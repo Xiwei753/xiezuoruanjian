@@ -114,12 +114,8 @@ Item {
 
     property var pendingTreeRow: null
 
-    onStarmapIdChanged: {
-        if (!navigationTree)
-            return
-        navigationTree.currentObjectKey = ""
-        navigationTree.reload()
-    }
+    // 根星图切换由 navigationTree.workspaceRootStarmapId 绑定统一处理：
+    // 清空旧根选中/展开状态并重建树，避免这里和绑定各刷新一次。
 
     // Issue #1016：把本次 SplitView 的真实宽度/可见状态上报给顶栏。
     function reportRenderedPane(side, pane) {
@@ -246,10 +242,12 @@ Item {
         }
     }
 
-    // 普通节点行：先进入它所在的画布，再命中、选中并居中该对象。
+    // 普通节点行：先进入它所在的画布；Scene 尚未 ready 时先保留高亮，
+    // 最终定位结果由 Canvas.treeObjectRevealFinished 回传。
     function revealTreeObject(rootStarmapId, segmentsJson, kind, objectId, objectKey) {
-        var revealed = canvas.revealTreeObject(rootStarmapId, segmentsJson, kind, objectId)
-        if (revealed) {
+        var accepted = canvas.revealTreeObject(rootStarmapId, segmentsJson, kind,
+                                                objectId, objectKey)
+        if (accepted) {
             navigationTree.currentObjectKey = String(objectKey || "")
             return true
         }
@@ -258,6 +256,17 @@ Item {
                                  canvas.segmentsJsonOf(canvas.currentRoute),
                                  canvas.routeKey)
         return false
+    }
+
+    function finishTreeObjectReveal(success, objectKey) {
+        if (success)
+            return
+        if (navigationTree.currentObjectKey !== String(objectKey || ""))
+            return
+        navigationTree.currentObjectKey = ""
+        navigationTree.syncRoute(canvas.currentRoute.rootStarmapId,
+                                 canvas.segmentsJsonOf(canvas.currentRoute),
+                                 canvas.routeKey)
     }
 
     function createObject(mode) {
@@ -453,6 +462,9 @@ Item {
                     root.syncTreeRoute(rootStarmapId, segmentsJson, routeKey)
                 }
                 onTreeStructureChanged: navigationTree.reload()
+                onTreeObjectRevealFinished: function(success, objectKey) {
+                    root.finishTreeObjectReveal(success, objectKey)
+                }
                 canvasBackgroundColor: Kirigami.Theme.backgroundColor
                 starmapId: root.starmapId
                 starmapBackendRef: root.starmapBackendRef

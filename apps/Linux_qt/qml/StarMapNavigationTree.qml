@@ -41,6 +41,8 @@ Rectangle {
     // 当前选中的普通节点对象键；为空时按 routeKey 高亮可导航行。
     property string currentObjectKey: ""
     property var contextRow: null
+    // 已经成功建出根行的根 ID；用于区分“首次/换根”与同一根普通刷新。
+    property string loadedRootStarmapId: ""
 
     signal routeActivated(string rootStarmapId, string segmentsJson, string routeKey)
     signal objectActivated(string rootStarmapId, string segmentsJson,
@@ -89,18 +91,86 @@ Rectangle {
         return keys
     }
 
-    function reload() {
+    // 当前 route 的根及每一级祖先 routeKey，用于把 expandToIndex() 在
+    // TreeView 里展开的路径同步回模型，刷新时才能恢复。
+    function clearExpandedDescendants(routeKey) {
+        if (routeKey === "")
+            return
+        var keys = expandedRouteKeys()
+        var prefix = routeKey.slice(-1) === "|" ? routeKey : routeKey + "/"
+        for (var i = 0; i < keys.length; ++i) {
+            var key = keys[i]
+            if (key !== routeKey && key.indexOf(prefix) === 0)
+                treeModel.set_expanded(key, false)
+        }
+    }
+
+    function routeKeysForPath(rootStarmapId, segmentsJson) {
+        var keys = []
+        if (!rootStarmapId)
+            return keys
+        keys.push(String(rootStarmapId) + "|")
+        var segments = []
+        try {
+            segments = JSON.parse(String(segmentsJson || "[]"))
+        } catch (e) {
+            return keys
+        }
+        if (!Array.isArray(segments))
+            return keys
+        var parts = []
+        for (var i = 0; i < segments.length; ++i) {
+            var segment = segments[i]
+            if (!segment)
+                continue
+            if (segment.type === "enterPortal")
+                parts.push("enterPortal:" + String(segment.nodeId || ""))
+            else
+                parts.push("enterEmbed:" + String(segment.instanceId || ""))
+            keys.push(String(rootStarmapId) + "|" + parts.join("/"))
+        }
+        return keys
+    }
+
+    function reload(forceRootExpanded) {
         if (!treeModel)
             return
+        if (forceRootExpanded === undefined)
+            forceRootExpanded = root.workspaceRootStarmapId !== ""
+                && (root.workspaceRootStarmapId !== root.loadedRootStarmapId
+                    || root.currentRouteKey === "")
         // reload 前保存已加载分支的完整 routeKey 和当前普通节点对象键；
         // 刷新后只恢复当前根下仍存在的路径，不把旧根的展开/选中带过来。
-        var expandedKeys = expandedRouteKeys()
+        // 根切换时强制展开新根；同一根普通刷新时保持用户原有展开/折叠。
+        var expandedKeys = forceRootExpanded ? [] : expandedRouteKeys()
         var selectedObjectKey = root.currentObjectKey
         treeModel.set_backend_ref(root.starmapBackendRef)
         treeModel.set_root_starmap_id(root.workspaceRootStarmapId)
         treeModel.refresh()
+        treeView.forceLayout()
+
+        // Qt 6.8 的 expandToIndex() 在根行已经可见时会直接返回，不能保证
+        // 根行的子行展开。这里显式取根行并调用 expand(rootRow)。
+        var rootKey = String(root.workspaceRootStarmapId || "") + "|"
+        if (root.workspaceRootStarmapId !== "") {
+            treeModel.ensure_children_loaded(rootKey)
+            treeView.forceLayout()
+        }
+        var rootIndex = treeModel.index_for_key(rootKey)
+        var rootRow = rootIndex ? treeView.rowAtIndex(rootIndex) : -1
+        if (rootRow >= 0)
+            root.loadedRootStarmapId = String(root.workspaceRootStarmapId || "")
+        if (rootRow >= 0 && (forceRootExpanded || expandedKeys.indexOf(rootKey) >= 0)) {
+            treeView.expand(rootRow)
+            if (treeView.isExpanded(rootRow))
+                treeModel.set_expanded(rootKey, true)
+            treeView.forceLayout()
+        }
+
         for (var i = 0; i < expandedKeys.length; ++i) {
             var key = expandedKeys[i]
+            if (key === rootKey)
+                continue
             var index = treeModel.index_for_key(key)
             if (!index)
                 continue
@@ -108,7 +178,9 @@ Rectangle {
             if (row < 0)
                 continue
             treeView.expand(row)
-            treeModel.set_expanded(key, true)
+            if (treeView.isExpanded(row))
+                treeModel.set_expanded(key, true)
+            treeView.forceLayout()
         }
         if (selectedObjectKey !== "") {
             var objectIndex = treeModel.index_for_object_key(selectedObjectKey)
@@ -123,26 +195,47 @@ Rectangle {
             }
         }
         if (root.currentRouteKey !== "")
-            syncRoute(root.currentRootStarmapId, root.currentSegmentsJson, root.currentRouteKey)
+            syncRoute(root.currentRootStarmapId, root.currentSegmentsJson,
+                      root.currentRouteKey, false)
     }
 
-    function syncRoute(rootStarmapId, segmentsJson, routeKey) {
+    function syncRoute(rootStarmapId, segmentsJson, routeKey, expandPath) {
         root.currentRootStarmapId = String(rootStarmapId || "")
         root.currentSegmentsJson = String(segmentsJson || "[]")
         root.currentRouteKey = String(routeKey || "")
         if (!treeModel || root.currentRouteKey === "" || root.currentRootStarmapId === "")
             return
-        // 根行必须在首次进入时主动加载真实子项；模型刷新时已预加载，
-        // 这里再兜底一次后端失败后的重试。
-        if (String(root.currentSegmentsJson || "[]") === "[]")
-            treeModel.ensure_children_loaded(root.currentRootStarmapId + "|")
+        if (expandPath === undefined)
+            expandPath = true
+        if (expandPath) {
+            // 根行必须先显式展开：expandToIndex() 不会处理已经可见的根行。
+            var rootKey = root.currentRootStarmapId + "|"
+            treeModel.ensure_children_loaded(rootKey)
+            var rootIndex = treeModel.index_for_key(rootKey)
+            var rootRow = rootIndex ? treeView.rowAtIndex(rootIndex) : -1
+            if (rootRow >= 0) {
+                treeView.expand(rootRow)
+                if (treeView.isExpanded(rootRow))
+                    treeModel.set_expanded(rootKey, true)
+                treeView.forceLayout()
+            }
+            var targetIndex = treeModel.index_for_route(root.currentRootStarmapId,
+                                                        root.currentSegmentsJson)
+            if (String(root.currentSegmentsJson || "[]") !== "[]")
+                treeView.expandToIndex(targetIndex)
+            treeView.forceLayout()
+            // expandToIndex() 只改变视图；把实际展开的祖先路径同步回模型。
+            var pathKeys = routeKeysForPath(root.currentRootStarmapId,
+                                            root.currentSegmentsJson)
+            for (var k = 0; k < pathKeys.length; ++k) {
+                var pathIndex = treeModel.index_for_key(pathKeys[k])
+                var pathRow = treeView.rowAtIndex(pathIndex)
+                if (pathRow >= 0 && treeView.isExpanded(pathRow))
+                    treeModel.set_expanded(pathKeys[k], true)
+            }
+        }
         var index = treeModel.index_for_route(root.currentRootStarmapId, root.currentSegmentsJson)
         var row = treeView.rowAtIndex(index)
-        if (row < 0)
-            return
-        treeView.expandToIndex(index)
-        treeView.forceLayout()
-        row = treeView.rowAtIndex(index)
         if (row < 0)
             return
         if (treeView.selectionModel)
@@ -184,6 +277,7 @@ Rectangle {
         if (treeView.isExpanded(row)) {
             treeView.collapse(row)
             treeModel.set_expanded(key, false)
+            clearExpandedDescendants(key)
             return
         }
         if (treeModel.ensure_children_loaded(key)) {
@@ -201,10 +295,10 @@ Rectangle {
             root.currentRouteKey = ""
             root.currentObjectKey = ""
         }
-        reload()
+        reload(true)
     }
 
-    Component.onCompleted: reload()
+    Component.onCompleted: reload(true)
 
     ColumnLayout {
         anchors.fill: parent

@@ -8,7 +8,12 @@ import { worker, ErrorEvent, MessageEvents } from '@kit.ArkTS'
 import hilog from '@ohos.hilog'
 
 import {
+  DiagnosticsArchiveManifestMeta,
   DiagnosticsArchiveRequest,
+  DiagnosticsFaultCaptureRequest,
+  DiagnosticsFaultKeysRequest,
+  DiagnosticsFaultRecoveryRequest,
+  DiagnosticsFileCopyRequest,
   DiagnosticsSnapshotRequest,
   DiagnosticsWorkerRequest,
   DiagnosticsWorkerResult
@@ -57,6 +62,65 @@ export class HarmonyDiagnosticsArchiveWorkerClient {
       themeJson: themeJson,
       uiJson: uiJson,
       editorJson: editorJson
+    }
+    return this.send(request, requestId)
+  }
+
+  // 故障事件落盘 + fault ZIP 由 Worker 串行完成；ArkUI 线程只传白名单元数据和
+  // 系统 external_log 路径，不创建目录、不复制大文件。
+  requestFaultCapture(outputDir: string, logDir: string, crashesDir: string, eventKey: string,
+    paramsJson: string, externalLogPaths: string[],
+    manifest: DiagnosticsArchiveManifestMeta): Promise<DiagnosticsWorkerResult> {
+    const requestId = this.nextRequestId()
+    const request: DiagnosticsFaultCaptureRequest = {
+      requestKind: 'fault_capture',
+      requestId: requestId,
+      outputDir: outputDir,
+      logDir: logDir,
+      crashesDir: crashesDir,
+      eventKey: eventKey,
+      paramsJson: paramsJson,
+      externalLogPaths: externalLogPaths,
+      manifest: manifest
+    }
+    return this.send(request, requestId)
+  }
+
+  // 启动时补全上次进程在复制/压缩阶段中断的故障事件。
+  requestFaultRecovery(outputDir: string, logDir: string, crashesDir: string,
+    manifest: DiagnosticsArchiveManifestMeta): Promise<DiagnosticsWorkerResult> {
+    const requestId = this.nextRequestId()
+    const request: DiagnosticsFaultRecoveryRequest = {
+      requestKind: 'fault_recovery',
+      requestId: requestId,
+      outputDir: outputDir,
+      logDir: logDir,
+      crashesDir: crashesDir,
+      manifest: manifest
+    }
+    return this.send(request, requestId)
+  }
+
+  // 启动时快速查询已知故障 eventKey；只列目录，不读取附件或压缩。
+  requestFaultKeys(crashesDir: string): Promise<DiagnosticsWorkerResult> {
+    const requestId = this.nextRequestId()
+    const request: DiagnosticsFaultKeysRequest = {
+      requestKind: 'fault_keys',
+      requestId: requestId,
+      crashesDir: crashesDir
+    }
+    return this.send(request, requestId)
+  }
+
+  // 导出包已经生成后的文件搬运。目标可以是沙箱路径或 DocumentViewPicker URI；
+  // Worker 固定大小分块复制，复制完成后再由调用方拉起分享/保存成功提示。
+  requestFileCopy(sourcePath: string, targetPath: string): Promise<DiagnosticsWorkerResult> {
+    const requestId = this.nextRequestId()
+    const request: DiagnosticsFileCopyRequest = {
+      requestKind: 'file_copy',
+      requestId: requestId,
+      sourcePath: sourcePath,
+      targetPath: targetPath
     }
     return this.send(request, requestId)
   }

@@ -2,24 +2,24 @@
 //
 // 负责：
 // 1. 启动时订阅 HiAppEvent 的 APP_CRASH / APP_FREEZE / APP_KILLED 事件；
-// 2. 系统回放故障事件时，把白名单 params 和 external_log 复制到
-//    diagnostics/crashes/<eventKey>/；按 eventKey 跨进程去重，避免每次冷启动
-//    都把同一条 APP_KILLED 重新记录、重新打包；
-// 3. 事件记录完成后请求一次独立的 fault 归档包（不覆盖 latest/previous）。
+// 2. 回放故障事件时，只提取并脱敏元数据，把 params 快照和 external_log 路径
+//    投递给 DiagnosticsArchiveWorker；
+// 3. Worker 在独立串行队列中创建 crashes/<eventKey>/、原子写入 params.json、
+//    分块复制/清理 external_log、生成 fault ZIP，并在 ZIP 发布后写 complete.json；
+// 4. 启动时请求 Worker 扫描未完成事件并从已保存的 params/fault 日志补全。
 //
-// 本类不扫描/压缩目录：ZIP 由 DiagnosticsArchiveWorker 生成。APP_KILLED 没有
+// 本类不在 ArkUI 线程执行 mkdir/write/copy/unlink/compress。APP_KILLED 没有
 // external_log 时仍会保存 reason/time，属于正常情况。
 
 import { common } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
-import fs from '@ohos.file.fs'
 import hiAppEvent from '@ohos.hiviewdfx.hiAppEvent'
 import { PlatformApiResolver } from '../version/PlatformApiResolver'
 import { HarmonyDiagnosticEvents, DiagnosticField } from './HarmonyDiagnosticEvents'
 import { HarmonyDiagnosticsExporter } from './HarmonyDiagnosticsExporter'
 
 const LOG_TAG = 'HarmonyCrashEventWatcher'
-const DIAGNOSTICS_DIR = 'diagnostics'
+const SAFE_ENUM_PATTERN = /^[A-Za-z0-9_.:-]{1,96}$/
 
 // 崩溃事件记录 — 用于序列化 params.json。
 // ArkTS 严格模式要求对象字面量有显式 interface 类型（arkts-no-untyped-obj-literals）。
@@ -30,12 +30,20 @@ interface CrashRecord {
   params: Record<string, Object>
 }
 
+interface ThreadSummary {
+  name: string
+  tid: number
+  state: string
+}
+
 export class HarmonyCrashEventWatcher {
   private static instance: HarmonyCrashEventWatcher
   private context: common.UIAbilityContext | null = null
   private exporter: HarmonyDiagnosticsExporter
   private watcher: hiAppEvent.Watcher | null = null
   private initialized: boolean = false
+  private generation: number = 0
+  private recoveryTimerId: number = -1
   private processedEventKeys: Set<string> = new Set()
 
   private constructor() {
@@ -56,10 +64,45 @@ export class HarmonyCrashEventWatcher {
     this.initialized = true
     this.context = context
     this.exporter.setAbilityContext(context)
+    this.generation += 1
+    // 先让 Worker 扫一遍已有 crashes/<eventKey>，再订阅系统事件。这样冷启动
+    // 回放的旧故障不会再次记结构化事件，也不会重复生成 fault ZIP。
+    void this.prepareWatcher(this.generation)
+  }
+
+  private async prepareWatcher(generation: number): Promise<void> {
+    try {
+      const knownKeys = await this.exporter.listKnownFaultEventKeys()
+      for (const key of knownKeys) {
+        this.processedEventKeys.add(key)
+      }
+    } catch (e) {
+      hilog.warn(0x0000, LOG_TAG, 'load known fault keys failed: %{public}s',
+        e instanceof Error ? e.name : 'UNKNOWN_ERROR')
+    }
+    if (!this.initialized || this.generation !== generation || this.context === null) {
+      return
+    }
     this.subscribeCrashEvents()
+    // 先给系统回放留一个短窗口：未完成故障若仍带 external_log 路径，优先由
+    // fault_capture 复制；没有回放时再从已落盘的 params/fault 日志补全。
+    if (this.recoveryTimerId >= 0) {
+      clearTimeout(this.recoveryTimerId)
+    }
+    this.recoveryTimerId = setTimeout(() => {
+      this.recoveryTimerId = -1
+      if (this.initialized && this.generation === generation) {
+        void this.exporter.recoverIncompleteFaults()
+      }
+    }, 3000)
   }
 
   destroy(): void {
+    this.generation += 1
+    if (this.recoveryTimerId >= 0) {
+      clearTimeout(this.recoveryTimerId)
+      this.recoveryTimerId = -1
+    }
     if (this.watcher !== null) {
       try {
         hiAppEvent.removeWatcher(this.watcher)
@@ -115,10 +158,9 @@ export class HarmonyCrashEventWatcher {
     }
   }
 
-  // 1. 按 eventKey 跨进程去重（params.json 已存在即视为已收尾）；
-  // 2. 记录结构化事件；
-  // 3. 写 params.json / 复制 external_log；
-  // 4. 请求一次 fault 归档。
+  // 事件回调只做内存/字符串工作：eventKey、白名单 params、external_log 路径。
+  // 目录、原子写入、大文件复制和 ZIP 都交给 Worker；跨进程完成状态由 Worker
+  // 的 complete.json 判断，不能因为 params.json 已存在就跳过故障包。
   private handleCrashEvent(event: hiAppEvent.AppEventInfo): void {
     try {
       if (this.context === null) {
@@ -129,13 +171,8 @@ export class HarmonyCrashEventWatcher {
       const externalLog = this.extractExternalLog(params)
       const timestamp = this.formatTimestamp(time)
       const eventKey = this.sanitizeEventKey(`${timestamp}-${event.name}`)
-      const crashesRoot = `${this.context.filesDir}/${DIAGNOSTICS_DIR}/crashes`
-      const crashesDir = `${crashesRoot}/${eventKey}`
-
-      // 内存集合是快路径；params.json 是跨进程持久去重标记。系统回放同一事件时
-      // 不再重复记录、不再重复复制日志、不再重复打包。
-      if (this.processedEventKeys.has(eventKey) || this.exists(`${crashesDir}/params.json`)) {
-        hilog.info(0x0000, LOG_TAG, 'Duplicate fault event key skipped: %{public}s', eventKey)
+      if (this.processedEventKeys.has(eventKey)) {
+        hilog.info(0x0000, LOG_TAG, 'Duplicate fault event key skipped in process: %{public}s', eventKey)
         return
       }
       this.processedEventKeys.add(eventKey)
@@ -153,42 +190,29 @@ export class HarmonyCrashEventWatcher {
         HarmonyDiagnosticEvents.record('Warn', 'System', 'system.app_killed', 'HarmonyCrashEventWatcher', eventFields)
       }
 
-      fs.mkdirSync(crashesDir, true)
-
       const crashRecord: CrashRecord = {
         domain: hiAppEvent.domain.OS,
         name: event.name,
         eventType: event.eventType,
         params: this.safeCrashParams(params)
       }
-      this.writeAtomic(`${crashesDir}/params.json`, JSON.stringify(crashRecord, null, 2))
-
-      if (externalLog.length > 0) {
-        for (let i = 0; i < externalLog.length; i++) {
-          this.copyFile(externalLog[i], crashesDir, `fault-${i + 1}.log`)
-        }
-      } else {
-        hilog.info(0x0000, LOG_TAG, 'No external_log in event %{public}s', event.name)
-      }
-
-      void this.generateFaultArchive(eventKey)
+      void this.persistFault(eventKey, JSON.stringify(crashRecord, null, 2), externalLog)
     } catch (e) {
       hilog.error(0x0000, LOG_TAG, 'handleCrashEvent failed: %{public}s', String(e))
     }
   }
 
-  // fault 归档由 Worker 读取 crashes/<eventKey>/params.json + fault-N.log 并压缩；
-  // 这里只投递一次请求，不在 ArkUI 线程做任何文件复制/压缩。
-  private async generateFaultArchive(eventKey: string): Promise<void> {
+  private async persistFault(eventKey: string, paramsJson: string,
+    externalLog: string[]): Promise<void> {
     try {
-      const archivePath = await this.exporter.exportFault(eventKey)
+      const archivePath = await this.exporter.captureFault(eventKey, paramsJson, externalLog)
       if (archivePath === null) {
-        hilog.warn(0x0000, LOG_TAG, 'Fault archive failed for event %{public}s', eventKey)
+        hilog.warn(0x0000, LOG_TAG, 'Fault capture incomplete for event %{public}s', eventKey)
         return
       }
       hilog.info(0x0000, LOG_TAG, 'Fault archive generated for event %{public}s', eventKey)
     } catch (e) {
-      hilog.error(0x0000, LOG_TAG, 'generateFaultArchive exception: %{public}s',
+      hilog.error(0x0000, LOG_TAG, 'persistFault exception: %{public}s',
         e instanceof Error ? e.name : 'UNKNOWN_ERROR')
     }
   }
@@ -205,10 +229,17 @@ export class HarmonyCrashEventWatcher {
 
   private extractExternalLog(params: Record<string, Object>): string[] {
     const logVal = params['external_log']
-    if (Array.isArray(logVal)) {
-      return logVal as string[]
+    if (!Array.isArray(logVal)) {
+      return []
     }
-    return []
+    const paths: string[] = []
+    const entries = logVal as Object[]
+    for (const item of entries) {
+      if (typeof item === 'string' && item.length > 0) {
+        paths.push(item)
+      }
+    }
+    return paths
   }
 
   // 只取系统枚举/短名称，不取 exception.message、stack 等可能含正文/路径的字段。
@@ -221,6 +252,10 @@ export class HarmonyCrashEventWatcher {
     if (typeof crashType === 'string') {
       return crashType
     }
+    const exceptionName = this.readExceptionName(params)
+    if (exceptionName.length > 0) {
+      return exceptionName
+    }
     const reason = params['reason']
     if (typeof reason === 'string') {
       return reason
@@ -229,10 +264,12 @@ export class HarmonyCrashEventWatcher {
   }
 
   // params.json 只保留稳定、非敏感的故障元数据。external_log 路径、exception
-  // message、stack 和正文内容都不进入归档。
+  // message、stack 和正文内容都不进入归档；threads 只保留名称/TID/状态摘要。
   private safeCrashParams(params: Record<string, Object>): Record<string, Object> {
     const safe: Record<string, Object> = {}
     this.copyNumber(params, safe, 'time')
+    this.copyNumber(params, safe, 'pid')
+    this.copyNumber(params, safe, 'uid')
     this.copyNumber(params, safe, 'process_id')
     this.copyNumber(params, safe, 'thread_id')
     this.copyEnum(params, safe, 'crash_type')
@@ -240,11 +277,78 @@ export class HarmonyCrashEventWatcher {
     this.copyEnum(params, safe, 'reason')
     this.copyEnum(params, safe, 'process_name')
     this.copyEnum(params, safe, 'thread_name')
+    this.copyEnum(params, safe, 'bundle_name')
+    this.copyEnum(params, safe, 'bundle_version')
+    const exceptionName = this.readExceptionName(params)
+    if (exceptionName.length > 0) {
+      safe['exception_name'] = exceptionName
+    }
+    this.copyThreads(params, safe)
     const foreground = params['foreground']
     if (typeof foreground === 'boolean') {
       safe['foreground'] = foreground
     }
+    const logOverLimit = params['log_over_limit']
+    if (typeof logOverLimit === 'boolean') {
+      safe['log_over_limit'] = logOverLimit
+    }
     return safe
+  }
+
+  private readExceptionName(params: Record<string, Object>): string {
+    const exception = params['exception']
+    if (exception !== null && typeof exception === 'object') {
+      const record = exception as Record<string, Object>
+      const name = record['name']
+      if (typeof name === 'string' && SAFE_ENUM_PATTERN.test(name)) {
+        return name
+      }
+    }
+    return ''
+  }
+
+  private copyThreads(params: Record<string, Object>, safe: Record<string, Object>): void {
+    const value = params['threads']
+    if (!Array.isArray(value)) {
+      return
+    }
+    const summaries: ThreadSummary[] = []
+    const entries = value as Object[]
+    for (let index = 0; index < entries.length && summaries.length < 16; index++) {
+      const item = entries[index]
+      if (item === null || typeof item !== 'object') {
+        continue
+      }
+      const record = item as Record<string, Object>
+      const summary: ThreadSummary = {
+        name: this.readSafeString(record, 'name') || this.readSafeString(record, 'thread_name'),
+        tid: this.readNumber(record, 'tid', this.readNumber(record, 'thread_id', -1)),
+        state: this.readSafeString(record, 'state')
+      }
+      if (summary.name.length > 0 || summary.tid >= 0 || summary.state.length > 0) {
+        summaries.push(summary)
+      }
+    }
+    safe['thread_count'] = entries.length
+    if (summaries.length > 0) {
+      safe['threads'] = summaries
+    }
+  }
+
+  private readNumber(source: Record<string, Object>, key: string, fallback: number): number {
+    const value = source[key]
+    if (typeof value === 'number') {
+      return value
+    }
+    return fallback
+  }
+
+  private readSafeString(source: Record<string, Object>, key: string): string {
+    const value = source[key]
+    if (typeof value === 'string' && SAFE_ENUM_PATTERN.test(value)) {
+      return value
+    }
+    return ''
   }
 
   private copyNumber(source: Record<string, Object>, target: Record<string, Object>, key: string): void {
@@ -256,96 +360,8 @@ export class HarmonyCrashEventWatcher {
 
   private copyEnum(source: Record<string, Object>, target: Record<string, Object>, key: string): void {
     const value = source[key]
-    if (typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,96}$/.test(value)) {
+    if (typeof value === 'string' && SAFE_ENUM_PATTERN.test(value)) {
       target[key] = value
-    }
-  }
-
-  // 原子写入 — 双槽模式（崩溃安全）。
-  private writeAtomic(filePath: string, content: string): void {
-    const newPath = `${filePath}.new`
-    const bakPath = `${filePath}.bak`
-
-    try {
-      if (!fs.accessSync(filePath) && fs.accessSync(bakPath)) {
-        fs.renameSync(bakPath, filePath)
-        hilog.info(0x0000, LOG_TAG, 'Restored params from backup')
-      }
-    } catch (_) {
-    }
-
-    const fd = fs.openSync(newPath, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC)
-    let closed = false
-    try {
-      fs.writeSync(fd.fd, content)
-      fs.closeSync(fd)
-      closed = true
-    } catch (e) {
-      if (!closed) {
-        try {
-          fs.closeSync(fd)
-        } catch (_) {
-        }
-      }
-      this.safeDelete(newPath)
-      throw e instanceof Error ? e : new Error(String(e))
-    }
-
-    this.safeDelete(bakPath)
-    try {
-      if (fs.accessSync(filePath)) {
-        fs.renameSync(filePath, bakPath)
-      }
-    } catch (e) {
-      this.safeDelete(newPath)
-      throw e instanceof Error ? e : new Error(String(e))
-    }
-
-    try {
-      fs.renameSync(newPath, filePath)
-    } catch (e) {
-      try {
-        if (fs.accessSync(bakPath)) {
-          fs.renameSync(bakPath, filePath)
-        }
-      } catch (_) {
-      }
-      this.safeDelete(newPath)
-      throw e instanceof Error ? e : new Error(String(e))
-    }
-    this.safeDelete(bakPath)
-  }
-
-  private safeDelete(filePath: string): void {
-    try {
-      if (fs.accessSync(filePath)) {
-        fs.unlinkSync(filePath)
-      }
-    } catch (_) {
-    }
-  }
-
-  private exists(filePath: string): boolean {
-    try {
-      return fs.accessSync(filePath)
-    } catch (_) {
-      return false
-    }
-  }
-
-  // 复制 external_log 后删除系统源文件，避免故障日志目录达到上限。
-  private copyFile(srcPath: string, destDir: string, fileName: string): void {
-    try {
-      const destPath = `${destDir}/${fileName}`
-      fs.copyFileSync(srcPath, destPath)
-      hilog.info(0x0000, LOG_TAG, 'Copied external fault log into diagnostics storage')
-      try {
-        fs.unlinkSync(srcPath)
-      } catch (_) {
-        hilog.warn(0x0000, LOG_TAG, 'Unable to delete copied system fault log source')
-      }
-    } catch (e) {
-      hilog.warn(0x0000, LOG_TAG, 'copyFile failed: %{public}s', e instanceof Error ? e.name : 'UNKNOWN_ERROR')
     }
   }
 

@@ -183,6 +183,7 @@ Item {
             scene.refreshEdges()
             scene.ensureEditingNodeExists()
         }
+        onStructureChanged: scene.structureChanged()
         onSelectionCleared: scene.selectionCleared()
         onNodeSelected: function(node) { scene.nodeSelected(node) }
         onEdgeSelected: function(edge) { scene.edgeSelected(edge) }
@@ -223,6 +224,8 @@ Item {
     signal selectionCleared()
     signal nodeSelected(var node)
     signal edgeSelected(var edge)
+    // 节点/嵌入已成功落盘的结构或标题变化，供 Workspace 刷新导航树。
+    signal structureChanged()
 
     // ── Issue #984：场景级唯一内联编辑会话 ──
     // 草稿只在这里保存一份；delegate 只负责显示和发出“编辑此节点”的意图。

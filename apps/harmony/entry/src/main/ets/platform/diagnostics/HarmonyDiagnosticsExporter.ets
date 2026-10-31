@@ -15,7 +15,6 @@
 import { common } from '@kit.AbilityKit'
 import { fileUri, picker } from '@kit.CoreFileKit'
 import hilog from '@ohos.hilog'
-import fs from '@ohos.file.fs'
 import bundleManager from '@ohos.bundle.bundleManager'
 import { BUILD_GIT_SHA } from '../../generated/BuildRevision'
 
@@ -151,6 +150,8 @@ export class HarmonyDiagnosticsExporter {
   private diagnosticsBridge: NativeDiagnosticsBridge
   private syncBridge: NativeSyncBridge
   private abilityContext: common.UIAbilityContext | null = null
+  // 构建身份只读且低频，缓存后避免故障事件回调和导出入口重复走 bundleManager 同步 IPC。
+  private cachedBuildIdentity: BuildIdentityAttachment | null = null
 
   constructor() {
     this.bridge = NativeWriterCoreBridge.getInstance()
@@ -187,13 +188,68 @@ export class HarmonyDiagnosticsExporter {
     return this.exportTo(outputDir, 'checkpoint', '')
   }
 
-  // 单个真实故障事件收尾归档 — 只附带该 eventKey 的故障附件，不覆盖双槽包。
-  async exportFault(eventKey: string): Promise<string | null> {
+  // 启动时查询已知故障 eventKey，供 CrashWatcher 在订阅系统事件前完成持久去重。
+  async listKnownFaultEventKeys(): Promise<string[]> {
+    if (this.abilityContext === null) {
+      return []
+    }
+    const result = await HarmonyDiagnosticsArchiveWorkerClient.getInstance().requestFaultKeys(
+      `${this.abilityContext.filesDir}/${DIAGNOSTICS_DIR}/crashes`
+    )
+    if (!result.success || result.eventKeys === undefined) {
+      return []
+    }
+    return result.eventKeys
+  }
+
+  // 故障事件落盘 + fault ZIP。事件回调只传白名单元数据和 external_log 路径，
+  // 目录创建、params 原子写入、大文件复制/删除、压缩和 complete.json 全在 Worker。
+  async captureFault(eventKey: string, paramsJson: string,
+    externalLogPaths: string[]): Promise<string | null> {
     if (this.abilityContext === null) {
       return null
     }
-    const outputDir = `${this.abilityContext.filesDir}/${DIAGNOSTICS_DIR}/snapshots`
-    return this.exportTo(outputDir, 'fault', eventKey)
+    const filesDir = this.abilityContext.filesDir
+    const outputDir = `${filesDir}/${DIAGNOSTICS_DIR}/snapshots`
+    const safeEventKey = eventKey.replace(/[^A-Za-z0-9_-]/g, '_')
+    const result = await HarmonyDiagnosticsArchiveWorkerClient.getInstance().requestFaultCapture(
+      outputDir,
+      `${filesDir}/${DIAGNOSTICS_DIR}/live/log`,
+      `${filesDir}/${DIAGNOSTICS_DIR}/crashes`,
+      safeEventKey,
+      paramsJson,
+      externalLogPaths,
+      this.buildManifestMeta()
+    )
+    if (!result.success) {
+      hilog.error(0x0000, LOG_TAG,
+        'fault capture failed: stage=%{public}s durationMs=%{public}d',
+        result.stage, result.durationMs)
+      return null
+    }
+    hilog.info(0x0000, LOG_TAG,
+      'fault capture completed: stage=%{public}s durationMs=%{public}d',
+      result.stage, result.durationMs)
+    return result.archivePath.length > 0 ? result.archivePath : null
+  }
+
+  // 启动补全上次进程中断的故障事件；只补已经落盘的 params/fault 日志，不阻塞启动。
+  async recoverIncompleteFaults(): Promise<void> {
+    if (this.abilityContext === null) {
+      return
+    }
+    const filesDir = this.abilityContext.filesDir
+    const result = await HarmonyDiagnosticsArchiveWorkerClient.getInstance().requestFaultRecovery(
+      `${filesDir}/${DIAGNOSTICS_DIR}/snapshots`,
+      `${filesDir}/${DIAGNOSTICS_DIR}/live/log`,
+      `${filesDir}/${DIAGNOSTICS_DIR}/crashes`,
+      this.buildManifestMeta()
+    )
+    if (!result.success) {
+      hilog.warn(0x0000, LOG_TAG,
+        'fault recovery incomplete: stage=%{public}s durationMs=%{public}d',
+        result.stage, result.durationMs)
+    }
   }
 
   // 归档统一入口：ArkUI 线程只收集轻量附件并投递 Worker 请求。
@@ -231,15 +287,8 @@ export class HarmonyDiagnosticsExporter {
     }
 
     const filesDir = this.abilityContext.filesDir
-    const identity = this.getBuildIdentity()
     const safeEventKey = eventKey.replace(/[^A-Za-z0-9_-]/g, '_')
-    const manifest: DiagnosticsArchiveManifestMeta = {
-      dataVersion: DIAGNOSTICS_ARCHIVE_DATA_VERSION,
-      appVersion: identity.appVersion,
-      buildKey: identity.buildKey,
-      gitSha: identity.gitSha,
-      exportedAt: new Date().toISOString()
-    }
+    const manifest: DiagnosticsArchiveManifestMeta = this.buildManifestMeta()
     const request: DiagnosticsArchiveRequest = {
       requestKind: 'archive',
       requestId: '',
@@ -280,24 +329,19 @@ export class HarmonyDiagnosticsExporter {
     }
 
     try {
-      // 把 zip copy 到 share 目录
-      const filesDir = this.abilityContext!.filesDir
-      const shareDir = `${filesDir}/${DIAGNOSTICS_DIR}/share`
-      this.ensureOutputDir(shareDir)
-
       // 固定分享文件名：share 目录只保留当前待分享的一份，不做历史仓库。
-      // snapshots/ 负责内部历史，share/ 永远只有一份。
-      const shareZipPath = `${shareDir}/sujian-diagnostics-share.zip`
-
-      // 旧文件存在先删，避免堆积重复 zip
-      if (fs.accessSync(shareZipPath)) {
-        fs.unlinkSync(shareZipPath)
+      // 整包复制由 Worker 分块完成，ArkUI 线程不按 ZIP 大小申请内存。
+      const filesDir = this.abilityContext!.filesDir
+      const shareZipPath = `${filesDir}/${DIAGNOSTICS_DIR}/share/sujian-diagnostics-share.zip`
+      const copyResult = await HarmonyDiagnosticsArchiveWorkerClient.getInstance().requestFileCopy(
+        zipPath, shareZipPath
+      )
+      if (!copyResult.success) {
+        hilog.error(0x0000, LOG_TAG,
+          'share zip copy failed: stage=%{public}s durationMs=%{public}d',
+          copyResult.stage, copyResult.durationMs)
+        return false
       }
-      fs.copyFileSync(zipPath, shareZipPath)
-
-      // 记录 share copy 的 size（仅日志，不拦截）
-      const stat = fs.statSync(shareZipPath)
-      hilog.info(0x0000, LOG_TAG, 'Share zip size: %{public}d bytes', stat.size)
 
       // 只把 share copy 的 URI 交给 ShareKit
       const shareService = HarmonyShareService.getInstance()
@@ -338,27 +382,14 @@ export class HarmonyDiagnosticsExporter {
         return { status: 'cancelled' }
       }
 
-      const src = fs.openSync(zipPath, fs.OpenMode.READ_ONLY)
-      const dst = fs.openSync(uris[0], fs.OpenMode.READ_WRITE)
-      try {
-        const sourceSize = fs.statSync(src.fd).size
-        if (sourceSize <= 0) {
-          throw new Error('diagnostics source zip is empty')
-        }
-
-        const data = new ArrayBuffer(sourceSize)
-        const readSize = fs.readSync(src.fd, data)
-        if (readSize !== sourceSize) {
-          throw new Error(`diagnostics read incomplete: ${readSize}/${sourceSize}`)
-        }
-
-        const writeSize = fs.writeSync(dst.fd, data)
-        if (writeSize !== readSize) {
-          throw new Error(`diagnostics write incomplete: ${writeSize}/${readSize}`)
-        }
-      } finally {
-        fs.closeSync(src)
-        fs.closeSync(dst)
+      const copyResult = await HarmonyDiagnosticsArchiveWorkerClient.getInstance().requestFileCopy(
+        zipPath, uris[0]
+      )
+      if (!copyResult.success) {
+        hilog.error(0x0000, LOG_TAG,
+          'save diagnostics copy failed: stage=%{public}s durationMs=%{public}d',
+          copyResult.stage, copyResult.durationMs)
+        return { status: 'failed', error: `保存诊断包失败（${copyResult.stage}）` }
       }
       return { status: 'success', fileName: fileName, uri: uris[0] }
     } catch (e) {
@@ -764,44 +795,39 @@ export class HarmonyDiagnosticsExporter {
     return this.makeAttachment(relativePath, errorJson)
   }
 
+  private buildManifestMeta(): DiagnosticsArchiveManifestMeta {
+    const identity = this.getBuildIdentity()
+    return {
+      dataVersion: DIAGNOSTICS_ARCHIVE_DATA_VERSION,
+      appVersion: identity.appVersion,
+      buildKey: identity.buildKey,
+      gitSha: identity.gitSha,
+      exportedAt: new Date().toISOString()
+    }
+  }
+
   // 获取构建身份 — 与 EntryAbility.getBuildIdentity() 逻辑一致。
   private getBuildIdentity(): BuildIdentityAttachment {
+    if (this.cachedBuildIdentity !== null) {
+      return this.cachedBuildIdentity
+    }
     try {
       const info = bundleManager.getBundleInfoForSelfSync(
         bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT
       )
-      return {
+      this.cachedBuildIdentity = {
         appVersion: info.versionName,
         buildKey: `harmony-v${info.versionCode}-${info.versionName}-${BUILD_GIT_SHA}`,
         gitSha: BUILD_GIT_SHA
       }
     } catch (_) {
-      return {
+      this.cachedBuildIdentity = {
         appVersion: 'unknown',
         buildKey: `harmony-unknown-${BUILD_GIT_SHA}`,
         gitSha: BUILD_GIT_SHA
       }
     }
+    return this.cachedBuildIdentity
   }
 
-  // 确保输出目录存在。
-  // 不清空旧 zip 文件，因为 snapshots 目录需要保留 latest.zip/previous.zip。
-  private ensureOutputDir(outputDir: string): void {
-    try {
-      if (!fs.accessSync(outputDir)) {
-        fs.mkdirSync(outputDir, true)
-      }
-    } catch (_) {
-      // 目录创建失败不影响导出（Rust 层会自己创建）
-    }
-  }
-
-  // 从文件路径中提取文件名。
-  private extractFileName(filePath: string): string {
-    const lastSlash = filePath.lastIndexOf('/')
-    if (lastSlash >= 0 && lastSlash < filePath.length - 1) {
-      return filePath.substring(lastSlash + 1)
-    }
-    return filePath
-  }
 }

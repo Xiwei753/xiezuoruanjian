@@ -97,6 +97,8 @@ Item {
     signal routeChanged(string rootStarmapId, string segmentsJson, string routeKey)
     // 画布内新建/移除图对象后通知左栏刷新当前分支。
     signal treeStructureChanged()
+    // 树对象定位的最终结果；异步等待 Scene ready 后才会发出。
+    signal treeObjectRevealFinished(bool success, string objectKey)
     // Issue #982：活动画布图数据/几何可用，供全局搜索按真实就绪时机定位。
     signal sceneGeometryReady(string starmapId, string routeKey)
     signal annotationActionRequested(string action, var targetRef, string title)
@@ -167,6 +169,9 @@ Item {
     property real _pinchSwitchBaseZoom: -1
     property real _pinchSwitchCanvasZoom: 1
     property bool _initialized: false
+    // 等待活动 Scene ready 后完成的树对象定位请求；不能把“尚未就绪”
+    // 当成定位失败而立即清掉左栏高亮。
+    property var pendingTreeReveal: null
 
     // 画布穿越阈值使用同一宽高双条件标尺，进入与退出基于同一比值。
     readonly property real _enterRatio: 1.0
@@ -311,9 +316,63 @@ Item {
         createDialog.open(mode, width / 2, height / 2)
     }
 
-    // Issue #1018：树中普通对象行定位。先进入该对象所在画布，再命中、
-    // 选中并居中；不复用 revealSearchTarget()，避免它强制回到根画布。
-    function revealTreeObject(rootStarmapId, segmentsJson, kind, objectId) {
+    function treeRevealMatches(pending) {
+        return pending
+            && String(currentRoute.rootStarmapId || "") === String(pending.rootStarmapId || "")
+            && routeKey === String(pending.routeKey || "")
+    }
+
+    function cancelPendingTreeReveal() {
+        if (!pendingTreeReveal)
+            return
+        var objectKey = String(pendingTreeReveal.objectKey || "")
+        pendingTreeReveal = null
+        treeObjectRevealFinished(false, objectKey)
+    }
+
+    // 活动 Scene 由 Loader 异步加载；只有 graphData 就绪且 route 完全匹配
+    // 时才执行命中/选中/居中。等待期间保留 pending，不误报失败。
+    function completeTreeReveal() {
+        if (!pendingTreeReveal)
+            return false
+        var pending = pendingTreeReveal
+        if (!treeRevealMatches(pending)) {
+            cancelPendingTreeReveal()
+            return null
+        }
+        var scene = activeScene()
+        if (!scene || !scene.ready)
+            return false
+        if (String(scene.scenePathKey || "") !== String(pending.routeKey || "")
+                || String(scene.starmapId || "") !== String(currentStarmapId || ""))
+            return false
+        var objectId = String(pending.objectId || "")
+        var kind = String(pending.kind || "")
+        var item = kind === "embed" ? scene.hitEmbed(objectId) : scene.hitNode(objectId)
+        if (!item) {
+            // Scene 已 ready 却找不到对象，说明目标已失效；结束等待并回报失败。
+            pendingTreeReveal = null
+            treeObjectRevealFinished(false, String(pending.objectKey || ""))
+            return null
+        }
+        if (kind === "embed")
+            scene.selectEmbed(objectId)
+        else
+            scene.selectNode(objectId)
+        var center = scene.itemCenterScene(kind === "embed" ? "embed" : "node", objectId)
+        if (center) {
+            applyPan(finiteDifference(width / 2, finiteProduct(center.x, zoomLevel)),
+                     finiteDifference(height / 2, finiteProduct(center.y, zoomLevel)))
+        }
+        pendingTreeReveal = null
+        treeObjectRevealFinished(true, String(pending.objectKey || ""))
+        return true
+    }
+
+    // Issue #1018：树中普通对象行定位。先进入该对象所在画布，再等待 Scene
+    // ready 后命中、选中并居中；不复用会强制回根图的 revealSearchTarget()。
+    // 返回值只表示“已接受定位请求”，最终结果由 treeObjectRevealFinished 发出。
+    function revealTreeObject(rootStarmapId, segmentsJson, kind, objectId, objectKey) {
         if (!rootStarmapId || !objectId)
             return false
         if (kind !== "node" && kind !== "portal" && kind !== "embed")
@@ -335,25 +394,19 @@ Item {
         })
         if (!targetRoute)
             return false
+        cancelPendingTreeReveal()
         if (!navigateToTreeRoute(rootStarmapId, JSON.stringify(targetSegments),
                                  routeKeyOf(targetRoute)))
             return false
-        var scene = activeScene()
-        if (!scene)
-            return false
-        var item = kind === "embed" ? scene.hitEmbed(objectId) : scene.hitNode(objectId)
-        if (!item)
-            return false
-        if (kind === "embed")
-            scene.selectEmbed(objectId)
-        else
-            scene.selectNode(objectId)
-        var center = scene.itemCenterScene(kind === "embed" ? "embed" : "node", objectId)
-        if (center) {
-            applyPan(finiteDifference(width / 2, finiteProduct(center.x, zoomLevel)),
-                     finiteDifference(height / 2, finiteProduct(center.y, zoomLevel)))
+        pendingTreeReveal = {
+            rootStarmapId: String(rootStarmapId),
+            routeKey: routeKeyOf(targetRoute),
+            kind: String(kind),
+            objectId: String(objectId),
+            objectKey: String(objectKey || "")
         }
-        return center !== null
+        // null 表示 Scene 已就绪但目标已失效；false 表示还在等待 ready。
+        return completeTreeReveal() !== null
     }
 
     // Issue #1014：树导航入口。先让 Core 解析 root + 完整 segments，解析失败
@@ -441,6 +494,7 @@ Item {
 
     // 切回根图：清所有层相机，镜头回默认。
     function resetToRoot() {
+        cancelPendingTreeReveal()
         if (!commitPendingNodeEditBeforeNavigation())
             return false
         settleViewportMotion()
@@ -472,6 +526,12 @@ Item {
         if (_initialized && currentRoute.rootStarmapId !== ""
                 && commitPendingNodeEditBeforeNavigation())
             applyRoute(currentRoute)
+    }
+
+    // 路由变化后旧的树定位请求已经失效，必须清掉，不能拿新画布误命中。
+    onRouteChanged: {
+        if (pendingTreeReveal && !treeRevealMatches(pendingTreeReveal))
+            cancelPendingTreeReveal()
     }
 
     // 相机任何变化都写回当前 route 的相机槽（同一张画布再次进入时可用）。
@@ -1693,6 +1753,7 @@ Item {
             onLoaded: {
                 if (item && item.ready) {
                     canvasArea.sceneGeometryReady(String(item.starmapId || ""), canvasArea.routeKey)
+                    canvasArea.completeTreeReveal()
                 }
             }
         }
@@ -1704,6 +1765,7 @@ Item {
                 var scene = activeSceneLoader.item
                 if (scene && scene.ready) {
                     canvasArea.sceneGeometryReady(String(scene.starmapId || ""), canvasArea.routeKey)
+                    canvasArea.completeTreeReveal()
                 }
             }
         }
@@ -1741,6 +1803,7 @@ Item {
             onNodeSelected: function(node) { canvasArea.nodeSelected(node) }
             onEdgeSelected: function(edge) { canvasArea.edgeSelected(edge) }
             onSelectionCleared: canvasArea.selectionCleared()
+            onStructureChanged: canvasArea.treeStructureChanged()
         }
     }
 
@@ -2705,7 +2768,8 @@ Item {
             else if (createMode === "starmap")
                 menuOwnerContent.createSubStarmapWithName(name, contextMenuSceneX, contextMenuSceneY)
             close()
-            treeStructureChanged()
+            // 结构刷新由 GraphController 在真实持久化成功后发出的
+            // structureChanged 统一触发，失败时不误报。
         }
     }
 

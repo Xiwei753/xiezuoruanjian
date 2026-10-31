@@ -594,7 +594,8 @@ impl StarmapTreeModel {
             if let Some(row) = state.rows.get_mut(node_id) {
                 row.children = child_ids;
                 row.children_state = ChildrenState::Present;
-                row.expanded = true;
+                // 装载孩子只代表模型已有子项，不代表用户在 TreeView 里展开了
+                // 该行；展开状态必须由 QML 的 expand/collapse 动作显式同步。
             }
         }
         self.end_insert_rows();

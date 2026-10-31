@@ -14,8 +14,14 @@ import hilog from '@ohos.hilog'
 import { HarmonyDiagnosticsArchive } from './HarmonyDiagnosticsArchive'
 import {
   DiagnosticsArchiveAttachment,
+  DiagnosticsArchiveManifestMeta,
   DiagnosticsArchiveRequest,
   DiagnosticsArchiveStage,
+  DiagnosticsFaultCaptureRequest,
+  DiagnosticsFaultKeysRequest,
+  DiagnosticsFaultRecoveryRequest,
+  DiagnosticsFileCopyRequest,
+  DiagnosticsHeavyRequest,
   DiagnosticsSnapshotRequest,
   DiagnosticsWorkerRequest,
   DiagnosticsWorkerResult
@@ -25,6 +31,8 @@ const LOG_TAG = 'DiagnosticsArchiveWorker'
 const LOG_FILENAME_PATTERN = /^sujian-current-[A-Za-z0-9._-]+\.log$/
 const CRASH_FILE_PATTERN = /^fault-[0-9]+\.log$/
 const EVENT_KEY_PATTERN = /^[A-Za-z0-9_-]+$/
+const FAULT_COMPLETE_FILE = 'complete.json'
+const FILE_COPY_CHUNK_BYTES = 256 * 1024
 
 const workerPort: ThreadWorkerGlobalScope = worker.workerPort
 
@@ -58,13 +66,21 @@ interface CrashCandidate {
   mtime: number
 }
 
-interface PendingArchive {
-  request: DiagnosticsArchiveRequest
-  requestIds: string[]
+interface FaultCompletion {
+  schemaVersion: number
+  eventKey: string
+  archivePath: string
+  completedAtMs: number
 }
 
-let archiveQueue: PendingArchive[] = []
-let processingArchive: boolean = false
+interface PendingOperation {
+  request: DiagnosticsHeavyRequest
+  requestIds: string[]
+  mergeKey: string
+}
+
+let operationQueue: PendingOperation[] = []
+let processingOperation: boolean = false
 let pendingSnapshot: DiagnosticsSnapshotRequest | null = null
 let pendingSnapshotIds: string[] = []
 let processingSnapshot: boolean = false
@@ -74,42 +90,70 @@ workerPort.onmessage = (event: MessageEvents): void => {
   if (request.requestKind === 'snapshot') {
     enqueueSnapshot(request)
   } else if (request.requestKind === 'archive') {
-    enqueueArchive(request)
+    enqueueOperation(request, `archive:${request.archiveKind}:${request.eventKey}`)
+  } else if (request.requestKind === 'fault_capture') {
+    enqueueOperation(request, `fault_capture:${request.eventKey}`)
+  } else if (request.requestKind === 'fault_recovery') {
+    enqueueOperation(request, 'fault_recovery')
+  } else if (request.requestKind === 'fault_keys') {
+    enqueueOperation(request, 'fault_keys')
+  } else if (request.requestKind === 'file_copy') {
+    enqueueOperation(request, `file_copy:${request.sourcePath}:${request.targetPath}`)
   }
 }
 
-function enqueueArchive(request: DiagnosticsArchiveRequest): void {
-  for (const pending of archiveQueue) {
-    if (pending.request.archiveKind === request.archiveKind &&
-      (request.archiveKind !== 'fault' || pending.request.eventKey === request.eventKey)) {
-      // 等价归档只保留最新内容，但每个调用方的 requestId 都必须收到终态。
+// 故障落盘、归档压缩和导出包复制共用同一个串行队列：调用方看到的每个
+// requestId 都会收到一次终态，等价的待处理请求只保留最新 payload。
+function enqueueOperation(request: DiagnosticsHeavyRequest, mergeKey: string): void {
+  for (const pending of operationQueue) {
+    if (pending.mergeKey === mergeKey) {
       pending.request = request
       pending.requestIds.push(request.requestId)
       return
     }
   }
-  const pending: PendingArchive = { request: request, requestIds: [request.requestId] }
-  archiveQueue.push(pending)
-  void drainArchiveQueue()
+  const pending: PendingOperation = {
+    request: request,
+    requestIds: [request.requestId],
+    mergeKey: mergeKey
+  }
+  operationQueue.push(pending)
+  void drainOperationQueue()
 }
 
-async function drainArchiveQueue(): Promise<void> {
-  if (processingArchive) {
+async function drainOperationQueue(): Promise<void> {
+  if (processingOperation) {
     return
   }
-  processingArchive = true
+  processingOperation = true
   try {
-    while (archiveQueue.length > 0) {
-      const pending = archiveQueue.shift()
+    while (operationQueue.length > 0) {
+      const pending = operationQueue.shift()
       if (pending === undefined) {
         continue
       }
-      const result = await runArchive(pending.request)
-      postArchiveResult(result, pending.requestIds)
+      const result = await runHeavyOperation(pending.request)
+      postOperationResult(result, pending.requestIds)
     }
   } finally {
-    processingArchive = false
+    processingOperation = false
   }
+}
+
+async function runHeavyOperation(request: DiagnosticsHeavyRequest): Promise<DiagnosticsWorkerResult> {
+  if (request.requestKind === 'archive') {
+    return runArchive(request)
+  }
+  if (request.requestKind === 'fault_capture') {
+    return runFaultCapture(request)
+  }
+  if (request.requestKind === 'fault_recovery') {
+    return runFaultRecovery(request)
+  }
+  if (request.requestKind === 'fault_keys') {
+    return runFaultKeys(request)
+  }
+  return runFileCopy(request)
 }
 
 function enqueueSnapshot(request: DiagnosticsSnapshotRequest): void {
@@ -146,7 +190,7 @@ async function drainSnapshots(): Promise<void> {
   }
 }
 
-function postArchiveResult(result: DiagnosticsWorkerResult, requestIds: string[]): void {
+function postOperationResult(result: DiagnosticsWorkerResult, requestIds: string[]): void {
   for (const requestId of requestIds) {
     const response: DiagnosticsWorkerResult = {
       requestId: requestId,
@@ -156,6 +200,9 @@ function postArchiveResult(result: DiagnosticsWorkerResult, requestIds: string[]
       archivePath: result.archivePath,
       durationMs: result.durationMs,
       mergedRequestIds: requestIds
+    }
+    if (result.eventKeys !== undefined) {
+      response.eventKeys = result.eventKeys
     }
     workerPort.postMessage(response)
   }
@@ -239,6 +286,324 @@ async function runArchive(request: DiagnosticsArchiveRequest): Promise<Diagnosti
       mergedRequestIds: []
     }
   }
+}
+
+// 启动去重只做目录级扫描，不读取 params/external_log，也不触发压缩。
+function runFaultKeys(request: DiagnosticsFaultKeysRequest): DiagnosticsWorkerResult {
+  const startedAt = Date.now()
+  const keys: string[] = []
+  try {
+    if (fileExists(request.crashesDir)) {
+      for (const entry of fs.listFileSync(request.crashesDir)) {
+        if (!EVENT_KEY_PATTERN.test(entry)) {
+          continue
+        }
+        const eventDir = `${request.crashesDir}/${entry}`
+        // 只有真正发布完成的故障才参与持久去重；params.json 只表示"事件已收到"，
+        // 未完成事件必须保留给本次回放/恢复继续复制 external_log 和压缩。
+        if (isFaultComplete(eventDir)) {
+          keys.push(entry)
+        }
+      }
+    }
+    return {
+      requestId: request.requestId,
+      success: true,
+      stage: 'fault_keys',
+      message: '',
+      archivePath: '',
+      durationMs: Date.now() - startedAt,
+      mergedRequestIds: [],
+      eventKeys: keys
+    }
+  } catch (e) {
+    return failureResult(request.requestId, 'fault_keys', errorName(e), '', startedAt)
+  }
+}
+
+// 故障事件：Worker 内完成 crashes/<eventKey> 建目录、params 原子写入、
+// external_log 分块复制/清理、fault ZIP 发布和 complete.json 完成标记。
+// complete.json 是唯一的持久完成标记；params.json 只是原始事件快照。
+async function runFaultCapture(request: DiagnosticsFaultCaptureRequest): Promise<DiagnosticsWorkerResult> {
+  const startedAt = Date.now()
+  let stage: DiagnosticsArchiveStage = 'fault_prepare'
+  const eventKey = sanitizeEventKey(request.eventKey)
+  if (!EVENT_KEY_PATTERN.test(eventKey)) {
+    return failureResult(request.requestId, stage, 'invalid_event_key', '', startedAt)
+  }
+  const eventDir = `${request.crashesDir}/${eventKey}`
+  const paramsPath = `${eventDir}/params.json`
+  const completePath = `${eventDir}/${FAULT_COMPLETE_FILE}`
+  try {
+    ensureDirectory(request.crashesDir)
+    ensureDirectory(eventDir)
+    if (isFaultComplete(eventDir)) {
+      const completion = readFaultCompletion(completePath)
+      return successResult(request.requestId, 'fault_complete',
+        completion === null ? '' : completion.archivePath, startedAt)
+    }
+    // 有 complete.json 但 ZIP 已被清理时，删除旧标记并重新生成。
+    if (fileExists(completePath)) {
+      safeDeleteFile(completePath)
+    }
+
+    if (!fileExists(paramsPath)) {
+      if (request.paramsJson.length === 0) {
+        throw new Error('missing fault params')
+      }
+      atomicWrite(eventDir, 'params.json', request.paramsJson)
+    }
+
+    stage = 'fault_log_copy'
+    copyExternalFaultLogs(request.externalLogPaths, eventDir)
+
+    stage = 'fault_compress'
+    const archivePath = await publishFaultArchive(
+      request.outputDir, request.logDir, request.crashesDir, request.manifest, eventKey
+    )
+
+    stage = 'fault_complete'
+    writeFaultCompletion(eventDir, eventKey, archivePath)
+    return successResult(request.requestId, 'fault_complete', archivePath, startedAt)
+  } catch (e) {
+    return failureResult(request.requestId, stage, errorName(e), '', startedAt)
+  }
+}
+
+// 启动补全：上次进程如果在复制/压缩/写完成标记之间被杀，这里从已经落盘的
+// params.json + fault-N.log 继续生成 ZIP，而不是因为 params.json 存在就跳过。
+async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promise<DiagnosticsWorkerResult> {
+  const startedAt = Date.now()
+  let stage: DiagnosticsArchiveStage = 'fault_recovery'
+  try {
+    if (!fileExists(request.crashesDir)) {
+      return successResult(request.requestId, 'fault_complete', '', startedAt)
+    }
+    for (const entry of fs.listFileSync(request.crashesDir)) {
+      if (!EVENT_KEY_PATTERN.test(entry)) {
+        continue
+      }
+      const eventDir = `${request.crashesDir}/${entry}`
+      try {
+        if (!fs.statSync(eventDir).isDirectory()) {
+          continue
+        }
+      } catch (_) {
+        continue
+      }
+      if (!fileExists(`${eventDir}/params.json`) || isFaultComplete(eventDir)) {
+        continue
+      }
+      const completePath = `${eventDir}/${FAULT_COMPLETE_FILE}`
+      if (fileExists(completePath)) {
+        safeDeleteFile(completePath)
+      }
+      stage = 'fault_compress'
+      const archivePath = await publishFaultArchive(
+        request.outputDir, request.logDir, request.crashesDir, request.manifest, entry
+      )
+      stage = 'fault_complete'
+      writeFaultCompletion(eventDir, entry, archivePath)
+    }
+    return successResult(request.requestId, 'fault_complete', '', startedAt)
+  } catch (e) {
+    return failureResult(request.requestId, stage, errorName(e), '', startedAt)
+  }
+}
+
+async function publishFaultArchive(outputDir: string, logDir: string, crashesDir: string,
+  meta: DiagnosticsArchiveManifestMeta, eventKey: string): Promise<string> {
+  const stagingDir = `${outputDir}/.staging-fault-${eventKey}-${Date.now()}-${Math.floor(Math.random() * 1000000)}`
+  try {
+    cleanStaleStaging(outputDir)
+    HarmonyDiagnosticsArchive.removeTree(stagingDir)
+    ensureDirectory(stagingDir)
+    const logSummary = copyPersistedLogs(logDir, stagingDir)
+    const crashEvents = copyCrashAttachments(crashesDir, stagingDir, 'fault', eventKey, 0)
+    const manifest = buildManifestFrom(meta, 'fault', eventKey, logSummary, [], crashEvents)
+    HarmonyDiagnosticsArchive.writeTextFile(
+      stagingDir, 'diagnostics_manifest.json', JSON.stringify(manifest, null, 2)
+    )
+    return await HarmonyDiagnosticsArchive.compressDirectory(
+      stagingDir, outputDir, `sujian-diagnostics-fault-${eventKey}`, true
+    )
+  } finally {
+    HarmonyDiagnosticsArchive.removeTree(stagingDir)
+  }
+}
+
+// external_log 可能是大文件：按固定块复制，成功后删除系统源文件。源文件已不存在
+// 时不阻塞补全（上次可能已经复制过，fault-N.log 仍在事件目录）。
+function copyExternalFaultLogs(paths: string[], eventDir: string): void {
+  for (let index = 0; index < paths.length; index++) {
+    const sourcePath = paths[index]
+    if (sourcePath.length === 0 || !fileExists(sourcePath)) {
+      continue
+    }
+    copyFileChunked(sourcePath, `${eventDir}/fault-${index + 1}.log`)
+    try {
+      fs.unlinkSync(sourcePath)
+    } catch (_) {
+      hilog.warn(0x0000, LOG_TAG, 'unable to remove copied external fault log source')
+    }
+  }
+}
+
+function isFaultComplete(eventDir: string): boolean {
+  const completePath = `${eventDir}/${FAULT_COMPLETE_FILE}`
+  const completion = readFaultCompletion(completePath)
+  return completion !== null && completion.archivePath.length > 0 && fileExists(completion.archivePath)
+}
+
+function readFaultCompletion(path: string): FaultCompletion | null {
+  if (!fileExists(path)) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(readTextFile(path)) as FaultCompletion
+    if (parsed !== null && typeof parsed.archivePath === 'string' &&
+      typeof parsed.completedAtMs === 'number') {
+      return parsed
+    }
+  } catch (_) {
+  }
+  return null
+}
+
+function writeFaultCompletion(eventDir: string, eventKey: string, archivePath: string): void {
+  const completion: FaultCompletion = {
+    schemaVersion: 1,
+    eventKey: eventKey,
+    archivePath: archivePath,
+    completedAtMs: Date.now()
+  }
+  atomicWrite(eventDir, FAULT_COMPLETE_FILE, JSON.stringify(completion, null, 2))
+}
+
+// 导出包搬运：源路径在沙箱，目标可以是沙箱路径或 picker URI。固定 256 KiB
+// 缓冲区分块读写，不按 ZIP 大小一次性申请 ArrayBuffer。
+async function runFileCopy(request: DiagnosticsFileCopyRequest): Promise<DiagnosticsWorkerResult> {
+  const startedAt = Date.now()
+  try {
+    if (!fileExists(request.sourcePath)) {
+      return failureResult(request.requestId, 'file_copy', 'source_missing', '', startedAt)
+    }
+    const sourceSize = fs.statSync(request.sourcePath).size
+    if (sourceSize <= 0) {
+      return failureResult(request.requestId, 'file_copy', 'source_empty', '', startedAt)
+    }
+    if (!request.targetPath.includes('://')) {
+      ensureDirectory(parentDir(request.targetPath))
+    }
+
+    const sourceFd = fs.openSync(request.sourcePath, fs.OpenMode.READ_ONLY).fd
+    let targetFd = -1
+    try {
+      // picker 返回的是已创建的文档 URI，只申请读写；沙箱分享路径需要创建/截断。
+      const targetMode = request.targetPath.includes('://')
+        ? fs.OpenMode.READ_WRITE
+        : (fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC)
+      targetFd = fs.openSync(request.targetPath, targetMode).fd
+      const buffer = new ArrayBuffer(FILE_COPY_CHUNK_BYTES)
+      let copied = 0
+      while (copied < sourceSize) {
+        const remaining = sourceSize - copied
+        const chunk = remaining < FILE_COPY_CHUNK_BYTES ? remaining : FILE_COPY_CHUNK_BYTES
+        const readSize = fs.readSync(sourceFd, buffer, { length: chunk })
+        if (readSize <= 0) {
+          throw new Error('file copy read incomplete')
+        }
+        let written = 0
+        while (written < readSize) {
+          const part: ArrayBuffer = written === 0 && readSize === chunk
+            ? buffer : buffer.slice(written, readSize)
+          const writeSize = fs.writeSync(targetFd, part, { length: readSize - written })
+          if (writeSize <= 0) {
+            throw new Error('file copy write incomplete')
+          }
+          written += writeSize
+        }
+        copied += readSize
+      }
+    } finally {
+      fs.closeSync(sourceFd)
+      if (targetFd >= 0) {
+        fs.closeSync(targetFd)
+      }
+    }
+    return successResult(request.requestId, 'file_copy', request.targetPath, startedAt)
+  } catch (e) {
+    return failureResult(request.requestId, 'file_copy', errorName(e), '', startedAt)
+  }
+}
+
+function copyFileChunked(sourcePath: string, targetPath: string): void {
+  const sourceSize = fs.statSync(sourcePath).size
+  const sourceFd = fs.openSync(sourcePath, fs.OpenMode.READ_ONLY).fd
+  let targetFd = -1
+  try {
+    targetFd = fs.openSync(targetPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC).fd
+    const buffer = new ArrayBuffer(FILE_COPY_CHUNK_BYTES)
+    let copied = 0
+    while (copied < sourceSize) {
+      const remaining = sourceSize - copied
+      const chunk = remaining < FILE_COPY_CHUNK_BYTES ? remaining : FILE_COPY_CHUNK_BYTES
+      const readSize = fs.readSync(sourceFd, buffer, { length: chunk })
+      if (readSize <= 0) {
+        throw new Error('fault log copy read incomplete')
+      }
+      let written = 0
+      while (written < readSize) {
+        const part: ArrayBuffer = written === 0 && readSize === chunk
+          ? buffer : buffer.slice(written, readSize)
+        const writeSize = fs.writeSync(targetFd, part, { length: readSize - written })
+        if (writeSize <= 0) {
+          throw new Error('fault log copy write incomplete')
+        }
+        written += writeSize
+      }
+      copied += readSize
+    }
+  } finally {
+    fs.closeSync(sourceFd)
+    if (targetFd >= 0) {
+      fs.closeSync(targetFd)
+    }
+  }
+}
+
+function successResult(requestId: string, stage: DiagnosticsArchiveStage, archivePath: string,
+  startedAt: number): DiagnosticsWorkerResult {
+  return {
+    requestId: requestId,
+    success: true,
+    stage: stage,
+    message: '',
+    archivePath: archivePath,
+    durationMs: Date.now() - startedAt,
+    mergedRequestIds: []
+  }
+}
+
+function failureResult(requestId: string, stage: DiagnosticsArchiveStage, message: string,
+  archivePath: string, startedAt: number): DiagnosticsWorkerResult {
+  return {
+    requestId: requestId,
+    success: false,
+    stage: stage,
+    message: message,
+    archivePath: archivePath,
+    durationMs: Date.now() - startedAt,
+    mergedRequestIds: []
+  }
+}
+
+function errorName(e: Object): string {
+  return e instanceof Error ? e.name : 'operation_failed'
+}
+
+function sanitizeEventKey(key: string): string {
+  return key.replace(/[^A-Za-z0-9_-]/g, '_')
 }
 
 function writeAttachment(stagingDir: string, attachment: DiagnosticsArchiveAttachment): void {
@@ -352,6 +717,12 @@ function copyCrashAttachments(crashesDir: string, stagingDir: string, archiveKin
 
 function buildManifest(request: DiagnosticsArchiveRequest, logs: LogSummary,
   attachments: string[], crashEvents: string[]): DiagnosticsManifest {
+  return buildManifestFrom(request.manifest, request.archiveKind, request.eventKey,
+    logs, attachments, crashEvents)
+}
+
+function buildManifestFrom(meta: DiagnosticsArchiveManifestMeta, archiveKind: string, eventKey: string,
+  logs: LogSummary, attachments: string[], crashEvents: string[]): DiagnosticsManifest {
   const collection: ManifestCollection = {
     logs: logs,
     attachments: attachments,
@@ -360,13 +731,13 @@ function buildManifest(request: DiagnosticsArchiveRequest, logs: LogSummary,
   return {
     schema_version: 1,
     platform: 'harmony',
-    archive_kind: request.archiveKind,
-    data_version: request.manifest.dataVersion,
-    build_identity: request.manifest.buildKey,
-    app_version: request.manifest.appVersion,
-    git_sha: request.manifest.gitSha,
-    exported_at: request.manifest.exportedAt,
-    event_key: request.eventKey,
+    archive_kind: archiveKind,
+    data_version: meta.dataVersion,
+    build_identity: meta.buildKey,
+    app_version: meta.appVersion,
+    git_sha: meta.gitSha,
+    exported_at: meta.exportedAt,
+    event_key: eventKey,
     collection: collection
   }
 }

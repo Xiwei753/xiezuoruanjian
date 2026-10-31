@@ -68,6 +68,9 @@ QtObject {
     readonly property int _embedDiameter: 200
 
     signal graphChanged()
+    // 只有真正落盘成功的节点/嵌入结构或标题变化才发出；位置、镜头、
+    // 边和链接变化不触发导航树重载。
+    signal structureChanged()
     signal selectionCleared()
     signal nodeSelected(var node)
     signal edgeSelected(var edge)
@@ -507,6 +510,7 @@ QtObject {
             clearError();
             loadGraph();
             selectNode(res.data.id);
+            structureChanged();
         } else {
             setError(backendErrorText(res, qsTr("创建节点失败")));
         }
@@ -567,6 +571,7 @@ QtObject {
                 loadGraph();
                 if (graphData === null)
                     return { success: false, message: errorMessage || qsTr("更新节点失败") }
+                structureChanged()
                 return { success: true }
             }
 
@@ -575,6 +580,7 @@ QtObject {
                 loadGraph()
                 if (graphData === null)
                     return { success: false, message: errorMessage || qsTr("更新节点失败") }
+                structureChanged()
                 return { success: true }
             }
 
@@ -582,6 +588,7 @@ QtObject {
             // 模型只 set 对应 row，Repeater delegate 保持稳定。
             buildModels();
             computeEdgeRenders(null);
+            structureChanged()
             return { success: true }
         } else {
             setError(backendErrorText(res, qsTr("更新节点失败")));
@@ -596,6 +603,7 @@ QtObject {
             clearError();
             loadGraph();
             clearSelection();
+            structureChanged();
         } else {
             _reloadOnConflict(res);
             setError(backendErrorText(res, qsTr("删除节点失败")));
@@ -676,6 +684,7 @@ QtObject {
                 }
                 embedsModel = nextEmbeds;
                 graphChanged();
+                structureChanged();
             } else {
                 setError(backendErrorText(nodeRes, qsTr("更新节点失败")));
             }
@@ -705,6 +714,7 @@ QtObject {
             }
             embedsModel = nextEmbeds;
             graphChanged();
+            structureChanged();
         } else {
             setError(backendErrorText(res, qsTr("更新子星图入口失败")));
         }
@@ -722,6 +732,7 @@ QtObject {
                 clearError();
                 loadGraph();
                 clearSelection();
+                structureChanged();
             } else {
                 _reloadOnConflict(nodeRes);
                 setError(backendErrorText(nodeRes, qsTr("删除节点失败")));
@@ -736,6 +747,7 @@ QtObject {
             clearError();
             loadGraph();
             clearSelection();
+            structureChanged();
         } else {
             _reloadOnConflict(res);
             setError(backendErrorText(res, qsTr("删除子星图入口失败")));
@@ -766,6 +778,7 @@ QtObject {
         if (instanceId) {
             selectEmbed(instanceId);
         }
+        structureChanged();
     }
 
     // Issue #798: 拖动结束后提交节点新位置。先持久化单节点 position，
