@@ -2648,6 +2648,7 @@ impl WriterCoreApi {
                             project_id: target_sync_result.project_id.clone(),
                             transaction_id: None,
                             event_id: None,
+                            missing_fields: Vec::new(),
                             message: format!("同步正文已落盘，但证明事件记录失败: {detail}"),
                         },
                     );

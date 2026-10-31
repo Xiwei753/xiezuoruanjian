@@ -309,6 +309,8 @@ pub(crate) struct ProofRecoveryIssue {
     pub transaction_id: Option<String>,
     pub event_id: Option<String>,
     pub message: String,
+    /// 恢复证据中无法确认的字段名；只有旧事务缺材料时非空。
+    pub missing_fields: Vec<String>,
 }
 
 impl ProofRecoveryIssue {
@@ -319,6 +321,9 @@ impl ProofRecoveryIssue {
         }
         if let Some(event_id) = &self.event_id {
             text.push_str(&format!("（事件 {event_id}）"));
+        }
+        if !self.missing_fields.is_empty() {
+            text.push_str(&format!("（缺失字段: {}）", self.missing_fields.join("、")));
         }
         text
     }
@@ -681,6 +686,7 @@ impl ProofRecoveryState {
                 && existing.transaction_id == issue.transaction_id
                 && existing.event_id == issue.event_id
                 && existing.message == issue.message
+                && existing.missing_fields == issue.missing_fields
         });
         if !duplicate {
             self.issues.push(issue);
@@ -699,6 +705,24 @@ impl ProofRecoveryState {
             transaction_id,
             event_id,
             message,
+            missing_fields: Vec::new(),
+        });
+    }
+
+    fn add_issue_with_missing(
+        &mut self,
+        project_id: Option<String>,
+        transaction_id: Option<String>,
+        event_id: Option<String>,
+        message: String,
+        missing_fields: Vec<String>,
+    ) {
+        self.record_issue(ProofRecoveryIssue {
+            project_id,
+            transaction_id,
+            event_id,
+            message,
+            missing_fields,
         });
     }
 }
@@ -728,122 +752,149 @@ fn event_workspace_path(event_id: &str) -> Option<String> {
     }
 }
 
-/// 从旧版事务目录重建证明恢复材料。
+/// 旧事务无法从不可变记录确认恢复字段时，携带具体缺失项。
+#[derive(Debug, Clone)]
+struct LegacyRecoveryGap {
+    missing_fields: Vec<String>,
+    reason: String,
+}
+
+/// 从稳定事件 ID 解析原事务内动作序号。
+fn event_action_index(event_id: &str) -> Option<usize> {
+    let rest = event_id.strip_prefix("sync:")?;
+    let (_run_id, rest) = rest.split_once(':')?;
+    let (_workspace_path, action_index) = rest.rsplit_once(':')?;
+    action_index.parse::<usize>().ok()
+}
+
+/// 核对旧版事务里还能证明哪些字段。
 ///
-/// 只能使用真实持久证据：事务创建时间、事务条目、备份目录中的前置正文、
-/// 已提交到 live 的正文文件。缺少任一必要证据时返回具体原因，不能凭空
-/// 生成时间、来源设备或 before/after。
-fn legacy_proof_recovery_record(
-    core: &crate::facade::WriterCore,
+/// `manifest.created_at_ms` 只是事务创建时间，不能冒充证明事件时间；
+/// `resolve_origin_device_id()` 只能说明本机写入了这个事务，不能证明原始远端来源；
+/// live 正文在提交后可能被继续编辑，也不能冒充当时的提交快照。
+/// 所以这里只读取事务目录内的不可变材料，并把无法证明的字段原样报告给调用方。
+fn legacy_recovery_gap(
     transaction: &TransactionRecovery,
     event_id: &str,
-) -> std::result::Result<ProofRecoveryRecord, String> {
-    let workspace_path = event_workspace_path(event_id)
-        .ok_or_else(|| "事件 ID 中没有可解析的 workspace 路径".to_string())?;
-    let (project_id, volume_id, chapter_id) = chapter_path_parts(Path::new(&workspace_path))
-        .ok_or_else(|| format!("事件路径不是章节正文: {workspace_path}"))?;
-    let manifest = load_transaction_manifest(transaction)
-        .map_err(|error| format!("读取事务 manifest 失败: {error}"))?
-        .ok_or_else(|| "事务 manifest 已不存在".to_string())?;
+) -> LegacyRecoveryGap {
+    let mut missing_fields = vec![
+        "occurred_at_ms".to_string(),
+        "source_device_id".to_string(),
+    ];
+    let Some(workspace_path) = event_workspace_path(event_id) else {
+        missing_fields.push("workspace_path".to_string());
+        return LegacyRecoveryGap {
+            missing_fields,
+            reason: "事件 ID 无法解析出原始 workspace 路径".to_string(),
+        };
+    };
+    let Some((project_id, _, _)) = chapter_path_parts(Path::new(&workspace_path)) else {
+        missing_fields.push("chapter_identity".to_string());
+        return LegacyRecoveryGap {
+            missing_fields,
+            reason: "事件 workspace 路径无法解析出作品/卷/章节".to_string(),
+        };
+    };
+    let manifest = match load_transaction_manifest(transaction) {
+        Ok(Some(manifest)) => manifest,
+        Ok(None) => {
+            return LegacyRecoveryGap {
+                missing_fields,
+                reason: "事务 manifest 已不存在".to_string(),
+            };
+        }
+        Err(error) => {
+            return LegacyRecoveryGap {
+                missing_fields,
+                reason: format!("读取事务 manifest 失败: {error}"),
+            };
+        }
+    };
     if manifest.created_at_ms <= 0 {
-        return Err("事务 manifest 缺少原始发生时间".to_string());
+        // 仍然只作事务时间参考，不能拿来补 occurred_at_ms。
     }
-    let normalized_target = workspace_path.trim_start_matches('/').to_string();
-    // 项目 target 的事务根是 projects/<pid>，manifest 条目保存项目相对路径
-    // （volumes/...），而事件 ID 保存 workspace 相对路径（projects/<pid>/volumes/...）。
-    // app target 的事务根是 app_data_root，两者本来就一致；先精确匹配，再按项目前缀匹配。
+    let normalized_workspace = workspace_path.trim_start_matches('/');
     let project_prefix = format!("projects/{project_id}/");
-    let entry = manifest
-        .entries
-        .iter()
-        .find(|entry| {
-            let candidate = entry.target_relative.trim_start_matches('/').replace('\\', "/");
-            if candidate == normalized_target {
-                return true;
-            }
-            normalized_target
+    let entry = manifest.entries.iter().find(|entry| {
+        let target = entry.target_relative.replace('\\', "/");
+        target.trim_start_matches('/') == normalized_workspace
+            || normalized_workspace
                 .strip_prefix(&project_prefix)
-                .is_some_and(|stripped| candidate == stripped)
-        })
-        .ok_or_else(|| "事务条目中找不到该章节正文".to_string())?;
-    let target_relative = entry
-        .target_relative
-        .trim_start_matches('/')
-        .replace('\\', "/");
-    let before_text = match manifest
+                .is_some_and(|relative| target.trim_start_matches('/') == relative)
+    });
+    let Some(entry) = entry else {
+        missing_fields.push("transaction_entry".to_string());
+        return LegacyRecoveryGap {
+            missing_fields,
+            reason: "事务 manifest 中找不到对应章节文件条目".to_string(),
+        };
+    };
+    let target_relative = entry.target_relative.replace('\\', "/");
+    let normalized_target = target_relative.trim_start_matches('/');
+    let backup = manifest
         .backup_entries
         .iter()
         .find(|backup| match backup {
-            BackupEntry::RestoreFile {
-                target_relative: backup_target,
-                ..
-            } => {
-                backup_target
-                    .trim_start_matches('/')
-                    .replace('\\', "/")
-                    == target_relative
+            BackupEntry::RestoreFile { target_relative, .. }
+            | BackupEntry::RemoveCreated { target_relative } => {
+                target_relative.replace('\\', "/").trim_start_matches('/') == normalized_target
             }
-            BackupEntry::RemoveCreated {
-                target_relative: backup_target,
-            } => {
-                backup_target
-                    .trim_start_matches('/')
-                    .replace('\\', "/")
-                    == target_relative
-            }
-        }) {
+        });
+    let before_known = match backup {
         Some(BackupEntry::RestoreFile {
             backup_filename, ..
-        }) => {
-            let path = transaction.tx_dir.join("backup").join(backup_filename);
-            let bytes = fs::read(&path)
-                .map_err(|error| format!("读取事务备份 {} 失败: {error}", path.display()))?;
-            Some(String::from_utf8(bytes).map_err(|error| {
-                format!("事务备份 {} 不是 UTF-8: {error}", path.display())
-            })?)
-        }
-        Some(BackupEntry::RemoveCreated { .. }) => None,
-        None => {
-            return Err(
-                "事务没有记录前置正文快照（缺少 backup_entries 与 proof-recovery.json）"
-                    .to_string(),
-            )
-        }
+        }) => transaction
+            .tx_dir
+            .join("backup")
+            .join(backup_filename)
+            .is_file(),
+        Some(BackupEntry::RemoveCreated { .. }) => true,
+        None => false,
     };
-    let after_text = if entry.is_delete {
-        None
-    } else {
-        let path = transaction.target_root.join(&target_relative);
-        let bytes = fs::read(&path)
-            .map_err(|error| format!("读取提交后正文 {} 失败: {error}", path.display()))?;
-        Some(
-            String::from_utf8(bytes)
-                .map_err(|error| format!("提交后正文 {} 不是 UTF-8: {error}", path.display()))?,
-        )
-    };
-    let source_device_id = core
-        .get_stats_api()
-        .store()
-        .resolve_origin_device_id()
-        .map_err(|error| format!("读取本机来源设备失败: {error}"))?;
-    Ok(ProofRecoveryRecord {
-        event_id: event_id.to_string(),
-        project_id,
-        volume_id,
-        chapter_id,
-        workspace_path: normalized_target,
-        before_text,
-        after_text,
-        source_device_id,
-        occurred_at_ms: manifest.created_at_ms,
-    })
+    if !before_known {
+        missing_fields.push("before_text".to_string());
+    }
+    let after_known = entry.is_delete
+        || transaction
+            .tx_dir
+            .join(&entry.staging_filename)
+            .is_file();
+    if !after_known {
+        missing_fields.push("after_text".to_string());
+    }
+    LegacyRecoveryGap {
+        missing_fields,
+        reason: format!(
+            "旧事务没有 proof-recovery.json；manifest 只有事务时间/文件条目，无法证明原始事件时间、来源设备和提交后快照（作品 {project_id}）"
+        ),
+    }
+}
+
+/// 单条待补证明事件。先按章节、真实发生时间、原事务动作序号和事件 ID 排序，
+/// 再交给证明链校验；不能让 HashMap 遍历顺序决定 before→after 依赖。
+#[derive(Debug)]
+struct RecoveryWorkItem {
+    record: ProofRecoveryRecord,
+    transaction_id: Option<String>,
+}
+
+/// 按章节聚合后，按真实发生时间/动作序号/事件 ID 排序。
+fn recovery_work_order(left: &RecoveryWorkItem, right: &RecoveryWorkItem) -> std::cmp::Ordering {
+    left.record
+        .project_id
+        .cmp(&right.record.project_id)
+        .then_with(|| left.record.volume_id.cmp(&right.record.volume_id))
+        .then_with(|| left.record.chapter_id.cmp(&right.record.chapter_id))
+        .then_with(|| left.record.occurred_at_ms.cmp(&right.record.occurred_at_ms))
+        .then_with(|| {
+            event_action_index(&left.record.event_id)
+                .unwrap_or(usize::MAX)
+                .cmp(&event_action_index(&right.record.event_id).unwrap_or(usize::MAX))
+        })
+        .then_with(|| left.record.event_id.cmp(&right.record.event_id))
 }
 
 /// 扫描并恢复所有未完成证明，返回可在本轮同步内复用的状态。
-///
-/// 事务扫描既从意图文件的 `transaction_root_for_intent` 进入，也遍历
-/// `app_data_root` 与 `projects_root/<pid>`；这样 manifest 仍链接事件、
-/// 但意图文件已丢失的旧事务也能进入恢复循环。
 pub(crate) fn recover_pending_state(
     core: &crate::facade::WriterCore,
 ) -> crate::Result<ProofRecoveryState> {
@@ -860,17 +911,19 @@ pub(crate) fn recover_pending_state(
             None,
             None,
             None,
-            format!("意图文件 {} 无法解析: {}", error.path.display(), error.message),
+            format!(
+                "证明意图文件无法读取（{}）: {}",
+                error.path.display(),
+                error.message
+            ),
         );
     }
 
     // 双向扫描：既从意图文件找事务根，也遍历所有可能保存正文事务的根。
-    // 只从意图反推时，意图文件丢失的已提交事务永远不会进入恢复循环。
-    let intent_event_ids: HashSet<String> = pending
-        .intents
-        .iter()
-        .map(|intent| intent.event_id.clone())
-        .collect();
+    let mut intent_event_ids: HashSet<String> = HashSet::new();
+    for intent in &pending.intents {
+        intent_event_ids.insert(intent.event_id.clone());
+    }
     let mut transaction_roots: HashSet<PathBuf> = HashSet::new();
     transaction_roots.insert(core.app_data_root().to_path_buf());
     match fs::read_dir(core.projects_root()) {
@@ -905,7 +958,7 @@ pub(crate) fn recover_pending_state(
     let mut known_transactions: HashMap<String, (PathBuf, TransactionRecovery)> = HashMap::new();
     let mut blocked_ids = HashSet::new();
     let mut blocked_roots = HashSet::new();
-    let mut all_event_ids: HashSet<String> = intent_event_ids.clone();
+    let mut all_event_ids = intent_event_ids.clone();
     for (transaction_root, scan) in &scans {
         if !scan.errors.is_empty() {
             for error in &scan.errors {
@@ -918,7 +971,7 @@ pub(crate) fn recover_pending_state(
                     None,
                     None,
                     format!(
-                        "正文事务目录 {} 无法读取: {error}",
+                        "正文事务状态未知（{}）: {error}",
                         transaction_root.display()
                     ),
                 );
@@ -950,69 +1003,31 @@ pub(crate) fn recover_pending_state(
         }
     }
 
-    // 本轮只查一次本机事件库：所有意图与事务链接的事件 ID 合并后批量查询。
+    // 只做一次批量查询：意图文件、manifest 链接和旧事务都共用这次落盘事实。
     let persisted_events = core
         .get_stats_api()
         .store()
         .find_events_by_ids(&all_event_ids)?;
     state.persisted_event_ids = persisted_events.keys().cloned().collect();
-
-    let mut recovered = 0usize;
-    let mut completed_ids: HashSet<String> = HashSet::new();
+    let mut completed_ids = state.persisted_event_ids.clone();
     let mut to_remove: HashSet<String> = HashSet::new();
+    let mut work_items: Vec<RecoveryWorkItem> = Vec::new();
+
     for intent in pending.intents {
         if state.persisted_event_ids.contains(&intent.event_id) {
-            completed_ids.insert(intent.event_id.clone());
             to_remove.insert(intent.event_id.clone());
             continue;
         }
-
         let transaction_root =
             transaction_root_for_intent(&intent, core.projects_root(), core.app_data_root());
         if let Some((_, transaction)) = committed.get(&intent.event_id) {
-            log::debug!(
-                "[proof_intent] 按已提交事务 {} 补记事件 {}",
-                transaction.transaction_id,
-                intent.event_id
-            );
-            match core.record_sync_content_change_at(
-                &intent.project_id,
-                &intent.volume_id,
-                &intent.chapter_id,
-                intent.before_text.as_deref(),
-                intent.after_text.as_deref(),
-                &intent.event_id,
-                &intent.source_device_id,
-                "",
-                intent.occurred_at_ms,
-            ) {
-                Ok(_) => {
-                    completed_ids.insert(intent.event_id.clone());
-                    to_remove.insert(intent.event_id.clone());
-                    state.mark_event_persisted(&intent.event_id);
-                }
-                Err(error) => {
-                    log::warn!(
-                        "[proof_intent] 恢复同步证明事件失败 {}: {error}",
-                        intent.event_id
-                    );
-                    state.add_issue(
-                        Some(intent.project_id.clone()),
-                        Some(transaction.transaction_id.clone()),
-                        Some(intent.event_id.clone()),
-                        format!("补记证明事件失败: {error}"),
-                    );
-                }
-            }
+            work_items.push(RecoveryWorkItem {
+                record: intent.recovery_record(),
+                transaction_id: Some(transaction.transaction_id.clone()),
+            });
             continue;
         }
-
         if blocked_ids.contains(&intent.event_id) || blocked_roots.contains(&transaction_root) {
-            log::warn!(
-                "[proof_intent] 正文事务状态未确认，保留意图 {}（{}）",
-                intent.event_id,
-                intent.workspace_path
-            );
             state.add_issue(
                 Some(intent.project_id.clone()),
                 None,
@@ -1021,63 +1036,23 @@ pub(crate) fn recover_pending_state(
             );
             continue;
         }
-
-        // 新格式意图在 prepare 时已写入 target_kind，正文提交必须经过同一
-        // SaveTransaction 链接。如果事务根里既没有该 ID 的已提交记录，也没有
-        // Prepared/读取错误，说明事务从未创建或明确回滚：按未提交清理，不能
-        // 再用 live 正文猜测，否则未提交的新章节会永久卡住同步，或把别的操作
-        // 恰好写出的 after 误记成本次同步。
         if !intent.target_kind.is_empty() {
-            log::warn!(
-                "[proof_intent] 新格式意图没有对应提交事务，按未提交清理 {}（{}）",
-                intent.event_id,
-                intent.workspace_path
-            );
+            // 新格式意图在 prepare 时已写入 target_kind，正文提交必须经过同一
+            // SaveTransaction 链接；没有事务说明从未提交或已回滚。
             to_remove.insert(intent.event_id.clone());
             continue;
         }
-
-        // 兼容没有事务链接的旧意图：只有能证明正文仍停在 before 时才清理。
         match legacy_live_state(&intent, core.projects_root()) {
             LegacyLiveState::Uncommitted => {
                 to_remove.insert(intent.event_id.clone());
             }
             LegacyLiveState::Committed => {
-                match core.record_sync_content_change_at(
-                    &intent.project_id,
-                    &intent.volume_id,
-                    &intent.chapter_id,
-                    intent.before_text.as_deref(),
-                    intent.after_text.as_deref(),
-                    &intent.event_id,
-                    &intent.source_device_id,
-                    "",
-                    intent.occurred_at_ms,
-                ) {
-                    Ok(_) => {
-                        completed_ids.insert(intent.event_id.clone());
-                        to_remove.insert(intent.event_id.clone());
-                        state.mark_event_persisted(&intent.event_id);
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "[proof_intent] 补记旧同步证明事件失败 {}: {error}",
-                            intent.event_id
-                        );
-                        state.add_issue(
-                            Some(intent.project_id.clone()),
-                            None,
-                            Some(intent.event_id.clone()),
-                            format!("补记旧同步证明事件失败: {error}"),
-                        );
-                    }
-                }
+                work_items.push(RecoveryWorkItem {
+                    record: intent.recovery_record(),
+                    transaction_id: None,
+                });
             }
             LegacyLiveState::Unknown => {
-                log::warn!(
-                    "[proof_intent] 旧意图缺少事务阶段且正文无法确认，保留意图 {}",
-                    intent.event_id
-                );
                 state.add_issue(
                     Some(intent.project_id.clone()),
                     None,
@@ -1088,66 +1063,83 @@ pub(crate) fn recover_pending_state(
         }
     }
 
-    // 事务仍在、但意图文件已丢失的孤儿事件：先确认事件是否已落盘；
-    // 未落盘时从事务目录内持久化的恢复材料补记。旧版事务没有恢复材料时，
-    // 再从 manifest/备份/live 正文追溯真实证据，绝不凭空生成证明。
-    for (event_id, (_, transaction)) in &known_transactions {
-        if intent_event_ids.contains(event_id) || completed_ids.contains(event_id) {
+    // 事务仍在、但意图文件已丢失的孤儿事件：先查已落盘事实，再读同事务恢复材料。
+    // 迭代顺序不能决定补记顺序；这里只收集，最终统一排序。
+    let mut orphan_ids: Vec<String> = known_transactions.keys().cloned().collect();
+    orphan_ids.sort();
+    for event_id in orphan_ids {
+        if intent_event_ids.contains(&event_id) || completed_ids.contains(&event_id) {
             continue;
         }
-        let project_id = event_project_id(event_id);
-        if state.persisted_event_ids.contains(event_id) {
-            completed_ids.insert(event_id.clone());
-            recovered = recovered.saturating_add(1);
+        let Some((_, transaction)) = known_transactions.get(&event_id) else {
             continue;
-        }
+        };
         if !matches!(
             transaction.phase,
             TransactionPhase::FilesCommitted | TransactionPhase::Finished
         ) {
             state.add_issue(
-                project_id,
+                event_project_id(&event_id),
                 Some(transaction.transaction_id.clone()),
                 Some(event_id.clone()),
                 "正文事务尚未确认提交，证明事件尚未入库".to_string(),
             );
             continue;
         }
-        let record = match load_proof_recovery_records(transaction) {
-            Ok(records) => match records.into_iter().find(|record| record.event_id == *event_id) {
-                Some(record) => Some(record),
-                None => match legacy_proof_recovery_record(core, transaction, event_id) {
-                    Ok(record) => Some(record),
-                    Err(reason) => {
-                        state.add_issue(
-                            project_id.clone(),
-                            Some(transaction.transaction_id.clone()),
-                            Some(event_id.clone()),
-                            format!(
-                                "事务 {} 缺少意图文件 {}，且无法重建原始证明: {reason}",
-                                transaction.transaction_id, event_id
-                            ),
-                        );
-                        None
-                    }
-                },
-            },
+        let records = match load_proof_recovery_records(transaction) {
+            Ok(records) => records,
             Err(error) => {
                 state.add_issue(
-                    project_id.clone(),
+                    event_project_id(&event_id),
                     Some(transaction.transaction_id.clone()),
                     Some(event_id.clone()),
-                    format!(
-                        "事务 {} 的证明恢复材料无法读取: {error}",
-                        transaction.transaction_id
-                    ),
+                    format!("读取事务证明恢复材料失败: {error}"),
                 );
-                None
+                continue;
             }
         };
-        let Some(record) = record else {
+        if let Some(record) = records
+            .into_iter()
+            .find(|record| record.event_id == event_id)
+        {
+            if record.occurred_at_ms <= 0 {
+                state.add_issue_with_missing(
+                    Some(record.project_id.clone()),
+                    Some(transaction.transaction_id.clone()),
+                    Some(event_id.clone()),
+                    "事务证明恢复材料缺少原始事件时间，不能参与证明链排序".to_string(),
+                    vec!["occurred_at_ms".to_string()],
+                );
+                continue;
+            }
+            work_items.push(RecoveryWorkItem {
+                record,
+                transaction_id: Some(transaction.transaction_id.clone()),
+            });
             continue;
-        };
+        }
+        let gap = legacy_recovery_gap(transaction, &event_id);
+        log::warn!(
+            "[proof_intent] 事务 {} 缺少意图文件 {}，且无法重建完整原始证明（缺失字段: {}）",
+            transaction.transaction_id,
+            event_id,
+            gap.missing_fields.join(",")
+        );
+        state.add_issue_with_missing(
+            event_project_id(&event_id),
+            Some(transaction.transaction_id.clone()),
+            Some(event_id.clone()),
+            format!("事务 {} 无法重建原始证明: {}", transaction.transaction_id, gap.reason),
+            gap.missing_fields,
+        );
+    }
+
+    // 同一章节必须按 before→after 顺序重放；跨章节互不依赖，但固定按章节分组，
+    // 避免诊断与重试顺序随 HashMap/目录遍历变化。
+    work_items.sort_by(recovery_work_order);
+    let mut recovered = 0usize;
+    for item in work_items {
+        let record = &item.record;
         match core.record_sync_content_change_at(
             &record.project_id,
             &record.volume_id,
@@ -1160,26 +1152,27 @@ pub(crate) fn recover_pending_state(
             record.occurred_at_ms,
         ) {
             Ok(_) => {
-                completed_ids.insert(event_id.clone());
-                state.mark_event_persisted(event_id);
+                completed_ids.insert(record.event_id.clone());
+                state.mark_event_persisted(&record.event_id);
                 recovered = recovered.saturating_add(1);
             }
             Err(error) => {
                 log::warn!(
-                    "[proof_intent] 从事务 {} 恢复同步证明事件 {} 失败: {error}",
-                    transaction.transaction_id,
-                    event_id
+                    "[proof_intent] 按原始记录恢复同步证明失败 {}: {error}",
+                    record.event_id
                 );
                 state.add_issue(
-                    project_id,
-                    Some(transaction.transaction_id.clone()),
-                    Some(event_id.clone()),
-                    format!("从事务恢复证明事件失败: {error}"),
+                    Some(record.project_id.clone()),
+                    item.transaction_id.clone(),
+                    Some(record.event_id.clone()),
+                    format!("按原始记录补记同步证明失败: {error}"),
                 );
             }
         }
     }
 
+    // 先清理已确认完成的事务目录，再删除其引用的意图文件；事务目录仍在时
+    // 不能先删意图，否则下一次恢复会重新落入“已提交事务 + 缺失意图”的歧义。
     let mut retained_ids: HashSet<String> = HashSet::new();
     for transaction_root in scans.keys() {
         retained_ids.extend(cleanup_completed_transactions(
@@ -1187,8 +1180,6 @@ pub(crate) fn recover_pending_state(
             &completed_ids,
         ));
     }
-    // 事务目录仍在时不能删除它引用的意图文件，否则下次恢复会看到
-    // “已提交事务 + 缺失意图”的不可判定状态。
     to_remove.retain(|event_id| !retained_ids.contains(event_id));
     for event_id in &to_remove {
         if remove_completed_intent(&root, event_id) {
