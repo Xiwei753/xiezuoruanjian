@@ -91,6 +91,7 @@ pub(crate) fn scan_pending_transactions(target_root: &Path) -> TransactionRecove
                         phase: manifest.phase,
                         proof_intent_ids: manifest.proof_intent_ids,
                         tx_dir,
+                        target_root: target_root.to_path_buf(),
                     });
                     continue;
                 }
@@ -246,6 +247,7 @@ pub(crate) fn scan_pending_transactions(target_root: &Path) -> TransactionRecove
                         phase: TransactionPhase::FilesCommitted,
                         proof_intent_ids: restored.proof_intent_ids,
                         tx_dir,
+                        target_root: target_root.to_path_buf(),
                     });
                     continue;
                 }
@@ -273,6 +275,7 @@ pub(crate) fn scan_pending_transactions(target_root: &Path) -> TransactionRecove
             phase,
             proof_intent_ids: manifest.proof_intent_ids,
             tx_dir,
+            target_root: target_root.to_path_buf(),
         });
     }
 

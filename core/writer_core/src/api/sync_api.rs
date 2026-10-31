@@ -2094,6 +2094,15 @@ impl WriterCoreApi {
             // Remote publish succeeded (or was a confirmed no-op).  Only now
             // write the merged content and consensus state back to live, so a
             // failed push cannot advance known_files for unpushed content.
+            // Issue #1021 复核：恢复只在一轮同步内做一次，所有 target 复用同一
+            // 已落盘事件集合/未完成问题，避免每组 target 重解压全部历史事件。
+            let mut proof_recovery_state = match self.core_write().recover_pending_sync_proof_state()
+            {
+                Ok(state) => state,
+                Err(error) => crate::sync::proof_intent::ProofRecoveryState::failed(format!(
+                    "recover pending sync proof intents before commit failed: {error}"
+                )),
+            };
             for pending in pending_commits {
                 let PendingTargetCommit {
                     target_index,
@@ -2127,6 +2136,7 @@ impl WriterCoreApi {
                         prepared_failure,
                         &staging_runs,
                         &target_sync_result,
+                        &mut proof_recovery_state,
                     );
                 let commit_outcome =
                     crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
@@ -2379,6 +2389,7 @@ impl WriterCoreApi {
         prepared_failure: bool,
         staging_runs: &[crate::sync::staging::StagingRun],
         target_sync_result: &crate::sync::types::TargetSyncResult,
+        proof_recovery_state: &mut crate::sync::proof_intent::ProofRecoveryState,
     ) -> (
         crate::sync::types::TargetSyncResult,
         Vec<crate::sync::commit_helpers::CommittedPath>,
@@ -2388,7 +2399,9 @@ impl WriterCoreApi {
             return (target_sync_result.clone(), Vec::new());
         }
         match staging_runs.get(target_index) {
-            Some(run) => self.commit_target_after_transfer(run, target_sync_result),
+            Some(run) => {
+                self.commit_target_after_transfer(run, target_sync_result, proof_recovery_state)
+            }
             None => (target_sync_result.clone(), Vec::new()),
         }
     }
@@ -2397,6 +2410,7 @@ impl WriterCoreApi {
         &self,
         run: &crate::sync::staging::StagingRun,
         target_sync_result: &crate::sync::types::TargetSyncResult,
+        proof_recovery_state: &mut crate::sync::proof_intent::ProofRecoveryState,
     ) -> (
         crate::sync::types::TargetSyncResult,
         Vec<crate::sync::commit_helpers::CommittedPath>,
@@ -2425,57 +2439,41 @@ impl WriterCoreApi {
 
             let sync_sources =
                 staging_manifest_device_ids(run, target_sync_result.project_id.as_deref());
-            // Issue #1008：先把上次崩溃留下的“正文已提交、证明未落盘”意图补记，
-            // 再进入本次 Commit，避免旧链头缺失导致新的同步事件无法接续。
-            if let Err(error) = core.recover_pending_sync_proof_intents() {
+            // Issue #1008 / #1021 复核：上一轮崩溃留下的证明恢复已经在本轮
+            // Commit 循环前统一执行；这里只复用结果，不再为每个 target 重扫。
+            if let Some(error) = proof_recovery_state.failure().map(str::to_string) {
                 let mut target_with_error = target_sync_result.clone();
                 target_with_error.result.status = crate::sync::SyncStatus::RecoverableError(
                     "sync_proof_recovery_failed".to_string(),
                 );
-                target_with_error.result.error = Some(format!(
-                    "recover pending sync proof intents before commit failed: {error}"
-                ));
+                target_with_error.result.error = Some(error);
                 return (target_with_error, Vec::new());
             }
             let intent_root = core.sync_proof_intent_root();
             let intent_sink = crate::sync::proof_intent::ProofIntentSink::new(
                 &intent_root,
-                core.app_data_root(),
-                core.projects_root(),
                 &sync_sources,
             );
             let mut target_with_conflicts = target_sync_result.clone();
             // 积压证明未完成时不能继续改同一项目正文：后续 Commit 会让新的
             // before/after 越过旧事件，证明链将无法按发生顺序接续。
             if let Some(project_id) = target_sync_result.project_id.as_deref() {
-                match intent_sink.unresolved_for_project(&core, Some(project_id)) {
-                    Ok(issues) if issues.is_empty() => {}
-                    Ok(issues) => {
-                        target_with_conflicts.result.status =
-                            crate::sync::SyncStatus::RecoverableError(
-                                "sync_proof_recovery_pending".to_string(),
-                            );
-                        let detail = issues
-                            .iter()
-                            .take(3)
-                            .map(|issue| issue.description())
-                            .collect::<Vec<_>>()
-                            .join("；");
-                        target_with_conflicts.result.error = Some(format!(
-                            "上次同步正文已落盘但证明事件尚未恢复；先完成证明恢复再同步该作品: {detail}"
-                        ));
-                        return (target_with_conflicts, Vec::new());
-                    }
-                    Err(error) => {
-                        target_with_conflicts.result.status =
-                            crate::sync::SyncStatus::RecoverableError(
-                                "sync_proof_recovery_pending".to_string(),
-                            );
-                        target_with_conflicts.result.error = Some(format!(
-                            "检查未恢复的同步证明意图失败，暂不提交正文: {error}"
-                        ));
-                        return (target_with_conflicts, Vec::new());
-                    }
+                let issues = proof_recovery_state.unresolved_for_project(Some(project_id));
+                if !issues.is_empty() {
+                    target_with_conflicts.result.status =
+                        crate::sync::SyncStatus::RecoverableError(
+                            "sync_proof_recovery_pending".to_string(),
+                        );
+                    let detail = issues
+                        .iter()
+                        .take(3)
+                        .map(|issue| issue.description())
+                        .collect::<Vec<_>>()
+                        .join("；");
+                    target_with_conflicts.result.error = Some(format!(
+                        "上次同步正文已落盘但证明事件尚未恢复；先完成证明恢复再同步该作品: {detail}"
+                    ));
+                    return (target_with_conflicts, Vec::new());
                 }
             }
             let (commit_result, conflicts, committed_paths) =
@@ -2624,6 +2622,7 @@ impl WriterCoreApi {
                         occurred_at_ms,
                     ) {
                         Ok(_) => {
+                            proof_recovery_state.mark_event_persisted(&sync_event_id);
                             proof_completed_ids.insert(sync_event_id.clone());
                         }
                         Err(e) => proof_errors.push(format!("{}: {e}", path.display())),
@@ -2641,13 +2640,22 @@ impl WriterCoreApi {
                 }
                 core.refresh_sync_proof_intents_pending();
                 if !proof_errors.is_empty() {
+                    let detail = proof_errors.join("; ");
+                    // 本轮后续 target 复用同一状态：本组证明未写完时，同项目
+                    // 不应继续改正文，避免旧事件被新的 before/after 越过。
+                    proof_recovery_state.record_issue(
+                        crate::sync::proof_intent::ProofRecoveryIssue {
+                            project_id: target_sync_result.project_id.clone(),
+                            transaction_id: None,
+                            event_id: None,
+                            message: format!("同步正文已落盘，但证明事件记录失败: {detail}"),
+                        },
+                    );
                     target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
                         "sync_proof_record_failed".to_string(),
                     );
-                    target_with_conflicts.result.error = Some(format!(
-                        "同步正文已落盘，但证明事件记录失败: {}",
-                        proof_errors.join("; ")
-                    ));
+                    target_with_conflicts.result.error =
+                        Some(format!("同步正文已落盘，但证明事件记录失败: {detail}"));
                 }
             }
 

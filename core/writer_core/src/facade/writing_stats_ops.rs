@@ -29,16 +29,26 @@ impl super::WriterCore {
             .store(pending, std::sync::atomic::Ordering::Release);
     }
 
-    /// 扫描并补记所有未完成的同步证明意图。返回本次完成（补记或确认已存在）
-    /// 的意图数量。单个意图失败只记录错误，不阻断后续意图。
-    pub(crate) fn recover_pending_sync_proof_intents(&self) -> Result<usize> {
+    /// 扫描并补记所有未完成的同步证明意图，返回本轮可复用的恢复状态。
+    ///
+    /// 一次同步只调用一次：状态里同时包含已落盘事件集合和按项目可过滤的
+    /// 未完成问题，后续每个 target 不需要重新扫描/解压全部历史事件。
+    pub(crate) fn recover_pending_sync_proof_state(
+        &self,
+    ) -> Result<crate::sync::proof_intent::ProofRecoveryState> {
         self.proof_intents_last_recovery_ms.store(
             chrono::Utc::now().timestamp_millis(),
             std::sync::atomic::Ordering::Release,
         );
-        let recovered = crate::sync::proof_intent::recover_pending(self)?;
+        let state = crate::sync::proof_intent::recover_pending_state(self)?;
         self.refresh_sync_proof_intents_pending();
-        Ok(recovered)
+        Ok(state)
+    }
+
+    /// 扫描并补记所有未完成的同步证明意图。返回本次完成（补记或确认已存在）
+    /// 的意图数量。单个意图失败只记录错误，不阻断后续意图。
+    pub(crate) fn recover_pending_sync_proof_intents(&self) -> Result<usize> {
+        Ok(self.recover_pending_sync_proof_state()?.recovered())
     }
 
     /// 编辑热路径的节流恢复：只读原子状态，最多每 60 秒扫描一次意图目录。

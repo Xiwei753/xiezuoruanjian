@@ -141,6 +141,9 @@ pub struct TransactionRecovery {
     /// 与该事务绑定的证明意图事件 ID。
     pub proof_intent_ids: Vec<String>,
     pub tx_dir: std::path::PathBuf,
+    /// 事务所属的 live 根目录（app_data_root 或 projects/<pid>）。
+    /// 旧事务缺少证明恢复材料时，需要据此读取正文终态并追溯备份。
+    pub target_root: std::path::PathBuf,
 }
 
 /// 一次事务目录扫描的完整结果。

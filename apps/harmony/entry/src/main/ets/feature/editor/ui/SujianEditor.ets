@@ -1904,8 +1904,17 @@ export struct SujianEditor {
       return
     }
 
-    // displayed 帧确实拥有全部字形（staticVisibleRanges 为空）：静态层应当不可见。
-    // 这是唯一的合法空遮罩场景，由运动层完整接管正文。
+    // Issue #1021：静态层把任何字形交给运动层之前，必须先确认 displayed 帧的
+    // 全部运动字形在物理上真的可绘制（源存在、窗口已挂载且 layoutReady）。
+    // 不能只看 motionGlyphWindows 非空：源缺失或窗口未 ready 时构建侧会跳过
+    // 该窗口，若静态层已经裁掉这些范围，就会同时失去两个绘制者。
+    if (!this.canMotionLayerOwnDisplayedFrame(frame)) {
+      this.applyFullStaticClip('fallback-full')
+      return
+    }
+
+    // displayed 帧确实拥有全部字形（staticVisibleRanges 为空）：静态层不可见。
+    // 这是唯一合法的空遮罩场景，且刚已确认运动窗口真实可绘制。
     if (frame.staticVisibleRanges.length === 0) {
       this.staticClipCommands = EditorMotionLayer.buildStaticMaskPath([])
       this.staticClipMode = 'motion-only'
@@ -1914,22 +1923,69 @@ export struct SujianEditor {
       return
     }
 
-    // displayedLineLayouts 与 displayedVisualFrame 同版；若缺少行几何或区间无法换算，
-    // computeStaticMaskRects 返回空数组，这里回退完整显示（证据见 staticClipMode）。
-    const rects = EditorMotionLayer.computeStaticMaskRects(
+    // displayedLineLayouts 与 displayedVisualFrame 同版。几何必须完整覆盖每个
+    // 应绘制的 staticVisibleRange；任何一段无法定位都整帧回退，不能接受部分矩形。
+    const computation = EditorMotionLayer.computeStaticMaskRects(
       frame,
       this.displayedLineLayouts,
       this.contentWidth,
       this.contentHeight
     )
-    if (rects.length === 0) {
+    if (!computation.valid || computation.rects.length === 0) {
       this.applyFullStaticClip('fallback-full')
       return
     }
-    this.staticClipCommands = EditorMotionLayer.buildStaticMaskPath(rects)
+    this.staticClipCommands = EditorMotionLayer.buildStaticMaskPath(computation.rects)
     this.staticClipMode = 'mask'
-    this.staticMaskRectCount = rects.length
+    this.staticMaskRectCount = computation.rects.length
     this.staticMaskEmpty = false
+  }
+
+  /**
+   * Issue #1021：displayed 帧的运动层是否具备完整的物理绘制能力。
+   *
+   * 只检查运动窗口数组非空不够：buildMotionWindowSources() 遇到源缺失会跳过窗口，
+   * 未挂载/未 layoutReady 的 Text 也不会真正出字。任一窗口不满足时，本帧必须
+   * 由主 Text 完整显示，且 buildMotionWindowSources() 不绘制 displayed 运动窗口。
+   */
+  private canMotionLayerOwnDisplayedFrame(frame: EditorVisualFrame): boolean {
+    if (!EditorMotionLayer.needsMotionLayer(frame)) {
+      return false
+    }
+    const windows = frame.motionGlyphWindows
+    const clipRects = EditorMotionLayer.buildAllClipRects(frame)
+    if (clipRects.length !== windows.length) {
+      return false
+    }
+    for (let i = 0; i < windows.length; i++) {
+      const window = windows[i]
+      if (window.runId.length === 0) {
+        return false
+      }
+      if (window.utf16End <= window.utf16Start) {
+        return false
+      }
+      const source = this.motionSourcePool.getSource(window.runId)
+      if (source === undefined || source.markedForRelease) {
+        return false
+      }
+      if (!this.motionSourcePool.isWindowMounted(window.renderNodeKey)) {
+        return false
+      }
+      if (!this.motionSourcePool.isWindowLayoutReady(window.renderNodeKey)) {
+        return false
+      }
+      const windowState = this.motionSourcePool.getWindowState(window.renderNodeKey)
+      if (windowState === undefined || !windowState.owners.has('displayed')) {
+        return false
+      }
+      // 有源但 clip 为空/零面积时 Text 同样画不出字，不能把静态层裁掉。
+      const bbox = EditorMotionLayer.clipRectsBBox(clipRects[i])
+      if (bbox.width <= 0 || bbox.height <= 0) {
+        return false
+      }
+    }
+    return true
   }
 
   // Issue #1021：静态层完整显示的单一构造入口，同时记录诊断状态。

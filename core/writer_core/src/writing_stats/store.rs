@@ -1132,14 +1132,19 @@ impl StatsStore {
         self.event_is_persisted(&origin, &date, event_id)
     }
 
-    /// 按稳定事件 ID 在本机事件分区中查找已落盘事件。
+    /// 按稳定事件 ID 批量查找本机已落盘事件。
     ///
     /// 事务恢复只持有 `event_id`，可能已经丢失原意图文件（及其时间）。
-    /// 该查询遍历本机原始段与归档段，返回真实事件及其原始 `timestamp_ms`，
-    /// 不按“当前时间”重建事件。
-    pub(crate) fn find_event_by_id(&self, event_id: &str) -> Result<Option<WritingInputEvent>> {
-        if event_id.is_empty() {
-            return Ok(None);
+    /// 该查询只遍历一次本机原始段与归档段，返回真实事件及其原始
+    /// `timestamp_ms`，不按“当前时间”重建事件。恢复流程必须先把本轮所有
+    /// 意图/事务链接的事件 ID 汇总后调用一次，避免每个事件重复解压历史归档。
+    pub(crate) fn find_events_by_ids(
+        &self,
+        event_ids: &HashSet<String>,
+    ) -> Result<HashMap<String, WritingInputEvent>> {
+        let mut found = HashMap::new();
+        if event_ids.is_empty() {
+            return Ok(found);
         }
         let origin = self.resolve_origin_device_id()?;
         let root = self.events_root();
@@ -1150,12 +1155,15 @@ impl StatsStore {
         files.extend(list_archive_files(&root, &origin)?);
         for file in files {
             for event in self.parse_events_file(&file)? {
-                if event.event_id == event_id {
-                    return Ok(Some(event));
+                if event_ids.contains(&event.event_id) {
+                    found.entry(event.event_id.clone()).or_insert(event);
                 }
             }
+            if found.len() == event_ids.len() {
+                break;
+            }
         }
-        Ok(None)
+        Ok(found)
     }
 
     /// 追加一批已测量的前台写作计时切片，只写入本机来源分区。

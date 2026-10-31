@@ -42,6 +42,21 @@ import { MotionSourceEntry } from './EditorMotionSourcePool'
 export { ClipRect } from './EditorVisualFrame'
 
 /**
+ * Issue #1021：静态遮罩计算必须显式区分“合法为空”和“几何不可用”。
+ *
+ * - valid=true 且 rects=[]：staticVisibleRanges 为空，全部字形由运动层接管；
+ *   调用方仍须再验证运动窗口真实可绘制。
+ * - valid=false：任一应绘制的 staticVisibleRange 存在无法换算的几何、
+ *   零宽分段或覆盖缺口；调用方必须回退完整静态显示并撤销运动层所有权，
+ *   不能把部分矩形当作完整遮罩。
+ */
+export interface StaticMaskComputation {
+  valid: boolean
+  rects: ClipRect[]
+  reason: string
+}
+
+/**
  * 运动层绘制工具。
  *
  * 提供 clipShape/maskShape 所需的裁切矩形计算、静态层可见区域计算、
@@ -193,76 +208,93 @@ export class EditorMotionLayer {
   }
 
   /**
-   * 计算静态可见区 mask 矩形列表。
+   * 计算静态可见区 mask 矩形列表，并显式报告几何是否完整。
    *
-   * Issue #879 本轮复核评论修复（问题1）：
-   * 从 EditorVisualFrame.staticVisibleRanges 和行布局生成静态可见裁切矩形列表。
-   * 主 Text 仍完整排版，但其绘制输出按这些矩形用 clipShape 裁切——
-   * 只显示未被运动接管的范围。
-   *
-   * 每个 StaticVisibleRange 可能跨多行，按行拆成多个矩形。
-   * 非动画时返回单个全尺寸矩形（不裁切，全显示）。
+   * Issue #1021：每个非空 staticVisibleRange 必须能完整换算成几何矩形。
+   * 只要有一段无法定位（缺 caretStops、无结束 caret stop、零宽、行高非法、
+   * 整个区间没有任何行覆盖），整帧就判为 invalid，由调用方回退完整静态显示，
+   * 不能把部分矩形当成合法遮罩而隐藏剩余文字。
    *
    * @param frame 当前视觉帧
-   * @param lineLayouts 行布局（用于把 UTF-16 offset 范围转成几何矩形）
+   * @param lineLayouts 与 frame 同版的行布局
    * @param fullWidth 全宽（vp，非动画时用）
    * @param fullHeight 全高（vp，非动画时用）
-   * @returns 裁切矩形列表（供 buildStaticMaskPath 构造 PathShape）
+   * @returns 显式 valid/rects/reason 结果
    */
   static computeStaticMaskRects(
     frame: EditorVisualFrame,
     lineLayouts: LineLayout[],
     fullWidth: number,
     fullHeight: number
-  ): ClipRect[] {
+  ): StaticMaskComputation {
     // 非动画状态：全显示（单个全尺寸矩形）
     if (!frame.isAnimating) {
-      return [{ x: 0, y: 0, width: fullWidth, height: fullHeight }]
+      return {
+        valid: true,
+        rects: [{ x: 0, y: 0, width: fullWidth, height: fullHeight }],
+        reason: 'full'
+      }
     }
 
-    // Issue #1021：全部字形由运动层接管——静态层合法地不画任何内容。
+    // 全部字形由运动层接管——静态层合法地不画任何内容。
+    // 运动窗口是否真实可绘制由调用方单独校验。
     if (frame.staticVisibleRanges.length === 0) {
-      return []
+      return { valid: true, rects: [], reason: 'motion-only' }
     }
-    // 几何来源缺失/尺寸无效：返回空数组让调用方回退完整显示，
-    // 不能把这个结果当成「静态层无内容」而构建空 path。
+    // 几何来源缺失/尺寸无效：必须回退完整显示。
     if (lineLayouts.length === 0 || fullWidth <= 0 || fullHeight <= 0) {
-      return []
+      return { valid: false, rects: [], reason: 'missing-line-layout' }
     }
 
-    // 动画状态：把每个 staticVisibleRange 按行拆成矩形
     const rects: ClipRect[] = []
     for (const range of frame.staticVisibleRanges) {
+      if (range.utf16End <= range.utf16Start) {
+        return { valid: false, rects: [], reason: 'empty-static-range' }
+      }
+      let rangeHasRect = false
       for (const line of lineLayouts) {
         // 行与区间无交集
         if (line.endUtf16 <= range.utf16Start || line.startUtf16 >= range.utf16End) {
           continue
         }
-        // 行几何与当前 displayed 帧不匹配（没有 caretStops 无法换算 x）：
-        // 整帧回退完整显示，避免只隐藏一部分行。
-        if (line.caretStops.length === 0) {
-          return []
+        // 该行确实与应绘制区间相交，必须提供完整几何。
+        if (line.caretStops.length === 0 || line.height <= 0) {
+          return { valid: false, rects: [], reason: 'invalid-line-geometry' }
         }
         const segStart = Math.max(range.utf16Start, line.startUtf16)
         const segEnd = Math.min(range.utf16End, line.endUtf16)
         if (segStart >= segEnd) {
           continue
         }
-        // 用 caretStops 找起始 x 和结束 x
-        let x = line.left
+        // 起点必须有 <= segStart 的 caret stop；否则无法定位第一段字形。
+        let x = -1
         for (const stop of line.caretStops) {
           if (stop.utf16Offset <= segStart) {
             x = stop.x
+          } else {
+            break
           }
         }
-        let endX = x
+        if (x < 0) {
+          return { valid: false, rects: [], reason: 'missing-start-stop' }
+        }
+        // 终点必须存在精确落在 segEnd 的 caret stop；
+        // 只有“最后一个 <= segEnd”会少算末尾字形，正是永久缺字的来源。
+        let endX = -1
         for (const stop of line.caretStops) {
-          if (stop.utf16Offset <= segEnd) {
+          if (stop.utf16Offset === segEnd) {
             endX = stop.x
+            break
+          }
+          if (stop.utf16Offset > segEnd) {
+            break
           }
         }
-        if (endX <= x || line.height <= 0) {
-          continue
+        if (endX < 0) {
+          return { valid: false, rects: [], reason: 'missing-end-stop' }
+        }
+        if (endX <= x) {
+          return { valid: false, rects: [], reason: 'zero-width-segment' }
         }
         rects.push({
           x,
@@ -270,9 +302,13 @@ export class EditorMotionLayer {
           width: endX - x,
           height: line.height
         })
+        rangeHasRect = true
+      }
+      if (!rangeHasRect) {
+        return { valid: false, rects: [], reason: 'range-without-line' }
       }
     }
-    return rects
+    return { valid: true, rects, reason: 'mask' }
   }
 
   /**
