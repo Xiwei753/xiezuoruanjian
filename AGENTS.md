@@ -31,6 +31,13 @@
 - `docs/TECHNICAL_ROUTE.md`：长期技术路线；**仅在 Issue 明确引用或修改确实涉及其契约时读取**。
 - 根目录 `Cargo.toml`：需要确认 Rust workspace / crate 依赖时再查看，不猜测 crate 关系。
 
+## Git 提交中的 AI 贡献署名
+
+- 只记录实际参与本次修改的 AI 工具或模型，不因为它曾参与其他任务就给本次提交署名。
+- Codex 实际参与修改且由代理创建 Git 提交时，在提交信息末尾（前面空一行）追加 `Co-authored-by: Codex <codex@openai.com>`；如果 Codex 已自动附带同一共同作者，则不要重复添加。保留用户本来的提交作者身份。
+- 其他 AI 若有已确认关联 GitHub 账号的共同作者邮箱，使用对应的 `Co-authored-by`；没有账号关联信息的 DeepSeek、GPT、GLM、MiMo 等，在提交正文末尾使用 `AI-assisted-by: 实际模型名称` 留下可追溯记录。这种自定义备注不会自动产生 GitHub 贡献者头像。
+- 只对新提交生效，不改写已公开的 Git 历史。
+
 ## 必须保持的项目边界
 
 - Core 是业务状态唯一事实来源；平台端处理 UI、输入、布局、动画与系统能力，不能复制业务状态机。Core 不依赖平台 UI 类型。
