@@ -34,6 +34,7 @@ const EVENT_KEY_PATTERN = /^[A-Za-z0-9_-]+$/
 const FAULT_COMPLETE_FILE = 'complete.json'
 const FAULT_STATE_FILE = 'fault-state.json'
 const FILE_COPY_CHUNK_BYTES = 256 * 1024
+const TEXT_IO_CHUNK_BYTES = 64 * 1024
 
 const workerPort: ThreadWorkerGlobalScope = worker.workerPort
 
@@ -638,10 +639,14 @@ function copyFaultFileStrict(eventDir: string, stagingDir: string, eventKey: str
   } catch (e) {
     throw new Error('fault attachment read failed')
   }
+  const expectedSanitizedBytes = sanitizedUtf8ByteLength(fileName, content)
   try {
-    HarmonyDiagnosticsArchive.writeTextFile(
+    const writtenBytes = HarmonyDiagnosticsArchive.writeTextFile(
       stagingDir, `crashes/${eventKey}/${fileName}`, content
     )
+    if (writtenBytes !== expectedSanitizedBytes) {
+      throw new Error('fault attachment staging write mismatch')
+    }
   } catch (e) {
     throw new Error('fault attachment staging write failed')
   }
@@ -651,10 +656,10 @@ function copyFaultFileStrict(eventDir: string, stagingDir: string, eventKey: str
     if (!stagedStat.isFile()) {
       throw new Error('fault attachment staging missing')
     }
-    if (expectedSize === 0 && stagedStat.size !== 0) {
+    if (stagedStat.size !== expectedSanitizedBytes) {
       throw new Error('fault attachment staging size mismatch')
     }
-    if (expectedSize !== 0 && stagedStat.size === 0) {
+    if (expectedSize > 0 && stagedStat.size === 0) {
       throw new Error('fault attachment staging empty')
     }
   } catch (e) {
@@ -1417,16 +1422,48 @@ function cleanStaleStaging(outputDir: string): void {
 }
 
 function readTextFile(filePath: string): string {
-  const fd = fs.openSync(filePath, fs.OpenMode.READ_ONLY)
+  const file = fs.openSync(filePath, fs.OpenMode.READ_ONLY)
   try {
-    const stat = fs.statSync(filePath)
-    const buf = new ArrayBuffer(stat.size)
-    fs.readSync(fd.fd, buf)
-    const decoder = new util.TextDecoder('utf-8')
-    return decoder.decodeWithStream(new Uint8Array(buf))
+    const expectedSize = fs.statSync(filePath).size
+    if (expectedSize === 0) {
+      return ''
+    }
+    const decoder = util.TextDecoder.create('utf-8', { fatal: false, ignoreBOM: true })
+    const buffer = new ArrayBuffer(TEXT_IO_CHUNK_BYTES)
+    let totalRead = 0
+    let content = ''
+    while (totalRead < expectedSize) {
+      const remaining = expectedSize - totalRead
+      const chunkLength = remaining < TEXT_IO_CHUNK_BYTES ? remaining : TEXT_IO_CHUNK_BYTES
+      const readBytes = fs.readSync(file.fd, buffer, { length: chunkLength })
+      if (readBytes <= 0) {
+        throw new Error('diagnostics text read incomplete')
+      }
+      const isLast = totalRead + readBytes >= expectedSize
+      const chunk = new Uint8Array(buffer, 0, readBytes)
+      const decoded = decoder.decodeToString(chunk, { stream: !isLast })
+      if (decoded.length > 0) {
+        content += decoded
+      }
+      totalRead += readBytes
+    }
+    if (totalRead !== expectedSize) {
+      throw new Error('diagnostics text read incomplete')
+    }
+    return content
   } finally {
-    fs.closeSync(fd)
+    fs.closeSync(file)
   }
+}
+
+function sanitizedUtf8ByteLength(fileName: string, content: string): number {
+  const safeContent = fileName.toLowerCase().endsWith('.json')
+    ? HarmonyDiagnosticsArchive.sanitizeJson(content)
+    : HarmonyDiagnosticsArchive.sanitizeText(content)
+  if (safeContent.length === 0) {
+    return 0
+  }
+  return new util.TextEncoder().encodeInto(safeContent).byteLength
 }
 
 function ensureDirectory(path: string): void {

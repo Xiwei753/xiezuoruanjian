@@ -4,10 +4,12 @@
 
 import hilog from '@ohos.hilog'
 import fs from '@ohos.file.fs'
+import util from '@ohos.util'
 import zlib from '@ohos.zlib'
 
 const LOG_TAG = 'HarmonyDiagnosticsArchive'
 const REDACTED = '[REDACTED]'
+const TEXT_WRITE_CHUNK_BYTES = 64 * 1024
 
 const SENSITIVE_JSON_KEYS: string[] = [
   'token', 'access_token', 'refresh_token', 'authorization', 'password', 'passwd',
@@ -52,7 +54,10 @@ export class HarmonyDiagnosticsArchive {
 
   // Writes one whitelisted relative file into a staging tree. Reject traversal and
   // absolute paths even though current callers use constants and sanitized event keys.
-  static writeTextFile(rootDir: string, relativePath: string, content: string): void {
+  // Returns the number of UTF-8 bytes actually written after sanitization. The
+  // caller can compare this with the staged file size to prove the attachment was
+  // not truncated by a short write.
+  static writeTextFile(rootDir: string, relativePath: string, content: string): number {
     if (!HarmonyDiagnosticsArchive.isSafeRelativePath(relativePath)) {
       throw new Error('invalid diagnostics attachment path')
     }
@@ -66,9 +71,27 @@ export class HarmonyDiagnosticsArchive {
     const safeContent = relativePath.toLowerCase().endsWith('.json')
       ? HarmonyDiagnosticsArchive.sanitizeJson(content)
       : HarmonyDiagnosticsArchive.sanitizeText(content)
+    const encoded = safeContent.length === 0
+      ? new Uint8Array(0)
+      : new util.TextEncoder().encodeInto(safeContent)
     const file = fs.openSync(path, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC)
     try {
-      fs.writeSync(file.fd, safeContent)
+      let written = 0
+      while (written < encoded.byteLength) {
+        const chunkLength = Math.min(TEXT_WRITE_CHUNK_BYTES, encoded.byteLength - written)
+        const chunk = encoded.slice(written, written + chunkLength)
+        let chunkWritten = 0
+        while (chunkWritten < chunk.byteLength) {
+          const part = chunkWritten === 0 ? chunk : chunk.slice(chunkWritten)
+          const writeBytes = fs.writeSync(file.fd, part.buffer, { length: part.byteLength })
+          if (writeBytes <= 0) {
+            throw new Error('diagnostics attachment write incomplete')
+          }
+          chunkWritten += writeBytes
+        }
+        written += chunk.byteLength
+      }
+      return written
     } finally {
       fs.closeSync(file)
     }
