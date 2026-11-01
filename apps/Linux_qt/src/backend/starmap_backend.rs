@@ -296,6 +296,7 @@ pub struct StarMapBackend {
     hit_test_scene_edge:
         qt_method!(fn(&self, scene_key: QString, x: f64, y: f64, threshold: f64) -> QJsonObject),
     release_scene_cache: qt_method!(fn(&self, scene_key: QString) -> bool),
+    create_scene_instance_id: qt_method!(fn(&self) -> QString),
     add_starmap_link:
         qt_method!(fn(&mut self, starmap_id: QString, link_json: QString) -> QJsonObject),
     update_starmap_link: qt_method!(
@@ -324,10 +325,12 @@ pub struct StarMapBackend {
     app: AppRef,
     // Issue #1029 评论：同一 Canvas 可能同时存在旧场景 / 活动场景两个
     // StarMapActiveScene，且同一张图可经不同 Embed 路径打开。显示缓存必须按
-    // starmapId + scenePathKey 隔离，不能由一个全局缓存互相覆盖。
+    // 场景实例 + starmapId + scenePathKey 隔离，不能由一个全局缓存互相覆盖，
+    // 也不能让同图同路径的两个实例互相释放。
     scene_caches: std::cell::RefCell<
         std::collections::HashMap<String, crate::starmap_view::scene_cache::SceneCache>,
     >,
+    next_scene_instance_id: std::cell::Cell<u64>,
 }
 
 impl StarMapBackend {
@@ -724,6 +727,13 @@ impl StarMapBackend {
             .borrow_mut()
             .remove(&scene_key.to_string())
             .is_some()
+    }
+    fn create_scene_instance_id(&self) -> QString {
+        // 每个 StarMapGraphController / StarMapActiveScene 生命周期唯一；与图 ID、
+        // 路径组合后即使同图同路径的两个实例也各自拥有独立显示缓存。
+        let next = self.next_scene_instance_id.get().saturating_add(1);
+        self.next_scene_instance_id.set(next);
+        QString::from(format!("scene-{next}"))
     }
     fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
         self.with_app(|app| app.get_starmap_graph_json(starmap_id))

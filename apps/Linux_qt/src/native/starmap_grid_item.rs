@@ -5,12 +5,13 @@
 // 层级：Linux_qt 平台可视组件（QML 原生类型 `Sujian.StarMapGridItem`）。
 //
 // 旧实现用 QML Canvas 画点阵，并在每次 pan/zoom 时 requestPaint：每帧都要
-// CPU 生成一张与视口等大的 QImage，再作为纹理上传 GPU。这里把点阵变成单个
-// QSGGeometryNode，外层 QSGTransformNode 负责相机平移。
+// CPU 生成一张与视口等大的 QImage，再作为纹理上传 GPU。这里改为一个全屏
+// 四边形 + 自定义 QSGMaterialShader：点阵在 fragment shader 中按 spacing /
+// phase uniform 计算。
 //
-// 评论修正：点阵按 spacing 周期生成，平移只更新 transform 的 modulo 位移，
-// 不再 allocate/memcpy 视口所有小方块；缩放/LOD 或尺寸变化才重建几何。
-// LOD 规则与旧 Canvas 保持一致（屏幕间距 >= 16px，world 间距按 5 倍档抬升）。
+// 评论修正：pan / zoom 只更新 matrix 与 uniform，几何始终只有 6 个顶点，
+// 不随相机变化 allocate / memcpy 任何点阵三角形。LOD 仍按旧 Canvas 口径：
+// 屏幕间距 >= 16px，world 间距按 5 倍档抬升；LOD 只改 uniform，也不重建几何。
 // =============================================================================
 
 use cpp::cpp;
@@ -18,6 +19,9 @@ use qmetaobject::prelude::*;
 use qmetaobject::scenegraph::{ContainerNode, SGNode};
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+const GRID_VERTEX_SHADER: &[u8] = include_bytes!("shaders/starmap_grid.vert.qsb");
+const GRID_FRAGMENT_SHADER: &[u8] = include_bytes!("shaders/starmap_grid.frag.qsb");
 
 static GRID_GEOMETRY_UPDATES: AtomicU64 = AtomicU64::new(0);
 static GRID_VERTEX_UPLOADS: AtomicU64 = AtomicU64::new(0);
@@ -35,88 +39,200 @@ pub fn render_statistics_json() -> String {
 
 cpp! {{
     #include <qmetaobject_rust.hpp>
-    #include <QtQuick/QQuickItem>
-    #include <QtQuick/QSGNode>
-    #include <QtQuick/QSGGeometryNode>
-    #include <QtQuick/QSGGeometry>
-    #include <QtQuick/QSGFlatColorMaterial>
-    #include <QtQuick/QSGTransformNode>
+    #include <QtCore/QCoreApplication>
+    #include <QtCore/QDir>
+    #include <QtCore/QFile>
     #include <QtGui/QColor>
-    #include <QtGui/QMatrix4x4>
+    #include <QtGui/QVector4D>
+    #include <QtQuick/QQuickItem>
+    #include <QtQuick/QSGGeometry>
+    #include <QtQuick/QSGGeometryNode>
+    #include <QtQuick/QSGMaterial>
+    #include <QtQuick/QSGMaterialShader>
+    #include <QtQuick/QSGNode>
+    #include <QtQuick/QSGRendererInterface>
     #include <cstring>
 
-    static QSGTransformNode *sujian_grid_transform_node(QSGNode *root)
+    static QString g_sujian_grid_vertex_shader_path;
+    static QString g_sujian_grid_fragment_shader_path;
+
+    static void sujian_write_grid_shader_file(const QString &path,
+                                              const char *bytes, int length)
     {
-        if (!root)
-            return nullptr;
-        QSGNode *child = root->firstChild();
-        if (child && child->type() == QSGNode::TransformNodeType)
-            return static_cast<QSGTransformNode *>(child);
-        QSGTransformNode *transform = new QSGTransformNode;
-        transform->setFlag(QSGNode::OwnedByParent, true);
-        root->appendChildNode(transform);
-        return transform;
+        QFile file(path);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            file.write(bytes, length);
     }
 
-    static QSGGeometryNode *sujian_grid_geometry_node(QSGTransformNode *transform)
+    static void sujian_set_grid_shaders(const char *vertex, int vertex_len,
+                                        const char *fragment, int fragment_len)
     {
-        if (!transform)
-            return nullptr;
-        QSGNode *child = transform->firstChild();
-        return (child && child->type() == QSGNode::GeometryNodeType)
-            ? static_cast<QSGGeometryNode *>(child) : nullptr;
+        if (!g_sujian_grid_vertex_shader_path.isEmpty())
+            return;
+        const QString base = QDir::tempPath() + QStringLiteral("/sujian-starmap-")
+                + QString::number(QCoreApplication::applicationPid());
+        g_sujian_grid_vertex_shader_path = base + QStringLiteral("-grid.vert.qsb");
+        g_sujian_grid_fragment_shader_path = base + QStringLiteral("-grid.frag.qsb");
+        sujian_write_grid_shader_file(g_sujian_grid_vertex_shader_path, vertex, vertex_len);
+        sujian_write_grid_shader_file(g_sujian_grid_fragment_shader_path, fragment, fragment_len);
+    }
+
+    class SujianGridMaterial : public QSGMaterial
+    {
+    public:
+        SujianGridMaterial() { setFlag(QSGMaterial::Blending); }
+
+        QColor color;
+        float viewport_x = 1.0f;
+        float viewport_y = 1.0f;
+        float spacing = 16.0f;
+        float phase_x = 0.0f;
+        float phase_y = 0.0f;
+
+        QSGMaterialType *type() const override
+        {
+            static QSGMaterialType material_type;
+            return &material_type;
+        }
+
+        int compare(const QSGMaterial *other) const override
+        {
+            const auto *rhs = static_cast<const SujianGridMaterial *>(other);
+            if (color.rgba() != rhs->color.rgba())
+                return color.rgba() < rhs->color.rgba() ? -1 : 1;
+            if (viewport_x != rhs->viewport_x)
+                return viewport_x < rhs->viewport_x ? -1 : 1;
+            if (viewport_y != rhs->viewport_y)
+                return viewport_y < rhs->viewport_y ? -1 : 1;
+            if (spacing != rhs->spacing)
+                return spacing < rhs->spacing ? -1 : 1;
+            if (phase_x != rhs->phase_x)
+                return phase_x < rhs->phase_x ? -1 : 1;
+            if (phase_y != rhs->phase_y)
+                return phase_y < rhs->phase_y ? -1 : 1;
+            return 0;
+        }
+
+        QSGMaterialShader *createShader(QSGRendererInterface::RenderMode) const override;
+    };
+
+    class SujianGridShader : public QSGMaterialShader
+    {
+    public:
+        SujianGridShader()
+        {
+            setShaderFileName(QSGMaterialShader::VertexStage,
+                              g_sujian_grid_vertex_shader_path);
+            setShaderFileName(QSGMaterialShader::FragmentStage,
+                              g_sujian_grid_fragment_shader_path);
+        }
+
+        bool updateUniformData(RenderState &state, QSGMaterial *new_material,
+                               QSGMaterial *old_material) override
+        {
+            QByteArray *buffer = state.uniformData();
+            if (buffer->size() < 128)
+                buffer->resize(128);
+            char *data = buffer->data();
+            bool changed = false;
+
+            if (state.isMatrixDirty()) {
+                std::memcpy(data, state.combinedMatrix().constData(), 64);
+                changed = true;
+            }
+            if (state.isOpacityDirty()) {
+                const float opacity = state.opacity();
+                std::memcpy(data + 64, &opacity, sizeof(float));
+                changed = true;
+            }
+
+            const auto *material = static_cast<const SujianGridMaterial *>(new_material);
+            const auto *previous = static_cast<const SujianGridMaterial *>(old_material);
+            if (changed || !previous
+                || material->color.rgba() != previous->color.rgba()
+                || material->viewport_x != previous->viewport_x
+                || material->viewport_y != previous->viewport_y
+                || material->spacing != previous->spacing
+                || material->phase_x != previous->phase_x
+                || material->phase_y != previous->phase_y) {
+                const float color[4] = { material->color.redF(),
+                                         material->color.greenF(),
+                                         material->color.blueF(),
+                                         material->color.alphaF() };
+                std::memcpy(data + 80, color, sizeof(color));
+                const float viewport[2] = { material->viewport_x, material->viewport_y };
+                std::memcpy(data + 96, viewport, sizeof(viewport));
+                std::memcpy(data + 104, &material->spacing, sizeof(float));
+                const float phase[2] = { material->phase_x, material->phase_y };
+                std::memcpy(data + 112, phase, sizeof(phase));
+                changed = true;
+            }
+            return changed;
+        }
+    };
+
+    QSGMaterialShader *SujianGridMaterial::createShader(QSGRendererInterface::RenderMode) const
+    {
+        return new SujianGridShader;
+    }
+
+    static const float sujian_grid_vertices[] = {
+        0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+        0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f,
+    };
+
+    static SujianGridMaterial *sujian_grid_material(QSGGeometryNode *node)
+    {
+        QSGMaterial *existing = node->material();
+        if (existing && existing->type() == SujianGridMaterial().type())
+            return static_cast<SujianGridMaterial *>(existing);
+        auto *material = new SujianGridMaterial;
+        node->setMaterial(material);
+        node->setFlag(QSGNode::OwnsMaterial, true);
+        return material;
     }
 
     static void sujian_starmap_grid_update(QSGNode *root,
-                                           double translate_x, double translate_y,
                                            bool geometry_dirty,
-                                           const float *vertices, int vertex_count,
+                                           double viewport_x, double viewport_y,
+                                           double spacing, double phase_x, double phase_y,
                                            int r, int g, int b, double alpha)
     {
-        QSGTransformNode *transform = sujian_grid_transform_node(root);
-        if (!transform)
-            return;
-        QMatrix4x4 matrix;
-        matrix.translate(float(translate_x), float(translate_y));
-        transform->setMatrix(matrix);
-        transform->markDirty(QSGNode::DirtyMatrix);
-
-        QSGGeometryNode *node = sujian_grid_geometry_node(transform);
+        QSGGeometryNode *node = nullptr;
+        QSGNode *child = root ? root->firstChild() : nullptr;
+        if (child && child->type() == QSGNode::GeometryNodeType)
+            node = static_cast<QSGGeometryNode *>(child);
         if (!node) {
             node = new QSGGeometryNode;
             node->setFlag(QSGNode::OwnedByParent, true);
-            transform->appendChildNode(node);
+            root->appendChildNode(node);
         }
 
-        if (geometry_dirty) {
+        if (geometry_dirty || !node->geometry()) {
             QSGGeometry *geometry = node->geometry();
             if (!geometry) {
-                geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(),
-                                           vertex_count);
+                geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 6);
                 geometry->setDrawingMode(QSGGeometry::DrawTriangles);
                 node->setGeometry(geometry);
                 node->setFlag(QSGNode::OwnsGeometry, true);
             } else {
-                geometry->allocate(vertex_count);
+                geometry->allocate(6);
             }
-            if (vertex_count > 0 && vertices)
-                std::memcpy(geometry->vertexData(), vertices,
-                            size_t(vertex_count) * 2 * sizeof(float));
+            std::memcpy(geometry->vertexData(), sujian_grid_vertices,
+                        6 * 2 * sizeof(float));
             geometry->markVertexDataDirty();
             node->markDirty(QSGNode::DirtyGeometry);
         }
 
-        QSGMaterial *existing = node->material();
-        QSGFlatColorMaterial *material =
-            existing ? static_cast<QSGFlatColorMaterial *>(existing) : nullptr;
-        if (!material) {
-            material = new QSGFlatColorMaterial;
-            node->setMaterial(material);
-            node->setFlag(QSGNode::OwnsMaterial, true);
-        }
+        SujianGridMaterial *material = sujian_grid_material(node);
         QColor color(r, g, b);
         color.setAlphaF(alpha);
-        material->setColor(color);
+        material->color = color;
+        material->viewport_x = float(viewport_x);
+        material->viewport_y = float(viewport_y);
+        material->spacing = float(spacing);
+        material->phase_x = float(phase_x);
+        material->phase_y = float(phase_y);
         node->markDirty(QSGNode::DirtyMaterial);
     }
 }}
@@ -148,17 +264,13 @@ impl StarMapGridItem {
         });
     }
 
-    fn mark_geometry_dirty(&mut self) {
-        self.geometry_dirty = true;
-        self.request_paint();
-    }
-
     fn set_zoom_level(&mut self, value: f64) {
         if self.zoom_level == value {
             return;
         }
         self.zoom_level = value;
-        self.mark_geometry_dirty();
+        // 只改 spacing uniform；点阵几何不重建。
+        self.request_paint();
     }
 
     fn set_pan_x(&mut self, value: f64) {
@@ -225,48 +337,18 @@ impl StarMapGridItem {
         (spacing > 0.0).then_some(spacing)
     }
 
-    /// 点阵局部坐标从 (0,0) 铺到视口右下；平移由 transform 的
-    /// `pan mod spacing` 承担，因此 pan 变化不触碰顶点。
-    fn build_vertices(&self) -> (Vec<f32>, f64) {
-        let (width, height) = self.item_size();
-        let Some(spacing) = self.spacing() else {
-            return (Vec::new(), 1.0);
-        };
-        if width <= 0.0 || height <= 0.0 || width > 1.0e6 || height > 1.0e6 {
-            return (Vec::new(), spacing);
-        }
-        let cols = (width / spacing).ceil() as i64 + 2;
-        let rows = (height / spacing).ceil() as i64 + 2;
-        if cols <= 0 || rows <= 0 || cols.saturating_mul(rows) > 200_000 {
-            return (Vec::new(), spacing);
-        }
-        let mut vertices = Vec::with_capacity((cols * rows * 12) as usize);
-        for col in 0..cols {
-            let cx = col as f64 * spacing;
-            for row in 0..rows {
-                let cy = row as f64 * spacing;
-                let x0 = (cx - 1.0) as f32;
-                let y0 = (cy - 1.0) as f32;
-                let x1 = (cx + 1.0) as f32;
-                let y1 = (cy + 1.0) as f32;
-                vertices.extend_from_slice(&[x0, y0, x1, y0, x0, y1, x0, y1, x1, y0, x1, y1]);
-            }
-        }
-        (vertices, spacing)
-    }
-
-    fn camera_translation(&self, spacing: f64) -> (f64, f64) {
+    fn camera_phase(&self, spacing: f64) -> (f64, f64) {
         if !(spacing > 0.0) || !spacing.is_finite() {
             return (0.0, 0.0);
         }
-        let pan = |value: f64| {
+        let phase = |value: f64| {
             if value.is_finite() {
                 value - (value / spacing).floor() * spacing
             } else {
                 0.0
             }
         };
-        (pan(self.pan_x), pan(self.pan_y))
+        (phase(self.pan_x), phase(self.pan_y))
     }
 }
 
@@ -276,17 +358,28 @@ impl QQuickItem for StarMapGridItem {
         if obj.is_null() {
             return;
         }
+        let vertex_ptr = GRID_VERTEX_SHADER.as_ptr();
+        let vertex_len = GRID_VERTEX_SHADER.len() as i32;
+        let fragment_ptr = GRID_FRAGMENT_SHADER.as_ptr();
+        let fragment_len = GRID_FRAGMENT_SHADER.len() as i32;
         // SAFETY: obj 是有效 QQuickItem 指针；ItemHasContents 启用 updatePaintNode。
-        cpp!(unsafe [obj as "QQuickItem *"] {
+        // shader 字节是 'static，C++ 立即复制到 QByteArray。
+        cpp!(unsafe [
+            obj as "QQuickItem *",
+            vertex_ptr as "const char *", vertex_len as "int",
+            fragment_ptr as "const char *", fragment_len as "int"
+        ] {
             if (obj)
                 obj->setFlag(QQuickItem::ItemHasContents, true);
+            sujian_set_grid_shaders(vertex_ptr, vertex_len, fragment_ptr, fragment_len);
         });
         self.geometry_dirty = true;
         self.request_paint();
     }
 
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
-        self.mark_geometry_dirty();
+        // 视口尺寸只改 uniform；全屏四边形仍是 0..1，不需要重建几何。
+        self.request_paint();
     }
 
     fn update_paint_node(&mut self, node: SGNode<ContainerNode>) -> SGNode<ContainerNode> {
@@ -301,14 +394,9 @@ impl QQuickItem for StarMapGridItem {
         }
 
         let geometry_dirty = self.geometry_dirty;
-        let (vertices, spacing) = if geometry_dirty {
-            self.build_vertices()
-        } else {
-            (Vec::new(), self.spacing().unwrap_or(1.0))
-        };
-        let vertices_ptr = vertices.as_ptr();
-        let count = (vertices.len() / 2) as i32;
-        let (tx, ty) = self.camera_translation(spacing);
+        let (width, height) = self.item_size();
+        let spacing = self.spacing().unwrap_or(16.0);
+        let (phase_x, phase_y) = self.camera_phase(spacing);
         let color = qmetaobject::QColor::from_name(&self.dot_color_hex.to_string());
         let alpha = if self.dot_opacity.is_finite() {
             self.dot_opacity.clamp(0.0, 1.0)
@@ -317,24 +405,25 @@ impl QQuickItem for StarMapGridItem {
         };
         if geometry_dirty {
             GRID_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
-            GRID_VERTEX_UPLOADS.fetch_add(count.max(0) as u64, Ordering::Relaxed);
+            GRID_VERTEX_UPLOADS.fetch_add(6, Ordering::Relaxed);
         } else {
             GRID_CAMERA_UPDATES.fetch_add(1, Ordering::Relaxed);
         }
         let r = color.red();
         let g = color.green();
         let b = color.blue();
-        // SAFETY: raw 是本 item 渲染线程上的 paint node；顶点数组在调用期间有效，
-        // C++ 只在本函数内拷贝，不保留 Rust 指针。
+        // SAFETY: raw 是本 item 渲染线程上的 paint node；C++ 不保留 Rust 指针。
         cpp!(unsafe [
             raw as "QSGNode *",
-            tx as "double", ty as "double", geometry_dirty as "bool",
-            vertices_ptr as "const float *",
-            count as "int",
+            geometry_dirty as "bool",
+            width as "double", height as "double",
+            spacing as "double",
+            phase_x as "double", phase_y as "double",
             r as "int", g as "int", b as "int", alpha as "double"
         ] {
-            sujian_starmap_grid_update(raw, tx, ty, geometry_dirty,
-                                       vertices_ptr, count, r, g, b, alpha);
+            sujian_starmap_grid_update(raw, geometry_dirty,
+                                       width, height, spacing, phase_x, phase_y,
+                                       r, g, b, alpha);
         });
         self.geometry_dirty = false;
         // SAFETY: raw 是刚取回所有权的节点指针，交给 Qt 继续持有。

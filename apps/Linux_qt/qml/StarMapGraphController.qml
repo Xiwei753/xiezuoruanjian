@@ -35,9 +35,13 @@ QtObject {
     // 数组变化时才 stringify 一次，不再每帧/每次命中都序列化全部边。
     property string edgeRendersJson: "[]"
     property var edgeLabels: []
-    // Issue #1029：缓存按「活动星图 + 导航路径」隔离；同一图从不同 Embed
-    // 入口打开时不能共享命中/连线缓存。
-    readonly property string sceneCacheKey: starmapId + "::" + pathKey
+    // Issue #1029 评论：缓存按「场景实例 + 活动星图 + 导航路径」隔离；同一
+    // Canvas 过渡期两份 Scene、或同图从不同 Embed 入口打开时都不能共享命中
+    // / 连线缓存，销毁时也只能释放自己这一个 key。
+    readonly property string sceneInstanceId:
+        starmapBackendRef ? starmapBackendRef.create_scene_instance_id() : ""
+    readonly property string sceneCacheKey:
+        sceneInstanceId + "::" + starmapId + "::" + pathKey
     property bool _sceneCacheDirty: true
     // 统一的世界锚点：节点 / 边 / Embed 的局部坐标都相对它，父级只保留
     // 视口中心相对的 double 平移与 zoom，避免巨大世界坐标进入场景图。
