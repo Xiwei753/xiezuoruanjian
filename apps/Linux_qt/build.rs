@@ -826,21 +826,62 @@ fn emit_qsb_validation() {
             "Fragment",
         ),
     ] {
-        match inspect_qsb(&qsb, path) {
-            Some((stage, variants, shaders)) if stage == expected_stage => {
-                println!("cargo:rustc-env={env_prefix}_STAGE={stage}");
-                println!("cargo:rustc-env={env_prefix}_GLSL={}", variants.join(","));
-                println!("cargo:rustc-env={env_prefix}_SHADERS={}", shaders.join(";"));
-            }
-            Some((stage, _, _)) => {
-                println!(
-                    "cargo:warning={path} 的 stage 是 {stage}，期望 {expected_stage}"
-                );
-            }
-            None => {
-                println!("cargo:warning=无法用 qsb -d 验证 {path}");
-            }
+        let Some(info) = inspect_qsb(&qsb, path) else {
+            println!("cargo:warning=无法用 qsb -d 验证 {path}");
+            continue;
+        };
+        if info.stage != expected_stage {
+            println!(
+                "cargo:warning={path} 的 stage 是 {}，期望 {expected_stage}",
+                info.stage
+            );
+            continue;
         }
+        let ready = qtquick_glsl_ready(&info);
+        if !ready {
+            println!(
+                "cargo:warning={path} 缺少 Qt Quick 所需的 Standard/Batchable GLSL 变体，\
+                 请用 qsb -b --qt6 重新生成顶点着色器"
+            );
+        }
+        println!("cargo:rustc-env={env_prefix}_STAGE={}", info.stage);
+        println!(
+            "cargo:rustc-env={env_prefix}_STANDARD_GLSL={}",
+            info.standard_glsl.join(",")
+        );
+        println!(
+            "cargo:rustc-env={env_prefix}_BATCHABLE_GLSL={}",
+            info.batchable_glsl.join(",")
+        );
+        println!(
+            "cargo:rustc-env={env_prefix}_SHADERS={}",
+            info.shaders.join(";")
+        );
+        println!(
+            "cargo:rustc-env={env_prefix}_QTQUICK_READY={}",
+            if ready { "1" } else { "0" }
+        );
+    }
+}
+
+struct QsbInfo {
+    stage: String,
+    shaders: Vec<String>,
+    standard_glsl: Vec<String>,
+    batchable_glsl: Vec<String>,
+}
+
+fn qtquick_glsl_ready(info: &QsbInfo) -> bool {
+    let required = ["100es", "120", "150"];
+    match info.stage.as_str() {
+        "Vertex" => required.iter().all(|version| {
+            info.standard_glsl.iter().any(|item| item == version)
+                && info.batchable_glsl.iter().any(|item| item == version)
+        }),
+        "Fragment" => required
+            .iter()
+            .all(|version| info.standard_glsl.iter().any(|item| item == version)),
+        _ => false,
     }
 }
 
@@ -877,45 +918,62 @@ fn find_qsb_tool() -> Option<PathBuf> {
     None
 }
 
-fn inspect_qsb(qsb: &Path, path: &str) -> Option<(String, Vec<String>, Vec<String>)> {
+fn inspect_qsb(qsb: &Path, path: &str) -> Option<QsbInfo> {
     let output = Command::new(qsb).arg("-d").arg(path).output().ok()?;
     if !output.status.success() {
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    let mut stage = String::new();
-    let mut variants = Vec::new();
-    let mut shaders = Vec::new();
+    let mut info = QsbInfo {
+        stage: String::new(),
+        shaders: Vec::new(),
+        standard_glsl: Vec::new(),
+        batchable_glsl: Vec::new(),
+    };
     for line in text.lines() {
         let line = line.trim();
         if let Some(value) = line.strip_prefix("Stage:") {
-            stage = value.trim().to_string();
+            info.stage = value.trim().to_string();
         }
-        if let Some(rest) = line.strip_prefix("Shader ") {
-            if let Some((_, description)) = rest.split_once(": ") {
-                let description = description.trim();
-                if !shaders.iter().any(|item| item == description) {
-                    shaders.push(description.to_string());
-                }
-                if let Some(glsl) = description.strip_prefix("GLSL ") {
-                    let version = glsl.split(" [").next().unwrap_or(glsl).trim();
-                    if version.starts_with("100") {
-                        variants.push("100es".to_string());
-                    } else {
-                        variants.push(version.to_string());
-                    }
-                }
-            }
+        let Some(rest) = line.strip_prefix("Shader ") else {
+            continue;
+        };
+        let Some((_, description)) = rest.split_once(": ") else {
+            continue;
+        };
+        let description = description.trim();
+        if !info.shaders.iter().any(|item| item == description) {
+            info.shaders.push(description.to_string());
+        }
+        let (language_version, variant) = if let Some(value) =
+            description.strip_suffix(" [Standard]")
+        {
+            (value, "standard")
+        } else if let Some(value) = description.strip_suffix(" [Batchable]") {
+            (value, "batchable")
+        } else {
+            continue;
+        };
+        let Some(glsl) = language_version.strip_prefix("GLSL ") else {
+            continue;
+        };
+        let version = glsl.trim();
+        let version = if version.starts_with("100") {
+            "100es"
+        } else {
+            version
+        };
+        let target = if variant == "standard" {
+            &mut info.standard_glsl
+        } else {
+            &mut info.batchable_glsl
+        };
+        if !target.iter().any(|item| item == version) {
+            target.push(version.to_string());
         }
     }
-    if stage.is_empty() || variants.is_empty() || shaders.is_empty() {
+    if info.stage.is_empty() || info.shaders.is_empty() || info.standard_glsl.is_empty() {
         return None;
     }
-    let mut unique = Vec::new();
-    for variant in variants {
-        if !unique.contains(&variant) {
-            unique.push(variant);
-        }
-    }
-    Some((stage, unique, shaders))
+    Some(info)
 }
