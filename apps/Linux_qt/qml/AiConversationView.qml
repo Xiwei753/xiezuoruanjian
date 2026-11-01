@@ -501,7 +501,7 @@ Item {
                     // 弹层优先保持较宽的模型列表，但不得超出当前窗口可视宽度。
                     readonly property real viewportMargin: Kirigami.Units.smallSpacing
                     readonly property real viewportWidth: {
-                        const targetWindow = Window.window
+                        const targetWindow = modelPickerButton.Window.window
                         const windowWidth = targetWindow ? targetWindow.width : root.width
                         return Math.max(0, windowWidth - 2 * viewportMargin)
                     }
