@@ -147,20 +147,45 @@ impl WriterCoreApi {
     /// 按根星图与路径段解析 MCP 会话真正活动的星图。
     ///
     /// Agent 提供的裸 `starmapId` 只作为请求参数，当前层身份始终由
-    /// root + 路径逐段解析；解析失败直接报错，不回退到请求 ID。
+    /// root + 路径逐段解析；解析失败直接报错，不回退到请求 ID。解析结果
+    /// 还必须落在同一份授权集合内，不能借路径进入其他作品的图。
     pub fn mcp_resolve_active_starmap(
         &self,
+        project_id: Option<&str>,
         root_starmap_id: &str,
         segments: Vec<StarMapPathSegmentDto>,
     ) -> ApiResult<String> {
-        self.get_starmap(root_starmap_id)?;
+        let ids = self.mcp_authorized_starmap_ids(project_id, Some(root_starmap_id))?;
         let resolved = self.resolve_starmap_path(root_starmap_id, segments)?;
-        Ok(resolved.final_starmap_id)
+        let active = resolved.final_starmap_id;
+        if !ids.iter().any(|id| id == &active) {
+            return Err(invalid(
+                "resolved starmap is outside the authorized starmap scope",
+            ));
+        }
+        Ok(active)
     }
 
-    /// 根星图及其所有 Embed 可达子图的 ID 集合。用于限制 MCP 只能读写
-    /// 当前会话授权范围内的图；循环 Embed 通过 visited 集合去重。
-    pub fn mcp_starmap_subtree_ids(&self, root_starmap_id: &str) -> ApiResult<Vec<String>> {
+    /// 单个星图是否属于会话的项目范围：未绑定图可作为已授权父图的真实子图，
+    /// 绑定图必须属于当前作品；没有授权作品时只能保留未绑定图。
+    fn mcp_starmap_meta_in_scope(meta: &StarMapMetaDto, project_id: Option<&str>) -> bool {
+        match (meta.project_id.as_deref(), project_id) {
+            (None, _) => true,
+            (Some(bound), Some(current)) => bound == current,
+            (Some(_), None) => false,
+        }
+    }
+
+    /// 根星图及其所有范围内 Embed 可达子图的 ID 集合。用于限制 MCP 只能
+    /// 读写当前会话授权范围内的图；循环 Embed 通过 visited 集合去重。
+    ///
+    /// 每一层都读取 meta 判断作品归属：绑定到其他作品的图既不进入授权集合，
+    /// 也不会继续遍历它的 Embed 子树，避免从根图越权进入其他作品。
+    pub fn mcp_starmap_subtree_ids(
+        &self,
+        project_id: Option<&str>,
+        root_starmap_id: &str,
+    ) -> ApiResult<Vec<String>> {
         let mut ids = Vec::new();
         let mut visited = HashSet::new();
         let mut queue = VecDeque::from([root_starmap_id.to_string()]);
@@ -168,18 +193,39 @@ impl WriterCoreApi {
             if !visited.insert(starmap_id.clone()) {
                 continue;
             }
+            let meta = match self.get_starmap(&starmap_id) {
+                Ok(meta) => meta,
+                Err(error) if starmap_id == root_starmap_id => return Err(error),
+                Err(error) => {
+                    // 子图缺失不扩大授权范围；保留根范围，跳过失效分支。
+                    log::warn!(
+                        "mcp_starmap_subtree_ids: skip unreadable child starmap {}: {}",
+                        starmap_id,
+                        error
+                    );
+                    continue;
+                }
+            };
+            if !Self::mcp_starmap_meta_in_scope(&meta, project_id) {
+                if starmap_id == root_starmap_id {
+                    return Err(invalid(
+                        "root starmap belongs to a project outside this MCP scope",
+                    ));
+                }
+                // 其他作品图及其子树都不进入授权范围。
+                continue;
+            }
+            ids.push(starmap_id.clone());
             match self.get_starmap_graph(&starmap_id) {
                 Ok(graph) => {
-                    ids.push(starmap_id);
                     for embed in graph.embeds {
                         queue.push_back(embed.target_starmap_id);
                     }
                 }
                 Err(error) if starmap_id == root_starmap_id => return Err(error),
                 Err(error) => {
-                    // 子图缺失不扩大授权范围；保留根范围，跳过失效分支。
                     log::warn!(
-                        "mcp_starmap_subtree_ids: skip unreadable child starmap {}: {}",
+                        "mcp_starmap_subtree_ids: skip unreadable child graph {}: {}",
                         starmap_id,
                         error
                     );
@@ -200,23 +246,7 @@ impl WriterCoreApi {
         root_starmap_id: Option<&str>,
     ) -> ApiResult<Vec<String>> {
         if let Some(root_starmap_id) = root_starmap_id {
-            let root = self.get_starmap(root_starmap_id)?;
-            if let Some(project_id) = project_id {
-                if root
-                    .project_id
-                    .as_deref()
-                    .is_some_and(|bound| bound != project_id)
-                {
-                    return Err(invalid(
-                        "root starmap belongs to a project outside this MCP scope",
-                    ));
-                }
-            } else if root.project_id.is_some() {
-                return Err(invalid(
-                    "root starmap belongs to a project outside this MCP scope",
-                ));
-            }
-            return self.mcp_starmap_subtree_ids(root_starmap_id);
+            return self.mcp_starmap_subtree_ids(project_id, root_starmap_id);
         }
 
         let project_id = project_id.ok_or_else(|| {
@@ -251,11 +281,7 @@ impl WriterCoreApi {
                     continue;
                 }
             };
-            if meta
-                .project_id
-                .as_deref()
-                .is_some_and(|bound| bound != project_id)
-            {
+            if !Self::mcp_starmap_meta_in_scope(&meta, Some(project_id)) {
                 // 作品图嵌入其他作品时，不沿那棵子树继续扩大授权范围。
                 continue;
             }
@@ -313,8 +339,9 @@ impl WriterCoreApi {
             }));
         }
         if let Some(root_starmap_id) = root_starmap_id {
-            // 路径必须能解析；这里不信任 Agent 提供的 activeStarmapId。
-            let _active = self.mcp_resolve_active_starmap(root_starmap_id, segments)?;
+            // 路径必须能解析，且解析出的活动图必须仍在同一授权集合中；
+            // 这里不信任 Agent 提供的 activeStarmapId。
+            let _active = self.mcp_resolve_active_starmap(project_id, root_starmap_id, segments)?;
         }
         Ok(target_starmap_id.to_string())
     }

@@ -175,6 +175,9 @@ pub struct AgentRuntimeBackend {
     project_title: String,
     /// 当前 AI 面板固定的 MCP 读写范围；换图后重建 broker，但 Core 对话不变。
     mcp_scope: McpScope,
+    /// UI 是否显式下发过 MCP 范围。用于区分“尚未设置范围”和“明确没有作品”：
+    /// 后者不能再用当前选中作品回填。
+    mcp_scope_explicit: bool,
     /// 最近一次真正激活的 AI 工作区；后台实例不能冒充它改 scope。
     scope_owner: String,
     /// 当前正在执行的轮次属于哪个 AI 工作区；跨面板 scope 更新不得取消它。
@@ -269,6 +272,7 @@ impl AgentRuntimeBackend {
             project_id: String::new(),
             project_title: String::new(),
             mcp_scope: McpScope::default(),
+            mcp_scope_explicit: false,
             scope_owner: String::new(),
             turn_owner: String::new(),
             turn_tool_success: 0,
@@ -710,19 +714,41 @@ impl AgentRuntimeBackend {
         Ok((app_data_root, projects_root, actual_project_id))
     }
 
-    /// 组装本次请求固定的 MCP 作用域。项目 ID 仍以写作区当前作品为准；
-    /// 星图面板额外带根图、活动图、路径和路由。不能从 contextLabel 或上一张图猜。
+    /// 读取根星图在 Core 中真实的作品归属。根图有 `projectId` 时以它为准；
+    /// 未绑定或读取失败都返回空，宁可缩小范围也不回填当前选中作品。
+    fn root_starmap_project_id(&self, root_starmap_id: &str) -> String {
+        let Some(api) = self.core_api() else {
+            return String::new();
+        };
+        match api.get_starmap(root_starmap_id) {
+            Ok(meta) => meta.project_id.unwrap_or_default(),
+            Err(error) => {
+                log::warn!(
+                    "[agent] 无法读取根星图 {} 的作品归属：{}",
+                    root_starmap_id,
+                    error
+                );
+                String::new()
+            }
+        }
+    }
+
+    /// 组装本次请求固定的 MCP 作用域。有根图时作品归属必须来自 Core 的根图
+    /// meta，UI 传入的旧作品 ID 即使非空也不能把独立星图重新贴回作品；无根图
+    /// 且 UI 从未下发范围时才允许回退到当前选中作品。
     fn mcp_scope_for(&self, actual_project_id: &str) -> McpScope {
-        let project_id = if !self.mcp_scope.project_id.is_empty() {
+        let root_starmap_id = self.mcp_scope.root_starmap_id.clone();
+        let project_id = if !root_starmap_id.is_empty() {
+            self.root_starmap_project_id(&root_starmap_id)
+        } else if self.mcp_scope_explicit {
+            // 明确没有作品时保持为空，不把上次选中的作品带进来。
             self.mcp_scope.project_id.clone()
-        } else if !self.project_id.is_empty() && !self.project_id.starts_with("starmap:") {
-            self.project_id.clone()
         } else {
             actual_project_id.to_string()
         };
         McpScope {
             project_id,
-            root_starmap_id: self.mcp_scope.root_starmap_id.clone(),
+            root_starmap_id,
             active_starmap_id: self.mcp_scope.active_starmap_id.clone(),
             path_segments_json: if self.mcp_scope.path_segments_json.trim().is_empty() {
                 "[]".to_string()
@@ -1008,6 +1034,7 @@ impl AgentRuntimeBackend {
             // scope 只比较作品/画布身份，避免切换 CLI 后误判为换图。
             executor: String::new(),
         };
+        self.mcp_scope_explicit = true;
 
         // 正在执行的轮次可能属于另一个 AI 工作区。此时只记录下一次发送要
         // 用的 scope，不关闭原生进程，也不把不属于调用方的轮次标成取消。

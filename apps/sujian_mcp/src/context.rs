@@ -157,7 +157,9 @@ impl McpContext {
                 root,
             )
         })?;
-        let active = read(|| api.mcp_resolve_active_starmap(&active, segments))?;
+        let active = read(|| {
+            api.mcp_resolve_active_starmap(self.project_id_opt(), &active, segments)
+        })?;
         if !self.scope.active_starmap_id.is_empty() && self.scope.active_starmap_id != active {
             eprintln!(
                 "sujian_mcp: 上报的活动星图 {} 与 Core 解析结果 {} 不一致，以 Core 为准",
