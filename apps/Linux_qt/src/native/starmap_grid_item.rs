@@ -56,12 +56,23 @@ cpp! {{
     static QString g_sujian_grid_vertex_shader_path;
     static QString g_sujian_grid_fragment_shader_path;
 
-    static void sujian_write_grid_shader_file(const QString &path,
+    static bool sujian_write_grid_shader_file(const QString &path,
                                               const char *bytes, int length)
     {
         QFile file(path);
-        if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-            file.write(bytes, length);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            qWarning("Sujian star map grid shader write failed: cannot open %s: %s",
+                     qPrintable(path), qPrintable(file.errorString()));
+            return false;
+        }
+        const qint64 written = file.write(bytes, length);
+        if (written != length) {
+            qWarning("Sujian star map grid shader write failed for %s: wrote %lld of %d bytes: %s",
+                     qPrintable(path), static_cast<long long>(written), length,
+                     qPrintable(file.errorString()));
+            return false;
+        }
+        return true;
     }
 
     static void sujian_set_grid_shaders(const char *vertex, int vertex_len,
@@ -88,6 +99,8 @@ cpp! {{
         float spacing = 16.0f;
         float phase_x = 0.0f;
         float phase_y = 0.0f;
+        // 材质是原地更新的；不能依赖 old/new 指针做字段比较。
+        bool uniform_dirty = false;
 
         QSGMaterialType *type() const override
         {
@@ -146,15 +159,8 @@ cpp! {{
                 changed = true;
             }
 
-            const auto *material = static_cast<const SujianGridMaterial *>(new_material);
-            const auto *previous = static_cast<const SujianGridMaterial *>(old_material);
-            if (changed || !previous
-                || material->color.rgba() != previous->color.rgba()
-                || material->viewport_x != previous->viewport_x
-                || material->viewport_y != previous->viewport_y
-                || material->spacing != previous->spacing
-                || material->phase_x != previous->phase_x
-                || material->phase_y != previous->phase_y) {
+            auto *material = static_cast<SujianGridMaterial *>(new_material);
+            if (old_material != new_material || material->uniform_dirty) {
                 const float color[4] = { material->color.redF(),
                                          material->color.greenF(),
                                          material->color.blueF(),
@@ -165,6 +171,7 @@ cpp! {{
                 std::memcpy(data + 104, &material->spacing, sizeof(float));
                 const float phase[2] = { material->phase_x, material->phase_y };
                 std::memcpy(data + 112, phase, sizeof(phase));
+                material->uniform_dirty = false;
                 changed = true;
             }
             return changed;
@@ -227,13 +234,23 @@ cpp! {{
         SujianGridMaterial *material = sujian_grid_material(node);
         QColor color(r, g, b);
         color.setAlphaF(alpha);
-        material->color = color;
-        material->viewport_x = float(viewport_x);
-        material->viewport_y = float(viewport_y);
-        material->spacing = float(spacing);
-        material->phase_x = float(phase_x);
-        material->phase_y = float(phase_y);
-        node->markDirty(QSGNode::DirtyMaterial);
+        const bool uniforms_changed =
+            material->color.rgba() != color.rgba()
+            || material->viewport_x != float(viewport_x)
+            || material->viewport_y != float(viewport_y)
+            || material->spacing != float(spacing)
+            || material->phase_x != float(phase_x)
+            || material->phase_y != float(phase_y);
+        if (uniforms_changed) {
+            material->color = color;
+            material->viewport_x = float(viewport_x);
+            material->viewport_y = float(viewport_y);
+            material->spacing = float(spacing);
+            material->phase_x = float(phase_x);
+            material->phase_y = float(phase_y);
+            material->uniform_dirty = true;
+            node->markDirty(QSGNode::DirtyMaterial);
+        }
     }
 }}
 

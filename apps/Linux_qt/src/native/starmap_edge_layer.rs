@@ -65,12 +65,23 @@ cpp! {{
     static QString g_sujian_edge_vertex_shader_path;
     static QString g_sujian_edge_fragment_shader_path;
 
-    static void sujian_write_shader_file(const QString &path,
+    static bool sujian_write_shader_file(const QString &path,
                                          const char *bytes, int length)
     {
         QFile file(path);
-        if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-            file.write(bytes, length);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            qWarning("Sujian star map edge shader write failed: cannot open %s: %s",
+                     qPrintable(path), qPrintable(file.errorString()));
+            return false;
+        }
+        const qint64 written = file.write(bytes, length);
+        if (written != length) {
+            qWarning("Sujian star map edge shader write failed for %s: wrote %lld of %d bytes: %s",
+                     qPrintable(path), static_cast<long long>(written), length,
+                     qPrintable(file.errorString()));
+            return false;
+        }
+        return true;
     }
 
     static void sujian_set_edge_shaders(const char *vertex, int vertex_len,
@@ -97,6 +108,9 @@ cpp! {{
         float stroke_half = 1.0f;
         float viewport_x = 1.0f;
         float viewport_y = 1.0f;
+        // Qt 6 会原地复用同一个 material 指针；不能靠 old/new 字段比较发现
+        // 变化，必须由更新方显式标记本次是否改过 uniform。
+        bool uniform_dirty = false;
 
         QSGMaterialType *type() const override
         {
@@ -151,13 +165,8 @@ cpp! {{
                 changed = true;
             }
 
-            const auto *material = static_cast<const SujianEdgeMaterial *>(new_material);
-            const auto *previous = static_cast<const SujianEdgeMaterial *>(old_material);
-            if (changed || !previous
-                || material->color.rgba() != previous->color.rgba()
-                || material->stroke_half != previous->stroke_half
-                || material->viewport_x != previous->viewport_x
-                || material->viewport_y != previous->viewport_y) {
+            auto *material = static_cast<SujianEdgeMaterial *>(new_material);
+            if (old_material != new_material || material->uniform_dirty) {
                 const float color[4] = { material->color.redF(),
                                          material->color.greenF(),
                                          material->color.blueF(),
@@ -166,6 +175,7 @@ cpp! {{
                 const float viewport[2] = { material->viewport_x, material->viewport_y };
                 std::memcpy(data + 96, viewport, sizeof(viewport));
                 std::memcpy(data + 104, &material->stroke_half, sizeof(float));
+                material->uniform_dirty = false;
                 changed = true;
             }
             return changed;
@@ -233,11 +243,19 @@ cpp! {{
         SujianEdgeMaterial *material = sujian_edge_material(node);
         QColor color(r, g, b);
         color.setAlphaF(alpha);
-        material->color = color;
-        material->stroke_half = float(stroke_half);
-        material->viewport_x = float(viewport_x);
-        material->viewport_y = float(viewport_y);
-        node->markDirty(QSGNode::DirtyMaterial);
+        const bool uniforms_changed =
+            material->color.rgba() != color.rgba()
+            || material->stroke_half != float(stroke_half)
+            || material->viewport_x != float(viewport_x)
+            || material->viewport_y != float(viewport_y);
+        if (uniforms_changed) {
+            material->color = color;
+            material->stroke_half = float(stroke_half);
+            material->viewport_x = float(viewport_x);
+            material->viewport_y = float(viewport_y);
+            material->uniform_dirty = true;
+            node->markDirty(QSGNode::DirtyMaterial);
+        }
     }
 
     static void sujian_apply_edge_geometry(QSGGeometryNode *node,
