@@ -123,7 +123,8 @@ pub struct SettingsBackend {
     set_desktop_pane_width: qt_method!(fn(&mut self, page_key: QString, side: QString, value: f64)),
     /// Issue #1014：记录某页面某一部分的折叠状态。
     #[allow(dead_code)]
-    set_desktop_pane_collapsed: qt_method!(fn(&mut self, page_key: QString, part: QString, collapsed: bool)),
+    set_desktop_pane_collapsed:
+        qt_method!(fn(&mut self, page_key: QString, part: QString, collapsed: bool)),
     #[allow(dead_code)]
     export_diagnostics_pack: qt_method!(fn(&self) -> QString),
     #[allow(dead_code)]
@@ -191,6 +192,25 @@ fn build_export_attachments(
                 .into_bytes(),
         });
     }
+
+    // graphics_info.json（Issue #1029）：真实场景图后端 + 星图渲染统计。
+    // 采样值直接来自 Qt，不根据 QPA 平台推断 GPU；统计只含计数，不含正文。
+    let graphics_runtime: serde_json::Value =
+        serde_json::from_str(&crate::app_main_cpp::graphics_runtime_info())
+            .unwrap_or_else(|_| serde_json::json!({}));
+    let render_stats: serde_json::Value =
+        serde_json::from_str(&crate::native::starmap_render_statistics_json())
+            .unwrap_or_else(|_| serde_json::json!({}));
+    let graphics_json = serde_json::json!({
+        "sceneGraph": graphics_runtime,
+        "starmapRenderer": render_stats,
+    });
+    attachments.push(writer_diagnostics::PlatformAttachment {
+        relative_path: "graphics_info.json".to_string(),
+        content: serde_json::to_string_pretty(&graphics_json)
+            .unwrap_or_else(|_| "{}".to_string())
+            .into_bytes(),
+    });
 
     // system_info.json
     if let Some(sys) = crate::backend::diagnostics::get_system_info() {
@@ -830,8 +850,7 @@ impl SettingsBackend {
     /// Issue #1014：页面级栏宽 / 折叠状态以 `DesktopSettings` 为唯一事实来源。
     fn desktop_layout_json(&self) -> QString {
         self.with_app(|app| {
-            serde_json::to_string(&app.current_desktop_layout)
-                .unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string(&app.current_desktop_layout).unwrap_or_else(|_| "{}".to_string())
         })
         .map(Into::into)
         .unwrap_or_else(|_| "{}".into())

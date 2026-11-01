@@ -115,6 +115,8 @@ use std::sync::{Mutex, OnceLock};
 use sujian_linux_qt::app_main_cpp;
 use sujian_linux_qt::backend;
 use sujian_linux_qt::native::starmap_circle_clip::StarMapCircleClip;
+use sujian_linux_qt::native::starmap_edge_layer::StarMapEdgeLayer;
+use sujian_linux_qt::native::starmap_grid_item::StarMapGridItem;
 use sujian_linux_qt::sujian_editor_item;
 
 use backend::app_backend::{debug_error_static, debug_log_static, debug_warn_static};
@@ -723,6 +725,9 @@ fn main() {
     );
     // Issue #949 复核：平台侧圆形裁剪容器，过渡期把子场景 Loader 裁到圆环内。
     qmetaobject::qml_register_type::<StarMapCircleClip>(c"Sujian", 1, 0, c"StarMapCircleClip");
+    // Issue #1029：批量连线与背景点阵的平台场景图组件。
+    qmetaobject::qml_register_type::<StarMapEdgeLayer>(c"Sujian", 1, 0, c"StarMapEdgeLayer");
+    qmetaobject::qml_register_type::<StarMapGridItem>(c"Sujian", 1, 0, c"StarMapGridItem");
     startup_mark("qt_runtime_probe_ready", "Qt runtime probed");
 
     let qml_path = "qrc:/main.qml";
@@ -819,6 +824,7 @@ fn main() {
     // 并让 Qt 在事件循环真正运行 750ms 后把顶层窗口 visible/exposed/geometry
     // 直接输出到 stderr；RPM launcher 会同步收进 startup 日志。
     app_main_cpp::install_window_state_probe();
+    app_main_cpp::install_graphics_runtime_probe();
     debug_log_static(
         "app",
         "event_loop_enter",

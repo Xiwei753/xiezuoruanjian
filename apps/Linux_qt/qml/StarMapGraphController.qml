@@ -31,6 +31,10 @@ QtObject {
     property ListModel nodesModel: ListModel { id: nodesListModel }
     property var edgesModel: []
     property var edgeRenders: []
+    // Issue #1029：传给原生连线图层的稳定 JSON 与只含标签的轻量模型。
+    // 数组变化时才 stringify 一次，不再每帧/每次命中都序列化全部边。
+    property string edgeRendersJson: "[]"
+    property var edgeLabels: []
     // Issue #796 评论 5886483653: 子星图 Embed 显示模型，从 graphData.embeds 派生。
     property var embedsModel: []
 
@@ -90,13 +94,26 @@ QtObject {
         var page = res.data || {}
         _workspaceEventOffset = page.nextOffset || 0
         var events = page.events || []
+        var structureEventSeen = false
+        var needLoadGraph = false
         for (var i = 0; i < events.length; i++) {
             var event = events[i]
-            if (event.kind === "starmap" && event.starmapId === starmapId) {
-                loadGraph()
-                return
+            // Issue #1028：新建 / 绑定 / 嵌入 / 解绑 / 删除等结构变更由 Core
+            // 发出 starmapStructure；左栏需要按真实 starmapId 重载，而不是把
+            // 重绘当成写入成功。
+            if (event.kind === "starmapStructure") {
+                structureEventSeen = true
+                if (event.starmapId === starmapId)
+                    needLoadGraph = true
+                continue
             }
+            if (event.kind === "starmap" && event.starmapId === starmapId)
+                needLoadGraph = true
         }
+        if (needLoadGraph)
+            loadGraph()
+        if (structureEventSeen)
+            structureChanged()
     }
 
     function revisionOfNode(nodeId) {
@@ -340,12 +357,7 @@ QtObject {
 
     function findNodeAt(wx, wy) {
         if (!ensureBackend()) return null;
-        var layoutNodes = [];
-        for (var i = 0; i < nodesModel.count; i++) {
-            var n = nodesModel.get(i);
-            layoutNodes.push({ nodeId: n.id, x: n.x, y: n.y, width: n.width, height: n.height, radius: 30, collapsed: false, zIndex: 0, scale: 1.0, depth: 0.0, focusWeight: 0.0, orbitGroup: null });
-        }
-        var res = normalizeBackendResult(starmapBackendRef.hit_test_nodes(JSON.stringify(layoutNodes), wx, wy), "");
+        var res = normalizeBackendResult(starmapBackendRef.hit_test_scene_node(wx, wy), "");
         if (res.success && res.data) {
             return getNode(res.data);
         }
@@ -951,15 +963,41 @@ QtObject {
         return embedPos;
     }
 
+    function syncSceneCache() {
+        if (!ensureBackend() || !graphData) return false;
+        var res = normalizeBackendResult(starmapBackendRef.sync_starmap_scene(
+            JSON.stringify(graphData),
+            JSON.stringify(nodeLayoutEntries(null)),
+            JSON.stringify(embedLayoutEntries(null))), "");
+        return res.success === true;
+    }
+
     function computeEdgeRenders(moveOverride) {
         if (!ensureBackend()) return;
         if (!graphData) return;
-        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders(
-            JSON.stringify(graphData),
-            JSON.stringify(nodeLayoutEntries(moveOverride)),
-            JSON.stringify(embedLayoutEntries(moveOverride))), "");
+        // 非拖拽帧（加载 / 落盘 / 选择变化）先把结构快照同步进显示缓存；
+        // 拖拽帧只传被拖对象的临时位置，其余几何直接复用缓存。
+        var hasOverride = moveOverride
+                && (moveOverride.kind === "node" || moveOverride.kind === "embed")
+                && moveOverride.id !== undefined;
+        if (!hasOverride && !syncSceneCache())
+            return;
+        var res = normalizeBackendResult(starmapBackendRef.compute_scene_edge_renders(
+            hasOverride ? moveOverride.kind : "",
+            hasOverride ? moveOverride.id : "",
+            hasOverride ? moveOverride.x : 0,
+            hasOverride ? moveOverride.y : 0,
+            hasOverride), "");
         if (res.success && res.data) {
             edgeRenders = res.data;
+            edgeRendersJson = JSON.stringify(res.data);
+            var labels = [];
+            for (var i = 0; i < res.data.length; i++) {
+                var render = res.data[i];
+                if (render.label && render.label.length > 0)
+                    labels.push(render);
+            }
+            edgeLabels = labels;
         }
     }
 
@@ -972,10 +1010,7 @@ QtObject {
     function computeProspectiveEdgeRender(fromPath, toPath) {
         if (!graphData) return null;
         if (!ensureBackend()) return null;
-        var res = normalizeBackendResult(starmapBackendRef.compute_prospective_edge_render(
-            JSON.stringify(graphData),
-            JSON.stringify(nodeLayoutEntries(null)),
-            JSON.stringify(embedLayoutEntries(null)),
+        var res = normalizeBackendResult(starmapBackendRef.compute_scene_prospective_edge_render(
             JSON.stringify(fromPath),
             JSON.stringify(toPath)), "");
         if (res.success && res.data) return res.data;
@@ -988,8 +1023,7 @@ QtObject {
     function hitTestEdge(wx, wy, threshold) {
         if (!ensureBackend()) return null;
         if (!edgeRenders || edgeRenders.length === 0) computeEdgeRenders(null);
-        if (!edgeRenders || edgeRenders.length === 0) return null;
-        var res = normalizeBackendResult(starmapBackendRef.hit_test_edge_renders(JSON.stringify(edgeRenders), wx, wy, threshold), "");
+        var res = normalizeBackendResult(starmapBackendRef.hit_test_scene_edge(wx, wy, threshold), "");
         if (res.success && res.data) {
             for (var i = 0; i < edgesModel.length; i++) {
                 if (edgesModel[i].id === res.data) return edgesModel[i];
@@ -1007,7 +1041,11 @@ QtObject {
         return path.target.nodeId || null;
     }
 
-    function invalidateEdgeRenders() { edgeRenders = []; }
+    function invalidateEdgeRenders() {
+        edgeRenders = [];
+        edgeRendersJson = "[]";
+        edgeLabels = [];
+    }
 
     // ---------------------------------------------------------------------------
     // Issue #834：内部链接（StarMapLink）菜单（add/update/delete/list）。

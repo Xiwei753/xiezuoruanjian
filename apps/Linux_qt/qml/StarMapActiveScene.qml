@@ -13,9 +13,10 @@
 //   - 单一投影入口：world 几何 → 当前活动相机 → 视口几何（worldToScreenX/Y）。
 //     渲染时以视口中心为相对原点（视口中心的世界坐标现算），避免巨大世界坐标
 //     乘极大 zoom 后的浮点抖动；镜头尺度只有数值安全边界，边界不触发层级切换。
-//   - 节点 / 子星图入口是 Qt Quick 矢量几何（矩形 / 正圆），连线由
-//     QtQuick.Shapes 的 ShapePath 按当前投影实时绘制，文字由实时 Text/TextInput/
-//     TextEdit 绘制。没有 layer FBO、没有缩略图纹理、没有把 1x 位图放大 N 倍。
+//   - 节点 / 子星图入口保持 authored world 坐标，整层由唯一 worldContent 的
+//     pan/zoom 变换投影；连线由原生场景图批量三角形绘制，背景网格也是原生
+//     场景图项。文字由实时 Text/TextInput/TextEdit 绘制。没有 layer FBO、
+//     没有缩略图纹理、没有把 1x 位图放大 N 倍，也没有逐节点无限动画。
 //   - 线宽 / 文字字号是确定的屏幕口径：线宽 = world 线宽 × 镜头比例（夹在
 //     1~6 屏幕像素）；字号 = 用户字号 token × 镜头比例（夹在 0.6~8 倍），
 //     都在屏幕像素上现算，不依赖任何预栅格化纹理。
@@ -23,8 +24,8 @@
 //     （StarMapEmbed → StarMapSceneContent），不递归创建可交互子场景。
 //
 // 坐标约定：
-//   - 本组件局部坐标 = 当前活动画布的 authored world 坐标（场景本身不平移、
-//     不缩放；相机只体现在投影函数里）。
+//   - authored world 坐标是业务几何的事实来源；相机只体现在 worldContent
+//     的父级变换与原生边层 / 网格的投影里，不改 authored position。
 //   - 输入路由 StarMapInputRouter 的 hit.owner 就是本组件：它按世界坐标查命中，
 //     移动 / 连线 / 建边也全部落在本画布自己的 GraphController 上。
 //
@@ -35,7 +36,7 @@
 
 import QtQuick
 import QtQuick.Controls as Controls
-import QtQuick.Shapes
+import Sujian 1.0
 import "StarMapPathPlanner.js" as StarMapPathPlanner
 import "StarMapNodeMetrics.js" as StarMapNodeMetrics
 
@@ -145,11 +146,9 @@ Item {
     }
 
     // ── 屏幕口径常量 ──
-    // 边线宽：world 线宽 × 镜头比例，夹在 1~6 屏幕像素（缩放是缩放，但不做
-    // 亚像素 / 巨线）。命中也吃同一份屏幕口径。
+    // 边线宽：world 线宽 × 镜头比例，夹在 1~6 屏幕像素（原生边层使用同一口径）。
+    // 命中也吃同一份屏幕口径。
     readonly property real _edgeLineWorldWidth: 2
-    readonly property real _edgeScreenStrokeWidth:
-        Math.max(1.0, Math.min(_edgeLineWorldWidth * _safeZoom, 6.0))
     readonly property real _edgeHitScreenPx: 10
     function _edgeHitThresholdWorld() {
         return Math.max(_edgeHitScreenPx / _safeZoom, _edgeLineWorldWidth / 2)
@@ -481,6 +480,16 @@ Item {
                 return it
         }
         return null
+    }
+    // 节点 delegate 在 worldContent 内使用世界坐标；编辑器 / 过渡环仍要求
+    // Scene 局部屏幕坐标，这里统一做一次映射。
+    function nodeItemSceneRect(nodeId) {
+        var item = nodeItemOf(nodeId)
+        if (!item)
+            return null
+        var p = item.mapToItem(scene, 0, 0)
+        var q = item.mapToItem(scene, item.width, item.height)
+        return { x: p.x, y: p.y, width: q.x - p.x, height: q.y - p.y }
     }
     function embedItemOf(instanceId) {
         for (var i = 0; i < embedRepeater.count; i++) {
@@ -1017,102 +1026,81 @@ Item {
         return interactionController
                 ? interactionController.isMovingTarget(scenePathKey, "embed", instanceId) : false
     }
-    function edgeLabelOf(edgeId) {
-        for (var i = 0; i < graphController.edgesModel.length; i++) {
-            if (graphController.edgesModel[i].id === edgeId)
-                return graphController.edgesModel[i].label || ""
-        }
-        return ""
-    }
 
     // =========================================================================
     // 视觉层：全部按当前投影实时绘制（无 layer / 无预栅格化纹理）
     // =========================================================================
 
-    // ── 连线：QtQuick.Shapes，按世界几何的当前投影画路径 ──
+    // ── 连线：原生场景图批量三角形（Issue #1029）──
+    // 所有未选中边共用一个 QSGGeometryNode，选中边单独一个；不再为每条边
+    // 创建全屏 Item + ShapePath。相机变化只触发这一层的顶点更新。
+    StarMapEdgeLayer {
+        id: edgeLayer
+        anchors.fill: parent
+        z: 0
+        edgesJson: graphController.edgeRendersJson
+        selectedEdgeId: scene.selectionController
+                && scene.selectionController.scenePathKey === scene.scenePathKey
+                && scene.selectionController.kind === "edge"
+                ? scene.selectionController.itemId : ""
+        zoomLevel: scene.zoomLevel
+        panX: scene.panX
+        panY: scene.panY
+        reveal: scene._reveal
+        lineWorldWidth: scene._edgeLineWorldWidth
+        normalColorHex: String(scene._border)
+        selectedColorHex: String(scene._accent)
+    }
+
+    // 连线标签：只保留真正有文字的标签，仍是实时 Text；几何由原生边层绘制。
     Repeater {
-        id: edgeRepeater
-        model: graphController.edgeRenders
+        id: edgeLabelRepeater
+        model: graphController.edgeLabels
 
         delegate: Item {
-            id: edgeItem
+            id: edgeLabelItem
             required property var modelData
 
             readonly property var render: modelData
-            readonly property bool isSelected: scene.selectionController
-                    ? scene.selectionController.matches(scene.scenePathKey, "edge", render.edgeId)
-                    : false
-            readonly property color strokeColor: isSelected ? scene._accent : scene._border
-            readonly property string label: scene.edgeLabelOf(render.edgeId)
+            readonly property bool labelVisible:
+                scene._safeZoom >= 0.4 && render.label.length > 0
 
-            anchors.fill: parent
-            z: 0
+            x: scene.worldToScreenX(render.labelX) - width / 2
+            y: scene.worldToScreenY(render.labelY) - height / 2
+            width: edgeLabelText.implicitWidth + 10
+            height: edgeLabelText.implicitHeight + 4
+            visible: labelVisible
+            opacity: scene._reveal
+            z: 0.5
 
-            Shape {
-                anchors.fill: parent
-                antialiasing: true
-                preferredRendererType: Shape.CurveRenderer
-                // Issue #949：连线跟随同一个展开进度逐帧显现（几何不变）。
-                opacity: scene._reveal
-
-                // 线段
-                ShapePath {
-                    strokeColor: edgeItem.strokeColor
-                    strokeWidth: scene._edgeScreenStrokeWidth
-                    fillColor: "transparent"
-                    capStyle: ShapePath.RoundCap
-                    PathPolyline {
-                        path: [
-                            Qt.point(scene.worldToScreenX(edgeItem.render.startX),
-                                     scene.worldToScreenY(edgeItem.render.startY)),
-                            Qt.point(scene.worldToScreenX(edgeItem.render.endX),
-                                     scene.worldToScreenY(edgeItem.render.endY))
-                        ]
-                    }
-                }
-
-                // 箭头
-                ShapePath {
-                    strokeColor: "transparent"
-                    fillColor: edgeItem.strokeColor
-                    PathPolyline {
-                        path: [
-                            Qt.point(scene.worldToScreenX(edgeItem.render.arrowTipX),
-                                     scene.worldToScreenY(edgeItem.render.arrowTipY)),
-                            Qt.point(scene.worldToScreenX(edgeItem.render.arrowLeftX),
-                                     scene.worldToScreenY(edgeItem.render.arrowLeftY)),
-                            Qt.point(scene.worldToScreenX(edgeItem.render.arrowRightX),
-                                     scene.worldToScreenY(edgeItem.render.arrowRightY)),
-                            Qt.point(scene.worldToScreenX(edgeItem.render.arrowTipX),
-                                     scene.worldToScreenY(edgeItem.render.arrowTipY))
-                        ]
-                    }
-                }
-            }
-
-            // 连线标签：实时 Text，字号同活动画布的屏幕口径。
             Rectangle {
-                id: edgeLabelBg
-                x: scene.worldToScreenX(edgeItem.render.labelX) - width / 2
-                y: scene.worldToScreenY(edgeItem.render.labelY) - height / 2
-                width: edgeLabelText.implicitWidth + 10
-                height: edgeLabelText.implicitHeight + 4
+                anchors.fill: parent
                 radius: 3 * scene._safeZoom
                 color: scene._surfaceContainer
-                visible: edgeItem.label.length > 0 && scene._safeZoom >= 0.4
+            }
 
-                Text {
-                    id: edgeLabelText
-                    anchors.centerIn: parent
-                    text: edgeItem.label
-                    color: scene._textPrimary
-                    font.pointSize: scene.dt.fontSmPt * scene._textScale
-                }
+            Text {
+                id: edgeLabelText
+                anchors.centerIn: parent
+                text: edgeLabelItem.render.label || ""
+                color: scene._textPrimary
+                font.pointSize: scene.dt.fontSmPt * scene._textScale
             }
         }
     }
 
     // ── 节点：矢量圆角矩形卡片（编辑输入在场景级稳定浮层，见 editOverlay）──
+    // Issue #1029：节点几何保持 authored world 坐标，整层只由父级 pan/zoom
+    // 变换一次。拖动一个节点仍只改它自己的世界坐标；平移相机不再逐个改写
+    // 107 个节点 delegate 的屏幕 x/y。
+    Item {
+        id: nodeWorldContent
+        x: scene.panX
+        y: scene.panY
+        scale: scene._safeZoom
+        transformOrigin: Item.TopLeft
+        z: 1
+
     Repeater {
         id: nodeRepeater
         model: graphController.nodesModel
@@ -1125,12 +1113,9 @@ Item {
         delegate: Item {
             id: nodeItem
             required property var modelData
-            required property int index
 
             readonly property var nodeData: modelData
             readonly property string nodeId: nodeData.id
-            property real _wobbleAnimX: 0
-            property real _wobbleAnimY: 0
 
             readonly property var closingSnapshot:
                 editOverlay._closingSnapshot
@@ -1173,47 +1158,48 @@ Item {
                     : nodeData.title && nodeData.title.length > 0
                         ? nodeData.title : qsTr("未命名")
 
-            x: scene.worldToScreenX(worldX)
-               + (cardWidth * scene._safeZoom - width) / 2
-            y: scene.worldToScreenY(worldY)
-               + (cardHeight * scene._safeZoom - height) / 2
-            width: cardWidth * scene._safeZoom * scene._reveal
-                   + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            height: cardHeight * scene._safeZoom * scene._reveal
-                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
+            // 世界单位下的投影尺寸：父级统一乘 zoom，reveal 缩成小圆点时
+            // 直径的屏幕像素仍保持 _revealDotRadius。
+            readonly property real projectedWidth:
+                cardWidth * scene._reveal
+                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
+            readonly property real projectedHeight:
+                cardHeight * scene._reveal
+                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
+
+            // worldX / worldY 是节点世界矩形的左上角；概览圆点态保持中心收缩。
+            x: worldX + (cardWidth - width) / 2
+            y: worldY + (cardHeight - height) / 2
+            width: projectedWidth
+            height: projectedHeight
             z: 1
 
             Rectangle {
                 id: visualNode
                 anchors.fill: parent
                 opacity: nodeItem.isEditing ? 1 - editOverlay.transitionProgress : 1
-                radius: Math.min(scene.dt.radiusSm * scene._safeZoom,
-                                 Math.min(width, height) / 2)
+                radius: Math.min(scene.dt.radiusSm, Math.min(width, height) / 2)
                 color: scene._surfaceContainer
                 border.color: nodeItem.isSelected || nodeItem.isEditing
                         ? scene._accent : scene._border
-                border.width: (nodeItem.isSelected || nodeItem.isEditing) ? 2 : 1
+                border.width: ((nodeItem.isSelected || nodeItem.isEditing) ? 2 : 1)
+                              / scene._safeZoom
                 clip: true
-
-                transform: Translate {
-                    x: (nodeItem.isSelected || nodeItem.isPressed || nodeItem.isEditing)
-                       ? 0 : nodeItem._wobbleAnimX
-                    y: (nodeItem.isSelected || nodeItem.isPressed || nodeItem.isEditing)
-                       ? 0 : nodeItem._wobbleAnimY
-                }
 
                 // 显示态：名称在上，正文预览在下。编辑输入层是场景级稳定容器，
                 // 不挂在这里，模型行更新不会销毁正在输入的内容。
                 Item {
                     id: displayLayer
                     anchors.fill: parent
-                    anchors.margins: StarMapNodeMetrics.PADDING * scene._safeZoom
-                    visible: nodeItem.height >= 18 && scene.detailReveal > 0.6
+                    anchors.margins: StarMapNodeMetrics.PADDING
+                    visible: nodeItem.height * scene._safeZoom >= 18
+                             && scene.detailReveal > 0.6
 
                     Column {
                         width: parent.width
                         spacing: nodeItem.bodyText.length > 0
-                                 ? StarMapNodeMetrics.TITLE_BODY_GAP * scene._textScale : 0
+                                 ? StarMapNodeMetrics.TITLE_BODY_GAP
+                                   * scene._textScale / scene._safeZoom : 0
 
                         Text {
                             id: titleLabel
@@ -1221,14 +1207,16 @@ Item {
                             text: nodeItem.titleText
                             textFormat: Text.PlainText
                             color: scene._textPrimary
-                            font.pixelSize: Math.max(1,
-                                StarMapNodeMetrics.TITLE_FONT_SIZE * scene._textScale)
+                            font.pixelSize: Math.max(0.01,
+                                StarMapNodeMetrics.TITLE_FONT_SIZE
+                                * scene._textScale / scene._safeZoom)
                             font.weight: Font.DemiBold
                             wrapMode: Text.Wrap
                             maximumLineCount: StarMapNodeMetrics.TITLE_MAX_LINES
                             elide: Text.ElideRight
                             lineHeightMode: Text.FixedHeight
-                            lineHeight: StarMapNodeMetrics.TITLE_LINE_HEIGHT * scene._textScale
+                            lineHeight: StarMapNodeMetrics.TITLE_LINE_HEIGHT
+                                        * scene._textScale / scene._safeZoom
                         }
 
                         Text {
@@ -1238,29 +1226,18 @@ Item {
                             textFormat: Text.PlainText
                             visible: text.length > 0
                             color: scene._textMuted
-                            font.pixelSize: Math.max(1,
-                                StarMapNodeMetrics.BODY_FONT_SIZE * scene._textScale)
+                            font.pixelSize: Math.max(0.01,
+                                StarMapNodeMetrics.BODY_FONT_SIZE
+                                * scene._textScale / scene._safeZoom)
                             wrapMode: Text.Wrap
                             maximumLineCount: StarMapNodeMetrics.PREVIEW_MAX_LINES
                             elide: Text.ElideRight
                             lineHeightMode: Text.FixedHeight
-                            lineHeight: StarMapNodeMetrics.BODY_LINE_HEIGHT * scene._textScale
+                            lineHeight: StarMapNodeMetrics.BODY_LINE_HEIGHT
+                                        * scene._textScale / scene._safeZoom
                         }
                     }
                 }
-            }
-
-            SequentialAnimation on _wobbleAnimX {
-                loops: Animation.Infinite
-                running: !nodeItem.isSelected && !nodeItem.isPressed
-                NumberAnimation { to: 0.6; duration: 7000 + (nodeItem.index % 7) * 400; easing.type: Easing.InOutSine }
-                NumberAnimation { to: -0.6; duration: 7000 + (nodeItem.index % 7) * 400; easing.type: Easing.InOutSine }
-            }
-            SequentialAnimation on _wobbleAnimY {
-                loops: Animation.Infinite
-                running: !nodeItem.isSelected && !nodeItem.isPressed
-                NumberAnimation { to: 0.4; duration: 8500 + (nodeItem.index % 5) * 300; easing.type: Easing.InOutSine }
-                NumberAnimation { to: -0.4; duration: 8500 + (nodeItem.index % 5) * 300; easing.type: Easing.InOutSine }
             }
         }
     }
@@ -1273,7 +1250,6 @@ Item {
         delegate: StarMapEmbed {
             id: embedItem
             required property var modelData
-            required property int index
 
             readonly property var embedData: modelData
             readonly property bool isMoving: scene.isMovingEmbed(embedData.instanceId)
@@ -1287,7 +1263,6 @@ Item {
             instanceId: embedData.instanceId
             targetStarmapId: embedData.targetStarmapId
             label: embedData.label
-            wobbleIndex: index
             isSelected: scene.selectionController
                     ? scene.selectionController.matches(scene.scenePathKey, "embed", embedData.instanceId)
                     : false
@@ -1296,17 +1271,18 @@ Item {
                     : false
             starmapBackendRef: scene.starmapBackendRef
 
-            x: scene.worldToScreenX(worldX) + (embedData.width * scene._safeZoom - width) / 2
-            y: scene.worldToScreenY(worldY) + (embedData.height * scene._safeZoom - height) / 2
-            width: embedData.width * scene._safeZoom * scene._reveal
-                   + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            height: embedData.height * scene._safeZoom * scene._reveal
-                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
+            x: worldX + (embedData.width - width) / 2
+            y: worldY + (embedData.height - height) / 2
+            width: embedData.width * scene._reveal
+                   + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
+            height: embedData.height * scene._reveal
+                    + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
             z: 2
             // Issue #949：只有走过渡的那个入口按同一个展开进度继续画圆壳。
             revealProgress: embedData.instanceId === scene.transitionEmbedId
                     ? scene.detailReveal : -1
         }
+    }
     }
 
     // ── Issue #949：过渡圆环（同一圆壳的放大描边 + 圆内表面）──
@@ -1349,10 +1325,9 @@ Item {
             if (!editingNode && !closingNode)
                 return { x: 0, y: 0, width: 0, height: 0 }
             var nodeId = closingNode ? closingNode.nodeId : editingNode.id
-            var item = scene.nodeItemOf(nodeId)
-            if (item) {
-                return { x: item.x, y: item.y, width: item.width, height: item.height }
-            }
+            var itemRect = scene.nodeItemSceneRect(nodeId)
+            if (itemRect)
+                return itemRect
             var worldX = closingNode ? closingNode.worldX : editingNode.x
             var worldY = closingNode ? closingNode.worldY : editingNode.y
             var nodeWidth = closingNode ? closingNode.worldWidth

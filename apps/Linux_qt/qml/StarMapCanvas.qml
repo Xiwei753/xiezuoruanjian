@@ -1807,47 +1807,15 @@ Item {
         }
     }
 
-    // Background Grid
-    Rectangle {
+    // Background Grid（Issue #1029：场景图点阵，不再用 Canvas 生成整幅位图）
+    StarMapGridItem {
         anchors.fill: parent
-        color: "transparent"
         opacity: 0.3
-
-        Canvas {
-            id: gridCanvas
-            anchors.fill: parent
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-                ctx.fillStyle = _textMuted
-
-                // 网格自身做 LOD：相机放开到 1e-4 后，50 × zoomLevel 会掉到亚像素，
-                // 双重循环按 1/zoom² 爆炸。按 5 倍档抬 world 间距，屏幕上实际画出来的
-                // 间距永远 >= 16px，循环次数只跟屏幕尺寸有关。
-                if (!(zoomLevel > 0))
-                    return
-                var worldSpacing = 50
-                var gridSpacing = finiteProduct(worldSpacing, zoomLevel)
-                while (gridSpacing < 16) {
-                    worldSpacing *= 5
-                    gridSpacing = worldSpacing * zoomLevel
-                }
-                var startX = (panX % gridSpacing)
-                var startY = (panY % gridSpacing)
-
-                for (var x = startX; x < width; x += gridSpacing) {
-                    for (var y = startY; y < height; y += gridSpacing) {
-                        ctx.fillRect(x - 1, y - 1, 2, 2)
-                    }
-                }
-            }
-            Connections {
-                target: canvasArea
-                function onPanXChanged() { gridCanvas.requestPaint() }
-                function onPanYChanged() { gridCanvas.requestPaint() }
-                function onZoomLevelChanged() { gridCanvas.requestPaint() }
-            }
-        }
+        zoomLevel: canvasArea.zoomLevel
+        panX: canvasArea.panX
+        panY: canvasArea.panY
+        dotColorHex: String(canvasArea._textMuted)
+        dotOpacity: 1.0
     }
 
     // ---------------------------------------------------------------------------

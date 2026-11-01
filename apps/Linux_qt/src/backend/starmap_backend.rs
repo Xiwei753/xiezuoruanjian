@@ -261,6 +261,25 @@ pub struct StarMapBackend {
         qt_method!(fn(&self, renders_json: QString, x: f64, y: f64, threshold: f64) -> QJsonObject),
     hit_test_nodes_json: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QString),
     hit_test_nodes: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QJsonObject),
+    // Issue #1029：活动画布显示缓存。结构变化时一次同步，拖拽只传被拖对象的
+    // 临时位置；命中/边几何都查本地缓存，不再每帧序列化整张图。
+    sync_starmap_scene: qt_method!(
+        fn(&self, graph_json: QString, nodes_json: QString, embeds_json: QString) -> QJsonObject
+    ),
+    compute_scene_edge_renders: qt_method!(
+        fn(
+            &self,
+            move_kind: QString,
+            move_id: QString,
+            move_x: f64,
+            move_y: f64,
+            has_override: bool,
+        ) -> QJsonObject
+    ),
+    compute_scene_prospective_edge_render:
+        qt_method!(fn(&self, from_path_json: QString, to_path_json: QString) -> QJsonObject),
+    hit_test_scene_node: qt_method!(fn(&self, x: f64, y: f64) -> QJsonObject),
+    hit_test_scene_edge: qt_method!(fn(&self, x: f64, y: f64, threshold: f64) -> QJsonObject),
     add_starmap_link:
         qt_method!(fn(&mut self, starmap_id: QString, link_json: QString) -> QJsonObject),
     update_starmap_link: qt_method!(
@@ -287,6 +306,7 @@ pub struct StarMapBackend {
         )
     ),
     app: AppRef,
+    scene_cache: std::cell::RefCell<crate::starmap_view::scene_cache::SceneCache>,
 }
 
 impl StarMapBackend {
@@ -566,6 +586,100 @@ impl StarMapBackend {
     }
     fn hit_test_nodes(&self, nodes_json: QString, x: f64, y: f64) -> QJsonObject {
         let raw = self.hit_test_nodes_json(nodes_json, x, y).to_string();
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn sync_starmap_scene(
+        &self,
+        graph_json: QString,
+        nodes_json: QString,
+        embeds_json: QString,
+    ) -> QJsonObject {
+        let mut cache = self.scene_cache.borrow_mut();
+        let result = cache.sync(
+            &graph_json.to_string(),
+            &nodes_json.to_string(),
+            &embeds_json.to_string(),
+        );
+        let raw = match result {
+            Ok(()) => writer_core::api::ResultEnvelope::success(serde_json::json!({
+                "ready": true
+            }))
+            .to_json_string(),
+            Err(msg) => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other(msg),
+            ),
+        };
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn compute_scene_edge_renders(
+        &self,
+        move_kind: QString,
+        move_id: QString,
+        move_x: f64,
+        move_y: f64,
+        has_override: bool,
+    ) -> QJsonObject {
+        let mut cache = self.scene_cache.borrow_mut();
+        if !cache.is_ready() {
+            let raw = crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other(
+                    "Star map scene cache is not initialized".to_string(),
+                ),
+            );
+            return crate::backend::json_utils::qjson_object_from_json(&raw);
+        }
+        let move_override = if has_override {
+            let id = move_id.to_string();
+            match move_kind.to_string().as_str() {
+                "node" => Some(crate::starmap_view::scene_cache::SceneMoveOverride::Node {
+                    id,
+                    x: move_x as f32,
+                    y: move_y as f32,
+                }),
+                "embed" => Some(crate::starmap_view::scene_cache::SceneMoveOverride::Embed {
+                    id,
+                    x: move_x as f32,
+                    y: move_y as f32,
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let renders = cache.edge_renders(move_override.as_ref());
+        let raw = writer_core::api::ResultEnvelope::success(renders).to_json_string();
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn compute_scene_prospective_edge_render(
+        &self,
+        from_path_json: QString,
+        to_path_json: QString,
+    ) -> QJsonObject {
+        let cache = self.scene_cache.borrow();
+        let raw = match cache
+            .prospective_edge_render(&from_path_json.to_string(), &to_path_json.to_string())
+        {
+            Ok(render) => writer_core::api::ResultEnvelope::success(render).to_json_string(),
+            Err(msg) => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other(msg),
+            ),
+        };
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn hit_test_scene_node(&self, x: f64, y: f64) -> QJsonObject {
+        let cache = self.scene_cache.borrow();
+        let raw = writer_core::api::ResultEnvelope::success(cache.hit_node(x as f32, y as f32))
+            .to_json_string();
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn hit_test_scene_edge(&self, x: f64, y: f64, threshold: f64) -> QJsonObject {
+        let cache = self.scene_cache.borrow();
+        let raw = writer_core::api::ResultEnvelope::success(cache.hit_edge(
+            x as f32,
+            y as f32,
+            threshold as f32,
+        ))
+        .to_json_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
     fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {

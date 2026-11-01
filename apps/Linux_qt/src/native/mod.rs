@@ -10,5 +10,23 @@
 mod kde_color_scheme;
 /// Issue #949 复核：过渡期把子场景 Loader 的可见区域裁到过渡圆环内的平台组件。
 pub mod starmap_circle_clip;
+/// Issue #1029：批量连线场景图图层与背景点阵图层。
+pub mod starmap_edge_layer;
+pub mod starmap_grid_item;
+
+/// 星图渲染诊断统计（仅计数，不含正文）。
+pub fn starmap_render_statistics_json() -> String {
+    let edge =
+        serde_json::from_str::<serde_json::Value>(&starmap_edge_layer::render_statistics_json())
+            .unwrap_or(serde_json::Value::Null);
+    let grid =
+        serde_json::from_str::<serde_json::Value>(&starmap_grid_item::render_statistics_json())
+            .unwrap_or(serde_json::Value::Null);
+    serde_json::json!({
+        "edgeLayer": edge,
+        "grid": grid,
+    })
+    .to_string()
+}
 
 pub(crate) use kde_color_scheme::apply_appearance_mode;

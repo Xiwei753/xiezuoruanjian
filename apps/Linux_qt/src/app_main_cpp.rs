@@ -31,6 +31,13 @@ cpp! {{
     #include <QSysInfo>
     #include <QTranslator>
     #include <QtGlobal>
+    #include <QtQuick/QQuickWindow>
+    #include <QtQuick/QSGRendererInterface>
+    #include <QJsonDocument>
+    #include <QJsonObject>
+
+    // Issue #1029：真实场景图后端采样，供诊断包读取；不根据 QPA 平台推断。
+    static QString g_sujian_graphics_runtime_info;
 }}
 
 pub fn qt_runtime_version() -> String {
@@ -164,6 +171,65 @@ pub fn install_window_state_probe() {
         QTimer::singleShot(0, probe);
         QTimer::singleShot(750, probe);
     });
+}
+
+/// Issue #1029：场景图初始化后记录真实渲染后端，不根据 QPA 平台猜 GPU。
+///
+/// 只在 QQuickWindow::sceneGraphInitialized 或延迟采样时写入；`graphicsApi`
+/// 直接来自 Qt，`softwareRenderer` 只在 Qt 明确返回 Software 时为 true。
+pub fn install_graphics_runtime_probe() {
+    cpp!(unsafe [] {
+        auto capture = [](QQuickWindow *window) {
+            if (!window || !window->isSceneGraphInitialized())
+                return;
+            const auto api = QQuickWindow::graphicsApi();
+            QString api_name = QStringLiteral("unknown");
+            switch (api) {
+            case QSGRendererInterface::Software: api_name = QStringLiteral("software"); break;
+            case QSGRendererInterface::OpenVG: api_name = QStringLiteral("openvg"); break;
+            case QSGRendererInterface::OpenGL: api_name = QStringLiteral("opengl"); break;
+            case QSGRendererInterface::Direct3D11: api_name = QStringLiteral("d3d11"); break;
+            case QSGRendererInterface::Direct3D12: api_name = QStringLiteral("d3d12"); break;
+            case QSGRendererInterface::Vulkan: api_name = QStringLiteral("vulkan"); break;
+            case QSGRendererInterface::Metal: api_name = QStringLiteral("metal"); break;
+            case QSGRendererInterface::Null: api_name = QStringLiteral("null"); break;
+            default: break;
+            }
+            QJsonObject info;
+            info.insert(QStringLiteral("graphicsApi"), api_name);
+            info.insert(QStringLiteral("graphicsApiEnum"), int(api));
+            info.insert(QStringLiteral("sceneGraphBackend"), QQuickWindow::sceneGraphBackend());
+            info.insert(QStringLiteral("softwareRenderer"),
+                        api == QSGRendererInterface::Software);
+            info.insert(QStringLiteral("sceneGraphInitialized"), true);
+            info.insert(QStringLiteral("sampleWidth"), window->width());
+            info.insert(QStringLiteral("sampleHeight"), window->height());
+            info.insert(QStringLiteral("devicePixelRatio"), window->effectiveDevicePixelRatio());
+            g_sujian_graphics_runtime_info =
+                QString::fromUtf8(QJsonDocument(info).toJson(QJsonDocument::Compact));
+            std::fprintf(stderr, "[SujianGraphicsProbe] %s\n",
+                         g_sujian_graphics_runtime_info.toUtf8().constData());
+            std::fflush(stderr);
+        };
+        const QWindowList windows = QGuiApplication::topLevelWindows();
+        for (QWindow *window : windows) {
+            auto *quick = qobject_cast<QQuickWindow *>(window);
+            if (!quick)
+                continue;
+            QObject::connect(quick, &QQuickWindow::sceneGraphInitialized, quick,
+                             [quick, capture] { capture(quick); });
+            QTimer::singleShot(0, quick, [quick, capture] { capture(quick); });
+            QTimer::singleShot(1000, quick, [quick, capture] { capture(quick); });
+        }
+    });
+}
+
+/// 返回最近一次真实场景图后端采样（JSON）；尚未初始化时返回 `{}`。
+pub fn graphics_runtime_info() -> String {
+    let info = cpp!(unsafe [] -> QString as "QString" {
+        return g_sujian_graphics_runtime_info;
+    });
+    info.to_string()
 }
 
 pub fn collect_system_info() -> diagnostics::SystemInfo {
