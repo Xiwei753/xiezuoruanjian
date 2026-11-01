@@ -187,6 +187,15 @@ Item {
     }
 
     readonly property string annotationProjectId: projectIdForStarmap(canvas.currentStarmapId || root.starmapId)
+    // Issue #1028：AI 面板的 MCP 作用域使用真实画布身份。进入子图后
+    // currentStarmapId 是子图 ID，根图和路径段单独提供，不用展示标题替代。
+    readonly property string aiStarmapRootId: String(
+        canvas.currentRoute.rootStarmapId || root.starmapId || "")
+    readonly property string aiStarmapActiveId: String(
+        canvas.currentStarmapId || root.starmapId || "")
+    readonly property string aiStarmapPathJson: JSON.stringify(
+        canvas.currentRoute.segments || [])
+    readonly property string aiStarmapRouteKey: String(canvas.routeKey || "")
     readonly property var annotationTargetRef: {
         var projectId = root.annotationProjectId
         var sceneId = String(canvas.currentStarmapId || root.starmapId || "")
@@ -531,6 +540,10 @@ Item {
                         workspaceProjectTitle: root.workspaceProjectTitle !== ""
                             ? root.workspaceProjectTitle : root.starmapTitle
                         aiContextLabel: root.starmapTitle
+                        starmapRootId: root.aiStarmapRootId
+                        starmapActiveId: root.aiStarmapActiveId
+                        starmapPathJson: root.aiStarmapPathJson
+                        starmapRouteKey: root.aiStarmapRouteKey
                         annotationBackendRef: root.annotationBackendRef
                         searchBackendRef: root.searchBackendRef
                         projectId: root.annotationProjectId

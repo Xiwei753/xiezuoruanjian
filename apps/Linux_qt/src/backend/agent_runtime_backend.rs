@@ -17,7 +17,7 @@ use crate::agent_runtime::model_catalog::ModelProbeResult;
 use crate::agent_runtime::{
     agent_working_dir, bind_current_project, AgentEvent, AgentHistoryMessage, AgentLaunchContext,
     AgentModelInfo, AgentPromptRequest, AgentSessionManager, CancelOutcome, CloseReason, EventSink,
-    McpServerLaunch, RuntimeEvent, ADAPTER_VERSION,
+    McpScope, McpServerLaunch, RuntimeEvent, TurnStopReason, ADAPTER_VERSION,
 };
 use crate::backend::AppRef;
 use writer_core::agent::{
@@ -117,6 +117,17 @@ pub struct AgentRuntimeBackend {
     mcp_status_changed: qt_signal!(),
 
     set_project: qt_method!(fn(&mut self, project_id: QString, project_title: QString)),
+    set_scope: qt_method!(
+        fn(
+            &mut self,
+            project_id: QString,
+            project_title: QString,
+            root_starmap_id: QString,
+            active_starmap_id: QString,
+            path_segments_json: QString,
+            route_key: QString,
+        )
+    ),
     set_agent_catalog: qt_method!(fn(&mut self, inventory_json: QString)),
     set_agent: qt_method!(
         fn(
@@ -161,6 +172,11 @@ pub struct AgentRuntimeBackend {
 
     project_id: String,
     project_title: String,
+    /// 当前 AI 面板固定的 MCP 读写范围；换图后重建 broker，但 Core 对话不变。
+    mcp_scope: McpScope,
+    /// 本轮工具成功/失败计数，仅用于轮次结束日志汇总。
+    turn_tool_success: u32,
+    turn_tool_failure: u32,
     agent_id: String,
     agent_name: String,
     launch_path: String,
@@ -225,6 +241,7 @@ impl AgentRuntimeBackend {
             permission_changed: Default::default(),
             mcp_status_changed: Default::default(),
             set_project: Default::default(),
+            set_scope: Default::default(),
             set_agent_catalog: Default::default(),
             set_agent: Default::default(),
             switch_agent: Default::default(),
@@ -246,6 +263,9 @@ impl AgentRuntimeBackend {
             runtime_generation: 0,
             project_id: String::new(),
             project_title: String::new(),
+            mcp_scope: McpScope::default(),
+            turn_tool_success: 0,
+            turn_tool_failure: 0,
             agent_id: String::new(),
             agent_name: String::new(),
             launch_path: String::new(),
@@ -615,19 +635,17 @@ impl AgentRuntimeBackend {
             self.mcp_status_changed();
             return;
         };
-        let project_id = if !self.project_id.is_empty() && !self.project_id.starts_with("starmap:")
-        {
-            self.project_id.clone()
-        } else {
-            project_id
-        };
-        let binding = bind_current_project(&app_data_root, &projects_root, &project_id);
+        let scope = self.mcp_scope_for(&project_id);
+        let binding = bind_current_project(&app_data_root, &projects_root, &scope);
         let working_dir = agent_working_dir(Path::new(&app_data_root), &self.agent_id);
         self.mcp_status_json_value = serde_json::json!({
             "status": binding.status,
             "available": binding.launch.is_some(),
             "command": binding.command,
-            "projectId": project_id,
+            "projectId": scope.project_id,
+            "rootStarmapId": scope.root_starmap_id,
+            "activeStarmapId": scope.active_starmap_id,
+            "routeKey": scope.route_key,
             "workingDir": working_dir.to_string_lossy(),
         })
         .to_string();
@@ -647,13 +665,8 @@ impl AgentRuntimeBackend {
             self.set_error("没有已打开的作品，无法生成 MCP 配置".to_string());
             return;
         };
-        let project_id = if !self.project_id.is_empty() && !self.project_id.starts_with("starmap:")
-        {
-            self.project_id.clone()
-        } else {
-            actual_project_id
-        };
-        let binding = bind_current_project(&app_data_root, &projects_root, &project_id);
+        let scope = self.mcp_scope_for(&actual_project_id);
+        let binding = bind_current_project(&app_data_root, &projects_root, &scope);
         let Some(launch) = binding.launch else {
             self.set_error(binding.status);
             return;
@@ -678,7 +691,7 @@ impl AgentRuntimeBackend {
         }
     }
 
-    fn launch_roots(&self) -> Result<(String, String, String, String), String> {
+    fn launch_roots(&self) -> Result<(String, String, String), String> {
         if self.agent_id.is_empty() || self.launch_path.is_empty() {
             return Err("请先在 AI 面板中选择本机 Agent".to_string());
         }
@@ -687,20 +700,35 @@ impl AgentRuntimeBackend {
             .with_app(|app| app.agent_project_context())
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "请先打开工作区".to_string())?;
-        // 绑定作品的星图会把真实 projectId 作为上下文 key；未绑定的星图使用
-        // `starmap:<id>`，此时工作目录退回当前选中作品/工作区根目录。
-        let workspace_project_id =
-            if !self.project_id.is_empty() && !self.project_id.starts_with("starmap:") {
-                self.project_id.clone()
+        Ok((app_data_root, projects_root, actual_project_id))
+    }
+
+    /// 组装本次请求固定的 MCP 作用域。项目 ID 仍以写作区当前作品为准；
+    /// 星图面板额外带根图、活动图、路径和路由。不能从 contextLabel 或上一张图猜。
+    fn mcp_scope_for(&self, actual_project_id: &str) -> McpScope {
+        let project_id = if !self.mcp_scope.project_id.is_empty() {
+            self.mcp_scope.project_id.clone()
+        } else if !self.project_id.is_empty() && !self.project_id.starts_with("starmap:") {
+            self.project_id.clone()
+        } else {
+            actual_project_id.to_string()
+        };
+        McpScope {
+            project_id,
+            root_starmap_id: self.mcp_scope.root_starmap_id.clone(),
+            active_starmap_id: self.mcp_scope.active_starmap_id.clone(),
+            path_segments_json: if self.mcp_scope.path_segments_json.trim().is_empty() {
+                "[]".to_string()
             } else {
-                actual_project_id.clone()
-            };
-        Ok((
-            app_data_root,
-            projects_root,
-            actual_project_id,
-            workspace_project_id,
-        ))
+                self.mcp_scope.path_segments_json.clone()
+            },
+            route_key: self.mcp_scope.route_key.clone(),
+            executor: if self.agent_id.is_empty() {
+                String::new()
+            } else {
+                format!("{}|{}", self.agent_id, self.launch_path)
+            },
+        }
     }
 
     fn ensure_working_dir(&self, app_data_root: &str) -> Result<PathBuf, String> {
@@ -723,6 +751,7 @@ impl AgentRuntimeBackend {
         resume_native_session_id: Option<String>,
         model: Option<String>,
         mcp_servers: Vec<McpServerLaunch>,
+        mcp_scope: McpScope,
         working_dir: PathBuf,
     ) -> AgentLaunchContext {
         let conversation_project_id = if self.project_id.is_empty() {
@@ -743,6 +772,7 @@ impl AgentRuntimeBackend {
             conversation_id,
             project_id: conversation_project_id,
             project_title: self.project_title.clone(),
+            mcp_scope,
             resume_native_session_id,
             model,
             mcp_servers,
@@ -760,9 +790,9 @@ impl AgentRuntimeBackend {
                 )
             })
             .ok_or_else(|| "AI 会话尚未创建".to_string())?;
-        let (app_data_root, projects_root, actual_project_id, workspace_project_id) =
-            self.launch_roots()?;
-        let binding = bind_current_project(&app_data_root, &projects_root, &workspace_project_id);
+        let (app_data_root, projects_root, actual_project_id) = self.launch_roots()?;
+        let mcp_scope = self.mcp_scope_for(&actual_project_id);
+        let binding = bind_current_project(&app_data_root, &projects_root, &mcp_scope);
         let mcp_servers = binding.launch.clone().into_iter().collect();
         let working_dir = self.ensure_working_dir(&app_data_root)?;
         Ok(self.base_launch_context(
@@ -773,6 +803,7 @@ impl AgentRuntimeBackend {
             resume_native_session_id,
             self.model.clone(),
             mcp_servers,
+            mcp_scope,
             working_dir,
         ))
     }
@@ -780,8 +811,7 @@ impl AgentRuntimeBackend {
     /// 探测上下文没有 Core 会话、原生 resume 身份和 MCP；它只借用当前 CLI
     /// 的安装路径与独立工作目录去查询官方模型目录。
     fn model_probe_context(&self) -> Result<AgentLaunchContext, String> {
-        let (app_data_root, projects_root, actual_project_id, _workspace_project_id) =
-            self.launch_roots()?;
+        let (app_data_root, projects_root, actual_project_id) = self.launch_roots()?;
         let working_dir = self.ensure_working_dir(&app_data_root)?;
         Ok(self.base_launch_context(
             app_data_root,
@@ -791,6 +821,7 @@ impl AgentRuntimeBackend {
             None,
             None,
             Vec::new(),
+            McpScope::default(),
             working_dir,
         ))
     }
@@ -928,18 +959,80 @@ impl AgentRuntimeBackend {
     }
 
     fn set_project(&mut self, project_id: QString, project_title: QString) {
+        self.set_scope(
+            project_id,
+            project_title,
+            "".into(),
+            "".into(),
+            "[]".into(),
+            "".into(),
+        );
+    }
+
+    fn set_scope(
+        &mut self,
+        project_id: QString,
+        project_title: QString,
+        root_starmap_id: QString,
+        active_starmap_id: QString,
+        path_segments_json: QString,
+        route_key: QString,
+    ) {
         let project_id = project_id.to_string();
         let project_title = project_title.to_string();
+        let root_starmap_id = root_starmap_id.to_string();
+        let active_starmap_id = active_starmap_id.to_string();
+        let path_segments_json = path_segments_json.to_string();
+        let route_key = route_key.to_string();
+        let next_scope = McpScope {
+            project_id: project_id.clone(),
+            root_starmap_id,
+            active_starmap_id,
+            path_segments_json: if path_segments_json.trim().is_empty() {
+                "[]".to_string()
+            } else {
+                path_segments_json
+            },
+            route_key,
+            // 执行者身份在 launch_context 中按当前 Agent 重新填入，存储的
+            // scope 只比较作品/画布身份，避免切换 CLI 后误判为换图。
+            executor: String::new(),
+        };
+
         if self.project_id == project_id {
             self.project_title = project_title;
+            if self.mcp_scope == next_scope {
+                return;
+            }
+            // 换星图只换 MCP 作用域和原生 broker；Core 会话、历史与模型都原位
+            // 保留，下一次发送会在同一 Core 对话里用新范围重建原生会话。
+            if self.running_value {
+                self.abandon_active_turn();
+            }
+            self.cancel_runtime_only(CloseReason::UserSwitch("切换星图".to_string()));
+            self.mcp_scope = next_scope;
+            self.active_turn_id.clear();
+            self.ignored_turn_id.clear();
+            self.cancelling_turn_id.clear();
+            self.permission_json_value = "null".to_string();
+            self.permission_changed();
+            let status = if self.conversation.is_some() {
+                "已切换到当前星图，下一次请求继续当前对话"
+            } else {
+                "未开始会话"
+            };
+            self.set_running(false, status);
+            self.update_mcp_status();
             return;
         }
+
         if self.running_value {
             self.abandon_active_turn();
         }
         self.cancel_runtime_only(CloseReason::UserSwitch("切换作品".to_string()));
         self.project_id = project_id;
         self.project_title = project_title;
+        self.mcp_scope = next_scope;
         self.conversation = None;
         self.model = None;
         self.reset_models_for_agent();
@@ -1215,6 +1308,8 @@ impl AgentRuntimeBackend {
                 return;
             }
         };
+        self.turn_tool_success = 0;
+        self.turn_tool_failure = 0;
         let resume_native_session_id = self.resume_session_id_for_current_agent(&conversation);
         // 启动前只准备两套候选历史；等原生 restore 的真实结果返回后，
         // 再由发送线程决定补增量还是全量，避免“以为恢复了”导致历史丢失。
@@ -1663,7 +1758,7 @@ impl AgentRuntimeBackend {
             }
         }
         let mut persist = false;
-        let mut finished: Option<(bool, String)> = None;
+        let mut finished: Option<(bool, String, String)> = None;
         let mut cancelled = false;
         let mut permission: Option<(String, String, Vec<serde_json::Value>)> = None;
         match event.event {
@@ -1843,6 +1938,17 @@ impl AgentRuntimeBackend {
                 output_json,
                 success,
             } => {
+                if success {
+                    self.turn_tool_success = self.turn_tool_success.saturating_add(1);
+                } else {
+                    self.turn_tool_failure = self.turn_tool_failure.saturating_add(1);
+                }
+                log::info!(
+                    "[agent] 工具结束：{} success={} toolCallId={}",
+                    name,
+                    success,
+                    tool_call_id
+                );
                 if let Some(turn) = conversation.turn_mut(&core_turn_id) {
                     if let Some(existing) = turn
                         .tool_events
@@ -1997,14 +2103,55 @@ impl AgentRuntimeBackend {
                 persist = true;
                 cancelled = true;
             }
-            AgentEvent::TurnCompleted => {
+            AgentEvent::TurnCompleted { stop_reason } => {
                 if let Some(turn) = conversation.turn_mut(&core_turn_id) {
-                    turn.complete(now_ms());
+                    match stop_reason {
+                        TurnStopReason::EndTurn => turn.complete(now_ms()),
+                        TurnStopReason::MaxTokens => turn.fail(
+                            now_ms(),
+                            "模型输出达到上限（stopReason=max_tokens），本轮未完成",
+                        ),
+                        TurnStopReason::MaxTurnRequests => turn.fail(
+                            now_ms(),
+                            "达到迭代次数上限（stopReason=max_turn_requests），本轮未完成",
+                        ),
+                        TurnStopReason::Refusal => {
+                            turn.fail(now_ms(), "模型拒绝继续（stopReason=refusal），本轮未完成")
+                        }
+                        TurnStopReason::Unknown => {
+                            turn.fail(now_ms(), "Agent 返回未知停止原因，本轮未完成")
+                        }
+                    }
                 }
-                conversation.status = AgentConversationStatus::Idle;
                 conversation.updated_at_ms = now_ms();
                 persist = true;
-                finished = Some((false, String::new()));
+                if stop_reason.is_normal_completion() {
+                    conversation.status = AgentConversationStatus::Idle;
+                    finished = Some((false, String::new(), "回答完成".to_string()));
+                } else {
+                    conversation.status = AgentConversationStatus::Failed;
+                    let (message, status) = match stop_reason {
+                        TurnStopReason::MaxTokens => (
+                            "模型输出达到上限（stopReason=max_tokens），本轮未完成".to_string(),
+                            "回答未完成：达到模型输出上限".to_string(),
+                        ),
+                        TurnStopReason::MaxTurnRequests => (
+                            "达到迭代次数上限（stopReason=max_turn_requests），本轮未完成"
+                                .to_string(),
+                            "回答未完成：达到迭代次数限制".to_string(),
+                        ),
+                        TurnStopReason::Refusal => (
+                            "模型拒绝继续（stopReason=refusal），本轮未完成".to_string(),
+                            "回答未完成：模型拒绝继续".to_string(),
+                        ),
+                        TurnStopReason::Unknown => (
+                            "Agent 返回未知停止原因，本轮未完成".to_string(),
+                            "回答未完成：停止原因未知".to_string(),
+                        ),
+                        TurnStopReason::EndTurn => unreachable!(),
+                    };
+                    finished = Some((true, message, status));
+                }
             }
             AgentEvent::TurnFailed { message } => {
                 log::warn!(
@@ -2018,9 +2165,10 @@ impl AgentRuntimeBackend {
                 conversation.status = AgentConversationStatus::Failed;
                 conversation.updated_at_ms = now_ms();
                 persist = true;
-                finished = Some((true, message));
+                finished = Some((true, message, "回答失败".to_string()));
             }
         }
+        let conversation_id_for_log = conversation.id.clone();
         self.conversation = Some(conversation);
         if persist {
             let api = self.core_api();
@@ -2036,7 +2184,7 @@ impl AgentRuntimeBackend {
             self.apply_cancelled_turn(&core_turn_id);
             return;
         }
-        if let Some((failed, message)) = finished {
+        if let Some((failed, message, status)) = finished {
             // 完成事件可能先于 HTTP/JSON-RPC 的受理回执抵达（尤其 OpenCode
             // 的 SSE 与 POST 回应没有顺序保证）。输入事件使用稳定 ID，重复
             // 补记是幂等的；失败事件只在确实受理后由 PromptAccepted 记录，
@@ -2068,11 +2216,21 @@ impl AgentRuntimeBackend {
             }
             self.active_turn_id.clear();
             self.cancelling_turn_id.clear();
+            log::info!(
+                "[agent] 本轮结束：status={}，工具成功 {}，工具失败 {}，conversation={}，turn={}",
+                status,
+                self.turn_tool_success,
+                self.turn_tool_failure,
+                conversation_id_for_log,
+                core_turn_id
+            );
+            self.turn_tool_success = 0;
+            self.turn_tool_failure = 0;
             if failed {
-                self.set_running(false, "回答失败");
+                self.set_running(false, &status);
                 self.set_error(message);
             } else {
-                self.set_running(false, "回答完成");
+                self.set_running(false, &status);
             }
             self.permission_json_value = "null".to_string();
             self.permission_changed();

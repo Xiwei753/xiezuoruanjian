@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
     json_text, json_value_text, AgentEvent, AgentLaunchContext, AgentModelInfo, AgentPromptRequest,
-    EventSink, PermissionOption, RuntimeEvent,
+    EventSink, PermissionOption, RuntimeEvent, TurnStopReason,
 };
 use super::rpc::{CloseReason, RpcClient};
 use super::workspace_access::WorkspaceAccess;
@@ -208,6 +208,12 @@ impl AcpAdapter {
                                     .unwrap_or_else(|| "tool".to_string());
                                 let status = json_text(update, &["status"]).unwrap_or_default();
                                 if matches!(status.as_str(), "completed" | "failed") {
+                                    log::info!(
+                                        "[agent] ACP 工具结束：{} status={} toolCallId={}",
+                                        name,
+                                        status,
+                                        tool_call_id
+                                    );
                                     (handler_emit)(RuntimeEvent::turn(
                                         core_turn_id.clone(),
                                         "",
@@ -1085,6 +1091,7 @@ impl AgentAdapter for AcpAdapter {
                     redact_session_id(&session_id),
                     selected_model.as_deref().unwrap_or("<会话默认>")
                 );
+                let prompt_started = Instant::now();
 
                 let accepted_state = state.clone();
                 let accepted_emit = emit.clone();
@@ -1150,20 +1157,62 @@ impl AgentAdapter for AcpAdapter {
                     let _ = client
                         .respond(request_id, json!({ "outcome": { "outcome": "cancelled" } }));
                 }
+                let elapsed_ms = prompt_started.elapsed().as_millis();
                 let event = match result {
-                    Ok(value) => match json_text(&value, &["stopReason"]).as_deref() {
-                        Some("cancelled") => AgentEvent::TurnCancelled,
-                        Some("end_turn" | "max_tokens" | "max_turn_requests" | "refusal") => {
-                            AgentEvent::TurnCompleted
+                    Ok(value) => {
+                        let stop_reason = json_text(&value, &["stopReason"]);
+                        match stop_reason.as_deref() {
+                            Some("cancelled") => {
+                                log::info!(
+                                    "[agent] ACP session/prompt 结束：stopReason=cancelled，实例 {}，核心轮次 {}，耗时 {}ms",
+                                    client.instance_id(),
+                                    round_id,
+                                    elapsed_ms
+                                );
+                                AgentEvent::TurnCancelled
+                            }
+                            Some(reason) => {
+                                let raw_reason = reason.to_string();
+                                let reason = TurnStopReason::from_acp(reason);
+                                log::info!(
+                                    "[agent] ACP session/prompt 结束：stopReason={}，实例 {}，核心轮次 {}，耗时 {}ms",
+                                    raw_reason,
+                                    client.instance_id(),
+                                    round_id,
+                                    elapsed_ms
+                                );
+                                if reason == TurnStopReason::Unknown {
+                                    AgentEvent::TurnFailed {
+                                        message: format!("ACP 未知停止原因：{raw_reason}"),
+                                    }
+                                } else {
+                                    AgentEvent::TurnCompleted {
+                                        stop_reason: reason,
+                                    }
+                                }
+                            }
+                            None => {
+                                log::warn!(
+                                    "[agent] ACP session/prompt 未返回 stopReason，实例 {}，核心轮次 {}，耗时 {}ms",
+                                    client.instance_id(),
+                                    round_id,
+                                    elapsed_ms
+                                );
+                                AgentEvent::TurnFailed {
+                                    message: "ACP session/prompt 未返回 stopReason".to_string(),
+                                }
+                            }
                         }
-                        Some(other) => AgentEvent::TurnFailed {
-                            message: format!("ACP 未知停止原因：{other}"),
-                        },
-                        None => AgentEvent::TurnFailed {
-                            message: "ACP session/prompt 未返回 stopReason".to_string(),
-                        },
-                    },
-                    Err(error) => AgentEvent::TurnFailed { message: error },
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "[agent] ACP session/prompt 失败：实例 {}，核心轮次 {}，耗时 {}ms，错误={error}",
+                            client.instance_id(),
+                            round_id,
+                            elapsed_ms
+                        );
+                        AgentEvent::TurnFailed { message: error }
+                    }
                 };
                 (emit)(RuntimeEvent::turn(round_id, "", event));
             });

@@ -1,6 +1,7 @@
 use rmcp::{
+    ServerHandler,
     model::{Implementation, ServerCapabilities, ServerConfig},
-    tool_handler, ServerHandler,
+    tool_handler,
 };
 
 use crate::context::McpContext;
@@ -29,9 +30,11 @@ impl ServerHandler for SujianMcpServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("sujian_mcp", env!("CARGO_PKG_VERSION")))
-            .with_instructions(
+            .with_instructions(format!(
                 "Sujian local writing workspace. Chapter body text is read-only. \
-                 Starmaps, tags, object links and chapter text anchors are writable metadata.",
-            )
+                 Starmaps, tags, object links and chapter text anchors are writable metadata; \
+                 every write is validated against the authorized scope and audited after commit. {}",
+                self.context.scope_summary()
+            ))
     }
 }

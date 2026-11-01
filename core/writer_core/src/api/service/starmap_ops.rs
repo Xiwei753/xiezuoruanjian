@@ -88,6 +88,14 @@ impl WriterCoreApi {
             );
         }
         self.finish_starmap_history_journal(&history_journal, "create_starmap");
+        if let Err(error) = crate::storage::workspace_events::append_structure_event(
+            &self.app_data_root,
+            &starmap_id,
+            "starmap",
+            &starmap_id,
+        ) {
+            log::warn!("failed to append create_starmap structure event: {error}");
+        }
         Self::json_string(&value)
     }
 
@@ -129,6 +137,14 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
+        if let Err(error) = crate::storage::workspace_events::append_structure_event(
+            &self.app_data_root,
+            starmap_id,
+            "starmap_embed",
+            &result.instance_id,
+        ) {
+            log::warn!("failed to append add_starmap_embed structure event: {error}");
+        }
         Ok(result.into())
     }
 
@@ -142,8 +158,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn =
-            self.begin_starmap_contribution_transaction(host_starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(host_starmap_id)?;
         // 根身份与 Embed 同属一次来源事务：index 在修改前登记备份，
         // 宿主图文件在 add 之后、flush 之前登记，保证失败时可整体回滚。
         contribution_txn.prepare_paths(&[self.app_data_root.join("starmaps/index.json")])?;
@@ -199,6 +214,14 @@ impl WriterCoreApi {
             );
         }
         self.finish_starmap_contribution_transaction(host_starmap_id, &mut contribution_txn)?;
+        if let Err(error) = crate::storage::workspace_events::append_structure_event(
+            &self.app_data_root,
+            host_starmap_id,
+            "starmap_embed",
+            &result.instance_id,
+        ) {
+            log::warn!("failed to append embed_existing_starmap structure event: {error}");
+        }
         Ok(result.into())
     }
 
@@ -332,6 +355,14 @@ impl WriterCoreApi {
                 true
             }
         };
+        if let Err(error) = crate::storage::workspace_events::append_structure_event(
+            &self.app_data_root,
+            &starmap_meta.starmap_id,
+            "starmap_embed",
+            &embed.instance_id,
+        ) {
+            log::warn!("failed to append child starmap structure event: {error}");
+        }
         Ok(crate::api::types::CreateStarMapChildEmbedResultDto {
             starmap: starmap_meta.into(),
             embed: embed.into(),
@@ -473,6 +504,14 @@ impl WriterCoreApi {
             target: None,
         });
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
+        if let Err(error) = crate::storage::workspace_events::append_structure_event(
+            &self.app_data_root,
+            starmap_id,
+            "starmap_embed",
+            instance_id,
+        ) {
+            log::warn!("failed to append delete_starmap_embed structure event: {error}");
+        }
         Ok(true)
     }
 
@@ -829,6 +868,14 @@ impl WriterCoreApi {
         }
         self.finish_starmap_history_journal(&history_journal, "create_starmap");
         let result_dto: crate::api::types::StarMapMetaDto = result.into();
+        if let Err(error) = crate::storage::workspace_events::append_structure_event(
+            &self.app_data_root,
+            &result_dto.starmap_id,
+            "starmap",
+            &result_dto.starmap_id,
+        ) {
+            log::warn!("failed to append create_starmap structure event: {error}");
+        }
         Ok(result_dto)
     }
 
@@ -1110,6 +1157,14 @@ impl WriterCoreApi {
         // LocalApplied，history 失败会在下次启动用同一 token 幂等补记。
         contribution_txn.commit()?;
         self.finish_starmap_history_journal(&journal, "delete_starmap");
+        if let Err(error) = crate::storage::workspace_events::append_structure_event(
+            &self.app_data_root,
+            starmap_id,
+            "starmap",
+            starmap_id,
+        ) {
+            log::warn!("failed to append delete_starmap structure event: {error}");
+        }
         Ok(true)
     }
 
@@ -1255,6 +1310,14 @@ impl WriterCoreApi {
             );
         }
         self.finish_starmap_history_journal(&history_journal, "bind_starmap_to_project");
+        if let Err(error) = crate::storage::workspace_events::append_structure_event(
+            &self.app_data_root,
+            starmap_id,
+            "starmap_binding",
+            project_id,
+        ) {
+            log::warn!("failed to append bind structure event: {error}");
+        }
         Ok(true)
     }
 
@@ -1399,6 +1462,14 @@ impl WriterCoreApi {
             );
         }
         self.finish_starmap_history_journal(&history_journal, "unbind_starmap_from_project");
+        if let Err(error) = crate::storage::workspace_events::append_structure_event(
+            &self.app_data_root,
+            starmap_id,
+            "starmap_unbind",
+            starmap_id,
+        ) {
+            log::warn!("failed to append unbind structure event: {error}");
+        }
         Ok(true)
     }
 
@@ -2266,7 +2337,7 @@ impl WriterCoreApi {
     ///
     /// 必须在写 meta/index 前调用：来源事务失败回滚时，该路径按“原本不存在”
     /// 恢复，不会留下可被启动恢复误补 history 的孤立 journal。
-    fn register_starmap_history_journal(
+    pub(crate) fn register_starmap_history_journal(
         &self,
         transaction: &mut crate::writing_stats::contribution_transaction::ContributionTransaction,
         token: &str,
@@ -2283,7 +2354,7 @@ impl WriterCoreApi {
     ///
     /// journal 记录本次确定的 change set；只有来源事务提交成功后，调用方
     /// 才允许记录 Git history 并清理 journal。
-    fn save_starmap_history_journal(
+    pub(crate) fn save_starmap_history_journal(
         &self,
         token: &str,
         change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
@@ -2308,7 +2379,7 @@ impl WriterCoreApi {
     ///
     /// history 失败时保留 journal，由 bootstrap 用同一 token 幂等补记；
     /// 不把对象已提交的写操作反向报告为失败，也不回滚已经提交的对象。
-    fn finish_starmap_history_journal(
+    pub(crate) fn finish_starmap_history_journal(
         &self,
         journal: &crate::storage::journal::workspace_change::WorkspaceChangeJournal,
         message: &str,
@@ -2343,7 +2414,7 @@ impl WriterCoreApi {
         }
     }
 
-    fn finish_starmap_contribution_transaction(
+    pub(crate) fn finish_starmap_contribution_transaction(
         &self,
         starmap_id: &str,
         transaction: &mut crate::writing_stats::contribution_transaction::ContributionTransaction,

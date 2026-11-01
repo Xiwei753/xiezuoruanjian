@@ -22,6 +22,11 @@ Item {
     property var agentCliBackendRef: null
     property string workspaceProjectId: ""
     property string workspaceProjectTitle: ""
+    // Issue #1028：星图面板同时传真实画布身份；写作面板保持空，仍以作品为范围。
+    property string starmapRootId: ""
+    property string starmapActiveId: ""
+    property string starmapPathJson: "[]"
+    property string starmapRouteKey: ""
     // 星图工作区可传“当前星图对象”，写作区传当前作品。
     property string contextLabel: ""
 
@@ -108,7 +113,14 @@ Item {
     function syncProjectContext() {
         if (!runtimeBackendRef)
             return
-        runtimeBackendRef.set_project(workspaceProjectId, workspaceProjectTitle)
+        // 项目/画布身份都显式下发；scope 在发送请求前固定，不从展示标题猜。
+        runtimeBackendRef.set_scope(
+            workspaceProjectId,
+            workspaceProjectTitle,
+            starmapRootId,
+            starmapActiveId,
+            starmapPathJson,
+            starmapRouteKey)
     }
 
     function syncAgentCatalog() {
@@ -388,7 +400,16 @@ Item {
         return modelsError
     }
 
-    onRuntimeBackendRefChanged: refresh()
+    onRuntimeBackendRefChanged: {
+        syncProjectContext()
+        refresh()
+    }
+    onVisibleChanged: {
+        // 写作面板与星图面板共用同一个运行时；回到某个面板时重新声明自己的
+        // 作用域，避免沿用另一面板最后一次设置的星图/作品范围。
+        if (visible)
+            syncProjectContext()
+    }
     onAgentCliBackendRefChanged: {
         syncAgentCatalog()
         syncAgentSelection()
@@ -398,6 +419,10 @@ Item {
         syncProjectContext()
         refresh()
     }
+    onStarmapRootIdChanged: syncProjectContext()
+    onStarmapActiveIdChanged: syncProjectContext()
+    onStarmapPathJsonChanged: syncProjectContext()
+    onStarmapRouteKeyChanged: syncProjectContext()
     Component.onCompleted: {
         syncAgentCatalog()
         syncAgentSelection()
@@ -928,11 +953,15 @@ Item {
                     id: sendButton
                     text: qsTr("发送")
                     enabled: !root.running && input.text.trim() !== ""
-                        && root.hasAgent && root.workspaceProjectId !== ""
+                        && root.hasAgent
+                        && (root.workspaceProjectId !== "" || root.starmapActiveId !== "")
                     function send() {
                         var message = input.text
                         if (!message.trim())
                             return
+                        // 发送前重新声明本面板的作用域，避免共用运行时沿用
+                        // 另一面板（写作/星图）最后一次设置的作品或画布。
+                        root.syncProjectContext()
                         input.text = ""
                         root.runtimeBackendRef.send_message(message)
                     }

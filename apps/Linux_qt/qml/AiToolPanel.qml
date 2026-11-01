@@ -19,6 +19,11 @@ Item {
     property var runtimeBackendRef: null
     property string workspaceProjectId: ""
     property string workspaceProjectTitle: ""
+    // Issue #1028：星图面板的真实画布身份（进入子图后 active 是子图 ID）。
+    property string starmapRootId: ""
+    property string starmapActiveId: ""
+    property string starmapPathJson: "[]"
+    property string starmapRouteKey: ""
     property string contextLabel: ""
 
     ColumnLayout {
@@ -60,6 +65,10 @@ Item {
             agentCliBackendRef: root.agentCliBackendRef
             workspaceProjectId: root.workspaceProjectId
             workspaceProjectTitle: root.workspaceProjectTitle
+            starmapRootId: root.starmapRootId
+            starmapActiveId: root.starmapActiveId
+            starmapPathJson: root.starmapPathJson
+            starmapRouteKey: root.starmapRouteKey
             contextLabel: root.contextLabel
         }
     }

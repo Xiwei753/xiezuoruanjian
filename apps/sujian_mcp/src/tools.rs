@@ -7,7 +7,7 @@ use rmcp::{
     tool, tool_router,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use writer_core::api::types::{
     AnnotationObjectRefDto, AnnotationTargetDto, StarMapAnchorDto, StarMapEdgeDto,
     StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto, StarMapLinkDto,
@@ -108,7 +108,7 @@ empty_params!(EmptyParams);
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ListChaptersParams {
-    /// Optional project id; when omitted, chapters from every project are listed.
+    /// Optional project id; when omitted, the authorized project is used.
     project_id: Option<String>,
 }
 
@@ -176,6 +176,15 @@ struct CreateStarmapParams {
     title: String,
     description: Option<String>,
     template_id: Option<String>,
+    /// 当前画布内创建子图时的宿主图；省略时使用会话解析出的活动画布。
+    parent_starmap_id: Option<String>,
+    /// 在已授权作品下创建一级星图（写作面板默认）。星图面板省略时为当前画布子图。
+    #[serde(default)]
+    create_as_root: bool,
+    #[serde(default)]
+    x: f64,
+    #[serde(default)]
+    y: f64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -287,7 +296,8 @@ struct CreateEmbedParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct CreateChildEmbedParams {
-    host_starmap_id: String,
+    /// 省略时使用会话解析出的当前活动画布。
+    host_starmap_id: Option<String>,
     title: String,
     #[serde(default)]
     x: f64,
@@ -454,38 +464,53 @@ impl SujianMcpServer {
 
     #[tool(
         name = "list_projects",
-        description = "List all Sujian writing projects. Chapter body content is read-only."
+        description = "List the Sujian project authorized for this session. Chapter body content is read-only."
     )]
     fn list_projects(
         &self,
         Parameters(_): Parameters<EmptyParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let api = self.ctx().api();
+        let project_id = self.ctx().scope().project_id.clone();
         let projects = crate::context::read(|| api.list_projects())?;
+        let projects: Vec<_> = if project_id.is_empty() {
+            Vec::new()
+        } else {
+            projects
+                .into_iter()
+                .filter(|project| project.id == project_id)
+                .collect()
+        };
         to_json(&projects)
     }
 
-    #[tool(name = "list_volumes", description = "List volumes of a project.")]
+    #[tool(
+        name = "list_volumes",
+        description = "List volumes of the authorized project."
+    )]
     fn list_volumes(
         &self,
         Parameters(params): Parameters<ProjectIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
         let api = self.ctx().api();
-        let volumes = crate::context::read(|| api.list_volumes(&params.project_id))?;
+        let volumes = crate::context::read(|| api.list_volumes(&project_id))?;
         to_json(&volumes)
     }
 
     #[tool(
         name = "list_chapters",
-        description = "List chapter metadata for one project or all projects. Does not return body text."
+        description = "List chapter metadata for the authorized project. Does not return body text."
     )]
     fn list_chapters(
         &self,
         Parameters(params): Parameters<ListChaptersParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        let project_id = self
+            .ctx()
+            .require_project_scope(params.project_id.as_deref())?;
         let api = self.ctx().api();
-        let chapters =
-            crate::context::read(|| api.mcp_list_chapters(params.project_id.as_deref()))?;
+        let chapters = crate::context::read(|| api.mcp_list_chapters(Some(&project_id)))?;
         to_json(&chapters)
     }
 
@@ -497,10 +522,11 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<ReadChapterParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
         let api = self.ctx().api();
         let chapter = crate::context::read(|| {
             api.mcp_read_chapter(
-                &params.project_id,
+                &project_id,
                 &params.chapter_id,
                 params.volume_id.as_deref(),
                 params.offset_chars,
@@ -512,86 +538,89 @@ impl SujianMcpServer {
 
     #[tool(
         name = "search",
-        description = "Search Sujian chapter titles/bodies, starmaps, settings and annotations."
+        description = "Search within the authorized project/starmap scope only."
     )]
     fn search(
         &self,
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let api = self.ctx().api();
         let scope = params.scope.as_deref().unwrap_or("All");
         let limit = params.limit.unwrap_or(50);
-        let raw = crate::context::read(|| {
-            api.global_search_json(&params.query, scope, limit, params.cursor.as_deref())
-        })?;
-        let value: Value = serde_json::from_str(&raw)
-            .map_err(|error| invalid_params(format!("invalid search response: {error}")))?;
+        let value = self
+            .ctx()
+            .search(&params.query, scope, limit, params.cursor.as_deref())?;
         Ok(Json(value))
     }
 
     #[tool(
         name = "list_starmaps",
-        description = "List starmaps. Provide projectId to list only that project's maps."
+        description = "List starmaps in the authorized project and current root starmap subtree."
     )]
     fn list_starmaps(
         &self,
         Parameters(params): Parameters<ListChaptersParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let api = self.ctx().api();
-        let maps = crate::context::read(|| match params.project_id.as_deref() {
-            Some(project_id) => api.list_starmaps_for_project(project_id),
-            None => api.list_starmaps(),
-        })?;
+        if let Some(project_id) = params.project_id.as_deref() {
+            self.ctx().require_project_scope(Some(project_id))?;
+        }
+        let maps = self.ctx().authorized_starmaps()?;
         to_json(&maps)
     }
 
     #[tool(
         name = "get_starmap_graph",
-        description = "Read a full starmap graph: nodes, edges, embeds and links."
+        description = "Read a full starmap graph within the authorized scope: nodes, edges, embeds and links."
     )]
     fn get_starmap_graph(
         &self,
         Parameters(params): Parameters<StarmapIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
         let api = self.ctx().api();
-        let graph = crate::context::read(|| api.get_starmap_graph(&params.starmap_id))?;
+        let graph = crate::context::read(|| api.get_starmap_graph(&starmap_id))?;
         to_json(&graph)
     }
 
-    #[tool(name = "list_tags", description = "List annotation tags of a project.")]
+    #[tool(
+        name = "list_tags",
+        description = "List annotation tags of the authorized project."
+    )]
     fn list_tags(
         &self,
         Parameters(params): Parameters<ProjectIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
         let api = self.ctx().api();
-        let tags = crate::context::read(|| api.list_tags(params.project_id))?;
+        let tags = crate::context::read(|| api.list_tags(project_id))?;
         to_json(&tags)
     }
 
     #[tool(
         name = "list_bindings_for_target",
-        description = "List tag bindings for an AnnotationObjectRefDto target."
+        description = "List tag bindings for an AnnotationObjectRefDto target inside the authorized project."
     )]
     fn list_bindings_for_target(
         &self,
         Parameters(params): Parameters<BindingsParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let target: AnnotationObjectRefDto = parse_input(params.target, "target")?;
+        self.ctx().require_object_ref(&target)?;
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
         let api = self.ctx().api();
-        let bindings =
-            crate::context::read(|| api.list_bindings_for_target(params.project_id, target))?;
+        let bindings = crate::context::read(|| api.list_bindings_for_target(project_id, target))?;
         to_json(&bindings)
     }
 
     #[tool(
         name = "list_links_for_source",
-        description = "List object links whose source is an AnnotationObjectRefDto."
+        description = "List object links whose source is an AnnotationObjectRefDto inside the authorized project."
     )]
     fn list_links_for_source(
         &self,
         Parameters(params): Parameters<LinkSourceParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let source: AnnotationObjectRefDto = parse_input(params.source, "source")?;
+        self.ctx().require_object_ref(&source)?;
         let api = self.ctx().api();
         let links = crate::context::read(|| api.list_links_for_source(source))?;
         to_json(&links)
@@ -599,13 +628,14 @@ impl SujianMcpServer {
 
     #[tool(
         name = "find_backlinks",
-        description = "Find object links that point at an internal object target (AnnotationTargetDto.objectRef). External URLs are not supported."
+        description = "Find object links inside the authorized project that point at an internal object target (AnnotationTargetDto.objectRef). External URLs are not supported."
     )]
     fn find_backlinks(
         &self,
         Parameters(params): Parameters<BacklinksParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let target = parse_internal_target(params.target, "target")?;
+        self.ctx().require_internal_target(&target)?;
         let api = self.ctx().api();
         let links = crate::context::read(|| api.find_backlinks(target))?;
         to_json(&links)
@@ -613,33 +643,37 @@ impl SujianMcpServer {
 
     #[tool(
         name = "list_text_anchors",
-        description = "List annotation text anchors for a chapter. Read-only metadata."
+        description = "List annotation text anchors for a chapter in the authorized project. Read-only metadata."
     )]
     fn list_text_anchors(
         &self,
         Parameters(params): Parameters<ChapterIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
         let api = self.ctx().api();
         let anchors = crate::context::read(|| {
-            api.list_text_anchors_for_chapter(params.project_id, params.chapter_id)
+            api.list_text_anchors_for_chapter(project_id, params.chapter_id)
         })?;
         to_json(&anchors)
     }
 
     #[tool(
         name = "get_contribution_stats",
-        description = "Read contribution statistics: historical human/AI/unknown operation volume and retained-content source distribution."
+        description = "Read contribution statistics for the authorized project."
     )]
     fn get_contribution_stats(
         &self,
         Parameters(params): Parameters<ContributionStatsParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        let project_id = self
+            .ctx()
+            .require_project_scope(params.project_id.as_deref())?;
         let api = self.ctx().api();
         let stats = crate::context::read(|| {
             api.get_contribution_stats(
                 &params.start_date,
                 &params.end_date,
-                params.project_id.as_deref(),
+                Some(&project_id),
                 params.actor.as_deref(),
                 params.object_type.as_deref(),
                 params.device_id.as_deref(),
@@ -650,41 +684,55 @@ impl SujianMcpServer {
 
     // --------------------------------------------------------- starmap writes
 
-    #[tool(name = "create_starmap", description = "Create an empty starmap.")]
+    #[tool(
+        name = "create_starmap",
+        description = "Create a starmap. In a canvas, creates and embeds a child starmap in the active graph; otherwise creates a project starmap in one Core transaction."
+    )]
     fn create_starmap(
         &self,
         Parameters(params): Parameters<CreateStarmapParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let description = params.description.unwrap_or_default();
-        let result = self.ctx().write(|api| {
-            api.create_starmap(&params.title, &description, params.template_id.as_deref())
-        })?;
-        to_json(&result)
+        self.ctx().create_starmap(
+            &params.title,
+            &description,
+            params.template_id.as_deref(),
+            params.parent_starmap_id.as_deref(),
+            params.create_as_root,
+            params.x,
+            params.y,
+        )
     }
 
-    #[tool(name = "rename_starmap", description = "Rename a starmap.")]
+    #[tool(
+        name = "rename_starmap",
+        description = "Rename a starmap inside the authorized scope."
+    )]
     fn rename_starmap(
         &self,
         Parameters(params): Parameters<RenameStarmapParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.rename_starmap(&params.starmap_id, &params.new_title))?;
-        to_json(&result)
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx()
+            .write_audited("rename_starmap", &params.starmap_id, &starmap_id, |api| {
+                api.rename_starmap(&starmap_id, &params.new_title)
+            })
     }
 
     #[tool(
         name = "delete_starmap",
-        description = "Delete an empty or explicitly confirmed starmap."
+        description = "Delete an empty or explicitly confirmed starmap inside the authorized scope."
     )]
     fn delete_starmap(
         &self,
         Parameters(params): Parameters<StarmapIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.delete_starmap(&params.starmap_id))?;
-        to_json(&json!({ "deleted": result }))
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx()
+            .write_audited("delete_starmap", &params.starmap_id, &starmap_id, |api| {
+                api.delete_starmap(&starmap_id)
+                    .map(|deleted| json!({ "deleted": deleted, "starmapId": starmap_id }))
+            })
     }
 
     #[tool(
@@ -760,15 +808,18 @@ impl SujianMcpServer {
             created_at: now_ms(),
             updated_at: now_ms(),
         };
-        let result = self
-            .ctx()
-            .write(|api| api.add_starmap_node(&params.starmap_id, node, params.x, params.y))?;
-        to_json(&result)
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "create_starmap_node",
+            &params.starmap_id,
+            &starmap_id,
+            |api| api.add_starmap_node(&starmap_id, node, params.x, params.y),
+        )
     }
 
     #[tool(
         name = "update_starmap_node",
-        description = "Update a starmap node with a StarMapNodePatchDto JSON patch."
+        description = "Update a starmap node with a StarMapNodePatchDto JSON patch inside the authorized scope."
     )]
     fn update_starmap_node(
         &self,
@@ -776,30 +827,50 @@ impl SujianMcpServer {
     ) -> Result<Json<Value>, ErrorData> {
         reject_external_bindings(&params.patch, "patch")?;
         let patch: StarMapNodePatchDto = parse_input(params.patch, "patch")?;
-        let result = self.ctx().write(|api| {
-            api.update_starmap_node_expected(
-                &params.starmap_id,
-                &params.node_id,
-                patch,
-                Some(params.expected_revision),
-            )
-        })?;
-        to_json(&result)
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "update_starmap_node",
+            &params.starmap_id,
+            &starmap_id,
+            |api| {
+                api.update_starmap_node_expected(
+                    &starmap_id,
+                    &params.node_id,
+                    patch,
+                    Some(params.expected_revision),
+                )
+            },
+        )
     }
 
-    #[tool(name = "delete_starmap_node", description = "Delete a starmap node.")]
+    #[tool(
+        name = "delete_starmap_node",
+        description = "Delete a starmap node inside the authorized scope."
+    )]
     fn delete_starmap_node(
         &self,
         Parameters(params): Parameters<NodeIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self.ctx().write(|api| {
-            api.delete_starmap_node_expected(
-                &params.starmap_id,
-                &params.node_id,
-                Some(params.expected_revision),
-            )
-        })?;
-        to_json(&json!({ "deleted": result }))
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "delete_starmap_node",
+            &params.starmap_id,
+            &starmap_id,
+            |api| {
+                api.delete_starmap_node_expected(
+                    &starmap_id,
+                    &params.node_id,
+                    Some(params.expected_revision),
+                )
+                .map(|deleted| {
+                    json!({
+                        "deleted": deleted,
+                        "starmapId": starmap_id,
+                        "nodeId": params.node_id,
+                    })
+                })
+            },
+        )
     }
 
     #[tool(
@@ -828,45 +899,68 @@ impl SujianMcpServer {
             created_at: now_ms(),
             updated_at: now_ms(),
         };
-        let result = self
-            .ctx()
-            .write(|api| api.add_starmap_edge(&params.starmap_id, edge))?;
-        to_json(&result)
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "create_starmap_edge",
+            &params.starmap_id,
+            &starmap_id,
+            |api| api.add_starmap_edge(&starmap_id, edge),
+        )
     }
 
     #[tool(
         name = "update_starmap_edge",
-        description = "Update a starmap edge with a StarMapEdgePatchDto JSON patch."
+        description = "Update a starmap edge with a StarMapEdgePatchDto JSON patch inside the authorized scope."
     )]
     fn update_starmap_edge(
         &self,
         Parameters(params): Parameters<UpdateEdgeParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let patch: StarMapEdgePatchDto = parse_input(params.patch, "patch")?;
-        let result = self.ctx().write(|api| {
-            api.update_starmap_edge_expected(
-                &params.starmap_id,
-                &params.edge_id,
-                patch,
-                Some(params.expected_revision),
-            )
-        })?;
-        to_json(&result)
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "update_starmap_edge",
+            &params.starmap_id,
+            &starmap_id,
+            |api| {
+                api.update_starmap_edge_expected(
+                    &starmap_id,
+                    &params.edge_id,
+                    patch,
+                    Some(params.expected_revision),
+                )
+            },
+        )
     }
 
-    #[tool(name = "delete_starmap_edge", description = "Delete a starmap edge.")]
+    #[tool(
+        name = "delete_starmap_edge",
+        description = "Delete a starmap edge inside the authorized scope."
+    )]
     fn delete_starmap_edge(
         &self,
         Parameters(params): Parameters<EdgeIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self.ctx().write(|api| {
-            api.delete_starmap_edge_expected(
-                &params.starmap_id,
-                &params.edge_id,
-                Some(params.expected_revision),
-            )
-        })?;
-        to_json(&json!({ "deleted": result }))
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "delete_starmap_edge",
+            &params.starmap_id,
+            &starmap_id,
+            |api| {
+                api.delete_starmap_edge_expected(
+                    &starmap_id,
+                    &params.edge_id,
+                    Some(params.expected_revision),
+                )
+                .map(|deleted| {
+                    json!({
+                        "deleted": deleted,
+                        "starmapId": starmap_id,
+                        "edgeId": params.edge_id,
+                    })
+                })
+            },
+        )
     }
 
     #[tool(
@@ -878,6 +972,9 @@ impl SujianMcpServer {
         Parameters(params): Parameters<CreateEmbedParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let host_path: StarMapTargetPathDto = parse_input(params.host_path, "hostPath")?;
+        let target_starmap_id = self
+            .ctx()
+            .require_starmap_scope(&params.target_starmap_id)?;
         let provenance = params
             .provenance
             .map(|value| parse_input(value, "provenance"))
@@ -885,7 +982,7 @@ impl SujianMcpServer {
             .unwrap_or_else(generated_by_mcp);
         let embed = StarMapEmbedDto {
             instance_id: uuid::Uuid::new_v4().to_string(),
-            target_starmap_id: params.target_starmap_id,
+            target_starmap_id,
             label: params.label,
             position: StarMapPointDto {
                 x: params.x,
@@ -896,66 +993,84 @@ impl SujianMcpServer {
             created_at: now_ms(),
             updated_at: now_ms(),
         };
-        let result = self
-            .ctx()
-            .write(|api| api.add_starmap_embed(&params.starmap_id, embed))?;
-        to_json(&result)
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "create_starmap_embed",
+            &params.starmap_id,
+            &starmap_id,
+            |api| api.add_starmap_embed(&starmap_id, embed),
+        )
     }
 
     #[tool(
         name = "create_starmap_child_embed",
-        description = "Atomically create a child starmap and embed it in the host graph."
+        description = "Atomically create a child starmap and embed it in the active canvas (or an explicit host graph)."
     )]
     fn create_starmap_child_embed(
         &self,
         Parameters(params): Parameters<CreateChildEmbedParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let position = StarMapPointDto {
-            x: params.x,
-            y: params.y,
-        };
-        let result = self.ctx().write(|api| {
-            api.create_starmap_child_embed(&params.host_starmap_id, &params.title, position)
-        })?;
-        to_json(&result)
+        self.ctx().create_child_embed(
+            params.host_starmap_id.as_deref(),
+            &params.title,
+            params.x,
+            params.y,
+        )
     }
 
     #[tool(
         name = "update_starmap_embed",
-        description = "Update an embed with a StarMapEmbedPatchDto JSON patch."
+        description = "Update an embed with a StarMapEmbedPatchDto JSON patch inside the authorized scope."
     )]
     fn update_starmap_embed(
         &self,
         Parameters(params): Parameters<UpdateEmbedParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let patch: StarMapEmbedPatchDto = parse_input(params.patch, "patch")?;
-        let result = self.ctx().write(|api| {
-            api.update_starmap_embed_expected(
-                &params.starmap_id,
-                &params.instance_id,
-                patch,
-                Some(params.expected_revision),
-            )
-        })?;
-        to_json(&result)
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "update_starmap_embed",
+            &params.starmap_id,
+            &starmap_id,
+            |api| {
+                api.update_starmap_embed_expected(
+                    &starmap_id,
+                    &params.instance_id,
+                    patch,
+                    Some(params.expected_revision),
+                )
+            },
+        )
     }
 
     #[tool(
         name = "delete_starmap_embed",
-        description = "Remove an embed from a starmap."
+        description = "Remove an embed from a starmap inside the authorized scope."
     )]
     fn delete_starmap_embed(
         &self,
         Parameters(params): Parameters<EmbedIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self.ctx().write(|api| {
-            api.delete_starmap_embed_expected(
-                &params.starmap_id,
-                &params.instance_id,
-                Some(params.expected_revision),
-            )
-        })?;
-        to_json(&json!({ "deleted": result }))
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "delete_starmap_embed",
+            &params.starmap_id,
+            &starmap_id,
+            |api| {
+                api.delete_starmap_embed_expected(
+                    &starmap_id,
+                    &params.instance_id,
+                    Some(params.expected_revision),
+                )
+                .map(|deleted| {
+                    json!({
+                        "deleted": deleted,
+                        "starmapId": starmap_id,
+                        "instanceId": params.instance_id,
+                    })
+                })
+            },
+        )
     }
 
     #[tool(
@@ -978,154 +1093,174 @@ impl SujianMcpServer {
             created_at: now_ms(),
             updated_at: now_ms(),
         };
-        let result = self
-            .ctx()
-            .write(|api| api.add_starmap_link(&params.starmap_id, link))?;
-        to_json(&result)
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "create_starmap_link",
+            &params.starmap_id,
+            &starmap_id,
+            |api| api.add_starmap_link(&starmap_id, link),
+        )
     }
 
     #[tool(
         name = "update_starmap_link",
-        description = "Update a starmap link with a StarMapLinkPatchDto JSON patch."
+        description = "Update a starmap link with a StarMapLinkPatchDto JSON patch inside the authorized scope."
     )]
     fn update_starmap_link(
         &self,
         Parameters(params): Parameters<UpdateLinkParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let patch: StarMapLinkPatchDto = parse_input(params.patch, "patch")?;
-        let result = self.ctx().write(|api| {
-            api.update_starmap_link_expected(
-                &params.starmap_id,
-                &params.link_id,
-                patch,
-                Some(params.expected_revision),
-            )
-        })?;
-        to_json(&result)
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "update_starmap_link",
+            &params.starmap_id,
+            &starmap_id,
+            |api| {
+                api.update_starmap_link_expected(
+                    &starmap_id,
+                    &params.link_id,
+                    patch,
+                    Some(params.expected_revision),
+                )
+            },
+        )
     }
 
-    #[tool(name = "delete_starmap_link", description = "Delete a starmap link.")]
+    #[tool(
+        name = "delete_starmap_link",
+        description = "Delete a starmap link inside the authorized scope."
+    )]
     fn delete_starmap_link(
         &self,
         Parameters(params): Parameters<LinkIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self.ctx().write(|api| {
-            api.delete_starmap_link_expected(
-                &params.starmap_id,
-                &params.link_id,
-                Some(params.expected_revision),
-            )
-        })?;
-        to_json(&json!({ "deleted": result }))
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "delete_starmap_link",
+            &params.starmap_id,
+            &starmap_id,
+            |api| {
+                api.delete_starmap_link_expected(
+                    &starmap_id,
+                    &params.link_id,
+                    Some(params.expected_revision),
+                )
+                .map(|deleted| {
+                    json!({
+                        "deleted": deleted,
+                        "starmapId": starmap_id,
+                        "linkId": params.link_id,
+                    })
+                })
+            },
+        )
     }
 
     #[tool(
         name = "bind_starmap_to_project",
-        description = "Bind a starmap to a project."
+        description = "Bind a starmap to the authorized project after validating source and target identity."
     )]
     fn bind_starmap_to_project(
         &self,
         Parameters(params): Parameters<BindStarmapParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.bind_starmap_to_project(&params.starmap_id, &params.project_id))?;
-        to_json(&json!({ "bound": result }))
+        self.ctx()
+            .bind_starmap(&params.project_id, &params.starmap_id)
     }
 
     #[tool(
         name = "unbind_starmap_from_project",
-        description = "Remove a starmap from its project without deleting it."
+        description = "Remove a starmap from the authorized project without deleting it."
     )]
     fn unbind_starmap_from_project(
         &self,
         Parameters(params): Parameters<StarmapIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.unbind_starmap_from_project(&params.starmap_id))?;
-        to_json(&json!({ "unbound": result }))
+        self.ctx().unbind_starmap(&params.starmap_id)
     }
 
     // ------------------------------------------------------------- tag writes
 
     #[tool(
         name = "create_tag",
-        description = "Create an annotation tag in a project."
+        description = "Create an annotation tag in the authorized project."
     )]
     fn create_tag(
         &self,
         Parameters(params): Parameters<CreateTagParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.create_tag(params.project_id, params.name, params.color))?;
-        to_json(&result)
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
+        self.ctx().write_audited("create_tag", "", "", |api| {
+            api.create_tag(project_id, params.name, params.color)
+        })
     }
 
-    #[tool(name = "rename_tag", description = "Rename an annotation tag.")]
+    #[tool(
+        name = "rename_tag",
+        description = "Rename an annotation tag in the authorized project."
+    )]
     fn rename_tag(
         &self,
         Parameters(params): Parameters<RenameTagParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.rename_tag(params.project_id, params.tag_id, params.name))?;
-        to_json(&result)
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
+        self.ctx().write_audited("rename_tag", "", "", |api| {
+            api.rename_tag(project_id, params.tag_id, params.name)
+        })
     }
 
     #[tool(
         name = "delete_tag",
-        description = "Delete an annotation tag and its bindings."
+        description = "Delete an annotation tag and its bindings in the authorized project."
     )]
     fn delete_tag(
         &self,
         Parameters(params): Parameters<TagIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.delete_tag(params.project_id, params.tag_id))?;
-        to_json(&json!({ "deleted": result }))
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
+        self.ctx().write_audited("delete_tag", "", "", |api| {
+            api.delete_tag(project_id.clone(), params.tag_id)
+                .map(|deleted| json!({ "deleted": deleted, "projectId": project_id }))
+        })
     }
 
     #[tool(
         name = "merge_tags",
-        description = "Merge the source tag into the target tag."
+        description = "Merge the source tag into the target tag in the authorized project."
     )]
     fn merge_tags(
         &self,
         Parameters(params): Parameters<MergeTagsParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self.ctx().write(|api| {
-            api.merge_tags(
-                params.project_id,
-                params.source_tag_id,
-                params.target_tag_id,
-            )
-        })?;
-        to_json(&json!({ "merged": result }))
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
+        self.ctx().write_audited("merge_tags", "", "", |api| {
+            api.merge_tags(project_id, params.source_tag_id, params.target_tag_id)
+                .map(|merged| json!({ "merged": merged }))
+        })
     }
 
     #[tool(
         name = "set_tag_bindings",
-        description = "Replace all tag bindings on an AnnotationObjectRefDto target."
+        description = "Replace all tag bindings on an AnnotationObjectRefDto target inside the authorized project."
     )]
     fn set_tag_bindings(
         &self,
         Parameters(params): Parameters<SetBindingsParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let target: AnnotationObjectRefDto = parse_input(params.target, "target")?;
-        let result = self
-            .ctx()
-            .write(|api| api.set_tag_bindings(params.project_id, target, params.tag_ids))?;
-        to_json(&result)
+        self.ctx().require_object_ref(&target)?;
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
+        self.ctx().write_audited("set_tag_bindings", "", "", |api| {
+            api.set_tag_bindings(project_id, target, params.tag_ids)
+        })
     }
 
     // ---------------------------------------------------- object-link writes
 
     #[tool(
         name = "create_object_link",
-        description = "Create a cross-object link from an AnnotationObjectRefDto to an internal object target (AnnotationTargetDto.objectRef). External URLs are not supported."
+        description = "Create a cross-object link from an AnnotationObjectRefDto to an internal object target (AnnotationTargetDto.objectRef) in the authorized project. External URLs are not supported."
     )]
     fn create_object_link(
         &self,
@@ -1133,13 +1268,17 @@ impl SujianMcpServer {
     ) -> Result<Json<Value>, ErrorData> {
         let source: AnnotationObjectRefDto = parse_input(params.source, "source")?;
         let target = parse_internal_target(params.target, "target")?;
-        let result = self.ctx().write(|api| api.create_link(source, target))?;
-        to_json(&result)
+        self.ctx().require_object_ref(&source)?;
+        self.ctx().require_internal_target(&target)?;
+        self.ctx()
+            .write_audited("create_object_link", "", "", |api| {
+                api.create_link(source, target)
+            })
     }
 
     #[tool(
         name = "update_object_link",
-        description = "Update an object link's source and internal object target (AnnotationTargetDto.objectRef). External URLs are not supported."
+        description = "Update an object link's source and internal object target (AnnotationTargetDto.objectRef) in the authorized project. External URLs are not supported."
     )]
     fn update_object_link(
         &self,
@@ -1147,40 +1286,55 @@ impl SujianMcpServer {
     ) -> Result<Json<Value>, ErrorData> {
         let source: AnnotationObjectRefDto = parse_input(params.source, "source")?;
         let target = parse_internal_target(params.target, "target")?;
-        let result = self
-            .ctx()
-            .write(|api| api.update_link(params.project_id, params.link_id, source, target))?;
-        to_json(&result)
+        self.ctx().require_object_ref(&source)?;
+        self.ctx().require_internal_target(&target)?;
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
+        self.ctx()
+            .write_audited("update_object_link", "", "", |api| {
+                api.update_link(project_id, params.link_id, source, target)
+            })
     }
 
-    #[tool(name = "delete_object_link", description = "Delete an object link.")]
+    #[tool(
+        name = "delete_object_link",
+        description = "Delete an object link in the authorized project."
+    )]
     fn delete_object_link(
         &self,
         Parameters(params): Parameters<ObjectLinkIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.delete_link(params.project_id, params.link_id))?;
-        to_json(&json!({ "deleted": result }))
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
+        self.ctx()
+            .write_audited("delete_object_link", "", "", |api| {
+                api.delete_link(project_id.clone(), params.link_id.clone())
+                    .map(|deleted| {
+                        json!({
+                            "deleted": deleted,
+                            "projectId": project_id,
+                            "linkId": params.link_id,
+                        })
+                    })
+            })
     }
 
     #[tool(
         name = "create_chapter_text_anchor",
-        description = "Create annotation metadata anchoring a chapter text byte range. The chapter body is never modified."
+        description = "Create annotation metadata anchoring a chapter text byte range in the authorized project. The chapter body is never modified."
     )]
     fn create_chapter_text_anchor(
         &self,
         Parameters(params): Parameters<CreateTextAnchorParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self.ctx().write(|api| {
-            api.mcp_create_chapter_text_anchor(
-                &params.project_id,
-                &params.chapter_id,
-                params.start_byte,
-                params.end_byte,
-                params.expected_hash.as_deref(),
-            )
-        })?;
-        to_json(&result)
+        let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
+        self.ctx()
+            .write_audited("create_chapter_text_anchor", "", "", |api| {
+                api.mcp_create_chapter_text_anchor(
+                    &project_id,
+                    &params.chapter_id,
+                    params.start_byte,
+                    params.end_byte,
+                    params.expected_hash.as_deref(),
+                )
+            })
     }
 }

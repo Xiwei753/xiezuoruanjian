@@ -65,6 +65,26 @@ pub fn append_event(
     Ok(())
 }
 
+/// 星图结构变化（新建 / 绑定 / 嵌入 / 解绑 / 删除）事件。
+///
+/// 与普通对象写入分开：桌面端据此重载左侧目录/根星图列表，而不是只把
+/// 当前画布重绘一次。事件仍带真实 starmapId 和对象 ID，便于追溯结构变更。
+pub fn append_structure_event(
+    app_data_root: &Path,
+    starmap_id: &str,
+    object_type: &str,
+    object_id: &str,
+) -> Result<()> {
+    append_event(
+        app_data_root,
+        "starmapStructure",
+        starmap_id,
+        object_type,
+        object_id,
+        0,
+    )
+}
+
 pub fn read_since(app_data_root: &Path, offset: u64) -> Result<WorkspaceChangePage> {
     let path = events_path(app_data_root);
     if !path.is_file() {

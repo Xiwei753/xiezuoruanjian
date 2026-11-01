@@ -18,6 +18,11 @@ Rectangle {
     property string workspaceProjectId: ""
     property string workspaceProjectTitle: ""
     property string aiContextLabel: ""
+    // Issue #1028：AI 面板必须拿到真实根图 / 当前画布 / 路径，而不是展示标题。
+    property string starmapRootId: ""
+    property string starmapActiveId: ""
+    property string starmapPathJson: "[]"
+    property string starmapRouteKey: ""
     property string projectId: ""
     property var targetRef: null
     property string targetLabel: ""
@@ -81,6 +86,10 @@ Rectangle {
             runtimeBackendRef: root.agentRuntimeBackendRef
             workspaceProjectId: root.workspaceProjectId
             workspaceProjectTitle: root.workspaceProjectTitle
+            starmapRootId: root.starmapRootId
+            starmapActiveId: root.starmapActiveId
+            starmapPathJson: root.starmapPathJson
+            starmapRouteKey: root.starmapRouteKey
             contextLabel: root.aiContextLabel
         }
     }

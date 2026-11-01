@@ -71,6 +71,7 @@ impl AgentSessionManager {
                     && existing.protocol == ctx.protocol
                     && existing.conversation_id == ctx.conversation_id
                     && existing.project_id == ctx.project_id
+                    && existing.mcp_scope == ctx.mcp_scope
             });
             if reusable {
                 // Core 会话在首轮之后才拿到原生 session ID；不能让同一个

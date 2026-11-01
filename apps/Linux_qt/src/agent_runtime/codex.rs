@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
     json_text, json_value_text, AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink,
-    PermissionOption, RuntimeEvent,
+    PermissionOption, RuntimeEvent, TurnStopReason,
 };
 use super::rpc::{CloseReason, RpcClient};
 use super::workspace_access::WorkspaceAccess;
@@ -409,7 +409,9 @@ impl CodexAdapter {
                             agent_identity: String::new(),
                             core_turn_id: core_turn_id.clone(),
                             native_turn_id: turn_id,
-                            event: AgentEvent::TurnCompleted,
+                            event: AgentEvent::TurnCompleted {
+                                stop_reason: TurnStopReason::EndTurn,
+                            },
                         });
                     }
                     "turn/failed" | "error" => {

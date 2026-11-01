@@ -165,8 +165,22 @@ Rectangle {
                     dt: root.dt
                     agentCliBackendRef: root.agentCliBackendRef
                     runtimeBackendRef: root.agentRuntimeBackendRef
-                    workspaceProjectId: root.workspaceProjectId
-                    workspaceProjectTitle: root.workspaceProjectTitle
+                    // Issue #1028：内嵌星图工作区打开时，AI 面板使用该画布的
+                    // 真实作品/根图/活动图身份；退出内嵌星图后恢复写作作品范围。
+                    workspaceProjectId: root.embeddedStarmapId !== ""
+                        ? embeddedStarmapWorkspace.annotationProjectId
+                        : root.workspaceProjectId
+                    workspaceProjectTitle: root.embeddedStarmapId !== ""
+                        ? embeddedStarmapWorkspace.starmapTitle
+                        : root.workspaceProjectTitle
+                    starmapRootId: root.embeddedStarmapId !== ""
+                        ? embeddedStarmapWorkspace.aiStarmapRootId : ""
+                    starmapActiveId: root.embeddedStarmapId !== ""
+                        ? embeddedStarmapWorkspace.aiStarmapActiveId : ""
+                    starmapPathJson: root.embeddedStarmapId !== ""
+                        ? embeddedStarmapWorkspace.aiStarmapPathJson : "[]"
+                    starmapRouteKey: root.embeddedStarmapId !== ""
+                        ? embeddedStarmapWorkspace.aiStarmapRouteKey : ""
                     contextLabel: root.aiContextLabel
                 }
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use super::events::{AgentLaunchContext, McpServerLaunch};
+use super::events::{AgentLaunchContext, McpScope, McpServerLaunch};
 
 #[derive(Debug, Clone)]
 pub struct McpBinding {
@@ -83,11 +83,15 @@ fn resolve_command() -> Option<(String, Vec<String>)> {
     find_in_path().map(|path| (path.to_string_lossy().into_owned(), Vec::new()))
 }
 
-/// 按当前作品构造 MCP stdio 启动配置。
+/// 按当前作品与星图作用域构造 MCP stdio 启动配置。
+///
+/// 作用域同时通过显式参数和环境变量传入：显式参数保证 broker/bridge 不
+/// 依赖父进程继承状态；环境变量覆盖旧值（空字符串也显式写入），避免
+/// 新建或恢复会话意外继承上一张图的 scope。
 pub fn bind_current_project(
     app_data_root: &str,
     projects_root: &str,
-    project_id: &str,
+    scope: &McpScope,
 ) -> McpBinding {
     let Some((command, mut args)) = resolve_command() else {
         return McpBinding {
@@ -100,6 +104,32 @@ pub fn bind_current_project(
     args.push(app_data_root.to_string());
     args.push("--projects-root".to_string());
     args.push(projects_root.to_string());
+    if !scope.project_id.is_empty() {
+        args.push("--project-id".to_string());
+        args.push(scope.project_id.clone());
+    }
+    if !scope.root_starmap_id.is_empty() {
+        args.push("--root-starmap-id".to_string());
+        args.push(scope.root_starmap_id.clone());
+    }
+    if !scope.active_starmap_id.is_empty() {
+        args.push("--active-starmap-id".to_string());
+        args.push(scope.active_starmap_id.clone());
+    }
+    args.push("--starmap-path".to_string());
+    args.push(if scope.path_segments_json.trim().is_empty() {
+        "[]".to_string()
+    } else {
+        scope.path_segments_json.clone()
+    });
+    if !scope.route_key.is_empty() {
+        args.push("--starmap-route".to_string());
+        args.push(scope.route_key.clone());
+    }
+    if !scope.executor.is_empty() {
+        args.push("--agent-identity".to_string());
+        args.push(scope.executor.clone());
+    }
     let launch = McpServerLaunch {
         name: "sujian".to_string(),
         command: command.clone(),
@@ -113,13 +143,41 @@ pub fn bind_current_project(
                 "SUJIAN_PROJECTS_ROOT".to_string(),
                 projects_root.to_string(),
             ),
-            ("SUJIAN_PROJECT_ID".to_string(), project_id.to_string()),
+            ("SUJIAN_PROJECT_ID".to_string(), scope.project_id.clone()),
+            (
+                "SUJIAN_ROOT_STARMAP_ID".to_string(),
+                scope.root_starmap_id.clone(),
+            ),
+            (
+                "SUJIAN_ACTIVE_STARMAP_ID".to_string(),
+                scope.active_starmap_id.clone(),
+            ),
+            (
+                "SUJIAN_STARMAP_PATH".to_string(),
+                if scope.path_segments_json.trim().is_empty() {
+                    "[]".to_string()
+                } else {
+                    scope.path_segments_json.clone()
+                },
+            ),
+            ("SUJIAN_STARMAP_ROUTE".to_string(), scope.route_key.clone()),
+            ("SUJIAN_AGENT_ID".to_string(), scope.executor.clone()),
         ],
+    };
+    let status = if scope.root_starmap_id.is_empty() {
+        "sujian-mcp 已绑定当前作品".to_string()
+    } else {
+        let active = if scope.active_starmap_id.is_empty() {
+            &scope.root_starmap_id
+        } else {
+            &scope.active_starmap_id
+        };
+        format!("sujian-mcp 已绑定当前作品与星图 {active}")
     };
     McpBinding {
         launch: Some(launch),
         command: Some(command),
-        status: "sujian-mcp 已绑定当前作品".to_string(),
+        status,
     }
 }
 
@@ -149,8 +207,7 @@ impl Drop for McpBroker {
 }
 
 fn socket_ready(path: &Path) -> bool {
-    path.exists()
-        && std::os::unix::net::UnixStream::connect(path).is_ok()
+    path.exists() && std::os::unix::net::UnixStream::connect(path).is_ok()
 }
 
 /// 把当前会话的 MCP 配置拆成“沙箱外 broker + 沙箱内 stdio bridge”。
@@ -187,12 +244,9 @@ pub fn prepare_mcp_brokers(
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .envs(server.env.iter().cloned());
-        let child = command.spawn().map_err(|error| {
-            format!(
-                "无法启动作品 MCP broker（{}）：{error}",
-                server.command
-            )
-        })?;
+        let child = command
+            .spawn()
+            .map_err(|error| format!("无法启动作品 MCP broker（{}）：{error}", server.command))?;
         children.push(child);
         let started = Instant::now();
         while !socket_ready(&socket) {

@@ -36,6 +36,20 @@ impl McpServerLaunch {
     }
 }
 
+/// 本次会话固定的 MCP 作用域。桌面端在发起请求前确定，原生会话复用时
+/// 必须整体比较；换作品或换画布都会重建 broker 与原生 MCP 连接。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpScope {
+    pub project_id: String,
+    pub root_starmap_id: String,
+    pub active_starmap_id: String,
+    /// `StarMapPathSegmentDto[]` 的 JSON；由 Core 重新解析当前活动层。
+    pub path_segments_json: String,
+    pub route_key: String,
+    /// 写入审计里的执行者身份（Agent ID / 启动路径）。
+    pub executor: String,
+}
+
 /// 启动一次会话所需的真实上下文。
 #[derive(Debug, Clone)]
 pub struct AgentLaunchContext {
@@ -58,6 +72,8 @@ pub struct AgentLaunchContext {
     pub conversation_id: String,
     pub project_id: String,
     pub project_title: String,
+    /// 本次会话明确的 MCP 读写范围；不能从历史 CLI 上下文继承。
+    pub mcp_scope: McpScope,
     pub resume_native_session_id: Option<String>,
     pub model: Option<String>,
     pub mcp_servers: Vec<McpServerLaunch>,
@@ -214,6 +230,33 @@ pub struct PermissionOption {
     pub kind: String,
 }
 
+/// Agent 协议明确声明的本轮停止原因。只有 `EndTurn` 代表正常完成；
+/// 输出上限、迭代上限和拒答都不能显示成“回答完成”。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnStopReason {
+    EndTurn,
+    MaxTokens,
+    MaxTurnRequests,
+    Refusal,
+    Unknown,
+}
+
+impl TurnStopReason {
+    pub fn from_acp(stop_reason: &str) -> Self {
+        match stop_reason {
+            "end_turn" => Self::EndTurn,
+            "max_tokens" => Self::MaxTokens,
+            "max_turn_requests" => Self::MaxTurnRequests,
+            "refusal" => Self::Refusal,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn is_normal_completion(&self) -> bool {
+        matches!(self, Self::EndTurn)
+    }
+}
+
 /// 标准化后的 Agent 事件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentEvent {
@@ -281,7 +324,9 @@ pub enum AgentEvent {
     SessionError {
         message: String,
     },
-    TurnCompleted,
+    TurnCompleted {
+        stop_reason: TurnStopReason,
+    },
     /// 协议已确认本轮被用户取消。异步停止任务在等待 HTTP/进程回执时
     /// 迟到的确认必须能结算到原来的 Core Turn。
     TurnCancelled,

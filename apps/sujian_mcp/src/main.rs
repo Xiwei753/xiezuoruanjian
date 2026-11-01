@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::context::McpContext;
+use crate::context::{McpContext, McpScope};
 use crate::server::SujianMcpServer;
 use rmcp::transport::stdio;
 
@@ -23,6 +23,8 @@ fn usage() -> &'static str {
     "sujian_mcp — local MCP server for Sujian\n\
      \n\
      Usage: sujian_mcp [--app-data-root <DIR>] [--projects-root <DIR>]\n\
+              [--project-id <ID>] [--root-starmap-id <ID>] [--active-starmap-id <ID>]\n\
+              [--starmap-path <JSON>] [--starmap-route <KEY>] [--agent-identity <TEXT>]\n\
             sujian_mcp --unix-socket <PATH> [--app-data-root <DIR>] [--projects-root <DIR>]\n\
             sujian_mcp --stdio-bridge <PATH>\n\
      \n\
@@ -31,6 +33,12 @@ fn usage() -> &'static str {
                               then $XDG_DATA_HOME/sujian or ~/.local/share/sujian)\n\
        --projects-root <DIR>  Projects/workspace root (default: $SUJIAN_PROJECTS_ROOT,\n\
                               then <app-data-root>/projects)\n\
+       --project-id <ID>      Authorized Sujian project scope (default: $SUJIAN_PROJECT_ID)\n\
+       --root-starmap-id <ID> Authorized root starmap scope (default: $SUJIAN_ROOT_STARMAP_ID)\n\
+       --active-starmap-id <ID> Reported active canvas id, verified against the Core path\n\
+       --starmap-path <JSON>  StarMapPathSegmentDto[] from the root starmap (default: $SUJIAN_STARMAP_PATH)\n\
+       --starmap-route <KEY>  Desktop route key for diagnostics (default: $SUJIAN_STARMAP_ROUTE)\n\
+       --agent-identity <TEXT> Executor name recorded in the MCP write audit\n\
        --unix-socket <PATH>   Serve MCP over a Unix socket (used outside the Agent sandbox)\n\
        --stdio-bridge <PATH>  Bridge stdio to a Unix-socket MCP broker (used inside sandbox)\n\
        -h, --help             Show this help\n\
@@ -56,11 +64,21 @@ fn default_app_data_root() -> Result<PathBuf, String> {
         .ok_or_else(|| "cannot determine app data root; pass --app-data-root".to_string())
 }
 
-fn parse_args() -> Result<(PathBuf, PathBuf, Mode), String> {
+fn env_scope_string(env: &str) -> Option<String> {
+    std::env::var(env).ok().filter(|value| !value.is_empty())
+}
+
+fn parse_args() -> Result<(PathBuf, PathBuf, Mode, McpScope), String> {
     let mut app_data_root = None;
     let mut projects_root = None;
     let mut unix_socket = None;
     let mut stdio_bridge = None;
+    let mut project_id = env_scope_string("SUJIAN_PROJECT_ID");
+    let mut root_starmap_id = env_scope_string("SUJIAN_ROOT_STARMAP_ID");
+    let mut active_starmap_id = env_scope_string("SUJIAN_ACTIVE_STARMAP_ID");
+    let mut starmap_path = env_scope_string("SUJIAN_STARMAP_PATH");
+    let mut starmap_route = env_scope_string("SUJIAN_STARMAP_ROUTE");
+    let mut agent_identity = env_scope_string("SUJIAN_AGENT_ID");
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -69,6 +87,24 @@ fn parse_args() -> Result<(PathBuf, PathBuf, Mode), String> {
             }
             "--projects-root" => {
                 projects_root = Some(PathBuf::from(next_value(&mut args, &arg)?));
+            }
+            "--project-id" => {
+                project_id = Some(next_value(&mut args, &arg)?);
+            }
+            "--root-starmap-id" => {
+                root_starmap_id = Some(next_value(&mut args, &arg)?);
+            }
+            "--active-starmap-id" => {
+                active_starmap_id = Some(next_value(&mut args, &arg)?);
+            }
+            "--starmap-path" => {
+                starmap_path = Some(next_value(&mut args, &arg)?);
+            }
+            "--starmap-route" => {
+                starmap_route = Some(next_value(&mut args, &arg)?);
+            }
+            "--agent-identity" => {
+                agent_identity = Some(next_value(&mut args, &arg)?);
             }
             "--unix-socket" => {
                 unix_socket = Some(PathBuf::from(next_value(&mut args, &arg)?));
@@ -101,7 +137,17 @@ fn parse_args() -> Result<(PathBuf, PathBuf, Mode), String> {
     } else {
         Mode::Stdio
     };
-    Ok((app_data_root, projects_root, mode))
+    let scope = McpScope {
+        project_id: project_id.unwrap_or_default(),
+        root_starmap_id: root_starmap_id.unwrap_or_default(),
+        active_starmap_id: active_starmap_id.unwrap_or_default(),
+        path_segments_json: starmap_path
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "[]".to_string()),
+        route_key: starmap_route.unwrap_or_default(),
+        executor: agent_identity.unwrap_or_else(|| "sujian_mcp".to_string()),
+    };
+    Ok((app_data_root, projects_root, mode, scope))
 }
 
 fn run_stdio_bridge(path: &Path) -> Result<(), String> {
@@ -160,9 +206,7 @@ async fn serve_unix(path: PathBuf, server: SujianMcpServer) {
             std::process::exit(1);
         }
     };
-    if let Err(error) =
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-    {
+    if let Err(error) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
         eprintln!("sujian_mcp: chmod socket failed: {error}");
         std::process::exit(1);
     }
@@ -191,7 +235,7 @@ async fn serve_unix(path: PathBuf, server: SujianMcpServer) {
 
 #[tokio::main]
 async fn main() {
-    let (app_data_root, projects_root, mode) = match parse_args() {
+    let (app_data_root, projects_root, mode, scope) = match parse_args() {
         Ok(value) => value,
         Err(error) => {
             eprintln!("sujian_mcp: {error}\n\n{}", usage());
@@ -208,12 +252,34 @@ async fn main() {
     }
 
     eprintln!(
-        "sujian_mcp: app data root = {}\nsujian_mcp: projects root = {}",
+        "sujian_mcp: app data root = {}\nsujian_mcp: projects root = {}\n\
+         sujian_mcp: project scope = {}\nsujian_mcp: root starmap scope = {}\n\
+         sujian_mcp: active starmap = {}\nsujian_mcp: route = {}",
         app_data_root.display(),
-        projects_root.display()
+        projects_root.display(),
+        if scope.project_id.is_empty() {
+            "<none>"
+        } else {
+            scope.project_id.as_str()
+        },
+        if scope.root_starmap_id.is_empty() {
+            "<none>"
+        } else {
+            scope.root_starmap_id.as_str()
+        },
+        if scope.active_starmap_id.is_empty() {
+            "<none>"
+        } else {
+            scope.active_starmap_id.as_str()
+        },
+        if scope.route_key.is_empty() {
+            "<none>"
+        } else {
+            scope.route_key.as_str()
+        }
     );
 
-    let server = SujianMcpServer::new(McpContext::new(&app_data_root, &projects_root));
+    let server = SujianMcpServer::new(McpContext::new(&app_data_root, &projects_root, scope));
 
     if let Mode::UnixSocket(path) = mode {
         serve_unix(path, server).await;
