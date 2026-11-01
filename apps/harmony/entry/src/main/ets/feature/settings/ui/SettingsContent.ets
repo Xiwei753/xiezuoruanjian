@@ -26,6 +26,7 @@ import { SyncOutcome } from '../presentation/SyncRunTypes'
 import { SyncRunPresentationState, SyncRunSnapshot } from '../presentation/SyncRunPresentationState'
 import { SyncOperationController } from '../presentation/SyncOperationController'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
+import { LocalSettingsStore } from '../presentation/LocalSettingsStore'
 import { DeviceSyncViewModel } from '../presentation/DeviceSyncViewModel'
 import { TrustedDeviceInfo } from '../../../platform/device/TrustedDeviceService'
 import { SettingsSectionContext } from '../presentation/SettingsSectionContext'
@@ -203,6 +204,11 @@ export struct SettingsContent {
   private lifecycleDisposed: boolean = false
   private syncRunPresentation: SyncRunPresentationState = SyncRunPresentationState.getInstance()
   private unsubscribeSyncRun: (() => void) | null = null
+  // Issue #1026：LocalSettings 落盘广播订阅句柄。
+  // 设置浮层与写作页同时打开时，任一侧保存后另一侧都要同步最新持久化值。
+  private unsubscribeLocalSettings: (() => void) | null = null
+  private localSettingsLoadRunning: boolean = false
+  private pendingPublishedLocalSettings: LocalSettings | null = null
   // Issue #986：握姿侧订阅句柄。
   private unsubscribeGrip: (() => void) | null = null
   private syncStateBridge: NativeSyncBridge = new NativeSyncBridge(new NativeCoreModule())
@@ -219,6 +225,20 @@ export struct SettingsContent {
     this.instanceToken = String(settingsContentInstanceSeq)
     this.lifecycleDisposed = false
     this.viewModel.beginDisplaySession()
+    // Issue #1026：订阅全局落盘广播，宽屏设置浮层与写作页共享同一份最新设置。
+    // 加载期间先暂存最后一条广播，等 loadData 完成后再合并，避免旧加载结果覆盖新发布值。
+    this.unsubscribeLocalSettings = LocalSettingsStore.getInstance().subscribe(
+      (persisted: LocalSettings): void => {
+        if (this.lifecycleDisposed) {
+          return
+        }
+        if (this.localSettingsLoadRunning) {
+          this.pendingPublishedLocalSettings = persisted
+          return
+        }
+        this.viewModel.applyPublishedLocalSettings(persisted)
+      }
+    )
     // Issue #982：搜索结果跳转到具体设置分类时展开该分类；普通进入不改变用户折叠状态。
     // 有精确 settingKey 时以真实控件所在分类为准（Core 索引的 section 可能仍是旧分类名）。
     const keySection: SettingsSectionId | null = this.initialSettingKey.length > 0
@@ -312,6 +332,12 @@ export struct SettingsContent {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
+    if (this.unsubscribeLocalSettings !== null) {
+      this.unsubscribeLocalSettings()
+      this.unsubscribeLocalSettings = null
+    }
+    this.pendingPublishedLocalSettings = null
+    this.localSettingsLoadRunning = false
     if (this.unsubscribeSyncRun !== null) {
       this.unsubscribeSyncRun()
       this.unsubscribeSyncRun = null
@@ -326,9 +352,21 @@ export struct SettingsContent {
 
   private async loadSettingsAndSyncState(): Promise<void> {
     const lifecycleToken: string = this.instanceToken
-    await this.viewModel.loadData()
+    this.localSettingsLoadRunning = true
+    try {
+      await this.viewModel.loadData()
+    } finally {
+      this.localSettingsLoadRunning = false
+    }
     if (!this.isLifecycleCurrent(lifecycleToken)) {
       return
+    }
+    // Issue #1026：加载期间收到的最后一条落盘广播在加载完成后合并，
+    // 只覆盖未被本页继续编辑/正在保存的字段。
+    const pendingPublished: LocalSettings | null = this.pendingPublishedLocalSettings
+    this.pendingPublishedLocalSettings = null
+    if (pendingPublished !== null) {
+      this.viewModel.applyPublishedLocalSettings(pendingPublished)
     }
     // Issue #982：数据到位后再尝试精确设置项定位，避免在静态默认值上滚动/高亮。
     this.tryApplyPendingLocate()

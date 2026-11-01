@@ -190,6 +190,9 @@ export class SettingsViewModel {
   private localSettingsSaveQueued: boolean = false
   private localSettingsSaveRunning: Promise<void> | null = null
   private localSettingsDirtyFields: Set<LocalSettingsField> = new Set<LocalSettingsField>()
+  // 正在落盘的一轮字段。外部广播必须同时避开 dirty 和 inFlight，
+  // 避免设置页等在途保存返回时，自己刚提交的字段被别的页面广播反向覆盖。
+  private localSettingsInFlightFields: Set<LocalSettingsField> = new Set<LocalSettingsField>()
 
   // ── Token 落盘合并（Issue #924） ──
   // TextInput.onChange 逐字触发 updateSyncToken：只更新内存并重置防抖计时器；
@@ -340,8 +343,13 @@ export class SettingsViewModel {
         const fields: Set<LocalSettingsField> =
           new Set<LocalSettingsField>(this.localSettingsDirtyFields)
         this.localSettingsDirtyFields.clear()
+        this.localSettingsInFlightFields = new Set<LocalSettingsField>(fields)
         const snapshot: LocalSettings = this.snapshotLocalSettings()
-        await this.persistLocalSettings(snapshot, fields)
+        try {
+          await this.persistLocalSettings(snapshot, fields)
+        } finally {
+          this.localSettingsInFlightFields.clear()
+        }
       }
     } finally {
       this.localSettingsSaveRunning = null
@@ -462,19 +470,44 @@ export class SettingsViewModel {
   }
 
   /**
-   * 把已落盘结果合并回 UI：只覆盖未被用户继续编辑的字段。
-   * 若用户在 await 期间又改了某字段，该字段仍保留内存草稿，等下一轮保存。
+   * 把一份落盘结果按字段合并回 UI，跳过 protectedFields。
+   * 合并前重新冻结当前内存值，保证调用期间用户刚改的草稿不被旧 DTO 覆盖。
    */
-  private mergePersistedLocalSettings(persisted: LocalSettings): void {
+  private mergeLocalSettings(
+    persisted: LocalSettings,
+    protectedFields: Set<LocalSettingsField>,
+  ): void {
     const safeFields: Set<LocalSettingsField> = new Set<LocalSettingsField>()
     for (const field of LOCAL_SETTINGS_FIELDS) {
-      if (!this.localSettingsDirtyFields.has(field)) {
+      if (!protectedFields.has(field)) {
         safeFields.add(field)
       }
     }
     const next: LocalSettings = this.snapshotLocalSettings()
     this.applyLocalSettingsFields(next, persisted, safeFields)
     this.settings = next
+  }
+
+  /**
+   * 把本页自己保存返回的落盘结果合并回 UI：只保护尚待保存的 dirty 字段，
+   * 本轮已提交字段允许回填，避免已落盘值被内存旧草稿长期占住。
+   */
+  private mergePersistedLocalSettings(persisted: LocalSettings): void {
+    this.mergeLocalSettings(persisted, this.localSettingsDirtyFields)
+  }
+
+  /**
+   * 外部页面（如 WritingScreen）落盘后的广播入口。
+   * 保护 dirty ∪ inFlight：用户正在编辑或正在等待保存的字段不被反向覆盖，
+   * 其余字段立即同步到设置页，保持两个入口显示同一份最新持久化设置。
+   */
+  applyPublishedLocalSettings(persisted: LocalSettings): void {
+    const protectedFields: Set<LocalSettingsField> =
+      new Set<LocalSettingsField>(this.localSettingsDirtyFields)
+    for (const field of this.localSettingsInFlightFields) {
+      protectedFields.add(field)
+    }
+    this.mergeLocalSettings(persisted, protectedFields)
   }
 
   /** 只持久化本轮字段和快照；广播、提示、主题都使用同一份落盘结果。 */
