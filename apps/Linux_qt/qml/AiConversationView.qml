@@ -11,6 +11,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 import org.kde.kirigami as Kirigami
 
 Item {
@@ -496,10 +497,33 @@ Item {
                 Popup {
                     id: modelPopup
                     parent: modelPickerButton
-                    x: 0
+
+                    // 弹层优先保持较宽的模型列表，但不得超出当前窗口可视宽度。
+                    readonly property real viewportMargin: Kirigami.Units.smallSpacing
+                    readonly property real viewportWidth: {
+                        const targetWindow = Window.window
+                        const windowWidth = targetWindow ? targetWindow.width : root.width
+                        return Math.max(0, windowWidth - 2 * viewportMargin)
+                    }
+                    readonly property real buttonGlobalLeft:
+                        modelPickerButton.mapToItem(null, 0, 0).x
+                    readonly property real buttonGlobalRight:
+                        buttonGlobalLeft + modelPickerButton.width
+                    readonly property real preferredWidth:
+                        Math.max(modelPickerButton.width,
+                                 Kirigami.Units.gridUnit * 22)
+                    width: Math.min(preferredWidth, viewportWidth)
+                    // 右侧空间不足时向按钮左侧展开，最左边界不超出窗口。
+                    readonly property real desiredGlobalLeft:
+                        buttonGlobalLeft + width > viewportMargin + viewportWidth
+                            ? buttonGlobalRight - width
+                            : buttonGlobalLeft
+                    readonly property real clampedGlobalLeft:
+                        Math.max(viewportMargin,
+                                 Math.min(desiredGlobalLeft,
+                                          viewportMargin + viewportWidth - width))
+                    x: clampedGlobalLeft - buttonGlobalLeft
                     y: modelPickerButton.height + Kirigami.Units.smallSpacing
-                    width: Math.max(modelPickerButton.width,
-                                    Kirigami.Units.gridUnit * 22)
                     height: Math.min(modelPopupContent.implicitHeight
                                      + topPadding + bottomPadding,
                                      Kirigami.Units.gridUnit * 30)
