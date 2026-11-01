@@ -239,6 +239,11 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/WorkspaceTree.qml" as "WorkspaceTree.qml",
     "qml/CreateProjectDialog.qml" as "CreateProjectDialog.qml",
     "qml/StatusPill.qml" as "StatusPill.qml",
+    // Issue #1030：星图原生 QSG 着色器直接编译进 qrc，安装后不再依赖进程临时文件。
+    "src/native/shaders/starmap_edge.vert.qsb" as "shaders/starmap_edge.vert.qsb",
+    "src/native/shaders/starmap_edge.frag.qsb" as "shaders/starmap_edge.frag.qsb",
+    "src/native/shaders/starmap_grid.vert.qsb" as "shaders/starmap_grid.vert.qsb",
+    "src/native/shaders/starmap_grid.frag.qsb" as "shaders/starmap_grid.frag.qsb",
     "resources/icons/sujian.svg" as "icons/sujian.svg",
     // i18n translations
     "i18n/zh_CN.qm" as "i18n/zh_CN.qm",

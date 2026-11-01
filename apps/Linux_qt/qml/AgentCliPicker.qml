@@ -16,6 +16,9 @@ ColumnLayout {
 
     property var backendRef: null
     property var dt
+    // Issue #1030：compactMode 只显示当前 CLI 名称 + 下拉箭头；扫描、路径、
+    // 版本冲突等低频操作由面板底部的「更多操作」菜单承载。
+    property bool compactMode: false
     property var installedAgents: []
     // 探测到但版本不满足要求的候选（例如 OpenCode 1.x），只用于明确提示，
     // 不进入可选安装列表。
@@ -122,6 +125,15 @@ ColumnLayout {
         backendRef.select_agent(installation.agentId, installation.candidates[index].path)
     }
 
+    function choosePath() {
+        cliPathDialog.open()
+    }
+
+    function refreshInventory() {
+        if (backendRef)
+            backendRef.refresh_inventory()
+    }
+
     RowLayout {
         Layout.fillWidth: true
         spacing: Kirigami.Units.smallSpacing
@@ -129,6 +141,7 @@ ColumnLayout {
         Label {
             text: qsTr("AI 命令行")
             font.weight: Font.DemiBold
+            visible: !root.compactMode
         }
 
         ComboBox {
@@ -143,21 +156,31 @@ ColumnLayout {
         }
 
         ToolButton {
-            visible: root.installedAgents.length > 0
+            visible: !root.compactMode && root.installedAgents.length > 0
             icon.name: "view-refresh"
             display: AbstractButton.IconOnly
             ToolTip.visible: hovered
             ToolTip.text: qsTr("重新扫描本机 CLI")
-            onClicked: if (root.backendRef) root.backendRef.refresh_inventory()
+            onClicked: root.refreshInventory()
         }
 
         // OpenCode / Codex 未在 PATH 中时，允许用户直接指定真实可执行文件。
         ToolButton {
+            visible: !root.compactMode
             icon.name: "document-open-folder"
             display: AbstractButton.IconOnly
             ToolTip.visible: hovered
             ToolTip.text: qsTr("选择 CLI 安装路径")
-            onClicked: cliPathDialog.open()
+            onClicked: choosePath()
+        }
+
+        // 紧凑模式且没有可用 CLI 时，用一行文字代替整套选择器。
+        ToolButton {
+            visible: root.compactMode && root.installedAgents.length === 0
+            text: qsTr("未检测到 CLI")
+            flat: true
+            font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+            onClicked: root.refreshInventory()
         }
     }
 
@@ -175,7 +198,7 @@ ColumnLayout {
 
     RowLayout {
         Layout.fillWidth: true
-        visible: root.installedAgents.length === 0
+        visible: !root.compactMode && root.installedAgents.length === 0
         spacing: Kirigami.Units.smallSpacing
 
         Label {
@@ -196,6 +219,8 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         visible: {
+            if (root.compactMode)
+                return false
             var installation = root.currentInstallation()
             return installation !== null && installation.candidates.length > 1
         }
@@ -220,7 +245,7 @@ ColumnLayout {
 
     Label {
         Layout.fillWidth: true
-        visible: root.rejectedAgents.length > 0
+        visible: !root.compactMode && root.rejectedAgents.length > 0
         text: root.rejectedAgents.join("\n")
         color: Kirigami.Theme.negativeTextColor
         wrapMode: Text.WordWrap
@@ -229,7 +254,7 @@ ColumnLayout {
 
     Label {
         Layout.fillWidth: true
-        visible: root.lastError !== ""
+        visible: !root.compactMode && root.lastError !== ""
         text: root.lastError
         color: Kirigami.Theme.negativeTextColor
         wrapMode: Text.WordWrap

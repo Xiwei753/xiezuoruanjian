@@ -600,6 +600,11 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/AgentCliPicker.qml");
     println!("cargo:rerun-if-changed=qml/AiToolPanel.qml");
     println!("cargo:rerun-if-changed=qml/AiConversationView.qml");
+    // Issue #1030：原生星图 QSG 着色器随 qrc 打包，任一 qsb 变化都重新生成资源。
+    println!("cargo:rerun-if-changed=src/native/shaders/starmap_edge.vert.qsb");
+    println!("cargo:rerun-if-changed=src/native/shaders/starmap_edge.frag.qsb");
+    println!("cargo:rerun-if-changed=src/native/shaders/starmap_grid.vert.qsb");
+    println!("cargo:rerun-if-changed=src/native/shaders/starmap_grid.frag.qsb");
     println!("cargo:rerun-if-changed=qml/DesktopLayoutState.qml");
     println!("cargo:rerun-if-changed=qml/StarMapNavigationTree.qml");
     println!("cargo:rerun-if-changed=qml/CorrectionPanel.qml");

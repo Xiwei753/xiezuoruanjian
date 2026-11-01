@@ -20,9 +20,6 @@ use qmetaobject::scenegraph::{ContainerNode, SGNode};
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const GRID_VERTEX_SHADER: &[u8] = include_bytes!("shaders/starmap_grid.vert.qsb");
-const GRID_FRAGMENT_SHADER: &[u8] = include_bytes!("shaders/starmap_grid.frag.qsb");
-
 static GRID_GEOMETRY_UPDATES: AtomicU64 = AtomicU64::new(0);
 static GRID_VERTEX_UPLOADS: AtomicU64 = AtomicU64::new(0);
 static GRID_CAMERA_UPDATES: AtomicU64 = AtomicU64::new(0);
@@ -39,8 +36,6 @@ pub fn render_statistics_json() -> String {
 
 cpp! {{
     #include <qmetaobject_rust.hpp>
-    #include <QtCore/QCoreApplication>
-    #include <QtCore/QDir>
     #include <QtCore/QFile>
     #include <QtGui/QColor>
     #include <QtGui/QVector4D>
@@ -53,40 +48,11 @@ cpp! {{
     #include <QtQuick/QSGRendererInterface>
     #include <cstring>
 
-    static QString g_sujian_grid_vertex_shader_path;
-    static QString g_sujian_grid_fragment_shader_path;
-
-    static bool sujian_write_grid_shader_file(const QString &path,
-                                              const char *bytes, int length)
-    {
-        QFile file(path);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            qWarning("Sujian star map grid shader write failed: cannot open %s: %s",
-                     qPrintable(path), qPrintable(file.errorString()));
-            return false;
-        }
-        const qint64 written = file.write(bytes, length);
-        if (written != length) {
-            qWarning("Sujian star map grid shader write failed for %s: wrote %lld of %d bytes: %s",
-                     qPrintable(path), static_cast<long long>(written), length,
-                     qPrintable(file.errorString()));
-            return false;
-        }
-        return true;
-    }
-
-    static void sujian_set_grid_shaders(const char *vertex, int vertex_len,
-                                        const char *fragment, int fragment_len)
-    {
-        if (!g_sujian_grid_vertex_shader_path.isEmpty())
-            return;
-        const QString base = QDir::tempPath() + QStringLiteral("/sujian-starmap-")
-                + QString::number(QCoreApplication::applicationPid());
-        g_sujian_grid_vertex_shader_path = base + QStringLiteral("-grid.vert.qsb");
-        g_sujian_grid_fragment_shader_path = base + QStringLiteral("-grid.frag.qsb");
-        sujian_write_grid_shader_file(g_sujian_grid_vertex_shader_path, vertex, vertex_len);
-        sujian_write_grid_shader_file(g_sujian_grid_fragment_shader_path, fragment, fragment_len);
-    }
+    // qsb 直接编译进 qrc（main.rs 注册），不依赖进程临时目录或安装目录。
+    static const QString kSujianGridVertexShader =
+            QStringLiteral(":/shaders/starmap_grid.vert.qsb");
+    static const QString kSujianGridFragmentShader =
+            QStringLiteral(":/shaders/starmap_grid.frag.qsb");
 
     class SujianGridMaterial : public QSGMaterial
     {
@@ -99,8 +65,6 @@ cpp! {{
         float spacing = 16.0f;
         float phase_x = 0.0f;
         float phase_y = 0.0f;
-        // 材质是原地更新的；不能依赖 old/new 指针做字段比较。
-        bool uniform_dirty = false;
 
         QSGMaterialType *type() const override
         {
@@ -134,15 +98,14 @@ cpp! {{
     public:
         SujianGridShader()
         {
-            setShaderFileName(QSGMaterialShader::VertexStage,
-                              g_sujian_grid_vertex_shader_path);
-            setShaderFileName(QSGMaterialShader::FragmentStage,
-                              g_sujian_grid_fragment_shader_path);
+            setShaderFileName(QSGMaterialShader::VertexStage, kSujianGridVertexShader);
+            setShaderFileName(QSGMaterialShader::FragmentStage, kSujianGridFragmentShader);
         }
 
         bool updateUniformData(RenderState &state, QSGMaterial *new_material,
                                QSGMaterial *old_material) override
         {
+            Q_UNUSED(old_material);
             QByteArray *buffer = state.uniformData();
             if (buffer->size() < 128)
                 buffer->resize(128);
@@ -159,22 +122,19 @@ cpp! {{
                 changed = true;
             }
 
+            // 自定义 uniform 每次都写，避免批次复用缓冲区时读到未初始化值。
             auto *material = static_cast<SujianGridMaterial *>(new_material);
-            if (old_material != new_material || material->uniform_dirty) {
-                const float color[4] = { material->color.redF(),
-                                         material->color.greenF(),
-                                         material->color.blueF(),
-                                         material->color.alphaF() };
-                std::memcpy(data + 80, color, sizeof(color));
-                const float viewport[2] = { material->viewport_x, material->viewport_y };
-                std::memcpy(data + 96, viewport, sizeof(viewport));
-                std::memcpy(data + 104, &material->spacing, sizeof(float));
-                const float phase[2] = { material->phase_x, material->phase_y };
-                std::memcpy(data + 112, phase, sizeof(phase));
-                material->uniform_dirty = false;
-                changed = true;
-            }
-            return changed;
+            const float color[4] = { material->color.redF(),
+                                     material->color.greenF(),
+                                     material->color.blueF(),
+                                     material->color.alphaF() };
+            std::memcpy(data + 80, color, sizeof(color));
+            const float viewport[2] = { material->viewport_x, material->viewport_y };
+            std::memcpy(data + 96, viewport, sizeof(viewport));
+            std::memcpy(data + 104, &material->spacing, sizeof(float));
+            const float phase[2] = { material->phase_x, material->phase_y };
+            std::memcpy(data + 112, phase, sizeof(phase));
+            return true;
         }
     };
 
@@ -248,7 +208,6 @@ cpp! {{
             material->spacing = float(spacing);
             material->phase_x = float(phase_x);
             material->phase_y = float(phase_y);
-            material->uniform_dirty = true;
             node->markDirty(QSGNode::DirtyMaterial);
         }
     }
@@ -375,20 +334,11 @@ impl QQuickItem for StarMapGridItem {
         if obj.is_null() {
             return;
         }
-        let vertex_ptr = GRID_VERTEX_SHADER.as_ptr();
-        let vertex_len = GRID_VERTEX_SHADER.len() as i32;
-        let fragment_ptr = GRID_FRAGMENT_SHADER.as_ptr();
-        let fragment_len = GRID_FRAGMENT_SHADER.len() as i32;
         // SAFETY: obj 是有效 QQuickItem 指针；ItemHasContents 启用 updatePaintNode。
-        // shader 字节是 'static，C++ 立即复制到 QByteArray。
-        cpp!(unsafe [
-            obj as "QQuickItem *",
-            vertex_ptr as "const char *", vertex_len as "int",
-            fragment_ptr as "const char *", fragment_len as "int"
-        ] {
+        // qsb 已通过 qrc 注册，材质 shader 直接按资源路径加载。
+        cpp!(unsafe [obj as "QQuickItem *"] {
             if (obj)
                 obj->setFlag(QQuickItem::ItemHasContents, true);
-            sujian_set_grid_shaders(vertex_ptr, vertex_len, fragment_ptr, fragment_len);
         });
         self.geometry_dirty = true;
         self.request_paint();

@@ -24,30 +24,90 @@ use qmetaobject::prelude::*;
 use qmetaobject::scenegraph::{ContainerNode, SGNode};
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use crate::starmap_view::edge_render::EdgeRender;
-
-const EDGE_VERTEX_SHADER: &[u8] = include_bytes!("shaders/starmap_edge.vert.qsb");
-const EDGE_FRAGMENT_SHADER: &[u8] = include_bytes!("shaders/starmap_edge.frag.qsb");
 
 static EDGE_GEOMETRY_UPDATES: AtomicU64 = AtomicU64::new(0);
 static EDGE_VERTEX_UPLOADS: AtomicU64 = AtomicU64::new(0);
 static EDGE_CAMERA_UPDATES: AtomicU64 = AtomicU64::new(0);
 
-/// 诊断用渲染统计：只含计数，不含星图正文。
+/// 最近一次同步/渲染状态。只记录数量、坐标与资源状态，不包含正文。
+/// update_paint_node 在渲染线程写，诊断导出线程读取，用 Mutex 串行化。
+#[derive(Clone, Default)]
+struct EdgeDiagnostics {
+    edge_render_count: usize,
+    normal_vertex_count: i32,
+    selected_vertex_count: i32,
+    normal_geometry_vertex_count: i32,
+    selected_geometry_vertex_count: i32,
+    normal_has_material: bool,
+    selected_has_material: bool,
+    viewport_x: f64,
+    viewport_y: f64,
+    stroke_half: f64,
+    zoom: f64,
+    translate_x: f64,
+    translate_y: f64,
+    normal_color: String,
+    normal_alpha: f64,
+    reveal: f64,
+    sample_edge_id: String,
+    sample_start_x: f64,
+    sample_start_y: f64,
+    sample_end_x: f64,
+    sample_end_y: f64,
+    sample_start_screen_x: f64,
+    sample_start_screen_y: f64,
+    sample_end_screen_x: f64,
+    sample_end_screen_y: f64,
+    clip_width: f64,
+    clip_height: f64,
+    shader_resource_ready: bool,
+}
+
+static EDGE_DIAGNOSTICS: Mutex<Option<EdgeDiagnostics>> = Mutex::new(None);
+
+/// 诊断用渲染统计：只含计数与实际资源状态，不含星图正文。
 pub fn render_statistics_json() -> String {
+    let snapshot = EDGE_DIAGNOSTICS
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .unwrap_or_default();
     serde_json::json!({
         "edgeLayerGeometryUpdates": EDGE_GEOMETRY_UPDATES.load(Ordering::Relaxed),
         "edgeLayerVertexUploads": EDGE_VERTEX_UPLOADS.load(Ordering::Relaxed),
         "edgeLayerCameraUpdates": EDGE_CAMERA_UPDATES.load(Ordering::Relaxed),
+        "edgeRenderCount": snapshot.edge_render_count,
+        "normalVertexCount": snapshot.normal_vertex_count,
+        "selectedVertexCount": snapshot.selected_vertex_count,
+        "normalGeometryVertexCount": snapshot.normal_geometry_vertex_count,
+        "selectedGeometryVertexCount": snapshot.selected_geometry_vertex_count,
+        "normalMaterialReady": snapshot.normal_has_material,
+        "selectedMaterialReady": snapshot.selected_has_material,
+        "shaderResourceReady": snapshot.shader_resource_ready,
+        "viewport": [snapshot.viewport_x, snapshot.viewport_y],
+        "clipRect": [0.0, 0.0, snapshot.clip_width, snapshot.clip_height],
+        "strokeHalf": snapshot.stroke_half,
+        "zoom": snapshot.zoom,
+        "cameraTranslation": [snapshot.translate_x, snapshot.translate_y],
+        "normalColor": snapshot.normal_color,
+        "normalAlpha": snapshot.normal_alpha,
+        "reveal": snapshot.reveal,
+        "sampleEdge": {
+            "id": snapshot.sample_edge_id,
+            "start": [snapshot.sample_start_x, snapshot.sample_start_y],
+            "end": [snapshot.sample_end_x, snapshot.sample_end_y],
+            "startScreen": [snapshot.sample_start_screen_x, snapshot.sample_start_screen_y],
+            "endScreen": [snapshot.sample_end_screen_x, snapshot.sample_end_screen_y],
+        },
     })
     .to_string()
 }
 
 cpp! {{
     #include <qmetaobject_rust.hpp>
-    #include <QtCore/QCoreApplication>
-    #include <QtCore/QDir>
     #include <QtCore/QFile>
     #include <QtGui/QColor>
     #include <QtGui/QMatrix4x4>
@@ -62,42 +122,11 @@ cpp! {{
     #include <QtQuick/QSGTransformNode>
     #include <cstring>
 
-    static QString g_sujian_edge_vertex_shader_path;
-    static QString g_sujian_edge_fragment_shader_path;
-
-    static bool sujian_write_shader_file(const QString &path,
-                                         const char *bytes, int length)
-    {
-        QFile file(path);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            qWarning("Sujian star map edge shader write failed: cannot open %s: %s",
-                     qPrintable(path), qPrintable(file.errorString()));
-            return false;
-        }
-        const qint64 written = file.write(bytes, length);
-        if (written != length) {
-            qWarning("Sujian star map edge shader write failed for %s: wrote %lld of %d bytes: %s",
-                     qPrintable(path), static_cast<long long>(written), length,
-                     qPrintable(file.errorString()));
-            return false;
-        }
-        return true;
-    }
-
-    static void sujian_set_edge_shaders(const char *vertex, int vertex_len,
-                                        const char *fragment, int fragment_len)
-    {
-        // QSGMaterialShader 只需要 qsb 文件路径；把嵌入字节写到进程临时目录，
-        // 避免依赖 Qt 私有 QShader 头文件，也不把源文件路径带进安装包。
-        if (!g_sujian_edge_vertex_shader_path.isEmpty())
-            return;
-        const QString base = QDir::tempPath() + QStringLiteral("/sujian-starmap-")
-                + QString::number(QCoreApplication::applicationPid());
-        g_sujian_edge_vertex_shader_path = base + QStringLiteral("-edge.vert.qsb");
-        g_sujian_edge_fragment_shader_path = base + QStringLiteral("-edge.frag.qsb");
-        sujian_write_shader_file(g_sujian_edge_vertex_shader_path, vertex, vertex_len);
-        sujian_write_shader_file(g_sujian_edge_fragment_shader_path, fragment, fragment_len);
-    }
+    // qsb 直接编译进 qrc（main.rs 注册），不依赖进程临时目录或安装目录。
+    static const QString kSujianEdgeVertexShader =
+            QStringLiteral(":/shaders/starmap_edge.vert.qsb");
+    static const QString kSujianEdgeFragmentShader =
+            QStringLiteral(":/shaders/starmap_edge.frag.qsb");
 
     class SujianEdgeMaterial : public QSGMaterial
     {
@@ -108,9 +137,6 @@ cpp! {{
         float stroke_half = 1.0f;
         float viewport_x = 1.0f;
         float viewport_y = 1.0f;
-        // Qt 6 会原地复用同一个 material 指针；不能靠 old/new 字段比较发现
-        // 变化，必须由更新方显式标记本次是否改过 uniform。
-        bool uniform_dirty = false;
 
         QSGMaterialType *type() const override
         {
@@ -140,15 +166,14 @@ cpp! {{
     public:
         SujianEdgeShader()
         {
-            setShaderFileName(QSGMaterialShader::VertexStage,
-                              g_sujian_edge_vertex_shader_path);
-            setShaderFileName(QSGMaterialShader::FragmentStage,
-                              g_sujian_edge_fragment_shader_path);
+            setShaderFileName(QSGMaterialShader::VertexStage, kSujianEdgeVertexShader);
+            setShaderFileName(QSGMaterialShader::FragmentStage, kSujianEdgeFragmentShader);
         }
 
         bool updateUniformData(RenderState &state, QSGMaterial *new_material,
                                QSGMaterial *old_material) override
         {
+            Q_UNUSED(old_material);
             QByteArray *buffer = state.uniformData();
             if (buffer->size() < 112)
                 buffer->resize(112);
@@ -165,20 +190,19 @@ cpp! {{
                 changed = true;
             }
 
+            // 自定义 uniform 每次都写：Qt 可能在多个批次/绘制通道里复用同一个
+            // material 指针，但 uniform 缓冲区并不保证跨批次保留旧值。这里
+            // 只有 4+2+1 个 float，成本远低于漏初始化导致的整层不可见。
             auto *material = static_cast<SujianEdgeMaterial *>(new_material);
-            if (old_material != new_material || material->uniform_dirty) {
-                const float color[4] = { material->color.redF(),
-                                         material->color.greenF(),
-                                         material->color.blueF(),
-                                         material->color.alphaF() };
-                std::memcpy(data + 80, color, sizeof(color));
-                const float viewport[2] = { material->viewport_x, material->viewport_y };
-                std::memcpy(data + 96, viewport, sizeof(viewport));
-                std::memcpy(data + 104, &material->stroke_half, sizeof(float));
-                material->uniform_dirty = false;
-                changed = true;
-            }
-            return changed;
+            const float color[4] = { material->color.redF(),
+                                     material->color.greenF(),
+                                     material->color.blueF(),
+                                     material->color.alphaF() };
+            std::memcpy(data + 80, color, sizeof(color));
+            const float viewport[2] = { material->viewport_x, material->viewport_y };
+            std::memcpy(data + 96, viewport, sizeof(viewport));
+            std::memcpy(data + 104, &material->stroke_half, sizeof(float));
+            return true;
         }
     };
 
@@ -253,7 +277,6 @@ cpp! {{
             material->stroke_half = float(stroke_half);
             material->viewport_x = float(viewport_x);
             material->viewport_y = float(viewport_y);
-            material->uniform_dirty = true;
             node->markDirty(QSGNode::DirtyMaterial);
         }
     }
@@ -281,6 +304,35 @@ cpp! {{
         node->markDirty(QSGNode::DirtyGeometry);
         sujian_apply_edge_material(node, r, g, b, alpha, stroke_half,
                                    viewport_x, viewport_y);
+    }
+
+    // 诊断位布局：normal_vc[0..19] | selected_vc[20..39] | flags[40..]。
+    static qint64 sujian_edge_debug_state(QSGNode *root)
+    {
+        QSGTransformNode *transform = nullptr;
+        if (root && root->firstChild()
+                && root->firstChild()->type() == QSGNode::TransformNodeType)
+            transform = static_cast<QSGTransformNode *>(root->firstChild());
+        QSGGeometryNode *normal = sujian_edge_geometry_node(transform, 0);
+        QSGGeometryNode *selected = sujian_edge_geometry_node(transform, 1);
+        const qint64 normal_vc = normal && normal->geometry()
+                ? normal->geometry()->vertexCount() : 0;
+        const qint64 selected_vc = selected && selected->geometry()
+                ? selected->geometry()->vertexCount() : 0;
+        qint64 flags = 0;
+        if (normal && normal->geometry())
+            flags |= 1;
+        if (selected && selected->geometry())
+            flags |= 2;
+        if (normal && normal->material())
+            flags |= 4;
+        if (selected && selected->material())
+            flags |= 8;
+        if (QFile::exists(kSujianEdgeVertexShader)
+                && QFile::exists(kSujianEdgeFragmentShader))
+            flags |= 16;
+        return (normal_vc & 0xfffff) | ((selected_vc & 0xfffff) << 20)
+                | (flags << 40);
     }
 
     static void sujian_starmap_edges_update(QSGNode *root,
@@ -575,22 +627,13 @@ impl QQuickItem for StarMapEdgeLayer {
         if obj.is_null() {
             return;
         }
-        let vertex_ptr = EDGE_VERTEX_SHADER.as_ptr();
-        let vertex_len = EDGE_VERTEX_SHADER.len() as i32;
-        let fragment_ptr = EDGE_FRAGMENT_SHADER.as_ptr();
-        let fragment_len = EDGE_FRAGMENT_SHADER.len() as i32;
         // SAFETY: obj 是有效 QQuickItem 指针；ItemHasContents 启用 updatePaintNode。
-        // shader 字节是 'static，C++ 立即复制到 QByteArray。
-        cpp!(unsafe [
-            obj as "QQuickItem *",
-            vertex_ptr as "const char *", vertex_len as "int",
-            fragment_ptr as "const char *", fragment_len as "int"
-        ] {
+        // qsb 已通过 qrc 注册，材质 shader 直接按资源路径加载。
+        cpp!(unsafe [obj as "QQuickItem *"] {
             if (obj) {
                 obj->setFlag(QQuickItem::ItemHasContents, true);
                 obj->setClip(true);
             }
-            sujian_set_edge_shaders(vertex_ptr, vertex_len, fragment_ptr, fragment_len);
         });
         self.geometry_dirty = true;
         self.request_paint();
@@ -665,6 +708,52 @@ impl QQuickItem for StarMapEdgeLayer {
                                         nr, ng, nb, reveal, sr, sg, sb, reveal,
                                         stroke_half, width, height);
         });
+        // SAFETY: raw 仍是本 item 的 paint node；只读几何/材质状态用于诊断。
+        let debug_state = cpp!(unsafe [raw as "QSGNode *"] -> i64 as "qint64" {
+            return sujian_edge_debug_state(raw);
+        });
+        let geometry_flags = debug_state >> 40;
+        let sample = self.edges.first();
+        let sample_start_screen = sample
+            .map(|edge| (f64::from(edge.start_x) * zoom + self.pan_x,
+                         f64::from(edge.start_y) * zoom + self.pan_y))
+            .unwrap_or((0.0, 0.0));
+        let sample_end_screen = sample
+            .map(|edge| (f64::from(edge.end_x) * zoom + self.pan_x,
+                         f64::from(edge.end_y) * zoom + self.pan_y))
+            .unwrap_or((0.0, 0.0));
+        if let Ok(mut guard) = EDGE_DIAGNOSTICS.lock() {
+            *guard = Some(EdgeDiagnostics {
+                edge_render_count: self.edges.len(),
+                normal_vertex_count: normal_count,
+                selected_vertex_count: selected_count,
+                normal_geometry_vertex_count: (debug_state & 0xfffff) as i32,
+                selected_geometry_vertex_count: ((debug_state >> 20) & 0xfffff) as i32,
+                normal_has_material: geometry_flags & 4 != 0,
+                selected_has_material: geometry_flags & 8 != 0,
+                viewport_x: width,
+                viewport_y: height,
+                stroke_half,
+                zoom,
+                translate_x: tx,
+                translate_y: ty,
+                normal_color: format!("#{nr:02x}{ng:02x}{nb:02x}"),
+                normal_alpha: reveal,
+                reveal,
+                sample_edge_id: sample.map(|edge| edge.edge_id.clone()).unwrap_or_default(),
+                sample_start_x: sample.map(|edge| f64::from(edge.start_x)).unwrap_or(0.0),
+                sample_start_y: sample.map(|edge| f64::from(edge.start_y)).unwrap_or(0.0),
+                sample_end_x: sample.map(|edge| f64::from(edge.end_x)).unwrap_or(0.0),
+                sample_end_y: sample.map(|edge| f64::from(edge.end_y)).unwrap_or(0.0),
+                sample_start_screen_x: sample_start_screen.0,
+                sample_start_screen_y: sample_start_screen.1,
+                sample_end_screen_x: sample_end_screen.0,
+                sample_end_screen_y: sample_end_screen.1,
+                clip_width: width,
+                clip_height: height,
+                shader_resource_ready: geometry_flags & 16 != 0,
+            });
+        }
         self.geometry_dirty = false;
         // SAFETY: raw 是刚取回所有权的节点指针，交给 Qt 继续持有。
         unsafe { SGNode::from_raw(raw) }

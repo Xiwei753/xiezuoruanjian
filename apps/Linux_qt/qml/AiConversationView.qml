@@ -472,311 +472,7 @@ Item {
         anchors.fill: parent
         spacing: Kirigami.Units.smallSpacing
 
-        // 会话切换 / 新建 / 模型
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: Kirigami.Units.smallSpacing
-
-            ComboBox {
-                id: conversationPicker
-                Layout.fillWidth: true
-                Layout.minimumWidth: 80
-                model: root.conversationList
-                textRole: "title"
-                displayText: currentIndex >= 0 && currentText
-                    ? currentText : qsTr("新会话")
-                currentIndex: root.conversationIndex()
-                onActivated: function(index) {
-                    if (index >= 0 && root.conversationList[index])
-                        root.runtimeBackendRef.open_conversation(
-                            String(root.conversationList[index].id))
-                }
-            }
-
-            ToolButton {
-                icon.name: "list-add"
-                display: AbstractButton.IconOnly
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("新建会话")
-                onClicked: root.runtimeBackendRef.new_conversation()
-            }
-        }
-
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: Kirigami.Units.smallSpacing
-
-            // 入口只显示当前“供应商 · 模型”一行；点击后先选供应商，
-            // 再进入该供应商的模型列表。打开弹层不重新探测模型目录。
-            Button {
-                id: modelPickerButton
-                Layout.fillWidth: true
-                Layout.minimumWidth: 120
-                enabled: root.hasAgent
-                text: root.modelDisplayText()
-                display: AbstractButton.TextOnly
-                ToolTip.visible: hovered && root.currentModel !== ""
-                ToolTip.text: root.currentModel
-                contentItem: Label {
-                    text: root.modelDisplayText()
-                    elide: Text.ElideRight
-                    horizontalAlignment: Text.AlignLeft
-                    verticalAlignment: Text.AlignVCenter
-                }
-                onClicked: {
-                    root.selectedProviderId = ""
-                    modelPopup.open()
-                }
-
-                Popup {
-                    id: modelPopup
-                    parent: modelPickerButton
-
-                    // 弹层优先保持较宽的模型列表，但不得超出当前窗口可视宽度。
-                    readonly property real viewportMargin: Kirigami.Units.smallSpacing
-                    readonly property real viewportWidth: {
-                        const targetWindow = modelPickerButton.Window.window
-                        const windowWidth = targetWindow ? targetWindow.width : root.width
-                        return Math.max(0, windowWidth - 2 * viewportMargin)
-                    }
-                    readonly property real buttonGlobalLeft:
-                        modelPickerButton.mapToItem(null, 0, 0).x
-                    readonly property real buttonGlobalRight:
-                        buttonGlobalLeft + modelPickerButton.width
-                    readonly property real preferredWidth:
-                        Math.max(modelPickerButton.width,
-                                 Kirigami.Units.gridUnit * 22)
-                    width: Math.min(preferredWidth, viewportWidth)
-                    // 右侧空间不足时向按钮左侧展开，最左边界不超出窗口。
-                    readonly property real desiredGlobalLeft:
-                        buttonGlobalLeft + width > viewportMargin + viewportWidth
-                            ? buttonGlobalRight - width
-                            : buttonGlobalLeft
-                    readonly property real clampedGlobalLeft:
-                        Math.max(viewportMargin,
-                                 Math.min(desiredGlobalLeft,
-                                          viewportMargin + viewportWidth - width))
-                    x: clampedGlobalLeft - buttonGlobalLeft
-                    y: modelPickerButton.height + Kirigami.Units.smallSpacing
-                    height: Math.min(modelPopupContent.implicitHeight
-                                     + topPadding + bottomPadding,
-                                     Kirigami.Units.gridUnit * 30)
-                    padding: Kirigami.Units.smallSpacing
-                    focus: true
-                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-                    contentItem: ColumnLayout {
-                        id: modelPopupContent
-                        width: modelPopup.availableWidth
-                        spacing: Kirigami.Units.smallSpacing
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: root.selectedProviderId === ""
-                            text: qsTr("选择供应商")
-                            font.bold: true
-                        }
-
-                        ListView {
-                            id: providerLevelList
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: Math.min(contentHeight,
-                                Kirigami.Units.gridUnit * 16)
-                            visible: root.selectedProviderId === ""
-                            clip: true
-                            spacing: 1
-                            model: root.providerChoices()
-
-                            delegate: ItemDelegate {
-                                required property var modelData
-                                width: providerLevelList.width
-                                implicitHeight: Kirigami.Units.gridUnit * 2.5
-                                contentItem: RowLayout {
-                                    spacing: Kirigami.Units.smallSpacing
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: String(modelData.providerName
-                                            || modelData.providerId
-                                            || qsTr("未标注供应商"))
-                                        elide: Text.ElideRight
-                                    }
-                                    Label {
-                                        text: qsTr("%1 个模型").arg(modelData.count)
-                                        color: Kirigami.Theme.disabledTextColor
-                                        font.pixelSize: Kirigami.Theme.smallFont.pixelSize
-                                    }
-                                }
-                                onClicked: root.selectedProviderId =
-                                    String(modelData.providerId)
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            visible: root.selectedProviderId !== ""
-                            spacing: Kirigami.Units.smallSpacing
-
-                            Button {
-                                text: qsTr("返回供应商")
-                                flat: true
-                                onClicked: root.selectedProviderId = ""
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                text: root.providerNameById(root.selectedProviderId)
-                                elide: Text.ElideRight
-                                font.bold: true
-                            }
-                        }
-
-                        ListView {
-                            id: providerModelLevelList
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: Math.min(contentHeight,
-                                Kirigami.Units.gridUnit * 16)
-                            visible: root.selectedProviderId !== ""
-                            clip: true
-                            spacing: 1
-                            model: root.modelsForProvider(root.selectedProviderId, "")
-
-                            delegate: ItemDelegate {
-                                required property var modelData
-                                width: providerModelLevelList.width
-                                implicitHeight: Kirigami.Units.gridUnit * 3
-                                contentItem: ColumnLayout {
-                                    spacing: 0
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: String(modelData.displayName
-                                            || modelData.modelId || modelData.id)
-                                        elide: Text.ElideRight
-                                    }
-                                    Label {
-                                        Layout.fillWidth: true
-                                        visible: String(modelData.modelId || "") !== ""
-                                            && String(modelData.modelId || "")
-                                                !== String(modelData.displayName || "")
-                                        text: String(modelData.modelId || "")
-                                        elide: Text.ElideRight
-                                        color: Kirigami.Theme.disabledTextColor
-                                        font.pixelSize:
-                                            Kirigami.Theme.smallFont.pixelSize
-                                    }
-                                }
-                                ToolTip.visible: hovered
-                                ToolTip.text: String(modelData.id)
-                                onClicked: {
-                                    root.chooseModelCandidate(String(modelData.id))
-                                    modelPopup.close()
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            ToolButton {
-                icon.name: "view-refresh"
-                display: AbstractButton.IconOnly
-                enabled: root.hasAgent
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("刷新模型目录")
-                onClicked: root.runtimeBackendRef.refresh_models()
-            }
-
-            ToolButton {
-                icon.name: "insert-text"
-                display: AbstractButton.IconOnly
-                checkable: true
-                checked: root.advancedModelInput
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("搜索或指定模型")
-                onClicked: root.advancedModelInput = checked
-            }
-        }
-
-        Label {
-            Layout.fillWidth: true
-            visible: text !== ""
-            text: root.modelsDetailText()
-            wrapMode: Text.Wrap
-            color: root.modelsState === "error" || root.modelsState === "unsupported"
-                ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.disabledTextColor
-            font.pixelSize: Kirigami.Theme.smallFont.pixelSize
-        }
-
-        // 高级输入默认折叠；支持按 provider/模型名搜索，也允许使用完整
-        // provider/model 指定目录中尚未出现的模型。
-        ColumnLayout {
-            Layout.fillWidth: true
-            visible: root.advancedModelInput
-            spacing: Kirigami.Units.smallSpacing / 2
-
-            TextField {
-                id: modelSearchField
-                Layout.fillWidth: true
-                text: root.modelSearch
-                placeholderText: qsTr("搜索模型，或输入完整 provider/model")
-                onTextChanged: {
-                    if (text !== root.modelSearch)
-                        root.modelSearch = text
-                }
-                onAccepted: {
-                    var value = String(text || "").trim()
-                    var exact = root.modelChoiceById(value)
-                    if (exact)
-                        root.chooseModelCandidate(exact.id)
-                    else if (root.customModelId() !== "")
-                        root.chooseModelCandidate(root.customModelId())
-                }
-            }
-
-            Label {
-                Layout.fillWidth: true
-                visible: root.modelSearch.trim() !== ""
-                    && root.modelCandidates().length === 0
-                text: qsTr("没有匹配模型；请从候选中选择，或输入完整的 provider/model。")
-                wrapMode: Text.Wrap
-                color: Kirigami.Theme.disabledTextColor
-                font.pixelSize: Kirigami.Theme.smallFont.pixelSize
-            }
-
-            ListView {
-                id: modelCandidateList
-                Layout.fillWidth: true
-                Layout.preferredHeight: count > 0
-                    ? Math.min(count * Kirigami.Units.gridUnit * 2.5,
-                               Kirigami.Units.gridUnit * 12) : 0
-                visible: count > 0
-                clip: true
-                model: root.modelCandidates()
-                spacing: 1
-
-                delegate: ItemDelegate {
-                    required property var modelData
-                    implicitHeight: Kirigami.Units.gridUnit * 2.5
-                    width: ListView.view ? ListView.view.width : 0
-                    text: String(modelData.displayText || modelData.id)
-                    ToolTip.visible: hovered
-                    ToolTip.text: String(modelData.id)
-                    onClicked: root.chooseModelCandidate(String(modelData.id))
-                }
-            }
-        }
-
-        // 当前上下文 / Agent 状态
-        Label {
-            Layout.fillWidth: true
-            visible: root.workspaceProjectId !== "" || root.contextLabel !== ""
-            text: root.contextLabel !== ""
-                ? qsTr("上下文：%1").arg(root.contextLabel)
-                : qsTr("上下文：%1").arg(root.workspaceProjectTitle || root.workspaceProjectId)
-            elide: Text.ElideRight
-            color: Kirigami.Theme.disabledTextColor
-            font.pixelSize: Kirigami.Theme.smallFont.pixelSize
-        }
-
-        // 会话消息
+        // 会话正文占满上方空间；工具与模型都收进底部输入工作台。
         ListView {
             id: messageList
             Layout.fillWidth: true
@@ -855,12 +551,12 @@ Item {
                 wrapMode: Text.Wrap
                 text: root.hasAgent
                     ? qsTr("向 %1 发送第一条消息").arg(root.agentId())
-                    : qsTr("请先在上方选择一个本机已安装的 AI 命令行工具")
+                    : qsTr("请先在下方选择一个本机已安装的 AI 命令行工具")
                 color: Kirigami.Theme.disabledTextColor
             }
         }
 
-        // 权限请求
+        // 权限请求紧贴输入区上方。
         Rectangle {
             Layout.fillWidth: true
             visible: root.permission !== null
@@ -899,87 +595,553 @@ Item {
             }
         }
 
-        // 错误 / 状态
-        Label {
+        // 低高度状态行：上下文只显示可读标题，UUID 放进 ToolTip。
+        ColumnLayout {
             Layout.fillWidth: true
-            visible: root.runtimeBackendRef
-                && String(root.runtimeBackendRef.last_error || "") !== ""
-            text: root.runtimeBackendRef ? String(root.runtimeBackendRef.last_error || "") : ""
-            wrapMode: Text.Wrap
-            color: Kirigami.Theme.negativeTextColor
-            font.pixelSize: Kirigami.Theme.smallFont.pixelSize
-        }
+            spacing: 0
 
-        Label {
-            Layout.fillWidth: true
-            visible: root.runtimeBackendRef
-                && String(root.runtimeBackendRef.status_text || "") !== ""
-            text: root.runtimeBackendRef ? String(root.runtimeBackendRef.status_text || "") : ""
-            elide: Text.ElideRight
-            color: Kirigami.Theme.disabledTextColor
-            font.pixelSize: Kirigami.Theme.smallFont.pixelSize
-        }
-
-        Label {
-            Layout.fillWidth: true
-            visible: root.mcpStatus && root.mcpStatus.status
-            text: root.mcpStatus && root.mcpStatus.status
-                ? qsTr("MCP：%1").arg(String(root.mcpStatus.status)) : ""
-            wrapMode: Text.Wrap
-            color: root.mcpStatus && root.mcpStatus.available
-                ? Kirigami.Theme.disabledTextColor : Kirigami.Theme.negativeTextColor
-            font.pixelSize: Kirigami.Theme.smallFont.pixelSize
-        }
-
-        // 输入
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: Kirigami.Units.smallSpacing
-
-            ScrollView {
+            Label {
                 Layout.fillWidth: true
-                Layout.preferredHeight: Kirigami.Units.gridUnit * 4
-                TextArea {
-                    id: input
-                    placeholderText: root.running
-                        ? qsTr("Agent 正在回答…")
-                        : qsTr("输入消息，Ctrl+Enter 发送")
-                    wrapMode: TextArea.Wrap
-                    enabled: !root.running
-                    Keys.onPressed: function(event) {
-                        if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                                && (event.modifiers & Qt.ControlModifier)) {
-                            sendButton.send()
-                            event.accepted = true
+                visible: root.runtimeBackendRef
+                    && String(root.runtimeBackendRef.last_error || "") !== ""
+                text: root.runtimeBackendRef
+                    ? String(root.runtimeBackendRef.last_error || "") : ""
+                wrapMode: Text.Wrap
+                color: Kirigami.Theme.negativeTextColor
+                font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: text !== ""
+                text: root.modelsDetailText()
+                elide: Text.ElideRight
+                color: root.modelsState === "error" || root.modelsState === "unsupported"
+                    ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.disabledTextColor
+                font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Kirigami.Units.smallSpacing
+
+                Label {
+                    Layout.fillWidth: true
+                    visible: root.workspaceProjectId !== "" || root.contextLabel !== ""
+                    text: root.contextLabel !== ""
+                        ? qsTr("上下文：%1").arg(root.contextLabel)
+                        : qsTr("上下文：%1").arg(root.workspaceProjectTitle
+                                                  || root.workspaceProjectId)
+                    elide: Text.ElideRight
+                    color: Kirigami.Theme.disabledTextColor
+                    font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                    ToolTip.visible: hovered && root.workspaceProjectId !== ""
+                    ToolTip.text: root.workspaceProjectId
+                }
+
+                Label {
+                    visible: root.runtimeBackendRef
+                        && String(root.runtimeBackendRef.status_text || "") !== ""
+                    text: root.runtimeBackendRef
+                        ? String(root.runtimeBackendRef.status_text || "") : ""
+                    elide: Text.ElideRight
+                    color: Kirigami.Theme.disabledTextColor
+                    font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                }
+
+                Label {
+                    visible: Boolean(root.mcpStatus && root.mcpStatus.status)
+                    text: Boolean(root.mcpStatus && root.mcpStatus.status)
+                        ? qsTr("MCP：%1").arg(String(root.mcpStatus.status)) : ""
+                    elide: Text.ElideRight
+                    color: Boolean(root.mcpStatus && root.mcpStatus.available)
+                        ? Kirigami.Theme.disabledTextColor
+                        : Kirigami.Theme.negativeTextColor
+                    font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                }
+            }
+        }
+
+        // 底部输入工作台：输入框在上，工具行在下。
+        Rectangle {
+            id: composer
+            Layout.fillWidth: true
+            Layout.preferredHeight: composerLayout.implicitHeight
+                + Kirigami.Units.smallSpacing * 2
+            radius: Kirigami.Units.smallSpacing * 1.5
+            color: root.dt ? root.dt.surfaceContainerLow
+                           : Kirigami.Theme.alternateBackgroundColor
+            border.width: 1
+            border.color: root.dt ? root.dt.border
+                                  : Kirigami.Theme.disabledTextColor
+
+            ColumnLayout {
+                id: composerLayout
+                anchors.fill: parent
+                anchors.margins: Kirigami.Units.smallSpacing
+                spacing: Kirigami.Units.smallSpacing
+
+                // 高级模型输入默认折叠，展开后仍限制高度，不挤占聊天区。
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: root.advancedModelInput
+                    spacing: Kirigami.Units.smallSpacing / 2
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Kirigami.Units.smallSpacing
+
+                        TextField {
+                            id: modelSearchField
+                            Layout.fillWidth: true
+                            text: root.modelSearch
+                            placeholderText: qsTr("搜索模型，或输入完整 provider/model")
+                            onTextChanged: {
+                                if (text !== root.modelSearch)
+                                    root.modelSearch = text
+                            }
+                            onAccepted: {
+                                var value = String(text || "").trim()
+                                var exact = root.modelChoiceById(value)
+                                if (exact)
+                                    root.chooseModelCandidate(exact.id)
+                                else if (root.customModelId() !== "")
+                                    root.chooseModelCandidate(root.customModelId())
+                            }
+                        }
+
+                        ToolButton {
+                            icon.name: "dialog-close"
+                            display: AbstractButton.IconOnly
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("收起模型搜索")
+                            onClicked: root.advancedModelInput = false
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: root.modelSearch.trim() !== ""
+                            && root.modelCandidates().length === 0
+                        text: qsTr("没有匹配模型；请从候选中选择，或输入完整的 provider/model。")
+                        wrapMode: Text.Wrap
+                        color: Kirigami.Theme.disabledTextColor
+                        font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                    }
+
+                    ListView {
+                        id: modelCandidateList
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: count > 0
+                            ? Math.min(count * Kirigami.Units.gridUnit * 2.5,
+                                       Kirigami.Units.gridUnit * 8) : 0
+                        visible: count > 0
+                        clip: true
+                        model: root.modelCandidates()
+                        spacing: 1
+
+                        delegate: ItemDelegate {
+                            required property var modelData
+                            implicitHeight: Kirigami.Units.gridUnit * 2.5
+                            width: ListView.view ? ListView.view.width : 0
+                            text: String(modelData.displayText || modelData.id)
+                            ToolTip.visible: hovered
+                            ToolTip.text: String(modelData.id)
+                            onClicked: root.chooseModelCandidate(String(modelData.id))
                         }
                     }
                 }
-            }
 
-            ColumnLayout {
-                spacing: Kirigami.Units.smallSpacing
-                Button {
-                    id: sendButton
-                    text: qsTr("发送")
-                    enabled: !root.running && input.text.trim() !== ""
-                        && root.hasAgent
-                        && (root.workspaceProjectId !== "" || root.starmapActiveId !== "")
-                    function send() {
-                        var message = input.text
-                        if (!message.trim() || !root.scopeActive || !root.visible)
-                            return
-                        // 发送前重新声明本面板的作用域，避免共用运行时沿用
-                        // 另一面板（写作/星图）最后一次设置的作品或画布。
-                        root.syncProjectContext()
-                        input.text = ""
-                        root.runtimeBackendRef.send_message(message)
+                ScrollView {
+                    id: inputScroll
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.min(
+                        Math.max(input.contentHeight + input.topPadding
+                                 + input.bottomPadding,
+                                 Kirigami.Units.gridUnit * 2.2),
+                        Kirigami.Units.gridUnit * 8)
+
+                    TextArea {
+                        id: input
+                        width: inputScroll.availableWidth
+                        placeholderText: root.running
+                            ? qsTr("Agent 正在回答…")
+                            : qsTr("输入消息，Ctrl+Enter 发送")
+                        wrapMode: TextArea.Wrap
+                        enabled: !root.running
+                        Keys.onPressed: function(event) {
+                            if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                                    && (event.modifiers & Qt.ControlModifier)) {
+                                sendButton.send()
+                                event.accepted = true
+                            }
+                        }
                     }
-                    onClicked: send()
                 }
-                Button {
-                    text: qsTr("停止")
-                    visible: root.running
-                    onClicked: root.runtimeBackendRef.cancel_turn()
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    ToolButton {
+                        id: moreActionsButton
+                        icon.name: "overflow-menu"
+                        display: AbstractButton.IconOnly
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("更多操作")
+                        onClicked: moreActionsMenu.popup()
+
+                        Menu {
+                            id: moreActionsMenu
+                            width: Math.min(Kirigami.Units.gridUnit * 20,
+                                            Math.max(root.width - Kirigami.Units.smallSpacing,
+                                                     Kirigami.Units.gridUnit * 12))
+
+                            MenuItem {
+                                text: qsTr("打开终端")
+                                enabled: root.agentCliBackendRef !== null
+                                onTriggered: if (root.agentCliBackendRef)
+                                    root.agentCliBackendRef.open_terminal()
+                            }
+                            MenuItem {
+                                text: qsTr("复制 MCP 接入信息")
+                                enabled: root.runtimeBackendRef !== null
+                                onTriggered: if (root.runtimeBackendRef)
+                                    root.runtimeBackendRef.copy_mcp_config()
+                            }
+                            MenuSeparator {}
+                            MenuItem {
+                                text: qsTr("重新扫描本机 CLI")
+                                enabled: root.agentCliBackendRef !== null
+                                onTriggered: if (root.agentCliBackendRef)
+                                    root.agentCliBackendRef.refresh_inventory()
+                            }
+                            MenuItem {
+                                text: qsTr("选择 CLI 安装路径")
+                                onTriggered: cliPicker.choosePath()
+                            }
+                            MenuItem {
+                                text: qsTr("刷新模型目录")
+                                enabled: root.hasAgent
+                                onTriggered: root.runtimeBackendRef.refresh_models()
+                            }
+                            MenuItem {
+                                text: qsTr("搜索或指定模型")
+                                checkable: true
+                                checked: root.advancedModelInput
+                                enabled: root.hasAgent
+                                onTriggered: root.advancedModelInput = checked
+                            }
+                            MenuSeparator {
+                                visible: cliPicker.rejectedAgents.length > 0
+                                    || cliPicker.lastError !== ""
+                            }
+                            MenuItem {
+                                visible: cliPicker.rejectedAgents.length > 0
+                                enabled: false
+                                text: cliPicker.rejectedAgents.join("；")
+                            }
+                            MenuItem {
+                                visible: cliPicker.lastError !== ""
+                                enabled: false
+                                text: cliPicker.lastError
+                            }
+                        }
+                    }
+
+                    Button {
+                        id: conversationButton
+                        Layout.maximumWidth: Kirigami.Units.gridUnit * 12
+                        Layout.minimumWidth: Kirigami.Units.gridUnit * 4
+                        flat: true
+                        display: AbstractButton.TextOnly
+                        text: {
+                            var index = root.conversationIndex()
+                            if (index >= 0 && root.conversationList[index]
+                                    && String(root.conversationList[index].title || "") !== "")
+                                return String(root.conversationList[index].title)
+                            return qsTr("新会话")
+                        }
+                        contentItem: RowLayout {
+                            spacing: 2
+                            Label {
+                                Layout.fillWidth: true
+                                text: conversationButton.text
+                                elide: Text.ElideRight
+                                font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                            }
+                            Label {
+                                text: "▾"
+                                font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                                color: Kirigami.Theme.disabledTextColor
+                            }
+                        }
+                        ToolTip.visible: hovered && root.conversation
+                        ToolTip.text: root.conversation
+                            ? String(root.conversation.id || "") : ""
+                        onClicked: conversationMenu.popup()
+
+                        Menu {
+                            id: conversationMenu
+                            width: Math.min(Kirigami.Units.gridUnit * 20,
+                                            Math.max(root.width - Kirigami.Units.smallSpacing,
+                                                     Kirigami.Units.gridUnit * 12))
+
+                            Instantiator {
+                                model: root.conversationList
+                                delegate: MenuItem {
+                                    text: String(modelData.title || qsTr("会话"))
+                                    checkable: true
+                                    checked: root.conversation
+                                        && String(root.conversation.id || "")
+                                            === String(modelData.id || "")
+                                    onTriggered: root.runtimeBackendRef.open_conversation(
+                                        String(modelData.id))
+                                }
+                                onObjectAdded: function(index, object) {
+                                    conversationMenu.insertItem(index, object)
+                                }
+                                onObjectRemoved: function(index, object) {
+                                    conversationMenu.removeItem(object)
+                                }
+                            }
+                            MenuSeparator {}
+                            MenuItem {
+                                text: qsTr("新建会话")
+                                icon.name: "list-add"
+                                onTriggered: root.runtimeBackendRef.new_conversation()
+                            }
+                        }
+                    }
+
+                    AgentCliPicker {
+                        id: cliPicker
+                        compactMode: true
+                        Layout.maximumWidth: Kirigami.Units.gridUnit * 12
+                        backendRef: root.agentCliBackendRef
+                        dt: root.dt
+                    }
+
+                    Button {
+                        id: modelPickerButton
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: Kirigami.Units.gridUnit * 7
+                        Layout.maximumWidth: Kirigami.Units.gridUnit * 18
+                        enabled: root.hasAgent
+                        text: root.modelDisplayText()
+                        display: AbstractButton.TextOnly
+                        ToolTip.visible: hovered && root.currentModel !== ""
+                        ToolTip.text: root.currentModel
+                        contentItem: Label {
+                            text: root.modelDisplayText()
+                            elide: Text.ElideMiddle
+                            horizontalAlignment: Text.AlignLeft
+                            verticalAlignment: Text.AlignVCenter
+                            font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                        }
+                        onClicked: {
+                            root.selectedProviderId = ""
+                            modelPopup.open()
+                        }
+
+                        Popup {
+                            id: modelPopup
+                            parent: modelPickerButton
+
+                            // 弹层从底部输入区向上展开，并限制在窗口可见范围内。
+                            readonly property real viewportMargin:
+                                Kirigami.Units.smallSpacing
+                            readonly property real viewportWidth: {
+                                const targetWindow = modelPickerButton.Window.window
+                                const windowWidth = targetWindow
+                                    ? targetWindow.width : root.width
+                                return Math.max(0, windowWidth - 2 * viewportMargin)
+                            }
+                            readonly property real viewportHeight: {
+                                const targetWindow = modelPickerButton.Window.window
+                                const windowHeight = targetWindow
+                                    ? targetWindow.height : root.height
+                                return Math.max(0, windowHeight - 2 * viewportMargin)
+                            }
+                            readonly property real buttonGlobalLeft:
+                                modelPickerButton.mapToItem(null, 0, 0).x
+                            readonly property real buttonGlobalTop:
+                                modelPickerButton.mapToItem(null, 0, 0).y
+                            readonly property real spaceAbove:
+                                Math.max(0, buttonGlobalTop - viewportMargin)
+                            // 列表高度只由按钮上方空间决定，避免和 Popup.height 互相绑定。
+                            readonly property real maxListHeight:
+                                Math.max(0, spaceAbove
+                                    - Kirigami.Units.gridUnit * 4)
+                            readonly property real buttonGlobalRight:
+                                buttonGlobalLeft + modelPickerButton.width
+                            readonly property real preferredWidth:
+                                Math.max(modelPickerButton.width,
+                                         Kirigami.Units.gridUnit * 22)
+                            width: Math.min(preferredWidth, viewportWidth)
+                            readonly property real desiredGlobalLeft:
+                                buttonGlobalLeft + width
+                                        > viewportMargin + viewportWidth
+                                    ? buttonGlobalRight - width
+                                    : buttonGlobalLeft
+                            readonly property real clampedGlobalLeft:
+                                Math.max(viewportMargin,
+                                         Math.min(desiredGlobalLeft,
+                                                  viewportMargin + viewportWidth - width))
+                            x: clampedGlobalLeft - buttonGlobalLeft
+                            y: -height - Kirigami.Units.smallSpacing
+                            height: Math.min(
+                                modelPopupContent.implicitHeight
+                                    + topPadding + bottomPadding,
+                                Math.max(1, Math.min(Kirigami.Units.gridUnit * 30,
+                                                     spaceAbove)))
+                            padding: Kirigami.Units.smallSpacing
+                            focus: true
+                            closePolicy: Popup.CloseOnEscape
+                                | Popup.CloseOnPressOutside
+
+                            contentItem: ColumnLayout {
+                                id: modelPopupContent
+                                width: modelPopup.availableWidth
+                                spacing: Kirigami.Units.smallSpacing
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: root.selectedProviderId === ""
+                                    text: qsTr("选择供应商")
+                                    font.bold: true
+                                }
+
+                                ListView {
+                                    id: providerLevelList
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: Math.min(contentHeight,
+                                        modelPopup.maxListHeight)
+                                    visible: root.selectedProviderId === ""
+                                    clip: true
+                                    spacing: 1
+                                    model: root.providerChoices()
+
+                                    delegate: ItemDelegate {
+                                        required property var modelData
+                                        width: providerLevelList.width
+                                        implicitHeight: Kirigami.Units.gridUnit * 2.5
+                                        contentItem: RowLayout {
+                                            spacing: Kirigami.Units.smallSpacing
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(modelData.providerName
+                                                    || modelData.providerId
+                                                    || qsTr("未标注供应商"))
+                                                elide: Text.ElideRight
+                                            }
+                                            Label {
+                                                text: qsTr("%1 个模型").arg(modelData.count)
+                                                color: Kirigami.Theme.disabledTextColor
+                                                font.pixelSize:
+                                                    Kirigami.Theme.smallFont.pixelSize
+                                            }
+                                        }
+                                        onClicked: root.selectedProviderId =
+                                            String(modelData.providerId)
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: root.selectedProviderId !== ""
+                                    spacing: Kirigami.Units.smallSpacing
+
+                                    Button {
+                                        text: qsTr("返回供应商")
+                                        flat: true
+                                        onClicked: root.selectedProviderId = ""
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: root.providerNameById(
+                                            root.selectedProviderId)
+                                        elide: Text.ElideRight
+                                        font.bold: true
+                                    }
+                                }
+
+                                ListView {
+                                    id: providerModelLevelList
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: Math.min(contentHeight,
+                                        modelPopup.maxListHeight)
+                                    visible: root.selectedProviderId !== ""
+                                    clip: true
+                                    spacing: 1
+                                    model: root.modelsForProvider(
+                                        root.selectedProviderId, "")
+
+                                    delegate: ItemDelegate {
+                                        required property var modelData
+                                        width: providerModelLevelList.width
+                                        implicitHeight: Kirigami.Units.gridUnit * 3
+                                        contentItem: ColumnLayout {
+                                            spacing: 0
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(modelData.displayName
+                                                    || modelData.modelId
+                                                    || modelData.id)
+                                                elide: Text.ElideRight
+                                            }
+                                            Label {
+                                                Layout.fillWidth: true
+                                                visible: String(modelData.modelId || "") !== ""
+                                                    && String(modelData.modelId || "")
+                                                        !== String(modelData.displayName || "")
+                                                text: String(modelData.modelId || "")
+                                                elide: Text.ElideRight
+                                                color: Kirigami.Theme.disabledTextColor
+                                                font.pixelSize:
+                                                    Kirigami.Theme.smallFont.pixelSize
+                                            }
+                                        }
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: String(modelData.id)
+                                        onClicked: {
+                                            root.chooseModelCandidate(
+                                                String(modelData.id))
+                                            modelPopup.close()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ToolButton {
+                        id: sendButton
+                        icon.name: root.running ? "media-playback-stop" : "document-send"
+                        display: AbstractButton.IconOnly
+                        enabled: root.running || (input.text.trim() !== ""
+                            && root.hasAgent
+                            && (root.workspaceProjectId !== ""
+                                || root.starmapActiveId !== ""))
+                        ToolTip.visible: hovered
+                        ToolTip.text: root.running ? qsTr("停止") : qsTr("发送")
+                        function send() {
+                            var message = input.text
+                            if (!message.trim() || !root.scopeActive || !root.visible)
+                                return
+                            // 发送前重新声明本面板的作用域，避免共用运行时沿用
+                            // 另一面板（写作/星图）最后一次设置的作品或画布。
+                            root.syncProjectContext()
+                            input.text = ""
+                            root.runtimeBackendRef.send_message(message)
+                        }
+                        onClicked: {
+                            if (root.running)
+                                root.runtimeBackendRef.cancel_turn()
+                            else
+                                send()
+                        }
+                    }
                 }
             }
         }
