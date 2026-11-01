@@ -120,6 +120,7 @@ pub struct AgentRuntimeBackend {
     set_scope: qt_method!(
         fn(
             &mut self,
+            owner: QString,
             project_id: QString,
             project_title: QString,
             root_starmap_id: QString,
@@ -174,6 +175,10 @@ pub struct AgentRuntimeBackend {
     project_title: String,
     /// 当前 AI 面板固定的 MCP 读写范围；换图后重建 broker，但 Core 对话不变。
     mcp_scope: McpScope,
+    /// 最近一次真正激活的 AI 工作区；后台实例不能冒充它改 scope。
+    scope_owner: String,
+    /// 当前正在执行的轮次属于哪个 AI 工作区；跨面板 scope 更新不得取消它。
+    turn_owner: String,
     /// 本轮工具成功/失败计数，仅用于轮次结束日志汇总。
     turn_tool_success: u32,
     turn_tool_failure: u32,
@@ -264,6 +269,8 @@ impl AgentRuntimeBackend {
             project_id: String::new(),
             project_title: String::new(),
             mcp_scope: McpScope::default(),
+            scope_owner: String::new(),
+            turn_owner: String::new(),
             turn_tool_success: 0,
             turn_tool_failure: 0,
             agent_id: String::new(),
@@ -960,6 +967,7 @@ impl AgentRuntimeBackend {
 
     fn set_project(&mut self, project_id: QString, project_title: QString) {
         self.set_scope(
+            "project".into(),
             project_id,
             project_title,
             "".into(),
@@ -971,6 +979,7 @@ impl AgentRuntimeBackend {
 
     fn set_scope(
         &mut self,
+        owner: QString,
         project_id: QString,
         project_title: QString,
         root_starmap_id: QString,
@@ -978,6 +987,7 @@ impl AgentRuntimeBackend {
         path_segments_json: QString,
         route_key: QString,
     ) {
+        let owner = owner.to_string();
         let project_id = project_id.to_string();
         let project_title = project_title.to_string();
         let root_starmap_id = root_starmap_id.to_string();
@@ -999,9 +1009,22 @@ impl AgentRuntimeBackend {
             executor: String::new(),
         };
 
+        // 正在执行的轮次可能属于另一个 AI 工作区。此时只记录下一次发送要
+        // 用的 scope，不关闭原生进程，也不把不属于调用方的轮次标成取消。
+        let turn_belongs_to_owner = !self.running_value
+            || self.turn_owner.is_empty()
+            || self.turn_owner == owner;
+
         if self.project_id == project_id {
             self.project_title = project_title;
             if self.mcp_scope == next_scope {
+                self.scope_owner = owner;
+                return;
+            }
+            if self.running_value && !turn_belongs_to_owner {
+                self.mcp_scope = next_scope;
+                self.scope_owner = owner;
+                self.update_mcp_status();
                 return;
             }
             // 换星图只换 MCP 作用域和原生 broker；Core 会话、历史与模型都原位
@@ -1011,9 +1034,11 @@ impl AgentRuntimeBackend {
             }
             self.cancel_runtime_only(CloseReason::UserSwitch("切换星图".to_string()));
             self.mcp_scope = next_scope;
+            self.scope_owner = owner;
             self.active_turn_id.clear();
             self.ignored_turn_id.clear();
             self.cancelling_turn_id.clear();
+            self.turn_owner.clear();
             self.permission_json_value = "null".to_string();
             self.permission_changed();
             let status = if self.conversation.is_some() {
@@ -1026,6 +1051,15 @@ impl AgentRuntimeBackend {
             return;
         }
 
+        if self.running_value && !turn_belongs_to_owner {
+            // 作品切换会清空 Core 会话，不能覆盖另一工作区仍在执行的轮次；
+            // 先只更新 MCP scope，等该轮结束后的下一次发送再完成作品切换。
+            self.mcp_scope = next_scope;
+            self.scope_owner = owner;
+            self.update_mcp_status();
+            return;
+        }
+
         if self.running_value {
             self.abandon_active_turn();
         }
@@ -1033,12 +1067,14 @@ impl AgentRuntimeBackend {
         self.project_id = project_id;
         self.project_title = project_title;
         self.mcp_scope = next_scope;
+        self.scope_owner = owner;
         self.conversation = None;
         self.model = None;
         self.reset_models_for_agent();
         self.active_turn_id.clear();
         self.ignored_turn_id.clear();
         self.cancelling_turn_id.clear();
+        self.turn_owner.clear();
         self.set_running(false, "未开始会话");
         self.permission_json_value = "null".to_string();
         self.permission_changed();
@@ -1402,6 +1438,7 @@ impl AgentRuntimeBackend {
         }
         self.conversation = Some(conversation);
         self.active_turn_id = turn_id_value.clone();
+        self.turn_owner = self.scope_owner.clone();
         self.ignored_turn_id.clear();
         self.cancelling_turn_id.clear();
         self.stream_events_since_persist = 0;

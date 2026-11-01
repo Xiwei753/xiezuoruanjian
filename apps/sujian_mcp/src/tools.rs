@@ -178,7 +178,8 @@ struct CreateStarmapParams {
     template_id: Option<String>,
     /// 当前画布内创建子图时的宿主图；省略时使用会话解析出的活动画布。
     parent_starmap_id: Option<String>,
-    /// 在已授权作品下创建一级星图（写作面板默认）。星图面板省略时为当前画布子图。
+    /// 仅在无画布根图的写作面板创建作品内一级星图；已绑定画布时传 true
+    /// 会被拒绝，必须改用当前画布内的子图。
     #[serde(default)]
     create_as_root: bool,
     #[serde(default)]

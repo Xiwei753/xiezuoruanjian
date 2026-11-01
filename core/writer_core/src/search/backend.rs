@@ -387,11 +387,19 @@ fn settings_section_label(section: &str) -> String {
     .to_string()
 }
 
-fn cursor_hash(query: &str, scope: SearchScope, context: &SearchContext) -> u64 {
+fn cursor_hash(
+    query: &str,
+    scope: SearchScope,
+    context: &SearchContext,
+    authorization: Option<&SearchAuthorization>,
+) -> u64 {
     let mut hasher = DefaultHasher::new();
     query.hash(&mut hasher);
     scope.hash(&mut hasher);
     context.cursor_fingerprint().hash(&mut hasher);
+    if let Some(authorization) = authorization {
+        authorization.cursor_fingerprint().hash(&mut hasher);
+    }
     hasher.finish()
 }
 
@@ -470,6 +478,32 @@ impl SearchBackend {
         cursor: Option<&str>,
         context: &SearchContext,
     ) -> SearchResultPage {
+        self.search_with_authorization(query, scope, limit, cursor, context, None)
+    }
+
+    /// 受限授权搜索。授权过滤发生在候选集形成后、命中匹配与分页之前，
+    /// 因此游标只会遍历授权范围内的数据。
+    pub fn search_authorized(
+        &self,
+        query: &str,
+        scope: SearchScope,
+        limit: usize,
+        cursor: Option<&str>,
+        context: &SearchContext,
+        authorization: &SearchAuthorization,
+    ) -> SearchResultPage {
+        self.search_with_authorization(query, scope, limit, cursor, context, Some(authorization))
+    }
+
+    fn search_with_authorization(
+        &self,
+        query: &str,
+        scope: SearchScope,
+        limit: usize,
+        cursor: Option<&str>,
+        context: &SearchContext,
+        authorization: Option<&SearchAuthorization>,
+    ) -> SearchResultPage {
         let query = query.trim();
         if query.is_empty() {
             return SearchResultPage::default();
@@ -486,6 +520,13 @@ impl SearchBackend {
             self.scope_index.get(&scope).cloned().unwrap_or_default()
         };
         candidate_ids.sort();
+        if let Some(authorization) = authorization {
+            candidate_ids.retain(|id| {
+                self.entries
+                    .get(id)
+                    .is_some_and(|entry| authorization.allows(&entry.target))
+            });
+        }
 
         let lookup = PathLookup::build(&self.entries);
         let mut all_results = Vec::new();
@@ -582,7 +623,7 @@ impl SearchBackend {
                 .then_with(|| a.byte_start.cmp(&b.byte_start))
         });
 
-        let query_hash = cursor_hash(query, scope, context);
+        let query_hash = cursor_hash(query, scope, context, authorization);
         let mut start_index = 0;
         if let Some(raw_cursor) = cursor {
             if let Ok(parsed) = serde_json::from_str::<SearchCursor>(raw_cursor) {

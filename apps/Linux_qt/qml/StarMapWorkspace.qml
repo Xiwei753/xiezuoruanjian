@@ -179,7 +179,9 @@ Item {
             try {
                 var envelope = JSON.parse(String(starmapBackendRef.get_starmap_json(id) || "{}"))
                 var meta = envelope && envelope.success === true ? envelope.data : null
-                if (meta && meta.projectId) return String(meta.projectId)
+                // Core 返回存在但 projectId 为空表示独立星图，不能把上一部
+                // 作品误贴到这张图上。
+                if (meta) return String(meta.projectId || "")
             } catch (e) {}
         }
         var selected = root.appState && root.appState.selected ? root.appState.selected : ({})
@@ -196,6 +198,10 @@ Item {
     readonly property string aiStarmapPathJson: JSON.stringify(
         canvas.currentRoute.segments || [])
     readonly property string aiStarmapRouteKey: String(canvas.routeKey || "")
+    // 顶层星图页与写作区内嵌星图共用 Runtime，但 scope 归属必须分开，
+    // 后台实例不能取消另一实例正在执行的轮次。
+    readonly property string aiScopeOwner: root.embedded
+        ? "starmap-embedded-ai" : "starmap-page-ai"
     readonly property var annotationTargetRef: {
         var projectId = root.annotationProjectId
         var sceneId = String(canvas.currentStarmapId || root.starmapId || "")
@@ -544,6 +550,10 @@ Item {
                         starmapActiveId: root.aiStarmapActiveId
                         starmapPathJson: root.aiStarmapPathJson
                         starmapRouteKey: root.aiStarmapRouteKey
+                        // 只有当前工作区可见且 AI 工具真正打开时才声明 scope。
+                        scopeActive: root.visible && !root.rightPaneCollapsed
+                            && root.toolDrawerOpen && root.selectedTool === "ai"
+                        scopeOwner: root.aiScopeOwner
                         annotationBackendRef: root.annotationBackendRef
                         searchBackendRef: root.searchBackendRef
                         projectId: root.annotationProjectId

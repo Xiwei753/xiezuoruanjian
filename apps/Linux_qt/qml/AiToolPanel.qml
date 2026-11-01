@@ -24,6 +24,9 @@ Item {
     property string starmapActiveId: ""
     property string starmapPathJson: "[]"
     property string starmapRouteKey: ""
+    // Issue #1028：只有当前可见的 AI 面板才能更新共享 Runtime 的 scope。
+    property bool scopeActive: false
+    property string scopeOwner: ""
     property string contextLabel: ""
 
     ColumnLayout {
@@ -69,6 +72,8 @@ Item {
             starmapActiveId: root.starmapActiveId
             starmapPathJson: root.starmapPathJson
             starmapRouteKey: root.starmapRouteKey
+            scopeActive: root.scopeActive
+            scopeOwner: root.scopeOwner
             contextLabel: root.contextLabel
         }
     }

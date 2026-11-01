@@ -27,6 +27,10 @@ Item {
     property string starmapActiveId: ""
     property string starmapPathJson: "[]"
     property string starmapRouteKey: ""
+    // 只有当前真正可见的 AI 工作区才能更新共享 Runtime 的 MCP scope。
+    // 隐藏面板的属性变化只保留在本地，重新激活时再一次性下发。
+    property bool scopeActive: false
+    property string scopeOwner: ""
     // 星图工作区可传“当前星图对象”，写作区传当前作品。
     property string contextLabel: ""
 
@@ -111,10 +115,11 @@ Item {
     }
 
     function syncProjectContext() {
-        if (!runtimeBackendRef)
+        if (!runtimeBackendRef || !scopeActive || !visible)
             return
         // 项目/画布身份都显式下发；scope 在发送请求前固定，不从展示标题猜。
         runtimeBackendRef.set_scope(
+            scopeOwner,
             workspaceProjectId,
             workspaceProjectTitle,
             starmapRootId,
@@ -405,9 +410,13 @@ Item {
         refresh()
     }
     onVisibleChanged: {
-        // 写作面板与星图面板共用同一个运行时；回到某个面板时重新声明自己的
-        // 作用域，避免沿用另一面板最后一次设置的星图/作品范围。
-        if (visible)
+        // 写作面板与星图面板共用同一个运行时；只有真正可见的面板才重新
+        // 声明自己的作用域，隐藏面板不能覆盖或取消另一面板的轮次。
+        if (visible && scopeActive)
+            syncProjectContext()
+    }
+    onScopeActiveChanged: {
+        if (scopeActive && visible)
             syncProjectContext()
     }
     onAgentCliBackendRefChanged: {
@@ -957,7 +966,7 @@ Item {
                         && (root.workspaceProjectId !== "" || root.starmapActiveId !== "")
                     function send() {
                         var message = input.text
-                        if (!message.trim())
+                        if (!message.trim() || !root.scopeActive || !root.visible)
                             return
                         // 发送前重新声明本面板的作用域，避免共用运行时沿用
                         // 另一面板（写作/星图）最后一次设置的作品或画布。

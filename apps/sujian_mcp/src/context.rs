@@ -234,8 +234,9 @@ impl McpContext {
         self.require_object_ref(&target.object_ref)
     }
 
-    /// 创建星图：写作面板在授权作品下创建一级图；星图面板默认在当前
-    /// 画布内创建子图并嵌入，避免 AI 只返回“创建成功”但用户仍看到空白父图。
+    /// 创建星图：写作面板（无画布根图）在授权作品下创建一级图；星图面板
+    /// 始终在当前活动画布内创建子图并嵌入，避免 Agent 用可选布尔值把图
+    /// 建到画布之外。缺省或空父 ID 统一解析当前活动图。
     pub fn create_starmap(
         &self,
         title: &str,
@@ -246,12 +247,22 @@ impl McpContext {
         x: f64,
         y: f64,
     ) -> Result<Json<Value>, ErrorData> {
+        let has_canvas_root = self.root_starmap_id_opt().is_some();
+        if create_as_root && has_canvas_root {
+            return Err(scope_error(
+                "当前星图会话已绑定画布，不能创建画布外的一级星图；请在当前画布内创建子图",
+            ));
+        }
+        let explicit_parent = parent_starmap_id
+            .map(str::trim)
+            .filter(|parent| !parent.is_empty())
+            .map(str::to_string);
         let parent = if create_as_root {
+            // 只有无画布根图的写作面板允许创建作品内一级图。
             None
         } else {
-            match parent_starmap_id {
-                Some(parent) if !parent.is_empty() => Some(parent.to_string()),
-                Some(_) => None,
+            match explicit_parent {
+                Some(parent) => Some(parent),
                 None => self.resolve_active_scene()?,
             }
         };

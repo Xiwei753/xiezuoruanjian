@@ -181,6 +181,11 @@ Rectangle {
                         ? embeddedStarmapWorkspace.aiStarmapPathJson : "[]"
                     starmapRouteKey: root.embeddedStarmapId !== ""
                         ? embeddedStarmapWorkspace.aiStarmapRouteKey : ""
+                    // Issue #1028：写作页与内嵌星图页共用 Runtime；只有真正
+                    // 显示在工具抽屉里的 AI 面板才能更新 scope。
+                    scopeActive: root.visible && root.selectedTool === "ai"
+                    scopeOwner: root.embeddedStarmapId !== ""
+                        ? "starmap-embedded-ai" : "writing-ai"
                     contextLabel: root.aiContextLabel
                 }
 

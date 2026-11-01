@@ -48,6 +48,22 @@ impl super::WriterCore {
         service.search_page(query, scope, limit, cursor, context)
     }
 
+    pub fn global_search_authorized(
+        &self,
+        query: &str,
+        scope: SearchScope,
+        limit: usize,
+        cursor: Option<&str>,
+        context: &SearchContext,
+        authorization: &SearchAuthorization,
+    ) -> SearchResultPage {
+        let mut service = self
+            .search_service
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        service.search_page_authorized(query, scope, limit, cursor, context, authorization)
+    }
+
     pub fn rebuild_search_index(&self, project_id: Option<&str>) -> Result<SearchIndexStatus> {
         let entries = super::super::search::rebuild::rebuild_index(
             &self.app_data_root,

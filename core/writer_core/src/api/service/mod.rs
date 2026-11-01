@@ -310,6 +310,19 @@ impl WriterCoreApi {
         core.global_search(query, scope, limit, cursor, context)
     }
 
+    pub(crate) fn search_service_page_authorized(
+        &self,
+        query: &str,
+        scope: crate::search::SearchScope,
+        limit: usize,
+        cursor: Option<&str>,
+        context: &crate::search::SearchContext,
+        authorization: &crate::search::SearchAuthorization,
+    ) -> crate::search::SearchResultPage {
+        let core = self.core_read();
+        core.global_search_authorized(query, scope, limit, cursor, context, authorization)
+    }
+
     pub fn search_service_rebuild(
         &self,
         project_id: Option<&str>,

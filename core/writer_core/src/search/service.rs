@@ -42,6 +42,21 @@ impl SearchIndexService {
         self.backend.search(query, scope, limit, cursor, context)
     }
 
+    /// 在授权范围内搜索，并在分页前裁剪候选集。
+    pub fn search_page_authorized(
+        &mut self,
+        query: &str,
+        scope: SearchScope,
+        limit: usize,
+        cursor: Option<&str>,
+        context: &SearchContext,
+        authorization: &SearchAuthorization,
+    ) -> SearchResultPage {
+        self.apply_queue();
+        self.backend
+            .search_authorized(query, scope, limit, cursor, context, authorization)
+    }
+
     pub fn status(&self) -> SearchIndexStatus {
         let scope_counts: Vec<(SearchScope, usize)> = SearchScope::all_scopes()
             .iter()

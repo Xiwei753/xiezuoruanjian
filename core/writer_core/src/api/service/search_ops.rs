@@ -1,6 +1,6 @@
 use super::*;
 
-fn parse_scope(scope: &str) -> crate::search::SearchScope {
+pub(super) fn parse_scope(scope: &str) -> crate::search::SearchScope {
     match scope {
         "chapterBody" => crate::search::SearchScope::ChapterBody,
         "chapterTitle" => crate::search::SearchScope::ChapterTitle,

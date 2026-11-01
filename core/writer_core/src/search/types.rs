@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -124,6 +126,38 @@ pub struct SearchResult {
 pub struct SearchResultPage {
     pub items: Vec<SearchResult>,
     pub next_cursor: Option<String>,
+}
+
+/// MCP 等受限调用方的搜索授权范围。过滤必须发生在候选集与分页之前，
+/// 游标也绑定这份范围，不能先分页再丢弃越界结果。
+#[derive(Debug, Clone, Default)]
+pub struct SearchAuthorization {
+    pub project_id: Option<String>,
+    pub starmap_ids: HashSet<String>,
+}
+
+impl SearchAuthorization {
+    /// 带图 ID 的结果必须命中授权图集合；章节、标注、设置等无图结果
+    /// 按作品约束。
+    pub(crate) fn allows(&self, target: &SearchTarget) -> bool {
+        if let Some(starmap_id) = target.starmap_id.as_deref() {
+            return self.starmap_ids.contains(starmap_id);
+        }
+        match self.project_id.as_deref() {
+            Some(project_id) => target.project_id.as_deref() == Some(project_id),
+            None => target.project_id.is_none(),
+        }
+    }
+
+    pub(crate) fn cursor_fingerprint(&self) -> String {
+        let mut starmap_ids: Vec<&str> = self.starmap_ids.iter().map(String::as_str).collect();
+        starmap_ids.sort_unstable();
+        format!(
+            "{}|{}",
+            self.project_id.as_deref().unwrap_or(""),
+            starmap_ids.join(",")
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

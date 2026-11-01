@@ -23,6 +23,9 @@ Rectangle {
     property string starmapActiveId: ""
     property string starmapPathJson: "[]"
     property string starmapRouteKey: ""
+    // Issue #1028：只有当前可见的星图 AI 面板才能更新共享 Runtime 的 scope。
+    property bool scopeActive: false
+    property string scopeOwner: ""
     property string projectId: ""
     property var targetRef: null
     property string targetLabel: ""
@@ -90,6 +93,8 @@ Rectangle {
             starmapActiveId: root.starmapActiveId
             starmapPathJson: root.starmapPathJson
             starmapRouteKey: root.starmapRouteKey
+            scopeActive: root.scopeActive
+            scopeOwner: root.scopeOwner
             contextLabel: root.aiContextLabel
         }
     }

@@ -189,12 +189,102 @@ impl WriterCoreApi {
         Ok(ids)
     }
 
+    /// MCP 会话的授权星图集合。
+    ///
+    /// 有画布根图时只包含根图及经 Core 图数据验证的 Embed 子树；只有作品
+    /// scope 时包含作品绑定图，以及从这些图沿 Embed 路径可达的未绑定子图。
+    /// 读取、写入和搜索都使用这一个集合，避免出现两套授权口径。
+    fn mcp_authorized_starmap_ids(
+        &self,
+        project_id: Option<&str>,
+        root_starmap_id: Option<&str>,
+    ) -> ApiResult<Vec<String>> {
+        if let Some(root_starmap_id) = root_starmap_id {
+            let root = self.get_starmap(root_starmap_id)?;
+            if let Some(project_id) = project_id {
+                if root
+                    .project_id
+                    .as_deref()
+                    .is_some_and(|bound| bound != project_id)
+                {
+                    return Err(invalid(
+                        "root starmap belongs to a project outside this MCP scope",
+                    ));
+                }
+            } else if root.project_id.is_some() {
+                return Err(invalid(
+                    "root starmap belongs to a project outside this MCP scope",
+                ));
+            }
+            return self.mcp_starmap_subtree_ids(root_starmap_id);
+        }
+
+        let project_id = project_id.ok_or_else(|| {
+            invalid("MCP session has no authorized project or starmap scope")
+        })?;
+        if !self
+            .list_projects()?
+            .iter()
+            .any(|project| project.id == project_id)
+        {
+            return Err(invalid("project does not exist"));
+        }
+
+        let mut ids = Vec::new();
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        for meta in self.list_starmaps_for_project(project_id)? {
+            queue.push_back(meta.starmap_id);
+        }
+        while let Some(starmap_id) = queue.pop_front() {
+            if !visited.insert(starmap_id.clone()) {
+                continue;
+            }
+            let meta = match self.get_starmap(&starmap_id) {
+                Ok(meta) => meta,
+                Err(error) => {
+                    log::warn!(
+                        "mcp_authorized_starmap_ids: skip unreadable starmap {}: {}",
+                        starmap_id,
+                        error
+                    );
+                    continue;
+                }
+            };
+            if meta
+                .project_id
+                .as_deref()
+                .is_some_and(|bound| bound != project_id)
+            {
+                // 作品图嵌入其他作品时，不沿那棵子树继续扩大授权范围。
+                continue;
+            }
+            ids.push(starmap_id.clone());
+            match self.get_starmap_graph(&starmap_id) {
+                Ok(graph) => {
+                    for embed in graph.embeds {
+                        queue.push_back(embed.target_starmap_id);
+                    }
+                }
+                Err(error) => {
+                    log::warn!(
+                        "mcp_authorized_starmap_ids: skip unreadable graph {}: {}",
+                        starmap_id,
+                        error
+                    );
+                }
+            }
+        }
+        Ok(ids)
+    }
+
     /// 校验 MCP 请求的目标星图是否属于会话授权范围。
     ///
     /// 授权规则：
-    /// - 目标绑定到会话已授权作品时允许；
-    /// - 目标未绑定作品（嵌套子图）时必须位于当前根星图及其 Embed 子树；
-    /// - 目标绑定到其他作品时一律拒绝。
+    /// - 有画布根图时，目标必须位于当前根图及其 Embed 子树；
+    /// - 只有作品 scope 时，目标必须绑定到该作品，或从该作品已授权父图
+    ///   沿 Embed 路径可达；
+    /// - 既无作品也无根图时一律拒绝。
     pub fn mcp_validate_starmap_target(
         &self,
         project_id: Option<&str>,
@@ -214,115 +304,31 @@ impl WriterCoreApi {
                 return Err(invalid("project does not exist"));
             }
         }
-        let target = self.get_starmap(target_starmap_id)?;
-        if let Some(project_id) = project_id {
-            if target
-                .project_id
-                .as_deref()
-                .is_some_and(|bound| bound != project_id)
-            {
-                return Err(invalid(
-                    "target starmap belongs to a project outside this MCP scope",
-                ));
-            }
-        } else if target.project_id.is_some() {
-            return Err(invalid(
-                "target starmap belongs to a project outside this MCP scope",
-            ));
+        let ids = self.mcp_authorized_starmap_ids(project_id, root_starmap_id)?;
+        if !ids.iter().any(|id| id == target_starmap_id) {
+            return Err(invalid(if root_starmap_id.is_some() {
+                "target starmap is outside the current root starmap subtree"
+            } else {
+                "target starmap is outside the authorized project scope"
+            }));
         }
-
-        match root_starmap_id {
-            Some(root_starmap_id) => {
-                let root = self.get_starmap(root_starmap_id)?;
-                if let Some(project_id) = project_id {
-                    if root
-                        .project_id
-                        .as_deref()
-                        .is_some_and(|bound| bound != project_id)
-                    {
-                        return Err(invalid(
-                            "root starmap belongs to a project outside this MCP scope",
-                        ));
-                    }
-                } else if root.project_id.is_some() {
-                    return Err(invalid(
-                        "root starmap belongs to a project outside this MCP scope",
-                    ));
-                }
-                // 路径必须能解析；这里不信任 Agent 提供的 activeStarmapId。
-                let _active = self.mcp_resolve_active_starmap(root_starmap_id, segments)?;
-                // 画布会话的写范围就是当前根图及其 Embed 子树。同一作品下
-                // 另一张无关星图也必须显式切换画布后才能操作，避免 Agent
-                // 继续拿上一张图的裸 starmapId 写入错误目标。
-                let ids = self.mcp_starmap_subtree_ids(root_starmap_id)?;
-                if !ids.iter().any(|id| id == target_starmap_id) {
-                    return Err(invalid(
-                        "target starmap is outside the current root starmap subtree",
-                    ));
-                }
-            }
-            None => {
-                if project_id.is_none() {
-                    return Err(invalid(
-                        "MCP session has no authorized project or starmap scope",
-                    ));
-                }
-            }
+        if let Some(root_starmap_id) = root_starmap_id {
+            // 路径必须能解析；这里不信任 Agent 提供的 activeStarmapId。
+            let _active = self.mcp_resolve_active_starmap(root_starmap_id, segments)?;
         }
         Ok(target_starmap_id.to_string())
     }
 
-    /// 会话授权范围内的星图元数据。项目范围内的图与当前根子树取并集，
-    /// 供 `list_starmaps` 和写审计确定真实目标。
+    /// 会话授权范围内的星图元数据。与读写校验共用同一授权集合。
     pub fn mcp_list_authorized_starmaps(
         &self,
         project_id: Option<&str>,
         root_starmap_id: Option<&str>,
     ) -> ApiResult<Vec<StarMapMetaDto>> {
-        let mut result: Vec<StarMapMetaDto> = Vec::new();
-        let mut seen = HashSet::new();
-        if let Some(root_starmap_id) = root_starmap_id {
-            // 画布会话只暴露当前根图子树，不把同作品下其他无关星图
-            // 混进可选列表，避免模型凭列表猜测写入目标。
-            let root = self.get_starmap(root_starmap_id)?;
-            if let Some(project_id) = project_id {
-                if root
-                    .project_id
-                    .as_deref()
-                    .is_some_and(|bound| bound != project_id)
-                {
-                    return Err(invalid(
-                        "root starmap belongs to a project outside this MCP scope",
-                    ));
-                }
-            } else if root.project_id.is_some() {
-                return Err(invalid(
-                    "root starmap belongs to a project outside this MCP scope",
-                ));
-            }
-            for starmap_id in self.mcp_starmap_subtree_ids(root_starmap_id)? {
-                let meta = self.get_starmap(&starmap_id)?;
-                if seen.insert(starmap_id.clone()) {
-                    result.push(meta);
-                }
-            }
-        } else if let Some(project_id) = project_id {
-            if !self
-                .list_projects()?
-                .iter()
-                .any(|project| project.id == project_id)
-            {
-                return Err(invalid("project does not exist"));
-            }
-            for meta in self.list_starmaps_for_project(project_id)? {
-                if seen.insert(meta.starmap_id.clone()) {
-                    result.push(meta);
-                }
-            }
-        } else {
-            return Err(invalid(
-                "MCP session has no authorized project or starmap scope",
-            ));
+        let ids = self.mcp_authorized_starmap_ids(project_id, root_starmap_id)?;
+        let mut result = Vec::with_capacity(ids.len());
+        for starmap_id in ids {
+            result.push(self.get_starmap(&starmap_id)?);
         }
         Ok(result)
     }
@@ -531,7 +537,8 @@ impl WriterCoreApi {
         Ok(result)
     }
 
-    /// 按会话作品/星图范围过滤全局搜索结果，避免 MCP 读到其他作品。
+    /// 按会话作品/星图范围搜索。授权过滤在 Core 搜索候选集与分页之前
+    /// 完成，游标也绑定同一份授权范围，避免先分页再丢弃造成结果缺失。
     pub fn mcp_search_json_scoped(
         &self,
         query: &str,
@@ -541,32 +548,19 @@ impl WriterCoreApi {
         project_id: Option<&str>,
         authorized_starmap_ids: &[String],
     ) -> ApiResult<String> {
-        let raw = self.global_search_json(query, scope, limit, cursor)?;
-        let results: Vec<crate::search::SearchResult> = serde_json::from_str(&raw)
-            .map_err(|error| invalid(format!("invalid search response: {error}")))?;
-        let allowed: HashSet<&str> = authorized_starmap_ids.iter().map(String::as_str).collect();
-        let filtered: Vec<crate::search::SearchResult> = results
-            .into_iter()
-            .filter(|result| {
-                let target = &result.target;
-                if let Some(project_id) = project_id {
-                    match target.project_id.as_deref() {
-                        Some(bound) => bound == project_id,
-                        None => target
-                            .starmap_id
-                            .as_deref()
-                            .is_some_and(|id| allowed.contains(id)),
-                    }
-                } else {
-                    target.project_id.is_none()
-                        && target
-                            .starmap_id
-                            .as_deref()
-                            .is_some_and(|id| allowed.contains(id))
-                }
-            })
-            .collect();
-        Self::json_string(&filtered)
+        let authorization = crate::search::SearchAuthorization {
+            project_id: project_id.map(str::to_string),
+            starmap_ids: authorized_starmap_ids.iter().cloned().collect(),
+        };
+        let page = self.search_service_page_authorized(
+            query,
+            super::search_ops::parse_scope(scope),
+            limit as usize,
+            cursor,
+            &crate::search::SearchContext::default(),
+            &authorization,
+        );
+        Self::json_string(&page.items)
     }
 
     fn mcp_find_chapter(
