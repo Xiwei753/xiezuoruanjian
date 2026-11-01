@@ -41,8 +41,10 @@ struct EdgeDiagnostics {
     selected_vertex_count: i32,
     normal_geometry_vertex_count: i32,
     selected_geometry_vertex_count: i32,
-    normal_has_material: bool,
-    selected_has_material: bool,
+    normal_geometry_present: bool,
+    selected_geometry_present: bool,
+    normal_material_present: bool,
+    selected_material_present: bool,
     viewport_x: f64,
     viewport_y: f64,
     stroke_half: f64,
@@ -63,10 +65,25 @@ struct EdgeDiagnostics {
     sample_end_screen_y: f64,
     clip_width: f64,
     clip_height: f64,
-    shader_resource_ready: bool,
+    shader_resource_exists: bool,
+    shader_vertex_container_valid: bool,
+    shader_fragment_container_valid: bool,
+    shader_vertex_qsb_version: i32,
+    shader_fragment_qsb_version: i32,
+    shader_vertex_stage_matches: bool,
+    shader_fragment_stage_matches: bool,
 }
 
 static EDGE_DIAGNOSTICS: Mutex<Option<EdgeDiagnostics>> = Mutex::new(None);
+
+// build.rs 用 Qt Shader Tools 的 qsb -d 检查实际打包的二进制；工具不可用时
+// 这些常量为 None，诊断不会把“未验证”写成“已就绪”。
+const EDGE_VERTEX_QSB_STAGE: Option<&str> = option_env!("SUJIAN_EDGE_VERTEX_QSB_STAGE");
+const EDGE_VERTEX_QSB_GLSL: Option<&str> = option_env!("SUJIAN_EDGE_VERTEX_QSB_GLSL");
+const EDGE_FRAGMENT_QSB_STAGE: Option<&str> = option_env!("SUJIAN_EDGE_FRAGMENT_QSB_STAGE");
+const EDGE_FRAGMENT_QSB_GLSL: Option<&str> = option_env!("SUJIAN_EDGE_FRAGMENT_QSB_GLSL");
+const EDGE_VERTEX_QSB_SHADERS: Option<&str> = option_env!("SUJIAN_EDGE_VERTEX_QSB_SHADERS");
+const EDGE_FRAGMENT_QSB_SHADERS: Option<&str> = option_env!("SUJIAN_EDGE_FRAGMENT_QSB_SHADERS");
 
 /// 诊断用渲染统计：只含计数与实际资源状态，不含星图正文。
 pub fn render_statistics_json() -> String {
@@ -75,6 +92,37 @@ pub fn render_statistics_json() -> String {
         .ok()
         .and_then(|guard| guard.clone())
         .unwrap_or_default();
+    let vertex_variants: Vec<&str> = EDGE_VERTEX_QSB_GLSL
+        .unwrap_or_default()
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .collect();
+    let fragment_variants: Vec<&str> = EDGE_FRAGMENT_QSB_GLSL
+        .unwrap_or_default()
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .collect();
+    let vertex_shaders: Vec<&str> = EDGE_VERTEX_QSB_SHADERS
+        .unwrap_or_default()
+        .split(';')
+        .filter(|value| !value.is_empty())
+        .collect();
+    let fragment_shaders: Vec<&str> = EDGE_FRAGMENT_QSB_SHADERS
+        .unwrap_or_default()
+        .split(';')
+        .filter(|value| !value.is_empty())
+        .collect();
+    let build_validated = EDGE_VERTEX_QSB_STAGE == Some("Vertex")
+        && EDGE_FRAGMENT_QSB_STAGE == Some("Fragment")
+        && !vertex_variants.is_empty()
+        && !fragment_variants.is_empty();
+    let opengl_ready = build_validated
+        && vertex_variants
+            .iter()
+            .any(|version| *version == "120" || *version == "150")
+        && fragment_variants
+            .iter()
+            .any(|version| *version == "120" || *version == "150");
     serde_json::json!({
         "edgeLayerGeometryUpdates": EDGE_GEOMETRY_UPDATES.load(Ordering::Relaxed),
         "edgeLayerVertexUploads": EDGE_VERTEX_UPLOADS.load(Ordering::Relaxed),
@@ -84,9 +132,25 @@ pub fn render_statistics_json() -> String {
         "selectedVertexCount": snapshot.selected_vertex_count,
         "normalGeometryVertexCount": snapshot.normal_geometry_vertex_count,
         "selectedGeometryVertexCount": snapshot.selected_geometry_vertex_count,
-        "normalMaterialReady": snapshot.normal_has_material,
-        "selectedMaterialReady": snapshot.selected_has_material,
-        "shaderResourceReady": snapshot.shader_resource_ready,
+        "normalGeometryPresent": snapshot.normal_geometry_present,
+        "selectedGeometryPresent": snapshot.selected_geometry_present,
+        "normalMaterialPresent": snapshot.normal_material_present,
+        "selectedMaterialPresent": snapshot.selected_material_present,
+        "shaderResourceExists": snapshot.shader_resource_exists,
+        "shaderVertexContainerValid": snapshot.shader_vertex_container_valid,
+        "shaderFragmentContainerValid": snapshot.shader_fragment_container_valid,
+        "shaderVertexQsbVersion": snapshot.shader_vertex_qsb_version,
+        "shaderFragmentQsbVersion": snapshot.shader_fragment_qsb_version,
+        "shaderVertexStageMatches": snapshot.shader_vertex_stage_matches,
+        "shaderFragmentStageMatches": snapshot.shader_fragment_stage_matches,
+        "shaderBuildToolValidated": build_validated,
+        "shaderVertexBuildShaders": vertex_shaders,
+        "shaderFragmentBuildShaders": fragment_shaders,
+        "shaderVertexBuildGlslVariants": vertex_variants,
+        "shaderFragmentBuildGlslVariants": fragment_variants,
+        "shaderOpenGlVariantReady": opengl_ready,
+        // QSGMaterialShader 没有公开 API 查询 GPU 编译/绘制结果，不能伪报。
+        "shaderPipelineVerified": false,
         "viewport": [snapshot.viewport_x, snapshot.viewport_y],
         "clipRect": [0.0, 0.0, snapshot.clip_width, snapshot.clip_height],
         "strokeHalf": snapshot.stroke_half,
@@ -108,6 +172,8 @@ pub fn render_statistics_json() -> String {
 
 cpp! {{
     #include <qmetaobject_rust.hpp>
+    #include <QtCore/QByteArray>
+    #include <QtCore/QDataStream>
     #include <QtCore/QFile>
     #include <QtGui/QColor>
     #include <QtGui/QMatrix4x4>
@@ -306,6 +372,91 @@ cpp! {{
                                    viewport_x, viewport_y);
     }
 
+    // qsb 是 qCompress 包裹的 QDataStream 数据：先解压，再读 QSB 版本与
+    // stage。这里做真实的容器级校验；QSG 的 GPU pipeline 是否创建成功没有
+    // 公开查询接口，因此不在诊断里伪装成已绘制。
+    struct SujianEdgeShaderContainer
+    {
+        bool exists = false;
+        bool decompressed = false;
+        bool stage_matches = false;
+        int qsb_version = 0;
+        int stage = -1;
+    };
+
+    static void sujian_inspect_edge_shader(const QString &path, int expected_stage,
+                                           SujianEdgeShaderContainer &out)
+    {
+        out.exists = QFile::exists(path);
+        if (!out.exists)
+            return;
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            return;
+        const QByteArray serialized = qUncompress(file.readAll());
+        if (serialized.isEmpty())
+            return;
+        out.decompressed = true;
+        QDataStream stream(serialized);
+        stream.setVersion(QDataStream::Qt_5_10);
+        stream >> out.qsb_version >> out.stage;
+        if (stream.status() != QDataStream::Ok)
+            return;
+        out.stage_matches = out.stage == expected_stage;
+    }
+
+    static const SujianEdgeShaderContainer &sujian_edge_vertex_shader()
+    {
+        static const SujianEdgeShaderContainer container = [] {
+            SujianEdgeShaderContainer c;
+            // Qt 6 QShader::Stage：VertexStage = 0，FragmentStage = 4。
+            sujian_inspect_edge_shader(kSujianEdgeVertexShader, 0, c);
+            return c;
+        }();
+        return container;
+    }
+
+    static const SujianEdgeShaderContainer &sujian_edge_fragment_shader()
+    {
+        static const SujianEdgeShaderContainer container = [] {
+            SujianEdgeShaderContainer c;
+            sujian_inspect_edge_shader(kSujianEdgeFragmentShader, 4, c);
+            return c;
+        }();
+        return container;
+    }
+
+    // 位布局：0 顶点资源存在，1 片元资源存在，2/3 容器解压成功，
+    // 4/5 stage 匹配，8..15 顶点 QSB 版本，16..23 片元版本，
+    // 40/41 版本为 9，42 两端容器和 stage 均通过。
+    static qint64 sujian_edge_shader_state_bits()
+    {
+        const SujianEdgeShaderContainer &v = sujian_edge_vertex_shader();
+        const SujianEdgeShaderContainer &f = sujian_edge_fragment_shader();
+        qint64 bits = 0;
+        if (v.exists)
+            bits |= 1LL << 0;
+        if (f.exists)
+            bits |= 1LL << 1;
+        if (v.decompressed)
+            bits |= 1LL << 2;
+        if (f.decompressed)
+            bits |= 1LL << 3;
+        if (v.stage_matches)
+            bits |= 1LL << 4;
+        if (f.stage_matches)
+            bits |= 1LL << 5;
+        bits |= qint64(qMin(qMax(v.qsb_version, 0), 255)) << 8;
+        bits |= qint64(qMin(qMax(f.qsb_version, 0), 255)) << 16;
+        if (v.qsb_version == 9)
+            bits |= 1LL << 40;
+        if (f.qsb_version == 9)
+            bits |= 1LL << 41;
+        if (v.decompressed && f.decompressed && v.stage_matches && f.stage_matches)
+            bits |= 1LL << 42;
+        return bits;
+    }
+
     // 诊断位布局：normal_vc[0..19] | selected_vc[20..39] | flags[40..]。
     static qint64 sujian_edge_debug_state(QSGNode *root)
     {
@@ -328,9 +479,6 @@ cpp! {{
             flags |= 4;
         if (selected && selected->material())
             flags |= 8;
-        if (QFile::exists(kSujianEdgeVertexShader)
-                && QFile::exists(kSujianEdgeFragmentShader))
-            flags |= 16;
         return (normal_vc & 0xfffff) | ((selected_vc & 0xfffff) << 20)
                 | (flags << 40);
     }
@@ -712,6 +860,9 @@ impl QQuickItem for StarMapEdgeLayer {
         let debug_state = cpp!(unsafe [raw as "QSGNode *"] -> i64 as "qint64" {
             return sujian_edge_debug_state(raw);
         });
+        let shader_bits = cpp!(unsafe [] -> i64 as "qint64" {
+            return sujian_edge_shader_state_bits();
+        });
         let geometry_flags = debug_state >> 40;
         let sample = self.edges.first();
         let sample_start_screen = sample
@@ -729,8 +880,10 @@ impl QQuickItem for StarMapEdgeLayer {
                 selected_vertex_count: selected_count,
                 normal_geometry_vertex_count: (debug_state & 0xfffff) as i32,
                 selected_geometry_vertex_count: ((debug_state >> 20) & 0xfffff) as i32,
-                normal_has_material: geometry_flags & 4 != 0,
-                selected_has_material: geometry_flags & 8 != 0,
+                normal_geometry_present: geometry_flags & 1 != 0,
+                selected_geometry_present: geometry_flags & 2 != 0,
+                normal_material_present: geometry_flags & 4 != 0,
+                selected_material_present: geometry_flags & 8 != 0,
                 viewport_x: width,
                 viewport_y: height,
                 stroke_half,
@@ -751,7 +904,14 @@ impl QQuickItem for StarMapEdgeLayer {
                 sample_end_screen_y: sample_end_screen.1,
                 clip_width: width,
                 clip_height: height,
-                shader_resource_ready: geometry_flags & 16 != 0,
+                shader_resource_exists: shader_bits & (1 << 0) != 0
+                    && shader_bits & (1 << 1) != 0,
+                shader_vertex_container_valid: shader_bits & (1 << 2) != 0,
+                shader_fragment_container_valid: shader_bits & (1 << 3) != 0,
+                shader_vertex_qsb_version: ((shader_bits >> 8) & 0xff) as i32,
+                shader_fragment_qsb_version: ((shader_bits >> 16) & 0xff) as i32,
+                shader_vertex_stage_matches: shader_bits & (1 << 4) != 0,
+                shader_fragment_stage_matches: shader_bits & (1 << 5) != 0,
             });
         }
         self.geometry_dirty = false;

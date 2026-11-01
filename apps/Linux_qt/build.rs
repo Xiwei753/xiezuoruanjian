@@ -605,6 +605,8 @@ fn main() {
     println!("cargo:rerun-if-changed=src/native/shaders/starmap_edge.frag.qsb");
     println!("cargo:rerun-if-changed=src/native/shaders/starmap_grid.vert.qsb");
     println!("cargo:rerun-if-changed=src/native/shaders/starmap_grid.frag.qsb");
+    println!("cargo:rerun-if-env-changed=QSB");
+    emit_qsb_validation();
     println!("cargo:rerun-if-changed=qml/DesktopLayoutState.qml");
     println!("cargo:rerun-if-changed=qml/StarMapNavigationTree.qml");
     println!("cargo:rerun-if-changed=qml/CorrectionPanel.qml");
@@ -795,4 +797,125 @@ fn inject_build_env_vars() {
     println!("cargo:rustc-env=RUSTC_VERSION={}", rustc_version);
     println!("cargo:rustc-env=PACKAGE_TYPE={}", package_type);
     println!("cargo:rustc-env=BUILD_KEY={}", build_key);
+}
+
+/// Issue #1030：用 Qt Shader Tools 的 `qsb -d` 校验实际打包的二进制内容。
+/// 工具缺失时安静跳过；诊断中的 shaderBuildToolValidated 保持 false，
+/// 不把“资源存在”或“未验证”误报成“shader 已通过 GPU pipeline”。
+fn emit_qsb_validation() {
+    let Some(qsb) = find_qsb_tool() else { return };
+    for (env_prefix, path, expected_stage) in [
+        (
+            "SUJIAN_EDGE_VERTEX_QSB",
+            "src/native/shaders/starmap_edge.vert.qsb",
+            "Vertex",
+        ),
+        (
+            "SUJIAN_EDGE_FRAGMENT_QSB",
+            "src/native/shaders/starmap_edge.frag.qsb",
+            "Fragment",
+        ),
+        (
+            "SUJIAN_GRID_VERTEX_QSB",
+            "src/native/shaders/starmap_grid.vert.qsb",
+            "Vertex",
+        ),
+        (
+            "SUJIAN_GRID_FRAGMENT_QSB",
+            "src/native/shaders/starmap_grid.frag.qsb",
+            "Fragment",
+        ),
+    ] {
+        match inspect_qsb(&qsb, path) {
+            Some((stage, variants, shaders)) if stage == expected_stage => {
+                println!("cargo:rustc-env={env_prefix}_STAGE={stage}");
+                println!("cargo:rustc-env={env_prefix}_GLSL={}", variants.join(","));
+                println!("cargo:rustc-env={env_prefix}_SHADERS={}", shaders.join(";"));
+            }
+            Some((stage, _, _)) => {
+                println!(
+                    "cargo:warning={path} 的 stage 是 {stage}，期望 {expected_stage}"
+                );
+            }
+            None => {
+                println!("cargo:warning=无法用 qsb -d 验证 {path}");
+            }
+        }
+    }
+}
+
+fn find_qsb_tool() -> Option<PathBuf> {
+    if let Ok(value) = std::env::var("QSB") {
+        let path = PathBuf::from(value.trim());
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    for candidate in [
+        "qsb-qt6",
+        "qsb",
+        "/usr/lib64/qt6/bin/qsb",
+        "/usr/lib/qt6/bin/qsb",
+        "/usr/lib/x86_64-linux-gnu/qt6/bin/qsb",
+        "/usr/bin/qsb-qt6",
+    ] {
+        let path = PathBuf::from(candidate);
+        if path.is_file() {
+            return Some(path);
+        }
+        if !candidate.contains('/') {
+            if let Ok(output) = Command::new("which").arg(candidate).output() {
+                if output.status.success() {
+                    let found = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !found.is_empty() {
+                        return Some(PathBuf::from(found));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn inspect_qsb(qsb: &Path, path: &str) -> Option<(String, Vec<String>, Vec<String>)> {
+    let output = Command::new(qsb).arg("-d").arg(path).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut stage = String::new();
+    let mut variants = Vec::new();
+    let mut shaders = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("Stage:") {
+            stage = value.trim().to_string();
+        }
+        if let Some(rest) = line.strip_prefix("Shader ") {
+            if let Some((_, description)) = rest.split_once(": ") {
+                let description = description.trim();
+                if !shaders.iter().any(|item| item == description) {
+                    shaders.push(description.to_string());
+                }
+                if let Some(glsl) = description.strip_prefix("GLSL ") {
+                    let version = glsl.split(" [").next().unwrap_or(glsl).trim();
+                    if version.starts_with("100") {
+                        variants.push("100es".to_string());
+                    } else {
+                        variants.push(version.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if stage.is_empty() || variants.is_empty() || shaders.is_empty() {
+        return None;
+    }
+    let mut unique = Vec::new();
+    for variant in variants {
+        if !unique.contains(&variant) {
+            unique.push(variant);
+        }
+    }
+    Some((stage, unique, shaders))
 }

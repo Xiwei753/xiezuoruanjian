@@ -12,6 +12,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
+import QtQml.Models
 import org.kde.kirigami as Kirigami
 
 Item {
@@ -876,7 +877,7 @@ Item {
                                 color: Kirigami.Theme.disabledTextColor
                             }
                         }
-                        ToolTip.visible: hovered && root.conversation
+                        ToolTip.visible: hovered && Boolean(root.conversation)
                         ToolTip.text: root.conversation
                             ? String(root.conversation.id || "") : ""
                         onClicked: conversationMenu.popup()
@@ -890,6 +891,7 @@ Item {
                             Instantiator {
                                 model: root.conversationList
                                 delegate: MenuItem {
+                                    required property var modelData
                                     text: String(modelData.title || qsTr("会话"))
                                     checkable: true
                                     checked: root.conversation
