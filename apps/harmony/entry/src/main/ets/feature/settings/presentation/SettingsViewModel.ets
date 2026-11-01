@@ -43,6 +43,43 @@ export type SettingsSectionId =
   | 'laboratory'
   | 'about'
 
+// Issue #1026：设置浮层只提交本次实际改动的字段，避免把整份旧 DTO 写回磁盘，
+// 覆盖写作页已经落盘的字号/行距等字段。
+type LocalSettingsField =
+  | 'themeMode'
+  | 'appearanceMode'
+  | 'colorSource'
+  | 'dynamicColorEnabled'
+  | 'selectedBuiltinThemeId'
+  | 'selectedPaletteId'
+  | 'locale'
+  | 'autoSaveEnabled'
+  | 'editorFontSize'
+  | 'editorLineSpacingMultiplier'
+  | 'autoSaveDelayMs'
+  | 'autoIndentEnabled'
+  | 'autoIndentWidth'
+  | 'editorTypingAnimationEnabled'
+  | 'editorSmoothCursorEnabled'
+  | 'editorTypingAnimationDurationMs'
+  | 'editorSmoothCursorDurationMs'
+  | 'aiEnabled'
+  | 'statsDeviceId'
+  | 'editorCoordinatedTextCursorAnimationEnabled'
+  | 'diagnosticsEnabled'
+  | 'diagnosticsVerbose'
+
+const LOCAL_SETTINGS_FIELDS: LocalSettingsField[] = [
+  'themeMode', 'appearanceMode', 'colorSource', 'dynamicColorEnabled',
+  'selectedBuiltinThemeId', 'selectedPaletteId', 'locale', 'autoSaveEnabled',
+  'editorFontSize', 'editorLineSpacingMultiplier', 'autoSaveDelayMs',
+  'autoIndentEnabled', 'autoIndentWidth', 'editorTypingAnimationEnabled',
+  'editorSmoothCursorEnabled', 'editorTypingAnimationDurationMs',
+  'editorSmoothCursorDurationMs', 'aiEnabled', 'statsDeviceId',
+  'editorCoordinatedTextCursorAnimationEnabled', 'diagnosticsEnabled',
+  'diagnosticsVerbose'
+]
+
 // 问题4：折叠状态持久化 — 使用 AppStorageV2 跨页面实例保留展开状态。
 // AppStorageV2 连接的 key，所有 SettingsScreen 实例共享同一份展开状态。
 const EXPANDED_SECTIONS_KEY = 'settings_expanded_sections'
@@ -148,9 +185,11 @@ export class SettingsViewModel {
 
   // ── LocalSettings 有序串行保存（Issue #1026） ──
   // 快速拖动字号/行距或连续切换主题时，saveSettings 只登记“还有最新请求”；
-  // drain 每轮冻结一份完整快照再落盘，避免多份异步写入乱序。
+  // drain 每轮取走待保存字段和对应快照，在统一写队列内做字段级合并，
+  // 避免多份异步写入乱序，也避免整份旧 DTO 覆盖其它页面刚写入的字段。
   private localSettingsSaveQueued: boolean = false
   private localSettingsSaveRunning: Promise<void> | null = null
+  private localSettingsDirtyFields: Set<LocalSettingsField> = new Set<LocalSettingsField>()
 
   // ── Token 落盘合并（Issue #924） ──
   // TextInput.onChange 逐字触发 updateSyncToken：只更新内存并重置防抖计时器；
@@ -272,6 +311,10 @@ export class SettingsViewModel {
   // ── 保存设置 ──
 
   async saveSettings(): Promise<void> {
+    // 没有字段变化时不需要保存；updateSettings 已记录本轮实际改动集合。
+    if (this.localSettingsDirtyFields.size === 0) {
+      return
+    }
     this.localSettingsSaveQueued = true
     this.isSaving = true
     if (this.localSettingsSaveRunning === null) {
@@ -283,13 +326,22 @@ export class SettingsViewModel {
     }
   }
 
-  /** 队列排空循环：每轮冻结当时完整设置；期间的新请求只置标记，合并为下一轮。 */
+  /**
+   * 队列排空循环：每轮取走当前待保存字段和快照；保存期间的新改动进入下一轮。
+   * 先取走字段再清空，保证在途请求不会吞掉后续滑块/开关产生的新改动。
+   */
   private async drainLocalSettingsSaves(): Promise<void> {
     try {
       while (this.localSettingsSaveQueued) {
         this.localSettingsSaveQueued = false
+        if (this.localSettingsDirtyFields.size === 0) {
+          continue
+        }
+        const fields: Set<LocalSettingsField> =
+          new Set<LocalSettingsField>(this.localSettingsDirtyFields)
+        this.localSettingsDirtyFields.clear()
         const snapshot: LocalSettings = this.snapshotLocalSettings()
-        await this.persistLocalSettings(snapshot)
+        await this.persistLocalSettings(snapshot, fields)
       }
     } finally {
       this.localSettingsSaveRunning = null
@@ -326,57 +378,149 @@ export class SettingsViewModel {
     }
   }
 
-  /** 只持久化传入快照；广播、提示和主题都使用这份快照对应的落盘结果。 */
-  private async persistLocalSettings(snapshot: LocalSettings): Promise<void> {
+  /** 显式比较字段；null 与空字符串不同，作为“未修改/改为空”的边界。 */
+  private localSettingsFieldEquals(
+    field: LocalSettingsField,
+    left: LocalSettings,
+    right: LocalSettings,
+  ): boolean {
+    switch (field) {
+      case 'themeMode': return left.themeMode === right.themeMode
+      case 'appearanceMode': return left.appearanceMode === right.appearanceMode
+      case 'colorSource': return left.colorSource === right.colorSource
+      case 'dynamicColorEnabled': return left.dynamicColorEnabled === right.dynamicColorEnabled
+      case 'selectedBuiltinThemeId': return left.selectedBuiltinThemeId === right.selectedBuiltinThemeId
+      case 'selectedPaletteId': return left.selectedPaletteId === right.selectedPaletteId
+      case 'locale': return left.locale === right.locale
+      case 'autoSaveEnabled': return left.autoSaveEnabled === right.autoSaveEnabled
+      case 'editorFontSize': return left.editorFontSize === right.editorFontSize
+      case 'editorLineSpacingMultiplier':
+        return left.editorLineSpacingMultiplier === right.editorLineSpacingMultiplier
+      case 'autoSaveDelayMs': return left.autoSaveDelayMs === right.autoSaveDelayMs
+      case 'autoIndentEnabled': return left.autoIndentEnabled === right.autoIndentEnabled
+      case 'autoIndentWidth': return left.autoIndentWidth === right.autoIndentWidth
+      case 'editorTypingAnimationEnabled':
+        return left.editorTypingAnimationEnabled === right.editorTypingAnimationEnabled
+      case 'editorSmoothCursorEnabled':
+        return left.editorSmoothCursorEnabled === right.editorSmoothCursorEnabled
+      case 'editorTypingAnimationDurationMs':
+        return left.editorTypingAnimationDurationMs === right.editorTypingAnimationDurationMs
+      case 'editorSmoothCursorDurationMs':
+        return left.editorSmoothCursorDurationMs === right.editorSmoothCursorDurationMs
+      case 'aiEnabled': return left.aiEnabled === right.aiEnabled
+      case 'statsDeviceId': return left.statsDeviceId === right.statsDeviceId
+      case 'editorCoordinatedTextCursorAnimationEnabled':
+        return left.editorCoordinatedTextCursorAnimationEnabled ===
+          right.editorCoordinatedTextCursorAnimationEnabled
+      case 'diagnosticsEnabled': return left.diagnosticsEnabled === right.diagnosticsEnabled
+      case 'diagnosticsVerbose': return left.diagnosticsVerbose === right.diagnosticsVerbose
+      default: return true
+    }
+  }
+
+  /** 只把指定字段从 source 写入 target，保留 target 中其它页面/入口刚落盘的最新值。 */
+  private applyLocalSettingsFields(
+    target: LocalSettings,
+    source: LocalSettings,
+    fields: Set<LocalSettingsField>,
+  ): LocalSettings {
+    if (fields.has('themeMode')) target.themeMode = source.themeMode
+    if (fields.has('appearanceMode')) target.appearanceMode = source.appearanceMode
+    if (fields.has('colorSource')) target.colorSource = source.colorSource
+    if (fields.has('dynamicColorEnabled')) target.dynamicColorEnabled = source.dynamicColorEnabled
+    if (fields.has('selectedBuiltinThemeId')) target.selectedBuiltinThemeId = source.selectedBuiltinThemeId
+    if (fields.has('selectedPaletteId')) target.selectedPaletteId = source.selectedPaletteId
+    if (fields.has('locale')) target.locale = source.locale
+    if (fields.has('autoSaveEnabled')) target.autoSaveEnabled = source.autoSaveEnabled
+    if (fields.has('editorFontSize')) target.editorFontSize = source.editorFontSize
+    if (fields.has('editorLineSpacingMultiplier')) {
+      target.editorLineSpacingMultiplier = source.editorLineSpacingMultiplier
+    }
+    if (fields.has('autoSaveDelayMs')) target.autoSaveDelayMs = source.autoSaveDelayMs
+    if (fields.has('autoIndentEnabled')) target.autoIndentEnabled = source.autoIndentEnabled
+    if (fields.has('autoIndentWidth')) target.autoIndentWidth = source.autoIndentWidth
+    if (fields.has('editorTypingAnimationEnabled')) {
+      target.editorTypingAnimationEnabled = source.editorTypingAnimationEnabled
+    }
+    if (fields.has('editorSmoothCursorEnabled')) {
+      target.editorSmoothCursorEnabled = source.editorSmoothCursorEnabled
+    }
+    if (fields.has('editorTypingAnimationDurationMs')) {
+      target.editorTypingAnimationDurationMs = source.editorTypingAnimationDurationMs
+    }
+    if (fields.has('editorSmoothCursorDurationMs')) {
+      target.editorSmoothCursorDurationMs = source.editorSmoothCursorDurationMs
+    }
+    if (fields.has('aiEnabled')) target.aiEnabled = source.aiEnabled
+    if (fields.has('statsDeviceId')) target.statsDeviceId = source.statsDeviceId
+    if (fields.has('editorCoordinatedTextCursorAnimationEnabled')) {
+      target.editorCoordinatedTextCursorAnimationEnabled = source.editorCoordinatedTextCursorAnimationEnabled
+    }
+    if (fields.has('diagnosticsEnabled')) target.diagnosticsEnabled = source.diagnosticsEnabled
+    if (fields.has('diagnosticsVerbose')) target.diagnosticsVerbose = source.diagnosticsVerbose
+    return target
+  }
+
+  /**
+   * 把已落盘结果合并回 UI：只覆盖未被用户继续编辑的字段。
+   * 若用户在 await 期间又改了某字段，该字段仍保留内存草稿，等下一轮保存。
+   */
+  private mergePersistedLocalSettings(persisted: LocalSettings): void {
+    const safeFields: Set<LocalSettingsField> = new Set<LocalSettingsField>()
+    for (const field of LOCAL_SETTINGS_FIELDS) {
+      if (!this.localSettingsDirtyFields.has(field)) {
+        safeFields.add(field)
+      }
+    }
+    const next: LocalSettings = this.snapshotLocalSettings()
+    this.applyLocalSettingsFields(next, persisted, safeFields)
+    this.settings = next
+  }
+
+  /** 只持久化本轮字段和快照；广播、提示、主题都使用同一份落盘结果。 */
+  private async persistLocalSettings(
+    snapshot: LocalSettings,
+    fields: Set<LocalSettingsField>,
+  ): Promise<void> {
     try {
-      const result = await this.bridge.saveLocalSettings(snapshot)
-      if (!result.success) {
+      const result = await this.bridge.updateLocalSettings(
+        (latest: LocalSettings): LocalSettings => this.applyLocalSettingsFields(latest, snapshot, fields)
+      )
+      if (!result.success || !result.data) {
         this.saveMessage = `error:${result.errorCode || 'unknown'}`
         return
       }
+      const persisted: LocalSettings = result.data
       this.saveMessage = 'saved'
       // Issue #825 复核8第 3 点：把刚落盘的那份设置广播出去。
-      // 宽屏下设置浮层盖在写作页上，两边各持一份 settings 会长期互不认知：
-      // 用户在这里改了字号/主题，底下活着的 WritingScreen 仍按旧排版渲染。
-      // 广播时机是"保存成功之后"，和 Linux 的 settingsBackend.onSettings_changed 同语义。
-      //
-      // Issue #825 复核9 第3项：不能把 this.settings 直接 publish 出去。
-      // 它是 SettingsContent 还在原地 edit 的对象（updateSettings 基本都是
-      // `s.editorFontSize = value; return s`），用户下一次拖 Slider 会在下一次
-      // save 成功之前就把这份"所谓最近一次落盘值"改掉。重新从 Core 读一次
-      // 拿到独立 decode 的 DTO，Store 才真的代表磁盘真相。
-      const persisted = await this.bridge.getLocalSettings()
-      const applied: LocalSettings = persisted.success && persisted.data ? persisted.data : snapshot
-      if (persisted.success && persisted.data) {
-        LocalSettingsStore.getInstance().publish(persisted.data)
-        // Issue #911：诊断开关只在 Core 真正落盘、且重新读回成功后，才比较读回的持久化值
-        // 与上次同步值；this.settings 是 UI 还在原地编辑的对象，不能当"已落盘真相"。
-        const persistedEnabled: boolean = persisted.data.diagnosticsEnabled
-        const persistedVerbose: boolean = persisted.data.diagnosticsVerbose
-        if (persistedEnabled !== this.lastSyncedDiagnosticsEnabled ||
-          persistedVerbose !== this.lastSyncedDiagnosticsVerbose) {
-          // setDiagnosticsConfig 返回 ResultEnvelope；success:false 不等于抛异常，
-          // 不能照旧宣称已同步，只有 success 才更新 lastSynced。
-          const syncResult = await this.bridge.setDiagnosticsConfig(persistedEnabled, persistedVerbose)
-          if (syncResult.success) {
-            this.lastSyncedDiagnosticsEnabled = persistedEnabled
-            this.lastSyncedDiagnosticsVerbose = persistedVerbose
-          } else {
-            hilog.warn(DOMAIN, TAG, `setDiagnosticsConfig failed on save: ${syncResult.errorCode || 'unknown'}`)
-          }
+      // updateLocalSettings 在统一写队列内读回真实持久化 DTO，Store 才代表磁盘真相。
+      LocalSettingsStore.getInstance().publish(persisted)
+      this.mergePersistedLocalSettings(persisted)
+      // Issue #911：诊断开关只在 Core 真正落盘、且重新读回成功后，才比较读回的持久化值
+      // 与上次同步值；只有 setDiagnosticsConfig 成功才更新 lastSynced。
+      const persistedEnabled: boolean = persisted.diagnosticsEnabled
+      const persistedVerbose: boolean = persisted.diagnosticsVerbose
+      if (persistedEnabled !== this.lastSyncedDiagnosticsEnabled ||
+        persistedVerbose !== this.lastSyncedDiagnosticsVerbose) {
+        const syncResult = await this.bridge.setDiagnosticsConfig(persistedEnabled, persistedVerbose)
+        if (syncResult.success) {
+          this.lastSyncedDiagnosticsEnabled = persistedEnabled
+          this.lastSyncedDiagnosticsVerbose = persistedVerbose
+        } else {
+          hilog.warn(DOMAIN, TAG, `setDiagnosticsConfig failed on save: ${syncResult.errorCode || 'unknown'}`)
         }
       }
-      // 主题与排版只应用这份快照对应的已落盘值，不再读可能已被后续操作改写的 this.settings。
-      const appearanceMode = applied.appearanceMode || applied.themeMode || 'system'
+      // 主题与排版只应用这份落盘结果，不读可能已被后续操作改写的 this.settings。
+      const appearanceMode = persisted.appearanceMode || persisted.themeMode || 'system'
       this.themeAdapter.updateFromLocalSettings(
         appearanceMode,
-        applied.selectedBuiltinThemeId || ''
+        persisted.selectedBuiltinThemeId || ''
       )
       this.themeAdapter.updateFromSettings({
         theme: appearanceMode as ThemeMode,
-        fontSize: applied.editorFontSize,
+        fontSize: persisted.editorFontSize,
         fontFamily: 'HarmonyOS Sans',
-        lineHeight: applied.editorLineSpacingMultiplier
+        lineHeight: persisted.editorLineSpacingMultiplier
       } as ThemeUpdateParams)
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to save settings: ${err}`)
@@ -451,7 +595,16 @@ export class SettingsViewModel {
   // ── 更新设置（供UI修改设置项后调用） ──
 
   updateSettings(updater: (settings: LocalSettings) => LocalSettings): void {
+    // Issue #1026：按字段记录本次实际改动，保存时只提交这些字段；
+    // 否则设置浮层会把内存里的旧整份 DTO 写回，覆盖写作页刚保存的字号/行距。
+    const before: LocalSettings = this.snapshotLocalSettings()
     this.settings = updater(this.settings)
+    const after: LocalSettings = this.snapshotLocalSettings()
+    for (const field of LOCAL_SETTINGS_FIELDS) {
+      if (!this.localSettingsFieldEquals(field, before, after)) {
+        this.localSettingsDirtyFields.add(field)
+      }
+    }
   }
 
   // ── 同步配置更新与保存 ──
