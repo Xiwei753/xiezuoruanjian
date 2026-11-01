@@ -6,9 +6,11 @@
 //
 // 旧实现用 QML Canvas 画点阵，并在每次 pan/zoom 时 requestPaint：每帧都要
 // CPU 生成一张与视口等大的 QImage，再作为纹理上传 GPU。这里把点阵变成单个
-// QSGGeometryNode：只保存屏幕空间的小方块三角形，相机变化时更新顶点，
-// 不再创建/上传整幅位图。LOD 规则与旧 Canvas 保持一致（屏幕间距 >= 16px，
-// world 间距按 5 倍档抬升）。
+// QSGGeometryNode，外层 QSGTransformNode 负责相机平移。
+//
+// 评论修正：点阵按 spacing 周期生成，平移只更新 transform 的 modulo 位移，
+// 不再 allocate/memcpy 视口所有小方块；缩放/LOD 或尺寸变化才重建几何。
+// LOD 规则与旧 Canvas 保持一致（屏幕间距 >= 16px，world 间距按 5 倍档抬升）。
 // =============================================================================
 
 use cpp::cpp;
@@ -19,12 +21,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static GRID_GEOMETRY_UPDATES: AtomicU64 = AtomicU64::new(0);
 static GRID_VERTEX_UPLOADS: AtomicU64 = AtomicU64::new(0);
+static GRID_CAMERA_UPDATES: AtomicU64 = AtomicU64::new(0);
 
 /// 诊断用渲染统计：只含计数，不含星图正文。
 pub fn render_statistics_json() -> String {
     serde_json::json!({
         "gridGeometryUpdates": GRID_GEOMETRY_UPDATES.load(Ordering::Relaxed),
         "gridVertexUploads": GRID_VERTEX_UPLOADS.load(Ordering::Relaxed),
+        "gridCameraUpdates": GRID_CAMERA_UPDATES.load(Ordering::Relaxed),
     })
     .to_string()
 }
@@ -36,37 +40,71 @@ cpp! {{
     #include <QtQuick/QSGGeometryNode>
     #include <QtQuick/QSGGeometry>
     #include <QtQuick/QSGFlatColorMaterial>
+    #include <QtQuick/QSGTransformNode>
     #include <QtGui/QColor>
+    #include <QtGui/QMatrix4x4>
     #include <cstring>
 
+    static QSGTransformNode *sujian_grid_transform_node(QSGNode *root)
+    {
+        if (!root)
+            return nullptr;
+        QSGNode *child = root->firstChild();
+        if (child && child->type() == QSGNode::TransformNodeType)
+            return static_cast<QSGTransformNode *>(child);
+        QSGTransformNode *transform = new QSGTransformNode;
+        transform->setFlag(QSGNode::OwnedByParent, true);
+        root->appendChildNode(transform);
+        return transform;
+    }
+
+    static QSGGeometryNode *sujian_grid_geometry_node(QSGTransformNode *transform)
+    {
+        if (!transform)
+            return nullptr;
+        QSGNode *child = transform->firstChild();
+        return (child && child->type() == QSGNode::GeometryNodeType)
+            ? static_cast<QSGGeometryNode *>(child) : nullptr;
+    }
+
     static void sujian_starmap_grid_update(QSGNode *root,
+                                           double translate_x, double translate_y,
+                                           bool geometry_dirty,
                                            const float *vertices, int vertex_count,
                                            int r, int g, int b, double alpha)
     {
-        QSGNode *first = root ? root->firstChild() : nullptr;
-        QSGGeometryNode *node = (first && first->type() == QSGNode::GeometryNodeType)
-            ? static_cast<QSGGeometryNode *>(first) : nullptr;
+        QSGTransformNode *transform = sujian_grid_transform_node(root);
+        if (!transform)
+            return;
+        QMatrix4x4 matrix;
+        matrix.translate(float(translate_x), float(translate_y));
+        transform->setMatrix(matrix);
+        transform->markDirty(QSGNode::DirtyMatrix);
+
+        QSGGeometryNode *node = sujian_grid_geometry_node(transform);
         if (!node) {
             node = new QSGGeometryNode;
             node->setFlag(QSGNode::OwnedByParent, true);
-            root->appendChildNode(node);
+            transform->appendChildNode(node);
         }
 
-        QSGGeometry *geometry = node->geometry();
-        if (!geometry) {
-            geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(),
-                                       vertex_count);
-            geometry->setDrawingMode(QSGGeometry::DrawTriangles);
-            node->setGeometry(geometry);
-            node->setFlag(QSGNode::OwnsGeometry, true);
-        } else {
-            geometry->allocate(vertex_count);
+        if (geometry_dirty) {
+            QSGGeometry *geometry = node->geometry();
+            if (!geometry) {
+                geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(),
+                                           vertex_count);
+                geometry->setDrawingMode(QSGGeometry::DrawTriangles);
+                node->setGeometry(geometry);
+                node->setFlag(QSGNode::OwnsGeometry, true);
+            } else {
+                geometry->allocate(vertex_count);
+            }
+            if (vertex_count > 0 && vertices)
+                std::memcpy(geometry->vertexData(), vertices,
+                            size_t(vertex_count) * 2 * sizeof(float));
+            geometry->markVertexDataDirty();
+            node->markDirty(QSGNode::DirtyGeometry);
         }
-        if (vertex_count > 0 && vertices)
-            std::memcpy(geometry->vertexData(), vertices,
-                        size_t(vertex_count) * 2 * sizeof(float));
-        geometry->markVertexDataDirty();
-        node->markDirty(QSGNode::DirtyGeometry);
 
         QSGMaterial *existing = node->material();
         QSGFlatColorMaterial *material =
@@ -93,6 +131,8 @@ pub struct StarMapGridItem {
     pan_y: qt_property!(f64; ALIAS panY WRITE set_pan_y),
     dot_color_hex: qt_property!(QString; ALIAS dotColorHex WRITE set_dot_color_hex),
     dot_opacity: qt_property!(f64; ALIAS dotOpacity WRITE set_dot_opacity),
+
+    geometry_dirty: bool,
 }
 
 impl StarMapGridItem {
@@ -108,12 +148,17 @@ impl StarMapGridItem {
         });
     }
 
+    fn mark_geometry_dirty(&mut self) {
+        self.geometry_dirty = true;
+        self.request_paint();
+    }
+
     fn set_zoom_level(&mut self, value: f64) {
         if self.zoom_level == value {
             return;
         }
         self.zoom_level = value;
-        self.request_paint();
+        self.mark_geometry_dirty();
     }
 
     fn set_pan_x(&mut self, value: f64) {
@@ -163,11 +208,10 @@ impl StarMapGridItem {
         (w, h)
     }
 
-    fn build_vertices(&self) -> Vec<f32> {
-        let (width, height) = self.item_size();
+    fn spacing(&self) -> Option<f64> {
         let zoom = self.zoom_level;
-        if !(zoom > 0.0) || !zoom.is_finite() || width <= 0.0 || height <= 0.0 {
-            return Vec::new();
+        if !(zoom > 0.0) || !zoom.is_finite() {
+            return None;
         }
         let mut world_spacing = 50.0_f64;
         let mut spacing = world_spacing * zoom;
@@ -175,24 +219,32 @@ impl StarMapGridItem {
             world_spacing *= 5.0;
             spacing = world_spacing * zoom;
             if !spacing.is_finite() {
-                return Vec::new();
+                return None;
             }
         }
-        if spacing <= 0.0 || width > 1.0e6 || height > 1.0e6 {
-            return Vec::new();
+        (spacing > 0.0).then_some(spacing)
+    }
+
+    /// 点阵局部坐标从 (0,0) 铺到视口右下；平移由 transform 的
+    /// `pan mod spacing` 承担，因此 pan 变化不触碰顶点。
+    fn build_vertices(&self) -> (Vec<f32>, f64) {
+        let (width, height) = self.item_size();
+        let Some(spacing) = self.spacing() else {
+            return (Vec::new(), 1.0);
+        };
+        if width <= 0.0 || height <= 0.0 || width > 1.0e6 || height > 1.0e6 {
+            return (Vec::new(), spacing);
         }
         let cols = (width / spacing).ceil() as i64 + 2;
         let rows = (height / spacing).ceil() as i64 + 2;
         if cols <= 0 || rows <= 0 || cols.saturating_mul(rows) > 200_000 {
-            return Vec::new();
+            return (Vec::new(), spacing);
         }
-        let start_x = self.pan_x - (self.pan_x / spacing).floor() * spacing;
-        let start_y = self.pan_y - (self.pan_y / spacing).floor() * spacing;
         let mut vertices = Vec::with_capacity((cols * rows * 12) as usize);
         for col in 0..cols {
-            let cx = start_x + col as f64 * spacing;
+            let cx = col as f64 * spacing;
             for row in 0..rows {
-                let cy = start_y + row as f64 * spacing;
+                let cy = row as f64 * spacing;
                 let x0 = (cx - 1.0) as f32;
                 let y0 = (cy - 1.0) as f32;
                 let x1 = (cx + 1.0) as f32;
@@ -200,7 +252,21 @@ impl StarMapGridItem {
                 vertices.extend_from_slice(&[x0, y0, x1, y0, x0, y1, x0, y1, x1, y0, x1, y1]);
             }
         }
-        vertices
+        (vertices, spacing)
+    }
+
+    fn camera_translation(&self, spacing: f64) -> (f64, f64) {
+        if !(spacing > 0.0) || !spacing.is_finite() {
+            return (0.0, 0.0);
+        }
+        let pan = |value: f64| {
+            if value.is_finite() {
+                value - (value / spacing).floor() * spacing
+            } else {
+                0.0
+            }
+        };
+        (pan(self.pan_x), pan(self.pan_y))
     }
 }
 
@@ -215,11 +281,12 @@ impl QQuickItem for StarMapGridItem {
             if (obj)
                 obj->setFlag(QQuickItem::ItemHasContents, true);
         });
+        self.geometry_dirty = true;
         self.request_paint();
     }
 
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
-        self.request_paint();
+        self.mark_geometry_dirty();
     }
 
     fn update_paint_node(&mut self, node: SGNode<ContainerNode>) -> SGNode<ContainerNode> {
@@ -233,17 +300,27 @@ impl QQuickItem for StarMapGridItem {
             });
         }
 
-        let vertices = self.build_vertices();
+        let geometry_dirty = self.geometry_dirty;
+        let (vertices, spacing) = if geometry_dirty {
+            self.build_vertices()
+        } else {
+            (Vec::new(), self.spacing().unwrap_or(1.0))
+        };
         let vertices_ptr = vertices.as_ptr();
         let count = (vertices.len() / 2) as i32;
+        let (tx, ty) = self.camera_translation(spacing);
         let color = qmetaobject::QColor::from_name(&self.dot_color_hex.to_string());
         let alpha = if self.dot_opacity.is_finite() {
             self.dot_opacity.clamp(0.0, 1.0)
         } else {
             1.0
         };
-        GRID_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
-        GRID_VERTEX_UPLOADS.fetch_add(count.max(0) as u64, Ordering::Relaxed);
+        if geometry_dirty {
+            GRID_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
+            GRID_VERTEX_UPLOADS.fetch_add(count.max(0) as u64, Ordering::Relaxed);
+        } else {
+            GRID_CAMERA_UPDATES.fetch_add(1, Ordering::Relaxed);
+        }
         let r = color.red();
         let g = color.green();
         let b = color.blue();
@@ -251,12 +328,15 @@ impl QQuickItem for StarMapGridItem {
         // C++ 只在本函数内拷贝，不保留 Rust 指针。
         cpp!(unsafe [
             raw as "QSGNode *",
+            tx as "double", ty as "double", geometry_dirty as "bool",
             vertices_ptr as "const float *",
             count as "int",
             r as "int", g as "int", b as "int", alpha as "double"
         ] {
-            sujian_starmap_grid_update(raw, vertices_ptr, count, r, g, b, alpha);
+            sujian_starmap_grid_update(raw, tx, ty, geometry_dirty,
+                                       vertices_ptr, count, r, g, b, alpha);
         });
+        self.geometry_dirty = false;
         // SAFETY: raw 是刚取回所有权的节点指针，交给 Qt 继续持有。
         unsafe { SGNode::from_raw(raw) }
     }

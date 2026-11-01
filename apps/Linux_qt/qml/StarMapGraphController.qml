@@ -35,8 +35,31 @@ QtObject {
     // 数组变化时才 stringify 一次，不再每帧/每次命中都序列化全部边。
     property string edgeRendersJson: "[]"
     property var edgeLabels: []
+    // Issue #1029：缓存按「活动星图 + 导航路径」隔离；同一图从不同 Embed
+    // 入口打开时不能共享命中/连线缓存。
+    readonly property string sceneCacheKey: starmapId + "::" + pathKey
+    property bool _sceneCacheDirty: true
+    // 统一的世界锚点：节点 / 边 / Embed 的局部坐标都相对它，父级只保留
+    // 视口中心相对的 double 平移与 zoom，避免巨大世界坐标进入场景图。
+    property real worldAnchorX: 0
+    property real worldAnchorY: 0
+    // 记录上一个 key，切图时只释放旧画布缓存，不整表清空。
+    property string _lastSceneCacheKey: ""
     // Issue #796 评论 5886483653: 子星图 Embed 显示模型，从 graphData.embeds 派生。
     property var embedsModel: []
+
+    onSceneCacheKeyChanged: {
+        if (_lastSceneCacheKey !== "" && starmapBackendRef)
+            starmapBackendRef.release_scene_cache(_lastSceneCacheKey)
+        _lastSceneCacheKey = sceneCacheKey
+        _sceneCacheDirty = true
+    }
+
+    // 场景销毁时只释放自己的显示缓存，避免旧画布 / 过渡层残留几何。
+    Component.onDestruction: {
+        if (starmapBackendRef && sceneCacheKey !== "")
+            starmapBackendRef.release_scene_cache(sceneCacheKey)
+    }
 
     // Issue #1010：同机其他进程（如 MCP）修改星图后，通过 Core 事件流
     // 增量感知并重新读取图数据，避免继续用旧 graphData 覆盖外部修改。
@@ -171,6 +194,7 @@ QtObject {
         var nextGraph = copyObject(graphData)
         nextGraph[collection] = nextItems
         graphData = nextGraph
+        _sceneCacheDirty = true
         return true
     }
 
@@ -212,14 +236,51 @@ QtObject {
         if (res.success) {
             clearError();
             graphData = res.data.graph;
-            buildModels();
+            _sceneCacheDirty = true;
+            // 结构通知与几何缓存提交分离：先更新模型、同步一次缓存并算一次边，
+            // 最后才通知视图；视图不再触发第二遍全图计算。
+            buildModels(false);
             computeEdgeRenders(null);
+            graphChanged();
         } else {
             setError(qsTr("加载星图数据失败"));
         }
     }
 
-    function buildModels() {
+    function updateWorldAnchor() {
+        var minX = Infinity
+        var minY = Infinity
+        var maxX = -Infinity
+        var maxY = -Infinity
+        for (var i = 0; i < nodesModel.count; i++) {
+            var n = nodesModel.get(i)
+            var nw = n.width !== undefined ? n.width : 0
+            var nh = n.height !== undefined ? n.height : 0
+            minX = Math.min(minX, n.x)
+            minY = Math.min(minY, n.y)
+            maxX = Math.max(maxX, n.x + nw)
+            maxY = Math.max(maxY, n.y + nh)
+        }
+        for (var j = 0; j < embedsModel.length; j++) {
+            var e = embedsModel[j]
+            var ew = e.width !== undefined ? e.width : 0
+            var eh = e.height !== undefined ? e.height : 0
+            minX = Math.min(minX, e.x)
+            minY = Math.min(minY, e.y)
+            maxX = Math.max(maxX, e.x + ew)
+            maxY = Math.max(maxY, e.y + eh)
+        }
+        if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY))
+            return
+        var ax = (minX + maxX) / 2
+        var ay = (minY + maxY) / 2
+        if (Math.abs(ax - worldAnchorX) > 0.01)
+            worldAnchorX = ax
+        if (Math.abs(ay - worldAnchorY) > 0.01)
+            worldAnchorY = ay
+    }
+
+    function buildModels(notify) {
         // graph.nodes[].position 是节点位置唯一真相，直接从 graph 派生平台显示模型。
         // Issue #984：普通节点是「名称 + 正文」文字卡片，宽高统一由图级
         // 布局快照提供；快照由平台文本排版器测量整张图（包括尚未打开的
@@ -302,7 +363,9 @@ QtObject {
         }
         embedsModel = newEmbeds;
 
-        graphChanged();
+        updateWorldAnchor();
+        if (notify !== false)
+            graphChanged();
     }
 
     function getNode(id) {
@@ -357,7 +420,7 @@ QtObject {
 
     function findNodeAt(wx, wy) {
         if (!ensureBackend()) return null;
-        var res = normalizeBackendResult(starmapBackendRef.hit_test_scene_node(wx, wy), "");
+        var res = normalizeBackendResult(starmapBackendRef.hit_test_scene_node(sceneCacheKey, wx, wy), "");
         if (res.success && res.data) {
             return getNode(res.data);
         }
@@ -643,6 +706,7 @@ QtObject {
                 nextEdges.push(e);
             }
             edgesModel = nextEdges;
+            computeEdgeRenders(null);
             graphChanged();
         } else {
             setError(backendErrorText(res, qsTr("更新连线失败")));
@@ -698,6 +762,7 @@ QtObject {
                     nextEmbeds.push(em);
                 }
                 embedsModel = nextEmbeds;
+                computeEdgeRenders(null);
                 graphChanged();
                 structureChanged();
             } else {
@@ -730,6 +795,7 @@ QtObject {
                 nextEmbeds.push(em);
             }
             embedsModel = nextEmbeds;
+            computeEdgeRenders(null);
             graphChanged();
             structureChanged();
         } else {
@@ -831,7 +897,8 @@ QtObject {
             setError(backendErrorText(res, qsTr("更新节点位置失败")));
             // Issue #798 评论 5892406254: 提交失败时 canonical model 未动，
             // 但 edgeRenders 已被 transient move 更新成临时坐标。
-            // 恢复 edge cache 到 canonical，与 delegate 回旧位置保持一致。
+            // 标记缓存过期，下一次计算从 canonical 布局重建。
+            _sceneCacheDirty = true;
             computeEdgeRenders(null);
             graphChanged();
             return false;
@@ -874,6 +941,7 @@ QtObject {
             } else {
                 _reloadOnConflict(nodeRes);
                 setError(backendErrorText(nodeRes, qsTr("更新节点位置失败")));
+                _sceneCacheDirty = true;
                 computeEdgeRenders(null);
                 graphChanged();
                 return false;
@@ -911,7 +979,8 @@ QtObject {
             setError(backendErrorText(res, qsTr("更新子星图入口失败")));
             // Issue #798 评论 5892406254: 提交失败时 canonical model 未动，
             // 但 edgeRenders 已被 transient move 更新成临时坐标。
-            // 恢复 edge cache 到 canonical，与 delegate 回旧位置保持一致。
+            // 标记缓存过期，下一次计算从 canonical 布局重建。
+            _sceneCacheDirty = true;
             computeEdgeRenders(null);
             graphChanged();
             return false;
@@ -965,10 +1034,17 @@ QtObject {
 
     function syncSceneCache() {
         if (!ensureBackend() || !graphData) return false;
+        // 正常选择 / pointerMode 变化不重传整图；只有图、布局或位置真的
+        // 变化（_replaceGraphObject / loadGraph）才同步一次显示缓存。
+        if (!_sceneCacheDirty)
+            return true;
         var res = normalizeBackendResult(starmapBackendRef.sync_starmap_scene(
+            sceneCacheKey,
             JSON.stringify(graphData),
             JSON.stringify(nodeLayoutEntries(null)),
             JSON.stringify(embedLayoutEntries(null))), "");
+        if (res.success === true)
+            _sceneCacheDirty = false;
         return res.success === true;
     }
 
@@ -980,24 +1056,32 @@ QtObject {
         var hasOverride = moveOverride
                 && (moveOverride.kind === "node" || moveOverride.kind === "embed")
                 && moveOverride.id !== undefined;
-        if (!hasOverride && !syncSceneCache())
-            return;
+        if (!hasOverride) {
+            updateWorldAnchor();
+            if (!syncSceneCache())
+                return;
+        }
         var res = normalizeBackendResult(starmapBackendRef.compute_scene_edge_renders(
+            sceneCacheKey,
             hasOverride ? moveOverride.kind : "",
             hasOverride ? moveOverride.id : "",
             hasOverride ? moveOverride.x : 0,
             hasOverride ? moveOverride.y : 0,
             hasOverride), "");
         if (res.success && res.data) {
-            edgeRenders = res.data;
-            edgeRendersJson = JSON.stringify(res.data);
-            var labels = [];
-            for (var i = 0; i < res.data.length; i++) {
-                var render = res.data[i];
-                if (render.label && render.label.length > 0)
-                    labels.push(render);
+            var nextJson = JSON.stringify(res.data);
+            // 相机 / 选择变化但几何未变时保持同一字符串，原生边层不重新解析。
+            if (nextJson !== edgeRendersJson) {
+                edgeRenders = res.data;
+                edgeRendersJson = nextJson;
+                var labels = [];
+                for (var i = 0; i < res.data.length; i++) {
+                    var render = res.data[i];
+                    if (render.label && render.label.length > 0)
+                        labels.push(render);
+                }
+                edgeLabels = labels;
             }
-            edgeLabels = labels;
         }
     }
 
@@ -1011,6 +1095,7 @@ QtObject {
         if (!graphData) return null;
         if (!ensureBackend()) return null;
         var res = normalizeBackendResult(starmapBackendRef.compute_scene_prospective_edge_render(
+            sceneCacheKey,
             JSON.stringify(fromPath),
             JSON.stringify(toPath)), "");
         if (res.success && res.data) return res.data;
@@ -1023,7 +1108,7 @@ QtObject {
     function hitTestEdge(wx, wy, threshold) {
         if (!ensureBackend()) return null;
         if (!edgeRenders || edgeRenders.length === 0) computeEdgeRenders(null);
-        var res = normalizeBackendResult(starmapBackendRef.hit_test_scene_edge(wx, wy, threshold), "");
+        var res = normalizeBackendResult(starmapBackendRef.hit_test_scene_edge(sceneCacheKey, wx, wy, threshold), "");
         if (res.success && res.data) {
             for (var i = 0; i < edgesModel.length; i++) {
                 if (edgesModel[i].id === res.data) return edgesModel[i];

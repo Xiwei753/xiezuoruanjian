@@ -264,11 +264,18 @@ pub struct StarMapBackend {
     // Issue #1029：活动画布显示缓存。结构变化时一次同步，拖拽只传被拖对象的
     // 临时位置；命中/边几何都查本地缓存，不再每帧序列化整张图。
     sync_starmap_scene: qt_method!(
-        fn(&self, graph_json: QString, nodes_json: QString, embeds_json: QString) -> QJsonObject
+        fn(
+            &self,
+            scene_key: QString,
+            graph_json: QString,
+            nodes_json: QString,
+            embeds_json: QString,
+        ) -> QJsonObject
     ),
     compute_scene_edge_renders: qt_method!(
         fn(
             &self,
+            scene_key: QString,
             move_kind: QString,
             move_id: QString,
             move_x: f64,
@@ -276,10 +283,19 @@ pub struct StarMapBackend {
             has_override: bool,
         ) -> QJsonObject
     ),
-    compute_scene_prospective_edge_render:
-        qt_method!(fn(&self, from_path_json: QString, to_path_json: QString) -> QJsonObject),
-    hit_test_scene_node: qt_method!(fn(&self, x: f64, y: f64) -> QJsonObject),
-    hit_test_scene_edge: qt_method!(fn(&self, x: f64, y: f64, threshold: f64) -> QJsonObject),
+    compute_scene_prospective_edge_render: qt_method!(
+        fn(
+            &self,
+            scene_key: QString,
+            from_path_json: QString,
+            to_path_json: QString,
+        ) -> QJsonObject
+    ),
+    hit_test_scene_node:
+        qt_method!(fn(&self, scene_key: QString, x: f64, y: f64) -> QJsonObject),
+    hit_test_scene_edge:
+        qt_method!(fn(&self, scene_key: QString, x: f64, y: f64, threshold: f64) -> QJsonObject),
+    release_scene_cache: qt_method!(fn(&self, scene_key: QString) -> bool),
     add_starmap_link:
         qt_method!(fn(&mut self, starmap_id: QString, link_json: QString) -> QJsonObject),
     update_starmap_link: qt_method!(
@@ -306,7 +322,12 @@ pub struct StarMapBackend {
         )
     ),
     app: AppRef,
-    scene_cache: std::cell::RefCell<crate::starmap_view::scene_cache::SceneCache>,
+    // Issue #1029 评论：同一 Canvas 可能同时存在旧场景 / 活动场景两个
+    // StarMapActiveScene，且同一张图可经不同 Embed 路径打开。显示缓存必须按
+    // starmapId + scenePathKey 隔离，不能由一个全局缓存互相覆盖。
+    scene_caches: std::cell::RefCell<
+        std::collections::HashMap<String, crate::starmap_view::scene_cache::SceneCache>,
+    >,
 }
 
 impl StarMapBackend {
@@ -590,11 +611,13 @@ impl StarMapBackend {
     }
     fn sync_starmap_scene(
         &self,
+        scene_key: QString,
         graph_json: QString,
         nodes_json: QString,
         embeds_json: QString,
     ) -> QJsonObject {
-        let mut cache = self.scene_cache.borrow_mut();
+        let mut caches = self.scene_caches.borrow_mut();
+        let cache = caches.entry(scene_key.to_string()).or_default();
         let result = cache.sync(
             &graph_json.to_string(),
             &nodes_json.to_string(),
@@ -613,13 +636,15 @@ impl StarMapBackend {
     }
     fn compute_scene_edge_renders(
         &self,
+        scene_key: QString,
         move_kind: QString,
         move_id: QString,
         move_x: f64,
         move_y: f64,
         has_override: bool,
     ) -> QJsonObject {
-        let mut cache = self.scene_cache.borrow_mut();
+        let mut caches = self.scene_caches.borrow_mut();
+        let cache = caches.entry(scene_key.to_string()).or_default();
         if !cache.is_ready() {
             let raw = crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::Other(
@@ -652,10 +677,12 @@ impl StarMapBackend {
     }
     fn compute_scene_prospective_edge_render(
         &self,
+        scene_key: QString,
         from_path_json: QString,
         to_path_json: QString,
     ) -> QJsonObject {
-        let cache = self.scene_cache.borrow();
+        let mut caches = self.scene_caches.borrow_mut();
+        let cache = caches.entry(scene_key.to_string()).or_default();
         let raw = match cache
             .prospective_edge_render(&from_path_json.to_string(), &to_path_json.to_string())
         {
@@ -666,14 +693,22 @@ impl StarMapBackend {
         };
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
-    fn hit_test_scene_node(&self, x: f64, y: f64) -> QJsonObject {
-        let cache = self.scene_cache.borrow();
+    fn hit_test_scene_node(&self, scene_key: QString, x: f64, y: f64) -> QJsonObject {
+        let mut caches = self.scene_caches.borrow_mut();
+        let cache = caches.entry(scene_key.to_string()).or_default();
         let raw = writer_core::api::ResultEnvelope::success(cache.hit_node(x as f32, y as f32))
             .to_json_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
-    fn hit_test_scene_edge(&self, x: f64, y: f64, threshold: f64) -> QJsonObject {
-        let cache = self.scene_cache.borrow();
+    fn hit_test_scene_edge(
+        &self,
+        scene_key: QString,
+        x: f64,
+        y: f64,
+        threshold: f64,
+    ) -> QJsonObject {
+        let mut caches = self.scene_caches.borrow_mut();
+        let cache = caches.entry(scene_key.to_string()).or_default();
         let raw = writer_core::api::ResultEnvelope::success(cache.hit_edge(
             x as f32,
             y as f32,
@@ -681,6 +716,14 @@ impl StarMapBackend {
         ))
         .to_json_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn release_scene_cache(&self, scene_key: QString) -> bool {
+        // 只释放正在销毁的 StarMapActiveScene 对应缓存；另一个仍在过渡中的
+        // 画布（同图不同 route 或旧层）保留自己的显示几何。
+        self.scene_caches
+            .borrow_mut()
+            .remove(&scene_key.to_string())
+            .is_some()
     }
     fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
         self.with_app(|app| app.get_starmap_graph_json(starmap_id))

@@ -5,11 +5,13 @@
 // 层级：Linux_qt 平台可视组件（QML 原生类型 `Sujian.StarMapEdgeLayer`）。
 //
 // 背景：旧实现为每条边创建一个全屏 Item + 两个 ShapePath，254 条边在每次
-// 平移/缩放时都会各自重算 PathPolyline 并触发场景图重建；拖一个节点也要把
-// 整张图重新序列化。这里把“所有未选中边 + 少量选中边”合并成两个
-// QSGGeometryNode，线宽/箭头全部用三角形批量绘制（不用 DrawLines），
-// 只在边集合、相机、尺寸或选择变化时更新顶点。相机变化时仍按同一投影公式
-// 生成屏幕顶点，但不再产生 254 个 QML Shape 场景图节点。
+// 平移/缩放时都会各自重算 PathPolyline 并触发场景图重建。这里把“所有未选中边
+// + 少量选中边”合并成两个 QSGGeometryNode，线宽/箭头全部用三角形批量绘制。
+//
+// 评论修正：#1029 要求相机变化不再上传整张图的顶点。现在几何顶点相对
+// `anchorX/anchorY`（图内容中心附近）缓存，平移只更新 QSGTransformNode 的
+// 矩阵，不 allocate / memcpy；缩放才重算屏幕口径的线宽和箭头大小。顶点数组
+// 只在结构/节点位置/选择/缩放变化时重建，并分别记录 geometry/camera 统计。
 //
 // 线程约束：QML 属性在 GUI 线程写入；顶点数组只在同步阶段（GUI 线程被阻塞）
 // 的 update_paint_node() 中读取。QSGNode / QSGGeometry / QSGMaterial 只在
@@ -26,12 +28,14 @@ use crate::starmap_view::edge_render::EdgeRender;
 
 static EDGE_GEOMETRY_UPDATES: AtomicU64 = AtomicU64::new(0);
 static EDGE_VERTEX_UPLOADS: AtomicU64 = AtomicU64::new(0);
+static EDGE_CAMERA_UPDATES: AtomicU64 = AtomicU64::new(0);
 
 /// 诊断用渲染统计：只含计数，不含星图正文。
 pub fn render_statistics_json() -> String {
     serde_json::json!({
         "edgeLayerGeometryUpdates": EDGE_GEOMETRY_UPDATES.load(Ordering::Relaxed),
         "edgeLayerVertexUploads": EDGE_VERTEX_UPLOADS.load(Ordering::Relaxed),
+        "edgeLayerCameraUpdates": EDGE_CAMERA_UPDATES.load(Ordering::Relaxed),
     })
     .to_string()
 }
@@ -43,13 +47,30 @@ cpp! {{
     #include <QtQuick/QSGGeometryNode>
     #include <QtQuick/QSGGeometry>
     #include <QtQuick/QSGFlatColorMaterial>
+    #include <QtQuick/QSGTransformNode>
     #include <QtGui/QColor>
+    #include <QtGui/QMatrix4x4>
     #include <cstring>
     #include <cmath>
 
-    static QSGGeometryNode *sujian_edge_geometry_node(QSGNode *root, int index)
+    static QSGTransformNode *sujian_edge_transform_node(QSGNode *root)
     {
-        QSGNode *child = root ? root->firstChild() : nullptr;
+        if (!root)
+            return nullptr;
+        QSGNode *child = root->firstChild();
+        if (child && child->type() == QSGNode::TransformNodeType)
+            return static_cast<QSGTransformNode *>(child);
+        QSGTransformNode *transform = new QSGTransformNode;
+        transform->setFlag(QSGNode::OwnedByParent, true);
+        root->appendChildNode(transform);
+        return transform;
+    }
+
+    static QSGGeometryNode *sujian_edge_geometry_node(QSGTransformNode *transform, int index)
+    {
+        if (!transform)
+            return nullptr;
+        QSGNode *child = transform->firstChild();
         while (child && index > 0) {
             child = child->nextSibling();
             --index;
@@ -59,26 +80,9 @@ cpp! {{
         return nullptr;
     }
 
-    static void sujian_apply_edge_geometry(QSGGeometryNode *node,
-                                           const float *vertices, int vertex_count,
-                                           int r, int g, int b, double alpha)
+    static void sujian_apply_edge_material(QSGGeometryNode *node,
+                                            int r, int g, int b, double alpha)
     {
-        QSGGeometry *geometry = node->geometry();
-        if (!geometry) {
-            geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(),
-                                       vertex_count);
-            geometry->setDrawingMode(QSGGeometry::DrawTriangles);
-            node->setGeometry(geometry);
-            node->setFlag(QSGNode::OwnsGeometry, true);
-        } else {
-            geometry->allocate(vertex_count);
-        }
-        if (vertex_count > 0 && vertices)
-            std::memcpy(geometry->vertexData(), vertices,
-                        size_t(vertex_count) * 2 * sizeof(float));
-        geometry->markVertexDataDirty();
-        node->markDirty(QSGNode::DirtyGeometry);
-
         QSGMaterial *existing = node->material();
         QSGFlatColorMaterial *material =
             existing ? static_cast<QSGFlatColorMaterial *>(existing) : nullptr;
@@ -93,7 +97,32 @@ cpp! {{
         node->markDirty(QSGNode::DirtyMaterial);
     }
 
+    static void sujian_apply_edge_geometry(QSGGeometryNode *node,
+                                           const float *vertices, int vertex_count,
+                                           int r, int g, int b, double alpha)
+    {
+        QSGGeometry *geometry = node->geometry();
+        if (!geometry) {
+            geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(),
+                                       vertex_count);
+            geometry->setDrawingMode(QSGGeometry::DrawTriangles);
+            node->setGeometry(geometry);
+            node->setFlag(QSGNode::OwnsGeometry, true);
+        } else if (geometry->vertexCount() != vertex_count) {
+            geometry->allocate(vertex_count);
+        }
+        if (vertex_count > 0 && vertices)
+            std::memcpy(geometry->vertexData(), vertices,
+                        size_t(vertex_count) * 2 * sizeof(float));
+        geometry->markVertexDataDirty();
+        node->markDirty(QSGNode::DirtyGeometry);
+
+        sujian_apply_edge_material(node, r, g, b, alpha);
+    }
+
     static void sujian_starmap_edges_update(QSGNode *root,
+                                            double translate_x, double translate_y,
+                                            bool geometry_dirty,
                                             const float *normal_vertices,
                                             int normal_vertex_count,
                                             const float *selected_vertices,
@@ -101,22 +130,37 @@ cpp! {{
                                             int nr, int ng, int nb, double na,
                                             int sr, int sg, int sb, double sa)
     {
-        QSGGeometryNode *normal = sujian_edge_geometry_node(root, 0);
+        QSGTransformNode *transform = sujian_edge_transform_node(root);
+        if (!transform)
+            return;
+
+        QMatrix4x4 matrix;
+        matrix.translate(float(translate_x), float(translate_y));
+        transform->setMatrix(matrix);
+        transform->markDirty(QSGNode::DirtyMatrix);
+
+        QSGGeometryNode *normal = sujian_edge_geometry_node(transform, 0);
         if (!normal) {
             normal = new QSGGeometryNode;
             normal->setFlag(QSGNode::OwnedByParent, true);
-            root->appendChildNode(normal);
+            transform->appendChildNode(normal);
         }
-        QSGGeometryNode *selected = sujian_edge_geometry_node(root, 1);
+        QSGGeometryNode *selected = sujian_edge_geometry_node(transform, 1);
         if (!selected) {
             selected = new QSGGeometryNode;
             selected->setFlag(QSGNode::OwnedByParent, true);
-            root->appendChildNode(selected);
+            transform->appendChildNode(selected);
         }
-        sujian_apply_edge_geometry(normal, normal_vertices, normal_vertex_count,
-                                   nr, ng, nb, na);
-        sujian_apply_edge_geometry(selected, selected_vertices,
-                                   selected_vertex_count, sr, sg, sb, sa);
+        if (geometry_dirty) {
+            sujian_apply_edge_geometry(normal, normal_vertices, normal_vertex_count,
+                                       nr, ng, nb, na);
+            sujian_apply_edge_geometry(selected, selected_vertices,
+                                       selected_vertex_count, sr, sg, sb, sa);
+        } else {
+            // 相机帧只更新颜色透明度（reveal），不触碰顶点或几何脏标记。
+            sujian_apply_edge_material(normal, nr, ng, nb, na);
+            sujian_apply_edge_material(selected, sr, sg, sb, sa);
+        }
     }
 }}
 
@@ -131,12 +175,15 @@ pub struct StarMapEdgeLayer {
     zoom_level: qt_property!(f64; ALIAS zoomLevel WRITE set_zoom_level),
     pan_x: qt_property!(f64; ALIAS panX WRITE set_pan_x),
     pan_y: qt_property!(f64; ALIAS panY WRITE set_pan_y),
+    anchor_x: qt_property!(f64; ALIAS anchorX WRITE set_anchor_x),
+    anchor_y: qt_property!(f64; ALIAS anchorY WRITE set_anchor_y),
     reveal: qt_property!(f64; ALIAS reveal WRITE set_reveal),
     line_world_width: qt_property!(f64; ALIAS lineWorldWidth WRITE set_line_world_width),
     normal_color_hex: qt_property!(QString; ALIAS normalColorHex WRITE set_normal_color_hex),
     selected_color_hex: qt_property!(QString; ALIAS selectedColorHex WRITE set_selected_color_hex),
 
     edges: Vec<EdgeRender>,
+    geometry_dirty: bool,
 }
 
 impl StarMapEdgeLayer {
@@ -152,6 +199,11 @@ impl StarMapEdgeLayer {
         });
     }
 
+    fn mark_geometry_dirty(&mut self) {
+        self.geometry_dirty = true;
+        self.request_paint();
+    }
+
     fn set_edges_json(&mut self, value: QString) {
         if self.edges_json == value {
             return;
@@ -162,7 +214,7 @@ impl StarMapEdgeLayer {
             log::warn!("StarMapEdgeLayer invalid edges JSON: {err}");
             Vec::new()
         });
-        self.request_paint();
+        self.mark_geometry_dirty();
     }
 
     fn set_selected_edge_id(&mut self, value: QString) {
@@ -170,7 +222,7 @@ impl StarMapEdgeLayer {
             return;
         }
         self.selected_edge_id = value;
-        self.request_paint();
+        self.mark_geometry_dirty();
     }
 
     fn set_zoom_level(&mut self, value: f64) {
@@ -178,7 +230,7 @@ impl StarMapEdgeLayer {
             return;
         }
         self.zoom_level = value;
-        self.request_paint();
+        self.mark_geometry_dirty();
     }
 
     fn set_pan_x(&mut self, value: f64) {
@@ -197,6 +249,22 @@ impl StarMapEdgeLayer {
         self.request_paint();
     }
 
+    fn set_anchor_x(&mut self, value: f64) {
+        if self.anchor_x == value {
+            return;
+        }
+        self.anchor_x = value;
+        self.mark_geometry_dirty();
+    }
+
+    fn set_anchor_y(&mut self, value: f64) {
+        if self.anchor_y == value {
+            return;
+        }
+        self.anchor_y = value;
+        self.mark_geometry_dirty();
+    }
+
     fn set_reveal(&mut self, value: f64) {
         if self.reveal == value {
             return;
@@ -210,7 +278,7 @@ impl StarMapEdgeLayer {
             return;
         }
         self.line_world_width = value;
-        self.request_paint();
+        self.mark_geometry_dirty();
     }
 
     fn set_normal_color_hex(&mut self, value: QString) {
@@ -249,14 +317,18 @@ impl StarMapEdgeLayer {
         (color.red(), color.green(), color.blue())
     }
 
+    /// 顶点坐标相对 anchor：`(world - anchor) * zoom`。平移不改变这些值，
+    /// 只改变 transform 的视口平移；缩放时线宽/箭头按屏幕像素重算。
     fn build_vertices(&self) -> (Vec<f32>, Vec<f32>) {
-        let (width, height) = self.item_size();
         let zoom = self.zoom_level;
-        if !(zoom > 0.0) || !zoom.is_finite() || width <= 0.0 || height <= 0.0 {
+        if !(zoom > 0.0) || !zoom.is_finite() {
             return (Vec::new(), Vec::new());
         }
-        let origin_x = (width / 2.0 - self.pan_x) / zoom;
-        let origin_y = (height / 2.0 - self.pan_y) / zoom;
+        let anchor_x = self.anchor_x;
+        let anchor_y = self.anchor_y;
+        if !anchor_x.is_finite() || !anchor_y.is_finite() {
+            return (Vec::new(), Vec::new());
+        }
         let half_w = (self.line_world_width * zoom).clamp(1.0, 6.0) / 2.0;
         let selected_id = self.selected_edge_id.to_string();
         let mut normal = Vec::with_capacity(self.edges.len() * 9);
@@ -264,8 +336,8 @@ impl StarMapEdgeLayer {
 
         let project = |wx: f32, wy: f32| -> (f32, f32) {
             (
-                (width / 2.0 + (f64::from(wx) - origin_x) * zoom) as f32,
-                (height / 2.0 + (f64::from(wy) - origin_y) * zoom) as f32,
+                ((f64::from(wx) - anchor_x) * zoom) as f32,
+                ((f64::from(wy) - anchor_y) * zoom) as f32,
             )
         };
 
@@ -300,6 +372,22 @@ impl StarMapEdgeLayer {
         }
         (normal, selected)
     }
+
+    /// anchor 当前投影到的屏幕坐标。相机近 anchor 时数值保持视口量级，
+    /// 保留双精度换算结果后只把小的平移交给场景图。
+    fn camera_translation(&self) -> (f64, f64) {
+        let (width, height) = self.item_size();
+        let zoom = self.zoom_level;
+        if !(zoom > 0.0) || !zoom.is_finite() || width <= 0.0 || height <= 0.0 {
+            return (0.0, 0.0);
+        }
+        let origin_x = (width / 2.0 - self.pan_x) / zoom;
+        let origin_y = (height / 2.0 - self.pan_y) / zoom;
+        (
+            width / 2.0 + (self.anchor_x - origin_x) * zoom,
+            height / 2.0 + (self.anchor_y - origin_y) * zoom,
+        )
+    }
 }
 
 impl QQuickItem for StarMapEdgeLayer {
@@ -315,6 +403,7 @@ impl QQuickItem for StarMapEdgeLayer {
                 obj->setClip(true);
             }
         });
+        self.geometry_dirty = true;
         self.request_paint();
     }
 
@@ -333,11 +422,17 @@ impl QQuickItem for StarMapEdgeLayer {
             });
         }
 
-        let (normal, selected) = self.build_vertices();
+        let geometry_dirty = self.geometry_dirty;
+        let (normal, selected) = if geometry_dirty {
+            self.build_vertices()
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let normal_ptr = normal.as_ptr();
         let selected_ptr = selected.as_ptr();
         let normal_count = (normal.len() / 2) as i32;
         let selected_count = (selected.len() / 2) as i32;
+        let (tx, ty) = self.camera_translation();
         let (nr, ng, nb) = Self::color_parts(&self.normal_color_hex.to_string());
         let (sr, sg, sb) = Self::color_parts(&self.selected_color_hex.to_string());
         let reveal = if self.reveal.is_finite() {
@@ -345,15 +440,20 @@ impl QQuickItem for StarMapEdgeLayer {
         } else {
             1.0
         };
-        EDGE_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
-        EDGE_VERTEX_UPLOADS.fetch_add(
-            (normal_count.max(0) + selected_count.max(0)) as u64,
-            Ordering::Relaxed,
-        );
+        if geometry_dirty {
+            EDGE_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
+            EDGE_VERTEX_UPLOADS.fetch_add(
+                (normal_count.max(0) + selected_count.max(0)) as u64,
+                Ordering::Relaxed,
+            );
+        } else {
+            EDGE_CAMERA_UPDATES.fetch_add(1, Ordering::Relaxed);
+        }
         // SAFETY: raw 是本 item 渲染线程上的 paint node；两个顶点数组在调用期间
         // 保持有效，C++ 只在本函数内拷贝，不保留 Rust 指针。
         cpp!(unsafe [
             raw as "QSGNode *",
+            tx as "double", ty as "double", geometry_dirty as "bool",
             normal_ptr as "const float *",
             normal_count as "int",
             selected_ptr as "const float *",
@@ -361,10 +461,12 @@ impl QQuickItem for StarMapEdgeLayer {
             nr as "int", ng as "int", nb as "int", reveal as "double",
             sr as "int", sg as "int", sb as "int"
         ] {
-            sujian_starmap_edges_update(raw, normal_ptr, normal_count,
+            sujian_starmap_edges_update(raw, tx, ty, geometry_dirty,
+                                        normal_ptr, normal_count,
                                         selected_ptr, selected_count,
                                         nr, ng, nb, reveal, sr, sg, sb, reveal);
         });
+        self.geometry_dirty = false;
         // SAFETY: raw 是刚取回所有权的节点指针，交给 Qt 继续持有。
         unsafe { SGNode::from_raw(raw) }
     }

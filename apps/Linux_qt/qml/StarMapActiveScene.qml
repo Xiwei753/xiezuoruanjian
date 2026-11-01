@@ -124,6 +124,9 @@ Item {
     }
     readonly property real _originWorldX: _finiteQuotient(_finiteDifference(width / 2, panX), _safeZoom)
     readonly property real _originWorldY: _finiteQuotient(_finiteDifference(height / 2, panY), _safeZoom)
+    // 统一世界锚点：所有局部几何相对它，父级变换只保留视口中心相对平移。
+    readonly property real _worldAnchorX: graphController.worldAnchorX
+    readonly property real _worldAnchorY: graphController.worldAnchorY
 
     function worldToScreenX(wx) {
         return _finiteSum(width / 2, _finiteProduct(_finiteDifference(wx, _originWorldX), _safeZoom))
@@ -179,7 +182,8 @@ Item {
         pathKey: scene.scenePathKey
         selectionController: scene.selectionController
         onGraphChanged: {
-            scene.refreshEdges()
+            // Issue #1029：图变更只刷新编辑会话；边几何由 loadGraph / 提交路径
+            // 单次计算，视图通知不再触发第二遍全图 sync + compute。
             scene.ensureEditingNodeExists()
         }
         onStructureChanged: scene.structureChanged()
@@ -819,7 +823,8 @@ Item {
             })
         }
         ic.endMove()
-        refreshEdges()
+        // commitNodeMove / commitEmbedMove 已按落盘结果重算一次边几何；
+        // 这里不再触发第二次全量刷新。
     }
 
     function finishConnect() {
@@ -1046,6 +1051,8 @@ Item {
         zoomLevel: scene.zoomLevel
         panX: scene.panX
         panY: scene.panY
+        anchorX: scene._worldAnchorX
+        anchorY: scene._worldAnchorY
         reveal: scene._reveal
         lineWorldWidth: scene._edgeLineWorldWidth
         normalColorHex: String(scene._border)
@@ -1095,8 +1102,14 @@ Item {
     // 107 个节点 delegate 的屏幕 x/y。
     Item {
         id: nodeWorldContent
-        x: scene.panX
-        y: scene.panY
+        x: scene._finiteSum(scene.width / 2,
+                            scene._finiteProduct(scene._finiteDifference(
+                                scene._worldAnchorX, scene._originWorldX),
+                                scene._safeZoom))
+        y: scene._finiteSum(scene.height / 2,
+                            scene._finiteProduct(scene._finiteDifference(
+                                scene._worldAnchorY, scene._originWorldY),
+                                scene._safeZoom))
         scale: scene._safeZoom
         transformOrigin: Item.TopLeft
         z: 1
@@ -1168,8 +1181,8 @@ Item {
                 + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
 
             // worldX / worldY 是节点世界矩形的左上角；概览圆点态保持中心收缩。
-            x: worldX + (cardWidth - width) / 2
-            y: worldY + (cardHeight - height) / 2
+            x: worldX - scene._worldAnchorX + (cardWidth - width) / 2
+            y: worldY - scene._worldAnchorY + (cardHeight - height) / 2
             width: projectedWidth
             height: projectedHeight
             z: 1
@@ -1271,8 +1284,8 @@ Item {
                     : false
             starmapBackendRef: scene.starmapBackendRef
 
-            x: worldX + (embedData.width - width) / 2
-            y: worldY + (embedData.height - height) / 2
+            x: worldX - scene._worldAnchorX + (embedData.width - width) / 2
+            y: worldY - scene._worldAnchorY + (embedData.height - height) / 2
             width: embedData.width * scene._reveal
                    + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
             height: embedData.height * scene._reveal
