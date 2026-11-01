@@ -63,6 +63,8 @@ export interface IWriterCoreBridge {
   // Settings
   getLocalSettings(): Promise<ResultEnvelope<LocalSettings>>
   saveLocalSettings(settings: LocalSettings): Promise<ResultEnvelope<boolean>>
+  /** 在全局 LocalSettings 写入序列内读-改-写，避免跨页面用旧快照覆盖新字段。 */
+  updateLocalSettings(mutator: (settings: LocalSettings) => LocalSettings): Promise<ResultEnvelope<LocalSettings>>
   getSyncableSettings(): Promise<ResultEnvelope<SyncableSettings>>
   saveSyncableSettings(settings: SyncableSettings): Promise<ResultEnvelope<boolean>>
 

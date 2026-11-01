@@ -1434,29 +1434,22 @@ export struct WritingScreen {
     }
   }
 
-  // 单次落盘：先取最新设置真相，只覆盖字号 / 行距，存成功才回写内存状态。
+  // 单次落盘：在全局 LocalSettings 写入序列内读取最新设置，只覆盖字号 / 行距。
+  // 读取与保存不能被设置浮层的写入隔开，否则会把对方刚写入的其它字段覆盖回旧值。
   private async saveEditorFormatOnce(fontSizePt: number, lineSpacingMultiplier: number): Promise<void> {
     try {
-      const latest = await this.bridge.getLocalSettings()
-      if (!latest.success || !latest.data) {
+      const saved = await this.bridge.updateLocalSettings((latest: LocalSettings): LocalSettings => {
+        // ArkTS 不允许对象展开（arkts-no-spread），所以就地覆盖这两个字段。
+        latest.editorFontSize = fontSizePt
+        latest.editorLineSpacingMultiplier = lineSpacingMultiplier
+        return latest
+      })
+      if (!saved.success || !saved.data) {
         this.realignDraftToPersisted()
         return
       }
-      // ArkTS 不允许对象展开（arkts-no-spread），所以就地覆盖这两个字段。
-      latest.data.editorFontSize = fontSizePt
-      latest.data.editorLineSpacingMultiplier = lineSpacingMultiplier
-      const saved = await this.bridge.saveLocalSettings(latest.data)
-      if (!saved.success) {
-        this.realignDraftToPersisted()
-        return
-      }
-      // Issue #825 复核9 第3项：成功后再从 Core 重新读一次，把重新 decode 出来的 DTO 当成"最近一次落盘"。
-      const persisted = await this.bridge.getLocalSettings()
-      if (persisted.success && persisted.data) {
-        LocalSettingsStore.getInstance().publish(persisted.data)
-      } else {
-        this.applyPublishedSettings(latest.data)
-      }
+      // 广播的就是本次落盘后重新读回的同一份 DTO，不再另读一次可能已被后续写入改变的状态。
+      LocalSettingsStore.getInstance().publish(saved.data)
     } catch (err) {
       this.realignDraftToPersisted()
     }

@@ -146,6 +146,12 @@ export class SettingsViewModel {
   private syncConfigSaveQueued: boolean = false
   private syncConfigSaveRunning: Promise<void> | null = null
 
+  // ── LocalSettings 有序串行保存（Issue #1026） ──
+  // 快速拖动字号/行距或连续切换主题时，saveSettings 只登记“还有最新请求”；
+  // drain 每轮冻结一份完整快照再落盘，避免多份异步写入乱序。
+  private localSettingsSaveQueued: boolean = false
+  private localSettingsSaveRunning: Promise<void> | null = null
+
   // ── Token 落盘合并（Issue #924） ──
   // TextInput.onChange 逐字触发 updateSyncToken：只更新内存并重置防抖计时器；
   // 输入停顿后由一次串行保存落盘，不再逐字同步 NAPI I/O。
@@ -266,62 +272,115 @@ export class SettingsViewModel {
   // ── 保存设置 ──
 
   async saveSettings(): Promise<void> {
+    this.localSettingsSaveQueued = true
     this.isSaving = true
-    this.saveMessage = ''
+    if (this.localSettingsSaveRunning === null) {
+      this.localSettingsSaveRunning = this.drainLocalSettingsSaves()
+    }
+    const running: Promise<void> | null = this.localSettingsSaveRunning
+    if (running !== null) {
+      await running
+    }
+  }
 
+  /** 队列排空循环：每轮冻结当时完整设置；期间的新请求只置标记，合并为下一轮。 */
+  private async drainLocalSettingsSaves(): Promise<void> {
     try {
-      const result = await this.bridge.saveLocalSettings(this.settings)
-      if (result.success) {
-        this.saveMessage = 'saved'
-        // Issue #825 复核8第 3 点：把刚落盘的那份设置广播出去。
-        // 宽屏下设置浮层盖在写作页上，两边各持一份 settings 会长期互不认知：
-        // 用户在这里改了字号/主题，底下活着的 WritingScreen 仍按旧排版渲染。
-        // 广播时机是"保存成功之后"，和 Linux 的 settingsBackend.onSettings_changed 同语义。
-        //
-        // Issue #825 复核9 第3项：不能把 this.settings 直接 publish 出去。
-        // 它是 SettingsContent 还在原地 edit 的对象（updateSettings 基本都是
-        // `s.editorFontSize = value; return s`），用户下一次拖 Slider 会在下一次
-        // save 成功之前就把这份"所谓最近一次落盘值"改掉。重新从 Core 读一次
-        // 拿到独立 decode 的 DTO，Store 才真的代表磁盘真相。
-        const persisted = await this.bridge.getLocalSettings()
-        if (persisted.success && persisted.data) {
-          LocalSettingsStore.getInstance().publish(persisted.data)
-          // Issue #911：诊断开关只在 Core 真正落盘、且重新读回成功后，才比较读回的持久化值
-          // 与上次同步值；this.settings 是 UI 还在原地编辑的对象，不能当"已落盘真相"。
-          const persistedEnabled: boolean = persisted.data.diagnosticsEnabled
-          const persistedVerbose: boolean = persisted.data.diagnosticsVerbose
-          if (persistedEnabled !== this.lastSyncedDiagnosticsEnabled ||
-            persistedVerbose !== this.lastSyncedDiagnosticsVerbose) {
-            // setDiagnosticsConfig 返回 ResultEnvelope；success:false 不等于抛异常，
-            // 不能照旧宣称已同步，只有 success 才更新 lastSynced。
-            const syncResult = await this.bridge.setDiagnosticsConfig(persistedEnabled, persistedVerbose)
-            if (syncResult.success) {
-              this.lastSyncedDiagnosticsEnabled = persistedEnabled
-              this.lastSyncedDiagnosticsVerbose = persistedVerbose
-            } else {
-              hilog.warn(DOMAIN, TAG, `setDiagnosticsConfig failed on save: ${syncResult.errorCode || 'unknown'}`)
-            }
+      while (this.localSettingsSaveQueued) {
+        this.localSettingsSaveQueued = false
+        const snapshot: LocalSettings = this.snapshotLocalSettings()
+        await this.persistLocalSettings(snapshot)
+      }
+    } finally {
+      this.localSettingsSaveRunning = null
+      this.isSaving = false
+    }
+  }
+
+  /** 独立快照：updateSettings 会原地修改 this.settings，落盘必须使用提交时冻结的值。 */
+  private snapshotLocalSettings(): LocalSettings {
+    const s: LocalSettings = this.settings
+    return {
+      themeMode: s.themeMode,
+      appearanceMode: s.appearanceMode,
+      colorSource: s.colorSource,
+      dynamicColorEnabled: s.dynamicColorEnabled,
+      selectedBuiltinThemeId: s.selectedBuiltinThemeId,
+      selectedPaletteId: s.selectedPaletteId,
+      locale: s.locale,
+      autoSaveEnabled: s.autoSaveEnabled,
+      editorFontSize: s.editorFontSize,
+      editorLineSpacingMultiplier: s.editorLineSpacingMultiplier,
+      autoSaveDelayMs: s.autoSaveDelayMs,
+      autoIndentEnabled: s.autoIndentEnabled,
+      autoIndentWidth: s.autoIndentWidth,
+      editorTypingAnimationEnabled: s.editorTypingAnimationEnabled,
+      editorSmoothCursorEnabled: s.editorSmoothCursorEnabled,
+      editorTypingAnimationDurationMs: s.editorTypingAnimationDurationMs,
+      editorSmoothCursorDurationMs: s.editorSmoothCursorDurationMs,
+      aiEnabled: s.aiEnabled,
+      statsDeviceId: s.statsDeviceId,
+      editorCoordinatedTextCursorAnimationEnabled: s.editorCoordinatedTextCursorAnimationEnabled,
+      diagnosticsEnabled: s.diagnosticsEnabled,
+      diagnosticsVerbose: s.diagnosticsVerbose
+    }
+  }
+
+  /** 只持久化传入快照；广播、提示和主题都使用这份快照对应的落盘结果。 */
+  private async persistLocalSettings(snapshot: LocalSettings): Promise<void> {
+    try {
+      const result = await this.bridge.saveLocalSettings(snapshot)
+      if (!result.success) {
+        this.saveMessage = `error:${result.errorCode || 'unknown'}`
+        return
+      }
+      this.saveMessage = 'saved'
+      // Issue #825 复核8第 3 点：把刚落盘的那份设置广播出去。
+      // 宽屏下设置浮层盖在写作页上，两边各持一份 settings 会长期互不认知：
+      // 用户在这里改了字号/主题，底下活着的 WritingScreen 仍按旧排版渲染。
+      // 广播时机是"保存成功之后"，和 Linux 的 settingsBackend.onSettings_changed 同语义。
+      //
+      // Issue #825 复核9 第3项：不能把 this.settings 直接 publish 出去。
+      // 它是 SettingsContent 还在原地 edit 的对象（updateSettings 基本都是
+      // `s.editorFontSize = value; return s`），用户下一次拖 Slider 会在下一次
+      // save 成功之前就把这份"所谓最近一次落盘值"改掉。重新从 Core 读一次
+      // 拿到独立 decode 的 DTO，Store 才真的代表磁盘真相。
+      const persisted = await this.bridge.getLocalSettings()
+      const applied: LocalSettings = persisted.success && persisted.data ? persisted.data : snapshot
+      if (persisted.success && persisted.data) {
+        LocalSettingsStore.getInstance().publish(persisted.data)
+        // Issue #911：诊断开关只在 Core 真正落盘、且重新读回成功后，才比较读回的持久化值
+        // 与上次同步值；this.settings 是 UI 还在原地编辑的对象，不能当"已落盘真相"。
+        const persistedEnabled: boolean = persisted.data.diagnosticsEnabled
+        const persistedVerbose: boolean = persisted.data.diagnosticsVerbose
+        if (persistedEnabled !== this.lastSyncedDiagnosticsEnabled ||
+          persistedVerbose !== this.lastSyncedDiagnosticsVerbose) {
+          // setDiagnosticsConfig 返回 ResultEnvelope；success:false 不等于抛异常，
+          // 不能照旧宣称已同步，只有 success 才更新 lastSynced。
+          const syncResult = await this.bridge.setDiagnosticsConfig(persistedEnabled, persistedVerbose)
+          if (syncResult.success) {
+            this.lastSyncedDiagnosticsEnabled = persistedEnabled
+            this.lastSyncedDiagnosticsVerbose = persistedVerbose
+          } else {
+            hilog.warn(DOMAIN, TAG, `setDiagnosticsConfig failed on save: ${syncResult.errorCode || 'unknown'}`)
           }
         }
-        const appearanceMode = this.settings.appearanceMode || this.settings.themeMode || 'system'
-        this.themeAdapter.updateFromLocalSettings(
-          appearanceMode,
-          this.settings.selectedBuiltinThemeId || ''
-        )
-        this.themeAdapter.updateFromSettings({
-          theme: appearanceMode as ThemeMode,
-          fontSize: this.settings.editorFontSize,
-          fontFamily: 'HarmonyOS Sans',
-          lineHeight: this.settings.editorLineSpacingMultiplier
-        } as ThemeUpdateParams)
-      } else {
-        this.saveMessage = `error:${result.errorCode || 'unknown'}`
       }
+      // 主题与排版只应用这份快照对应的已落盘值，不再读可能已被后续操作改写的 this.settings。
+      const appearanceMode = applied.appearanceMode || applied.themeMode || 'system'
+      this.themeAdapter.updateFromLocalSettings(
+        appearanceMode,
+        applied.selectedBuiltinThemeId || ''
+      )
+      this.themeAdapter.updateFromSettings({
+        theme: appearanceMode as ThemeMode,
+        fontSize: applied.editorFontSize,
+        fontFamily: 'HarmonyOS Sans',
+        lineHeight: applied.editorLineSpacingMultiplier
+      } as ThemeUpdateParams)
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to save settings: ${err}`)
       this.saveMessage = 'error:save_failed'
-    } finally {
-      this.isSaving = false
     }
   }
 

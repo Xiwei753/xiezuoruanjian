@@ -667,6 +667,16 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(true)
   }
 
+  async updateLocalSettings(
+    mutator: (settings: LocalSettings) => LocalSettings
+  ): Promise<ResultEnvelope<LocalSettings>> {
+    const saved = await this.saveLocalSettings(mutator(this.mockSettings))
+    if (!saved.success) {
+      return { success: false, errorCode: saved.errorCode, userMessage: saved.userMessage }
+    }
+    return this.getLocalSettings()
+  }
+
   async getSyncableSettings(): Promise<ResultEnvelope<SyncableSettings>> {
     await this.delay(100)
     const result: SyncableSettings = {

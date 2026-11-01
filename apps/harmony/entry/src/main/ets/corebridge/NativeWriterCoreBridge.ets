@@ -338,6 +338,12 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.settingsBridge.saveLocalSettings(settings)
   }
 
+  async updateLocalSettings(
+    mutator: (settings: LocalSettings) => LocalSettings
+  ): Promise<ResultEnvelope<LocalSettings>> {
+    return this.settingsBridge.updateLocalSettings(mutator)
+  }
+
   async getSyncableSettings(): Promise<ResultEnvelope<SyncableSettings>> {
     return this.settingsBridge.getSyncableSettings()
   }
