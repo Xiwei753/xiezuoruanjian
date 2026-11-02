@@ -71,6 +71,15 @@ struct ExtremeGeometryCache {
     selected: Vec<f32>,
 }
 
+/// 当前已经提交给 QSG 的几何编码。相机从极端模式退回普通模式时，
+/// 必须显式重建 anchor-relative 顶点，不能只更新矩阵。
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum EdgeGeometryMode {
+    #[default]
+    Anchor,
+    Extreme,
+}
+
 /// 最近一次同步/渲染状态。只记录数量、坐标与资源状态，不包含正文。
 /// update_paint_node 在渲染线程写，诊断导出线程读取，用 Mutex 串行化。
 #[derive(Clone, Default)]
@@ -517,6 +526,9 @@ pub struct StarMapEdgeLayer {
     cached_normal: Vec<f32>,
     cached_selected: Vec<f32>,
     extreme_cache: Option<ExtremeGeometryCache>,
+    uploaded_geometry_mode: EdgeGeometryMode,
+    uploaded_extreme_key: Option<ExtremeGeometryKey>,
+    uploaded_anchor_position_bucket: Option<f64>,
 }
 
 impl StarMapEdgeLayer {
@@ -734,16 +746,38 @@ impl StarMapEdgeLayer {
     }
 
     /// 相机变化时只有缓存桶真正变了才重建；同一桶内只更新矩阵/uniform。
+    /// 注意必须比较“已上传的几何模式”，而不是只看当前是否极端：
+    /// 极端 → 普通时 QSG 里仍是 bucket-local 顶点，必须重建并上传。
     fn camera_geometry_changed(&mut self) {
         if !self.uses_extreme_camera() {
-            self.request_paint();
+            let anchor_ready = self.uploaded_geometry_mode == EdgeGeometryMode::Anchor
+                && self.uploaded_anchor_position_bucket == Some(1.0);
+            if anchor_ready && !self.geometry_dirty {
+                self.request_paint();
+            } else {
+                self.mark_geometry_dirty();
+            }
             return;
         }
-        let current = self.extreme_geometry_params().map(|params| params.key);
-        let cache_valid = match (&self.extreme_cache, current) {
-            (Some(cache), Some(key)) => cache.key == key,
-            _ => false,
+        let Some(params) = self.extreme_geometry_params() else {
+            let position_scale = self.zoom_level / self.render_zoom();
+            let position_bucket = Self::pow2_bucket(position_scale);
+            let anchor_ready = self.uploaded_geometry_mode == EdgeGeometryMode::Anchor
+                && self.uploaded_anchor_position_bucket == position_bucket;
+            if anchor_ready && !self.geometry_dirty {
+                self.request_paint();
+            } else {
+                self.mark_geometry_dirty();
+            }
+            return;
         };
+        let cache_valid = self.uploaded_geometry_mode == EdgeGeometryMode::Extreme
+            && self.uploaded_extreme_key.as_ref() == Some(&params.key)
+            && self
+                .extreme_cache
+                .as_ref()
+                .is_some_and(|cache| cache.key == params.key)
+            && !self.geometry_dirty;
         if cache_valid {
             self.request_paint();
         } else {
@@ -833,9 +867,11 @@ impl StarMapEdgeLayer {
         if !self.pan_x.is_finite() || !self.pan_y.is_finite() {
             return None;
         }
-        // 缩放桶内变换会继续变化；缓冲区至少覆盖一个视口，
-        // 这样桶内缩小到 1/sqrt(2) 时缓存的裁剪几何仍然覆盖新视口。
-        let margin = (EXTREME_CULL_MARGIN + width.max(height) * 1.5) / zoom;
+        // 缩放/原点桶内只更新矩阵；中心最多移动近一个 1024px 桶，
+        // 桶内缩放最多变化到约一半。缓存范围额外覆盖两倍桶宽和视口，
+        // 避免平移或缩小时在缓存边缘露出未生成的线段。
+        let margin =
+            (EXTREME_CULL_MARGIN + EXTREME_ORIGIN_BUCKET_PX * 2.0 + width.max(height) * 0.5) / zoom;
         let left = (0.0 - self.pan_x) / zoom - margin;
         let top = (0.0 - self.pan_y) / zoom - margin;
         let right = (width - self.pan_x) / zoom + margin;
@@ -1097,9 +1133,10 @@ impl QQuickItem for StarMapEdgeLayer {
     }
 
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
-        // 视口尺寸变了，可见范围缓存必须失效；常规镜头只改矩阵。
-        self.extreme_cache = None;
-        if self.uses_extreme_camera() {
+        // 视口尺寸变了，极端模式的可见块键必须失效；普通 anchor 几何
+        // 与视口无关，只更新 uniform 中的 viewport。
+        if self.uploaded_geometry_mode == EdgeGeometryMode::Extreme {
+            self.extreme_cache = None;
             self.mark_geometry_dirty();
         } else {
             self.request_paint();
@@ -1140,6 +1177,9 @@ impl QQuickItem for StarMapEdgeLayer {
                         selected,
                     });
                 }
+                self.uploaded_geometry_mode = EdgeGeometryMode::Extreme;
+                self.uploaded_extreme_key = Some(params.key.clone());
+                self.uploaded_anchor_position_bucket = None;
             } else {
                 self.extreme_cache = None;
                 let position_scale = self.zoom_level / self.render_zoom();
@@ -1151,6 +1191,9 @@ impl QQuickItem for StarMapEdgeLayer {
                 );
                 self.cached_normal = normal;
                 self.cached_selected = selected;
+                self.uploaded_geometry_mode = EdgeGeometryMode::Anchor;
+                self.uploaded_extreme_key = None;
+                self.uploaded_anchor_position_bucket = Self::pow2_bucket(position_scale);
             }
         }
         let (width, height) = self.item_size();
@@ -1206,6 +1249,9 @@ impl QQuickItem for StarMapEdgeLayer {
                 render_zoom,
             )
         };
+        // 顶点可能按 position_bucket 预缩放，QSG 矩阵必须乘回真实比例；
+        // 不是 render_zoom 本身。普通模式两者相等。
+        let qsg_matrix_zoom = transform_zoom;
         let normal_ptr = normal.as_ptr();
         let selected_ptr = selected.as_ptr();
         let normal_count = (normal.len() / 7) as i32;
@@ -1244,7 +1290,7 @@ impl QQuickItem for StarMapEdgeLayer {
         // 保持有效，C++ 只在本函数内拷贝，不保留 Rust 指针。
         cpp!(unsafe [
             raw as "QSGNode *",
-            tx as "double", ty as "double", render_zoom as "double",
+            tx as "double", ty as "double", qsg_matrix_zoom as "double",
             geometry_dirty as "bool",
             normal_ptr as "const float *",
             normal_count as "int",
@@ -1255,7 +1301,7 @@ impl QQuickItem for StarMapEdgeLayer {
             normal_stroke_half as "double", selected_stroke_half as "double",
             width as "double", height as "double"
         ] {
-            sujian_starmap_edges_update(raw, tx, ty, render_zoom, geometry_dirty,
+            sujian_starmap_edges_update(raw, tx, ty, qsg_matrix_zoom, geometry_dirty,
                                         normal_ptr, normal_count,
                                         selected_ptr, selected_count,
                                         nr, ng, nb, normal_alpha,
@@ -1303,7 +1349,7 @@ impl QQuickItem for StarMapEdgeLayer {
                 viewport_y: height,
                 stroke_half: normal_stroke_half,
                 zoom,
-                render_zoom,
+                render_zoom: qsg_matrix_zoom,
                 extreme_camera: extreme,
                 normal_width_px,
                 selected_width_px,

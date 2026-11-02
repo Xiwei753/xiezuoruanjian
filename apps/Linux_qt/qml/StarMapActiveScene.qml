@@ -232,9 +232,6 @@ Item {
     // 决定是否还值得排版。_textScale 只保留给独立屏幕层的边标签 / 子图概览。
     readonly property real _textScale: Math.max(0.6, Math.min(8.0, _safeZoom))
     readonly property real _nodeTextMinScreenPx: 5
-    // 仅用于极端镜头下的文字局部放大，避免把 Number.MAX_VALUE 直接写进
-    // QSG 的 float 变换；正常镜头父层已经乘以 _safeZoom，这里保持 1。
-    readonly property real _textRenderScale: Math.min(_safeZoom, 1e9)
 
     // Issue #949：概览圆点口径（与 StarMapSceneContent 的概览圆点同一公式），
     // 展开进度 0 时活动画布的节点先以这个屏幕半径的圆点出现，逐步长成完整节点。
@@ -1368,10 +1365,10 @@ Item {
                            ? nodeItem.textBaseWidth : parent.width - 2 * StarMapNodeMetrics.PADDING
                     height: scene._extremeCamera
                             ? nodeItem.textBaseHeight : parent.height - 2 * StarMapNodeMetrics.PADDING
-                    // 极端镜头下 delegate 已是屏幕坐标：只放大文本局部，
-                    // 文字仍按 authored world 字号排版，再被卡片的视口相交
-                    // 矩形裁剪。放大后只出现可见字形局部，不会整段隐藏。
-                    scale: scene._extremeCamera ? scene._textRenderScale : 1
+                    // 极端镜头下 delegate 已是屏幕坐标：文本按 authored world
+                    // 字号排版，再乘真实缩放并交给卡片的视口相交矩形裁剪。
+                    // 不使用第二套字号上限，放大后只出现可见字形局部。
+                    scale: scene._extremeCamera ? scene._safeZoom : 1
                     transformOrigin: Item.TopLeft
                     visible: nodeItem.titleVisible
 
