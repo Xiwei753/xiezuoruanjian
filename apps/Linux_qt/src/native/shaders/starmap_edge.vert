@@ -5,6 +5,8 @@ layout(location = 1) in vec2 aDir;
 layout(location = 2) in vec2 aOffset;
 layout(location = 3) in float aKind;
 
+layout(location = 0) out float vEdgeDistance;
+
 layout(std140, binding = 0) uniform buf {
     mat4 qt_Matrix;
     float qt_Opacity;
@@ -24,10 +26,14 @@ void main()
 
     vec2 offsetPx;
     if (aKind < 0.5) {
-        offsetPx = normal * (aOffset.y * ubuf.uStrokeHalf);
+        // 顶点扩到半线宽 + 0.5px，片元再按到线心的距离计算覆盖率，
+        // 亚像素线宽不会靠“加粗到 1px”来维持可见。
+        offsetPx = normal * (aOffset.y * (ubuf.uStrokeHalf + 0.5));
+        vEdgeDistance = aOffset.y * ubuf.uStrokeHalf;
     } else {
         float screenPerWorld = length(clipDir);
         offsetPx = (dir * aOffset.x + normal * aOffset.y) * screenPerWorld;
+        vEdgeDistance = 0.0;
     }
 
     gl_Position = center;

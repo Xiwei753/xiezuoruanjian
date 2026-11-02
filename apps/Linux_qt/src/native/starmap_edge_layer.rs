@@ -9,10 +9,10 @@
 // + 少量选中边”合并成两个 QSGGeometryNode。
 //
 // 评论修正：#1029 要求相机变化不再上传整张图的顶点。现在顶点只保存相对
-// `anchorX/anchorY` 的 world 坐标与线段方向；线宽 1~6 屏幕像素、箭头大小全部
-// 在 QSGMaterialShader 里按 uniform 计算。平移/缩放只更新 QSGTransformNode
+// 锚点的 world 坐标与线段方向；线宽固定为屏幕物理像素、箭头大小也全部在
+// QSGMaterialShader 里按 uniform 计算。平移/缩放只更新 QSGTransformNode
 // 矩阵与少量 uniform，不 allocate / memcpy 顶点。顶点只在结构、节点位置、
-// 选择或 anchor 改变时重建，并分别记录 geometry/camera 统计。
+// 选择、锚点或极端镜头跨档时重建，并分别记录 geometry/camera 统计。
 //
 // 线程约束：QML 属性在 GUI 线程写入；顶点数组只在同步阶段（GUI 线程被阻塞）
 // 的 update_paint_node() 中读取。QSGNode / QSGGeometry / QSGMaterial 只在
@@ -32,6 +32,13 @@ static EDGE_GEOMETRY_UPDATES: AtomicU64 = AtomicU64::new(0);
 static EDGE_VERTEX_UPLOADS: AtomicU64 = AtomicU64::new(0);
 static EDGE_CAMERA_UPDATES: AtomicU64 = AtomicU64::new(0);
 
+// 相机在世界空间保持 double 连续变换；只有进入 QSG 的这一层才夹到 float
+// 安全的局部范围。极端缩放时把原点改到视口中心，并只上传可见边。
+const MIN_RENDER_ZOOM: f64 = 1e-6;
+const MAX_RENDER_ZOOM: f64 = 1e6;
+const MAX_ANCHOR_SCREEN_OFFSET: f64 = 1e7;
+const EXTREME_CULL_MARGIN: f64 = 64.0;
+
 /// 最近一次同步/渲染状态。只记录数量、坐标与资源状态，不包含正文。
 /// update_paint_node 在渲染线程写，诊断导出线程读取，用 Mutex 串行化。
 #[derive(Clone, Default)]
@@ -49,10 +56,15 @@ struct EdgeDiagnostics {
     viewport_y: f64,
     stroke_half: f64,
     zoom: f64,
+    render_zoom: f64,
+    extreme_camera: bool,
+    normal_width_px: f64,
+    selected_width_px: f64,
     translate_x: f64,
     translate_y: f64,
     normal_color: String,
     normal_alpha: f64,
+    selected_alpha: f64,
     reveal: f64,
     sample_edge_id: String,
     sample_start_x: f64,
@@ -105,8 +117,8 @@ pub fn render_statistics_json() -> String {
     let vertex_standard = split_metadata(EDGE_VERTEX_QSB_STANDARD_GLSL, ',');
     let vertex_batchable = split_metadata(EDGE_VERTEX_QSB_BATCHABLE_GLSL, ',');
     let fragment_standard = split_metadata(EDGE_FRAGMENT_QSB_STANDARD_GLSL, ',');
-    let opengl_ready = EDGE_VERTEX_QSB_QTQUICK_READY == Some("1")
-        && EDGE_FRAGMENT_QSB_QTQUICK_READY == Some("1");
+    let opengl_ready =
+        EDGE_VERTEX_QSB_QTQUICK_READY == Some("1") && EDGE_FRAGMENT_QSB_QTQUICK_READY == Some("1");
     serde_json::json!({
         "edgeLayerGeometryUpdates": EDGE_GEOMETRY_UPDATES.load(Ordering::Relaxed),
         "edgeLayerVertexUploads": EDGE_VERTEX_UPLOADS.load(Ordering::Relaxed),
@@ -135,9 +147,14 @@ pub fn render_statistics_json() -> String {
         "clipRect": [0.0, 0.0, snapshot.clip_width, snapshot.clip_height],
         "strokeHalf": snapshot.stroke_half,
         "zoom": snapshot.zoom,
+        "renderZoom": snapshot.render_zoom,
+        "extremeCamera": snapshot.extreme_camera,
+        "normalWidthPx": snapshot.normal_width_px,
+        "selectedWidthPx": snapshot.selected_width_px,
         "cameraTranslation": [snapshot.translate_x, snapshot.translate_y],
         "normalColor": snapshot.normal_color,
         "normalAlpha": snapshot.normal_alpha,
+        "selectedAlpha": snapshot.selected_alpha,
         "reveal": snapshot.reveal,
         "sampleEdge": {
             "id": snapshot.sample_edge_id,
@@ -398,7 +415,8 @@ cpp! {{
                                             int selected_vertex_count,
                                             int nr, int ng, int nb, double na,
                                             int sr, int sg, int sb, double sa,
-                                            double stroke_half,
+                                            double normal_stroke_half,
+                                            double selected_stroke_half,
                                             double viewport_x, double viewport_y)
     {
         QSGTransformNode *transform = sujian_edge_transform_node(root);
@@ -425,16 +443,16 @@ cpp! {{
         }
         if (geometry_dirty || !normal->geometry() || !selected->geometry()) {
             sujian_apply_edge_geometry(normal, normal_vertices, normal_vertex_count,
-                                       nr, ng, nb, na, stroke_half,
+                                       nr, ng, nb, na, normal_stroke_half,
                                        viewport_x, viewport_y);
             sujian_apply_edge_geometry(selected, selected_vertices,
                                        selected_vertex_count, sr, sg, sb, sa,
-                                       stroke_half, viewport_x, viewport_y);
+                                       selected_stroke_half, viewport_x, viewport_y);
         } else {
             // 相机帧只更新颜色/线宽 uniform，不触碰顶点或几何脏标记。
-            sujian_apply_edge_material(normal, nr, ng, nb, na, stroke_half,
+            sujian_apply_edge_material(normal, nr, ng, nb, na, normal_stroke_half,
                                        viewport_x, viewport_y);
-            sujian_apply_edge_material(selected, sr, sg, sb, sa, stroke_half,
+            sujian_apply_edge_material(selected, sr, sg, sb, sa, selected_stroke_half,
                                        viewport_x, viewport_y);
         }
     }
@@ -454,7 +472,10 @@ pub struct StarMapEdgeLayer {
     anchor_x: qt_property!(f64; ALIAS anchorX WRITE set_anchor_x),
     anchor_y: qt_property!(f64; ALIAS anchorY WRITE set_anchor_y),
     reveal: qt_property!(f64; ALIAS reveal WRITE set_reveal),
-    line_world_width: qt_property!(f64; ALIAS lineWorldWidth WRITE set_line_world_width),
+    normal_width_px: qt_property!(f64; ALIAS normalWidthPx WRITE set_normal_width_px),
+    selected_width_px: qt_property!(f64; ALIAS selectedWidthPx WRITE set_selected_width_px),
+    normal_alpha: qt_property!(f64; ALIAS normalAlpha WRITE set_normal_alpha),
+    selected_alpha: qt_property!(f64; ALIAS selectedAlpha WRITE set_selected_alpha),
     normal_color_hex: qt_property!(QString; ALIAS normalColorHex WRITE set_normal_color_hex),
     selected_color_hex: qt_property!(QString; ALIAS selectedColorHex WRITE set_selected_color_hex),
 
@@ -505,25 +526,40 @@ impl StarMapEdgeLayer {
         if self.zoom_level == value {
             return;
         }
+        let was_extreme = self.uses_extreme_camera();
         self.zoom_level = value;
-        // 缩放只改 transform 矩阵与 stroke uniform，不重建顶点。
-        self.request_paint();
+        if was_extreme || self.uses_extreme_camera() {
+            self.mark_geometry_dirty();
+        } else {
+            // 常规缩放只改 transform 矩阵与线宽 uniform，不重建顶点。
+            self.request_paint();
+        }
     }
 
     fn set_pan_x(&mut self, value: f64) {
         if self.pan_x == value {
             return;
         }
+        let was_extreme = self.uses_extreme_camera();
         self.pan_x = value;
-        self.request_paint();
+        if was_extreme || self.uses_extreme_camera() {
+            self.mark_geometry_dirty();
+        } else {
+            self.request_paint();
+        }
     }
 
     fn set_pan_y(&mut self, value: f64) {
         if self.pan_y == value {
             return;
         }
+        let was_extreme = self.uses_extreme_camera();
         self.pan_y = value;
-        self.request_paint();
+        if was_extreme || self.uses_extreme_camera() {
+            self.mark_geometry_dirty();
+        } else {
+            self.request_paint();
+        }
     }
 
     fn set_anchor_x(&mut self, value: f64) {
@@ -550,11 +586,35 @@ impl StarMapEdgeLayer {
         self.request_paint();
     }
 
-    fn set_line_world_width(&mut self, value: f64) {
-        if self.line_world_width == value {
+    fn set_normal_width_px(&mut self, value: f64) {
+        if self.normal_width_px == value {
             return;
         }
-        self.line_world_width = value;
+        self.normal_width_px = value;
+        self.request_paint();
+    }
+
+    fn set_selected_width_px(&mut self, value: f64) {
+        if self.selected_width_px == value {
+            return;
+        }
+        self.selected_width_px = value;
+        self.request_paint();
+    }
+
+    fn set_normal_alpha(&mut self, value: f64) {
+        if self.normal_alpha == value {
+            return;
+        }
+        self.normal_alpha = value;
+        self.request_paint();
+    }
+
+    fn set_selected_alpha(&mut self, value: f64) {
+        if self.selected_alpha == value {
+            return;
+        }
+        self.selected_alpha = value;
         self.request_paint();
     }
 
@@ -594,31 +654,162 @@ impl StarMapEdgeLayer {
         (color.red(), color.green(), color.blue())
     }
 
+    /// 进入 QSG 前的缩放上限：世界相机仍用 f64 连续值，这里只保护 float 矩阵。
+    fn render_zoom(&self) -> f64 {
+        let zoom = self.zoom_level;
+        if zoom.is_finite() && zoom > 0.0 {
+            zoom.clamp(MIN_RENDER_ZOOM, MAX_RENDER_ZOOM)
+        } else {
+            1.0
+        }
+    }
+
+    /// 常规镜头沿用 anchor 局部几何，相机变化只更新矩阵；只有缩放跨出
+    /// float 安全档位，或 anchor 已离视口过远时，才改用以视口中心为原点的
+    /// 极端模式并重建可见顶点。
+    fn uses_extreme_camera(&self) -> bool {
+        let zoom = self.zoom_level;
+        if !zoom.is_finite() || zoom <= 0.0 {
+            return false;
+        }
+        if zoom < MIN_RENDER_ZOOM || zoom > MAX_RENDER_ZOOM {
+            return true;
+        }
+        let (width, height) = self.item_size();
+        if width <= 0.0 || height <= 0.0 {
+            return false;
+        }
+        if !self.pan_x.is_finite()
+            || !self.pan_y.is_finite()
+            || !self.anchor_x.is_finite()
+            || !self.anchor_y.is_finite()
+        {
+            return true;
+        }
+        let origin_x = (width / 2.0 - self.pan_x) / zoom;
+        let origin_y = (height / 2.0 - self.pan_y) / zoom;
+        let tx = width / 2.0 + (self.anchor_x - origin_x) * zoom;
+        let ty = height / 2.0 + (self.anchor_y - origin_y) * zoom;
+        !tx.is_finite()
+            || !ty.is_finite()
+            || tx.abs() > MAX_ANCHOR_SCREEN_OFFSET
+            || ty.abs() > MAX_ANCHOR_SCREEN_OFFSET
+    }
+
+    /// 极端镜头的局部原点 = 当前视口中心对应的 world 坐标。
+    /// 原点超出 f64 时退回 0，让所有有限顶点落在视口中心（与 QML 的
+    /// 饱和投影保持同一可见结果），而不是把 infinity 交给场景图。
+    fn extreme_origin(&self) -> Option<(f64, f64)> {
+        let zoom = self.zoom_level;
+        let (width, height) = self.item_size();
+        if !zoom.is_finite() || zoom <= 0.0 || width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        if !self.pan_x.is_finite() || !self.pan_y.is_finite() {
+            return None;
+        }
+        let origin_x = (width / 2.0 - self.pan_x) / zoom;
+        let origin_y = (height / 2.0 - self.pan_y) / zoom;
+        if origin_x.is_finite() && origin_y.is_finite() {
+            Some((origin_x, origin_y))
+        } else {
+            Some((0.0, 0.0))
+        }
+    }
+
+    fn sanitized_width_px(value: f64) -> f64 {
+        if value.is_finite() {
+            value.clamp(0.25, 16.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// 极端缩放下只重建与视口相交的边；常规缩放仍保留整张图的静态顶点。
+    fn edge_screen_visible(&self, edge: &EdgeRender, width: f64, height: f64) -> bool {
+        let zoom = self.zoom_level;
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        let points = [
+            (edge.start_x, edge.start_y),
+            (edge.end_x, edge.end_y),
+            (edge.arrow_tip_x, edge.arrow_tip_y),
+            (edge.arrow_left_x, edge.arrow_left_y),
+            (edge.arrow_right_x, edge.arrow_right_y),
+        ];
+        for (wx, wy) in points {
+            let x = f64::from(wx) * zoom + self.pan_x;
+            let y = f64::from(wy) * zoom + self.pan_y;
+            if !x.is_finite() || !y.is_finite() {
+                return false;
+            }
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+        max_x >= -EXTREME_CULL_MARGIN
+            && min_x <= width + EXTREME_CULL_MARGIN
+            && max_y >= -EXTREME_CULL_MARGIN
+            && min_y <= height + EXTREME_CULL_MARGIN
+    }
+
     /// 顶点布局：pos(2) + dir(2) + offset(2) + kind(1)，共 7 个 float。
     /// 线段 offset=(0,±1) 由 shader 乘屏幕半线宽；箭头 offset 是相对箭尖的
-    /// world 偏移，由 shader 按当前变换换算成屏幕像素。缩放 / 平移不重建。
-    fn build_vertices(&self) -> (Vec<f32>, Vec<f32>) {
-        let anchor_x = self.anchor_x;
-        let anchor_y = self.anchor_y;
-        if !anchor_x.is_finite() || !anchor_y.is_finite() {
+    /// world 偏移，由 shader 按当前变换换算成屏幕像素。常规缩放不重建。
+    fn build_vertices(&self, extreme: bool) -> (Vec<f32>, Vec<f32>) {
+        let (width, height) = self.item_size();
+        let (base_x, base_y) = if extreme {
+            match self.extreme_origin() {
+                Some(origin) => origin,
+                None => return (Vec::new(), Vec::new()),
+            }
+        } else {
+            if !self.anchor_x.is_finite() || !self.anchor_y.is_finite() {
+                return (Vec::new(), Vec::new());
+            }
+            (self.anchor_x, self.anchor_y)
+        };
+        let position_scale = if extreme {
+            self.zoom_level / self.render_zoom()
+        } else {
+            1.0
+        };
+        if !position_scale.is_finite() {
             return (Vec::new(), Vec::new());
         }
         let selected_id = self.selected_edge_id.to_string();
         let mut normal = Vec::with_capacity(self.edges.len() * 63);
         let mut selected = Vec::with_capacity(63);
 
-        let local = |wx: f32, wy: f32| -> (f32, f32) {
-            ((f64::from(wx) - anchor_x) as f32, (f64::from(wy) - anchor_y) as f32)
+        let local = |wx: f32, wy: f32| -> Option<(f32, f32)> {
+            let lx = (f64::from(wx) - base_x) * position_scale;
+            let ly = (f64::from(wy) - base_y) * position_scale;
+            if !lx.is_finite() || !ly.is_finite() {
+                return None;
+            }
+            let (lx, ly) = (lx as f32, ly as f32);
+            if lx.is_finite() && ly.is_finite() {
+                Some((lx, ly))
+            } else {
+                None
+            }
         };
 
         for edge in &self.edges {
-            let target = if !selected_id.is_empty() && edge.edge_id == selected_id {
-                &mut selected
-            } else {
-                &mut normal
+            if extreme && !self.edge_screen_visible(edge, width, height) {
+                continue;
+            }
+            let (sx, sy) = match local(edge.start_x, edge.start_y) {
+                Some(point) => point,
+                None => continue,
             };
-            let (sx, sy) = local(edge.start_x, edge.start_y);
-            let (ex, ey) = local(edge.end_x, edge.end_y);
+            let (ex, ey) = match local(edge.end_x, edge.end_y) {
+                Some(point) => point,
+                None => continue,
+            };
             let dx = ex - sx;
             let dy = ey - sy;
             let len = (dx * dx + dy * dy).sqrt();
@@ -627,6 +818,24 @@ impl StarMapEdgeLayer {
             }
             let ux = dx / len;
             let uy = dy / len;
+            let (tx, ty) = match local(edge.arrow_tip_x, edge.arrow_tip_y) {
+                Some(point) => point,
+                None => continue,
+            };
+            let (lx, ly) = match local(edge.arrow_left_x, edge.arrow_left_y) {
+                Some(point) => point,
+                None => continue,
+            };
+            let (rx, ry) = match local(edge.arrow_right_x, edge.arrow_right_y) {
+                Some(point) => point,
+                None => continue,
+            };
+
+            let target = if !selected_id.is_empty() && edge.edge_id == selected_id {
+                &mut selected
+            } else {
+                &mut normal
+            };
 
             let mut push = |x: f32, y: f32, ox: f32, oy: f32, kind: f32| {
                 target.extend_from_slice(&[x, y, ux, uy, ox, oy, kind]);
@@ -641,9 +850,6 @@ impl StarMapEdgeLayer {
             push(ex, ey, 0.0, -1.0, 0.0);
 
             // 箭头：箭尖 + 左右底角，offset 是相对箭尖的 world 偏移。
-            let (tx, ty) = local(edge.arrow_tip_x, edge.arrow_tip_y);
-            let (lx, ly) = local(edge.arrow_left_x, edge.arrow_left_y);
-            let (rx, ry) = local(edge.arrow_right_x, edge.arrow_right_y);
             let (la, ll) = (lx - tx, ly - ty);
             let (ra, rl) = (rx - tx, ry - ty);
             let left_along = la * ux + ll * uy;
@@ -667,10 +873,13 @@ impl StarMapEdgeLayer {
         }
         let origin_x = (width / 2.0 - self.pan_x) / zoom;
         let origin_y = (height / 2.0 - self.pan_y) / zoom;
-        (
-            width / 2.0 + (self.anchor_x - origin_x) * zoom,
-            height / 2.0 + (self.anchor_y - origin_y) * zoom,
-        )
+        let tx = width / 2.0 + (self.anchor_x - origin_x) * zoom;
+        let ty = height / 2.0 + (self.anchor_y - origin_y) * zoom;
+        if tx.is_finite() && ty.is_finite() {
+            (tx, ty)
+        } else {
+            (0.0, 0.0)
+        }
     }
 }
 
@@ -693,7 +902,13 @@ impl QQuickItem for StarMapEdgeLayer {
     }
 
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
-        self.request_paint();
+        // 极端镜头以视口中心为局部原点，尺寸变化必须重建顶点；常规镜头
+        // 只改矩阵，静态顶点继续复用。
+        if self.uses_extreme_camera() {
+            self.mark_geometry_dirty();
+        } else {
+            self.request_paint();
+        }
     }
 
     fn update_paint_node(&mut self, node: SGNode<ContainerNode>) -> SGNode<ContainerNode> {
@@ -707,9 +922,10 @@ impl QQuickItem for StarMapEdgeLayer {
             });
         }
 
+        let extreme = self.uses_extreme_camera();
         let geometry_dirty = self.geometry_dirty;
         let (normal, selected) = if geometry_dirty {
-            self.build_vertices()
+            self.build_vertices(extreme)
         } else {
             (Vec::new(), Vec::new())
         };
@@ -717,14 +933,22 @@ impl QQuickItem for StarMapEdgeLayer {
         let selected_ptr = selected.as_ptr();
         let normal_count = (normal.len() / 7) as i32;
         let selected_count = (selected.len() / 7) as i32;
-        let (tx, ty) = self.camera_translation();
         let (width, height) = self.item_size();
         let zoom = if self.zoom_level > 0.0 && self.zoom_level.is_finite() {
             self.zoom_level
         } else {
             1.0
         };
-        let stroke_half = (self.line_world_width * zoom).clamp(1.0, 6.0) / 2.0;
+        let render_zoom = self.render_zoom();
+        let (tx, ty) = if extreme {
+            (width / 2.0, height / 2.0)
+        } else {
+            self.camera_translation()
+        };
+        let normal_width_px = Self::sanitized_width_px(self.normal_width_px);
+        let selected_width_px = Self::sanitized_width_px(self.selected_width_px);
+        let normal_stroke_half = normal_width_px * 0.5;
+        let selected_stroke_half = selected_width_px * 0.5;
         let (nr, ng, nb) = Self::color_parts(&self.normal_color_hex.to_string());
         let (sr, sg, sb) = Self::color_parts(&self.selected_color_hex.to_string());
         let reveal = if self.reveal.is_finite() {
@@ -732,6 +956,16 @@ impl QQuickItem for StarMapEdgeLayer {
         } else {
             1.0
         };
+        let normal_alpha = if self.normal_alpha.is_finite() {
+            self.normal_alpha.clamp(0.0, 1.0)
+        } else {
+            0.55
+        } * reveal;
+        let selected_alpha = if self.selected_alpha.is_finite() {
+            self.selected_alpha.clamp(0.0, 1.0)
+        } else {
+            1.0
+        } * reveal;
         if geometry_dirty {
             EDGE_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
             EDGE_VERTEX_UPLOADS.fetch_add(
@@ -745,21 +979,24 @@ impl QQuickItem for StarMapEdgeLayer {
         // 保持有效，C++ 只在本函数内拷贝，不保留 Rust 指针。
         cpp!(unsafe [
             raw as "QSGNode *",
-            tx as "double", ty as "double", zoom as "double",
+            tx as "double", ty as "double", render_zoom as "double",
             geometry_dirty as "bool",
             normal_ptr as "const float *",
             normal_count as "int",
             selected_ptr as "const float *",
             selected_count as "int",
-            nr as "int", ng as "int", nb as "int", reveal as "double",
-            sr as "int", sg as "int", sb as "int",
-            stroke_half as "double", width as "double", height as "double"
+            nr as "int", ng as "int", nb as "int", normal_alpha as "double",
+            sr as "int", sg as "int", sb as "int", selected_alpha as "double",
+            normal_stroke_half as "double", selected_stroke_half as "double",
+            width as "double", height as "double"
         ] {
-            sujian_starmap_edges_update(raw, tx, ty, zoom, geometry_dirty,
+            sujian_starmap_edges_update(raw, tx, ty, render_zoom, geometry_dirty,
                                         normal_ptr, normal_count,
                                         selected_ptr, selected_count,
-                                        nr, ng, nb, reveal, sr, sg, sb, reveal,
-                                        stroke_half, width, height);
+                                        nr, ng, nb, normal_alpha,
+                                        sr, sg, sb, selected_alpha,
+                                        normal_stroke_half, selected_stroke_half,
+                                        width, height);
         });
         // SAFETY: raw 仍是本 item 的 paint node；只读几何/材质状态用于诊断。
         let debug_state = cpp!(unsafe [raw as "QSGNode *"] -> i64 as "qint64" {
@@ -771,12 +1008,20 @@ impl QQuickItem for StarMapEdgeLayer {
         let geometry_flags = debug_state >> 40;
         let sample = self.edges.first();
         let sample_start_screen = sample
-            .map(|edge| (f64::from(edge.start_x) * zoom + self.pan_x,
-                         f64::from(edge.start_y) * zoom + self.pan_y))
+            .map(|edge| {
+                (
+                    f64::from(edge.start_x) * zoom + self.pan_x,
+                    f64::from(edge.start_y) * zoom + self.pan_y,
+                )
+            })
             .unwrap_or((0.0, 0.0));
         let sample_end_screen = sample
-            .map(|edge| (f64::from(edge.end_x) * zoom + self.pan_x,
-                         f64::from(edge.end_y) * zoom + self.pan_y))
+            .map(|edge| {
+                (
+                    f64::from(edge.end_x) * zoom + self.pan_x,
+                    f64::from(edge.end_y) * zoom + self.pan_y,
+                )
+            })
             .unwrap_or((0.0, 0.0));
         if let Ok(mut guard) = EDGE_DIAGNOSTICS.lock() {
             *guard = Some(EdgeDiagnostics {
@@ -791,12 +1036,17 @@ impl QQuickItem for StarMapEdgeLayer {
                 selected_material_present: geometry_flags & 8 != 0,
                 viewport_x: width,
                 viewport_y: height,
-                stroke_half,
+                stroke_half: normal_stroke_half,
                 zoom,
+                render_zoom,
+                extreme_camera: extreme,
+                normal_width_px,
+                selected_width_px,
                 translate_x: tx,
                 translate_y: ty,
                 normal_color: format!("#{nr:02x}{ng:02x}{nb:02x}"),
-                normal_alpha: reveal,
+                normal_alpha,
+                selected_alpha,
                 reveal,
                 sample_edge_id: sample.map(|edge| edge.edge_id.clone()).unwrap_or_default(),
                 sample_start_x: sample.map(|edge| f64::from(edge.start_x)).unwrap_or(0.0),
@@ -809,8 +1059,7 @@ impl QQuickItem for StarMapEdgeLayer {
                 sample_end_screen_y: sample_end_screen.1,
                 clip_width: width,
                 clip_height: height,
-                shader_resource_exists: shader_bits & (1 << 0) != 0
-                    && shader_bits & (1 << 1) != 0,
+                shader_resource_exists: shader_bits & (1 << 0) != 0 && shader_bits & (1 << 1) != 0,
             });
         }
         self.geometry_dirty = false;

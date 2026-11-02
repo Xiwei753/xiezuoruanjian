@@ -140,6 +140,20 @@ Item {
     function arbitrateEditorPress(point, button, gestureId) {
         if (!hasActiveNodeEdit())
             return "free"
+        var scene = canvas ? canvas.activeScene() : null
+        // 初始化中途失败（还没有有效投影矩形）不能留下一个“永远 blocked”
+        // 的半成品会话。这里先无条件取消，让本次手势继续走正常命中。
+        if (scene && typeof scene.nodeEditUsable === "function"
+                && !scene.nodeEditUsable()) {
+            canvas.logInteraction("node_edit_cancel", "node",
+                                  scene.editingNodeId || "", {
+                "reason": "unusable_session",
+                "button": button,
+                "gesture": gestureId
+            })
+            canvas.cancelNodeEdit()
+            return "free"
+        }
         if (pointInsideNodeEditor(point)) {
             canvas.logInteraction("node_edit_pointer_claimed", "node", "", {
                 "button": button,
@@ -1167,10 +1181,18 @@ Item {
     }
 
     // Issue #834：armed 态下 Escape 取消（空白取消已在 handleSingleTap 处理）。
-    // 用 Shortcut 全局拦截，不抢 TextInput 焦点；armed 时无 Popup 打开，不冲突。
+    // 内联编辑会话同样用 Escape 无条件取消：不触发名称非空/保存校验，随后
+    // 正常 node/edge/pan 命中立即恢复。Shortcut 不抢 TextInput 焦点。
     Shortcut {
         sequence: "Escape"
-        enabled: router.ic && (router.ic.linkArmed || router.ic.connectArmed)
-        onActivated: router.ic.cancelArmed()
+        enabled: router.ic && (router.ic.linkArmed || router.ic.connectArmed
+                               || router.canvas.hasActiveNodeEdit())
+        onActivated: {
+            if (router.canvas.hasActiveNodeEdit()) {
+                router.canvas.cancelNodeEdit()
+                return
+            }
+            router.ic.cancelArmed()
+        }
     }
 }

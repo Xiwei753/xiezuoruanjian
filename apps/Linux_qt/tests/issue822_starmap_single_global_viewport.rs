@@ -1173,12 +1173,12 @@ fn node_title_is_edited_inline_with_a_text_input() {
         "编辑层只在场景会话存在时显示并接管输入，实际源码缺少"
     );
 
-    let begin = function_window(&src, "function beginInlineEdit(", 1400);
+    let begin = function_window(&src, "function beginInlineEdit(", 2400);
     assert!(
         begin.contains("if (editingNodeId !== \"\" && !commitActiveNodeEdit())")
             && begin.contains("return false")
             && begin.contains("editingNodeId = nodeId")
-            && begin.contains("Qt.callLater(editOverlay.activate)"),
+            && begin.contains("editOverlay.requestActivation()"),
         "打开新节点前必须先提交旧会话，失败保留原编辑；再建立唯一会话，实际窗口:\n{begin}"
     );
     let commit = function_window(&src, "function commitEdit(", 3600);
@@ -1270,17 +1270,19 @@ fn node_editor_is_a_stable_viewport_anchored_overlay() {
             && active.contains("function finishActiveNodeEdit()"),
         "活动画布必须有唯一编辑会话，inlineEditingKey 由会话派生"
     );
-    let begin = function_window(&active, "function beginInlineEdit(", 1400);
+    let begin = function_window(&active, "function beginInlineEdit(", 2400);
     assert!(
         begin.contains("if (editingNodeId !== \"\" && !commitActiveNodeEdit())")
-            && begin.contains("Qt.callLater(editOverlay.activate)"),
-        "打开新节点必须先提交旧会话，失败不切换，实际窗口:\n{begin}"
+            && begin.contains("editOverlay.requestActivation()")
+            && begin.contains("editingAnchorWorldRect"),
+        "打开新节点必须先提交旧会话，失败不切换；新会话必须保存稳定 world 锚点，实际窗口:\n{begin}"
     );
-    let anchor = function_window(&active, "readonly property var _anchor:", 1400);
+    let anchor = function_window(&active, "function expandedRectFor(", 1200);
     assert!(
-        anchor.contains("x + w > vw - m") && anchor.contains("y + h > vh - m")
-            && anchor.contains("(vw - w) / 2"),
-        "编辑浮层必须按视口边界换向/居中，实际窗口:\n{anchor}"
+        anchor.contains("return { x: r.x, y: r.y, width: w, height: h }")
+            && !anchor.contains("(vw - w) / 2")
+            && !anchor.contains("(vh - h) / 2"),
+        "编辑浮层必须从原节点左上角展开，不得再按视口居中漂移，实际窗口:\n{anchor}"
     );
     assert!(
         active.contains("readonly property string inlineEditingKey:")
@@ -2068,12 +2070,13 @@ fn edge_hit_threshold_is_screen_relative() {
         scene.contains("readonly property real _edgeHitScreenPx: 10"),
         "命中阈值必须是屏幕像素常量"
     );
-    // 评论 5977083591 问题 2：命中范围不得小于真实可见线宽的一半，
-    // 高倍放大时不能"点在肉眼很粗的线里却点不中"。
+    // 评论 5977083591 问题 2：命中范围独立于可见线宽，保持约 10 屏幕像素；
+    // 线宽改为固定屏幕物理像素后，不能再随 zoom 放大到 6px。
     assert!(
-        scene.contains("readonly property real _edgeLineWorldWidth: 2")
-            && scene.contains("Math.max(_edgeHitScreenPx / _safeZoom, _edgeLineWorldWidth / 2)"),
-        "阈值必须同时覆盖屏幕像素下限与可见线宽下限，实际源码缺少"
+        scene.contains("readonly property real _edgeNormalScreenWidth: 1.0")
+            && scene.contains("readonly property real _edgeSelectedScreenWidth: 2.4")
+            && !scene.contains("_edgeLineWorldWidth"),
+        "可见线宽必须是固定屏幕像素常量，实际源码缺少"
     );
     let threshold = function_window(&scene, "function _edgeHitThresholdWorld(", 400);
     assert!(
@@ -2085,15 +2088,11 @@ fn edge_hit_threshold_is_screen_relative() {
         "活动画布命中必须把折算后的阈值传给 hitTestEdge"
     );
 
-    // 绘制与命中同源：活动画布 / 概览 / 预览线都用同一份线宽口径。
-    assert_eq!(
-        count_occurrences(&scene, "strokeWidth: scene._edgeScreenStrokeWidth"),
-        1,
-        "活动画布连线必须用屏幕口径 _edgeScreenStrokeWidth 绘制"
-    );
+    // 绘制与命中解耦：命中保持 10 屏幕像素，原生边层/Canvas 预览共用屏幕像素宽度。
     assert!(
-        scene.contains("Math.max(1.0, Math.min(_edgeLineWorldWidth * _safeZoom, 6.0))"),
-        "线宽必须由 _edgeLineWorldWidth × 镜头比例夹定，实际源码缺少"
+        scene.contains("normalWidthPx: scene._edgeNormalScreenWidth")
+            && scene.contains("selectedWidthPx: scene._edgeSelectedScreenWidth"),
+        "活动画布必须把固定屏幕线宽交给原生边层，实际源码缺少"
     );
     let content = strip_line_comments(&read_src(CONTENT));
     assert_eq!(
@@ -2270,42 +2269,30 @@ fn connect_preview_reuses_platform_edge_renderer() {
     );
 }
 
-/// 边命中范围与可见线宽同源：缩小时至少 10 屏幕像素，放大时至少覆盖线本体；
-/// #929：活动画布用 ShapePath 画边、概览用 ShapePath、预览 overlay 用 Canvas，
-/// 三处都必须从同一份 _edgeLineWorldWidth 派生屏幕线宽。
+/// 边命中范围与可见线宽解耦：缩小时保持约 10 屏幕像素，放大时线宽固定为
+/// 1.0~2.4 屏幕像素；活动画布原生边层与预览 overlay 共用屏幕像素口径。
 #[test]
-fn edge_hit_threshold_covers_visible_line_width() {
+fn edge_hit_threshold_is_independent_of_visual_width() {
     let scene = strip_line_comments(&read_src(ACTIVE_SCENE));
     assert!(
-        scene.contains("readonly property real _edgeLineWorldWidth: 2"),
-        "边线宽必须是单一 world 常量（绘制与命中共用）"
+        scene.contains("readonly property real _edgeNormalScreenWidth: 1.0")
+            && scene.contains("readonly property real _edgeSelectedScreenWidth: 2.4")
+            && !scene.contains("_edgeLineWorldWidth"),
+        "边线宽必须是固定屏幕像素常量，实际源码不符"
     );
     let threshold = function_window(&scene, "function _edgeHitThresholdWorld(", 400);
     assert!(
-        threshold
-            .contains("return Math.max(_edgeHitScreenPx / _safeZoom, _edgeLineWorldWidth / 2)"),
-        "命中阈值必须同时覆盖屏幕像素下限与真实线宽，实际窗口:\n{threshold}"
+        threshold.contains("return _edgeHitScreenPx / _safeZoom"),
+        "命中阈值必须独立于可见线宽，只按屏幕像素折算，实际窗口:\n{threshold}"
     );
 
-    // 绘制不许再手写 lineWidth = 2：活动画布/概览/预览 overlay 都从同一常量派生。
-    assert!(
-        count_occurrences(&scene, "strokeWidth: scene._edgeScreenStrokeWidth") == 1
-            && scene.contains("readonly property real _edgeScreenStrokeWidth:")
-            && scene.contains("Math.min(_edgeLineWorldWidth * _safeZoom, 6.0)"),
-        "活动画布连线必须由 _edgeLineWorldWidth 派生屏幕线宽，实际源码不符"
-    );
     let content = strip_line_comments(&read_src(CONTENT));
-    assert_eq!(
-        count_occurrences(&content, "strokeWidth: overview._previewStrokeWidth"),
-        3,
-        "概览的边 / 节点 / 子入口必须统一用 _previewStrokeWidth"
-    );
     let canvas = strip_line_comments(&read_src(CANVAS));
     assert!(
-        canvas.contains("ctx.lineWidth = canvasArea._edgeScreenStrokeWidth")
-            && canvas.contains("readonly property real _edgeScreenStrokeWidth:")
-            && canvas.contains("Math.min(_edgeLineWorldWidth * zoomLevel, 6.0)"),
-        "连线预览线宽必须跟同一份 world 线宽常量，实际源码不符"
+        canvas.contains("readonly property real _edgePreviewScreenWidth: 1.5")
+            && canvas.contains("readonly property real _edgeScreenStrokeWidth: _edgePreviewScreenWidth")
+            && canvas.contains("ctx.lineWidth = canvasArea._edgeScreenStrokeWidth"),
+        "连线预览线宽必须跟同一份屏幕像素常量，实际源码不符"
     );
     for (name, src) in [
         ("StarMapActiveScene", &scene),

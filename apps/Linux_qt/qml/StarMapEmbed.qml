@@ -70,9 +70,9 @@ Item {
     // 父场景的文字口径：和活动画布同一份"按用户字号策略"。
     readonly property real _textScale: parentScene ? parentScene._textScale : 1
     // 本组件位于父场景统一的 worldContent 变换内：宽度 / 字号 / 边框都按
-    // authored world 单位计算，屏幕口径通过除以父级 zoom 保持恒定。
-    readonly property real _safeZoom: parentScene && parentScene._safeZoom > 0
-                                      ? parentScene._safeZoom : 1
+    // authored world 单位计算，屏幕口径通过除以父级渲染缩放保持恒定。
+    readonly property real _renderZoom: parentScene && parentScene._renderZoom > 0
+                                        ? parentScene._renderZoom : 1
 
     // 直径（世界单位）：Embed 是正圆，取投影短边。
     readonly property real _diameter: Math.min(width, height)
@@ -83,8 +83,8 @@ Item {
     // 概览的 fitScale 同时是"进入该子图后的子画布比例"：加载成功后父画布
     // 穿越子图时用同一份比例，切画布前后画面连续。
     readonly property bool previewWanted:
-        targetStarmapId !== "" && width * _safeZoom >= 32
-        && height * _safeZoom >= 32
+        targetStarmapId !== "" && width * _renderZoom >= 32
+        && height * _renderZoom >= 32
     readonly property var previewContent: previewLoader.item
     readonly property var childBounds: previewContent ? previewContent.childBounds : null
     readonly property real childFitScale: previewContent ? previewContent.fitScale : 0
@@ -121,17 +121,17 @@ Item {
         // 内容之下），只有整圈离开可见视口后才停。
         color: root._surfaceLow
         border.color: root._inverseSurface
-        border.width: (root.isSelected ? 3 : 2) / root._safeZoom
+        border.width: (root.isSelected ? 3 : 2) / root._renderZoom
         visible: !root.revealActive || root.revealOnScreen
 
         // 近似阴影的一圈描边（不参与命中）
         Rectangle {
             anchors.fill: parent
-            anchors.margins: -1 / root._safeZoom
+            anchors.margins: -1 / root._renderZoom
             z: -1
             color: "transparent"
             border.color: root._shadowLight
-            radius: visualEmbed.radius + 1 / root._safeZoom
+            radius: visualEmbed.radius + 1 / root._renderZoom
             visible: !root.isSelected
         }
     }
@@ -139,14 +139,14 @@ Item {
     // ── 标题：约束在圆的内接正方形顶部带内，不需要圆形裁剪 ──
     Label {
         id: titleLabel
-        visible: root.label.length > 0 && root._diameter * root._safeZoom >= 56
+        visible: root.label.length > 0 && root._diameter * root._renderZoom >= 56
         x: (root.width - width) / 2
         y: (root.height - root._inscribedSide) / 2 + root._inscribedSide * 0.04
         width: root._inscribedSide
-        height: Math.max(14 / root._safeZoom, root._inscribedSide * 0.16)
+        height: Math.max(14 / root._renderZoom, root._inscribedSide * 0.16)
         text: root.label
         color: root._textPrimary
-        font.pointSize: root.dt.fontSmPt * root._textScale / root._safeZoom
+        font.pointSize: root.dt.fontSmPt * root._textScale / root._renderZoom
         wrapMode: Text.NoWrap
         elide: Text.ElideRight
         horizontalAlignment: Text.AlignHCenter
@@ -162,7 +162,7 @@ Item {
         radius: width / 2
         color: "transparent"
         border.color: root.dt.accent
-        border.width: 2 / root._safeZoom
+        border.width: 2 / root._renderZoom
         visible: root.isSelected
         antialiasing: true
         z: 10

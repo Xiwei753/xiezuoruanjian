@@ -576,9 +576,10 @@ Item {
         return (sy - panY) / (zoomLevel > 0 ? zoomLevel : 1)
     }
 
-    readonly property real _edgeLineWorldWidth: 2
-    readonly property real _edgeScreenStrokeWidth:
-        Math.max(1.0, Math.min(_edgeLineWorldWidth * zoomLevel, 6.0))
+    // 连线统一使用屏幕物理像素口径：原生边层、活动 Scene、这里的预览线
+    // 共用同一份宽度事实，缩放不再把线加粗。
+    readonly property real _edgePreviewScreenWidth: 1.5
+    readonly property real _edgeScreenStrokeWidth: _edgePreviewScreenWidth
 
     // Issue #949：连续缩放的演出状态。只属于当前显示帧，不是第二套相机模型：
     //   - _zoomAnchorX/Y 是本轮缩放的屏幕锚点（滚轮 / 捏合 / 按钮的指针位置）；
@@ -1481,6 +1482,14 @@ Item {
         return !!scene && scene.hasActiveNodeEdit === true
     }
 
+    // Escape / 取消按钮的公共入口：无条件放弃草稿，不经过名称非空或保存校验。
+    function cancelNodeEdit() {
+        var scene = activeScene()
+        if (!scene || typeof scene.cancelActiveNodeEdit !== "function")
+            return false
+        return scene.cancelActiveNodeEdit() === true
+    }
+
     // Issue #987：编辑框外的新手势开始前，同步提交唯一编辑会话。
     // 失败返回 false：Router 必须把本次手势整体判为 blocked，保留编辑器与草稿。
     function commitNodeEditForOutsideGesture(sx, sy, button, gestureId) {
@@ -1845,21 +1854,51 @@ Item {
         id: connectPreview
         anchors.fill: parent
         z: 3
+        // 普通平移/缩放时预览层完全隐藏，不再每帧重绘并上传一张全屏纹理。
+        visible: interaction.pointerMode === "connect"
 
         Connections {
             target: canvasArea
-            function onPanXChanged() { connectPreview.requestPaint() }
-            function onPanYChanged() { connectPreview.requestPaint() }
-            function onZoomLevelChanged() { connectPreview.requestPaint() }
+            function onPanXChanged() {
+                if (interaction.pointerMode === "connect")
+                    connectPreview.requestPaint()
+            }
+            function onPanYChanged() {
+                if (interaction.pointerMode === "connect")
+                    connectPreview.requestPaint()
+            }
+            function onZoomLevelChanged() {
+                if (interaction.pointerMode === "connect")
+                    connectPreview.requestPaint()
+            }
         }
         Connections {
             target: interaction
-            function onConnectMouseXChanged() { connectPreview.requestPaint() }
-            function onConnectMouseYChanged() { connectPreview.requestPaint() }
-            function onConnectFromSceneXChanged() { connectPreview.requestPaint() }
-            function onConnectFromSceneYChanged() { connectPreview.requestPaint() }
-            function onConnectPreviewEndXChanged() { connectPreview.requestPaint() }
-            function onConnectPreviewEndYChanged() { connectPreview.requestPaint() }
+            function onConnectMouseXChanged() {
+                if (interaction.pointerMode === "connect")
+                    connectPreview.requestPaint()
+            }
+            function onConnectMouseYChanged() {
+                if (interaction.pointerMode === "connect")
+                    connectPreview.requestPaint()
+            }
+            function onConnectFromSceneXChanged() {
+                if (interaction.pointerMode === "connect")
+                    connectPreview.requestPaint()
+            }
+            function onConnectFromSceneYChanged() {
+                if (interaction.pointerMode === "connect")
+                    connectPreview.requestPaint()
+            }
+            function onConnectPreviewEndXChanged() {
+                if (interaction.pointerMode === "connect")
+                    connectPreview.requestPaint()
+            }
+            function onConnectPreviewEndYChanged() {
+                if (interaction.pointerMode === "connect")
+                    connectPreview.requestPaint()
+            }
+            // 进入/退出 connect 都只重绘一次：进入画出起点，退出清空纹理。
             function onPointerModeChanged() { connectPreview.requestPaint() }
         }
 

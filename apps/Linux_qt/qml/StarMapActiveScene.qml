@@ -101,6 +101,25 @@ Item {
     // "视口中心 + (w - 视口中心世界坐标) × zoom"：中心偏移在 double 里现算，
     // 场景图只见到视口量级的相对坐标。
     readonly property real _safeZoom: zoomLevel > 0 && isFinite(zoomLevel) ? zoomLevel : 1.0
+    // 相机在 double 里保持连续；场景图只接收 float，所以渲染边界再夹一次。
+    // 位置仍按真实 zoom 投影，局部尺寸/文字用 _renderZoom 缩放。极端比例下
+    // 对象要么铺满视口、要么小于一个像素，视觉等价，但不会把 MAX_VALUE 写进
+    // QSG 矩阵或顶点。
+    readonly property real _renderZoom: Math.max(1e-6, Math.min(1e6, _safeZoom))
+    readonly property real _renderPositionScale: _finiteQuotient(_safeZoom, _renderZoom)
+    // anchor 投影必须在 float 平移安全范围内；平移饱和到 MAX_VALUE 时也切
+    // 极端模式，不能把无穷大的父级 x/y 交给场景图。
+    readonly property real _anchorScreenX: _finiteSum(
+        width / 2,
+        _finiteProduct(_finiteDifference(_worldAnchorX, _originWorldX), _safeZoom))
+    readonly property real _anchorScreenY: _finiteSum(
+        height / 2,
+        _finiteProduct(_finiteDifference(_worldAnchorY, _originWorldY), _safeZoom))
+    // 常规划分沿用 anchor 局部坐标，平移/缩放只动父级矩阵；只有跨出 float
+    // 安全档位时才改用以视口中心为原点的局部坐标并逐个更新可见对象位置。
+    readonly property bool _extremeCamera: _safeZoom < 1e-6 || _safeZoom > 1e6
+            || Math.abs(_anchorScreenX) > 1e7
+            || Math.abs(_anchorScreenY) > 1e7
     function _finiteProduct(a, b) {
         var value = a * b
         if (isFinite(value)) return value
@@ -148,17 +167,40 @@ Item {
         return { x: (point.x - origin.x) / _safeZoom, y: (point.y - origin.y) / _safeZoom }
     }
 
+    // 视口裁剪：只判断屏幕矩形是否与 Scene 相交，不改变任何 authored 几何。
+    function screenRectVisible(x, y, w, h, margin) {
+        var m = margin !== undefined ? margin : 0
+        return isFinite(x) && isFinite(y) && isFinite(w) && isFinite(h)
+                && x + w >= -m && x <= width + m
+                && y + h >= -m && y <= height + m
+    }
+
+    // 极端镜头下 delegate 仍放在 worldContent 的局部坐标里；这里把饱和位置
+    // 夹到有限范围，离屏对象本来会被 visible 裁剪，绝不能把 MAX_VALUE 交给
+    // QSG 的 float 顶点/变换。
+    function _renderLocalPosition(worldValue, originValue) {
+        var value = _finiteProduct(_finiteDifference(worldValue, originValue),
+                                   _renderPositionScale)
+        return Math.max(-1e10, Math.min(1e10, value))
+    }
+
     // ── 屏幕口径常量 ──
-    // 边线宽：world 线宽 × 镜头比例，夹在 1~6 屏幕像素（原生边层使用同一口径）。
-    // 命中也吃同一份屏幕口径。
-    readonly property real _edgeLineWorldWidth: 2
+    // 线宽是物理屏幕像素，不随 zoom 变粗；命中仍保留约 10 屏幕像素的容差。
+    // 原生边层、Canvas 预览线和这里必须共用同一份口径。
+    readonly property real _edgeNormalScreenWidth: 1.0
+    readonly property real _edgeSelectedScreenWidth: 2.4
+    readonly property real _edgeNormalAlpha: 0.55
+    readonly property real _edgeSelectedAlpha: 0.95
+    readonly property real _edgeLabelBackgroundAlpha: 0.62
     readonly property real _edgeHitScreenPx: 10
     function _edgeHitThresholdWorld() {
-        return Math.max(_edgeHitScreenPx / _safeZoom, _edgeLineWorldWidth / 2)
+        return _edgeHitScreenPx / _safeZoom
     }
-    // 文字口径：用户字号 token × 镜头比例，夹在 0.6~8 倍（字形缓存安全边界，
-    // 不是层级边界）。投影太小的对象直接不画文字。
+    // 文字口径：节点文字使用固定 world 字号 + CurveRendering，由父级统一缩放；
+    // _textScale 只保留给独立屏幕层的边标签 / 子图概览。节点文字超过这个屏幕
+    // 像素上限时隐藏（此时用户已放大到只看卡片局部，不再重排整段文本）。
     readonly property real _textScale: Math.max(0.6, Math.min(8.0, _safeZoom))
+    readonly property real _nodeTextMaxScreenPx: Math.max(512, Math.max(width, height) * 2)
 
     // Issue #949：概览圆点口径（与 StarMapSceneContent 的概览圆点同一公式），
     // 展开进度 0 时活动画布的节点先以这个屏幕半径的圆点出现，逐步长成完整节点。
@@ -242,6 +284,9 @@ Item {
     // Issue #989：打开编辑时的节点快照。稳定编辑器不能因为一次模型查询
     // 短暂返回 null 就静默隐藏；节点真正删除由 ensureEditingNodeExists() 收尾。
     property var editingNodeSnapshot: null
+    // 打开编辑时的稳定 world 锚点。编辑器矩形永远由这份 world 矩形现投影，
+    // 不读取 delegate 的瞬时屏幕位置；展开 / 收起共用同一事实。
+    property var editingAnchorWorldRect: null
     // 打开该会话的左/右键手势序号，用于把 begin/ready/commit 串成同一条日志链。
     property int editingGestureId: 0
     property string editingGestureButton: ""
@@ -263,6 +308,7 @@ Item {
         editingError = ""
         editingSaving = false
         editingNodeSnapshot = null
+        editingAnchorWorldRect = null
         editingGestureId = 0
         editingGestureButton = ""
     }
@@ -467,34 +513,36 @@ Item {
                 && p.x <= editOverlay.width && p.y <= editOverlay.height
     }
 
+    // 编辑会话只有在实际投影矩形有效时才能接管输入；初始化中途失败时
+    // Router 用这个入口把半成品会话无条件取消，不能让它永久拦截画布手势。
+    function nodeEditUsable() {
+        return editingNodeId !== ""
+                && editOverlay.visible
+                && editOverlay.width > 0
+                && editOverlay.height > 0
+    }
+
+    function cancelActiveNodeEdit() {
+        if (editingNodeId === "")
+            return false
+        editOverlay.closeEdit(false)
+        return true
+    }
+
     // Canvas 用这份 Scene 局部视觉矩形做一次性最小镜头平移；节点世界坐标不变。
     function nodeEditExpandedRect() {
         if (editingNodeId === "" || !editOverlay.visible)
             return null
-        var r = editOverlay._expandedRect
+        var r = editOverlay.currentExpandedRect()
+        if (!r || r.width <= 0 || r.height <= 0)
+            return null
         return { x: r.x, y: r.y, width: r.width, height: r.height }
     }
 
     // Repeater.itemAt() 的静态类型是 QQuickItem（qmllint 会把这些 delegate 属性
     // 报成 missing-property，属静态分析的已知误报），运行时取的是真实 delegate。
-    function nodeItemOf(nodeId) {
-        for (var i = 0; i < nodeRepeater.count; i++) {
-            var it = nodeRepeater.itemAt(i)
-            if (it && it.nodeId === nodeId)
-                return it
-        }
-        return null
-    }
-    // 节点 delegate 在 worldContent 内使用世界坐标；编辑器 / 过渡环仍要求
-    // Scene 局部屏幕坐标，这里统一做一次映射。
-    function nodeItemSceneRect(nodeId) {
-        var item = nodeItemOf(nodeId)
-        if (!item)
-            return null
-        var p = item.mapToItem(scene, 0, 0)
-        var q = item.mapToItem(scene, item.width, item.height)
-        return { x: p.x, y: p.y, width: q.x - p.x, height: q.y - p.y }
-    }
+    // 编辑框锚点来自打开会话时保存的 world 矩形，不再读取 delegate 的瞬时
+    // mapToItem 结果；delegate 仍只负责显示与普通命中。
     function embedItemOf(instanceId) {
         for (var i = 0; i < embedRepeater.count; i++) {
             var it = embedRepeater.itemAt(i)
@@ -530,23 +578,24 @@ Item {
         editingBodyDraft = StarMapNodeMetrics.bodyOf(node)
         editingError = ""
         editingSaving = false
+        editingAnchorWorldRect = {
+            "x": node.x,
+            "y": node.y,
+            "width": node.width !== undefined
+                    ? node.width : StarMapNodeMetrics.defaultNodeWidth(),
+            "height": node.height !== undefined
+                    ? node.height : StarMapNodeMetrics.defaultNodeHeight()
+        }
         editOverlay.prepareExpand()
         scene.logInteraction("node_edit_begin", "node", nodeId, {
             "gesture": editingGestureId,
             "button": editingGestureButton
         })
-        // 先建立正文真实焦点以接住紧随双击的输入，再只平移一次镜头露出展开卡片。
-        editOverlay.activate()
-        Qt.callLater(function() {
-            if (scene.editingNodeId !== nodeId || !editOverlay.visible)
-                return
-            if (scene.menuHost && typeof scene.menuHost.ensureNodeEditVisible === "function")
-                scene.menuHost.ensureNodeEditVisible()
-            Qt.callLater(function() {
-                if (scene.editingNodeId === nodeId)
-                    editOverlay.startExpand()
-            })
-        })
+        // 先只平移一次镜头露出展开卡片；激活在 overlay 获得有效尺寸后由
+        // onWidthChanged/onHeightChanged 触发，不依赖嵌套 callLater 的时序。
+        if (scene.menuHost && typeof scene.menuHost.ensureNodeEditVisible === "function")
+            scene.menuHost.ensureNodeEditVisible()
+        editOverlay.requestActivation()
         return true
     }
 
@@ -1054,7 +1103,10 @@ Item {
         anchorX: scene._worldAnchorX
         anchorY: scene._worldAnchorY
         reveal: scene._reveal
-        lineWorldWidth: scene._edgeLineWorldWidth
+        normalWidthPx: scene._edgeNormalScreenWidth
+        selectedWidthPx: scene._edgeSelectedScreenWidth
+        normalAlpha: scene._edgeNormalAlpha
+        selectedAlpha: scene._edgeSelectedAlpha
         normalColorHex: String(scene._border)
         selectedColorHex: String(scene._accent)
     }
@@ -1069,11 +1121,14 @@ Item {
             required property var modelData
 
             readonly property var render: modelData
+            readonly property real screenX: scene.worldToScreenX(render.labelX)
+            readonly property real screenY: scene.worldToScreenY(render.labelY)
             readonly property bool labelVisible:
                 scene._safeZoom >= 0.4 && render.label.length > 0
+                && scene.screenRectVisible(x, y, width, height, 64)
 
-            x: scene.worldToScreenX(render.labelX) - width / 2
-            y: scene.worldToScreenY(render.labelY) - height / 2
+            x: screenX - width / 2
+            y: screenY - height / 2
             width: edgeLabelText.implicitWidth + 10
             height: edgeLabelText.implicitHeight + 4
             visible: labelVisible
@@ -1082,8 +1137,11 @@ Item {
 
             Rectangle {
                 anchors.fill: parent
-                radius: 3 * scene._safeZoom
-                color: scene._surfaceContainer
+                radius: 3
+                color: Qt.rgba(scene._surfaceContainer.r,
+                               scene._surfaceContainer.g,
+                               scene._surfaceContainer.b,
+                               scene._edgeLabelBackgroundAlpha)
             }
 
             Text {
@@ -1097,20 +1155,15 @@ Item {
     }
 
     // ── 节点：矢量圆角矩形卡片（编辑输入在场景级稳定浮层，见 editOverlay）──
-    // Issue #1029：节点几何保持 authored world 坐标，整层只由父级 pan/zoom
-    // 变换一次。拖动一个节点仍只改它自己的世界坐标；平移相机不再逐个改写
-    // 107 个节点 delegate 的屏幕 x/y。
+    // Issue #1029：节点几何保持 authored world 坐标，常规镜头下整层只由父级
+    // pan/zoom 变换一次；平移相机不再逐个改写节点 delegate 的世界 x/y。
+    // Issue #1031：跨出 float 安全档位时切到视口中心局部原点，避免 MAX_VALUE
+    // 进入 QSG 顶点；只有这种极端镜头才逐个更新可见对象位置。
     Item {
         id: nodeWorldContent
-        x: scene._finiteSum(scene.width / 2,
-                            scene._finiteProduct(scene._finiteDifference(
-                                scene._worldAnchorX, scene._originWorldX),
-                                scene._safeZoom))
-        y: scene._finiteSum(scene.height / 2,
-                            scene._finiteProduct(scene._finiteDifference(
-                                scene._worldAnchorY, scene._originWorldY),
-                                scene._safeZoom))
-        scale: scene._safeZoom
+        x: scene._extremeCamera ? scene.width / 2 : scene._anchorScreenX
+        y: scene._extremeCamera ? scene.height / 2 : scene._anchorScreenY
+        scale: scene._extremeCamera ? scene._renderZoom : scene._safeZoom
         transformOrigin: Item.TopLeft
         z: 1
 
@@ -1171,20 +1224,50 @@ Item {
                     : nodeData.title && nodeData.title.length > 0
                         ? nodeData.title : qsTr("未命名")
 
-            // 世界单位下的投影尺寸：父级统一乘 zoom，reveal 缩成小圆点时
+            // 世界单位下的投影尺寸：父级统一乘 _renderZoom，reveal 缩成小圆点时
             // 直径的屏幕像素仍保持 _revealDotRadius。
             readonly property real projectedWidth:
                 cardWidth * scene._reveal
-                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
+                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._renderZoom
             readonly property real projectedHeight:
                 cardHeight * scene._reveal
-                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
+                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._renderZoom
 
-            // worldX / worldY 是节点世界矩形的左上角；概览圆点态保持中心收缩。
-            x: worldX - scene._worldAnchorX + (cardWidth - width) / 2
-            y: worldY - scene._worldAnchorY + (cardHeight - height) / 2
+            // 屏幕矩形只用于视口裁剪 / 文字 LOD，不参与 authored 几何。
+            readonly property real screenLeft: scene.worldToScreenX(worldX)
+                    + (cardWidth - projectedWidth) * scene._renderZoom / 2
+            readonly property real screenTop: scene.worldToScreenY(worldY)
+                    + (cardHeight - projectedHeight) * scene._renderZoom / 2
+            readonly property real screenWidth: projectedWidth * scene._renderZoom
+            readonly property real screenHeight: projectedHeight * scene._renderZoom
+            readonly property bool inViewport: scene.screenRectVisible(
+                    screenLeft, screenTop, screenWidth, screenHeight, 64)
+            readonly property real titleScreenPx:
+                StarMapNodeMetrics.TITLE_FONT_SIZE * scene._renderZoom
+            readonly property real bodyScreenPx:
+                StarMapNodeMetrics.BODY_FONT_SIZE * scene._renderZoom
+            readonly property bool titleVisible:
+                scene.detailReveal > 0.6 && screenHeight >= 18
+                && titleScreenPx >= 5
+                && titleScreenPx <= scene._nodeTextMaxScreenPx
+            readonly property bool bodyTextVisible:
+                titleVisible && screenHeight >= 56
+                && bodyScreenPx >= 5
+                && bodyScreenPx <= scene._nodeTextMaxScreenPx
+
+            // 世界坐标的左上角；常规镜头相对图锚点，极端镜头先按真实 zoom
+            // 的 double 差值折算到 _renderZoom 局部单位。概览圆点态保持中心收缩。
+            x: scene._extremeCamera
+               ? scene._renderLocalPosition(worldX, scene._originWorldX)
+                 + (cardWidth - width) / 2
+               : worldX - scene._worldAnchorX + (cardWidth - width) / 2
+            y: scene._extremeCamera
+               ? scene._renderLocalPosition(worldY, scene._originWorldY)
+                 + (cardHeight - height) / 2
+               : worldY - scene._worldAnchorY + (cardHeight - height) / 2
             width: projectedWidth
             height: projectedHeight
+            visible: inViewport || isEditing
             z: 1
 
             Rectangle {
@@ -1196,7 +1279,7 @@ Item {
                 border.color: nodeItem.isSelected || nodeItem.isEditing
                         ? scene._accent : scene._border
                 border.width: ((nodeItem.isSelected || nodeItem.isEditing) ? 2 : 1)
-                              / scene._safeZoom
+                              / scene._renderZoom
                 clip: true
 
                 // 显示态：名称在上，正文预览在下。编辑输入层是场景级稳定容器，
@@ -1205,14 +1288,12 @@ Item {
                     id: displayLayer
                     anchors.fill: parent
                     anchors.margins: StarMapNodeMetrics.PADDING
-                    visible: nodeItem.height * scene._safeZoom >= 18
-                             && scene.detailReveal > 0.6
+                    visible: nodeItem.titleVisible
 
                     Column {
                         width: parent.width
                         spacing: nodeItem.bodyText.length > 0
-                                 ? StarMapNodeMetrics.TITLE_BODY_GAP
-                                   * scene._textScale / scene._safeZoom : 0
+                                 ? StarMapNodeMetrics.TITLE_BODY_GAP : 0
 
                         Text {
                             id: titleLabel
@@ -1220,16 +1301,15 @@ Item {
                             text: nodeItem.titleText
                             textFormat: Text.PlainText
                             color: scene._textPrimary
-                            font.pixelSize: Math.max(0.01,
-                                StarMapNodeMetrics.TITLE_FONT_SIZE
-                                * scene._textScale / scene._safeZoom)
+                            // 固定 world 字号；不再随每帧 zoom 改写字体/行高。
+                            font.pixelSize: StarMapNodeMetrics.TITLE_FONT_SIZE
                             font.weight: Font.DemiBold
+                            renderType: Text.CurveRendering
                             wrapMode: Text.Wrap
                             maximumLineCount: StarMapNodeMetrics.TITLE_MAX_LINES
                             elide: Text.ElideRight
                             lineHeightMode: Text.FixedHeight
                             lineHeight: StarMapNodeMetrics.TITLE_LINE_HEIGHT
-                                        * scene._textScale / scene._safeZoom
                         }
 
                         Text {
@@ -1237,17 +1317,15 @@ Item {
                             width: parent.width
                             text: nodeItem.bodyText
                             textFormat: Text.PlainText
-                            visible: text.length > 0
+                            visible: text.length > 0 && nodeItem.bodyTextVisible
                             color: scene._textMuted
-                            font.pixelSize: Math.max(0.01,
-                                StarMapNodeMetrics.BODY_FONT_SIZE
-                                * scene._textScale / scene._safeZoom)
+                            font.pixelSize: StarMapNodeMetrics.BODY_FONT_SIZE
+                            renderType: Text.CurveRendering
                             wrapMode: Text.Wrap
                             maximumLineCount: StarMapNodeMetrics.PREVIEW_MAX_LINES
                             elide: Text.ElideRight
                             lineHeightMode: Text.FixedHeight
                             lineHeight: StarMapNodeMetrics.BODY_LINE_HEIGHT
-                                        * scene._textScale / scene._safeZoom
                         }
                     }
                 }
@@ -1284,12 +1362,32 @@ Item {
                     : false
             starmapBackendRef: scene.starmapBackendRef
 
-            x: worldX - scene._worldAnchorX + (embedData.width - width) / 2
-            y: worldY - scene._worldAnchorY + (embedData.height - height) / 2
-            width: embedData.width * scene._reveal
-                   + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
-            height: embedData.height * scene._reveal
-                    + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
+            readonly property real projectedWidth:
+                embedData.width * scene._reveal
+                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._renderZoom
+            readonly property real projectedHeight:
+                embedData.height * scene._reveal
+                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._renderZoom
+            readonly property real screenLeft: scene.worldToScreenX(worldX)
+                    + (embedData.width - projectedWidth) * scene._renderZoom / 2
+            readonly property real screenTop: scene.worldToScreenY(worldY)
+                    + (embedData.height - projectedHeight) * scene._renderZoom / 2
+            readonly property bool inViewport: scene.screenRectVisible(
+                    screenLeft, screenTop,
+                    projectedWidth * scene._renderZoom,
+                    projectedHeight * scene._renderZoom, 64)
+
+            x: scene._extremeCamera
+               ? scene._renderLocalPosition(worldX, scene._originWorldX)
+                 + (embedData.width - width) / 2
+               : worldX - scene._worldAnchorX + (embedData.width - width) / 2
+            y: scene._extremeCamera
+               ? scene._renderLocalPosition(worldY, scene._originWorldY)
+                 + (embedData.height - height) / 2
+               : worldY - scene._worldAnchorY + (embedData.height - height) / 2
+            width: projectedWidth
+            height: projectedHeight
+            visible: inViewport
             z: 2
             // Issue #949：只有走过渡的那个入口按同一个展开进度继续画圆壳。
             revealProgress: embedData.instanceId === scene.transitionEmbedId
@@ -1319,8 +1417,8 @@ Item {
     }
 
     // ── 场景级唯一节点编辑器（不挂在 Repeater delegate 内）──
-    // 模型行更新 / 文本重测 / 保存成功都不会重建输入层。编辑卡以原节点投影
-    // 矩形为锚点、保持中心展开；镜头负责露出卡片，不改 authored position。
+    // 模型行更新 / 文本重测 / 保存成功都不会重建输入层。编辑卡以原节点
+    // world 矩形为锚点向右下展开；镜头负责露出卡片，不改 authored position。
     Rectangle {
         id: editOverlay
 
@@ -1333,48 +1431,53 @@ Item {
                     || scene.editingNodeSnapshot
         }
         readonly property real _margin: 12
-        readonly property var _nodeRect: {
-            var closingNode = !editingNode ? _closingSnapshot : null
-            if (!editingNode && !closingNode)
+        // 节点投影矩形只由“打开会话时的 world 锚点 + 当前相机”计算，不读取
+        // delegate 的瞬时 mapToItem 结果。展开 / 收起 / 镜头平移共用同一事实。
+        function nodeRectNow() {
+            var world = scene.editingAnchorWorldRect
+            var closing = scene.hasActiveNodeEdit ? null : _closingSnapshot
+            if (!world && closing) {
+                world = {
+                    "x": closing.worldX,
+                    "y": closing.worldY,
+                    "width": closing.worldWidth,
+                    "height": closing.worldHeight
+                }
+            }
+            if (!world)
                 return { x: 0, y: 0, width: 0, height: 0 }
-            var nodeId = closingNode ? closingNode.nodeId : editingNode.id
-            var itemRect = scene.nodeItemSceneRect(nodeId)
-            if (itemRect)
-                return itemRect
-            var worldX = closingNode ? closingNode.worldX : editingNode.x
-            var worldY = closingNode ? closingNode.worldY : editingNode.y
-            var nodeWidth = closingNode ? closingNode.worldWidth
-                    : editingNode.width !== undefined
-                        ? editingNode.width : StarMapNodeMetrics.defaultNodeWidth()
-            var nodeHeight = closingNode ? closingNode.worldHeight
-                    : editingNode.height !== undefined
-                        ? editingNode.height : StarMapNodeMetrics.defaultNodeHeight()
-            var projectedWidth = nodeWidth * scene._safeZoom * scene._reveal
+            var projectedWidth = world.width * scene._renderZoom * scene._reveal
                     + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            var projectedHeight = nodeHeight * scene._safeZoom * scene._reveal
+            var projectedHeight = world.height * scene._renderZoom * scene._reveal
                     + scene._revealDotRadius * 2 * (1 - scene._reveal)
             return {
-                x: scene.worldToScreenX(worldX)
-                   + (nodeWidth * scene._safeZoom - projectedWidth) / 2,
-                y: scene.worldToScreenY(worldY)
-                   + (nodeHeight * scene._safeZoom - projectedHeight) / 2,
+                x: scene.worldToScreenX(world.x)
+                   + (world.width * scene._renderZoom - projectedWidth) / 2,
+                y: scene.worldToScreenY(world.y)
+                   + (world.height * scene._renderZoom - projectedHeight) / 2,
                 width: projectedWidth,
                 height: projectedHeight
             }
         }
-        readonly property var _expandedRect: {
-            var r = _nodeRect
+        readonly property var _nodeRect: nodeRectNow()
+
+        // 从原节点左上角向右下展开；只限制尺寸，绝不把卡片居中或挪到别处。
+        // 镜头由 ensureNodeEditVisible() 负责露出。
+        function expandedRectFor(r) {
             var vw = Math.max(0, scene.width)
             var vh = Math.max(0, scene.height)
-            var m = _margin
-            var availableW = Math.max(0, vw - m * 2)
-            var availableH = Math.max(0, vh - m * 2)
+            var availableW = Math.max(0, vw - _margin * 2)
+            var availableH = Math.max(0, vh - _margin * 2)
             var w = Math.min(Math.max(0, r.width, 260), availableW)
             var h = Math.min(Math.max(r.height, 220),
                              Math.min(StarMapNodeMetrics.EDIT_MAX_HEIGHT, availableH))
-            var x = r.x + (r.width - w) / 2
-            var y = r.y + (r.height - h) / 2
-            return { x: x, y: y, width: w, height: h }
+            // 始终从节点左上角展开。超出视口的部分交给 ensureNodeEditVisible()
+            // 平移镜头露出；这里只限制卡片尺寸，避免把卡片“挪”到别的位置。
+            return { x: r.x, y: r.y, width: w, height: h }
+        }
+        readonly property var _expandedRect: expandedRectFor(_nodeRect)
+        function currentExpandedRect() {
+            return expandedRectFor(nodeRectNow())
         }
         property real transitionProgress: 0
         property bool _transitionRunning: false
@@ -1383,6 +1486,8 @@ Item {
         property int _expandGeneration: 0
         property int _collapseGeneration: 0
         property var _closingSnapshot: null
+        property bool _syncingInputs: false
+        property bool _activationPending: false
         readonly property bool _inputReady: scene.hasActiveNodeEdit && !_closing
         readonly property bool _inputVisible: visible
                 && scene.hasActiveNodeEdit && !_closing && !_transitionRunning
@@ -1428,6 +1533,8 @@ Item {
             _transitionGeneration += 1
             expandAnimation.stop()
             collapseAnimation.stop()
+            activationTimeout.stop()
+            _activationPending = false
             transitionProgress = 0
             _transitionRunning = true
             _closing = false
@@ -1471,6 +1578,8 @@ Item {
             var displayNode = committed ? currentNode
                                         : (scene.editingNodeSnapshot || currentNode)
             expandAnimation.stop()
+            activationTimeout.stop()
+            _activationPending = false
             _transitionGeneration += 1
             _collapseGeneration = _transitionGeneration
             _closingSnapshot = presentationSnapshot(displayNode)
@@ -1553,16 +1662,42 @@ Item {
             return false
         }
 
-        function activate() {
-            if (scene.editingNodeId === "")
-                return activationFailed("no_session")
-            if (!_inputReady || width <= 0 || height <= 0)
-                return activationFailed("overlay_not_ready")
+        // 节目的一次性初始化：先把草稿灌进两个输入控件，并用标志阻止
+        // onTextChanged 把初始值当成用户输入回写。
+        function syncInputsFromDraft() {
+            _syncingInputs = true
             titleInput.text = scene.editingTitleDraft
             bodyEdit.text = scene.editingBodyDraft
+            _syncingInputs = false
             _titleInputReported = false
             _bodyInputReported = false
             bodyFlick.contentY = 0
+        }
+
+        // 会话建立后请求激活。若 width/height 尚未完成布局，则等 onWidthChanged /
+        // onHeightChanged 再试；超时仍无有效尺寸就取消整个会话，绝不留下半成品
+        // 编辑层永久拦截画布手势。
+        function requestActivation() {
+            if (!scene.hasActiveNodeEdit || _closing)
+                return false
+            _activationPending = true
+            syncInputsFromDraft()
+            activationTimeout.restart()
+            return tryActivate()
+        }
+
+        function tryActivate() {
+            if (!_activationPending)
+                return false
+            if (!scene.hasActiveNodeEdit || _closing) {
+                _activationPending = false
+                activationTimeout.stop()
+                return false
+            }
+            if (!visible || width <= 0 || height <= 0)
+                return false
+            _activationPending = false
+            activationTimeout.stop()
             var bodyEditable = StarMapNodeMetrics.canEditBody(editingNode)
             if (bodyEditable) {
                 bodyEdit.cursorPosition = bodyEdit.length
@@ -1573,8 +1708,11 @@ Item {
             }
             var titleFocus = titleInput.activeFocus
             var bodyFocus = bodyEdit.activeFocus
-            if (bodyEditable ? !bodyFocus : !titleFocus)
-                return activationFailed("focus_not_granted")
+            if (bodyEditable ? !bodyFocus : !titleFocus) {
+                activationFailed("focus_not_granted")
+                scene.cancelActiveNodeEdit()
+                return false
+            }
             scene.logInteraction("node_edit_ready", "node", scene.editingNodeId, {
                 "visible": visible,
                 "titleFocus": titleFocus,
@@ -1586,7 +1724,29 @@ Item {
                 "gesture": scene.editingGestureId,
                 "button": scene.editingGestureButton
             })
+            startExpand()
             return true
+        }
+
+        // 兼容旧调用名；实际激活由 requestActivation / 尺寸变化驱动。
+        function activate() {
+            return tryActivate()
+        }
+
+        onWidthChanged: tryActivate()
+        onHeightChanged: tryActivate()
+
+        Timer {
+            id: activationTimeout
+            interval: 500
+            repeat: false
+            onTriggered: {
+                if (!editOverlay._activationPending)
+                    return
+                editOverlay._activationPending = false
+                editOverlay.activationFailed("activation_timeout")
+                scene.cancelActiveNodeEdit()
+            }
         }
 
         function focusCurrent() {
@@ -1714,7 +1874,7 @@ Item {
                 }
             }
             onTextChanged: {
-                if (editOverlay._inputReady) {
+                if (editOverlay._inputReady && !editOverlay._syncingInputs) {
                     scene.editingTitleDraft = text
                     if (scene.editingError.length > 0)
                         scene.editingError = ""
@@ -1835,7 +1995,7 @@ Item {
                     }
                 }
                 onTextChanged: {
-                    if (editOverlay._inputReady) {
+                    if (editOverlay._inputReady && !editOverlay._syncingInputs) {
                         scene.editingBodyDraft = text
                         if (scene.editingError.length > 0)
                             scene.editingError = ""
