@@ -295,6 +295,18 @@ pub struct StarMapBackend {
         qt_method!(fn(&self, scene_key: QString, x: f64, y: f64) -> QJsonObject),
     hit_test_scene_edge:
         qt_method!(fn(&self, scene_key: QString, x: f64, y: f64, threshold: f64) -> QJsonObject),
+    hit_test_scene_edge_screen: qt_method!(
+        fn(
+            &self,
+            scene_key: QString,
+            x: f64,
+            y: f64,
+            zoom: f64,
+            pan_x: f64,
+            pan_y: f64,
+            threshold_px: f64,
+        ) -> QJsonObject
+    ),
     release_scene_cache: qt_method!(fn(&self, scene_key: QString) -> bool),
     create_scene_instance_id: qt_method!(fn(&self) -> QString),
     add_starmap_link:
@@ -716,6 +728,24 @@ impl StarMapBackend {
             x as f32,
             y as f32,
             threshold as f32,
+        ))
+        .to_json_string();
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn hit_test_scene_edge_screen(
+        &self,
+        scene_key: QString,
+        x: f64,
+        y: f64,
+        zoom: f64,
+        pan_x: f64,
+        pan_y: f64,
+        threshold_px: f64,
+    ) -> QJsonObject {
+        let mut caches = self.scene_caches.borrow_mut();
+        let cache = caches.entry(scene_key.to_string()).or_default();
+        let raw = writer_core::api::ResultEnvelope::success(cache.hit_edge_screen(
+            x, y, zoom, pan_x, pan_y, threshold_px,
         ))
         .to_json_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)

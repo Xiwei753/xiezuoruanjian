@@ -18,25 +18,30 @@ layout(std140, binding = 0) uniform buf {
 
 void main()
 {
-    // 顶点已经在 CPU 侧按当前相机投影成视口局部像素坐标。这里只做
-    // 固定屏幕像素的线宽外扩，不再把世界方向交给矩阵缩放。
-    vec2 dir = length(aDir) > 1e-5 ? normalize(aDir) : vec2(0.0, -1.0);
+    // aPos 是相对稳定 world anchor 的局部坐标，qt_Matrix 负责 anchor 平移
+    // 与 zoom 缩放；线宽和箭头仍在屏幕像素空间展开。
+    vec4 center = ubuf.qt_Matrix * vec4(aPos, 0.0, 1.0);
+    vec4 ahead = ubuf.qt_Matrix * vec4(aPos + aDir, 0.0, 1.0);
+    vec2 clipDir = (ahead.xy / ahead.w - center.xy / center.w)
+                   * ubuf.uViewport * 0.5;
+    vec2 dir = length(clipDir) > 1e-5 ? normalize(clipDir) : vec2(0.0, -1.0);
     vec2 normal = vec2(-dir.y, dir.x);
 
     vec2 offsetPx;
     if (aKind < 0.5) {
-        // 几何扩到半线宽 + 0.5px；片元按到线心的真实像素距离衰减，
-        // 亚像素线宽和抗锯齿都走同一条覆盖规则。
+        // 几何外扩到半线宽 + 0.5px，vEdgeDistance 记录真实屏幕像素距离；
+        // 片元覆盖率在几何外缘平滑降到 0。
         float outerHalf = ubuf.uStrokeHalf + 0.5;
         offsetPx = normal * (aOffset.y * outerHalf);
         vEdgeDistance = aOffset.y * outerHalf;
         vSolid = 0.0;
     } else {
-        // 箭头三角形固定屏幕尺寸，保持实心。
-        offsetPx = aOffset;
+        // 箭头顶点都落在真实箭尖；aOffset 是屏幕像素，不随 zoom 放大。
+        offsetPx = dir * aOffset.x + normal * aOffset.y;
         vEdgeDistance = 0.0;
         vSolid = 1.0;
     }
 
-    gl_Position = ubuf.qt_Matrix * vec4(aPos + offsetPx, 0.0, 1.0);
+    gl_Position = center;
+    gl_Position.xy += (offsetPx / (ubuf.uViewport * 0.5)) * center.w;
 }

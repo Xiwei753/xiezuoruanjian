@@ -490,9 +490,21 @@ Item {
     function applyCamera(cam) {
         if (!cam)
             return
-        zoomLevel = cam.zoom
-        panX = cam.panX
-        panY = cam.panY
+        // Issue #1031：持久化/导航恢复的相机也必须经过同一产品级缩放范围。
+        // 若目标倍率被夹住，保持相机原本的视口中心世界坐标不变，再按夹后的
+        // 倍率反推 pan；只夹 zoom 会让原有镜头中心漂移。
+        var targetZoom = normalizedZoom(cam.zoom, zoomLevel)
+        var sourceZoom = (isFinite(cam.zoom) && cam.zoom > 0) ? cam.zoom : targetZoom
+        var centerX = finiteQuotient(finiteDifference(width / 2, cam.panX), sourceZoom)
+        var centerY = finiteQuotient(finiteDifference(height / 2, cam.panY), sourceZoom)
+        zoomLevel = targetZoom
+        if (targetZoom === cam.zoom) {
+            panX = cam.panX
+            panY = cam.panY
+        } else {
+            panX = finiteDifference(width / 2, finiteProduct(centerX, targetZoom))
+            panY = finiteDifference(height / 2, finiteProduct(centerY, targetZoom))
+        }
     }
 
     // 切回根图：清所有层相机，镜头回默认。

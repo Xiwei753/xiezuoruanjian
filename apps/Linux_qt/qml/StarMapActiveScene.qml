@@ -211,9 +211,6 @@ Item {
     readonly property real _edgeSelectedAlpha: 0.95
     readonly property real _edgeLabelBackgroundAlpha: 0.62
     readonly property real _edgeHitScreenPx: 10
-    function _edgeHitThresholdWorld() {
-        return _edgeHitScreenPx / _safeZoom
-    }
     // 文字口径：节点文字使用固定 world 字号 + CurveRendering，由节点 delegate
     // 按真实 zoom 缩放。放大时只裁剪到视口相交区域，不隐藏文字；缩小时按投影后
     // 的实际像素高度决定是否还值得排版。_textScale 只保留给独立屏幕层的边标签。
@@ -723,7 +720,9 @@ Item {
                      targetPath: embedPath(inside.instanceId),
                      localX: wx, localY: wy }
         }
-        var edge = graphController.hitTestEdge(wx, wy, _edgeHitThresholdWorld())
+        var edge = graphController.hitTestEdgeScreen(
+            worldToScreenX(wx), worldToScreenY(wy),
+            zoomLevel, panX, panY, _edgeHitScreenPx)
         if (edge) {
             return { owner: scene, scenePathKey: scenePathKey, starmapId: starmapId,
                      kind: "edge", id: edge.id, targetPath: null,

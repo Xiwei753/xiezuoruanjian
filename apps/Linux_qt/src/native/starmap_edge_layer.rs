@@ -8,11 +8,10 @@
 // 平移/缩放时都会各自重算 PathPolyline 并触发场景图重建。这里把“所有未选中边
 // + 少量选中边”合并成两个 QSGGeometryNode。
 //
-// 评论修正：#1029 要求相机变化不再上传整张图的顶点。现在顶点只保存相对
-// 锚点的 world 坐标与线段方向；线宽固定为屏幕物理像素、箭头大小也全部在
-// QSGMaterialShader 里按 uniform 计算。平移/缩放只更新 QSGTransformNode
-// 矩阵与少量 uniform，不 allocate / memcpy 顶点。顶点只在结构、节点位置、
-// 选择、锚点或极端镜头跨档时重建，并分别记录 geometry/camera 统计。
+// 评论修正（#1029 / #1031）：顶点只保存相对稳定 world anchor 的局部坐标与
+// 线段方向；线宽固定为屏幕物理像素，箭头也按屏幕像素展开。平移/缩放只更新
+// QSGTransformNode 矩阵与少量 uniform，不 allocate / memcpy 顶点。顶点只在
+// 结构、节点位置、选择或锚点真正改变时重建，并分别记录 geometry/camera 统计。
 //
 // 线程约束：QML 属性在 GUI 线程写入；顶点数组只在同步阶段（GUI 线程被阻塞）
 // 的 update_paint_node() 中读取。QSGNode / QSGGeometry / QSGMaterial 只在
@@ -26,19 +25,13 @@ use std::os::raw::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use crate::starmap_view::edge_render::EdgeRender;
+use crate::starmap_view::edge_render::{
+    EdgeRender, EDGE_ARROW_HALF_WIDTH_PX, EDGE_ARROW_LENGTH_PX,
+};
 
 static EDGE_GEOMETRY_UPDATES: AtomicU64 = AtomicU64::new(0);
 static EDGE_VERTEX_UPLOADS: AtomicU64 = AtomicU64::new(0);
 static EDGE_CAMERA_UPDATES: AtomicU64 = AtomicU64::new(0);
-
-// Issue #1031 第四轮：只有一条绘制路径。世界端点始终保留 f64，先在屏幕
-// 空间投影并裁剪到视口附近，再把有限屏幕局部坐标转成 f32 顶点。边数规模
-// 当前只有数百条，每帧只处理视口可见线段；不需要 zoom 档位或第二套模式。
-const EDGE_CULL_MARGIN_PX: f64 = 64.0;
-/// 箭头固定为屏幕像素尺寸，不随 zoom 放大。
-const EDGE_ARROW_LENGTH_PX: f64 = 7.0;
-const EDGE_ARROW_HALF_WIDTH_PX: f64 = 4.0;
 
 /// 最近一次同步/渲染状态。只记录数量、坐标与资源状态，不包含正文。
 /// update_paint_node 在渲染线程写，诊断导出线程读取，用 Mutex 串行化。
@@ -478,6 +471,8 @@ pub struct StarMapEdgeLayer {
 
     edges: Vec<EdgeRender>,
     geometry_dirty: bool,
+    cached_normal: Vec<f32>,
+    cached_selected: Vec<f32>,
 }
 
 impl StarMapEdgeLayer {
@@ -553,7 +548,7 @@ impl StarMapEdgeLayer {
             return;
         }
         self.anchor_x = value;
-        self.request_paint();
+        self.invalidate_geometry();
     }
 
     fn set_anchor_y(&mut self, value: f64) {
@@ -561,7 +556,7 @@ impl StarMapEdgeLayer {
             return;
         }
         self.anchor_y = value;
-        self.request_paint();
+        self.invalidate_geometry();
     }
 
     fn set_reveal(&mut self, value: f64) {
@@ -648,138 +643,72 @@ impl StarMapEdgeLayer {
         }
     }
 
-    /// Liang-Barsky：把屏幕空间线段裁到视口附近。只要线段穿过视口，
-    /// 即使两个端点都远在视口外也会保留可见部分。
-    fn clip_segment(
-        x0: f64,
-        y0: f64,
-        x1: f64,
-        y1: f64,
-        left: f64,
-        top: f64,
-        right: f64,
-        bottom: f64,
-    ) -> Option<(f64, f64, f64, f64)> {
-        let dx = x1 - x0;
-        let dy = y1 - y0;
-        let mut t0 = 0.0f64;
-        let mut t1 = 1.0f64;
-        for (p, q) in [
-            (-dx, x0 - left),
-            (dx, right - x0),
-            (-dy, y0 - top),
-            (dy, bottom - y0),
-        ] {
-            if p.abs() < f64::EPSILON {
-                if q < 0.0 {
-                    return None;
-                }
-                continue;
-            }
-            let r = q / p;
-            if p < 0.0 {
-                if r > t1 {
-                    return None;
-                }
-                if r > t0 {
-                    t0 = r;
-                }
-            } else {
-                if r < t0 {
-                    return None;
-                }
-                if r < t1 {
-                    t1 = r;
-                }
-            }
-        }
-        if !(0.0..=1.0).contains(&t0) || !(0.0..=1.0).contains(&t1) || t0 > t1 {
-            return None;
-        }
-        Some((x0 + t0 * dx, y0 + t0 * dy, x0 + t1 * dx, y0 + t1 * dy))
-    }
-
-    /// 唯一顶点生成入口：world 端点用 f64 投到屏幕，裁到视口附近，
-    /// 再把屏幕局部坐标转 f32。箭头按固定屏幕像素重建，不随 zoom 变粗。
-    fn build_screen_vertices(&self) -> (Vec<f32>, Vec<f32>) {
-        let (width, height) = self.item_size();
-        let zoom = self.zoom_level;
-        if width <= 0.0
-            || height <= 0.0
-            || !zoom.is_finite()
-            || zoom <= 0.0
-            || !self.pan_x.is_finite()
-            || !self.pan_y.is_finite()
-        {
+    /// 唯一顶点生成入口：世界端点保留 f64，只减去稳定 anchor 后转 f32。
+    /// 相机变化不再重建这里；QSGTransformNode 用 f64 算出的 anchor 平移和
+    /// zoom 缩放，shader 再把线段按屏幕像素展开。
+    fn build_anchor_vertices(&self) -> (Vec<f32>, Vec<f32>) {
+        let anchor_x = self.anchor_x;
+        let anchor_y = self.anchor_y;
+        if !anchor_x.is_finite() || !anchor_y.is_finite() {
             return (Vec::new(), Vec::new());
         }
-        let left = -EDGE_CULL_MARGIN_PX;
-        let top = -EDGE_CULL_MARGIN_PX;
-        let right = width + EDGE_CULL_MARGIN_PX;
-        let bottom = height + EDGE_CULL_MARGIN_PX;
         let selected_id = self.selected_edge_id.to_string();
         let mut normal = Vec::with_capacity(self.edges.len() * 18);
         let mut selected = Vec::with_capacity(18);
 
         for edge in &self.edges {
-            let sx0 = self.pan_x + edge.start_x * zoom;
-            let sy0 = self.pan_y + edge.start_y * zoom;
-            let sx1 = self.pan_x + edge.end_x * zoom;
-            let sy1 = self.pan_y + edge.end_y * zoom;
-            if ![sx0, sy0, sx1, sy1].iter().all(|value| value.is_finite()) {
+            let lx0 = edge.start_x - anchor_x;
+            let ly0 = edge.start_y - anchor_y;
+            let lx1 = edge.end_x - anchor_x;
+            let ly1 = edge.end_y - anchor_y;
+            if ![lx0, ly0, lx1, ly1].iter().all(|value| value.is_finite()) {
                 continue;
             }
-            let dx = sx1 - sx0;
-            let dy = sy1 - sy0;
+            let dx = edge.end_x - edge.start_x;
+            let dy = edge.end_y - edge.start_y;
             let len = (dx * dx + dy * dy).sqrt();
             if !len.is_finite() || len < 1e-9 {
                 continue;
             }
             let ux = dx / len;
             let uy = dy / len;
+            let (sx0, sy0, sx1, sy1) = (lx0 as f32, ly0 as f32, lx1 as f32, ly1 as f32);
+            let (ufx, ufy) = (ux as f32, uy as f32);
+            if ![sx0, sy0, sx1, sy1, ufx, ufy]
+                .iter()
+                .all(|value| value.is_finite())
+            {
+                continue;
+            }
             let target = if !selected_id.is_empty() && edge.edge_id == selected_id {
                 &mut selected
             } else {
                 &mut normal
             };
 
-            if let Some((cx0, cy0, cx1, cy1)) =
-                Self::clip_segment(sx0, sy0, sx1, sy1, left, top, right, bottom)
-            {
-                let cdx = cx1 - cx0;
-                let cdy = cy1 - cy0;
-                if (cdx * cdx + cdy * cdy).sqrt() > 1e-9 {
-                    let (cx0, cy0, cx1, cy1) = (cx0 as f32, cy0 as f32, cx1 as f32, cy1 as f32);
-                    let (ufx, ufy) = (ux as f32, uy as f32);
-                    // 线段：offset.y = ±1，片元按到中心的屏幕距离算覆盖率。
-                    target.extend_from_slice(&[
-                        cx0, cy0, ufx, ufy, 0.0, -1.0, 0.0, cx0, cy0, ufx, ufy, 0.0, 1.0, 0.0, cx1,
-                        cy1, ufx, ufy, 0.0, 1.0, 0.0, cx0, cy0, ufx, ufy, 0.0, -1.0, 0.0, cx1, cy1,
-                        ufx, ufy, 0.0, 1.0, 0.0, cx1, cy1, ufx, ufy, 0.0, -1.0, 0.0,
-                    ]);
-                }
-            }
+            // 线段：offset.y = ±1，shader 按当前矩阵算出屏幕方向后展开像素宽度。
+            target.extend_from_slice(&[
+                sx0, sy0, ufx, ufy, 0.0, -1.0, 0.0, sx0, sy0, ufx, ufy, 0.0, 1.0, 0.0, sx1, sy1,
+                ufx, ufy, 0.0, 1.0, 0.0, sx0, sy0, ufx, ufy, 0.0, -1.0, 0.0, sx1, sy1, ufx, ufy,
+                0.0, 1.0, 0.0, sx1, sy1, ufx, ufy, 0.0, -1.0, 0.0,
+            ]);
 
-            // 箭头：固定屏幕尺寸，尖端仍在真实投影位置。
-            let tip_x = self.pan_x + edge.arrow_tip_x * zoom;
-            let tip_y = self.pan_y + edge.arrow_tip_y * zoom;
+            // 箭头：三个顶点都落在真实箭尖；aOffset 是屏幕像素偏移，
+            // shader 用当前矩阵算出的屏幕方向展开固定大小三角形。
+            let tip_x = edge.arrow_tip_x - anchor_x;
+            let tip_y = edge.arrow_tip_y - anchor_y;
             if !tip_x.is_finite() || !tip_y.is_finite() {
                 continue;
             }
-            if tip_x < left || tip_x > right || tip_y < top || tip_y > bottom {
+            let (tx, ty) = (tip_x as f32, tip_y as f32);
+            if !tx.is_finite() || !ty.is_finite() {
                 continue;
             }
-            let base_x = tip_x - ux * EDGE_ARROW_LENGTH_PX;
-            let base_y = tip_y - uy * EDGE_ARROW_LENGTH_PX;
-            let nx = -uy * EDGE_ARROW_HALF_WIDTH_PX;
-            let ny = ux * EDGE_ARROW_HALF_WIDTH_PX;
-            let (tx, ty) = (tip_x as f32, tip_y as f32);
-            let (lx, ly) = ((base_x + nx) as f32, (base_y + ny) as f32);
-            let (rx, ry) = ((base_x - nx) as f32, (base_y - ny) as f32);
-            let (ufx, ufy) = (ux as f32, uy as f32);
+            let length = EDGE_ARROW_LENGTH_PX as f32;
+            let half_width = EDGE_ARROW_HALF_WIDTH_PX as f32;
             target.extend_from_slice(&[
-                tx, ty, ufx, ufy, 0.0, 0.0, 1.0, lx, ly, ufx, ufy, 0.0, 0.0, 1.0, rx, ry, ufx, ufy,
-                0.0, 0.0, 1.0,
+                tx, ty, ufx, ufy, 0.0, 0.0, 1.0, tx, ty, ufx, ufy, -length, half_width, 1.0, tx,
+                ty, ufx, ufy, -length, -half_width, 1.0,
             ]);
         }
         (normal, selected)
@@ -805,8 +734,9 @@ impl QQuickItem for StarMapEdgeLayer {
     }
 
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
-        // 视口尺寸参与屏幕投影和裁剪，必须重新生成可见顶点。
-        self.mark_geometry_dirty();
+        // 顶点相对 world anchor，尺寸变化只影响 shader 的视口 uniform；
+        // 不重建世界几何。
+        self.request_paint();
     }
 
     fn update_paint_node(&mut self, node: SGNode<ContainerNode>) -> SGNode<ContainerNode> {
@@ -820,19 +750,24 @@ impl QQuickItem for StarMapEdgeLayer {
             });
         }
 
-        // 唯一绘制路径：f64 世界→屏幕投影、视口裁剪、f32 屏幕局部顶点。
-        // 顶点已经是当前相机下的像素坐标，QSG 只做单位矩阵平移。
-        let (normal, selected) = self.build_screen_vertices();
-        let normal_ptr = normal.as_ptr();
-        let selected_ptr = selected.as_ptr();
-        let normal_count = (normal.len() / 7) as i32;
-        let selected_count = (selected.len() / 7) as i32;
+        // 唯一绘制路径：世界顶点只相对稳定 anchor 保存；相机变化只更新
+        // QSGTransformNode 的 f64 平移/缩放与 shader uniform。
         let (width, height) = self.item_size();
         let zoom = if self.zoom_level.is_finite() && self.zoom_level > 0.0 {
             self.zoom_level
         } else {
             1.0
         };
+        let geometry_dirty = self.geometry_dirty;
+        if geometry_dirty {
+            let (normal, selected) = self.build_anchor_vertices();
+            self.cached_normal = normal;
+            self.cached_selected = selected;
+        }
+        let normal_ptr = self.cached_normal.as_ptr();
+        let selected_ptr = self.cached_selected.as_ptr();
+        let normal_count = (self.cached_normal.len() / 7) as i32;
+        let selected_count = (self.cached_selected.len() / 7) as i32;
         let normal_width_px = Self::sanitized_width_px(self.normal_width_px);
         let selected_width_px = Self::sanitized_width_px(self.selected_width_px);
         let normal_stroke_half = normal_width_px * 0.5;
@@ -854,15 +789,30 @@ impl QQuickItem for StarMapEdgeLayer {
         } else {
             1.0
         } * reveal;
-        let tx = 0.0;
-        let ty = 0.0;
-        let qsg_matrix_zoom = 1.0;
-        let geometry_dirty = true;
-        EDGE_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
-        EDGE_VERTEX_UPLOADS.fetch_add(
-            (normal_count.max(0) + selected_count.max(0)) as u64,
-            Ordering::Relaxed,
-        );
+        // anchor 的屏幕位置 = pan + anchor × zoom；用 f64 计算后再交给
+        // QSGTransformNode，避免把世界坐标乘进顶点缓冲。
+        let (tx, ty) = if self.anchor_x.is_finite()
+            && self.anchor_y.is_finite()
+            && self.pan_x.is_finite()
+            && self.pan_y.is_finite()
+        {
+            (
+                self.pan_x + self.anchor_x * zoom,
+                self.pan_y + self.anchor_y * zoom,
+            )
+        } else {
+            (0.0, 0.0)
+        };
+        let qsg_matrix_zoom = zoom;
+        if geometry_dirty {
+            EDGE_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
+            EDGE_VERTEX_UPLOADS.fetch_add(
+                (normal_count.max(0) + selected_count.max(0)) as u64,
+                Ordering::Relaxed,
+            );
+        } else {
+            EDGE_CAMERA_UPDATES.fetch_add(1, Ordering::Relaxed);
+        }
         // SAFETY: raw 是本 item 渲染线程上的 paint node；两个顶点数组在调用期间
         // 保持有效，C++ 只在本函数内拷贝，不保留 Rust 指针。
         cpp!(unsafe [

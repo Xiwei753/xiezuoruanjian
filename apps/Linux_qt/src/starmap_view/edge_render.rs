@@ -17,6 +17,12 @@ use super::hittest::{point_in_triangle, point_to_segment_distance};
 
 const DEFAULT_BIDIRECTIONAL_OFFSET: f64 = 12.0;
 const DEFAULT_ARROW_LENGTH: f64 = 10.0;
+/// 边命中容差（屏幕像素）。线宽与箭头尺寸同样按屏幕像素定义，
+/// 命中与显示必须使用同一组常量。
+pub const EDGE_HIT_THRESHOLD_PX: f64 = 10.0;
+/// 边箭头在屏幕上的固定尺寸；原生 QSG 与命中测试共用。
+pub const EDGE_ARROW_LENGTH_PX: f64 = 7.0;
+pub const EDGE_ARROW_HALF_WIDTH_PX: f64 = 4.0;
 /// 边命中的兜底阈值（world 单位，仅供无缩放的 Rust 调用方/测试使用）。
 /// UI 路径必须传"屏幕像素 ÷ effectiveScale"算出的阈值，不能吃这个固定值：
 /// 相机范围放开到 1e-4~1e5 之后，固定 world 阈值在屏幕上会差好几个数量级。
@@ -618,6 +624,84 @@ pub fn hit_test_edge_renders_with_threshold(
     for r in renders {
         let dist = distance_to_edge_render(x, y, r);
         if dist < threshold && dist < closest_dist {
+            closest_dist = dist;
+            closest_id = Some(r.edge_id.clone());
+        }
+    }
+
+    closest_id
+}
+
+/// 屏幕空间边命中：与原生 QSG 顶点使用同一 f64 世界→视口投影、
+/// 同一固定像素箭头尺寸和同一命中容差。世界几何仍只来自 `EdgeRender`。
+pub fn hit_test_edge_renders_screen(
+    x: f64,
+    y: f64,
+    zoom: f64,
+    pan_x: f64,
+    pan_y: f64,
+    renders: &[EdgeRender],
+    threshold_px: f64,
+) -> Option<String> {
+    if !x.is_finite()
+        || !y.is_finite()
+        || !zoom.is_finite()
+        || zoom <= 0.0
+        || !pan_x.is_finite()
+        || !pan_y.is_finite()
+        || !threshold_px.is_finite()
+        || threshold_px <= 0.0
+    {
+        return None;
+    }
+
+    let mut closest_dist = f64::MAX;
+    let mut closest_id = None;
+
+    for r in renders {
+        let sx0 = pan_x + r.start_x * zoom;
+        let sy0 = pan_y + r.start_y * zoom;
+        let sx1 = pan_x + r.end_x * zoom;
+        let sy1 = pan_y + r.end_y * zoom;
+        if ![sx0, sy0, sx1, sy1].iter().all(|value| value.is_finite()) {
+            continue;
+        }
+        let shaft = point_to_segment_distance_f64(x, y, sx0, sy0, sx1, sy1);
+
+        let tip_x = pan_x + r.arrow_tip_x * zoom;
+        let tip_y = pan_y + r.arrow_tip_y * zoom;
+        let mut arrow = f64::MAX;
+        let dx = sx1 - sx0;
+        let dy = sy1 - sy0;
+        let len = (dx * dx + dy * dy).sqrt();
+        if tip_x.is_finite() && tip_y.is_finite() && len.is_finite() && len > 1e-12 {
+            let ux = dx / len;
+            let uy = dy / len;
+            let nx = -uy;
+            let ny = ux;
+            let base_x = tip_x - ux * EDGE_ARROW_LENGTH_PX;
+            let base_y = tip_y - uy * EDGE_ARROW_LENGTH_PX;
+            let left_x = base_x + nx * EDGE_ARROW_HALF_WIDTH_PX;
+            let left_y = base_y + ny * EDGE_ARROW_HALF_WIDTH_PX;
+            let right_x = base_x - nx * EDGE_ARROW_HALF_WIDTH_PX;
+            let right_y = base_y - ny * EDGE_ARROW_HALF_WIDTH_PX;
+            arrow = if point_in_triangle_f64(
+                x, y, tip_x, tip_y, left_x, left_y, right_x, right_y,
+            ) {
+                0.0
+            } else {
+                point_to_segment_distance_f64(x, y, tip_x, tip_y, left_x, left_y)
+                    .min(point_to_segment_distance_f64(
+                        x, y, left_x, left_y, right_x, right_y,
+                    ))
+                    .min(point_to_segment_distance_f64(
+                        x, y, right_x, right_y, tip_x, tip_y,
+                    ))
+            };
+        }
+
+        let dist = shaft.min(arrow);
+        if dist < threshold_px && dist < closest_dist {
             closest_dist = dist;
             closest_id = Some(r.edge_id.clone());
         }

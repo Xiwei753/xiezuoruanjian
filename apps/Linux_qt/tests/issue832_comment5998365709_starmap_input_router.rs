@@ -236,7 +236,7 @@ fn single_entry_hit(hit: &str) -> bool {
         && hit.contains("findEmbedChromeAt(wx, wy)")
         && hit.contains("findEmbedContentAt(wx, wy)")
         && hit.contains("kind: \"embed\"")
-        && hit.contains("graphController.hitTestEdge(")
+        && hit.contains("graphController.hitTestEdgeScreen(")
         && !hit.contains("hitTargetAtScene")
         && !hit.contains("kind: \"childContent\"")
 }

@@ -1121,6 +1121,21 @@ QtObject {
         return null;
     }
 
+    // 屏幕空间命中：与原生连线图层共用 f64 投影、固定像素箭头与容差。
+    // 世界几何仍只来自 EdgeRender，不在 QML 里复制另一套箭头。
+    function hitTestEdgeScreen(sx, sy, zoom, panX, panY, thresholdPx) {
+        if (!ensureBackend()) return null;
+        if (!edgeRenders || edgeRenders.length === 0) computeEdgeRenders(null);
+        var res = normalizeBackendResult(starmapBackendRef.hit_test_scene_edge_screen(
+            sceneCacheKey, sx, sy, zoom, panX, panY, thresholdPx), "");
+        if (res.success && res.data) {
+            for (var i = 0; i < edgesModel.length; i++) {
+                if (edgesModel[i].id === res.data) return edgesModel[i];
+            }
+        }
+        return null;
+    }
+
     // 从 StarMapTargetPathDto 路径对象中提取本图节点 ID。
     // 仅当 target.type === "node" 且 segments 为空（即直接指向本图节点）时返回 nodeId，否则 null。
     function localNodeIdFromPath(path) {

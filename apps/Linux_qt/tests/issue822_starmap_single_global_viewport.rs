@@ -661,7 +661,7 @@ fn hit_testing_has_one_entry_returning_the_active_canvas_hit() {
         .find("var inside = findEmbedContentAt(")
         .expect("命中入口必须再查 embed 内容区");
     let i_edge = hit
-        .find("var edge = graphController.hitTestEdge(")
+        .find("var edge = graphController.hitTestEdgeScreen(")
         .expect("命中入口最后必须查连线");
     assert!(
         i_node < i_chrome && i_chrome < i_inside && i_inside < i_edge,
@@ -2086,14 +2086,15 @@ fn edge_hit_threshold_is_screen_relative() {
             && !scene.contains("_edgeLineWorldWidth"),
         "可见线宽必须是固定屏幕像素常量，实际源码缺少"
     );
-    let threshold = function_window(&scene, "function _edgeHitThresholdWorld(", 400);
     assert!(
-        threshold.contains("_edgeHitScreenPx / _safeZoom"),
-        "阈值必须除以活动镜头比例折算到画布 world 单位，实际窗口:\n{threshold}"
+        !scene.contains("_edgeHitThresholdWorld"),
+        "命中不能先折回 world 阈值再交给另一套几何"
     );
     assert!(
-        scene.contains("graphController.hitTestEdge(wx, wy, _edgeHitThresholdWorld())"),
-        "活动画布命中必须把折算后的阈值传给 hitTestEdge"
+        scene.contains("graphController.hitTestEdgeScreen(")
+            && scene.contains("worldToScreenX(wx), worldToScreenY(wy)")
+            && scene.contains("_edgeHitScreenPx"),
+        "活动画布命中必须把屏幕点和同一投影交给 hitTestEdgeScreen"
     );
 
     // 绘制与命中解耦：命中保持 10 屏幕像素，原生边层/Canvas 预览共用屏幕像素宽度。
@@ -2126,10 +2127,9 @@ fn edge_hit_threshold_is_screen_relative() {
 
     let controller = strip_line_comments(&read_src(CONTROLLER));
     assert!(
-        controller.contains("function hitTestEdge(wx, wy, threshold)")
-            && controller
-                .contains("hit_test_edge_renders(JSON.stringify(edgeRenders), wx, wy, threshold)"),
-        "GraphController 必须把 threshold 透传给后端"
+        controller.contains("function hitTestEdgeScreen(sx, sy, zoom, panX, panY, thresholdPx)")
+            && controller.contains("hit_test_scene_edge_screen("),
+        "GraphController 必须把屏幕点、相机与像素阈值透传给同一投影命中接口"
     );
 }
 
@@ -2288,10 +2288,11 @@ fn edge_hit_threshold_is_independent_of_visual_width() {
             && !scene.contains("_edgeLineWorldWidth"),
         "边线宽必须是固定屏幕像素常量，实际源码不符"
     );
-    let threshold = function_window(&scene, "function _edgeHitThresholdWorld(", 400);
     assert!(
-        threshold.contains("return _edgeHitScreenPx / _safeZoom"),
-        "命中阈值必须独立于可见线宽，只按屏幕像素折算，实际窗口:\n{threshold}"
+        !scene.contains("_edgeHitThresholdWorld")
+            && scene.contains("graphController.hitTestEdgeScreen(")
+            && scene.contains("_edgeHitScreenPx"),
+        "命中必须直接使用屏幕像素阈值与同一投影，不能再折回 world 阈值"
     );
 
     let content = strip_line_comments(&read_src(CONTENT));

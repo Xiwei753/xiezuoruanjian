@@ -81,7 +81,7 @@ fn active_scene_hit_order_is_node_embed_edge_blank_without_recursion() {
         .find("findEmbedContentAt(wx, wy)")
         .expect("hitTargetAtWorld 必须判 embed content");
     let edge_at = hit
-        .find("graphController.hitTestEdge(")
+        .find("graphController.hitTestEdgeScreen(")
         .expect("hitTargetAtWorld 必须判连线命中");
     let empty_at = hit
         .find("kind: \"empty\"")

@@ -250,6 +250,27 @@ impl SceneCache {
         edge_render::hit_test_edge_renders_with_threshold(x, y, &self.edge_renders, threshold)
     }
 
+    /// 屏幕空间命中：投影、固定像素箭头与原生 QSG 共用同一套规则。
+    pub fn hit_edge_screen(
+        &self,
+        x: f64,
+        y: f64,
+        zoom: f64,
+        pan_x: f64,
+        pan_y: f64,
+        threshold_px: f64,
+    ) -> Option<String> {
+        edge_render::hit_test_edge_renders_screen(
+            x,
+            y,
+            zoom,
+            pan_x,
+            pan_y,
+            &self.edge_renders,
+            threshold_px,
+        )
+    }
+
     pub fn prospective_edge_render(
         &self,
         from_path_json: &str,
