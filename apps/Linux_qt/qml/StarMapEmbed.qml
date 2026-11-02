@@ -50,6 +50,13 @@ Item {
     // 概览需要的数据入口（只读）
     property var starmapBackendRef: null
 
+    // Issue #1031：极端镜头下父场景交给本组件的不是 world 尺寸，而是
+    // “真实屏幕投影矩形 ∩ 视口”的屏幕局部矩形。trueScreenRect 保留原始
+    // 边界，用来判断圆壳是否只是被裁掉一部分。
+    property bool extremeClipped: false
+    property var screenClipRect: null
+    property var trueScreenRect: null
+
     // Issue #949：过渡演出进度（<0 = 不在过渡中）。圆壳仍然是父图里的真实
     // Embed、世界直径仍是 200。过渡期间"同一个圆壳"由过渡层的圆环接手：
     // 进场时圆环在进度 0 与本圆壳完全重合（没有一帧突变），之后按完整
@@ -69,10 +76,18 @@ Item {
 
     // 父场景的文字口径：和活动画布同一份"按用户字号策略"。
     readonly property real _textScale: parentScene ? parentScene._textScale : 1
-    // 本组件位于父场景统一的 worldContent 变换内：宽度 / 字号 / 边框都按
-    // authored world 单位计算，屏幕口径通过除以父级渲染缩放保持恒定。
-    readonly property real _renderZoom: parentScene && parentScene._renderZoom > 0
-                                        ? parentScene._renderZoom : 1
+    // 常规镜头：本组件位于父场景统一的 worldContent 变换内，宽度 / 字号 /
+    // 边框都按 authored world 单位计算，屏幕口径通过除以父级 _safeZoom 保持
+    // 恒定。极端镜头：根对象已是屏幕坐标，所有口径直接用像素。
+    readonly property real _cameraZoom: parentScene && parentScene._safeZoom > 0
+                                        ? parentScene._safeZoom : 1
+    readonly property bool _extreme: extremeClipped
+    readonly property bool _fullyVisible: !_extreme
+        || (screenClipRect !== null && trueScreenRect !== null
+            && Math.abs(screenClipRect.x - trueScreenRect.x) < 0.5
+            && Math.abs(screenClipRect.y - trueScreenRect.y) < 0.5
+            && Math.abs(screenClipRect.width - trueScreenRect.width) < 0.5
+            && Math.abs(screenClipRect.height - trueScreenRect.height) < 0.5)
 
     // 直径（世界单位）：Embed 是正圆，取投影短边。
     readonly property real _diameter: Math.min(width, height)
@@ -83,8 +98,9 @@ Item {
     // 概览的 fitScale 同时是"进入该子图后的子画布比例"：加载成功后父画布
     // 穿越子图时用同一份比例，切画布前后画面连续。
     readonly property bool previewWanted:
-        targetStarmapId !== "" && width * _renderZoom >= 32
-        && height * _renderZoom >= 32
+        (!_extreme || _fullyVisible)
+        && targetStarmapId !== "" && width * _cameraZoom >= 32
+        && height * _cameraZoom >= 32
     readonly property var previewContent: previewLoader.item
     readonly property var childBounds: previewContent ? previewContent.childBounds : null
     readonly property real childFitScale: previewContent ? previewContent.fitScale : 0
@@ -114,39 +130,47 @@ Item {
     Rectangle {
         id: visualEmbed
         anchors.fill: parent
-        radius: width / 2
+        // 极端镜头被视口裁掉时只填相交区域，不把裁剪矩形伪装成圆壳边界；
+        // 圆壳真实边线交给父场景的边框投影处理（此处不再画假圆角）。
+        radius: root._fullyVisible ? width / 2 : 0
         antialiasing: true
         // 子星图像一块独立的主题表面：浅色主题浅底 + 深色反边，反之相反。
         // 过渡期间仍继续绘制（圆环放大描边由过渡层按同一个圆壳几何画在
         // 内容之下），只有整圈离开可见视口后才停。
         color: root._surfaceLow
         border.color: root._inverseSurface
-        border.width: (root.isSelected ? 3 : 2) / root._renderZoom
+        border.width: root._extreme
+                      ? (root._fullyVisible ? (root.isSelected ? 3 : 2) : 0)
+                      : (root.isSelected ? 3 : 2) / root._cameraZoom
         visible: !root.revealActive || root.revealOnScreen
 
         // 近似阴影的一圈描边（不参与命中）
         Rectangle {
             anchors.fill: parent
-            anchors.margins: -1 / root._renderZoom
+            anchors.margins: root._extreme ? -1 : -1 / root._cameraZoom
             z: -1
             color: "transparent"
             border.color: root._shadowLight
-            radius: visualEmbed.radius + 1 / root._renderZoom
-            visible: !root.isSelected
+            radius: root._fullyVisible
+                    ? visualEmbed.radius + (root._extreme ? 1 : 1 / root._cameraZoom) : 0
+            visible: !root.isSelected && (!root._extreme || root._fullyVisible)
         }
     }
 
     // ── 标题：约束在圆的内接正方形顶部带内，不需要圆形裁剪 ──
     Label {
         id: titleLabel
-        visible: root.label.length > 0 && root._diameter * root._renderZoom >= 56
+        visible: (!root._extreme || root._fullyVisible)
+                 && root.label.length > 0 && root._diameter * root._cameraZoom >= 56
         x: (root.width - width) / 2
         y: (root.height - root._inscribedSide) / 2 + root._inscribedSide * 0.04
         width: root._inscribedSide
-        height: Math.max(14 / root._renderZoom, root._inscribedSide * 0.16)
+        height: Math.max(root._extreme ? 14 : 14 / root._cameraZoom,
+                         root._inscribedSide * 0.16)
         text: root.label
         color: root._textPrimary
-        font.pointSize: root.dt.fontSmPt * root._textScale / root._renderZoom
+        font.pointSize: root.dt.fontSmPt * root._textScale
+                         / (root._extreme ? 1 : root._cameraZoom)
         wrapMode: Text.NoWrap
         elide: Text.ElideRight
         horizontalAlignment: Text.AlignHCenter
@@ -162,8 +186,8 @@ Item {
         radius: width / 2
         color: "transparent"
         border.color: root.dt.accent
-        border.width: 2 / root._renderZoom
-        visible: root.isSelected
+        border.width: root._extreme ? 2 : 2 / root._cameraZoom
+        visible: root.isSelected && (!root._extreme || root._fullyVisible)
         antialiasing: true
         z: 10
     }

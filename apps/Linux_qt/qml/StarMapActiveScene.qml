@@ -101,12 +101,9 @@ Item {
     // "视口中心 + (w - 视口中心世界坐标) × zoom"：中心偏移在 double 里现算，
     // 场景图只见到视口量级的相对坐标。
     readonly property real _safeZoom: zoomLevel > 0 && isFinite(zoomLevel) ? zoomLevel : 1.0
-    // 相机在 double 里保持连续；场景图只接收 float，所以渲染边界再夹一次。
-    // 位置仍按真实 zoom 投影，局部尺寸/文字用 _renderZoom 缩放。极端比例下
-    // 对象要么铺满视口、要么小于一个像素，视觉等价，但不会把 MAX_VALUE 写进
-    // QSG 矩阵或顶点。
-    readonly property real _renderZoom: Math.max(1e-6, Math.min(1e6, _safeZoom))
-    readonly property real _renderPositionScale: _finiteQuotient(_safeZoom, _renderZoom)
+    // 相机始终用 double 保存连续的世界变换。场景图只接收 float，所以任何
+    // 进入 QSG 的矩形都先按真实 zoom 在 double 里投影，再与视口相交；只把
+    // 相交后的有限局部矩形交给 delegate。数值保护不再充当“对象缩放倍率”。
     // anchor 投影必须在 float 平移安全范围内；平移饱和到 MAX_VALUE 时也切
     // 极端模式，不能把无穷大的父级 x/y 交给场景图。
     readonly property real _anchorScreenX: _finiteSum(
@@ -175,13 +172,47 @@ Item {
                 && y + h >= -m && y <= height + m
     }
 
-    // 极端镜头下 delegate 仍放在 worldContent 的局部坐标里；这里把饱和位置
-    // 夹到有限范围，离屏对象本来会被 visible 裁剪，绝不能把 MAX_VALUE 交给
-    // QSG 的 float 顶点/变换。
-    function _renderLocalPosition(worldValue, originValue) {
-        var value = _finiteProduct(_finiteDifference(worldValue, originValue),
-                                   _renderPositionScale)
-        return Math.max(-1e10, Math.min(1e10, value))
+    // 世界矩形 → 当前 Scene 的真实屏幕矩形（double 投影，不做渲染倍率夹取）。
+    // 只返回有限值；调用方再和视口相交后才会把它交给场景图。
+    function projectWorldRect(worldX, worldY, worldWidth, worldHeight) {
+        var w = _finiteProduct(worldWidth, _safeZoom)
+        var h = _finiteProduct(worldHeight, _safeZoom)
+        var centerX = worldToScreenX(_finiteSum(worldX, worldWidth / 2))
+        var centerY = worldToScreenY(_finiteSum(worldY, worldHeight / 2))
+        if (!isFinite(w) || !isFinite(h) || w < 0 || h < 0
+                || !isFinite(centerX) || !isFinite(centerY)) return null
+        return {
+            x: _finiteDifference(centerX, w / 2),
+            y: _finiteDifference(centerY, h / 2),
+            width: w,
+            height: h
+        }
+    }
+
+    // 把真实屏幕矩形与当前视口相交。返回的 x/y/width/height 是唯一的 QSG
+    // 局部矩形；left/top/right/bottom 保留原始边界，用来画真实边框而不是
+    // 把裁剪后的矩形当成对象边界。
+    function clippedScreenRect(rect, margin) {
+        if (!rect || !isFinite(rect.x) || !isFinite(rect.y)
+                || !isFinite(rect.width) || !isFinite(rect.height)) return null
+        var m = margin !== undefined ? margin : 0
+        var right = _finiteSum(rect.x, rect.width)
+        var bottom = _finiteSum(rect.y, rect.height)
+        var left = Math.max(-m, rect.x)
+        var top = Math.max(-m, rect.y)
+        var clippedRight = Math.min(width + m, right)
+        var clippedBottom = Math.min(height + m, bottom)
+        if (!(clippedRight > left && clippedBottom > top)) return null
+        return {
+            x: left,
+            y: top,
+            width: clippedRight - left,
+            height: clippedBottom - top,
+            left: rect.x,
+            top: rect.y,
+            right: right,
+            bottom: bottom
+        }
     }
 
     // ── 屏幕口径常量 ──
@@ -196,11 +227,14 @@ Item {
     function _edgeHitThresholdWorld() {
         return _edgeHitScreenPx / _safeZoom
     }
-    // 文字口径：节点文字使用固定 world 字号 + CurveRendering，由父级统一缩放；
-    // _textScale 只保留给独立屏幕层的边标签 / 子图概览。节点文字超过这个屏幕
-    // 像素上限时隐藏（此时用户已放大到只看卡片局部，不再重排整段文本）。
+    // 文字口径：节点文字使用固定 world 字号 + CurveRendering，由父级统一缩放。
+    // 放大时只裁剪到视口相交区域，不隐藏文字；缩小时按投影后的实际像素高度
+    // 决定是否还值得排版。_textScale 只保留给独立屏幕层的边标签 / 子图概览。
     readonly property real _textScale: Math.max(0.6, Math.min(8.0, _safeZoom))
-    readonly property real _nodeTextMaxScreenPx: Math.max(512, Math.max(width, height) * 2)
+    readonly property real _nodeTextMinScreenPx: 5
+    // 仅用于极端镜头下的文字局部放大，避免把 Number.MAX_VALUE 直接写进
+    // QSG 的 float 变换；正常镜头父层已经乘以 _safeZoom，这里保持 1。
+    readonly property real _textRenderScale: Math.min(_safeZoom, 1e9)
 
     // Issue #949：概览圆点口径（与 StarMapSceneContent 的概览圆点同一公式），
     // 展开进度 0 时活动画布的节点先以这个屏幕半径的圆点出现，逐步长成完整节点。
@@ -1157,13 +1191,13 @@ Item {
     // ── 节点：矢量圆角矩形卡片（编辑输入在场景级稳定浮层，见 editOverlay）──
     // Issue #1029：节点几何保持 authored world 坐标，常规镜头下整层只由父级
     // pan/zoom 变换一次；平移相机不再逐个改写节点 delegate 的世界 x/y。
-    // Issue #1031：跨出 float 安全档位时切到视口中心局部原点，避免 MAX_VALUE
-    // 进入 QSG 顶点；只有这种极端镜头才逐个更新可见对象位置。
+    // Issue #1031：极端镜头不再缩放世界层，而是把每个对象的“真实投影矩形
+    // ∩ 视口”直接作为屏幕局部矩形；只有常规镜头由父级统一 pan/zoom。
     Item {
         id: nodeWorldContent
-        x: scene._extremeCamera ? scene.width / 2 : scene._anchorScreenX
-        y: scene._extremeCamera ? scene.height / 2 : scene._anchorScreenY
-        scale: scene._extremeCamera ? scene._renderZoom : scene._safeZoom
+        x: scene._extremeCamera ? 0 : scene._anchorScreenX
+        y: scene._extremeCamera ? 0 : scene._anchorScreenY
+        scale: scene._extremeCamera ? 1 : scene._safeZoom
         transformOrigin: Item.TopLeft
         z: 1
 
@@ -1224,49 +1258,74 @@ Item {
                     : nodeData.title && nodeData.title.length > 0
                         ? nodeData.title : qsTr("未命名")
 
-            // 世界单位下的投影尺寸：父级统一乘 _renderZoom，reveal 缩成小圆点时
-            // 直径的屏幕像素仍保持 _revealDotRadius。
+            // 世界单位下的投影尺寸：常规镜头由父级统一乘 _safeZoom；reveal
+            // 缩成小圆点时直径的屏幕像素仍保持 _revealDotRadius。极端镜头
+            // 不再用这个值当屏幕尺寸，而是用下面的真实屏幕矩形与视口相交。
             readonly property real projectedWidth:
                 cardWidth * scene._reveal
-                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._renderZoom
+                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
             readonly property real projectedHeight:
                 cardHeight * scene._reveal
-                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._renderZoom
+                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
 
-            // 屏幕矩形只用于视口裁剪 / 文字 LOD，不参与 authored 几何。
-            readonly property real screenLeft: scene.worldToScreenX(worldX)
-                    + (cardWidth - projectedWidth) * scene._renderZoom / 2
-            readonly property real screenTop: scene.worldToScreenY(worldY)
-                    + (cardHeight - projectedHeight) * scene._renderZoom / 2
-            readonly property real screenWidth: projectedWidth * scene._renderZoom
-            readonly property real screenHeight: projectedHeight * scene._renderZoom
-            readonly property bool inViewport: scene.screenRectVisible(
-                    screenLeft, screenTop, screenWidth, screenHeight, 64)
+            // 真实屏幕矩形始终按 double 的 _safeZoom 投影，再做视口裁剪。
+            // renderClip 是唯一进入 QSG 的局部矩形；trueScreenRect 的
+            // left/top/right/bottom 仍代表对象真实边界，用来决定边框位置。
+            readonly property real screenWidth:
+                _finiteProduct(cardWidth, scene._safeZoom) * scene._reveal
+                + scene._revealDotRadius * 2 * (1 - scene._reveal)
+            readonly property real screenHeight:
+                _finiteProduct(cardHeight, scene._safeZoom) * scene._reveal
+                + scene._revealDotRadius * 2 * (1 - scene._reveal)
+            readonly property real screenCenterX:
+                scene.worldToScreenX(_finiteSum(worldX, cardWidth / 2))
+            readonly property real screenCenterY:
+                scene.worldToScreenY(_finiteSum(worldY, cardHeight / 2))
+            readonly property real screenLeft:
+                _finiteDifference(screenCenterX, screenWidth / 2)
+            readonly property real screenTop:
+                _finiteDifference(screenCenterY, screenHeight / 2)
+            readonly property var trueScreenRect: ({
+                x: screenLeft, y: screenTop,
+                width: screenWidth, height: screenHeight
+            })
+            readonly property var renderClip: scene.clippedScreenRect(trueScreenRect, 0)
+            readonly property bool inViewport: scene.clippedScreenRect(trueScreenRect, 64) !== null
+            readonly property bool fullyVisible: renderClip !== null
+                && Math.abs(renderClip.x - trueScreenRect.x) < 0.5
+                && Math.abs(renderClip.y - trueScreenRect.y) < 0.5
+                && Math.abs(renderClip.width - trueScreenRect.width) < 0.5
+                && Math.abs(renderClip.height - trueScreenRect.height) < 0.5
             readonly property real titleScreenPx:
-                StarMapNodeMetrics.TITLE_FONT_SIZE * scene._renderZoom
+                StarMapNodeMetrics.TITLE_FONT_SIZE * scene._safeZoom
             readonly property real bodyScreenPx:
-                StarMapNodeMetrics.BODY_FONT_SIZE * scene._renderZoom
+                StarMapNodeMetrics.BODY_FONT_SIZE * scene._safeZoom
             readonly property bool titleVisible:
                 scene.detailReveal > 0.6 && screenHeight >= 18
-                && titleScreenPx >= 5
-                && titleScreenPx <= scene._nodeTextMaxScreenPx
+                && titleScreenPx >= scene._nodeTextMinScreenPx
             readonly property bool bodyTextVisible:
                 titleVisible && screenHeight >= 56
-                && bodyScreenPx >= 5
-                && bodyScreenPx <= scene._nodeTextMaxScreenPx
+                && bodyScreenPx >= scene._nodeTextMinScreenPx
+            readonly property real textBaseWidth:
+                Math.max(0, cardWidth - StarMapNodeMetrics.PADDING * 2)
+            readonly property real textBaseHeight:
+                Math.max(0, cardHeight - StarMapNodeMetrics.PADDING * 2)
+            readonly property real textScreenLeft:
+                scene.worldToScreenX(_finiteSum(worldX, StarMapNodeMetrics.PADDING))
+            readonly property real textScreenTop:
+                scene.worldToScreenY(_finiteSum(worldY, StarMapNodeMetrics.PADDING))
 
-            // 世界坐标的左上角；常规镜头相对图锚点，极端镜头先按真实 zoom
-            // 的 double 差值折算到 _renderZoom 局部单位。概览圆点态保持中心收缩。
+            // 常规镜头保持 anchor 局部坐标；极端镜头直接放置视口相交矩形。
             x: scene._extremeCamera
-               ? scene._renderLocalPosition(worldX, scene._originWorldX)
-                 + (cardWidth - width) / 2
+               ? (renderClip ? renderClip.x : 0)
                : worldX - scene._worldAnchorX + (cardWidth - width) / 2
             y: scene._extremeCamera
-               ? scene._renderLocalPosition(worldY, scene._originWorldY)
-                 + (cardHeight - height) / 2
+               ? (renderClip ? renderClip.y : 0)
                : worldY - scene._worldAnchorY + (cardHeight - height) / 2
-            width: projectedWidth
-            height: projectedHeight
+            width: scene._extremeCamera
+                   ? (renderClip ? renderClip.width : 0) : projectedWidth
+            height: scene._extremeCamera
+                    ? (renderClip ? renderClip.height : 0) : projectedHeight
             visible: inViewport || isEditing
             z: 1
 
@@ -1274,20 +1333,46 @@ Item {
                 id: visualNode
                 anchors.fill: parent
                 opacity: nodeItem.isEditing ? 1 - editOverlay.transitionProgress : 1
-                radius: Math.min(scene.dt.radiusSm, Math.min(width, height) / 2)
+                radius: nodeItem.fullyVisible
+                        ? (scene._extremeCamera
+                           ? Math.min(scene.dt.radiusSm * scene._safeZoom,
+                                      Math.min(width, height) / 2)
+                           : Math.min(scene.dt.radiusSm, Math.min(width, height) / 2))
+                        : 0
                 color: scene._surfaceContainer
                 border.color: nodeItem.isSelected || nodeItem.isEditing
                         ? scene._accent : scene._border
-                border.width: ((nodeItem.isSelected || nodeItem.isEditing) ? 2 : 1)
-                              / scene._renderZoom
+                // 极端镜头只在对象完整可见时走圆角矩形边框；被视口裁掉时
+                // 由下面的真实边线段绘制，绝不把裁剪矩形当成对象边界。
+                border.width: !scene._extremeCamera
+                              ? ((nodeItem.isSelected || nodeItem.isEditing) ? 2 : 1)
+                                / scene._safeZoom
+                              : (nodeItem.fullyVisible
+                                 ? ((nodeItem.isSelected || nodeItem.isEditing) ? 2 : 1)
+                                 : 0)
                 clip: true
 
                 // 显示态：名称在上，正文预览在下。编辑输入层是场景级稳定容器，
                 // 不挂在这里，模型行更新不会销毁正在输入的内容。
                 Item {
                     id: displayLayer
-                    anchors.fill: parent
-                    anchors.margins: StarMapNodeMetrics.PADDING
+                    x: scene._extremeCamera
+                       ? nodeItem.textScreenLeft
+                         - (nodeItem.renderClip ? nodeItem.renderClip.x : 0)
+                       : StarMapNodeMetrics.PADDING
+                    y: scene._extremeCamera
+                       ? nodeItem.textScreenTop
+                         - (nodeItem.renderClip ? nodeItem.renderClip.y : 0)
+                       : StarMapNodeMetrics.PADDING
+                    width: scene._extremeCamera
+                           ? nodeItem.textBaseWidth : parent.width - 2 * StarMapNodeMetrics.PADDING
+                    height: scene._extremeCamera
+                            ? nodeItem.textBaseHeight : parent.height - 2 * StarMapNodeMetrics.PADDING
+                    // 极端镜头下 delegate 已是屏幕坐标：只放大文本局部，
+                    // 文字仍按 authored world 字号排版，再被卡片的视口相交
+                    // 矩形裁剪。放大后只出现可见字形局部，不会整段隐藏。
+                    scale: scene._extremeCamera ? scene._textRenderScale : 1
+                    transformOrigin: Item.TopLeft
                     visible: nodeItem.titleVisible
 
                     Column {
@@ -1329,6 +1414,87 @@ Item {
                         }
                     }
                 }
+
+                // 被视口裁掉的对象不画假边框：四条边分别在真实 left/top/
+                // right/bottom 的位置画屏幕像素线，超出视口的那条直接省略。
+                Item {
+                    id: extremeFrame
+                    anchors.fill: parent
+                    visible: scene._extremeCamera && !nodeItem.fullyVisible
+                             && nodeItem.renderClip !== null
+                    z: 10
+
+                    readonly property real borderPx:
+                        (nodeItem.isSelected || nodeItem.isEditing) ? 2 : 1
+                    readonly property color borderColor:
+                        (nodeItem.isSelected || nodeItem.isEditing)
+                        ? scene._accent : scene._border
+                    readonly property var clipRect: nodeItem.renderClip || ({
+                        x: 0, y: 0, width: 0, height: 0,
+                        left: 0, top: 0, right: 0, bottom: 0
+                    })
+                    readonly property real visibleLeft:
+                        Math.max(0, clipRect.left - clipRect.x)
+                    readonly property real visibleTop:
+                        Math.max(0, clipRect.top - clipRect.y)
+                    readonly property real visibleRight:
+                        Math.min(clipRect.width, clipRect.right - clipRect.x)
+                    readonly property real visibleBottom:
+                        Math.min(clipRect.height, clipRect.bottom - clipRect.y)
+
+                    Rectangle {
+                        visible: extremeFrame.clipRect.left >= extremeFrame.clipRect.x - 0.5
+                                 && extremeFrame.clipRect.left <= extremeFrame.clipRect.x
+                                    + extremeFrame.clipRect.width + 0.5
+                        x: Math.max(0, Math.min(extremeFrame.width - extremeFrame.borderPx,
+                                                extremeFrame.clipRect.left
+                                                - extremeFrame.clipRect.x
+                                                - extremeFrame.borderPx / 2))
+                        y: extremeFrame.visibleTop
+                        width: extremeFrame.borderPx
+                        height: Math.max(0, extremeFrame.visibleBottom - extremeFrame.visibleTop)
+                        color: extremeFrame.borderColor
+                    }
+                    Rectangle {
+                        visible: extremeFrame.clipRect.right >= extremeFrame.clipRect.x - 0.5
+                                 && extremeFrame.clipRect.right <= extremeFrame.clipRect.x
+                                    + extremeFrame.clipRect.width + 0.5
+                        x: Math.max(0, Math.min(extremeFrame.width - extremeFrame.borderPx,
+                                                extremeFrame.clipRect.right
+                                                - extremeFrame.clipRect.x
+                                                - extremeFrame.borderPx / 2))
+                        y: extremeFrame.visibleTop
+                        width: extremeFrame.borderPx
+                        height: Math.max(0, extremeFrame.visibleBottom - extremeFrame.visibleTop)
+                        color: extremeFrame.borderColor
+                    }
+                    Rectangle {
+                        visible: extremeFrame.clipRect.top >= extremeFrame.clipRect.y - 0.5
+                                 && extremeFrame.clipRect.top <= extremeFrame.clipRect.y
+                                    + extremeFrame.clipRect.height + 0.5
+                        x: extremeFrame.visibleLeft
+                        y: Math.max(0, Math.min(extremeFrame.height - extremeFrame.borderPx,
+                                                extremeFrame.clipRect.top
+                                                - extremeFrame.clipRect.y
+                                                - extremeFrame.borderPx / 2))
+                        width: Math.max(0, extremeFrame.visibleRight - extremeFrame.visibleLeft)
+                        height: extremeFrame.borderPx
+                        color: extremeFrame.borderColor
+                    }
+                    Rectangle {
+                        visible: extremeFrame.clipRect.bottom >= extremeFrame.clipRect.y - 0.5
+                                 && extremeFrame.clipRect.bottom <= extremeFrame.clipRect.y
+                                    + extremeFrame.clipRect.height + 0.5
+                        x: extremeFrame.visibleLeft
+                        y: Math.max(0, Math.min(extremeFrame.height - extremeFrame.borderPx,
+                                                extremeFrame.clipRect.bottom
+                                                - extremeFrame.clipRect.y
+                                                - extremeFrame.borderPx / 2))
+                        width: Math.max(0, extremeFrame.visibleRight - extremeFrame.visibleLeft)
+                        height: extremeFrame.borderPx
+                        color: extremeFrame.borderColor
+                    }
+                }
             }
         }
     }
@@ -1364,31 +1530,46 @@ Item {
 
             readonly property real projectedWidth:
                 embedData.width * scene._reveal
-                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._renderZoom
+                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
             readonly property real projectedHeight:
                 embedData.height * scene._reveal
-                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._renderZoom
-            readonly property real screenLeft: scene.worldToScreenX(worldX)
-                    + (embedData.width - projectedWidth) * scene._renderZoom / 2
-            readonly property real screenTop: scene.worldToScreenY(worldY)
-                    + (embedData.height - projectedHeight) * scene._renderZoom / 2
-            readonly property bool inViewport: scene.screenRectVisible(
-                    screenLeft, screenTop,
-                    projectedWidth * scene._renderZoom,
-                    projectedHeight * scene._renderZoom, 64)
+                + scene._revealDotRadius * 2 * (1 - scene._reveal) / scene._safeZoom
+            readonly property real screenWidth:
+                _finiteProduct(embedData.width, scene._safeZoom) * scene._reveal
+                + scene._revealDotRadius * 2 * (1 - scene._reveal)
+            readonly property real screenHeight:
+                _finiteProduct(embedData.height, scene._safeZoom) * scene._reveal
+                + scene._revealDotRadius * 2 * (1 - scene._reveal)
+            readonly property real screenCenterX:
+                scene.worldToScreenX(_finiteSum(worldX, embedData.width / 2))
+            readonly property real screenCenterY:
+                scene.worldToScreenY(_finiteSum(worldY, embedData.height / 2))
+            readonly property real screenLeft:
+                _finiteDifference(screenCenterX, screenWidth / 2)
+            readonly property real screenTop:
+                _finiteDifference(screenCenterY, screenHeight / 2)
+            readonly property var embedScreenRect: ({
+                x: screenLeft, y: screenTop,
+                width: screenWidth, height: screenHeight
+            })
+            readonly property var renderClip: scene.clippedScreenRect(embedScreenRect, 0)
+            readonly property bool inViewport: scene.clippedScreenRect(embedScreenRect, 64) !== null
 
             x: scene._extremeCamera
-               ? scene._renderLocalPosition(worldX, scene._originWorldX)
-                 + (embedData.width - width) / 2
+               ? (renderClip ? renderClip.x : 0)
                : worldX - scene._worldAnchorX + (embedData.width - width) / 2
             y: scene._extremeCamera
-               ? scene._renderLocalPosition(worldY, scene._originWorldY)
-                 + (embedData.height - height) / 2
+               ? (renderClip ? renderClip.y : 0)
                : worldY - scene._worldAnchorY + (embedData.height - height) / 2
-            width: projectedWidth
-            height: projectedHeight
+            width: scene._extremeCamera
+                   ? (renderClip ? renderClip.width : 0) : projectedWidth
+            height: scene._extremeCamera
+                    ? (renderClip ? renderClip.height : 0) : projectedHeight
             visible: inViewport
             z: 2
+            extremeClipped: scene._extremeCamera
+            screenClipRect: renderClip
+            trueScreenRect: embedScreenRect
             // Issue #949：只有走过渡的那个入口按同一个展开进度继续画圆壳。
             revealProgress: embedData.instanceId === scene.transitionEmbedId
                     ? scene.detailReveal : -1
@@ -1446,18 +1627,24 @@ Item {
             }
             if (!world)
                 return { x: 0, y: 0, width: 0, height: 0 }
-            var projectedWidth = world.width * scene._renderZoom * scene._reveal
+            // 与节点 delegate 同一投影：先按真实 _safeZoom 得到 authored
+            // 卡片矩形，再用 reveal 圆点态收缩，最后与视口相交。编辑卡从
+            // 可见部分左上角展开；镜头平移后同一 world 锚点会重新投影。
+            var full = scene.projectWorldRect(world.x, world.y,
+                                              world.width, world.height)
+            if (!full)
+                return { x: 0, y: 0, width: 0, height: 0 }
+            var projectedWidth = full.width * scene._reveal
                     + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            var projectedHeight = world.height * scene._renderZoom * scene._reveal
+            var projectedHeight = full.height * scene._reveal
                     + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            return {
-                x: scene.worldToScreenX(world.x)
-                   + (world.width * scene._renderZoom - projectedWidth) / 2,
-                y: scene.worldToScreenY(world.y)
-                   + (world.height * scene._renderZoom - projectedHeight) / 2,
+            var rect = {
+                x: full.x + (full.width - projectedWidth) / 2,
+                y: full.y + (full.height - projectedHeight) / 2,
                 width: projectedWidth,
                 height: projectedHeight
             }
+            return scene.clippedScreenRect(rect, 0) || rect
         }
         readonly property var _nodeRect: nodeRectNow()
 
