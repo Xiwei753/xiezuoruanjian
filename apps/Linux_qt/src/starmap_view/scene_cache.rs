@@ -125,11 +125,13 @@ impl SceneCache {
                 .nodes
                 .iter()
                 .find(|n| &n.node_id == id)
-                .map(|n| (n.x + n.width / 2.0, n.y + n.height / 2.0)),
+                .map(|n| (f64::from(n.x) + f64::from(n.width) / 2.0,
+                           f64::from(n.y) + f64::from(n.height) / 2.0)),
             Some(SceneMoveOverride::Embed { id, .. }) => embeds
                 .iter()
                 .find(|e| &e.instance_id == id)
-                .map(|e| (e.x + e.width / 2.0, e.y + e.height / 2.0)),
+                .map(|e| (f64::from(e.x) + f64::from(e.width) / 2.0,
+                           f64::from(e.y) + f64::from(e.height) / 2.0)),
             None => None,
         };
         // 连续拖拽时，缓存里的边端点已经停在上一帧位置；用上一帧中心匹配，
@@ -138,12 +140,12 @@ impl SceneCache {
             (Some(SceneMoveOverride::Node { id, .. }), Some((kind, moved_id, x, y)))
                 if kind == "node" && moved_id == id =>
             {
-                Some((*x, *y))
+                Some((f64::from(*x), f64::from(*y)))
             }
             (Some(SceneMoveOverride::Embed { id, .. }), Some((kind, moved_id, x, y)))
                 if kind == "embed" && moved_id == id =>
             {
-                Some((*x, *y))
+                Some((f64::from(*x), f64::from(*y)))
             }
             _ => base_center,
         };
@@ -168,19 +170,21 @@ impl SceneCache {
                 .nodes
                 .iter()
                 .find(|n| &n.node_id == id)
-                .map(|n| (n.x + n.width / 2.0, n.y + n.height / 2.0)),
+                .map(|n| (f64::from(n.x) + f64::from(n.width) / 2.0,
+                           f64::from(n.y) + f64::from(n.height) / 2.0)),
             Some(SceneMoveOverride::Embed { id, .. }) => embeds
                 .iter()
                 .find(|e| &e.instance_id == id)
-                .map(|e| (e.x + e.width / 2.0, e.y + e.height / 2.0)),
+                .map(|e| (f64::from(e.x) + f64::from(e.width) / 2.0,
+                           f64::from(e.y) + f64::from(e.height) / 2.0)),
             None => None,
         };
         self.last_move = match (move_override, new_center) {
             (Some(SceneMoveOverride::Node { id, .. }), Some((cx, cy))) => {
-                Some(("node".to_string(), id.clone(), cx, cy))
+                Some(("node".to_string(), id.clone(), cx as f32, cy as f32))
             }
             (Some(SceneMoveOverride::Embed { id, .. }), Some((cx, cy))) => {
-                Some(("embed".to_string(), id.clone(), cx, cy))
+                Some(("embed".to_string(), id.clone(), cx as f32, cy as f32))
             }
             _ => None,
         };
@@ -188,7 +192,7 @@ impl SceneCache {
         // 拖拽时只重算端点中心与移动对象旧中心重合的边。双向边的两条记录
         // 共享同一端点中心，因此会一起被包含；其余边的几何保持不变。
         if let (Some((cx, cy)), false) = (previous_center, self.edge_renders.is_empty()) {
-            let near = |x: f32, y: f32| (x - cx).abs() <= 0.75 && (y - cy).abs() <= 0.75;
+            let near = |x: f64, y: f64| (x - cx).abs() <= 0.75 && (y - cy).abs() <= 0.75;
             let connected: std::collections::HashSet<&str> = self
                 .edge_renders
                 .iter()

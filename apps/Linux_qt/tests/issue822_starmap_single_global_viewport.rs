@@ -190,7 +190,15 @@ fn camera_zoom_has_one_entry_used_by_wheel_pinch_and_buttons() {
     );
     assert!(
         zoom.contains("var target = normalizedZoom(requested, zoomLevel)"),
-        "zoomAt 只做 Number 边界规范化，不夹 1e-4×/1e5× 产品范围，实际窗口:\n{zoom}"
+        "zoomAt 必须只经 normalizedZoom 做统一产品范围规范化，实际窗口:\n{zoom}"
+    );
+    // Issue #1031 第四轮：只保留一套连续投影，缩放范围是唯一产品级边界，
+    // 不再在渲染器内部按 1e6 等阈值切换第二套倍率。
+    assert!(
+        src.contains("readonly property real _minUserZoom: 1.0 / 1024.0")
+            && src.contains("readonly property real _maxUserZoom: 1024.0")
+            && src.contains("return Math.max(_minUserZoom, Math.min(_maxUserZoom, value))"),
+        "缩放范围必须由 Canvas 的唯一相机入口统一约束"
     );
     // #929 复核：连续缩放穿越也从同一入口评估，判定只按入口投影覆盖率
     //（maybeEnterEmbedAt / maybeExitCanvas），zoom 数值本身不是层级依据；

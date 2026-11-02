@@ -113,16 +113,19 @@ Item {
     property real zoomLevel: 1.0
     property real panX: 0
     property real panY: 0
-    // 相机比例不设产品上下限：滚轮、按钮、捏合都连续作用在同一台活动镜头上。
-    // 只有 Number 真正上溢/下溢时才做数值规范化，规范化不触发任何层级切换。
+    // Issue #1031 第四轮：镜头只有一套连续投影。缩放范围是唯一的产品级
+    // 数值边界，由这里统一约束；节点、Embed、连线、文字都使用同一个
+    // zoom，不存在渲染器内部切换的第二套倍率或文字专用上限。
     readonly property real _zoomFactor: 1.2
+    readonly property real _minUserZoom: 1.0 / 1024.0
+    readonly property real _maxUserZoom: 1024.0
 
     function normalizedZoom(value, fallback) {
         if (value === Infinity)
-            return Number.MAX_VALUE
+            value = Number.MAX_VALUE
         if (!isFinite(value) || value <= 0)
-            return fallback > 0 && isFinite(fallback) ? fallback : 1.0
-        return value
+            value = fallback > 0 && isFinite(fallback) ? fallback : 1.0
+        return Math.max(_minUserZoom, Math.min(_maxUserZoom, value))
     }
 
     // 相机比例可以连续增大/缩小，但世界坐标乘比例、pan 加减都必须在 Number

@@ -18,29 +18,25 @@ layout(std140, binding = 0) uniform buf {
 
 void main()
 {
-    vec4 center = ubuf.qt_Matrix * vec4(aPos, 0.0, 1.0);
-    vec4 ahead = ubuf.qt_Matrix * vec4(aPos + aDir, 0.0, 1.0);
-    vec2 clipDir = (ahead.xy / ahead.w - center.xy / center.w)
-                   * ubuf.uViewport * 0.5;
-    vec2 dir = length(clipDir) > 1e-5 ? normalize(clipDir) : vec2(0.0, -1.0);
+    // 顶点已经在 CPU 侧按当前相机投影成视口局部像素坐标。这里只做
+    // 固定屏幕像素的线宽外扩，不再把世界方向交给矩阵缩放。
+    vec2 dir = length(aDir) > 1e-5 ? normalize(aDir) : vec2(0.0, -1.0);
     vec2 normal = vec2(-dir.y, dir.x);
 
     vec2 offsetPx;
     if (aKind < 0.5) {
-        // 顶点扩到半线宽 + 0.5px；vEdgeDistance 也使用同一个半宽 + 0.5px，
-        // 这样最外缘正好是 0 覆盖率，片元不会在几何边缘突然截断。
+        // 几何扩到半线宽 + 0.5px；片元按到线心的真实像素距离衰减，
+        // 亚像素线宽和抗锯齿都走同一条覆盖规则。
         float outerHalf = ubuf.uStrokeHalf + 0.5;
         offsetPx = normal * (aOffset.y * outerHalf);
         vEdgeDistance = aOffset.y * outerHalf;
         vSolid = 0.0;
     } else {
-        // 箭头保持实心三角形，不参与线宽覆盖率。
-        float screenPerWorld = length(clipDir);
-        offsetPx = (dir * aOffset.x + normal * aOffset.y) * screenPerWorld;
+        // 箭头三角形固定屏幕尺寸，保持实心。
+        offsetPx = aOffset;
         vEdgeDistance = 0.0;
         vSolid = 1.0;
     }
 
-    gl_Position = center;
-    gl_Position.xy += (offsetPx / (ubuf.uViewport * 0.5)) * center.w;
+    gl_Position = ubuf.qt_Matrix * vec4(aPos + offsetPx, 0.0, 1.0);
 }

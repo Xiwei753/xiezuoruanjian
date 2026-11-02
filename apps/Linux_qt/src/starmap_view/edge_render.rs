@@ -7,13 +7,16 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::hittest::{point_in_triangle, point_to_segment_distance};
+
 use super::layout_types::{StarMapEmbedSceneRect, StarMapLayout};
 use writer_core::starmap::types::reference::StarMapTargetPath;
 use writer_core::starmap::types::StarMapGraph;
 
-const DEFAULT_BIDIRECTIONAL_OFFSET: f32 = 12.0;
-const DEFAULT_ARROW_LENGTH: f32 = 10.0;
+#[cfg(test)]
+use super::hittest::{point_in_triangle, point_to_segment_distance};
+
+const DEFAULT_BIDIRECTIONAL_OFFSET: f64 = 12.0;
+const DEFAULT_ARROW_LENGTH: f64 = 10.0;
 /// 边命中的兜底阈值（world 单位，仅供无缩放的 Rust 调用方/测试使用）。
 /// UI 路径必须传"屏幕像素 ÷ effectiveScale"算出的阈值，不能吃这个固定值：
 /// 相机范围放开到 1e-4~1e5 之后，固定 world 阈值在屏幕上会差好几个数量级。
@@ -66,24 +69,24 @@ pub struct EdgeRenderBatch {
 #[serde(rename_all = "camelCase")]
 pub struct EdgeRender {
     pub edge_id: String,
-    pub from_cx: f32,
-    pub from_cy: f32,
-    pub to_cx: f32,
-    pub to_cy: f32,
-    pub start_x: f32,
-    pub start_y: f32,
-    pub end_x: f32,
-    pub end_y: f32,
-    pub offset_x: f32,
-    pub offset_y: f32,
-    pub arrow_tip_x: f32,
-    pub arrow_tip_y: f32,
-    pub arrow_left_x: f32,
-    pub arrow_left_y: f32,
-    pub arrow_right_x: f32,
-    pub arrow_right_y: f32,
-    pub label_x: f32,
-    pub label_y: f32,
+    pub from_cx: f64,
+    pub from_cy: f64,
+    pub to_cx: f64,
+    pub to_cy: f64,
+    pub start_x: f64,
+    pub start_y: f64,
+    pub end_x: f64,
+    pub end_y: f64,
+    pub offset_x: f64,
+    pub offset_y: f64,
+    pub arrow_tip_x: f64,
+    pub arrow_tip_y: f64,
+    pub arrow_left_x: f64,
+    pub arrow_left_y: f64,
+    pub arrow_right_x: f64,
+    pub arrow_right_y: f64,
+    pub label_x: f64,
+    pub label_y: f64,
     pub label: Option<String>,
     pub has_bidirectional: bool,
 }
@@ -92,15 +95,15 @@ pub struct EdgeRender {
 #[serde(rename_all = "camelCase")]
 pub struct EdgeRenderParams {
     #[serde(default = "default_bidirectional_offset")]
-    pub bidirectional_offset: f32,
+    pub bidirectional_offset: f64,
     #[serde(default = "default_arrow_length")]
-    pub arrow_length: f32,
+    pub arrow_length: f64,
 }
 
-fn default_bidirectional_offset() -> f32 {
+fn default_bidirectional_offset() -> f64 {
     DEFAULT_BIDIRECTIONAL_OFFSET
 }
-fn default_arrow_length() -> f32 {
+fn default_arrow_length() -> f64 {
     DEFAULT_ARROW_LENGTH
 }
 
@@ -119,15 +122,15 @@ impl Default for EdgeRenderParams {
 /// 边端点的起止点只能由"形状 + 连线方向"求交得到，不能再用固定内缩常量猜边界。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EndpointShape {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
     pub is_embed: bool,
 }
 
 impl EndpointShape {
-    pub fn center(&self) -> (f32, f32) {
+    pub fn center(&self) -> (f64, f64) {
         (self.x + self.width / 2.0, self.y + self.height / 2.0)
     }
 }
@@ -183,10 +186,10 @@ pub fn resolve_edge_endpoint_anchor(
                     let ui_instance_id = format!("legacy-portal:{}", node_id);
                     if let Some(r) = embed_rects.iter().find(|r| r.instance_id == ui_instance_id) {
                         return Ok(EndpointShape {
-                            x: r.x,
-                            y: r.y,
-                            width: r.width,
-                            height: r.height,
+                            x: f64::from(r.x),
+                            y: f64::from(r.y),
+                            width: f64::from(r.width),
+                            height: f64::from(r.height),
                             is_embed: true,
                         });
                     }
@@ -232,10 +235,10 @@ pub fn resolve_edge_endpoint_anchor(
                 .iter()
                 .find(|r| r.instance_id == *instance_id)
                 .map(|r| EndpointShape {
-                    x: r.x,
-                    y: r.y,
-                    width: r.width,
-                    height: r.height,
+                    x: f64::from(r.x),
+                    y: f64::from(r.y),
+                    width: f64::from(r.width),
+                    height: f64::from(r.height),
                     is_embed: true,
                 })
                 .ok_or(EdgeAnchorDiagnostic {
@@ -259,10 +262,10 @@ pub fn resolve_edge_endpoint_anchor(
             let ui_instance_id = format!("legacy-portal:{}", node_id);
             if let Some(r) = embed_rects.iter().find(|r| r.instance_id == ui_instance_id) {
                 return Ok(EndpointShape {
-                    x: r.x,
-                    y: r.y,
-                    width: r.width,
-                    height: r.height,
+                    x: f64::from(r.x),
+                    y: f64::from(r.y),
+                    width: f64::from(r.width),
+                    height: f64::from(r.height),
                     is_embed: true,
                 });
             }
@@ -286,10 +289,10 @@ fn node_layout_rect(
         .iter()
         .find(|n| n.node_id == node_id)
         .map(|n| EndpointShape {
-            x: n.x,
-            y: n.y,
-            width: n.width,
-            height: n.height,
+            x: f64::from(n.x),
+            y: f64::from(n.y),
+            width: f64::from(n.width),
+            height: f64::from(n.height),
             is_embed,
         })
 }
@@ -303,9 +306,9 @@ fn node_layout_rect(
 /// 退化输入（无交点）时退回 `p`。
 pub fn endpoint_boundary_point(
     shape: &EndpointShape,
-    p: (f32, f32),
-    dir: (f32, f32),
-) -> (f32, f32) {
+    p: (f64, f64),
+    dir: (f64, f64),
+) -> (f64, f64) {
     if shape.is_embed {
         line_circle_entry(shape, p, dir)
     } else {
@@ -316,7 +319,7 @@ pub fn endpoint_boundary_point(
 /// 线 × 圆周：返回沿 `dir` 前进方向与圆的第一个交点（射线进入点）。
 /// 半径取短边一半：Embed 是正方形圆盒（radius = 宽 / 2），非正方形只可能来自
 /// 兜底几何，取内切圆避免把椭圆当成圆。
-fn line_circle_entry(shape: &EndpointShape, p: (f32, f32), dir: (f32, f32)) -> (f32, f32) {
+fn line_circle_entry(shape: &EndpointShape, p: (f64, f64), dir: (f64, f64)) -> (f64, f64) {
     let (cx, cy) = shape.center();
     let radius = shape.width.min(shape.height) / 2.0;
     let fx = p.0 - cx;
@@ -338,13 +341,13 @@ fn line_circle_entry(shape: &EndpointShape, p: (f32, f32), dir: (f32, f32)) -> (
 }
 
 /// 线 × 矩形：slab 裁剪取进入点（`p` 已在矩形内时取离开点）。
-fn line_rect_entry(shape: &EndpointShape, p: (f32, f32), dir: (f32, f32)) -> (f32, f32) {
+fn line_rect_entry(shape: &EndpointShape, p: (f64, f64), dir: (f64, f64)) -> (f64, f64) {
     let x1 = shape.x;
     let x2 = shape.x + shape.width;
     let y1 = shape.y;
     let y2 = shape.y + shape.height;
 
-    let (tx_min, tx_max) = if dir.0.abs() > f32::EPSILON {
+    let (tx_min, tx_max) = if dir.0.abs() > f64::EPSILON {
         let a = (x1 - p.0) / dir.0;
         let b = (x2 - p.0) / dir.0;
         if a < b {
@@ -355,9 +358,9 @@ fn line_rect_entry(shape: &EndpointShape, p: (f32, f32), dir: (f32, f32)) -> (f3
     } else if p.0 < x1 || p.0 > x2 {
         return p;
     } else {
-        (f32::NEG_INFINITY, f32::INFINITY)
+        (f64::NEG_INFINITY, f64::INFINITY)
     };
-    let (ty_min, ty_max) = if dir.1.abs() > f32::EPSILON {
+    let (ty_min, ty_max) = if dir.1.abs() > f64::EPSILON {
         let a = (y1 - p.1) / dir.1;
         let b = (y2 - p.1) / dir.1;
         if a < b {
@@ -368,7 +371,7 @@ fn line_rect_entry(shape: &EndpointShape, p: (f32, f32), dir: (f32, f32)) -> (f3
     } else if p.1 < y1 || p.1 > y2 {
         return p;
     } else {
-        (f32::NEG_INFINITY, f32::INFINITY)
+        (f64::NEG_INFINITY, f64::INFINITY)
     };
 
     let t_min = tx_min.max(ty_min);
@@ -565,7 +568,7 @@ fn compute_renders_from_resolved(
         } else {
             dy.atan2(dx)
         };
-        let half_spread = std::f32::consts::PI / 6.0;
+        let half_spread = std::f64::consts::PI / 6.0;
         let al = params.arrow_length;
 
         renders.push(EdgeRender {
@@ -594,7 +597,7 @@ fn compute_renders_from_resolved(
     }
 }
 
-fn coords_eq(a: (f32, f32), b: (f32, f32)) -> bool {
+fn coords_eq(a: (f64, f64), b: (f64, f64)) -> bool {
     (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3
 }
 
@@ -608,8 +611,9 @@ pub fn hit_test_edge_renders_with_threshold(
     renders: &[EdgeRender],
     threshold: f32,
 ) -> Option<String> {
-    let mut closest_dist = f32::MAX;
+    let mut closest_dist = f64::MAX;
     let mut closest_id = None;
+    let threshold = f64::from(threshold);
 
     for r in renders {
         let dist = distance_to_edge_render(x, y, r);
@@ -627,23 +631,72 @@ pub fn hit_test_edge_renders_with_threshold(
 /// 箭头是边的一部分（QML 会 fill 出三角形），只测箭杆会在高倍缩放下出现
 /// "点在箭头上却点不中"：箭头长 10 world、半角 30°，翼尖离主线可达
 /// `10 * sin(30°) = 5 world`，远大于放大后的屏幕折算阈值。
-fn distance_to_edge_render(x: f32, y: f32, r: &EdgeRender) -> f32 {
-    let shaft = point_to_segment_distance(x, y, r.start_x, r.start_y, r.end_x, r.end_y);
-    shaft.min(arrow_triangle_distance(x, y, r))
+fn distance_to_edge_render(x: f32, y: f32, r: &EdgeRender) -> f64 {
+    let px = f64::from(x);
+    let py = f64::from(y);
+    let shaft =
+        point_to_segment_distance_f64(px, py, r.start_x, r.start_y, r.end_x, r.end_y);
+    shaft.min(arrow_triangle_distance(px, py, r))
 }
 
 /// 点到箭头三角形的距离：在三角形内部为 0，否则取到三条边的最短距离。
-fn arrow_triangle_distance(x: f32, y: f32, r: &EdgeRender) -> f32 {
+fn arrow_triangle_distance(px: f64, py: f64, r: &EdgeRender) -> f64 {
     let (tx, ty) = (r.arrow_tip_x, r.arrow_tip_y);
     let (lx, ly) = (r.arrow_left_x, r.arrow_left_y);
     let (rx, ry) = (r.arrow_right_x, r.arrow_right_y);
 
-    if point_in_triangle(x, y, tx, ty, lx, ly, rx, ry) {
+    if point_in_triangle_f64(px, py, tx, ty, lx, ly, rx, ry) {
         return 0.0;
     }
-    point_to_segment_distance(x, y, tx, ty, lx, ly)
-        .min(point_to_segment_distance(x, y, lx, ly, rx, ry))
-        .min(point_to_segment_distance(x, y, rx, ry, tx, ty))
+    point_to_segment_distance_f64(px, py, tx, ty, lx, ly)
+        .min(point_to_segment_distance_f64(px, py, lx, ly, rx, ry))
+        .min(point_to_segment_distance_f64(px, py, rx, ry, tx, ty))
+}
+
+/// 边几何在生成处保持 f64；命中测试同样不能先落到 f32 再恢复。
+fn point_to_segment_distance_f64(
+    px: f64,
+    py: f64,
+    ax: f64,
+    ay: f64,
+    bx: f64,
+    by: f64,
+) -> f64 {
+    let dx = bx - ax;
+    let dy = by - ay;
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < 1e-20 {
+        return ((px - ax).powi(2) + (py - ay).powi(2)).sqrt();
+    }
+    let t = (((px - ax) * dx + (py - ay) * dy) / len_sq).clamp(0.0, 1.0);
+    let proj_x = ax + t * dx;
+    let proj_y = ay + t * dy;
+    ((px - proj_x).powi(2) + (py - proj_y).powi(2)).sqrt()
+}
+
+fn cross_f64(ux: f64, uy: f64, vx: f64, vy: f64) -> f64 {
+    ux * vy - uy * vx
+}
+
+fn point_in_triangle_f64(
+    px: f64,
+    py: f64,
+    ax: f64,
+    ay: f64,
+    bx: f64,
+    by: f64,
+    cx: f64,
+    cy: f64,
+) -> bool {
+    if cross_f64(bx - ax, by - ay, cx - ax, cy - ay).abs() < 1e-12 {
+        return false;
+    }
+    let d1 = cross_f64(px - ax, py - ay, bx - ax, by - ay);
+    let d2 = cross_f64(px - bx, py - by, cx - bx, cy - by);
+    let d3 = cross_f64(px - cx, py - cy, ax - cx, ay - cy);
+    let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+    let has_pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+    !(has_neg && has_pos)
 }
 
 #[cfg(test)]

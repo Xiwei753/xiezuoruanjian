@@ -11,7 +11,7 @@
 
 use super::*;
 
-fn make_render(id: &str, start: (f32, f32), end: (f32, f32)) -> EdgeRender {
+fn make_render(id: &str, start: (f64, f64), end: (f64, f64)) -> EdgeRender {
     EdgeRender {
         edge_id: id.to_string(),
         from_cx: start.0,

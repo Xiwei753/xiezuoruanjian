@@ -32,53 +32,13 @@ static EDGE_GEOMETRY_UPDATES: AtomicU64 = AtomicU64::new(0);
 static EDGE_VERTEX_UPLOADS: AtomicU64 = AtomicU64::new(0);
 static EDGE_CAMERA_UPDATES: AtomicU64 = AtomicU64::new(0);
 
-// 相机在世界空间保持 double 连续变换；只有进入 QSG 的这一层才夹到 float
-// 安全的局部范围。极端缩放时按“视口可见范围”缓存一份局部几何，平移/缩放
-// 在同一个缓存桶内只更新统一矩阵，不重新扫描边。
-const MIN_RENDER_ZOOM: f64 = 1e-6;
-const MAX_RENDER_ZOOM: f64 = 1e6;
-const MAX_ANCHOR_SCREEN_OFFSET: f64 = 1e7;
-const EXTREME_CULL_MARGIN: f64 = 64.0;
-// 局部原点按屏幕像素分桶：平移超过一个桶才需要重建可见范围几何。
-const EXTREME_ORIGIN_BUCKET_PX: f64 = 1024.0;
-
-/// 极端镜头的几何缓存键。zoom 桶决定世界分桶大小，position 桶决定
-/// 写入顶点的局部比例；两者都按 2 的幂量化，避免每帧重建。
-#[derive(Clone, PartialEq)]
-struct ExtremeGeometryKey {
-    zoom_bucket_bits: u64,
-    position_bucket_bits: u64,
-    origin_cell_x: i64,
-    origin_cell_y: i64,
-    viewport_width_bits: u64,
-    viewport_height_bits: u64,
-    geometry_epoch: u64,
-}
-
-struct ExtremeGeometryParams {
-    key: ExtremeGeometryKey,
-    origin_x: f64,
-    origin_y: f64,
-    position_scale: f64,
-    position_bucket: f64,
-}
-
-struct ExtremeGeometryCache {
-    key: ExtremeGeometryKey,
-    origin_x: f64,
-    origin_y: f64,
-    normal: Vec<f32>,
-    selected: Vec<f32>,
-}
-
-/// 当前已经提交给 QSG 的几何编码。相机从极端模式退回普通模式时，
-/// 必须显式重建 anchor-relative 顶点，不能只更新矩阵。
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum EdgeGeometryMode {
-    #[default]
-    Anchor,
-    Extreme,
-}
+// Issue #1031 第四轮：只有一条绘制路径。世界端点始终保留 f64，先在屏幕
+// 空间投影并裁剪到视口附近，再把有限屏幕局部坐标转成 f32 顶点。边数规模
+// 当前只有数百条，每帧只处理视口可见线段；不需要 zoom 档位或第二套模式。
+const EDGE_CULL_MARGIN_PX: f64 = 64.0;
+/// 箭头固定为屏幕像素尺寸，不随 zoom 放大。
+const EDGE_ARROW_LENGTH_PX: f64 = 7.0;
+const EDGE_ARROW_HALF_WIDTH_PX: f64 = 4.0;
 
 /// 最近一次同步/渲染状态。只记录数量、坐标与资源状态，不包含正文。
 /// update_paint_node 在渲染线程写，诊断导出线程读取，用 Mutex 串行化。
@@ -97,8 +57,6 @@ struct EdgeDiagnostics {
     viewport_y: f64,
     stroke_half: f64,
     zoom: f64,
-    render_zoom: f64,
-    extreme_camera: bool,
     normal_width_px: f64,
     selected_width_px: f64,
     translate_x: f64,
@@ -188,8 +146,6 @@ pub fn render_statistics_json() -> String {
         "clipRect": [0.0, 0.0, snapshot.clip_width, snapshot.clip_height],
         "strokeHalf": snapshot.stroke_half,
         "zoom": snapshot.zoom,
-        "renderZoom": snapshot.render_zoom,
-        "extremeCamera": snapshot.extreme_camera,
         "normalWidthPx": snapshot.normal_width_px,
         "selectedWidthPx": snapshot.selected_width_px,
         "cameraTranslation": [snapshot.translate_x, snapshot.translate_y],
@@ -522,13 +478,6 @@ pub struct StarMapEdgeLayer {
 
     edges: Vec<EdgeRender>,
     geometry_dirty: bool,
-    geometry_epoch: u64,
-    cached_normal: Vec<f32>,
-    cached_selected: Vec<f32>,
-    extreme_cache: Option<ExtremeGeometryCache>,
-    uploaded_geometry_mode: EdgeGeometryMode,
-    uploaded_extreme_key: Option<ExtremeGeometryKey>,
-    uploaded_anchor_position_bucket: Option<f64>,
 }
 
 impl StarMapEdgeLayer {
@@ -549,12 +498,8 @@ impl StarMapEdgeLayer {
         self.request_paint();
     }
 
-    /// 结构 / 选择 / 锚点变化：旧缓存不再可信，清空后只重建一次可见范围。
+    /// 结构 / 选择变化：下一次同步重新投影并上传可见顶点。
     fn invalidate_geometry(&mut self) {
-        self.geometry_epoch = self.geometry_epoch.wrapping_add(1);
-        self.extreme_cache = None;
-        self.cached_normal.clear();
-        self.cached_selected.clear();
         self.mark_geometry_dirty();
     }
 
@@ -584,7 +529,7 @@ impl StarMapEdgeLayer {
             return;
         }
         self.zoom_level = value;
-        self.camera_geometry_changed();
+        self.request_paint();
     }
 
     fn set_pan_x(&mut self, value: f64) {
@@ -592,7 +537,7 @@ impl StarMapEdgeLayer {
             return;
         }
         self.pan_x = value;
-        self.camera_geometry_changed();
+        self.request_paint();
     }
 
     fn set_pan_y(&mut self, value: f64) {
@@ -600,7 +545,7 @@ impl StarMapEdgeLayer {
             return;
         }
         self.pan_y = value;
-        self.camera_geometry_changed();
+        self.request_paint();
     }
 
     fn set_anchor_x(&mut self, value: f64) {
@@ -608,7 +553,7 @@ impl StarMapEdgeLayer {
             return;
         }
         self.anchor_x = value;
-        self.invalidate_geometry();
+        self.request_paint();
     }
 
     fn set_anchor_y(&mut self, value: f64) {
@@ -616,7 +561,7 @@ impl StarMapEdgeLayer {
             return;
         }
         self.anchor_y = value;
-        self.invalidate_geometry();
+        self.request_paint();
     }
 
     fn set_reveal(&mut self, value: f64) {
@@ -695,48 +640,6 @@ impl StarMapEdgeLayer {
         (color.red(), color.green(), color.blue())
     }
 
-    /// 进入 QSG 前的缩放上限：世界相机仍用 f64 连续值，这里只保护 float 矩阵。
-    fn render_zoom(&self) -> f64 {
-        let zoom = self.zoom_level;
-        if zoom.is_finite() && zoom > 0.0 {
-            zoom.clamp(MIN_RENDER_ZOOM, MAX_RENDER_ZOOM)
-        } else {
-            1.0
-        }
-    }
-
-    /// 常规镜头沿用 anchor 局部几何，相机变化只更新矩阵；只有缩放跨出
-    /// float 安全档位，或 anchor 已离视口过远时，才改用以视口中心为原点的
-    /// 极端模式并重建可见顶点。
-    fn uses_extreme_camera(&self) -> bool {
-        let zoom = self.zoom_level;
-        if !zoom.is_finite() || zoom <= 0.0 {
-            return false;
-        }
-        if zoom < MIN_RENDER_ZOOM || zoom > MAX_RENDER_ZOOM {
-            return true;
-        }
-        let (width, height) = self.item_size();
-        if width <= 0.0 || height <= 0.0 {
-            return false;
-        }
-        if !self.pan_x.is_finite()
-            || !self.pan_y.is_finite()
-            || !self.anchor_x.is_finite()
-            || !self.anchor_y.is_finite()
-        {
-            return true;
-        }
-        let origin_x = (width / 2.0 - self.pan_x) / zoom;
-        let origin_y = (height / 2.0 - self.pan_y) / zoom;
-        let tx = width / 2.0 + (self.anchor_x - origin_x) * zoom;
-        let ty = height / 2.0 + (self.anchor_y - origin_y) * zoom;
-        !tx.is_finite()
-            || !ty.is_finite()
-            || tx.abs() > MAX_ANCHOR_SCREEN_OFFSET
-            || ty.abs() > MAX_ANCHOR_SCREEN_OFFSET
-    }
-
     fn sanitized_width_px(value: f64) -> f64 {
         if value.is_finite() {
             value.clamp(0.25, 16.0)
@@ -745,149 +648,8 @@ impl StarMapEdgeLayer {
         }
     }
 
-    /// 相机变化时只有缓存桶真正变了才重建；同一桶内只更新矩阵/uniform。
-    /// 注意必须比较“已上传的几何模式”，而不是只看当前是否极端：
-    /// 极端 → 普通时 QSG 里仍是 bucket-local 顶点，必须重建并上传。
-    fn camera_geometry_changed(&mut self) {
-        if !self.uses_extreme_camera() {
-            let anchor_ready = self.uploaded_geometry_mode == EdgeGeometryMode::Anchor
-                && self.uploaded_anchor_position_bucket == Some(1.0);
-            if anchor_ready && !self.geometry_dirty {
-                self.request_paint();
-            } else {
-                self.mark_geometry_dirty();
-            }
-            return;
-        }
-        let Some(params) = self.extreme_geometry_params() else {
-            let position_scale = self.zoom_level / self.render_zoom();
-            let position_bucket = Self::pow2_bucket(position_scale);
-            let anchor_ready = self.uploaded_geometry_mode == EdgeGeometryMode::Anchor
-                && self.uploaded_anchor_position_bucket == position_bucket;
-            if anchor_ready && !self.geometry_dirty {
-                self.request_paint();
-            } else {
-                self.mark_geometry_dirty();
-            }
-            return;
-        };
-        let cache_valid = self.uploaded_geometry_mode == EdgeGeometryMode::Extreme
-            && self.uploaded_extreme_key.as_ref() == Some(&params.key)
-            && self
-                .extreme_cache
-                .as_ref()
-                .is_some_and(|cache| cache.key == params.key)
-            && !self.geometry_dirty;
-        if cache_valid {
-            self.request_paint();
-        } else {
-            self.mark_geometry_dirty();
-        }
-    }
-
-    fn pow2_bucket(value: f64) -> Option<f64> {
-        if !value.is_finite() || value <= 0.0 {
-            return None;
-        }
-        let exponent = value.log2().round().clamp(-1022.0, 1022.0);
-        let bucket = 2f64.powf(exponent);
-        if bucket.is_finite() && bucket > 0.0 {
-            Some(bucket)
-        } else {
-            None
-        }
-    }
-
-    /// 极端镜头缓存参数：
-    /// - zoom_bucket 决定世界分桶大小（每个桶约 1024 屏幕像素）；
-    /// - position_bucket 决定写入 f32 顶点的局部比例，避免把 1e100 直接
-    ///   交给 QSG 矩阵；
-    /// - 局部原点取视口中心所在的分桶原点，桶内平移只改统一平移矩阵。
-    fn extreme_geometry_params(&self) -> Option<ExtremeGeometryParams> {
-        let zoom = self.zoom_level;
-        let (width, height) = self.item_size();
-        if !zoom.is_finite() || zoom <= 0.0 || width <= 0.0 || height <= 0.0 {
-            return None;
-        }
-        if !self.pan_x.is_finite() || !self.pan_y.is_finite() {
-            return None;
-        }
-        let zoom_bucket = Self::pow2_bucket(zoom)?;
-        let cell_size = EXTREME_ORIGIN_BUCKET_PX / zoom_bucket;
-        if !cell_size.is_finite() || cell_size <= 0.0 {
-            return None;
-        }
-        let center_x = (width / 2.0 - self.pan_x) / zoom;
-        let center_y = (height / 2.0 - self.pan_y) / zoom;
-        if !center_x.is_finite() || !center_y.is_finite() {
-            return None;
-        }
-        let origin_cell_x = (center_x / cell_size).floor();
-        let origin_cell_y = (center_y / cell_size).floor();
-        if origin_cell_x < i64::MIN as f64
-            || origin_cell_x > i64::MAX as f64
-            || origin_cell_y < i64::MIN as f64
-            || origin_cell_y > i64::MAX as f64
-        {
-            return None;
-        }
-        let origin_cell_x = origin_cell_x as i64;
-        let origin_cell_y = origin_cell_y as i64;
-        let origin_x = origin_cell_x as f64 * cell_size;
-        let origin_y = origin_cell_y as f64 * cell_size;
-        if !origin_x.is_finite() || !origin_y.is_finite() {
-            return None;
-        }
-        let position_scale = zoom / self.render_zoom();
-        let position_bucket = Self::pow2_bucket(position_scale)?;
-        Some(ExtremeGeometryParams {
-            key: ExtremeGeometryKey {
-                zoom_bucket_bits: zoom_bucket.to_bits(),
-                position_bucket_bits: position_bucket.to_bits(),
-                origin_cell_x,
-                origin_cell_y,
-                viewport_width_bits: width.to_bits(),
-                viewport_height_bits: height.to_bits(),
-                geometry_epoch: self.geometry_epoch,
-            },
-            origin_x,
-            origin_y,
-            position_scale,
-            position_bucket,
-        })
-    }
-
-    /// 当前视口对应的世界矩形（含一屏外缓冲），用于裁剪长线和箭头。
-    fn visible_world_rect(&self) -> Option<(f64, f64, f64, f64)> {
-        let zoom = self.zoom_level;
-        let (width, height) = self.item_size();
-        if !zoom.is_finite() || zoom <= 0.0 || width <= 0.0 || height <= 0.0 {
-            return None;
-        }
-        if !self.pan_x.is_finite() || !self.pan_y.is_finite() {
-            return None;
-        }
-        // 缩放/原点桶内只更新矩阵；中心最多移动近一个 1024px 桶，
-        // 桶内缩放最多变化到约一半。缓存范围额外覆盖两倍桶宽和视口，
-        // 避免平移或缩小时在缓存边缘露出未生成的线段。
-        let margin =
-            (EXTREME_CULL_MARGIN + EXTREME_ORIGIN_BUCKET_PX * 2.0 + width.max(height) * 0.5) / zoom;
-        let left = (0.0 - self.pan_x) / zoom - margin;
-        let top = (0.0 - self.pan_y) / zoom - margin;
-        let right = (width - self.pan_x) / zoom + margin;
-        let bottom = (height - self.pan_y) / zoom + margin;
-        if [left, top, right, bottom]
-            .iter()
-            .all(|value| value.is_finite())
-        {
-            Some((left, top, right, bottom))
-        } else {
-            None
-        }
-    }
-
-    /// Liang-Barsky：把线段裁到可见世界矩形，长线只保留穿过视口的局部，
-    /// 不会因为两个端点都在视口外就整条丢掉。
+    /// Liang-Barsky：把屏幕空间线段裁到视口附近。只要线段穿过视口，
+    /// 即使两个端点都远在视口外也会保留可见部分。
     fn clip_segment(
         x0: f64,
         y0: f64,
@@ -902,13 +664,12 @@ impl StarMapEdgeLayer {
         let dy = y1 - y0;
         let mut t0 = 0.0f64;
         let mut t1 = 1.0f64;
-        let checks = [
+        for (p, q) in [
             (-dx, x0 - left),
             (dx, right - x0),
             (-dy, y0 - top),
             (dy, bottom - y0),
-        ];
-        for (p, q) in checks {
+        ] {
             if p.abs() < f64::EPSILON {
                 if q < 0.0 {
                     return None;
@@ -938,179 +699,90 @@ impl StarMapEdgeLayer {
         Some((x0 + t0 * dx, y0 + t0 * dy, x0 + t1 * dx, y0 + t1 * dy))
     }
 
-    fn arrow_visible(&self, edge: &EdgeRender, rect: (f64, f64, f64, f64)) -> bool {
-        let min_x = f64::from(edge.arrow_tip_x)
-            .min(f64::from(edge.arrow_left_x))
-            .min(f64::from(edge.arrow_right_x));
-        let max_x = f64::from(edge.arrow_tip_x)
-            .max(f64::from(edge.arrow_left_x))
-            .max(f64::from(edge.arrow_right_x));
-        let min_y = f64::from(edge.arrow_tip_y)
-            .min(f64::from(edge.arrow_left_y))
-            .min(f64::from(edge.arrow_right_y));
-        let max_y = f64::from(edge.arrow_tip_y)
-            .max(f64::from(edge.arrow_left_y))
-            .max(f64::from(edge.arrow_right_y));
-        max_x >= rect.0 && min_x <= rect.2 && max_y >= rect.1 && min_y <= rect.3
-    }
-
-    /// 顶点布局：pos(2) + dir(2) + offset(2) + kind(1)，共 7 个 float。
-    /// 常规镜头：顶点相对图锚点，相机变化只改统一矩阵。顶点布局：
-    /// pos(2) + dir(2) + offset(2) + kind(1)，共 7 个 float。
-    /// 线段 offset=(0,±1) 由 shader 乘屏幕半线宽；箭头 offset 是相对箭尖的
-    /// 局部偏移，由 shader 按当前变换换算成屏幕像素。
-    fn build_vertices(&self) -> (Vec<f32>, Vec<f32>) {
-        if !self.anchor_x.is_finite() || !self.anchor_y.is_finite() {
+    /// 唯一顶点生成入口：world 端点用 f64 投到屏幕，裁到视口附近，
+    /// 再把屏幕局部坐标转 f32。箭头按固定屏幕像素重建，不随 zoom 变粗。
+    fn build_screen_vertices(&self) -> (Vec<f32>, Vec<f32>) {
+        let (width, height) = self.item_size();
+        let zoom = self.zoom_level;
+        if width <= 0.0
+            || height <= 0.0
+            || !zoom.is_finite()
+            || zoom <= 0.0
+            || !self.pan_x.is_finite()
+            || !self.pan_y.is_finite()
+        {
             return (Vec::new(), Vec::new());
         }
-        self.build_vertices_relative(self.anchor_x, self.anchor_y, 1.0, None)
-    }
-
-    /// 极端镜头：只把视口可见范围（含缓冲）内的边写入局部几何，并把
-    /// 长线裁到可见矩形。局部原点取 1024px 分桶原点，桶内平移只改矩阵。
-    fn build_extreme_vertices(&self, params: &ExtremeGeometryParams) -> (Vec<f32>, Vec<f32>) {
-        let visible = match self.visible_world_rect() {
-            Some(rect) => rect,
-            None => return (Vec::new(), Vec::new()),
-        };
-        self.build_vertices_relative(
-            params.origin_x,
-            params.origin_y,
-            params.position_bucket,
-            Some(visible),
-        )
-    }
-
-    fn build_vertices_relative(
-        &self,
-        base_x: f64,
-        base_y: f64,
-        position_scale: f64,
-        visible: Option<(f64, f64, f64, f64)>,
-    ) -> (Vec<f32>, Vec<f32>) {
-        if !position_scale.is_finite() || position_scale <= 0.0 {
-            return (Vec::new(), Vec::new());
-        }
+        let left = -EDGE_CULL_MARGIN_PX;
+        let top = -EDGE_CULL_MARGIN_PX;
+        let right = width + EDGE_CULL_MARGIN_PX;
+        let bottom = height + EDGE_CULL_MARGIN_PX;
         let selected_id = self.selected_edge_id.to_string();
-        let mut normal = Vec::with_capacity(self.edges.len() * 63);
-        let mut selected = Vec::with_capacity(63);
-
-        let local = |wx: f64, wy: f64| -> Option<(f32, f32)> {
-            let lx = (wx - base_x) * position_scale;
-            let ly = (wy - base_y) * position_scale;
-            if !lx.is_finite() || !ly.is_finite() {
-                return None;
-            }
-            let (lx, ly) = (lx as f32, ly as f32);
-            if lx.is_finite() && ly.is_finite() {
-                Some((lx, ly))
-            } else {
-                None
-            }
-        };
+        let mut normal = Vec::with_capacity(self.edges.len() * 18);
+        let mut selected = Vec::with_capacity(18);
 
         for edge in &self.edges {
-            let start_x = f64::from(edge.start_x);
-            let start_y = f64::from(edge.start_y);
-            let end_x = f64::from(edge.end_x);
-            let end_y = f64::from(edge.end_y);
-            // 方向在世界坐标中归一化；局部坐标只做统一正比例缩放，
-            // 因此单位方向在局部空间保持不变。这样即使远端端点超出
-            // f32 局部范围，只要线段穿过视口仍能先裁剪再转换。
-            let world_dx = end_x - start_x;
-            let world_dy = end_y - start_y;
-            let world_len = (world_dx * world_dx + world_dy * world_dy).sqrt();
-            if !world_len.is_finite() || world_len < 1e-12 {
+            let sx0 = self.pan_x + edge.start_x * zoom;
+            let sy0 = self.pan_y + edge.start_y * zoom;
+            let sx1 = self.pan_x + edge.end_x * zoom;
+            let sy1 = self.pan_y + edge.end_y * zoom;
+            if ![sx0, sy0, sx1, sy1].iter().all(|value| value.is_finite()) {
                 continue;
             }
-            let ux = (world_dx / world_len) as f32;
-            let uy = (world_dy / world_len) as f32;
-            if !ux.is_finite() || !uy.is_finite() {
+            let dx = sx1 - sx0;
+            let dy = sy1 - sy0;
+            let len = (dx * dx + dy * dy).sqrt();
+            if !len.is_finite() || len < 1e-9 {
                 continue;
             }
-
+            let ux = dx / len;
+            let uy = dy / len;
             let target = if !selected_id.is_empty() && edge.edge_id == selected_id {
                 &mut selected
             } else {
                 &mut normal
             };
-            let mut push = |x: f32, y: f32, ox: f32, oy: f32, kind: f32| {
-                target.extend_from_slice(&[x, y, ux, uy, ox, oy, kind]);
-            };
 
-            // 线段：先裁到可见世界矩形，再只转换裁剪后的局部端点。
-            let clipped = match visible {
-                Some((left, top, right, bottom)) => {
-                    Self::clip_segment(start_x, start_y, end_x, end_y, left, top, right, bottom)
-                }
-                None => Some((start_x, start_y, end_x, end_y)),
-            };
-            if let Some((cx0, cy0, cx1, cy1)) = clipped {
-                if let (Some((sx, sy)), Some((ex, ey))) = (local(cx0, cy0), local(cx1, cy1)) {
-                    let dx = ex - sx;
-                    let dy = ey - sy;
-                    let len = (dx * dx + dy * dy).sqrt();
-                    if len.is_finite() && len > 1e-6 {
-                        push(sx, sy, 0.0, -1.0, 0.0);
-                        push(sx, sy, 0.0, 1.0, 0.0);
-                        push(ex, ey, 0.0, 1.0, 0.0);
-                        push(sx, sy, 0.0, -1.0, 0.0);
-                        push(ex, ey, 0.0, 1.0, 0.0);
-                        push(ex, ey, 0.0, -1.0, 0.0);
-                    }
-                }
-            }
-
-            // 箭头：只有三角形 bbox 与可见范围相交时才写入；长线被裁掉
-            // 不影响位于可见端的箭头。
-            if let Some(rect) = visible {
-                if !self.arrow_visible(edge, rect) {
-                    continue;
-                }
-            }
-            let (tx, ty) = match local(f64::from(edge.arrow_tip_x), f64::from(edge.arrow_tip_y)) {
-                Some(point) => point,
-                None => continue,
-            };
-            let (lx, ly) = match local(f64::from(edge.arrow_left_x), f64::from(edge.arrow_left_y)) {
-                Some(point) => point,
-                None => continue,
-            };
-            let (rx, ry) = match local(f64::from(edge.arrow_right_x), f64::from(edge.arrow_right_y))
+            if let Some((cx0, cy0, cx1, cy1)) =
+                Self::clip_segment(sx0, sy0, sx1, sy1, left, top, right, bottom)
             {
-                Some(point) => point,
-                None => continue,
-            };
-            let (la, ll) = (lx - tx, ly - ty);
-            let (ra, rl) = (rx - tx, ry - ty);
-            let left_along = la * ux + ll * uy;
-            let left_lateral = -la * uy + ll * ux;
-            let right_along = ra * ux + rl * uy;
-            let right_lateral = -ra * uy + rl * ux;
-            push(tx, ty, 0.0, 0.0, 1.0);
-            push(tx, ty, left_along, left_lateral, 1.0);
-            push(tx, ty, right_along, right_lateral, 1.0);
+                let cdx = cx1 - cx0;
+                let cdy = cy1 - cy0;
+                if (cdx * cdx + cdy * cdy).sqrt() > 1e-9 {
+                    let (cx0, cy0, cx1, cy1) = (cx0 as f32, cy0 as f32, cx1 as f32, cy1 as f32);
+                    let (ufx, ufy) = (ux as f32, uy as f32);
+                    // 线段：offset.y = ±1，片元按到中心的屏幕距离算覆盖率。
+                    target.extend_from_slice(&[
+                        cx0, cy0, ufx, ufy, 0.0, -1.0, 0.0, cx0, cy0, ufx, ufy, 0.0, 1.0, 0.0, cx1,
+                        cy1, ufx, ufy, 0.0, 1.0, 0.0, cx0, cy0, ufx, ufy, 0.0, -1.0, 0.0, cx1, cy1,
+                        ufx, ufy, 0.0, 1.0, 0.0, cx1, cy1, ufx, ufy, 0.0, -1.0, 0.0,
+                    ]);
+                }
+            }
+
+            // 箭头：固定屏幕尺寸，尖端仍在真实投影位置。
+            let tip_x = self.pan_x + edge.arrow_tip_x * zoom;
+            let tip_y = self.pan_y + edge.arrow_tip_y * zoom;
+            if !tip_x.is_finite() || !tip_y.is_finite() {
+                continue;
+            }
+            if tip_x < left || tip_x > right || tip_y < top || tip_y > bottom {
+                continue;
+            }
+            let base_x = tip_x - ux * EDGE_ARROW_LENGTH_PX;
+            let base_y = tip_y - uy * EDGE_ARROW_LENGTH_PX;
+            let nx = -uy * EDGE_ARROW_HALF_WIDTH_PX;
+            let ny = ux * EDGE_ARROW_HALF_WIDTH_PX;
+            let (tx, ty) = (tip_x as f32, tip_y as f32);
+            let (lx, ly) = ((base_x + nx) as f32, (base_y + ny) as f32);
+            let (rx, ry) = ((base_x - nx) as f32, (base_y - ny) as f32);
+            let (ufx, ufy) = (ux as f32, uy as f32);
+            target.extend_from_slice(&[
+                tx, ty, ufx, ufy, 0.0, 0.0, 1.0, lx, ly, ufx, ufy, 0.0, 0.0, 1.0, rx, ry, ufx, ufy,
+                0.0, 0.0, 1.0,
+            ]);
         }
         (normal, selected)
-    }
-
-    /// anchor 当前投影到的屏幕坐标。相机近 anchor 时数值保持视口量级，
-    /// 保留双精度换算结果后只把小的平移交给场景图。
-    fn camera_translation(&self) -> (f64, f64) {
-        let (width, height) = self.item_size();
-        let zoom = self.zoom_level;
-        if !(zoom > 0.0) || !zoom.is_finite() || width <= 0.0 || height <= 0.0 {
-            return (0.0, 0.0);
-        }
-        let origin_x = (width / 2.0 - self.pan_x) / zoom;
-        let origin_y = (height / 2.0 - self.pan_y) / zoom;
-        let tx = width / 2.0 + (self.anchor_x - origin_x) * zoom;
-        let ty = height / 2.0 + (self.anchor_y - origin_y) * zoom;
-        if tx.is_finite() && ty.is_finite() {
-            (tx, ty)
-        } else {
-            (0.0, 0.0)
-        }
     }
 }
 
@@ -1133,14 +805,8 @@ impl QQuickItem for StarMapEdgeLayer {
     }
 
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
-        // 视口尺寸变了，极端模式的可见块键必须失效；普通 anchor 几何
-        // 与视口无关，只更新 uniform 中的 viewport。
-        if self.uploaded_geometry_mode == EdgeGeometryMode::Extreme {
-            self.extreme_cache = None;
-            self.mark_geometry_dirty();
-        } else {
-            self.request_paint();
-        }
+        // 视口尺寸参与屏幕投影和裁剪，必须重新生成可见顶点。
+        self.mark_geometry_dirty();
     }
 
     fn update_paint_node(&mut self, node: SGNode<ContainerNode>) -> SGNode<ContainerNode> {
@@ -1154,108 +820,19 @@ impl QQuickItem for StarMapEdgeLayer {
             });
         }
 
-        let extreme = self.uses_extreme_camera();
-        let geometry_dirty = self.geometry_dirty;
-        let params = if extreme {
-            self.extreme_geometry_params()
-        } else {
-            None
-        };
-        if geometry_dirty {
-            if let Some(params) = params.as_ref() {
-                let rebuild = match &self.extreme_cache {
-                    Some(cache) => cache.key != params.key,
-                    None => true,
-                };
-                if rebuild {
-                    let (normal, selected) = self.build_extreme_vertices(params);
-                    self.extreme_cache = Some(ExtremeGeometryCache {
-                        key: params.key.clone(),
-                        origin_x: params.origin_x,
-                        origin_y: params.origin_y,
-                        normal,
-                        selected,
-                    });
-                }
-                self.uploaded_geometry_mode = EdgeGeometryMode::Extreme;
-                self.uploaded_extreme_key = Some(params.key.clone());
-                self.uploaded_anchor_position_bucket = None;
-            } else {
-                self.extreme_cache = None;
-                let position_scale = self.zoom_level / self.render_zoom();
-                let (normal, selected) = self.build_vertices_relative(
-                    self.anchor_x,
-                    self.anchor_y,
-                    position_scale,
-                    None,
-                );
-                self.cached_normal = normal;
-                self.cached_selected = selected;
-                self.uploaded_geometry_mode = EdgeGeometryMode::Anchor;
-                self.uploaded_extreme_key = None;
-                self.uploaded_anchor_position_bucket = Self::pow2_bucket(position_scale);
-            }
-        }
-        let (width, height) = self.item_size();
-        let zoom = if self.zoom_level > 0.0 && self.zoom_level.is_finite() {
-            self.zoom_level
-        } else {
-            1.0
-        };
-        let render_zoom = self.render_zoom();
-        let anchor_translation = self.camera_translation();
-        let (normal, selected, tx, ty, transform_zoom) = if extreme {
-            if let (Some(cache), Some(params)) = (&self.extreme_cache, &params) {
-                let origin_world_x = (width / 2.0 - self.pan_x) / zoom;
-                let origin_world_y = (height / 2.0 - self.pan_y) / zoom;
-                let tx = width / 2.0 + (cache.origin_x - origin_world_x) * zoom;
-                let ty = height / 2.0 + (cache.origin_y - origin_world_y) * zoom;
-                // 顶点按 position_bucket 预缩放；矩阵再乘回真实 zoom 与
-                // position_bucket 的比值。两者都在 float 安全范围内。
-                let ratio = params.position_scale / params.position_bucket;
-                let transform_zoom = render_zoom * ratio;
-                if tx.is_finite() && ty.is_finite() && transform_zoom.is_finite() {
-                    (
-                        cache.normal.as_slice(),
-                        cache.selected.as_slice(),
-                        tx.clamp(-MAX_ANCHOR_SCREEN_OFFSET, MAX_ANCHOR_SCREEN_OFFSET),
-                        ty.clamp(-MAX_ANCHOR_SCREEN_OFFSET, MAX_ANCHOR_SCREEN_OFFSET),
-                        transform_zoom.clamp(1e-9, MAX_ANCHOR_SCREEN_OFFSET),
-                    )
-                } else {
-                    (
-                        self.cached_normal.as_slice(),
-                        self.cached_selected.as_slice(),
-                        anchor_translation.0,
-                        anchor_translation.1,
-                        render_zoom,
-                    )
-                }
-            } else {
-                (
-                    self.cached_normal.as_slice(),
-                    self.cached_selected.as_slice(),
-                    anchor_translation.0,
-                    anchor_translation.1,
-                    render_zoom,
-                )
-            }
-        } else {
-            (
-                self.cached_normal.as_slice(),
-                self.cached_selected.as_slice(),
-                anchor_translation.0,
-                anchor_translation.1,
-                render_zoom,
-            )
-        };
-        // 顶点可能按 position_bucket 预缩放，QSG 矩阵必须乘回真实比例；
-        // 不是 render_zoom 本身。普通模式两者相等。
-        let qsg_matrix_zoom = transform_zoom;
+        // 唯一绘制路径：f64 世界→屏幕投影、视口裁剪、f32 屏幕局部顶点。
+        // 顶点已经是当前相机下的像素坐标，QSG 只做单位矩阵平移。
+        let (normal, selected) = self.build_screen_vertices();
         let normal_ptr = normal.as_ptr();
         let selected_ptr = selected.as_ptr();
         let normal_count = (normal.len() / 7) as i32;
         let selected_count = (selected.len() / 7) as i32;
+        let (width, height) = self.item_size();
+        let zoom = if self.zoom_level.is_finite() && self.zoom_level > 0.0 {
+            self.zoom_level
+        } else {
+            1.0
+        };
         let normal_width_px = Self::sanitized_width_px(self.normal_width_px);
         let selected_width_px = Self::sanitized_width_px(self.selected_width_px);
         let normal_stroke_half = normal_width_px * 0.5;
@@ -1277,15 +854,15 @@ impl QQuickItem for StarMapEdgeLayer {
         } else {
             1.0
         } * reveal;
-        if geometry_dirty {
-            EDGE_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
-            EDGE_VERTEX_UPLOADS.fetch_add(
-                (normal_count.max(0) + selected_count.max(0)) as u64,
-                Ordering::Relaxed,
-            );
-        } else {
-            EDGE_CAMERA_UPDATES.fetch_add(1, Ordering::Relaxed);
-        }
+        let tx = 0.0;
+        let ty = 0.0;
+        let qsg_matrix_zoom = 1.0;
+        let geometry_dirty = true;
+        EDGE_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
+        EDGE_VERTEX_UPLOADS.fetch_add(
+            (normal_count.max(0) + selected_count.max(0)) as u64,
+            Ordering::Relaxed,
+        );
         // SAFETY: raw 是本 item 渲染线程上的 paint node；两个顶点数组在调用期间
         // 保持有效，C++ 只在本函数内拷贝，不保留 Rust 指针。
         cpp!(unsafe [
@@ -1321,16 +898,16 @@ impl QQuickItem for StarMapEdgeLayer {
         let sample_start_screen = sample
             .map(|edge| {
                 (
-                    f64::from(edge.start_x) * zoom + self.pan_x,
-                    f64::from(edge.start_y) * zoom + self.pan_y,
+                    edge.start_x * zoom + self.pan_x,
+                    edge.start_y * zoom + self.pan_y,
                 )
             })
             .unwrap_or((0.0, 0.0));
         let sample_end_screen = sample
             .map(|edge| {
                 (
-                    f64::from(edge.end_x) * zoom + self.pan_x,
-                    f64::from(edge.end_y) * zoom + self.pan_y,
+                    edge.end_x * zoom + self.pan_x,
+                    edge.end_y * zoom + self.pan_y,
                 )
             })
             .unwrap_or((0.0, 0.0));
@@ -1349,8 +926,6 @@ impl QQuickItem for StarMapEdgeLayer {
                 viewport_y: height,
                 stroke_half: normal_stroke_half,
                 zoom,
-                render_zoom: qsg_matrix_zoom,
-                extreme_camera: extreme,
                 normal_width_px,
                 selected_width_px,
                 translate_x: tx,
@@ -1360,10 +935,10 @@ impl QQuickItem for StarMapEdgeLayer {
                 selected_alpha,
                 reveal,
                 sample_edge_id: sample.map(|edge| edge.edge_id.clone()).unwrap_or_default(),
-                sample_start_x: sample.map(|edge| f64::from(edge.start_x)).unwrap_or(0.0),
-                sample_start_y: sample.map(|edge| f64::from(edge.start_y)).unwrap_or(0.0),
-                sample_end_x: sample.map(|edge| f64::from(edge.end_x)).unwrap_or(0.0),
-                sample_end_y: sample.map(|edge| f64::from(edge.end_y)).unwrap_or(0.0),
+                sample_start_x: sample.map(|edge| edge.start_x).unwrap_or(0.0),
+                sample_start_y: sample.map(|edge| edge.start_y).unwrap_or(0.0),
+                sample_end_x: sample.map(|edge| edge.end_x).unwrap_or(0.0),
+                sample_end_y: sample.map(|edge| edge.end_y).unwrap_or(0.0),
                 sample_start_screen_x: sample_start_screen.0,
                 sample_start_screen_y: sample_start_screen.1,
                 sample_end_screen_x: sample_end_screen.0,
