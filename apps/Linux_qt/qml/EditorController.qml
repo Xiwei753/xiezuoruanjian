@@ -321,6 +321,7 @@ QtObject {
             };
             annotationBackendRef.queue_annotation_edits(
                 requestId,
+                Number(annotationApplyRequests[requestId].epoch),
                 String(fact.projectId),
                 String(fact.chapterId),
                 Number(fact.baseRevision),
@@ -406,7 +407,8 @@ QtObject {
             epoch: correctionDocumentEpoch
         }
         annotationBackendRef.request_chapter_annotations(
-            requestId, String(projectId), String(chapterId), revision, text)
+            requestId, Number(annotationRefreshRequests[requestId].epoch),
+            String(projectId), String(chapterId), revision, text)
     }
 
     function receiveAnnotationSnapshot(requestId, projectId, chapterId,
@@ -708,6 +710,10 @@ QtObject {
         annotationNavigationSnapshot = null;
         annotationBaselineRevision = -1;
         applyTextDecorations();
+        // 新 documentEpoch 必须由后台重新建立 baseline；不能让旧周期的
+        // revision 或 pending patch 被当成当前文档已应用。
+        if (annotationBackendRef && targetEditorItem && projectId && chapterId)
+            annotationRefreshTimer.restart();
         correctionError = "";
         correctionStatus = "";
     }

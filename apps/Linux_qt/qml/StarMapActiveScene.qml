@@ -702,13 +702,24 @@ Item {
     function invalidatePreviewTargets(events) {
         if (!starmapBackendRef || !events)
             return
+        var seen = ({})
         for (var i = 0; i < events.length; i++) {
             var event = events[i]
             if (!event) continue
             var id = String(event.starmapId || "")
             if (id === "") continue
-            starmapBackendRef.invalidate_starmap_preview(
-                id, Number(event.revision || 0))
+            var revision = Number(event.revision || 0)
+            // 同一目标 + 同一修订在一个事件批次里只标脏一次；服务端再用
+            // 事件对象 / 时间身份去重多个 Scene 对同一事件的重复上报。
+            var dirtyKey = id + "\u001f" + String(revision)
+            if (seen[dirtyKey]) continue
+            seen[dirtyKey] = true
+            var eventKey = dirtyKey
+                    + "\u001f" + String(event.kind || "")
+                    + "\u001f" + String(event.objectType || "")
+                    + "\u001f" + String(event.objectId || "")
+                    + "\u001f" + String(event.occurredAtMs || 0)
+            starmapBackendRef.invalidate_starmap_preview(id, revision, eventKey)
         }
     }
 

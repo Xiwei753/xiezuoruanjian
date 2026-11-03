@@ -52,6 +52,7 @@ impl AnnotationContext {
 
 struct AnnotationRefreshJob {
     request_id: u32,
+    document_epoch: u32,
     project_id: String,
     chapter_id: String,
     text_revision: u64,
@@ -62,6 +63,7 @@ struct AnnotationRefreshJob {
 
 struct AnnotationApplyJob {
     request_id: u32,
+    document_epoch: u32,
     project_id: String,
     chapter_id: String,
     base_revision: u64,
@@ -100,6 +102,7 @@ type AnnotationWorkerCallback = Box<dyn FnOnce(AnnotationWorkerEvent) + Send>;
 struct AnnotationSession {
     baseline_id: String,
     revision: u64,
+    document_epoch: u32,
 }
 
 #[derive(Default)]
@@ -151,13 +154,13 @@ fn annotation_worker_loop(receiver: mpsc::Receiver<AnnotationJob>) {
     }
 }
 
-fn chapter_key(project_id: &str, chapter_id: &str) -> String {
-    format!("{project_id}\u{1f}{chapter_id}")
+fn chapter_key(project_id: &str, chapter_id: &str, document_epoch: u32) -> String {
+    format!("{project_id}\u{1f}{chapter_id}\u{1f}{document_epoch}")
 }
 
 fn handle_annotation_refresh(state: &mut AnnotationWorkerState, job: AnnotationRefreshJob) {
     let api_state = state.api_state(&job.context);
-    let key = chapter_key(&job.project_id, &job.chapter_id);
+    let key = chapter_key(&job.project_id, &job.chapter_id, job.document_epoch);
     let existing = api_state.sessions.get(&key).cloned();
     let preferred_baseline = existing
         .as_ref()
@@ -227,6 +230,7 @@ fn handle_annotation_refresh(state: &mut AnnotationWorkerState, job: AnnotationR
                     AnnotationSession {
                         baseline_id: snapshot.baseline_id.clone(),
                         revision: snapshot.text_revision,
+                        document_epoch: job.document_epoch,
                     },
                 );
             }
@@ -253,7 +257,7 @@ fn handle_annotation_refresh(state: &mut AnnotationWorkerState, job: AnnotationR
 
 fn handle_annotation_apply(state: &mut AnnotationWorkerState, job: AnnotationApplyJob) {
     let api_state = state.api_state(&job.context);
-    let key = chapter_key(&job.project_id, &job.chapter_id);
+    let key = chapter_key(&job.project_id, &job.chapter_id, job.document_epoch);
     if let Some(session) = api_state.sessions.get(&key) {
         if job.base_revision < session.revision {
             // 更晚的标注快照已经包含这笔编辑；只回报实际消费到的 revision。
@@ -321,6 +325,9 @@ fn apply_annotation_edit_job(
     session: &mut AnnotationSession,
     job: &AnnotationApplyJob,
 ) -> Result<u64, String> {
+    if session.document_epoch != job.document_epoch {
+        return Err("标注会话文档周期不匹配".to_string());
+    }
     let cause = parse_annotation_cause(&job.cause)?;
     let edits = parse_annotation_ranges(&job.ranges_json)?;
     api.apply_annotation_edits(
@@ -532,6 +539,7 @@ pub struct AnnotationBackend {
         fn(
             &self,
             request_id: u32,
+            document_epoch: u32,
             project_id: QString,
             chapter_id: QString,
             text_revision: u64,
@@ -542,6 +550,7 @@ pub struct AnnotationBackend {
         fn(
             &self,
             request_id: u32,
+            document_epoch: u32,
             project_id: QString,
             chapter_id: QString,
             base_revision: u64,
@@ -976,6 +985,7 @@ impl AnnotationBackend {
     fn request_chapter_annotations(
         &self,
         request_id: u32,
+        document_epoch: u32,
         project_id: QString,
         chapter_id: QString,
         text_revision: u64,
@@ -1041,6 +1051,7 @@ impl AnnotationBackend {
         let fail_chapter = chapter_id.clone();
         let job = AnnotationRefreshJob {
             request_id,
+            document_epoch,
             project_id: project_id.to_string(),
             chapter_id: chapter_id.to_string(),
             text_revision,
@@ -1062,6 +1073,7 @@ impl AnnotationBackend {
     fn queue_annotation_edits(
         &self,
         request_id: u32,
+        document_epoch: u32,
         project_id: QString,
         chapter_id: QString,
         base_revision: u64,
@@ -1137,6 +1149,7 @@ impl AnnotationBackend {
         let fail_chapter = chapter_id.clone();
         let job = AnnotationApplyJob {
             request_id,
+            document_epoch,
             project_id: project_id.to_string(),
             chapter_id: chapter_id.to_string(),
             base_revision,

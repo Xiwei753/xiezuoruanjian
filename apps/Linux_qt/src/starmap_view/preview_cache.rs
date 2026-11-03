@@ -20,7 +20,7 @@
 //   - 镜头缩放 / 平移不会进入这里，也不会让缓存失效。
 // =============================================================================
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
@@ -207,6 +207,9 @@ enum PreviewJob {
 
 struct PreviewShared {
     epochs: Mutex<HashMap<GraphKey, u64>>,
+    // 同一工作区事件会被多个 ActiveScene 看到；按事件身份去重，避免每个
+    // 场景都推进一次服务级 epoch。
+    seen_events: Mutex<HashMap<GraphKey, HashSet<String>>>,
 }
 
 /// 固定后台预览服务句柄。所有 QML 场景共享同一个实例。
@@ -252,16 +255,36 @@ impl PreviewService {
     }
 
     /// 只按目标星图精确标脏。内容 / 几何依赖变化时递增 epoch；下一次读图
-    /// 或 finalize 会因此丢弃旧结果并重新读取。
-    pub fn invalidate(&self, context: &PreviewContext, starmap_id: &str, _revision: u64) {
+    /// 或 finalize 会因此丢弃旧结果并重新读取。event_key 为空表示本地写操作
+    /// 强制失效；非空时同一事件被多个场景重复上报只推进一次 epoch。
+    pub fn invalidate(
+        &self,
+        context: &PreviewContext,
+        starmap_id: &str,
+        _revision: u64,
+        event_key: &str,
+    ) -> bool {
         let key = GraphKey {
             context: context.clone(),
             starmap_id: starmap_id.to_string(),
         };
+        if !event_key.is_empty() {
+            if let Ok(mut seen) = self.shared.seen_events.lock() {
+                let entry = seen.entry(key.clone()).or_default();
+                if !entry.insert(event_key.to_string()) {
+                    return false;
+                }
+                if entry.len() > 512 {
+                    entry.clear();
+                    entry.insert(event_key.to_string());
+                }
+            }
+        }
         if let Ok(mut epochs) = self.shared.epochs.lock() {
             let next = epochs.get(&key).copied().unwrap_or(0).saturating_add(1);
             epochs.insert(key, next);
         }
+        true
     }
 }
 
@@ -272,6 +295,7 @@ pub fn service() -> &'static PreviewService {
         let (tx, rx) = mpsc::channel();
         let shared = Arc::new(PreviewShared {
             epochs: Mutex::new(HashMap::new()),
+            seen_events: Mutex::new(HashMap::new()),
         });
         let thread_shared = Arc::clone(&shared);
         std::thread::Builder::new()

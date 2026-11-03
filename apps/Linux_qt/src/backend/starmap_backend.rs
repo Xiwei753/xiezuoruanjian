@@ -58,7 +58,8 @@ pub struct StarMapBackend {
             layouts_json: QString,
         )
     ),
-    invalidate_starmap_preview: qt_method!(fn(&self, starmap_id: QString, revision: u64)),
+    invalidate_starmap_preview:
+        qt_method!(fn(&self, starmap_id: QString, revision: u64, event_key: QString)),
     resolve_starmap_path_json:
         qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QString),
     resolve_starmap_path:
@@ -989,8 +990,9 @@ impl StarMapBackend {
 
     /// 工作区事件按目标 starmapId 精确标脏；epoch 变化后旧任务结果不会再
     /// 被预览服务当成当前快照。
-    fn invalidate_starmap_preview(&self, starmap_id: QString, revision: u64) {
+    fn invalidate_starmap_preview(&self, starmap_id: QString, revision: u64, event_key: QString) {
         let target = starmap_id.to_string();
+        let mut invalidated = true;
         if let Ok(Some(context)) = self.with_app(|app| app.starmap_preview_context()) {
             let (data_root, projects_root, layout) = context;
             let preview_context = crate::starmap_view::preview_cache::PreviewContext::new(
@@ -998,13 +1000,16 @@ impl StarMapBackend {
                 &projects_root,
                 &layout,
             );
-            crate::starmap_view::preview_cache::service().invalidate(
+            invalidated = crate::starmap_view::preview_cache::service().invalidate(
                 &preview_context,
                 &target,
                 revision,
+                &event_key.to_string(),
             );
         }
-        self.starmap_preview_invalidated(starmap_id, revision);
+        if invalidated {
+            self.starmap_preview_invalidated(starmap_id, revision);
+        }
     }
     fn resolve_starmap_path_json(
         &self,
