@@ -102,6 +102,7 @@ QtObject {
     // 编辑事实并接收按章节 + revision 返回的异步结果。这里只保存展示侧的
     // 请求标识；切章 / 重置时丢弃旧页面回调，但不会删除已提交的后台事实。
     property int annotationRequestSerial: 0
+    property double annotationDocumentSessionId: 0
     property var annotationApplyRequests: ({})
     property var annotationRefreshRequests: ({})
     property int correctionApplyRequestSerial: 0
@@ -258,21 +259,27 @@ QtObject {
 
     property var annotationBackendConnections: Connections {
         target: annotationBackendRef ? annotationBackendRef : null
-        function onAnnotation_chapter_ready(requestId, projectId, chapterId,
+        function onAnnotation_chapter_ready(requestId, documentSessionId,
+                                            projectId, chapterId,
                                             textRevision, snapshotJson) {
             controller.receiveAnnotationSnapshot(
-                requestId, projectId, chapterId, textRevision, snapshotJson)
+                requestId, documentSessionId, projectId, chapterId,
+                textRevision, snapshotJson)
         }
-        function onAnnotation_chapter_failed(requestId, projectId, chapterId,
+        function onAnnotation_chapter_failed(requestId, documentSessionId,
+                                             projectId, chapterId,
                                              textRevision, message) {
             controller.receiveAnnotationFailure(
-                requestId, projectId, chapterId, textRevision, message)
+                requestId, documentSessionId, projectId, chapterId,
+                textRevision, message)
         }
-        function onAnnotation_edits_applied(requestId, projectId, chapterId,
-                                            baseRevision, textRevision, success, message) {
+        function onAnnotation_edits_applied(requestId, documentSessionId,
+                                            projectId, chapterId,
+                                            baseRevision, textRevision,
+                                            success, message) {
             controller.receiveAnnotationEditsApplied(
-                requestId, projectId, chapterId, baseRevision,
-                textRevision, success, message)
+                requestId, documentSessionId, projectId, chapterId,
+                baseRevision, textRevision, success, message)
         }
     }
 
@@ -302,17 +309,31 @@ QtObject {
         return String(text).replace(/\u2029/g, "\n").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     }
 
+    // Issue #1032 复审：每次加载 / 重建正文 EditorKernel 都从 Rust 全局
+    // 生成器领取新的 documentSessionId。不能复用 QML 页面内的数字 epoch，
+    // 因为 Loader 销毁重建后计数会从头开始。
+    function beginAnnotationDocumentSession() {
+        var next = 0
+        if (annotationBackendRef && annotationBackendRef.begin_annotation_document_session)
+            next = Number(annotationBackendRef.begin_annotation_document_session())
+        annotationDocumentSessionId = next
+        clearAnnotationDisplayRequests()
+        return next
+    }
+
     // Issue #1032 复审：onEditor_change_applied 只投递不可变事实。标注更新
     // 进入 Rust 单线程业务队列，按项目 + 章节 + base/new revision 顺序消费；
     // 纠错 patch 继续进入现有 correction FIFO。这里不再用 Qt.callLater 代替
     // 业务队列，也不在 GUI 线程执行任何 annotation Core 调用。
     function submitAnnotationEditFact(fact) {
         if (!fact || !fact.projectId || !fact.chapterId) return;
-        if (annotationBackendRef && annotationBackendRef.queue_annotation_edits) {
+        if (annotationBackendRef && annotationBackendRef.queue_annotation_edits
+                && annotationDocumentSessionId > 0) {
             annotationRequestSerial += 1;
             if (annotationRequestSerial > 2147483000) annotationRequestSerial = 1;
             var requestId = annotationRequestSerial;
             annotationApplyRequests[requestId] = {
+                sessionId: Number(annotationDocumentSessionId),
                 projectId: String(fact.projectId),
                 chapterId: String(fact.chapterId),
                 baseRevision: Number(fact.baseRevision),
@@ -321,7 +342,7 @@ QtObject {
             };
             annotationBackendRef.queue_annotation_edits(
                 requestId,
-                Number(annotationApplyRequests[requestId].epoch),
+                Number(annotationDocumentSessionId),
                 String(fact.projectId),
                 String(fact.chapterId),
                 Number(fact.baseRevision),
@@ -394,6 +415,8 @@ QtObject {
             applyTextDecorations()
             return
         }
+        if (annotationDocumentSessionId <= 0)
+            beginAnnotationDocumentSession()
         var revision = Number(targetEditorItem.text_revision)
         var text = getEditorPlainText()
         annotationRequestSerial += 1
@@ -401,21 +424,26 @@ QtObject {
         var requestId = annotationRequestSerial
         annotationRefreshRequests = ({})
         annotationRefreshRequests[requestId] = {
+            sessionId: Number(annotationDocumentSessionId),
             projectId: String(projectId),
             chapterId: String(chapterId),
             revision: revision,
             epoch: correctionDocumentEpoch
         }
         annotationBackendRef.request_chapter_annotations(
-            requestId, Number(annotationRefreshRequests[requestId].epoch),
+            requestId, Number(annotationDocumentSessionId),
             String(projectId), String(chapterId), revision, text)
     }
 
-    function receiveAnnotationSnapshot(requestId, projectId, chapterId,
+    function receiveAnnotationSnapshot(requestId, documentSessionId,
+                                       projectId, chapterId,
                                        textRevision, snapshotJson) {
         var expected = annotationRefreshRequests[requestId]
         delete annotationRefreshRequests[requestId]
         if (!expected) return
+        if (Number(expected.sessionId) !== Number(documentSessionId)
+                || Number(annotationDocumentSessionId) !== Number(documentSessionId))
+            return
         if (expected.projectId !== projectId || expected.chapterId !== chapterId
                 || Number(expected.revision) !== Number(textRevision)
                 || expected.epoch !== correctionDocumentEpoch
@@ -476,11 +504,15 @@ QtObject {
         applyTextDecorations()
     }
 
-    function receiveAnnotationFailure(requestId, projectId, chapterId,
+    function receiveAnnotationFailure(requestId, documentSessionId,
+                                      projectId, chapterId,
                                       textRevision, message) {
         var expected = annotationRefreshRequests[requestId]
         delete annotationRefreshRequests[requestId]
         if (!expected) return
+        if (Number(expected.sessionId) !== Number(documentSessionId)
+                || Number(annotationDocumentSessionId) !== Number(documentSessionId))
+            return
         if (expected.projectId !== projectId
                 || expected.chapterId !== chapterId
                 || Number(expected.revision) !== Number(textRevision)
@@ -493,13 +525,17 @@ QtObject {
             applyTextDecorations()
     }
 
-    function receiveAnnotationEditsApplied(requestId, projectId, chapterId,
+    function receiveAnnotationEditsApplied(requestId, documentSessionId,
+                                          projectId, chapterId,
                                           baseRevision, textRevision,
                                           success, message) {
         var expected = annotationApplyRequests[requestId]
         delete annotationApplyRequests[requestId]
         if (!expected) return
         // 后台事实已经按章节完成；这里只决定是否更新当前页面的展示状态。
+        if (Number(expected.sessionId) !== Number(documentSessionId)
+                || Number(annotationDocumentSessionId) !== Number(documentSessionId))
+            return
         if (expected.projectId !== projectId
                 || expected.chapterId !== chapterId
                 || Number(expected.baseRevision) !== Number(baseRevision)
@@ -1545,6 +1581,9 @@ QtObject {
             targetEditorItem.load_document_text(content);
             targetEditorItem.clear_undo_stack();
         }
+        // 即使同一章节文本相同，新页面 / 新 EditorKernel 也是新的 Core
+        // 标注会话；必须领取进程级唯一 ID，不能沿用旧页面的数字 epoch。
+        beginAnnotationDocumentSession();
 
         previousEditorText = content;
         lastSavedEditorText = content;
@@ -1577,6 +1616,7 @@ QtObject {
             releaseCorrectionSession(projectId, chapterId);
             if (targetEditorItem) {
                 targetEditorItem.load_document_text("");
+                beginAnnotationDocumentSession();
                 targetEditorItem.clear_undo_stack();
             }
             projectId = "";
@@ -1625,6 +1665,7 @@ QtObject {
         autoSaveTimer.stop();
         try {
             targetEditorItem.reload_plain_text(plain);
+            beginAnnotationDocumentSession();
             targetEditorItem.clear_undo_stack();
         } finally {
             isApplyingFormat = false;

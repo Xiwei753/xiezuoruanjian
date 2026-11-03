@@ -12,7 +12,9 @@ use writer_core::api::types::{
 use writer_core::api::{ResultEnvelope, WriterCoreApi, WriterError};
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, OnceLock};
+use std::time::{Duration, Instant};
 
 use writer_core::storage::git_repo_layout::GitRepoLayout;
 
@@ -52,7 +54,7 @@ impl AnnotationContext {
 
 struct AnnotationRefreshJob {
     request_id: u32,
-    document_epoch: u32,
+    document_session_id: u64,
     project_id: String,
     chapter_id: String,
     text_revision: u64,
@@ -63,7 +65,7 @@ struct AnnotationRefreshJob {
 
 struct AnnotationApplyJob {
     request_id: u32,
-    document_epoch: u32,
+    document_session_id: u64,
     project_id: String,
     chapter_id: String,
     base_revision: u64,
@@ -82,6 +84,7 @@ enum AnnotationJob {
 enum AnnotationWorkerEvent {
     Snapshot {
         request_id: u32,
+        document_session_id: u64,
         project_id: String,
         chapter_id: String,
         text_revision: u64,
@@ -89,6 +92,7 @@ enum AnnotationWorkerEvent {
     },
     Edits {
         request_id: u32,
+        document_session_id: u64,
         project_id: String,
         chapter_id: String,
         base_revision: u64,
@@ -102,7 +106,8 @@ type AnnotationWorkerCallback = Box<dyn FnOnce(AnnotationWorkerEvent) + Send>;
 struct AnnotationSession {
     baseline_id: String,
     revision: u64,
-    document_epoch: u32,
+    document_session_id: u64,
+    last_active: Instant,
 }
 
 #[derive(Default)]
@@ -132,6 +137,11 @@ impl AnnotationWorkerState {
 }
 
 static ANNOTATION_WORKER: OnceLock<mpsc::Sender<AnnotationJob>> = OnceLock::new();
+static NEXT_ANNOTATION_DOCUMENT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_annotation_document_session_id() -> u64 {
+    NEXT_ANNOTATION_DOCUMENT_SESSION_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 fn annotation_worker() -> &'static mpsc::Sender<AnnotationJob> {
     ANNOTATION_WORKER.get_or_init(|| {
@@ -154,13 +164,57 @@ fn annotation_worker_loop(receiver: mpsc::Receiver<AnnotationJob>) {
     }
 }
 
-fn chapter_key(project_id: &str, chapter_id: &str, document_epoch: u32) -> String {
-    format!("{project_id}\u{1f}{chapter_id}\u{1f}{document_epoch}")
+fn chapter_key(project_id: &str, chapter_id: &str, document_session_id: u64) -> String {
+    format!("{project_id}\u{1f}{chapter_id}\u{1f}{document_session_id}")
+}
+
+fn annotation_chapter_prefix(key: &str) -> Option<&str> {
+    key.rsplit_once('\u{1f}').map(|(prefix, _)| prefix)
+}
+
+fn annotation_session_id(key: &str) -> Option<u64> {
+    key.rsplit_once('\u{1f}')
+        .and_then(|(_, session_id)| session_id.parse::<u64>().ok())
+}
+
+/// 新文档会话建立后回收同一章节中已无 pending 事实的旧会话；超过 5 分钟
+/// 且无 pending 的其他会话也回收，避免常驻 worker 的 session map 无限积累。
+/// 有 pending 事实的旧会话继续保留，按原 session id 完成映射。
+fn prune_annotation_sessions(api_state: &mut AnnotationApiState, keep_key: &str) {
+    let keep_prefix = annotation_chapter_prefix(keep_key);
+    let keep_session_id = annotation_session_id(keep_key).unwrap_or(u64::MAX);
+    let mut remove = Vec::new();
+    for (key, session) in &api_state.sessions {
+        if key == keep_key || session.document_session_id >= keep_session_id {
+            continue;
+        }
+        let pending_empty = api_state
+            .pending
+            .get(key)
+            .map_or(true, |queue| queue.is_empty());
+        if !pending_empty {
+            continue;
+        }
+        let same_chapter = annotation_chapter_prefix(key) == keep_prefix;
+        if same_chapter || session.last_active.elapsed() >= Duration::from_secs(300) {
+            remove.push(key.clone());
+        }
+    }
+    for key in remove {
+        api_state.sessions.remove(&key);
+        if api_state
+            .pending
+            .get(&key)
+            .map_or(true, |queue| queue.is_empty())
+        {
+            api_state.pending.remove(&key);
+        }
+    }
 }
 
 fn handle_annotation_refresh(state: &mut AnnotationWorkerState, job: AnnotationRefreshJob) {
     let api_state = state.api_state(&job.context);
-    let key = chapter_key(&job.project_id, &job.chapter_id, job.document_epoch);
+    let key = chapter_key(&job.project_id, &job.chapter_id, job.document_session_id);
     let existing = api_state.sessions.get(&key).cloned();
     let preferred_baseline = existing
         .as_ref()
@@ -172,6 +226,7 @@ fn handle_annotation_refresh(state: &mut AnnotationWorkerState, job: AnnotationR
         None => {
             (job.callback)(AnnotationWorkerEvent::Snapshot {
                 request_id: job.request_id,
+                document_session_id: job.document_session_id,
                 project_id: job.project_id,
                 chapter_id: job.chapter_id,
                 text_revision: job.text_revision,
@@ -212,6 +267,7 @@ fn handle_annotation_refresh(state: &mut AnnotationWorkerState, job: AnnotationR
                 Err(error) => {
                     (job.callback)(AnnotationWorkerEvent::Snapshot {
                         request_id: job.request_id,
+                        document_session_id: job.document_session_id,
                         project_id: job.project_id,
                         chapter_id: job.chapter_id,
                         text_revision: job.text_revision,
@@ -230,22 +286,26 @@ fn handle_annotation_refresh(state: &mut AnnotationWorkerState, job: AnnotationR
                     AnnotationSession {
                         baseline_id: snapshot.baseline_id.clone(),
                         revision: snapshot.text_revision,
-                        document_epoch: job.document_epoch,
+                        document_session_id: job.document_session_id,
+                        last_active: Instant::now(),
                     },
                 );
             }
             (job.callback)(AnnotationWorkerEvent::Snapshot {
                 request_id: job.request_id,
+                document_session_id: job.document_session_id,
                 project_id: job.project_id,
                 chapter_id: job.chapter_id,
                 text_revision: snapshot.text_revision,
                 result: Ok(snapshot_json),
             });
             drain_pending_annotation_edits(api_state, &key);
+            prune_annotation_sessions(api_state, &key);
         }
         Err(error) => {
             (job.callback)(AnnotationWorkerEvent::Snapshot {
                 request_id: job.request_id,
+                document_session_id: job.document_session_id,
                 project_id: job.project_id,
                 chapter_id: job.chapter_id,
                 text_revision: job.text_revision,
@@ -257,12 +317,13 @@ fn handle_annotation_refresh(state: &mut AnnotationWorkerState, job: AnnotationR
 
 fn handle_annotation_apply(state: &mut AnnotationWorkerState, job: AnnotationApplyJob) {
     let api_state = state.api_state(&job.context);
-    let key = chapter_key(&job.project_id, &job.chapter_id, job.document_epoch);
+    let key = chapter_key(&job.project_id, &job.chapter_id, job.document_session_id);
     if let Some(session) = api_state.sessions.get(&key) {
         if job.base_revision < session.revision {
             // 更晚的标注快照已经包含这笔编辑；只回报实际消费到的 revision。
             (job.callback)(AnnotationWorkerEvent::Edits {
                 request_id: job.request_id,
+                document_session_id: job.document_session_id,
                 project_id: job.project_id,
                 chapter_id: job.chapter_id,
                 base_revision: job.base_revision,
@@ -277,6 +338,7 @@ fn handle_annotation_apply(state: &mut AnnotationWorkerState, job: AnnotationApp
                     None => {
                         (job.callback)(AnnotationWorkerEvent::Edits {
                             request_id: job.request_id,
+                            document_session_id: job.document_session_id,
                             project_id: job.project_id,
                             chapter_id: job.chapter_id,
                             base_revision: job.base_revision,
@@ -295,16 +357,19 @@ fn handle_annotation_apply(state: &mut AnnotationWorkerState, job: AnnotationApp
                 Ok(revision) => {
                     (job.callback)(AnnotationWorkerEvent::Edits {
                         request_id: job.request_id,
+                        document_session_id: job.document_session_id,
                         project_id: job.project_id,
                         chapter_id: job.chapter_id,
                         base_revision: job.base_revision,
                         result: Ok(revision),
                     });
                     drain_pending_annotation_edits(api_state, &key);
+                    prune_annotation_sessions(api_state, &key);
                 }
                 Err(error) => {
                     (job.callback)(AnnotationWorkerEvent::Edits {
                         request_id: job.request_id,
+                        document_session_id: job.document_session_id,
                         project_id: job.project_id,
                         chapter_id: job.chapter_id,
                         base_revision: job.base_revision,
@@ -325,7 +390,7 @@ fn apply_annotation_edit_job(
     session: &mut AnnotationSession,
     job: &AnnotationApplyJob,
 ) -> Result<u64, String> {
-    if session.document_epoch != job.document_epoch {
+    if session.document_session_id != job.document_session_id {
         return Err("标注会话文档周期不匹配".to_string());
     }
     let cause = parse_annotation_cause(&job.cause)?;
@@ -341,6 +406,7 @@ fn apply_annotation_edit_job(
     )
     .map_err(|error| error.to_string())?;
     session.revision = job.text_revision;
+    session.last_active = Instant::now();
     Ok(session.revision)
 }
 
@@ -370,6 +436,7 @@ fn drain_pending_annotation_edits(api_state: &mut AnnotationApiState, key: &str)
         if base_revision < session_revision {
             (job.callback)(AnnotationWorkerEvent::Edits {
                 request_id: job.request_id,
+                document_session_id: job.document_session_id,
                 project_id: job.project_id,
                 chapter_id: job.chapter_id,
                 base_revision: job.base_revision,
@@ -382,6 +449,7 @@ fn drain_pending_annotation_edits(api_state: &mut AnnotationApiState, key: &str)
             None => {
                 (job.callback)(AnnotationWorkerEvent::Edits {
                     request_id: job.request_id,
+                        document_session_id: job.document_session_id,
                     project_id: job.project_id,
                     chapter_id: job.chapter_id,
                     base_revision: job.base_revision,
@@ -397,6 +465,7 @@ fn drain_pending_annotation_edits(api_state: &mut AnnotationApiState, key: &str)
         match apply_annotation_edit_job(api, session, &job) {
             Ok(revision) => (job.callback)(AnnotationWorkerEvent::Edits {
                 request_id: job.request_id,
+                document_session_id: job.document_session_id,
                 project_id: job.project_id,
                 chapter_id: job.chapter_id,
                 base_revision: job.base_revision,
@@ -404,6 +473,7 @@ fn drain_pending_annotation_edits(api_state: &mut AnnotationApiState, key: &str)
             }),
             Err(error) => (job.callback)(AnnotationWorkerEvent::Edits {
                 request_id: job.request_id,
+                document_session_id: job.document_session_id,
                 project_id: job.project_id,
                 chapter_id: job.chapter_id,
                 base_revision: job.base_revision,
@@ -535,11 +605,12 @@ pub struct AnnotationBackend {
             edits_json: QString,
         ) -> QString
     ),
+    begin_annotation_document_session: qt_method!(fn(&self) -> u64),
     request_chapter_annotations: qt_method!(
         fn(
             &self,
             request_id: u32,
-            document_epoch: u32,
+            document_session_id: u64,
             project_id: QString,
             chapter_id: QString,
             text_revision: u64,
@@ -550,7 +621,7 @@ pub struct AnnotationBackend {
         fn(
             &self,
             request_id: u32,
-            document_epoch: u32,
+            document_session_id: u64,
             project_id: QString,
             chapter_id: QString,
             base_revision: u64,
@@ -570,6 +641,7 @@ pub struct AnnotationBackend {
     ),
     annotation_chapter_ready: qt_signal!(
         request_id: u32,
+        document_session_id: u64,
         project_id: QString,
         chapter_id: QString,
         text_revision: u64,
@@ -577,6 +649,7 @@ pub struct AnnotationBackend {
     ),
     annotation_chapter_failed: qt_signal!(
         request_id: u32,
+        document_session_id: u64,
         project_id: QString,
         chapter_id: QString,
         text_revision: u64,
@@ -584,6 +657,7 @@ pub struct AnnotationBackend {
     ),
     annotation_edits_applied: qt_signal!(
         request_id: u32,
+        document_session_id: u64,
         project_id: QString,
         chapter_id: QString,
         base_revision: u64,
@@ -982,10 +1056,16 @@ impl AnnotationBackend {
         })
     }
 
+    /// 每次加载 / 重建正文 EditorKernel 都分配新的进程级会话 ID。
+    /// 它独立于 correctionDocumentEpoch，避免 QML 页面销毁重建后数字复用。
+    fn begin_annotation_document_session(&self) -> u64 {
+        next_annotation_document_session_id()
+    }
+
     fn request_chapter_annotations(
         &self,
         request_id: u32,
-        document_epoch: u32,
+        document_session_id: u64,
         project_id: QString,
         chapter_id: QString,
         text_revision: u64,
@@ -996,6 +1076,7 @@ impl AnnotationBackend {
             Ok(None) => {
                 self.annotation_chapter_failed(
                     request_id,
+                    document_session_id,
                     project_id,
                     chapter_id,
                     text_revision,
@@ -1006,6 +1087,7 @@ impl AnnotationBackend {
             Err(error) => {
                 self.annotation_chapter_failed(
                     request_id,
+                    document_session_id,
                     project_id,
                     chapter_id,
                     text_revision,
@@ -1023,6 +1105,7 @@ impl AnnotationBackend {
                 match event {
                     AnnotationWorkerEvent::Snapshot {
                         request_id,
+                        document_session_id,
                         project_id,
                         chapter_id,
                         text_revision,
@@ -1030,6 +1113,7 @@ impl AnnotationBackend {
                     } => match result {
                         Ok(snapshot_json) => this.annotation_chapter_ready(
                             request_id,
+                            document_session_id,
                             QString::from(project_id),
                             QString::from(chapter_id),
                             text_revision,
@@ -1037,6 +1121,7 @@ impl AnnotationBackend {
                         ),
                         Err(message) => this.annotation_chapter_failed(
                             request_id,
+                            document_session_id,
                             QString::from(project_id),
                             QString::from(chapter_id),
                             text_revision,
@@ -1051,7 +1136,7 @@ impl AnnotationBackend {
         let fail_chapter = chapter_id.clone();
         let job = AnnotationRefreshJob {
             request_id,
-            document_epoch,
+            document_session_id,
             project_id: project_id.to_string(),
             chapter_id: chapter_id.to_string(),
             text_revision,
@@ -1062,6 +1147,7 @@ impl AnnotationBackend {
         if let Err(error) = annotation_worker().send(AnnotationJob::Refresh(job)) {
             self.annotation_chapter_failed(
                 request_id,
+                document_session_id,
                 fail_project,
                 fail_chapter,
                 text_revision,
@@ -1073,7 +1159,7 @@ impl AnnotationBackend {
     fn queue_annotation_edits(
         &self,
         request_id: u32,
-        document_epoch: u32,
+        document_session_id: u64,
         project_id: QString,
         chapter_id: QString,
         base_revision: u64,
@@ -1086,6 +1172,7 @@ impl AnnotationBackend {
             Ok(None) => {
                 self.annotation_edits_applied(
                     request_id,
+                    document_session_id,
                     project_id,
                     chapter_id,
                     base_revision,
@@ -1098,6 +1185,7 @@ impl AnnotationBackend {
             Err(error) => {
                 self.annotation_edits_applied(
                     request_id,
+                    document_session_id,
                     project_id,
                     chapter_id,
                     base_revision,
@@ -1116,6 +1204,7 @@ impl AnnotationBackend {
                 let this = pinned.borrow_mut();
                 if let AnnotationWorkerEvent::Edits {
                     request_id,
+                    document_session_id,
                     project_id,
                     chapter_id,
                     base_revision,
@@ -1125,6 +1214,7 @@ impl AnnotationBackend {
                     match result {
                         Ok(text_revision) => this.annotation_edits_applied(
                             request_id,
+                            document_session_id,
                             QString::from(project_id),
                             QString::from(chapter_id),
                             base_revision,
@@ -1134,6 +1224,7 @@ impl AnnotationBackend {
                         ),
                         Err(message) => this.annotation_edits_applied(
                             request_id,
+                            document_session_id,
                             QString::from(project_id),
                             QString::from(chapter_id),
                             base_revision,
@@ -1149,7 +1240,7 @@ impl AnnotationBackend {
         let fail_chapter = chapter_id.clone();
         let job = AnnotationApplyJob {
             request_id,
-            document_epoch,
+            document_session_id,
             project_id: project_id.to_string(),
             chapter_id: chapter_id.to_string(),
             base_revision,
@@ -1162,6 +1253,7 @@ impl AnnotationBackend {
         if let Err(error) = annotation_worker().send(AnnotationJob::Apply(job)) {
             self.annotation_edits_applied(
                 request_id,
+                document_session_id,
                 fail_project,
                 fail_chapter,
                 base_revision,
