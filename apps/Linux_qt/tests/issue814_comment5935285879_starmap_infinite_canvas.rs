@@ -278,8 +278,9 @@ fn content_overview_is_readonly_without_camera_hit_or_gestures() {
         "微缩概览必须显式给出 fitScale（进入子画布时的比例来源）"
     );
     assert!(
-        src.contains("readonly property real _safeRatio: 0.66"),
-        "概览必须留在圆的内接安全区（66% 内接，天然不溢出圆外，不需裁剪纹理）"
+        src.contains("StarMapNodeMetrics.embedBounds(")
+            && src.contains("StarMapNodeMetrics.embedFitScale(childBounds"),
+        "概览必须复用共享的 66% 内接安全区几何事实（embedBounds / embedFitScale）"
     );
 }
 
@@ -449,11 +450,13 @@ fn embed_shell_is_a_circle() {
             "StarMapEmbed 不得再保留圆形裁剪 / 递归子内容机制 {removed}"
         );
     }
-    // 概览懒加载：入口投影足够大（>=32px）才创建。
+    // 概览数据只要求入口在视口内；不完整可见时仍要保留 bounds/fitScale。
     assert!(
         src.contains("readonly property bool previewWanted:")
-            && src.contains("width >= 32 && height >= 32"),
-        "概览必须只在入口投影足够大时创建，实际源码不符"
+            && src.contains("screenClipRect !== null")
+            && src.contains("&& _diameter > 0")
+            && !src.contains("width >= 32 && height >= 32"),
+        "预览数据不得再被入口完整可见或 32px 尺寸门槛卸载，实际源码不符"
     );
 }
 

@@ -36,9 +36,8 @@ Item {
     property string starmapId: ""
     property var starmapBackendRef: null
 
-    // 概览包围盒最大边 = 短边 × 该比例。内接正方形是 1/√2 ≈ 0.707，
-    // 取 0.66 留出边距，概览不贴到圆边。
-    readonly property real _safeRatio: 0.66
+    // 概览包围盒最大边 = 短边 × EMBED_SAFE_RATIO。内接正方形是
+    // 1/√2 ≈ 0.707，取 0.66 留出边距，概览不贴到圆边。
     // Issue #984：普通节点宽高统一由 StarMapNodeMetrics 度量（读原始
     // graphData 节点的 title/content），这里不再保留第二套固定几何。
     readonly property int _embedDiameter: 200
@@ -67,49 +66,10 @@ Item {
     readonly property var embeds: graphData && graphData.embeds ? graphData.embeds : []
 
     // ── fit-to-bounds：真实 authored 坐标 → 概览局部像素 ──
-    readonly property var childBounds: {
-        var minX = 0
-        var minY = 0
-        var maxX = 0
-        var maxY = 0
-        var has = false
-        var i
-        for (i = 0; i < nodes.length; i++) {
-            var n = nodes[i]
-            var np = n.position || { x: 0, y: 0 }
-            var isPortal = n.portal && n.portal.destinationStarmapId
-            // Issue #984：普通节点读原始 graphData 节点的 content 度量，
-            // 旧 portal 仍按 Embed 直径处理。
-            var size = StarMapNodeMetrics.sizeFor(layoutSizes, n)
-            var nw = isPortal ? _embedDiameter : size.width
-            var nh = isPortal ? _embedDiameter : size.height
-            if (!has) {
-                minX = np.x; minY = np.y
-                maxX = np.x + nw; maxY = np.y + nh
-                has = true
-            } else {
-                minX = Math.min(minX, np.x); minY = Math.min(minY, np.y)
-                maxX = Math.max(maxX, np.x + nw); maxY = Math.max(maxY, np.y + nh)
-            }
-        }
-        for (i = 0; i < embeds.length; i++) {
-            var e = embeds[i]
-            var ep = e.position || { x: 0, y: 0 }
-            if (!has) {
-                minX = ep.x; minY = ep.y
-                maxX = ep.x + _embedDiameter; maxY = ep.y + _embedDiameter
-                has = true
-            } else {
-                minX = Math.min(minX, ep.x); minY = Math.min(minY, ep.y)
-                maxX = Math.max(maxX, ep.x + _embedDiameter)
-                maxY = Math.max(maxY, ep.y + _embedDiameter)
-            }
-        }
-        if (!has)
-            return null
-        return { minX: minX, minY: minY, maxX: maxX, maxY: maxY,
-                 width: maxX - minX, height: maxY - minY }
-    }
+    // Issue #1031：界面绘制与进入子图共用同一份纯几何事实。
+    // Loader 尺寸使用入口真实屏幕圆直径；视口裁剪只影响绘制，不改变这里。
+    readonly property var childBounds:
+        StarMapNodeMetrics.embedBounds(nodes, embeds, layoutSizes, _embedDiameter)
 
     readonly property real _centerWorldX: childBounds
             ? (childBounds.minX + childBounds.maxX) / 2 : 0
@@ -118,13 +78,8 @@ Item {
 
     // 子图 world 单位 → 概览局部像素（这就是"进入该子图"时的子画布比例）。
     // 没有内容时返回 0，不画任何投影。
-    readonly property real fitScale: {
-        var b = childBounds
-        var side = Math.min(width, height) * _safeRatio
-        if (!b || !(side > 0) || !(b.width > 0) || !(b.height > 0))
-            return 0
-        return side / Math.max(b.width, b.height)
-    }
+    readonly property real fitScale:
+        StarMapNodeMetrics.embedFitScale(childBounds, Math.min(width, height))
 
     function projectX(wx) { return width / 2 + (wx - _centerWorldX) * fitScale }
     function projectY(wy) { return height / 2 + (wy - _centerWorldY) * fitScale }

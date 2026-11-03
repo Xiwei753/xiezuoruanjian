@@ -425,8 +425,9 @@ fn embed_loads_readonly_overview_instead_of_nested_scene() {
     }
     assert!(
         src.contains("readonly property bool previewWanted:")
-            && src.contains("width >= 32 && height >= 32"),
-        "概览必须按入口投影懒加载（>=32px 才创建）"
+            && src.contains("screenClipRect !== null")
+            && src.contains("&& _diameter > 0"),
+        "概览数据只按入口是否在视口内加载，不按完整可见/尺寸门槛卸载"
     );
     assert!(
         src.contains("active: root.previewWanted")
@@ -1573,9 +1574,9 @@ fn overview_fit_is_a_readonly_projection_not_a_world_transform() {
 
     let fit = function_window(&content, "readonly property real fitScale:", 500);
     assert!(
-        fit.contains("var side = Math.min(width, height) * _safeRatio")
-            && fit.contains("return side / Math.max(b.width, b.height)"),
-        "概览 fit 只按圆内接安全区对 authored bounds 做只读投影，实际窗口:\n{fit}"
+        fit.contains("StarMapNodeMetrics.embedFitScale(childBounds")
+            && fit.contains("Math.min(width, height)"),
+        "概览 fit 只按共享的圆内接安全区对 authored bounds 做只读投影，实际窗口:\n{fit}"
     );
     let project = function_window(&content, "function projectX(wx)", 200);
     assert!(
@@ -1643,8 +1644,9 @@ fn overview_renders_static_projection_and_passes_hits_through() {
     let embed = strip_line_comments(&read_src(EMBED));
     assert!(
         embed.contains("active: root.previewWanted")
-            && embed.contains("width >= 32 && height >= 32"),
-        "概览必须由 previewWanted 懒加载，实际源码缺少"
+            && embed.contains("screenClipRect !== null")
+            && embed.contains("&& _diameter > 0"),
+        "概览几何数据必须仅在视口内时加载，且不依赖完整可见，实际源码缺少"
     );
     let scene = strip_line_comments(&read_src(ACTIVE_SCENE));
     assert!(
@@ -1983,11 +1985,11 @@ fn overview_fit_uses_the_circle_inscribed_safe_area_without_world_clamp() {
         }
     }
 
-    // 概览 fit 用圆内接安全区：内接正方形 1/√2 ≈ 0.707，取 0.66 留边距。
+    // 概览 fit 复用模块里的 66% 内接安全区，界面与进入子图共享同一份事实。
     assert!(
-        content.contains("readonly property real _safeRatio: 0.66")
-            && content.contains("var side = Math.min(width, height) * _safeRatio"),
-        "概览必须以圆内接安全区为上限 fit-to-bounds"
+        content.contains("StarMapNodeMetrics.embedBounds(")
+            && content.contains("StarMapNodeMetrics.embedFitScale(childBounds"),
+        "概览必须以共享的圆内接安全区为上限 fit-to-bounds"
     );
     assert!(
         embed.contains("readonly property real _inscribedSide: _diameter / Math.SQRT2"),

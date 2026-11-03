@@ -617,11 +617,51 @@ Item {
     // ── 子图入口的进入连续性信息（Canvas 穿越子画布时用）──
     // fitScale 是概览按当前父镜头把子图压进圆内接安全区的比例；
     // 它同时就是"进入该子图后的子画布 zoom"，切画布前后画面连续。
+    //
+    // Issue #1031：这两项是目标图的几何事实，不能因为入口圆被视口裁掉、
+    // 预览 Loader 尚未创建就退化成 null/0。优先读活动预览的同一份计算；
+    // 缺失时按目标图数据现算，且明确区分“空图/加载成功”和“加载失败”。
+    function _childEntryFacts(targetStarmapId, diameterPx) {
+        if (!starmapBackendRef || !targetStarmapId)
+            return { loaded: false, bounds: null, fitScale: 0 }
+        var res = starmapBackendRef.get_starmap_graph(targetStarmapId)
+        if (!res || res.success !== true || !res.data || !res.data.graph)
+            return { loaded: false, bounds: null, fitScale: 0 }
+        var graph = res.data.graph
+        var childNodes = graph.nodes || []
+        var childEmbeds = graph.embeds || []
+        var sizes = nodeMeasurer
+                ? StarMapNodeMetrics.snapshotFor(
+                      targetStarmapId, childNodes, nodeMeasurer.measureNode)
+                : StarMapNodeMetrics.snapshotSizes(targetStarmapId)
+        var bounds = StarMapNodeMetrics.embedBounds(
+                    childNodes, childEmbeds, sizes, graphController._embedDiameter)
+        return {
+            loaded: true,
+            bounds: bounds,
+            fitScale: StarMapNodeMetrics.embedFitScale(bounds, diameterPx)
+        }
+    }
+
     function embedEntryInfo(instanceId) {
         var m = graphController.getEmbed(instanceId)
         if (!m)
             return null
         var d = embedItemOf(instanceId)
+        var loaded = d ? d.childLoaded === true : false
+        var bounds = d ? d.childBounds : null
+        var fitScale = d ? d.childFitScale : 0
+        // 预览被视口裁掉或尚未实例化时，从目标图数据补齐同一份几何事实。
+        if (!bounds || !(fitScale > 0)) {
+            var facts = _childEntryFacts(
+                        m.targetStarmapId,
+                        Math.min(m.width, m.height) * _safeZoom)
+            loaded = loaded || facts.loaded
+            if (!bounds)
+                bounds = facts.bounds
+            if (!(fitScale > 0))
+                fitScale = facts.fitScale
+        }
         return {
             instanceId: instanceId,
             targetStarmapId: m.targetStarmapId,
@@ -629,8 +669,9 @@ Item {
             height: m.height,
             centerX: m.x + m.width / 2,
             centerY: m.y + m.height / 2,
-            bounds: d ? d.childBounds : null,
-            fitScale: d ? d.childFitScale : 0
+            loaded: loaded,
+            bounds: bounds,
+            fitScale: fitScale
         }
     }
 

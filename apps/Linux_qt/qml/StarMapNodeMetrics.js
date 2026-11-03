@@ -163,6 +163,61 @@ function sizeFor(sizes, node) {
     return { width: defaultNodeWidth(), height: defaultNodeHeight() }
 }
 
+// ── 子星图概览的稳定几何事实 ──
+// 预览是否被视口裁剪只影响绘制，不影响进入子图所需的 bounds / fitScale。
+// 活动画布与概览共用这两个函数，避免两边各算一套 bounds。
+var EMBED_SAFE_RATIO = 0.66
+
+function embedBounds(nodes, embeds, layoutSizes, embedDiameter) {
+    var list = nodes || []
+    var portals = embeds || []
+    var minX = 0
+    var minY = 0
+    var maxX = 0
+    var maxY = 0
+    var has = false
+    var i
+    for (i = 0; i < list.length; i++) {
+        var n = list[i]
+        var np = n.position || { x: 0, y: 0 }
+        var isPortal = n.portal && n.portal.destinationStarmapId
+        var size = sizeFor(layoutSizes, n)
+        var nw = isPortal ? embedDiameter : size.width
+        var nh = isPortal ? embedDiameter : size.height
+        if (!has) {
+            minX = np.x; minY = np.y
+            maxX = np.x + nw; maxY = np.y + nh
+            has = true
+        } else {
+            minX = Math.min(minX, np.x); minY = Math.min(minY, np.y)
+            maxX = Math.max(maxX, np.x + nw); maxY = Math.max(maxY, np.y + nh)
+        }
+    }
+    for (i = 0; i < portals.length; i++) {
+        var e = portals[i]
+        var ep = e.position || { x: 0, y: 0 }
+        if (!has) {
+            minX = ep.x; minY = ep.y
+            maxX = ep.x + embedDiameter; maxY = ep.y + embedDiameter
+            has = true
+        } else {
+            minX = Math.min(minX, ep.x); minY = Math.min(minY, ep.y)
+            maxX = Math.max(maxX, ep.x + embedDiameter)
+            maxY = Math.max(maxY, ep.y + embedDiameter)
+        }
+    }
+    if (!has)
+        return null
+    return { minX: minX, minY: minY, maxX: maxX, maxY: maxY,
+             width: maxX - minX, height: maxY - minY }
+}
+
+function embedFitScale(bounds, diameterPx) {
+    if (!bounds || !(diameterPx > 0) || !(bounds.width > 0) || !(bounds.height > 0))
+        return 0
+    return diameterPx * EMBED_SAFE_RATIO / Math.max(bounds.width, bounds.height)
+}
+
 function invalidateSnapshot(starmapId) {
     var key = starmapId !== undefined && starmapId !== null ? String(starmapId) : ""
     delete _snapshots[key]

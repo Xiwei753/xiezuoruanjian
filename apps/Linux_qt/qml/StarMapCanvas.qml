@@ -1188,6 +1188,16 @@ Item {
         var info = scene.embedEntryInfo(instanceId)
         if (!info)
             return -1
+        // Issue #1031：没有目标图的 bounds/fitScale 事实时不能进入；否则
+        // ratio=1.0 / boundsCenter=0 会被误当成“已装载的空子图”，导致切换跳变。
+        if (info.loaded !== true || (info.bounds !== null && !(info.fitScale > 0))) {
+            routeError = qsTr("子星图预览尚未就绪")
+            logInteraction("scene_enter_blocked", "embed", instanceId, {
+                "trigger": trigger || "",
+                "reason": info.loaded === true ? "missing_geometry" : "preview_not_loaded"
+            })
+            return -1
+        }
         var zoomEntryKeyUsed = _zoomEntryKey
         var parentZoom = zoomLevel
         var projectedDiameterPx = Math.min(info.width, info.height) * parentZoom
@@ -1242,6 +1252,8 @@ Item {
         var context = {
             parentRouteKey: routeKey,
             instanceId: instanceId,
+            // 仅“加载成功但没有内容”的空图才使用 ratio=1 / boundsCenter=0；
+            // 未装载或非空图缺少几何已在上面中止，不会用这两个默认值伪装。
             ratio: (info.fitScale > 0 && parentZoom > 0) ? info.fitScale / parentZoom : 1.0,
             embedDiameter: Math.min(info.width, info.height),
             embedCenterX: info.centerX,
