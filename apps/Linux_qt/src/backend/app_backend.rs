@@ -782,6 +782,18 @@ impl AppBackend {
         ))
     }
 
+    /// 标注后台任务的工作区上下文。与星图预览共用同一条边界：GUI 线程只
+    /// 复制 roots + GitRepoLayout，后台线程重新构造 WriterCoreApi。
+    pub(crate) fn annotation_task_context(
+        &self,
+    ) -> Option<(
+        String,
+        String,
+        writer_core::storage::git_repo_layout::GitRepoLayout,
+    )> {
+        self.starmap_preview_context()
+    }
+
     // --- StarMap methods ---
 
     // Deprecated compatibility forwarding surface is split by domain.

@@ -49,6 +49,16 @@ pub struct StarMapBackend {
     workspace_changes_since_json: qt_method!(fn(&self, offset: u64) -> QString),
     get_starmap_graph: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
     request_starmap_preview: qt_method!(fn(&self, request_id: u32, starmap_id: QString)),
+    finalize_starmap_preview: qt_method!(
+        fn(
+            &self,
+            request_id: u32,
+            starmap_id: QString,
+            graph_revision: QString,
+            layouts_json: QString,
+        )
+    ),
+    invalidate_starmap_preview: qt_method!(fn(&self, starmap_id: QString, revision: u64)),
     resolve_starmap_path_json:
         qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QString),
     resolve_starmap_path:
@@ -292,8 +302,7 @@ pub struct StarMapBackend {
             to_path_json: QString,
         ) -> QJsonObject
     ),
-    hit_test_scene_node:
-        qt_method!(fn(&self, scene_key: QString, x: f64, y: f64) -> QJsonObject),
+    hit_test_scene_node: qt_method!(fn(&self, scene_key: QString, x: f64, y: f64) -> QJsonObject),
     hit_test_scene_edge:
         qt_method!(fn(&self, scene_key: QString, x: f64, y: f64, threshold: f64) -> QJsonObject),
     hit_test_scene_edge_screen: qt_method!(
@@ -337,6 +346,12 @@ pub struct StarMapBackend {
     ),
     // Issue #1032：子星图预览快照在后台线程构建，完成后带请求 id / 图 id /
     // graphRevision 回 GUI；QML 只在 revision 变化时替换共享快照。
+    starmap_preview_graph_ready: qt_signal!(
+        request_id: u32,
+        starmap_id: QString,
+        graph_revision: QString,
+        graph_json: QString
+    ),
     starmap_preview_ready: qt_signal!(
         request_id: u32,
         starmap_id: QString,
@@ -344,6 +359,7 @@ pub struct StarMapBackend {
         snapshot_json: QString
     ),
     starmap_preview_failed: qt_signal!(request_id: u32, starmap_id: QString, message: QString),
+    starmap_preview_invalidated: qt_signal!(starmap_id: QString, revision: u64),
     app: AppRef,
     // Issue #1029 评论：同一 Canvas 可能同时存在旧场景 / 活动场景两个
     // StarMapActiveScene，且同一张图可经不同 Embed 路径打开。显示缓存必须按
@@ -755,7 +771,12 @@ impl StarMapBackend {
         let mut caches = self.scene_caches.borrow_mut();
         let cache = caches.entry(scene_key.to_string()).or_default();
         let raw = writer_core::api::ResultEnvelope::success(cache.hit_edge_screen(
-            x, y, zoom, pan_x, pan_y, threshold_px,
+            x,
+            y,
+            zoom,
+            pan_x,
+            pan_y,
+            threshold_px,
         ))
         .to_json_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)
@@ -792,11 +813,12 @@ impl StarMapBackend {
             })
     }
 
-    /// Issue #1032：后台构建子星图预览快照。
+    /// Issue #1032：向后台共享预览服务请求目标图数据。
     ///
-    /// 这里只取 roots + GitRepoLayout 快照；真正的 Core 读取、节点尺寸估算、
-    /// 边几何与包围盒都在独立线程完成。完成信号带 request_id 与 graphRevision，
-    /// QML 只在当前请求且 revision 真正变化时替换共享快照。
+    /// 后台服务只读取 Core 图数据并返回 graphRevision；QML 必须先用
+    /// StarMapNodeMeasurer 实测整张目标图的节点布局，再调用
+    /// finalize_starmap_preview 计算边与 bounds。这样可以保证预览和活动
+    /// 画布消费的是同一份 Qt 文本排版，不在 Rust 重新发明度量算法。
     fn request_starmap_preview(&self, request_id: u32, starmap_id: QString) {
         let target = starmap_id.to_string();
         let context = match self.with_app(|app| app.starmap_preview_context()) {
@@ -815,57 +837,174 @@ impl StarMapBackend {
             }
         };
         let (data_root, projects_root, layout) = context;
+        let preview_context = crate::starmap_view::preview_cache::PreviewContext::new(
+            &data_root,
+            &projects_root,
+            &layout,
+        );
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(
-            move |(request_id, starmap_id, result): (u32, String, Result<String, String>)| {
+            move |event: crate::starmap_view::preview_cache::PreviewEvent| {
                 if let Some(pinned) = qptr.as_pinned() {
                     let this = pinned.borrow_mut();
-                    match result {
-                        Ok(json) => {
-                            let graph_revision = serde_json::from_str::<serde_json::Value>(&json)
-                                .ok()
-                                .and_then(|value| {
-                                    value
-                                        .get("graphRevision")
-                                        .and_then(|revision| revision.as_str())
-                                        .map(str::to_owned)
-                                })
-                                .unwrap_or_default();
-                            this.starmap_preview_ready(
-                                request_id,
-                                QString::from(starmap_id),
-                                QString::from(graph_revision),
-                                QString::from(json),
-                            );
-                        }
-                        Err(message) => {
-                            this.starmap_preview_failed(
-                                request_id,
-                                QString::from(starmap_id),
-                                QString::from(message),
-                            );
-                        }
+                    match event {
+                        crate::starmap_view::preview_cache::PreviewEvent::GraphReady {
+                            request_id,
+                            starmap_id,
+                            graph_revision,
+                            graph_json,
+                        } => this.starmap_preview_graph_ready(
+                            request_id,
+                            QString::from(starmap_id),
+                            QString::from(graph_revision),
+                            QString::from(graph_json),
+                        ),
+                        crate::starmap_view::preview_cache::PreviewEvent::Ready {
+                            request_id,
+                            starmap_id,
+                            graph_revision,
+                            snapshot_json,
+                        } => this.starmap_preview_ready(
+                            request_id,
+                            QString::from(starmap_id),
+                            QString::from(graph_revision),
+                            QString::from(snapshot_json),
+                        ),
+                        crate::starmap_view::preview_cache::PreviewEvent::Failed {
+                            request_id,
+                            starmap_id,
+                            message,
+                        } => this.starmap_preview_failed(
+                            request_id,
+                            QString::from(starmap_id),
+                            QString::from(message),
+                        ),
                     }
                 }
             },
         );
-        let thread_target = target.clone();
-        let spawn = std::thread::Builder::new()
-            .name("starmap-preview".to_string())
-            .spawn(move || {
-                let api = super::with_layout_core_api(&data_root, &projects_root, &layout);
-                let result = api
-                    .get_starmap_graph(&thread_target)
-                    .map_err(|error| error.to_string())
-                    .and_then(crate::starmap_view::preview_cache::build_from_dto)
-                    .and_then(|snapshot| {
-                        crate::starmap_view::preview_cache::to_json(&snapshot)
-                    });
-                callback((request_id, thread_target, result));
-            });
-        if let Err(error) = spawn {
-            self.starmap_preview_failed(request_id, starmap_id, QString::from(error.to_string()));
+        crate::starmap_view::preview_cache::service().request_graph(
+            request_id,
+            preview_context,
+            target,
+            Box::new(move |event| callback(event)),
+        );
+    }
+
+    /// QML 已完成目标图的真实文本排版测量；把布局交给后台服务算边和 bounds。
+    fn finalize_starmap_preview(
+        &self,
+        request_id: u32,
+        starmap_id: QString,
+        graph_revision: QString,
+        layouts_json: QString,
+    ) {
+        let target = starmap_id.to_string();
+        let revision = graph_revision.to_string();
+        let layouts = match serde_json::from_str::<
+            Vec<crate::starmap_view::preview_cache::PreviewNodeLayout>,
+        >(&layouts_json.to_string())
+        {
+            Ok(layouts) => layouts,
+            Err(error) => {
+                self.starmap_preview_failed(
+                    request_id,
+                    starmap_id,
+                    QString::from(format!("节点布局 JSON 无效: {error}")),
+                );
+                return;
+            }
+        };
+        let context = match self.with_app(|app| app.starmap_preview_context()) {
+            Ok(Some(context)) => context,
+            Ok(None) => {
+                self.starmap_preview_failed(
+                    request_id,
+                    starmap_id,
+                    QString::from("工作区尚未打开"),
+                );
+                return;
+            }
+            Err(error) => {
+                self.starmap_preview_failed(request_id, starmap_id, error.to_string().into());
+                return;
+            }
+        };
+        let (data_root, projects_root, layout) = context;
+        let preview_context = crate::starmap_view::preview_cache::PreviewContext::new(
+            &data_root,
+            &projects_root,
+            &layout,
+        );
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |event: crate::starmap_view::preview_cache::PreviewEvent| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match event {
+                        crate::starmap_view::preview_cache::PreviewEvent::GraphReady {
+                            request_id,
+                            starmap_id,
+                            graph_revision,
+                            graph_json,
+                        } => this.starmap_preview_graph_ready(
+                            request_id,
+                            QString::from(starmap_id),
+                            QString::from(graph_revision),
+                            QString::from(graph_json),
+                        ),
+                        crate::starmap_view::preview_cache::PreviewEvent::Ready {
+                            request_id,
+                            starmap_id,
+                            graph_revision,
+                            snapshot_json,
+                        } => this.starmap_preview_ready(
+                            request_id,
+                            QString::from(starmap_id),
+                            QString::from(graph_revision),
+                            QString::from(snapshot_json),
+                        ),
+                        crate::starmap_view::preview_cache::PreviewEvent::Failed {
+                            request_id,
+                            starmap_id,
+                            message,
+                        } => this.starmap_preview_failed(
+                            request_id,
+                            QString::from(starmap_id),
+                            QString::from(message),
+                        ),
+                    }
+                }
+            },
+        );
+        crate::starmap_view::preview_cache::service().finalize(
+            request_id,
+            preview_context,
+            target,
+            revision,
+            layouts,
+            Box::new(move |event| callback(event)),
+        );
+    }
+
+    /// 工作区事件按目标 starmapId 精确标脏；epoch 变化后旧任务结果不会再
+    /// 被预览服务当成当前快照。
+    fn invalidate_starmap_preview(&self, starmap_id: QString, revision: u64) {
+        let target = starmap_id.to_string();
+        if let Ok(Some(context)) = self.with_app(|app| app.starmap_preview_context()) {
+            let (data_root, projects_root, layout) = context;
+            let preview_context = crate::starmap_view::preview_cache::PreviewContext::new(
+                &data_root,
+                &projects_root,
+                &layout,
+            );
+            crate::starmap_view::preview_cache::service().invalidate(
+                &preview_context,
+                &target,
+                revision,
+            );
         }
+        self.starmap_preview_invalidated(starmap_id, revision);
     }
     fn resolve_starmap_path_json(
         &self,

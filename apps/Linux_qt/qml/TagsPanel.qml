@@ -64,8 +64,10 @@ Rectangle {
         if (selectionAnchorRef && selectionAnchorKey === key)
             return selectionAnchorRef
         if (annotationBackendRef.get_chapter_annotations_json) {
+            // Issue #1032：编辑事务 baseline 由标注后台线程持有；这里是只读
+            // 查询，不能用后台 baselineId 调另一个 GUI 线程 API 实例。
             var snapshot = parseData(annotationBackendRef.get_chapter_annotations_json(
-                projectId, chapterId, Number(textRevision), chapterText, baselineId))
+                projectId, chapterId, Number(textRevision), chapterText, ""))
             var anchors = snapshot && snapshot.anchors ? snapshot.anchors : []
             for (var i = 0; i < anchors.length; ++i) {
                 if (Number(anchors[i].startByte) === selectionStartByte

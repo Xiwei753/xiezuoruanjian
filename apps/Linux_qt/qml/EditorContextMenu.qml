@@ -32,13 +32,11 @@ Menu {
             var currentText = controller.getEditorPlainText()
             var revision = Number(editorItem.text_revision)
             if (annotationBackendRef.get_chapter_annotations_json) {
-                var currentSnapshot = controller.annotationNavigationSnapshot
-                var baselineId = currentSnapshot
-                        && String(currentSnapshot.projectId) === String(controller.projectId)
-                        && String(currentSnapshot.chapterId) === String(controller.chapterId)
-                        ? String(currentSnapshot.baselineId || "") : ""
+                // Issue #1032：编辑事务 baseline 由标注后台线程持有；这里是
+                // 只读查询，不能把后台 baselineId 交给 GUI 线程的另一个 API
+                // 实例。空 baseline 会按当前正文重新投影已有锚点。
                 var snapshot = parseData(annotationBackendRef.get_chapter_annotations_json(
-                    controller.projectId, controller.chapterId, revision, currentText, baselineId))
+                    controller.projectId, controller.chapterId, revision, currentText, ""))
                 var anchors = snapshot && snapshot.anchors ? snapshot.anchors : []
                 for (var i = 0; i < anchors.length; ++i) {
                     if (Number(anchors[i].startByte) === Number(editorItem.selection_start_byte)

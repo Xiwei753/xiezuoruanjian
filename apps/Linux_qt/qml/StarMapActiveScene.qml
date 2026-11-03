@@ -71,6 +71,11 @@ Item {
     // key = targetStarmapId，value = 后台构建的不可变快照（含 graphRevision）。
     // 同一目标图的多个 Embed 入口共享同一份；相机变化不改变这里。
     property var previewSnapshots: ({})
+    property var previewDirty: ({})
+    // 每次按目标标脏递增 generation；请求发出时记录当时 generation，
+    // 完成时 generation 不一致说明计算期间又变了，必须丢弃重算。
+    property var previewGenerations: ({})
+    property var previewRequestGenerations: ({})
     // key = targetStarmapId，value = 当前在途请求 id；用于丢弃过期结果。
     property var previewRequests: ({})
     property int previewRequestSerial: 0
@@ -253,7 +258,7 @@ Item {
             // Issue #1032：只补充缺失 / 新增入口的预览；已有快照不随缩放重建。
             scene.syncPreviewTargets(false)
         }
-        onWorkspaceActivity: function(events) { scene.syncPreviewTargets(true) }
+        onWorkspaceActivity: function(events) { scene.invalidatePreviewTargets(events) }
         onStructureChanged: scene.structureChanged()
         onSelectionCleared: scene.selectionCleared()
         onNodeSelected: function(node) { scene.nodeSelected(node) }
@@ -629,14 +634,14 @@ Item {
     // fitScale 是概览按当前父镜头把子图压进圆内接安全区的比例；
     // 它同时就是"进入该子图后的子画布 zoom"，切画布前后画面连续。
     //
-    // Issue #1032：这两项直接来自后台共享预览快照，不再在 GUI 线程同步
-    // 读目标图或实测文本。快照缺失时先触发一次后台请求，返回未加载。
+    // Issue #1032：预览快照由 Rust 固定后台队列共享构建；这里不在 GUI
+    // 同步读目标图 / 猜排版。QML 只用 StarMapNodeMeasurer 在数据加载阶段
+    // 实测一次整图布局，再交给后台算边与 bounds。
     function _childEntryFacts(targetStarmapId, diameterPx) {
         if (!targetStarmapId)
             return { loaded: false, bounds: null, fitScale: 0 }
         var snapshot = previewSnapshots[targetStarmapId]
-        if (!snapshot) {
-            // 快照尚未就绪时只触发一次后台请求，不回到 GUI 线程同步读 Core。
+        if (!snapshot || previewDirty[targetStarmapId]) {
             syncPreviewTargets(false)
             return { loaded: false, bounds: null, fitScale: 0 }
         }
@@ -649,8 +654,6 @@ Item {
         }
     }
 
-    // 每张目标图只保留一个在途请求；结果按 requestId + starmapId + revision
-    // 校验。多个 Embed 入口因此共享同一份快照，不会各自读图。
     function previewTargetIds() {
         var seen = {}
         var out = []
@@ -665,40 +668,110 @@ Item {
         return out
     }
 
+    function isPreviewTarget(starmapId) {
+        var id = String(starmapId || "")
+        if (id === "") return false
+        var targets = previewTargetIds()
+        for (var i = 0; i < targets.length; i++)
+            if (targets[i] === id) return true
+        return false
+    }
+
     function syncPreviewTargets(force) {
         if (!starmapBackendRef)
             return
         var targets = previewTargetIds()
         for (var i = 0; i < targets.length; i++) {
             var target = targets[i]
-            if (!force && previewSnapshots[target])
+            if (!force && previewSnapshots[target] && !previewDirty[target])
                 continue
             if (previewRequests[target] !== undefined)
                 continue
             previewRequestSerial += 1
+            if (previewRequestSerial > 2147483000) previewRequestSerial = 1
             var requestId = previewRequestSerial
             previewRequests[target] = requestId
+            previewRequestGenerations[target] =
+                Number(previewGenerations[target] || 0)
             starmapBackendRef.request_starmap_preview(requestId, target)
         }
+    }
+
+    // QML 只做事件路由：按 event.starmapId / revision 精确标脏。后台服务收到
+    // invalidate 后递增该图 epoch；在途旧任务即使晚到也不会被当成当前几何。
+    function invalidatePreviewTargets(events) {
+        if (!starmapBackendRef || !events)
+            return
+        for (var i = 0; i < events.length; i++) {
+            var event = events[i]
+            if (!event) continue
+            var id = String(event.starmapId || "")
+            if (id === "") continue
+            starmapBackendRef.invalidate_starmap_preview(
+                id, Number(event.revision || 0))
+        }
+    }
+
+    function discardStalePreviewRequest(starmapId) {
+        delete previewRequests[starmapId]
+        // dirty 保留到新快照真正就绪，避免旧 bounds 被当成当前几何。
+        syncPreviewTargets(false)
+    }
+
+    // 后台先返回图数据；这里用 Qt 唯一真实的文本排版测量整张目标图。
+    function receiveStarmapPreviewGraphReady(requestId, starmapId, graphRevision, graphJson) {
+        if (previewRequests[starmapId] !== requestId)
+            return
+        if (Number(previewRequestGenerations[starmapId] || 0)
+                !== Number(previewGenerations[starmapId] || 0)) {
+            discardStalePreviewRequest(starmapId)
+            return
+        }
+        var graph = null
+        try { graph = JSON.parse(String(graphJson || "{}")) } catch (error) {}
+        if (!graph || !graph.nodes) {
+            delete previewRequests[starmapId]
+            return
+        }
+        var sizes = StarMapNodeMetrics.snapshotFor(
+            starmapId, graph.nodes, nodeMeasurer.measureNode)
+        var layouts = []
+        for (var i = 0; i < graph.nodes.length; i++) {
+            var node = graph.nodes[i]
+            if (!node || !node.id) continue
+            var size = StarMapNodeMetrics.sizeFor(sizes, node)
+            layouts.push({
+                id: String(node.id),
+                width: Number(size.width),
+                height: Number(size.height)
+            })
+        }
+        starmapBackendRef.finalize_starmap_preview(
+            requestId, starmapId, String(graphRevision), JSON.stringify(layouts))
     }
 
     function receiveStarmapPreviewReady(requestId, starmapId, graphRevision, snapshotJson) {
         if (previewRequests[starmapId] !== requestId)
             return
-        delete previewRequests[starmapId]
-        var snapshot = null
-        try {
-            snapshot = JSON.parse(snapshotJson)
-        } catch (error) {
+        if (Number(previewRequestGenerations[starmapId] || 0)
+                !== Number(previewGenerations[starmapId] || 0)) {
+            discardStalePreviewRequest(starmapId)
             return
         }
+        delete previewRequests[starmapId]
+        delete previewRequestGenerations[starmapId]
+        var snapshot = null
+        try { snapshot = JSON.parse(String(snapshotJson || "{}")) } catch (error) {}
         if (!snapshot || (snapshot.starmapId && snapshot.starmapId !== starmapId))
             return
         if (!snapshot.graphRevision)
             snapshot.graphRevision = graphRevision
         var current = previewSnapshots[starmapId]
-        if (current && current.graphRevision === snapshot.graphRevision)
+        if (current && current.graphRevision === snapshot.graphRevision) {
+            delete previewDirty[starmapId]
             return
+        }
+        delete previewDirty[starmapId]
         var next = {}
         for (var key in previewSnapshots)
             next[key] = previewSnapshots[key]
@@ -707,8 +780,23 @@ Item {
     }
 
     function receiveStarmapPreviewFailed(requestId, starmapId, message) {
-        if (previewRequests[starmapId] === requestId)
+        if (previewRequests[starmapId] === requestId) {
             delete previewRequests[starmapId]
+            delete previewRequestGenerations[starmapId]
+            // 保留 dirty，确保旧 bounds 不会在失败后重新被当成当前几何。
+        }
+    }
+
+    function receiveStarmapPreviewInvalidated(starmapId, revision) {
+        if (!isPreviewTarget(starmapId))
+            return
+        previewDirty[starmapId] = Number(revision || 0)
+        previewGenerations[starmapId] =
+            Number(previewGenerations[starmapId] || 0) + 1
+        // 已有快照先保留显示，但下一次请求必须重新读图；在途请求由完成
+        // 回调检查 dirty 后丢弃并重发。
+        if (previewRequests[starmapId] === undefined)
+            syncPreviewTargets(false)
     }
 
     function embedEntryInfo(instanceId) {
@@ -1202,11 +1290,18 @@ Item {
     // + graphRevision 替换，相机缩放不会触发这里。
     Connections {
         target: scene.starmapBackendRef
+        function onStarmap_preview_graph_ready(requestId, starmapId, graphRevision, graphJson) {
+            scene.receiveStarmapPreviewGraphReady(
+                requestId, starmapId, graphRevision, graphJson)
+        }
         function onStarmap_preview_ready(requestId, starmapId, graphRevision, snapshotJson) {
             scene.receiveStarmapPreviewReady(requestId, starmapId, graphRevision, snapshotJson)
         }
         function onStarmap_preview_failed(requestId, starmapId, message) {
             scene.receiveStarmapPreviewFailed(requestId, starmapId, message)
+        }
+        function onStarmap_preview_invalidated(starmapId, revision) {
+            scene.receiveStarmapPreviewInvalidated(starmapId, revision)
         }
     }
 

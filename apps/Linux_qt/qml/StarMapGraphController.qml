@@ -204,7 +204,17 @@ QtObject {
         nextGraph[collection] = nextItems
         graphData = nextGraph
         _sceneCacheDirty = true
+        invalidatePreviewCache()
         return true
+    }
+
+    // 本地落到 Core 的图内容 / 位置变化也要让共享预览缓存失效；镜头、
+    // 选择和拖拽临时帧不调用这里。
+    function invalidatePreviewCache() {
+        if (!starmapBackendRef || !starmapId
+                || !starmapBackendRef.invalidate_starmap_preview)
+            return
+        starmapBackendRef.invalidate_starmap_preview(starmapId, 0)
     }
 
     function _reloadOnConflict(res) {
@@ -246,6 +256,7 @@ QtObject {
             clearError();
             graphData = res.data.graph;
             _sceneCacheDirty = true;
+            invalidatePreviewCache();
             // 结构通知与几何缓存提交分离：先更新模型、同步一次缓存并算一次边，
             // 最后才通知视图；视图不再触发第二遍全图计算。
             buildModels(false);

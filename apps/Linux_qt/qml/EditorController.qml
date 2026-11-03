@@ -98,10 +98,12 @@ QtObject {
     // Epoch attached to every in-flight request, so a delayed response from a
     // previous document cannot overwrite the current chapter's annotations.
     property var correctionRequestEpochs: ({})
-    // Issue #1032：编辑事实先入队，首帧提交后逐条处理，避免同步槽函数
-    // 在按键路径上跑标注/纠错映射。纠错 apply 本身进入 Rust 后台 FIFO。
-    property var editorFollowups: []
-    property bool editorFollowupScheduled: false
+    // Issue #1032 复审：标注映射也进入 Rust 后台固定队列，QML 只投递轻量
+    // 编辑事实并接收按章节 + revision 返回的异步结果。这里只保存展示侧的
+    // 请求标识；切章 / 重置时丢弃旧页面回调，但不会删除已提交的后台事实。
+    property int annotationRequestSerial: 0
+    property var annotationApplyRequests: ({})
+    property var annotationRefreshRequests: ({})
     property int correctionApplyRequestSerial: 0
     property var correctionApplyRequests: ({})
     property var editorViewportRef: null
@@ -231,7 +233,7 @@ QtObject {
                                          changesJson, oldSelectionAnchor, oldSelectionHead,
                                          newSelectionAnchor, newSelectionHead,
                                          beforeTextSha256, afterTextSha256) {
-            controller.enqueueEditorFollowup({
+            controller.submitAnnotationEditFact({
                 projectId: controller.projectId,
                 chapterId: controller.chapterId,
                 cause: cause,
@@ -251,6 +253,26 @@ QtObject {
                 controller.proofBaselineSent = true;
             }
             }
+        }
+    }
+
+    property var annotationBackendConnections: Connections {
+        target: annotationBackendRef ? annotationBackendRef : null
+        function onAnnotation_chapter_ready(requestId, projectId, chapterId,
+                                            textRevision, snapshotJson) {
+            controller.receiveAnnotationSnapshot(
+                requestId, projectId, chapterId, textRevision, snapshotJson)
+        }
+        function onAnnotation_chapter_failed(requestId, projectId, chapterId,
+                                             textRevision, message) {
+            controller.receiveAnnotationFailure(
+                requestId, projectId, chapterId, textRevision, message)
+        }
+        function onAnnotation_edits_applied(requestId, projectId, chapterId,
+                                            baseRevision, textRevision, success, message) {
+            controller.receiveAnnotationEditsApplied(
+                requestId, projectId, chapterId, baseRevision,
+                textRevision, success, message)
         }
     }
 
@@ -280,40 +302,43 @@ QtObject {
         return String(text).replace(/\u2029/g, "\n").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     }
 
-    // Issue #1032：`editor_change_applied` 槽只做事实入队。每条事实在独立的
-    // 事件循环轮次处理，先让刚提交的正文视觉有机会上屏，再按章节 + revision
-    // 顺序映射标注区间和纠错 patch。
-    function enqueueEditorFollowup(fact) {
+    // Issue #1032 复审：onEditor_change_applied 只投递不可变事实。标注更新
+    // 进入 Rust 单线程业务队列，按项目 + 章节 + base/new revision 顺序消费；
+    // 纠错 patch 继续进入现有 correction FIFO。这里不再用 Qt.callLater 代替
+    // 业务队列，也不在 GUI 线程执行任何 annotation Core 调用。
+    function submitAnnotationEditFact(fact) {
         if (!fact || !fact.projectId || !fact.chapterId) return;
-        editorFollowups.push(fact);
-        if (!editorFollowupScheduled) {
-            editorFollowupScheduled = true;
-            Qt.callLater(controller.processNextEditorFollowup);
+        if (annotationBackendRef && annotationBackendRef.queue_annotation_edits) {
+            annotationRequestSerial += 1;
+            if (annotationRequestSerial > 2147483000) annotationRequestSerial = 1;
+            var requestId = annotationRequestSerial;
+            annotationApplyRequests[requestId] = {
+                projectId: String(fact.projectId),
+                chapterId: String(fact.chapterId),
+                baseRevision: Number(fact.baseRevision),
+                revision: Number(fact.newRevision),
+                epoch: correctionDocumentEpoch
+            };
+            annotationBackendRef.queue_annotation_edits(
+                requestId,
+                String(fact.projectId),
+                String(fact.chapterId),
+                Number(fact.baseRevision),
+                Number(fact.newRevision),
+                String(fact.cause || "Typing"),
+                String(fact.editRangesJson || "[]"));
         }
-    }
-
-    function processNextEditorFollowup() {
-        editorFollowupScheduled = false;
-        if (editorFollowups.length === 0) return;
-        var fact = editorFollowups.shift();
-        if (fact.projectId !== controller.projectId
-                || fact.chapterId !== controller.chapterId) {
-            // 旧章节事实不再作用于当前文档，也不阻塞后续事实。
-        } else {
-            applyAnnotationEditRanges(
-                fact.cause, fact.baseRevision, fact.newRevision, fact.editRangesJson);
+        // 纠错 apply 已是后台 FIFO；这里只负责投递 patch 事实。
+        if (fact.projectId === controller.projectId
+                && fact.chapterId === controller.chapterId) {
             reconcileCorrectionEdit(
                 fact.baseRevision, fact.newRevision, fact.editRangesJson);
         }
-        if (editorFollowups.length > 0) {
-            editorFollowupScheduled = true;
-            Qt.callLater(controller.processNextEditorFollowup);
-        }
     }
 
-    function clearEditorFollowups() {
-        editorFollowups = [];
-        editorFollowupScheduled = false;
+    function clearAnnotationDisplayRequests() {
+        annotationApplyRequests = ({});
+        annotationRefreshRequests = ({});
     }
 
     function cancelPendingCorrectionRequest() {
@@ -355,59 +380,8 @@ QtObject {
         targetEditorItem.set_text_decorations_json(JSON.stringify(spans));
     }
 
-    function applyAnnotationEditRanges(cause, baseRevision, newRevision, rangesJson) {
-        if (!annotationBackendRef || !projectId || !chapterId || isLoadingChapter || isApplyingFormat)
-            return;
-        var edits = [];
-        try {
-            var ranges = JSON.parse(String(rangesJson || "[]"));
-            for (var i = 0; i < ranges.length; ++i) {
-                var range = ranges[i];
-                if (!range || range.length < 4) continue;
-                edits.push({
-                    oldStartByte: Number(range[0]), oldEndByte: Number(range[1]),
-                    newStartByte: Number(range[2]), newEndByte: Number(range[3])
-                });
-            }
-        } catch (e) {
-            annotationError = qsTr("正文标记更新范围无效")
-            annotationDecorations = []
-            annotationNavigationSnapshot = null
-            annotationBaselineRevision = -1
-            applyTextDecorations()
-            return
-        }
-        var snapshot = annotationNavigationSnapshot
-        if (!snapshot || String(snapshot.projectId) !== String(projectId)
-                || String(snapshot.chapterId) !== String(chapterId)
-                || Number(annotationBaselineRevision) !== Number(baseRevision)
-                || String(snapshot.baselineId || "").length === 0) {
-            annotationError = qsTr("正文标记基准已失效，正在重新载入")
-            annotationNavigationSnapshot = null
-            annotationBaselineRevision = -1
-            annotationRefreshTimer.restart()
-            return
-        }
-        var raw = annotationBackendRef.apply_annotation_edits_json(
-            projectId, chapterId, String(snapshot.baselineId),
-            Number(baseRevision), Number(newRevision), String(cause),
-            JSON.stringify(edits))
-        var envelope = null
-        try { envelope = JSON.parse(String(raw || "{}")) } catch (e) {}
-        if (!envelope || envelope.success !== true) {
-            annotationError = envelope && envelope.rawError ? String(envelope.rawError) : qsTr("正文标记未能更新")
-            annotationDecorations = []
-            annotationNavigationSnapshot = null
-            annotationBaselineRevision = -1
-            applyTextDecorations()
-            annotationRefreshTimer.restart()
-            return
-        }
-        annotationError = ""
-        annotationBaselineRevision = Number(newRevision)
-        annotationRefreshTimer.restart()
-    }
-
+    // Issue #1032 复审：标注快照也由后台 API 生成。请求带当前章节、正文
+    // revision 和文档 epoch；返回后只有仍匹配当前文档的最新请求才更新显示。
     function refreshChapterAnnotations() {
         if (!annotationBackendRef || !targetEditorItem || !projectId || !chapterId) {
             annotationDecorations = []
@@ -421,28 +395,40 @@ QtObject {
         }
         var revision = Number(targetEditorItem.text_revision)
         var text = getEditorPlainText()
-        var existingSnapshot = annotationNavigationSnapshot
-        var baselineId = existingSnapshot
-                && String(existingSnapshot.projectId) === String(projectId)
-                && String(existingSnapshot.chapterId) === String(chapterId)
-                ? String(existingSnapshot.baselineId || "") : ""
-        var raw = annotationBackendRef.get_chapter_annotations_json(
-            projectId, chapterId, revision, text, baselineId)
-        var envelope = null
-        try { envelope = JSON.parse(String(raw || "{}")) } catch (e) {}
-        if (!envelope || envelope.success !== true || !envelope.data) {
-            annotationError = envelope && envelope.rawError ? String(envelope.rawError) : qsTr("正文标记暂不可用")
-            annotationDecorations = []
-            annotationNavigationSnapshot = null
-            annotationBaselineRevision = -1
-            applyTextDecorations()
+        annotationRequestSerial += 1
+        if (annotationRequestSerial > 2147483000) annotationRequestSerial = 1
+        var requestId = annotationRequestSerial
+        annotationRefreshRequests = ({})
+        annotationRefreshRequests[requestId] = {
+            projectId: String(projectId),
+            chapterId: String(chapterId),
+            revision: revision,
+            epoch: correctionDocumentEpoch
+        }
+        annotationBackendRef.request_chapter_annotations(
+            requestId, String(projectId), String(chapterId), revision, text)
+    }
+
+    function receiveAnnotationSnapshot(requestId, projectId, chapterId,
+                                       textRevision, snapshotJson) {
+        var expected = annotationRefreshRequests[requestId]
+        delete annotationRefreshRequests[requestId]
+        if (!expected) return
+        if (expected.projectId !== projectId || expected.chapterId !== chapterId
+                || Number(expected.revision) !== Number(textRevision)
+                || expected.epoch !== correctionDocumentEpoch
+                || projectId !== controller.projectId
+                || chapterId !== controller.chapterId)
+            return
+        var snapshot = null
+        try { snapshot = JSON.parse(String(snapshotJson || "{}")) } catch (e) {}
+        if (!snapshot) {
+            annotationError = qsTr("正文标记响应无法读取")
             return
         }
-        var snapshot = envelope.data
-        if (Number(snapshot.textRevision) !== revision
+        var revision = Number(snapshot.textRevision)
+        if (revision !== Number(textRevision)
                 || revision !== Number(targetEditorItem.text_revision)) {
-            annotationNavigationSnapshot = null
-            annotationBaselineRevision = -1
             annotationRefreshTimer.restart()
             return
         }
@@ -486,6 +472,48 @@ QtObject {
         annotationTrackedRevision = revision
         annotationError = ""
         applyTextDecorations()
+    }
+
+    function receiveAnnotationFailure(requestId, projectId, chapterId,
+                                      textRevision, message) {
+        var expected = annotationRefreshRequests[requestId]
+        delete annotationRefreshRequests[requestId]
+        if (!expected) return
+        if (expected.projectId !== projectId
+                || expected.chapterId !== chapterId
+                || Number(expected.revision) !== Number(textRevision)
+                || expected.epoch !== correctionDocumentEpoch
+                || projectId !== controller.projectId
+                || chapterId !== controller.chapterId)
+            return
+        annotationError = String(message || qsTr("正文标记暂不可用"))
+        if (annotationNavigationSnapshot === null)
+            applyTextDecorations()
+    }
+
+    function receiveAnnotationEditsApplied(requestId, projectId, chapterId,
+                                          baseRevision, textRevision,
+                                          success, message) {
+        var expected = annotationApplyRequests[requestId]
+        delete annotationApplyRequests[requestId]
+        if (!expected) return
+        // 后台事实已经按章节完成；这里只决定是否更新当前页面的展示状态。
+        if (expected.projectId !== projectId
+                || expected.chapterId !== chapterId
+                || Number(expected.baseRevision) !== Number(baseRevision)
+                || expected.epoch !== correctionDocumentEpoch
+                || projectId !== controller.projectId
+                || chapterId !== controller.chapterId)
+            return
+        if (!success) {
+            annotationError = String(message || qsTr("正文标记未能更新"))
+            annotationRefreshTimer.restart()
+            return
+        }
+        annotationError = ""
+        annotationBaselineRevision = Math.max(
+            Number(annotationBaselineRevision), Number(textRevision))
+        annotationRefreshTimer.restart()
     }
 
     function annotationTargetLabel(target, namedEntries, matchedText) {
@@ -643,7 +671,7 @@ QtObject {
     // stays valid so later edits remain incremental.
     function clearCorrectionAnnotations() {
         cancelPendingCorrectionRequest();
-        clearEditorFollowups();
+        clearAnnotationDisplayRequests();
         correctionApplyRequests = ({});
         correctionRequestEpochs = ({});
         pendingCorrectionRevision = -1;
@@ -664,7 +692,7 @@ QtObject {
 
     function invalidateCorrectionResults() {
         cancelPendingCorrectionRequest();
-        clearEditorFollowups();
+        clearAnnotationDisplayRequests();
         correctionApplyRequests = ({});
         correctionDocumentEpoch += 1;
         if (correctionDocumentEpoch > 2147483000) correctionDocumentEpoch = 1;
@@ -675,6 +703,11 @@ QtObject {
         pendingCorrectionText = "";
         pendingCorrectionSilent = false;
         updateCorrectionSuggestions([]);
+        // 文档 identity / epoch 已变，旧的标注展示快照不能再挂在新正文上。
+        annotationDecorations = [];
+        annotationNavigationSnapshot = null;
+        annotationBaselineRevision = -1;
+        applyTextDecorations();
         correctionError = "";
         correctionStatus = "";
     }
