@@ -12,6 +12,8 @@ mod kde_color_scheme;
 pub mod starmap_circle_clip;
 /// Issue #1029：批量连线场景图图层与背景点阵图层。
 pub mod starmap_edge_layer;
+/// Issue #1035：节点卡片与子图圆壳的批量场景图图层。
+pub mod starmap_object_layer;
 pub mod starmap_grid_item;
 
 /// 星图渲染诊断统计（仅计数，不含正文）。
@@ -19,11 +21,15 @@ pub fn starmap_render_statistics_json() -> String {
     let edge =
         serde_json::from_str::<serde_json::Value>(&starmap_edge_layer::render_statistics_json())
             .unwrap_or(serde_json::Value::Null);
+    let object =
+        serde_json::from_str::<serde_json::Value>(&starmap_object_layer::render_statistics_json())
+            .unwrap_or(serde_json::Value::Null);
     let grid =
         serde_json::from_str::<serde_json::Value>(&starmap_grid_item::render_statistics_json())
             .unwrap_or(serde_json::Value::Null);
     serde_json::json!({
         "edgeLayer": edge,
+        "objectLayer": object,
         "grid": grid,
     })
     .to_string()

@@ -34,6 +34,11 @@ QtObject {
     // Issue #1029：传给原生连线图层的稳定 JSON 与只含标签的轻量模型。
     // 数组变化时才 stringify 一次，不再每帧/每次命中都序列化全部边。
     property string edgeRendersJson: "[]"
+    // Issue #1035：节点卡片与子图圆壳的完整 world 几何快照。只在图数据 /
+    // 布局 / 拖动落盘确实变化时更新；相机缩放平移不再生成或序列化对象几何。
+    property string objectGeometryJson: "[]"
+    property string objectNodesJson: "[]"
+    property string objectEmbedsJson: "[]"
     property var edgeLabels: []
     // Issue #1029 评论：缓存按「场景实例 + 活动星图 + 导航路径」隔离；同一
     // Canvas 过渡期两份 Scene、或同图从不同 Embed 入口打开时都不能共享命中
@@ -99,6 +104,8 @@ QtObject {
     readonly property int _embedDiameter: 200
 
     signal graphChanged()
+    // Issue #1035：完整对象几何（world 坐标 / 宽高）发生变化。相机变化不发此信号。
+    signal objectGeometryChanged()
     // 工作区事件流出现外部改动时发出原始事件列表；活动场景据此刷新子星图
     // 预览快照，但不会因为相机缩放 / 平移重算任何预览。
     signal workspaceActivity(var events)
@@ -304,6 +311,40 @@ QtObject {
             worldAnchorY = ay
     }
 
+    // Issue #1035：对象几何是完整 world 事实，和相机变换彻底分离。
+    // 这里只在模型真正变化时发布一次；原生图层相机变化只切换矩阵。
+    function publishObjectGeometry() {
+        var nodes = []
+        for (var i = 0; i < nodesModel.count; i++) {
+            var n = nodesModel.get(i)
+            nodes.push({
+                id: n.id,
+                x: n.x,
+                y: n.y,
+                width: n.width,
+                height: n.height
+            })
+        }
+        var embeds = []
+        for (var j = 0; j < embedsModel.length; j++) {
+            var e = embedsModel[j]
+            embeds.push({
+                instanceId: e.instanceId,
+                x: e.x,
+                y: e.y,
+                width: e.width,
+                height: e.height
+            })
+        }
+        var next = JSON.stringify({ nodes: nodes, embeds: embeds })
+        if (next !== objectGeometryJson) {
+            objectGeometryJson = next
+            objectNodesJson = JSON.stringify(nodes)
+            objectEmbedsJson = JSON.stringify(embeds)
+            objectGeometryChanged()
+        }
+    }
+
     function buildModels(notify) {
         // graph.nodes[].position 是节点位置唯一真相，直接从 graph 派生平台显示模型。
         // Issue #984：普通节点是「名称 + 正文」文字卡片，宽高统一由图级
@@ -388,6 +429,7 @@ QtObject {
         embedsModel = newEmbeds;
 
         updateWorldAnchor();
+        publishObjectGeometry();
         if (notify !== false)
             graphChanged();
     }
@@ -786,6 +828,7 @@ QtObject {
                     nextEmbeds.push(em);
                 }
                 embedsModel = nextEmbeds;
+                publishObjectGeometry();
                 computeEdgeRenders(null);
                 graphChanged();
                 structureChanged();
@@ -819,6 +862,7 @@ QtObject {
                 nextEmbeds.push(em);
             }
             embedsModel = nextEmbeds;
+            publishObjectGeometry();
             computeEdgeRenders(null);
             graphChanged();
             structureChanged();
@@ -913,6 +957,7 @@ QtObject {
                 nodesModel.setProperty(row, "x", updated.position.x);
                 nodesModel.setProperty(row, "y", updated.position.y);
             }
+            publishObjectGeometry();
             computeEdgeRenders(null);
             graphChanged();
             return true;
@@ -959,6 +1004,7 @@ QtObject {
                     nextEmbeds.push(em);
                 }
                 embedsModel = nextEmbeds;
+                publishObjectGeometry();
                 computeEdgeRenders(null);
                 graphChanged();
                 return true;
@@ -995,6 +1041,7 @@ QtObject {
                 nextEmbeds.push(em);
             }
             embedsModel = nextEmbeds;
+            publishObjectGeometry();
             computeEdgeRenders(null);
             graphChanged();
             return true;

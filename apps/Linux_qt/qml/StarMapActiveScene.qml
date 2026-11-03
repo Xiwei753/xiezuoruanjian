@@ -189,32 +189,6 @@ Item {
         }
     }
 
-    // 把真实屏幕矩形与当前视口相交。返回的 x/y/width/height 是唯一的 QSG
-    // 局部矩形；left/top/right/bottom 保留原始边界，用来画真实边框而不是
-    // 把裁剪后的矩形当成对象边界。
-    function clippedScreenRect(rect, margin) {
-        if (!rect || !isFinite(rect.x) || !isFinite(rect.y)
-                || !isFinite(rect.width) || !isFinite(rect.height)) return null
-        var m = margin !== undefined ? margin : 0
-        var right = _finiteSum(rect.x, rect.width)
-        var bottom = _finiteSum(rect.y, rect.height)
-        var left = Math.max(-m, rect.x)
-        var top = Math.max(-m, rect.y)
-        var clippedRight = Math.min(width + m, right)
-        var clippedBottom = Math.min(height + m, bottom)
-        if (!(clippedRight > left && clippedBottom > top)) return null
-        return {
-            x: left,
-            y: top,
-            width: clippedRight - left,
-            height: clippedBottom - top,
-            left: rect.x,
-            top: rect.y,
-            right: right,
-            bottom: bottom
-        }
-    }
-
     // ── 屏幕口径常量 ──
     // 线宽是物理屏幕像素，不随 zoom 变粗；命中仍保留约 10 屏幕像素的容差。
     // 原生边层、Canvas 预览线和这里必须共用同一份口径。
@@ -1398,215 +1372,222 @@ Item {
         }
     }
 
-    // ── 节点：矢量圆角矩形卡片（编辑输入在场景级稳定浮层，见 editOverlay）──
-    // Issue #1031 第四轮：唯一渲染坐标系是“世界 → f64 屏幕投影 → 视口相交
-    // → 有限屏幕局部矩形”。节点不再由父级 world 层统一缩放，也不存在普通/
-    // 极端两套坐标；每个 delegate 的宽高已经是进入 QSG 的屏幕像素。
-    Item {
-        id: nodeWorldContent
-        x: 0
-        y: 0
-        width: scene.width
-        height: scene.height
-        z: 1
+    // ── 节点：原生批量卡片 + 稳定世界坐标文字层（Issue #1035）──
+    // 卡片 / 圆角 / 边框由原生图层一次提交完整 world 几何，相机变化只改
+    // 一个变换矩阵。这里只保留文字：整层共用同一个相机变换，字体始终按
+    // authored world 字号排版，不再逐节点改字号、卡片宽高或裁剪矩形。
+    property int _visibleTextInstances: 0
+    function adjustVisibleText(delta) {
+        _visibleTextInstances = Math.max(0, _visibleTextInstances + delta)
+    }
+    function noteZoomFrame(durationMs) {
+        objectLayer.note_zoom_frame(durationMs)
+    }
 
-    Repeater {
-        id: nodeRepeater
-        model: graphController.nodesModel
-        // 模型行重建也可能触发 itemRemoved；只有节点确实从图里消失时才结束
-        // 会话，不能让一次模型刷新清掉仍有效的草稿与编辑器。
-        onItemRemoved: function(index, item) {
-            scene.ensureEditingNodeExists()
+    StarMapObjectLayer {
+        id: objectLayer
+        anchors.fill: parent
+        z: 1
+        nodesJson: graphController.objectNodesJson
+        embedsJson: graphController.objectEmbedsJson
+        selectedKind: scene.selectionController
+                && scene.selectionController.scenePathKey === scene.scenePathKey
+                ? scene.selectionController.kind : ""
+        selectedId: scene.selectionController
+                && scene.selectionController.scenePathKey === scene.scenePathKey
+                ? scene.selectionController.itemId : ""
+        editingKind: scene.editingNodeId !== "" || editOverlay._closingSnapshot
+                ? "node" : ""
+        editingId: scene.editingNodeId !== ""
+                ? scene.editingNodeId
+                : (editOverlay._closingSnapshot
+                   ? editOverlay._closingSnapshot.nodeId : "")
+        editingProgress: editOverlay.transitionProgress
+        dragKind: scene.interactionController
+                && scene.interactionController.moveScenePathKey === scene.scenePathKey
+                ? scene.interactionController.moveKind : ""
+        dragId: dragKind !== "" ? scene.interactionController.moveId : ""
+        dragX: scene.interactionController ? scene.interactionController.moveX : 0
+        dragY: scene.interactionController ? scene.interactionController.moveY : 0
+        zoomLevel: scene.zoomLevel
+        panX: scene.panX
+        panY: scene.panY
+        anchorX: scene._worldAnchorX
+        anchorY: scene._worldAnchorY
+        reveal: scene._reveal
+        revealDotRadiusPx: scene._revealDotRadius
+        cornerRadius: scene.dt.radiusSm
+        visibleTextCount: scene._visibleTextInstances
+        nodeFillHex: String(scene._surfaceContainer)
+        nodeBorderHex: String(scene._border)
+        selectedBorderHex: String(scene._accent)
+        embedFillHex: String(scene.dt.surfaceContainerLow)
+        embedBorderHex: String(scene.dt.inverseSurface)
+        nodeBorderPx: 1
+        nodeSelectedBorderPx: 2
+        embedBorderPx: 2
+        embedSelectedBorderPx: 3
+    }
+
+    Item {
+        id: nodeTextLayer
+        // 世界 → 屏幕只在这里变换一次：平移相对稳定 anchor，缩放是整层
+        // 统一矩阵。delegate 内部坐标始终是完整 authored world 尺寸。
+        x: scene.panX + scene._worldAnchorX * scene._safeZoom
+        y: scene.panY + scene._worldAnchorY * scene._safeZoom
+        z: 2
+        transform: Scale {
+            origin.x: 0
+            origin.y: 0
+            xScale: scene._safeZoom
+            yScale: scene._safeZoom
         }
 
-        delegate: Item {
-            id: nodeItem
-            required property var modelData
-
-            readonly property var nodeData: modelData
-            readonly property string nodeId: nodeData.id
-
-            readonly property var closingSnapshot:
-                editOverlay._closingSnapshot
-                && editOverlay._closingSnapshot.nodeId === nodeData.id
-                    ? editOverlay._closingSnapshot : null
-
-            readonly property bool isSelected: scene.selectionController
-                    ? scene.selectionController.matches(scene.scenePathKey, "node", nodeData.id)
-                    : false
-            readonly property bool isPressed: scene.interactionController
-                    ? scene.interactionController.isPressedTarget(scene.scenePathKey, "node", nodeData.id)
-                    : false
-            readonly property bool isMoving: scene.isMovingNode(nodeData.id)
-            readonly property bool isEditing: scene.editingNodeId === nodeData.id
-                    || closingSnapshot !== null
-            readonly property real worldX: closingSnapshot
-                    ? closingSnapshot.worldX
-                    : isMoving && scene.interactionController
-                    ? scene.interactionController.moveX : nodeData.x
-            readonly property real worldY: closingSnapshot
-                    ? closingSnapshot.worldY
-                    : isMoving && scene.interactionController
-                    ? scene.interactionController.moveY : nodeData.y
-
-            // Issue #984：宽高来自图级布局快照（由平台文本排版一次性测量），
-            // delegate 不再实测 / 回写 / 维护编辑草稿。
-            readonly property real cardWidth: closingSnapshot
-                    ? closingSnapshot.worldWidth
-                    : nodeData.width !== undefined
-                        ? nodeData.width : StarMapNodeMetrics.defaultNodeWidth()
-            readonly property real cardHeight: closingSnapshot
-                    ? closingSnapshot.worldHeight
-                    : nodeData.height !== undefined
-                        ? nodeData.height : StarMapNodeMetrics.defaultNodeHeight()
-            readonly property string bodyText: closingSnapshot
-                    ? closingSnapshot.body : StarMapNodeMetrics.bodyOf(nodeData)
-            readonly property string titleText: closingSnapshot
-                    ? (closingSnapshot.title.length > 0
-                       ? closingSnapshot.title : qsTr("未命名"))
-                    : nodeData.title && nodeData.title.length > 0
-                        ? nodeData.title : qsTr("未命名")
-
-            // 真实屏幕矩形始终按 double 的 _safeZoom 投影，再做视口裁剪。
-            // renderClip 是唯一进入 QSG 的局部矩形；trueScreenRect 的
-            // left/top/right/bottom 仍代表对象真实边界，用来决定边框位置。
-            readonly property real screenWidth:
-                _finiteProduct(cardWidth, scene._safeZoom) * scene._reveal
-                + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            readonly property real screenHeight:
-                _finiteProduct(cardHeight, scene._safeZoom) * scene._reveal
-                + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            readonly property real screenCenterX:
-                scene.worldToScreenX(_finiteSum(worldX, cardWidth / 2))
-            readonly property real screenCenterY:
-                scene.worldToScreenY(_finiteSum(worldY, cardHeight / 2))
-            readonly property real screenLeft:
-                _finiteDifference(screenCenterX, screenWidth / 2)
-            readonly property real screenTop:
-                _finiteDifference(screenCenterY, screenHeight / 2)
-            readonly property var trueScreenRect: ({
-                x: screenLeft, y: screenTop,
-                width: screenWidth, height: screenHeight
-            })
-            readonly property var renderClip: scene.clippedScreenRect(trueScreenRect, 0)
-            readonly property bool inViewport: scene.clippedScreenRect(trueScreenRect, 64) !== null
-            readonly property real titleScreenPx:
-                StarMapNodeMetrics.TITLE_FONT_SIZE * scene._safeZoom
-            readonly property real bodyScreenPx:
-                StarMapNodeMetrics.BODY_FONT_SIZE * scene._safeZoom
-            readonly property bool titleVisible:
-                scene.detailReveal > 0.6 && screenHeight >= 18
-                && titleScreenPx >= scene._nodeTextMinScreenPx
-            readonly property bool bodyTextVisible:
-                titleVisible && screenHeight >= 56
-                && bodyScreenPx >= scene._nodeTextMinScreenPx
-            readonly property real textBaseWidth:
-                Math.max(0, cardWidth - StarMapNodeMetrics.PADDING * 2)
-            readonly property real textBaseHeight:
-                Math.max(0, cardHeight - StarMapNodeMetrics.PADDING * 2)
-            // delegate 是“真实屏幕矩形 ∩ 视口”，负责裁剪；子级 visualNode
-            // 仍按真实屏幕矩形绘制，圆角、边框和文字都来自真实几何，而不是
-            // 把裁剪后的矩形硬当成节点边界。
-            x: renderClip ? renderClip.x : 0
-            y: renderClip ? renderClip.y : 0
-            width: renderClip ? renderClip.width : 0
-            height: renderClip ? renderClip.height : 0
-            visible: inViewport || isEditing
-            clip: true
-            z: 1
-
-            // Issue #1032：只有与视口相交（或正在编辑 / 拖拽）的节点才创建
-            // 卡片、文字与裁剪子树；中倍率下大量视口外节点不再保留常驻文字
-            // delegate。Loader 保持空壳，模型行和编辑身份仍然稳定。
-            Loader {
-                id: visualLoader
-                x: 0
-                y: 0
-                width: nodeItem.width
-                height: nodeItem.height
-                active: nodeItem.inViewport || nodeItem.isEditing || nodeItem.isMoving
-                visible: active
-                sourceComponent: nodeVisualComponent
+        Repeater {
+            id: nodeRepeater
+            model: graphController.nodesModel
+            // 模型行重建也可能触发 itemRemoved；只有节点确实从图里消失时才结束
+            // 会话，不能让一次模型刷新清掉仍有效的草稿与编辑器。
+            onItemRemoved: function(index, item) {
+                scene.ensureEditingNodeExists()
             }
 
-            Component {
-                id: nodeVisualComponent
-                Rectangle {
-                    id: visualNode
-                    // 真实屏幕矩形，位置相对 delegate 的视口交集；父级 clip 负责
-                    // 裁掉视口外部分。这样圆角和边框仍是节点自己的几何。
-                    x: nodeItem.trueScreenRect.x
-                       - (nodeItem.renderClip ? nodeItem.renderClip.x : 0)
-                    y: nodeItem.trueScreenRect.y
-                       - (nodeItem.renderClip ? nodeItem.renderClip.y : 0)
-                    width: nodeItem.screenWidth
-                    height: nodeItem.screenHeight
-                    opacity: nodeItem.isEditing ? 1 - editOverlay.transitionProgress : 1
-                    radius: Math.min(scene.dt.radiusSm * scene._safeZoom,
-                                     Math.min(width, height) / 2)
-                    color: scene._surfaceContainer
-                    border.color: nodeItem.isSelected || nodeItem.isEditing
-                            ? scene._accent : scene._border
-                    border.width: (nodeItem.isSelected || nodeItem.isEditing) ? 2 : 1
-                    clip: true
+            delegate: Item {
+                id: nodeItem
+                required property var modelData
 
-                    // 显示态：名称在上，正文预览在下。编辑输入层是场景级稳定容器，
-                    // 不挂在这里，模型行更新不会销毁正在输入的内容。
-                    Item {
-                        id: displayLayer
-                        // 文字仍按 authored world 字号排版，再以真实 zoom 变换到
-                        // 屏幕；卡片视口相交矩形负责裁掉不可见字形。相机已有统一
-                        // 产品缩放范围，因此这里不存在第二套“文字专用”倍率。
-                        x: StarMapNodeMetrics.PADDING * scene._safeZoom
-                        y: StarMapNodeMetrics.PADDING * scene._safeZoom
-                        width: nodeItem.textBaseWidth
-                        height: nodeItem.textBaseHeight
-                        scale: scene._safeZoom
-                        transformOrigin: Item.TopLeft
-                        visible: nodeItem.titleVisible
+                readonly property var nodeData: modelData
+                readonly property string nodeId: nodeData.id
 
-                        Column {
+                readonly property var closingSnapshot:
+                    editOverlay._closingSnapshot
+                    && editOverlay._closingSnapshot.nodeId === nodeId
+                    ? editOverlay._closingSnapshot : null
+                readonly property bool isMoving: scene.isMovingNode(nodeId)
+                readonly property bool isEditing:
+                    scene.editingNodeId === nodeId || closingSnapshot !== null
+                readonly property real worldX: closingSnapshot
+                        ? closingSnapshot.worldX
+                        : isMoving && scene.interactionController
+                            ? scene.interactionController.moveX : nodeData.x
+                readonly property real worldY: closingSnapshot
+                        ? closingSnapshot.worldY
+                        : isMoving && scene.interactionController
+                            ? scene.interactionController.moveY : nodeData.y
+                readonly property real cardWidth: closingSnapshot
+                        ? closingSnapshot.worldWidth
+                        : nodeData.width !== undefined && nodeData.width > 0
+                            ? nodeData.width : StarMapNodeMetrics.CARD_WIDTH
+                readonly property real cardHeight: closingSnapshot
+                        ? closingSnapshot.worldHeight
+                        : nodeData.height !== undefined && nodeData.height > 0
+                            ? nodeData.height : StarMapNodeMetrics.defaultNodeHeight()
+                readonly property string bodyText: closingSnapshot
+                        ? closingSnapshot.body : StarMapNodeMetrics.bodyOf(nodeData)
+                readonly property string titleText: closingSnapshot
+                        ? (closingSnapshot.title.length > 0
+                           ? closingSnapshot.title : qsTr("未命名"))
+                        : nodeData.title && nodeData.title.length > 0
+                            ? nodeData.title : qsTr("未命名")
+
+                // 只做完整视口可见性判断，不把交集写回对象尺寸。
+                readonly property real screenX: scene.worldToScreenX(worldX)
+                readonly property real screenY: scene.worldToScreenY(worldY)
+                readonly property bool inViewport: scene.screenRectVisible(
+                        screenX, screenY,
+                        cardWidth * scene._safeZoom,
+                        cardHeight * scene._safeZoom, 64)
+                readonly property real titleScreenPx:
+                    StarMapNodeMetrics.TITLE_FONT_SIZE * scene._safeZoom
+                readonly property real bodyScreenPx:
+                    StarMapNodeMetrics.BODY_FONT_SIZE * scene._safeZoom
+                readonly property bool titleVisible:
+                    inViewport && scene.detailReveal > 0.6
+                    && cardHeight * scene._safeZoom >= 18
+                    && titleScreenPx >= scene._nodeTextMinScreenPx
+                readonly property bool bodyTextVisible:
+                    titleVisible && cardHeight * scene._safeZoom >= 56
+                    && bodyScreenPx >= scene._nodeTextMinScreenPx
+                readonly property int _textInstanceTotal:
+                    (titleVisible ? 1 : 0)
+                    + (bodyTextVisible && bodyText.length > 0 ? 1 : 0)
+
+                property int _reportedTextInstances: 0
+                function _syncTextInstanceCount() {
+                    if (_reportedTextInstances === _textInstanceTotal)
+                        return
+                    scene.adjustVisibleText(_textInstanceTotal - _reportedTextInstances)
+                    _reportedTextInstances = _textInstanceTotal
+                }
+
+                x: worldX - scene._worldAnchorX
+                y: worldY - scene._worldAnchorY
+                width: cardWidth
+                height: cardHeight
+                visible: titleVisible
+                opacity: isEditing
+                        ? Math.max(0, 1 - editOverlay.transitionProgress) : 1
+
+                Component.onCompleted: {
+                    objectLayer.note_text_created()
+                    _syncTextInstanceCount()
+                }
+                Component.onDestruction: {
+                    objectLayer.note_text_destroyed()
+                    scene.adjustVisibleText(-_reportedTextInstances)
+                }
+                onTitleVisibleChanged: _syncTextInstanceCount()
+                onBodyTextVisibleChanged: _syncTextInstanceCount()
+
+                // 文字容器使用节点自己的完整 world 边界；部分可见节点只由
+                // 场景视口裁切像素，绝不把裁剪矩形当作文本宽度 / 高度。
+                Item {
+                    id: displayLayer
+                    x: StarMapNodeMetrics.PADDING
+                    y: StarMapNodeMetrics.PADDING
+                    width: Math.max(0, nodeItem.cardWidth
+                                    - StarMapNodeMetrics.PADDING * 2)
+                    height: Math.max(0, nodeItem.cardHeight
+                                     - StarMapNodeMetrics.PADDING * 2)
+
+                    Column {
+                        width: parent.width
+                        spacing: StarMapNodeMetrics.TITLE_BODY_GAP
+
+                        Text {
+                            id: titleLabel
                             width: parent.width
-                            spacing: nodeItem.bodyText.length > 0
-                                     ? StarMapNodeMetrics.TITLE_BODY_GAP : 0
+                            text: nodeItem.titleText
+                            textFormat: Text.PlainText
+                            color: scene._textPrimary
+                            font.pixelSize: StarMapNodeMetrics.TITLE_FONT_SIZE
+                            font.weight: Font.DemiBold
+                            renderType: Text.CurveRendering
+                            wrapMode: Text.Wrap
+                            maximumLineCount: StarMapNodeMetrics.TITLE_MAX_LINES
+                            elide: Text.ElideRight
+                            lineHeightMode: Text.FixedHeight
+                            lineHeight: StarMapNodeMetrics.TITLE_LINE_HEIGHT
+                        }
 
-                            Text {
-                                id: titleLabel
-                                width: parent.width
-                                text: nodeItem.titleText
-                                textFormat: Text.PlainText
-                                color: scene._textPrimary
-                                // 固定 world 字号；不再随每帧 zoom 改写字体/行高。
-                                font.pixelSize: StarMapNodeMetrics.TITLE_FONT_SIZE
-                                font.weight: Font.DemiBold
-                                renderType: Text.CurveRendering
-                                wrapMode: Text.Wrap
-                                maximumLineCount: StarMapNodeMetrics.TITLE_MAX_LINES
-                                elide: Text.ElideRight
-                                lineHeightMode: Text.FixedHeight
-                                lineHeight: StarMapNodeMetrics.TITLE_LINE_HEIGHT
-                            }
-
-                            Text {
-                                id: bodyPreview
-                                width: parent.width
-                                text: nodeItem.bodyText
-                                textFormat: Text.PlainText
-                                visible: text.length > 0 && nodeItem.bodyTextVisible
-                                color: scene._textMuted
-                                font.pixelSize: StarMapNodeMetrics.BODY_FONT_SIZE
-                                renderType: Text.CurveRendering
-                                wrapMode: Text.Wrap
-                                maximumLineCount: StarMapNodeMetrics.PREVIEW_MAX_LINES
-                                elide: Text.ElideRight
-                                lineHeightMode: Text.FixedHeight
-                                lineHeight: StarMapNodeMetrics.BODY_LINE_HEIGHT
-                            }
+                        Text {
+                            id: bodyPreview
+                            width: parent.width
+                            text: nodeItem.bodyText
+                            textFormat: Text.PlainText
+                            visible: text.length > 0 && nodeItem.bodyTextVisible
+                            color: scene._textMuted
+                            font.pixelSize: StarMapNodeMetrics.BODY_FONT_SIZE
+                            renderType: Text.CurveRendering
+                            wrapMode: Text.Wrap
+                            maximumLineCount: StarMapNodeMetrics.PREVIEW_MAX_LINES
+                            elide: Text.ElideRight
+                            lineHeightMode: Text.FixedHeight
+                            lineHeight: StarMapNodeMetrics.BODY_LINE_HEIGHT
                         }
                     }
                 }
             }
-        }
         }
     }
 
@@ -1654,21 +1635,17 @@ Item {
                 _finiteDifference(screenCenterX, screenWidth / 2)
             readonly property real screenTop:
                 _finiteDifference(screenCenterY, screenHeight / 2)
-            readonly property var embedScreenRect: ({
-                x: screenLeft, y: screenTop,
-                width: screenWidth, height: screenHeight
-            })
-            readonly property var renderClip: scene.clippedScreenRect(embedScreenRect, 0)
-            readonly property bool inViewport: scene.clippedScreenRect(embedScreenRect, 64) !== null
+            readonly property bool inViewport: scene.screenRectVisible(
+                screenLeft, screenTop, screenWidth, screenHeight, 64)
 
-            x: renderClip ? renderClip.x : 0
-            y: renderClip ? renderClip.y : 0
-            width: renderClip ? renderClip.width : 0
-            height: renderClip ? renderClip.height : 0
+            // Issue #1035：根对象就是真实投影圆；部分可见时只由场景视口
+            // 裁像素，不再把“视口 ∩ 圆”写回 x/y/width/height。
+            x: screenLeft
+            y: screenTop
+            width: screenWidth
+            height: screenHeight
             visible: inViewport
             z: 2
-            screenClipRect: renderClip
-            trueScreenRect: embedScreenRect
             // Issue #949：只有走过渡的那个入口按同一个展开进度继续画圆壳。
             revealProgress: embedData.instanceId === scene.transitionEmbedId
                     ? scene.detailReveal : -1
@@ -1726,8 +1703,8 @@ Item {
             if (!world)
                 return { x: 0, y: 0, width: 0, height: 0 }
             // 与节点 delegate 同一投影：先按真实 _safeZoom 得到 authored
-            // 卡片矩形，再用 reveal 圆点态收缩，最后与视口相交。编辑卡从
-            // 可见部分左上角展开；镜头平移后同一 world 锚点会重新投影。
+            // 卡片矩形，再用 reveal 圆点态收缩。编辑卡从真实左上角展开；
+            // 镜头平移后同一 world 锚点会重新投影，不能用视口交集伪造锚点。
             var full = scene.projectWorldRect(world.x, world.y,
                                               world.width, world.height)
             if (!full)
@@ -1736,13 +1713,12 @@ Item {
                     + scene._revealDotRadius * 2 * (1 - scene._reveal)
             var projectedHeight = full.height * scene._reveal
                     + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            var rect = {
+            return {
                 x: full.x + (full.width - projectedWidth) / 2,
                 y: full.y + (full.height - projectedHeight) / 2,
                 width: projectedWidth,
                 height: projectedHeight
             }
-            return scene.clippedScreenRect(rect, 0) || rect
         }
         readonly property var _nodeRect: nodeRectNow()
 

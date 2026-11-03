@@ -117,6 +117,7 @@ use sujian_linux_qt::backend;
 use sujian_linux_qt::native::starmap_circle_clip::StarMapCircleClip;
 use sujian_linux_qt::native::starmap_edge_layer::StarMapEdgeLayer;
 use sujian_linux_qt::native::starmap_grid_item::StarMapGridItem;
+use sujian_linux_qt::native::starmap_object_layer::StarMapObjectLayer;
 use sujian_linux_qt::sujian_editor_item;
 
 use backend::app_backend::{debug_error_static, debug_log_static, debug_warn_static};
@@ -242,6 +243,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     // Issue #1030：星图原生 QSG 着色器直接编译进 qrc，安装后不再依赖进程临时文件。
     "src/native/shaders/starmap_edge.vert.qsb" as "shaders/starmap_edge.vert.qsb",
     "src/native/shaders/starmap_edge.frag.qsb" as "shaders/starmap_edge.frag.qsb",
+    "src/native/shaders/starmap_object.vert.qsb" as "shaders/starmap_object.vert.qsb",
+    "src/native/shaders/starmap_object.frag.qsb" as "shaders/starmap_object.frag.qsb",
     "src/native/shaders/starmap_grid.vert.qsb" as "shaders/starmap_grid.vert.qsb",
     "src/native/shaders/starmap_grid.frag.qsb" as "shaders/starmap_grid.frag.qsb",
     "resources/icons/sujian.svg" as "icons/sujian.svg",
@@ -732,6 +735,8 @@ fn main() {
     qmetaobject::qml_register_type::<StarMapCircleClip>(c"Sujian", 1, 0, c"StarMapCircleClip");
     // Issue #1029：批量连线与背景点阵的平台场景图组件。
     qmetaobject::qml_register_type::<StarMapEdgeLayer>(c"Sujian", 1, 0, c"StarMapEdgeLayer");
+    // Issue #1035：节点卡片与子图圆壳的批量场景图图层。
+    qmetaobject::qml_register_type::<StarMapObjectLayer>(c"Sujian", 1, 0, c"StarMapObjectLayer");
     qmetaobject::qml_register_type::<StarMapGridItem>(c"Sujian", 1, 0, c"StarMapGridItem");
     startup_mark("qt_runtime_probe_ready", "Qt runtime probed");
 

@@ -449,6 +449,10 @@ Item {
         if (!commitPendingNodeEditBeforeNavigation())
             return false
         settleViewportMotion()
+        // Issue #1035：离开当前 route 前只记录一次真实镜头，替代原先相机属性
+        // 每帧写回 cameraStack 的监听器。
+        if (routeKey)
+            storeCamera(routeKey, cameraSnapshot())
         prepareCanvasSwitch()
         applyRoute(route)
         var cachedCamera = cameraStack[targetKey]
@@ -549,11 +553,8 @@ Item {
             cancelPendingTreeReveal()
     }
 
-    // 相机任何变化都写回当前 route 的相机槽（同一张画布再次进入时可用）。
-    onZoomLevelChanged: storeCamera(routeKey, cameraSnapshot())
-    onPanXChanged: storeCamera(routeKey, cameraSnapshot())
-    onPanYChanged: storeCamera(routeKey, cameraSnapshot())
-
+    // Issue #1035：相机变化不再每帧复制整个 cameraStack。仅在真正离开当前
+    // route、进入子图或树导航时记录一次；活动图层直接读当前 zoom/pan。
     // ── 纯方法：平移 / 缩放 / 坐标换算 ──
     function applyPan(nextX, nextY) {
         panX = isFinite(nextX) ? nextX : (nextX === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE)
@@ -689,6 +690,7 @@ Item {
         var previous = zoomLevel
         if (target === previous)
             return -1
+        var frameStarted = Date.now()
         zoomLevel = target
         applyPan(finiteDifference(screenX, finiteProduct(_zoomRoundWorldX, target)),
                  finiteDifference(screenY, finiteProduct(_zoomRoundWorldY, target)))
@@ -700,6 +702,9 @@ Item {
         } else if (zoomingOut) {
             switched = maybeExitCanvas()
         }
+        var displayedScene = activeScene()
+        if (displayedScene && displayedScene.noteZoomFrame)
+            displayedScene.noteZoomFrame(Date.now() - frameStarted)
         return switched
     }
 
@@ -1063,14 +1068,16 @@ Item {
     // 只用新层自己的值兜底续走，不再拿旧层倍率 / 落点覆盖它。晚到的旧时间线
     // （generation 不匹配）直接忽略，不许把用户拉回上一层。
     // Issue #949 复核（问题 2）：只有这一条路径（自然完成）才允许 applyCamera
-    // (toCamera)；cameraStack 由 applyCamera 触发的 onZoomLevelChanged /
-    // onPanXChanged / onPanYChanged 写回**真实落点**。
+    // (toCamera)；Issue #1035 起由这里显式把真实落点写回当前 route 的相机槽。
     function finishViewportMotion(enteringFlag, generation) {
         if (generation !== undefined && generation !== motionGeneration)
             return
         var to = viewportMotion.toCamera
         if (to)
             applyCamera(to)
+        // Issue #1035：过渡自然收尾后显式记录真实落点；相机属性监听器已移除。
+        if (routeKey)
+            storeCamera(routeKey, cameraSnapshot())
         var pending = _zoomTargetLevel
         var anchorX = _zoomAnchorX
         var anchorY = _zoomAnchorY
@@ -1317,7 +1324,7 @@ Item {
     //     可见帧平滑移动 / 缩放过去（用户拖到多远都不会直接跳回）。
     // 圆环起点 = 当前帧入口圆的投影（与退出阈值判定同一"正在显示的投影直径"
     // 几何），终点 = 目标父帧下入口圆投影；圆内子图 / 圆外父图按同一帧接上，
-    // 结束才由 applyCamera 更新 cameraStack、才销毁临时层。
+    // 结束才由 finishViewportMotion 显式写回 cameraStack，才销毁临时层。
     function exitCanvasViaCore(continuous) {
         if (focusIsRoot || !starmapBackendRef)
             return -1
@@ -1334,6 +1341,8 @@ Item {
         var childCamera = cameraSnapshot()
         var childStarmapId = currentStarmapId
         var childRoute = normalizeRoute(currentRoute)
+        // Issue #1035：离开子图 route 前记录一次当前镜头，替代逐帧相机监听器。
+        storeCamera(childKey, childCamera)
         // Issue #949 复核评论 6250932011（问题 2）：换层前保存子图这轮还没显示完
         // 的滚轮目标与屏幕锚点（子图尺度）。prepareCanvasSwitch() 会
         // resetZoomRound()，不先存就会被丢掉。

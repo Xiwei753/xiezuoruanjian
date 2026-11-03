@@ -603,6 +603,8 @@ fn main() {
     // Issue #1030：原生星图 QSG 着色器随 qrc 打包，任一 qsb 变化都重新生成资源。
     println!("cargo:rerun-if-changed=src/native/shaders/starmap_edge.vert.qsb");
     println!("cargo:rerun-if-changed=src/native/shaders/starmap_edge.frag.qsb");
+    println!("cargo:rerun-if-changed=src/native/shaders/starmap_object.vert.qsb");
+    println!("cargo:rerun-if-changed=src/native/shaders/starmap_object.frag.qsb");
     println!("cargo:rerun-if-changed=src/native/shaders/starmap_grid.vert.qsb");
     println!("cargo:rerun-if-changed=src/native/shaders/starmap_grid.frag.qsb");
     println!("cargo:rerun-if-env-changed=QSB");
@@ -813,6 +815,16 @@ fn emit_qsb_validation() {
         (
             "SUJIAN_EDGE_FRAGMENT_QSB",
             "src/native/shaders/starmap_edge.frag.qsb",
+            "Fragment",
+        ),
+        (
+            "SUJIAN_OBJECT_VERTEX_QSB",
+            "src/native/shaders/starmap_object.vert.qsb",
+            "Vertex",
+        ),
+        (
+            "SUJIAN_OBJECT_FRAGMENT_QSB",
+            "src/native/shaders/starmap_object.frag.qsb",
             "Fragment",
         ),
         (
