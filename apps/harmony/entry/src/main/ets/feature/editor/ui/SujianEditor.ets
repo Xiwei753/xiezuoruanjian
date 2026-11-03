@@ -3096,14 +3096,20 @@ export struct SujianEditor {
   // Issue #879 最新复核评论修复（问题2）：使用 displayedSnapshot 而非 currentSnapshot——
   // 命中测试和选区操作应基于当前显示的内容。
   private handleTouchEvent(event: TouchEvent): void {
-    const snap = this.displayedSnapshot ?? this.currentSnapshot
-    if (!snap || !this.renderResult || !this.dispatcher) {
-      return
-    }
-    // Issue #1034：Cancel 无论有没有触点都必须清理本轮手势状态。
+    // Issue #1034：Cancel 必须在会话/布局 guard 之前清理，否则切换会话或
+    // 布局暂不可用时会把上一轮手指/手写笔状态留下来。
     if (event.type === TouchType.Cancel) {
       this.clearStylusDragState()
       this.clearFingerTouchState()
+      return
+    }
+    const snap = this.displayedSnapshot ?? this.currentSnapshot
+    if (!snap || !this.renderResult || !this.dispatcher) {
+      // 无快照时 Up 也要收尾，避免状态遗留；Down/Move 不产生选择副作用。
+      if (event.type === TouchType.Up) {
+        this.clearStylusDragState()
+        this.clearFingerTouchState()
+      }
       return
     }
     // Issue #743 评论5792119958：使用触点前先检查空数组。Up 在部分设备上
@@ -3112,7 +3118,7 @@ export struct SujianEditor {
     if (touchList.length === 0) {
       if (event.type === TouchType.Up) {
         if (this.fingerDownActive) {
-          this.finishFingerTap(snap)
+          this.finishFingerTap(snap, null)
         } else {
           this.clearStylusDragState()
         }
@@ -3120,11 +3126,8 @@ export struct SujianEditor {
       return
     }
     const touch: TouchObject = touchList[0]
-    // Issue #767 评论 5828146609 第 1 节：首次触摸编辑区时先确保 focus/IME，
-    // 这样空白处点击也能获得焦点和键盘。
     if (event.type === TouchType.Down) {
       hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `touch down: x=${touch.x}, y=${touch.y}`)
-      this.focusAndAttachIme()
     }
     // Issue #778 评论5853666955 第1项：onTouch 绑定在内层 Stack 上，
     // ArkUI TouchObject.x/y 已是相对 Stack 左上角的局部坐标，滚动后也由 ArkUI 自动补偿。
@@ -3135,18 +3138,41 @@ export struct SujianEditor {
       contentY >= 0 &&
       contentX <= this.contentWidth &&
       contentY <= this.contentHeight
-    // Issue #629 评论18：hitTestContent 返回 VisualCaretPosition。
-    const hitPos: VisualCaretPosition = inContentArea
-      ? this.hitTestContent(contentX, contentY)
-      : { utf16Offset: 0, affinity: CaretAffinity.Downstream }
 
-    // 笔事件保留原有拖选路径；手指事件只做点击判定，拖选交给长按手势。
+    // 笔事件保留原有拖选路径；手指事件按类别分流，普通 Move 不做文本命中测试。
     if (this.stylusService.isStylusEvent(event)) {
+      const hitPos: VisualCaretPosition = inContentArea
+        ? this.hitTestContent(contentX, contentY)
+        : { utf16Offset: 0, affinity: CaretAffinity.Downstream }
       this.stylusService.normalizeStylusEvent(event)
       this.handleStylusTouchEvent(event.type, snap, inContentArea, hitPos)
       return
     }
-    this.handleFingerTouchEvent(event.type, snap, contentX, contentY, inContentArea, hitPos)
+    switch (event.type) {
+      case TouchType.Down: {
+        const hitPos: VisualCaretPosition = inContentArea
+          ? this.hitTestContent(contentX, contentY)
+          : { utf16Offset: 0, affinity: CaretAffinity.Downstream }
+        this.handleFingerTouchDown(snap, contentX, contentY, inContentArea, hitPos)
+        break
+      }
+      case TouchType.Move:
+        this.handleFingerTouchMove(contentX, contentY)
+        break
+      case TouchType.Up: {
+        // 只有确定是点按时才做命中测试；拖选结束不再重复命中。
+        const shouldHit: boolean = inContentArea &&
+          !this.fingerMovedBeyondTapSlop &&
+          !this.selectionGestureHandled
+        const upHit: VisualCaretPosition | null = shouldHit
+          ? this.hitTestContent(contentX, contentY)
+          : null
+        this.finishFingerTap(snap, upHit)
+        break
+      }
+      default:
+        break
+    }
   }
 
   // 手写笔/原有触控拖选路径：保持按下即 anchor、移动 dragSelect、抬起结束的语义。
@@ -3158,6 +3184,8 @@ export struct SujianEditor {
   ): void {
     switch (type) {
       case TouchType.Down:
+        // Issue #1034：手写笔保留独立 Down 获焦路径；手指普通 pan 不再唤起输入法。
+        this.focusAndAttachIme()
         if (!inContentArea) {
           break
         }
@@ -3214,54 +3242,40 @@ export struct SujianEditor {
     }
   }
 
-  // Issue #1034：手指触摸拆成「点击」与「长按后拖动选择」两条路径。
-  // - Down 只记录起点，不派发 selection；
-  // - Move 只记录是否超过点击容差，绝不派发 dragSelect，普通纵向滑动交给外层 Scroll；
-  // - Up 只有在未识别为拖选且未移动时派发一次 setSelection；
-  // - 长按/拖动选择由 GestureGroup(Sequence(LongPress, Pan)) 处理。
-  private handleFingerTouchEvent(
-    type: TouchType,
+  // Issue #1034：手指按下只记录起点，不派发 selection、不获焦。
+  private handleFingerTouchDown(
     snap: EditorLayoutSnapshot,
     contentX: number,
     contentY: number,
     inContentArea: boolean,
     hitPos: VisualCaretPosition,
   ): void {
-    switch (type) {
-      case TouchType.Down:
-        this.clearFingerTouchState()
-        this.fingerDownActive = true
-        this.fingerDownX = contentX
-        this.fingerDownY = contentY
-        this.fingerDownInContentArea = inContentArea
-        this.fingerDownHit = inContentArea ? hitPos : null
-        this.fingerDownHyperlink = inContentArea &&
-          snap.selectionAnchor === snap.selectionHead &&
-          this.hasHyperlinkAt(hitPos.utf16Offset, snap.revision, snap.text)
-        this.fingerDownStartedAtMs = Date.now()
-        break
-      case TouchType.Move: {
-        if (!this.fingerDownActive) {
-          break
-        }
-        const dx: number = contentX - this.fingerDownX
-        const dy: number = contentY - this.fingerDownY
-        if (dx * dx + dy * dy > EDITOR_TAP_SLOP_VP * EDITOR_TAP_SLOP_VP) {
-          this.fingerMovedBeyondTapSlop = true
-        }
-        // 不在这里派发 selection：纵向滑动必须交给外层 Scroll。
-        break
-      }
-      case TouchType.Up:
-        this.finishFingerTap(snap)
-        break
-      default:
-        break
+    this.clearFingerTouchState()
+    this.fingerDownActive = true
+    this.fingerDownX = contentX
+    this.fingerDownY = contentY
+    this.fingerDownInContentArea = inContentArea
+    this.fingerDownHit = inContentArea ? hitPos : null
+    this.fingerDownHyperlink = inContentArea &&
+      snap.selectionAnchor === snap.selectionHead &&
+      this.hasHyperlinkAt(hitPos.utf16Offset, snap.revision, snap.text)
+    this.fingerDownStartedAtMs = Date.now()
+  }
+
+  // Issue #1034：普通手指 Move 只更新点击容差，不做文本命中测试，也不改选区。
+  private handleFingerTouchMove(contentX: number, contentY: number): void {
+    if (!this.fingerDownActive) {
+      return
+    }
+    const dx: number = contentX - this.fingerDownX
+    const dy: number = contentY - this.fingerDownY
+    if (dx * dx + dy * dy > EDITOR_TAP_SLOP_VP * EDITOR_TAP_SLOP_VP) {
+      this.fingerMovedBeyondTapSlop = true
     }
   }
 
   // 只有从未进入拖选、且未超过点击容差的手指抬起才派发一次 setSelection。
-  private finishFingerTap(snap: EditorLayoutSnapshot): void {
+  private finishFingerTap(snap: EditorLayoutSnapshot, upHit: VisualCaretPosition | null): void {
     if (!this.fingerDownActive) {
       return
     }
@@ -3280,7 +3294,10 @@ export struct SujianEditor {
     if (wasHyperlinkTap && this.onHyperlinkTap(downHit.utf16Offset, snap.revision, snap.text)) {
       return
     }
-    const corePos = this.toCoreCaretPosition(downHit)
+    // Issue #1034：确定是点按后才获焦；普通上下滚动不唤起输入法。
+    this.focusAndAttachIme()
+    const tapHit: VisualCaretPosition = upHit ?? downHit
+    const corePos = this.toCoreCaretPosition(tapHit)
     if (corePos !== null) {
       this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: corePos })
     }
@@ -3317,6 +3334,8 @@ export struct SujianEditor {
     if (!this.fingerDownActive || !this.fingerDownInContentArea) {
       return
     }
+    // Issue #1034：长按选择确定后才获焦，普通手指 pan 不触发焦点/IME。
+    this.focusAndAttachIme()
     let x: number = this.fingerDownX
     let y: number = this.fingerDownY
     if (event.fingerList.length > 0) {
@@ -3438,8 +3457,10 @@ export struct SujianEditor {
         height = bottom
       }
     }
-    if (height > 0 && height !== this.contentHeight) {
-      this.contentHeight = height
+    // 空 LineLayout[] 也要把上篇文章的高度清回 0，不能保留旧值。
+    const nextHeight: number = Math.max(0, height)
+    if (nextHeight !== this.contentHeight) {
+      this.contentHeight = nextHeight
     }
   }
 

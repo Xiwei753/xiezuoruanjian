@@ -676,15 +676,15 @@ pub(crate) fn map_git_error(err: git2::Error, operation: &'static str) -> Provid
     let code = err.code();
     let class = err.class();
     let mapped = classify_git_error(operation, &raw_message, code, class);
-    // 只记录错误码/类别/稳定原因码、OpenSSL 校验原因和消息类型，
+    // 只记录错误码/类别/稳定原因码、错误文本提示和消息类型，
     // 不落 URL、Token、文件路径、证书内容或原始报文。
     log::warn!(
-        "sync.git_error: operation={} git_error_code={:?} git_error_class={:?} reason_code={} tls_verify_reason={} message_kind={}",
+        "sync.git_error: operation={} git_error_code={:?} git_error_class={:?} reason_code={} tls_message_hint={} message_kind={}",
         operation,
         code,
         class,
         mapped.stable_code(),
-        tls_verify_reason(&raw_message),
+        tls_message_hint(&raw_message),
         message_kind(&raw_message)
     );
     mapped
@@ -768,6 +768,11 @@ fn classify_git_error(
         // 未命中证书文本的 SSL/握手错误性质不明，不能凭 `handshake`、
         // `ssl connect error` 等泛关键词触发 REST 后备。只有明确出现
         // 连接拒绝/超时/重置/EOF 等传输失败时才归为 Network。
+        //
+        // 注意：libgit2 的 OpenSSL 封装会把 SSL_ERROR_NONE、ZERO_RETURN 及
+        // 其它未单独分支的返回值统一写成 `SSL error: unknown error`；
+        // `git2::Error` 不暴露 `SSL_get_error` 的具体分支，文本也无法反推出
+        // 真实失败阶段，因此保持 Other，不能误报证书错误或网络不可达。
         ErrorClass::Ssl => {
             if is_network_transport_error(raw_message) {
                 ProviderError::Network {
@@ -983,12 +988,14 @@ fn message_kind(message: &str) -> &'static str {
     "unknown"
 }
 
-/// 从 OpenSSL/libgit2 的既有错误文本提取稳定的校验原因码。
+/// 从 OpenSSL/libgit2 的既有错误文本提取稳定的诊断提示。
 ///
-/// 这里只返回固定枚举字符串，原始终端错误文本、证书主题/签发者、URL 和路径
-/// 都不进入日志。`openssl_error_unknown` 表示当前错误只能确认是 OpenSSL
-/// 非校验类错误，不能据此推断网络不可达。
-fn tls_verify_reason(message: &str) -> &'static str {
+/// 注意：这只是对 `git2::Error::message()` 的文本归类，不是 OpenSSL 的真实
+/// 验证结果；libgit2 的 `SSL error: unknown error` 无法从文本逆推出
+/// `SSL_get_error` 的具体分支。这里只返回固定枚举字符串，原始错误文本、
+/// 证书主题/签发者、URL 和路径都不进入日志。`openssl_error_unknown`
+/// 仅表示文本里出现 SSL/TLS 字样，不能据此推断网络不可达或证书失败。
+fn tls_message_hint(message: &str) -> &'static str {
     let lower = message.to_ascii_lowercase();
     if lower.contains("unable to get local issuer") {
         "x509_unable_to_get_issuer_cert_locally"
