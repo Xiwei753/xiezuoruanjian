@@ -28,4 +28,5 @@ pub mod bridge;
 pub mod edge_render;
 pub mod hittest;
 pub mod layout_types;
+pub mod preview_cache;
 pub mod scene_cache;

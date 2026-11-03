@@ -761,6 +761,27 @@ impl AppBackend {
         self.current_data_root.clone().into()
     }
 
+    /// 星图微缩预览后台线程所需的只读工作区上下文。
+    ///
+    /// AppRef 和 AppBackend 都只能在 GUI 线程使用；后台线程只拿到 roots 与
+    /// 已 bootstrap 的 GitRepoLayout 快照，再用 with_layout_core_api 新建 API。
+    pub(crate) fn starmap_preview_context(
+        &self,
+    ) -> Option<(
+        String,
+        String,
+        writer_core::storage::git_repo_layout::GitRepoLayout,
+    )> {
+        if !self.current_has_data_root || self.current_data_root.is_empty() {
+            return None;
+        }
+        Some((
+            self.current_data_root.clone(),
+            self.current_projects_root.clone(),
+            self.current_workspace_git_layout.clone()?,
+        ))
+    }
+
     // --- StarMap methods ---
 
     // Deprecated compatibility forwarding surface is split by domain.

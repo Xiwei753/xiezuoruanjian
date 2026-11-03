@@ -19,6 +19,9 @@ impl SujianEditorItem {
         result: &EditorEditResult,
         emit: bool,
     ) -> VisualPrepareOutcome {
+        // Issue #1032：拆分本笔视觉事务耗时，区分 canonical 重排、动画快照与
+        // 局部纹理准备，便于定位剩余 GUI 热路径。
+        let visual_started = std::time::Instant::now();
         // Issue #978 新评论：text_revision 已由 `apply_edit_with_visuals()` 在
         // Core Applied 后、发出 `editor_change_applied` 前推进；这里不再重复设置。
 
@@ -59,10 +62,13 @@ impl SujianEditorItem {
 
         // Issue #978：先只更新 canonical 静态布局（受影响段落增量重排）。
         // 无论文字动画是否开启，这一步都必须发生，保证正文立即跟手。
+        let canonical_started = std::time::Instant::now();
         self.update_canonical_layout_after_edit(width, affected_range);
+        let canonical_elapsed = canonical_started.elapsed();
 
         // Issue #904：文字动画开启时才准备新布局事实源（generation + 物化视觉行），
         // 供新一侧只在同一版布局上补图。
+        let animation_snapshot_started = std::time::Instant::now();
         let new_layout = if prepare_animation {
             match self.build_incremental_animation_snapshot(width, affected_range) {
                 Ok(pair) => Some(pair),
@@ -71,9 +77,11 @@ impl SujianEditorItem {
         } else {
             None
         };
+        let animation_snapshot_elapsed = animation_snapshot_started.elapsed();
 
         // Issue #904 评论 4：先建立唯一的局部动画计划，再按计划真正引用的源快照 id
         // 准备纹理；不再用编辑字节范围预判几行，也不在计划之前无差别补图。
+        let texture_started = std::time::Instant::now();
         let mut motion: Option<TextMotion> = None;
         if let Some((new_snap, new_source)) = new_layout.as_ref() {
             let session = self.document_session;
@@ -155,6 +163,7 @@ impl SujianEditorItem {
                 ));
             }
         }
+        let texture_elapsed = texture_started.elapsed();
 
         let has_motion = motion.is_some();
         if let Some((new_snap, _new_source)) = new_layout {
@@ -163,7 +172,44 @@ impl SujianEditorItem {
         // Issue #978：文字动画关闭时保留上面安装的轻量 canonical 快照（#919），
         // 不携带行图/旧几何；下一次开启文字动画时由开关边界显式重建动画源。
         *self.pipeline.text_motion_mut() = motion;
+        let scene_submit_started = std::time::Instant::now();
         self.request_scene_rebuild();
+        let scene_submit_elapsed = scene_submit_started.elapsed();
+
+        writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            sequence: 0,
+            session_id: String::new(),
+            level: writer_diagnostics::DiagnosticLevel::Info,
+            origin: writer_diagnostics::DiagnosticOrigin::App,
+            event: "editor.visual.segments".to_string(),
+            target: "editor.visual".to_string(),
+            message: None,
+            fields: {
+                let mut f = std::collections::BTreeMap::new();
+                f.insert(
+                    "canonical_ms".to_string(),
+                    serde_json::json!(canonical_elapsed.as_secs_f64() * 1000.0),
+                );
+                f.insert(
+                    "animation_snapshot_ms".to_string(),
+                    serde_json::json!(animation_snapshot_elapsed.as_secs_f64() * 1000.0),
+                );
+                f.insert(
+                    "texture_prepare_ms".to_string(),
+                    serde_json::json!(texture_elapsed.as_secs_f64() * 1000.0),
+                );
+                f.insert(
+                    "first_frame_submit_ms".to_string(),
+                    serde_json::json!(scene_submit_elapsed.as_secs_f64() * 1000.0),
+                );
+                f.insert(
+                    "total_ms".to_string(),
+                    serde_json::json!(visual_started.elapsed().as_secs_f64() * 1000.0),
+                );
+                f
+            },
+        });
 
         // Issue #815 评论 6042062633 修改 8: 滚动/加载/套用格式期间抑制动画是显式规则，
         // 但必须留下正式事件，否则诊断包里"编辑发生了却没有动画"没有任何线索。

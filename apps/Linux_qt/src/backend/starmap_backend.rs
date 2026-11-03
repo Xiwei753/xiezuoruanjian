@@ -48,6 +48,7 @@ pub struct StarMapBackend {
     get_starmap_graph_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
     workspace_changes_since_json: qt_method!(fn(&self, offset: u64) -> QString),
     get_starmap_graph: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
+    request_starmap_preview: qt_method!(fn(&self, request_id: u32, starmap_id: QString)),
     resolve_starmap_path_json:
         qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QString),
     resolve_starmap_path:
@@ -334,6 +335,15 @@ pub struct StarMapBackend {
             fields_json: QString,
         )
     ),
+    // Issue #1032：子星图预览快照在后台线程构建，完成后带请求 id / 图 id /
+    // graphRevision 回 GUI；QML 只在 revision 变化时替换共享快照。
+    starmap_preview_ready: qt_signal!(
+        request_id: u32,
+        starmap_id: QString,
+        graph_revision: QString,
+        snapshot_json: QString
+    ),
+    starmap_preview_failed: qt_signal!(request_id: u32, starmap_id: QString, message: QString),
     app: AppRef,
     // Issue #1029 评论：同一 Canvas 可能同时存在旧场景 / 活动场景两个
     // StarMapActiveScene，且同一张图可经不同 Embed 路径打开。显示缓存必须按
@@ -780,6 +790,82 @@ impl StarMapBackend {
                     &crate::backend::json_utils::borrow_conflict_error_json(),
                 )
             })
+    }
+
+    /// Issue #1032：后台构建子星图预览快照。
+    ///
+    /// 这里只取 roots + GitRepoLayout 快照；真正的 Core 读取、节点尺寸估算、
+    /// 边几何与包围盒都在独立线程完成。完成信号带 request_id 与 graphRevision，
+    /// QML 只在当前请求且 revision 真正变化时替换共享快照。
+    fn request_starmap_preview(&self, request_id: u32, starmap_id: QString) {
+        let target = starmap_id.to_string();
+        let context = match self.with_app(|app| app.starmap_preview_context()) {
+            Ok(Some(context)) => context,
+            Ok(None) => {
+                self.starmap_preview_failed(
+                    request_id,
+                    starmap_id,
+                    QString::from("工作区尚未打开"),
+                );
+                return;
+            }
+            Err(error) => {
+                self.starmap_preview_failed(request_id, starmap_id, error.to_string().into());
+                return;
+            }
+        };
+        let (data_root, projects_root, layout) = context;
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(request_id, starmap_id, result): (u32, String, Result<String, String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match result {
+                        Ok(json) => {
+                            let graph_revision = serde_json::from_str::<serde_json::Value>(&json)
+                                .ok()
+                                .and_then(|value| {
+                                    value
+                                        .get("graphRevision")
+                                        .and_then(|revision| revision.as_str())
+                                        .map(str::to_owned)
+                                })
+                                .unwrap_or_default();
+                            this.starmap_preview_ready(
+                                request_id,
+                                QString::from(starmap_id),
+                                QString::from(graph_revision),
+                                QString::from(json),
+                            );
+                        }
+                        Err(message) => {
+                            this.starmap_preview_failed(
+                                request_id,
+                                QString::from(starmap_id),
+                                QString::from(message),
+                            );
+                        }
+                    }
+                }
+            },
+        );
+        let thread_target = target.clone();
+        let spawn = std::thread::Builder::new()
+            .name("starmap-preview".to_string())
+            .spawn(move || {
+                let api = super::with_layout_core_api(&data_root, &projects_root, &layout);
+                let result = api
+                    .get_starmap_graph(&thread_target)
+                    .map_err(|error| error.to_string())
+                    .and_then(crate::starmap_view::preview_cache::build_from_dto)
+                    .and_then(|snapshot| {
+                        crate::starmap_view::preview_cache::to_json(&snapshot)
+                    });
+                callback((request_id, thread_target, result));
+            });
+        if let Err(error) = spawn {
+            self.starmap_preview_failed(request_id, starmap_id, QString::from(error.to_string()));
+        }
     }
     fn resolve_starmap_path_json(
         &self,

@@ -67,6 +67,14 @@ Item {
     property real panX: 0
     property real panY: 0
 
+    // ── Issue #1032：子星图预览共享快照 ──
+    // key = targetStarmapId，value = 后台构建的不可变快照（含 graphRevision）。
+    // 同一目标图的多个 Embed 入口共享同一份；相机变化不改变这里。
+    property var previewSnapshots: ({})
+    // key = targetStarmapId，value = 当前在途请求 id；用于丢弃过期结果。
+    property var previewRequests: ({})
+    property int previewRequestSerial: 0
+
     // ── Issue #949：过渡的显示层开关（不参与命中 / 业务状态）──
     // detailReveal：0 时节点画成概览同款小圆点，1 时是当前层完整节点
     //   （连线跟随同一几何、标题随后显现）。过渡期间只改显示，不改 authored
@@ -242,7 +250,10 @@ Item {
             // Issue #1029：图变更只刷新编辑会话；边几何由 loadGraph / 提交路径
             // 单次计算，视图通知不再触发第二遍全图 sync + compute。
             scene.ensureEditingNodeExists()
+            // Issue #1032：只补充缺失 / 新增入口的预览；已有快照不随缩放重建。
+            scene.syncPreviewTargets(false)
         }
+        onWorkspaceActivity: function(events) { scene.syncPreviewTargets(true) }
         onStructureChanged: scene.structureChanged()
         onSelectionCleared: scene.selectionCleared()
         onNodeSelected: function(node) { scene.nodeSelected(node) }
@@ -618,29 +629,86 @@ Item {
     // fitScale 是概览按当前父镜头把子图压进圆内接安全区的比例；
     // 它同时就是"进入该子图后的子画布 zoom"，切画布前后画面连续。
     //
-    // Issue #1031：这两项是目标图的几何事实，不能因为入口圆被视口裁掉、
-    // 预览 Loader 尚未创建就退化成 null/0。优先读活动预览的同一份计算；
-    // 缺失时按目标图数据现算，且明确区分“空图/加载成功”和“加载失败”。
+    // Issue #1032：这两项直接来自后台共享预览快照，不再在 GUI 线程同步
+    // 读目标图或实测文本。快照缺失时先触发一次后台请求，返回未加载。
     function _childEntryFacts(targetStarmapId, diameterPx) {
-        if (!starmapBackendRef || !targetStarmapId)
+        if (!targetStarmapId)
             return { loaded: false, bounds: null, fitScale: 0 }
-        var res = starmapBackendRef.get_starmap_graph(targetStarmapId)
-        if (!res || res.success !== true || !res.data || !res.data.graph)
+        var snapshot = previewSnapshots[targetStarmapId]
+        if (!snapshot) {
+            // 快照尚未就绪时只触发一次后台请求，不回到 GUI 线程同步读 Core。
+            syncPreviewTargets(false)
             return { loaded: false, bounds: null, fitScale: 0 }
-        var graph = res.data.graph
-        var childNodes = graph.nodes || []
-        var childEmbeds = graph.embeds || []
-        var sizes = nodeMeasurer
-                ? StarMapNodeMetrics.snapshotFor(
-                      targetStarmapId, childNodes, nodeMeasurer.measureNode)
-                : StarMapNodeMetrics.snapshotSizes(targetStarmapId)
-        var bounds = StarMapNodeMetrics.embedBounds(
-                    childNodes, childEmbeds, sizes, graphController._embedDiameter)
+        }
+        var bounds = snapshot.bounds
         return {
             loaded: true,
             bounds: bounds,
-            fitScale: StarMapNodeMetrics.embedFitScale(bounds, diameterPx)
+            fitScale: bounds
+                    ? StarMapNodeMetrics.embedFitScale(bounds, diameterPx) : 0
         }
+    }
+
+    // 每张目标图只保留一个在途请求；结果按 requestId + starmapId + revision
+    // 校验。多个 Embed 入口因此共享同一份快照，不会各自读图。
+    function previewTargetIds() {
+        var seen = {}
+        var out = []
+        var model = graphController.embedsModel || []
+        for (var i = 0; i < model.length; i++) {
+            var target = model[i] ? model[i].targetStarmapId : ""
+            if (!target || seen[target])
+                continue
+            seen[target] = true
+            out.push(target)
+        }
+        return out
+    }
+
+    function syncPreviewTargets(force) {
+        if (!starmapBackendRef)
+            return
+        var targets = previewTargetIds()
+        for (var i = 0; i < targets.length; i++) {
+            var target = targets[i]
+            if (!force && previewSnapshots[target])
+                continue
+            if (previewRequests[target] !== undefined)
+                continue
+            previewRequestSerial += 1
+            var requestId = previewRequestSerial
+            previewRequests[target] = requestId
+            starmapBackendRef.request_starmap_preview(requestId, target)
+        }
+    }
+
+    function receiveStarmapPreviewReady(requestId, starmapId, graphRevision, snapshotJson) {
+        if (previewRequests[starmapId] !== requestId)
+            return
+        delete previewRequests[starmapId]
+        var snapshot = null
+        try {
+            snapshot = JSON.parse(snapshotJson)
+        } catch (error) {
+            return
+        }
+        if (!snapshot || (snapshot.starmapId && snapshot.starmapId !== starmapId))
+            return
+        if (!snapshot.graphRevision)
+            snapshot.graphRevision = graphRevision
+        var current = previewSnapshots[starmapId]
+        if (current && current.graphRevision === snapshot.graphRevision)
+            return
+        var next = {}
+        for (var key in previewSnapshots)
+            next[key] = previewSnapshots[key]
+        next[starmapId] = snapshot
+        previewSnapshots = next
+    }
+
+    function receiveStarmapPreviewFailed(requestId, starmapId, message) {
+        if (previewRequests[starmapId] === requestId)
+            delete previewRequests[starmapId]
     }
 
     function embedEntryInfo(instanceId) {
@@ -1130,6 +1198,18 @@ Item {
         function onPointerModeChanged() { scene.refreshAllEdges() }
     }
 
+    // Issue #1032：后台预览快照完成 / 失败都回到 GUI 线程；快照只按目标图
+    // + graphRevision 替换，相机缩放不会触发这里。
+    Connections {
+        target: scene.starmapBackendRef
+        function onStarmap_preview_ready(requestId, starmapId, graphRevision, snapshotJson) {
+            scene.receiveStarmapPreviewReady(requestId, starmapId, graphRevision, snapshotJson)
+        }
+        function onStarmap_preview_failed(requestId, starmapId, message) {
+            scene.receiveStarmapPreviewFailed(requestId, starmapId, message)
+        }
+    }
+
     function isMovingNode(id) {
         return interactionController
                 ? interactionController.isMovingTarget(scenePathKey, "node", id) : false
@@ -1329,81 +1409,98 @@ Item {
             clip: true
             z: 1
 
-            Rectangle {
-                id: visualNode
-                // 真实屏幕矩形，位置相对 delegate 的视口交集；父级 clip 负责
-                // 裁掉视口外部分。这样圆角和边框仍是节点自己的几何。
-                x: nodeItem.trueScreenRect.x
-                   - (nodeItem.renderClip ? nodeItem.renderClip.x : 0)
-                y: nodeItem.trueScreenRect.y
-                   - (nodeItem.renderClip ? nodeItem.renderClip.y : 0)
-                width: nodeItem.screenWidth
-                height: nodeItem.screenHeight
-                opacity: nodeItem.isEditing ? 1 - editOverlay.transitionProgress : 1
-                radius: Math.min(scene.dt.radiusSm * scene._safeZoom,
-                                 Math.min(width, height) / 2)
-                color: scene._surfaceContainer
-                border.color: nodeItem.isSelected || nodeItem.isEditing
-                        ? scene._accent : scene._border
-                border.width: (nodeItem.isSelected || nodeItem.isEditing) ? 2 : 1
-                clip: true
+            // Issue #1032：只有与视口相交（或正在编辑 / 拖拽）的节点才创建
+            // 卡片、文字与裁剪子树；中倍率下大量视口外节点不再保留常驻文字
+            // delegate。Loader 保持空壳，模型行和编辑身份仍然稳定。
+            Loader {
+                id: visualLoader
+                x: 0
+                y: 0
+                width: nodeItem.width
+                height: nodeItem.height
+                active: nodeItem.inViewport || nodeItem.isEditing || nodeItem.isMoving
+                visible: active
+                sourceComponent: nodeVisualComponent
+            }
 
-                // 显示态：名称在上，正文预览在下。编辑输入层是场景级稳定容器，
-                // 不挂在这里，模型行更新不会销毁正在输入的内容。
-                Item {
-                    id: displayLayer
-                    // 文字仍按 authored world 字号排版，再以真实 zoom 变换到
-                    // 屏幕；卡片视口相交矩形负责裁掉不可见字形。相机已有统一
-                    // 产品缩放范围，因此这里不存在第二套“文字专用”倍率。
-                    x: StarMapNodeMetrics.PADDING * scene._safeZoom
-                    y: StarMapNodeMetrics.PADDING * scene._safeZoom
-                    width: nodeItem.textBaseWidth
-                    height: nodeItem.textBaseHeight
-                    scale: scene._safeZoom
-                    transformOrigin: Item.TopLeft
-                    visible: nodeItem.titleVisible
+            Component {
+                id: nodeVisualComponent
+                Rectangle {
+                    id: visualNode
+                    // 真实屏幕矩形，位置相对 delegate 的视口交集；父级 clip 负责
+                    // 裁掉视口外部分。这样圆角和边框仍是节点自己的几何。
+                    x: nodeItem.trueScreenRect.x
+                       - (nodeItem.renderClip ? nodeItem.renderClip.x : 0)
+                    y: nodeItem.trueScreenRect.y
+                       - (nodeItem.renderClip ? nodeItem.renderClip.y : 0)
+                    width: nodeItem.screenWidth
+                    height: nodeItem.screenHeight
+                    opacity: nodeItem.isEditing ? 1 - editOverlay.transitionProgress : 1
+                    radius: Math.min(scene.dt.radiusSm * scene._safeZoom,
+                                     Math.min(width, height) / 2)
+                    color: scene._surfaceContainer
+                    border.color: nodeItem.isSelected || nodeItem.isEditing
+                            ? scene._accent : scene._border
+                    border.width: (nodeItem.isSelected || nodeItem.isEditing) ? 2 : 1
+                    clip: true
 
-                    Column {
-                        width: parent.width
-                        spacing: nodeItem.bodyText.length > 0
-                                 ? StarMapNodeMetrics.TITLE_BODY_GAP : 0
+                    // 显示态：名称在上，正文预览在下。编辑输入层是场景级稳定容器，
+                    // 不挂在这里，模型行更新不会销毁正在输入的内容。
+                    Item {
+                        id: displayLayer
+                        // 文字仍按 authored world 字号排版，再以真实 zoom 变换到
+                        // 屏幕；卡片视口相交矩形负责裁掉不可见字形。相机已有统一
+                        // 产品缩放范围，因此这里不存在第二套“文字专用”倍率。
+                        x: StarMapNodeMetrics.PADDING * scene._safeZoom
+                        y: StarMapNodeMetrics.PADDING * scene._safeZoom
+                        width: nodeItem.textBaseWidth
+                        height: nodeItem.textBaseHeight
+                        scale: scene._safeZoom
+                        transformOrigin: Item.TopLeft
+                        visible: nodeItem.titleVisible
 
-                        Text {
-                            id: titleLabel
+                        Column {
                             width: parent.width
-                            text: nodeItem.titleText
-                            textFormat: Text.PlainText
-                            color: scene._textPrimary
-                            // 固定 world 字号；不再随每帧 zoom 改写字体/行高。
-                            font.pixelSize: StarMapNodeMetrics.TITLE_FONT_SIZE
-                            font.weight: Font.DemiBold
-                            renderType: Text.CurveRendering
-                            wrapMode: Text.Wrap
-                            maximumLineCount: StarMapNodeMetrics.TITLE_MAX_LINES
-                            elide: Text.ElideRight
-                            lineHeightMode: Text.FixedHeight
-                            lineHeight: StarMapNodeMetrics.TITLE_LINE_HEIGHT
-                        }
+                            spacing: nodeItem.bodyText.length > 0
+                                     ? StarMapNodeMetrics.TITLE_BODY_GAP : 0
 
-                        Text {
-                            id: bodyPreview
-                            width: parent.width
-                            text: nodeItem.bodyText
-                            textFormat: Text.PlainText
-                            visible: text.length > 0 && nodeItem.bodyTextVisible
-                            color: scene._textMuted
-                            font.pixelSize: StarMapNodeMetrics.BODY_FONT_SIZE
-                            renderType: Text.CurveRendering
-                            wrapMode: Text.Wrap
-                            maximumLineCount: StarMapNodeMetrics.PREVIEW_MAX_LINES
-                            elide: Text.ElideRight
-                            lineHeightMode: Text.FixedHeight
-                            lineHeight: StarMapNodeMetrics.BODY_LINE_HEIGHT
+                            Text {
+                                id: titleLabel
+                                width: parent.width
+                                text: nodeItem.titleText
+                                textFormat: Text.PlainText
+                                color: scene._textPrimary
+                                // 固定 world 字号；不再随每帧 zoom 改写字体/行高。
+                                font.pixelSize: StarMapNodeMetrics.TITLE_FONT_SIZE
+                                font.weight: Font.DemiBold
+                                renderType: Text.CurveRendering
+                                wrapMode: Text.Wrap
+                                maximumLineCount: StarMapNodeMetrics.TITLE_MAX_LINES
+                                elide: Text.ElideRight
+                                lineHeightMode: Text.FixedHeight
+                                lineHeight: StarMapNodeMetrics.TITLE_LINE_HEIGHT
+                            }
+
+                            Text {
+                                id: bodyPreview
+                                width: parent.width
+                                text: nodeItem.bodyText
+                                textFormat: Text.PlainText
+                                visible: text.length > 0 && nodeItem.bodyTextVisible
+                                color: scene._textMuted
+                                font.pixelSize: StarMapNodeMetrics.BODY_FONT_SIZE
+                                renderType: Text.CurveRendering
+                                wrapMode: Text.Wrap
+                                maximumLineCount: StarMapNodeMetrics.PREVIEW_MAX_LINES
+                                elide: Text.ElideRight
+                                lineHeightMode: Text.FixedHeight
+                                lineHeight: StarMapNodeMetrics.BODY_LINE_HEIGHT
+                            }
                         }
                     }
                 }
-
             }
+        }
         }
     }
 
@@ -1435,6 +1532,7 @@ Item {
                     ? scene.interactionController.isPressedTarget(scene.scenePathKey, "embed", embedData.instanceId)
                     : false
             starmapBackendRef: scene.starmapBackendRef
+            previewSnapshot: scene.previewSnapshots[embedData.targetStarmapId] || null
 
             readonly property real screenWidth:
                 _finiteProduct(embedData.width, scene._safeZoom) * scene._reveal
@@ -1469,7 +1567,6 @@ Item {
             revealProgress: embedData.instanceId === scene.transitionEmbedId
                     ? scene.detailReveal : -1
         }
-    }
     }
 
     // ── Issue #949：过渡圆环（同一圆壳的放大描边 + 圆内表面）──

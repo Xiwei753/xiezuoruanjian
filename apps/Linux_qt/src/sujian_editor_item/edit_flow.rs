@@ -192,8 +192,11 @@ impl SujianEditorItem {
         visual_cause: EditorTransactionCause,
         composition: Option<CompositionCommitParams>,
     ) -> EditApplyOutcome {
+        // Issue #1032：记录 Core edit 与首帧提交各段耗时，定位剩余 GUI 阻塞点。
+        let edit_started = std::time::Instant::now();
         // 1. 在 Core edit command 之前保证 old/current canonical 已建立且属于当前 text revision。
         self.ensure_current_canonical_before_edit();
+        let canonical_ready_elapsed = edit_started.elapsed();
 
         // 2. 调 Core edit command
         // Issue #819 评论 5967250411 问题 3：pipeline edit 方法现在返回 PipelineEditOutcome，
@@ -309,6 +312,7 @@ impl SujianEditorItem {
                 visual: EditVisualOutcome::AnimationDisabled,
             };
         }
+        let core_edit_elapsed = edit_started.elapsed();
 
         // Issue #978 新评论: 在发出 `editor_change_applied` 之前先把 pipeline 的
         // text_revision 推进到 Core 的 new_revision。QML 的同步 signal handler
@@ -430,26 +434,16 @@ impl SujianEditorItem {
             visual_cause
         ));
 
-        // Issue #843: 发编辑事实 signal，让 QML 直接拿到 cause + content_delta，
-        // 不再在 QML 中用文本长度 diff 猜统计。纯 cursor/selection 移动（content_delta
-        // 全 0）不发——避免无意义的统计事件。
-        //
-        // cause 用 visual_cause（当前真实输入语义），不用 result.cause（pipeline cause）。
-        // 粘贴时 pipeline_cause 仍是 Typing/TypingCommit，但 visual_cause 是 Paste；
-        // 透传 visual_cause 才能让 Core 把粘贴记进 Pasted 而非 HumanTyped。
-        {
-            let result = edit_result
-                .as_ref()
-                .expect("edit_result is Some when applied is true");
-            self.emit_editor_change_fact(visual_cause, result);
-        }
-
         // 4. 文字动画是否真实生效（不受协调模式/独立开关表面值影响）。
         // Issue #978: 使用 effective_animation().text 而不是 animation_requested()；
         // 后者包含光标动画，仅光标动画时不应把普通编辑误报为文字动画跳过。
         let text_animation_requested = self.effective_animation().text;
 
-        // 5. 调视觉流水线，构造明确的 visual outcome
+        // 5. 调视觉流水线，构造明确的 visual outcome。
+        // Issue #1032：先提交本笔 canonical 布局、光标目标与局部动画计划，再发
+        // `editor_change_applied`。QML 的同线程槽函数会同步执行，只有先完成视觉
+        // 事务才能保证正文跟手，不让标注/纠错映射抢在首帧之前占用 GUI 线程。
+        let visual_started = std::time::Instant::now();
         let visual = if let Some(params) = composition {
             // composition commit 路径 — record_composition_commit_transaction
             // 内部自己处理动画开关和跳过事件，返回 VisualPrepareOutcome。
@@ -503,6 +497,58 @@ impl SujianEditorItem {
                 }
             }
         };
+
+        let visual_elapsed = visual_started.elapsed();
+
+        // Issue #1032：视觉事务提交后再发编辑事实。该 signal 的 QML 槽函数与
+        // 当前调用同线程，emit 返回时同步回调已经执行完毕，因此这段时间就是
+        // GUI 同步回调的实际占用；后续标注/纠错映射必须异步化。
+        let signal_started = std::time::Instant::now();
+        {
+            let result = edit_result
+                .as_ref()
+                .expect("edit_result is Some when applied is true");
+            // cause 用 visual_cause（当前真实输入语义），不用 result.cause（pipeline cause）。
+            // 粘贴时 pipeline_cause 仍是 Typing/TypingCommit，但 visual_cause 是 Paste；
+            // 透传 visual_cause 才能让 Core 把粘贴记进 Pasted 而非 HumanTyped。
+            self.emit_editor_change_fact(visual_cause, result);
+        }
+        let signal_elapsed = signal_started.elapsed();
+
+        writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            sequence: 0,
+            session_id: String::new(),
+            level: writer_diagnostics::DiagnosticLevel::Info,
+            origin: writer_diagnostics::DiagnosticOrigin::App,
+            event: "editor.edit.segments".to_string(),
+            target: "editor.edit".to_string(),
+            message: None,
+            fields: {
+                let mut f = std::collections::BTreeMap::new();
+                f.insert(
+                    "canonical_ready_ms".to_string(),
+                    serde_json::json!(canonical_ready_elapsed.as_secs_f64() * 1000.0),
+                );
+                f.insert(
+                    "core_edit_ms".to_string(),
+                    serde_json::json!(core_edit_elapsed.as_secs_f64() * 1000.0),
+                );
+                f.insert(
+                    "visual_transaction_ms".to_string(),
+                    serde_json::json!(visual_elapsed.as_secs_f64() * 1000.0),
+                );
+                f.insert(
+                    "change_signal_ms".to_string(),
+                    serde_json::json!(signal_elapsed.as_secs_f64() * 1000.0),
+                );
+                f.insert(
+                    "total_ms".to_string(),
+                    serde_json::json!(edit_started.elapsed().as_secs_f64() * 1000.0),
+                );
+                f
+            },
+        });
 
         EditApplyOutcome {
             applied: true,

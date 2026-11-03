@@ -19,6 +19,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import "StarMapNodeMetrics.js" as StarMapNodeMetrics
 
 Item {
     id: root
@@ -38,6 +39,9 @@ Item {
 
     // 概览需要的数据入口（只读）
     property var starmapBackendRef: null
+    // Issue #1032：同一目标图 + graphRevision 的共享不可变预览快照。
+    // 由父活动场景统一请求 / 缓存，多个入口只读同一份数据。
+    property var previewSnapshot: null
 
     // 父场景给出的“真实屏幕矩形 ∩ 视口”和真实屏幕矩形。两者都是屏幕
     // 像素；不再存在普通/极端两套绘制分支。
@@ -81,18 +85,33 @@ Item {
     // 圆的内接正方形边长：标题、概览都被它约束在圆内。
     readonly property real _inscribedSide: _diameter / Math.SQRT2
 
-    // Issue #1031：预览是否实例化按视口交集与可读直径控制，
-    // 进入子图所需的 bounds / fitScale 由活动画布独立读取，不依赖 Loader 存活；
-    // 圆被视口裁掉一部分时仍按真实屏幕圆尺寸绘制剩余可见的微缩内容。
-    readonly property bool previewWanted:
-        screenClipRect !== null && targetStarmapId !== ""
-        && _diameter >= 32
+    // Issue #1031/1032：预览实例化按视口交集与可读直径控制。进入阈值 32px、
+    // 退出阈值 20px 形成滞回，避免镜头在阈值附近抖动时反复销毁 / 重建整棵
+    // 预览对象树；快照本身与相机无关，缩放只改变投影。
+    property bool _previewLatched: false
+    function _updatePreviewLatch() {
+        if (screenClipRect === null || targetStarmapId === "") {
+            _previewLatched = false
+            return
+        }
+        if (_diameter >= 32)
+            _previewLatched = true
+        else if (_diameter < 20)
+            _previewLatched = false
+    }
+    onWidthChanged: _updatePreviewLatch()
+    onHeightChanged: _updatePreviewLatch()
+    onTrueScreenRectChanged: _updatePreviewLatch()
+    onScreenClipRectChanged: _updatePreviewLatch()
+    onTargetStarmapIdChanged: _updatePreviewLatch()
+    Component.onCompleted: _updatePreviewLatch()
+
+    readonly property bool previewWanted: _previewLatched
     readonly property var previewContent: previewLoader.item
-    readonly property bool childLoaded:
-        previewContent !== null && previewContent !== undefined
-        && previewContent.graphData !== null && previewContent.loadError === ""
-    readonly property var childBounds: previewContent ? previewContent.childBounds : null
-    readonly property real childFitScale: previewContent ? previewContent.fitScale : 0
+    readonly property bool childLoaded: previewSnapshot !== null
+    readonly property var childBounds: previewSnapshot ? previewSnapshot.bounds : null
+    readonly property real childFitScale: childBounds
+            ? StarMapNodeMetrics.embedFitScale(childBounds, _diameter) : 0
 
     clip: true
 
@@ -115,8 +134,7 @@ Item {
         id: previewComponent
         StarMapSceneContent {
             dt: root.dt
-            starmapId: root.targetStarmapId
-            starmapBackendRef: root.starmapBackendRef
+            snapshot: root.previewSnapshot
             detailReveal: root.revealActive ? root.revealProgress : 1
         }
     }

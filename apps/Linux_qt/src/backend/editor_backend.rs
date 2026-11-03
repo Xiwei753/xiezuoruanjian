@@ -86,6 +86,17 @@ pub struct EditorBackend {
     correction_check_ready: qt_signal!(request_id: u32, text_revision: u64, snapshot_json: QString),
     #[allow(dead_code)]
     correction_check_failed: qt_signal!(request_id: u32, text_revision: u64, message: QString),
+    /// Issue #1032：异步 patch 映射完成，携带章节 + revision 让 QML 只接受
+    /// 当前章节/版本的结果。
+    #[allow(dead_code)]
+    correction_edits_applied: qt_signal!(
+        request_id: u32,
+        project_id: QString,
+        chapter_id: QString,
+        text_revision: u64,
+        success: bool,
+        message: QString
+    ),
     #[allow(dead_code)]
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
     /// Issue #920：正文段落格式化规则归 Core，Qt 只触发此操作。
@@ -278,18 +289,20 @@ pub struct EditorBackend {
             text: QString,
         )
     ),
-    /// Issue #954：编辑事务的第一阶段，只更新 Core 内存段索引，不跑模型。
+    /// Issue #1032：编辑事务的第一阶段改为后台 FIFO 任务；QML 通过
+    /// `correction_edits_applied` 接收带章节/revision 的完成结果。
     #[allow(dead_code)]
     apply_correction_edits: qt_method!(
         fn(
             &mut self,
+            request_id: u32,
             project_id: QString,
             chapter_id: QString,
             session_id: u64,
             text_revision: u64,
             base_revision: u64,
             edits_json: QString,
-        ) -> QJsonObject
+        )
     ),
     /// Issue #954：章节关闭/切换后释放共享校对队列中的章节记录。
     #[allow(dead_code)]
@@ -1077,38 +1090,81 @@ impl EditorBackend {
 
     fn apply_correction_edits(
         &mut self,
+        request_id: u32,
         project_id: QString,
         chapter_id: QString,
         session_id: u64,
         text_revision: u64,
         base_revision: u64,
         edits_json: QString,
-    ) -> QJsonObject {
+    ) {
+        let project = project_id.to_string();
+        let chapter = chapter_id.to_string();
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(request_id, text_revision, result): (u32, u64, Result<String, String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match result {
+                        Ok(_) => this.correction_edits_applied(
+                            request_id,
+                            QString::from(project.clone()),
+                            QString::from(chapter.clone()),
+                            text_revision,
+                            true,
+                            QString::from(""),
+                        ),
+                        Err(message) => this.correction_edits_applied(
+                            request_id,
+                            QString::from(project.clone()),
+                            QString::from(chapter.clone()),
+                            text_revision,
+                            false,
+                            QString::from(message),
+                        ),
+                    }
+                }
+            },
+        );
+        let completion: super::correction_operations::CorrectionQueryCallback =
+            Box::new(move |request_id, text_revision, result| {
+                callback((request_id, text_revision, result));
+            });
         let result = self.with_app(|app| {
             app.request_correction_edits_apply(
+                request_id,
                 project_id.to_string(),
                 chapter_id.to_string(),
                 session_id,
                 text_revision,
                 base_revision,
                 edits_json.to_string(),
+                completion,
             )
         });
-        let mut response = qjson_object_from_json("{}");
         match result {
-            Ok(Ok(())) => {
-                response.insert("ok", true.into());
-            }
+            Ok(Ok(())) => {}
             Ok(Err(message)) => {
-                response.insert("ok", false.into());
-                response.insert("error", QString::from(message).into());
+                self.correction_edits_applied(
+                    request_id,
+                    project_id,
+                    chapter_id,
+                    text_revision,
+                    false,
+                    QString::from(message),
+                );
             }
             Err(error) => {
-                response.insert("ok", false.into());
-                response.insert("error", QString::from(error.to_string()).into());
+                self.correction_edits_applied(
+                    request_id,
+                    project_id,
+                    chapter_id,
+                    text_revision,
+                    false,
+                    QString::from(error.to_string()),
+                );
             }
         }
-        response
     }
 
     fn release_correction_session(&self, project_id: QString, chapter_id: QString) {

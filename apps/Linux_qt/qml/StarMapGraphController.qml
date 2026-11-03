@@ -99,6 +99,9 @@ QtObject {
     readonly property int _embedDiameter: 200
 
     signal graphChanged()
+    // 工作区事件流出现外部改动时发出原始事件列表；活动场景据此刷新子星图
+    // 预览快照，但不会因为相机缩放 / 平移重算任何预览。
+    signal workspaceActivity(var events)
     // 只有真正落盘成功的节点/嵌入结构或标题变化才发出；位置、镜头、
     // 边和链接变化不触发导航树重载。
     signal structureChanged()
@@ -141,6 +144,8 @@ QtObject {
             loadGraph()
         if (structureEventSeen)
             structureChanged()
+        if (events.length > 0)
+            workspaceActivity(events)
     }
 
     function revisionOfNode(nodeId) {

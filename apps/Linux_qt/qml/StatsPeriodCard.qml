@@ -92,6 +92,21 @@ Kirigami.ShadowedRectangle {
         return Number(parts[0]) + "/" + Number(parts[1]) + "/" + Number(parts[2])
     }
 
+    // Issue #1032：实测速度的分子只包含真实计时覆盖的输入，必须同时展示
+    // 「计时覆盖 A / B 字」和实际计时，避免把全期总字数误认为速度分子。
+    function coverageText() {
+        return qsTr("计时覆盖 %1 / %2 字 · 实际计时 %3")
+            .arg(root.formatNum(root.val(root.periodSummary, "timedHumanTypedChars")))
+            .arg(root.formatNum(root.val(root.periodSummary, "totalHumanTypedChars")))
+            .arg(root.formatMeasuredDuration(root.val(root.periodSummary, "measuredWritingSeconds")))
+    }
+
+    function hasUncoveredHistory() {
+        var timed = root.val(root.periodSummary, "timedHumanTypedChars")
+        var total = root.val(root.periodSummary, "totalHumanTypedChars")
+        return timed !== null && total !== null && timed < total
+    }
+
     readonly property string title: {
         switch (preset) {
         case "last7Days": return qsTr("近七天")
@@ -154,7 +169,7 @@ Kirigami.ShadowedRectangle {
         Kirigami.Heading {
             level: 3
             Layout.fillWidth: true
-            text: root.formatAveragePerHour(root.val(root.periodSummary, "averageCharsPerHour")) + " " + qsTr("字/时")
+            text: qsTr("实测 %1 字/时").arg(root.formatAveragePerHour(root.val(root.periodSummary, "averageCharsPerHour")))
             color: Kirigami.Theme.textColor
             font.pixelSize: Math.round(Kirigami.Units.gridUnit * 1.1)
             elide: Text.ElideRight
@@ -173,9 +188,16 @@ Kirigami.ShadowedRectangle {
 
         Label {
             Layout.fillWidth: true
-            text: root.val(root.periodSummary, "hasMeasuredTiming") === true
-                ? qsTr("实际计时 %1").arg(root.formatMeasuredDuration(root.val(root.periodSummary, "measuredWritingSeconds")))
-                : qsTr("仅统计新记录")
+            text: root.coverageText()
+            color: Kirigami.Theme.disabledTextColor
+            font: Kirigami.Theme.smallFont
+            elide: Text.ElideRight
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: root.hasUncoveredHistory()
+            text: qsTr("历史输入未纳入实测计时，不计入实测速度")
             color: Kirigami.Theme.disabledTextColor
             font: Kirigami.Theme.smallFont
             elide: Text.ElideRight

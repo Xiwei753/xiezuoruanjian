@@ -98,6 +98,12 @@ QtObject {
     // Epoch attached to every in-flight request, so a delayed response from a
     // previous document cannot overwrite the current chapter's annotations.
     property var correctionRequestEpochs: ({})
+    // Issue #1032：编辑事实先入队，首帧提交后逐条处理，避免同步槽函数
+    // 在按键路径上跑标注/纠错映射。纠错 apply 本身进入 Rust 后台 FIFO。
+    property var editorFollowups: []
+    property bool editorFollowupScheduled: false
+    property int correctionApplyRequestSerial: 0
+    property var correctionApplyRequests: ({})
     property var editorViewportRef: null
 
     property var annotationRefreshTimer: Timer {
@@ -225,8 +231,14 @@ QtObject {
                                          changesJson, oldSelectionAnchor, oldSelectionHead,
                                          newSelectionAnchor, newSelectionHead,
                                          beforeTextSha256, afterTextSha256) {
-            controller.reconcileCorrectionEdit(baseRevision, newRevision, editRangesJson);
-            controller.applyAnnotationEditRanges(cause, baseRevision, newRevision, editRangesJson);
+            controller.enqueueEditorFollowup({
+                projectId: controller.projectId,
+                chapterId: controller.chapterId,
+                cause: cause,
+                baseRevision: Number(baseRevision),
+                newRevision: Number(newRevision),
+                editRangesJson: String(editRangesJson || "[]")
+            });
             if (controller.chapterId && controller.editorBackendRef) {
                 controller.editorBackendRef.record_editor_change_stats(
                     controller.projectId, controller.volumeId, controller.chapterId,
@@ -250,6 +262,11 @@ QtObject {
         function onCorrection_check_failed(requestId, textRevision, message) {
             controller.receiveCorrectionFailure(requestId, textRevision, message);
         }
+        function onCorrection_edits_applied(requestId, projectId, chapterId,
+                                            textRevision, success, message) {
+            controller.receiveCorrectionEditsApplied(
+                requestId, projectId, chapterId, textRevision, success, message);
+        }
     }
 
     // Safe plain text extraction via SujianEditorItem in Rust.
@@ -261,6 +278,42 @@ QtObject {
     function normalizePlainText(text) {
         if (text === undefined || text === null) return "";
         return String(text).replace(/\u2029/g, "\n").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    }
+
+    // Issue #1032：`editor_change_applied` 槽只做事实入队。每条事实在独立的
+    // 事件循环轮次处理，先让刚提交的正文视觉有机会上屏，再按章节 + revision
+    // 顺序映射标注区间和纠错 patch。
+    function enqueueEditorFollowup(fact) {
+        if (!fact || !fact.projectId || !fact.chapterId) return;
+        editorFollowups.push(fact);
+        if (!editorFollowupScheduled) {
+            editorFollowupScheduled = true;
+            Qt.callLater(controller.processNextEditorFollowup);
+        }
+    }
+
+    function processNextEditorFollowup() {
+        editorFollowupScheduled = false;
+        if (editorFollowups.length === 0) return;
+        var fact = editorFollowups.shift();
+        if (fact.projectId !== controller.projectId
+                || fact.chapterId !== controller.chapterId) {
+            // 旧章节事实不再作用于当前文档，也不阻塞后续事实。
+        } else {
+            applyAnnotationEditRanges(
+                fact.cause, fact.baseRevision, fact.newRevision, fact.editRangesJson);
+            reconcileCorrectionEdit(
+                fact.baseRevision, fact.newRevision, fact.editRangesJson);
+        }
+        if (editorFollowups.length > 0) {
+            editorFollowupScheduled = true;
+            Qt.callLater(controller.processNextEditorFollowup);
+        }
+    }
+
+    function clearEditorFollowups() {
+        editorFollowups = [];
+        editorFollowupScheduled = false;
     }
 
     function cancelPendingCorrectionRequest() {
@@ -590,6 +643,8 @@ QtObject {
     // stays valid so later edits remain incremental.
     function clearCorrectionAnnotations() {
         cancelPendingCorrectionRequest();
+        clearEditorFollowups();
+        correctionApplyRequests = ({});
         correctionRequestEpochs = ({});
         pendingCorrectionRevision = -1;
         pendingCorrectionProjectId = "";
@@ -609,6 +664,8 @@ QtObject {
 
     function invalidateCorrectionResults() {
         cancelPendingCorrectionRequest();
+        clearEditorFollowups();
+        correctionApplyRequests = ({});
         correctionDocumentEpoch += 1;
         if (correctionDocumentEpoch > 2147483000) correctionDocumentEpoch = 1;
         correctionRequestEpochs = ({});
@@ -797,10 +854,12 @@ QtObject {
         var next = Number(newRevision);
 
         // Issue #978 新评论: apply_edit_with_visuals 已在发出
-        // editor_change_applied 前把 text_revision 推进到 next，因此这里的
-        // actualRevision 应直接等于 next，正常输入走 patch-only 路径。
+        // editor_change_applied 前把 text_revision 推进到 next。
+        // Issue #1032：事实改成逐条排队后，处理某条历史 patch 时编辑器可能已经
+        // 走到更晚的 revision；只要 base 与已跟踪 revision 连续，就按队列顺序
+        // 重放该 patch。actualRevision < next 才表示真的丢失了连续性。
         // 只有真正失去连续性时才由快照请求读取一次正文；已有请求在途时不重复。
-        if (!isFinite(base) || !isFinite(next) || actualRevision !== next
+        if (!isFinite(base) || !isFinite(next) || actualRevision < next
                 || base !== correctionTrackedRevision
                 || correctionTrackedProjectId !== projectId
                 || correctionTrackedChapterId !== chapterId
@@ -816,19 +875,45 @@ QtObject {
         correctionTrackedChapterId = chapterId;
         // Issue #954/#978: 只把 patch/revision 交给 Core 更新内存段索引，
         // 不复制整章正文；模型阶段由 requestCorrectionPendingNow 在停顿后读取一次。
-        var applied = editorBackendRef.apply_correction_edits(
+        // Issue #1032：QML 不再同步等待；Rust 校对队列按章节 FIFO 执行，
+        // 完成结果通过 correction_edits_applied 带回章节 + revision。
+        correctionApplyRequestSerial += 1;
+        if (correctionApplyRequestSerial > 2147483000) correctionApplyRequestSerial = 1;
+        var applyRequestId = correctionApplyRequestSerial;
+        correctionApplyRequests[applyRequestId] = {
+            projectId: projectId,
+            chapterId: chapterId,
+            revision: next,
+            epoch: correctionDocumentEpoch
+        };
+        editorBackendRef.apply_correction_edits(
+            applyRequestId,
             projectId,
             chapterId,
             correctionDocumentEpoch,
             next,
             base,
             String(patchRangesJson || "[]"));
-        if (applied && applied.ok === false) {
-            if (!correctionCheckPending) {
-                requestCorrectionSnapshot();
-            }
+    }
+
+    function receiveCorrectionEditsApplied(requestId, projectId, chapterId,
+                                          textRevision, success, errorMessage) {
+        var expected = correctionApplyRequests[requestId];
+        delete correctionApplyRequests[requestId];
+        if (!expected) return;
+        if (expected.projectId !== projectId
+                || expected.chapterId !== chapterId
+                || Number(expected.revision) !== Number(textRevision)
+                || expected.epoch !== correctionDocumentEpoch
+                || projectId !== controller.projectId
+                || chapterId !== controller.chapterId) {
             return;
         }
+        if (!success) {
+            if (!correctionCheckPending) requestCorrectionSnapshot();
+            return;
+        }
+        if (Number(textRevision) < correctionTrackedRevision) return;
         correctionError = "";
         correctionStatus = qsTr("正在校对修改段落…");
         correctionScanDebounceTimer.restart();

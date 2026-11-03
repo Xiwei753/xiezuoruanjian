@@ -132,6 +132,20 @@ Rectangle {
         return Number(parts[0]) + "/" + Number(parts[1]) + "/" + Number(parts[2])
     }
 
+    // Issue #1032：实测速度只以真实计时覆盖的输入为分子，展示覆盖字数 A/B。
+    function coverageTextFor(obj) {
+        return qsTr("计时覆盖 %1 / %2 字 · 实际计时 %3")
+            .arg(root.formatNum(root.val(obj, "timedHumanTypedChars")))
+            .arg(root.formatNum(root.val(obj, "totalHumanTypedChars")))
+            .arg(root.formatMeasuredDuration(root.val(obj, "measuredWritingSeconds")))
+    }
+
+    function hasUncoveredHistory(obj) {
+        var timed = root.val(obj, "timedHumanTypedChars")
+        var total = root.val(obj, "totalHumanTypedChars")
+        return timed !== null && total !== null && timed < total
+    }
+
     function lifetimeRangeText() {
         if (!root.lifetime) return "—"
         var first = root.formatDate(root.lifetime.firstWritingDate)
@@ -352,7 +366,7 @@ Rectangle {
 
                                     Label {
                                         Layout.fillWidth: true
-                                        text: qsTr("平均 %1 字/时 · %2 字/天")
+                                        text: qsTr("实测 %1 字/时 · %2 字/天")
                                             .arg(root.formatAveragePerHour(root.val(root.lifetime, "averageCharsPerHour")))
                                             .arg(root.formatAverage(root.val(root.lifetime, "averageCharsPerDay")))
                                         color: Kirigami.Theme.disabledTextColor
@@ -361,12 +375,24 @@ Rectangle {
 
                                     Label {
                                         Layout.fillWidth: true
-                                        text: root.val(root.lifetime, "hasMeasuredTiming") === true
-                                            ? qsTr("共计 %1 天 · 实际计时 %2")
-                                                .arg(root.formatNum(root.val(root.lifetime, "elapsedCalendarDays")))
-                                                .arg(root.formatMeasuredDuration(root.val(root.lifetime, "measuredWritingSeconds")))
-                                            : qsTr("共计 %1 天 · 仅统计新记录")
-                                                .arg(root.formatNum(root.val(root.lifetime, "elapsedCalendarDays")))
+                                        text: root.coverageTextFor(root.lifetime)
+                                        color: Kirigami.Theme.disabledTextColor
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        visible: root.hasUncoveredHistory(root.lifetime)
+                                        text: qsTr("历史输入未纳入实测计时，不计入实测速度")
+                                        color: Kirigami.Theme.disabledTextColor
+                                        font: Kirigami.Theme.smallFont
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: qsTr("共计 %1 天")
+                                            .arg(root.formatNum(root.val(root.lifetime, "elapsedCalendarDays")))
                                         color: Kirigami.Theme.disabledTextColor
                                         elide: Text.ElideRight
                                     }

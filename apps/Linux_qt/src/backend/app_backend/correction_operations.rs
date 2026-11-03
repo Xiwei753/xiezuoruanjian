@@ -754,43 +754,73 @@ impl AppBackend {
         )
     }
 
-    /// Lightweight half of the two-stage edit flow. Runs on the caller thread
-    /// and only maps byte ranges in the committed segment index; it does not
-    /// copy the chapter or touch the model.
+    /// Lightweight half of the two-stage edit flow. Issue #1032：不再在 GUI
+    /// 线程同步执行，而是作为不可合并任务排入同一个章节 FIFO；后续扫描任务
+    /// 会等它完成后再执行，从而严格保持章节 + revision 顺序。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn request_correction_edits_apply(
         &self,
+        request_id: u32,
         project_id: String,
         chapter_id: String,
         session_id: u64,
         text_revision: u64,
         base_revision: u64,
         edits_json: String,
+        completion: CorrectionQueryCallback,
     ) -> Result<(), String> {
-        let layout = if self.current_has_data_root && !self.current_data_root.is_empty() {
-            self.current_workspace_git_layout
-                .clone()
-                .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?
-        } else {
-            return Err("Core 尚未打开工作区".to_string());
-        };
+        let (data_root, projects_root, layout) =
+            if self.current_has_data_root && !self.current_data_root.is_empty() {
+                let layout = self
+                    .current_workspace_git_layout
+                    .clone()
+                    .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?;
+                (
+                    self.current_data_root.clone(),
+                    self.current_projects_root.clone(),
+                    layout,
+                )
+            } else {
+                return Err("Core 尚未打开工作区".to_string());
+            };
         let edits = parse_correction_edits_json(&edits_json)?;
-        let api = with_layout_core_api(
-            &self.current_data_root,
-            &self.current_projects_root,
-            &layout,
-        );
-        api.apply_correction_edits(
+        submit_correction_job(
             project_id.clone(),
             chapter_id.clone(),
+            request_id,
             session_id,
             text_revision,
-            base_revision,
-            edits,
+            "edit_apply",
+            false,
+            move || {
+                let api = with_layout_core_api(&data_root, &projects_root, &layout);
+                let result = api
+                    .apply_correction_edits(
+                        project_id.clone(),
+                        chapter_id.clone(),
+                        session_id,
+                        text_revision,
+                        base_revision,
+                        edits,
+                    )
+                    .map_err(|error| error.to_string());
+                if result.is_ok() {
+                    record_correction_latest(
+                        &project_id,
+                        &chapter_id,
+                        session_id,
+                        text_revision,
+                    );
+                }
+                let succeeded = result.is_ok();
+                completion(
+                    request_id,
+                    text_revision,
+                    result.map(|_| "{}".to_string()),
+                );
+                succeeded
+            },
         )
-        .map_err(|error| error.to_string())?;
-        record_correction_latest(&project_id, &chapter_id, session_id, text_revision);
-        Ok(())
     }
 
     /// Model half of the two-stage edit flow. The executor coalesces queued

@@ -1,26 +1,20 @@
 // =============================================================================
-// StarMapSceneContent.qml — 子星图微缩概览（fit-to-bounds 预览投影）
+// StarMapSceneContent.qml — 子星图微缩概览（纯快照投影）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：把「一张星图」的真实节点 / 边 / 子入口按 fit-to-bounds 投影成父图中
+// 职责：把一份后台构建好的子星图预览快照，按 fit-to-bounds 投影成父图中
 //   圆形入口内的微缩概览。它只回答一个问题："里面大概有什么"。
 //
-// Issue #929：独立画布协议下，父图不再递归渲染子画布的可交互内容。
-//   - 本组件不是视口、不是画布：没有 pan/zoom/相机属性，也没有任何手势、
-//     没有节点拖拽、没有局部相机、不往里递归 Loader；
-//   - fit 只属于这份「父图的微缩概览投影」：真实子图的 authored 坐标不变，
-//     也没有 localFitScale × ancestor effectiveScale 的递归尺寸链；
-//   - 概览整体留在圆的内接安全区（约直径 66%），天然不会溢出圆外，
-//     不需要 layer.enabled / MultiEffect 圆形 FBO 遮罩 / ShaderEffectSource；
-//   - 未进入的子图按 fit-to-bounds 直接投影真实节点卡片、文字、边和入口圆壳；
-//     缩小后文字看不清是自然结果，不换圆点、不换摘要、不换另一套 LOD。
-//   - 不保存任何固定分辨率快照：父图相机变化时按当前投影重画几何。
-//     超过进入阈值后由 StarMapActiveScene 用同一套 authored 几何接管。
+// Issue #1032：本组件不再在 Loader/Component.onCompleted 生命周期里同步读取
+//   Core、实测文本或计算边几何。数据入口只有 `snapshot`：同一
+//   (targetStarmapId, graphRevision) 的多个入口共享同一份不可变快照；相机
+//   缩放 / 平移只改变下面的 fitScale 与投影，不会重新读图。
 //
 // 约束：
-//   - 纯 UI 渲染，不调 Core 写入接口，不创建子画布
+//   - 纯 UI 渲染，不调 Core / backend，不创建子画布
 //   - 不引用 StarMapEmbed / StarMapActiveScene，避免编译期类型环
+//   - 仍是真实矢量节点 / 边 / 入口投影，不做预栅格化
 // =============================================================================
 
 import QtQuick
@@ -32,127 +26,36 @@ Item {
 
     required property var dt
 
-    // 被概览的子星图 ID（由父 Embed 传入；空串 = 不画）。
-    property string starmapId: ""
-    property var starmapBackendRef: null
-
-    // 概览包围盒最大边 = 短边 × EMBED_SAFE_RATIO。内接正方形是
-    // 1/√2 ≈ 0.707，取 0.66 留出边距，概览不贴到圆边。
-    // Issue #984：普通节点宽高统一由 StarMapNodeMetrics 度量（读原始
-    // graphData 节点的 title/content），这里不再保留第二套固定几何。
-    readonly property int _embedDiameter: 200
-    // 概览线宽的屏幕口径：概览是父图投影的一部分，线宽恒定在屏幕像素上。
-    readonly property real _previewStrokeWidth: 1.5
+    // 后台预览快照：{ starmapId, graphRevision, nodes, embeds, edges, bounds }。
+    property var snapshot: null
 
     // Issue #949 保留该属性给视口过渡传值；#1009 起它不再切换任何形状。
     property real detailReveal: 1.0
     readonly property real _titleFontPx: Math.max(0.01, 14 * fitScale)
     readonly property real _bodyFontPx: Math.max(0.01, 12 * fitScale)
     readonly property real _cardRadiusPx: Math.max(0.1, 6 * fitScale)
+    // 概览线宽的屏幕口径：概览是父图投影的一部分，线宽恒定在屏幕像素上。
+    readonly property real _previewStrokeWidth: 1.5
 
-    // ── 目标图数据（只读快照，不写 Core）──
-    property var graphData: null
-    property var edgeRenders: []
-    // Issue #984：整张子图的节点布局快照（含未打开的子图，由真实文本排版
-    // 测量），概览 bounds / 端点 / 卡片几何共用这一份，不再回退到固定高度。
-    property var layoutSizes: ({})
-    property string loadError: ""
-
-    StarMapNodeMeasurer {
-        id: nodeMeasurer
-    }
-
-    readonly property var nodes: graphData && graphData.nodes ? graphData.nodes : []
-    readonly property var embeds: graphData && graphData.embeds ? graphData.embeds : []
-
-    // ── fit-to-bounds：真实 authored 坐标 → 概览局部像素 ──
-    // Issue #1031：界面绘制与进入子图共用同一份纯几何事实。
-    // Loader 尺寸使用入口真实屏幕圆直径；视口裁剪只影响绘制，不改变这里。
-    readonly property var childBounds:
-        StarMapNodeMetrics.embedBounds(nodes, embeds, layoutSizes, _embedDiameter)
+    readonly property var nodes: snapshot && snapshot.nodes ? snapshot.nodes : []
+    readonly property var embeds: snapshot && snapshot.embeds ? snapshot.embeds : []
+    readonly property var edgeRenders: snapshot && snapshot.edges ? snapshot.edges : []
+    readonly property var childBounds: snapshot ? snapshot.bounds : null
+    readonly property string loadError: snapshot ? "" : "preview_not_ready"
 
     readonly property real _centerWorldX: childBounds
             ? (childBounds.minX + childBounds.maxX) / 2 : 0
     readonly property real _centerWorldY: childBounds
             ? (childBounds.minY + childBounds.maxY) / 2 : 0
 
-    // 子图 world 单位 → 概览局部像素（这就是"进入该子图"时的子画布比例）。
-    // 没有内容时返回 0，不画任何投影。
+    // 子图 world 单位 → 概览局部像素。没有内容时返回 0，不画任何投影。
     readonly property real fitScale:
         StarMapNodeMetrics.embedFitScale(childBounds, Math.min(width, height))
 
     function projectX(wx) { return width / 2 + (wx - _centerWorldX) * fitScale }
     function projectY(wy) { return height / 2 + (wy - _centerWorldY) * fitScale }
 
-    // ── 数据加载：只读入口，不写 Core ──
-    function _layoutNodes() {
-        var out = []
-        for (var i = 0; i < nodes.length; i++) {
-            var n = nodes[i]
-            var pos = n.position || { x: 0, y: 0 }
-            // 旧 portal 归一到 Embed 几何，和活动画布同一口径。
-            // Issue #984：普通节点与 StarMapGraphController.buildModels 共用度量。
-            var isPortal = n.portal && n.portal.destinationStarmapId
-            out.push({
-                id: n.id,
-                x: pos.x, y: pos.y,
-                width: isPortal ? _embedDiameter
-                                : StarMapNodeMetrics.sizeFor(layoutSizes, n).width,
-                height: isPortal ? _embedDiameter
-                                 : StarMapNodeMetrics.sizeFor(layoutSizes, n).height
-            })
-        }
-        return out
-    }
-
-    function _layoutEmbeds() {
-        var out = []
-        for (var i = 0; i < embeds.length; i++) {
-            var e = embeds[i]
-            var pos = e.position || { x: 0, y: 0 }
-            out.push({
-                instanceId: e.instanceId,
-                x: pos.x, y: pos.y,
-                width: _embedDiameter, height: _embedDiameter
-            })
-        }
-        return out
-    }
-
-    // 边渲染仍走 Core 的唯一几何真相（starmap_view::compute_edge_renders），
-    // 概览不另写一套端点 / 箭头 / 偏移算法。
-    function reload() {
-        if (!starmapBackendRef || starmapId === "") {
-            graphData = null
-            edgeRenders = []
-            loadError = ""
-            return
-        }
-        var res = starmapBackendRef.get_starmap_graph(starmapId)
-        if (!res || res.success !== true || !res.data || !res.data.graph) {
-            graphData = null
-            edgeRenders = []
-            loadError = res && res.errorCode ? res.errorCode : "load_failed"
-            return
-        }
-        graphData = res.data.graph
-        layoutSizes = StarMapNodeMetrics.snapshotFor(starmapId, nodes, nodeMeasurer.measureNode)
-        loadError = ""
-        var renderRes = starmapBackendRef.compute_edge_renders(
-                    JSON.stringify(graphData),
-                    JSON.stringify(_layoutNodes()),
-                    JSON.stringify(_layoutEmbeds()))
-        edgeRenders = (renderRes && renderRes.success === true && renderRes.data)
-                ? renderRes.data : []
-    }
-
-    onStarmapIdChanged: reload()
-    onStarmapBackendRefChanged: reload()
-    Component.onCompleted: reload()
-
     // ── 单一投影入口画出的矢量几何（QtQuick.Shapes）──
-    // 全是实时的几何路径，没有 layer / FBO / 快照纹理：父图相机一变，
-    // 下面的绑定就按新投影重算路径字符串。
     function _circlePath(cx, cy, r) {
         return "M " + (cx - r) + " " + cy
                 + " A " + r + " " + r + " 0 1 0 " + (cx + r) + " " + cy
@@ -171,57 +74,34 @@ Item {
         return s
     }
 
-    // 真实节点卡片的投影：尺寸、文字、正文全部来自原始图，只乘同一个 fitScale。
+    // 节点卡片与入口圆壳只做投影，不再读原始 graph / 重新测量。
     readonly property var projectedNodes: {
         var out = []
         if (!(fitScale > 0))
             return out
         for (var i = 0; i < nodes.length; i++) {
             var n = nodes[i]
-            if (n.portal && n.portal.destinationStarmapId)
-                continue
-            var pos = n.position || { x: 0, y: 0 }
-            var size = StarMapNodeMetrics.sizeFor(layoutSizes, n)
-            var bodyText = ""
-            if (n.content) {
-                bodyText = n.content.body !== undefined ? n.content.body
-                    : (n.content.summary !== undefined ? n.content.summary : "")
-            }
             out.push({
                 id: n.id,
-                x: projectX(pos.x), y: projectY(pos.y),
-                width: size.width * fitScale, height: size.height * fitScale,
+                x: projectX(n.x), y: projectY(n.y),
+                width: n.width * fitScale, height: n.height * fitScale,
                 title: n.title !== undefined ? n.title : "",
-                body: bodyText !== null && bodyText !== undefined ? String(bodyText) : ""
+                body: n.body !== undefined && n.body !== null ? String(n.body) : ""
             })
         }
         return out
     }
 
-    // 子图入口同样是真实圆形几何，只是按同一投影缩小；没有缩略图 / 小圆点分支。
     readonly property var projectedEmbeds: {
         var out = []
         if (!(fitScale > 0))
             return out
-        for (var i = 0; i < nodes.length; i++) {
-            var n = nodes[i]
-            if (!(n.portal && n.portal.destinationStarmapId))
-                continue
-            var npos = n.position || { x: 0, y: 0 }
-            out.push({
-                id: n.id,
-                x: projectX(npos.x), y: projectY(npos.y),
-                diameter: _embedDiameter * fitScale,
-                label: n.title !== undefined ? n.title : ""
-            })
-        }
-        for (var j = 0; j < embeds.length; j++) {
-            var e = embeds[j]
-            var pos = e.position || { x: 0, y: 0 }
+        for (var i = 0; i < embeds.length; i++) {
+            var e = embeds[i]
             out.push({
                 id: e.instanceId,
-                x: projectX(pos.x), y: projectY(pos.y),
-                diameter: _embedDiameter * fitScale,
+                x: projectX(e.x), y: projectY(e.y),
+                diameter: e.diameter * fitScale,
                 label: e.label !== undefined && e.label !== null ? e.label : ""
             })
         }
@@ -235,7 +115,6 @@ Item {
         antialiasing: true
         preferredRendererType: Shape.CurveRenderer
 
-        // 边：和活动画布同一份 Core edge render 几何（直线段）。
         ShapePath {
             strokeColor: overview.dt.border
             strokeWidth: overview._previewStrokeWidth
@@ -243,10 +122,8 @@ Item {
             capStyle: ShapePath.RoundCap
             PathSvg { path: overview.edgesPath }
         }
-
     }
 
-    // 节点卡片：原始标题 / 正文 / 卡片边框按真实几何缩小，不换摘要或圆点。
     Repeater {
         model: overview.projectedNodes
         delegate: Rectangle {
@@ -291,7 +168,6 @@ Item {
         }
     }
 
-    // 子图入口：真实圆形边界 + 标题，随同一投影缩放。
     Repeater {
         model: overview.projectedEmbeds
         delegate: Rectangle {
