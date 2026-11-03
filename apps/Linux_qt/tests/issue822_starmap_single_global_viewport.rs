@@ -426,8 +426,8 @@ fn embed_loads_readonly_overview_instead_of_nested_scene() {
     assert!(
         src.contains("readonly property bool previewWanted:")
             && src.contains("screenClipRect !== null")
-            && src.contains("&& _diameter > 0"),
-        "概览数据只按入口是否在视口内加载，不按完整可见/尺寸门槛卸载"
+            && src.contains("&& _diameter >= 32"),
+        "概览绘制必须按视口交集与可读直径门控，进入几何不得依赖 Loader 存活"
     );
     assert!(
         src.contains("active: root.previewWanted")
@@ -1645,8 +1645,8 @@ fn overview_renders_static_projection_and_passes_hits_through() {
     assert!(
         embed.contains("active: root.previewWanted")
             && embed.contains("screenClipRect !== null")
-            && embed.contains("&& _diameter > 0"),
-        "概览几何数据必须仅在视口内时加载，且不依赖完整可见，实际源码缺少"
+            && embed.contains("&& _diameter >= 32"),
+        "概览必须按视口交集与可读直径懒加载，进入几何独立于 Loader，实际源码缺少"
     );
     let scene = strip_line_comments(&read_src(ACTIVE_SCENE));
     assert!(

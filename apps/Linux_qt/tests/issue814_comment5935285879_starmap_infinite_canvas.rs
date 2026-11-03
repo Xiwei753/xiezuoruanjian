@@ -450,13 +450,13 @@ fn embed_shell_is_a_circle() {
             "StarMapEmbed 不得再保留圆形裁剪 / 递归子内容机制 {removed}"
         );
     }
-    // 概览数据只要求入口在视口内；不完整可见时仍要保留 bounds/fitScale。
+    // 概览只在入口与视口相交且投影达到可读尺寸时实例化；进入几何独立于 Loader。
     assert!(
         src.contains("readonly property bool previewWanted:")
             && src.contains("screenClipRect !== null")
-            && src.contains("&& _diameter > 0")
+            && src.contains("&& _diameter >= 32")
             && !src.contains("width >= 32 && height >= 32"),
-        "预览数据不得再被入口完整可见或 32px 尺寸门槛卸载，实际源码不符"
+        "预览必须按视口交集与可读直径门控，且不得退回完整可见门槛，实际源码不符"
     );
 }
 

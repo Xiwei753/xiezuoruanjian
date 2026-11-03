@@ -81,13 +81,12 @@ Item {
     // 圆的内接正方形边长：标题、概览都被它约束在圆内。
     readonly property real _inscribedSide: _diameter / Math.SQRT2
 
-    // Issue #1031：预览数据是否存在只取决于入口是否在视口内，不取决于
-    // 圆是否完整可见。Loader 始终按入口真实屏幕圆尺寸创建并加载目标图；
-    // 根对象裁剪可见像素，因此圆被视口裁掉一部分时仍保留进场所需的
-    // bounds / fitScale，也能画出剩余可见的微缩内容。
+    // Issue #1031：预览是否实例化按视口交集与可读直径控制，
+    // 进入子图所需的 bounds / fitScale 由活动画布独立读取，不依赖 Loader 存活；
+    // 圆被视口裁掉一部分时仍按真实屏幕圆尺寸绘制剩余可见的微缩内容。
     readonly property bool previewWanted:
         screenClipRect !== null && targetStarmapId !== ""
-        && _diameter > 0
+        && _diameter >= 32
     readonly property var previewContent: previewLoader.item
     readonly property bool childLoaded:
         previewContent !== null && previewContent !== undefined
@@ -105,8 +104,8 @@ Item {
         width: root._circleWidth
         height: root._circleHeight
         active: root.previewWanted
-        // 数据常驻，但过小的投影不绘制无意义的字形/线条。
-        visible: root._diameter >= 32
+        // active 已要求可读尺寸；根对象继续裁剪部分可见的圆。
+        visible: root.previewWanted
         sourceComponent: previewComponent
         // 概览画在圆壳之上、标题之下；圆壳本身是不透明表面。
         z: 1
