@@ -676,13 +676,15 @@ pub(crate) fn map_git_error(err: git2::Error, operation: &'static str) -> Provid
     let code = err.code();
     let class = err.class();
     let mapped = classify_git_error(operation, &raw_message, code, class);
-    // 只记录错误码/类别/稳定原因码和消息类型，不落 URL、Token、文件路径或原始报文。
+    // 只记录错误码/类别/稳定原因码、OpenSSL 校验原因和消息类型，
+    // 不落 URL、Token、文件路径、证书内容或原始报文。
     log::warn!(
-        "sync.git_error: operation={} git_error_code={:?} git_error_class={:?} reason_code={} message_kind={}",
+        "sync.git_error: operation={} git_error_code={:?} git_error_class={:?} reason_code={} tls_verify_reason={} message_kind={}",
         operation,
         code,
         class,
         mapped.stable_code(),
+        tls_verify_reason(&raw_message),
         message_kind(&raw_message)
     );
     mapped
@@ -979,6 +981,57 @@ fn message_kind(message: &str) -> &'static str {
         return "http_server";
     }
     "unknown"
+}
+
+/// 从 OpenSSL/libgit2 的既有错误文本提取稳定的校验原因码。
+///
+/// 这里只返回固定枚举字符串，原始终端错误文本、证书主题/签发者、URL 和路径
+/// 都不进入日志。`openssl_error_unknown` 表示当前错误只能确认是 OpenSSL
+/// 非校验类错误，不能据此推断网络不可达。
+fn tls_verify_reason(message: &str) -> &'static str {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("unable to get local issuer") {
+        "x509_unable_to_get_issuer_cert_locally"
+    } else if lower.contains("unable to get issuer certificate") {
+        "x509_unable_to_get_issuer_cert"
+    } else if lower.contains("unable to verify the first certificate") {
+        "x509_unable_to_verify_first_cert"
+    } else if lower.contains("unknown ca") {
+        "x509_unknown_ca"
+    } else if lower.contains("no ca certificate") {
+        "x509_no_ca_certificate"
+    } else if lower.contains("self signed") || lower.contains("self-signed") {
+        "x509_self_signed_certificate"
+    } else if lower.contains("hostname mismatch")
+        || lower.contains("hostname does not match")
+        || lower.contains("does not match certificate")
+        || lower.contains("certificate subject name")
+    {
+        "x509_hostname_mismatch"
+    } else if lower.contains("certificate has expired") {
+        "x509_certificate_expired"
+    } else if lower.contains("certificate is not yet valid") {
+        "x509_certificate_not_yet_valid"
+    } else if lower.contains("certificate revoked") {
+        "x509_certificate_revoked"
+    } else if lower.contains("unsupported certificate purpose") {
+        "x509_unsupported_certificate_purpose"
+    } else if lower.contains("certificate chain")
+        || lower.contains("peer certificate cannot be authenticated")
+        || lower.contains("invalid certificate")
+    {
+        "x509_certificate_chain_invalid"
+    } else if lower.contains("certificate verify")
+        || lower.contains("certificate verification")
+        || lower.contains("cert verify")
+        || lower.contains("ssl verify")
+    {
+        "x509_certificate_verify_failed"
+    } else if lower.contains("ssl") || lower.contains("tls") || lower.contains("handshake") {
+        "openssl_error_unknown"
+    } else {
+        "none"
+    }
 }
 
 /// OpenSSL 的“找不到签发者/系统根”文本表示 CA 信任源不可用，而不是

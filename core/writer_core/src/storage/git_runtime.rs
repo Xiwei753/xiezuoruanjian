@@ -57,6 +57,21 @@ pub fn ensure_tls_initialized() -> crate::Result<()> {
 /// 稳定前缀 `ca_store_unavailable`，供 Provider 层区分于普通运行时初始化失败。
 fn configure_tls_trust() -> Result<(), String> {
     let (bundle, dir, required) = TLS_TRUST.get().cloned().unwrap_or((None, None, false));
+    // 平台层选中一种信任源即可；Core 侧再次保证不会把 bundle 与 CApath
+    // 混在同一次 GIT_OPT_SET_SSL_CERT_LOCATIONS 配置中。
+    let (bundle, dir) = if bundle.is_some() {
+        (bundle, None)
+    } else {
+        (None, dir)
+    };
+    let source = match (bundle.is_some(), dir.is_some()) {
+        (true, false) => "bundle",
+        (false, true) => "ca_dir",
+        (false, false) => "missing",
+        (true, true) => unreachable!("bundle and CA directory are mutually exclusive"),
+    };
+    // 只记录来源类型，不落具体路径。
+    log::info!("git.tls_ca_source={source}");
     if bundle.is_none() && dir.is_none() {
         if required {
             return Err(

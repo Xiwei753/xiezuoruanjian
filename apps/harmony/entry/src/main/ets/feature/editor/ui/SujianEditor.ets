@@ -90,6 +90,10 @@ const EDITOR_TEXT_ID = 'sujian-editor-text'
 const EDITOR_HORIZONTAL_PADDING_VP = 20
 const EDITOR_TOP_PADDING_VP = 20
 const EDITOR_BOTTOM_PADDING_VP = 32
+// Issue #1034：区分单击与显式拖选。手指移动超过该距离后不再按点击处理。
+const EDITOR_TAP_SLOP_VP: number = 8
+// Issue #1034：长按后拖动选择的手势标签，供 onGestureJudgeBegin 仲裁。
+const EDITOR_SELECTION_GESTURE_TAG: string = 'sujian-editor-selection'
 
 /**
  * Issue #879 问题4：两阶段发布——暂存显示切换数据。
@@ -299,9 +303,9 @@ export struct SujianEditor {
   @State annotationLinkUnderlineRects: SelectionRect[] = []
   // Issue #629 评论6 Part C：分开 viewport 与 content 尺寸。
   // viewportWidth/viewportHeight：外层 Scroll 可视区域尺寸（px），来自 Scroll onAreaChange。
-  // contentWidth/contentHeight：内层正文实际渲染尺寸（px），来自 Text onAreaChange。
-  // 旧实现 containerWidth/textHeight 混用，emitViewportChange 把 viewportHeight = textHeight、
-  // contentHeight = textHeight（两者永远相同），maxScrollTop 永远 0。新实现分开记录。
+  // contentWidth：正文排版宽度（px），来自 Text onAreaChange。
+  // contentHeight：整篇正文内容高度（px），由完整行布局最后一行底部计算，不能取
+  // Text onAreaChange 的视口裁切高度，否则 stackHeight 会反过来把 Scroll 内容压成视口高。
   @State viewportWidth: number = 0
   @State viewportHeight: number = 0
   @State contentWidth: number = 0
@@ -335,6 +339,20 @@ export struct SujianEditor {
   private isDragging: boolean = false
   private pendingHyperlinkTap: boolean = false
   private pendingHyperlinkStartedAtMs: number = 0
+  // Issue #1034：手指触摸/长按拖选状态。与鼠标/手写笔共用的 dragAnchor 分开，
+  // 普通纵向滑动只交给外层 Scroll，不在 onTouch Move 里改选区。
+  private fingerDownActive: boolean = false
+  private fingerDownX: number = 0
+  private fingerDownY: number = 0
+  private fingerDownInContentArea: boolean = false
+  private fingerDownHit: VisualCaretPosition | null = null
+  private fingerDownHyperlink: boolean = false
+  private fingerDownStartedAtMs: number = 0
+  private fingerMovedBeyondTapSlop: boolean = false
+  private selectionGestureHandled: boolean = false
+  private selectionGestureArmed: boolean = false
+  private selectionGestureActive: boolean = false
+  private selectionGestureAnchorCore: VisualCaretPosition | null = null
   // Issue #768：编辑器焦点状态，供诊断快照读取。
   private isFocused: boolean = false
   // Issue #768：布局来源标记，供诊断快照读取。
@@ -827,6 +845,7 @@ export struct SujianEditor {
       // Issue #879 复核评论修复（问题3）：清空 displayed 版本字段。
       this.displayedSnapshot = null
       this.displayedLineLayouts = []
+      this.contentHeight = 0
       this.displayedStyledString = null
       // Issue #879 本轮复核评论修复（问题6）：会话失效时停止旧动画。
       // 先增 generation 使旧 animator 回调失效，再 cancel。
@@ -914,6 +933,7 @@ export struct SujianEditor {
       this.displayedSnapshot = null
       this.displayedStyledString = null
       this.displayedLineLayouts = []
+      this.contentHeight = 0
       this.displayedVisualFrame = null
       // Issue #1021：会话切换必须立刻恢复主 Text 完整静态显示，
       // 不能残留上一会话的静态遮罩几何。
@@ -1391,6 +1411,7 @@ export struct SujianEditor {
     // 更新 displayed 版本字段
     this.displayedSnapshot = data.latestUpdate.layoutSnapshot
     this.displayedLineLayouts = data.lineLayouts
+    this.updateDocumentContentHeight(data.lineLayouts)
     this.displayedStyledString = data.newStyledString
     this.displayedPresentation = data.latestUpdate
 
@@ -2486,6 +2507,7 @@ export struct SujianEditor {
 
       // 2. 更新 renderResult 和几何状态
       this.renderResult = result
+      this.updateDocumentContentHeight(result.lines)
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
@@ -2553,6 +2575,7 @@ export struct SujianEditor {
       visualCaret.affinity,
     )
     this.renderResult = result
+    this.updateDocumentContentHeight(result.lines)
     this.selectionRects = result.selectionRects
     this.caretRect = result.caretRect
     this.compositionUnderlineRects = result.compositionUnderlineRects
@@ -3077,21 +3100,26 @@ export struct SujianEditor {
     if (!snap || !this.renderResult || !this.dispatcher) {
       return
     }
-    // Issue #743 评论5792119958：空触点边界检查必须先于 touches[0] 解引用。
-    // ArkUI TouchEvent.touches 在 Cancel 等场景可能为空；StylusInputService.normalizeStylusEvent
-    // 虽已处理空 touches，但编辑器在调用 service 前先解引用 touches[0] 会让 service 的 null 防护走不到。
-    // 华为 ArkUI 文档明确：使用 touches 前需先检查是否为空。
-    // Cancel 场景顺手清掉 isDragging / dragAnchor，避免留下上一轮拖选状态；其余空触点直接 return。
-    if (event.touches.length === 0) {
-      if (event.type === TouchType.Cancel) {
-        this.isDragging = false
-        this.dragAnchor = null
-        this.pendingHyperlinkTap = false
-        this.pendingHyperlinkStartedAtMs = 0
+    // Issue #1034：Cancel 无论有没有触点都必须清理本轮手势状态。
+    if (event.type === TouchType.Cancel) {
+      this.clearStylusDragState()
+      this.clearFingerTouchState()
+      return
+    }
+    // Issue #743 评论5792119958：使用触点前先检查空数组。Up 在部分设备上
+    // touches 为空，但 changedTouches 仍带抬起触点；两者都为空时用按下状态收尾点击。
+    const touchList: TouchObject[] = event.touches.length > 0 ? event.touches : event.changedTouches
+    if (touchList.length === 0) {
+      if (event.type === TouchType.Up) {
+        if (this.fingerDownActive) {
+          this.finishFingerTap(snap)
+        } else {
+          this.clearStylusDragState()
+        }
       }
       return
     }
-    const touch: TouchObject = event.touches[0]
+    const touch: TouchObject = touchList[0]
     // Issue #767 评论 5828146609 第 1 节：首次触摸编辑区时先确保 focus/IME，
     // 这样空白处点击也能获得焦点和键盘。
     if (event.type === TouchType.Down) {
@@ -3100,7 +3128,6 @@ export struct SujianEditor {
     }
     // Issue #778 评论5853666955 第1项：onTouch 绑定在内层 Stack 上，
     // ArkUI TouchObject.x/y 已是相对 Stack 左上角的局部坐标，滚动后也由 ArkUI 自动补偿。
-    // 不再调用 viewportToContent()（会把滚动量算第二次），也不再减 padding（padding 在外层 Column）。
     const contentX = touch.x
     const contentY = touch.y
     const inContentArea =
@@ -3113,20 +3140,27 @@ export struct SujianEditor {
       ? this.hitTestContent(contentX, contentY)
       : { utf16Offset: 0, affinity: CaretAffinity.Downstream }
 
-    // 笔事件识别：统一由 StylusInputService.isStylusEvent 按 ArkUI event.sourceTool 判断。
-    // 由 StylusInputService 归一化后按触控选择/书写区交互处理，原始 stylus event 不进 Core。
+    // 笔事件保留原有拖选路径；手指事件只做点击判定，拖选交给长按手势。
     if (this.stylusService.isStylusEvent(event)) {
       this.stylusService.normalizeStylusEvent(event)
-      // 笔事件按触控选择/书写区交互处理（与触控同一套 hit test + selection）。
+      this.handleStylusTouchEvent(event.type, snap, inContentArea, hitPos)
+      return
     }
+    this.handleFingerTouchEvent(event.type, snap, contentX, contentY, inContentArea, hitPos)
+  }
 
-    switch (event.type) {
+  // 手写笔/原有触控拖选路径：保持按下即 anchor、移动 dragSelect、抬起结束的语义。
+  private handleStylusTouchEvent(
+    type: TouchType,
+    snap: EditorLayoutSnapshot,
+    inContentArea: boolean,
+    hitPos: VisualCaretPosition,
+  ): void {
+    switch (type) {
       case TouchType.Down:
-        // Issue #776 评论5848626733 第8项：padding 区域不命中文字，不开始 drag。
         if (!inContentArea) {
           break
         }
-        // 按下：记 anchor，开始 potential drag。
         this.dragAnchor = hitPos
         this.dragAnchorCore = this.toCoreCaretPosition(hitPos)
         this.isDragging = true
@@ -3141,9 +3175,6 @@ export struct SujianEditor {
           this.pendingHyperlinkStartedAtMs = 0
           this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: this.dragAnchorCore })
         }
-        // 拖动选区：anchor 不变，head 跟随当前位置。传完整 VisualCaretPosition。
-        // Issue #879 复核评论修复（问题2）：比较用可见坐标，发命令用 Core 坐标；
-        // 映射不可得时不发送 dispatcher 命令。
         if (this.isDragging && this.dragAnchor !== null && this.dragAnchorCore !== null
           && inContentArea && this.dragAnchor.utf16Offset !== hitPos.utf16Offset) {
           const headCore = this.toCoreCaretPosition(hitPos)
@@ -3162,37 +3193,216 @@ export struct SujianEditor {
             Date.now() - this.pendingHyperlinkStartedAtMs < HYPERLINK_TAP_MAX_DURATION_MS && this.dragAnchor !== null &&
             inContentArea && this.dragAnchor.utf16Offset === hitPos.utf16Offset
           if (wasHyperlinkTap && this.onHyperlinkTap(hitPos.utf16Offset, snap.revision, snap.text)) {
-            this.pendingHyperlinkTap = false
-            this.pendingHyperlinkStartedAtMs = 0
-            this.isDragging = false
-            this.dragAnchor = null
-            this.dragAnchorCore = null
+            this.clearStylusDragState()
             break
           }
           if (this.pendingHyperlinkTap && this.dragAnchorCore !== null) {
             this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: this.dragAnchorCore })
           }
-          this.pendingHyperlinkTap = false
-          this.pendingHyperlinkStartedAtMs = 0
           if (inContentArea && this.dragAnchor !== null
             && this.dragAnchor.utf16Offset === hitPos.utf16Offset) {
-            // 单击：经 dispatcher 发 selection，成功后查询最终 selection 再通知 IME。
-            // Issue #879 复核评论修复（问题2）：映射不可得时不发送 dispatcher 命令。
             const corePos = this.toCoreCaretPosition(hitPos)
             if (corePos !== null) {
               this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: corePos })
             }
           }
-          this.isDragging = false
-          this.dragAnchor = null
-          this.dragAnchorCore = null
-          this.pendingHyperlinkTap = false
-          this.pendingHyperlinkStartedAtMs = 0
+          this.clearStylusDragState()
         }
         break
       default:
         break
     }
+  }
+
+  // Issue #1034：手指触摸拆成「点击」与「长按后拖动选择」两条路径。
+  // - Down 只记录起点，不派发 selection；
+  // - Move 只记录是否超过点击容差，绝不派发 dragSelect，普通纵向滑动交给外层 Scroll；
+  // - Up 只有在未识别为拖选且未移动时派发一次 setSelection；
+  // - 长按/拖动选择由 GestureGroup(Sequence(LongPress, Pan)) 处理。
+  private handleFingerTouchEvent(
+    type: TouchType,
+    snap: EditorLayoutSnapshot,
+    contentX: number,
+    contentY: number,
+    inContentArea: boolean,
+    hitPos: VisualCaretPosition,
+  ): void {
+    switch (type) {
+      case TouchType.Down:
+        this.clearFingerTouchState()
+        this.fingerDownActive = true
+        this.fingerDownX = contentX
+        this.fingerDownY = contentY
+        this.fingerDownInContentArea = inContentArea
+        this.fingerDownHit = inContentArea ? hitPos : null
+        this.fingerDownHyperlink = inContentArea &&
+          snap.selectionAnchor === snap.selectionHead &&
+          this.hasHyperlinkAt(hitPos.utf16Offset, snap.revision, snap.text)
+        this.fingerDownStartedAtMs = Date.now()
+        break
+      case TouchType.Move: {
+        if (!this.fingerDownActive) {
+          break
+        }
+        const dx: number = contentX - this.fingerDownX
+        const dy: number = contentY - this.fingerDownY
+        if (dx * dx + dy * dy > EDITOR_TAP_SLOP_VP * EDITOR_TAP_SLOP_VP) {
+          this.fingerMovedBeyondTapSlop = true
+        }
+        // 不在这里派发 selection：纵向滑动必须交给外层 Scroll。
+        break
+      }
+      case TouchType.Up:
+        this.finishFingerTap(snap)
+        break
+      default:
+        break
+    }
+  }
+
+  // 只有从未进入拖选、且未超过点击容差的手指抬起才派发一次 setSelection。
+  private finishFingerTap(snap: EditorLayoutSnapshot): void {
+    if (!this.fingerDownActive) {
+      return
+    }
+    const wasHandled: boolean = this.selectionGestureHandled
+    const moved: boolean = this.fingerMovedBeyondTapSlop
+    const wasInContent: boolean = this.fingerDownInContentArea
+    const downHit: VisualCaretPosition | null = this.fingerDownHit
+    const wasHyperlink: boolean = this.fingerDownHyperlink
+    const downStartedAtMs: number = this.fingerDownStartedAtMs
+    this.clearFingerTouchState()
+    if (wasHandled || moved || !wasInContent || downHit === null) {
+      return
+    }
+    const wasHyperlinkTap: boolean = wasHyperlink &&
+      Date.now() - downStartedAtMs < HYPERLINK_TAP_MAX_DURATION_MS
+    if (wasHyperlinkTap && this.onHyperlinkTap(downHit.utf16Offset, snap.revision, snap.text)) {
+      return
+    }
+    const corePos = this.toCoreCaretPosition(downHit)
+    if (corePos !== null) {
+      this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: corePos })
+    }
+  }
+
+  private clearStylusDragState(): void {
+    this.isDragging = false
+    this.dragAnchor = null
+    this.dragAnchorCore = null
+    this.pendingHyperlinkTap = false
+    this.pendingHyperlinkStartedAtMs = 0
+  }
+
+  private clearFingerTouchState(): void {
+    this.fingerDownActive = false
+    this.fingerDownX = 0
+    this.fingerDownY = 0
+    this.fingerDownInContentArea = false
+    this.fingerDownHit = null
+    this.fingerDownHyperlink = false
+    this.fingerDownStartedAtMs = 0
+    this.fingerMovedBeyondTapSlop = false
+    this.selectionGestureHandled = false
+    this.selectionGestureArmed = false
+    this.selectionGestureActive = false
+    this.selectionGestureAnchorCore = null
+  }
+
+  // Issue #1034：长按识别成功后才允许进入拖选；先在按下位置放一次光标。
+  private handleSelectionLongPress(event: GestureEvent): void {
+    if (event.sourceTool !== SourceTool.Finger) {
+      return
+    }
+    if (!this.fingerDownActive || !this.fingerDownInContentArea) {
+      return
+    }
+    let x: number = this.fingerDownX
+    let y: number = this.fingerDownY
+    if (event.fingerList.length > 0) {
+      x = event.fingerList[0].localX
+      y = event.fingerList[0].localY
+    }
+    const hitPos: VisualCaretPosition = this.hitTestContent(x, y)
+    this.selectionGestureHandled = true
+    this.selectionGestureArmed = true
+    this.selectionGestureActive = false
+    this.selectionGestureAnchorCore = this.toCoreCaretPosition(hitPos)
+    if (this.selectionGestureAnchorCore !== null) {
+      this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: this.selectionGestureAnchorCore })
+    }
+  }
+
+  private handleSelectionLongPressCancel(): void {
+    this.selectionGestureArmed = false
+    this.selectionGestureActive = false
+  }
+
+  private handleSelectionPanStart(event: GestureEvent): void {
+    if (!this.selectionGestureArmed || this.selectionGestureAnchorCore === null) {
+      return
+    }
+    this.selectionGestureActive = true
+    this.updateSelectionGesture(event)
+  }
+
+  private handleSelectionPanUpdate(event: GestureEvent): void {
+    if (!this.selectionGestureActive || this.selectionGestureAnchorCore === null) {
+      return
+    }
+    this.updateSelectionGesture(event)
+  }
+
+  private updateSelectionGesture(event: GestureEvent): void {
+    if (event.fingerList.length === 0 || this.selectionGestureAnchorCore === null) {
+      return
+    }
+    const x: number = event.fingerList[0].localX
+    const y: number = event.fingerList[0].localY
+    const headPos: VisualCaretPosition = this.hitTestContent(x, y)
+    const headCore = this.toCoreCaretPosition(headPos)
+    if (headCore !== null) {
+      this.dispatchSelectionAndSyncIme({
+        kind: 'dragSelect',
+        anchor: this.selectionGestureAnchorCore,
+        head: headCore
+      })
+    }
+  }
+
+  private handleSelectionPanEnd(): void {
+    this.selectionGestureActive = false
+    this.selectionGestureArmed = false
+  }
+
+  private handleSelectionPanCancel(): void {
+    this.selectionGestureActive = false
+    this.selectionGestureArmed = false
+  }
+
+  // Issue #1034：手势仲裁。系统滚动手势始终放行；只有手指长按成功后才允许
+  // 自己的 Pan 继续，否则拒绝它，让普通纵向平移由外层 Scroll 接管。
+  private judgeEditorGesture(gestureInfo: GestureInfo, event: BaseGestureEvent): GestureJudgeResult {
+    if (gestureInfo.isSystemGesture) {
+      return GestureJudgeResult.CONTINUE
+    }
+    if (gestureInfo.tag !== EDITOR_SELECTION_GESTURE_TAG) {
+      return GestureJudgeResult.CONTINUE
+    }
+    if (event.sourceTool !== SourceTool.Finger) {
+      return GestureJudgeResult.REJECT
+    }
+    if (gestureInfo.type === GestureControl.GestureType.LONG_PRESS_GESTURE) {
+      return this.fingerDownActive && this.fingerDownInContentArea
+        ? GestureJudgeResult.CONTINUE
+        : GestureJudgeResult.REJECT
+    }
+    if (gestureInfo.type === GestureControl.GestureType.PAN_GESTURE) {
+      return this.selectionGestureArmed
+        ? GestureJudgeResult.CONTINUE
+        : GestureJudgeResult.REJECT
+    }
+    return GestureJudgeResult.CONTINUE
   }
 
   // viewport 状态变化时回调给 WritingScreen。
@@ -3217,9 +3427,26 @@ export struct SujianEditor {
     this.onViewportChange(state)
   }
 
+  // Issue #1034：整篇内容高度只能由完整行布局最后一行底部计算。
+  // Text.onAreaChange 在 Scroll 子节点里拿到的是被视口裁切后的高度，不能再喂回
+  // stackHeight()，否则会出现 468 行却只有 635.92px 内容高度的循环。
+  private updateDocumentContentHeight(lines: LineLayout[]): void {
+    let height: number = 0
+    for (let i = 0; i < lines.length; i++) {
+      const bottom: number = lines[i].y + lines[i].height
+      if (bottom > height) {
+        height = bottom
+      }
+    }
+    if (height > 0 && height !== this.contentHeight) {
+      this.contentHeight = height
+    }
+  }
+
   // Issue #629 评论6 Part C：Stack 高度：至少可用区域高度，随正文增长。
   // 旧实现固定 .height('100%')，长正文真实内容高度被压成视口高度，maxScrollTop 永远 0。
-  // 新实现：contentHeight > availableHeight 时用 contentHeight（长正文可滚动）；
+  // Issue #1034：contentHeight 来自完整行布局（不是 Text 的裁切区域），
+  // 因此 contentHeight > availableHeight 时 Scroll 子节点能覆盖全文。
   // 否则用 availableHeight（短正文至少占满视口）；都是 0 时用 '100%' 兜底避免高度 0。
   // Issue #778 任务7：padding 从 Stack 移到外层 Column，Stack 高度不含 padding。
   // availableHeight = viewportHeight - 上下 padding（Column 的 padding 占用了一部分 viewport 高度）。
@@ -3280,6 +3507,9 @@ export struct SujianEditor {
             Text(undefined, { controller: this.textController })
               .id(EDITOR_TEXT_ID)
               .width('100%')
+              // Issue #1034：显式覆盖整篇内容高度，避免 Text 被 Scroll 视口高度约束后
+              // 只报告裁切区域，反过来又把 Scroll 内容压回视口。
+              .height(this.stackHeight())
               .textAlign(TextAlign.Start)
               .wordBreak(WordBreak.BREAK_ALL)
               .onAppear(() => {
@@ -3299,11 +3529,10 @@ export struct SujianEditor {
                 this.textMounted = false
               })
               .onAreaChange((_oldArea: Area, newArea: Area): void => {
-                // Issue #629 评论6 Part C：Text onAreaChange 更新的是内层正文实际渲染尺寸
-                // （contentWidth/contentHeight），不是外层 Scroll 可视区域尺寸。
+                // Issue #1034：这里只更新排版宽度。Text 在 Scroll 子节点里量到的高度
+                // 会被视口裁切，不能作为整篇内容高度；contentHeight 由完整行布局计算。
                 const oldContentWidth = this.contentWidth
                 this.contentWidth = Number(newArea.width)
-                this.contentHeight = Number(newArea.height)
                 // Issue #629 R9 评论5326213302 第4项：内容宽度变化时失效旧 visual caret hint。
                 // 布局宽度变化不改 Core revision，但 soft-wrap 可能重新发生，旧 affinity 可能不再有效。
                 // 不给 SujianEditor 再加第二份 affinity 状态；invalidate 后 refreshRenderLayout 从 owner 重取。
@@ -3460,6 +3689,37 @@ export struct SujianEditor {
       .onTouch((event: TouchEvent): void => {
         // 触摸/笔事件 → hit test + drag selection。
         this.handleTouchEvent(event)
+      })
+      // Issue #1034：长按后才进入拖选。普通单指纵向滑动不会命中这个序列，
+      // 由外层 Scroll 接管；onGestureJudgeBegin 再拒绝未武装的 Pan。
+      .gesture(
+        GestureGroup(GestureMode.Sequence,
+          LongPressGesture({ fingers: 1, repeat: false, duration: 500 })
+            .tag(EDITOR_SELECTION_GESTURE_TAG)
+            .onAction((event: GestureEvent): void => {
+              this.handleSelectionLongPress(event)
+            })
+            .onActionCancel((): void => {
+              this.handleSelectionLongPressCancel()
+            }),
+          PanGesture({ fingers: 1, direction: PanDirection.All, distance: 1 })
+            .tag(EDITOR_SELECTION_GESTURE_TAG)
+            .onActionStart((event: GestureEvent): void => {
+              this.handleSelectionPanStart(event)
+            })
+            .onActionUpdate((event: GestureEvent): void => {
+              this.handleSelectionPanUpdate(event)
+            })
+            .onActionEnd((): void => {
+              this.handleSelectionPanEnd()
+            })
+            .onActionCancel((): void => {
+              this.handleSelectionPanCancel()
+            })
+        )
+      )
+      .onGestureJudgeBegin((gestureInfo: GestureInfo, event: BaseGestureEvent): GestureJudgeResult => {
+        return this.judgeEditorGesture(gestureInfo, event)
       })
       .align(Alignment.TopStart)
       .width('100%')

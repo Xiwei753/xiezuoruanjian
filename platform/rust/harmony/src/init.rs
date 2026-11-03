@@ -15,45 +15,112 @@ fn readable_dir(path: &Path) -> bool {
     path.is_dir() && std::fs::read_dir(path).is_ok()
 }
 
+/// 实际选中的 TLS CA 来源。只用于结构化日志，不携带路径或证书内容。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TlsCaSource {
+    SslCertFile,
+    SystemBundle,
+    OpenSslCaDir,
+    Missing,
+}
+
+impl TlsCaSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SslCertFile => "ssl_cert_file",
+            Self::SystemBundle => "system_bundle",
+            Self::OpenSslCaDir => "openssl_ca_dir",
+            Self::Missing => "missing",
+        }
+    }
+}
+
+/// 判断目录是否包含 OpenSSL CApath 可识别的哈希文件名（如 `9d66eef0.0`）。
+///
+/// 只检查目录项命名，不读取证书内容；普通目录不能仅因可读就被当作 CApath。
+fn is_openssl_ca_dir(path: &Path) -> bool {
+    if !readable_dir(path) {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        match name.to_str() {
+            Some(name) => is_openssl_ca_hash_name(name),
+            None => false,
+        }
+    })
+}
+
+fn is_openssl_ca_hash_name(name: &str) -> bool {
+    let Some((hash, suffix)) = name.split_once('.') else {
+        return false;
+    };
+    hash.len() == 8
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        && !suffix.is_empty()
+        && suffix.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// HarmonyOS 系统 CA 的候选位置。
 ///
-/// 华为《网络连接安全配置》要求第三方库使用系统预置 CA 目录
-/// `/etc/security/certificates`。该目录优先于其他系统的兼容路径。此处只确认
-/// 路径存在且可读；目录内容是否真能用于校验由 OpenSSL 设置 CApath 后的实际
-/// TLS 握手给出结论，不能靠扫描文件头代替。禁止在没有可信根时关闭 TLS 校验，
-/// 未发现可用 CA 时由 Core 返回 `tls_ca_unavailable`。
-fn resolve_tls_ca() -> (Option<PathBuf>, Option<PathBuf>) {
-    let bundle_candidates = [
-        std::env::var_os("SSL_CERT_FILE").map(PathBuf::from),
-        Some(PathBuf::from("/etc/ssl/certs/cacert.pem")),
-        Some(PathBuf::from("/system/etc/ssl/certs/cacert.pem")),
-        Some(PathBuf::from("/system/etc/security/cacert.pem")),
-        Some(PathBuf::from(
-            "/system/etc/security/certificates/cacert.pem",
-        )),
-        Some(PathBuf::from("/etc/ssl/certs/ca-certificates.crt")),
+/// 华为《网络连接安全配置》要求第三方库使用系统 PEM bundle
+/// `/etc/ssl/certs/cacert.pem`；有效的 `SSL_CERT_FILE` 覆盖优先。只有所有
+/// bundle 都不可读时才回退到 OpenSSL 能识别的 CA 目录（CApath）。bundle 与
+/// CApath 互斥，避免无效路径让整次 `GIT_OPT_SET_SSL_CERT_LOCATIONS` 失败。
+/// 禁止在没有可信根时关闭 TLS 校验，未发现可用 CA 时由 Core 返回
+/// `tls_ca_unavailable`。
+fn resolve_tls_ca() -> (Option<PathBuf>, Option<PathBuf>, TlsCaSource) {
+    // 1. 显式 SSL_CERT_FILE 覆盖；只有真实可读的文件才生效。
+    if let Some(path) = std::env::var_os("SSL_CERT_FILE").map(PathBuf::from) {
+        if readable_file(&path) {
+            return (Some(path), None, TlsCaSource::SslCertFile);
+        }
+    }
+
+    // 2. HarmonyOS 文档给出的系统 bundle 优先。
+    let system_bundle = Path::new("/etc/ssl/certs/cacert.pem");
+    if readable_file(system_bundle) {
+        return (
+            Some(system_bundle.to_path_buf()),
+            None,
+            TlsCaSource::SystemBundle,
+        );
+    }
+
+    // 3. 其他系统兼容 bundle 仅作为回退，仍优先于 CApath。
+    const OTHER_BUNDLES: &[&str] = &[
+        "/system/etc/ssl/certs/cacert.pem",
+        "/system/etc/security/cacert.pem",
+        "/etc/security/certificates/cacert.pem",
+        "/system/etc/security/certificates/cacert.pem",
+        "/etc/ssl/certs/ca-certificates.crt",
     ];
+    for candidate in OTHER_BUNDLES {
+        let path = Path::new(candidate);
+        if readable_file(path) {
+            return (Some(path.to_path_buf()), None, TlsCaSource::SystemBundle);
+        }
+    }
+
+    // 4. 没有可读 bundle 时才选择 OpenSSL 可用的 CApath。
     let dir_candidates = [
         Some(PathBuf::from("/etc/security/certificates")),
         Some(PathBuf::from("/system/etc/security/certificates")),
         std::env::var_os("SSL_CERT_DIR").map(PathBuf::from),
         Some(PathBuf::from("/etc/ssl/certs")),
     ];
-    let tls_ca_dir = dir_candidates
-        .into_iter()
-        .flatten()
-        .find(|path| readable_dir(path));
-    // 官方 CA 目录优先且互斥：目录可用时不再混入另一个 bundle，避免无效文件
-    // 让整次 GIT_OPT_SET_SSL_CERT_LOCATIONS 失败。只有找不到目录时才回退到 bundle。
-    let tls_ca_bundle = if tls_ca_dir.is_some() {
-        None
-    } else {
-        bundle_candidates
-            .into_iter()
-            .flatten()
-            .find(|path| readable_file(path))
-    };
-    (tls_ca_bundle, tls_ca_dir)
+    for path in dir_candidates.into_iter().flatten() {
+        if is_openssl_ca_dir(&path) {
+            return (None, Some(path), TlsCaSource::OpenSslCaDir);
+        }
+    }
+
+    (None, None, TlsCaSource::Missing)
 }
 
 /// 从 Harmony 目录信息构造平台初始化结构。
@@ -66,7 +133,9 @@ pub fn create_platform_init(
     timezone: String,
 ) -> PlatformInit {
     let log_dir = cache_dir.join("log");
-    let (tls_ca_bundle, tls_ca_dir) = resolve_tls_ca();
+    let (tls_ca_bundle, tls_ca_dir, tls_ca_source) = resolve_tls_ca();
+    // 只记录稳定来源枚举，不落具体路径或证书内容。
+    log::info!("harmony.tls_ca_source={}", tls_ca_source.as_str());
     PlatformInit {
         platform: PlatformKind::Harmony,
         app_data_dir: files_dir,
