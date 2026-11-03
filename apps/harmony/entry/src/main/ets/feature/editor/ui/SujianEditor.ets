@@ -3286,7 +3286,12 @@ export struct SujianEditor {
     const wasHyperlink: boolean = this.fingerDownHyperlink
     const downStartedAtMs: number = this.fingerDownStartedAtMs
     this.clearFingerTouchState()
-    if (wasHandled || moved || !wasInContent || downHit === null) {
+    if (wasHandled || moved) {
+      return
+    }
+    // 空白区域也属于可聚焦编辑区：短正文下方点按只获焦，不派发选区。
+    if (!wasInContent || downHit === null) {
+      this.focusAndAttachIme()
       return
     }
     const wasHyperlinkTap: boolean = wasHyperlink &&

@@ -1,3 +1,9 @@
+[patch.crates-io]
+# #1033：libgit2 1.9.4 的 OpenSSL 封装把 SSL_ERROR_NONE/ZERO_RETURN 等
+# 合并成 "SSL error: unknown error"，Rust 侧无法恢复真实失败阶段。
+# 这里使用仓库内同一版本 libgit2-sys，仅修补 streams/openssl.c 的错误分类。
+libgit2-sys = { path = "third_party/libgit2-sys" }
+
 [workspace]
 members = [
     "core/writer_core",

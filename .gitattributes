@@ -28,6 +28,9 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
+# Vendored third-party sources keep upstream whitespace/line endings.
+third_party/libgit2-sys/** -whitespace
+
 # Binary files
 *.png binary
 *.jpg binary
