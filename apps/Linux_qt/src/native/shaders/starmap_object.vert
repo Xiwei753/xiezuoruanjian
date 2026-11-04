@@ -1,6 +1,6 @@
 #version 440
 
-layout(location = 0) in vec2 aCenter;
+layout(location = 0) in vec2 aPosition;
 layout(location = 1) in vec2 aHalf;
 layout(location = 2) in vec2 aCorner;
 layout(location = 3) in float aRadius;
@@ -34,10 +34,12 @@ void main()
     float radius = mix(maxRadius, min(aRadius, maxRadius),
                        clamp(ubuf.uReveal, 0.0, 1.0));
 
-    // 角点与中心必须经过同一份完整模型-视图-投影矩阵；不能再用当前 Item 的
+    // aPosition 是 Qt 计算批次 bounds 用的完整矩形角点，先还原对象中心；
+    // 角点与中心必须经过同一份完整模型-视图-投影矩阵，不能再用当前 Item 的
     // 宽高把像素偏移归一化到 NDC，否则活动画布/子图预览尺寸不同时会误缩放。
+    vec2 objectCenter = aPosition - aCorner * aHalf;
     vec2 expandWorld = vec2(1.5 / zoom);
-    vec2 cornerWorld = aCenter + aCorner * (halfSize + expandWorld);
+    vec2 cornerWorld = objectCenter + aCorner * (halfSize + expandWorld);
     gl_Position = ubuf.qt_Matrix * vec4(cornerWorld, 0.0, 1.0);
 
     vLocal = aCorner * (halfSize + expandWorld);

@@ -1160,7 +1160,9 @@ impl StarMapObjectLayer {
         if !cx.is_finite() || !cy.is_finite() || !hw.is_finite() || !hh.is_finite() {
             return;
         }
-        // 两个三角形；aCorner 是对象局部归一化角点，shader 据此算 SDF。
+        // 两个三角形。第 0 个 position 属性必须是完整矩形角点，Qt Scene Graph
+        // 才能按真实物体范围计算批次 bounds；aCorner 仍用于 shader 内还原中心、
+        // 计算 SDF 与抗锯齿扩边。
         for (corner_x, corner_y) in [
             (-1.0f32, -1.0f32),
             (1.0, -1.0),
@@ -1169,7 +1171,16 @@ impl StarMapObjectLayer {
             (1.0, 1.0),
             (-1.0, 1.0),
         ] {
-            target.extend_from_slice(&[cx, cy, hw, hh, corner_x, corner_y, radius, alpha]);
+            target.extend_from_slice(&[
+                cx + corner_x * hw,
+                cy + corner_y * hh,
+                hw,
+                hh,
+                corner_x,
+                corner_y,
+                radius,
+                alpha,
+            ]);
         }
     }
 }
