@@ -10,12 +10,15 @@
 //   Core、实测文本或计算边几何。数据入口只有 `snapshot`。
 //
 // Issue #1035：快照节点 / 入口 / 连线的局部几何只在 snapshot 变化时生成一次，
-//   全部保存在同一份 child world 坐标里；父图缩放只更新一个根 Item 的
-//   scale / 居中位置，不重建 PathSvg、Repeater 模型，也不重新排版文字。
+//   全部保存在同一份 child world 坐标里；父图缩放只更新一个预览根变换和
+//   原生对象层的相机矩阵，不重建 PathSvg、Repeater 模型，也不重新排版文字。
+//   卡片、圆壳及描边由 StarMapObjectLayer 的 SDF 批量几何绘制；连线使用
+//   cosmeticStroke，屏幕线宽不随 fitScale 变化。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Shapes
+import Sujian 1.0
 import "StarMapNodeMetrics.js" as StarMapNodeMetrics
 
 Item {
@@ -46,9 +49,13 @@ Item {
     readonly property real fitScale:
         StarMapNodeMetrics.embedFitScale(childBounds, Math.min(width, height))
     readonly property bool hasContent: fitScale > 0
-    // 概览连线在父图屏幕上的目标线宽；ShapePath 在 contentRoot 内，需要
-    // 除以 fitScale 换算回局部世界单位。
-    readonly property real _previewStrokeWidth: 1.5
+
+    // 概览唯一的缩放 / 居中入口：父图相机变化只改这里的 x/y 和根节点矩阵，
+    // 不改任何子对象尺寸、描边或文字排版。
+    readonly property real _contentX:
+        (overview.width - overview._childWorldWidth * overview.fitScale) / 2
+    readonly property real _contentY:
+        (overview.height - overview._childWorldHeight * overview.fitScale) / 2
 
     function localX(wx) { return wx - _minWorldX }
     function localY(wy) { return wy - _minWorldY }
@@ -93,15 +100,41 @@ Item {
         return out
     }
 
-    // 概览唯一的缩放 / 居中入口：父图相机变化只改这里的 scale 和 x/y，
-    // 不改任何子对象尺寸或文字排版。
-    Item {
-        id: contentRoot
-        x: (overview.width - overview._childWorldWidth * overview.fitScale) / 2
-        y: (overview.height - overview._childWorldHeight * overview.fitScale) / 2
+    // 原生对象层只接受稳定的局部 world 矩形；fitScale 变化不会重新序列化。
+    readonly property string objectNodesJson: {
+        var out = []
+        for (var i = 0; i < localNodes.length; i++) {
+            var n = localNodes[i]
+            out.push({
+                id: n.id, x: n.x, y: n.y,
+                width: n.width, height: n.height
+            })
+        }
+        return JSON.stringify(out)
+    }
+
+    readonly property string objectEmbedsJson: {
+        var out = []
+        for (var i = 0; i < localEmbeds.length; i++) {
+            var e = localEmbeds[i]
+            out.push({
+                instanceId: e.id, x: e.x, y: e.y,
+                width: e.diameter, height: e.diameter
+            })
+        }
+        return JSON.stringify(out)
+    }
+
+    Shape {
+        x: overview._contentX
+        y: overview._contentY
         width: overview._childWorldWidth
         height: overview._childWorldHeight
         visible: overview.hasContent
+        antialiasing: true
+        preferredRendererType: Shape.CurveRenderer
+        z: 0
+
         transform: Scale {
             origin.x: 0
             origin.y: 0
@@ -109,34 +142,68 @@ Item {
             yScale: overview.fitScale
         }
 
-        Shape {
-            anchors.fill: parent
-            antialiasing: true
-            preferredRendererType: Shape.CurveRenderer
+        ShapePath {
+            strokeColor: overview.dt.border
+            // 屏幕固定 1.5px；路径与描边参数都不再依赖 fitScale。
+            strokeWidth: 1.5
+            cosmeticStroke: true
+            fillColor: "transparent"
+            capStyle: ShapePath.RoundCap
+            PathSvg { path: overview.edgesPath }
+        }
+    }
 
-            ShapePath {
-                strokeColor: overview.dt.border
-                // 世界线宽换算成父图屏幕上的 1.5px；路径本身不随 zoom 重建。
-                strokeWidth: overview.hasContent
-                        ? overview._previewStrokeWidth / overview.fitScale : 0
-                fillColor: "transparent"
-                capStyle: ShapePath.RoundCap
-                PathSvg { path: overview.edgesPath }
-            }
+    StarMapObjectLayer {
+        anchors.fill: parent
+        visible: overview.hasContent
+        nodesJson: overview.objectNodesJson
+        embedsJson: overview.objectEmbedsJson
+        selectedKind: ""
+        selectedId: ""
+        zoomLevel: overview.fitScale
+        panX: overview._contentX
+        panY: overview._contentY
+        anchorX: 0
+        anchorY: 0
+        reveal: 1
+        revealDotRadiusPx: 0
+        cornerRadius: 6
+        nodeFillHex: String(overview.dt.surfaceContainer)
+        nodeBorderHex: String(overview.dt.border)
+        selectedBorderHex: String(overview.dt.border)
+        embedFillHex: String(overview.dt.accentSoft)
+        embedBorderHex: String(overview.dt.border)
+        nodeBorderPx: 1
+        nodeSelectedBorderPx: 1
+        embedBorderPx: 1
+        embedSelectedBorderPx: 1
+        z: 1
+    }
+
+    Item {
+        id: labelsRoot
+        x: overview._contentX
+        y: overview._contentY
+        width: overview._childWorldWidth
+        height: overview._childWorldHeight
+        visible: overview.hasContent
+        z: 2
+
+        transform: Scale {
+            origin.x: 0
+            origin.y: 0
+            xScale: overview.fitScale
+            yScale: overview.fitScale
         }
 
         Repeater {
             model: overview.localNodes
-            delegate: Rectangle {
+            delegate: Item {
                 x: modelData.x
                 y: modelData.y
                 width: modelData.width
                 height: modelData.height
-                radius: 6
-                color: overview.dt.surfaceContainer
-                border.color: overview.dt.border
-                border.width: overview.hasContent
-                        ? 1 / overview.fitScale : 0
+                clip: true
                 visible: width > 0.3 && height > 0.3
 
                 Column {
@@ -170,16 +237,11 @@ Item {
 
         Repeater {
             model: overview.localEmbeds
-            delegate: Rectangle {
+            delegate: Item {
                 x: modelData.x
                 y: modelData.y
                 width: modelData.diameter
                 height: modelData.diameter
-                radius: modelData.diameter / 2
-                color: overview.dt.accentSoft
-                border.color: overview.dt.border
-                border.width: overview.hasContent
-                        ? 1 / overview.fitScale : 0
                 visible: width > 0.3 && height > 0.3
 
                 Text {

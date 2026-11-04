@@ -8,7 +8,8 @@
 //   - 顶点保存相对稳定 world anchor 的完整对象矩形（f64 → f32 局部坐标）；
 //   - 相机平移 / 缩放只更新一个 QSGTransformNode 矩阵和少量 uniform；
 //   - 展开进度（圆点 → 完整卡片）只改 shader 的有效半宽 / 圆角，不重建顶点；
-//   - 选择 / 编辑 / 拖动才重新分组或改写对应对象顶点。
+//   - 选中 / 编辑 / 拖动的对象单独放入第 5 个动态批次；成员变化只重建静态
+//     批次一次，之后拖动只重传这 6 个顶点，编辑透明度只改它的材质 uniform。
 // 文字仍由 QML 实时矢量排版，且整层共用一个 world anchor 相机变换。
 // =============================================================================
 
@@ -23,6 +24,10 @@ use serde::Deserialize;
 
 static OBJECT_GEOMETRY_UPDATES: AtomicU64 = AtomicU64::new(0);
 static OBJECT_VERTEX_UPLOADS: AtomicU64 = AtomicU64::new(0);
+static OBJECT_STATIC_GEOMETRY_UPDATES: AtomicU64 = AtomicU64::new(0);
+static OBJECT_ACTIVE_GEOMETRY_UPDATES: AtomicU64 = AtomicU64::new(0);
+static OBJECT_STATIC_VERTEX_UPLOADS: AtomicU64 = AtomicU64::new(0);
+static OBJECT_ACTIVE_VERTEX_UPLOADS: AtomicU64 = AtomicU64::new(0);
 static OBJECT_CAMERA_UPDATES: AtomicU64 = AtomicU64::new(0);
 static OBJECT_TEXT_CREATED: AtomicU64 = AtomicU64::new(0);
 static OBJECT_TEXT_DESTROYED: AtomicU64 = AtomicU64::new(0);
@@ -64,6 +69,9 @@ struct ObjectDiagnostics {
     node_selected_geometry_present: bool,
     embed_normal_geometry_present: bool,
     embed_selected_geometry_present: bool,
+    active_vertex_count: i32,
+    active_kind: String,
+    active_id: String,
     visible_text_count: i32,
     anchor_x: f64,
     anchor_y: f64,
@@ -128,6 +136,10 @@ pub fn render_statistics_json() -> String {
     serde_json::json!({
         "objectGeometryUpdates": OBJECT_GEOMETRY_UPDATES.load(Ordering::Relaxed),
         "objectVertexUploads": OBJECT_VERTEX_UPLOADS.load(Ordering::Relaxed),
+        "objectStaticGeometryUpdates": OBJECT_STATIC_GEOMETRY_UPDATES.load(Ordering::Relaxed),
+        "objectActiveGeometryUpdates": OBJECT_ACTIVE_GEOMETRY_UPDATES.load(Ordering::Relaxed),
+        "objectStaticVertexUploads": OBJECT_STATIC_VERTEX_UPLOADS.load(Ordering::Relaxed),
+        "objectActiveVertexUploads": OBJECT_ACTIVE_VERTEX_UPLOADS.load(Ordering::Relaxed),
         "objectCameraUpdates": OBJECT_CAMERA_UPDATES.load(Ordering::Relaxed),
         "objectTextCreated": OBJECT_TEXT_CREATED.load(Ordering::Relaxed),
         "objectTextDestroyed": OBJECT_TEXT_DESTROYED.load(Ordering::Relaxed),
@@ -145,6 +157,9 @@ pub fn render_statistics_json() -> String {
         "nodeSelectedGeometryPresent": snapshot.node_selected_geometry_present,
         "embedNormalGeometryPresent": snapshot.embed_normal_geometry_present,
         "embedSelectedGeometryPresent": snapshot.embed_selected_geometry_present,
+        "activeVertexCount": snapshot.active_vertex_count,
+        "activeObjectKind": snapshot.active_kind,
+        "activeObjectId": snapshot.active_id,
         "visibleTextInstanceCount": snapshot.visible_text_count,
         "shaderResourceExists": snapshot.shader_resource_exists,
         "shaderBuildToolValidated": !vertex_shaders.is_empty()
@@ -332,7 +347,7 @@ cpp! {{
             return existing;
         auto *node = new QSGGeometryNode;
         node->setFlag(QSGNode::OwnedByParent, true);
-        // 按索引补齐前面的空节点；本图层固定 4 个批次的顺序。
+        // 按索引补齐前面的空节点；0-3 是静态批次，4 是当前活动对象批次。
         while (transform->childCount() < index) {
             auto *placeholder = new QSGGeometryNode;
             placeholder->setFlag(QSGNode::OwnedByParent, true);
@@ -527,6 +542,36 @@ cpp! {{
             }
         }
     }
+
+    // 当前选中 / 编辑 / 拖拽对象单独占第 5 个批次。位置或透明度变化只改这个
+    // 对象自己的 6 个顶点或材质，静态批次缓存保持不动。
+    static void sujian_starmap_objects_update_active(
+            QSGNode *root, bool geometry_dirty,
+            const float *vertices, int vertex_count,
+            int fr, int fg, int fb, double fa,
+            int br, int bg, int bb, double ba,
+            double border_px, double viewport_x, double viewport_y,
+            double zoom, double reveal, double dot_world_radius)
+    {
+        QSGTransformNode *transform = sujian_object_transform_node(root);
+        if (!transform)
+            return;
+        QSGGeometryNode *node = sujian_object_ensure_geometry_node(transform, 4);
+        if (!node)
+            return;
+        if (geometry_dirty || !node->geometry()) {
+            sujian_apply_object_geometry(
+                node, vertices, vertex_count,
+                fr, fg, fb, fa, br, bg, bb, ba,
+                border_px, viewport_x, viewport_y, zoom, reveal,
+                dot_world_radius);
+        } else {
+            sujian_apply_object_material(
+                node, fr, fg, fb, fa, br, bg, bb, ba,
+                border_px, viewport_x, viewport_y, zoom, reveal,
+                dot_world_radius);
+        }
+    }
 }}
 
 /// 星图对象批量图层（QML 类型 `Sujian.StarMapObjectLayer`）。
@@ -570,11 +615,14 @@ pub struct StarMapObjectLayer {
 
     nodes: Vec<NodeRect>,
     embeds: Vec<EmbedRect>,
-    geometry_dirty: bool,
+    static_geometry_dirty: bool,
+    active_geometry_dirty: bool,
+    camera_dirty: bool,
     cached_node_normal: Vec<f32>,
     cached_node_selected: Vec<f32>,
     cached_embed_normal: Vec<f32>,
     cached_embed_selected: Vec<f32>,
+    cached_active: Vec<f32>,
 }
 
 impl StarMapObjectLayer {
@@ -591,7 +639,18 @@ impl StarMapObjectLayer {
     }
 
     fn mark_geometry_dirty(&mut self) {
-        self.geometry_dirty = true;
+        self.static_geometry_dirty = true;
+        self.active_geometry_dirty = true;
+        self.request_paint();
+    }
+
+    fn mark_active_geometry_dirty(&mut self) {
+        self.active_geometry_dirty = true;
+        self.request_paint();
+    }
+
+    fn mark_camera_dirty(&mut self) {
+        self.camera_dirty = true;
         self.request_paint();
     }
 
@@ -656,7 +715,8 @@ impl StarMapObjectLayer {
             return;
         }
         self.editing_progress = value;
-        self.mark_geometry_dirty();
+        // 编辑透明度是活动批次的材质参数，只重传这一个对象的 uniform，不重建几何。
+        self.request_paint();
     }
 
     fn set_drag_kind(&mut self, value: QString) {
@@ -680,7 +740,7 @@ impl StarMapObjectLayer {
             return;
         }
         self.drag_x = value;
-        self.mark_geometry_dirty();
+        self.mark_active_geometry_dirty();
     }
 
     fn set_drag_y(&mut self, value: f64) {
@@ -688,7 +748,7 @@ impl StarMapObjectLayer {
             return;
         }
         self.drag_y = value;
-        self.mark_geometry_dirty();
+        self.mark_active_geometry_dirty();
     }
 
     fn set_zoom_level(&mut self, value: f64) {
@@ -696,7 +756,7 @@ impl StarMapObjectLayer {
             return;
         }
         self.zoom_level = value;
-        self.request_paint();
+        self.mark_camera_dirty();
     }
 
     fn set_pan_x(&mut self, value: f64) {
@@ -704,7 +764,7 @@ impl StarMapObjectLayer {
             return;
         }
         self.pan_x = value;
-        self.request_paint();
+        self.mark_camera_dirty();
     }
 
     fn set_pan_y(&mut self, value: f64) {
@@ -712,7 +772,7 @@ impl StarMapObjectLayer {
             return;
         }
         self.pan_y = value;
-        self.request_paint();
+        self.mark_camera_dirty();
     }
 
     fn set_anchor_x(&mut self, value: f64) {
@@ -720,6 +780,7 @@ impl StarMapObjectLayer {
             return;
         }
         self.anchor_x = value;
+        self.camera_dirty = true;
         self.mark_geometry_dirty();
     }
 
@@ -728,6 +789,7 @@ impl StarMapObjectLayer {
             return;
         }
         self.anchor_y = value;
+        self.camera_dirty = true;
         self.mark_geometry_dirty();
     }
 
@@ -915,8 +977,36 @@ impl StarMapObjectLayer {
         }
     }
 
-    /// 顶点只保存相对稳定 anchor 的完整 world 矩形；相机变化不重建这里。
-    fn build_anchor_vertices(&self) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
+    /// 活动对象优先级：正在编辑 > 正在拖动 > 当前选中。它从静态批次中排除，
+    /// 由第 5 个动态批次单独提交。
+    fn active_identity(&self) -> Option<(String, String)> {
+        let candidates = [
+            (&self.editing_kind, &self.editing_id),
+            (&self.drag_kind, &self.drag_id),
+            (&self.selected_kind, &self.selected_id),
+        ];
+        for (kind, id) in candidates {
+            let kind = kind.to_string();
+            let id = id.to_string();
+            if !kind.is_empty() && !id.is_empty() {
+                return Some((kind, id));
+            }
+        }
+        None
+    }
+
+    fn is_active(active: Option<(&str, &str)>, kind: &str, id: &str) -> bool {
+        match active {
+            Some((active_kind, active_id)) => active_kind == kind && active_id == id,
+            None => false,
+        }
+    }
+
+    /// 静态批次只保存非活动对象的完整 world 矩形；相机变化不重建这里。
+    fn build_static_vertices(
+        &self,
+        active: Option<(&str, &str)>,
+    ) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
         let anchor_x = self.anchor_x;
         let anchor_y = self.anchor_y;
         if !anchor_x.is_finite() || !anchor_y.is_finite() {
@@ -931,12 +1021,14 @@ impl StarMapObjectLayer {
         let mut embed_selected = Vec::with_capacity(48);
 
         for node in &self.nodes {
+            if Self::is_active(active, "node", &node.id) {
+                continue;
+            }
             let (x, y) = self.dragged_position("node", &node.id, node.x, node.y);
             if !x.is_finite() || !y.is_finite() {
                 continue;
             }
             let selected = self.is_selected("node", &node.id);
-            let alpha = self.editing_alpha("node", &node.id);
             let target = if selected {
                 &mut node_selected
             } else {
@@ -951,18 +1043,20 @@ impl StarMapObjectLayer {
                 anchor_x,
                 anchor_y,
                 corner,
-                alpha,
+                1.0,
                 false,
             );
         }
 
         for embed in &self.embeds {
+            if Self::is_active(active, "embed", &embed.id) {
+                continue;
+            }
             let (x, y) = self.dragged_position("embed", &embed.id, embed.x, embed.y);
             if !x.is_finite() || !y.is_finite() {
                 continue;
             }
             let selected = self.is_selected("embed", &embed.id);
-            let alpha = self.editing_alpha("embed", &embed.id);
             let target = if selected {
                 &mut embed_selected
             } else {
@@ -977,12 +1071,61 @@ impl StarMapObjectLayer {
                 anchor_x,
                 anchor_y,
                 corner,
-                alpha,
+                1.0,
                 true,
             );
         }
 
         (node_normal, node_selected, embed_normal, embed_selected)
+    }
+
+    /// 当前选中 / 编辑 / 拖动的单个对象。拖动坐标和编辑透明度变化都只更新
+    /// 这一小段顶点或材质，不会触碰静态批次。
+    fn build_active_vertices(&self, active: Option<(&str, &str)>) -> Vec<f32> {
+        let Some((kind, id)) = active else {
+            return Vec::new();
+        };
+        let anchor_x = self.anchor_x;
+        let anchor_y = self.anchor_y;
+        if !anchor_x.is_finite() || !anchor_y.is_finite() {
+            return Vec::new();
+        }
+        let corner = Self::sanitized_radius(self.corner_radius);
+        let mut vertices = Vec::with_capacity(48);
+        if kind == "node" {
+            if let Some(node) = self.nodes.iter().find(|node| node.id == id) {
+                let (x, y) = self.dragged_position(kind, id, node.x, node.y);
+                Self::push_rounded_rect(
+                    &mut vertices,
+                    x,
+                    y,
+                    node.width,
+                    node.height,
+                    anchor_x,
+                    anchor_y,
+                    corner,
+                    1.0,
+                    false,
+                );
+            }
+        } else if kind == "embed" {
+            if let Some(embed) = self.embeds.iter().find(|embed| embed.id == id) {
+                let (x, y) = self.dragged_position(kind, id, embed.x, embed.y);
+                Self::push_rounded_rect(
+                    &mut vertices,
+                    x,
+                    y,
+                    embed.width,
+                    embed.height,
+                    anchor_x,
+                    anchor_y,
+                    corner,
+                    1.0,
+                    true,
+                );
+            }
+        }
+        vertices
     }
 
     fn push_rounded_rect(
@@ -1044,11 +1187,14 @@ impl QQuickItem for StarMapObjectLayer {
                 obj->setClip(true);
             }
         });
-        self.geometry_dirty = true;
+        self.static_geometry_dirty = true;
+        self.active_geometry_dirty = true;
+        self.camera_dirty = true;
         self.request_paint();
     }
 
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
+        self.camera_dirty = true;
         self.request_paint();
     }
 
@@ -1069,19 +1215,28 @@ impl QQuickItem for StarMapObjectLayer {
         } else {
             1.0
         };
-        let geometry_dirty = self.geometry_dirty;
-        if geometry_dirty {
+        let active_identity = self.active_identity();
+        let active_key = active_identity
+            .as_ref()
+            .map(|(kind, id)| (kind.as_str(), id.as_str()));
+        let static_geometry_dirty = self.static_geometry_dirty;
+        let active_geometry_dirty = self.active_geometry_dirty || static_geometry_dirty;
+        if static_geometry_dirty {
             let (node_normal, node_selected, embed_normal, embed_selected) =
-                self.build_anchor_vertices();
+                self.build_static_vertices(active_key);
             self.cached_node_normal = node_normal;
             self.cached_node_selected = node_selected;
             self.cached_embed_normal = embed_normal;
             self.cached_embed_selected = embed_selected;
         }
+        if active_geometry_dirty {
+            self.cached_active = self.build_active_vertices(active_key);
+        }
         let node_normal_count = (self.cached_node_normal.len() / FLOATS_PER_VERTEX) as i32;
         let node_selected_count = (self.cached_node_selected.len() / FLOATS_PER_VERTEX) as i32;
         let embed_normal_count = (self.cached_embed_normal.len() / FLOATS_PER_VERTEX) as i32;
         let embed_selected_count = (self.cached_embed_selected.len() / FLOATS_PER_VERTEX) as i32;
+        let active_count = (self.cached_active.len() / FLOATS_PER_VERTEX) as i32;
 
         let (nfr, nfg, nfb) = Self::color_parts(&self.node_fill_hex.to_string());
         let (efr, efg, efb) = Self::color_parts(&self.embed_fill_hex.to_string());
@@ -1116,34 +1271,79 @@ impl QQuickItem for StarMapObjectLayer {
             (0.0, 0.0)
         };
 
-        if geometry_dirty {
+        if static_geometry_dirty {
+            let static_vertices = (node_normal_count.max(0)
+                + node_selected_count.max(0)
+                + embed_normal_count.max(0)
+                + embed_selected_count.max(0)) as u64;
             OBJECT_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
-            OBJECT_VERTEX_UPLOADS.fetch_add(
-                (node_normal_count.max(0)
-                    + node_selected_count.max(0)
-                    + embed_normal_count.max(0)
-                    + embed_selected_count.max(0)) as u64,
-                Ordering::Relaxed,
-            );
-        } else {
-            OBJECT_CAMERA_UPDATES.fetch_add(1, Ordering::Relaxed);
+            OBJECT_STATIC_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
+            OBJECT_VERTEX_UPLOADS.fetch_add(static_vertices, Ordering::Relaxed);
+            OBJECT_STATIC_VERTEX_UPLOADS.fetch_add(static_vertices, Ordering::Relaxed);
         }
+        if active_geometry_dirty {
+            let active_vertices = active_count.max(0) as u64;
+            OBJECT_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
+            OBJECT_ACTIVE_GEOMETRY_UPDATES.fetch_add(1, Ordering::Relaxed);
+            OBJECT_VERTEX_UPLOADS.fetch_add(active_vertices, Ordering::Relaxed);
+            OBJECT_ACTIVE_VERTEX_UPLOADS.fetch_add(active_vertices, Ordering::Relaxed);
+        }
+        if self.camera_dirty {
+            OBJECT_CAMERA_UPDATES.fetch_add(1, Ordering::Relaxed);
+            self.camera_dirty = false;
+        }
+
+        let active_kind = active_identity
+            .as_ref()
+            .map(|(kind, _)| kind.as_str())
+            .unwrap_or("");
+        let active_id = active_identity
+            .as_ref()
+            .map(|(_, id)| id.as_str())
+            .unwrap_or("");
+        let active_selected = self.is_selected(active_kind, active_id);
+        let active_is_embed = active_kind == "embed";
+        let (afr, afg, afb) = if active_is_embed {
+            (efr, efg, efb)
+        } else {
+            (nfr, nfg, nfb)
+        };
+        let (abr, abg, abb) = if active_selected {
+            (sr, sg, sb)
+        } else if active_is_embed {
+            (ebr, ebg, ebb)
+        } else {
+            (nbr, nbg, nbb)
+        };
+        let active_border_px = if active_selected {
+            if active_is_embed {
+                embed_selected_border_px
+            } else {
+                node_selected_border_px
+            }
+        } else if active_is_embed {
+            embed_border_px
+        } else {
+            node_border_px
+        };
+        let active_alpha = self.editing_alpha(active_kind, active_id) as f64;
 
         let node_normal_ptr = self.cached_node_normal.as_ptr();
         let node_selected_ptr = self.cached_node_selected.as_ptr();
         let embed_normal_ptr = self.cached_embed_normal.as_ptr();
         let embed_selected_ptr = self.cached_embed_selected.as_ptr();
+        let active_ptr = self.cached_active.as_ptr();
         let node_alpha = 1.0f64;
         let embed_alpha = 1.0f64;
         let selected_alpha = 1.0f64;
         let node_border_alpha = 1.0f64;
         let embed_border_alpha = 1.0f64;
-        // SAFETY: raw 是本 item 渲染线程上的 paint node；四个顶点数组在调用期间
-        // 保持有效，C++ 只在本函数内拷贝，不保留 Rust 指针。
+        // SAFETY: raw 是本 item 渲染线程上的 paint node；静态与活动顶点数组在
+        // 调用期间保持有效，C++ 只在本函数内拷贝，不保留 Rust 指针。
         cpp!(unsafe [
             raw as "QSGNode *",
             tx as "double", ty as "double", zoom as "double",
-            geometry_dirty as "bool",
+            static_geometry_dirty as "bool",
             node_normal_ptr as "const float *", node_normal_count as "int",
             node_selected_ptr as "const float *", node_selected_count as "int",
             embed_normal_ptr as "const float *", embed_normal_count as "int",
@@ -1156,10 +1356,15 @@ impl QQuickItem for StarMapObjectLayer {
             node_border_px as "double", node_selected_border_px as "double",
             embed_border_px as "double", embed_selected_border_px as "double",
             width as "double", height as "double",
-            reveal as "double", dot_world_radius as "double"
+            reveal as "double", dot_world_radius as "double",
+            active_geometry_dirty as "bool",
+            active_ptr as "const float *", active_count as "int",
+            afr as "int", afg as "int", afb as "int", active_alpha as "double",
+            abr as "int", abg as "int", abb as "int",
+            active_border_px as "double"
         ] {
             sujian_starmap_objects_update(
-                raw, tx, ty, zoom, geometry_dirty,
+                raw, tx, ty, zoom, static_geometry_dirty,
                 node_normal_ptr, node_normal_count,
                 node_selected_ptr, node_selected_count,
                 embed_normal_ptr, embed_normal_count,
@@ -1172,6 +1377,13 @@ impl QQuickItem for StarMapObjectLayer {
                 node_border_px, node_selected_border_px,
                 embed_border_px, embed_selected_border_px,
                 width, height, reveal, dot_world_radius);
+            sujian_starmap_objects_update_active(
+                raw, active_geometry_dirty,
+                active_ptr, active_count,
+                afr, afg, afb, active_alpha,
+                abr, abg, abb, active_alpha,
+                active_border_px, width, height, zoom, reveal,
+                dot_world_radius);
         });
 
         // SAFETY: raw 仍是本 item 的 paint node；只读几何状态用于诊断。
@@ -1194,6 +1406,9 @@ impl QQuickItem for StarMapObjectLayer {
                 node_selected_geometry_present: (debug_state >> 61) & 1 != 0,
                 embed_normal_geometry_present: (debug_state >> 62) & 1 != 0,
                 embed_selected_geometry_present: (debug_state >> 63) & 1 != 0,
+                active_vertex_count: active_count,
+                active_kind: active_kind.to_string(),
+                active_id: active_id.to_string(),
                 visible_text_count: self.visible_text_count,
                 anchor_x: self.anchor_x,
                 anchor_y: self.anchor_y,
@@ -1210,7 +1425,8 @@ impl QQuickItem for StarMapObjectLayer {
                 shader_resource_exists: shader_bits & (1 << 0) != 0 && shader_bits & (1 << 1) != 0,
             });
         }
-        self.geometry_dirty = false;
+        self.static_geometry_dirty = false;
+        self.active_geometry_dirty = false;
         // SAFETY: raw 是刚取回所有权的节点指针，交给 Qt 继续持有。
         unsafe { SGNode::from_raw(raw) }
     }

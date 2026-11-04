@@ -47,8 +47,10 @@ Item {
 
     readonly property color _textPrimary: dt.textPrimary
 
-    // 父场景的文字口径：和活动画布同一份“按用户字号策略”。
-    readonly property real _textScale: parentScene ? parentScene._textScale : 1
+    // 父镜头缩放：标题在 world 单位下保持固定字号 / 固定布局宽度，再由这个
+    // 统一比例放大。父图每帧缩放只改变换，不会重新走 QML 字体排版。
+    readonly property real _worldScale:
+        parentScene && parentScene._safeZoom > 0 ? parentScene._safeZoom : 1
 
     // 直径（屏幕像素）：Embed 是正圆，取投影短边。尺寸来自完整 world 几何，
     // 不是视口交集。
@@ -112,18 +114,20 @@ Item {
         }
     }
 
-    // ── 标题：约束在圆的内接正方形顶部带内，不需要圆形裁剪 ──
+    // ── 标题：world 固定字号 + 父镜头统一缩放，屏幕宽度约束在圆内接正方形 ──
     Label {
         id: titleLabel
         visible: root.label.length > 0 && root._diameter >= 56
                  && !root.revealOnScreen
-        x: (root.width - width) / 2
+        x: (root.width - root._inscribedSide) / 2
         y: (root.height - root._inscribedSide) / 2 + root._inscribedSide * 0.04
-        width: root._inscribedSide
-        height: Math.max(14, root._inscribedSide * 0.16)
+        width: root._inscribedSide / root._worldScale
+        height: Math.max(14, root._inscribedSide * 0.16) / root._worldScale
+        scale: root._worldScale
+        transformOrigin: Item.TopLeft
         text: root.label
         color: root._textPrimary
-        font.pointSize: root.dt.fontSmPt * root._textScale
+        font.pointSize: root.dt.fontSmPt
         wrapMode: Text.NoWrap
         elide: Text.ElideRight
         horizontalAlignment: Text.AlignHCenter
