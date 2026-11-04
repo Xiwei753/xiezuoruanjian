@@ -34,16 +34,13 @@ void main()
     float radius = mix(maxRadius, min(aRadius, maxRadius),
                        clamp(ubuf.uReveal, 0.0, 1.0));
 
-    vec4 center = ubuf.qt_Matrix * vec4(aCenter, 0.0, 1.0);
-    vec2 viewport = max(ubuf.uViewport, vec2(1.0));
-    vec2 screenHalf = halfSize * zoom;
-    // 向外扩 1.5 屏幕像素，给 SDF 抗锯齿留出片元。
-    vec2 expandPx = vec2(1.5);
-    gl_Position = center;
-    gl_Position.xy += ((aCorner * (screenHalf + expandPx))
-                      / (viewport * 0.5)) * center.w;
+    // 角点与中心必须经过同一份完整模型-视图-投影矩阵；不能再用当前 Item 的
+    // 宽高把像素偏移归一化到 NDC，否则活动画布/子图预览尺寸不同时会误缩放。
+    vec2 expandWorld = vec2(1.5 / zoom);
+    vec2 cornerWorld = aCenter + aCorner * (halfSize + expandWorld);
+    gl_Position = ubuf.qt_Matrix * vec4(cornerWorld, 0.0, 1.0);
 
-    vLocal = aCorner * (halfSize + vec2(expandPx.x / zoom, expandPx.y / zoom));
+    vLocal = aCorner * (halfSize + expandWorld);
     vHalf = halfSize;
     vRadius = radius;
     vAlpha = aAlpha;
