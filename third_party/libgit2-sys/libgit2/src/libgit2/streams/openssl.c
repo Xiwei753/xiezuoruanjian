@@ -324,6 +324,7 @@ static int ssl_set_error(SSL *ssl, int error, ssl_error_phase phase)
 	const char *phase_name = ssl_error_phase_name(phase);
 	long verify_result;
 	int err;
+	int saved_errno = errno;
 	unsigned long e;
 	char errmsg[256];
 
@@ -366,8 +367,14 @@ static int ssl_set_error(SSL *ssl, int error, ssl_error_phase phase)
 				"SSL error during %s: %s", phase_name, errmsg);
 			break;
 		} else if (error < 0) {
-			git_error_set(GIT_ERROR_NET,
-				"SSL error during %s: syscall failure", phase_name);
+			if (saved_errno != 0)
+				git_error_set(GIT_ERROR_NET,
+					"SSL error during %s: syscall failure: %s",
+					phase_name, strerror(saved_errno));
+			else
+				git_error_set(GIT_ERROR_NET,
+					"SSL error during %s: syscall failure",
+					phase_name);
 			break;
 		}
 		git_error_set(GIT_ERROR_NET,

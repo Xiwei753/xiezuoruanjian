@@ -19,5 +19,17 @@ Git HTTPS 不再把不同的 `SSL_get_error` 分支统一报成
 - `verify_server_cert()` 的证书解析失败返回 `GIT_ECERTIFICATE`，不再调用
   `ssl_set_error(ssl, 0)`。
 
+`libgit2/src/libgit2/streams/socket.c`：
+
+- 修正 `socket_read()` / `socket_write()` 的 errno 判断：
+  `EAGAIN == EWOULDBLOCK` 时旧条件会让所有失败进入 poll。
+- 保存失败时的 errno；`EINTR` 直接重试原 recv/send，只有
+  `EAGAIN`/`EWOULDBLOCK` 才进入 poll。
+- `ECONNRESET` 等真实失败直接返回并保留 errno，不再被改写成 timeout。
+- poll 的 EINTR、超时和错误分别处理；写入方向错误提示改为 write。
+- `openssl.c` 的 `SSL_ERROR_SYSCALL` 在无 OpenSSL 错误栈时保留下层 errno
+  文本；只有 `error == 0` 的提前关闭返回 `GIT_EEOF`，真实 syscall 失败
+  返回 `GIT_ERROR_NET`。
+
 升级 libgit2-sys 时，应以同一版本的 crates.io 源码为基线重新应用这些改动，
 并同步更新根 `Cargo.toml` 的 `[patch.crates-io]` 与 `Cargo.lock`。

@@ -258,6 +258,46 @@ done:
 	return error;
 }
 
+static int socket_poll(
+	git_socket_stream *st,
+	short events,
+	const char *operation,
+	int *out_errno)
+{
+	struct pollfd fd;
+	int ret;
+
+	fd.fd = st->s;
+	fd.events = events;
+	fd.revents = 0;
+
+	do {
+		ret = p_poll(&fd, 1, st->parent.timeout);
+	} while (ret < 0 && errno == EINTR);
+
+	if (ret == 0) {
+		git_error_set(GIT_ERROR_NET,
+			"could not %s socket: timed out", operation);
+		return GIT_TIMEOUT;
+	}
+	if (ret < 0) {
+#ifdef GIT_WIN32
+		net_set_error("error polling socket");
+#else
+		*out_errno = errno;
+		if (*out_errno != 0)
+			git_error_set(GIT_ERROR_NET,
+				"error polling socket: %s", strerror(*out_errno));
+		else
+			git_error_set(GIT_ERROR_NET,
+				"error polling socket");
+#endif
+		return -1;
+	}
+
+	return 0;
+}
+
 static ssize_t socket_write(
 	git_stream *stream,
 	const char *data,
@@ -265,33 +305,39 @@ static ssize_t socket_write(
 	int flags)
 {
 	git_socket_stream *st = (git_socket_stream *) stream;
-	struct pollfd fd;
 	ssize_t ret;
+	int error = 0;
 
 	GIT_ASSERT(flags == 0);
 	GIT_UNUSED(flags);
 
-	ret = p_send(st->s, data, len, 0);
+	for (;;) {
+		ret = p_send(st->s, data, len, 0);
+		if (ret >= 0)
+			break;
 
-	if (st->parent.timeout && ret < 0 &&
-	    (errno == EAGAIN || errno != EWOULDBLOCK)) {
-		fd.fd = st->s;
-		fd.events = POLLOUT;
-		fd.revents = 0;
+		error = errno;
 
-		ret = p_poll(&fd, 1, st->parent.timeout);
+		/* Interrupted syscall: retry the original send. */
+		if (error == EINTR)
+			continue;
 
-		if (ret == 1) {
-			ret = p_send(st->s, data, len, 0);
-		} else if (ret == 0) {
-			git_error_set(GIT_ERROR_NET,
-				"could not write to socket: timed out");
-			return GIT_TIMEOUT;
-		}
+		/* Only EAGAIN/EWOULDBLOCK may wait for writability. */
+		if (!st->parent.timeout ||
+		    (error != EAGAIN && error != EWOULDBLOCK))
+			break;
+
+		if ((ret = socket_poll(st, POLLOUT, "write", &error)) != 0)
+			return ret;
 	}
 
 	if (ret < 0) {
-		net_set_error("error receiving data from socket");
+#ifdef GIT_WIN32
+		net_set_error("error writing data to socket");
+#else
+		errno = error;
+		net_set_error("error writing data to socket");
+#endif
 		return -1;
 	}
 
@@ -304,30 +350,36 @@ static ssize_t socket_read(
 	size_t len)
 {
 	git_socket_stream *st = (git_socket_stream *) stream;
-	struct pollfd fd;
 	ssize_t ret;
+	int error = 0;
 
-	ret = p_recv(st->s, data, len, 0);
+	for (;;) {
+		ret = p_recv(st->s, data, len, 0);
+		if (ret >= 0)
+			break;
 
-	if (st->parent.timeout && ret < 0 &&
-	    (errno == EAGAIN || errno != EWOULDBLOCK)) {
-		fd.fd = st->s;
-		fd.events = POLLIN;
-		fd.revents = 0;
+		error = errno;
 
-		ret = p_poll(&fd, 1, st->parent.timeout);
+		/* Interrupted syscall: retry the original recv. */
+		if (error == EINTR)
+			continue;
 
-		if (ret == 1) {
-			ret = p_recv(st->s, data, len, 0);
-		} else if (ret == 0) {
-			git_error_set(GIT_ERROR_NET,
-				"could not read from socket: timed out");
-			return GIT_TIMEOUT;
-		}
+		/* Only EAGAIN/EWOULDBLOCK may wait for readability. */
+		if (!st->parent.timeout ||
+		    (error != EAGAIN && error != EWOULDBLOCK))
+			break;
+
+		if ((ret = socket_poll(st, POLLIN, "read", &error)) != 0)
+			return ret;
 	}
 
 	if (ret < 0) {
+#ifdef GIT_WIN32
 		net_set_error("error receiving data from socket");
+#else
+		errno = error;
+		net_set_error("error receiving data from socket");
+#endif
 		return -1;
 	}
 
