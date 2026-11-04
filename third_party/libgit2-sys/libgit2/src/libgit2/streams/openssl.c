@@ -244,14 +244,26 @@ static int bio_destroy(BIO *b)
 static int bio_read(BIO *b, char *buf, int len)
 {
 	git_stream *io = (git_stream *) BIO_get_data(b);
+	int ret;
 
-	return (int) git_stream_read(io, buf, len);
+	/*
+	 * Clear before the current I/O so ssl_set_error() can trust
+	 * git_error_last() as the result of this BIO call, not a stale error.
+	 */
+	git_error_clear();
+	ret = (int) git_stream_read(io, buf, len);
+	return ret;
 }
 
 static int bio_write(BIO *b, const char *buf, int len)
 {
 	git_stream *io = (git_stream *) BIO_get_data(b);
-	return (int) git_stream_write(io, buf, len, 0);
+	int ret;
+
+	/* See bio_read(): only preserve errors set by this I/O call. */
+	git_error_clear();
+	ret = (int) git_stream_write(io, buf, len, 0);
+	return ret;
 }
 
 static long bio_ctrl(BIO *b, int cmd, long num, void *ptr)
@@ -367,6 +379,20 @@ static int ssl_set_error(SSL *ssl, int error, ssl_error_phase phase)
 				"SSL error during %s: %s", phase_name, errmsg);
 			break;
 		} else if (error < 0) {
+			const git_error *last_error = git_error_last();
+
+			/*
+			 * bio_read()/bio_write() clear the error before each I/O.
+			 * If this BIO call already produced a specific network error
+			 * (timeout, ECONNRESET, ...), keep it instead of replacing it
+			 * with a generic strerror(saved_errno) message.
+			 */
+			if (last_error != NULL &&
+			    last_error->klass == GIT_ERROR_NET &&
+			    last_error->message != NULL &&
+			    last_error->message[0] != '\0')
+				return -1;
+
 			if (saved_errno != 0)
 				git_error_set(GIT_ERROR_NET,
 					"SSL error during %s: syscall failure: %s",

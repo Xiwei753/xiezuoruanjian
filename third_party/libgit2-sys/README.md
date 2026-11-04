@@ -30,6 +30,10 @@ Git HTTPS 不再把不同的 `SSL_get_error` 分支统一报成
 - `openssl.c` 的 `SSL_ERROR_SYSCALL` 在无 OpenSSL 错误栈时保留下层 errno
   文本；只有 `error == 0` 的提前关闭返回 `GIT_EEOF`，真实 syscall 失败
   返回 `GIT_ERROR_NET`。
+- `bio_read()` / `bio_write()` 在每次底层 I/O 前 `git_error_clear()`，使
+  `ssl_set_error()` 能确认 `git_error_last()` 是本次 BIO 调用的结果；若
+  `socket.c` 已设置具体 `GIT_ERROR_NET`（如 timeout、ECONNRESET），保留该
+  错误，不再用通用 `strerror(saved_errno)` 覆盖。
 
 升级 libgit2-sys 时，应以同一版本的 crates.io 源码为基线重新应用这些改动，
 并同步更新根 `Cargo.toml` 的 `[patch.crates-io]` 与 `Cargo.lock`。
