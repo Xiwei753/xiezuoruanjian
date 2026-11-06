@@ -16,8 +16,8 @@ use crate::writing_stats::contribution::{
     ContributionEvent, ContributionObjectType, ContributionOperation, MutationActor,
 };
 use crate::writing_stats::starmap_checkpoint::{
-    append_starmap_checkpoint, has_starmap_checkpoints, StarMapProofCheckpoint,
-    CHECKPOINT_REASON_BASELINE_INCOMPLETE, CHECKPOINT_REASON_CREATED,
+    append_starmap_checkpoint, ensure_checkpoint_storage, has_starmap_checkpoints,
+    StarMapProofCheckpoint, CHECKPOINT_REASON_BASELINE_INCOMPLETE, CHECKPOINT_REASON_CREATED,
 };
 use crate::writing_stats::starmap_proof::{
     compute_replay_event_hash, proof_object_sha256, ReplayEventIdentity,
@@ -468,6 +468,8 @@ impl ContributionStore {
     /// 事件落盘后按需维护完整图检查点，避免回放热路径写盘。
     fn maintain_starmap_checkpoints(&self, targets: &[(String, String, u64)]) {
         for (origin, starmap_id, position) in targets {
+            // 旧 JSONL 只在这里（写路径）一次性迁移，普通读取不写其它设备分区。
+            let _ = ensure_checkpoint_storage(&self.app_data_root, origin, starmap_id);
             let last = crate::writing_stats::starmap_checkpoint::last_checkpoint_position(
                 &self.app_data_root,
                 origin,

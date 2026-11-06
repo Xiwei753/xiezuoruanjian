@@ -6,6 +6,7 @@
 //! 自行渲染。回放绝不修改真实工作区里的星图。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -242,11 +243,12 @@ fn expected_event_hash(events: &[ContributionEvent], index: usize, head: &str) -
 }
 
 /// 整条分支的一次性前缀校验结果：哈希链 + 真实对象状态转换。
+///
+/// 这里只做顺序的轻量校验；完整图状态摘要只在真正恢复/导出某个检查点
+/// 时按需重建，避免打开回放时对全部历史检查点重复整图哈希。
 struct PrefixValidation {
     /// 0..=N 每个位置是否可以安全跳转。
     valid: Vec<bool>,
-    /// 只在实际检查点位置计算的完整图状态摘要；其余位置为 `None`。
-    state_hashes: Vec<Option<String>>,
     /// 第一个失败位置；无失败时为 `u64::MAX`。
     first_invalid_position: u64,
 }
@@ -452,25 +454,21 @@ impl IndexedProofState {
     }
 }
 
-/// 一次算出整条分支的哈希链与对象状态连续性，避免跳转时绕过早期断链。
+/// 顺序校验整条分支的事件哈希链与对象级 before/after 连续性。
+///
+/// 该函数不计算任何完整图摘要，打开回放的成本只与事件数量线性相关；
+/// 检查点的整图状态匹配在 `validate_checkpoint_at` 中按需进行。
 fn validate_event_chain(
     events: &[ContributionEvent],
     baseline: &StarMapProofState,
-    hash_positions: &HashSet<u64>,
 ) -> PrefixValidation {
     let mut valid = Vec::with_capacity(events.len() + 1);
-    let mut state_hashes = Vec::with_capacity(events.len() + 1);
     valid.push(true);
-    state_hashes.push(if hash_positions.contains(&0) {
-        Some(state_sha256(baseline))
-    } else {
-        None
-    });
     let mut state = IndexedProofState::from_state(baseline);
     let mut head = String::new();
     let mut first_invalid_position = u64::MAX;
     for (index, event) in events.iter().enumerate() {
-        let mut ok = true;
+        let mut ok;
         let delta = event.replay_delta.as_ref();
         let stored = delta.and_then(|delta| delta.event_hash.as_deref());
         if let Some(delta) = delta {
@@ -503,11 +501,6 @@ fn validate_event_chain(
         let cumulative = previous && ok;
         valid.push(cumulative);
         let position = index as u64 + 1;
-        state_hashes.push(if cumulative && hash_positions.contains(&position) {
-            Some(state_sha256(&state.to_state()))
-        } else {
-            None
-        });
         if !cumulative && first_invalid_position == u64::MAX {
             first_invalid_position = position;
         }
@@ -515,7 +508,6 @@ fn validate_event_chain(
     }
     PrefixValidation {
         valid,
-        state_hashes,
         first_invalid_position,
     }
 }
@@ -533,12 +525,12 @@ fn build_time_index(events: &[ContributionEvent]) -> Vec<i64> {
     prefix_max
 }
 
-fn checkpoint_fields_match(
+/// 轻量检查点头是否锚定到真实事件前缀；不读取整图快照。
+fn checkpoint_header_anchors(
     events: &[ContributionEvent],
     validation: &PrefixValidation,
     position: u64,
     event_chain_head: &str,
-    state_sha256: &str,
 ) -> bool {
     if position == 0 {
         return true;
@@ -554,18 +546,12 @@ fn checkpoint_fields_match(
     {
         return false;
     }
-    let hash_ok = !event_chain_head.is_empty()
+    !event_chain_head.is_empty()
         && events
             .get(index)
             .and_then(|event| event.replay_delta.as_ref())
             .and_then(|delta| delta.event_hash.as_deref())
-            .is_some_and(|hash| hash == event_chain_head);
-    let state_ok = validation
-        .state_hashes
-        .get(position as usize)
-        .and_then(|hash| hash.as_deref())
-        .is_some_and(|hash| hash == state_sha256);
-    hash_ok && state_ok
+            .is_some_and(|hash| hash == event_chain_head)
 }
 
 /// 一次回放会话。向前播放时复用当前状态，只在目标位置回退时从最近检查点重建。
@@ -575,7 +561,16 @@ pub struct StarMapReplaySession {
     events: Vec<ContributionEvent>,
     branches: Vec<StarMapReplayBranch>,
     checkpoint_headers: Vec<StarMapCheckpointHeader>,
-    checkpoint_cache: HashMap<u64, StarMapProofCheckpoint>,
+    /// 只有真正恢复某帧时才载入完整快照；命中后用 `Arc` 共享，避免每帧深拷贝。
+    checkpoint_cache: HashMap<u64, Arc<StarMapProofCheckpoint>>,
+    /// 检查点整图状态是否与真实重放状态一致；按位置缓存结论。
+    checkpoint_validation: HashMap<u64, bool>,
+    /// 检查点位置集合，连续播放时每帧只做常数时间判断。
+    checkpoint_positions: HashSet<u64>,
+    /// 完整重放（导出）时在各检查点位置记录的真实状态摘要。
+    checkpoint_replay_hashes: HashMap<u64, String>,
+    /// 只有完整重放才收集检查点状态摘要。
+    collect_checkpoint_hashes: bool,
     history_complete: bool,
     cursor_position: u64,
     cursor_state: StarMapProofState,
@@ -640,6 +635,10 @@ impl StarMapReplaySession {
             branches,
             checkpoint_headers,
             checkpoint_cache: HashMap::new(),
+            checkpoint_validation: HashMap::new(),
+            checkpoint_positions: HashSet::new(),
+            checkpoint_replay_hashes: HashMap::new(),
+            collect_checkpoint_hashes: false,
             history_complete: true,
             cursor_position: 0,
             cursor_state: StarMapProofState::empty(&request.starmap_id),
@@ -649,7 +648,6 @@ impl StarMapReplaySession {
             legacy_event_count,
             prefix_validation: PrefixValidation {
                 valid: Vec::new(),
-                state_hashes: Vec::new(),
                 first_invalid_position: u64::MAX,
             },
             time_index: Vec::new(),
@@ -657,24 +655,23 @@ impl StarMapReplaySession {
             root: store.app_data_root().to_path_buf(),
         };
         session.initialize_baseline();
-        let mut hash_positions: HashSet<u64> = session
-            .checkpoint_headers
-            .iter()
-            .map(|header| header.position)
-            .collect();
-        hash_positions.insert(session.events.len() as u64);
-        session.prefix_validation =
-            validate_event_chain(&session.events, &session.baseline_state, &hash_positions);
+        // 打开时只做一次线性事件链校验；检查点整图状态留到实际跳转/导出
+        // 时再按需重建，避免历史累积后每次打开都重复哈希全部旧图。
+        session.prefix_validation = validate_event_chain(&session.events, &session.baseline_state);
         session.time_index = build_time_index(&session.events);
         session.checkpoint_headers.retain(|header| {
-            checkpoint_fields_match(
+            checkpoint_header_anchors(
                 &session.events,
                 &session.prefix_validation,
                 header.position,
                 &header.event_chain_head,
-                &header.state_sha256,
             )
         });
+        session.checkpoint_positions = session
+            .checkpoint_headers
+            .iter()
+            .map(|header| header.position)
+            .collect();
         if session.legacy_event_count > 0 {
             session.history_complete = false;
         }
@@ -692,7 +689,8 @@ impl StarMapReplaySession {
             if let Ok(Some(checkpoint)) =
                 load_checkpoint_at(&self.root, &self.device_id, &self.request.starmap_id, 0)
             {
-                self.checkpoint_cache.insert(0, checkpoint.clone());
+                self.checkpoint_cache
+                    .insert(0, Arc::new(checkpoint.clone()));
                 self.cursor_state = checkpoint.state.clone();
                 self.baseline_state = checkpoint.state.clone();
                 self.cursor_checkpoint_position = 0;
@@ -779,15 +777,18 @@ impl StarMapReplaySession {
         total
     }
 
-    fn checkpoint_at_or_before(&mut self, target: u64) -> Option<StarMapProofCheckpoint> {
-        let position = self
-            .checkpoint_headers
+    fn latest_checkpoint_position_at_or_before(&self, target: u64) -> Option<u64> {
+        self.checkpoint_headers
             .iter()
             .filter(|header| header.position <= target)
             .map(|header| header.position)
-            .max()?;
+            .max()
+    }
+
+    /// 载入检查点整图；缓存用 `Arc` 共享，调用方只在自己需要恢复游标时克隆状态。
+    fn load_checkpoint(&mut self, position: u64) -> Option<Arc<StarMapProofCheckpoint>> {
         if let Some(cached) = self.checkpoint_cache.get(&position) {
-            return Some(cached.clone());
+            return Some(Arc::clone(cached));
         }
         let checkpoint = load_checkpoint_at(
             &self.root,
@@ -797,39 +798,103 @@ impl StarMapReplaySession {
         )
         .ok()
         .flatten()?;
-        self.checkpoint_cache.insert(position, checkpoint.clone());
+        let checkpoint = Arc::new(checkpoint);
+        self.checkpoint_cache
+            .insert(position, Arc::clone(&checkpoint));
         Some(checkpoint)
+    }
+
+    /// 从基线独立重放事件到 `position`，得到该位置的真实整图摘要。
+    fn reconstructed_state_hash(&self, position: u64) -> Option<String> {
+        if position > self.events.len() as u64 {
+            return None;
+        }
+        if position == 0 {
+            return Some(state_sha256(&self.baseline_state));
+        }
+        let mut state = IndexedProofState::from_state(&self.baseline_state);
+        for event in &self.events[..position as usize] {
+            let delta = event.replay_delta.as_ref()?;
+            state.apply_delta(delta).ok()?;
+        }
+        Some(state_sha256(&state.to_state()))
+    }
+
+    /// 按需校验某个检查点的完整状态，并缓存结论。
+    ///
+    /// 事件链和对象级连续性由 `open` 一次性完成；这里才比较整图摘要，
+    /// 因此只有随机跳转/导出会支付完整状态成本。
+    fn validate_checkpoint_at(&mut self, position: u64) -> bool {
+        if let Some(valid) = self.checkpoint_validation.get(&position) {
+            return *valid;
+        }
+        let Some(header) = self
+            .checkpoint_headers
+            .iter()
+            .find(|header| header.position == position)
+            .cloned()
+        else {
+            return false;
+        };
+        let mut valid = checkpoint_header_anchors(
+            &self.events,
+            &self.prefix_validation,
+            header.position,
+            &header.event_chain_head,
+        );
+        if valid {
+            valid = self.load_checkpoint(position).is_some_and(|checkpoint| {
+                !checkpoint.state_sha256.is_empty()
+                    && checkpoint.state_sha256 == header.state_sha256
+                    && checkpoint.hash_matches()
+            });
+        }
+        if valid && position > 0 {
+            let expected = self
+                .checkpoint_replay_hashes
+                .get(&position)
+                .cloned()
+                .or_else(|| self.reconstructed_state_hash(position));
+            valid = expected.is_some_and(|hash| hash == header.state_sha256);
+        }
+        self.checkpoint_validation.insert(position, valid);
+        valid
+    }
+
+    fn restore_checkpoint(&mut self, position: u64) -> bool {
+        if !self.validate_checkpoint_at(position) {
+            return false;
+        }
+        let Some(checkpoint) = self.load_checkpoint(position) else {
+            self.checkpoint_validation.insert(position, false);
+            return false;
+        };
+        self.cursor_state = checkpoint.state.clone();
+        self.cursor_position = position.min(self.events.len() as u64);
+        self.cursor_checkpoint_position = self.cursor_position;
+        self.chain_head = self.hash_at_position(self.cursor_position);
+        true
+    }
+
+    fn reset_to_baseline(&mut self) {
+        self.cursor_state = self.baseline_state.clone();
+        self.cursor_position = 0;
+        self.cursor_checkpoint_position = 0;
+        self.chain_head.clear();
     }
 
     fn reset_cursor_to(&mut self, target: u64) {
         // 重新定位后旧目标的断链错误不再属于当前帧；从检查点/基线重建。
         self.errors.clear();
-        let checkpoint = self.checkpoint_at_or_before(target);
-        if let Some(checkpoint) = checkpoint {
-            if checkpoint.hash_matches()
-                && checkpoint_fields_match(
-                    &self.events,
-                    &self.prefix_validation,
-                    checkpoint.position,
-                    &checkpoint.event_chain_head,
-                    &checkpoint.state_sha256,
-                )
-            {
-                self.cursor_state = checkpoint.state.clone();
-                self.cursor_position = checkpoint.position.min(self.events.len() as u64);
-                self.cursor_checkpoint_position = self.cursor_position;
-                self.chain_head = self.hash_at_position(self.cursor_position);
+        if let Some(position) = self.latest_checkpoint_position_at_or_before(target) {
+            if self.restore_checkpoint(position) {
                 return;
             }
             self.errors.push(format!(
-                "starmap checkpoint hash mismatch at position {}",
-                checkpoint.position
+                "starmap checkpoint hash mismatch at position {position}"
             ));
         }
-        self.cursor_state = self.baseline_state.clone();
-        self.cursor_position = 0;
-        self.cursor_checkpoint_position = 0;
-        self.chain_head.clear();
+        self.reset_to_baseline();
     }
 
     fn hash_at_position(&self, position: u64) -> String {
@@ -844,27 +909,9 @@ impl StarMapReplaySession {
     fn apply_to(&mut self, target: u64) {
         if target < self.cursor_position {
             self.reset_cursor_to(target);
-        } else if target > self.cursor_position {
-            // 随机向前跳转时优先复用目标之前的最近检查点；连续向前播放
-            // （相邻帧）不会命中这里，只应用新增事件。
-            if let Some(checkpoint) = self.checkpoint_at_or_before(target) {
-                if checkpoint.position > self.cursor_position
-                    && checkpoint.hash_matches()
-                    && checkpoint_fields_match(
-                        &self.events,
-                        &self.prefix_validation,
-                        checkpoint.position,
-                        &checkpoint.event_chain_head,
-                        &checkpoint.state_sha256,
-                    )
-                {
-                    self.cursor_state = checkpoint.state.clone();
-                    self.cursor_position = checkpoint.position;
-                    self.cursor_checkpoint_position = checkpoint.position;
-                    self.chain_head = self.hash_at_position(checkpoint.position);
-                }
-            }
         }
+        // 连续向前播放只需要应用增量事件；既不读取整图快照，也不深拷贝
+        // 检查点状态。检查点只用于回退/随机跳转。
         let from = self.cursor_position as usize;
         let to = target as usize;
         for index in from..to {
@@ -956,6 +1003,14 @@ impl StarMapReplaySession {
             } else {
                 // 完全没有回放元数据的事件不能冒充链的一部分。
                 self.chain_head.clear();
+            }
+            let position = index as u64 + 1;
+            if self.collect_checkpoint_hashes
+                && self.checkpoint_positions.contains(&position)
+                && !self.checkpoint_replay_hashes.contains_key(&position)
+            {
+                let hash = state_sha256(&self.cursor_state);
+                self.checkpoint_replay_hashes.insert(position, hash);
             }
         }
         self.cursor_position = target;
@@ -1059,10 +1114,10 @@ pub fn export_starmap_proof(
         ..StarMapReplayRequest::default()
     };
     let mut session = StarMapReplaySession::open(store, &request)?;
-    // 导出必须从真实基线重放整条事件链，不能借最近检查点跳过前缀校验。
-    session.checkpoint_headers.clear();
-    session.checkpoint_cache.clear();
-    session.reset_cursor_to(0);
+    // 导出从真实基线完整重放整条事件链，保留已验证的库头供导出枚举；
+    // 完整重放时顺便记录各检查点位置的真实状态摘要，供随后核对快照。
+    session.collect_checkpoint_hashes = true;
+    session.reset_to_baseline();
     let target = session.total_events();
     let frame = session.frame_at(&StarMapReplayRequest {
         target_position: Some(target),
@@ -1118,20 +1173,24 @@ impl StarMapReplaySession {
 
     /// 只返回哈希链和对象状态转换都通过、且与真实前缀状态摘要一致的检查点。
     ///
-    /// 该函数只在导出证明时调用，按需读取整图快照；普通回放打开不会走这里。
-    pub fn validated_checkpoints(&self) -> Vec<StarMapProofCheckpoint> {
-        self.checkpoint_headers
+    /// 该函数只在导出证明时调用；普通回放打开不会读取全部整图快照。
+    pub fn validated_checkpoints(&mut self) -> Vec<StarMapProofCheckpoint> {
+        let mut positions: Vec<u64> = self
+            .checkpoint_headers
             .iter()
-            .filter_map(|header| {
-                load_checkpoint_at(
-                    &self.root,
-                    &self.device_id,
-                    &self.request.starmap_id,
-                    header.position,
-                )
-                .ok()
-                .flatten()
-            })
-            .collect()
+            .map(|header| header.position)
+            .collect();
+        positions.sort_unstable();
+        positions.dedup();
+        let mut checkpoints = Vec::new();
+        for position in positions {
+            if !self.validate_checkpoint_at(position) {
+                continue;
+            }
+            if let Some(checkpoint) = self.load_checkpoint(position) {
+                checkpoints.push((*checkpoint).clone());
+            }
+        }
+        checkpoints
     }
 }
