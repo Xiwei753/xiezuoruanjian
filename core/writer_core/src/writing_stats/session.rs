@@ -42,7 +42,27 @@ pub const PAUSE_REASON_LOCK: &str = "lock";
 pub const PAUSE_REASON_CLOSE: &str = "close";
 pub const PAUSE_REASON_HEARTBEAT: &str = "heartbeat";
 pub const PAUSE_REASON_CHAPTER_SWITCH: &str = "chapterSwitch";
+pub const PAUSE_REASON_TARGET_SWITCH: &str = "targetSwitch";
 pub const PAUSE_REASON_UNKNOWN: &str = "unknown";
+
+/// 一段前台计时的真实归属目标。
+///
+/// 老切片没有该字段（`None`），仍按原有 `project_id` / `chapter_id` 解释；
+/// 星图切片必须使用 [`WritingActivityTarget::StarMap`]，绝不把星图 ID
+/// 伪装成章节 ID。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum WritingActivityTarget {
+    Chapter {
+        project_id: String,
+        chapter_id: String,
+    },
+    StarMap {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<String>,
+        starmap_id: String,
+    },
+}
 
 /// 一段**已经测量完成**的前台编辑器计时切片。
 ///
@@ -76,6 +96,9 @@ pub struct WritingActivitySegment {
     /// 本切片结束的原因（[`PAUSE_REASON_*`]）。
     #[serde(default)]
     pub pause_reason: String,
+    /// 切片的真实目标。旧数据缺失时按 chapter_id 解释。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<WritingActivityTarget>,
 }
 
 impl WritingActivitySegment {
@@ -101,8 +124,8 @@ impl WritingActivitySegment {
         } else {
             event_id
         };
-        let local_date = calendar::local_date_at(start_at_ms)
-            .or_else(|_| calendar::utc_date_at(start_at_ms))?;
+        let local_date =
+            calendar::local_date_at(start_at_ms).or_else(|_| calendar::utc_date_at(start_at_ms))?;
         Ok(Self {
             event_id,
             device_id: device_id.to_string(),
@@ -117,7 +140,78 @@ impl WritingActivitySegment {
             end_at_ms,
             duration_ms: u64::try_from(end_at_ms - start_at_ms).unwrap_or(0),
             pause_reason: normalized_reason(pause_reason).to_string(),
+            target: Some(WritingActivityTarget::Chapter {
+                project_id: project_id.to_string(),
+                chapter_id: chapter_id.to_string(),
+            }),
         })
+    }
+
+    /// 创建一段星图前台计时切片。星图可以没有所属项目，因此 `project_id`
+    /// 是可选的；星图 ID 只出现在 target 中，不写入 chapter_id。
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_for_starmap(
+        event_id: String,
+        device_id: &str,
+        platform: Platform,
+        device_class: &str,
+        project_id: Option<&str>,
+        starmap_id: &str,
+        session_id: &str,
+        start_at_ms: i64,
+        end_at_ms: i64,
+        pause_reason: &str,
+    ) -> Result<Self> {
+        validate_span(start_at_ms, end_at_ms)?;
+        if starmap_id.trim().is_empty() {
+            return Err(Error::Other(
+                "starmap writing activity segment requires starmap_id".to_string(),
+            ));
+        }
+        let event_id = if event_id.is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            event_id
+        };
+        let local_date =
+            calendar::local_date_at(start_at_ms).or_else(|_| calendar::utc_date_at(start_at_ms))?;
+        Ok(Self {
+            event_id,
+            device_id: device_id.to_string(),
+            platform,
+            device_class: device_class.to_string(),
+            project_id: project_id.unwrap_or_default().to_string(),
+            volume_id: String::new(),
+            chapter_id: String::new(),
+            session_id: session_id.to_string(),
+            local_date,
+            start_at_ms,
+            end_at_ms,
+            duration_ms: u64::try_from(end_at_ms - start_at_ms).unwrap_or(0),
+            pause_reason: normalized_reason(pause_reason).to_string(),
+            target: Some(WritingActivityTarget::StarMap {
+                project_id: project_id.map(str::to_string),
+                starmap_id: starmap_id.to_string(),
+            }),
+        })
+    }
+
+    /// 该切片实际归属的星图 ID；章节切片或旧数据返回 `None`。
+    pub fn star_map_id(&self) -> Option<&str> {
+        match &self.target {
+            Some(WritingActivityTarget::StarMap { starmap_id, .. }) => Some(starmap_id),
+            _ => None,
+        }
+    }
+
+    /// 旧切片没有 target 时回退到 chapter_id 语义。
+    pub fn target_chapter_id(&self) -> Option<&str> {
+        match &self.target {
+            Some(WritingActivityTarget::Chapter { chapter_id, .. }) => Some(chapter_id),
+            Some(WritingActivityTarget::StarMap { .. }) => None,
+            None if !self.chapter_id.is_empty() => Some(&self.chapter_id),
+            None => None,
+        }
     }
 
     /// 切片归属的业务日历日。新切片直接读持久化的 `local_date`；老数据
@@ -138,8 +232,8 @@ impl WritingActivitySegment {
         let mut slices = Vec::new();
         let mut cursor = self.start_at_ms;
         while cursor < self.end_at_ms {
-            let date = calendar::local_date_at(cursor)
-                .or_else(|_| calendar::utc_date_at(cursor))?;
+            let date =
+                calendar::local_date_at(cursor).or_else(|_| calendar::utc_date_at(cursor))?;
             let next_midnight = next_local_midnight_ms(cursor)?.unwrap_or(self.end_at_ms);
             let slice_end = next_midnight.min(self.end_at_ms);
             if slice_end <= cursor {
@@ -233,6 +327,8 @@ pub struct WritingSessionClock {
     project_id: String,
     volume_id: String,
     chapter_id: String,
+    /// 当前前台切片的星图目标；`None` 表示正文切片。
+    starmap_id: Option<String>,
     /// 当前前台切片的单调起点。
     segment_start_mono_ms: i64,
     /// 当前会话第一次计时时的墙钟锚点。
@@ -256,6 +352,7 @@ impl WritingSessionClock {
             project_id: String::new(),
             volume_id: String::new(),
             chapter_id: String::new(),
+            starmap_id: None,
             segment_start_mono_ms: 0,
             wall_anchor_ms: 0,
             mono_anchor_ms: 0,
@@ -300,23 +397,63 @@ impl WritingSessionClock {
                         platform,
                         device_class,
                     ));
-                    self.begin_slice(
-                        mono_ms,
-                        project_id,
-                        volume_id,
-                        chapter_id,
-                    );
+                    self.begin_slice(mono_ms, project_id, volume_id, chapter_id, None);
                 }
             }
             WritingSessionState::Idle => {
                 self.session_id = uuid::Uuid::new_v4().to_string();
                 self.wall_anchor_ms = wall_ms;
                 self.mono_anchor_ms = mono_ms;
-                self.begin_slice(mono_ms, project_id, volume_id, chapter_id);
+                self.begin_slice(mono_ms, project_id, volume_id, chapter_id, None);
             }
             WritingSessionState::Paused => {
                 // 暂停后第一次输入才恢复计时；不补算暂停期间。
-                self.begin_slice(mono_ms, project_id, volume_id, chapter_id);
+                self.begin_slice(mono_ms, project_id, volume_id, chapter_id, None);
+            }
+        }
+        completed
+    }
+
+    /// 星图第一次真实人工操作：开始/切换星图前台切片。
+    ///
+    /// 纯后台 MCP 写入不会调用这里，因此不能冒充人工创作时间。切换正文与
+    /// 星图时先结算旧目标，时长不会同时记到两个目标。
+    #[allow(clippy::too_many_arguments)]
+    pub fn on_first_human_starmap_operation(
+        &mut self,
+        mono_ms: i64,
+        wall_ms: i64,
+        project_id: Option<&str>,
+        starmap_id: &str,
+        device_id: &str,
+        platform: Platform,
+        device_class: &str,
+    ) -> Vec<WritingActivitySegment> {
+        let project_id = project_id.unwrap_or_default();
+        let mut completed = Vec::new();
+        match self.state {
+            WritingSessionState::Writing => {
+                let same_target =
+                    self.starmap_id.as_deref() == Some(starmap_id) && self.project_id == project_id;
+                if !same_target {
+                    completed.extend(self.take_segment(
+                        mono_ms,
+                        PAUSE_REASON_TARGET_SWITCH,
+                        device_id,
+                        platform,
+                        device_class,
+                    ));
+                    self.begin_slice(mono_ms, project_id, "", "", Some(starmap_id));
+                }
+            }
+            WritingSessionState::Idle => {
+                self.session_id = uuid::Uuid::new_v4().to_string();
+                self.wall_anchor_ms = wall_ms;
+                self.mono_anchor_ms = mono_ms;
+                self.begin_slice(mono_ms, project_id, "", "", Some(starmap_id));
+            }
+            WritingSessionState::Paused => {
+                self.begin_slice(mono_ms, project_id, "", "", Some(starmap_id));
             }
         }
         completed
@@ -333,6 +470,7 @@ impl WritingSessionClock {
             &self.project_id.clone(),
             &self.volume_id.clone(),
             &self.chapter_id.clone(),
+            self.starmap_id.clone().as_deref(),
         );
         true
     }
@@ -433,11 +571,13 @@ impl WritingSessionClock {
         project_id: &str,
         volume_id: &str,
         chapter_id: &str,
+        starmap_id: Option<&str>,
     ) {
         self.state = WritingSessionState::Writing;
         self.project_id = project_id.to_string();
         self.volume_id = volume_id.to_string();
         self.chapter_id = chapter_id.to_string();
+        self.starmap_id = starmap_id.map(str::to_string);
         self.segment_start_mono_ms = mono_ms;
     }
 
@@ -457,20 +597,36 @@ impl WritingSessionClock {
         let start_at_ms = self.wall_anchor_ms + (self.segment_start_mono_ms - self.mono_anchor_ms);
         let end_at_ms = self.wall_anchor_ms + (mono_ms - self.mono_anchor_ms);
         self.segment_start_mono_ms = mono_ms;
-        WritingActivitySegment::new(
-            String::new(),
-            device_id,
-            platform,
-            device_class,
-            &self.project_id,
-            &self.volume_id,
-            &self.chapter_id,
-            &self.session_id,
-            start_at_ms,
-            end_at_ms,
-            reason,
-        )
-        .ok()
+        if let Some(starmap_id) = self.starmap_id.as_deref() {
+            WritingActivitySegment::new_for_starmap(
+                String::new(),
+                device_id,
+                platform,
+                device_class,
+                (!self.project_id.is_empty()).then_some(self.project_id.as_str()),
+                starmap_id,
+                &self.session_id,
+                start_at_ms,
+                end_at_ms,
+                reason,
+            )
+            .ok()
+        } else {
+            WritingActivitySegment::new(
+                String::new(),
+                device_id,
+                platform,
+                device_class,
+                &self.project_id,
+                &self.volume_id,
+                &self.chapter_id,
+                &self.session_id,
+                start_at_ms,
+                end_at_ms,
+                reason,
+            )
+            .ok()
+        }
     }
 
     fn reset(&mut self) {
@@ -479,6 +635,7 @@ impl WritingSessionClock {
         self.project_id.clear();
         self.volume_id.clear();
         self.chapter_id.clear();
+        self.starmap_id = None;
         self.segment_start_mono_ms = 0;
         self.wall_anchor_ms = 0;
         self.mono_anchor_ms = 0;

@@ -240,6 +240,118 @@ pub unsafe extern "C" fn writer_core_list_proof_checkpoints_json(
     }
 }
 
+/// 星图统计（当前保留文字、操作来源、真实星图时长）。
+///
+/// # Safety
+/// `start_date` / `end_date` 必须是以 NUL 结尾的 UTF-8 C 字符串；
+/// `project_id` 可为 NULL。返回调用方持有的 C 字符串。
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_starmap_stats_json(
+    start_date: *const c_char,
+    end_date: *const c_char,
+    project_id: *const c_char,
+) -> *mut c_char {
+    let Some((start_date, end_date)) = read_date_pair(start_date, end_date) else {
+        return err_json("INVALID_ARGUMENT", "invalid date range");
+    };
+    let project_id = match optional_c_str(project_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("invalid project id: {error}")),
+    };
+    match with_app_service(|svc| {
+        svc.get_starmap_stats_json(&start_date, &end_date, project_id.as_deref())
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
+        Err(error) => err_json("UNKNOWN_ERROR", &error),
+    }
+}
+
+/// 回放星图手写证明。`request_json` 为 `StarMapReplayRequest` 的 camelCase JSON。
+///
+/// # Safety
+/// `request_json` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串。
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_replay_starmap_proof_json(
+    request_json: *const c_char,
+) -> *mut c_char {
+    let request_json = match c_str_to_rust(request_json) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &error.to_string()),
+    };
+    match with_app_service(|svc| {
+        svc.replay_starmap_proof_json(request_json)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
+        Err(error) => err_json("UNKNOWN_ERROR", &error),
+    }
+}
+
+/// 导出星图证明包。包含历史图结构，UI 必须先提示用户。
+///
+/// # Safety
+/// `starmap_id` / `device_id` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串。
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_export_starmap_proof_json(
+    starmap_id: *const c_char,
+    device_id: *const c_char,
+) -> *mut c_char {
+    let starmap_id = match c_str_to_rust(starmap_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &error.to_string()),
+    };
+    let device_id = match c_str_to_rust(device_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &error.to_string()),
+    };
+    match with_app_service(|svc| {
+        svc.export_starmap_proof_json(starmap_id, device_id)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
+        Err(error) => err_json("UNKNOWN_ERROR", &error),
+    }
+}
+
+/// 列出某设备/星图分支的回放检查点。
+///
+/// # Safety
+/// `device_id` / `starmap_id` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串。
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_list_starmap_proof_checkpoints_json(
+    device_id: *const c_char,
+    starmap_id: *const c_char,
+) -> *mut c_char {
+    let device_id = match c_str_to_rust(device_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &error.to_string()),
+    };
+    let starmap_id = match c_str_to_rust(starmap_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &error.to_string()),
+    };
+    match with_app_service(|svc| {
+        svc.list_starmap_proof_checkpoints_json(device_id, starmap_id)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
+        Err(error) => err_json("UNKNOWN_ERROR", &error),
+    }
+}
+
 /// 上报一段平台已测量的前台写作计时切片。
 ///
 /// # Safety

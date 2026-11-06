@@ -1957,6 +1957,23 @@ Item {
         }
     }
 
+    // Issue #1036：星图创作记录 / 手写证明入口。只读回放 Core 历史图状态。
+    ToolButton {
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 16
+        z: 50
+        text: qsTr("创作记录")
+        icon.name: "document-open-recent"
+        onClicked: starmapProofDialog.openFor(canvasArea.currentStarmapId || canvasArea.starmapId)
+    }
+
+    StarMapProofReplayDialog {
+        id: starmapProofDialog
+        dt: canvasArea.dt
+        starmapBackendRef: canvasArea.starmapBackendRef
+    }
+
     // Issue #801 评论 5894639734: 触屏缩放 +/- 按钮（右下角浮层）。
     RowLayout {
         anchors.right: parent.right

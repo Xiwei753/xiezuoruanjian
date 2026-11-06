@@ -249,9 +249,8 @@ impl WriterCoreApi {
             return self.mcp_starmap_subtree_ids(project_id, root_starmap_id);
         }
 
-        let project_id = project_id.ok_or_else(|| {
-            invalid("MCP session has no authorized project or starmap scope")
-        })?;
+        let project_id = project_id
+            .ok_or_else(|| invalid("MCP session has no authorized project or starmap scope"))?;
         if !self
             .list_projects()?
             .iter()
@@ -419,15 +418,16 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         let context = crate::writing_stats::current_mutation_context();
-        self.record_contribution_event_with_context(
+        self.record_starmap_meta_with_context(
             &context,
-            project_id,
-            crate::writing_stats::ContributionObjectType::StarMap,
+            Some(project_id),
             &meta.starmap_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            None,
-            Some(Self::starmap_meta_snapshot(&meta)),
+            Some(&meta),
+            crate::starmap::load_index(&self.app_data_root)
+                .ok()
+                .map(|index| index.root_starmap_ids),
         )?;
         // 模板可能已经生成节点/边/嵌入/链接，逐个记录来源，保持与
         // `create_starmap` 相同的统计口径。

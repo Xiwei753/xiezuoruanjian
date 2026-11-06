@@ -123,6 +123,9 @@ Rectangle {
                         starmapContextMenu.starmapTitle = smTitle
                         starmapContextMenu.popup()
                     }
+                    onProofRequested: function(smId, smTitle) {
+                        starMapProofDialog.openFor(smId)
+                    }
                 }
 
                 DropArea {
@@ -342,5 +345,11 @@ Rectangle {
                 }
             }
         }
+    }
+
+    StarMapProofReplayDialog {
+        id: starMapProofDialog
+        dt: root.dt
+        starmapBackendRef: root.starmapBackendRef
     }
 }

@@ -13,6 +13,8 @@ use std::cell::RefCell;
 use serde::{Deserialize, Serialize};
 use similar::{capture_diff_slices, Algorithm, DiffOp};
 
+use crate::writing_stats::starmap_proof::StarMapProofDelta;
+
 /// 对象修改的真实操作者。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -296,6 +298,16 @@ pub struct ContributionEvent {
     pub text_before: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_after: Option<String>,
+    /// 星图回放增量格式版本。旧 JSONL 没有该字段时视为无回放数据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_format_version: Option<u32>,
+    /// 同一业务事务内星图操作的稳定顺序（0 起）。回放按它还原真实操作
+    /// 次序，不以时间戳重排。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_order: Option<u32>,
+    /// 星图对象的完整前后状态；正文/注释事件保持 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_delta: Option<StarMapProofDelta>,
 }
 
 impl ContributionEvent {
@@ -349,7 +361,27 @@ impl ContributionEvent {
             modified_chars: modified,
             text_before: before.and_then(|snapshot| snapshot.text),
             text_after: after.and_then(|snapshot| snapshot.text),
+            replay_format_version: None,
+            replay_order: None,
+            replay_delta: None,
         }
+    }
+
+    /// 附加星图回放增量。`order` 是同事务内的稳定顺序；大于 0 时把顺序
+    /// 写进 event_id，避免同一事务里同对象多次操作被幂等去重误删。
+    pub fn attach_replay(&mut self, delta: StarMapProofDelta, order: Option<u32>) {
+        self.replay_format_version = Some(delta.format_version);
+        self.replay_order = order;
+        if let Some(order) = order {
+            if order > 0 {
+                self.event_id = format!("{}:r{}", self.event_id, order);
+            }
+        }
+        self.replay_delta = Some(delta);
+    }
+
+    pub fn has_replay(&self) -> bool {
+        self.replay_delta.is_some()
     }
 
     pub fn is_textual(&self) -> bool {

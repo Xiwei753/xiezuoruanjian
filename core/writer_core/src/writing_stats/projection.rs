@@ -1723,6 +1723,218 @@ fn add_retained_chars(result: &mut ContributionStatsAgg, object_type: &str, acto
     result.retained_total_chars += 1;
 }
 
+/// 星图统计的展示元数据（来自当前真实 meta，不来自事件推断）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StarMapStatsMeta {
+    pub starmap_id: String,
+    pub project_id: Option<String>,
+    pub title: String,
+}
+
+/// 一张星图的统计投影。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapStatsRecordAgg {
+    pub starmap_id: String,
+    pub project_id: Option<String>,
+    pub title: String,
+    pub current_chars: u64,
+    pub inserted_chars: u64,
+    pub deleted_chars: u64,
+    pub modified_chars: u64,
+    pub node_operations: u64,
+    pub edge_operations: u64,
+    pub embed_operations: u64,
+    pub link_operations: u64,
+    pub total_operations: u64,
+    pub human_operations: u64,
+    pub ai_operations: u64,
+    pub active_seconds: u64,
+}
+
+/// 星图整体统计。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapStatsAgg {
+    pub records: Vec<StarMapStatsRecordAgg>,
+    pub current_chars: u64,
+    pub inserted_chars: u64,
+    pub deleted_chars: u64,
+    pub modified_chars: u64,
+    pub total_operations: u64,
+    pub human_operations: u64,
+    pub ai_operations: u64,
+    pub active_seconds: u64,
+}
+
+fn event_local_date(event: &ContributionEvent) -> String {
+    if !event.local_date.is_empty() {
+        return event.local_date.clone();
+    }
+    calendar::local_date_at(event.occurred_at_ms).unwrap_or_default()
+}
+
+/// 投影星图历史操作量、当前保留文字和真实前台时长。
+///
+/// 星图时长只来自 `WritingActivitySegment.target = StarMap`；同一设备重叠
+/// 切片先按秒去重，跨设备相加。引用/嵌入不重复累计被引用节点的文字。
+pub fn project_starmap_stats(
+    events: &[ContributionEvent],
+    segments: &[WritingActivitySegment],
+    current_texts: &[CurrentTextSnapshot],
+    metas: &[StarMapStatsMeta],
+    start_date: &str,
+    end_date: &str,
+    project_id: Option<&str>,
+) -> StarMapStatsAgg {
+    let mut records: BTreeMap<String, StarMapStatsRecordAgg> = BTreeMap::new();
+    let mut meta_project: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+    for meta in metas {
+        if project_id.is_some_and(|value| meta.project_id.as_deref() != Some(value)) {
+            continue;
+        }
+        meta_project.insert(meta.starmap_id.as_str(), meta.project_id.as_deref());
+        records.insert(
+            meta.starmap_id.clone(),
+            StarMapStatsRecordAgg {
+                starmap_id: meta.starmap_id.clone(),
+                project_id: meta.project_id.clone(),
+                title: meta.title.clone(),
+                ..StarMapStatsRecordAgg::default()
+            },
+        );
+    }
+
+    for event in events {
+        let date = event_local_date(event);
+        if date.is_empty() || date.as_str() < start_date || date.as_str() > end_date {
+            continue;
+        }
+        let starmap_id =
+            if event.object_type == crate::writing_stats::ContributionObjectType::StarMap {
+                event.object_id.as_str()
+            } else {
+                match event.container_id.as_deref() {
+                    Some(value) => value,
+                    None => continue,
+                }
+            };
+        let Some(record) = records.get_mut(starmap_id) else {
+            continue;
+        };
+        record.inserted_chars += u64::from(event.inserted_chars);
+        record.deleted_chars += u64::from(event.deleted_chars);
+        record.modified_chars += u64::from(event.modified_chars);
+        record.total_operations += 1;
+        match event.object_type {
+            crate::writing_stats::ContributionObjectType::StarMapNode => {
+                record.node_operations += 1;
+            }
+            crate::writing_stats::ContributionObjectType::StarMapEdge => {
+                record.edge_operations += 1;
+            }
+            crate::writing_stats::ContributionObjectType::StarMapEmbed => {
+                record.embed_operations += 1;
+            }
+            crate::writing_stats::ContributionObjectType::StarMapLink => {
+                record.link_operations += 1;
+            }
+            _ => {}
+        }
+        match event.actor {
+            MutationActor::Human => record.human_operations += 1,
+            MutationActor::Ai => record.ai_operations += 1,
+            MutationActor::Unknown | MutationActor::System => {}
+        }
+    }
+
+    for snapshot in current_texts {
+        let Some(container_id) = snapshot.container_id.as_deref() else {
+            continue;
+        };
+        let Some(record) = records.get_mut(container_id) else {
+            continue;
+        };
+        if meta_project
+            .get(container_id)
+            .and_then(|value| *value)
+            .is_some_and(|project| {
+                !snapshot.project_id.is_empty() && snapshot.project_id != project
+            })
+        {
+            continue;
+        }
+        record.current_chars += snapshot.text.chars().count() as u64;
+    }
+
+    // 同一设备的重叠切片取并集，跨设备相加；星图切换/心跳的切片不会重复计时。
+    let mut intervals: BTreeMap<(&str, &str), Vec<(i64, i64)>> = BTreeMap::new();
+    for segment in segments {
+        let Some(starmap_id) = segment.star_map_id() else {
+            continue;
+        };
+        if !records.contains_key(starmap_id) {
+            continue;
+        }
+        let date = segment.business_date();
+        if date.is_empty() || date.as_str() < start_date || date.as_str() > end_date {
+            continue;
+        }
+        intervals
+            .entry((starmap_id, segment.device_id.as_str()))
+            .or_default()
+            .push((segment.start_at_ms, segment.end_at_ms));
+    }
+    for ((starmap_id, _device), mut ranges) in intervals {
+        ranges.sort_unstable();
+        let mut merged_ms = 0i64;
+        let mut current: Option<(i64, i64)> = None;
+        for (start, end) in ranges {
+            if end <= start {
+                continue;
+            }
+            match current {
+                Some((current_start, current_end)) if start <= current_end => {
+                    current = Some((current_start, current_end.max(end)));
+                }
+                Some((current_start, current_end)) => {
+                    merged_ms += current_end - current_start;
+                    current = Some((start, end));
+                }
+                None => current = Some((start, end)),
+            }
+        }
+        if let Some((start, end)) = current {
+            merged_ms += end - start;
+        }
+        if let Some(record) = records.get_mut(starmap_id) {
+            record.active_seconds += (merged_ms / 1000) as u64;
+        }
+    }
+
+    let mut records: Vec<StarMapStatsRecordAgg> = records.into_values().collect();
+    records.sort_by(|left, right| {
+        right
+            .current_chars
+            .cmp(&left.current_chars)
+            .then_with(|| left.title.cmp(&right.title))
+            .then_with(|| left.starmap_id.cmp(&right.starmap_id))
+    });
+    let mut summary = StarMapStatsAgg::default();
+    for record in &records {
+        summary.current_chars += record.current_chars;
+        summary.inserted_chars += record.inserted_chars;
+        summary.deleted_chars += record.deleted_chars;
+        summary.modified_chars += record.modified_chars;
+        summary.total_operations += record.total_operations;
+        summary.human_operations += record.human_operations;
+        summary.ai_operations += record.ai_operations;
+        summary.active_seconds += record.active_seconds;
+    }
+    summary.records = records;
+    summary
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

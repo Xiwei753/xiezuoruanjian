@@ -17,6 +17,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -27,6 +29,10 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.core.designsystem.component.SujianCard
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.time.LocalDate
 
 /**
  * #618 六：统计页 UI。
@@ -49,11 +55,28 @@ fun StatsScreen(modifier: Modifier = Modifier) {
         vm.refreshIfNeeded()
     }
 
+    // Issue #1036：星图创作也进入统一统计。正文与星图分开显示，但共用同一
+    // 时间范围；端侧只展示 Core 返回的数字，不重算操作/字数/时长。
+    val starMapStatsJson by produceState<String?>(initialValue = null, deps.statsRepository) {
+        val today = LocalDate.now()
+        value = withContext(Dispatchers.IO) {
+            deps.statsRepository.getStarMapStats(
+                startDate = today.minusDays(29).toString(),
+                endDate = today.toString(),
+                projectId = null,
+            )
+        }
+    }
+
     if (uiState.loading) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
         }
         return
+    }
+
+    val starMapStats = remember(starMapStatsJson) {
+        starMapStatsJson?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
     }
 
     LazyColumn(
@@ -132,6 +155,41 @@ fun StatsScreen(modifier: Modifier = Modifier) {
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
                             )
+                        }
+                    }
+                }
+            }
+        }
+
+        starMapStats?.let { stats ->
+            item {
+                SujianCard(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = dims.space12),
+                ) {
+                    Column(modifier = Modifier.padding(dims.space16)) {
+                        Text("星图创作（近 30 天）", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "星图当前文字 ${stats.optLong("currentChars")} 字 · "
+                                + "操作 ${stats.optLong("totalOperations")} 次",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "人工 ${stats.optLong("humanOperations")} · "
+                                + "AI ${stats.optLong("aiOperations")} · "
+                                + "前台 ${formatDuration(stats.optLong("activeSeconds"), context)}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        val starMaps = stats.optJSONArray("starmaps")
+                        if (starMaps != null) {
+                            for (index in 0 until minOf(3, starMaps.length())) {
+                                val mapItem = starMaps.optJSONObject(index) ?: continue
+                                Text(
+                                    "${mapItem.optString("title")} · "
+                                        + "${mapItem.optLong("currentChars")} 字 · "
+                                        + "${mapItem.optLong("totalOperations")} 次",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                         }
                     }
                 }

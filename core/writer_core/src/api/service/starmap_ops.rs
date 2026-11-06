@@ -69,14 +69,16 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_contribution_event(
-            project_id.as_deref().unwrap_or_default(),
-            crate::writing_stats::ContributionObjectType::StarMap,
+        self.record_starmap_meta_with_context(
+            &crate::writing_stats::current_mutation_context(),
+            project_id.as_deref(),
             &starmap_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            None,
-            Some(Self::starmap_meta_snapshot(&value)),
+            self.core_write().get_starmap(&starmap_id).ok().as_ref(),
+            crate::starmap::load_index(&self.app_data_root)
+                .ok()
+                .map(|index| index.root_starmap_ids),
         )?;
         self.commit_contribution_batch(&mut contribution_batch)?;
         self.finish_starmap_contribution_transaction(&starmap_id, &mut contribution_txn)?;
@@ -297,15 +299,14 @@ impl WriterCoreApi {
         });
 
         let context = crate::writing_stats::current_mutation_context();
-        self.record_contribution_event_with_context(
+        self.record_starmap_meta_with_context(
             &context,
-            project_id.as_deref().unwrap_or_default(),
-            crate::writing_stats::ContributionObjectType::StarMap,
+            project_id.as_deref(),
             &starmap_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
+            Some(&starmap_meta),
             None,
-            Some(Self::starmap_meta_snapshot(&starmap_meta)),
         )?;
         let after = self.get_starmap_graph_snapshot(host_starmap_id);
         self.record_starmap_object_with_context(
@@ -405,6 +406,7 @@ impl WriterCoreApi {
             instance_id,
         )?;
         let project_id = get_starmap_project_id(self, starmap_id);
+        let trajectory = patch.trajectory.clone();
         let result = self
             .core_write()
             .update_starmap_embed(
@@ -414,7 +416,9 @@ impl WriterCoreApi {
             )
             .map_err(WriterError::from)?;
         let after = self.get_starmap_graph_snapshot(starmap_id);
-        self.record_starmap_object(
+        let context = crate::writing_stats::current_mutation_context();
+        self.record_starmap_object_with_context_and_trajectory(
+            &context,
             project_id.as_deref(),
             starmap_id,
             crate::writing_stats::ContributionObjectType::StarMapEmbed,
@@ -422,6 +426,7 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Update,
             before.as_ref(),
             after.as_ref(),
+            &trajectory,
         )?;
         let entry = crate::search::extractor::extract_starmap_embed_entry(
             starmap_id,
@@ -797,15 +802,19 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         let context = crate::writing_stats::current_mutation_context();
-        self.record_contribution_event_with_context(
+        self.record_starmap_meta_with_context(
             &context,
-            project_id.unwrap_or(""),
-            crate::writing_stats::ContributionObjectType::StarMap,
+            project_id,
             &result.starmap_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            None,
-            Some(Self::starmap_meta_snapshot(&result)),
+            self.core_write()
+                .get_starmap(&result.starmap_id)
+                .ok()
+                .as_ref(),
+            crate::starmap::load_index(&self.app_data_root)
+                .ok()
+                .map(|index| index.root_starmap_ids),
         )?;
         if let Some(graph) = self.get_starmap_graph_snapshot(&result.starmap_id) {
             for node in &graph.nodes {
@@ -945,11 +954,7 @@ impl WriterCoreApi {
             .join(format!("{}.meta.json", starmap_id))])?;
         self.register_starmap_history_journal(&mut contribution_txn, &history_token)?;
         //   用 _with_changes 版本记录本地历史。
-        let before = self
-            .core_write()
-            .get_starmap(starmap_id)
-            .ok()
-            .map(|meta| Self::starmap_meta_snapshot(&meta));
+        let before_meta = self.core_write().get_starmap(starmap_id).ok();
         let (result, change_set) = self
             .core_write()
             .rename_starmap_with_changes(starmap_id, new_title)
@@ -973,15 +978,14 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        let after = Self::starmap_meta_snapshot(&result);
-        self.record_contribution_event(
-            project_id.as_deref().unwrap_or_default(),
-            crate::writing_stats::ContributionObjectType::StarMap,
+        self.record_starmap_meta_with_context(
+            &crate::writing_stats::current_mutation_context(),
+            project_id.as_deref(),
             starmap_id,
             crate::writing_stats::ContributionOperation::Update,
+            before_meta.as_ref(),
+            self.core_write().get_starmap(starmap_id).ok().as_ref(),
             None,
-            before,
-            Some(after),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         if let Err(e) = history_journal.mark_local_applied(&self.app_data_root) {
@@ -1022,7 +1026,6 @@ impl WriterCoreApi {
             .as_ref()
             .and_then(|meta| meta.project_id.clone())
             .unwrap_or_default();
-        let before_snapshot = before_meta.as_ref().map(Self::starmap_meta_snapshot);
         let before_graph = self.get_starmap_graph_snapshot(starmap_id);
         let device_id = crate::settings::load_device_info(&self.app_data_root)
             .map(|i| i.device_id)
@@ -1092,15 +1095,16 @@ impl WriterCoreApi {
             self.remove_search_index_by_prefix(prefix);
         }
         let context = crate::writing_stats::current_mutation_context();
-        self.record_contribution_event_with_context(
+        self.record_starmap_meta_with_context(
             &context,
-            &contribution_project,
-            crate::writing_stats::ContributionObjectType::StarMap,
+            Some(&contribution_project),
             starmap_id,
             crate::writing_stats::ContributionOperation::Delete,
+            before_meta.as_ref(),
             None,
-            before_snapshot,
-            None,
+            crate::starmap::load_index(&self.app_data_root)
+                .ok()
+                .map(|index| index.root_starmap_ids),
         )?;
         if let Some(graph) = before_graph {
             for node in &graph.nodes {
@@ -1292,14 +1296,14 @@ impl WriterCoreApi {
                 });
             }
         }
-        self.record_contribution_event(
-            project_id,
-            crate::writing_stats::ContributionObjectType::StarMap,
+        self.record_starmap_meta_with_context(
+            &crate::writing_stats::current_mutation_context(),
+            Some(project_id),
             starmap_id,
             crate::writing_stats::ContributionOperation::Link,
+            before_meta.as_ref(),
+            Some(&meta),
             None,
-            before_meta.as_ref().map(Self::starmap_meta_snapshot),
-            Some(Self::starmap_meta_snapshot(&meta)),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         if let Err(e) = history_journal.mark_local_applied(&self.app_data_root) {
@@ -1443,14 +1447,14 @@ impl WriterCoreApi {
             .as_ref()
             .and_then(|meta| meta.project_id.clone())
             .unwrap_or_default();
-        self.record_contribution_event(
-            &contribution_project,
-            crate::writing_stats::ContributionObjectType::StarMap,
+        self.record_starmap_meta_with_context(
+            &crate::writing_stats::current_mutation_context(),
+            Some(&contribution_project),
             starmap_id,
             crate::writing_stats::ContributionOperation::Unlink,
+            before_meta.as_ref(),
+            Some(&meta),
             None,
-            before_meta.as_ref().map(Self::starmap_meta_snapshot),
-            Some(Self::starmap_meta_snapshot(&meta)),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         if let Err(e) = history_journal.mark_local_applied(&self.app_data_root) {
@@ -1596,36 +1600,26 @@ impl WriterCoreApi {
         )?;
         let context = crate::writing_stats::current_mutation_context();
         if let Some(previous) = previous.filter(|meta| meta.starmap_id != starmap_id) {
-            let before = self
-                .core_write()
-                .get_starmap(&previous.starmap_id)
-                .ok()
-                .map(|meta| Self::starmap_meta_snapshot(&meta));
-            self.record_contribution_event_with_context(
+            let before = self.core_write().get_starmap(&previous.starmap_id).ok();
+            self.record_starmap_meta_with_context(
                 &context,
-                project_id,
-                crate::writing_stats::ContributionObjectType::StarMap,
+                Some(project_id),
                 &previous.starmap_id,
                 crate::writing_stats::ContributionOperation::Unlink,
+                before.as_ref(),
                 None,
-                before,
                 None,
             )?;
         }
-        let after = self
-            .core_write()
-            .get_starmap(starmap_id)
-            .ok()
-            .map(|meta| Self::starmap_meta_snapshot(&meta));
-        self.record_contribution_event_with_context(
+        let after = self.core_write().get_starmap(starmap_id).ok();
+        self.record_starmap_meta_with_context(
             &context,
-            project_id,
-            crate::writing_stats::ContributionObjectType::StarMap,
+            Some(project_id),
             starmap_id,
             crate::writing_stats::ContributionOperation::Link,
             None,
+            after.as_ref(),
             None,
-            after,
         )?;
         self.commit_contribution_batch(&mut contribution_batch)?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
@@ -1684,6 +1678,7 @@ impl WriterCoreApi {
             "node",
             node_id,
         )?;
+        let trajectory = patch.trajectory.clone();
         let result = self
             .core_write()
             .update_starmap_node(
@@ -1710,7 +1705,9 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         let after = self.get_starmap_graph_snapshot(starmap_id);
-        self.record_starmap_object(
+        let context = crate::writing_stats::current_mutation_context();
+        self.record_starmap_object_with_context_and_trajectory(
+            &context,
             project_id.as_deref(),
             starmap_id,
             crate::writing_stats::ContributionObjectType::StarMapNode,
@@ -1718,6 +1715,7 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Update,
             before.as_ref(),
             after.as_ref(),
+            &trajectory,
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())

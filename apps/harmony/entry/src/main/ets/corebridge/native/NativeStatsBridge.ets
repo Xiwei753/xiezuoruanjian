@@ -241,6 +241,34 @@ export class NativeStatsBridge {
     } catch (e) { return nativeError<boolean>(e) }
   }
 
+  // Issue #1036：星图统计（当前文字、操作来源、真实星图时长）。
+  async getStarMapStats(startDate: string, endDate: string, projectId: string | null): Promise<ResultEnvelope<Object>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeGetStarMapStats(startDate, endDate, projectId)
+      return this.core.parseRawEnvelope(jsonStr)
+    } catch (e) { return nativeError<Object>(e) }
+  }
+
+  // Issue #1036：星图手写证明回放。请求/响应均为 Core JSON。
+  async replayStarMapProof(requestJson: string): Promise<ResultEnvelope<Object>> {
+    try {
+      const blocked = await this.statsWritesBlocked<Object>()
+      if (blocked !== null) return blocked
+      const jsonStr: string = this.core.getNativeModule().nativeReplayStarMapProof(requestJson)
+      return this.core.parseRawEnvelope(jsonStr)
+    } catch (e) { return nativeError<Object>(e) }
+  }
+
+  // Issue #1036：导出星图证明包。包含历史图结构，调用方必须先提示用户。
+  async exportStarMapProof(starMapId: string, deviceId: string): Promise<ResultEnvelope<Object>> {
+    try {
+      const blocked = await this.statsWritesBlocked<Object>()
+      if (blocked !== null) return blocked
+      const jsonStr: string = this.core.getNativeModule().nativeExportStarMapProof(starMapId, deviceId)
+      return this.core.parseRawEnvelope(jsonStr)
+    } catch (e) { return nativeError<Object>(e) }
+  }
+
   async calculateWordCount(text: string): Promise<number> {
     if (!this.isInitialized) { return -1 }
     try {

@@ -1060,12 +1060,12 @@ Item {
         var ny = ic.moveY
         var committed = false
         if (kind === "node" && id !== "") {
-            committed = graphController.commitNodeMove(id, nx, ny)
+            committed = graphController.commitNodeMove(id, nx, ny, ic.moveTrajectory)
             logInteraction("move_end", "node", id, {
                 "toX": nx, "toY": ny, "commitSuccess": committed
             })
         } else if (kind === "embed" && id !== "") {
-            committed = graphController.commitEmbedMove(id, nx, ny)
+            committed = graphController.commitEmbedMove(id, nx, ny, ic.moveTrajectory)
             logInteraction("move_end", "embed", id, {
                 "toX": nx, "toY": ny, "commitSuccess": committed
             })

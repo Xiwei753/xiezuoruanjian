@@ -15,6 +15,10 @@ use crate::storage::atomic_write_string;
 use crate::writing_stats::contribution::{
     ContributionEvent, ContributionObjectType, ContributionOperation, MutationActor,
 };
+use crate::writing_stats::starmap_checkpoint::{
+    append_starmap_checkpoint, has_starmap_checkpoints, StarMapProofCheckpoint,
+    CHECKPOINT_REASON_BASELINE_INCOMPLETE,
+};
 
 const EVENTS_ROOT: &str = "stats/events";
 const PENDING_ROOT: &str = "stats/pending/contributions";
@@ -35,6 +39,10 @@ impl ContributionStore {
 
     fn events_root(&self) -> PathBuf {
         self.app_data_root.join(EVENTS_ROOT)
+    }
+
+    pub fn app_data_root(&self) -> &Path {
+        &self.app_data_root
     }
 
     fn event_file_path(&self, origin: &str, date: &str) -> PathBuf {
@@ -91,6 +99,7 @@ impl ContributionStore {
             .unwrap_or_default();
         let pending_path = self.pending_file_path(&transaction_id, prepared.len());
         self.write_pending(&pending_path, &prepared)?;
+        self.persist_baseline_checkpoints(&prepared);
 
         let mut by_date: BTreeMap<String, Vec<ContributionEvent>> = BTreeMap::new();
         for event in prepared {
@@ -209,7 +218,7 @@ impl ContributionStore {
             }
             let mut existing = read_ids(&path)?;
             let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-            for event in events {
+            for event in &events {
                 if !event.event_id.is_empty() && existing.contains(&event.event_id) {
                     continue;
                 }
@@ -219,7 +228,49 @@ impl ContributionStore {
                 }
             }
         }
+        let all_events: Vec<ContributionEvent> = events.to_vec();
+        self.persist_baseline_checkpoints(&all_events);
         Ok(())
+    }
+
+    /// 第一次在旧星图上记录回放事件时落一条真实基线检查点。
+    ///
+    /// 基线明确标记历史不完整：旧星图不是从空白创建出来的，回放不能伪造
+    /// 更早的过程。检查点按位置 0 幂等写入，重复调用不会覆盖。
+    fn persist_baseline_checkpoints(&self, events: &[ContributionEvent]) {
+        for event in events {
+            let Some(delta) = event.replay_delta.as_ref() else {
+                continue;
+            };
+            let Some(baseline) = delta.baseline.as_ref() else {
+                continue;
+            };
+            if delta.starmap_id.is_empty() {
+                continue;
+            }
+            let device_id = if event.origin_device_id.is_empty() {
+                match self.resolve_origin_device_id() {
+                    Ok(id) => id,
+                    Err(_) => continue,
+                }
+            } else {
+                event.origin_device_id.clone()
+            };
+            if has_starmap_checkpoints(&self.app_data_root, &device_id, &delta.starmap_id) {
+                continue;
+            }
+            let checkpoint = StarMapProofCheckpoint::new(
+                &delta.starmap_id,
+                &device_id,
+                0,
+                baseline.state(),
+                CHECKPOINT_REASON_BASELINE_INCOMPLETE,
+                false,
+            );
+            if let Err(error) = append_starmap_checkpoint(&self.app_data_root, &checkpoint) {
+                log::warn!("failed to persist starmap baseline checkpoint: {error}");
+            }
+        }
     }
 
     pub fn load_all_events(&self) -> Result<Vec<ContributionEvent>> {

@@ -119,6 +119,10 @@ QtObject {
     // move 模式当前临时坐标（拖动期间未提交的显示位置）
     property real moveX: 0
     property real moveY: 0
+    // Issue #1036：本次拖动的有界轨迹关键点，释放时随一次业务操作提交。
+    property var moveTrajectory: []
+    property real moveTrajectoryStartedAtMs: 0
+    property real moveTrajectoryLastAtMs: 0
 
     // ── 按下仲裁 ──
     // 只在 idle 受理按下。登记归属和坐标，不移动也不连线。
@@ -164,6 +168,9 @@ QtObject {
         moveTargetPath = targetPath
         moveX = startX
         moveY = startY
+        moveTrajectory = []
+        moveTrajectoryStartedAtMs = Date.now()
+        moveTrajectoryLastAtMs = moveTrajectoryStartedAtMs
         return true
     }
 
@@ -368,6 +375,9 @@ QtObject {
         moveTargetPath = targetPath
         moveX = startX
         moveY = startY
+        moveTrajectory = []
+        moveTrajectoryStartedAtMs = Date.now()
+        moveTrajectoryLastAtMs = moveTrajectoryStartedAtMs
         return true
     }
     function updateMove(x, y) {
@@ -375,6 +385,21 @@ QtObject {
             return
         moveX = x
         moveY = y
+        var now = Date.now()
+        var last = moveTrajectory.length > 0
+                   ? moveTrajectory[moveTrajectory.length - 1] : null
+        // 有界压缩：只保留方向变化/足够间隔的关键点，最多 64 个。
+        if (!last || Math.hypot(x - last.x, y - last.y) >= 6
+                || now - moveTrajectoryLastAtMs >= 80) {
+            moveTrajectory.push({
+                x: x,
+                y: y,
+                offsetMs: Math.max(0, now - moveTrajectoryStartedAtMs)
+            })
+            if (moveTrajectory.length > 64)
+                moveTrajectory.shift()
+            moveTrajectoryLastAtMs = now
+        }
     }
     function endMove() {
         pressTimerActive = false
@@ -385,6 +410,7 @@ QtObject {
         moveTargetPath = null
         moveX = 0
         moveY = 0
+        moveTrajectory = []
     }
 
     // ── 视觉查询（Node / Embed 动画绑定用）──

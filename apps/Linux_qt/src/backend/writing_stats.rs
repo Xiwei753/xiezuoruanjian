@@ -59,12 +59,14 @@ impl AppBackend {
             return Ok(());
         };
         for segment in segments {
+            let starmap_id = segment.star_map_id().unwrap_or_default().to_string();
             let input = writer_core::api::WritingActivitySegmentInputDto {
                 event_id: segment.event_id,
                 platform: "linux".to_string(),
                 project_id: segment.project_id,
                 volume_id: segment.volume_id,
                 chapter_id: segment.chapter_id,
+                starmap_id,
                 session_id: segment.session_id,
                 start_at_ms: segment.start_at_ms,
                 end_at_ms: segment.end_at_ms,
@@ -78,6 +80,41 @@ impl AppBackend {
             }
         }
         Ok(())
+    }
+
+    /// 星图第一次真实人工操作：开始/切换星图前台计时。
+    ///
+    /// 只有平台 UI 的成功写操作会调用；后台 MCP 写入不会走到这里，因此不能
+    /// 冒充人工创作时间。星图没有所属项目时仍进入全局汇总。
+    pub(crate) fn note_human_starmap_operation(&self, starmap_id: &str) {
+        if starmap_id.is_empty() {
+            return;
+        }
+        let project_id = self
+            .core_api()
+            .and_then(|api| api.get_starmap(starmap_id).ok())
+            .and_then(|meta| meta.project_id);
+        let segments = {
+            let mut session = self
+                .writing_session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if !session.foreground {
+                return;
+            }
+            let mono_ms = session.now_mono_ms();
+            let wall_ms = LinuxWritingSession::now_wall_ms();
+            session.clock.on_first_human_starmap_operation(
+                mono_ms,
+                wall_ms,
+                project_id.as_deref(),
+                starmap_id,
+                "",
+                writer_core::writing_stats::Platform::Desktop,
+                "",
+            )
+        };
+        self.enqueue_writing_activity_segments(segments);
     }
 
     /// Issue #981：首次人工输入开始计时；暂停后再次输入恢复计时。
@@ -412,6 +449,48 @@ impl AppBackend {
             Ok(value) => qjson_object_from_json(&value),
             Err(error) => {
                 self.debug_error("stats", "export_chapter_proof_failed", &error.to_string());
+                qjson_object_from_json(&format!(
+                    "{{\"error\":\"{}\"}}",
+                    error.to_string().replace('\\', "\\\\").replace('"', "\\\"")
+                ))
+            }
+        }
+    }
+
+    /// 星图手写证明回放：按 starmapId + deviceId + position 取 Core 历史图状态。
+    pub(crate) fn replay_starmap_proof_object(&self, request_json: QString) -> QJsonObject {
+        let Some(core) = self.core_api() else {
+            return QJsonObject::default();
+        };
+        match core.replay_starmap_proof_json(&request_json.to_string()) {
+            Ok(value) => qjson_object_from_json(&value),
+            Err(error) => {
+                self.debug_error(
+                    "stats",
+                    "replay_starmap_proof_failed",
+                    &error.to_string(),
+                );
+                qjson_object_from_json(&format!(
+                    "{{\"valid\":false,\"errors\":[\"{}\"]}}",
+                    error.to_string().replace('\\', "\\\\").replace('"', "\\\"")
+                ))
+            }
+        }
+    }
+
+    /// 导出星图证明包；包含历史图结构，UI 必须先提示用户。
+    pub(crate) fn export_starmap_proof_object(
+        &self,
+        starmap_id: QString,
+        device_id: QString,
+    ) -> QJsonObject {
+        let Some(core) = self.core_api() else {
+            return QJsonObject::default();
+        };
+        match core.export_starmap_proof_json(&starmap_id.to_string(), &device_id.to_string()) {
+            Ok(value) => qjson_object_from_json(&value),
+            Err(error) => {
+                self.debug_error("stats", "export_starmap_proof_failed", &error.to_string());
                 qjson_object_from_json(&format!(
                     "{{\"error\":\"{}\"}}",
                     error.to_string().replace('\\', "\\\\").replace('"', "\\\"")

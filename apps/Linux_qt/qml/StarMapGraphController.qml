@@ -124,6 +124,14 @@ QtObject {
 
     function clearError() { errorMessage = ""; }
 
+    // Issue #1036：星图成功写操作是真实人工前台活动的起点；纯加载/相机
+    // 平移缩放不调用这里，也不会产生创作时长。
+    function noteHumanActivity() {
+        if (starmapId !== "" && starmapBackendRef
+                && starmapBackendRef.note_starmap_operation)
+            starmapBackendRef.note_starmap_operation(starmapId)
+    }
+
     function pollWorkspaceChanges() {
         if (!starmapBackendRef || starmapId === "") return
         var res = normalizeBackendResult(starmapBackendRef.workspace_changes_since_json(_workspaceEventOffset), "")
@@ -649,6 +657,7 @@ QtObject {
         var res = normalizeBackendResult(starmapBackendRef.create_starmap_node(starmapId, title, "Note", wx, wy), qsTr("创建节点失败"));
         if (res.success) {
             clearError();
+            noteHumanActivity();
             loadGraph(true);
             selectNode(res.data.id);
             structureChanged();
@@ -662,6 +671,7 @@ QtObject {
         var res = normalizeBackendResult(starmapBackendRef.create_starmap_edge(starmapId, fromId, toId, "RelatedTo", ""), qsTr("创建连线失败"));
         if (res.success) {
             clearError();
+            noteHumanActivity();
             loadGraph(true);
         } else {
             setError(backendErrorText(res, qsTr("创建连线失败")));
@@ -687,6 +697,7 @@ QtObject {
         );
         if (res.success) {
             clearError();
+            noteHumanActivity();
             loadGraph(true);
             return true;
         } else {
@@ -709,7 +720,8 @@ QtObject {
             var updated = res.data;
             if (!updated || updated.id !== nodeId) {
                 // 返回结构不可用时退回全量加载，仍然不能只改 title。
-                loadGraph(true);
+            noteHumanActivity();
+            loadGraph(true);
                 if (graphData === null)
                     return { success: false, message: errorMessage || qsTr("更新节点失败") }
                 structureChanged()
@@ -742,6 +754,7 @@ QtObject {
         var res = normalizeBackendResult(starmapBackendRef.delete_starmap_node(starmapId, nodeId, revisionOfNode(nodeId) || 0), qsTr("删除节点失败"));
         if (res.success) {
             clearError();
+            noteHumanActivity();
             loadGraph(true);
             clearSelection();
             structureChanged();
@@ -759,7 +772,8 @@ QtObject {
             var updated = res.data;
             if (!updated || updated.id !== edgeId
                     || !_replaceGraphObject("edges", "id", edgeId, updated)) {
-                loadGraph(true);
+            noteHumanActivity();
+            loadGraph(true);
                 return;
             }
             var nextEdges = [];
@@ -784,6 +798,7 @@ QtObject {
         var res = normalizeBackendResult(starmapBackendRef.delete_starmap_edge(starmapId, edgeId, revisionOfEdge(edgeId) || 0), qsTr("删除连线失败"));
         if (res.success) {
             clearError();
+            noteHumanActivity();
             loadGraph(true);
             clearSelection();
         } else {
@@ -811,7 +826,8 @@ QtObject {
                         || !_replaceGraphObject("nodes", "id", embed.legacyPortalNodeId, updatedNode)) {
                     // Core 已保存成功；即使返回 DTO 不完整、无法原地替换，
                     // 重新载入图后也必须通知左栏刷新标题。
-                    loadGraph(true);
+            noteHumanActivity();
+            loadGraph(true);
                     structureChanged();
                     return;
                 }
@@ -845,7 +861,8 @@ QtObject {
             if (!updated || updated.instanceId !== instanceId
                     || !_replaceGraphObject("embeds", "instanceId", instanceId, updated)) {
                 // 正式 Embed 同样已在 Core 保存成功，重载后补发结构变更。
-                loadGraph(true);
+            noteHumanActivity();
+            loadGraph(true);
                 structureChanged();
                 return;
             }
@@ -881,7 +898,8 @@ QtObject {
                 qsTr("删除节点失败"));
             if (nodeRes.success) {
                 clearError();
-                loadGraph(true);
+            noteHumanActivity();
+            loadGraph(true);
                 clearSelection();
                 structureChanged();
             } else {
@@ -896,6 +914,7 @@ QtObject {
             qsTr("删除子星图入口失败"));
         if (res.success) {
             clearError();
+            noteHumanActivity();
             loadGraph(true);
             clearSelection();
             structureChanged();
@@ -925,7 +944,8 @@ QtObject {
             ? res.data.embed.instanceId : "";
         // 成功，reload graph 并选中新 Embed
         clearError();
-        loadGraph(true);
+            noteHumanActivity();
+            loadGraph(true);
         if (instanceId) {
             selectEmbed(instanceId);
         }
@@ -937,10 +957,14 @@ QtObject {
     // 不再调用全量 saveLayout()，避免拖一个节点把所有节点逐个重写。
     // 失败时 canonical model 不动，结束 transient move 后 delegate 因 binding
     // 自动回旧位置（与 commitEmbedMove 顺序一致）。
-    function commitNodeMove(nodeId, nx, ny) {
+    function commitNodeMove(nodeId, nx, ny, trajectory) {
         if (!ensureBackend()) return false;
+        var movePatch = { position: { x: nx, y: ny } }
+        // Issue #1036：轨迹只是回放显示辅助，最终坐标仍来自持久化 position。
+        if (trajectory && trajectory.length > 0)
+            movePatch.trajectory = trajectory
         var res = normalizeBackendResult(
-            starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(withExpectedRevision({ position: { x: nx, y: ny } }, revisionOfNode(nodeId)))),
+            starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(withExpectedRevision(movePatch, revisionOfNode(nodeId)))),
             qsTr("更新节点位置失败")
         );
         if (res.success) {
@@ -949,7 +973,8 @@ QtObject {
             if (!updated || updated.id !== nodeId
                     || !_replaceGraphObject("nodes", "id", nodeId, updated)
                     || !updated.position) {
-                loadGraph(true);
+            noteHumanActivity();
+            loadGraph(true);
                 return true;
             }
             var row = _nodeRowIndex(nodeId);
@@ -976,13 +1001,16 @@ QtObject {
 
     // Issue #798: 拖动结束后提交 Embed 新位置。先持久化到后端，
     // 再浅拷贝新数组一次赋值更新本地模型。
-    function commitEmbedMove(instanceId, nx, ny) {
+    function commitEmbedMove(instanceId, nx, ny, trajectory) {
         if (!ensureBackend()) return false;
+        var embedMovePatch = { position: { x: nx, y: ny } }
+        if (trajectory && trajectory.length > 0)
+            embedMovePatch.trajectory = trajectory
         // Issue #801 评论 5896594591: 旧 portal 移动走 Node API。
         var embed = getEmbed(instanceId);
         if (embed && embed.legacyPortalNodeId) {
             var nodeRes = normalizeBackendResult(
-                starmapBackendRef.update_starmap_node(starmapId, embed.legacyPortalNodeId, JSON.stringify(withExpectedRevision({ position: { x: nx, y: ny } }, revisionOfNode(embed.legacyPortalNodeId)))),
+                starmapBackendRef.update_starmap_node(starmapId, embed.legacyPortalNodeId, JSON.stringify(withExpectedRevision(embedMovePatch, revisionOfNode(embed.legacyPortalNodeId)))),
                 qsTr("更新节点位置失败")
             );
             if (nodeRes.success) {
@@ -991,7 +1019,8 @@ QtObject {
                 if (!updatedNode || updatedNode.id !== embed.legacyPortalNodeId
                         || !_replaceGraphObject("nodes", "id", embed.legacyPortalNodeId, updatedNode)
                         || !updatedNode.position) {
-                    loadGraph(true);
+            noteHumanActivity();
+            loadGraph(true);
                     return true;
                 }
                 var nextEmbeds = [];
@@ -1019,7 +1048,7 @@ QtObject {
         }
         // 正式 Embed 继续走 Embed API（原逻辑不变）
         var res = normalizeBackendResult(
-            starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify(withExpectedRevision({ position: { x: nx, y: ny } }, revisionOfEmbed(instanceId)))),
+            starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify(withExpectedRevision(embedMovePatch, revisionOfEmbed(instanceId)))),
             qsTr("更新子星图入口失败")
         );
         if (res.success) {
@@ -1028,7 +1057,8 @@ QtObject {
             if (!updated || updated.instanceId !== instanceId
                     || !_replaceGraphObject("embeds", "instanceId", instanceId, updated)
                     || !updated.position) {
-                loadGraph(true);
+            noteHumanActivity();
+            loadGraph(true);
                 return true;
             }
             var nextEmbeds = [];
@@ -1253,7 +1283,8 @@ QtObject {
             var updated = res.data;
             if (!updated || updated.linkId !== linkId
                     || !_replaceGraphObject("links", "linkId", linkId, updated)) {
-                loadGraph(true);
+            noteHumanActivity();
+            loadGraph(true);
                 return true;
             }
             graphChanged();
@@ -1272,6 +1303,7 @@ QtObject {
         );
         if (res.success) {
             clearError();
+            noteHumanActivity();
             loadGraph(true);
             return true;
         }
@@ -1300,6 +1332,7 @@ QtObject {
     function createLinkWithPaths(fromPath, toPath) {
         var link = addLink(fromPath, toPath, "");
         if (link !== null) {
+            noteHumanActivity();
             loadGraph(true);
             return true;
         }

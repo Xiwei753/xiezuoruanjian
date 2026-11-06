@@ -1059,6 +1059,7 @@ export struct StarMapScreen {
         // 当前活动画布的完整 route；根画布为空数组。
         scenePath: this.activePath,
         starmapId: this.starmapId,
+        projectId: this.annotationProjectId,
         graph: $graph,
         // 全局相机：根 Scene 是相机本体（#818）
         cameraScale: this.cameraScale,

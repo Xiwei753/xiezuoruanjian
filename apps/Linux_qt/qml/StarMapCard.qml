@@ -26,6 +26,7 @@ Kirigami.ShadowedRectangle {
 
     signal clicked(string starmapId, string title)
     signal menuRequested(string starmapId, string title)
+    signal proofRequested(string starmapId, string title)
 
     width: isChild ? 200 : 260
     height: isChild ? 140 : 180
@@ -100,6 +101,17 @@ Kirigami.ShadowedRectangle {
                            Kirigami.Theme.highlightColor :
                            Kirigami.Theme.disabledTextColor
                 }
+            }
+
+            ToolButton {
+                Layout.alignment: Qt.AlignTop
+                icon.name: "document-open-recent"
+                text: qsTr("创作记录")
+                display: AbstractButton.IconOnly
+                ToolTip.text: qsTr("创作记录")
+                ToolTip.visible: hovered
+                onClicked: root.proofRequested(String(root.starmapData.starmapId || ""),
+                                              String(root.starmapData.title || ""))
             }
         }
 

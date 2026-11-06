@@ -101,6 +101,10 @@ export interface IWriterCoreBridge {
   recordWritingActivitySegment(input: WritingActivitySegmentInput): Promise<ResultEnvelope<boolean>>
   replayChapterProof(requestJson: string): Promise<ResultEnvelope<Object>>
   exportChapterProof(chapterId: string, deviceId: string): Promise<ResultEnvelope<Object>>
+  // Issue #1036：星图统计与手写证明回放。
+  getStarMapStats(startDate: string, endDate: string, projectId: string | null): Promise<ResultEnvelope<Object>>
+  replayStarMapProof(requestJson: string): Promise<ResultEnvelope<Object>>
+  exportStarMapProof(starMapId: string, deviceId: string): Promise<ResultEnvelope<Object>>
   calculateWordCount(text: string): Promise<number>
   getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>>
 

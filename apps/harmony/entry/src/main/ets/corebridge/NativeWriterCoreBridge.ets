@@ -436,6 +436,19 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.statsBridge.exportChapterProof(chapterId, deviceId)
   }
 
+  // Issue #1036：星图统计与手写证明回放。
+  async getStarMapStats(startDate: string, endDate: string, projectId: string | null): Promise<ResultEnvelope<Object>> {
+    return this.statsBridge.getStarMapStats(startDate, endDate, projectId)
+  }
+
+  async replayStarMapProof(requestJson: string): Promise<ResultEnvelope<Object>> {
+    return this.statsBridge.replayStarMapProof(requestJson)
+  }
+
+  async exportStarMapProof(starMapId: string, deviceId: string): Promise<ResultEnvelope<Object>> {
+    return this.statsBridge.exportStarMapProof(starMapId, deviceId)
+  }
+
   async calculateWordCount(text: string): Promise<number> {
     return this.statsBridge.calculateWordCount(text)
   }

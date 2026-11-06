@@ -69,6 +69,9 @@ pub struct StarMapEmbedPatchDto {
     pub label: Option<Option<String>>,
     pub position: Option<StarMapPointDto>,
     pub host_path: Option<StarMapTargetPathDto>,
+    /// 拖动轨迹关键点；最终位置仍来自持久化 position。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trajectory: Vec<crate::writing_stats::starmap_proof::StarMapProofTrajectorySample>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -92,6 +95,7 @@ impl From<StarMapEmbedPatchInputDto> for StarMapEmbedPatchDto {
             },
             position: d.position,
             host_path: d.host_path,
+            trajectory: Vec::new(),
         }
     }
 }

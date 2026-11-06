@@ -160,4 +160,37 @@ class StatsBridge internal constructor(private val holder: WriterAppServiceHolde
         holder.wrapResult {
             holder.service.recordWritingActivitySegment(input)
         }
+
+    /** Issue #1036：星图统计（当前文字、操作来源、真实星图时长）。 */
+    fun getStarMapStats(
+        startDate: String,
+        endDate: String,
+        projectId: String?,
+    ): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.getStarmapStatsJson(startDate, endDate, projectId)
+        }
+
+    /** Issue #1036：星图手写证明回放，返回 Core 已校验的历史图帧 JSON。 */
+    fun replayStarMapProof(requestJson: String): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.replayStarmapProofJson(requestJson)
+        }
+
+    /** Issue #1036：导出星图证明包；包含历史图结构，调用方需先提示用户。 */
+    fun exportStarMapProof(
+        starMapId: String,
+        deviceId: String,
+    ): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.exportStarmapProofJson(starMapId, deviceId)
+        }
+
+    fun listStarMapProofCheckpoints(
+        deviceId: String,
+        starMapId: String,
+    ): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.listStarmapProofCheckpointsJson(deviceId, starMapId)
+        }
 }

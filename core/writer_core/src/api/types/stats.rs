@@ -495,6 +495,49 @@ pub struct ContributionStatsDto {
     pub history_scope: String,
 }
 
+/// 单张星图的写作统计。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapStatsRecordDto {
+    pub starmap_id: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    pub title: String,
+    pub current_chars: u64,
+    pub inserted_chars: u64,
+    pub deleted_chars: u64,
+    pub modified_chars: u64,
+    pub node_operations: u64,
+    pub edge_operations: u64,
+    pub embed_operations: u64,
+    pub link_operations: u64,
+    pub total_operations: u64,
+    pub human_operations: u64,
+    pub ai_operations: u64,
+    pub active_seconds: u64,
+}
+
+/// 星图整体统计；全局汇总与作品内统计共用此结构。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapStatsSummaryDto {
+    pub range: DateRangeDto,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    pub total_records: u32,
+    pub current_chars: u64,
+    pub inserted_chars: u64,
+    pub deleted_chars: u64,
+    pub modified_chars: u64,
+    pub total_operations: u64,
+    pub human_operations: u64,
+    pub ai_operations: u64,
+    pub active_seconds: u64,
+    pub starmaps: Vec<StarMapStatsRecordDto>,
+    #[serde(default)]
+    pub history_scope: String,
+}
+
 /// 平台端上报的一段已测量前台写作计时切片。
 ///
 /// 平台端只负责用单调时钟测出 `start_at_ms..end_at_ms` 的真实前台片段；
@@ -513,6 +556,9 @@ pub struct WritingActivitySegmentInputDto {
     pub volume_id: String,
     #[serde(default)]
     pub chapter_id: String,
+    /// 星图前台计时目标；非空表示本次切片属于星图，不得伪装成章节。
+    #[serde(default)]
+    pub starmap_id: String,
     /// 本次前台写作会话 ID；暂停恢复后仍是同一次会话。
     pub session_id: String,
     /// 切片墙钟起点（Unix 毫秒）。

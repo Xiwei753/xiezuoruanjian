@@ -38,12 +38,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.center
-import androidx.compose.ui.geometry.height
-import androidx.compose.ui.geometry.size
-import androidx.compose.ui.geometry.topLeft
-import androidx.compose.ui.geometry.width
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -124,6 +121,7 @@ private fun StarMapRootScreen(
     val repository = LocalSujianAppDependencies.current.starmapRepository
     var reloadToken by remember { mutableIntStateOf(0) }
     var state by remember { mutableStateOf<StarMapListState>(StarMapListState.Loading) }
+    var proofStarMapId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(repository, reloadToken) {
         state = StarMapListState.Loading
@@ -158,11 +156,20 @@ private fun StarMapRootScreen(
                             headline = map.title,
                             supportingText = map.description.takeIf { it.isNotBlank() },
                             onClick = { onOpenStarmap(map.starmapId, map.projectId) },
+                            trailingContent = {
+                                TextButton(onClick = { proofStarMapId = map.starmapId }) {
+                                    Text("创作记录")
+                                }
+                            },
                         )
                     }
                 }
             }
         }
+    }
+
+    proofStarMapId?.let { id ->
+        StarMapProofReplayDialog(starMapId = id, onDismiss = { proofStarMapId = null })
     }
 }
 
@@ -196,18 +203,34 @@ private fun StarMapDetailScreen(
                 modifier = modifier.fillMaxSize(),
             )
         is StarMapDetailState.Ready ->
-            StarMapCanvas(
-                starmapId = starmapId,
-                projectId = projectId,
-                repository = repository,
-                data = current.data,
-                target = target,
-                onNodeUpdated = { updated ->
-                    // Issue #984：保存后立即用 Core 返回的节点刷新当前画布。
-                    state = StarMapDetailState.Ready(current.data.withUpdatedNode(updated))
-                },
-                modifier = modifier.fillMaxSize(),
-            )
+            run {
+                val writingSession = rememberStarMapWritingSession(starmapId, projectId)
+                Box(
+                    modifier = modifier
+                        .fillMaxSize()
+                        .pointerInput(writingSession) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    awaitPointerEvent(PointerEventPass.Initial)
+                                    writingSession.start()
+                                }
+                            }
+                        },
+                ) {
+                    StarMapCanvas(
+                        starmapId = starmapId,
+                        projectId = projectId,
+                        repository = repository,
+                        data = current.data,
+                        target = target,
+                        onNodeUpdated = { updated ->
+                            // Issue #984：保存后立即用 Core 返回的节点刷新当前画布。
+                            state = StarMapDetailState.Ready(current.data.withUpdatedNode(updated))
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
     }
 }
 

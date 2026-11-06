@@ -493,6 +493,45 @@ static napi_value NativeExportChapterProof(napi_env env, napi_callback_info info
     return result;
 }
 
+// Issue #1036：星图统计（当前文字、操作来源、真实星图时长）。
+static napi_value NativeGetStarMapStats(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3] = {nullptr, nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    char* start = TakeStringArg(env, argc >= 1 ? args[0] : nullptr);
+    char* end = TakeStringArg(env, argc >= 2 ? args[1] : nullptr);
+    char* project = TakeStringArg(env, argc >= 3 ? args[2] : nullptr);
+    napi_value result = ReturnJsonString(env, writer_core_get_starmap_stats_json(start, end, project));
+    delete[] start;
+    delete[] end;
+    delete[] project;
+    return result;
+}
+
+// Issue #1036：星图手写证明回放。请求/响应均为 Core JSON。
+static napi_value NativeReplayStarMapProof(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    char* request = TakeStringArg(env, argc >= 1 ? args[0] : nullptr);
+    napi_value result = ReturnJsonString(env, writer_core_replay_starmap_proof_json(request));
+    delete[] request;
+    return result;
+}
+
+// Issue #1036：导出星图证明包。包含历史图结构，UI 必须先提示用户。
+static napi_value NativeExportStarMapProof(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    char* starmap = TakeStringArg(env, argc >= 1 ? args[0] : nullptr);
+    char* device = TakeStringArg(env, argc >= 2 ? args[1] : nullptr);
+    napi_value result = ReturnJsonString(env, writer_core_export_starmap_proof_json(starmap, device));
+    delete[] starmap;
+    delete[] device;
+    return result;
+}
+
 napi_property_descriptor* getStatsDescriptors(size_t* count) {
     static napi_property_descriptor desc[] = {
         {"nativeGetWritingStats", nullptr, NativeGetWritingStats, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -506,6 +545,9 @@ napi_property_descriptor* getStatsDescriptors(size_t* count) {
         {"nativeRecordWritingActivitySegment", nullptr, NativeRecordWritingActivitySegment, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeReplayChapterProof", nullptr, NativeReplayChapterProof, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeExportChapterProof", nullptr, NativeExportChapterProof, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeGetStarMapStats", nullptr, NativeGetStarMapStats, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeReplayStarMapProof", nullptr, NativeReplayStarMapProof, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeExportStarMapProof", nullptr, NativeExportStarMapProof, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     *count = sizeof(desc) / sizeof(desc[0]);
     return desc;

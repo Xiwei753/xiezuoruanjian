@@ -158,6 +158,7 @@ internal class WritingSessionTracker(
                 projectId = projectId,
                 volumeId = volumeId,
                 chapterId = chapterId,
+                starmapId = "",
                 sessionId = sessionId,
                 startAtMs = startAtMs,
                 endAtMs = endAtMs,

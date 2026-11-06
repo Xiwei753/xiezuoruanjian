@@ -59,6 +59,9 @@ pub mod projection;
 pub mod proof;
 pub mod replay;
 pub mod session;
+pub mod starmap_checkpoint;
+pub mod starmap_proof;
+pub mod starmap_replay;
 pub mod store;
 
 pub use ai_usage::{stable_event_id, AiUsageDirection, AiUsageEvent};
@@ -68,7 +71,7 @@ pub use contribution::{
     MutationEntrypoint,
 };
 pub use session::{
-    WritingActivitySegment, WritingSessionClock, WritingSessionState,
+    WritingActivitySegment, WritingActivityTarget, WritingSessionClock, WritingSessionState,
 };
 
 use serde::{Deserialize, Serialize};

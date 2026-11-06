@@ -180,6 +180,8 @@ export interface WritingActivitySegmentInput {
   projectId: string
   volumeId: string
   chapterId: string
+  /** Issue #1036：非空表示星图前台计时，值只放星图 ID，不伪装成 chapterId。 */
+  starmapId?: string
   sessionId: string
   startAtMs: number
   endAtMs: number

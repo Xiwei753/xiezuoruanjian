@@ -16,6 +16,10 @@ use crate::writing_stats::contribution::{
     current_mutation_context, ContributionEvent, ContributionObjectSnapshot,
     ContributionObjectType, ContributionOperation, CurrentTextSnapshot, MutationContext,
 };
+use crate::writing_stats::starmap_checkpoint::has_starmap_checkpoints;
+use crate::writing_stats::starmap_proof::{
+    StarMapProofBaseline, StarMapProofDelta, StarMapProofTrajectorySample,
+};
 
 thread_local! {
     static ACTIVE_BATCH: RefCell<Option<Vec<ContributionEvent>>> = const { RefCell::new(None) };
@@ -101,7 +105,34 @@ impl WriterCoreApi {
         before: Option<ContributionObjectSnapshot>,
         after: Option<ContributionObjectSnapshot>,
     ) -> super::ApiResult<()> {
-        let event = ContributionEvent::new(
+        self.record_contribution_event_with_context_and_delta(
+            context,
+            project_id,
+            object_type,
+            object_id,
+            operation,
+            container_id,
+            before,
+            after,
+            None,
+        )
+    }
+
+    /// 记录一条对象事件，并可附带星图回放增量。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_contribution_event_with_context_and_delta(
+        &self,
+        context: &MutationContext,
+        project_id: &str,
+        object_type: ContributionObjectType,
+        object_id: &str,
+        operation: ContributionOperation,
+        container_id: Option<String>,
+        before: Option<ContributionObjectSnapshot>,
+        after: Option<ContributionObjectSnapshot>,
+        replay_delta: Option<StarMapProofDelta>,
+    ) -> super::ApiResult<()> {
+        let mut event = ContributionEvent::new(
             context,
             project_id,
             object_type,
@@ -113,12 +144,29 @@ impl WriterCoreApi {
         );
         let batched = ACTIVE_BATCH.with(|slot| slot.borrow().is_some());
         if batched {
+            let order = ACTIVE_BATCH.with(|slot| {
+                slot.borrow()
+                    .as_ref()
+                    .map(|events| {
+                        events
+                            .iter()
+                            .filter(|event| event.replay_delta.is_some())
+                            .count() as u32
+                    })
+                    .unwrap_or(0)
+            });
+            if let Some(delta) = replay_delta {
+                event.attach_replay(delta, Some(order));
+            }
             ACTIVE_BATCH.with(|slot| {
                 if let Some(events) = slot.borrow_mut().as_mut() {
                     events.push(event);
                 }
             });
             return Ok(());
+        }
+        if let Some(delta) = replay_delta {
+            event.attach_replay(delta, Some(0));
         }
         self.record_contribution_events(vec![event])
     }
@@ -319,7 +367,8 @@ impl WriterCoreApi {
     }
 
     /// 记录一次星图对象写入。`before`/`after` 是同一对象的图快照，
-    /// 节点文本差异由 [`ContributionEvent::new`] 计算。
+    /// 节点文本差异由 [`ContributionEvent::new`] 计算；同时保存完整对象增量
+    /// 供星图手写证明回放。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_starmap_object_with_context(
         &self,
@@ -332,6 +381,32 @@ impl WriterCoreApi {
         before_graph: Option<&StarMapGraph>,
         after_graph: Option<&StarMapGraph>,
     ) -> super::ApiResult<()> {
+        self.record_starmap_object_with_context_and_trajectory(
+            context,
+            project_id,
+            starmap_id,
+            object_type,
+            object_id,
+            operation,
+            before_graph,
+            after_graph,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_starmap_object_with_context_and_trajectory(
+        &self,
+        context: &MutationContext,
+        project_id: Option<&str>,
+        starmap_id: &str,
+        object_type: ContributionObjectType,
+        object_id: &str,
+        operation: ContributionOperation,
+        before_graph: Option<&StarMapGraph>,
+        after_graph: Option<&StarMapGraph>,
+        trajectory: &[StarMapProofTrajectorySample],
+    ) -> super::ApiResult<()> {
         let before = before_graph
             .and_then(|graph| Self::starmap_object_snapshot(graph, object_type, object_id));
         let after = after_graph
@@ -340,7 +415,25 @@ impl WriterCoreApi {
             .as_ref()
             .and_then(|snapshot| snapshot.version.parse::<u64>().ok())
             .unwrap_or(0);
-        let result = self.record_contribution_event_with_context(
+        let mut delta = StarMapProofDelta::for_object(
+            starmap_id,
+            object_type,
+            object_id,
+            operation,
+            before_graph,
+            after_graph,
+        )
+        .with_trajectory(trajectory.to_vec());
+        if let Some(baseline) = self.starmap_replay_baseline(
+            starmap_id,
+            before_graph,
+            after_graph,
+            object_type,
+            object_id,
+        ) {
+            delta = delta.with_baseline(baseline);
+        }
+        let result = self.record_contribution_event_with_context_and_delta(
             context,
             project_id.unwrap_or_default(),
             object_type,
@@ -349,6 +442,7 @@ impl WriterCoreApi {
             Some(starmap_id.to_string()),
             before,
             after,
+            Some(delta),
         );
         if result.is_ok() {
             if let Err(error) = crate::storage::workspace_events::append_event(
@@ -363,6 +457,126 @@ impl WriterCoreApi {
             }
         }
         result
+    }
+
+    /// 记录星图元数据操作（创建/重命名/删除/绑定项目等）。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_starmap_meta_with_context(
+        &self,
+        context: &MutationContext,
+        project_id: Option<&str>,
+        starmap_id: &str,
+        operation: ContributionOperation,
+        before: Option<&StarMapMeta>,
+        after: Option<&StarMapMeta>,
+        roots_after: Option<Vec<String>>,
+    ) -> super::ApiResult<()> {
+        let before_snapshot = before.map(Self::starmap_meta_snapshot);
+        let after_snapshot = after.map(Self::starmap_meta_snapshot);
+        let mut delta = StarMapProofDelta::for_meta(starmap_id, operation, before, after);
+        if let Some(roots) = roots_after {
+            delta = delta.with_roots_after(roots);
+        }
+        if operation != ContributionOperation::Create {
+            if let Some(baseline) = self.starmap_meta_replay_baseline(starmap_id, before) {
+                delta = delta.with_baseline(baseline);
+            }
+        }
+        self.record_contribution_event_with_context_and_delta(
+            context,
+            project_id.unwrap_or_default(),
+            ContributionObjectType::StarMap,
+            starmap_id,
+            operation,
+            None,
+            before_snapshot,
+            after_snapshot,
+            Some(delta),
+        )
+    }
+
+    /// 旧星图第一次进入回放账本时，从真实图快照生成基线。
+    fn starmap_replay_baseline(
+        &self,
+        starmap_id: &str,
+        before_graph: Option<&StarMapGraph>,
+        after_graph: Option<&StarMapGraph>,
+        object_type: ContributionObjectType,
+        object_id: &str,
+    ) -> Option<StarMapProofBaseline> {
+        if starmap_created_in_active_batch(starmap_id) {
+            return None;
+        }
+        let device_id = self
+            .core_write()
+            .get_stats_api()
+            .contribution_store()
+            .resolve_origin_device_id()
+            .ok()?;
+        if has_starmap_checkpoints(&self.app_data_root, &device_id, starmap_id) {
+            return None;
+        }
+        let graph = match before_graph {
+            Some(graph) => graph.clone(),
+            None => {
+                // 第一条操作就是新增对象：用写入后的真实图减去该对象，得到
+                // 操作前的图状态，而不是把新对象提前放进基线。
+                let mut graph = after_graph?.clone();
+                match object_type {
+                    ContributionObjectType::StarMapNode => {
+                        graph.nodes.retain(|node| node.id != object_id);
+                    }
+                    ContributionObjectType::StarMapEdge => {
+                        graph.edges.retain(|edge| edge.id != object_id);
+                    }
+                    ContributionObjectType::StarMapEmbed => {
+                        graph.embeds.retain(|embed| embed.instance_id != object_id);
+                    }
+                    ContributionObjectType::StarMapLink => {
+                        graph.links.retain(|link| link.link_id != object_id);
+                    }
+                    _ => return None,
+                }
+                graph
+            }
+        };
+        let meta = self.core_write().get_starmap(starmap_id).ok();
+        let root_starmap_ids = crate::starmap::load_index(&self.app_data_root)
+            .map(|index| index.root_starmap_ids)
+            .unwrap_or_default();
+        Some(StarMapProofBaseline {
+            meta,
+            graph,
+            root_starmap_ids,
+        })
+    }
+
+    fn starmap_meta_replay_baseline(
+        &self,
+        starmap_id: &str,
+        before: Option<&StarMapMeta>,
+    ) -> Option<StarMapProofBaseline> {
+        if starmap_created_in_active_batch(starmap_id) {
+            return None;
+        }
+        let device_id = self
+            .core_write()
+            .get_stats_api()
+            .contribution_store()
+            .resolve_origin_device_id()
+            .ok()?;
+        if has_starmap_checkpoints(&self.app_data_root, &device_id, starmap_id) {
+            return None;
+        }
+        let graph = self.get_starmap_graph_snapshot(starmap_id)?;
+        let root_starmap_ids = crate::starmap::load_index(&self.app_data_root)
+            .map(|index| index.root_starmap_ids)
+            .unwrap_or_default();
+        Some(StarMapProofBaseline {
+            meta: before.cloned(),
+            graph,
+            root_starmap_ids,
+        })
     }
 
     pub(crate) fn record_starmap_object(
@@ -495,6 +709,19 @@ impl WriterCoreApi {
     ) -> ContributionObjectSnapshot {
         ContributionObjectSnapshot::object(version, summary)
     }
+}
+
+/// 当前批次的星图创建事件会从空白开始回放，不能再生成“旧图基线”。
+fn starmap_created_in_active_batch(starmap_id: &str) -> bool {
+    ACTIVE_BATCH.with(|slot| {
+        slot.borrow().as_ref().is_some_and(|events| {
+            events.iter().any(|event| {
+                event.object_type == ContributionObjectType::StarMap
+                    && event.object_id == starmap_id
+                    && event.operation == ContributionOperation::Create
+            })
+        })
+    })
 }
 
 fn dto_node_contributing_text(

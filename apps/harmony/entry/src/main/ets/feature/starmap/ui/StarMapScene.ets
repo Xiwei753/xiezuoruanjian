@@ -77,6 +77,7 @@ import hilog from '@ohos.hilog'
 import { ComponentContent, UIContext } from '@kit.ArkUI'
 import { CreateTitleDialogArgs, createTitleDialogContent } from './CreateTitleDialog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
+import { StarMapWritingSessionTracker } from './StarMapWritingSessionTracker'
 import {
   StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed,
   StarMapTargetPath, StarMapPoint, StarMapPathSegment,
@@ -472,6 +473,11 @@ export struct StarMapScene {
   // ─── 普通属性：共享对象和回调 ───
   /** Core bridge（用于 mutation） */
   bridge: IWriterCoreBridge | null = null
+  /** 星图所属项目；独立星图为空。用于统计归属，不参与渲染。 */
+  @Prop projectId: string = ''
+  /** Issue #1036：星图前台计时（第一次真实人工操作才开始）。 */
+  private starMapWritingSession: StarMapWritingSessionTracker = new StarMapWritingSessionTracker()
+  private starMapWritingHeartbeat: number = -1
   /** 手势状态追踪器（共享） */
   gestureTracker: StarMapGestureStateTracker = new StarMapGestureStateTracker()
   /**
@@ -613,16 +619,28 @@ export struct StarMapScene {
 
   // ─── 生命周期 ───
 
+  private noteStarMapActivity(): void {
+    this.starMapWritingSession.start(this.bridge, this.projectId, this.starmapId)
+  }
+
   aboutToAppear() {
     this.canvasActive = true
     this.recomputeLayoutAndGeometry()
     this.registerSceneHandle()
     this.maybeFitView()
     this.notifySceneGeometryReady()
+    this.starMapWritingHeartbeat = setInterval(() => {
+      this.starMapWritingSession.heartbeat()
+    }, 30000)
   }
 
   aboutToDisappear() {
     this.canvasActive = false
+    if (this.starMapWritingHeartbeat >= 0) {
+      clearInterval(this.starMapWritingHeartbeat)
+      this.starMapWritingHeartbeat = -1
+    }
+    this.starMapWritingSession.close('leftEditor')
     this.unregisterSceneHandle()
     // 树里所有 Scene 共用一个 tracker。根 Scene 整页退出可以无条件清空；
     // 子 Scene 退出（Embed 被删、childGraph 重载、loading/error 分支切换）时，
@@ -1652,6 +1670,7 @@ private refitAfterContentAdded(): void {
    */
   /** 入参是**盒子坐标**（#821），内部换算到累计屏幕空间再做递归命中。 */
   async finishConnect(localBoxX: number, localBoxY: number) {
+    this.noteStarMapActivity()
     const sourcePath: StarMapTargetPath | null = this.connectSourcePath
     if (sourcePath === null) {
       return
@@ -1911,6 +1930,7 @@ private refitAfterContentAdded(): void {
    * （facade/starmap_ops/graph.rs::add_starmap_edge 把边写进 starmap_id 自己的图）。
    */
   async createEdgeBetween(from: StarMapTargetPath, to: StarMapTargetPath): Promise<boolean> {
+    this.noteStarMapActivity()
     const bridge: IWriterCoreBridge | null = this.bridge
     if (!bridge) {
       return false
@@ -1950,6 +1970,7 @@ private refitAfterContentAdded(): void {
    * title / content 字段不传（undefined），Core 不会把它们当成清空。
    */
   async saveNodePosition(nodeId: string) {
+    this.noteStarMapActivity()
     const ln = this.getPlatformLayoutNode(nodeId)
     const bridge: IWriterCoreBridge | null = this.bridge
     if (!ln || !bridge) return
@@ -2157,6 +2178,7 @@ private refitAfterContentAdded(): void {
     body: string,
     editContent: boolean
   ): Promise<StarMapNodeSaveResult> {
+    this.noteStarMapActivity()
     const bridge: IWriterCoreBridge | null = this.bridge
     if (!this.graph || !bridge) {
       return { success: false, message: '星图尚未加载，暂时无法保存' }
@@ -2258,6 +2280,7 @@ private refitAfterContentAdded(): void {
    * 用户捏合相机不会走到这里 —— 缩放只改显示变换，不改这里的任何一个数字。
    */
   async saveEmbedPosition(embedId: string) {
+    this.noteStarMapActivity()
     const ln = this.getPlatformLayoutNode(embedId)
     const bridge: IWriterCoreBridge | null = this.bridge
     if (!ln || !bridge) return
@@ -2281,6 +2304,7 @@ private refitAfterContentAdded(): void {
    * #984：卡片宽高按标题 / 正文实测，不再用固定 160×80。
    */
   async performCreateNode(title: string) {
+    this.noteStarMapActivity()
     const trimmed: string = title.trim()
     if (trimmed.length === 0) return
     const bridge: IWriterCoreBridge | null = this.bridge
@@ -2333,6 +2357,7 @@ private refitAfterContentAdded(): void {
    * 在父圆边缘直接出生会大到顶满父圆甚至被裁掉，必须夹进圆内接正方形并让 local fit 缩小。
    */
   async performCreateEmbed(title: string) {
+    this.noteStarMapActivity()
     const trimmed: string = title.trim()
     if (trimmed.length === 0) return
     const bridge: IWriterCoreBridge | null = this.bridge

@@ -1253,6 +1253,21 @@ interface WriterAppService {
     [Throws=WriterError]
     string get_contribution_stats_json(string start_date, string end_date, string? project_id, string? actor, string? object_type, string? device_id);
 
+    // 星图统计（当前保留文字、操作来源、真实星图前台时长）。返回 Core JSON。
+    [Throws=WriterError]
+    string get_starmap_stats_json(string start_date, string end_date, string? project_id);
+
+    // 星图手写证明回放：按 starmapId + deviceId + position 取历史图状态。
+    [Throws=WriterError]
+    string replay_starmap_proof_json(string request_json);
+
+    // 导出星图证明包；包含历史图结构，UI 必须先提示用户。
+    [Throws=WriterError]
+    string export_starmap_proof_json(string starmap_id, string device_id);
+
+    [Throws=WriterError]
+    string list_starmap_proof_checkpoints_json(string device_id, string starmap_id);
+
     [Throws=WriterError]
     SpeedCurveSummaryDto get_writing_speed_curve(string start_date, string end_date, u32 bucket_minutes);
 
@@ -1671,6 +1686,8 @@ dictionary WritingActivitySegmentInputDto {
     string project_id;
     string volume_id;
     string chapter_id;
+    // 非空表示本切片属于星图；平台端不得把星图 ID 填进 chapter_id。
+    string starmap_id = "";
     // 本次前台写作会话 ID；暂停后恢复仍沿用同一会话。
     string session_id;
     // 切片墙钟起点/终点（Unix 毫秒）。

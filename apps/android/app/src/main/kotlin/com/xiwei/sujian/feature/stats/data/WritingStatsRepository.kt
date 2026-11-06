@@ -326,6 +326,30 @@ class WritingStatsRepository(
         }
     }
 
+    /** Issue #1036：回放星图手写证明；先等统计写入落盘，避免刚拖动完看不到。 */
+    suspend fun replayStarMapProof(requestJson: String): String? {
+        awaitPendingWrites()
+        return withContext(Dispatchers.IO) {
+            when (val result = statsBridge.replayStarMapProof(requestJson)) {
+                is BridgeResult.Success -> result.data
+                else -> null
+            }
+        }
+    }
+
+    /** Issue #1036：星图统计 JSON。 */
+    suspend fun getStarMapStats(
+        startDate: String,
+        endDate: String,
+        projectId: String?,
+    ): String? =
+        withContext(Dispatchers.IO) {
+            when (val result = statsBridge.getStarMapStats(startDate, endDate, projectId)) {
+                is BridgeResult.Success -> result.data
+                else -> null
+            }
+        }
+
     /** Issue #1008：导出证明包 JSON（包含历史正文）。 */
     suspend fun exportChapterProof(
         chapterId: String,

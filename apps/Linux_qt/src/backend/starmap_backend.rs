@@ -91,6 +91,10 @@ pub struct StarMapBackend {
         qt_method!(fn(&self, from_path_json: QString, to_path_json: QString) -> QString),
     plan_cross_layer_connection:
         qt_method!(fn(&self, from_path_json: QString, to_path_json: QString) -> QJsonObject),
+    note_starmap_operation: qt_method!(fn(&self, starmap_id: QString)),
+    replay_starmap_proof_object: qt_method!(fn(&self, request_json: QString) -> QJsonObject),
+    export_starmap_proof_object:
+        qt_method!(fn(&self, starmap_id: QString, device_id: QString) -> QJsonObject),
     create_starmap_node_json: qt_method!(
         fn(
             &mut self,
@@ -1102,6 +1106,30 @@ impl StarMapBackend {
         to_path_json: QString,
     ) -> QJsonObject {
         self.with_app(|app| app.plan_cross_layer_connection(from_path_json, to_path_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn note_starmap_operation(&self, starmap_id: QString) {
+        let starmap_id = starmap_id.to_string();
+        let _ = self.with_app(|app| app.note_human_starmap_operation(&starmap_id));
+    }
+    fn replay_starmap_proof_object(&self, request_json: QString) -> QJsonObject {
+        self.with_app(|app| app.replay_starmap_proof_object(request_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn export_starmap_proof_object(
+        &self,
+        starmap_id: QString,
+        device_id: QString,
+    ) -> QJsonObject {
+        self.with_app(|app| app.export_starmap_proof_object(starmap_id, device_id))
             .unwrap_or_else(|_| {
                 crate::backend::json_utils::qjson_object_from_json(
                     &crate::backend::json_utils::borrow_conflict_error_json(),

@@ -150,7 +150,7 @@ Kirigami.ApplicationWindow {
     // 锁屏、最小化或隐藏窗口立即结束当前切片；回到前台只解除暂停，不补算离开时间。
     readonly property bool writingSessionApplicationActive: Qt.application.state === Qt.ApplicationActive
     readonly property bool writingSessionForeground: rootHasWorkspace
-        && appController.inWriting
+        && (appController.inWriting || appController.inStarmap)
         && window.writingSessionApplicationActive
         && window.active
         && window.visibility !== Window.Minimized
@@ -158,7 +158,7 @@ Kirigami.ApplicationWindow {
 
     function syncWritingSessionLifecycle() {
         if (!editorBackend) return
-        if (!appController.inWriting) {
+        if (!appController.inWriting && !appController.inStarmap) {
             editorBackend.close_writing_session("leftEditor")
             return
         }

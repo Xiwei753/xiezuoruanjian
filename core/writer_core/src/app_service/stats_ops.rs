@@ -115,7 +115,39 @@ impl super::WriterAppService {
         device_id: String,
         chapter_id: String,
     ) -> Result<String, WriterError> {
-        self.api.list_proof_checkpoints_json(&device_id, &chapter_id)
+        self.api
+            .list_proof_checkpoints_json(&device_id, &chapter_id)
+    }
+
+    pub fn get_starmap_stats_json(
+        &self,
+        start_date: String,
+        end_date: String,
+        project_id: Option<String>,
+    ) -> Result<String, WriterError> {
+        self.api
+            .get_starmap_stats_json(&start_date, &end_date, project_id.as_deref())
+    }
+
+    pub fn replay_starmap_proof_json(&self, request_json: String) -> Result<String, WriterError> {
+        self.api.replay_starmap_proof_json(&request_json)
+    }
+
+    pub fn export_starmap_proof_json(
+        &self,
+        starmap_id: String,
+        device_id: String,
+    ) -> Result<String, WriterError> {
+        self.api.export_starmap_proof_json(&starmap_id, &device_id)
+    }
+
+    pub fn list_starmap_proof_checkpoints_json(
+        &self,
+        device_id: String,
+        starmap_id: String,
+    ) -> Result<String, WriterError> {
+        self.api
+            .list_starmap_proof_checkpoints_json(&device_id, &starmap_id)
     }
 
     /// 上报一段平台已测量的前台写作计时切片。

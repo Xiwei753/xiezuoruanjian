@@ -205,6 +205,13 @@ bool  writer_core_record_writing_activity_segment(const char* segment_json);
 char* writer_core_replay_chapter_proof_json(const char* request_json);
 // 导出证明包（#1008）。包内含历史正文；device_id 为空时由 Core 选择本机分区。
 char* writer_core_export_chapter_proof_json(const char* chapter_id, const char* device_id);
+// 星图创作统计（#1036）：当前保留文字、操作来源与真实星图前台时长。
+char* writer_core_get_starmap_stats_json(const char* start_date, const char* end_date, const char* project_id);
+// 星图手写证明回放（#1036）：request_json 为 StarMapReplayRequest camelCase JSON。
+char* writer_core_replay_starmap_proof_json(const char* request_json);
+// 导出星图证明包（#1036）；包内含历史图结构，UI 必须先提示用户。
+char* writer_core_export_starmap_proof_json(const char* starmap_id, const char* device_id);
+char* writer_core_list_starmap_proof_checkpoints_json(const char* device_id, const char* starmap_id);
 // 正文保存 + 未确认统计事件一次提交：先走正文保存事务，成功后再幂等记录
 // events_json（[EditorChangeStatsInputDto] 数组，可为 NULL/空串）里的事件。
 // 正文保存失败则不记任何事件；重复提交同一批事件不会重复计字。

@@ -205,6 +205,12 @@ impl StatsApi {
         &self.store
     }
 
+    pub fn contribution_store(
+        &self,
+    ) -> &crate::writing_stats::contribution_store::ContributionStore {
+        &self.contribution_store
+    }
+
     /// 读取查询前的迁移闸门：失败时显式报错并允许下一次重试。
     ///
     /// 迁移成功前不能把新目录当成唯一事实源；`record_event` 不受此限制，
@@ -819,6 +825,65 @@ impl StatsApi {
 
     pub fn load_contribution_events(&self) -> Result<Vec<ContributionEvent>> {
         self.contribution_store.load_all_events()
+    }
+
+    /// 星图统计：历史操作量 + 当前保留文字 + 真实星图前台时长。
+    pub fn get_starmap_stats(
+        &self,
+        start_date: &str,
+        end_date: &str,
+        project_id: Option<&str>,
+        current_texts: &[CurrentTextSnapshot],
+        metas: &[crate::writing_stats::projection::StarMapStatsMeta],
+    ) -> Result<crate::writing_stats::projection::StarMapStatsAgg> {
+        self.ensure_migrated()?;
+        let events = self
+            .contribution_store
+            .load_events_range(start_date, end_date)?;
+        let segments = self.store.load_segments_range(start_date, end_date)?;
+        Ok(crate::writing_stats::projection::project_starmap_stats(
+            &events,
+            &segments,
+            current_texts,
+            metas,
+            start_date,
+            end_date,
+            project_id,
+        ))
+    }
+
+    pub fn replay_starmap_proof(
+        &self,
+        request: &crate::writing_stats::starmap_replay::StarMapReplayRequest,
+    ) -> Result<crate::writing_stats::starmap_replay::StarMapReplayFrame> {
+        crate::writing_stats::starmap_replay::replay_starmap_proof(
+            &self.contribution_store,
+            request,
+        )
+    }
+
+    pub fn export_starmap_proof(
+        &self,
+        starmap_id: &str,
+        device_id: &str,
+    ) -> Result<crate::writing_stats::starmap_replay::StarMapProofExportPackage> {
+        crate::writing_stats::starmap_replay::export_starmap_proof(
+            &self.contribution_store,
+            starmap_id,
+            device_id,
+        )
+    }
+
+    pub fn list_starmap_proof_checkpoints(
+        &self,
+        device_id: &str,
+        starmap_id: &str,
+    ) -> Result<Vec<crate::writing_stats::starmap_checkpoint::StarMapProofCheckpoint>> {
+        crate::writing_stats::starmap_checkpoint::load_starmap_checkpoints(
+            self.contribution_store.app_data_root(),
+            device_id,
+            starmap_id,
+        )
     }
 
     /// 幂等记录一批 AI 方向事件。请求输入与模型响应输出分别是独立事件，

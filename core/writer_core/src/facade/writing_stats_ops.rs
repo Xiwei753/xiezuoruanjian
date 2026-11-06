@@ -585,19 +585,34 @@ impl super::WriterCore {
             platform.default_device_class(),
             preferred_device_id.as_deref(),
         )?;
-        let segment = crate::writing_stats::WritingActivitySegment::new(
-            input.event_id,
-            &device_info.device_id,
-            platform,
-            &device_info.device_class,
-            &input.project_id,
-            &input.volume_id,
-            &input.chapter_id,
-            &input.session_id,
-            input.start_at_ms,
-            input.end_at_ms,
-            &input.pause_reason,
-        )?;
+        let segment = if input.starmap_id.is_empty() {
+            crate::writing_stats::WritingActivitySegment::new(
+                input.event_id,
+                &device_info.device_id,
+                platform,
+                &device_info.device_class,
+                &input.project_id,
+                &input.volume_id,
+                &input.chapter_id,
+                &input.session_id,
+                input.start_at_ms,
+                input.end_at_ms,
+                &input.pause_reason,
+            )?
+        } else {
+            crate::writing_stats::WritingActivitySegment::new_for_starmap(
+                input.event_id,
+                &device_info.device_id,
+                platform,
+                &device_info.device_class,
+                (!input.project_id.is_empty()).then_some(input.project_id.as_str()),
+                &input.starmap_id,
+                &input.session_id,
+                input.start_at_ms,
+                input.end_at_ms,
+                &input.pause_reason,
+            )?
+        };
         self.get_stats_api().record_activity_segment(segment)
     }
 

@@ -428,6 +428,142 @@ impl WriterCoreApi {
         )?;
         Self::json_string(&stats)
     }
+
+    /// 星图统计：与正文分开查询，但可进入统一全局汇总。
+    pub fn get_starmap_stats(
+        &self,
+        start_date: &str,
+        end_date: &str,
+        project_id: Option<&str>,
+    ) -> ApiResult<crate::api::types::StarMapStatsSummaryDto> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let metas: Vec<crate::writing_stats::projection::StarMapStatsMeta> = self
+            .list_starmaps()?
+            .into_iter()
+            .map(|meta| crate::writing_stats::projection::StarMapStatsMeta {
+                starmap_id: meta.starmap_id,
+                project_id: meta.project_id,
+                title: meta.title,
+            })
+            .collect();
+        let current_texts = self.collect_current_starmap_texts(project_id)?;
+        let (aggregate, history_scope) = {
+            let core = self.core_read();
+            let stats = core.get_stats_api();
+            (
+                stats.get_starmap_stats(
+                    start_date,
+                    end_date,
+                    project_id,
+                    &current_texts,
+                    &metas,
+                )?,
+                stats.history_scope(),
+            )
+        };
+        Ok(starmap_stats_dto(
+            &aggregate,
+            start_date,
+            end_date,
+            project_id,
+            history_scope,
+        ))
+    }
+
+    pub fn get_starmap_stats_json(
+        &self,
+        start_date: &str,
+        end_date: &str,
+        project_id: Option<&str>,
+    ) -> ApiResult<String> {
+        Self::json_string(&self.get_starmap_stats(start_date, end_date, project_id)?)
+    }
+
+    pub fn replay_starmap_proof_json(&self, request_json: &str) -> ApiResult<String> {
+        let request: crate::writing_stats::starmap_replay::StarMapReplayRequest =
+            serde_json::from_str(request_json).map_err(|error| {
+                crate::api::error::WriterError::Other(format!(
+                    "invalid starmap replay request: {error}"
+                ))
+            })?;
+        let frame = self
+            .core_read()
+            .get_stats_api()
+            .replay_starmap_proof(&request)?;
+        Self::json_string(&frame)
+    }
+
+    pub fn export_starmap_proof_json(
+        &self,
+        starmap_id: &str,
+        device_id: &str,
+    ) -> ApiResult<String> {
+        let package = self
+            .core_read()
+            .get_stats_api()
+            .export_starmap_proof(starmap_id, device_id)?;
+        Self::json_string(&package)
+    }
+
+    pub fn list_starmap_proof_checkpoints_json(
+        &self,
+        device_id: &str,
+        starmap_id: &str,
+    ) -> ApiResult<String> {
+        let checkpoints = self
+            .core_read()
+            .get_stats_api()
+            .list_starmap_proof_checkpoints(device_id, starmap_id)?;
+        Self::json_string(&checkpoints)
+    }
+}
+
+fn starmap_stats_dto(
+    aggregate: &crate::writing_stats::projection::StarMapStatsAgg,
+    start_date: &str,
+    end_date: &str,
+    project_id: Option<&str>,
+    history_scope: String,
+) -> crate::api::types::StarMapStatsSummaryDto {
+    crate::api::types::StarMapStatsSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+        },
+        project_id: project_id.map(str::to_string),
+        total_records: aggregate.records.len() as u32,
+        current_chars: aggregate.current_chars,
+        inserted_chars: aggregate.inserted_chars,
+        deleted_chars: aggregate.deleted_chars,
+        modified_chars: aggregate.modified_chars,
+        total_operations: aggregate.total_operations,
+        human_operations: aggregate.human_operations,
+        ai_operations: aggregate.ai_operations,
+        active_seconds: aggregate.active_seconds,
+        starmaps: aggregate
+            .records
+            .iter()
+            .map(|record| crate::api::types::StarMapStatsRecordDto {
+                starmap_id: record.starmap_id.clone(),
+                project_id: record.project_id.clone(),
+                title: record.title.clone(),
+                current_chars: record.current_chars,
+                inserted_chars: record.inserted_chars,
+                deleted_chars: record.deleted_chars,
+                modified_chars: record.modified_chars,
+                node_operations: record.node_operations,
+                edge_operations: record.edge_operations,
+                embed_operations: record.embed_operations,
+                link_operations: record.link_operations,
+                total_operations: record.total_operations,
+                human_operations: record.human_operations,
+                ai_operations: record.ai_operations,
+                active_seconds: record.active_seconds,
+            })
+            .collect(),
+        history_scope,
+    }
 }
 
 fn contribution_counts_dto(

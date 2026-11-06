@@ -218,6 +218,9 @@ pub struct StarMapNodePatchDto {
     pub position: Option<StarMapPointDto>,
     pub style: Option<StarMapNodeStyleDto>,
     pub provenance: Option<StarMapProvenanceDto>,
+    /// 拖动轨迹关键点（仅平台端拖动提交时携带）；Core 只作为回放显示辅助。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trajectory: Vec<crate::writing_stats::starmap_proof::StarMapProofTrajectorySample>,
 }
 
 impl TryFrom<StarMapNodePatchDto> for crate::starmap::types::StarMapNodePatch {
@@ -356,6 +359,7 @@ impl From<StarMapNodePatchInputDto> for StarMapNodePatchDto {
             position: d.position,
             style: d.style,
             provenance: d.provenance,
+            trajectory: Vec::new(),
         }
     }
 }
