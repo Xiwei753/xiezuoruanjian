@@ -238,48 +238,90 @@ fn expected_event_hash(events: &[ContributionEvent], index: usize, head: &str) -
     }
 }
 
-/// 一次算出整条分支的前缀校验状态，避免跳转时跳过早期断链。
-fn validate_event_chain(events: &[ContributionEvent]) -> Vec<bool> {
+/// 整条分支的一次性前缀校验结果：哈希链 + 真实对象状态转换。
+struct PrefixValidation {
+    /// 0..=N 每个位置是否可以安全跳转。
+    valid: Vec<bool>,
+    /// 0..=N 每个位置的完整图状态摘要。
+    state_hashes: Vec<String>,
+    /// 第一个失败位置；无失败时为 `u64::MAX`。
+    first_invalid_position: u64,
+}
+
+/// 一次算出整条分支的哈希链与对象状态连续性，避免跳转时绕过早期断链。
+fn validate_event_chain(
+    events: &[ContributionEvent],
+    baseline: &StarMapProofState,
+) -> PrefixValidation {
     let mut valid = Vec::with_capacity(events.len() + 1);
+    let mut state_hashes = Vec::with_capacity(events.len() + 1);
     valid.push(true);
+    state_hashes.push(state_sha256(baseline));
+    let mut state = baseline.clone();
     let mut head = String::new();
+    let mut first_invalid_position = u64::MAX;
     for (index, event) in events.iter().enumerate() {
-        let stored = event
-            .replay_delta
-            .as_ref()
-            .and_then(|delta| delta.event_hash.clone());
-        let mut ok = stored.is_some();
-        if let Some(stored_hash) = stored.as_deref() {
-            let expected = expected_event_hash(events, index, &head);
-            ok = stored_hash == expected;
-            if let Some(delta) = event.replay_delta.as_ref() {
+        let mut ok = true;
+        let delta = event.replay_delta.as_ref();
+        let stored = delta.and_then(|delta| delta.event_hash.as_deref());
+        if let Some(delta) = delta {
+            if let Some(stored_hash) = stored {
+                ok = stored_hash == expected_event_hash(events, index, &head);
                 let prev_ok = match delta.prev_event_hash.as_deref() {
                     Some(prev) => prev == head,
                     None => head.is_empty(),
                 };
                 ok = ok && prev_ok;
+            } else {
+                ok = false;
             }
+            let current_before = state_object_for_delta(&state, delta);
+            if let Some(expected) = delta.before_state_hash.as_deref() {
+                ok = ok && proof_object_sha256(current_before.as_ref()) == expected;
+            }
+            if state.apply_delta(delta).is_err() {
+                ok = false;
+            } else {
+                let current_after = state_object_for_delta(&state, delta);
+                if let Some(expected) = delta.after_state_hash.as_deref() {
+                    ok = ok && proof_object_sha256(current_after.as_ref()) == expected;
+                }
+            }
+        } else {
+            ok = false;
         }
         let previous = *valid.last().unwrap_or(&true);
-        valid.push(previous && ok);
-        head = stored.unwrap_or_default();
+        let cumulative = previous && ok;
+        valid.push(cumulative);
+        state_hashes.push(state_sha256(&state));
+        if !cumulative && first_invalid_position == u64::MAX {
+            first_invalid_position = index as u64 + 1;
+        }
+        head = stored.unwrap_or_default().to_string();
     }
-    valid
+    PrefixValidation {
+        valid,
+        state_hashes,
+        first_invalid_position,
+    }
 }
 
-fn build_time_index(events: &[ContributionEvent]) -> Vec<(i64, u64)> {
-    let mut index: Vec<(i64, u64)> = events
-        .iter()
-        .enumerate()
-        .map(|(position, event)| (event.occurred_at_ms, position as u64))
-        .collect();
-    index.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    index
+/// 按提交位置维护前缀最大时间：位置 N 可还原当且仅当该前缀里所有事件
+/// `occurred_at_ms` 都不晚于目标时间。时间戳倒序不能打乱提交因果序。
+fn build_time_index(events: &[ContributionEvent]) -> Vec<i64> {
+    let mut prefix_max = Vec::with_capacity(events.len() + 1);
+    prefix_max.push(i64::MIN);
+    let mut max_timestamp = i64::MIN;
+    for event in events {
+        max_timestamp = max_timestamp.max(event.occurred_at_ms);
+        prefix_max.push(max_timestamp);
+    }
+    prefix_max
 }
 
 fn checkpoint_prefix_matches(
     events: &[ContributionEvent],
-    prefix_valid: &[bool],
+    validation: &PrefixValidation,
     checkpoint: &StarMapProofCheckpoint,
 ) -> bool {
     if checkpoint.position == 0 {
@@ -288,18 +330,24 @@ fn checkpoint_prefix_matches(
     let Ok(index) = usize::try_from(checkpoint.position - 1) else {
         return false;
     };
-    if !prefix_valid
+    if !validation
+        .valid
         .get(checkpoint.position as usize)
         .copied()
         .unwrap_or(false)
     {
         return false;
     }
-    events
+    let hash_ok = events
         .get(index)
         .and_then(|event| event.replay_delta.as_ref())
         .and_then(|delta| delta.event_hash.as_deref())
-        .is_some_and(|hash| checkpoint.anchors_event_chain(hash))
+        .is_some_and(|hash| checkpoint.anchors_event_chain(hash));
+    let state_ok = validation
+        .state_hashes
+        .get(checkpoint.position as usize)
+        .is_some_and(|hash| hash == &checkpoint.state_sha256);
+    hash_ok && state_ok
 }
 
 /// 一次回放会话。向前播放时复用当前状态，只在目标位置回退时从最近检查点重建。
@@ -316,8 +364,8 @@ pub struct StarMapReplaySession {
     baseline_state: StarMapProofState,
     chain_head: String,
     legacy_event_count: u64,
-    prefix_valid: Vec<bool>,
-    time_index: Vec<(i64, u64)>,
+    prefix_validation: PrefixValidation,
+    time_index: Vec<i64>,
     errors: Vec<String>,
     root: std::path::PathBuf,
 }
@@ -351,17 +399,10 @@ impl StarMapReplaySession {
             .collect();
         sort_events(&mut events);
 
-        let prefix_valid = validate_event_chain(&events);
-        let time_index = build_time_index(&events);
         let checkpoints = if device_id.is_empty() {
             Vec::new()
         } else {
             load_starmap_checkpoints(store.app_data_root(), &device_id, &request.starmap_id)?
-                .into_iter()
-                .filter(|checkpoint| {
-                    checkpoint_prefix_matches(&events, &prefix_valid, checkpoint)
-                })
-                .collect()
         };
         let legacy_event_count = events
             .iter()
@@ -385,12 +426,21 @@ impl StarMapReplaySession {
             baseline_state: StarMapProofState::empty(&request.starmap_id),
             chain_head: String::new(),
             legacy_event_count,
-            prefix_valid,
-            time_index,
+            prefix_validation: PrefixValidation {
+                valid: Vec::new(),
+                state_hashes: Vec::new(),
+                first_invalid_position: u64::MAX,
+            },
+            time_index: Vec::new(),
             errors: Vec::new(),
             root: store.app_data_root().to_path_buf(),
         };
         session.initialize_baseline();
+        session.prefix_validation = validate_event_chain(&session.events, &session.baseline_state);
+        session.time_index = build_time_index(&session.events);
+        session.checkpoints.retain(|checkpoint| {
+            checkpoint_prefix_matches(&session.events, &session.prefix_validation, checkpoint)
+        });
         if session.legacy_event_count > 0 {
             session.history_complete = false;
         }
@@ -475,16 +525,12 @@ impl StarMapReplaySession {
             return (index as u64 + 1).min(total);
         }
         if let Some(time_ms) = request.target_time_ms {
-            // 事件按提交顺序排序，时间戳可能倒序；必须用独立时间索引定位。
+            // 前缀最大时间单调递增；只选「该前缀所有事件都不晚于目标时间」
+            // 的最长提交前缀，避免把时间更晚但先提交的操作带进画面。
             let count = self
                 .time_index
-                .partition_point(|(timestamp, _)| *timestamp <= time_ms);
-            return self
-                .time_index
-                .get(count.saturating_sub(1))
-                .map(|(_, position)| position.saturating_add(1))
-                .unwrap_or(0)
-                .min(total);
+                .partition_point(|timestamp| *timestamp <= time_ms);
+            return (count.saturating_sub(1) as u64).min(total);
         }
         total
     }
@@ -495,7 +541,7 @@ impl StarMapReplaySession {
         let checkpoint = latest_checkpoint_at_or_before(&self.checkpoints, target);
         if let Some(checkpoint) = checkpoint {
             if checkpoint.hash_matches()
-                && checkpoint_prefix_matches(&self.events, &self.prefix_valid, checkpoint)
+                && checkpoint_prefix_matches(&self.events, &self.prefix_validation, checkpoint)
             {
                 self.cursor_state = checkpoint.state.clone();
                 self.cursor_position = checkpoint.position.min(self.events.len() as u64);
@@ -532,7 +578,7 @@ impl StarMapReplaySession {
             if let Some(checkpoint) = latest_checkpoint_at_or_before(&self.checkpoints, target) {
                 if checkpoint.position > self.cursor_position
                     && checkpoint.hash_matches()
-                    && checkpoint_prefix_matches(&self.events, &self.prefix_valid, checkpoint)
+                    && checkpoint_prefix_matches(&self.events, &self.prefix_validation, checkpoint)
                 {
                     self.cursor_state = checkpoint.state.clone();
                     self.cursor_position = checkpoint.position;
@@ -638,15 +684,11 @@ impl StarMapReplaySession {
     }
 
     fn prefix_error_at(&self, target: u64) -> Option<String> {
-        (1..=target)
-            .find(|position| {
-                !self
-                    .prefix_valid
-                    .get(*position as usize)
-                    .copied()
-                    .unwrap_or(false)
-            })
-            .map(|position| format!("event chain validation failed at position {position}"))
+        let first = self.prefix_validation.first_invalid_position;
+        if first == u64::MAX || target < first {
+            return None;
+        }
+        Some(format!("event chain validation failed at position {first}"))
     }
 
     pub fn frame_at(&mut self, request: &StarMapReplayRequest) -> StarMapReplayFrame {
@@ -760,14 +802,7 @@ pub fn export_starmap_proof(
         .filter(|event| event.origin_device_id == frame.device_id)
         .collect();
     sort_events(&mut events);
-    let prefix_valid = validate_event_chain(&events);
-    let checkpoints: Vec<StarMapProofCheckpoint> =
-        load_starmap_checkpoints(store.app_data_root(), &frame.device_id, starmap_id)?
-            .into_iter()
-            .filter(|checkpoint| {
-                checkpoint_prefix_matches(&events, &prefix_valid, checkpoint)
-            })
-            .collect();
+    let checkpoints = session.validated_checkpoints().to_vec();
     let baseline = checkpoints
         .iter()
         .find(|checkpoint| checkpoint.position == 0)
@@ -800,5 +835,10 @@ pub fn export_starmap_proof(
 impl StarMapReplaySession {
     pub fn root(&self) -> &std::path::Path {
         &self.root
+    }
+
+    /// 只返回哈希链和对象状态转换都通过、且与真实前缀状态摘要一致的检查点。
+    pub fn validated_checkpoints(&self) -> &[StarMapProofCheckpoint] {
+        &self.checkpoints
     }
 }

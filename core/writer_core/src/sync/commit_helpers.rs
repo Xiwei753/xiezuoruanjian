@@ -490,7 +490,7 @@ fn apply_commit_plan_with_optional_merge(
     backup_mode: bool,
     proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
 ) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
-    if plan.needs_sync_state_merge {
+    let result = if plan.needs_sync_state_merge {
         let base_root = run.base_root();
         let staging_root = run.staging_root();
         let app_group = run.app_group();
@@ -529,7 +529,18 @@ fn apply_commit_plan_with_optional_merge(
             backup_mode,
             proof_recovery_records,
         )
+    };
+    if result.is_ok()
+        && matches!(
+            run.app_group(),
+            Some(crate::sync::types::AppDataGroup::StatsDevice(_))
+        )
+    {
+        // 同步直接搬运 JSONL 不会经过 ContributionStore 写入路径；提交成功后
+        // 显式递增事件库代数，避免回放缓存/事件 ID 缓存继续信任旧目录指纹。
+        crate::writing_stats::contribution_store::invalidate_stats_event_store(live_root);
     }
+    result
 }
 
 /// 在 staging cleanup 前，对 plan.conflict 的每个 StagingConflict 读取 incoming

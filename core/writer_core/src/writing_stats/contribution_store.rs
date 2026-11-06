@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use crate::error::{Error, Result};
 use crate::storage::atomic_write_string;
@@ -36,6 +36,14 @@ pub struct ContributionStore {
 struct OriginEventIdCache {
     fingerprint: u64,
     ids: HashSet<String>,
+}
+
+/// 跨 `ContributionStore` 实例共享的写锁：同一个 app data 根下只能有一个
+/// 写入者完成 recover→去重→分配回放元数据→追加→索引更新。
+static CONTRIBUTION_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn contribution_write_lock() -> &'static Mutex<()> {
+    CONTRIBUTION_WRITE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 struct ReplayMetadata {
@@ -557,6 +565,9 @@ impl ContributionStore {
         if events.is_empty() {
             return Ok(0);
         }
+        let _write_guard = contribution_write_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let origin = self.resolve_origin_device_id()?;
         let device_info =
             crate::settings::load_device_info(&self.app_data_root).unwrap_or_default();
@@ -585,7 +596,7 @@ impl ContributionStore {
             prepared.push(event);
         }
 
-        self.recover_pending_events()?;
+        self.recover_pending_events_locked()?;
         // 先按真实落盘事实去重，再给新增事件分配序号/计数/哈希。重发相同
         // event_id 时不能推进任何派生索引，否则会留下不存在的“幽灵链头”。
         let mut existing_by_origin: HashMap<String, HashSet<String>> = HashMap::new();
@@ -640,18 +651,18 @@ impl ContributionStore {
         fs::create_dir_all(&partition_dir)?;
         let mut written = 0usize;
         let mut written_ids: Vec<String> = Vec::new();
+        let existing_ids = existing_by_origin.entry(origin.clone()).or_default();
         for (date, events) in by_date {
             let path = self.event_file_path(&origin, &date);
-            let mut existing = read_ids(&path)?;
             let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
             for event in events {
-                if !event.event_id.is_empty() && existing.contains(&event.event_id) {
+                if !event.event_id.is_empty() && existing_ids.contains(&event.event_id) {
                     continue;
                 }
                 let line = serde_json::to_string(&event)?;
                 writeln!(file, "{line}")?;
                 if !event.event_id.is_empty() {
-                    existing.insert(event.event_id.clone());
+                    existing_ids.insert(event.event_id.clone());
                     written_ids.push(event.event_id.clone());
                 }
                 written += 1;
@@ -664,14 +675,24 @@ impl ContributionStore {
         // 元数据和分支计数落稳后才删 journal；中途崩溃时下次重放会重新
         // 扫描真实事件并修正计数，避免沿用旧缓存跳过位置。
         fs::remove_file(&pending_path)?;
-        self.maintain_starmap_checkpoints(&checkpoint_targets);
         self.bump_replay_generation();
         self.cache_written_event_ids(&origin, &written_ids);
+        // 检查点回放会通过 load_all_events 重入 pending recovery；先释放写锁，
+        // 否则同一线程会在不可重入的全局锁上死锁。
+        drop(_write_guard);
+        self.maintain_starmap_checkpoints(&checkpoint_targets);
         Ok(written)
     }
 
     /// 重放上次进程在「业务已成功、事件已进入 journal」之后未能追加的事件。
     pub fn recover_pending_events(&self) -> Result<()> {
+        let _write_guard = contribution_write_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.recover_pending_events_locked()
+    }
+
+    fn recover_pending_events_locked(&self) -> Result<()> {
         let pending_dir = self.app_data_root.join(PENDING_ROOT);
         if !pending_dir.is_dir() {
             return Ok(());
@@ -689,7 +710,7 @@ impl ContributionStore {
             let content = fs::read_to_string(&path)?;
             let events: Vec<ContributionEvent> = serde_json::from_str(&content)?;
             if !events.is_empty() {
-                self.append_events(&events)?;
+                self.append_events_locked(&events)?;
             }
             fs::remove_file(&path)?;
         }
@@ -724,7 +745,7 @@ impl ContributionStore {
         atomic_write_string(path, &serde_json::to_string(events)?)
     }
 
-    fn append_events(&self, events: &[ContributionEvent]) -> Result<()> {
+    fn append_events_locked(&self, events: &[ContributionEvent]) -> Result<()> {
         let mut by_origin_date: BTreeMap<(String, String), Vec<&ContributionEvent>> =
             BTreeMap::new();
         for event in events {
@@ -745,13 +766,19 @@ impl ContributionStore {
                 .or_default()
                 .push(event);
         }
+        let mut existing_by_origin: HashMap<String, HashSet<String>> = HashMap::new();
+        for (origin, _) in by_origin_date.keys() {
+            if !existing_by_origin.contains_key(origin) {
+                existing_by_origin.insert(origin.clone(), self.load_origin_event_ids(origin)?);
+            }
+        }
         let mut written_by_origin: HashMap<String, Vec<String>> = HashMap::new();
         for ((origin, date), events) in by_origin_date {
             let path = self.event_file_path(&origin, &date);
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            let mut existing = read_ids(&path)?;
+            let existing = existing_by_origin.entry(origin.clone()).or_default();
             let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
             for event in &events {
                 if !event.event_id.is_empty() && existing.contains(&event.event_id) {
@@ -923,6 +950,15 @@ impl ContributionStore {
         origins.sort();
         Ok(origins)
     }
+}
+
+/// 同步直接搬入事件文件后显式递增事件库代数，避免依赖目录 mtime。
+pub fn invalidate_stats_event_store(app_data_root: &Path) {
+    let path = app_data_root
+        .join(EVENTS_ROOT)
+        .join(".contribution-generation");
+    let value = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default() as u64;
+    let _ = atomic_write_string(&path, &value.to_string());
 }
 
 /// 解析本机统计事件分区使用的稳定设备 ID。
