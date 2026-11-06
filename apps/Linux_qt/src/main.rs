@@ -234,6 +234,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/MotionToolButton.qml" as "MotionToolButton.qml",
     "qml/MotionDialog.qml" as "MotionDialog.qml",
     "qml/ProofReplayDialog.qml" as "ProofReplayDialog.qml",
+    "qml/StarMapProofReplayDialog.qml" as "StarMapProofReplayDialog.qml",
     "qml/MotionMenu.qml" as "MotionMenu.qml",
     "qml/SectionHeader.qml" as "SectionHeader.qml",
     "qml/DesktopWheelScrollHandler.qml" as "DesktopWheelScrollHandler.qml",

@@ -1670,7 +1670,6 @@ private refitAfterContentAdded(): void {
    */
   /** 入参是**盒子坐标**（#821），内部换算到累计屏幕空间再做递归命中。 */
   async finishConnect(localBoxX: number, localBoxY: number) {
-    this.noteStarMapActivity()
     const sourcePath: StarMapTargetPath | null = this.connectSourcePath
     if (sourcePath === null) {
       return
@@ -1930,7 +1929,6 @@ private refitAfterContentAdded(): void {
    * （facade/starmap_ops/graph.rs::add_starmap_edge 把边写进 starmap_id 自己的图）。
    */
   async createEdgeBetween(from: StarMapTargetPath, to: StarMapTargetPath): Promise<boolean> {
-    this.noteStarMapActivity()
     const bridge: IWriterCoreBridge | null = this.bridge
     if (!bridge) {
       return false
@@ -1938,6 +1936,7 @@ private refitAfterContentAdded(): void {
     const result = await this.withPeerWriteBarrier(
       async () => bridge.addStarMapEdge(this.starmapId, from, to, 'RelatedTo', null))
     if (result.success && result.data) {
+      this.noteStarMapActivity()
       // 成功分支必须留痕：Issue #813 的诊断包里只有 create_starmap_child_embed，
       // 无法判断是"没画线"还是"画了线但没落库"。这条日志同时覆盖普通节点和 Embed 端点。
       hilog.info(
@@ -1970,7 +1969,6 @@ private refitAfterContentAdded(): void {
    * title / content 字段不传（undefined），Core 不会把它们当成清空。
    */
   async saveNodePosition(nodeId: string) {
-    this.noteStarMapActivity()
     const ln = this.getPlatformLayoutNode(nodeId)
     const bridge: IWriterCoreBridge | null = this.bridge
     if (!ln || !bridge) return
@@ -1980,6 +1978,8 @@ private refitAfterContentAdded(): void {
         { position: { x: ln.x, y: ln.y } }))
     if (!result.success) {
       hilog.error(0x0000, 'StarMapScene', `saveNodePosition failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
+    } else {
+      this.noteStarMapActivity()
     }
     this.onMoveNode(this.scenePath, this.starmapId, nodeId, { x: ln.x, y: ln.y })
   }
@@ -2178,7 +2178,6 @@ private refitAfterContentAdded(): void {
     body: string,
     editContent: boolean
   ): Promise<StarMapNodeSaveResult> {
-    this.noteStarMapActivity()
     const bridge: IWriterCoreBridge | null = this.bridge
     if (!this.graph || !bridge) {
       return { success: false, message: '星图尚未加载，暂时无法保存' }
@@ -2218,6 +2217,7 @@ private refitAfterContentAdded(): void {
         message: result.userMessage ?? '保存失败，请重试'
       }
     }
+    this.noteStarMapActivity()
     // await 之后重新取图：期间 Scene 可能已经被父层移除 / 换图。
     if (!this.graph) {
       return { success: false, message: '星图已切换，保存未完成' }
@@ -2280,7 +2280,6 @@ private refitAfterContentAdded(): void {
    * 用户捏合相机不会走到这里 —— 缩放只改显示变换，不改这里的任何一个数字。
    */
   async saveEmbedPosition(embedId: string) {
-    this.noteStarMapActivity()
     const ln = this.getPlatformLayoutNode(embedId)
     const bridge: IWriterCoreBridge | null = this.bridge
     if (!ln || !bridge) return
@@ -2291,6 +2290,8 @@ private refitAfterContentAdded(): void {
         { x: ln.x, y: ln.y }))
     if (!result.success) {
       hilog.error(0x0000, 'StarMapScene', `saveEmbedPosition failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
+    } else {
+      this.noteStarMapActivity()
     }
     this.onMoveEmbed(this.scenePath, this.starmapId, embedId, { x: ln.x, y: ln.y })
   }
@@ -2304,7 +2305,6 @@ private refitAfterContentAdded(): void {
    * #984：卡片宽高按标题 / 正文实测，不再用固定 160×80。
    */
   async performCreateNode(title: string) {
-    this.noteStarMapActivity()
     const trimmed: string = title.trim()
     if (trimmed.length === 0) return
     const bridge: IWriterCoreBridge | null = this.bridge
@@ -2323,6 +2323,7 @@ private refitAfterContentAdded(): void {
     const result = await this.withPeerWriteBarrier(
       async () => bridge.addStarMapNode(this.starmapId, trimmed, 'Custom', position))
     if (result.success && result.data) {
+      this.noteStarMapActivity()
       if (this.graph) {
         this.graph = {
           schemaVersion: this.graph.schemaVersion,
@@ -2357,7 +2358,6 @@ private refitAfterContentAdded(): void {
    * 在父圆边缘直接出生会大到顶满父圆甚至被裁掉，必须夹进圆内接正方形并让 local fit 缩小。
    */
   async performCreateEmbed(title: string) {
-    this.noteStarMapActivity()
     const trimmed: string = title.trim()
     if (trimmed.length === 0) return
     const bridge: IWriterCoreBridge | null = this.bridge
@@ -2375,6 +2375,7 @@ private refitAfterContentAdded(): void {
     const result = await this.withPeerWriteBarrier(
       async () => bridge.createStarmapChildEmbed(this.starmapId, trimmed, position))
     if (result.success && result.data) {
+      this.noteStarMapActivity()
       if (this.graph) {
         this.graph = {
           schemaVersion: this.graph.schemaVersion,

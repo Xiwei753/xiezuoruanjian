@@ -845,6 +845,7 @@ pub fn project_measured_sessions(
 ) -> Result<MeasuredSessionAgg> {
     let mut by_device: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
     let mut by_chapter: HashMap<(String, String, String, String), Vec<(i64, i64)>> = HashMap::new();
+    let mut by_starmap: HashMap<(String, String, String), Vec<(i64, i64)>> = HashMap::new();
     let mut by_session: HashMap<(String, String), Vec<(i64, i64)>> = HashMap::new();
     let mut session_dates: HashMap<(String, String), String> = HashMap::new();
 
@@ -868,6 +869,16 @@ pub fn project_measured_sessions(
                     segment.project_id.clone(),
                     segment.volume_id.clone(),
                     segment.chapter_id.clone(),
+                ))
+                .or_default()
+                .push(interval);
+        }
+        if let Some(starmap_id) = segment.star_map_id() {
+            by_starmap
+                .entry((
+                    segment.device_id.clone(),
+                    segment.project_id.clone(),
+                    starmap_id.to_string(),
                 ))
                 .or_default()
                 .push(interval);
@@ -898,6 +909,11 @@ pub fn project_measured_sessions(
         .filter(|(_, intervals)| !intervals.is_empty())
         .map(|(key, intervals)| (key, merge_intervals(intervals)))
         .collect();
+    let merged_by_starmap: HashMap<&(String, String, String), Vec<(i64, i64)>> = by_starmap
+        .iter()
+        .filter(|(_, intervals)| !intervals.is_empty())
+        .map(|(key, intervals)| (key, merge_intervals(intervals)))
+        .collect();
 
     let mut timed_human_typed_chars: u64 = 0;
     for event in events {
@@ -908,16 +924,26 @@ pub fn project_measured_sessions(
         if date.is_empty() || !date_in_range(&date, range) {
             continue;
         }
-        let key = (
-            event.device_id.clone(),
-            event.project_id.clone(),
-            event.volume_id.clone(),
-            event.chapter_id.clone(),
-        );
-        if merged_by_chapter
-            .get(&key)
-            .is_some_and(|intervals| interval_contains(intervals, event.timestamp_ms))
-        {
+        let covered = if let Some(starmap_id) = event.starmap_id.as_deref() {
+            merged_by_starmap
+                .get(&(
+                    event.device_id.clone(),
+                    event.project_id.clone(),
+                    starmap_id.to_string(),
+                ))
+                .is_some_and(|intervals| interval_contains(intervals, event.timestamp_ms))
+        } else {
+            let key = (
+                event.device_id.clone(),
+                event.project_id.clone(),
+                event.volume_id.clone(),
+                event.chapter_id.clone(),
+            );
+            merged_by_chapter
+                .get(&key)
+                .is_some_and(|intervals| interval_contains(intervals, event.timestamp_ms))
+        };
+        if covered {
             timed_human_typed_chars += u64::from(event.inserted_chars);
         }
     }
@@ -1788,23 +1814,10 @@ pub fn project_starmap_stats(
     project_id: Option<&str>,
 ) -> StarMapStatsAgg {
     let mut records: BTreeMap<String, StarMapStatsRecordAgg> = BTreeMap::new();
-    let mut meta_project: BTreeMap<&str, Option<&str>> = BTreeMap::new();
-    for meta in metas {
-        if project_id.is_some_and(|value| meta.project_id.as_deref() != Some(value)) {
-            continue;
-        }
-        meta_project.insert(meta.starmap_id.as_str(), meta.project_id.as_deref());
-        records.insert(
-            meta.starmap_id.clone(),
-            StarMapStatsRecordAgg {
-                starmap_id: meta.starmap_id.clone(),
-                project_id: meta.project_id.clone(),
-                title: meta.title.clone(),
-                ..StarMapStatsRecordAgg::default()
-            },
-        );
-    }
+    let mut historical_projects: BTreeMap<String, std::collections::BTreeSet<String>> =
+        BTreeMap::new();
 
+    // 先从查询区间的事件建立历史 ID：已删除星图仍保留当期创作贡献。
     for event in events {
         let date = event_local_date(event);
         if date.is_empty() || date.as_str() < start_date || date.as_str() > end_date {
@@ -1819,9 +1832,33 @@ pub fn project_starmap_stats(
                     None => continue,
                 }
             };
-        let Some(record) = records.get_mut(starmap_id) else {
-            continue;
-        };
+        let record =
+            records
+                .entry(starmap_id.to_string())
+                .or_insert_with(|| StarMapStatsRecordAgg {
+                    starmap_id: starmap_id.to_string(),
+                    project_id: None,
+                    title: starmap_id.to_string(),
+                    ..StarMapStatsRecordAgg::default()
+                });
+        if !event.project_id.is_empty() {
+            historical_projects
+                .entry(starmap_id.to_string())
+                .or_default()
+                .insert(event.project_id.clone());
+            if record.project_id.is_none() {
+                record.project_id = Some(event.project_id.clone());
+            }
+        }
+        if event.object_type == crate::writing_stats::ContributionObjectType::StarMap {
+            if let Some(summary) = event
+                .after_summary
+                .as_ref()
+                .or(event.before_summary.as_ref())
+            {
+                record.title = summary.clone();
+            }
+        }
         record.inserted_chars += u64::from(event.inserted_chars);
         record.deleted_chars += u64::from(event.deleted_chars);
         record.modified_chars += u64::from(event.modified_chars);
@@ -1848,6 +1885,60 @@ pub fn project_starmap_stats(
         }
     }
 
+    // 区间内只有计时、没有贡献事件的星图也要出现在明细里。
+    for segment in segments {
+        let Some(starmap_id) = segment.star_map_id() else {
+            continue;
+        };
+        let date = segment.business_date();
+        if date.is_empty() || date.as_str() < start_date || date.as_str() > end_date {
+            continue;
+        }
+        let record =
+            records
+                .entry(starmap_id.to_string())
+                .or_insert_with(|| StarMapStatsRecordAgg {
+                    starmap_id: starmap_id.to_string(),
+                    project_id: None,
+                    title: starmap_id.to_string(),
+                    ..StarMapStatsRecordAgg::default()
+                });
+        if !segment.project_id.is_empty() {
+            historical_projects
+                .entry(starmap_id.to_string())
+                .or_default()
+                .insert(segment.project_id.clone());
+            if record.project_id.is_none() {
+                record.project_id = Some(segment.project_id.clone());
+            }
+        }
+    }
+
+    // 当前仍存在的星图用真实 meta 覆盖标题/归属；已删除星图保留历史标题。
+    for meta in metas {
+        let record =
+            records
+                .entry(meta.starmap_id.clone())
+                .or_insert_with(|| StarMapStatsRecordAgg {
+                    starmap_id: meta.starmap_id.clone(),
+                    project_id: meta.project_id.clone(),
+                    title: meta.title.clone(),
+                    ..StarMapStatsRecordAgg::default()
+                });
+        record.title = meta.title.clone();
+        record.project_id = meta.project_id.clone();
+    }
+
+    if let Some(project_id) = project_id {
+        records.retain(|starmap_id, record| {
+            let current_matches = record.project_id.as_deref() == Some(project_id);
+            let historical_matches = historical_projects
+                .get(starmap_id)
+                .is_some_and(|projects| projects.contains(project_id));
+            current_matches || historical_matches
+        });
+    }
+
     for snapshot in current_texts {
         let Some(container_id) = snapshot.container_id.as_deref() else {
             continue;
@@ -1855,15 +1946,6 @@ pub fn project_starmap_stats(
         let Some(record) = records.get_mut(container_id) else {
             continue;
         };
-        if meta_project
-            .get(container_id)
-            .and_then(|value| *value)
-            .is_some_and(|project| {
-                !snapshot.project_id.is_empty() && snapshot.project_id != project
-            })
-        {
-            continue;
-        }
         record.current_chars += snapshot.text.chars().count() as u64;
     }
 

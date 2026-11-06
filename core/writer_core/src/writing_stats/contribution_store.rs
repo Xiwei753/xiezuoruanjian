@@ -4,7 +4,7 @@
 //! 每台设备只追加自己的分区；读取时扫描全部已到达分区并按 `event_id` 去重。
 //! 同步只搬运文件，不重写 `actor`/`entrypoint`。
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -19,6 +19,7 @@ use crate::writing_stats::starmap_checkpoint::{
     append_starmap_checkpoint, has_starmap_checkpoints, StarMapProofCheckpoint,
     CHECKPOINT_REASON_BASELINE_INCOMPLETE, CHECKPOINT_REASON_CREATED,
 };
+use crate::writing_stats::starmap_proof::{compute_replay_event_hash, proof_object_sha256};
 
 const EVENTS_ROOT: &str = "stats/events";
 const PENDING_ROOT: &str = "stats/pending/contributions";
@@ -49,6 +50,231 @@ impl ContributionStore {
         self.events_root()
             .join(origin)
             .join(format!("{date}{OBJECTS_SUFFIX}"))
+    }
+
+    fn replay_sequence_path(&self, origin: &str) -> PathBuf {
+        self.events_root().join(origin).join("starmap.sequence")
+    }
+
+    fn replay_chain_path(&self, origin: &str, starmap_id: &str) -> PathBuf {
+        self.events_root()
+            .join(origin)
+            .join("starmap")
+            .join(format!("{starmap_id}.chain"))
+    }
+
+    fn generation_path(&self) -> PathBuf {
+        self.events_root().join(".contribution-generation")
+    }
+
+    /// 事件库代数：每次追加事件后更新，供回放缓存判断失效。
+    pub fn replay_generation(&self) -> u64 {
+        fs::read_to_string(self.generation_path())
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(0)
+    }
+
+    fn bump_replay_generation(&self) {
+        let value = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default() as u64;
+        let _ = atomic_write_string(&self.generation_path(), &value.to_string());
+    }
+
+    fn read_replay_sequence(&self, origin: &str) -> Result<u64> {
+        let path = self.replay_sequence_path(origin);
+        if let Ok(value) = fs::read_to_string(&path) {
+            if let Ok(sequence) = value.trim().parse::<u64>() {
+                return Ok(sequence);
+            }
+        }
+        // 首次升级后没有 sequence 文件：从已落盘事件里恢复最大位置。
+        let dir = self.events_root().join(origin);
+        let mut max_position = 0u64;
+        if dir.is_dir() {
+            for entry in fs::read_dir(&dir)? {
+                let path = entry?.path();
+                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if !name.ends_with(OBJECTS_SUFFIX) {
+                    continue;
+                }
+                let file = fs::File::open(&path)?;
+                for line in BufReader::new(file).lines() {
+                    let Ok(line) = line else { continue };
+                    let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                        continue;
+                    };
+                    if let Some(position) = value.get("replay_position").and_then(|v| v.as_u64()) {
+                        max_position = max_position.max(position.saturating_add(1));
+                    }
+                }
+            }
+        }
+        Ok(max_position)
+    }
+
+    fn read_replay_chain_head(&self, origin: &str, starmap_id: &str) -> String {
+        fs::read_to_string(self.replay_chain_path(origin, starmap_id))
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default()
+    }
+
+    /// 追加时分配来源设备内持久、单调的回放位置，并建立事件哈希链。
+    fn assign_replay_metadata(
+        &self,
+        events: &mut [ContributionEvent],
+    ) -> Result<(HashMap<String, u64>, HashMap<(String, String), String>)> {
+        let mut sequences: HashMap<String, u64> = HashMap::new();
+        let mut chains: HashMap<(String, String), String> = HashMap::new();
+        for event in events {
+            let Some(delta) = event.replay_delta.as_ref() else {
+                continue;
+            };
+            if event.origin_device_id.is_empty() {
+                continue;
+            }
+            let origin = event.origin_device_id.clone();
+            let starmap_id = delta.starmap_id.clone();
+            let chain_key = (origin.clone(), starmap_id.clone());
+            if !sequences.contains_key(&origin) {
+                sequences.insert(origin.clone(), self.read_replay_sequence(&origin)?);
+            }
+            let next = sequences.get_mut(&origin).expect("sequence inserted");
+            let position = match event.replay_position {
+                Some(position) => {
+                    *next = (*next).max(position.saturating_add(1));
+                    position
+                }
+                None => {
+                    let position = *next;
+                    *next = next.saturating_add(1);
+                    event.replay_position = Some(position);
+                    position
+                }
+            };
+            if event
+                .replay_delta
+                .as_ref()
+                .and_then(|delta| delta.event_hash.as_ref())
+                .is_some()
+            {
+                if let Some(hash) = event
+                    .replay_delta
+                    .as_ref()
+                    .and_then(|delta| delta.event_hash.clone())
+                {
+                    chains.insert(chain_key, hash);
+                }
+                continue;
+            }
+            if !chains.contains_key(&chain_key) {
+                chains.insert(
+                    chain_key.clone(),
+                    self.read_replay_chain_head(&origin, &starmap_id),
+                );
+            }
+            let head = chains.get(&chain_key).cloned().unwrap_or_default();
+            let mut delta = event.replay_delta.take().expect("delta exists");
+            if delta.before_state_hash.is_none() {
+                delta.before_state_hash = Some(proof_object_sha256(delta.before.as_ref()));
+            }
+            if delta.after_state_hash.is_none() {
+                delta.after_state_hash = Some(proof_object_sha256(delta.after.as_ref()));
+            }
+            delta.prev_event_hash = (!head.is_empty()).then_some(head.clone());
+            let event_hash = compute_replay_event_hash(&head, &event.event_id, position, &delta);
+            delta.event_hash = Some(event_hash.clone());
+            event.replay_delta = Some(delta);
+            chains.insert(chain_key, event_hash);
+        }
+        Ok((sequences, chains))
+    }
+
+    fn persist_replay_metadata(
+        &self,
+        sequences: &HashMap<String, u64>,
+        chains: &HashMap<(String, String), String>,
+    ) -> Result<()> {
+        for (origin, sequence) in sequences {
+            atomic_write_string(&self.replay_sequence_path(origin), &sequence.to_string())?;
+        }
+        for ((origin, starmap_id), hash) in chains {
+            if hash.is_empty() {
+                continue;
+            }
+            atomic_write_string(&self.replay_chain_path(origin, starmap_id), hash)?;
+        }
+        Ok(())
+    }
+
+    /// 事件落盘后按需维护完整图检查点，避免回放热路径写盘。
+    fn maintain_starmap_checkpoints(&self, targets: &[(String, String, u64)]) {
+        for (origin, starmap_id, position) in targets {
+            let checkpoints = crate::writing_stats::starmap_checkpoint::load_starmap_checkpoints(
+                &self.app_data_root,
+                origin,
+                starmap_id,
+            )
+            .unwrap_or_default();
+            let last = checkpoints
+                .iter()
+                .map(|checkpoint| checkpoint.position)
+                .max()
+                .unwrap_or(0);
+            if position.saturating_sub(last) < 64 {
+                continue;
+            }
+            let request = crate::writing_stats::starmap_replay::StarMapReplayRequest::for_position(
+                starmap_id, origin, *position,
+            );
+            let Ok(mut session) =
+                crate::writing_stats::starmap_replay::StarMapReplaySession::open(self, &request)
+            else {
+                continue;
+            };
+            let frame = session.frame_at(&request);
+            if !frame.valid {
+                continue;
+            }
+            let checkpoint = StarMapProofCheckpoint::new(
+                starmap_id,
+                origin,
+                *position,
+                frame.state,
+                crate::writing_stats::starmap_checkpoint::CHECKPOINT_REASON_PERIODIC,
+                frame.history_complete,
+            );
+            if let Err(error) = append_starmap_checkpoint(&self.app_data_root, &checkpoint) {
+                log::warn!("failed to append periodic starmap checkpoint: {error}");
+            }
+        }
+    }
+
+    /// 从已经带元数据的事件恢复 sequence/chain 头（pending 重放路径）。
+    fn persist_metadata_from_events(&self, events: &[ContributionEvent]) -> Result<()> {
+        let mut sequences: HashMap<String, u64> = HashMap::new();
+        let mut chains: HashMap<(String, String), String> = HashMap::new();
+        for event in events {
+            let Some(delta) = event.replay_delta.as_ref() else {
+                continue;
+            };
+            if let Some(position) = event.replay_position {
+                sequences
+                    .entry(event.origin_device_id.clone())
+                    .and_modify(|sequence| {
+                        *sequence = (*sequence).max(position.saturating_add(1));
+                    })
+                    .or_insert(position.saturating_add(1));
+            }
+            if let Some(hash) = delta.event_hash.as_ref() {
+                chains.insert(
+                    (event.origin_device_id.clone(), delta.starmap_id.clone()),
+                    hash.clone(),
+                );
+            }
+        }
+        self.persist_replay_metadata(&sequences, &chains)
     }
 
     pub fn resolve_origin_device_id(&self) -> Result<String> {
@@ -93,6 +319,8 @@ impl ContributionStore {
         }
 
         self.recover_pending_events()?;
+        let metadata = self.assign_replay_metadata(&mut prepared)?;
+        let checkpoint_targets = replay_checkpoint_targets(&prepared);
         let transaction_id = prepared
             .first()
             .map(|event| event.transaction_id.clone())
@@ -133,6 +361,9 @@ impl ContributionStore {
             }
         }
         fs::remove_file(&pending_path)?;
+        self.persist_replay_metadata(&metadata.0, &metadata.1)?;
+        self.maintain_starmap_checkpoints(&checkpoint_targets);
+        self.bump_replay_generation();
         Ok(written)
     }
 
@@ -230,6 +461,8 @@ impl ContributionStore {
         }
         let all_events: Vec<ContributionEvent> = events.to_vec();
         self.persist_baseline_checkpoints(&all_events);
+        self.persist_metadata_from_events(&all_events)?;
+        self.bump_replay_generation();
         Ok(())
     }
 
@@ -415,6 +648,25 @@ fn read_ids(path: &Path) -> Result<HashSet<String>> {
         }
     }
     Ok(ids)
+}
+
+/// 本批事件里每个来源设备/星图的最大回放位置，供写路径维护检查点。
+fn replay_checkpoint_targets(events: &[ContributionEvent]) -> Vec<(String, String, u64)> {
+    let mut targets: BTreeMap<(String, String), u64> = BTreeMap::new();
+    for event in events {
+        let (Some(delta), Some(position)) = (event.replay_delta.as_ref(), event.replay_position)
+        else {
+            continue;
+        };
+        targets
+            .entry((event.origin_device_id.clone(), delta.starmap_id.clone()))
+            .and_modify(|value| *value = (*value).max(position.saturating_add(1)))
+            .or_insert(position.saturating_add(1));
+    }
+    targets
+        .into_iter()
+        .map(|((origin, starmap_id), position)| (origin, starmap_id, position))
+        .collect()
 }
 
 pub(crate) fn valid_segment(value: &str) -> bool {

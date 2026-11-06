@@ -106,6 +106,17 @@ pub struct StarMapProofDelta {
     /// 创建/删除星图时根星图集合的真实变化。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roots_after: Option<Vec<String>>,
+    /// 同一来源分支上一条回放事件的哈希；分支首条为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev_event_hash: Option<String>,
+    /// 本事件哈希：prev + event_id + position + delta 稳定字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_hash: Option<String>,
+    /// delta 前/后对象状态的 sha256，用于回放时核对真实对象是否被外部改写。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_state_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_state_hash: Option<String>,
 }
 
 const fn default_format_version() -> u32 {
@@ -134,6 +145,10 @@ impl StarMapProofDelta {
             trajectory: Vec::new(),
             baseline: None,
             roots_after: None,
+            prev_event_hash: None,
+            event_hash: None,
+            before_state_hash: None,
+            after_state_hash: None,
         }
     }
 
@@ -154,6 +169,10 @@ impl StarMapProofDelta {
             trajectory: Vec::new(),
             baseline: None,
             roots_after: None,
+            prev_event_hash: None,
+            event_hash: None,
+            before_state_hash: None,
+            after_state_hash: None,
         }
     }
 
@@ -333,11 +352,8 @@ fn remove_object(
     match object_type {
         ContributionObjectType::StarMap => {
             state.meta = None;
-            // 星图删除后，后续对象删除事件仍按真实 ID 依次到达；这里清空图
-            // 是删除星图本身的事实结果，不回放旧内容。
-            let starmap_id = state.graph.starmap_id.clone();
-            state.graph = StarMapGraph::default();
-            state.graph.starmap_id = starmap_id;
+            // 星图删除后，后续对象删除事件仍按真实 ID 依次到达；这里只清
+            // 元数据与根身份，保留图对象让对象删除事件继续核对 before 状态。
             state.root_starmap_ids.clear();
         }
         ContributionObjectType::StarMapNode => {
@@ -370,4 +386,69 @@ pub fn state_sha256(state: &StarMapProofState) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// 单个对象状态摘要；`None` 表示该对象在该时刻不存在。
+pub fn proof_object_sha256(object: Option<&StarMapProofObject>) -> String {
+    match object {
+        Some(object) => sha256_hex(&serde_json::to_vec(object).unwrap_or_default()),
+        None => sha256_hex(b"missing"),
+    }
+}
+
+/// 从回放状态取出 delta 目标对象的当前完整状态。
+pub fn state_object_for_delta(
+    state: &StarMapProofState,
+    delta: &StarMapProofDelta,
+) -> Option<StarMapProofObject> {
+    proof_object_from_graph(&state.graph, delta.object_type, &delta.object_id).or_else(|| {
+        if delta.object_type == ContributionObjectType::StarMap {
+            state
+                .meta
+                .clone()
+                .map(|meta| StarMapProofObject::Meta { meta })
+        } else {
+            None
+        }
+    })
+}
+
+/// 计算一条回放事件的稳定哈希。
+///
+/// 只覆盖业务事实字段，不覆盖哈希自身；同步搬运后设备/操作者字段原样保留。
+pub fn compute_replay_event_hash(
+    prev_event_hash: &str,
+    event_id: &str,
+    replay_position: u64,
+    delta: &StarMapProofDelta,
+) -> String {
+    let payload = serde_json::json!({
+        "version": STARMAP_PROOF_FORMAT_VERSION,
+        "prev": prev_event_hash,
+        "eventId": event_id,
+        "position": replay_position,
+        "starmapId": delta.starmap_id,
+        "objectType": delta.object_type,
+        "objectId": delta.object_id,
+        "operation": delta.operation,
+        "before": delta.before,
+        "after": delta.after,
+        "trajectory": delta.trajectory,
+        "baseline": delta.baseline,
+        "rootsAfter": delta.roots_after,
+        "beforeStateHash": delta.before_state_hash,
+        "afterStateHash": delta.after_state_hash,
+    });
+    sha256_hex(&serde_json::to_vec(&payload).unwrap_or_default())
 }

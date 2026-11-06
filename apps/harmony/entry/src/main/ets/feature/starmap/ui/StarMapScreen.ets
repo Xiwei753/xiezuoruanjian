@@ -35,6 +35,7 @@ import { StarMapSyncBarrier } from '../platform/StarMapSyncBarrier'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { StarMapScene } from './StarMapScene'
+import { StarMapProofReplayPanel } from './StarMapProofReplayPanel'
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 import { AnnotationObjectRefDto } from '../../../corebridge/dto/AnnotationDtos'
 import { AnnotationPanel } from '../../editor/annotation/AnnotationPanel'
@@ -106,6 +107,7 @@ export struct StarMapScreen {
   @State private compactAnnotationPanelOpen: boolean = false
   @State private starMapToolPanelOpen: boolean = false
   @State private selectedStarMapTool: string = 'ai'
+  @State private starMapProofVisible: boolean = false
 
   // 全局视角相机（#818/#1009）：当前活动画布只有这一台相机。
   // 工具栏 +/- 和画布双指捏合改的都是它；节点和入口都只是这张画布里的内容。
@@ -1169,6 +1171,32 @@ export struct StarMapScreen {
         .backgroundColor($r('sys.color.background_secondary'))
         .width('100%')
         .height('100%')
+      }
+
+      // Issue #1036：星图创作记录入口（只读回放 Core 历史帧）。
+      Button('创作记录')
+        .fontSize(12)
+        .height(32)
+        .position({ x: 12, y: 12 })
+        .onClick(() => {
+          this.starMapProofVisible = true
+        })
+
+      if (this.starMapProofVisible) {
+        Column() {
+          StarMapProofReplayPanel({
+            bridge: this.bridge,
+            starmapId: this.starmapId,
+            onClose: (): void => {
+              this.starMapProofVisible = false
+            }
+          })
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .backgroundColor('#66000000')
       }
     }
     .alignContent(Alignment.BottomEnd)

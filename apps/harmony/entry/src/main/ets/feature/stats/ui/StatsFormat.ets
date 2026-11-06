@@ -54,7 +54,8 @@ export const EMPTY_STATS_EXPLORER: WritingStatsExplorer = {
     records: EMPTY_RECORDS,
     trend: EMPTY_TREND
   },
-  contributions: null
+  contributions: null,
+  starMap: null
 }
 
 /** 千分位整数。29456 → "29,456"。 */

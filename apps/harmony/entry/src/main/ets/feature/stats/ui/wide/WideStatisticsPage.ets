@@ -32,6 +32,7 @@ import { WidePeriodExpanded } from './WidePeriodExpanded'
 import { WideCompanionship } from './WideCompanionship'
 import { WideCalendarHeatmap } from './WideCalendarHeatmap'
 import { ContributionStatsSection } from '../ContributionStatsSection'
+import { StarMapStatsSection } from '../StarMapStatsSection'
 
 // 统计内容占宽屏正文可用宽度的比例（参考图约 973 / 1102vp）。
 const WIDE_CONTENT_WIDTH: string = '88.3%'
@@ -100,6 +101,7 @@ export struct WideStatisticsPage {
             .justifyContent(FlexAlign.Center)
 
             ContributionStatsSection({ stats: this.explorer.contributions })
+            StarMapStatsSection({ stats: this.explorer.starMap })
 
             if (this.expandedPanel === STATS_PANEL_LIFETIME) {
               // 生涯展开态没有四卡区，陪伴条直接跟在展开框后，但留白比普通段间距大。

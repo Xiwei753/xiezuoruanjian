@@ -206,6 +206,38 @@ Dialog {
                                    root.screenY(to.position.y, width, height) + 22)
                         ctx.stroke()
                     }
+                    var links = root.graph && root.graph.links ? root.graph.links : []
+                    ctx.strokeStyle = root.dt ? root.dt.accent : "#6f7fd8"
+                    ctx.setLineDash([4, 4])
+                    for (var k = 0; k < links.length; k++) {
+                        var link = links[k]
+                        var linkFrom = link.source && link.source.target && link.source.target.nodeId
+                                       ? nodeById[link.source.target.nodeId] : null
+                        var linkTo = link.target && link.target.target && link.target.target.nodeId
+                                     ? nodeById[link.target.target.nodeId] : null
+                        if (!linkFrom || !linkTo || !linkFrom.position || !linkTo.position) continue
+                        ctx.beginPath()
+                        ctx.moveTo(root.screenX(linkFrom.position.x, width, height) + 48,
+                                   root.screenY(linkFrom.position.y, width, height) + 22)
+                        ctx.lineTo(root.screenX(linkTo.position.x, width, height) + 48,
+                                   root.screenY(linkTo.position.y, width, height) + 22)
+                        ctx.stroke()
+                    }
+                    ctx.setLineDash([])
+                    var embeds = root.graph && root.graph.embeds ? root.graph.embeds : []
+                    ctx.fillStyle = root.dt ? root.dt.accentSoft : "#eef1ff"
+                    ctx.strokeStyle = root.dt ? root.dt.accent : "#6f7fd8"
+                    ctx.lineWidth = 2
+                    for (var e = 0; e < embeds.length; e++) {
+                        var embed = embeds[e]
+                        if (!embed.position) continue
+                        ctx.beginPath()
+                        ctx.arc(root.screenX(embed.position.x, width, height) + 48,
+                                root.screenY(embed.position.y, width, height) + 22,
+                                26, 0, Math.PI * 2)
+                        ctx.fill()
+                        ctx.stroke()
+                    }
                 }
             }
 
@@ -240,6 +272,33 @@ Dialog {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                         color: root.dt ? root.dt.textPrimary : Kirigami.Theme.textColor
+                    }
+                }
+            }
+
+            Repeater {
+                model: root.graph && root.graph.embeds ? root.graph.embeds : []
+                delegate: Rectangle {
+                    required property var modelData
+                    x: root.screenX(modelData.position ? modelData.position.x : 0,
+                                    graphCanvas.width, graphCanvas.height) + 22
+                    y: root.screenY(modelData.position ? modelData.position.y : 0,
+                                    graphCanvas.width, graphCanvas.height) - 4
+                    width: 52
+                    height: 52
+                    radius: 26
+                    color: "transparent"
+                    border.width: 2
+                    border.color: root.dt ? root.dt.accent : "#6f7fd8"
+                    Label {
+                        anchors.centerIn: parent
+                        width: parent.width - 8
+                        text: modelData.label || modelData.instanceId
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
+                        font.pixelSize: 9
+                        horizontalAlignment: Text.AlignHCenter
+                        color: root.dt ? root.dt.textSecondary : Kirigami.Theme.textColor
                     }
                 }
             }

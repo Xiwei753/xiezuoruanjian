@@ -169,6 +169,41 @@ export interface WritingStatsExplorer {
   selected: WritingStatsSelectedPeriod
   /** 当前选中区间的贡献来源快照；Core 未提供时为 null。 */
   contributions: ContributionStats | null
+  /** 当前选中区间的星图创作明细；旧 Core 未提供时为 null。 */
+  starMap: StarMapStatsSummary | null
+}
+
+export interface StarMapStatsRecord {
+  starmapId: string
+  projectId: string | null
+  title: string
+  currentChars: number
+  insertedChars: number
+  deletedChars: number
+  modifiedChars: number
+  nodeOperations: number
+  edgeOperations: number
+  embedOperations: number
+  linkOperations: number
+  totalOperations: number
+  humanOperations: number
+  aiOperations: number
+  activeSeconds: number
+}
+
+export interface StarMapStatsSummary {
+  projectId: string | null
+  totalRecords: number
+  currentChars: number
+  insertedChars: number
+  deletedChars: number
+  modifiedChars: number
+  totalOperations: number
+  humanOperations: number
+  aiOperations: number
+  activeSeconds: number
+  starmaps: StarMapStatsRecord[]
+  historyScope: string
 }
 
 // ─── WritingActivitySegmentInputDto：平台端已测量完成的前台写作切片 ───

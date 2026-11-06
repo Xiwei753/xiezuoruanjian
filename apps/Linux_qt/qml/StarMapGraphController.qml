@@ -717,6 +717,7 @@ QtObject {
         var res = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(withExpectedRevision(patch, revisionOfNode(nodeId)))), qsTr("更新节点失败"));
         if (res.success) {
             clearError();
+            noteHumanActivity();
             var updated = res.data;
             if (!updated || updated.id !== nodeId) {
                 // 返回结构不可用时退回全量加载，仍然不能只改 title。
@@ -821,6 +822,7 @@ QtObject {
             var nodeRes = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, embed.legacyPortalNodeId, JSON.stringify(withExpectedRevision(nodePatch, revisionOfNode(embed.legacyPortalNodeId)))), qsTr("更新节点失败"));
             if (nodeRes.success) {
                 clearError();
+                noteHumanActivity();
                 var updatedNode = nodeRes.data;
                 if (!updatedNode || updatedNode.id !== embed.legacyPortalNodeId
                         || !_replaceGraphObject("nodes", "id", embed.legacyPortalNodeId, updatedNode)) {
@@ -969,6 +971,7 @@ QtObject {
         );
         if (res.success) {
             clearError();
+            noteHumanActivity();
             var updated = res.data;
             if (!updated || updated.id !== nodeId
                     || !_replaceGraphObject("nodes", "id", nodeId, updated)
@@ -1015,6 +1018,7 @@ QtObject {
             );
             if (nodeRes.success) {
                 clearError();
+                noteHumanActivity();
                 var updatedNode = nodeRes.data;
                 if (!updatedNode || updatedNode.id !== embed.legacyPortalNodeId
                         || !_replaceGraphObject("nodes", "id", embed.legacyPortalNodeId, updatedNode)

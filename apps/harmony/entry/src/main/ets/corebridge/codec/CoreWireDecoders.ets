@@ -14,7 +14,7 @@
 
 import { LocalSettings, SyncableSettings, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { DateRange, Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
-import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, WritingStatsSelectedPeriod, WritingStatsRecord, WritingStatsRecords, WritingStatsTrend, WritingStatsTrendPoint, WritingStatsHeatmap, WritingStatsHeatmapDay, ContributionCounts, ContributionActorStats, ContributionObjectTypeStats, ContributionDayStats, ContributionDeviceStats, ContributionStats } from '../dto/StatsDtos'
+import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, WritingStatsSelectedPeriod, WritingStatsRecord, WritingStatsRecords, WritingStatsTrend, WritingStatsTrendPoint, WritingStatsHeatmap, WritingStatsHeatmapDay, ContributionCounts, ContributionActorStats, ContributionObjectTypeStats, ContributionDayStats, ContributionDeviceStats, ContributionStats, StarMapStatsSummary, StarMapStatsRecord } from '../dto/StatsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, FullSyncReport, FullSyncReportFailure, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
@@ -898,6 +898,65 @@ function decodeContributionStats(data: Object): DecodeResult<ContributionStats> 
   return ok<ContributionStats>(value)
 }
 
+function decodeStarMapStatsRecord(data: Object): DecodeResult<StarMapStatsRecord> {
+  const starmapId: string | null = reqStr(data, 'starmapId')
+  const title: string | null = reqStr(data, 'title')
+  const currentChars: number | null = reqNum(data, 'currentChars')
+  const totalOperations: number | null = reqNum(data, 'totalOperations')
+  const humanOperations: number | null = reqNum(data, 'humanOperations')
+  const aiOperations: number | null = reqNum(data, 'aiOperations')
+  const activeSeconds: number | null = reqNum(data, 'activeSeconds')
+  if (starmapId === null || title === null || currentChars === null
+      || totalOperations === null || humanOperations === null
+      || aiOperations === null || activeSeconds === null) {
+    return err<StarMapStatsRecord>('StarMapStatsRecord: required field missing')
+  }
+  const projectIdR: DecodeResult<string | null> = nullStr(data, 'projectId')
+  return ok<StarMapStatsRecord>({
+    starmapId: starmapId,
+    projectId: projectIdR.ok ? projectIdR.value ?? null : null,
+    title: title,
+    currentChars: currentChars,
+    insertedChars: reqNum(data, 'insertedChars') ?? 0,
+    deletedChars: reqNum(data, 'deletedChars') ?? 0,
+    modifiedChars: reqNum(data, 'modifiedChars') ?? 0,
+    nodeOperations: reqNum(data, 'nodeOperations') ?? 0,
+    edgeOperations: reqNum(data, 'edgeOperations') ?? 0,
+    embedOperations: reqNum(data, 'embedOperations') ?? 0,
+    linkOperations: reqNum(data, 'linkOperations') ?? 0,
+    totalOperations: totalOperations,
+    humanOperations: humanOperations,
+    aiOperations: aiOperations,
+    activeSeconds: activeSeconds
+  })
+}
+
+function decodeStarMapStats(data: Object): DecodeResult<StarMapStatsSummary> {
+  const recordsArr: Array<Object> | null = reqArray(data, 'starmaps')
+  if (recordsArr === null) { return err<StarMapStatsSummary>('StarMapStatsSummary: starmaps missing') }
+  const recordsR: DecodeResult<StarMapStatsRecord[]> =
+    decodeArray<StarMapStatsRecord>(recordsArr as Object, decodeStarMapStatsRecord, 'starmaps')
+  if (!recordsR.ok || recordsR.value === undefined) {
+    return err<StarMapStatsSummary>(recordsR.error ?? 'starmaps decode failed')
+  }
+  const projectIdR: DecodeResult<string | null> = nullStr(data, 'projectId')
+  return ok<StarMapStatsSummary>({
+    projectId: projectIdR.ok ? projectIdR.value ?? null : null,
+    totalRecords: reqNum(data, 'totalRecords') ?? recordsR.value.length,
+    currentChars: reqNum(data, 'currentChars') ?? 0,
+    insertedChars: reqNum(data, 'insertedChars') ?? 0,
+    deletedChars: reqNum(data, 'deletedChars') ?? 0,
+    modifiedChars: reqNum(data, 'modifiedChars') ?? 0,
+    totalOperations: reqNum(data, 'totalOperations') ?? 0,
+    humanOperations: reqNum(data, 'humanOperations') ?? 0,
+    aiOperations: reqNum(data, 'aiOperations') ?? 0,
+    activeSeconds: reqNum(data, 'activeSeconds') ?? 0,
+    starmaps: recordsR.value,
+    historyScope: reqStr(data, 'historyScope') ?? ''
+  })
+}
+
+
 export function decodeWritingStatsExplorer(data: Object): DecodeResult<WritingStatsExplorer> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return err<WritingStatsExplorer>('WritingStatsExplorer: expected object')
@@ -927,12 +986,23 @@ export function decodeWritingStatsExplorer(data: Object): DecodeResult<WritingSt
     }
     contributions = contributionsR.value
   }
+  let starMap: StarMapStatsSummary | null = null
+  const starMapObjR: DecodeResult<Object | undefined> = optObj(data, 'starMap')
+  if (!starMapObjR.ok) { return err<WritingStatsExplorer>(starMapObjR.error ?? 'starMap decode failed') }
+  if (starMapObjR.value !== undefined) {
+    const starMapR: DecodeResult<StarMapStatsSummary> = decodeStarMapStats(starMapObjR.value)
+    if (!starMapR.ok || starMapR.value === undefined) {
+      return err<WritingStatsExplorer>(starMapR.error ?? 'starMap decode failed')
+    }
+    starMap = starMapR.value
+  }
   const value: WritingStatsExplorer = {
     historyScope: historyScope,
     lifetime: lifetimeR.value,
     periodCards: cardsR.value,
     selected: selectedR.value,
-    contributions: contributions
+    contributions: contributions,
+    starMap: starMap
   }
   return ok<WritingStatsExplorer>(value)
 }

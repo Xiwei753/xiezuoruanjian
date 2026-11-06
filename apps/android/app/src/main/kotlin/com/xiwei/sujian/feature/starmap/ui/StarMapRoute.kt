@@ -40,7 +40,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.center
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -205,31 +204,21 @@ private fun StarMapDetailScreen(
         is StarMapDetailState.Ready ->
             run {
                 val writingSession = rememberStarMapWritingSession(starmapId, projectId)
-                Box(
-                    modifier = modifier
-                        .fillMaxSize()
-                        .pointerInput(writingSession) {
-                            awaitPointerEventScope {
-                                while (true) {
-                                    awaitPointerEvent(PointerEventPass.Initial)
-                                    writingSession.start()
-                                }
-                            }
-                        },
-                ) {
-                    StarMapCanvas(
-                        starmapId = starmapId,
-                        projectId = projectId,
-                        repository = repository,
-                        data = current.data,
-                        target = target,
-                        onNodeUpdated = { updated ->
-                            // Issue #984：保存后立即用 Core 返回的节点刷新当前画布。
-                            state = StarMapDetailState.Ready(current.data.withUpdatedNode(updated))
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+                StarMapCanvas(
+                    starmapId = starmapId,
+                    projectId = projectId,
+                    repository = repository,
+                    data = current.data,
+                    target = target,
+                    onNodeUpdated = { updated ->
+                        // 只有真实写操作成功后才开启/延续星图计时；选择、平移、
+                        // 捏合和误触都不会从画布手势层直接开始计时。
+                        writingSession.start()
+                        // Issue #984：保存后立即用 Core 返回的节点刷新当前画布。
+                        state = StarMapDetailState.Ready(current.data.withUpdatedNode(updated))
+                    },
+                    modifier = modifier.fillMaxSize(),
+                )
             }
     }
 }

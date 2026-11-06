@@ -20,6 +20,7 @@ import {
 import { EMPTY_STATS_EXPLORER, formatDateHuman, formatDateRangeHuman, formatDurationHuman, formatHistoryScope, formatInt, formatMeasuredDuration, formatRecordValue } from './StatsFormat'
 import { WritingStatsCalendarHeatmap } from './WritingStatsCalendarHeatmap'
 import { ContributionStatsSection } from './ContributionStatsSection'
+import { StarMapStatsSection } from './StarMapStatsSection'
 
 interface RangeOption {
   label: string
@@ -94,6 +95,7 @@ export struct CompactStatsContent {
         this.SummarySection()
         this.RecordsSection()
         ContributionStatsSection({ stats: this.explorer.contributions })
+        StarMapStatsSection({ stats: this.explorer.starMap })
         this.HeatmapSection()
       }
       .width('100%')

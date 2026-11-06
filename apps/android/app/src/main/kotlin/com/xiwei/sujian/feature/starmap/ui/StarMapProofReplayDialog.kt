@@ -170,6 +170,30 @@ fun StarMapProofReplayDialog(
                             maxLines = 1,
                         )
                     }
+                    val embeds = graph?.optJSONArray("embeds")
+                    if (embeds != null) {
+                        for (index in 0 until embeds.length()) {
+                            val embed = embeds.optJSONObject(index) ?: continue
+                            val point = embed.optJSONObject("position") ?: continue
+                            val center = screen(
+                                Offset(
+                                    point.optDouble("x", 0.0).toFloat(),
+                                    point.optDouble("y", 0.0).toFloat(),
+                                ),
+                            )
+                            drawCircle(
+                                color = Color(0xFFE7E0FF),
+                                radius = 16f,
+                                center = center,
+                            )
+                            drawCircle(
+                                color = Color(0xFF6F7FD8),
+                                radius = 16f,
+                                center = center,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f),
+                            )
+                        }
+                    }
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),

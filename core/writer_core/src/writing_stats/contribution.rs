@@ -308,6 +308,9 @@ pub struct ContributionEvent {
     /// 星图对象的完整前后状态；正文/注释事件保持 `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay_delta: Option<StarMapProofDelta>,
+    /// 来源设备内持久、单调的回放位置，由 Core 在追加事件时分配。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_position: Option<u64>,
 }
 
 impl ContributionEvent {
@@ -364,6 +367,7 @@ impl ContributionEvent {
             replay_format_version: None,
             replay_order: None,
             replay_delta: None,
+            replay_position: None,
         }
     }
 

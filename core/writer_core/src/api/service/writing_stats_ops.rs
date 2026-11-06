@@ -330,6 +330,8 @@ impl WriterCoreApi {
             None,
             None,
         )?);
+        snapshot.star_map =
+            Some(self.get_starmap_stats(&range.start_date, &range.end_date, None)?);
         Ok(snapshot)
     }
 

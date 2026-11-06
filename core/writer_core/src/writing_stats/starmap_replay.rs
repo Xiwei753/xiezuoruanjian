@@ -16,11 +16,11 @@ use crate::writing_stats::contribution::{
 };
 use crate::writing_stats::contribution_store::ContributionStore;
 use crate::writing_stats::starmap_checkpoint::{
-    append_starmap_checkpoint, latest_checkpoint_at_or_before, load_starmap_checkpoints,
-    StarMapProofCheckpoint, CHECKPOINT_REASON_PERIODIC,
+    latest_checkpoint_at_or_before, load_starmap_checkpoints, StarMapProofCheckpoint,
 };
 use crate::writing_stats::starmap_proof::{
-    state_sha256, StarMapProofState, StarMapProofTrajectorySample, STARMAP_PROOF_FORMAT_VERSION,
+    compute_replay_event_hash, proof_object_sha256, state_object_for_delta, state_sha256,
+    StarMapProofState, StarMapProofTrajectorySample, STARMAP_PROOF_FORMAT_VERSION,
 };
 
 /// 回放查询。位置 `target_position` 表示「已应用多少个事件」，0 是空白/基线。
@@ -141,13 +141,19 @@ fn is_starmap_event(event: &ContributionEvent, starmap_id: &str) -> bool {
             .is_some_and(|delta| delta.starmap_id == starmap_id)
 }
 
-fn event_sort_key(event: &ContributionEvent) -> (i64, &str, u32, &str) {
-    (
-        event.occurred_at_ms,
-        event.transaction_id.as_str(),
-        event.replay_order.unwrap_or(u32::MAX),
-        event.event_id.as_str(),
-    )
+fn event_sort_key(event: &ContributionEvent) -> (u8, u64, i64, &str, u32, &str) {
+    if let Some(position) = event.replay_position {
+        (1, position, 0, "", 0, event.event_id.as_str())
+    } else {
+        (
+            0,
+            0,
+            event.occurred_at_ms,
+            event.transaction_id.as_str(),
+            event.replay_order.unwrap_or(u32::MAX),
+            event.event_id.as_str(),
+        )
+    }
 }
 
 fn sort_events(events: &mut [ContributionEvent]) {
@@ -195,6 +201,8 @@ pub struct StarMapReplaySession {
     cursor_position: u64,
     cursor_state: StarMapProofState,
     cursor_checkpoint_position: u64,
+    baseline_state: StarMapProofState,
+    chain_head: String,
     errors: Vec<String>,
     root: std::path::PathBuf,
 }
@@ -244,6 +252,8 @@ impl StarMapReplaySession {
             cursor_position: 0,
             cursor_state: StarMapProofState::empty(&request.starmap_id),
             cursor_checkpoint_position: 0,
+            baseline_state: StarMapProofState::empty(&request.starmap_id),
+            chain_head: String::new(),
             errors: Vec::new(),
             root: store.app_data_root().to_path_buf(),
         };
@@ -260,6 +270,7 @@ impl StarMapReplaySession {
             .find(|checkpoint| checkpoint.position == 0)
         {
             self.cursor_state = checkpoint.state.clone();
+            self.baseline_state = checkpoint.state.clone();
             self.cursor_checkpoint_position = 0;
             if !checkpoint.history_complete {
                 self.history_complete = false;
@@ -273,6 +284,7 @@ impl StarMapReplaySession {
             .and_then(|delta| delta.baseline.as_ref())
         {
             self.cursor_state = baseline.state();
+            self.baseline_state = self.cursor_state.clone();
             self.cursor_checkpoint_position = 0;
             self.history_complete = false;
             return;
@@ -339,6 +351,7 @@ impl StarMapReplaySession {
                 self.cursor_state = checkpoint.state.clone();
                 self.cursor_position = checkpoint.position.min(self.events.len() as u64);
                 self.cursor_checkpoint_position = self.cursor_position;
+                self.chain_head = self.hash_at_position(self.cursor_position);
                 return;
             }
             self.errors.push(format!(
@@ -346,9 +359,19 @@ impl StarMapReplaySession {
                 checkpoint.position
             ));
         }
-        self.cursor_state = StarMapProofState::empty(&self.request.starmap_id);
+        self.cursor_state = self.baseline_state.clone();
         self.cursor_position = 0;
         self.cursor_checkpoint_position = 0;
+        self.chain_head.clear();
+    }
+
+    fn hash_at_position(&self, position: u64) -> String {
+        position
+            .checked_sub(1)
+            .and_then(|index| self.events.get(index as usize))
+            .and_then(|event| event.replay_delta.as_ref())
+            .and_then(|delta| delta.event_hash.clone())
+            .unwrap_or_default()
     }
 
     fn apply_to(&mut self, target: u64) {
@@ -362,59 +385,81 @@ impl StarMapReplaySession {
                     self.cursor_state = checkpoint.state.clone();
                     self.cursor_position = checkpoint.position;
                     self.cursor_checkpoint_position = checkpoint.position;
+                    self.chain_head = self.hash_at_position(checkpoint.position);
                 }
             }
         }
         let from = self.cursor_position as usize;
         let to = target as usize;
         for index in from..to {
-            let event = &self.events[index];
-            let Some(delta) = event.replay_delta.as_ref() else {
+            let event = self.events[index].clone();
+            let Some(delta) = event.replay_delta.clone() else {
                 self.errors.push(format!(
                     "event {} has no starmap replay delta",
                     event.event_id
                 ));
                 continue;
             };
-            if let Err(error) = self.cursor_state.apply_delta(delta) {
+            let positioned = event.replay_position.is_some();
+            if positioned {
+                let position = event.replay_position.unwrap_or(0);
+                if let Some(prev) = delta.prev_event_hash.as_deref() {
+                    if prev != self.chain_head {
+                        self.errors.push(format!(
+                            "event {} previous hash does not match branch chain",
+                            event.event_id
+                        ));
+                    }
+                } else if !self.chain_head.is_empty() {
+                    self.errors.push(format!(
+                        "event {} missing previous hash in non-empty branch",
+                        event.event_id
+                    ));
+                }
+                let computed =
+                    compute_replay_event_hash(&self.chain_head, &event.event_id, position, &delta);
+                if delta.event_hash.as_deref() != Some(computed.as_str()) {
+                    self.errors.push(format!(
+                        "event {} hash mismatch (possible tampering)",
+                        event.event_id
+                    ));
+                }
+                let current_before = state_object_for_delta(&self.cursor_state, &delta);
+                if let Some(expected) = delta.before_state_hash.as_deref() {
+                    if proof_object_sha256(current_before.as_ref()) != expected {
+                        self.errors.push(format!(
+                            "event {} before state does not match replay state",
+                            event.event_id
+                        ));
+                    }
+                }
+            }
+            if let Err(error) = self.cursor_state.apply_delta(&delta) {
                 self.errors.push(format!("{}: {error}", event.event_id));
+                continue;
+            }
+            if positioned {
+                let current_after = state_object_for_delta(&self.cursor_state, &delta);
+                if let Some(expected) = delta.after_state_hash.as_deref() {
+                    if proof_object_sha256(current_after.as_ref()) != expected {
+                        self.errors.push(format!(
+                            "event {} after state does not match replay state",
+                            event.event_id
+                        ));
+                    }
+                }
+                self.chain_head = delta.event_hash.clone().unwrap_or_default();
+            } else {
+                // 旧事件没有链哈希；后续新链从空头重新开始。
+                self.chain_head.clear();
             }
         }
         self.cursor_position = target;
     }
 
-    fn maybe_record_checkpoint(&mut self, target: u64) {
-        if target == 0 || self.device_id.is_empty() {
-            return;
-        }
-        let last = self
-            .checkpoints
-            .iter()
-            .map(|checkpoint| checkpoint.position)
-            .max()
-            .unwrap_or(0);
-        if target.saturating_sub(last) < 64 {
-            return;
-        }
-        let checkpoint = StarMapProofCheckpoint::new(
-            &self.request.starmap_id,
-            &self.device_id,
-            target,
-            self.cursor_state.clone(),
-            CHECKPOINT_REASON_PERIODIC,
-            self.history_complete,
-        );
-        match append_starmap_checkpoint(&self.root, &checkpoint) {
-            Ok(true) => self.checkpoints.push(checkpoint),
-            Ok(false) => {}
-            Err(error) => log::warn!("failed to append starmap replay checkpoint: {error}"),
-        }
-    }
-
     pub fn frame_at(&mut self, request: &StarMapReplayRequest) -> StarMapReplayFrame {
         let target = self.resolve_target_position(request);
         self.apply_to(target);
-        self.maybe_record_checkpoint(target);
 
         let event_info = target
             .checked_sub(1)

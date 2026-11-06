@@ -185,6 +185,9 @@ pub struct WritingStatsExplorerDto {
     /// 不把对象操作数混入人工码字或写作时长。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contributions: Option<ContributionStatsDto>,
+    /// 与 `selected.range` 同区间的星图明细（当前文字、操作来源、真实时长）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub star_map: Option<StarMapStatsSummaryDto>,
 }
 
 /// 全应用生涯摘要。

@@ -30,7 +30,9 @@ use crate::writing_stats::projection::{
     TrendGranularity,
 };
 use crate::writing_stats::store::StatsStore;
-use crate::writing_stats::{DateRange, WritingActivitySegment, WritingInputEvent};
+use crate::writing_stats::{
+    DateRange, EventSource, Platform, WritingActivitySegment, WritingInputEvent,
+};
 use serde_json::Value;
 use std::path::Path;
 
@@ -86,6 +88,7 @@ fn project_records_json(projection: &StatsProjection) -> Vec<Value> {
     projection
         .per_project
         .values()
+        .filter(|p| !p.project_id.is_empty())
         .map(|p| {
             serde_json::json!({
                 "projectId": p.project_id,
@@ -105,6 +108,7 @@ fn chapter_records_json(projection: &StatsProjection) -> Vec<Value> {
     projection
         .per_chapter
         .values()
+        .filter(|c| !c.chapter_id.is_empty())
         .map(|c| {
             serde_json::json!({
                 "chapterId": c.chapter_id,
@@ -179,6 +183,18 @@ pub struct StatsApi {
     /// 此时读取查询必须显式失败（统计页显示明确原因），不能把旧历史
     /// 静默当成 0 字。下一次查询会重试迁移，成功后清除。
     migration_error: std::sync::Mutex<Option<String>>,
+    /// 星图回放会话缓存：代数 + (starmapId|deviceId) -> 共享游标。
+    starmap_replay_cache: std::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            (
+                u64,
+                std::sync::Arc<
+                    std::sync::Mutex<crate::writing_stats::starmap_replay::StarMapReplaySession>,
+                >,
+            ),
+        >,
+    >,
 }
 
 impl StatsApi {
@@ -198,6 +214,7 @@ impl StatsApi {
             ai_usage_store: AiUsageStore::new(app_data_root),
             replay_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             migration_error: std::sync::Mutex::new(migration_error),
+            starmap_replay_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -327,9 +344,7 @@ impl StatsApi {
 
     pub fn get_stats_summary(&self, range: &DateRange) -> Result<Value> {
         self.ensure_migrated()?;
-        let events = self
-            .store
-            .load_events_range(&range.start_date, &range.end_date)?;
+        let events = self.load_global_events_range(&range.start_date, &range.end_date)?;
         let segments = self
             .store
             .load_segments_range(&range.start_date, &range.end_date)?;
@@ -347,9 +362,7 @@ impl StatsApi {
 
     pub fn get_stats_by_project(&self, range: &DateRange) -> Result<Value> {
         self.ensure_migrated()?;
-        let events = self
-            .store
-            .load_events_range(&range.start_date, &range.end_date)?;
+        let events = self.load_global_events_range(&range.start_date, &range.end_date)?;
         let segments = self
             .store
             .load_segments_range(&range.start_date, &range.end_date)?;
@@ -362,6 +375,7 @@ impl StatsApi {
         let projects: Vec<Value> = proj
             .per_project
             .values()
+            .filter(|p| !p.project_id.is_empty())
             .map(|p| {
                 serde_json::json!({
                     "projectId": p.project_id,
@@ -386,9 +400,7 @@ impl StatsApi {
 
     pub fn get_stats_by_chapter(&self, range: &DateRange) -> Result<Value> {
         self.ensure_migrated()?;
-        let events = self
-            .store
-            .load_events_range(&range.start_date, &range.end_date)?;
+        let events = self.load_global_events_range(&range.start_date, &range.end_date)?;
         let segments = self
             .store
             .load_segments_range(&range.start_date, &range.end_date)?;
@@ -401,6 +413,7 @@ impl StatsApi {
         let chapters: Vec<Value> = proj
             .per_chapter
             .values()
+            .filter(|c| !c.chapter_id.is_empty())
             .map(|c| {
                 serde_json::json!({
                     "chapterId": c.chapter_id,
@@ -425,9 +438,7 @@ impl StatsApi {
 
     pub fn get_stats_by_device(&self, range: &DateRange) -> Result<Value> {
         self.ensure_migrated()?;
-        let events = self
-            .store
-            .load_events_range(&range.start_date, &range.end_date)?;
+        let events = self.load_global_events_range(&range.start_date, &range.end_date)?;
         let segments = self
             .store
             .load_segments_range(&range.start_date, &range.end_date)?;
@@ -467,9 +478,7 @@ impl StatsApi {
 
     pub fn get_stats_by_device_class(&self, range: &DateRange) -> Result<Value> {
         self.ensure_migrated()?;
-        let events = self
-            .store
-            .load_events_range(&range.start_date, &range.end_date)?;
+        let events = self.load_global_events_range(&range.start_date, &range.end_date)?;
         let segments = self
             .store
             .load_segments_range(&range.start_date, &range.end_date)?;
@@ -508,7 +517,7 @@ impl StatsApi {
     /// 作品没有任何人工输入时返回全 0 且无首次写作日期。
     pub fn get_project_lifetime_stats(&self, project_id: &str) -> Result<ProjectLifetimeStatsAgg> {
         self.ensure_migrated()?;
-        let events = self.store.load_events_for_project(project_id)?;
+        let events = self.load_global_events_for_project(project_id)?;
         Ok(project_lifetime_stats(&events, project_id))
     }
 
@@ -532,7 +541,7 @@ impl StatsApi {
             calendar::parse_explorer_query(preset, custom_start, custom_end)?;
         let today = calendar::local_today_date();
 
-        let events = self.store.load_all_events()?;
+        let events = self.load_global_events_all()?;
         let segments = self.store.load_all_segments()?;
         let career = project_all_time_stats_with_sessions(&events, &segments)?;
         let history_scope = self.history_scope();
@@ -652,6 +661,7 @@ impl StatsApi {
                 },
             },
             contributions: None,
+            star_map: None,
         })
     }
 
@@ -671,7 +681,7 @@ impl StatsApi {
         let start_date = format!("{year:04}-01-01");
         let end_date = format!("{year:04}-12-31");
 
-        let events = self.store.load_all_events()?;
+        let events = self.load_global_events_all()?;
         // 覆盖范围与 Explorer 同源：更早未建立记录、或统计同步失败的区间不能画成真实 0。
         let history_scope = self.history_scope();
         let sync_incomplete = history_scope == "partialSync";
@@ -714,7 +724,7 @@ impl StatsApi {
         } else {
             month_start.as_str()
         };
-        let events = self.store.load_events_range(load_start, &today)?;
+        let events = self.load_global_events_range(load_start, &today)?;
 
         let today_events = events_within(&events, &today, &today);
         let week_events = events_within(&events, &week_start, &today);
@@ -784,9 +794,7 @@ impl StatsApi {
         // 钳到至少 1 分钟，避免 bucket_ms = 0 导致速度曲线死循环
         let bucket_minutes = bucket_minutes.max(1);
         self.ensure_migrated()?;
-        let events = self
-            .store
-            .load_events_range(&range.start_date, &range.end_date)?;
+        let events = self.load_global_events_range(&range.start_date, &range.end_date)?;
         let proj = project_events(&events, bucket_minutes, None);
 
         let bucket_json: Vec<Value> = proj
@@ -827,6 +835,128 @@ impl StatsApi {
         self.contribution_store.load_all_events()
     }
 
+    fn load_global_events_range(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<WritingInputEvent>> {
+        let mut events = self.store.load_events_range(start_date, end_date)?;
+        let contributions = self
+            .contribution_store
+            .load_events_range(start_date, end_date)?;
+        events.extend(self.starmap_global_input_events(&contributions));
+        Ok(events)
+    }
+
+    fn load_global_events_all(&self) -> Result<Vec<WritingInputEvent>> {
+        let mut events = self.store.load_all_events()?;
+        let contributions = self.contribution_store.load_all_events()?;
+        events.extend(self.starmap_global_input_events(&contributions));
+        Ok(events)
+    }
+
+    fn load_global_events_for_project(&self, project_id: &str) -> Result<Vec<WritingInputEvent>> {
+        let mut events = self.store.load_events_for_project(project_id)?;
+        let contributions = self
+            .contribution_store
+            .load_events_for_project(project_id)?;
+        events.extend(self.starmap_global_input_events(&contributions));
+        Ok(events)
+    }
+
+    /// 把星图人类/AI 文字贡献转换成现有 WritingInputEvent 口径，合并进全局统计。
+    ///
+    /// 只转换星图对象事件；标签/锚点等非星图对象不进入“正文 + 星图”总账。
+    /// 删除事件单独记为 Deleted，既保留历史输入贡献，又不把回退字算成新输入。
+    fn starmap_global_input_events(
+        &self,
+        contribution_events: &[ContributionEvent],
+    ) -> Vec<WritingInputEvent> {
+        use crate::writing_stats::contribution::{ContributionObjectType, MutationActor};
+        let mut synthetic = Vec::new();
+        for event in contribution_events {
+            if !matches!(
+                event.object_type,
+                ContributionObjectType::StarMap
+                    | ContributionObjectType::StarMapNode
+                    | ContributionObjectType::StarMapEdge
+                    | ContributionObjectType::StarMapEmbed
+                    | ContributionObjectType::StarMapLink
+            ) {
+                continue;
+            }
+            let starmap_id = if event.object_type == ContributionObjectType::StarMap {
+                event.object_id.clone()
+            } else {
+                event.container_id.clone().unwrap_or_default()
+            };
+            if starmap_id.is_empty() {
+                continue;
+            }
+            let push_event = |source: EventSource,
+                              inserted: u32,
+                              deleted: u32,
+                              ai_inserted: u32,
+                              suffix: &str,
+                              out: &mut Vec<WritingInputEvent>| {
+                let mut input = WritingInputEvent::with_identity(
+                    format!("starmap:{}:{suffix}", event.event_id),
+                    event.occurred_at_ms,
+                    &event.origin_device_id,
+                    Platform::Desktop,
+                    "",
+                    &event.project_id,
+                    "",
+                    "",
+                    source,
+                    inserted,
+                    deleted,
+                    0,
+                    ai_inserted,
+                    0,
+                    "",
+                );
+                if !event.local_date.is_empty() {
+                    input.local_date = event.local_date.clone();
+                }
+                input.starmap_id = Some(starmap_id.clone());
+                out.push(input);
+            };
+            if event.inserted_chars > 0 {
+                if event.actor == MutationActor::Ai {
+                    push_event(
+                        EventSource::AiInserted,
+                        0,
+                        0,
+                        event.inserted_chars,
+                        "ai",
+                        &mut synthetic,
+                    );
+                } else {
+                    push_event(
+                        EventSource::HumanTyped,
+                        event.inserted_chars,
+                        0,
+                        0,
+                        "inserted",
+                        &mut synthetic,
+                    );
+                }
+            }
+            if event.deleted_chars > 0 {
+                push_event(
+                    EventSource::Deleted,
+                    0,
+                    event.deleted_chars,
+                    0,
+                    "deleted",
+                    &mut synthetic,
+                );
+            }
+        }
+        synthetic
+    }
+
     /// 星图统计：历史操作量 + 当前保留文字 + 真实星图前台时长。
     pub fn get_starmap_stats(
         &self,
@@ -856,10 +986,31 @@ impl StatsApi {
         &self,
         request: &crate::writing_stats::starmap_replay::StarMapReplayRequest,
     ) -> Result<crate::writing_stats::starmap_replay::StarMapReplayFrame> {
-        crate::writing_stats::starmap_replay::replay_starmap_proof(
-            &self.contribution_store,
-            request,
-        )
+        let generation = self.contribution_store.replay_generation();
+        let key = format!("{}|{}", request.starmap_id, request.device_id);
+        let session = {
+            let mut cache = self
+                .starmap_replay_cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match cache.get(&key) {
+                Some((cached, session)) if *cached == generation => session.clone(),
+                _ => {
+                    let session = std::sync::Arc::new(std::sync::Mutex::new(
+                        crate::writing_stats::starmap_replay::StarMapReplaySession::open(
+                            &self.contribution_store,
+                            request,
+                        )?,
+                    ));
+                    cache.insert(key, (generation, session.clone()));
+                    session
+                }
+            }
+        };
+        let mut session = session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Ok(session.frame_at(request))
     }
 
     pub fn export_starmap_proof(
@@ -1142,7 +1293,14 @@ impl StatsApi {
         let window_seconds = window_seconds.max(1);
         let start_ms = now_ms - i64::from(window_seconds) * 1_000;
 
-        let events = self.store.load_events_in_window(start_ms, now_ms)?;
+        let mut events = self.store.load_events_in_window(start_ms, now_ms)?;
+        let contributions: Vec<ContributionEvent> = self
+            .contribution_store
+            .load_all_events()?
+            .into_iter()
+            .filter(|event| event.occurred_at_ms >= start_ms && event.occurred_at_ms <= now_ms)
+            .collect();
+        events.extend(self.starmap_global_input_events(&contributions));
         let proj = project_events(&events, 60, Some(window_seconds));
         Ok(proj.current_speed.unwrap_or(CurrentWritingSpeed {
             window_seconds,
