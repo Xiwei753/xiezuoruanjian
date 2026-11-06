@@ -103,6 +103,8 @@ fun StarMapProofReplayDialog(
     val event = frame?.optJSONObject("event")
     val historyComplete = frame?.optBoolean("historyComplete", true) ?: true
     val legacyEventCount = frame?.optInt("legacyEventCount", 0) ?: 0
+    val valid = frame?.optBoolean("valid", true) ?: true
+    val frameErrors = frame?.optJSONArray("errors")
     val branches = frame?.optJSONArray("branches")
 
     AlertDialog(
@@ -127,7 +129,7 @@ fun StarMapProofReplayDialog(
                         val point = node.optJSONObject("position") ?: continue
                         val x = point.optDouble("x", 0.0).toFloat()
                         val y = point.optDouble("y", 0.0).toFloat()
-                        points[node.optString("id")] = Offset(x, y)
+                        points["node:" + node.optString("id")] = Offset(x, y)
                         if (!seen) {
                             minX = x; maxX = x; minY = y; maxY = y; seen = true
                         }
@@ -199,7 +201,7 @@ fun StarMapProofReplayDialog(
                     val activeId = event?.optString("objectId").orEmpty()
                     for (index in 0 until graphNodes.length()) {
                         val node = graphNodes.optJSONObject(index) ?: continue
-                        val point = points[node.optString("id")] ?: continue
+                        val point = points["node:" + node.optString("id")] ?: continue
                         val center = screen(point)
                         val active = node.optString("id") == activeId
                         drawCircle(
@@ -300,8 +302,13 @@ fun StarMapProofReplayDialog(
                 )
                 Text(
                     text = event?.let {
+                        val kind = if (it.optString("textInputKind") == "whole_save") {
+                            " · 整段保存（非逐字）"
+                        } else {
+                            ""
+                        }
                         "${it.optString("actor")} · ${it.optString("entrypoint")} · " +
-                            "${it.optString("operation")} ${it.optString("objectType")}"
+                            "${it.optString("operation")} ${it.optString("objectType")}$kind"
                     } ?: "起始状态",
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -314,6 +321,20 @@ fun StarMapProofReplayDialog(
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (!valid) {
+                    val messages = buildList {
+                        if (frameErrors != null) {
+                            for (index in 0 until frameErrors.length()) {
+                                frameErrors.optString(index).takeIf { it.isNotEmpty() }?.let(::add)
+                            }
+                        }
+                    }
+                    Text(
+                        text = "证明校验失败：" + messages.joinToString("；"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
                     )
                 }
                 error?.let {

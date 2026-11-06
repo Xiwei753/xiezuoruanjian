@@ -102,6 +102,73 @@ impl ContributionStore {
         let _ = atomic_write_string(&self.generation_path(), &value.to_string());
     }
 
+    /// 事件库真实存储指纹：同步直接搬入文件时也能让回放缓存失效。
+    pub fn storage_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut files: Vec<(PathBuf, u64, u128)> = Vec::new();
+        let root = self.events_root();
+        if let Ok(origins) = fs::read_dir(&root) {
+            for origin in origins.flatten() {
+                let Ok(origin_kind) = origin.file_type() else {
+                    continue;
+                };
+                if !origin_kind.is_dir() {
+                    continue;
+                }
+                let origin_dir = origin.path();
+                if let Ok(entries) = fs::read_dir(&origin_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                            continue;
+                        };
+                        if name.ends_with(OBJECTS_SUFFIX) {
+                            if let Ok(meta) = entry.metadata() {
+                                let modified = meta
+                                    .modified()
+                                    .ok()
+                                    .and_then(|time| {
+                                        time.duration_since(std::time::UNIX_EPOCH).ok()
+                                    })
+                                    .map(|duration| duration.as_nanos())
+                                    .unwrap_or(0);
+                                files.push((path, meta.len(), modified));
+                            }
+                        }
+                    }
+                }
+                if let Ok(entries) = fs::read_dir(origin_dir.join("starmap")) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                            continue;
+                        };
+                        if !name.ends_with(".checkpoints.jsonl") {
+                            continue;
+                        }
+                        if let Ok(meta) = entry.metadata() {
+                            let modified = meta
+                                .modified()
+                                .ok()
+                                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|duration| duration.as_nanos())
+                                .unwrap_or(0);
+                            files.push((path, meta.len(), modified));
+                        }
+                    }
+                }
+            }
+        }
+        files.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for (path, len, modified) in files {
+            path.to_string_lossy().hash(&mut hasher);
+            len.hash(&mut hasher);
+            modified.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     fn read_replay_sequence(&self, origin: &str) -> Result<u64> {
         let path = self.replay_sequence_path(origin);
         if let Ok(value) = fs::read_to_string(&path) {
@@ -110,6 +177,10 @@ impl ContributionStore {
             }
         }
         // 首次升级后没有 sequence 文件：从已落盘事件里恢复最大位置。
+        self.scan_replay_sequence(origin)
+    }
+
+    fn scan_replay_sequence(&self, origin: &str) -> Result<u64> {
         let dir = self.events_root().join(origin);
         let mut max_position = 0u64;
         if dir.is_dir() {
@@ -124,10 +195,10 @@ impl ContributionStore {
                 let file = fs::File::open(&path)?;
                 for line in BufReader::new(file).lines() {
                     let Ok(line) = line else { continue };
-                    let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    let Ok(event) = serde_json::from_str::<ContributionEvent>(&line) else {
                         continue;
                     };
-                    if let Some(position) = value.get("replay_position").and_then(|v| v.as_u64()) {
+                    if let Some(position) = event.replay_position {
                         max_position = max_position.max(position.saturating_add(1));
                     }
                 }
@@ -149,7 +220,11 @@ impl ContributionStore {
     fn read_branch_replay_state(&self, origin: &str, starmap_id: &str) -> Result<(u64, String)> {
         if let Ok(value) = fs::read_to_string(self.replay_branch_count_path(origin, starmap_id)) {
             if let Ok(count) = value.trim().parse::<u64>() {
-                return Ok((count, self.read_replay_chain_head(origin, starmap_id)));
+                let head = self.read_replay_chain_head(origin, starmap_id);
+                // 只有计数、没有链头时说明本地索引不完整，必须回扫真实事件。
+                if count == 0 || !head.is_empty() {
+                    return Ok((count, head));
+                }
             }
         }
         self.scan_branch_replay_state(origin, starmap_id)
@@ -162,7 +237,7 @@ impl ContributionStore {
             return Ok((0, chain_head));
         }
         let mut count = 0u64;
-        let mut latest: Option<(u64, i64, String)> = None;
+        let mut latest: Option<(u64, String, String)> = None;
         for entry in fs::read_dir(&dir)? {
             let path = entry?.path();
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -174,30 +249,26 @@ impl ContributionStore {
             let file = fs::File::open(&path)?;
             for line in BufReader::new(file).lines() {
                 let Ok(line) = line else { continue };
-                let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                // 强类型读取 camelCase JSONL；手写字段名会在 eventHash 等处出错。
+                let Ok(event) = serde_json::from_str::<ContributionEvent>(&line) else {
                     continue;
                 };
-                let Some(delta) = value.get("replay_delta") else {
+                let Some(delta) = event.replay_delta.as_ref() else {
                     continue;
                 };
-                if delta.get("starmapId").and_then(|item| item.as_str()) != Some(starmap_id) {
+                if delta.starmap_id != starmap_id {
                     continue;
                 }
                 count = count.saturating_add(1);
-                if let Some(hash) = delta.get("event_hash").and_then(|item| item.as_str()) {
-                    let position = value
-                        .get("replay_position")
-                        .and_then(|item| item.as_u64())
-                        .unwrap_or(0);
-                    let occurred = value
-                        .get("occurred_at_ms")
-                        .and_then(|item| item.as_i64())
-                        .unwrap_or(0);
-                    let candidate = (position, occurred, hash.to_string());
-                    if latest
-                        .as_ref()
-                        .is_none_or(|current| (candidate.0, candidate.1) >= (current.0, current.1))
-                    {
+                if let Some(hash) = delta.event_hash.as_ref() {
+                    let candidate = (
+                        event.replay_position.unwrap_or(0),
+                        event.event_id.clone(),
+                        hash.clone(),
+                    );
+                    if latest.as_ref().is_none_or(|current| {
+                        (candidate.0, &candidate.1) >= (current.0, &current.1)
+                    }) {
                         latest = Some(candidate);
                     }
                 }
@@ -208,6 +279,26 @@ impl ContributionStore {
             .filter(|hash| !hash.is_empty())
             .unwrap_or(chain_head);
         Ok((count, head))
+    }
+
+    /// 读取某来源分区已落盘的全部对象事件 ID，用于幂等去重。
+    fn load_origin_event_ids(&self, origin: &str) -> Result<HashSet<String>> {
+        let dir = self.events_root().join(origin);
+        let mut ids = HashSet::new();
+        if !dir.is_dir() {
+            return Ok(ids);
+        }
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(OBJECTS_SUFFIX) {
+                continue;
+            }
+            ids.extend(read_ids(&path)?);
+        }
+        Ok(ids)
     }
 
     /// 追加时分配来源设备内持久、单调的排序序号，并按星图分支内事件数建立
@@ -372,35 +463,30 @@ impl ContributionStore {
         }
     }
 
-    /// 从已经带元数据的事件恢复 sequence/chain 头（pending 重放路径）。
-    fn persist_metadata_from_events(&self, events: &[ContributionEvent]) -> Result<()> {
-        let mut sequences: HashMap<String, u64> = HashMap::new();
-        let mut chains: HashMap<(String, String), String> = HashMap::new();
+    /// pending 重放后从真实已落盘事件重建本地派生索引。
+    ///
+    /// 不能把旧批次携带的链头直接写回：它可能早于更新的事件，覆盖后会让
+    /// 下一次真实操作引用过期前缀。`.count/.chain/.sequence` 都只是可重建
+    /// 索引，必须以磁盘事件为准。
+    fn rebuild_replay_indexes(&self, events: &[ContributionEvent]) -> Result<()> {
+        let mut origins: HashSet<String> = HashSet::new();
         let mut branches: HashSet<(String, String)> = HashSet::new();
         for event in events {
             let Some(delta) = event.replay_delta.as_ref() else {
                 continue;
             };
+            origins.insert(event.origin_device_id.clone());
             branches.insert((event.origin_device_id.clone(), delta.starmap_id.clone()));
-            if let Some(position) = event.replay_position {
-                sequences
-                    .entry(event.origin_device_id.clone())
-                    .and_modify(|sequence| {
-                        *sequence = (*sequence).max(position.saturating_add(1));
-                    })
-                    .or_insert(position.saturating_add(1));
-            }
-            if let Some(hash) = delta.event_hash.as_ref() {
-                chains.insert(
-                    (event.origin_device_id.clone(), delta.starmap_id.clone()),
-                    hash.clone(),
-                );
-            }
         }
-        self.persist_replay_metadata(&sequences, &chains)?;
+        for origin in origins {
+            let sequence = self.scan_replay_sequence(&origin)?;
+            atomic_write_string(&self.replay_sequence_path(&origin), &sequence.to_string())?;
+        }
         for (origin, starmap_id) in branches {
-            // pending 重放后必须重新扫描真实事件，不能沿用旧计数缓存。
-            let (count, _) = self.scan_branch_replay_state(&origin, &starmap_id)?;
+            let (count, head) = self.scan_branch_replay_state(&origin, &starmap_id)?;
+            if !head.is_empty() {
+                atomic_write_string(&self.replay_chain_path(&origin, &starmap_id), &head)?;
+            }
             self.persist_branch_count(&origin, &starmap_id, count);
         }
         Ok(())
@@ -459,6 +545,34 @@ impl ContributionStore {
         }
 
         self.recover_pending_events()?;
+        // 先按真实落盘事实去重，再给新增事件分配序号/计数/哈希。重发相同
+        // event_id 时不能推进任何派生索引，否则会留下不存在的“幽灵链头”。
+        let mut existing_by_origin: HashMap<String, HashSet<String>> = HashMap::new();
+        for event in &prepared {
+            if existing_by_origin.contains_key(&event.origin_device_id) {
+                continue;
+            }
+            existing_by_origin.insert(
+                event.origin_device_id.clone(),
+                self.load_origin_event_ids(&event.origin_device_id)?,
+            );
+        }
+        let mut seen_in_batch: HashSet<(String, String)> = HashSet::new();
+        prepared.retain(|event| {
+            if event.event_id.is_empty() {
+                return true;
+            }
+            if existing_by_origin
+                .get(&event.origin_device_id)
+                .is_some_and(|ids| ids.contains(&event.event_id))
+            {
+                return false;
+            }
+            seen_in_batch.insert((event.origin_device_id.clone(), event.event_id.clone()))
+        });
+        if prepared.is_empty() {
+            return Ok(0);
+        }
         let metadata = self.assign_replay_metadata(&mut prepared)?;
         let checkpoint_targets = metadata.checkpoint_targets.clone();
         let transaction_id = prepared
@@ -606,7 +720,7 @@ impl ContributionStore {
         }
         let all_events: Vec<ContributionEvent> = events.to_vec();
         self.persist_baseline_checkpoints(&all_events);
-        self.persist_metadata_from_events(&all_events)?;
+        self.rebuild_replay_indexes(&all_events)?;
         self.bump_replay_generation();
         Ok(())
     }

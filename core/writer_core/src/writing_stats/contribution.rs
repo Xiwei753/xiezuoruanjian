@@ -47,6 +47,16 @@ pub enum MutationEntrypoint {
     System,
 }
 
+/// 文字提交形态：区分可逐字复核的增量编辑与整段保存。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContributionTextInputKind {
+    /// 已存在文本上的纯插入/删除，可按字符 diff 复核。
+    Incremental,
+    /// 新建节点或整段替换：作者仍算人工创作，但不能声称逐字输入。
+    WholeSave,
+}
+
 impl MutationEntrypoint {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -299,6 +309,9 @@ pub struct ContributionEvent {
     pub deleted_chars: u32,
     #[serde(default)]
     pub modified_chars: u32,
+    /// 文字提交形态；旧事件为 None，不能反推逐字证明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_input_kind: Option<ContributionTextInputKind>,
     /// 仅含正文的对象使用：用于增量维护「当前保留内容来源」。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_before: Option<String>,
@@ -337,6 +350,21 @@ impl ContributionEvent {
                 .and_then(|snapshot| snapshot.text.as_deref()),
             after.as_ref().and_then(|snapshot| snapshot.text.as_deref()),
         );
+        let has_text = before
+            .as_ref()
+            .and_then(|snapshot| snapshot.text.as_ref())
+            .is_some()
+            || after
+                .as_ref()
+                .and_then(|snapshot| snapshot.text.as_ref())
+                .is_some();
+        let text_input_kind = has_text.then_some(
+            if operation == ContributionOperation::Create || modified > 0 {
+                ContributionTextInputKind::WholeSave
+            } else {
+                ContributionTextInputKind::Incremental
+            },
+        );
         let object_id = object_id.into();
         let after_version = after.as_ref().map(|snapshot| snapshot.version.clone());
         let event_id = format!(
@@ -370,6 +398,7 @@ impl ContributionEvent {
             inserted_chars: inserted,
             deleted_chars: deleted,
             modified_chars: modified,
+            text_input_kind,
             text_before: before.and_then(|snapshot| snapshot.text),
             text_after: after.and_then(|snapshot| snapshot.text),
             replay_format_version: None,

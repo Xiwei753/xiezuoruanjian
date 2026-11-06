@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::writing_stats::contribution::{
-    ContributionEvent, ContributionObjectType, ContributionOperation, MutationActor,
-    MutationEntrypoint,
+    ContributionEvent, ContributionObjectType, ContributionOperation, ContributionTextInputKind,
+    MutationActor, MutationEntrypoint,
 };
 use crate::writing_stats::contribution_store::ContributionStore;
 use crate::writing_stats::starmap_checkpoint::{
@@ -81,6 +81,9 @@ pub struct StarMapReplayEventInfo {
     pub operation: ContributionOperation,
     pub object_type: ContributionObjectType,
     pub object_id: String,
+    /// 整段保存时 UI 必须说明“非逐字输入”，不能冒充手写轨迹。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_input_kind: Option<ContributionTextInputKind>,
 }
 
 /// 一帧历史星图状态。
@@ -130,6 +133,9 @@ pub struct StarMapProofExportPackage {
     pub final_state_sha256: String,
     pub contains_historical_graph: bool,
     pub history_complete: bool,
+    /// 导出时整条事件链/检查点校验错误；无效链不会生成包。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validation_errors: Vec<String>,
 }
 
 fn is_starmap_event(event: &ContributionEvent, starmap_id: &str) -> bool {
@@ -387,6 +393,8 @@ impl StarMapReplaySession {
     }
 
     fn reset_cursor_to(&mut self, target: u64) {
+        // 重新定位后旧目标的断链错误不再属于当前帧；从检查点/基线重建。
+        self.errors.clear();
         let checkpoint = latest_checkpoint_at_or_before(&self.checkpoints, target);
         if let Some(checkpoint) = checkpoint {
             if checkpoint.hash_matches() && checkpoint_prefix_matches(&self.events, checkpoint) {
@@ -538,6 +546,7 @@ impl StarMapReplaySession {
                 operation: event.operation,
                 object_type: event.object_type,
                 object_id: event.object_id.clone(),
+                text_input_kind: event.text_input_kind,
             });
         let trajectory = if request.include_trajectory {
             target
@@ -605,11 +614,20 @@ pub fn export_starmap_proof(
         ..StarMapReplayRequest::default()
     };
     let mut session = StarMapReplaySession::open(store, &request)?;
+    // 导出必须从真实基线重放整条事件链，不能借最近检查点跳过前缀校验。
+    session.checkpoints.clear();
+    session.reset_cursor_to(0);
     let target = session.total_events();
     let frame = session.frame_at(&StarMapReplayRequest {
         target_position: Some(target),
         ..request.clone()
     });
+    if !frame.valid {
+        return Err(Error::Other(format!(
+            "cannot export invalid starmap proof for {starmap_id}: {}",
+            frame.errors.join("; ")
+        )));
+    }
     let mut events: Vec<ContributionEvent> = store
         .load_all_events()?
         .into_iter()
@@ -646,6 +664,7 @@ pub fn export_starmap_proof(
         final_state_sha256,
         contains_historical_graph,
         history_complete: frame.history_complete,
+        validation_errors: frame.errors,
     })
 }
 

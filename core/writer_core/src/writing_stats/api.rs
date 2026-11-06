@@ -872,9 +872,7 @@ impl StatsApi {
         &self,
         contribution_events: &[ContributionEvent],
     ) -> Vec<WritingInputEvent> {
-        use crate::writing_stats::contribution::{
-            ContributionObjectType, ContributionOperation, MutationActor,
-        };
+        use crate::writing_stats::contribution::{ContributionObjectType, MutationActor};
         let mut synthetic = Vec::new();
         for event in contribution_events {
             if !matches!(
@@ -927,54 +925,30 @@ impl StatsApi {
                 input.starmap_id = Some(starmap_id.clone());
                 out.push(input);
             };
-            // 创建节点/整段改写一次提交的是完整文本，不能凭一次保存就宣称
-            // 逐字手写。只有已有文本的纯增删（diff 没有修改段）才计入人工
-            // 逐字输入；整段替换按 Unknown 只累计净变化。
-            let replaced =
-                event.operation == ContributionOperation::Create || event.modified_chars > 0;
+            // 作者身份由 MutationActor 确认：人工创作/编辑的文字必须进入
+            // 全局人工创作统计。整段保存是否属于“逐字手写证明”由
+            // `text_input_kind` 单独标记，不能因此把人工贡献抹成未知来源。
             match event.actor {
                 MutationActor::Human => {
                     if event.inserted_chars > 0 {
-                        if replaced {
-                            push_event(
-                                EventSource::Unknown,
-                                event.inserted_chars,
-                                0,
-                                0,
-                                "replace-inserted",
-                                &mut synthetic,
-                            );
-                        } else {
-                            push_event(
-                                EventSource::HumanTyped,
-                                event.inserted_chars,
-                                0,
-                                0,
-                                "inserted",
-                                &mut synthetic,
-                            );
-                        }
+                        push_event(
+                            EventSource::HumanTyped,
+                            event.inserted_chars,
+                            0,
+                            0,
+                            "inserted",
+                            &mut synthetic,
+                        );
                     }
                     if event.deleted_chars > 0 {
-                        if replaced {
-                            push_event(
-                                EventSource::Unknown,
-                                0,
-                                event.deleted_chars,
-                                0,
-                                "replace-deleted",
-                                &mut synthetic,
-                            );
-                        } else {
-                            push_event(
-                                EventSource::Deleted,
-                                0,
-                                event.deleted_chars,
-                                0,
-                                "deleted",
-                                &mut synthetic,
-                            );
-                        }
+                        push_event(
+                            EventSource::Deleted,
+                            0,
+                            event.deleted_chars,
+                            0,
+                            "deleted",
+                            &mut synthetic,
+                        );
                     }
                 }
                 MutationActor::Ai => {
@@ -1056,7 +1030,8 @@ impl StatsApi {
         &self,
         request: &crate::writing_stats::starmap_replay::StarMapReplayRequest,
     ) -> Result<crate::writing_stats::starmap_replay::StarMapReplayFrame> {
-        let generation = self.contribution_store.replay_generation();
+        // 同步直接落盘不会经过本地追加，不能用 generation 文件判断失效。
+        let generation = self.contribution_store.storage_fingerprint();
         let key = format!("{}|{}", request.starmap_id, request.device_id);
         let session = {
             let mut cache = self

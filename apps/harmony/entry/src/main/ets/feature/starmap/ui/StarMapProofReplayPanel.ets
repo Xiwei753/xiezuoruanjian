@@ -68,6 +68,7 @@ interface StarMapProofEvent {
   operation: string
   objectType: string
   objectId: string
+  textInputKind?: string
 }
 
 interface StarMapProofBranch {
@@ -228,7 +229,8 @@ export struct StarMapProofReplayPanel {
     if (event === null || event === undefined) {
       return '起始状态'
     }
-    return `${event.actor} · ${event.entrypoint} · ${event.operation} ${event.objectType}`
+    const kind = event.textInputKind === 'whole_save' ? ' · 整段保存（非逐字）' : ''
+    return `${event.actor} · ${event.entrypoint} · ${event.operation} ${event.objectType}${kind}`
   }
 
   private graph(): StarMapProofGraph {
@@ -444,6 +446,13 @@ export struct StarMapProofReplayPanel {
           .fontSize(11)
           .fontColor($r('sys.color.warning'))
           .width('100%')
+      }
+      if (this.frame !== null && !this.frame.valid) {
+        Text('证明校验失败：' + this.frame.errors.join('；'))
+          .fontSize(11)
+          .fontColor($r('sys.color.warning'))
+          .width('100%')
+          .maxLines(3)
       }
 
       // 真实画布：节点、连线、Embed 和跨层端点都由 Core 的历史图驱动。

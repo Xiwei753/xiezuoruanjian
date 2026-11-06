@@ -178,6 +178,15 @@ Dialog {
                 color: root.dt ? root.dt.textMuted : Kirigami.Theme.disabledTextColor
                 font.pixelSize: 12
             }
+            Label {
+                visible: root.frame.valid === false
+                text: qsTr("证明校验失败：")
+                      + (root.frame.errors ? root.frame.errors.join(qsTr("；")) : "")
+                color: "#b3261e"
+                font.pixelSize: 12
+                elide: Text.ElideRight
+                Layout.maximumWidth: 360
+            }
             Button {
                 text: qsTr("关闭")
                 onClicked: root.close()
@@ -389,8 +398,11 @@ Dialog {
                     var event = root.frame ? root.frame.event : null
                     if (!event)
                         return qsTr("起始状态")
+                    var kind = event.textInputKind === "whole_save"
+                               ? qsTr(" · 整段保存（非逐字）") : ""
                     return event.actor + " · " + event.entrypoint + " · "
-                           + event.operation + " " + event.objectType + " · " + event.objectId
+                           + event.operation + " " + event.objectType + " · "
+                           + event.objectId + kind
                 }
                 color: root.dt ? root.dt.textSecondary : Kirigami.Theme.textColor
                 font.pixelSize: 12

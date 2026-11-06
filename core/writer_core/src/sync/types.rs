@@ -227,9 +227,7 @@ impl AppDataGroup {
     pub fn owns_path(&self, path: &str) -> bool {
         let path = path.replace('\\', "/");
         match self {
-            Self::Global => {
-                path == "settings.sync.json" || is_agent_conversation_path(&path)
-            }
+            Self::Global => path == "settings.sync.json" || is_agent_conversation_path(&path),
             Self::StarmapIndex => path == "starmaps/index.json",
             Self::Starmap(id) => {
                 path == format!("starmaps/{id}.meta.json")
@@ -327,6 +325,18 @@ pub(crate) fn stats_device_id_for_event_path(rel_path: &str) -> Option<String> {
         }
         return Some(device_id.to_string());
     }
+    // 星图回放检查点：<device>/starmap/<starmap_id>.checkpoints.jsonl。
+    // `.chain/.count/.sequence` 是本地可重建索引，不参与同步。
+    if let Some(name) = tail.strip_prefix("starmap/") {
+        if !name.contains('/') {
+            if let Some(starmap_id) = name.strip_suffix(".checkpoints.jsonl") {
+                if is_safe_checkpoint_segment(starmap_id) {
+                    return Some(device_id.to_string());
+                }
+            }
+        }
+        return None;
+    }
     // 证明检查点与连续性缺口：<device>/proof/<chapter>.checkpoints.jsonl、
     // <device>/proof/<chapter>.gaps/<64位十六进制记录ID>.json。
     if let Some(name) = tail.strip_prefix("proof/") {
@@ -342,9 +352,7 @@ pub(crate) fn stats_device_id_for_event_path(rel_path: &str) -> Option<String> {
                 if is_safe_checkpoint_segment(chapter)
                     && record.len() == 64 + ".json".len()
                     && record.ends_with(b".json")
-                    && record[..64]
-                        .iter()
-                        .all(|byte| byte.is_ascii_hexdigit())
+                    && record[..64].iter().all(|byte| byte.is_ascii_hexdigit())
                 {
                     return Some(device_id.to_string());
                 }
