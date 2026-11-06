@@ -51,10 +51,16 @@ pub enum MutationEntrypoint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContributionTextInputKind {
-    /// 已存在文本上的纯插入/删除，可按字符 diff 复核。
-    Incremental,
-    /// 新建节点或整段替换：作者仍算人工创作，但不能声称逐字输入。
-    WholeSave,
+    /// 只能从对象前后快照确认的一次提交（新建、整段替换、纯文本 diff）。
+    /// 作者仍算人工创作，但没有逐字输入证据。
+    #[serde(alias = "whole_save", alias = "incremental")]
+    ObjectCommit,
+    /// 平台提供了真实编辑事务/按键事件。
+    Typed,
+    /// 平台明确报告为粘贴。
+    Pasted,
+    /// 平台明确报告为输入法组合提交。
+    Composition,
 }
 
 impl MutationEntrypoint {
@@ -358,13 +364,8 @@ impl ContributionEvent {
                 .as_ref()
                 .and_then(|snapshot| snapshot.text.as_ref())
                 .is_some();
-        let text_input_kind = has_text.then_some(
-            if operation == ContributionOperation::Create || modified > 0 {
-                ContributionTextInputKind::WholeSave
-            } else {
-                ContributionTextInputKind::Incremental
-            },
-        );
+        // 对象前后快照只能证明“发生了一次提交”，不能从 diff 推断逐字输入。
+        let text_input_kind = has_text.then_some(ContributionTextInputKind::ObjectCommit);
         let object_id = object_id.into();
         let after_version = after.as_ref().map(|snapshot| snapshot.version.clone());
         let event_id = format!(

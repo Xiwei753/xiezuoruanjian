@@ -57,6 +57,7 @@ fn summary_json(range: &DateRange, summary: &StatsSummary) -> Value {
             "endDate": range.end_date,
         },
         "totalHumanTypedChars": summary.total_human_typed_chars,
+        "totalVerifiedTypedChars": summary.total_verified_typed_chars,
         "totalPastedChars": summary.total_pasted_chars,
         "totalDeletedChars": summary.total_deleted_chars,
         "totalAiInsertedChars": summary.total_ai_inserted_chars,
@@ -553,6 +554,7 @@ impl StatsApi {
         let elapsed_days = elapsed_calendar_days(first_writing_date.as_deref(), &today)?;
         let lifetime = WritingStatsLifetimeDto {
             total_human_typed_chars: career.total_human_typed_chars,
+            verified_typed_chars: career.verified_typed_chars,
             first_writing_date: first_writing_date.clone(),
             last_writing_date,
             elapsed_calendar_days: elapsed_days,
@@ -640,6 +642,7 @@ impl StatsApi {
                 preset: preset.as_str().to_string(),
                 range: date_range_dto(&range),
                 total_human_typed_chars: selected_stats.total_human_typed_chars,
+                verified_typed_chars: selected_stats.verified_typed_chars,
                 total_active_seconds: selected_stats.total_active_seconds,
                 writing_days: selected_stats.writing_days,
                 average_chars_per_day: average_chars_per_day(
@@ -923,6 +926,9 @@ impl StatsApi {
                     input.local_date = event.local_date.clone();
                 }
                 input.starmap_id = Some(starmap_id.clone());
+                // 只有平台真实编辑事件才可支撑逐字/速度口径；对象提交不是。
+                input.verified_typed = event.text_input_kind
+                    == Some(crate::writing_stats::contribution::ContributionTextInputKind::Typed);
                 out.push(input);
             };
             // 作者身份由 MutationActor 确认：人工创作/编辑的文字必须进入
@@ -1479,6 +1485,7 @@ fn period_card(
             has_selection: false,
             range: None,
             total_human_typed_chars: 0,
+            verified_typed_chars: 0,
             total_active_seconds: 0,
             writing_days: 0,
             average_chars_per_day: None,
@@ -1498,6 +1505,7 @@ fn period_card(
         has_selection: true,
         range: Some(date_range_dto(&range)),
         total_human_typed_chars: stats.total_human_typed_chars,
+        verified_typed_chars: stats.verified_typed_chars,
         total_active_seconds: stats.total_active_seconds,
         writing_days: stats.writing_days,
         average_chars_per_day: average_chars_per_day(stats.total_human_typed_chars, calendar_days),

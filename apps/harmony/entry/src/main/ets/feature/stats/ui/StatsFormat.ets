@@ -29,6 +29,7 @@ export const EMPTY_STATS_EXPLORER: WritingStatsExplorer = {
   historyScope: 'localEvents',
   lifetime: {
     totalHumanTypedChars: 0,
+    verifiedTypedChars: 0,
     firstWritingDate: null,
     lastWritingDate: null,
     elapsedCalendarDays: 0,
@@ -44,6 +45,7 @@ export const EMPTY_STATS_EXPLORER: WritingStatsExplorer = {
     preset: 'last7Days',
     range: { startDate: '', endDate: '' },
     totalHumanTypedChars: 0,
+    verifiedTypedChars: 0,
     totalActiveSeconds: 0,
     writingDays: 0,
     averageCharsPerDay: null,

@@ -304,6 +304,7 @@
     <string name="stats_active_days">活跃天数</string>
     <string name="stats_total_duration">总时长</string>
     <string name="stats_manual_input">手动输入</string>
+    <string name="stats_manual_and_verified">人工 / 可证实逐字</string>
     <string name="stats_active_duration">活跃时长</string>
     <string name="stats_session_count">会话数</string>
     <string name="stats_by_project">按作品统计</string>

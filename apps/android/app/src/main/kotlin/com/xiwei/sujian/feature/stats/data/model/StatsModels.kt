@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.stats.data.model
 data class WritingStatsSummary(
     val range: WritingStatsRange? = null,
     val totalHumanTypedChars: Long = 0,
+    val totalVerifiedTypedChars: Long = 0,
     val totalPastedChars: Long = 0,
     val totalDeletedChars: Long = 0,
     val totalAiInsertedChars: Long = 0,

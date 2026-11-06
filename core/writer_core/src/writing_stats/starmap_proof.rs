@@ -16,14 +16,16 @@ use crate::starmap::types::{
 };
 use crate::starmap::StarMapMeta;
 use crate::writing_stats::contribution::{
-    ContributionObjectType, ContributionOperation, MutationActor, MutationEntrypoint,
+    ContributionObjectType, ContributionOperation, ContributionTextInputKind, MutationActor,
+    MutationEntrypoint,
 };
 
 /// 星图证明增量格式版本。
 ///
 /// v2 起事件哈希覆盖来源字段，检查点锚定事件链头。旧事件缺版本字段时按
 /// [`LEGACY_STARMAP_PROOF_FORMAT_VERSION`] 读取，不能静默套用新算法。
-pub const STARMAP_PROOF_FORMAT_VERSION: u32 = 2;
+pub const STARMAP_PROOF_FORMAT_VERSION: u32 = 3;
+pub const LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION: u32 = 2;
 pub const LEGACY_STARMAP_PROOF_FORMAT_VERSION: u32 = 1;
 
 /// 拖动轨迹的一个有界关键点。
@@ -201,7 +203,9 @@ impl StarMapProofDelta {
     pub fn is_valid(&self) -> bool {
         matches!(
             self.format_version,
-            LEGACY_STARMAP_PROOF_FORMAT_VERSION | STARMAP_PROOF_FORMAT_VERSION
+            LEGACY_STARMAP_PROOF_FORMAT_VERSION
+                | LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION
+                | STARMAP_PROOF_FORMAT_VERSION
         ) && !self.starmap_id.is_empty()
             && !self.object_id.is_empty()
     }
@@ -447,12 +451,17 @@ pub struct ReplayEventIdentity<'a> {
     pub origin_device_id: &'a str,
     pub project_id: &'a str,
     pub transaction_id: &'a str,
+    pub replay_order: Option<u32>,
+    pub text_input_kind: Option<ContributionTextInputKind>,
+    pub platform: &'a str,
+    pub device_class: &'a str,
     pub branch_position: u64,
 }
 
-/// 计算一条回放事件的稳定哈希（v2）。
+/// 计算一条回放事件的稳定哈希（v3）。
 ///
-/// 只覆盖业务事实字段，不覆盖哈希自身；同步搬运后设备/操作者字段原样保留。
+/// 覆盖业务事实、来源平台/设备类别、编辑提交方式和事务顺序；同步搬运后
+/// 这些字段原样保留，篡改任何一项都会使链校验失败。
 pub fn compute_replay_event_hash(
     prev_event_hash: &str,
     identity: &ReplayEventIdentity<'_>,
@@ -460,6 +469,42 @@ pub fn compute_replay_event_hash(
 ) -> String {
     let payload = serde_json::json!({
         "version": STARMAP_PROOF_FORMAT_VERSION,
+        "prev": prev_event_hash,
+        "eventId": identity.event_id,
+        "actor": identity.actor.as_str(),
+        "entrypoint": identity.entrypoint.as_str(),
+        "occurredAtMs": identity.occurred_at_ms,
+        "originDeviceId": identity.origin_device_id,
+        "projectId": identity.project_id,
+        "transactionId": identity.transaction_id,
+        "replayOrder": identity.replay_order,
+        "textInputKind": identity.text_input_kind,
+        "platform": identity.platform,
+        "deviceClass": identity.device_class,
+        "position": identity.branch_position,
+        "starmapId": delta.starmap_id,
+        "objectType": delta.object_type,
+        "objectId": delta.object_id,
+        "operation": delta.operation,
+        "before": delta.before,
+        "after": delta.after,
+        "trajectory": delta.trajectory,
+        "baseline": delta.baseline,
+        "rootsAfter": delta.roots_after,
+        "beforeStateHash": delta.before_state_hash,
+        "afterStateHash": delta.after_state_hash,
+    });
+    sha256_hex(&serde_json::to_vec(&payload).unwrap_or_default())
+}
+
+/// v2 旧算法：用于校验已写入的来源字段哈希，不重写历史。
+pub fn compute_v2_replay_event_hash(
+    prev_event_hash: &str,
+    identity: &ReplayEventIdentity<'_>,
+    delta: &StarMapProofDelta,
+) -> String {
+    let payload = serde_json::json!({
+        "version": LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION,
         "prev": prev_event_hash,
         "eventId": identity.event_id,
         "actor": identity.actor.as_str(),

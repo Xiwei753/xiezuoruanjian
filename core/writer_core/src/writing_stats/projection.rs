@@ -97,7 +97,10 @@ pub struct DeviceClassStatsAgg {
 /// 总汇统计。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StatsSummary {
+    /// 人工创作/编辑总字数（actor=Human，含整段保存）。
     pub total_human_typed_chars: u64,
+    /// 其中有真实编辑事件/按键证据的逐字输入字数。
+    pub total_verified_typed_chars: u64,
     pub total_pasted_chars: u64,
     pub total_deleted_chars: u64,
     pub total_ai_inserted_chars: u64,
@@ -356,7 +359,10 @@ pub struct StatsRecord {
 /// 旧投影兼容字段里，绝不参与速度和最长会话。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RangeStatsAgg {
+    /// 人工创作量：所有 `HumanTyped` 输入，含整段保存等无逐字过程证据的提交。
     pub total_human_typed_chars: u64,
+    /// 可证实逐字输入量：只有平台携带真实键入事实的事件参与速度/逐字证明。
+    pub verified_typed_chars: u64,
     /// 真实的已测量写作秒数。带 `*_with_sessions` 的投影会覆盖成切片并集；
     /// 旧投影无计时事实时保持 0，绝不拿事件时间差冒充。
     pub total_active_seconds: u64,
@@ -587,6 +593,7 @@ fn aggregate_range_stats(
     range: Option<(&str, &str)>,
 ) -> Result<RangeStatsAgg> {
     let mut daily: BTreeMap<String, u64> = BTreeMap::new();
+    let mut verified_typed_chars: u64 = 0;
     let mut human_events: Vec<&WritingInputEvent> = Vec::new();
     let mut by_device: HashMap<&str, Vec<&WritingInputEvent>> = HashMap::new();
 
@@ -598,7 +605,10 @@ fn aggregate_range_stats(
         }
         if event.source == EventSource::HumanTyped && event.inserted_chars > 0 {
             *daily.entry(date).or_default() += u64::from(event.inserted_chars);
-            human_events.push(event);
+            if event.verified_typed {
+                verified_typed_chars += u64::from(event.inserted_chars);
+                human_events.push(event);
+            }
         }
         by_device
             .entry(event.device_id.as_str())
@@ -653,6 +663,7 @@ fn aggregate_range_stats(
 
     Ok(RangeStatsAgg {
         total_human_typed_chars: daily.values().sum(),
+        verified_typed_chars,
         total_active_seconds,
         timed_human_typed_chars: 0,
         measured_session_count: 0,
@@ -917,7 +928,10 @@ pub fn project_measured_sessions(
 
     let mut timed_human_typed_chars: u64 = 0;
     for event in events {
-        if event.source != EventSource::HumanTyped || event.inserted_chars == 0 {
+        if event.source != EventSource::HumanTyped
+            || !event.verified_typed
+            || event.inserted_chars == 0
+        {
             continue;
         }
         let date = event.business_date();
@@ -1113,6 +1127,11 @@ fn compute_summary_chars(events: &[WritingInputEvent]) -> StatsSummary {
         &mut summary.total_net_delta_chars,
         &all_sorted,
     );
+    summary.total_verified_typed_chars = events
+        .iter()
+        .filter(|event| event.source == EventSource::HumanTyped && event.verified_typed)
+        .map(|event| u64::from(event.inserted_chars))
+        .sum();
 
     summary
 }
@@ -1197,7 +1216,7 @@ fn compute_speed_curve(events: &[WritingInputEvent], bucket_minutes: u32) -> Vec
     // 只保留 HumanTyped 事件
     let mut human_events: Vec<&WritingInputEvent> = events
         .iter()
-        .filter(|e| e.source == EventSource::HumanTyped)
+        .filter(|e| e.source == EventSource::HumanTyped && e.verified_typed)
         .collect();
 
     if human_events.is_empty() {
@@ -1259,6 +1278,7 @@ fn compute_current_speed(events: &[WritingInputEvent], window_seconds: u32) -> C
         .iter()
         .filter(|e| {
             e.source == EventSource::HumanTyped
+                && e.verified_typed
                 && e.timestamp_ms >= start_ms
                 && e.timestamp_ms <= now_ms
         })

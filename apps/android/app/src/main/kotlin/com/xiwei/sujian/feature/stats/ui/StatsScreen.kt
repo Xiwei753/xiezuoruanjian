@@ -98,7 +98,10 @@ fun StatsScreen(modifier: Modifier = Modifier) {
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
-                            StatItem(stringResource(id = R.string.stats_manual_input), "${s.totalHumanTypedChars}")
+                            StatItem(
+                                stringResource(id = R.string.stats_manual_and_verified),
+                                "${s.totalHumanTypedChars} / ${s.totalVerifiedTypedChars}",
+                            )
                             StatItem(stringResource(id = R.string.stats_active_days), "${s.daysCount}")
                             StatItem(
                                 stringResource(id = R.string.stats_active_duration),

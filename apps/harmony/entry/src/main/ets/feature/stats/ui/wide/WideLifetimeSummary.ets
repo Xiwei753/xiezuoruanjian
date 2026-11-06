@@ -141,6 +141,9 @@ export struct WideLifetimeSummary {
             .margin({ bottom: 5 })
         }
         .alignItems(VerticalAlign.Bottom)
+        Text(`其中可证实逐字 ${formatInt(this.explorer.lifetime.verifiedTypedChars)} 字`)
+          .fontSize(11)
+          .fontColor($r('sys.color.font_tertiary'))
       }
       .alignItems(HorizontalAlign.Start)
 

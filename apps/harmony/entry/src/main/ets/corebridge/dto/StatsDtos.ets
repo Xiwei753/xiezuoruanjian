@@ -22,6 +22,8 @@ export const STATS_PRESET_CUSTOM: string = 'custom'
 
 export interface WritingStatsLifetime {
   totalHumanTypedChars: number
+  /** 其中带真实输入事务证据的逐字输入量 */
+  verifiedTypedChars: number
   firstWritingDate: string | null
   lastWritingDate: string | null
   /** 首次写作日到今天（含两端）的自然日历天数；没有历史时为 0 */
@@ -45,6 +47,8 @@ export interface WritingStatsPeriodCard {
   hasSelection: boolean
   range: DateRange | null
   totalHumanTypedChars: number
+  /** 其中带真实输入事务证据的逐字输入量 */
+  verifiedTypedChars: number
   totalActiveSeconds: number
   writingDays: number
   averageCharsPerDay: number | null
@@ -97,6 +101,8 @@ export interface WritingStatsSelectedPeriod {
   preset: string
   range: DateRange
   totalHumanTypedChars: number
+  /** 其中带真实输入事务证据的逐字输入量 */
+  verifiedTypedChars: number
   totalActiveSeconds: number
   writingDays: number
   averageCharsPerDay: number | null

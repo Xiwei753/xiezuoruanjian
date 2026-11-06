@@ -30,6 +30,12 @@ const OBJECTS_SUFFIX: &str = ".objects.jsonl";
 pub struct ContributionStore {
     app_data_root: PathBuf,
     origin_device_id: Mutex<Option<String>>,
+    event_id_cache: Mutex<HashMap<String, OriginEventIdCache>>,
+}
+
+struct OriginEventIdCache {
+    fingerprint: u64,
+    ids: HashSet<String>,
 }
 
 struct ReplayMetadata {
@@ -43,6 +49,7 @@ impl ContributionStore {
         Self {
             app_data_root: app_data_root.to_path_buf(),
             origin_device_id: Mutex::new(None),
+            event_id_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -103,69 +110,59 @@ impl ContributionStore {
     }
 
     /// 事件库真实存储指纹：同步直接搬入文件时也能让回放缓存失效。
+    ///
+    /// 只读目录元数据，不逐文件扫描；事件追加会同时更新 generation 文件，
+    /// 同步替换分区会改变 origin/starmap 目录 mtime。
     pub fn storage_fingerprint(&self) -> u64 {
         use std::hash::{Hash, Hasher};
-        let mut files: Vec<(PathBuf, u64, u128)> = Vec::new();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hash_entry = |path: &Path| {
+            path.to_string_lossy().hash(&mut hasher);
+            if let Ok(meta) = fs::metadata(path) {
+                meta.len().hash(&mut hasher);
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_nanos())
+                    .unwrap_or(0);
+                modified.hash(&mut hasher);
+            }
+        };
         let root = self.events_root();
+        hash_entry(&root);
+        hash_entry(&self.generation_path());
         if let Ok(origins) = fs::read_dir(&root) {
             for origin in origins.flatten() {
-                let Ok(origin_kind) = origin.file_type() else {
-                    continue;
-                };
-                if !origin_kind.is_dir() {
+                if !origin.file_type().is_ok_and(|kind| kind.is_dir()) {
                     continue;
                 }
                 let origin_dir = origin.path();
-                if let Ok(entries) = fs::read_dir(&origin_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                            continue;
-                        };
-                        if name.ends_with(OBJECTS_SUFFIX) {
-                            if let Ok(meta) = entry.metadata() {
-                                let modified = meta
-                                    .modified()
-                                    .ok()
-                                    .and_then(|time| {
-                                        time.duration_since(std::time::UNIX_EPOCH).ok()
-                                    })
-                                    .map(|duration| duration.as_nanos())
-                                    .unwrap_or(0);
-                                files.push((path, meta.len(), modified));
-                            }
-                        }
-                    }
-                }
-                if let Ok(entries) = fs::read_dir(origin_dir.join("starmap")) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                            continue;
-                        };
-                        if !name.ends_with(".checkpoints.jsonl") {
-                            continue;
-                        }
-                        if let Ok(meta) = entry.metadata() {
-                            let modified = meta
-                                .modified()
-                                .ok()
-                                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                                .map(|duration| duration.as_nanos())
-                                .unwrap_or(0);
-                            files.push((path, meta.len(), modified));
-                        }
-                    }
-                }
+                hash_entry(&origin_dir);
+                hash_entry(&origin_dir.join("starmap"));
             }
         }
-        files.sort_by(|left, right| left.0.cmp(&right.0));
+        hasher.finish()
+    }
+
+    fn origin_fingerprint(&self, origin: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for (path, len, modified) in files {
+        let mut hash_entry = |path: &Path| {
             path.to_string_lossy().hash(&mut hasher);
-            len.hash(&mut hasher);
-            modified.hash(&mut hasher);
-        }
+            if let Ok(meta) = fs::metadata(path) {
+                meta.len().hash(&mut hasher);
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_nanos())
+                    .unwrap_or(0);
+                modified.hash(&mut hasher);
+            }
+        };
+        hash_entry(&self.generation_path());
+        hash_entry(&self.events_root().join(origin));
         hasher.finish()
     }
 
@@ -282,23 +279,63 @@ impl ContributionStore {
     }
 
     /// 读取某来源分区已落盘的全部对象事件 ID，用于幂等去重。
+    ///
+    /// 缓存只在 origin 指纹变化（同步替换目录、generation 更新）时重扫。
     fn load_origin_event_ids(&self, origin: &str) -> Result<HashSet<String>> {
+        let fingerprint = self.origin_fingerprint(origin);
+        {
+            let cache = self
+                .event_id_cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(entry) = cache.get(origin) {
+                if entry.fingerprint == fingerprint {
+                    return Ok(entry.ids.clone());
+                }
+            }
+        }
         let dir = self.events_root().join(origin);
         let mut ids = HashSet::new();
-        if !dir.is_dir() {
-            return Ok(ids);
-        }
-        for entry in fs::read_dir(&dir)? {
-            let path = entry?.path();
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if !name.ends_with(OBJECTS_SUFFIX) {
-                continue;
+        if dir.is_dir() {
+            for entry in fs::read_dir(&dir)? {
+                let path = entry?.path();
+                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if !name.ends_with(OBJECTS_SUFFIX) {
+                    continue;
+                }
+                ids.extend(read_ids(&path)?);
             }
-            ids.extend(read_ids(&path)?);
         }
+        let mut cache = self
+            .event_id_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.insert(
+            origin.to_string(),
+            OriginEventIdCache {
+                fingerprint,
+                ids: ids.clone(),
+            },
+        );
         Ok(ids)
+    }
+
+    /// 写成功后增量更新事件 ID 缓存，避免下一次记录再次全量扫描。
+    fn cache_written_event_ids(&self, origin: &str, event_ids: &[String]) {
+        if event_ids.is_empty() {
+            return;
+        }
+        let fingerprint = self.origin_fingerprint(origin);
+        let mut cache = self
+            .event_id_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = cache.get_mut(origin) {
+            entry.ids.extend(event_ids.iter().cloned());
+            entry.fingerprint = fingerprint;
+        }
     }
 
     /// 追加时分配来源设备内持久、单调的排序序号，并按星图分支内事件数建立
@@ -377,6 +414,10 @@ impl ContributionStore {
                 origin_device_id: &origin,
                 project_id: &event.project_id,
                 transaction_id: &event.transaction_id,
+                replay_order: event.replay_order,
+                text_input_kind: event.text_input_kind,
+                platform: &event.platform,
+                device_class: &event.device_class,
                 branch_position,
             };
             let event_hash = compute_replay_event_hash(&head, &identity, &delta);
@@ -598,6 +639,7 @@ impl ContributionStore {
         let partition_dir = self.events_root().join(&origin);
         fs::create_dir_all(&partition_dir)?;
         let mut written = 0usize;
+        let mut written_ids: Vec<String> = Vec::new();
         for (date, events) in by_date {
             let path = self.event_file_path(&origin, &date);
             let mut existing = read_ids(&path)?;
@@ -610,6 +652,7 @@ impl ContributionStore {
                 writeln!(file, "{line}")?;
                 if !event.event_id.is_empty() {
                     existing.insert(event.event_id.clone());
+                    written_ids.push(event.event_id.clone());
                 }
                 written += 1;
             }
@@ -623,6 +666,7 @@ impl ContributionStore {
         fs::remove_file(&pending_path)?;
         self.maintain_starmap_checkpoints(&checkpoint_targets);
         self.bump_replay_generation();
+        self.cache_written_event_ids(&origin, &written_ids);
         Ok(written)
     }
 
@@ -701,6 +745,7 @@ impl ContributionStore {
                 .or_default()
                 .push(event);
         }
+        let mut written_by_origin: HashMap<String, Vec<String>> = HashMap::new();
         for ((origin, date), events) in by_origin_date {
             let path = self.event_file_path(&origin, &date);
             if let Some(parent) = path.parent() {
@@ -715,6 +760,10 @@ impl ContributionStore {
                 writeln!(file, "{}", serde_json::to_string(event)?)?;
                 if !event.event_id.is_empty() {
                     existing.insert(event.event_id.clone());
+                    written_by_origin
+                        .entry(origin.clone())
+                        .or_default()
+                        .push(event.event_id.clone());
                 }
             }
         }
@@ -722,6 +771,9 @@ impl ContributionStore {
         self.persist_baseline_checkpoints(&all_events);
         self.rebuild_replay_indexes(&all_events)?;
         self.bump_replay_generation();
+        for (origin, ids) in written_by_origin {
+            self.cache_written_event_ids(&origin, &ids);
+        }
         Ok(())
     }
 

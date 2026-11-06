@@ -136,6 +136,11 @@ export struct WidePeriodCards {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
+        Text(`可证实逐字 ${formatInt(card.verifiedTypedChars)} 字`)
+          .fontSize(11)
+          .fontColor($r('sys.color.font_tertiary'))
+          .width('100%')
+
         Row() {
           Text(`${formatAveragePerHour(card.averageCharsPerHour)} 字/时`)
             .fontSize(16)

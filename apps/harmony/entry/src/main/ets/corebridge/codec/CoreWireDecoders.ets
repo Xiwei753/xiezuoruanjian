@@ -576,6 +576,7 @@ function decodeWritingStatsLifetime(data: Object): DecodeResult<WritingStatsLife
   }
   const totalHumanTypedChars: number | null = reqNum(data, 'totalHumanTypedChars')
   if (totalHumanTypedChars === null) { return err<WritingStatsLifetime>('lifetime.totalHumanTypedChars missing or not number') }
+  const verifiedTypedChars: number = reqNum(data, 'verifiedTypedChars') ?? 0
   const firstWritingDateR: DecodeResult<string | null> = nullStr(data, 'firstWritingDate')
   if (!firstWritingDateR.ok || firstWritingDateR.value === undefined) { return err<WritingStatsLifetime>(`lifetime.${firstWritingDateR.error ?? 'firstWritingDate decode failed'}`) }
   const lastWritingDateR: DecodeResult<string | null> = nullStr(data, 'lastWritingDate')
@@ -596,6 +597,7 @@ function decodeWritingStatsLifetime(data: Object): DecodeResult<WritingStatsLife
   if (hasMeasuredTiming === null) { return err<WritingStatsLifetime>('lifetime.hasMeasuredTiming missing or not boolean') }
   const value: WritingStatsLifetime = {
     totalHumanTypedChars: totalHumanTypedChars,
+    verifiedTypedChars: verifiedTypedChars,
     firstWritingDate: firstWritingDateR.value,
     lastWritingDate: lastWritingDateR.value,
     elapsedCalendarDays: elapsedCalendarDays,
@@ -627,6 +629,7 @@ function decodeWritingStatsPeriodCard(data: Object): DecodeResult<WritingStatsPe
   }
   const totalHumanTypedChars: number | null = reqNum(data, 'totalHumanTypedChars')
   if (totalHumanTypedChars === null) { return err<WritingStatsPeriodCard>('periodCard.totalHumanTypedChars missing or not number') }
+  const verifiedTypedChars: number = reqNum(data, 'verifiedTypedChars') ?? 0
   const totalActiveSeconds: number | null = reqNum(data, 'totalActiveSeconds')
   if (totalActiveSeconds === null) { return err<WritingStatsPeriodCard>('periodCard.totalActiveSeconds missing or not number') }
   const writingDays: number | null = reqNum(data, 'writingDays')
@@ -646,6 +649,7 @@ function decodeWritingStatsPeriodCard(data: Object): DecodeResult<WritingStatsPe
     hasSelection: hasSelection,
     range: range,
     totalHumanTypedChars: totalHumanTypedChars,
+    verifiedTypedChars: verifiedTypedChars,
     totalActiveSeconds: totalActiveSeconds,
     writingDays: writingDays,
     averageCharsPerDay: averageCharsPerDayR.value,
@@ -736,6 +740,7 @@ function decodeWritingStatsSelectedPeriod(data: Object): DecodeResult<WritingSta
   if (!rangeR.ok || rangeR.value === undefined) { return err<WritingStatsSelectedPeriod>(`selected.range: ${rangeR.error ?? 'decode failed'}`) }
   const totalHumanTypedChars: number | null = reqNum(data, 'totalHumanTypedChars')
   if (totalHumanTypedChars === null) { return err<WritingStatsSelectedPeriod>('selected.totalHumanTypedChars missing or not number') }
+  const verifiedTypedChars: number = reqNum(data, 'verifiedTypedChars') ?? 0
   const totalActiveSeconds: number | null = reqNum(data, 'totalActiveSeconds')
   if (totalActiveSeconds === null) { return err<WritingStatsSelectedPeriod>('selected.totalActiveSeconds missing or not number') }
   const writingDays: number | null = reqNum(data, 'writingDays')
@@ -762,6 +767,7 @@ function decodeWritingStatsSelectedPeriod(data: Object): DecodeResult<WritingSta
     preset: preset,
     range: rangeR.value,
     totalHumanTypedChars: totalHumanTypedChars,
+    verifiedTypedChars: verifiedTypedChars,
     totalActiveSeconds: totalActiveSeconds,
     writingDays: writingDays,
     averageCharsPerDay: averageCharsPerDayR.value,

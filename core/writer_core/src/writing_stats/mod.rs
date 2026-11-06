@@ -151,6 +151,16 @@ pub struct WritingInputEvent {
     /// 星图文字贡献的合成输入事件：指向真实星图 ID，不写入 chapter_id。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub starmap_id: Option<String>,
+    /// 是否有真实编辑事件/按键证明可支撑“逐字输入”。
+    ///
+    /// 旧事件缺字段时默认 true，保持既有正文口径；星图整段保存必须显式
+    /// 设为 false，只计入人工创作而不计入输入速度/可计时逐字字数。
+    #[serde(default = "default_verified_typed")]
+    pub verified_typed: bool,
+}
+
+const fn default_verified_typed() -> bool {
+    true
 }
 
 impl WritingInputEvent {
@@ -252,6 +262,7 @@ impl WritingInputEvent {
                 .unwrap_or_default(),
             proof: None,
             starmap_id: None,
+            verified_typed: true,
         }
     }
 

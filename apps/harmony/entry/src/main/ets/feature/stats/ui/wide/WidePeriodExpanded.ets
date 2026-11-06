@@ -134,6 +134,11 @@ export struct WidePeriodExpanded {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
 
+      Text(`其中可证实逐字 ${formatInt(this.selected.verifiedTypedChars)} 字`)
+        .fontSize(11)
+        .fontColor($r('sys.color.font_tertiary'))
+        .margin({ top: 4 })
+
       Text(`${formatAveragePerHour(this.selected.averageCharsPerHour)} 字/时`)
         .fontSize(16)
         .fontColor($r('sys.color.font_secondary'))

@@ -435,6 +435,7 @@ internal fun WritingStatsSummaryDto.toModel() =
     WritingStatsSummary(
         range = range.toModel(),
         totalHumanTypedChars = totalHumanTypedChars.toLong(),
+        totalVerifiedTypedChars = totalVerifiedTypedChars.toLong(),
         totalPastedChars = totalPastedChars.toLong(),
         totalDeletedChars = totalDeletedChars.toLong(),
         totalAiInsertedChars = totalAiInsertedChars.toLong(),

@@ -193,6 +193,11 @@ export struct CompactStatsContent {
       .width('100%')
       .alignItems(VerticalAlign.Bottom)
 
+      Text(`其中可证实逐字 ${formatInt(this.selected().verifiedTypedChars)} 字`)
+        .fontSize(11)
+        .fontColor($r('sys.color.font_tertiary'))
+        .width('100%')
+
       Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween }) {
         Text(formatDateRangeHuman(this.selected().range.startDate, this.selected().range.endDate))
           .fontSize(14)

@@ -12,6 +12,8 @@ pub struct DateRangeDto {
 pub struct WritingStatsSummaryDto {
     pub range: DateRangeDto,
     pub total_human_typed_chars: u64,
+    #[serde(default)]
+    pub total_verified_typed_chars: u64,
     pub total_pasted_chars: u64,
     pub total_deleted_chars: u64,
     pub total_ai_inserted_chars: u64,
@@ -199,6 +201,8 @@ pub struct WritingStatsExplorerDto {
 pub struct WritingStatsLifetimeDto {
     /// 累计人工输入字符数（含后来被删掉/重写的字；不含粘贴、AI、同步、撤销）。
     pub total_human_typed_chars: u64,
+    /// 其中带真实 editor transaction/input event 证据的逐字输入量。
+    pub verified_typed_chars: u64,
     /// 首次有人工输入的本地业务日；没有任何输入时为 null。
     pub first_writing_date: Option<String>,
     /// 最近一次有人工输入的本地业务日；没有任何输入时为 null。
@@ -235,6 +239,8 @@ pub struct WritingStatsPeriodCardDto {
     pub has_selection: bool,
     pub range: Option<DateRangeDto>,
     pub total_human_typed_chars: u64,
+    /// 其中带真实输入事务证据的逐字输入量。
+    pub verified_typed_chars: u64,
     pub total_active_seconds: u64,
     pub writing_days: u64,
     /// 平均每天字数 = 区间人工输入 / 该区间的自然日历天数（含无输入日、
@@ -261,6 +267,8 @@ pub struct WritingStatsSelectedPeriodDto {
     pub preset: String,
     pub range: DateRangeDto,
     pub total_human_typed_chars: u64,
+    /// 其中带真实输入事务证据的逐字输入量。
+    pub verified_typed_chars: u64,
     pub total_active_seconds: u64,
     pub writing_days: u64,
     /// 平均每天字数 = 区间人工输入 / 该区间的自然日历天数（含无输入日、

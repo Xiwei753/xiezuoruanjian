@@ -561,6 +561,7 @@ dictionary DateRangeDto {
 dictionary WritingStatsSummaryDto {
     DateRangeDto range;
     u64 total_human_typed_chars;
+    u64 total_verified_typed_chars;
     u64 total_pasted_chars;
     u64 total_deleted_chars;
     u64 total_ai_inserted_chars;

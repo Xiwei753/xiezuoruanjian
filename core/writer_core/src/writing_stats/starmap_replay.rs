@@ -19,10 +19,10 @@ use crate::writing_stats::starmap_checkpoint::{
     latest_checkpoint_at_or_before, load_starmap_checkpoints, StarMapProofCheckpoint,
 };
 use crate::writing_stats::starmap_proof::{
-    compute_legacy_replay_event_hash, compute_replay_event_hash, proof_object_sha256,
-    state_object_for_delta, state_sha256, ReplayEventIdentity, StarMapProofState,
-    StarMapProofTrajectorySample, LEGACY_STARMAP_PROOF_FORMAT_VERSION,
-    STARMAP_PROOF_FORMAT_VERSION,
+    compute_legacy_replay_event_hash, compute_replay_event_hash, compute_v2_replay_event_hash,
+    proof_object_sha256, state_object_for_delta, state_sha256, ReplayEventIdentity,
+    StarMapProofState, StarMapProofTrajectorySample, LEGACY_STARMAP_PROOF_FORMAT_VERSION,
+    LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION, STARMAP_PROOF_FORMAT_VERSION,
 };
 
 /// 回放查询。位置 `target_position` 表示「已应用多少个事件」，0 是空白/基线。
@@ -202,8 +202,84 @@ fn branches_for(events: &[ContributionEvent]) -> Vec<StarMapReplayBranch> {
 }
 
 /// 检查点必须锚定到本分支同一位置的事件链头，不能只信状态字节摘要。
+fn expected_event_hash(events: &[ContributionEvent], index: usize, head: &str) -> String {
+    let Some(event) = events.get(index) else {
+        return String::new();
+    };
+    let Some(delta) = event.replay_delta.as_ref() else {
+        return String::new();
+    };
+    if delta.format_version == LEGACY_STARMAP_PROOF_FORMAT_VERSION {
+        return compute_legacy_replay_event_hash(
+            head,
+            &event.event_id,
+            event.replay_position.unwrap_or(index as u64),
+            delta,
+        );
+    }
+    let identity = ReplayEventIdentity {
+        event_id: &event.event_id,
+        actor: event.actor,
+        entrypoint: event.entrypoint,
+        occurred_at_ms: event.occurred_at_ms,
+        origin_device_id: &event.origin_device_id,
+        project_id: &event.project_id,
+        transaction_id: &event.transaction_id,
+        replay_order: event.replay_order,
+        text_input_kind: event.text_input_kind,
+        platform: &event.platform,
+        device_class: &event.device_class,
+        branch_position: index as u64,
+    };
+    if delta.format_version == LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION {
+        compute_v2_replay_event_hash(head, &identity, delta)
+    } else {
+        compute_replay_event_hash(head, &identity, delta)
+    }
+}
+
+/// 一次算出整条分支的前缀校验状态，避免跳转时跳过早期断链。
+fn validate_event_chain(events: &[ContributionEvent]) -> Vec<bool> {
+    let mut valid = Vec::with_capacity(events.len() + 1);
+    valid.push(true);
+    let mut head = String::new();
+    for (index, event) in events.iter().enumerate() {
+        let stored = event
+            .replay_delta
+            .as_ref()
+            .and_then(|delta| delta.event_hash.clone());
+        let mut ok = stored.is_some();
+        if let Some(stored_hash) = stored.as_deref() {
+            let expected = expected_event_hash(events, index, &head);
+            ok = stored_hash == expected;
+            if let Some(delta) = event.replay_delta.as_ref() {
+                let prev_ok = match delta.prev_event_hash.as_deref() {
+                    Some(prev) => prev == head,
+                    None => head.is_empty(),
+                };
+                ok = ok && prev_ok;
+            }
+        }
+        let previous = *valid.last().unwrap_or(&true);
+        valid.push(previous && ok);
+        head = stored.unwrap_or_default();
+    }
+    valid
+}
+
+fn build_time_index(events: &[ContributionEvent]) -> Vec<(i64, u64)> {
+    let mut index: Vec<(i64, u64)> = events
+        .iter()
+        .enumerate()
+        .map(|(position, event)| (event.occurred_at_ms, position as u64))
+        .collect();
+    index.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    index
+}
+
 fn checkpoint_prefix_matches(
     events: &[ContributionEvent],
+    prefix_valid: &[bool],
     checkpoint: &StarMapProofCheckpoint,
 ) -> bool {
     if checkpoint.position == 0 {
@@ -212,6 +288,13 @@ fn checkpoint_prefix_matches(
     let Ok(index) = usize::try_from(checkpoint.position - 1) else {
         return false;
     };
+    if !prefix_valid
+        .get(checkpoint.position as usize)
+        .copied()
+        .unwrap_or(false)
+    {
+        return false;
+    }
     events
         .get(index)
         .and_then(|event| event.replay_delta.as_ref())
@@ -233,6 +316,8 @@ pub struct StarMapReplaySession {
     baseline_state: StarMapProofState,
     chain_head: String,
     legacy_event_count: u64,
+    prefix_valid: Vec<bool>,
+    time_index: Vec<(i64, u64)>,
     errors: Vec<String>,
     root: std::path::PathBuf,
 }
@@ -266,12 +351,16 @@ impl StarMapReplaySession {
             .collect();
         sort_events(&mut events);
 
+        let prefix_valid = validate_event_chain(&events);
+        let time_index = build_time_index(&events);
         let checkpoints = if device_id.is_empty() {
             Vec::new()
         } else {
             load_starmap_checkpoints(store.app_data_root(), &device_id, &request.starmap_id)?
                 .into_iter()
-                .filter(|checkpoint| checkpoint_prefix_matches(&events, checkpoint))
+                .filter(|checkpoint| {
+                    checkpoint_prefix_matches(&events, &prefix_valid, checkpoint)
+                })
                 .collect()
         };
         let legacy_event_count = events
@@ -296,6 +385,8 @@ impl StarMapReplaySession {
             baseline_state: StarMapProofState::empty(&request.starmap_id),
             chain_head: String::new(),
             legacy_event_count,
+            prefix_valid,
+            time_index,
             errors: Vec::new(),
             root: store.app_data_root().to_path_buf(),
         };
@@ -384,10 +475,16 @@ impl StarMapReplaySession {
             return (index as u64 + 1).min(total);
         }
         if let Some(time_ms) = request.target_time_ms {
+            // 事件按提交顺序排序，时间戳可能倒序；必须用独立时间索引定位。
+            let count = self
+                .time_index
+                .partition_point(|(timestamp, _)| *timestamp <= time_ms);
             return self
-                .events
-                .partition_point(|event| event.occurred_at_ms <= time_ms)
-                as u64;
+                .time_index
+                .get(count.saturating_sub(1))
+                .map(|(_, position)| position.saturating_add(1))
+                .unwrap_or(0)
+                .min(total);
         }
         total
     }
@@ -397,7 +494,9 @@ impl StarMapReplaySession {
         self.errors.clear();
         let checkpoint = latest_checkpoint_at_or_before(&self.checkpoints, target);
         if let Some(checkpoint) = checkpoint {
-            if checkpoint.hash_matches() && checkpoint_prefix_matches(&self.events, checkpoint) {
+            if checkpoint.hash_matches()
+                && checkpoint_prefix_matches(&self.events, &self.prefix_valid, checkpoint)
+            {
                 self.cursor_state = checkpoint.state.clone();
                 self.cursor_position = checkpoint.position.min(self.events.len() as u64);
                 self.cursor_checkpoint_position = self.cursor_position;
@@ -433,7 +532,7 @@ impl StarMapReplaySession {
             if let Some(checkpoint) = latest_checkpoint_at_or_before(&self.checkpoints, target) {
                 if checkpoint.position > self.cursor_position
                     && checkpoint.hash_matches()
-                    && checkpoint_prefix_matches(&self.events, checkpoint)
+                    && checkpoint_prefix_matches(&self.events, &self.prefix_valid, checkpoint)
                 {
                     self.cursor_state = checkpoint.state.clone();
                     self.cursor_position = checkpoint.position;
@@ -454,7 +553,8 @@ impl StarMapReplaySession {
                 continue;
             };
             let legacy = delta.format_version == LEGACY_STARMAP_PROOF_FORMAT_VERSION;
-            let positioned = legacy || event.replay_position.is_some();
+            let v2 = delta.format_version == LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION;
+            let positioned = legacy || v2 || event.replay_position.is_some();
             if positioned {
                 if let Some(prev) = delta.prev_event_hash.as_deref() {
                     if prev != self.chain_head {
@@ -486,9 +586,17 @@ impl StarMapReplaySession {
                         origin_device_id: &event.origin_device_id,
                         project_id: &event.project_id,
                         transaction_id: &event.transaction_id,
+                        replay_order: event.replay_order,
+                        text_input_kind: event.text_input_kind,
+                        platform: &event.platform,
+                        device_class: &event.device_class,
                         branch_position: index as u64,
                     };
-                    compute_replay_event_hash(&self.chain_head, &identity, &delta)
+                    if v2 {
+                        compute_v2_replay_event_hash(&self.chain_head, &identity, &delta)
+                    } else {
+                        compute_replay_event_hash(&self.chain_head, &identity, &delta)
+                    }
                 };
                 if delta.event_hash.as_deref() != Some(computed.as_str()) {
                     self.errors.push(format!(
@@ -529,9 +637,26 @@ impl StarMapReplaySession {
         self.cursor_position = target;
     }
 
+    fn prefix_error_at(&self, target: u64) -> Option<String> {
+        (1..=target)
+            .find(|position| {
+                !self
+                    .prefix_valid
+                    .get(*position as usize)
+                    .copied()
+                    .unwrap_or(false)
+            })
+            .map(|position| format!("event chain validation failed at position {position}"))
+    }
+
     pub fn frame_at(&mut self, request: &StarMapReplayRequest) -> StarMapReplayFrame {
         let target = self.resolve_target_position(request);
         self.apply_to(target);
+        if let Some(error) = self.prefix_error_at(target) {
+            if !self.errors.iter().any(|existing| existing == &error) {
+                self.errors.push(error);
+            }
+        }
 
         let event_info = target
             .checked_sub(1)
@@ -635,10 +760,13 @@ pub fn export_starmap_proof(
         .filter(|event| event.origin_device_id == frame.device_id)
         .collect();
     sort_events(&mut events);
+    let prefix_valid = validate_event_chain(&events);
     let checkpoints: Vec<StarMapProofCheckpoint> =
         load_starmap_checkpoints(store.app_data_root(), &frame.device_id, starmap_id)?
             .into_iter()
-            .filter(|checkpoint| checkpoint_prefix_matches(&events, checkpoint))
+            .filter(|checkpoint| {
+                checkpoint_prefix_matches(&events, &prefix_valid, checkpoint)
+            })
             .collect();
     let baseline = checkpoints
         .iter()
