@@ -468,17 +468,14 @@ impl ContributionStore {
     /// 事件落盘后按需维护完整图检查点，避免回放热路径写盘。
     fn maintain_starmap_checkpoints(&self, targets: &[(String, String, u64)]) {
         for (origin, starmap_id, position) in targets {
-            let checkpoints = crate::writing_stats::starmap_checkpoint::load_starmap_checkpoints(
+            let last = crate::writing_stats::starmap_checkpoint::last_checkpoint_position(
                 &self.app_data_root,
                 origin,
                 starmap_id,
             )
-            .unwrap_or_default();
-            let last = checkpoints
-                .iter()
-                .map(|checkpoint| checkpoint.position)
-                .max()
-                .unwrap_or(0);
+            .ok()
+            .flatten()
+            .unwrap_or(0);
             if position.saturating_sub(last) < 64 {
                 continue;
             }

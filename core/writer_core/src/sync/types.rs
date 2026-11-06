@@ -325,12 +325,30 @@ pub(crate) fn stats_device_id_for_event_path(rel_path: &str) -> Option<String> {
         }
         return Some(device_id.to_string());
     }
-    // 星图回放检查点：<device>/starmap/<starmap_id>.checkpoints.jsonl。
+    // 星图回放检查点：旧版 <starmap_id>.checkpoints.jsonl，以及新版
+    // <starmap_id>.checkpoints.index.json + <starmap_id>.checkpoints/<pos>.json。
     // `.chain/.count/.sequence` 是本地可重建索引，不参与同步。
     if let Some(name) = tail.strip_prefix("starmap/") {
         if !name.contains('/') {
             if let Some(starmap_id) = name.strip_suffix(".checkpoints.jsonl") {
                 if is_safe_checkpoint_segment(starmap_id) {
+                    return Some(device_id.to_string());
+                }
+            }
+            if let Some(starmap_id) = name.strip_suffix(".checkpoints.index.json") {
+                if is_safe_checkpoint_segment(starmap_id) {
+                    return Some(device_id.to_string());
+                }
+            }
+        }
+        if let Some((dir, file)) = name.split_once('/') {
+            if let Some(starmap_id) = dir.strip_suffix(".checkpoints") {
+                if is_safe_checkpoint_segment(starmap_id)
+                    && !file.contains('/')
+                    && file.len() == 20 + ".json".len()
+                    && file.ends_with(".json")
+                    && file[..20].bytes().all(|byte| byte.is_ascii_digit())
+                {
                     return Some(device_id.to_string());
                 }
             }
