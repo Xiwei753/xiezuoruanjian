@@ -17,7 +17,7 @@ use crate::writing_stats::contribution::{
 };
 use crate::writing_stats::starmap_checkpoint::{
     append_starmap_checkpoint, has_starmap_checkpoints, StarMapProofCheckpoint,
-    CHECKPOINT_REASON_BASELINE_INCOMPLETE,
+    CHECKPOINT_REASON_BASELINE_INCOMPLETE, CHECKPOINT_REASON_CREATED,
 };
 
 const EVENTS_ROOT: &str = "stats/events";
@@ -264,8 +264,12 @@ impl ContributionStore {
                 &device_id,
                 0,
                 baseline.state(),
-                CHECKPOINT_REASON_BASELINE_INCOMPLETE,
-                false,
+                if baseline.history_complete {
+                    CHECKPOINT_REASON_CREATED
+                } else {
+                    CHECKPOINT_REASON_BASELINE_INCOMPLETE
+                },
+                baseline.history_complete,
             );
             if let Err(error) = append_starmap_checkpoint(&self.app_data_root, &checkpoint) {
                 log::warn!("failed to persist starmap baseline checkpoint: {error}");

@@ -477,10 +477,19 @@ impl WriterCoreApi {
         if let Some(roots) = roots_after {
             delta = delta.with_roots_after(roots);
         }
-        if operation != ContributionOperation::Create {
-            if let Some(baseline) = self.starmap_meta_replay_baseline(starmap_id, before) {
-                delta = delta.with_baseline(baseline);
-            }
+        if operation == ContributionOperation::Create {
+            // 新星图从空白开始：位置 0 的空基线同时充当“已开始记录”标记，
+            // 之后的普通写操作不会再误判为旧星图而补历史基线。
+            let mut graph = StarMapGraph::default();
+            graph.starmap_id = starmap_id.to_string();
+            delta = delta.with_baseline(StarMapProofBaseline {
+                meta: None,
+                graph,
+                root_starmap_ids: Vec::new(),
+                history_complete: true,
+            });
+        } else if let Some(baseline) = self.starmap_meta_replay_baseline(starmap_id, before) {
+            delta = delta.with_baseline(baseline);
         }
         self.record_contribution_event_with_context_and_delta(
             context,
@@ -548,6 +557,7 @@ impl WriterCoreApi {
             meta,
             graph,
             root_starmap_ids,
+            history_complete: false,
         })
     }
 
@@ -576,6 +586,7 @@ impl WriterCoreApi {
             meta: before.cloned(),
             graph,
             root_starmap_ids,
+            history_complete: false,
         })
     }
 

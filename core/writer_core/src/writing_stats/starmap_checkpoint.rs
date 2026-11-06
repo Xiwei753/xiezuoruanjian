@@ -22,6 +22,7 @@ use crate::writing_stats::starmap_proof::{
 
 pub const STARMAP_CHECKPOINT_FORMAT_VERSION: u32 = 1;
 pub const CHECKPOINT_REASON_BASELINE_INCOMPLETE: &str = "baselineIncomplete";
+pub const CHECKPOINT_REASON_CREATED: &str = "created";
 pub const CHECKPOINT_REASON_PERIODIC: &str = "periodic";
 pub const CHECKPOINT_REASON_EXPORT: &str = "export";
 

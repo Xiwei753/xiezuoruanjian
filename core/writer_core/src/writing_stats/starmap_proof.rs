@@ -69,6 +69,9 @@ pub struct StarMapProofBaseline {
     pub graph: StarMapGraph,
     #[serde(default)]
     pub root_starmap_ids: Vec<String>,
+    /// 从空白创建开始时为 true；旧星图补录基线固定为 false。
+    #[serde(default)]
+    pub history_complete: bool,
 }
 
 impl StarMapProofBaseline {
