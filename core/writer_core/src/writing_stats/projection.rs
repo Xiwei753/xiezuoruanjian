@@ -1286,7 +1286,7 @@ fn compute_device_class_summary(
     for device_stats in per_device.values() {
         let class = if device_stats.device_class.is_empty() {
             let kind = crate::writing_stats::Platform::from_str_name(&device_stats.platform)
-                .unwrap_or(crate::writing_stats::Platform::Desktop);
+                .unwrap_or(crate::writing_stats::Platform::Unknown);
             kind.default_device_class().to_string()
         } else {
             device_stats.device_class.clone()
@@ -1814,13 +1814,16 @@ pub fn project_starmap_stats(
     project_id: Option<&str>,
 ) -> StarMapStatsAgg {
     let mut records: BTreeMap<String, StarMapStatsRecordAgg> = BTreeMap::new();
-    let mut historical_projects: BTreeMap<String, std::collections::BTreeSet<String>> =
-        BTreeMap::new();
 
     // 先从查询区间的事件建立历史 ID：已删除星图仍保留当期创作贡献。
+    // 项目过滤必须看每条事件发生时的 project_id，不能把一张图在区间内的
+    // 全部历史都算给它「当前」所属项目。
     for event in events {
         let date = event_local_date(event);
         if date.is_empty() || date.as_str() < start_date || date.as_str() > end_date {
+            continue;
+        }
+        if project_id.is_some_and(|project| event.project_id != project) {
             continue;
         }
         let starmap_id =
@@ -1842,11 +1845,7 @@ pub fn project_starmap_stats(
                     ..StarMapStatsRecordAgg::default()
                 });
         if !event.project_id.is_empty() {
-            historical_projects
-                .entry(starmap_id.to_string())
-                .or_default()
-                .insert(event.project_id.clone());
-            if record.project_id.is_none() {
+            if record.project_id.is_none() || project_id.is_some() {
                 record.project_id = Some(event.project_id.clone());
             }
         }
@@ -1894,6 +1893,9 @@ pub fn project_starmap_stats(
         if date.is_empty() || date.as_str() < start_date || date.as_str() > end_date {
             continue;
         }
+        if project_id.is_some_and(|project| segment.project_id != project) {
+            continue;
+        }
         let record =
             records
                 .entry(starmap_id.to_string())
@@ -1904,18 +1906,21 @@ pub fn project_starmap_stats(
                     ..StarMapStatsRecordAgg::default()
                 });
         if !segment.project_id.is_empty() {
-            historical_projects
-                .entry(starmap_id.to_string())
-                .or_default()
-                .insert(segment.project_id.clone());
-            if record.project_id.is_none() {
+            if record.project_id.is_none() || project_id.is_some() {
                 record.project_id = Some(segment.project_id.clone());
             }
         }
     }
 
     // 当前仍存在的星图用真实 meta 覆盖标题/归属；已删除星图保留历史标题。
+    // 当前存量只归当前 meta 的项目，不把历史事件重新分配。
     for meta in metas {
+        if project_id.is_some_and(|project| meta.project_id.as_deref() != Some(project)) {
+            if let Some(record) = records.get_mut(&meta.starmap_id) {
+                record.title = meta.title.clone();
+            }
+            continue;
+        }
         let record =
             records
                 .entry(meta.starmap_id.clone())
@@ -1929,20 +1934,17 @@ pub fn project_starmap_stats(
         record.project_id = meta.project_id.clone();
     }
 
-    if let Some(project_id) = project_id {
-        records.retain(|starmap_id, record| {
-            let current_matches = record.project_id.as_deref() == Some(project_id);
-            let historical_matches = historical_projects
-                .get(starmap_id)
-                .is_some_and(|projects| projects.contains(project_id));
-            current_matches || historical_matches
-        });
-    }
-
     for snapshot in current_texts {
         let Some(container_id) = snapshot.container_id.as_deref() else {
             continue;
         };
+        if project_id.is_some_and(|project| {
+            metas.iter().all(|meta| {
+                meta.starmap_id != container_id || meta.project_id.as_deref() != Some(project)
+            })
+        }) {
+            continue;
+        }
         let Some(record) = records.get_mut(container_id) else {
             continue;
         };
@@ -1960,6 +1962,9 @@ pub fn project_starmap_stats(
         }
         let date = segment.business_date();
         if date.is_empty() || date.as_str() < start_date || date.as_str() > end_date {
+            continue;
+        }
+        if project_id.is_some_and(|project| segment.project_id != project) {
             continue;
         }
         intervals

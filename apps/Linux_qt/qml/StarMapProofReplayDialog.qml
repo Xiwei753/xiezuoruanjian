@@ -36,6 +36,9 @@ Dialog {
         ? root.frame.state.graph : ({ nodes: [], edges: [], embeds: [], links: [] })
     readonly property var branches:
         root.frame && root.frame.branches ? root.frame.branches : []
+    // 视图投影只依赖当前帧的 graph；不要在每次绘制/每个 delegate 里全表扫描。
+    property var boundsCache: ({ minX: 0, minY: 0, maxX: 1, maxY: 1 })
+    property real projectionScaleCache: 1
 
     function openFor(id) {
         root.starmapId = String(id || "")
@@ -43,6 +46,7 @@ Dialog {
         root.position = 0
         root.playing = false
         root.frame = ({})
+        root.boundsCache = ({ minX: 0, minY: 0, maxX: 1, maxY: 1 })
         root.open()
     }
 
@@ -65,6 +69,8 @@ Dialog {
         root.frame = res
         root.position = Number(res.position || 0)
         root.errorText = ""
+        root.boundsCache = root.graphBounds()
+        root.refreshProjectionScale()
         graphCanvas.requestPaint()
     }
 
@@ -107,22 +113,27 @@ Dialog {
         return { minX: minX, minY: minY, maxX: maxX, maxY: maxY }
     }
 
-    function screenX(worldX, width, height) {
-        var b = graphBounds()
+    function refreshProjectionScale() {
+        var b = root.boundsCache
         var spanX = Math.max(1, b.maxX - b.minX)
         var spanY = Math.max(1, b.maxY - b.minY)
-        var scale = Math.min((width - 120) / spanX, (height - 120) / spanY)
-        scale = Math.max(0.2, Math.min(scale, 2.2))
-        return width / 2 + (worldX - (b.minX + b.maxX) / 2) * scale - 48
+        var width = graphCanvas.width
+        var height = graphCanvas.height
+        root.projectionScaleCache =
+            Math.max(0.2, Math.min(Math.min((width - 120) / spanX,
+                                            (height - 120) / spanY), 2.2))
+    }
+
+    function screenX(worldX, width, height) {
+        var b = root.boundsCache
+        return width / 2 + (worldX - (b.minX + b.maxX) / 2)
+                * root.projectionScaleCache - 48
     }
 
     function screenY(worldY, width, height) {
-        var b = graphBounds()
-        var spanX = Math.max(1, b.maxX - b.minX)
-        var spanY = Math.max(1, b.maxY - b.minY)
-        var scale = Math.min((width - 120) / spanX, (height - 120) / spanY)
-        scale = Math.max(0.2, Math.min(scale, 2.2))
-        return height / 2 + (worldY - (b.minY + b.maxY) / 2) * scale - 22
+        var b = root.boundsCache
+        return height / 2 + (worldY - (b.minY + b.maxY) / 2)
+                * root.projectionScaleCache - 22
     }
 
     background: Rectangle {
@@ -161,7 +172,9 @@ Dialog {
             Item { Layout.fillWidth: true }
             Label {
                 visible: !root.frame.historyComplete && root.frame.position > 0
-                text: qsTr("此前历史不完整（从真实基线开始）")
+                text: root.frame.legacyEventCount > 0
+                      ? qsTr("包含旧格式事件：历史和逐字证明不完整")
+                      : qsTr("此前历史不完整（从真实基线开始）")
                 color: root.dt ? root.dt.textMuted : Kirigami.Theme.disabledTextColor
                 font.pixelSize: 12
             }
@@ -182,6 +195,8 @@ Dialog {
             Canvas {
                 id: graphCanvas
                 anchors.fill: parent
+                onWidthChanged: root.refreshProjectionScale()
+                onHeightChanged: root.refreshProjectionScale()
                 onPaint: {
                     var ctx = getContext("2d")
                     ctx.reset()
@@ -190,20 +205,39 @@ Dialog {
                     var nodeById = ({})
                     for (var i = 0; i < nodes.length; i++)
                         nodeById[nodes[i].id] = nodes[i]
+                    var embedsForEdges = root.graph && root.graph.embeds ? root.graph.embeds : []
+                    var embedById = ({})
+                    for (var b = 0; b < embedsForEdges.length; b++)
+                        embedById[embedsForEdges[b].instanceId] = embedsForEdges[b]
+                    // 端点可能穿过 Embed/Portal 进入子图；用最后一段路径的宿主
+                    // 位置落线，跨层连线不能被静默省略。
+                    function endpointWorld(path) {
+                        if (!path) return null
+                        var segments = path.segments || []
+                        if (segments.length > 0) {
+                            var last = segments[segments.length - 1]
+                            if (last.type === "enterEmbed" && embedById[last.instanceId]
+                                    && embedById[last.instanceId].position)
+                                return embedById[last.instanceId].position
+                            if (last.type === "enterPortal" && nodeById[last.nodeId]
+                                    && nodeById[last.nodeId].position)
+                                return nodeById[last.nodeId].position
+                        }
+                        var nodeId = path.target && path.target.nodeId
+                        return nodeId && nodeById[nodeId] ? nodeById[nodeId].position : null
+                    }
                     ctx.strokeStyle = root.dt ? root.dt.border : "#888"
                     ctx.lineWidth = 1.5
                     for (var j = 0; j < edges.length; j++) {
                         var edge = edges[j]
-                        var from = edge.from && edge.from.target && edge.from.target.nodeId
-                                   ? nodeById[edge.from.target.nodeId] : null
-                        var to = edge.to && edge.to.target && edge.to.target.nodeId
-                                   ? nodeById[edge.to.target.nodeId] : null
-                        if (!from || !to || !from.position || !to.position) continue
+                        var from = endpointWorld(edge.from)
+                        var to = endpointWorld(edge.to)
+                        if (!from || !to) continue
                         ctx.beginPath()
-                        ctx.moveTo(root.screenX(from.position.x, width, height) + 48,
-                                   root.screenY(from.position.y, width, height) + 22)
-                        ctx.lineTo(root.screenX(to.position.x, width, height) + 48,
-                                   root.screenY(to.position.y, width, height) + 22)
+                        ctx.moveTo(root.screenX(from.x, width, height) + 48,
+                                   root.screenY(from.y, width, height) + 22)
+                        ctx.lineTo(root.screenX(to.x, width, height) + 48,
+                                   root.screenY(to.y, width, height) + 22)
                         ctx.stroke()
                     }
                     var links = root.graph && root.graph.links ? root.graph.links : []
@@ -211,33 +245,18 @@ Dialog {
                     ctx.setLineDash([4, 4])
                     for (var k = 0; k < links.length; k++) {
                         var link = links[k]
-                        var linkFrom = link.source && link.source.target && link.source.target.nodeId
-                                       ? nodeById[link.source.target.nodeId] : null
-                        var linkTo = link.target && link.target.target && link.target.target.nodeId
-                                     ? nodeById[link.target.target.nodeId] : null
-                        if (!linkFrom || !linkTo || !linkFrom.position || !linkTo.position) continue
+                        var linkFrom = endpointWorld(link.source)
+                        var linkTo = endpointWorld(link.target)
+                        if (!linkFrom || !linkTo) continue
                         ctx.beginPath()
-                        ctx.moveTo(root.screenX(linkFrom.position.x, width, height) + 48,
-                                   root.screenY(linkFrom.position.y, width, height) + 22)
-                        ctx.lineTo(root.screenX(linkTo.position.x, width, height) + 48,
-                                   root.screenY(linkTo.position.y, width, height) + 22)
+                        ctx.moveTo(root.screenX(linkFrom.x, width, height) + 48,
+                                   root.screenY(linkFrom.y, width, height) + 22)
+                        ctx.lineTo(root.screenX(linkTo.x, width, height) + 48,
+                                   root.screenY(linkTo.y, width, height) + 22)
                         ctx.stroke()
                     }
                     ctx.setLineDash([])
-                    var embeds = root.graph && root.graph.embeds ? root.graph.embeds : []
-                    ctx.fillStyle = root.dt ? root.dt.accentSoft : "#eef1ff"
-                    ctx.strokeStyle = root.dt ? root.dt.accent : "#6f7fd8"
-                    ctx.lineWidth = 2
-                    for (var e = 0; e < embeds.length; e++) {
-                        var embed = embeds[e]
-                        if (!embed.position) continue
-                        ctx.beginPath()
-                        ctx.arc(root.screenX(embed.position.x, width, height) + 48,
-                                root.screenY(embed.position.y, width, height) + 22,
-                                26, 0, Math.PI * 2)
-                        ctx.fill()
-                        ctx.stroke()
-                    }
+                    // Embed 圆环只由下面的 Repeater 绘制，Canvas 不再叠画第二层。
                 }
             }
 

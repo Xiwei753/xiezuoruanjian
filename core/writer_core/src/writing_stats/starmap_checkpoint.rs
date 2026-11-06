@@ -20,7 +20,8 @@ use crate::writing_stats::starmap_proof::{
     state_sha256, StarMapProofState, STARMAP_PROOF_FORMAT_VERSION,
 };
 
-pub const STARMAP_CHECKPOINT_FORMAT_VERSION: u32 = 1;
+pub const STARMAP_CHECKPOINT_FORMAT_VERSION: u32 = 2;
+pub const LEGACY_STARMAP_CHECKPOINT_FORMAT_VERSION: u32 = 1;
 pub const CHECKPOINT_REASON_BASELINE_INCOMPLETE: &str = "baselineIncomplete";
 pub const CHECKPOINT_REASON_CREATED: &str = "created";
 pub const CHECKPOINT_REASON_PERIODIC: &str = "periodic";
@@ -34,8 +35,11 @@ pub struct StarMapProofCheckpoint {
     pub format_version: u32,
     pub starmap_id: String,
     pub device_id: String,
-    /// 已应用的事件数（0 表示基线/空白）。
+    /// 本星图该来源分支内已应用的事件数（0 表示基线/空白）。
     pub position: u64,
+    /// `position` 对应的事件链头哈希；仅 state 摘要不能证明事件前缀。
+    #[serde(default)]
+    pub event_chain_head: String,
     pub state: StarMapProofState,
     #[serde(default)]
     pub state_sha256: String,
@@ -51,7 +55,8 @@ pub struct StarMapProofCheckpoint {
 }
 
 const fn default_format_version() -> u32 {
-    STARMAP_CHECKPOINT_FORMAT_VERSION
+    // 旧检查点没有版本字段，不能默认成 v2。
+    LEGACY_STARMAP_CHECKPOINT_FORMAT_VERSION
 }
 
 impl StarMapProofCheckpoint {
@@ -69,6 +74,7 @@ impl StarMapProofCheckpoint {
             starmap_id: starmap_id.to_string(),
             device_id: device_id.to_string(),
             position,
+            event_chain_head: String::new(),
             state,
             state_sha256,
             created_at_ms: chrono::Utc::now().timestamp_millis(),
@@ -78,8 +84,19 @@ impl StarMapProofCheckpoint {
         }
     }
 
+    pub fn with_event_chain_head(mut self, event_chain_head: &str) -> Self {
+        self.event_chain_head = event_chain_head.to_string();
+        self
+    }
+
     pub fn hash_matches(&self) -> bool {
         self.state_sha256.is_empty() || self.state_sha256 == state_sha256(&self.state)
+    }
+
+    /// 检查点是否锚定到该事件链前缀的真实链头。
+    pub fn anchors_event_chain(&self, event_chain_head: &str) -> bool {
+        self.position == 0
+            || (!self.event_chain_head.is_empty() && self.event_chain_head == event_chain_head)
     }
 }
 
@@ -92,7 +109,10 @@ pub fn starmap_checkpoint_path(root: &Path, device_id: &str, starmap_id: &str) -
 }
 
 pub fn has_starmap_checkpoints(root: &Path, device_id: &str, starmap_id: &str) -> bool {
-    starmap_checkpoint_path(root, device_id, starmap_id).exists()
+    // 旧 v1 检查点会被 load 丢弃；不能仅凭文件存在就跳过新的真实基线。
+    load_starmap_checkpoints(root, device_id, starmap_id)
+        .map(|checkpoints| !checkpoints.is_empty())
+        .unwrap_or_else(|_| starmap_checkpoint_path(root, device_id, starmap_id).exists())
 }
 
 pub fn load_starmap_checkpoints(

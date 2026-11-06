@@ -279,6 +279,12 @@ pub struct ContributionEvent {
     pub entrypoint: MutationEntrypoint,
     /// 同一次业务事务内的多个对象事件共享此 ID。
     pub transaction_id: String,
+    /// 事件发生设备的持久平台标识；旧事件为空，不能猜成桌面。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub platform: String,
+    /// 事件发生设备的类别：phone / tablet / desktop。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub device_class: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -355,6 +361,8 @@ impl ContributionEvent {
             actor: context.actor(),
             entrypoint: context.entrypoint(),
             transaction_id: context.transaction_id().to_string(),
+            platform: String::new(),
+            device_class: String::new(),
             before_version: before.as_ref().map(|snapshot| snapshot.version.clone()),
             after_version,
             before_summary: before.as_ref().map(|snapshot| snapshot.summary.clone()),

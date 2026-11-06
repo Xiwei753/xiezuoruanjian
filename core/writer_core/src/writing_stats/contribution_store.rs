@@ -19,7 +19,9 @@ use crate::writing_stats::starmap_checkpoint::{
     append_starmap_checkpoint, has_starmap_checkpoints, StarMapProofCheckpoint,
     CHECKPOINT_REASON_BASELINE_INCOMPLETE, CHECKPOINT_REASON_CREATED,
 };
-use crate::writing_stats::starmap_proof::{compute_replay_event_hash, proof_object_sha256};
+use crate::writing_stats::starmap_proof::{
+    compute_replay_event_hash, proof_object_sha256, ReplayEventIdentity,
+};
 
 const EVENTS_ROOT: &str = "stats/events";
 const PENDING_ROOT: &str = "stats/pending/contributions";
@@ -28,6 +30,12 @@ const OBJECTS_SUFFIX: &str = ".objects.jsonl";
 pub struct ContributionStore {
     app_data_root: PathBuf,
     origin_device_id: Mutex<Option<String>>,
+}
+
+struct ReplayMetadata {
+    sequences: HashMap<String, u64>,
+    chains: HashMap<(String, String), String>,
+    checkpoint_targets: Vec<(String, String, u64)>,
 }
 
 impl ContributionStore {
@@ -61,6 +69,20 @@ impl ContributionStore {
             .join(origin)
             .join("starmap")
             .join(format!("{starmap_id}.chain"))
+    }
+
+    fn replay_branch_count_path(&self, origin: &str, starmap_id: &str) -> PathBuf {
+        self.events_root()
+            .join(origin)
+            .join("starmap")
+            .join(format!("{starmap_id}.count"))
+    }
+
+    fn persist_branch_count(&self, origin: &str, starmap_id: &str, count: u64) {
+        let _ = atomic_write_string(
+            &self.replay_branch_count_path(origin, starmap_id),
+            &count.to_string(),
+        );
     }
 
     fn generation_path(&self) -> PathBuf {
@@ -120,13 +142,81 @@ impl ContributionStore {
             .unwrap_or_default()
     }
 
-    /// 追加时分配来源设备内持久、单调的回放位置，并建立事件哈希链。
-    fn assign_replay_metadata(
-        &self,
-        events: &mut [ContributionEvent],
-    ) -> Result<(HashMap<String, u64>, HashMap<(String, String), String>)> {
+    /// 读取某来源分支「星图 + 设备」已落盘的回放事件数与链头。
+    ///
+    /// 设备级 `replay_position` 只是跨星图排序序号，不能当回放位置。这里按
+    /// 真实对象事件计数，供新事件哈希和检查点使用同一 0..N 坐标系。
+    fn read_branch_replay_state(&self, origin: &str, starmap_id: &str) -> Result<(u64, String)> {
+        if let Ok(value) = fs::read_to_string(self.replay_branch_count_path(origin, starmap_id)) {
+            if let Ok(count) = value.trim().parse::<u64>() {
+                return Ok((count, self.read_replay_chain_head(origin, starmap_id)));
+            }
+        }
+        self.scan_branch_replay_state(origin, starmap_id)
+    }
+
+    fn scan_branch_replay_state(&self, origin: &str, starmap_id: &str) -> Result<(u64, String)> {
+        let dir = self.events_root().join(origin);
+        let chain_head = self.read_replay_chain_head(origin, starmap_id);
+        if !dir.is_dir() {
+            return Ok((0, chain_head));
+        }
+        let mut count = 0u64;
+        let mut latest: Option<(u64, i64, String)> = None;
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(OBJECTS_SUFFIX) {
+                continue;
+            }
+            let file = fs::File::open(&path)?;
+            for line in BufReader::new(file).lines() {
+                let Ok(line) = line else { continue };
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    continue;
+                };
+                let Some(delta) = value.get("replay_delta") else {
+                    continue;
+                };
+                if delta.get("starmapId").and_then(|item| item.as_str()) != Some(starmap_id) {
+                    continue;
+                }
+                count = count.saturating_add(1);
+                if let Some(hash) = delta.get("event_hash").and_then(|item| item.as_str()) {
+                    let position = value
+                        .get("replay_position")
+                        .and_then(|item| item.as_u64())
+                        .unwrap_or(0);
+                    let occurred = value
+                        .get("occurred_at_ms")
+                        .and_then(|item| item.as_i64())
+                        .unwrap_or(0);
+                    let candidate = (position, occurred, hash.to_string());
+                    if latest
+                        .as_ref()
+                        .is_none_or(|current| (candidate.0, candidate.1) >= (current.0, current.1))
+                    {
+                        latest = Some(candidate);
+                    }
+                }
+            }
+        }
+        let head = latest
+            .map(|(_, _, hash)| hash)
+            .filter(|hash| !hash.is_empty())
+            .unwrap_or(chain_head);
+        Ok((count, head))
+    }
+
+    /// 追加时分配来源设备内持久、单调的排序序号，并按星图分支内事件数建立
+    /// 哈希链；同时返回需要维护检查点的分支目标。
+    fn assign_replay_metadata(&self, events: &mut [ContributionEvent]) -> Result<ReplayMetadata> {
         let mut sequences: HashMap<String, u64> = HashMap::new();
         let mut chains: HashMap<(String, String), String> = HashMap::new();
+        let mut branch_counts: HashMap<(String, String), u64> = HashMap::new();
+        let mut checkpoint_targets: BTreeMap<(String, String), u64> = BTreeMap::new();
         for event in events {
             let Some(delta) = event.replay_delta.as_ref() else {
                 continue;
@@ -141,18 +231,24 @@ impl ContributionStore {
                 sequences.insert(origin.clone(), self.read_replay_sequence(&origin)?);
             }
             let next = sequences.get_mut(&origin).expect("sequence inserted");
-            let position = match event.replay_position {
+            match event.replay_position {
                 Some(position) => {
                     *next = (*next).max(position.saturating_add(1));
-                    position
                 }
                 None => {
                     let position = *next;
                     *next = next.saturating_add(1);
                     event.replay_position = Some(position);
-                    position
                 }
-            };
+            }
+            if !branch_counts.contains_key(&chain_key) {
+                let (count, head) = self.read_branch_replay_state(&origin, &starmap_id)?;
+                branch_counts.insert(chain_key.clone(), count);
+                chains.entry(chain_key.clone()).or_insert(head);
+            }
+            let branch_position = *branch_counts
+                .get(&chain_key)
+                .expect("branch count inserted");
             if event
                 .replay_delta
                 .as_ref()
@@ -164,15 +260,14 @@ impl ContributionStore {
                     .as_ref()
                     .and_then(|delta| delta.event_hash.clone())
                 {
-                    chains.insert(chain_key, hash);
+                    chains.insert(chain_key.clone(), hash);
                 }
+                let next = branch_counts
+                    .get_mut(&chain_key)
+                    .expect("branch count inserted");
+                *next = next.saturating_add(1);
+                checkpoint_targets.insert(chain_key, *next);
                 continue;
-            }
-            if !chains.contains_key(&chain_key) {
-                chains.insert(
-                    chain_key.clone(),
-                    self.read_replay_chain_head(&origin, &starmap_id),
-                );
             }
             let head = chains.get(&chain_key).cloned().unwrap_or_default();
             let mut delta = event.replay_delta.take().expect("delta exists");
@@ -183,12 +278,34 @@ impl ContributionStore {
                 delta.after_state_hash = Some(proof_object_sha256(delta.after.as_ref()));
             }
             delta.prev_event_hash = (!head.is_empty()).then_some(head.clone());
-            let event_hash = compute_replay_event_hash(&head, &event.event_id, position, &delta);
+            let identity = ReplayEventIdentity {
+                event_id: &event.event_id,
+                actor: event.actor,
+                entrypoint: event.entrypoint,
+                occurred_at_ms: event.occurred_at_ms,
+                origin_device_id: &origin,
+                project_id: &event.project_id,
+                transaction_id: &event.transaction_id,
+                branch_position,
+            };
+            let event_hash = compute_replay_event_hash(&head, &identity, &delta);
             delta.event_hash = Some(event_hash.clone());
             event.replay_delta = Some(delta);
-            chains.insert(chain_key, event_hash);
+            chains.insert(chain_key.clone(), event_hash);
+            let next = branch_counts
+                .get_mut(&chain_key)
+                .expect("branch count inserted");
+            *next = next.saturating_add(1);
+            checkpoint_targets.insert(chain_key, *next);
         }
-        Ok((sequences, chains))
+        Ok(ReplayMetadata {
+            sequences,
+            chains,
+            checkpoint_targets: checkpoint_targets
+                .into_iter()
+                .map(|((origin, starmap_id), position)| (origin, starmap_id, position))
+                .collect(),
+        })
     }
 
     fn persist_replay_metadata(
@@ -237,6 +354,9 @@ impl ContributionStore {
             if !frame.valid {
                 continue;
             }
+            let (_, chain_head) = self
+                .read_branch_replay_state(origin, starmap_id)
+                .unwrap_or_default();
             let checkpoint = StarMapProofCheckpoint::new(
                 starmap_id,
                 origin,
@@ -244,7 +364,8 @@ impl ContributionStore {
                 frame.state,
                 crate::writing_stats::starmap_checkpoint::CHECKPOINT_REASON_PERIODIC,
                 frame.history_complete,
-            );
+            )
+            .with_event_chain_head(&chain_head);
             if let Err(error) = append_starmap_checkpoint(&self.app_data_root, &checkpoint) {
                 log::warn!("failed to append periodic starmap checkpoint: {error}");
             }
@@ -255,10 +376,12 @@ impl ContributionStore {
     fn persist_metadata_from_events(&self, events: &[ContributionEvent]) -> Result<()> {
         let mut sequences: HashMap<String, u64> = HashMap::new();
         let mut chains: HashMap<(String, String), String> = HashMap::new();
+        let mut branches: HashSet<(String, String)> = HashSet::new();
         for event in events {
             let Some(delta) = event.replay_delta.as_ref() else {
                 continue;
             };
+            branches.insert((event.origin_device_id.clone(), delta.starmap_id.clone()));
             if let Some(position) = event.replay_position {
                 sequences
                     .entry(event.origin_device_id.clone())
@@ -274,7 +397,13 @@ impl ContributionStore {
                 );
             }
         }
-        self.persist_replay_metadata(&sequences, &chains)
+        self.persist_replay_metadata(&sequences, &chains)?;
+        for (origin, starmap_id) in branches {
+            // pending 重放后必须重新扫描真实事件，不能沿用旧计数缓存。
+            let (count, _) = self.scan_branch_replay_state(&origin, &starmap_id)?;
+            self.persist_branch_count(&origin, &starmap_id, count);
+        }
+        Ok(())
     }
 
     pub fn resolve_origin_device_id(&self) -> Result<String> {
@@ -302,6 +431,8 @@ impl ContributionStore {
             return Ok(0);
         }
         let origin = self.resolve_origin_device_id()?;
+        let device_info =
+            crate::settings::load_device_info(&self.app_data_root).unwrap_or_default();
         let mut prepared = Vec::with_capacity(events.len());
         for mut event in events {
             if event.local_date.is_empty() {
@@ -315,12 +446,21 @@ impl ContributionStore {
             if event.origin_device_id.is_empty() {
                 event.origin_device_id = origin.clone();
             }
+            // 本机事件必须带上真实平台；同步/导入的远端事件保留源值。
+            if event.origin_device_id == origin {
+                if event.platform.is_empty() {
+                    event.platform = device_info.platform.clone();
+                }
+                if event.device_class.is_empty() {
+                    event.device_class = device_info.device_class.clone();
+                }
+            }
             prepared.push(event);
         }
 
         self.recover_pending_events()?;
         let metadata = self.assign_replay_metadata(&mut prepared)?;
-        let checkpoint_targets = replay_checkpoint_targets(&prepared);
+        let checkpoint_targets = metadata.checkpoint_targets.clone();
         let transaction_id = prepared
             .first()
             .map(|event| event.transaction_id.clone())
@@ -360,8 +500,13 @@ impl ContributionStore {
                 written += 1;
             }
         }
+        self.persist_replay_metadata(&metadata.sequences, &metadata.chains)?;
+        for (origin, starmap_id, count) in &checkpoint_targets {
+            self.persist_branch_count(origin, starmap_id, *count);
+        }
+        // 元数据和分支计数落稳后才删 journal；中途崩溃时下次重放会重新
+        // 扫描真实事件并修正计数，避免沿用旧缓存跳过位置。
         fs::remove_file(&pending_path)?;
-        self.persist_replay_metadata(&metadata.0, &metadata.1)?;
         self.maintain_starmap_checkpoints(&checkpoint_targets);
         self.bump_replay_generation();
         Ok(written)
@@ -648,25 +793,6 @@ fn read_ids(path: &Path) -> Result<HashSet<String>> {
         }
     }
     Ok(ids)
-}
-
-/// 本批事件里每个来源设备/星图的最大回放位置，供写路径维护检查点。
-fn replay_checkpoint_targets(events: &[ContributionEvent]) -> Vec<(String, String, u64)> {
-    let mut targets: BTreeMap<(String, String), u64> = BTreeMap::new();
-    for event in events {
-        let (Some(delta), Some(position)) = (event.replay_delta.as_ref(), event.replay_position)
-        else {
-            continue;
-        };
-        targets
-            .entry((event.origin_device_id.clone(), delta.starmap_id.clone()))
-            .and_modify(|value| *value = (*value).max(position.saturating_add(1)))
-            .or_insert(position.saturating_add(1));
-    }
-    targets
-        .into_iter()
-        .map(|((origin, starmap_id), position)| (origin, starmap_id, position))
-        .collect()
 }
 
 pub(crate) fn valid_segment(value: &str) -> bool {

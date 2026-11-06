@@ -111,6 +111,7 @@ impl PlatformCapabilitiesExt for PlatformKind {
             Self::Windows => PlatformCapabilities::windows(),
             Self::Harmony => PlatformCapabilities::harmony(),
             Self::Apple => PlatformCapabilities::minimal(),
+            Self::Unknown => PlatformCapabilities::minimal(),
         }
     }
 }

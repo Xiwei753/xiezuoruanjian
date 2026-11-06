@@ -21,6 +21,7 @@ impl From<PlatformKindDto> for writer_platform_api::PlatformKind {
             PlatformKindDto::Windows => Self::Windows,
             PlatformKindDto::Harmony => Self::Harmony,
             PlatformKindDto::Apple => Self::Apple,
+            PlatformKindDto::Unknown => Self::Unknown,
         }
     }
 }

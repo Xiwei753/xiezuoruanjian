@@ -534,6 +534,7 @@ enum PlatformDto {
     "Windows",
     "Harmony",
     "Apple",
+    "Unknown",
 };
 
 dictionary PlatformInitDto {

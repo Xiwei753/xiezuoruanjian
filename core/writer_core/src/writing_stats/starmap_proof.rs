@@ -15,10 +15,16 @@ use crate::starmap::types::{
     StarMapEdge, StarMapEmbed, StarMapGraph, StarMapLink, StarMapNode, StarMapPoint,
 };
 use crate::starmap::StarMapMeta;
-use crate::writing_stats::contribution::{ContributionObjectType, ContributionOperation};
+use crate::writing_stats::contribution::{
+    ContributionObjectType, ContributionOperation, MutationActor, MutationEntrypoint,
+};
 
-/// 星图证明增量格式版本。旧事件没有该字段时按「无回放数据」处理。
-pub const STARMAP_PROOF_FORMAT_VERSION: u32 = 1;
+/// 星图证明增量格式版本。
+///
+/// v2 起事件哈希覆盖来源字段，检查点锚定事件链头。旧事件缺版本字段时按
+/// [`LEGACY_STARMAP_PROOF_FORMAT_VERSION`] 读取，不能静默套用新算法。
+pub const STARMAP_PROOF_FORMAT_VERSION: u32 = 2;
+pub const LEGACY_STARMAP_PROOF_FORMAT_VERSION: u32 = 1;
 
 /// 拖动轨迹的一个有界关键点。
 ///
@@ -120,7 +126,8 @@ pub struct StarMapProofDelta {
 }
 
 const fn default_format_version() -> u32 {
-    STARMAP_PROOF_FORMAT_VERSION
+    // 旧 JSON 没有版本字段时必须是 v1；新写入由构造器显式写 v2。
+    LEGACY_STARMAP_PROOF_FORMAT_VERSION
 }
 
 impl StarMapProofDelta {
@@ -192,8 +199,10 @@ impl StarMapProofDelta {
     }
 
     pub fn is_valid(&self) -> bool {
-        self.format_version == STARMAP_PROOF_FORMAT_VERSION
-            && !self.starmap_id.is_empty()
+        matches!(
+            self.format_version,
+            LEGACY_STARMAP_PROOF_FORMAT_VERSION | STARMAP_PROOF_FORMAT_VERSION
+        ) && !self.starmap_id.is_empty()
             && !self.object_id.is_empty()
     }
 }
@@ -424,17 +433,66 @@ pub fn state_object_for_delta(
     })
 }
 
-/// 计算一条回放事件的稳定哈希。
+/// 一条回放事件的不可变来源字段。
+///
+/// 哈希必须覆盖这些字段：同步、导入或外部改写只要篡改来源、时间、项目或
+/// 事务，回放校验就会失败。`branch_position` 是「星图 + 来源设备分支」内
+/// 已应用事件数，不是设备级排序序号。
+#[derive(Debug, Clone, Copy)]
+pub struct ReplayEventIdentity<'a> {
+    pub event_id: &'a str,
+    pub actor: MutationActor,
+    pub entrypoint: MutationEntrypoint,
+    pub occurred_at_ms: i64,
+    pub origin_device_id: &'a str,
+    pub project_id: &'a str,
+    pub transaction_id: &'a str,
+    pub branch_position: u64,
+}
+
+/// 计算一条回放事件的稳定哈希（v2）。
 ///
 /// 只覆盖业务事实字段，不覆盖哈希自身；同步搬运后设备/操作者字段原样保留。
 pub fn compute_replay_event_hash(
+    prev_event_hash: &str,
+    identity: &ReplayEventIdentity<'_>,
+    delta: &StarMapProofDelta,
+) -> String {
+    let payload = serde_json::json!({
+        "version": STARMAP_PROOF_FORMAT_VERSION,
+        "prev": prev_event_hash,
+        "eventId": identity.event_id,
+        "actor": identity.actor.as_str(),
+        "entrypoint": identity.entrypoint.as_str(),
+        "occurredAtMs": identity.occurred_at_ms,
+        "originDeviceId": identity.origin_device_id,
+        "projectId": identity.project_id,
+        "transactionId": identity.transaction_id,
+        "position": identity.branch_position,
+        "starmapId": delta.starmap_id,
+        "objectType": delta.object_type,
+        "objectId": delta.object_id,
+        "operation": delta.operation,
+        "before": delta.before,
+        "after": delta.after,
+        "trajectory": delta.trajectory,
+        "baseline": delta.baseline,
+        "rootsAfter": delta.roots_after,
+        "beforeStateHash": delta.before_state_hash,
+        "afterStateHash": delta.after_state_hash,
+    });
+    sha256_hex(&serde_json::to_vec(&payload).unwrap_or_default())
+}
+
+/// v1 旧算法：只用于读取和校验历史事件，绝不用来重写旧来源。
+pub fn compute_legacy_replay_event_hash(
     prev_event_hash: &str,
     event_id: &str,
     replay_position: u64,
     delta: &StarMapProofDelta,
 ) -> String {
     let payload = serde_json::json!({
-        "version": STARMAP_PROOF_FORMAT_VERSION,
+        "version": LEGACY_STARMAP_PROOF_FORMAT_VERSION,
         "prev": prev_event_hash,
         "eventId": event_id,
         "position": replay_position,

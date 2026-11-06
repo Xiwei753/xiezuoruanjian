@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.starmap.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -100,6 +102,8 @@ fun StarMapProofReplayDialog(
     val edges = graph?.optJSONArray("edges")
     val event = frame?.optJSONObject("event")
     val historyComplete = frame?.optBoolean("historyComplete", true) ?: true
+    val legacyEventCount = frame?.optInt("legacyEventCount", 0) ?: 0
+    val branches = frame?.optJSONArray("branches")
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -130,6 +134,21 @@ fun StarMapProofReplayDialog(
                         minX = minOf(minX, x); maxX = maxOf(maxX, x)
                         minY = minOf(minY, y); maxY = maxOf(maxY, y)
                     }
+                    val graphEmbeds = graph?.optJSONArray("embeds")
+                    if (graphEmbeds != null) {
+                        for (index in 0 until graphEmbeds.length()) {
+                            val embed = graphEmbeds.optJSONObject(index) ?: continue
+                            val point = embed.optJSONObject("position") ?: continue
+                            val x = point.optDouble("x", 0.0).toFloat()
+                            val y = point.optDouble("y", 0.0).toFloat()
+                            points["embed:" + embed.optString("instanceId")] = Offset(x, y)
+                            if (!seen) {
+                                minX = x; maxX = x; minY = y; maxY = y; seen = true
+                            }
+                            minX = minOf(minX, x); maxX = maxOf(maxX, x)
+                            minY = minOf(minY, y); maxY = maxOf(maxY, y)
+                        }
+                    }
                     if (!seen) return@Canvas
                     val spanX = (maxX - minX).coerceAtLeast(1f)
                     val spanY = (maxY - minY).coerceAtLeast(1f)
@@ -139,17 +158,43 @@ fun StarMapProofReplayDialog(
                         size.width / 2 + (point.x - (minX + maxX) / 2) * scale,
                         size.height / 2 + (point.y - (minY + maxY) / 2) * scale,
                     )
+                    fun endpoint(path: JSONObject?): Offset? {
+                        if (path == null) return null
+                        val segments = path.optJSONArray("segments")
+                        if (segments != null && segments.length() > 0) {
+                            val last = segments.optJSONObject(segments.length() - 1)
+                            val type = last?.optString("type").orEmpty()
+                            if (type == "enterEmbed") {
+                                points["embed:" + last?.optString("instanceId")]?.let { return it }
+                            }
+                            if (type == "enterPortal") {
+                                points["node:" + last?.optString("nodeId")]?.let { return it }
+                            }
+                        }
+                        val nodeId = path.optJSONObject("target")?.optString("nodeId").orEmpty()
+                        return if (nodeId.isNotEmpty()) points["node:$nodeId"] else null
+                    }
                     val edgeColor = Color(0xFF9AA4B2)
                     val graphEdges = edges ?: return@Canvas
                     for (index in 0 until graphEdges.length()) {
                         val edge = graphEdges.optJSONObject(index) ?: continue
-                        val from = edge.optJSONObject("from")
-                            ?.optJSONObject("target")?.optString("nodeId").orEmpty()
-                        val to = edge.optJSONObject("to")
-                            ?.optJSONObject("target")?.optString("nodeId").orEmpty()
-                        val start = points[from] ?: continue
-                        val end = points[to] ?: continue
+                        val start = endpoint(edge.optJSONObject("from")) ?: continue
+                        val end = endpoint(edge.optJSONObject("to")) ?: continue
                         drawLine(edgeColor, screen(start), screen(end), strokeWidth = 2f)
+                    }
+                    val links = graph?.optJSONArray("links")
+                    if (links != null) {
+                        for (index in 0 until links.length()) {
+                            val link = links.optJSONObject(index) ?: continue
+                            val start = endpoint(link.optJSONObject("source")) ?: continue
+                            val end = endpoint(link.optJSONObject("target")) ?: continue
+                            drawLine(
+                                Color(0xFF7C8BE0),
+                                screen(start),
+                                screen(end),
+                                strokeWidth = 1.5f,
+                            )
+                        }
                     }
                     val activeId = event?.optString("objectId").orEmpty()
                     for (index in 0 until graphNodes.length()) {
@@ -195,6 +240,35 @@ fun StarMapProofReplayDialog(
                         }
                     }
                 }
+                if (branches != null && branches.length() > 1) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        for (index in 0 until branches.length()) {
+                            val branch = branches.optJSONObject(index) ?: continue
+                            val branchId = branch.optString("deviceId")
+                            OutlinedButton(
+                                onClick = {
+                                    playing = false
+                                    deviceId = branchId
+                                    position = 0
+                                    scope.launch { requestFrame(0) }
+                                },
+                            ) {
+                                Text(
+                                    text = if (branchId == deviceId) {
+                                        "✓ ${branchId.take(8)} · ${branch.optInt("eventCount")}"
+                                    } else {
+                                        "${branchId.take(8)} · ${branch.optInt("eventCount")}"
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -233,7 +307,11 @@ fun StarMapProofReplayDialog(
                 )
                 if (!historyComplete) {
                     Text(
-                        text = "此前历史不完整（从真实基线开始）",
+                        text = if (legacyEventCount > 0) {
+                            "包含 $legacyEventCount 条旧格式事件：历史和逐字证明不完整"
+                        } else {
+                            "此前历史不完整（从真实基线开始）"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

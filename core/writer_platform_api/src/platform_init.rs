@@ -10,6 +10,8 @@ pub enum PlatformKind {
     Windows,
     Harmony,
     Apple,
+    /// 旧事件或外部数据没有可验证的平台来源；不得猜成桌面。
+    Unknown,
 }
 
 impl std::fmt::Display for PlatformKind {
@@ -20,6 +22,7 @@ impl std::fmt::Display for PlatformKind {
             Self::Windows => write!(f, "windows"),
             Self::Harmony => write!(f, "harmony"),
             Self::Apple => write!(f, "apple"),
+            Self::Unknown => write!(f, "unknown"),
         }
     }
 }
@@ -32,6 +35,7 @@ impl PlatformKind {
             Self::Windows => "windows",
             Self::Harmony => "harmony",
             Self::Apple => "apple",
+            Self::Unknown => "unknown",
         }
     }
 
@@ -42,6 +46,7 @@ impl PlatformKind {
             "windows" => Some(Self::Windows),
             "harmony" => Some(Self::Harmony),
             "apple" => Some(Self::Apple),
+            "unknown" => Some(Self::Unknown),
             _ => None,
         }
     }
@@ -53,6 +58,7 @@ impl PlatformKind {
             Self::Harmony => "tablet",
             Self::Windows => "desktop",
             Self::Apple => "desktop",
+            Self::Unknown => "",
         }
     }
 }

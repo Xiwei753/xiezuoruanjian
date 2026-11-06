@@ -40,6 +40,7 @@ pub enum PlatformKindDto {
     Windows,
     Harmony,
     Apple,
+    Unknown,
 }
 
 impl From<crate::platform_interaction::PlatformKind> for PlatformKindDto {
@@ -50,6 +51,7 @@ impl From<crate::platform_interaction::PlatformKind> for PlatformKindDto {
             crate::platform_interaction::PlatformKind::Windows => Self::Windows,
             crate::platform_interaction::PlatformKind::Harmony => Self::Harmony,
             crate::platform_interaction::PlatformKind::Apple => Self::Apple,
+            crate::platform_interaction::PlatformKind::Unknown => Self::Unknown,
         }
     }
 }

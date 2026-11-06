@@ -7,6 +7,7 @@ pub enum PlatformDto {
     Windows,
     Harmony,
     Apple,
+    Unknown,
 }
 
 impl From<PlatformDto> for writer_platform_api::PlatformKind {
@@ -17,6 +18,7 @@ impl From<PlatformDto> for writer_platform_api::PlatformKind {
             PlatformDto::Windows => Self::Windows,
             PlatformDto::Harmony => Self::Harmony,
             PlatformDto::Apple => Self::Apple,
+            PlatformDto::Unknown => Self::Unknown,
         }
     }
 }
@@ -79,6 +81,7 @@ impl From<crate::writing_stats::Platform> for PlatformDto {
             crate::writing_stats::Platform::Windows => Self::Windows,
             crate::writing_stats::Platform::Harmony => Self::Harmony,
             crate::writing_stats::Platform::Apple => Self::Apple,
+            crate::writing_stats::Platform::Unknown => Self::Unknown,
         }
     }
 }

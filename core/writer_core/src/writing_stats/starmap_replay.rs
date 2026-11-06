@@ -19,8 +19,10 @@ use crate::writing_stats::starmap_checkpoint::{
     latest_checkpoint_at_or_before, load_starmap_checkpoints, StarMapProofCheckpoint,
 };
 use crate::writing_stats::starmap_proof::{
-    compute_replay_event_hash, proof_object_sha256, state_object_for_delta, state_sha256,
-    StarMapProofState, StarMapProofTrajectorySample, STARMAP_PROOF_FORMAT_VERSION,
+    compute_legacy_replay_event_hash, compute_replay_event_hash, proof_object_sha256,
+    state_object_for_delta, state_sha256, ReplayEventIdentity, StarMapProofState,
+    StarMapProofTrajectorySample, LEGACY_STARMAP_PROOF_FORMAT_VERSION,
+    STARMAP_PROOF_FORMAT_VERSION,
 };
 
 /// 回放查询。位置 `target_position` 表示「已应用多少个事件」，0 是空白/基线。
@@ -87,6 +89,9 @@ pub struct StarMapReplayEventInfo {
 pub struct StarMapReplayFrame {
     pub starmap_id: String,
     pub device_id: String,
+    /// 本分支实际使用的证明格式；包含旧事件时为 v1，并标记历史不完整。
+    pub proof_format_version: u32,
+    pub legacy_event_count: u64,
     pub position: u64,
     pub total_events: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -190,6 +195,24 @@ fn branches_for(events: &[ContributionEvent]) -> Vec<StarMapReplayBranch> {
     branches
 }
 
+/// 检查点必须锚定到本分支同一位置的事件链头，不能只信状态字节摘要。
+fn checkpoint_prefix_matches(
+    events: &[ContributionEvent],
+    checkpoint: &StarMapProofCheckpoint,
+) -> bool {
+    if checkpoint.position == 0 {
+        return true;
+    }
+    let Ok(index) = usize::try_from(checkpoint.position - 1) else {
+        return false;
+    };
+    events
+        .get(index)
+        .and_then(|event| event.replay_delta.as_ref())
+        .and_then(|delta| delta.event_hash.as_deref())
+        .is_some_and(|hash| checkpoint.anchors_event_chain(hash))
+}
+
 /// 一次回放会话。向前播放时复用当前状态，只在目标位置回退时从最近检查点重建。
 pub struct StarMapReplaySession {
     request: StarMapReplayRequest,
@@ -203,6 +226,7 @@ pub struct StarMapReplaySession {
     cursor_checkpoint_position: u64,
     baseline_state: StarMapProofState,
     chain_head: String,
+    legacy_event_count: u64,
     errors: Vec<String>,
     root: std::path::PathBuf,
 }
@@ -240,7 +264,18 @@ impl StarMapReplaySession {
             Vec::new()
         } else {
             load_starmap_checkpoints(store.app_data_root(), &device_id, &request.starmap_id)?
+                .into_iter()
+                .filter(|checkpoint| checkpoint_prefix_matches(&events, checkpoint))
+                .collect()
         };
+        let legacy_event_count = events
+            .iter()
+            .filter(|event| {
+                event.replay_delta.as_ref().is_some_and(|delta| {
+                    delta.format_version == LEGACY_STARMAP_PROOF_FORMAT_VERSION
+                })
+            })
+            .count() as u64;
 
         let mut session = Self {
             request: request.clone(),
@@ -254,10 +289,14 @@ impl StarMapReplaySession {
             cursor_checkpoint_position: 0,
             baseline_state: StarMapProofState::empty(&request.starmap_id),
             chain_head: String::new(),
+            legacy_event_count,
             errors: Vec::new(),
             root: store.app_data_root().to_path_buf(),
         };
         session.initialize_baseline();
+        if session.legacy_event_count > 0 {
+            session.history_complete = false;
+        }
         Ok(session)
     }
 
@@ -303,7 +342,10 @@ impl StarMapReplaySession {
                     &self.device_id,
                 )
             {
+                // 跨设备基线必须同时成为游标和回退基线；否则向后拖动时
+                // reset_cursor_to 会退回空图，把真实历史整段抹掉。
                 self.cursor_state = other.state;
+                self.baseline_state = self.cursor_state.clone();
                 self.cursor_checkpoint_position = 0;
                 self.history_complete = false;
                 return;
@@ -347,7 +389,7 @@ impl StarMapReplaySession {
     fn reset_cursor_to(&mut self, target: u64) {
         let checkpoint = latest_checkpoint_at_or_before(&self.checkpoints, target);
         if let Some(checkpoint) = checkpoint {
-            if checkpoint.hash_matches() {
+            if checkpoint.hash_matches() && checkpoint_prefix_matches(&self.events, checkpoint) {
                 self.cursor_state = checkpoint.state.clone();
                 self.cursor_position = checkpoint.position.min(self.events.len() as u64);
                 self.cursor_checkpoint_position = self.cursor_position;
@@ -381,7 +423,10 @@ impl StarMapReplaySession {
             // 随机向前跳转时优先复用目标之前的最近检查点；连续向前播放
             // （相邻帧）不会命中这里，只应用新增事件。
             if let Some(checkpoint) = latest_checkpoint_at_or_before(&self.checkpoints, target) {
-                if checkpoint.position > self.cursor_position && checkpoint.hash_matches() {
+                if checkpoint.position > self.cursor_position
+                    && checkpoint.hash_matches()
+                    && checkpoint_prefix_matches(&self.events, checkpoint)
+                {
                     self.cursor_state = checkpoint.state.clone();
                     self.cursor_position = checkpoint.position;
                     self.cursor_checkpoint_position = checkpoint.position;
@@ -400,9 +445,9 @@ impl StarMapReplaySession {
                 ));
                 continue;
             };
-            let positioned = event.replay_position.is_some();
+            let legacy = delta.format_version == LEGACY_STARMAP_PROOF_FORMAT_VERSION;
+            let positioned = legacy || event.replay_position.is_some();
             if positioned {
-                let position = event.replay_position.unwrap_or(0);
                 if let Some(prev) = delta.prev_event_hash.as_deref() {
                     if prev != self.chain_head {
                         self.errors.push(format!(
@@ -416,8 +461,27 @@ impl StarMapReplaySession {
                         event.event_id
                     ));
                 }
-                let computed =
-                    compute_replay_event_hash(&self.chain_head, &event.event_id, position, &delta);
+                let computed = if legacy {
+                    // v1 保留原算法与设备级位置，不静默改写历史来源。
+                    compute_legacy_replay_event_hash(
+                        &self.chain_head,
+                        &event.event_id,
+                        event.replay_position.unwrap_or(index as u64),
+                        &delta,
+                    )
+                } else {
+                    let identity = ReplayEventIdentity {
+                        event_id: &event.event_id,
+                        actor: event.actor,
+                        entrypoint: event.entrypoint,
+                        occurred_at_ms: event.occurred_at_ms,
+                        origin_device_id: &event.origin_device_id,
+                        project_id: &event.project_id,
+                        transaction_id: &event.transaction_id,
+                        branch_position: index as u64,
+                    };
+                    compute_replay_event_hash(&self.chain_head, &identity, &delta)
+                };
                 if delta.event_hash.as_deref() != Some(computed.as_str()) {
                     self.errors.push(format!(
                         "event {} hash mismatch (possible tampering)",
@@ -450,7 +514,7 @@ impl StarMapReplaySession {
                 }
                 self.chain_head = delta.event_hash.clone().unwrap_or_default();
             } else {
-                // 旧事件没有链哈希；后续新链从空头重新开始。
+                // 完全没有回放元数据的事件不能冒充链的一部分。
                 self.chain_head.clear();
             }
         }
@@ -496,6 +560,12 @@ impl StarMapReplaySession {
         StarMapReplayFrame {
             starmap_id: self.request.starmap_id.clone(),
             device_id: self.device_id.clone(),
+            proof_format_version: if self.legacy_event_count > 0 {
+                LEGACY_STARMAP_PROOF_FORMAT_VERSION
+            } else {
+                STARMAP_PROOF_FORMAT_VERSION
+            },
+            legacy_event_count: self.legacy_event_count,
             position: target,
             total_events: self.events.len() as u64,
             event: event_info,
@@ -540,12 +610,6 @@ pub fn export_starmap_proof(
         target_position: Some(target),
         ..request.clone()
     });
-    let checkpoints =
-        load_starmap_checkpoints(store.app_data_root(), &frame.device_id, starmap_id)?;
-    let baseline = checkpoints
-        .iter()
-        .find(|checkpoint| checkpoint.position == 0)
-        .cloned();
     let mut events: Vec<ContributionEvent> = store
         .load_all_events()?
         .into_iter()
@@ -553,6 +617,15 @@ pub fn export_starmap_proof(
         .filter(|event| event.origin_device_id == frame.device_id)
         .collect();
     sort_events(&mut events);
+    let checkpoints: Vec<StarMapProofCheckpoint> =
+        load_starmap_checkpoints(store.app_data_root(), &frame.device_id, starmap_id)?
+            .into_iter()
+            .filter(|checkpoint| checkpoint_prefix_matches(&events, checkpoint))
+            .collect();
+    let baseline = checkpoints
+        .iter()
+        .find(|checkpoint| checkpoint.position == 0)
+        .cloned();
     let baseline_from_event = events
         .first()
         .and_then(|event| event.replay_delta.as_ref())

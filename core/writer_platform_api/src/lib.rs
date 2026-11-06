@@ -75,7 +75,10 @@ mod tests {
             PlatformKind::from_str_name("apple"),
             Some(PlatformKind::Apple)
         );
-        assert_eq!(PlatformKind::from_str_name("unknown"), None);
+        assert_eq!(
+            PlatformKind::from_str_name("unknown"),
+            Some(PlatformKind::Unknown)
+        );
     }
 
     #[test]

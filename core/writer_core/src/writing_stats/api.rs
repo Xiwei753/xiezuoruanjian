@@ -872,7 +872,9 @@ impl StatsApi {
         &self,
         contribution_events: &[ContributionEvent],
     ) -> Vec<WritingInputEvent> {
-        use crate::writing_stats::contribution::{ContributionObjectType, MutationActor};
+        use crate::writing_stats::contribution::{
+            ContributionObjectType, ContributionOperation, MutationActor,
+        };
         let mut synthetic = Vec::new();
         for event in contribution_events {
             if !matches!(
@@ -893,6 +895,9 @@ impl StatsApi {
             if starmap_id.is_empty() {
                 continue;
             }
+            // 来源平台必须来自事件自身/设备元数据；旧事件无平台时诚实记为
+            // Unknown，不能把安卓/鸿蒙星图贡献伪装成桌面。
+            let platform = Platform::from_str_name(&event.platform).unwrap_or(Platform::Unknown);
             let push_event = |source: EventSource,
                               inserted: u32,
                               deleted: u32,
@@ -903,8 +908,8 @@ impl StatsApi {
                     format!("starmap:{}:{suffix}", event.event_id),
                     event.occurred_at_ms,
                     &event.origin_device_id,
-                    Platform::Desktop,
-                    "",
+                    platform,
+                    &event.device_class,
                     &event.project_id,
                     "",
                     "",
@@ -922,36 +927,101 @@ impl StatsApi {
                 input.starmap_id = Some(starmap_id.clone());
                 out.push(input);
             };
-            if event.inserted_chars > 0 {
-                if event.actor == MutationActor::Ai {
-                    push_event(
-                        EventSource::AiInserted,
-                        0,
-                        0,
-                        event.inserted_chars,
-                        "ai",
-                        &mut synthetic,
-                    );
-                } else {
-                    push_event(
-                        EventSource::HumanTyped,
-                        event.inserted_chars,
-                        0,
-                        0,
-                        "inserted",
-                        &mut synthetic,
-                    );
+            // 创建节点/整段改写一次提交的是完整文本，不能凭一次保存就宣称
+            // 逐字手写。只有已有文本的纯增删（diff 没有修改段）才计入人工
+            // 逐字输入；整段替换按 Unknown 只累计净变化。
+            let replaced =
+                event.operation == ContributionOperation::Create || event.modified_chars > 0;
+            match event.actor {
+                MutationActor::Human => {
+                    if event.inserted_chars > 0 {
+                        if replaced {
+                            push_event(
+                                EventSource::Unknown,
+                                event.inserted_chars,
+                                0,
+                                0,
+                                "replace-inserted",
+                                &mut synthetic,
+                            );
+                        } else {
+                            push_event(
+                                EventSource::HumanTyped,
+                                event.inserted_chars,
+                                0,
+                                0,
+                                "inserted",
+                                &mut synthetic,
+                            );
+                        }
+                    }
+                    if event.deleted_chars > 0 {
+                        if replaced {
+                            push_event(
+                                EventSource::Unknown,
+                                0,
+                                event.deleted_chars,
+                                0,
+                                "replace-deleted",
+                                &mut synthetic,
+                            );
+                        } else {
+                            push_event(
+                                EventSource::Deleted,
+                                0,
+                                event.deleted_chars,
+                                0,
+                                "deleted",
+                                &mut synthetic,
+                            );
+                        }
+                    }
                 }
-            }
-            if event.deleted_chars > 0 {
-                push_event(
-                    EventSource::Deleted,
-                    0,
-                    event.deleted_chars,
-                    0,
-                    "deleted",
-                    &mut synthetic,
-                );
+                MutationActor::Ai => {
+                    if event.inserted_chars > 0 {
+                        push_event(
+                            EventSource::AiInserted,
+                            0,
+                            0,
+                            event.inserted_chars,
+                            "ai",
+                            &mut synthetic,
+                        );
+                    }
+                    if event.deleted_chars > 0 {
+                        // AI 删除不是人工删除；只保留净变化。
+                        push_event(
+                            EventSource::Unknown,
+                            0,
+                            event.deleted_chars,
+                            0,
+                            "ai-deleted",
+                            &mut synthetic,
+                        );
+                    }
+                }
+                MutationActor::Unknown | MutationActor::System => {
+                    if event.inserted_chars > 0 {
+                        push_event(
+                            EventSource::Unknown,
+                            event.inserted_chars,
+                            0,
+                            0,
+                            "unknown-inserted",
+                            &mut synthetic,
+                        );
+                    }
+                    if event.deleted_chars > 0 {
+                        push_event(
+                            EventSource::Unknown,
+                            0,
+                            event.deleted_chars,
+                            0,
+                            "unknown-deleted",
+                            &mut synthetic,
+                        );
+                    }
+                }
             }
         }
         synthetic
