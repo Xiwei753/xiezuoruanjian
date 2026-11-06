@@ -5,11 +5,13 @@
 //! 拥有的图业务状态和当前事件元数据，节点文字、边、嵌入、相机与动画由各端
 //! 自行渲染。回放绝不修改真实工作区里的星图。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapGraph, StarMapLink, StarMapNode};
+use crate::starmap::StarMapMeta;
 use crate::writing_stats::contribution::{
     ContributionEvent, ContributionObjectType, ContributionOperation, ContributionTextInputKind,
     MutationActor, MutationEntrypoint,
@@ -21,7 +23,8 @@ use crate::writing_stats::starmap_checkpoint::{
 use crate::writing_stats::starmap_proof::{
     compute_legacy_replay_event_hash, compute_replay_event_hash, compute_v2_replay_event_hash,
     proof_object_sha256, state_object_for_delta, state_sha256, ReplayEventIdentity,
-    StarMapProofState, StarMapProofTrajectorySample, LEGACY_STARMAP_PROOF_FORMAT_VERSION,
+    StarMapProofObject, StarMapProofState, StarMapProofTrajectorySample,
+    LEGACY_STARMAP_PROOF_FORMAT_VERSION,
     LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION, STARMAP_PROOF_FORMAT_VERSION,
 };
 
@@ -242,22 +245,222 @@ fn expected_event_hash(events: &[ContributionEvent], index: usize, head: &str) -
 struct PrefixValidation {
     /// 0..=N 每个位置是否可以安全跳转。
     valid: Vec<bool>,
-    /// 0..=N 每个位置的完整图状态摘要。
-    state_hashes: Vec<String>,
+    /// 只在实际检查点位置计算的完整图状态摘要；其余位置为 `None`。
+    state_hashes: Vec<Option<String>>,
     /// 第一个失败位置；无失败时为 `u64::MAX`。
     first_invalid_position: u64,
+}
+
+/// 校验器使用的索引式图状态。
+///
+/// 回放验证不再对完整 `StarMapProofState` 做 Vec 线性查找，也不在每次
+/// apply 后序列化整张图。对象按 ID 索引，保留创建顺序；只有真实检查点
+/// 位置才按原始 Vec 顺序还原并计算 `state_sha256`。
+struct IndexedProofState {
+    schema_version: u32,
+    starmap_id: String,
+    meta: Option<StarMapMeta>,
+    nodes: HashMap<String, (u64, StarMapNode)>,
+    edges: HashMap<String, (u64, StarMapEdge)>,
+    embeds: HashMap<String, (u64, StarMapEmbed)>,
+    links: HashMap<String, (u64, StarMapLink)>,
+    root_starmap_ids: Vec<String>,
+    next_order: u64,
+}
+
+impl IndexedProofState {
+    fn from_state(state: &StarMapProofState) -> Self {
+        let mut indexed = Self {
+            schema_version: state.graph.schema_version,
+            starmap_id: state.graph.starmap_id.clone(),
+            meta: state.meta.clone(),
+            nodes: HashMap::new(),
+            edges: HashMap::new(),
+            embeds: HashMap::new(),
+            links: HashMap::new(),
+            root_starmap_ids: state.root_starmap_ids.clone(),
+            next_order: 0,
+        };
+        for node in &state.graph.nodes {
+            indexed.insert_node(node.clone());
+        }
+        for edge in &state.graph.edges {
+            indexed.insert_edge(edge.clone());
+        }
+        for embed in &state.graph.embeds {
+            indexed.insert_embed(embed.clone());
+        }
+        for link in &state.graph.links {
+            indexed.insert_link(link.clone());
+        }
+        indexed
+    }
+
+    fn take_order(&mut self) -> u64 {
+        let order = self.next_order;
+        self.next_order = self.next_order.saturating_add(1);
+        order
+    }
+
+    fn insert_node(&mut self, node: StarMapNode) {
+        let order = self
+            .nodes
+            .get(&node.id)
+            .map(|(order, _)| *order)
+            .unwrap_or_else(|| self.take_order());
+        self.nodes.insert(node.id.clone(), (order, node));
+    }
+
+    fn insert_edge(&mut self, edge: StarMapEdge) {
+        let order = self
+            .edges
+            .get(&edge.id)
+            .map(|(order, _)| *order)
+            .unwrap_or_else(|| self.take_order());
+        self.edges.insert(edge.id.clone(), (order, edge));
+    }
+
+    fn insert_embed(&mut self, embed: StarMapEmbed) {
+        let order = self
+            .embeds
+            .get(&embed.instance_id)
+            .map(|(order, _)| *order)
+            .unwrap_or_else(|| self.take_order());
+        self.embeds
+            .insert(embed.instance_id.clone(), (order, embed));
+    }
+
+    fn insert_link(&mut self, link: StarMapLink) {
+        let order = self
+            .links
+            .get(&link.link_id)
+            .map(|(order, _)| *order)
+            .unwrap_or_else(|| self.take_order());
+        self.links.insert(link.link_id.clone(), (order, link));
+    }
+
+    fn object_for_delta(&self, delta: &crate::writing_stats::starmap_proof::StarMapProofDelta) -> Option<StarMapProofObject> {
+        match delta.object_type {
+            ContributionObjectType::StarMap => self
+                .meta
+                .clone()
+                .map(|meta| StarMapProofObject::Meta { meta }),
+            ContributionObjectType::StarMapNode => self
+                .nodes
+                .get(&delta.object_id)
+                .map(|(_, node)| StarMapProofObject::Node { node: node.clone() }),
+            ContributionObjectType::StarMapEdge => self
+                .edges
+                .get(&delta.object_id)
+                .map(|(_, edge)| StarMapProofObject::Edge { edge: edge.clone() }),
+            ContributionObjectType::StarMapEmbed => self
+                .embeds
+                .get(&delta.object_id)
+                .map(|(_, embed)| StarMapProofObject::Embed { embed: embed.clone() }),
+            ContributionObjectType::StarMapLink => self
+                .links
+                .get(&delta.object_id)
+                .map(|(_, link)| StarMapProofObject::Link { link: link.clone() }),
+            _ => None,
+        }
+    }
+
+    fn apply_delta(
+        &mut self,
+        delta: &crate::writing_stats::starmap_proof::StarMapProofDelta,
+    ) -> Result<()> {
+        if !delta.is_valid() {
+            return Err(Error::Other(format!(
+                "unsupported starmap proof delta format: {}",
+                delta.format_version
+            )));
+        }
+        if !self.starmap_id.is_empty()
+            && !delta.starmap_id.is_empty()
+            && self.starmap_id != delta.starmap_id
+        {
+            return Err(Error::Other(format!(
+                "starmap proof delta belongs to {} but state is {}",
+                delta.starmap_id, self.starmap_id
+            )));
+        }
+        if self.starmap_id.is_empty() {
+            self.starmap_id = delta.starmap_id.clone();
+        }
+        if let Some(roots) = &delta.roots_after {
+            self.root_starmap_ids = roots.clone();
+        }
+        match &delta.after {
+            Some(StarMapProofObject::Meta { meta }) => {
+                self.meta = Some(meta.clone());
+                self.starmap_id = meta.starmap_id.clone();
+            }
+            Some(StarMapProofObject::Node { node }) => self.insert_node(node.clone()),
+            Some(StarMapProofObject::Edge { edge }) => self.insert_edge(edge.clone()),
+            Some(StarMapProofObject::Embed { embed }) => self.insert_embed(embed.clone()),
+            Some(StarMapProofObject::Link { link }) => self.insert_link(link.clone()),
+            None => match delta.object_type {
+                ContributionObjectType::StarMap => {
+                    self.meta = None;
+                    self.root_starmap_ids.clear();
+                }
+                ContributionObjectType::StarMapNode => {
+                    self.nodes.remove(&delta.object_id);
+                }
+                ContributionObjectType::StarMapEdge => {
+                    self.edges.remove(&delta.object_id);
+                }
+                ContributionObjectType::StarMapEmbed => {
+                    self.embeds.remove(&delta.object_id);
+                }
+                ContributionObjectType::StarMapLink => {
+                    self.links.remove(&delta.object_id);
+                }
+                _ => {}
+            },
+        }
+        Ok(())
+    }
+
+    fn to_state(&self) -> StarMapProofState {
+        let mut nodes: Vec<(u64, StarMapNode)> = self.nodes.values().cloned().collect();
+        let mut edges: Vec<(u64, StarMapEdge)> = self.edges.values().cloned().collect();
+        let mut embeds: Vec<(u64, StarMapEmbed)> = self.embeds.values().cloned().collect();
+        let mut links: Vec<(u64, StarMapLink)> = self.links.values().cloned().collect();
+        nodes.sort_by_key(|(order, _)| *order);
+        edges.sort_by_key(|(order, _)| *order);
+        embeds.sort_by_key(|(order, _)| *order);
+        links.sort_by_key(|(order, _)| *order);
+        StarMapProofState {
+            meta: self.meta.clone(),
+            graph: StarMapGraph {
+                schema_version: self.schema_version,
+                starmap_id: self.starmap_id.clone(),
+                nodes: nodes.into_iter().map(|(_, node)| node).collect(),
+                edges: edges.into_iter().map(|(_, edge)| edge).collect(),
+                embeds: embeds.into_iter().map(|(_, embed)| embed).collect(),
+                links: links.into_iter().map(|(_, link)| link).collect(),
+            },
+            root_starmap_ids: self.root_starmap_ids.clone(),
+        }
+    }
 }
 
 /// 一次算出整条分支的哈希链与对象状态连续性，避免跳转时绕过早期断链。
 fn validate_event_chain(
     events: &[ContributionEvent],
     baseline: &StarMapProofState,
+    hash_positions: &HashSet<u64>,
 ) -> PrefixValidation {
     let mut valid = Vec::with_capacity(events.len() + 1);
     let mut state_hashes = Vec::with_capacity(events.len() + 1);
     valid.push(true);
-    state_hashes.push(state_sha256(baseline));
-    let mut state = baseline.clone();
+    state_hashes.push(if hash_positions.contains(&0) {
+        Some(state_sha256(baseline))
+    } else {
+        None
+    });
+    let mut state = IndexedProofState::from_state(baseline);
     let mut head = String::new();
     let mut first_invalid_position = u64::MAX;
     for (index, event) in events.iter().enumerate() {
@@ -275,14 +478,14 @@ fn validate_event_chain(
             } else {
                 ok = false;
             }
-            let current_before = state_object_for_delta(&state, delta);
+            let current_before = state.object_for_delta(delta);
             if let Some(expected) = delta.before_state_hash.as_deref() {
                 ok = ok && proof_object_sha256(current_before.as_ref()) == expected;
             }
             if state.apply_delta(delta).is_err() {
                 ok = false;
             } else {
-                let current_after = state_object_for_delta(&state, delta);
+                let current_after = state.object_for_delta(delta);
                 if let Some(expected) = delta.after_state_hash.as_deref() {
                     ok = ok && proof_object_sha256(current_after.as_ref()) == expected;
                 }
@@ -293,9 +496,14 @@ fn validate_event_chain(
         let previous = *valid.last().unwrap_or(&true);
         let cumulative = previous && ok;
         valid.push(cumulative);
-        state_hashes.push(state_sha256(&state));
+        let position = index as u64 + 1;
+        state_hashes.push(if cumulative && hash_positions.contains(&position) {
+            Some(state_sha256(&state.to_state()))
+        } else {
+            None
+        });
         if !cumulative && first_invalid_position == u64::MAX {
-            first_invalid_position = index as u64 + 1;
+            first_invalid_position = position;
         }
         head = stored.unwrap_or_default().to_string();
     }
@@ -346,7 +554,8 @@ fn checkpoint_prefix_matches(
     let state_ok = validation
         .state_hashes
         .get(checkpoint.position as usize)
-        .is_some_and(|hash| hash == &checkpoint.state_sha256);
+        .and_then(|hash| hash.as_deref())
+        .is_some_and(|hash| hash == checkpoint.state_sha256);
     hash_ok && state_ok
 }
 
@@ -436,7 +645,14 @@ impl StarMapReplaySession {
             root: store.app_data_root().to_path_buf(),
         };
         session.initialize_baseline();
-        session.prefix_validation = validate_event_chain(&session.events, &session.baseline_state);
+        let mut hash_positions: HashSet<u64> = session
+            .checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.position)
+            .collect();
+        hash_positions.insert(session.events.len() as u64);
+        session.prefix_validation =
+            validate_event_chain(&session.events, &session.baseline_state, &hash_positions);
         session.time_index = build_time_index(&session.events);
         session.checkpoints.retain(|checkpoint| {
             checkpoint_prefix_matches(&session.events, &session.prefix_validation, checkpoint)
@@ -514,6 +730,11 @@ impl StarMapReplaySession {
 
     pub fn total_events(&self) -> u64 {
         self.events.len() as u64
+    }
+
+    /// 指定回放位置的真实事件链头；position 0 为基线，返回空串。
+    pub fn event_chain_head_at(&self, position: u64) -> String {
+        self.hash_at_position(position)
     }
 
     fn resolve_target_position(&self, request: &StarMapReplayRequest) -> u64 {

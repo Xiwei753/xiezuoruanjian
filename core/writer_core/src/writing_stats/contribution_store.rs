@@ -494,9 +494,9 @@ impl ContributionStore {
             if !frame.valid {
                 continue;
             }
-            let (_, chain_head) = self
-                .read_branch_replay_state(origin, starmap_id)
-                .unwrap_or_default();
+            // 检查点必须锚定第 N 个位置自己的事件链头，不能读取仍在增长
+            // 的分支尾部；否则 N 帧状态会被 N+1 的链头永久拒绝。
+            let chain_head = session.event_chain_head_at(*position);
             let checkpoint = StarMapProofCheckpoint::new(
                 starmap_id,
                 origin,
