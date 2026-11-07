@@ -2,7 +2,7 @@ import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import { WideLayoutMode, WideLayoutState } from '../../../app/navigation/wide/WideLayoutMode'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapPathSegment, StarMapPoint, StarMapTargetPath, StarMapAssetRef } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapPathSegment, StarMapPoint, StarMapTargetPath, StarMapAssetRef, StarMapAssetReference } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
@@ -1047,6 +1047,49 @@ export struct StarMapScreen {
     }
   }
 
+  /** 单击库条目：星图进入原画布；节点定位当前画布中的引用或首个引用位置。 */
+  private async openLibraryAsset(target: StarMapAssetRef, title: string): Promise<void> {
+    if (target.kind === 'starmap') {
+      await this.openLibraryStarmap(target.assetId)
+      return
+    }
+    const result = await this.bridge.listStarMapAssetReferences(JSON.stringify(target))
+    if (!result.success || result.data === undefined || result.data.length === 0) {
+      this.errorMessage = result.userMessage ?? `“${title}”暂无引用`
+      return
+    }
+    const current = result.data.find((ref: StarMapAssetReference): boolean =>
+      ref.starmapId === this.starmapId)
+    await this.openLibraryReference(current ?? result.data[0])
+  }
+
+  private async openLibraryStarmap(starmapId: string): Promise<void> {
+    if (starmapId.length === 0) {
+      return
+    }
+    this.saveRouteCamera(this.activePath)
+    this.rootStarmapId = starmapId
+    this.starmapId = starmapId
+    this.activePath = []
+    this.activeStarmapIds = [starmapId]
+    this.focusScenePath = 'root'
+    this.selectionState.clear()
+    this.graph = null
+    await this.loadStarMap()
+    this.libraryDrawerOpen = false
+  }
+
+  private async openLibraryReference(reference: StarMapAssetReference): Promise<void> {
+    if (reference.starmapId !== this.starmapId) {
+      await this.openLibraryStarmap(reference.starmapId)
+    }
+    this.searchFocusKind = 'node'
+    this.searchFocusId = reference.instanceId
+    this.searchFocusHandled = false
+    this.scheduleSearchFocus()
+    this.libraryDrawerOpen = false
+  }
+
   private cameraWidthCenter(): number {
     return (this.canvasWidth / 2 - this.cameraOffsetX) / this.cameraScale
   }
@@ -1065,6 +1108,12 @@ export struct StarMapScreen {
         canInsert: this.starmapId.length > 0,
         onInsert: (target: StarMapAssetRef, title: string): void => {
           this.insertLibraryAsset(target, title)
+        },
+        onOpen: (target: StarMapAssetRef, title: string): void => {
+          this.openLibraryAsset(target, title)
+        },
+        onReferenceJump: (reference: StarMapAssetReference): void => {
+          this.openLibraryReference(reference)
         }
       })
         .layoutWeight(1)
@@ -1078,6 +1127,12 @@ export struct StarMapScreen {
         canInsert: this.starmapId.length > 0,
         onInsert: (target: StarMapAssetRef, title: string): void => {
           this.insertLibraryAsset(target, title)
+        },
+        onOpen: (target: StarMapAssetRef, title: string): void => {
+          this.openLibraryAsset(target, title)
+        },
+        onReferenceJump: (reference: StarMapAssetReference): void => {
+          this.openLibraryReference(reference)
         }
       })
         .layoutWeight(1)

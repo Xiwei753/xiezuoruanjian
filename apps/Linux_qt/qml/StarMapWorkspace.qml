@@ -143,6 +143,50 @@ Item {
         root.reloadLibraryPanels()
     }
 
+    function libraryReferences(targetJson) {
+        if (!root.starmapBackendRef)
+            return []
+        try {
+            var value = JSON.parse(String(
+                        root.starmapBackendRef.list_starmap_asset_references_json(
+                            targetJson) || "{}"))
+            if (value && value.success === true && Array.isArray(value.data))
+                return value.data
+        } catch (e) {
+        }
+        return []
+    }
+
+    function openLibraryAsset(kind, assetId, title, scopeJson, targetJson) {
+        void scopeJson
+        if (kind === "starmap") {
+            canvas.navigateToTreeRoute(assetId, "[]", "")
+            return
+        }
+        var refs = root.libraryReferences(targetJson)
+        for (var i = 0; i < refs.length; ++i) {
+            if (String(refs[i].starmapId || "") === canvas.currentStarmapId) {
+                canvas.revealTreeObject(canvas.currentRoute.rootStarmapId,
+                                        JSON.stringify(canvas.currentRoute.segments),
+                                        "node", refs[i].instanceId, "")
+                return
+            }
+        }
+        globalLibraryPanel.showReferences(targetJson, title)
+    }
+
+    function jumpLibraryReference(reference) {
+        if (!reference)
+            return
+        var target = reference.target || {}
+        if (String(target.kind || "") === "starmap") {
+            canvas.navigateToTreeRoute(String(target.assetId || ""), "[]", "")
+            return
+        }
+        canvas.revealTreeObject(String(reference.starmapId || ""), "[]",
+                                "node", String(reference.instanceId || ""), "")
+    }
+
     function reloadLibraryPanels() {
         if (globalLibraryPanel)
             globalLibraryPanel.reload()
@@ -485,6 +529,12 @@ Item {
                         onAssetActivated: function(kind, assetId, title, scopeJson, targetJson) {
                             root.insertLibraryAsset(kind, assetId, title, scopeJson, targetJson)
                         }
+                        onOpenAsset: function(kind, assetId, title, scopeJson, targetJson) {
+                            root.openLibraryAsset(kind, assetId, title, scopeJson, targetJson)
+                        }
+                        onReferenceJumpRequested: function(reference) {
+                            root.jumpLibraryReference(reference)
+                        }
                         onCopyRequested: function(targetJson, scopeJson, title) {
                             root.copyLibraryAsset(targetJson, scopeJson, title)
                         }
@@ -511,6 +561,12 @@ Item {
                         otherScopeJson: root.globalLibraryScopeJson
                         onAssetActivated: function(kind, assetId, title, scopeJson, targetJson) {
                             root.insertLibraryAsset(kind, assetId, title, scopeJson, targetJson)
+                        }
+                        onOpenAsset: function(kind, assetId, title, scopeJson, targetJson) {
+                            root.openLibraryAsset(kind, assetId, title, scopeJson, targetJson)
+                        }
+                        onReferenceJumpRequested: function(reference) {
+                            root.jumpLibraryReference(reference)
                         }
                         onCopyRequested: function(targetJson, scopeJson, title) {
                             root.copyLibraryAsset(targetJson, scopeJson, title)

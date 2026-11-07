@@ -108,10 +108,45 @@ fun StarMapScreen(
     onOpenStarmap: (starmapId: String, projectId: String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (starmapId == null) {
+    var referenceDestination by remember(starmapId, projectId, target) {
+        mutableStateOf<StarMapReferenceDestination?>(null)
+    }
+    val onOpenReference: (String, String, String, String) -> Unit =
+        { hostStarmapId, instanceId, kind, assetId ->
+            if (isStarMapLibraryKind(kind)) {
+                onOpenStarmap(assetId, null)
+            } else {
+                // 节点实例没有独立路由：保留宿主画布并把实例 ID 作为选择目标。
+                referenceDestination =
+                    StarMapReferenceDestination(
+                        starmapId = hostStarmapId,
+                        projectId = projectId,
+                        target = StarMapSelectionTarget.Node(instanceId),
+                        instanceId = instanceId,
+                    )
+            }
+        }
+    val openedReference = referenceDestination
+    if (openedReference != null) {
+        StarMapDetailScreen(
+            starmapId = openedReference.starmapId,
+            projectId = openedReference.projectId,
+            target = openedReference.target,
+            onOpenStarmap = onOpenStarmap,
+            onOpenReference = onOpenReference,
+            modifier = modifier,
+        )
+    } else if (starmapId == null) {
         StarMapRootScreen(onOpenStarmap = onOpenStarmap, modifier = modifier)
     } else {
-        StarMapDetailScreen(starmapId = starmapId, projectId = projectId, target = target, modifier = modifier)
+        StarMapDetailScreen(
+            starmapId = starmapId,
+            projectId = projectId,
+            target = target,
+            onOpenStarmap = onOpenStarmap,
+            onOpenReference = onOpenReference,
+            modifier = modifier,
+        )
     }
 }
 
@@ -182,6 +217,8 @@ private fun StarMapDetailScreen(
     starmapId: String,
     projectId: String?,
     target: StarMapSelectionTarget?,
+    onOpenStarmap: (starmapId: String, projectId: String?) -> Unit,
+    onOpenReference: (starmapId: String, instanceId: String, kind: String, assetId: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val repository = LocalSujianAppDependencies.current.starmapRepository
@@ -214,7 +251,7 @@ private fun StarMapDetailScreen(
                 val insertLibraryTarget: (StarMapLibraryTarget) -> Unit = { target ->
                     libraryScope.launch {
                         val inserted = withContext(Dispatchers.IO) {
-                            if (target.kind == "starmap") {
+                            if (target.isStarmap) {
                                 repository.addStarmapReference(starmapId, target.assetId, 0f, 0f)
                             } else {
                                 repository.addStarmapNodeReference(starmapId, target.assetId, 0f, 0f)
@@ -226,12 +263,20 @@ private fun StarMapDetailScreen(
                         }
                     }
                 }
+                val openLibraryTarget: (StarMapLibraryTarget) -> Unit = { target ->
+                    if (target.isStarmap) {
+                        librarySheetOpen = false
+                        onOpenStarmap(target.assetId, target.projectId ?: projectId)
+                    }
+                }
                 Row(modifier = modifier.fillMaxSize()) {
                     if (isWideLayout) {
                         StarMapLibraryPane(
                             repository = repository,
                             projectId = projectId,
+                            onOpen = openLibraryTarget,
                             onInsert = insertLibraryTarget,
+                            onOpenReference = onOpenReference,
                         )
                     }
                     Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
@@ -267,7 +312,9 @@ private fun StarMapDetailScreen(
                         repository = repository,
                         projectId = projectId,
                         onDismiss = { librarySheetOpen = false },
+                        onOpen = openLibraryTarget,
                         onInsert = insertLibraryTarget,
+                        onOpenReference = onOpenReference,
                     )
                 }
             }
@@ -289,6 +336,14 @@ private sealed interface StarMapDetailState {
 
     data object Failed : StarMapDetailState
 }
+
+/** 素材引用跳转到宿主画布时的最小路由状态；实例 ID 保留给后续精确选择。 */
+private data class StarMapReferenceDestination(
+    val starmapId: String,
+    val projectId: String?,
+    val target: StarMapSelectionTarget?,
+    val instanceId: String,
+)
 
 private suspend fun loadStarMaps(repository: StarMapRepository): StarMapListState =
     withContext(Dispatchers.IO) {

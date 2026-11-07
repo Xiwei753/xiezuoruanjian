@@ -2232,7 +2232,7 @@ impl WriterCoreApi {
                     affected_starmap,
                     crate::writing_stats::ContributionObjectType::StarMapNode,
                     affected_instance,
-                    crate::writing_stats::ContributionOperation::Update,
+                    crate::writing_stats::ContributionOperation::Link,
                     before_graph,
                     Some(after_graph),
                     &[],

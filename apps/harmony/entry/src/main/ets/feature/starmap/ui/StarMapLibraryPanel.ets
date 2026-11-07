@@ -1,8 +1,8 @@
 // StarMapLibraryPanel — 星图素材库（Issue #1037）。
 //
 // 只展示一个作用域的库目录：全局库或当前作品库。条目是「库归属」，
-// 点击只发出插入请求；真正的引用实例由画布调用 Core 创建，位置属于当前画布。
-// 删除库条目不会删除共享本体；本体删除与引用保护仍由 Core 判断。
+// 单击打开原素材（星图进入原画布，节点定位引用），拖入/菜单插入才创建
+// 当前画布引用；删除库条目不会删除共享本体。
 
 import { StarMapAssetReference, StarMapAssetRef, StarMapLibraryEntryView, StarMapLibraryFolder, StarMapLibraryView } from '../../../corebridge/dto/StarMapDtos'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
@@ -18,11 +18,20 @@ export struct StarMapLibraryPanel {
   @Param canInsert: boolean = true
   @Param onInsert: (target: StarMapAssetRef, title: string) => void =
     (_target: StarMapAssetRef, _title: string): void => {}
+  @Param onOpen: (target: StarMapAssetRef, title: string) => void =
+    (_target: StarMapAssetRef, _title: string): void => {}
+  @Param onReferenceJump: (reference: StarMapAssetReference) => void =
+    (_reference: StarMapAssetReference): void => {}
 
   @Local entries: StarMapLibraryEntryView[] = []
   @Local folders: StarMapLibraryFolder[] = []
   @Local errorMessage: string = ''
   @Local loading: boolean = false
+  @Local selectedFolderId: string = ''
+  @Local menuEntry: StarMapLibraryEntryView | null = null
+  @Local referencesSheetVisible: boolean = false
+  @Local references: StarMapAssetReference[] = []
+  @Local referencesTitle: string = ''
 
   private bridge: IWriterCoreBridge = getBridge()
 
@@ -75,9 +84,9 @@ export struct StarMapLibraryPanel {
     return folder.length > 0 ? `${folder} / ${item.title}` : item.title
   }
 
-  private requestCreateFolder(): void {
+  private requestCreateFolder(parentFolderId: string = ''): void {
     const args: CompactTextDialogArgs = {
-      title: '新建素材文件夹',
+      title: parentFolderId.length > 0 ? '新建子文件夹' : '新建素材文件夹',
       placeholder: '文件夹名称',
       initialText: '',
       confirmLabel: '创建',
@@ -86,14 +95,15 @@ export struct StarMapLibraryPanel {
         if (name.length === 0) {
           return
         }
-        this.createFolder(name)
+        this.createFolder(name, parentFolderId)
       }
     }
     openCompactTextDialog(this.getUIContext(), args)
   }
 
-  private async createFolder(name: string): Promise<void> {
-    const result = await this.bridge.createStarMapLibraryFolder(this.scopeJson, '', name)
+  private async createFolder(name: string, parentFolderId: string): Promise<void> {
+    const result = await this.bridge.createStarMapLibraryFolder(
+      this.scopeJson, parentFolderId, name)
     if (!result.success) {
       this.errorMessage = result.userMessage ?? '新建文件夹失败'
       return
@@ -101,16 +111,63 @@ export struct StarMapLibraryPanel {
     await this.reload()
   }
 
-  private async showReferences(target: StarMapAssetRef): Promise<void> {
+  private async showReferences(target: StarMapAssetRef, title: string): Promise<void> {
     const result = await this.bridge.listStarMapAssetReferences(JSON.stringify(target))
     if (!result.success || result.data === undefined) {
       this.errorMessage = result.userMessage ?? '读取引用位置失败'
       return
     }
-    const refs: StarMapAssetReference[] = result.data
-    const lines: string[] = refs.map((ref: StarMapAssetReference): string =>
-      `${ref.projectId ?? '全局'} / ${ref.starmapId} / ${ref.instanceId}`)
-    this.errorMessage = lines.length > 0 ? lines.join('\n') : '暂无引用'
+    this.references = result.data
+    this.referencesTitle = title
+    this.referencesSheetVisible = true
+  }
+
+  private async copyEntry(item: StarMapLibraryEntryView): Promise<void> {
+    const result = await this.bridge.copyStarMapLibraryAsset(
+      JSON.stringify(item.entry.target), this.scopeJson, '')
+    if (!result.success) {
+      this.errorMessage = result.userMessage ?? '复制素材失败'
+      return
+    }
+    await this.reload()
+  }
+
+  private async moveEntryToFolder(item: StarMapLibraryEntryView): Promise<void> {
+    const result = await this.bridge.moveStarMapLibraryEntry(
+      item.entry.entryId, this.scopeJson, this.selectedFolderId)
+    if (!result.success) {
+      this.errorMessage = result.userMessage ?? '移动素材失败'
+      return
+    }
+    await this.reload()
+  }
+
+  private async moveEntryToOtherScope(item: StarMapLibraryEntryView): Promise<void> {
+    if (this.otherScopeJson.length === 0) {
+      this.errorMessage = '当前没有可移动的目标素材库'
+      return
+    }
+    const result = await this.bridge.moveStarMapLibraryEntry(
+      item.entry.entryId, this.otherScopeJson, '')
+    if (!result.success) {
+      this.errorMessage = result.userMessage ?? '移动素材归属失败'
+      return
+    }
+    await this.reload()
+  }
+
+  private async deleteEntry(item: StarMapLibraryEntryView): Promise<void> {
+    const refs = await this.bridge.listStarMapAssetReferences(JSON.stringify(item.entry.target))
+    if (refs.success && refs.data !== undefined && refs.data.length > 0) {
+      await this.showReferences(item.entry.target, item.title)
+      return
+    }
+    const result = await this.bridge.deleteStarMapLibraryAsset(JSON.stringify(item.entry.target))
+    if (!result.success) {
+      this.errorMessage = result.userMessage ?? '删除素材本体失败'
+      return
+    }
+    await this.reload()
   }
 
   @Builder
@@ -126,36 +183,142 @@ export struct StarMapLibraryPanel {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
+      Text('⋯')
+        .fontSize(16)
+        .fontColor($r('sys.color.font_secondary'))
+        .width(28)
+        .textAlign(TextAlign.Center)
+        .onClick(() => {
+          this.menuEntry = item
+        })
+        .bindMenu(this.EntryMenu)
     }
     .width('100%')
     .height(40)
     .padding({ left: 8, right: 8 })
     .borderRadius(DesignTokens.radiusSm)
     .onClick(() => {
-      if (this.canInsert) {
-        this.onInsert(item.entry.target, item.title)
-      }
+      this.onOpen(item.entry.target, item.title)
     })
     .gesture(LongPressGesture().onAction(() => {
-      this.showReferences(item.entry.target)
+      this.showReferences(item.entry.target, item.title)
     }))
   }
 
   @Builder
   FolderRow(folder: StarMapLibraryFolder) {
     Row({ space: 6 }) {
-      Text('▸')
+      Text(this.selectedFolderId === folder.folderId ? '▾' : '▸')
         .fontSize(11)
         .fontColor($r('sys.color.icon_secondary'))
       Text(folder.name)
         .fontSize(12)
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('sys.color.font_secondary'))
+        .fontColor(this.selectedFolderId === folder.folderId
+          ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
         .maxLines(1)
+        .layoutWeight(1)
+      Text('+')
+        .fontSize(14)
+        .fontColor($r('sys.color.font_secondary'))
+        .width(24)
+        .textAlign(TextAlign.Center)
+        .onClick(() => this.requestCreateFolder(folder.folderId))
     }
     .width('100%')
     .height(32)
     .padding({ left: 4, right: 4 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.selectedFolderId === folder.folderId
+      ? $r('sys.color.comp_background_gray') : Color.Transparent)
+    .onClick(() => {
+      this.selectedFolderId = this.selectedFolderId === folder.folderId ? '' : folder.folderId
+    })
+  }
+
+  @Builder
+  EntryMenu() {
+    Menu() {
+      MenuItem({ content: '插入当前画布' })
+        .onClick(() => {
+          if (this.canInsert && this.menuEntry !== null) {
+            this.onInsert(this.menuEntry.entry.target, this.menuEntry.title)
+          }
+        })
+      MenuItem({ content: '复制' })
+        .onClick(() => {
+          if (this.menuEntry !== null) {
+            this.copyEntry(this.menuEntry)
+          }
+        })
+      MenuItem({ content: this.selectedFolderId.length > 0 ? '移动到当前文件夹' : '移回库根目录' })
+        .onClick(() => {
+          if (this.menuEntry !== null) {
+            this.moveEntryToFolder(this.menuEntry)
+          }
+        })
+      MenuItem({ content: '移动到另一素材库' })
+        .onClick(() => {
+          if (this.otherScopeJson.length > 0 && this.menuEntry !== null) {
+            this.moveEntryToOtherScope(this.menuEntry)
+          }
+        })
+      MenuItem({ content: '查看引用位置' })
+        .onClick(() => {
+          if (this.menuEntry !== null) {
+            this.showReferences(this.menuEntry.entry.target, this.menuEntry.title)
+          }
+        })
+      MenuItem({ content: '删除素材本体' })
+        .onClick(() => {
+          if (this.menuEntry !== null) {
+            this.deleteEntry(this.menuEntry)
+          }
+        })
+    }
+  }
+
+  @Builder
+  ReferenceSheet() {
+    Column({ space: 8 }) {
+      Text(`${this.referencesTitle} · 引用位置`)
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .width('100%')
+      if (this.references.length === 0) {
+        Text('暂无引用')
+          .fontSize(12)
+          .fontColor($r('sys.color.font_secondary'))
+      } else {
+        List({ space: 6 }) {
+          ForEach(this.references, (ref: StarMapAssetReference) => {
+            ListItem() {
+              Column({ space: 2 }) {
+                Text(ref.starmapId)
+                  .fontSize(13)
+                  .fontColor($r('sys.color.font_primary'))
+                Text(`${ref.projectId ?? '全局'} / ${ref.instanceId}`)
+                  .fontSize(11)
+                  .fontColor($r('sys.color.font_secondary'))
+              }
+              .width('100%')
+              .padding(8)
+              .borderRadius(DesignTokens.radiusSm)
+              .backgroundColor($r('sys.color.comp_background_gray'))
+              .onClick(() => {
+                this.referencesSheetVisible = false
+                this.onReferenceJump(ref)
+              })
+            }
+          }, (ref: StarMapAssetReference) => `${ref.starmapId}:${ref.instanceId}`)
+        }
+        .layoutWeight(1)
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .padding(12)
+    .alignItems(HorizontalAlign.Start)
   }
 
   build() {
@@ -214,5 +377,6 @@ export struct StarMapLibraryPanel {
     .height('100%')
     .padding(8)
     .alignItems(HorizontalAlign.Start)
+    .bindSheet($$this.referencesSheetVisible, this.ReferenceSheet(), { height: 320 })
   }
 }

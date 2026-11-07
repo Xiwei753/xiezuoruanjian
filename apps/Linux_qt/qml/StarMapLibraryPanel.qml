@@ -24,9 +24,12 @@ Rectangle {
     property string otherScopeJson: ""
     property string header: qsTr("素材库")
     property string emptyText: qsTr("暂无素材")
+    property string newFolderParentId: ""
 
+    signal openAsset(string kind, string assetId, string title, string scopeJson, string targetJson)
     signal assetActivated(string kind, string assetId, string title, string scopeJson, string targetJson)
     signal copyRequested(string targetJson, string scopeJson, string title)
+    signal referenceJumpRequested(var reference)
     signal libraryChanged()
 
     implicitHeight: contentColumn.implicitHeight
@@ -64,16 +67,7 @@ Rectangle {
                     root.starmapBackendRef.list_starmap_asset_references_json(targetJson))
         if (!Array.isArray(refs))
             refs = []
-        var lines = []
-        for (var i = 0; i < refs.length; ++i) {
-            var ref = refs[i] || {}
-            lines.push(String(ref.projectId || qsTr("全局"))
-                       + " / " + String(ref.starmapId || "")
-                       + " / " + String(ref.instanceId || ""))
-        }
-        referencesDialog.referenceText = lines.length > 0
-                ? lines.join("\n")
-                : qsTr("没有画布引用")
+        referencesDialog.references = refs
         referencesDialog.referenceTitle = title
         referencesDialog.open()
     }
@@ -129,6 +123,7 @@ Rectangle {
                 ToolTip.text: qsTr("新建文件夹")
                 ToolTip.visible: hovered
                 onClicked: {
+                    root.newFolderParentId = ""
                     newFolderDialog.open()
                 }
             }
@@ -222,13 +217,23 @@ Rectangle {
 
                     onClicked: function(mouse) {
                         if (delegateRoot.rowKind === "folder") {
-                            if (mouse.button === Qt.LeftButton)
+                            if (mouse.button === Qt.LeftButton) {
                                 libraryModel.toggle_folder(delegateRoot.folderId)
+                            } else if (mouse.button === Qt.RightButton) {
+                                contextMenu.rowKind = "folder"
+                                contextMenu.folderId = delegateRoot.folderId
+                                contextMenu.entryId = delegateRoot.entryId
+                                contextMenu.popup()
+                            }
                             return
                         }
                         if (mouse.button === Qt.LeftButton) {
-                            root.showReferences(delegateRoot.targetJson,
-                                                delegateRoot.title)
+                            // 单击是“打开/定位素材本体”；插入引用只通过拖拽或右键菜单。
+                            root.openAsset(delegateRoot.rowKind,
+                                           delegateRoot.assetId,
+                                           delegateRoot.title,
+                                           delegateRoot.scopeJson,
+                                           delegateRoot.targetJson)
                         } else if (mouse.button === Qt.RightButton) {
                             contextMenu.rowKind = delegateRoot.rowKind
                             contextMenu.assetId = delegateRoot.assetId
@@ -236,17 +241,18 @@ Rectangle {
                             contextMenu.targetJson = delegateRoot.targetJson
                             contextMenu.scopeJson = delegateRoot.scopeJson
                             contextMenu.entryId = delegateRoot.entryId
+                            contextMenu.folderId = ""
                             contextMenu.popup()
                         }
                     }
 
                     onDoubleClicked: {
                         if (delegateRoot.rowKind !== "folder") {
-                            root.assetActivated(delegateRoot.rowKind,
-                                                delegateRoot.assetId,
-                                                delegateRoot.title,
-                                                delegateRoot.scopeJson,
-                                                delegateRoot.targetJson)
+                            root.openAsset(delegateRoot.rowKind,
+                                           delegateRoot.assetId,
+                                           delegateRoot.title,
+                                           delegateRoot.scopeJson,
+                                           delegateRoot.targetJson)
                         }
                     }
                 }
@@ -278,11 +284,21 @@ Rectangle {
             } catch (e) {
                 return
             }
-            if (!payload || !payload.entryId || !payload.scopeJson
-                    || payload.scopeJson === root.scopeJson)
+            if (!payload || !payload.entryId || !payload.scopeJson)
+                return
+            var targetFolderId = ""
+            var local = libraryList.mapFromItem(root, drop.x, drop.y)
+            var rowIndex = libraryList.indexAt(local.x, local.y)
+            if (rowIndex >= 0) {
+                var modelIndex = libraryModel.index(rowIndex, 0)
+                if (String(libraryModel.data(modelIndex, 302) || "") === "folder")
+                    targetFolderId = String(libraryModel.data(modelIndex, 305) || "")
+            }
+            // 同库拖放只用于移入/移出文件夹；跨库拖放同时改变归属 scope。
+            if (payload.scopeJson === root.scopeJson && targetFolderId === "")
                 return
             root.starmapBackendRef.move_starmap_library_entry_json(
-                        String(payload.entryId), root.scopeJson, "")
+                        String(payload.entryId), root.scopeJson, targetFolderId)
             root.reload()
             root.libraryChanged()
         }
@@ -296,9 +312,19 @@ Rectangle {
         property string targetJson: ""
         property string scopeJson: ""
         property string entryId: ""
+        property string folderId: ""
 
         MenuItem {
+            text: qsTr("新建子文件夹")
+            visible: contextMenu.rowKind === "folder"
+            onTriggered: {
+                root.newFolderParentId = contextMenu.folderId
+                newFolderDialog.open()
+            }
+        }
+        MenuItem {
             text: qsTr("插入当前画布")
+            visible: contextMenu.rowKind !== "folder"
             onTriggered: root.assetActivated(contextMenu.rowKind,
                                               contextMenu.assetId,
                                               contextMenu.title,
@@ -307,6 +333,7 @@ Rectangle {
         }
         MenuItem {
             text: qsTr("复制")
+            visible: contextMenu.rowKind !== "folder"
             onTriggered: root.copyRequested(contextMenu.targetJson,
                                             contextMenu.scopeJson,
                                             contextMenu.title)
@@ -314,6 +341,7 @@ Rectangle {
         MenuItem {
             text: root.otherScopeJson === "" ? qsTr("移动归属")
                                              : qsTr("移动到另一素材库")
+            visible: contextMenu.rowKind !== "folder"
             enabled: root.otherScopeJson !== ""
                      && contextMenu.targetJson !== ""
             onTriggered: {
@@ -327,11 +355,15 @@ Rectangle {
         }
         MenuItem {
             text: qsTr("查看全部引用")
+            visible: contextMenu.rowKind !== "folder"
             onTriggered: root.showReferences(contextMenu.targetJson, contextMenu.title)
         }
-        MenuSeparator {}
+        MenuSeparator {
+            visible: contextMenu.rowKind !== "folder"
+        }
         MenuItem {
             text: qsTr("删除素材本体")
+            visible: contextMenu.rowKind !== "folder"
             onTriggered: root.removeAsset(contextMenu.targetJson, contextMenu.title)
         }
     }
@@ -346,8 +378,9 @@ Rectangle {
             if (!root.starmapBackendRef)
                 return
             root.starmapBackendRef.create_starmap_library_folder_json(
-                        root.scopeJson, "", nameField.text)
+                        root.scopeJson, root.newFolderParentId, nameField.text)
             nameField.text = ""
+            root.newFolderParentId = ""
             root.reload()
         }
         TextField {
@@ -359,14 +392,35 @@ Rectangle {
     Dialog {
         id: referencesDialog
         property string referenceTitle: ""
-        property string referenceText: ""
+        property var references: []
         title: referenceTitle
         modal: true
         anchors.centerIn: Overlay.overlay
         standardButtons: Dialog.Close
-        Label {
-            text: referencesDialog.referenceText
-            wrapMode: Text.Wrap
+        width: Math.min(520, Overlay.overlay ? Overlay.overlay.width - 48 : 520)
+        contentItem: ListView {
+            implicitHeight: Math.max(60, contentHeight)
+            clip: true
+            model: referencesDialog.references
+            footer: Label {
+                visible: referencesDialog.references.length === 0
+                width: ListView.view ? ListView.view.width : 0
+                text: qsTr("没有画布引用")
+                wrapMode: Text.Wrap
+            }
+            delegate: ItemDelegate {
+                width: ListView.view.width
+                text: {
+                    var ref = modelData || {}
+                    return String(ref.projectId || qsTr("全局"))
+                            + " / " + String(ref.starmapId || "")
+                            + " / " + String(ref.instanceId || "")
+                }
+                onClicked: {
+                    root.referenceJumpRequested(modelData)
+                    referencesDialog.close()
+                }
+            }
         }
     }
 
