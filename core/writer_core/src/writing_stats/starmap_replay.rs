@@ -22,12 +22,13 @@ use crate::writing_stats::starmap_checkpoint::{
     list_checkpoint_headers, load_checkpoint_at, StarMapCheckpointHeader, StarMapProofCheckpoint,
     STARMAP_CHECKPOINT_INTERVAL,
 };
+use crate::writing_stats::starmap_commitment::StateCommitment;
 use crate::writing_stats::starmap_proof::{
     compute_legacy_replay_event_hash, compute_replay_event_hash, compute_v2_replay_event_hash,
-    proof_object_sha256, state_object_for_delta, state_sha256, ReplayEventIdentity,
-    StarMapProofObject, StarMapProofState, StarMapProofTrajectorySample,
+    compute_v4_replay_event_hash, proof_object_sha256, state_object_for_delta, state_sha256,
+    ReplayEventIdentity, StarMapProofObject, StarMapProofState, StarMapProofTrajectorySample,
     LEGACY_STARMAP_PROOF_FORMAT_VERSION, LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION,
-    STARMAP_PROOF_FORMAT_VERSION,
+    LEGACY_V3_STARMAP_PROOF_FORMAT_VERSION, STARMAP_PROOF_FORMAT_VERSION,
 };
 
 /// 回放查询。位置 `target_position` 表示「已应用多少个事件」，0 是空白/基线。
@@ -143,7 +144,7 @@ pub struct StarMapProofExportPackage {
     pub validation_errors: Vec<String>,
 }
 
-fn is_starmap_event(event: &ContributionEvent, starmap_id: &str) -> bool {
+pub(crate) fn is_starmap_event(event: &ContributionEvent, starmap_id: &str) -> bool {
     if event.replay_delta.is_none() {
         return false;
     }
@@ -172,7 +173,7 @@ fn event_sort_key(event: &ContributionEvent) -> (u8, u64, i64, &str, u32, &str) 
     }
 }
 
-fn sort_events(events: &mut [ContributionEvent]) {
+pub(crate) fn sort_events(events: &mut [ContributionEvent]) {
     events.sort_by(|left, right| event_sort_key(left).cmp(&event_sort_key(right)));
 }
 
@@ -238,8 +239,10 @@ fn expected_event_hash(events: &[ContributionEvent], index: usize, head: &str) -
     };
     if delta.format_version == LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION {
         compute_v2_replay_event_hash(head, &identity, delta)
-    } else {
+    } else if delta.format_version == LEGACY_V3_STARMAP_PROOF_FORMAT_VERSION {
         compute_replay_event_hash(head, &identity, delta)
+    } else {
+        compute_v4_replay_event_hash(head, &identity, delta)
     }
 }
 
@@ -250,6 +253,8 @@ fn expected_event_hash(events: &[ContributionEvent], index: usize, head: &str) -
 struct PrefixValidation {
     /// 0..=N 每个位置是否可以安全跳转。
     valid: Vec<bool>,
+    /// 顺序验证过程中在检查点位置记录的可信状态承诺根。
+    state_roots: HashMap<u64, String>,
     /// 第一个失败位置；无失败时为 `u64::MAX`。
     first_invalid_position: u64,
 }
@@ -462,10 +467,15 @@ impl IndexedProofState {
 fn validate_event_chain(
     events: &[ContributionEvent],
     baseline: &StarMapProofState,
+    root_positions: &HashSet<u64>,
 ) -> PrefixValidation {
     let mut valid = Vec::with_capacity(events.len() + 1);
     valid.push(true);
-    let mut state = IndexedProofState::from_state(baseline);
+    let mut state = StateCommitment::from_state(baseline);
+    let mut state_roots = HashMap::new();
+    if root_positions.contains(&0) {
+        state_roots.insert(0, state.root_hex());
+    }
     let mut head = String::new();
     let mut first_invalid_position = u64::MAX;
     for (index, event) in events.iter().enumerate() {
@@ -483,6 +493,9 @@ fn validate_event_chain(
             } else {
                 ok = false;
             }
+            if delta.format_version == STARMAP_PROOF_FORMAT_VERSION {
+                ok = ok && delta.branch_position == Some(index as u64);
+            }
             let current_before = state.object_for_delta(delta);
             if let Some(expected) = delta.before_state_hash.as_deref() {
                 ok = ok && proof_object_sha256(current_before.as_ref()) == expected;
@@ -494,6 +507,10 @@ fn validate_event_chain(
                 if let Some(expected) = delta.after_state_hash.as_deref() {
                     ok = ok && proof_object_sha256(current_after.as_ref()) == expected;
                 }
+                if delta.format_version == STARMAP_PROOF_FORMAT_VERSION {
+                    let root = state.root_hex();
+                    ok = ok && delta.state_root_after.as_deref() == Some(root.as_str());
+                }
             }
         } else {
             ok = false;
@@ -502,6 +519,9 @@ fn validate_event_chain(
         let cumulative = previous && ok;
         valid.push(cumulative);
         let position = index as u64 + 1;
+        if root_positions.contains(&position) {
+            state_roots.insert(position, state.root_hex());
+        }
         if !cumulative && first_invalid_position == u64::MAX {
             first_invalid_position = position;
         }
@@ -509,6 +529,7 @@ fn validate_event_chain(
     }
     PrefixValidation {
         valid,
+        state_roots,
         first_invalid_position,
     }
 }
@@ -652,6 +673,7 @@ impl StarMapReplaySession {
             legacy_event_count,
             prefix_validation: PrefixValidation {
                 valid: Vec::new(),
+                state_roots: HashMap::new(),
                 first_invalid_position: u64::MAX,
             },
             time_index: Vec::new(),
@@ -661,7 +683,13 @@ impl StarMapReplaySession {
         session.initialize_baseline();
         // 打开时只做一次线性事件链校验；检查点整图状态留到实际跳转/导出
         // 时再按需重建，避免历史累积后每次打开都重复哈希全部旧图。
-        session.prefix_validation = validate_event_chain(&session.events, &session.baseline_state);
+        let root_positions: HashSet<u64> = session
+            .checkpoint_headers
+            .iter()
+            .map(|header| header.position)
+            .collect();
+        session.prefix_validation =
+            validate_event_chain(&session.events, &session.baseline_state, &root_positions);
         session.verify_baseline_checkpoint();
         session.time_index = build_time_index(&session.events);
         session.checkpoint_headers.retain(|header| {
@@ -783,8 +811,9 @@ impl StarMapReplaySession {
             Ok(Some(checkpoint))
                 if checkpoint.state_sha256 == expected && checkpoint.hash_matches() =>
             {
+                // 不在这里直接标记 validation=true：让 position 0 首次使用时走完整的
+                // state_root/快照校验，避免绕过 v4 状态根检查。
                 self.checkpoint_cache.insert(0, Arc::new(checkpoint));
-                self.checkpoint_validation.insert(0, true);
             }
             _ => {
                 self.baseline_error = Some(
@@ -914,14 +943,25 @@ impl StarMapReplaySession {
             header.position,
             &header.event_chain_head,
         );
+        let expected_root = (!header.state_root.is_empty())
+            .then(|| self.prefix_validation.state_roots.get(&position).cloned())
+            .flatten();
         if valid {
             valid = self.load_checkpoint(position).is_some_and(|checkpoint| {
+                let root_ok = if header.state_root.is_empty() {
+                    true
+                } else {
+                    expected_root.as_deref() == Some(header.state_root.as_str())
+                        && StateCommitment::from_state(&checkpoint.state).root_hex()
+                            == header.state_root
+                };
                 !checkpoint.state_sha256.is_empty()
                     && checkpoint.state_sha256 == header.state_sha256
                     && checkpoint.hash_matches()
+                    && root_ok
             });
         }
-        if valid && position > 0 {
+        if valid && position > 0 && header.state_root.is_empty() {
             let expected = self
                 .checkpoint_replay_hashes
                 .get(&position)
@@ -1049,8 +1089,10 @@ impl StarMapReplaySession {
                     };
                     if v2 {
                         compute_v2_replay_event_hash(&self.chain_head, &identity, &delta)
-                    } else {
+                    } else if delta.format_version == LEGACY_V3_STARMAP_PROOF_FORMAT_VERSION {
                         compute_replay_event_hash(&self.chain_head, &identity, &delta)
+                    } else {
+                        compute_v4_replay_event_hash(&self.chain_head, &identity, &delta)
                     }
                 };
                 if delta.event_hash.as_deref() != Some(computed.as_str()) {

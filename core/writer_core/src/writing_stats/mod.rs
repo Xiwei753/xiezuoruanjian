@@ -60,6 +60,7 @@ pub mod proof;
 pub mod replay;
 pub mod session;
 pub mod starmap_checkpoint;
+pub mod starmap_commitment;
 pub mod starmap_proof;
 pub mod starmap_replay;
 pub mod store;

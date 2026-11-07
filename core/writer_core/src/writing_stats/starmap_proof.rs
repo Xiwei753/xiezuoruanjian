@@ -24,7 +24,8 @@ use crate::writing_stats::contribution::{
 ///
 /// v2 起事件哈希覆盖来源字段，检查点锚定事件链头。旧事件缺版本字段时按
 /// [`LEGACY_STARMAP_PROOF_FORMAT_VERSION`] 读取，不能静默套用新算法。
-pub const STARMAP_PROOF_FORMAT_VERSION: u32 = 3;
+pub const STARMAP_PROOF_FORMAT_VERSION: u32 = 4;
+pub const LEGACY_V3_STARMAP_PROOF_FORMAT_VERSION: u32 = 3;
 pub const LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION: u32 = 2;
 pub const LEGACY_STARMAP_PROOF_FORMAT_VERSION: u32 = 1;
 
@@ -114,6 +115,12 @@ pub struct StarMapProofDelta {
     /// 创建/删除星图时根星图集合的真实变化。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roots_after: Option<Vec<String>>,
+    /// 本事件应用后、按对象 ID/内容/顺序/meta/roots 计算的状态承诺根。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_root_after: Option<String>,
+    /// 本事件在「星图 + 来源设备分支」内的位置；与 event_hash 一并签名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_position: Option<u64>,
     /// 同一来源分支上一条回放事件的哈希；分支首条为空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prev_event_hash: Option<String>,
@@ -154,6 +161,8 @@ impl StarMapProofDelta {
             trajectory: Vec::new(),
             baseline: None,
             roots_after: None,
+            state_root_after: None,
+            branch_position: None,
             prev_event_hash: None,
             event_hash: None,
             before_state_hash: None,
@@ -178,6 +187,8 @@ impl StarMapProofDelta {
             trajectory: Vec::new(),
             baseline: None,
             roots_after: None,
+            state_root_after: None,
+            branch_position: None,
             prev_event_hash: None,
             event_hash: None,
             before_state_hash: None,
@@ -205,6 +216,7 @@ impl StarMapProofDelta {
             self.format_version,
             LEGACY_STARMAP_PROOF_FORMAT_VERSION
                 | LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION
+                | LEGACY_V3_STARMAP_PROOF_FORMAT_VERSION
                 | STARMAP_PROOF_FORMAT_VERSION
         ) && !self.starmap_id.is_empty()
             && !self.object_id.is_empty()
@@ -468,7 +480,7 @@ pub fn compute_replay_event_hash(
     delta: &StarMapProofDelta,
 ) -> String {
     let payload = serde_json::json!({
-        "version": STARMAP_PROOF_FORMAT_VERSION,
+        "version": LEGACY_V3_STARMAP_PROOF_FORMAT_VERSION,
         "prev": prev_event_hash,
         "eventId": identity.event_id,
         "actor": identity.actor.as_str(),
@@ -491,6 +503,47 @@ pub fn compute_replay_event_hash(
         "trajectory": delta.trajectory,
         "baseline": delta.baseline,
         "rootsAfter": delta.roots_after,
+        "beforeStateHash": delta.before_state_hash,
+        "afterStateHash": delta.after_state_hash,
+    });
+    sha256_hex(&serde_json::to_vec(&payload).unwrap_or_default())
+}
+
+/// 计算一条回放事件的稳定哈希（v4）。
+///
+/// 在 v3 字段基础上把应用后的对象级状态承诺根纳入哈希链；分支位置同时
+/// 要求与 delta 自身记录的值一致，避免只改事件字段而重排分支。
+pub fn compute_v4_replay_event_hash(
+    prev_event_hash: &str,
+    identity: &ReplayEventIdentity<'_>,
+    delta: &StarMapProofDelta,
+) -> String {
+    let payload = serde_json::json!({
+        "version": STARMAP_PROOF_FORMAT_VERSION,
+        "prev": prev_event_hash,
+        "eventId": identity.event_id,
+        "actor": identity.actor.as_str(),
+        "entrypoint": identity.entrypoint.as_str(),
+        "occurredAtMs": identity.occurred_at_ms,
+        "originDeviceId": identity.origin_device_id,
+        "projectId": identity.project_id,
+        "transactionId": identity.transaction_id,
+        "replayOrder": identity.replay_order,
+        "textInputKind": identity.text_input_kind,
+        "platform": identity.platform,
+        "deviceClass": identity.device_class,
+        "position": identity.branch_position,
+        "branchPosition": delta.branch_position,
+        "starmapId": delta.starmap_id,
+        "objectType": delta.object_type,
+        "objectId": delta.object_id,
+        "operation": delta.operation,
+        "before": delta.before,
+        "after": delta.after,
+        "trajectory": delta.trajectory,
+        "baseline": delta.baseline,
+        "rootsAfter": delta.roots_after,
+        "stateRootAfter": delta.state_root_after,
         "beforeStateHash": delta.before_state_hash,
         "afterStateHash": delta.after_state_hash,
     });

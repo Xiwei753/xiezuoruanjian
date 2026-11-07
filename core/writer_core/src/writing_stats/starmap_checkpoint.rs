@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::writing_stats::contribution_store::valid_segment;
+use crate::writing_stats::starmap_commitment::StateCommitment;
 use crate::writing_stats::starmap_proof::{
     state_sha256, StarMapProofState, STARMAP_PROOF_FORMAT_VERSION,
 };
@@ -47,6 +48,9 @@ pub struct StarMapProofCheckpoint {
     pub state: StarMapProofState,
     #[serde(default)]
     pub state_sha256: String,
+    /// 按对象 ID/内容/顺序/meta/roots 计算的状态承诺根；旧检查点为空。
+    #[serde(default)]
+    pub state_root: String,
     pub created_at_ms: i64,
     #[serde(default)]
     pub reason: String,
@@ -70,6 +74,9 @@ pub struct StarMapCheckpointHeader {
     pub event_chain_head: String,
     #[serde(default)]
     pub state_sha256: String,
+    /// 该检查点位置由顺序验证得到的可信状态承诺根；旧检查点为空。
+    #[serde(default)]
+    pub state_root: String,
     pub created_at_ms: i64,
     #[serde(default)]
     pub reason: String,
@@ -107,6 +114,7 @@ impl StarMapProofCheckpoint {
         reason: &str,
         history_complete: bool,
     ) -> Self {
+        let state_root = StateCommitment::from_state(&state).root_hex();
         let state_sha256 = state_sha256(&state);
         Self {
             format_version: STARMAP_CHECKPOINT_FORMAT_VERSION,
@@ -116,6 +124,7 @@ impl StarMapProofCheckpoint {
             event_chain_head: String::new(),
             state,
             state_sha256,
+            state_root,
             created_at_ms: chrono::Utc::now().timestamp_millis(),
             reason: reason.to_string(),
             source_device_id: device_id.to_string(),
@@ -125,6 +134,11 @@ impl StarMapProofCheckpoint {
 
     pub fn with_event_chain_head(mut self, event_chain_head: &str) -> Self {
         self.event_chain_head = event_chain_head.to_string();
+        self
+    }
+
+    pub fn with_state_root(mut self, state_root: &str) -> Self {
+        self.state_root = state_root.to_string();
         self
     }
 
@@ -146,6 +160,7 @@ impl StarMapProofCheckpoint {
             position: self.position,
             event_chain_head: self.event_chain_head.clone(),
             state_sha256: self.state_sha256.clone(),
+            state_root: self.state_root.clone(),
             created_at_ms: self.created_at_ms,
             reason: self.reason.clone(),
             source_device_id: self.source_device_id.clone(),
@@ -582,6 +597,7 @@ fn checkpoint_matches_header(
         && checkpoint.history_complete == header.history_complete
         && !header.state_sha256.is_empty()
         && checkpoint.state_sha256 == header.state_sha256
+        && checkpoint.state_root == header.state_root
         && checkpoint.hash_matches();
     matches.then_some(checkpoint)
 }
