@@ -292,13 +292,16 @@ fn collect_rebased_anchor_paths(
 fn is_starmap_node_instance_path(path: &std::path::Path) -> bool {
     let components = path
         .components()
-        .map(|component| component.as_os_str().to_string_lossy())
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value.to_string_lossy()),
+            _ => None,
+        })
         .collect::<Vec<_>>();
-    components.len() == 6
+    components.len() == 5
         && components[0] == "starmaps"
         && components[1] != "library"
         && components[2] == "nodes"
-        && components[5].ends_with(".json")
+        && components[4].ends_with(".json")
 }
 
 /// 同步直接落盘画布实例后，本机派生的引用索引必须立即失效重建。

@@ -1073,7 +1073,7 @@ impl WriterCoreApi {
                     )),
                     Some(delta),
                 )?;
-                self.commit_contribution_batch(&mut copy_batch);
+                self.commit_contribution_batch(&mut copy_batch)?;
                 let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
                     .add_upsert(crate::starmap::library::node_definition_rel_path(
                         &asset.asset_id,
@@ -1154,7 +1154,7 @@ impl WriterCoreApi {
                         )?;
                     }
                 }
-                self.commit_contribution_batch(&mut copy_batch);
+                self.commit_contribution_batch(&mut copy_batch)?;
                 let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
                 for path in &result.change_paths {
                     change_set = change_set.add_upsert(path.clone());
