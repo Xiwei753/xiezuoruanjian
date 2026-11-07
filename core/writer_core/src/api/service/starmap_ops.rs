@@ -755,6 +755,37 @@ impl WriterCoreApi {
         serde_json::from_str(scope_json).map_err(WriterError::from)
     }
 
+    /// 素材库写入同样必须进入来源事务和 Workspace 变更链。库索引与派生
+    /// 引用索引的路径在修改前登记；对象文件由各操作显式加入 change set。
+    fn commit_library_transaction(
+        &self,
+        transaction: &mut crate::writing_stats::contribution_transaction::ContributionTransaction,
+        change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
+        message: &str,
+    ) -> ApiResult<()> {
+        transaction.commit()?;
+        if let Err(error) = self.record_workspace_change_set_history(change_set, message) {
+            log::warn!("{message}: record_workspace_change_set_history failed: {error}");
+        }
+        Ok(())
+    }
+
+    fn prepare_library_paths(
+        &self,
+        transaction: &mut crate::writing_stats::contribution_transaction::ContributionTransaction,
+        include_definitions: bool,
+    ) -> ApiResult<()> {
+        let mut paths = vec![
+            crate::starmap::library::library_index_abs_path(&self.app_data_root),
+            crate::starmap::library::reference_index_abs_path(&self.app_data_root),
+        ];
+        if include_definitions {
+            paths.push(crate::starmap::library::library_dir(&self.app_data_root).join("nodes"));
+        }
+        transaction.prepare_paths(&paths)?;
+        Ok(())
+    }
+
     pub fn list_starmap_library_json(&self, scope_json: &str) -> ApiResult<String> {
         let scope = Self::parse_library_scope(scope_json)?;
         let (entries, folders) = self
@@ -788,10 +819,19 @@ impl WriterCoreApi {
         let scope = Self::parse_library_scope(scope_json)?;
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmaps_contribution_transaction()?;
+        self.prepare_library_paths(&mut contribution_txn, false)?;
         let folder = self
             .core_write()
             .create_starmap_library_folder(&scope, parent_folder_id, name)
             .map_err(WriterError::from)?;
+        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(crate::starmap::library::library_index_rel_path());
+        self.commit_library_transaction(
+            &mut contribution_txn,
+            &change_set,
+            "create_starmap_library_folder",
+        )?;
         Self::json_string(&folder)
     }
 
@@ -804,10 +844,19 @@ impl WriterCoreApi {
         let scope = Self::parse_library_scope(scope_json)?;
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmaps_contribution_transaction()?;
+        self.prepare_library_paths(&mut contribution_txn, false)?;
         let entry = self
             .core_write()
             .move_starmap_library_entry(entry_id, &scope, parent_folder_id)
             .map_err(WriterError::from)?;
+        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(crate::starmap::library::library_index_rel_path());
+        self.commit_library_transaction(
+            &mut contribution_txn,
+            &change_set,
+            "move_starmap_library_entry",
+        )?;
         Self::json_string(&entry)
     }
 
@@ -821,10 +870,20 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let instance_id = format!("n_{}", uuid::Uuid::new_v4());
+        contribution_txn.prepare_paths(&[
+            self.app_data_root
+                .join(crate::starmap::package_storage::node_rel_path(
+                    starmap_id,
+                    &instance_id,
+                )),
+            crate::starmap::library::library_index_abs_path(&self.app_data_root),
+            crate::starmap::library::reference_index_abs_path(&self.app_data_root),
+        ])?;
         let position = crate::starmap::types::StarMapPoint { x, y };
         let result = self
             .core_write()
-            .add_starmap_node_reference(starmap_id, asset_id, position, None)
+            .add_starmap_node_reference(starmap_id, asset_id, position, None, Some(instance_id.clone()))
             .map_err(WriterError::from)?;
         let node_content = extract_node_search_body(&result.content, &result.tags);
         let project_id = get_starmap_project_id(self, starmap_id);
@@ -849,11 +908,27 @@ impl WriterCoreApi {
             starmap_id,
             crate::writing_stats::ContributionObjectType::StarMapNode,
             &result.id,
-            crate::writing_stats::ContributionOperation::Create,
+            crate::writing_stats::ContributionOperation::Link,
             None,
             after.as_ref(),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
+        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(crate::starmap::package_storage::node_rel_path(
+                starmap_id,
+                &result.id,
+            ))
+            .add_upsert(crate::starmap::package_storage::graph_meta_rel_path(
+                starmap_id,
+            ))
+            .add_upsert(crate::starmap::library::library_index_rel_path())
+            .add_upsert(crate::starmap::library::reference_index_rel_path());
+        if let Err(error) = self.record_workspace_change_set_history(
+            &change_set,
+            "add_starmap_node_reference",
+        ) {
+            log::warn!("add_starmap_node_reference history failed: {error}");
+        }
         Ok(result.into())
     }
 
@@ -867,12 +942,23 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_contribution_transaction(host_starmap_id)?;
+        let embed_instance_id =
+            crate::storage::journal::starmap_child_embed::new_embed_instance_id();
+        contribution_txn.prepare_paths(&[
+            self.app_data_root
+                .join(crate::starmap::package_storage::embed_rel_path(
+                    host_starmap_id,
+                    &embed_instance_id,
+                )),
+            crate::starmap::library::library_index_abs_path(&self.app_data_root),
+        ])?;
         let result = self
             .core_write()
             .add_starmap_reference(
                 host_starmap_id,
                 target_starmap_id,
                 crate::starmap::types::StarMapPoint { x, y },
+                Some(embed_instance_id),
             )
             .map_err(WriterError::from)?;
         let project_id = get_starmap_project_id(self, host_starmap_id);
@@ -901,6 +987,20 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         self.finish_starmap_contribution_transaction(host_starmap_id, &mut contribution_txn)?;
+        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(crate::starmap::package_storage::embed_rel_path(
+                host_starmap_id,
+                &result.instance_id,
+            ))
+            .add_upsert(crate::starmap::package_storage::graph_meta_rel_path(
+                host_starmap_id,
+            ))
+            .add_upsert(crate::starmap::library::library_index_rel_path());
+        if let Err(error) =
+            self.record_workspace_change_set_history(&change_set, "add_starmap_reference")
+        {
+            log::warn!("add_starmap_reference history failed: {error}");
+        }
         if let Err(error) = crate::storage::workspace_events::append_structure_event(
             &self.app_data_root,
             host_starmap_id,
@@ -922,10 +1022,34 @@ impl WriterCoreApi {
         let scope = Self::parse_library_scope(scope_json)?;
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmaps_contribution_transaction()?;
+        self.prepare_library_paths(&mut contribution_txn, true)?;
+        contribution_txn
+            .prepare_paths(&[self.app_data_root.join("starmaps/index.json")])?;
         let copied = self
             .core_write()
             .copy_starmap_library_asset(&target, &scope, title)
             .map_err(WriterError::from)?;
+        let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(std::path::PathBuf::from("starmaps/index.json"))
+            .add_upsert(crate::starmap::library::library_index_rel_path());
+        match copied.kind {
+            crate::starmap::types::StarMapAssetKind::Node => {
+                change_set = change_set.add_upsert(
+                    crate::starmap::library::node_definition_rel_path(&copied.asset_id),
+                );
+            }
+            crate::starmap::types::StarMapAssetKind::StarMap => {
+                change_set = change_set.add_upsert(std::path::PathBuf::from("starmaps").join(
+                    format!("{}.meta.json", copied.asset_id),
+                ));
+            }
+        }
+        self.commit_library_transaction(
+            &mut contribution_txn,
+            &change_set,
+            "copy_starmap_library_asset",
+        )?;
         Self::json_string(&copied)
     }
 
@@ -952,9 +1076,24 @@ impl WriterCoreApi {
         }
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmaps_contribution_transaction()?;
+        self.prepare_library_paths(&mut contribution_txn, false)?;
+        let definition_rel =
+            crate::starmap::library::node_definition_rel_path(&target.asset_id);
+        contribution_txn
+            .prepare_paths(&[self.app_data_root.join(&definition_rel)])?;
         self.core_write()
             .delete_starmap_library_asset(&target)
             .map_err(WriterError::from)?;
+        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_delete(definition_rel)
+            .add_upsert(crate::starmap::library::library_index_rel_path())
+            .add_upsert(crate::starmap::library::reference_index_rel_path());
+        self.commit_library_transaction(
+            &mut contribution_txn,
+            &change_set,
+            "delete_starmap_library_asset",
+        )?;
         Ok(true)
     }
 
@@ -1162,6 +1301,14 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        contribution_txn.prepare_paths(&[
+            crate::starmap::library::library_index_abs_path(&self.app_data_root),
+            crate::starmap::library::reference_index_abs_path(&self.app_data_root),
+            crate::starmap::library::node_definition_abs_path(
+                &self.app_data_root,
+                &node.id,
+            ),
+        ])?;
         let result = self
             .core_write()
             .add_starmap_node(
@@ -1199,6 +1346,23 @@ impl WriterCoreApi {
             after.as_ref(),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
+        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(crate::starmap::package_storage::node_rel_path(
+                starmap_id,
+                &result.id,
+            ))
+            .add_upsert(crate::starmap::package_storage::graph_meta_rel_path(
+                starmap_id,
+            ))
+            .add_upsert(crate::starmap::library::library_index_rel_path())
+            .add_upsert(crate::starmap::library::reference_index_rel_path())
+            .add_upsert(crate::starmap::library::node_definition_rel_path(
+                &result.id,
+            ));
+        if let Err(error) = self.record_workspace_change_set_history(&change_set, "add_starmap_node")
+        {
+            log::warn!("add_starmap_node history failed: {error}");
+        }
         Ok(result.into())
     }
 
@@ -1957,6 +2121,18 @@ impl WriterCoreApi {
         )?;
         let trajectory = patch.trajectory.clone();
         let shared_changed = node_patch_has_shared_fields(&patch);
+        let position_changed = patch.position.is_some();
+        let definition_asset = if shared_changed {
+            Some(
+                self.starmap_asset_bindings(starmap_id)?
+                    .into_iter()
+                    .find(|binding| binding.instance_id == node_id)
+                    .map(|binding| binding.asset_id)
+                    .unwrap_or_else(|| node_id.to_string()),
+            )
+        } else {
+            None
+        };
         let affected_instances = if shared_changed {
             self.shared_node_instances(starmap_id, node_id)
         } else {
@@ -1976,31 +2152,21 @@ impl WriterCoreApi {
             if before_graphs.contains_key(affected_starmap) {
                 continue;
             }
-            if let Some(graph) = self.read_unloaded_starmap_graph(affected_starmap) {
-                before_graphs.insert(affected_starmap.clone(), graph);
-            }
+            let graph = self.read_contribution_starmap_graph(affected_starmap)?;
+            before_graphs.insert(affected_starmap.clone(), graph);
         }
-        if shared_changed {
-            // 共享定义会写入所有实例的 node 文件；先登记备份，来源事务才能
-            // 在后续步骤失败时回滚未加载画布的派生写入。
-            let mut paths = Vec::new();
-            for (affected_starmap, affected_instance) in &affected_instances {
-                paths.push(
-                    crate::starmap::package_storage::starmap_pkg_dir(
-                        &self.app_data_root,
-                        affected_starmap,
-                    )
-                    .join("nodes")
-                    .join(crate::starmap::package_storage::bucket_for_id(
-                        affected_instance,
-                    ))
-                    .join(format!("{affected_instance}.json")),
-                );
-                paths.push(self.app_data_root.join(
-                    crate::starmap::package_storage::graph_meta_rel_path(affected_starmap),
-                ));
-            }
-            contribution_txn.prepare_paths(&paths)?;
+        if let Some(definition_asset) = definition_asset.as_deref() {
+            // 共享定义是唯一内容源；实例文件不因内容修改而重写。共享定义、
+            // 库归属索引和反向索引都会在 facade 更新阶段直接落盘，必须在
+            // 调用前登记，提交失败时才能一起恢复。
+            contribution_txn.prepare_paths(&[
+                crate::starmap::library::node_definition_abs_path(
+                    &self.app_data_root,
+                    definition_asset,
+                ),
+                crate::starmap::library::reference_index_abs_path(&self.app_data_root),
+                crate::starmap::library::library_index_abs_path(&self.app_data_root),
+            ])?;
         }
         let result = self
             .core_write()
@@ -2020,9 +2186,8 @@ impl WriterCoreApi {
             if after_graphs.contains_key(affected_starmap) {
                 continue;
             }
-            if let Some(graph) = self.get_starmap_graph_snapshot(affected_starmap) {
-                after_graphs.insert(affected_starmap.clone(), graph);
-            }
+            let graph = self.read_contribution_starmap_graph(affected_starmap)?;
+            after_graphs.insert(affected_starmap.clone(), graph);
         }
         let context = crate::writing_stats::current_mutation_context();
         let propagated_context = crate::writing_stats::MutationContext::system()
@@ -2030,14 +2195,19 @@ impl WriterCoreApi {
         let mut origin_recorded = false;
         for (affected_starmap, affected_instance) in &affected_instances {
             let Some(after_graph) = after_graphs.get(affected_starmap) else {
-                continue;
+                return Err(WriterError::Other(format!(
+                    "shared node update: missing updated graph for starmap {affected_starmap}"
+                )));
             };
             let Some(after_node) = after_graph
                 .nodes
                 .iter()
                 .find(|node| node.id == *affected_instance)
             else {
-                continue;
+                return Err(WriterError::Other(format!(
+                    "shared node update: instance {affected_instance} missing from starmap \
+                     {affected_starmap} after update"
+                )));
             };
             self.enqueue_starmap_node_search_update(affected_starmap, after_node);
             let before_graph = before_graphs.get(affected_starmap);
@@ -2084,6 +2254,28 @@ impl WriterCoreApi {
             )?;
         }
         self.finish_starmaps_contribution_transaction(&affected_starmaps, &mut contribution_txn)?;
+        let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
+        if position_changed {
+            change_set = change_set
+                .add_upsert(crate::starmap::package_storage::node_rel_path(
+                    starmap_id, node_id,
+                ))
+                .add_upsert(crate::starmap::package_storage::graph_meta_rel_path(
+                    starmap_id,
+                ));
+        }
+        if let Some(definition_asset) = definition_asset.as_deref() {
+            change_set = change_set
+                .add_upsert(crate::starmap::library::node_definition_rel_path(
+                    definition_asset,
+                ))
+                .add_upsert(crate::starmap::library::library_index_rel_path());
+        }
+        if let Err(error) =
+            self.record_workspace_change_set_history(&change_set, "update_starmap_node")
+        {
+            log::warn!("update_starmap_node history failed: {error}");
+        }
         Ok(result.into())
     }
 
@@ -2100,6 +2292,9 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        contribution_txn.prepare_paths(&[
+            crate::starmap::library::reference_index_abs_path(&self.app_data_root),
+        ])?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -2130,6 +2325,20 @@ impl WriterCoreApi {
             None,
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
+        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_delete(crate::starmap::package_storage::node_rel_path(
+                starmap_id,
+                node_id,
+            ))
+            .add_upsert(crate::starmap::package_storage::graph_meta_rel_path(
+                starmap_id,
+            ))
+            .add_upsert(crate::starmap::library::reference_index_rel_path());
+        if let Err(error) =
+            self.record_workspace_change_set_history(&change_set, "delete_starmap_node")
+        {
+            log::warn!("delete_starmap_node history failed: {error}");
+        }
         Ok(true)
     }
 
@@ -2781,19 +2990,26 @@ impl WriterCoreApi {
         }
     }
 
-    /// 读取画布当前图快照，但不把它装入 WriterCore 的长期 store 表。
-    /// 共享内容更新前用它保存其它画布的 before，避免预热改变 facade 的
-    /// 已加载集合与校验上下文。
-    fn read_unloaded_starmap_graph(
+    /// 读取受影响画布的贡献事件前后态：优先使用已加载 Store 的当前内存图，
+    /// 只有画布尚未加载时才用临时 Store 从磁盘只读重建，避免预热未加载画布。
+    /// 两种来源都必须按同一实例的真实状态读取，不能把磁盘旧图与内存新图混用。
+    fn read_contribution_starmap_graph(
         &self,
         starmap_id: &str,
-    ) -> Option<crate::starmap::types::StarMapGraph> {
+    ) -> ApiResult<crate::starmap::types::StarMapGraph> {
+        if let Some(graph) = self
+            .core_read()
+            .get_loaded_starmap_graph(starmap_id)
+            .map_err(WriterError::from)?
+        {
+            return Ok(graph);
+        }
         let mut store = crate::starmap::store::StarMapStore::new(&self.app_data_root, starmap_id);
-        store.ensure_fully_loaded().ok()?;
-        Some(store.to_starmap_graph())
+        store.ensure_fully_loaded().map_err(WriterError::from)?;
+        Ok(store.to_starmap_graph())
     }
 
-    /// 枚举共享节点素材在全部画布中的实例。
+    /// 枚举共享节点素材在全部画布中的实例；来源画布自身必须包含在内。
     fn shared_node_instances(&self, starmap_id: &str, node_id: &str) -> Vec<(String, String)> {
         let asset_id = crate::starmap::library::instance_asset_bindings_for_starmap(
             &self.app_data_root,

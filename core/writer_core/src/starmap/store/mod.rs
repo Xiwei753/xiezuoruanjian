@@ -153,10 +153,10 @@ impl StarMapStore {
             return;
         }
         self.node_assets_loaded = true;
-        let Ok(index) = crate::starmap::library::load_library_index(&self.app_data_root) else {
+        let Ok(index) = crate::starmap::library::load_reference_index(&self.app_data_root) else {
             return;
         };
-        for record in index.node_instances {
+        for record in index.nodes {
             if record.starmap_id == self.starmap_id {
                 self.node_assets
                     .insert(record.instance_id, record.target_node_id);
@@ -164,8 +164,8 @@ impl StarMapStore {
         }
     }
 
-    /// 把共享定义同步到当前画布的全部实例（只改共享字段，保留实例位置）。
-    /// 返回受影响的实例 ID。
+    /// 把共享定义同步到当前画布的内存实例（只改共享字段，保留位置）。
+    /// 不把画布文件标脏：画布只持久化实例，共享内容由定义文件承载。
     pub fn apply_shared_node_definition(
         &mut self,
         definition: &crate::starmap::types::StarMapNodeDefinition,
@@ -185,11 +185,7 @@ impl StarMapStore {
         for instance_id in &ids {
             if let Some(node) = self.nodes.get_mut(instance_id) {
                 definition.apply_to_node(node);
-                self.dirty_nodes.insert(instance_id.clone());
             }
-        }
-        if !ids.is_empty() {
-            self.dirty_graph_meta = true;
         }
         ids
     }

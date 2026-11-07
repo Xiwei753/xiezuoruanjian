@@ -14,7 +14,7 @@ use crate::starmap::semantic::{
     StarMapAnchor, StarMapNodeContent, StarMapPortal, StarMapProvenance,
 };
 
-pub const CURRENT_LIBRARY_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_LIBRARY_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,8 +131,6 @@ pub struct StarMapLibraryIndex {
     #[serde(default)]
     pub folders: Vec<StarMapLibraryFolder>,
     #[serde(default)]
-    pub node_instances: Vec<StarMapNodeInstance>,
-    #[serde(default)]
     pub updated_at: u64,
 }
 
@@ -142,7 +140,37 @@ impl Default for StarMapLibraryIndex {
             schema_version: CURRENT_LIBRARY_SCHEMA_VERSION,
             entries: Vec::new(),
             folders: Vec::new(),
-            node_instances: Vec::new(),
+            updated_at: 0,
+        }
+    }
+}
+
+/// 画布实例的反向引用索引项。只保存身份，不保存位置等画布事实。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapNodeReference {
+    pub target_node_id: String,
+    pub starmap_id: String,
+    pub instance_id: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapReferenceIndex {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub nodes: Vec<StarMapNodeReference>,
+    #[serde(default)]
+    pub updated_at: u64,
+}
+
+impl Default for StarMapReferenceIndex {
+    fn default() -> Self {
+        Self {
+            schema_version: CURRENT_LIBRARY_SCHEMA_VERSION,
+            nodes: Vec::new(),
             updated_at: 0,
         }
     }
@@ -202,6 +230,25 @@ impl StarMapNodeDefinition {
             provenance: node.provenance.clone(),
             created_at: node.created_at,
             updated_at: node.updated_at,
+        }
+    }
+
+    /// 用共享本体组装某个画布实例的完整展示节点。
+    pub fn instantiate(&self, instance_id: &str, position: StarMapPoint) -> super::StarMapNode {
+        super::StarMapNode {
+            id: instance_id.to_string(),
+            title: self.title.clone(),
+            kind: self.kind.clone(),
+            payload: self.payload.clone(),
+            tags: self.tags.clone(),
+            content: self.content.clone(),
+            anchors: self.anchors.clone(),
+            portal: self.portal.clone(),
+            position,
+            style: self.style.clone(),
+            provenance: self.provenance.clone(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
         }
     }
 

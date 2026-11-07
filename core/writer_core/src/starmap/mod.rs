@@ -139,7 +139,7 @@ pub(crate) fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
     Ok(idx)
 }
 
-fn save_index(app_data_root: &Path, idx: &StarMapIndexRecord) -> Result<()> {
+pub(crate) fn save_index(app_data_root: &Path, idx: &StarMapIndexRecord) -> Result<()> {
     let dir = starmaps_dir(app_data_root);
     fs::create_dir_all(&dir)?;
     let content = serde_json::to_string_pretty(idx)?;

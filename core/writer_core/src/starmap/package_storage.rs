@@ -131,15 +131,33 @@ fn link_path(dir: &Path, link_id: &str) -> PathBuf {
         .join(format!("{}.json", link_id))
 }
 
-pub fn save_node(app_data_root: &Path, starmap_id: &str, node: &StarMapNode) -> Result<PathBuf> {
+pub fn save_node_instance(
+    app_data_root: &Path,
+    starmap_id: &str,
+    instance: &StarMapNodeInstance,
+) -> Result<PathBuf> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
-    fs::create_dir_all(dir.join("nodes").join(bucket_for_id(&node.id)))?;
-    let json = serde_json::to_string_pretty(node)?;
-    atomic_write_string(&node_path(&dir, &node.id), &json)?;
+    fs::create_dir_all(dir.join("nodes").join(bucket_for_id(&instance.instance_id)))?;
+    let json = serde_json::to_string_pretty(instance)?;
+    atomic_write_string(&node_path(&dir, &instance.instance_id), &json)?;
     Ok(starmap_pkg_rel_dir(starmap_id)
         .join("nodes")
-        .join(bucket_for_id(&node.id))
-        .join(format!("{}.json", node.id)))
+        .join(bucket_for_id(&instance.instance_id))
+        .join(format!("{}.json", instance.instance_id)))
+}
+
+/// 兼容入口：画布文件只保存实例，目标本体默认为实例 ID。
+pub fn save_node(app_data_root: &Path, starmap_id: &str, node: &StarMapNode) -> Result<PathBuf> {
+    let instance = StarMapNodeInstance {
+        instance_id: node.id.clone(),
+        target_node_id: node.id.clone(),
+        position: node.position.clone(),
+        starmap_id: starmap_id.to_string(),
+        project_id: None,
+        created_at: node.created_at,
+        updated_at: node.updated_at,
+    };
+    save_node_instance(app_data_root, starmap_id, &instance)
 }
 
 /// 直接 unlink 的旧删除 API：生产代码不得调用。

@@ -68,6 +68,7 @@ const NEW_GRAPH_META_SCHEMA_VERSION: &str = "4";
 pub fn migrate_starmap_data(app_data_root: &Path) -> Result<()> {
     migrate_index(app_data_root)?;
     migrate_all_starmap_graphs(app_data_root)?;
+    crate::starmap::library::ensure_library_index(app_data_root)?;
     Ok(())
 }
 
@@ -331,7 +332,7 @@ fn rewrite_meta_to_current_shape(
 }
 
 /// 对所有星图执行对象存储迁移 schema "3" -> "4"。
-fn migrate_all_starmap_graphs(app_data_root: &Path) -> Result<()> {
+pub(crate) fn migrate_all_starmap_graphs(app_data_root: &Path) -> Result<()> {
     let starmaps_dir = app_data_root.join("starmaps");
     if !starmaps_dir.exists() {
         return Ok(());

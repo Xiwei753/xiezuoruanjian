@@ -58,6 +58,12 @@ pub(crate) fn classify_content_path(raw_path: &str) -> ContentClass {
         return ContentClass::LocalOnly;
     }
 
+    // 素材反向引用索引是可从画布实例重建的派生数据，不能进入同步，
+    // 否则每次拖动/新增引用都会制造无业务意义的跨设备冲突。
+    if path == "starmaps/library/references.json" {
+        return ContentClass::LocalOnly;
+    }
+
     // StarMap business objects: semantic merge for index/graph, LWW for object files.
     // 覆盖 starmaps/ 下所有 .json 文件（index.json、graph.json、meta.json、
     // 对象文件、recovery.json）。index.json 和 graph.json 在 compute_commit_plan

@@ -90,6 +90,7 @@ impl super::super::WriterCore {
         asset_id: &str,
         position: crate::starmap::types::StarMapPoint,
         title: Option<String>,
+        instance_id: Option<String>,
     ) -> Result<crate::starmap::types::StarMapNode> {
         let definition = crate::starmap::library::load_node_definition(
             &self.app_data_root,
@@ -99,7 +100,7 @@ impl super::super::WriterCore {
             crate::error::Error::Other(format!("node asset not found: {asset_id}"))
         })?;
         let now = crate::starmap::now_epoch();
-        let instance_id = format!("n_{}", uuid::Uuid::new_v4());
+        let instance_id = instance_id.unwrap_or_else(|| format!("n_{}", uuid::Uuid::new_v4()));
         let mut node = crate::starmap::types::StarMapNode {
             id: instance_id,
             title: title.unwrap_or(definition.title),
@@ -281,8 +282,10 @@ impl super::super::WriterCore {
             let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
             let asset_id = store.asset_id_for_node(node_id);
             let result = store.update_node(node_id, &patch)?;
-            store.enqueue_save(SaveQueueEntry::Node);
-            store.enqueue_save(SaveQueueEntry::GraphMeta);
+            if patch.position.is_some() {
+                store.enqueue_save(SaveQueueEntry::Node);
+                store.enqueue_save(SaveQueueEntry::GraphMeta);
+            }
             (asset_id, result)
         };
 
@@ -295,15 +298,8 @@ impl super::super::WriterCore {
             &result,
             &result.position,
         )?;
-        crate::starmap::library::update_instance_position(
-            &self.app_data_root,
-            starmap_id,
-            &result.id,
-            &result.position,
-        )?;
 
-        // 共享内容变更写回素材本体，并同步到所有已加载/未加载画布中的实例。
-        // 位置属于当前画布，不进入共享定义。
+        // 共享内容只写素材本体；已加载画布更新内存视图，画布文件只保存实例。
         if patch_has_shared_node_fields(&patch) {
             let definition = crate::starmap::types::StarMapNodeDefinition::from_node(
                 asset_id.clone(),
@@ -311,20 +307,9 @@ impl super::super::WriterCore {
             );
             crate::starmap::library::save_node_definition(&self.app_data_root, &definition)?;
 
-            let mut loaded_starmaps = std::collections::HashSet::new();
-            for (loaded_id, loaded_store) in stores.iter_mut() {
-                let affected = loaded_store.apply_shared_node_definition(&definition);
-                if !affected.is_empty() {
-                    loaded_starmaps.insert(loaded_id.clone());
-                    loaded_store.enqueue_save(SaveQueueEntry::Node);
-                    loaded_store.enqueue_save(SaveQueueEntry::GraphMeta);
-                }
+            for loaded_store in stores.values_mut() {
+                loaded_store.apply_shared_node_definition(&definition);
             }
-            crate::starmap::library::sync_definition_to_instance_files(
-                &self.app_data_root,
-                &definition,
-                &loaded_starmaps,
-            )?;
         }
 
         // Portal/Anchor 变更会改变路径解析结果，失效持久化索引。

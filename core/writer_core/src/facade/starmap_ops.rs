@@ -38,6 +38,25 @@ impl super::WriterCore {
         crate::starmap::get_starmap(&self.app_data_root, starmap_id)
     }
 
+    /// 只读取已加载 Store 的当前图快照，不创建或预热未加载的画布。
+    ///
+    /// 共享素材传播会直接修改已加载 Store 的内存视图；贡献事件必须以同一个
+    /// Store 的真实前后态生成，不能绕回磁盘读取尚未 flush 的旧图。
+    pub fn get_loaded_starmap_graph(
+        &self,
+        starmap_id: &str,
+    ) -> Result<Option<crate::starmap::types::StarMapGraph>> {
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(store) = stores.get_mut(starmap_id) else {
+            return Ok(None);
+        };
+        store.ensure_fully_loaded()?;
+        Ok(Some(store.to_starmap_graph()))
+    }
+
     pub fn create_starmap(
         &self,
         title: &str,

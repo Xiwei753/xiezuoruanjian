@@ -958,13 +958,6 @@ pub(crate) fn merge_starmap_library_index(
         |folder| folder.folder_id.as_str(),
         |folder| folder.updated_at,
     );
-    let node_instances = merge_library_records(
-        &base_index.node_instances,
-        &local_index.node_instances,
-        &incoming_index.node_instances,
-        |instance| instance.instance_id.as_str(),
-        |instance| instance.updated_at,
-    );
 
     // 文件夹删除后，仍保留的条目挂回根目录，避免产生悬空父目录。
     let folder_ids: HashSet<&str> = folders.iter().map(|f| f.folder_id.as_str()).collect();
@@ -985,7 +978,6 @@ pub(crate) fn merge_starmap_library_index(
             .max(incoming_index.schema_version),
         entries,
         folders,
-        node_instances,
         updated_at: local_index.updated_at.max(incoming_index.updated_at),
     };
     let merged_bytes = serde_json::to_vec_pretty(&merged)?;

@@ -103,11 +103,12 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 │  ├── index.json                  # 全局星图索引
 │  ├── <starmap_id>.meta.json      # 星图元数据
 │  ├── library/
-│  │  ├── index.json               # 全局/作品素材库目录、归属与画布实例索引
+│  │  ├── index.json               # 全局/作品素材库目录与归属
+│  │  ├── references.json          # 由画布实例扫描得到的节点反向引用索引（可重建）
 │  │  └── nodes/<bucket>/<asset_id>.json  # 共享节点本体定义
 │  └── <starmap_id>/
 │     ├── graph.json               # 星图元信息、成员 ID 与 package revision
-│     ├── nodes/<bucket>/<instance_id>.json  # 画布节点实例缓存（位置+本体快照）
+│     ├── nodes/<bucket>/<instance_id>.json  # 画布节点实例（本体 ID + 位置）
 │     ├── edges/<bucket>/<edge_id>.json
 │     ├── embeds/<bucket>/<instance_id>.json
 │     ├── links/<bucket>/<link_id>.json
@@ -121,9 +122,11 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 
 ### 素材库目录
 
-`starmaps/library/index.json` 保存素材库归属事实：`StarMapLibraryEntry`（素材本体属于全局库还是某个作品库、父文件夹）、`StarMapLibraryFolder` 和 `StarMapNodeInstance` 反向索引（`instance_id → target_node_id`、所属画布、位置与更新时间）。`starmaps/library/nodes/<bucket>/<asset_id>.json` 是共享节点本体定义，可编辑内容以这里为权威。
+`starmaps/library/index.json` 只保存素材库归属事实：`StarMapLibraryEntry`（素材本体属于全局库还是某个作品库、父文件夹）与 `StarMapLibraryFolder`。它不保存画布实例位置，也不作为节点反向引用的事实来源。`starmaps/library/nodes/<bucket>/<asset_id>.json` 是共享节点本体定义，可编辑内容以这里为权威。
 
-画布目录中的 `starmaps/<starmap_id>/nodes/<bucket>/<instance_id>.json` 仍然完整保存该实例的显示快照与 `position`，用于离线读取和单画布恢复；加载时若存在同名共享本体定义，以本体内容覆盖标题/正文/样式等共享字段并保留实例 ID 与位置。因此同一本体在多个作品、多个画布编辑时写回同一份 `library/nodes` 文件，单个画布移动只改自己的实例文件。星图本体不复制到素材库，库 entry 通过 `starmap_id` 指向原画布；从正文、搜索、超链接打开星图仍进入原画布。
+画布目录中的 `starmaps/<starmap_id>/nodes/<bucket>/<instance_id>.json` 只保存 `StarMapNodeInstance`：实例 ID、`target_node_id`（共享本体 ID）与 `position`。平台读取时先加载实例，再按本体 ID 读取一次共享定义并组装成显示用节点 DTO；同一本体在多个作品、多个画布编辑时只写同一份 `library/nodes` 文件，单个画布移动只改自己的实例文件，不扫描或改写其他画布。
+
+`starmaps/library/references.json` 是从全部画布实例文件扫描得到的派生反向索引（`target_node_id → starmap_id + instance_id + project_id`），用于展示和删除保护，可随时重建；它不由用户内容写入路径集中维护，也不保存坐标。星图本体不复制到素材库，库 entry 通过 `starmap_id` 指向原画布；从正文、搜索、超链接打开星图仍进入原画布。
 
 `starmaps/<starmap_id>/` 不再包含 `hyperlinks/`，星图对象也不再携带外部网页/URL 绑定。旧版本写入的 `hyperlinks/` 目录及 `hyperlinks` 成员记录在读取时由既有星图 schema 迁移清理并删除，内部 Link 原样保留在 `links/`。
 

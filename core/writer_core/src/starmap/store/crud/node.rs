@@ -74,8 +74,10 @@ impl StarMapStore {
         }
         node.updated_at = crate::starmap::now_epoch().max(node.updated_at.saturating_add(1));
         let updated = node.clone();
-        self.dirty_nodes.insert(node_id.to_string());
-        self.dirty_graph_meta = true;
+        if patch.position.is_some() {
+            self.dirty_nodes.insert(node_id.to_string());
+            self.dirty_graph_meta = true;
+        }
         Ok(updated)
     }
 

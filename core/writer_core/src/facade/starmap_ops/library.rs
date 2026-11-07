@@ -47,19 +47,16 @@ impl super::super::WriterCore {
         host_starmap_id: &str,
         target_starmap_id: &str,
         position: crate::starmap::types::StarMapPoint,
+        instance_id: Option<String>,
     ) -> Result<crate::starmap::types::StarMapEmbed> {
-        if host_starmap_id == target_starmap_id {
-            return Err(crate::error::Error::Other(
-                "cannot reference a starmap from itself".to_string(),
-            ));
-        }
         let meta = crate::starmap::get_starmap(&self.app_data_root, target_starmap_id)?;
         crate::starmap::library::ensure_starmap_asset(&self.app_data_root, &meta)?;
         let now = crate::starmap::now_epoch();
         let embed = crate::starmap::types::StarMapEmbed {
-            instance_id: crate::storage::journal::starmap_child_embed::new_embed_instance_id(),
+            instance_id: instance_id
+                .unwrap_or_else(crate::storage::journal::starmap_child_embed::new_embed_instance_id),
             target_starmap_id: target_starmap_id.to_string(),
-            label: Some(meta.title),
+            label: None,
             position,
             host_path: crate::starmap::types::StarMapTargetPath {
                 starmap_id: host_starmap_id.to_string(),
@@ -227,115 +224,450 @@ impl super::super::WriterCore {
         title: Option<String>,
         scope: &crate::starmap::types::StarMapAssetScope,
     ) -> Result<crate::starmap::StarMapMeta> {
+        let mut created_starmaps = Vec::new();
+        let mut created_nodes = Vec::new();
+        let result = self.copy_starmap_canvas_inner(
+            source_starmap_id,
+            title,
+            scope,
+            &mut created_starmaps,
+            &mut created_nodes,
+        );
+        if result.is_err() {
+            self.cleanup_failed_starmap_copy(&created_starmaps, &created_nodes);
+        }
+        result
+    }
+
+    fn copy_starmap_canvas_inner(
+        &self,
+        source_starmap_id: &str,
+        title: Option<String>,
+        scope: &crate::starmap::types::StarMapAssetScope,
+        created_starmaps: &mut Vec<String>,
+        created_nodes: &mut Vec<String>,
+    ) -> Result<crate::starmap::StarMapMeta> {
         use crate::starmap::semantic::StarMapTargetDetail;
+        use crate::starmap::types::StarMapTargetPath;
+        use std::collections::{HashMap, VecDeque};
 
         let source_meta = crate::starmap::get_starmap(&self.app_data_root, source_starmap_id)?;
-        let graph = self.get_starmap_graph(source_starmap_id)?;
-        let new_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
-        let new_title = title.unwrap_or_else(|| format!("{} 副本", source_meta.title));
-        let mut meta = crate::starmap::create_starmap_with_id(
-            &self.app_data_root,
-            &new_starmap_id,
-            &new_title,
-            &source_meta.description,
-            Some(source_meta.accent_color.as_str()),
-        )?;
-        if let Some(project_id) = scope.project_id() {
-            crate::starmap::bind_starmap_to_project(
+        let new_root_title = title.unwrap_or_else(|| format!("{} 副本", source_meta.title));
+
+        // 先完整遍历源画布可达的全部子画布。复制必须覆盖所有内部引用，
+        // 否则子图仍指向原对象，后续编辑会穿透到副本。
+        let mut source_graphs = HashMap::new();
+        let mut source_metas = HashMap::new();
+        let mut order = Vec::new();
+        let mut queue = VecDeque::from([source_starmap_id.to_string()]);
+        while let Some(starmap_id) = queue.pop_front() {
+            if source_graphs.contains_key(&starmap_id) {
+                continue;
+            }
+            let meta = crate::starmap::get_starmap(&self.app_data_root, &starmap_id)?;
+            let graph = self.get_starmap_graph(&starmap_id)?;
+            for embed in &graph.embeds {
+                if !source_graphs.contains_key(&embed.target_starmap_id) {
+                    queue.push_back(embed.target_starmap_id.clone());
+                }
+            }
+            source_metas.insert(starmap_id.clone(), meta);
+            source_graphs.insert(starmap_id.clone(), graph);
+            order.push(starmap_id);
+        }
+
+        let mut starmap_map = HashMap::new();
+        for starmap_id in &order {
+            let source = source_metas
+                .get(starmap_id)
+                .expect("source meta collected with graph");
+            let new_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
+            let is_root = starmap_id == source_starmap_id;
+            let new_title = if is_root {
+                new_root_title.clone()
+            } else {
+                source.title.clone()
+            };
+            let mut meta = crate::starmap::create_starmap_with_id(
                 &self.app_data_root,
                 &new_starmap_id,
-                project_id,
+                &new_title,
+                &source.description,
+                Some(source.accent_color.as_str()),
             )?;
-            meta.project_id = Some(project_id.to_string());
-        }
-
-        let mut node_map = std::collections::HashMap::new();
-        for node in &graph.nodes {
-            let new_instance_id = format!("n_{}", uuid::Uuid::new_v4());
-            let mut copied = node.clone();
-            copied.id = new_instance_id.clone();
-            copied.created_at = crate::starmap::now_epoch();
-            copied.updated_at = copied.created_at;
-            node_map.insert(node.id.clone(), new_instance_id.clone());
-            self.add_starmap_node(
-                &new_starmap_id,
-                copied,
-                node.position.x,
-                node.position.y,
-            )?;
-        }
-
-        let remap_path = |path: &mut crate::starmap::types::StarMapTargetPath| {
-            if path.starmap_id == source_starmap_id {
-                path.starmap_id = new_starmap_id.clone();
+            created_starmaps.push(new_starmap_id.clone());
+            let project_id = if is_root {
+                scope.project_id()
+            } else {
+                source.project_id.as_deref()
+            };
+            if let Some(project_id) = project_id {
+                crate::starmap::bind_starmap_to_project(
+                    &self.app_data_root,
+                    &new_starmap_id,
+                    project_id,
+                )?;
+                meta.project_id = Some(project_id.to_string());
             }
-            // 内部嵌入的实例 ID 在复制时整体重建；指向旧实例的路径在复制
-            // 画布中不再可达，保留旧 ID 会制造悬空引用，因此清空该段。
-            path.segments.retain(|segment| {
-                !matches!(
-                    segment,
-                    crate::starmap::types::StarMapPathSegment::EnterEmbed { .. }
-                )
-            });
-            match &mut path.target {
-                StarMapTargetDetail::Node { node_id } => {
-                    if let Some(mapped) = node_map.get(node_id) {
-                        *node_id = mapped.clone();
-                    }
+            starmap_map.insert(starmap_id.clone(), new_starmap_id);
+        }
+
+        let mut node_maps: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let mut embed_maps: HashMap<String, HashMap<String, String>> = HashMap::new();
+        for (starmap_id, graph) in &source_graphs {
+            let nodes = graph
+                .nodes
+                .iter()
+                .map(|node| {
+                    (
+                        node.id.clone(),
+                        format!("n_{}", uuid::Uuid::new_v4()),
+                    )
+                })
+                .collect::<HashMap<_, _>>();
+            let embeds = graph
+                .embeds
+                .iter()
+                .map(|embed| {
+                    (
+                        embed.instance_id.clone(),
+                        crate::storage::journal::starmap_child_embed::new_embed_instance_id(),
+                    )
+                })
+                .collect::<HashMap<_, _>>();
+            created_nodes.extend(nodes.values().cloned());
+            node_maps.insert(starmap_id.clone(), nodes);
+            embed_maps.insert(starmap_id.clone(), embeds);
+        }
+
+        // 节点先不带 portal 写入，确保所有画布所有实例都已存在；portal 在
+        // 第二轮统一重映射，避免环形/前向 portal 因目标实例尚未创建而失败。
+        for starmap_id in &order {
+            let new_starmap_id = starmap_map
+                .get(starmap_id)
+                .expect("copy map covers collected starmaps")
+                .clone();
+            let graph = source_graphs
+                .get(starmap_id)
+                .expect("graph collected with starmap");
+            let nodes = node_maps
+                .get(starmap_id)
+                .expect("node map built for each copied starmap");
+            for node in &graph.nodes {
+                let mut copied = node.clone();
+                copied.id = nodes
+                    .get(&node.id)
+                    .expect("node id assigned")
+                    .clone();
+                copied.portal = None;
+                copied.created_at = crate::starmap::now_epoch();
+                copied.updated_at = copied.created_at;
+                self.add_starmap_node(
+                    &new_starmap_id,
+                    copied,
+                    node.position.x,
+                    node.position.y,
+                )?;
+            }
+        }
+
+        for starmap_id in &order {
+            let new_starmap_id = starmap_map
+                .get(starmap_id)
+                .expect("copy map covers collected starmaps")
+                .clone();
+            let graph = source_graphs
+                .get(starmap_id)
+                .expect("graph collected with starmap");
+            let nodes = node_maps
+                .get(starmap_id)
+                .expect("node map built for each copied starmap");
+            for node in &graph.nodes {
+                let Some(mut portal) = node.portal.clone() else {
+                    continue;
+                };
+                let had_target = portal.destination_target.is_some();
+                let mut path = StarMapTargetPath {
+                    starmap_id: portal.destination_starmap_id.clone(),
+                    segments: Vec::new(),
+                    target: portal
+                        .destination_target
+                        .clone()
+                        .unwrap_or(StarMapTargetDetail::Starmap),
+                };
+                remap_copy_path(
+                    &mut path,
+                    &starmap_map,
+                    &node_maps,
+                    &embed_maps,
+                    &source_graphs,
+                )?;
+                portal.destination_starmap_id = path.starmap_id;
+                portal.destination_target = if had_target {
+                    Some(path.target)
+                } else {
+                    None
+                };
+                let patch = crate::starmap::types::StarMapNodePatch {
+                    title: None,
+                    kind: None,
+                    payload: None,
+                    tags: None,
+                    content: None,
+                    anchors: None,
+                    portal: Some(Some(portal)),
+                    position: None,
+                    style: None,
+                    provenance: None,
+                };
+                self.update_starmap_node(
+                    &new_starmap_id,
+                    nodes.get(&node.id).expect("node id assigned"),
+                    patch,
+                )?;
+            }
+        }
+
+        // 嵌入实例的 ID 也必须重建，路径中的 EnterEmbed 才能指向副本内部。
+        for starmap_id in &order {
+            let new_starmap_id = starmap_map
+                .get(starmap_id)
+                .expect("copy map covers collected starmaps")
+                .clone();
+            let graph = source_graphs
+                .get(starmap_id)
+                .expect("graph collected with starmap");
+            let embeds = embed_maps
+                .get(starmap_id)
+                .expect("embed map built for each copied starmap");
+            for embed in &graph.embeds {
+                let mut copied = embed.clone();
+                copied.instance_id = embeds
+                    .get(&embed.instance_id)
+                    .expect("embed id assigned")
+                    .clone();
+                if let Some(mapped) = starmap_map.get(&embed.target_starmap_id) {
+                    copied.target_starmap_id = mapped.clone();
                 }
-                StarMapTargetDetail::Anchor { node_id, .. } => {
-                    if let Some(mapped) = node_map.get(node_id) {
-                        *node_id = mapped.clone();
-                    }
-                }
-                _ => {}
-            }
-        };
-
-        for edge in graph.edges {
-            let mut copied = edge.clone();
-            copied.id = format!("edge_{}", uuid::Uuid::new_v4());
-            copied.created_at = crate::starmap::now_epoch();
-            copied.updated_at = copied.created_at;
-            remap_path(&mut copied.from);
-            remap_path(&mut copied.to);
-            if let Err(error) = self.add_starmap_edge(&new_starmap_id, copied) {
-                log::warn!("copy_starmap: skip edge {}: {error}", edge.id);
+                remap_copy_path(
+                    &mut copied.host_path,
+                    &starmap_map,
+                    &node_maps,
+                    &embed_maps,
+                    &source_graphs,
+                )?;
+                copied.created_at = crate::starmap::now_epoch();
+                copied.updated_at = copied.created_at;
+                self.add_starmap_embed(&new_starmap_id, copied)?;
             }
         }
 
-        for link in graph.links {
-            let mut copied = link.clone();
-            copied.link_id = format!("link_{}", uuid::Uuid::new_v4());
-            copied.created_at = crate::starmap::now_epoch();
-            copied.updated_at = copied.created_at;
-            remap_path(&mut copied.source);
-            remap_path(&mut copied.target);
-            if let Err(error) = self.add_starmap_link(&new_starmap_id, copied) {
-                log::warn!("copy_starmap: skip link {}: {error}", link.link_id);
+        for starmap_id in &order {
+            let new_starmap_id = starmap_map
+                .get(starmap_id)
+                .expect("copy map covers collected starmaps")
+                .clone();
+            let graph = source_graphs
+                .get(starmap_id)
+                .expect("graph collected with starmap");
+            for edge in &graph.edges {
+                let mut copied = edge.clone();
+                copied.id = format!("edge_{}", uuid::Uuid::new_v4());
+                remap_copy_path(
+                    &mut copied.from,
+                    &starmap_map,
+                    &node_maps,
+                    &embed_maps,
+                    &source_graphs,
+                )?;
+                remap_copy_path(
+                    &mut copied.to,
+                    &starmap_map,
+                    &node_maps,
+                    &embed_maps,
+                    &source_graphs,
+                )?;
+                copied.created_at = crate::starmap::now_epoch();
+                copied.updated_at = copied.created_at;
+                self.add_starmap_edge(&new_starmap_id, copied)?;
             }
         }
 
-        for embed in graph.embeds {
-            let mut copied = embed.clone();
-            copied.instance_id =
-                crate::storage::journal::starmap_child_embed::new_embed_instance_id();
-            copied.created_at = crate::starmap::now_epoch();
-            copied.updated_at = copied.created_at;
-            remap_path(&mut copied.host_path);
-            if let Err(error) = self.add_starmap_embed(&new_starmap_id, copied) {
-                log::warn!("copy_starmap: skip embed {}: {error}", embed.instance_id);
+        for starmap_id in &order {
+            let new_starmap_id = starmap_map
+                .get(starmap_id)
+                .expect("copy map covers collected starmaps")
+                .clone();
+            let graph = source_graphs
+                .get(starmap_id)
+                .expect("graph collected with starmap");
+            for link in &graph.links {
+                let mut copied = link.clone();
+                copied.link_id = format!("link_{}", uuid::Uuid::new_v4());
+                remap_copy_path(
+                    &mut copied.source,
+                    &starmap_map,
+                    &node_maps,
+                    &embed_maps,
+                    &source_graphs,
+                )?;
+                remap_copy_path(
+                    &mut copied.target,
+                    &starmap_map,
+                    &node_maps,
+                    &embed_maps,
+                    &source_graphs,
+                )?;
+                copied.created_at = crate::starmap::now_epoch();
+                copied.updated_at = copied.created_at;
+                self.add_starmap_link(&new_starmap_id, copied)?;
             }
         }
 
+        let new_root_id = starmap_map
+            .get(source_starmap_id)
+            .expect("root starmap copied")
+            .clone();
+        let meta = crate::starmap::get_starmap(&self.app_data_root, &new_root_id)?;
         crate::starmap::library::ensure_starmap_asset(&self.app_data_root, &meta)?;
         crate::starmap::library::assign_entry_scope(
             &self.app_data_root,
-            crate::starmap::types::StarMapAssetRef::starmap(new_starmap_id.clone()),
+            crate::starmap::types::StarMapAssetRef::starmap(new_root_id.clone()),
             scope,
             None,
         )?;
-        self.flush_starmap_store(&new_starmap_id)?;
+        for starmap_id in created_starmaps.iter() {
+            self.flush_starmap_store(starmap_id)?;
+        }
         Ok(meta)
     }
+
+    fn cleanup_failed_starmap_copy(
+        &self,
+        starmap_ids: &[String],
+        node_ids: &[String],
+    ) {
+        for node_id in node_ids {
+            let _ = crate::starmap::library::delete_node_definition(
+                &self.app_data_root,
+                node_id,
+            );
+            let _ = crate::starmap::library::remove_entries_for_asset(
+                &self.app_data_root,
+                &crate::starmap::types::StarMapAssetRef::node(node_id.clone()),
+            );
+        }
+        for starmap_id in starmap_ids.iter().rev() {
+            let _ = self.flush_starmap_store(starmap_id);
+            self.remove_starmap_store(starmap_id);
+            let _ = crate::starmap::library::remove_starmap_instance_records(
+                &self.app_data_root,
+                starmap_id,
+            );
+            let _ = std::fs::remove_dir_all(
+                crate::starmap::package_storage::starmap_pkg_dir(
+                    &self.app_data_root,
+                    starmap_id,
+                ),
+            );
+            let _ = std::fs::remove_file(
+                self.app_data_root
+                    .join("starmaps")
+                    .join(format!("{starmap_id}.meta.json")),
+            );
+            let _ = crate::starmap::library::remove_entries_for_asset(
+                &self.app_data_root,
+                &crate::starmap::types::StarMapAssetRef::starmap(starmap_id.clone()),
+            );
+        }
+        if let Ok(mut index) = crate::starmap::load_index(&self.app_data_root) {
+            index.starmap_ids.retain(|id| !starmap_ids.contains(id));
+            index.root_starmap_ids.retain(|id| !starmap_ids.contains(id));
+            index
+                .main_starmap_by_project
+                .retain(|_, id| !starmap_ids.contains(id));
+            index.updated_at = crate::starmap::now_epoch();
+            let _ = crate::starmap::save_index(&self.app_data_root, &index);
+        }
+    }
+}
+
+fn remap_copy_path(
+    path: &mut crate::starmap::types::StarMapTargetPath,
+    starmap_map: &std::collections::HashMap<String, String>,
+    node_maps: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    embed_maps: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    source_graphs: &std::collections::HashMap<String, crate::starmap::types::StarMapGraph>,
+) -> Result<()> {
+    let source_start = path.starmap_id.clone();
+    let Some(new_start) = starmap_map.get(&source_start) else {
+        // 指向副本外部的路径整体保持不变，外部宿主仍引用原对象。
+        return Ok(());
+    };
+    path.starmap_id = new_start.clone();
+    let mut current_source = source_start;
+    for segment in &mut path.segments {
+        let Some(graph) = source_graphs.get(&current_source) else {
+            // 已进入外部画布，后续段不属于本次复制，保持原样。
+            return Ok(());
+        };
+        match segment {
+            crate::starmap::types::StarMapPathSegment::EnterEmbed { instance_id } => {
+                let new_instance = embed_maps
+                    .get(&current_source)
+                    .and_then(|map| map.get(instance_id))
+                    .cloned()
+                    .ok_or_else(|| {
+                        crate::error::Error::Other(format!(
+                            "copy starmap: missing embed remap {current_source}/{instance_id}"
+                        ))
+                    })?;
+                let target = graph
+                    .embeds
+                    .iter()
+                    .find(|embed| &embed.instance_id == instance_id)
+                    .map(|embed| embed.target_starmap_id.clone())
+                    .ok_or_else(|| {
+                        crate::error::Error::Other(format!(
+                            "copy starmap: missing embed {current_source}/{instance_id}"
+                        ))
+                    })?;
+                *instance_id = new_instance;
+                current_source = target;
+            }
+            crate::starmap::types::StarMapPathSegment::EnterPortal { node_id } => {
+                if let Some(map) = node_maps.get(&current_source) {
+                    *node_id = map.get(node_id).cloned().ok_or_else(|| {
+                        crate::error::Error::Other(format!(
+                            "copy starmap: missing portal node remap {current_source}/{node_id}"
+                        ))
+                    })?;
+                }
+            }
+        }
+    }
+    remap_copy_target(&mut path.target, &current_source, node_maps)
+}
+
+fn remap_copy_target(
+    target: &mut crate::starmap::semantic::StarMapTargetDetail,
+    source_starmap_id: &str,
+    node_maps: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+) -> Result<()> {
+    use crate::starmap::semantic::StarMapTargetDetail;
+    match target {
+        StarMapTargetDetail::Node { node_id }
+        | StarMapTargetDetail::Anchor { node_id, .. } => {
+            if let Some(map) = node_maps.get(source_starmap_id) {
+                *node_id = map.get(node_id).cloned().ok_or_else(|| {
+                    crate::error::Error::Other(format!(
+                        "copy starmap: missing target node remap {source_starmap_id}/{node_id}"
+                    ))
+                })?;
+            }
+        }
+        StarMapTargetDetail::Starmap => {}
+        _ => {}
+    }
+    Ok(())
 }

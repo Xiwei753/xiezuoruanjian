@@ -1,8 +1,9 @@
-//! 全局/作品素材库目录与共享节点头。
+//! 全局/作品素材库目录、共享节点头与画布实例反向索引。
 //!
-//! 目录只保存“归属与分类”，素材本体按稳定 `asset_id` 存放：
-//! `starmaps/library/index.json` 与
-//! `starmaps/library/nodes/<bucket>/<asset_id>.json`。
+//! - `starmaps/library/index.json` 只保存归属/分类（entries、folders）。
+//! - `starmaps/library/nodes/<bucket>/<asset_id>.json` 保存唯一可写内容本体。
+//! - `starmaps/library/references.json` 是可重建的派生反向索引，不保存位置。
+//! - 画布节点文件只保存 `StarMapNodeInstance`，位置属于各自画布。
 
 use std::collections::HashSet;
 use std::fs;
@@ -22,6 +23,16 @@ pub(crate) fn library_index_rel_path() -> PathBuf {
 
 pub(crate) fn library_index_abs_path(app_data_root: &Path) -> PathBuf {
     app_data_root.join(library_index_rel_path())
+}
+
+pub(crate) fn reference_index_rel_path() -> PathBuf {
+    PathBuf::from("starmaps")
+        .join("library")
+        .join("references.json")
+}
+
+pub(crate) fn reference_index_abs_path(app_data_root: &Path) -> PathBuf {
+    app_data_root.join(reference_index_rel_path())
 }
 
 pub(crate) fn node_definition_rel_path(asset_id: &str) -> PathBuf {
@@ -60,37 +71,101 @@ pub fn save_library_index(app_data_root: &Path, index: &StarMapLibraryIndex) -> 
     atomic_write_string(&library_index_abs_path(app_data_root), &content)
 }
 
-/// 确保库索引存在。首次打开旧数据时把已有节点/星图登记为素材本体。
+pub fn load_reference_index(app_data_root: &Path) -> Result<StarMapReferenceIndex> {
+    let path = reference_index_abs_path(app_data_root);
+    if !path.exists() {
+        return Ok(StarMapReferenceIndex::default());
+    }
+    let content = fs::read_to_string(&path)?;
+    let index: StarMapReferenceIndex = serde_json::from_str(&content)?;
+    if index.schema_version != CURRENT_LIBRARY_SCHEMA_VERSION {
+        return Err(Error::UnsupportedVersion {
+            version: index.schema_version.to_string(),
+        });
+    }
+    Ok(index)
+}
+
+pub fn save_reference_index(
+    app_data_root: &Path,
+    index: &StarMapReferenceIndex,
+) -> Result<()> {
+    fs::create_dir_all(library_dir(app_data_root))?;
+    let mut index = index.clone();
+    index.schema_version = CURRENT_LIBRARY_SCHEMA_VERSION;
+    index.updated_at = crate::starmap::now_epoch();
+    let content = serde_json::to_string_pretty(&index)?;
+    atomic_write_string(&reference_index_abs_path(app_data_root), &content)
+}
+
+/// 确保库索引存在并完成旧数据拆分；反向索引缺失时从画布实例文件重建。
 pub fn ensure_library_index(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
     let path = library_index_abs_path(app_data_root);
     if path.exists() {
-        let index = load_library_index(app_data_root)?;
-        return Ok(index);
+        let content = fs::read_to_string(&path)?;
+        let value: serde_json::Value = serde_json::from_str(&content)?;
+        let version = value
+            .get("schemaVersion")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+        if version == CURRENT_LIBRARY_SCHEMA_VERSION {
+            let index: StarMapLibraryIndex = serde_json::from_value(value)?;
+            if !reference_index_abs_path(app_data_root).exists() {
+                rebuild_reference_index(app_data_root)?;
+            }
+            return Ok(index);
+        }
     }
     migrate_library(app_data_root)
 }
 
-/// 旧数据迁移：每个旧节点的 `id` 直接成为共享本体 ID，画布实例保留原名。
+/// 旧数据迁移：每个旧节点的 `id` 成为共享本体 ID，画布文件改写为实例文件。
 ///
-/// 迁移只写库索引、共享定义和实例映射，不改 graph.json；节点缓存文件仍是
-/// 画布实例的完整读缓存，读取时以共享定义覆盖内容字段。
+/// 只执行一次；保留已有库目录归属/folder 和旧版 `nodeInstances` 映射。
 pub fn migrate_library(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
+    // 先把旧图对象存储迁移到当前 schema，再拆分本体/实例；否则旧的完整
+    // 节点文件会先被改写成实例文件，导致图迁移缺少 position 源数据。
+    crate::starmap::migration::migrate_all_starmap_graphs(app_data_root)?;
     let starmaps_dir = app_data_root.join("starmaps");
     if !starmaps_dir.exists() {
         let index = StarMapLibraryIndex::default();
         save_library_index(app_data_root, &index)?;
+        save_reference_index(app_data_root, &StarMapReferenceIndex::default())?;
         return Ok(index);
     }
 
     let now = crate::starmap::now_epoch();
-    let mut index = StarMapLibraryIndex {
-        schema_version: CURRENT_LIBRARY_SCHEMA_VERSION,
-        entries: Vec::new(),
-        folders: Vec::new(),
-        node_instances: Vec::new(),
-        updated_at: now,
-    };
+    let mut index = StarMapLibraryIndex::default();
+    index.updated_at = now;
+    let mut refs = StarMapReferenceIndex::default();
+    refs.updated_at = now;
+
+    let mut legacy_instances: Vec<StarMapNodeInstance> = Vec::new();
     let mut seen_assets = HashSet::new();
+    let mut seen_folders = HashSet::new();
+    let mut seen_entries = HashSet::new();
+
+    let index_path = library_index_abs_path(app_data_root);
+    if index_path.exists() {
+        let content = fs::read_to_string(&index_path)?;
+        let value: serde_json::Value = serde_json::from_str(&content)?;
+        if let Ok(legacy) = serde_json::from_value::<StarMapLibraryIndex>(value.clone()) {
+            for folder in legacy.folders {
+                if seen_folders.insert(folder.folder_id.clone()) {
+                    index.folders.push(folder);
+                }
+            }
+            for entry in legacy.entries {
+                if seen_entries.insert(entry.entry_id.clone()) {
+                    seen_assets.insert(asset_key(&entry.target));
+                    index.entries.push(entry);
+                }
+            }
+        }
+        if let Some(instances) = value.get("nodeInstances") {
+            legacy_instances = serde_json::from_value(instances.clone()).unwrap_or_default();
+        }
+    }
 
     let mut starmap_ids = Vec::new();
     for entry in fs::read_dir(&starmaps_dir)? {
@@ -120,13 +195,13 @@ pub fn migrate_library(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
             continue;
         };
         let scope = StarMapAssetScope::from_project_id(meta.project_id.as_deref());
-
-        if seen_assets.insert(format!("starmap:{starmap_id}")) {
+        let target = StarMapAssetRef::starmap(starmap_id.clone());
+        if seen_assets.insert(asset_key(&target)) {
             index.entries.push(StarMapLibraryEntry {
                 entry_id: new_entry_id(),
                 parent_folder_id: None,
                 scope: scope.clone(),
-                target: StarMapAssetRef::starmap(starmap_id.clone()),
+                target,
                 created_at: meta.created_at,
                 updated_at: now,
             });
@@ -139,40 +214,95 @@ pub fn migrate_library(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
             let Ok(content) = fs::read_to_string(&node_path) else {
                 continue;
             };
-            let Ok(node) = serde_json::from_str::<StarMapNode>(&content) else {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
                 continue;
             };
-            let asset_id = node.id.clone();
-            let definition =
-                StarMapNodeDefinition::from_node(asset_id.clone(), &node);
-            let definition_path = node_definition_abs_path(app_data_root, &asset_id);
-            if !definition_path.exists() {
-                save_node_definition(app_data_root, &definition)?;
-            }
-            if seen_assets.insert(format!("node:{asset_id}")) {
+            let legacy_instance = legacy_instances.iter().find(|record| {
+                record.starmap_id == *starmap_id
+                    && node_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|id| id == record.instance_id)
+                        .unwrap_or(false)
+            });
+
+            let (instance, definition) = if value.get("instanceId").is_some() {
+                let Ok(instance) = serde_json::from_value::<StarMapNodeInstance>(value) else {
+                    continue;
+                };
+                let definition = load_node_definition(app_data_root, &instance.target_node_id)?;
+                let Some(definition) = definition else {
+                    continue;
+                };
+                (instance, definition)
+            } else {
+                let Ok(node) = serde_json::from_value::<StarMapNode>(value) else {
+                    continue;
+                };
+                let asset_id = legacy_instance
+                    .map(|record| record.target_node_id.clone())
+                    .unwrap_or_else(|| node.id.clone());
+                let definition =
+                    StarMapNodeDefinition::from_node(asset_id.clone(), &node);
+                let instance = StarMapNodeInstance {
+                    instance_id: node.id.clone(),
+                    target_node_id: asset_id,
+                    position: node.position.clone(),
+                    starmap_id: starmap_id.clone(),
+                    project_id: meta.project_id.clone(),
+                    created_at: node.created_at,
+                    updated_at: node.updated_at,
+                };
+                if !node_definition_abs_path(app_data_root, &definition.asset_id).exists() {
+                    save_node_definition(app_data_root, &definition)?;
+                }
+                crate::starmap::package_storage::save_node_instance(
+                    app_data_root,
+                    starmap_id,
+                    &instance,
+                )?;
+                (instance, definition)
+            };
+
+            let target = StarMapAssetRef::node(instance.target_node_id.clone());
+            if seen_assets.insert(asset_key(&target)) {
                 index.entries.push(StarMapLibraryEntry {
                     entry_id: new_entry_id(),
                     parent_folder_id: None,
                     scope: scope.clone(),
-                    target: StarMapAssetRef::node(asset_id.clone()),
-                    created_at: node.created_at,
+                    target,
+                    created_at: definition.created_at,
                     updated_at: now,
                 });
             }
-            index.node_instances.push(StarMapNodeInstance {
-                instance_id: node.id.clone(),
-                target_node_id: asset_id,
-                position: node.position.clone(),
-                starmap_id: starmap_id.clone(),
-                project_id: meta.project_id.clone(),
-                created_at: node.created_at,
-                updated_at: node.updated_at,
-            });
+            push_reference(&mut refs, &instance);
         }
     }
 
     save_library_index(app_data_root, &index)?;
+    save_reference_index(app_data_root, &refs)?;
     Ok(index)
+}
+
+fn asset_key(target: &StarMapAssetRef) -> String {
+    match target.kind {
+        StarMapAssetKind::Node => format!("node:{}", target.asset_id),
+        StarMapAssetKind::StarMap => format!("starmap:{}", target.asset_id),
+    }
+}
+
+fn push_reference(index: &mut StarMapReferenceIndex, instance: &StarMapNodeInstance) {
+    if index.nodes.iter().any(|record| {
+        record.starmap_id == instance.starmap_id && record.instance_id == instance.instance_id
+    }) {
+        return;
+    }
+    index.nodes.push(StarMapNodeReference {
+        target_node_id: instance.target_node_id.clone(),
+        starmap_id: instance.starmap_id.clone(),
+        instance_id: instance.instance_id.clone(),
+        project_id: instance.project_id.clone(),
+    });
 }
 
 fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -187,6 +317,52 @@ fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// 从全部画布的实例文件重建反向引用索引。位置不进入索引。
+pub fn rebuild_reference_index(app_data_root: &Path) -> Result<StarMapReferenceIndex> {
+    let starmaps_dir = app_data_root.join("starmaps");
+    let mut refs = StarMapReferenceIndex::default();
+    if !starmaps_dir.exists() {
+        save_reference_index(app_data_root, &refs)?;
+        return Ok(refs);
+    }
+    let mut starmaps = Vec::new();
+    for entry in fs::read_dir(&starmaps_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name == "library" {
+            continue;
+        }
+        starmaps.push(name.to_string());
+    }
+    for starmap_id in starmaps {
+        let nodes_dir = starmaps_dir.join(&starmap_id).join("nodes");
+        let mut node_paths = Vec::new();
+        collect_json_files(&nodes_dir, &mut node_paths);
+        for node_path in node_paths {
+            let Ok(content) = fs::read_to_string(&node_path) else {
+                continue;
+            };
+            let Ok(instance) = serde_json::from_str::<StarMapNodeInstance>(&content) else {
+                continue;
+            };
+            if instance.starmap_id == starmap_id {
+                push_reference(&mut refs, &instance);
+            }
+        }
+    }
+    refs.nodes.sort_by(|a, b| {
+        (&a.starmap_id, &a.instance_id).cmp(&(&b.starmap_id, &b.instance_id))
+    });
+    save_reference_index(app_data_root, &refs)?;
+    Ok(refs)
 }
 
 pub fn save_node_definition(
@@ -258,7 +434,9 @@ pub fn ensure_library_entry(
     entry
 }
 
-/// 新增或复用共享节点头，并登记实例和库归属。
+/// 新增或复用共享节点头，并登记库归属与画布反向引用。
+///
+/// 位置不写入任何中央索引；共享内容只在定义文件不存在时初始化。
 pub fn ensure_node_asset(
     app_data_root: &Path,
     starmap_id: &str,
@@ -266,7 +444,7 @@ pub fn ensure_node_asset(
     asset_id: &str,
     instance_id: &str,
     node: &StarMapNode,
-    position: &StarMapPoint,
+    _position: &StarMapPoint,
 ) -> Result<String> {
     let mut index = ensure_library_index(app_data_root)?;
     let definition_path = node_definition_abs_path(app_data_root, asset_id);
@@ -277,6 +455,7 @@ pub fn ensure_node_asset(
         )?;
     }
     let scope = StarMapAssetScope::from_project_id(project_id);
+    let before = index.entries.len();
     ensure_library_entry(
         &mut index,
         &scope,
@@ -284,17 +463,16 @@ pub fn ensure_node_asset(
         None,
         crate::starmap::now_epoch(),
     );
-    record_node_instance(
-        &mut index,
+    if index.entries.len() != before {
+        save_library_index(app_data_root, &index)?;
+    }
+    record_node_reference(
+        app_data_root,
         starmap_id,
         project_id,
         instance_id,
-        &asset_id,
-        position,
-        node.created_at,
-        node.updated_at,
-    );
-    save_library_index(app_data_root, &index)?;
+        asset_id,
+    )?;
     Ok(asset_id.to_string())
 }
 
@@ -304,6 +482,7 @@ pub fn ensure_starmap_asset(
 ) -> Result<StarMapLibraryEntry> {
     let mut index = ensure_library_index(app_data_root)?;
     let scope = StarMapAssetScope::from_project_id(meta.project_id.as_deref());
+    let before = index.entries.len();
     let entry = ensure_library_entry(
         &mut index,
         &scope,
@@ -311,7 +490,9 @@ pub fn ensure_starmap_asset(
         None,
         crate::starmap::now_epoch(),
     );
-    save_library_index(app_data_root, &index)?;
+    if index.entries.len() != before {
+        save_library_index(app_data_root, &index)?;
+    }
     Ok(entry)
 }
 
@@ -349,75 +530,59 @@ pub fn assign_entry_scope(
     Ok(entry)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn record_node_instance(
-    index: &mut StarMapLibraryIndex,
+pub fn record_node_reference(
+    app_data_root: &Path,
     starmap_id: &str,
     project_id: Option<&str>,
     instance_id: &str,
     target_node_id: &str,
-    position: &StarMapPoint,
-    created_at: u64,
-    updated_at: u64,
-) {
-    if let Some(record) = index.node_instances.iter_mut().find(|record| {
-        record.starmap_id == starmap_id && record.instance_id == instance_id
-    }) {
-        record.target_node_id = target_node_id.to_string();
-        record.position = position.clone();
-        record.project_id = project_id.map(ToString::to_string);
-        record.updated_at = updated_at;
-        return;
+) -> Result<()> {
+    let mut refs = load_reference_index(app_data_root)?;
+    let project_id = project_id.map(ToString::to_string);
+    let mut changed = false;
+    if let Some(record) = refs
+        .nodes
+        .iter_mut()
+        .find(|record| record.starmap_id == starmap_id && record.instance_id == instance_id)
+    {
+        if record.target_node_id != target_node_id || record.project_id != project_id {
+            record.target_node_id = target_node_id.to_string();
+            record.project_id = project_id;
+            changed = true;
+        }
+    } else {
+        refs.nodes.push(StarMapNodeReference {
+            target_node_id: target_node_id.to_string(),
+            starmap_id: starmap_id.to_string(),
+            instance_id: instance_id.to_string(),
+            project_id,
+        });
+        changed = true;
     }
-    index.node_instances.push(StarMapNodeInstance {
-        instance_id: instance_id.to_string(),
-        target_node_id: target_node_id.to_string(),
-        position: position.clone(),
-        starmap_id: starmap_id.to_string(),
-        project_id: project_id.map(ToString::to_string),
-        created_at,
-        updated_at,
-    });
+    if changed {
+        save_reference_index(app_data_root, &refs)?;
+    }
+    Ok(())
 }
 
+/// 兼容旧调用：实例位置已只存在于画布文件中，这里只登记反向引用。
 pub fn ensure_instance_record(
     app_data_root: &Path,
     starmap_id: &str,
     project_id: Option<&str>,
     instance_id: &str,
     target_node_id: &str,
-    position: &StarMapPoint,
-    created_at: u64,
-    updated_at: u64,
+    _position: &StarMapPoint,
+    _created_at: u64,
+    _updated_at: u64,
 ) -> Result<()> {
-    let mut index = ensure_library_index(app_data_root)?;
-    record_node_instance(
-        &mut index,
+    record_node_reference(
+        app_data_root,
         starmap_id,
         project_id,
         instance_id,
         target_node_id,
-        position,
-        created_at,
-        updated_at,
-    );
-    save_library_index(app_data_root, &index)
-}
-
-pub fn update_instance_position(
-    app_data_root: &Path,
-    starmap_id: &str,
-    instance_id: &str,
-    position: &StarMapPoint,
-) -> Result<()> {
-    let mut index = load_library_index(app_data_root)?;
-    for record in &mut index.node_instances {
-        if record.starmap_id == starmap_id && record.instance_id == instance_id {
-            record.position = position.clone();
-            record.updated_at = crate::starmap::now_epoch();
-        }
-    }
-    save_library_index(app_data_root, &index)
+    )
 }
 
 pub fn remove_instance_record(
@@ -433,71 +598,25 @@ pub fn remove_instance_records(
     starmap_id: &str,
     instance_ids: &[String],
 ) -> Result<()> {
-    let mut index = load_library_index(app_data_root)?;
-    let before = index.node_instances.len();
-    index.node_instances.retain(|record| {
+    let mut refs = load_reference_index(app_data_root)?;
+    let before = refs.nodes.len();
+    refs.nodes.retain(|record| {
         !(record.starmap_id == starmap_id
             && instance_ids.iter().any(|id| id == &record.instance_id))
     });
-    if index.node_instances.len() != before {
-        save_library_index(app_data_root, &index)?;
+    if refs.nodes.len() != before {
+        save_reference_index(app_data_root, &refs)?;
     }
     Ok(())
 }
 
-/// 整张画布删除后清理该画布的实例反向索引；共享节点本体与库归属保留，
-/// 以便未嵌入的素材仍可继续被其它画布引用。
+/// 整张画布删除后清理该画布的反向引用；共享本体与库归属保留。
 pub fn remove_starmap_instance_records(app_data_root: &Path, starmap_id: &str) -> Result<()> {
-    let mut index = load_library_index(app_data_root)?;
-    let before = index.node_instances.len();
-    index
-        .node_instances
-        .retain(|record| record.starmap_id != starmap_id);
-    if index.node_instances.len() != before {
-        save_library_index(app_data_root, &index)?;
-    }
-    Ok(())
-}
-
-/// 把共享定义写进尚未加载的画布实例缓存文件。
-///
-/// 已加载 Store 由调用方在内存中应用定义并等待 flush；这里只处理其余画布，
-/// 避免绕过 Store 写队列。
-pub fn sync_definition_to_instance_files(
-    app_data_root: &Path,
-    definition: &StarMapNodeDefinition,
-    loaded_starmaps: &HashSet<String>,
-) -> Result<()> {
-    let index = load_library_index(app_data_root)?;
-    for record in index
-        .node_instances
-        .iter()
-        .filter(|record| record.target_node_id == definition.asset_id)
-    {
-        if loaded_starmaps.contains(&record.starmap_id) {
-            continue;
-        }
-        let path = crate::starmap::package_storage::starmap_pkg_dir(
-            app_data_root,
-            &record.starmap_id,
-        )
-        .join("nodes")
-        .join(crate::starmap::package_storage::bucket_for_id(
-            &record.instance_id,
-        ))
-        .join(format!("{}.json", record.instance_id));
-        let Ok(content) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(mut node) = serde_json::from_str::<StarMapNode>(&content) else {
-            continue;
-        };
-        definition.apply_to_node(&mut node);
-        crate::starmap::package_storage::save_node(
-            app_data_root,
-            &record.starmap_id,
-            &node,
-        )?;
+    let mut refs = load_reference_index(app_data_root)?;
+    let before = refs.nodes.len();
+    refs.nodes.retain(|record| record.starmap_id != starmap_id);
+    if refs.nodes.len() != before {
+        save_reference_index(app_data_root, &refs)?;
     }
     Ok(())
 }
@@ -507,35 +626,44 @@ pub fn asset_id_for_instance(
     starmap_id: &str,
     instance_id: &str,
 ) -> Result<Option<String>> {
-    let index = load_library_index(app_data_root)?;
-    Ok(index
-        .node_instances
+    let refs = load_reference_index(app_data_root)?;
+    Ok(refs
+        .nodes
         .iter()
         .find(|record| record.starmap_id == starmap_id && record.instance_id == instance_id)
         .map(|record| record.target_node_id.clone()))
 }
 
+/// 反向引用；位置字段仅为旧调用兼容，不再从中央索引提供。
 pub fn instances_for_asset(
     app_data_root: &Path,
     asset_id: &str,
 ) -> Result<Vec<StarMapNodeInstance>> {
-    let index = load_library_index(app_data_root)?;
-    Ok(index
-        .node_instances
+    let refs = load_reference_index(app_data_root)?;
+    Ok(refs
+        .nodes
         .into_iter()
         .filter(|record| record.target_node_id == asset_id)
+        .map(|record| StarMapNodeInstance {
+            instance_id: record.instance_id,
+            target_node_id: record.target_node_id,
+            position: StarMapPoint::default(),
+            starmap_id: record.starmap_id,
+            project_id: record.project_id,
+            created_at: 0,
+            updated_at: 0,
+        })
         .collect())
 }
 
 /// 返回某画布中全部节点实例到共享本体的映射，供 Graph DTO 一次带到平台端。
-/// 尚未登记映射的旧实例由调用方回退使用 instance_id。
 pub fn instance_asset_bindings_for_starmap(
     app_data_root: &Path,
     starmap_id: &str,
 ) -> Result<Vec<(String, String)>> {
-    let index = load_library_index(app_data_root)?;
-    Ok(index
-        .node_instances
+    let refs = load_reference_index(app_data_root)?;
+    Ok(refs
+        .nodes
         .into_iter()
         .filter(|record| record.starmap_id == starmap_id)
         .map(|record| (record.instance_id, record.target_node_id))
@@ -629,9 +757,13 @@ pub fn remove_entries_for_asset(
     app_data_root: &Path,
     target: &StarMapAssetRef,
 ) -> Result<()> {
-    let mut index = load_library_index(app_data_root)?;
+    let mut index = ensure_library_index(app_data_root)?;
+    let before = index.entries.len();
     index.entries.retain(|entry| &entry.target != target);
-    save_library_index(app_data_root, &index)
+    if index.entries.len() != before {
+        save_library_index(app_data_root, &index)?;
+    }
+    Ok(())
 }
 
 pub fn asset_title(app_data_root: &Path, target: &StarMapAssetRef) -> Result<Option<String>> {
@@ -666,7 +798,7 @@ mod tests {
             None,
             1,
         );
-        save_library_index(&root, &mut index).unwrap();
+        save_library_index(&root, &index).unwrap();
         let moved = move_entry(
             &root,
             &entry.entry_id,

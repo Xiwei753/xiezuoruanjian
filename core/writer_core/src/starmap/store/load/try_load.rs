@@ -96,29 +96,41 @@ impl StarMapStore {
         node_id: &str,
     ) -> Result<StarMapNode> {
         let dir = self.starmap_dir();
-        let mut node: StarMapNode = load_object_strict(
+        let instance: StarMapNodeInstance = load_object_strict(
             &mut self.recovery_log,
             &dir,
             "nodes",
-            "node",
+            "node instance",
             node_id,
-            "id",
-            |n: &StarMapNode| n.id.as_str(),
+            "instanceId",
+            |n: &StarMapNodeInstance| n.instance_id.as_str(),
         )?;
-        self.ensure_node_assets_loaded();
-        let asset_id = self
-            .node_assets
-            .entry(node_id.to_string())
-            .or_insert_with(|| node.id.clone())
-            .clone();
-        if let Ok(Some(definition)) =
-            crate::starmap::library::load_node_definition(&self.app_data_root, &asset_id)
-        {
-            if definition.asset_id == asset_id {
-                definition.apply_to_node(&mut node);
-            }
+        if !instance.starmap_id.is_empty() && instance.starmap_id != self.starmap_id {
+            return Err(Error::Other(format!(
+                "node instance {} belongs to starmap {}, expected {}",
+                node_id, instance.starmap_id, self.starmap_id
+            )));
         }
-        Ok(node)
+        let target_node_id = instance.target_node_id.clone();
+        self.node_assets
+            .insert(node_id.to_string(), target_node_id.clone());
+        let definition = crate::starmap::library::load_node_definition(
+            &self.app_data_root,
+            &target_node_id,
+        )?
+        .ok_or_else(|| {
+            Error::Other(format!(
+                "shared node definition missing for instance {} -> {}",
+                node_id, target_node_id
+            ))
+        })?;
+        if definition.asset_id != target_node_id {
+            return Err(Error::Other(format!(
+                "shared node definition id mismatch for {}: {}",
+                target_node_id, definition.asset_id
+            )));
+        }
+        Ok(definition.instantiate(node_id, instance.position))
     }
 
     /// 严格加载单个 edge：同 `try_load_node` 的 fail-closed 语义。

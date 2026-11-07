@@ -68,7 +68,20 @@ impl StarMapStore {
             let mut succeeded = true;
             for node_id in &ids {
                 if let Some(node) = self.nodes.get(node_id) {
-                    match package_storage::save_node(&self.app_data_root, &self.starmap_id, node) {
+                    let instance = crate::starmap::types::StarMapNodeInstance {
+                        instance_id: node.id.clone(),
+                        target_node_id: self.asset_id_for_node(&node.id),
+                        position: node.position.clone(),
+                        starmap_id: self.starmap_id.clone(),
+                        project_id: None,
+                        created_at: node.created_at,
+                        updated_at: node.updated_at,
+                    };
+                    match package_storage::save_node_instance(
+                        &self.app_data_root,
+                        &self.starmap_id,
+                        &instance,
+                    ) {
                         Ok(rel_path) => {
                             changed_paths.push(rel_path);
                             successful_writes.nodes.insert(node_id.clone());

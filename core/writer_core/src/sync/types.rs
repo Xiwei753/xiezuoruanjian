@@ -229,7 +229,9 @@ impl AppDataGroup {
         match self {
             Self::Global => path == "settings.sync.json" || is_agent_conversation_path(&path),
             Self::StarmapIndex => {
-                path == "starmaps/index.json" || path.starts_with("starmaps/library/")
+                path == "starmaps/index.json"
+                    || (path.starts_with("starmaps/library/")
+                        && path != "starmaps/library/references.json")
             }
             Self::Starmap(id) => {
                 path == format!("starmaps/{id}.meta.json")
