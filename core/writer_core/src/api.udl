@@ -672,6 +672,11 @@ dictionary StarMapMetaDto {
     u64 updated_at;
 };
 
+dictionary StarMapNodeAssetBindingDto {
+    string instance_id;
+    string asset_id;
+};
+
 dictionary StarMapGraphDto {
     u32 schema_version;
     string starmap_id;
@@ -679,6 +684,7 @@ dictionary StarMapGraphDto {
     sequence<StarMapEdgeDto> edges;
     sequence<StarMapEmbedDto> embeds;
     sequence<StarMapLinkDto> links;
+    sequence<StarMapNodeAssetBindingDto> asset_bindings;
 };
 
 dictionary StarMapNodeDto {
@@ -824,6 +830,7 @@ dictionary StarMapPhasedSnapshotDto {
     sequence<StarMapEdgeDto> edges;
     sequence<StarMapEmbedDto> embeds;
     sequence<StarMapLinkDto> links;
+    sequence<StarMapNodeAssetBindingDto> asset_bindings;
     sequence<string> deleted_node_ids;
     sequence<string> deleted_edge_ids;
     sequence<string> deleted_embed_ids;
@@ -1334,6 +1341,34 @@ interface WriterAppService {
 
     [Throws=WriterError]
     boolean delete_starmap_node(string starmap_id, string node_id);
+
+    // ── 全局 / 作品素材库 ──
+    [Throws=WriterError]
+    string list_starmap_library_json(string scope_json);
+
+    [Throws=WriterError]
+    string create_starmap_library_folder_json(string scope_json, string? parent_folder_id, string name);
+
+    [Throws=WriterError]
+    string move_starmap_library_entry_json(string entry_id, string scope_json, string? parent_folder_id);
+
+    [Throws=WriterError]
+    StarMapNodeDto add_starmap_node_reference(string starmap_id, string asset_id, double x, double y);
+
+    [Throws=WriterError]
+    StarMapEmbedDto add_starmap_reference(string host_starmap_id, string target_starmap_id, double x, double y);
+
+    [Throws=WriterError]
+    string copy_starmap_library_asset_json(string target_json, string scope_json, string? title);
+
+    [Throws=WriterError]
+    string list_starmap_asset_references_json(string target_json);
+
+    [Throws=WriterError]
+    boolean delete_starmap_library_asset_json(string target_json);
+
+    [Throws=WriterError]
+    boolean remove_starmap_instance(string starmap_id, string instance_id, boolean is_embed);
 
     [Throws=WriterError]
     StarMapEdgeDto add_starmap_edge(string starmap_id, StarMapEdgeDto edge);

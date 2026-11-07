@@ -96,7 +96,7 @@ impl StarMapStore {
         node_id: &str,
     ) -> Result<StarMapNode> {
         let dir = self.starmap_dir();
-        load_object_strict(
+        let mut node: StarMapNode = load_object_strict(
             &mut self.recovery_log,
             &dir,
             "nodes",
@@ -104,7 +104,21 @@ impl StarMapStore {
             node_id,
             "id",
             |n: &StarMapNode| n.id.as_str(),
-        )
+        )?;
+        self.ensure_node_assets_loaded();
+        let asset_id = self
+            .node_assets
+            .entry(node_id.to_string())
+            .or_insert_with(|| node.id.clone())
+            .clone();
+        if let Ok(Some(definition)) =
+            crate::starmap::library::load_node_definition(&self.app_data_root, &asset_id)
+        {
+            if definition.asset_id == asset_id {
+                definition.apply_to_node(&mut node);
+            }
+        }
+        Ok(node)
     }
 
     /// 严格加载单个 edge：同 `try_load_node` 的 fail-closed 语义。

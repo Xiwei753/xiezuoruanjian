@@ -45,6 +45,7 @@ const ROLE_REVISION: i32 = 268;
 const ROLE_DEPTH: i32 = 269;
 const ROLE_OBJECT_KEY: i32 = 270;
 const ROLE_OBJECT_ID: i32 = 271;
+const ROLE_ASSET_ID: i32 = 272;
 
 const QT_DISPLAY_ROLE: i32 = 0;
 const QT_EDIT_ROLE: i32 = 2;
@@ -141,6 +142,8 @@ struct TreeRow {
     kind: RowKind,
     /// 行所代表对象自身的 ID：根星图 ID / Embed 实例 ID / 节点 ID。
     object_id: String,
+    /// 共享素材 ID：星图本体 ID 或节点本体 ID；旧数据回退为实例 ID。
+    asset_id: String,
     /// 唯一对象键：容器 routeKey + 行类型 + object_id。
     object_key: String,
     revision: u64,
@@ -191,6 +194,7 @@ struct ChildSpec {
     starmap_id: String,
     segment: Option<RouteSegment>,
     object_id: String,
+    asset_id: String,
     revision: u64,
 }
 
@@ -399,6 +403,7 @@ impl StarmapTreeModel {
                     parent_starmap_id: String::new(),
                     kind: RowKind::Root,
                     object_id: root_id.clone(),
+                    asset_id: root_id.clone(),
                     object_key: root_object_key.clone(),
                     revision: meta.updated_at,
                     depth: 0,
@@ -435,9 +440,15 @@ impl StarmapTreeModel {
             .and_then(|data| data.get("graph").cloned())
             .and_then(|graph| serde_json::from_value::<StarMapGraphDto>(graph).ok())
             .map(|graph| {
+                let asset_by_instance: HashMap<String, String> = graph
+                    .asset_bindings
+                    .into_iter()
+                    .map(|binding| (binding.instance_id, binding.asset_id))
+                    .collect();
                 let mut children = Vec::new();
                 for embed in graph.embeds {
                     let target_starmap_id = embed.target_starmap_id;
+                    let asset_id = target_starmap_id.clone();
                     let instance_id = embed.instance_id;
                     let title = embed
                         .label
@@ -452,10 +463,15 @@ impl StarmapTreeModel {
                             instance_id: instance_id.clone(),
                         }),
                         object_id: instance_id,
+                        asset_id,
                         revision: embed.updated_at,
                     });
                 }
                 for node in graph.nodes {
+                    let asset_id = asset_by_instance
+                        .get(&node.id)
+                        .cloned()
+                        .unwrap_or_else(|| node.id.clone());
                     if let Some(portal) = node.portal {
                         let target_starmap_id = portal.destination_starmap_id;
                         let title = if node.title.trim().is_empty() {
@@ -472,6 +488,7 @@ impl StarmapTreeModel {
                                 node_id: node.id.clone(),
                             }),
                             object_id: node.id,
+                            asset_id,
                             revision: node.updated_at,
                         });
                     } else {
@@ -486,6 +503,7 @@ impl StarmapTreeModel {
                             starmap_id: container_starmap_id.clone(),
                             segment: None,
                             object_id: node.id,
+                            asset_id,
                             revision: node.updated_at,
                         });
                     }
@@ -574,6 +592,7 @@ impl StarmapTreeModel {
                     parent_starmap_id: parent_starmap_id.clone(),
                     kind: spec.kind,
                     object_id: spec.object_id,
+                    asset_id: spec.asset_id,
                     object_key: child_object_key.clone(),
                     revision: spec.revision,
                     depth: depth + 1,
@@ -683,6 +702,7 @@ impl QAbstractItemModel for StarmapTreeModel {
             ROLE_DEPTH => QVariant::from(row.depth),
             ROLE_OBJECT_KEY => QVariant::from(QString::from(row.object_key.as_str())),
             ROLE_OBJECT_ID => QVariant::from(QString::from(row.object_id.as_str())),
+            ROLE_ASSET_ID => QVariant::from(QString::from(row.asset_id.as_str())),
             _ => QVariant::default(),
         }
     }
@@ -704,6 +724,7 @@ impl QAbstractItemModel for StarmapTreeModel {
         names.insert(ROLE_DEPTH, QByteArray::from("depth"));
         names.insert(ROLE_OBJECT_KEY, QByteArray::from("objectKey"));
         names.insert(ROLE_OBJECT_ID, QByteArray::from("objectId"));
+        names.insert(ROLE_ASSET_ID, QByteArray::from("assetId"));
         names
     }
 }

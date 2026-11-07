@@ -101,6 +101,12 @@ Item {
     readonly property int rightPaneMaxWidth: 520
     readonly property int canvasMinWidth: 240
 
+    // 素材库归属独立于星图根/嵌入关系；当前作品库 scope 只来自当前活动作品的业务 ID。
+    readonly property string globalLibraryScopeJson: "{\"kind\":\"global\"}"
+    readonly property string projectLibraryScopeJson: root.annotationProjectId !== ""
+        ? JSON.stringify({ "kind": "project", "projectId": root.annotationProjectId })
+        : ""
+
     // Issue #977：顶栏需要知道当前是根画布还是子画布，以决定返回文案与动作。
     readonly property bool focusIsRoot: canvas.focusIsRoot
 
@@ -118,8 +124,33 @@ Item {
     // 清空旧根选中/展开状态并重建树，避免这里和绑定各刷新一次。
 
     // Issue #1016：把本次 SplitView 的真实宽度/可见状态上报给顶栏。
-    function reportRenderedPane(side, pane) {
-        if (!root.layoutState || !pane)
+    function insertLibraryAsset(kind, assetId, title, scopeJson, targetJson) {
+        void title
+        void scopeJson
+        void targetJson
+        if (!root.starmapBackendRef)
+            return
+        canvas.insertLibraryAssetAtScreen(kind, assetId,
+                                          canvas.width / 2,
+                                          canvas.height / 2)
+    }
+
+    function copyLibraryAsset(targetJson, scopeJson, title) {
+        if (!root.starmapBackendRef || !scopeJson)
+            return
+        root.starmapBackendRef.copy_starmap_library_asset_json(
+                    targetJson, scopeJson, title)
+        root.reloadLibraryPanels()
+    }
+
+    function reloadLibraryPanels() {
+        if (globalLibraryPanel)
+            globalLibraryPanel.reload()
+        if (projectLibraryPanel)
+            projectLibraryPanel.reload()
+    }
+
+    function reportRenderedPane(side, pane) {        if (!root.layoutState || !pane)
             return
         root.layoutState.setRenderedPaneWidth(root.pageKey, side,
             pane.visible ? pane.width : 0)
@@ -424,7 +455,7 @@ Item {
                                                      rightPaneContainer.width)
             }
 
-            // ── 左栏：星图层级树 ──
+            // ── 左栏：素材库 + 当前画布目录 ──
             Rectangle {
                 id: leftPaneContainer
                 visible: !root.embedded && !root.leftPaneCollapsed
@@ -438,28 +469,96 @@ Item {
                 color: "transparent"
                 clip: true
 
-                StarMapNavigationTree {
-                    id: navigationTree
+                ColumnLayout {
                     anchors.fill: parent
-                    dt: root.dt
-                    starmapBackendRef: root.starmapBackendRef
-                    workspaceRootStarmapId: root.starmapId
-                    onRouteActivated: function(rootStarmapId, segmentsJson, routeKey) {
-                        root.activateTreeRoute(rootStarmapId, segmentsJson, routeKey)
+                    spacing: 0
+
+                    StarMapLibraryPanel {
+                        id: globalLibraryPanel
+                        Layout.fillWidth: true
+                        dt: root.dt
+                        starmapBackendRef: root.starmapBackendRef
+                        header: qsTr("全局素材库")
+                        emptyText: qsTr("全局库暂无素材")
+                        scopeJson: root.globalLibraryScopeJson
+                        otherScopeJson: root.projectLibraryScopeJson
+                        onAssetActivated: function(kind, assetId, title, scopeJson, targetJson) {
+                            root.insertLibraryAsset(kind, assetId, title, scopeJson, targetJson)
+                        }
+                        onCopyRequested: function(targetJson, scopeJson, title) {
+                            root.copyLibraryAsset(targetJson, scopeJson, title)
+                        }
+                        onLibraryChanged: root.reloadLibraryPanels()
                     }
-                    onObjectActivated: function(rootStarmapId, segmentsJson,
-                                                kind, objectId, objectKey) {
-                        root.revealTreeObject(rootStarmapId, segmentsJson,
-                                              kind, objectId, objectKey)
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 1
+                        color: Kirigami.Theme.disabledTextColor
+                        opacity: 0.25
                     }
-                    onCreateObjectRequested: function(mode) {
-                        root.createObject(mode)
+
+                    StarMapLibraryPanel {
+                        id: projectLibraryPanel
+                        Layout.fillWidth: true
+                        dt: root.dt
+                        starmapBackendRef: root.starmapBackendRef
+                        header: qsTr("当前作品素材库")
+                        emptyText: root.annotationProjectId !== ""
+                                   ? qsTr("作品库暂无素材")
+                                   : qsTr("请先选择作品")
+                        scopeJson: root.projectLibraryScopeJson
+                        otherScopeJson: root.globalLibraryScopeJson
+                        onAssetActivated: function(kind, assetId, title, scopeJson, targetJson) {
+                            root.insertLibraryAsset(kind, assetId, title, scopeJson, targetJson)
+                        }
+                        onCopyRequested: function(targetJson, scopeJson, title) {
+                            root.copyLibraryAsset(targetJson, scopeJson, title)
+                        }
+                        onLibraryChanged: root.reloadLibraryPanels()
                     }
-                    onRenameRequested: function(rowInfo) {
-                        root.beginRenameTreeRow(rowInfo)
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 1
+                        color: Kirigami.Theme.disabledTextColor
+                        opacity: 0.25
                     }
-                    onDeleteRequested: function(rowInfo) {
-                        root.beginDeleteTreeRow(rowInfo)
+
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 10
+                        Layout.topMargin: 6
+                        text: qsTr("当前画布目录")
+                        font.bold: true
+                        font.pixelSize: 12
+                        color: Kirigami.Theme.textColor
+                    }
+
+                    StarMapNavigationTree {
+                        id: navigationTree
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        dt: root.dt
+                        starmapBackendRef: root.starmapBackendRef
+                        workspaceRootStarmapId: root.starmapId
+                        onRouteActivated: function(rootStarmapId, segmentsJson, routeKey) {
+                            root.activateTreeRoute(rootStarmapId, segmentsJson, routeKey)
+                        }
+                        onObjectActivated: function(rootStarmapId, segmentsJson,
+                                                    kind, objectId, objectKey) {
+                            root.revealTreeObject(rootStarmapId, segmentsJson,
+                                                  kind, objectId, objectKey)
+                        }
+                        onCreateObjectRequested: function(mode) {
+                            root.createObject(mode)
+                        }
+                        onRenameRequested: function(rowInfo) {
+                            root.beginRenameTreeRow(rowInfo)
+                        }
+                        onDeleteRequested: function(rowInfo) {
+                            root.beginDeleteTreeRow(rowInfo)
+                        }
                     }
                 }
             }
@@ -506,6 +605,26 @@ Item {
                 onVisibleChanged: {
                     if (!visible)
                         canvas.resetInteraction()
+                }
+            }
+
+            DropArea {
+                anchors.fill: canvas
+                keys: ["application/x-sujian-starmap-asset"]
+                onDropped: function(drop) {
+                    var payload = {}
+                    try {
+                        payload = JSON.parse(String(drop.getDataAsString(
+                                    "application/x-sujian-starmap-asset") || "{}"))
+                    } catch (e) {
+                        return
+                    }
+                    if (payload && payload.assetId) {
+                        canvas.insertLibraryAssetAtScreen(String(payload.kind || "node"),
+                                                          String(payload.assetId),
+                                                          drop.x, drop.y)
+                        navigationTree.reload()
+                    }
                 }
             }
 

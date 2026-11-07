@@ -2,6 +2,13 @@ use super::*;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct StarMapNodeAssetBindingDto {
+    pub instance_id: String,
+    pub asset_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct StarMapGraphDto {
     pub schema_version: u32,
     pub starmap_id: String,
@@ -11,6 +18,8 @@ pub struct StarMapGraphDto {
     pub embeds: Vec<StarMapEmbedDto>,
     #[serde(default)]
     pub links: Vec<StarMapLinkDto>,
+    #[serde(default)]
+    pub asset_bindings: Vec<StarMapNodeAssetBindingDto>,
 }
 
 impl From<crate::starmap::types::StarMapGraph> for StarMapGraphDto {
@@ -22,6 +31,7 @@ impl From<crate::starmap::types::StarMapGraph> for StarMapGraphDto {
             edges: g.edges.into_iter().map(Into::into).collect(),
             embeds: g.embeds.into_iter().map(Into::into).collect(),
             links: g.links.into_iter().map(Into::into).collect(),
+            asset_bindings: Vec::new(),
         }
     }
 }
@@ -160,6 +170,7 @@ pub struct StarMapPhasedSnapshotDto {
     pub edges: Vec<StarMapEdgeDto>,
     pub embeds: Vec<StarMapEmbedDto>,
     pub links: Vec<StarMapLinkDto>,
+    pub asset_bindings: Vec<StarMapNodeAssetBindingDto>,
     pub deleted_node_ids: Vec<String>,
     pub deleted_edge_ids: Vec<String>,
     pub deleted_embed_ids: Vec<String>,
@@ -189,6 +200,7 @@ impl From<crate::starmap::store::StarMapPhasedSnapshot> for StarMapPhasedSnapsho
             edges: s.edges.into_iter().map(Into::into).collect(),
             embeds: s.embeds.into_iter().map(Into::into).collect(),
             links: s.links.into_iter().map(Into::into).collect(),
+            asset_bindings: Vec::new(),
             deleted_node_ids: s.deleted_node_ids,
             deleted_edge_ids: s.deleted_edge_ids,
             deleted_embed_ids: s.deleted_embed_ids,

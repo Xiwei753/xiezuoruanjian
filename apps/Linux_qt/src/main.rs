@@ -142,6 +142,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapWorkspace.qml" as "StarMapWorkspace.qml",
     // Issue #1014：星图工作区左侧层级导航树（Qt 6.8 原生 TreeView + Rust 模型）。
     "qml/StarMapNavigationTree.qml" as "StarMapNavigationTree.qml",
+    // Issue #1037：全局 / 当前作品素材库目录面板。
+    "qml/StarMapLibraryPanel.qml" as "StarMapLibraryPanel.qml",
     // Issue #822: 递归的是星图内容，不是视口。StarMapScene.qml 已删除：
     // 它"每个 Scene 实例自己有一套 panX/panY/zoomLevel"的定义正是要废掉的抽象。
     "qml/StarMapSceneContent.qml" as "StarMapSceneContent.qml",
@@ -725,6 +727,12 @@ fn main() {
         1,
         0,
         c"StarmapTreeModel",
+    );
+    qmetaobject::qml_register_type::<backend::starmap_library_model::StarmapLibraryModel>(
+        c"SujianApp",
+        1,
+        0,
+        c"StarmapLibraryModel",
     );
     qmetaobject::qml_register_type::<sujian_editor_item::SujianEditorItem>(
         c"Sujian",

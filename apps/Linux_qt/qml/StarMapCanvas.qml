@@ -592,6 +592,34 @@ Item {
         return (sy - panY) / (zoomLevel > 0 ? zoomLevel : 1)
     }
 
+    // 素材库拖入/插入引用：只创建当前活动画布实例，本体与库归属仍由 Core 管理。
+    function insertLibraryAssetAtScreen(kind, assetId, screenX, screenY) {
+        if (!starmapBackendRef || currentStarmapId === "" || !assetId)
+            return false
+        var x = screenToWorldX(screenX === undefined ? width / 2 : screenX)
+        var y = screenToWorldY(screenY === undefined ? height / 2 : screenY)
+        var raw = kind === "starmap"
+                ? starmapBackendRef.add_starmap_reference_json(
+                      currentStarmapId, assetId, x, y)
+                : starmapBackendRef.add_starmap_node_reference_json(
+                      currentStarmapId, assetId, x, y)
+        var ok = false
+        try {
+            var value = JSON.parse(String(raw || "{}"))
+            ok = value && value.success === true
+        } catch (e) {
+            ok = false
+        }
+        if (!ok)
+            return false
+        // 新实例已经写入 Core；重建当前 Scene 读取同一张图，不在这里复制节点状态。
+        var wasActive = activeSceneLoader.active
+        activeSceneLoader.active = false
+        activeSceneLoader.active = wasActive
+        treeStructureChanged()
+        return true
+    }
+
     // 连线统一使用屏幕物理像素口径：原生边层、活动 Scene、这里的预览线
     // 共用同一份宽度事实，缩放不再把线加粗。
     readonly property real _edgePreviewScreenWidth: 1.5

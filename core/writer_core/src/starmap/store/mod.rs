@@ -54,6 +54,10 @@ pub struct StarMapStore {
     pub(super) app_data_root: PathBuf,
     pub(super) starmap_id: String,
     pub(super) nodes: HashMap<String, StarMapNode>,
+    /// instance_id -> shared node asset_id。库索引是持久事实源；
+    /// 这里只是当前画布的加载缓存。
+    pub(super) node_assets: HashMap<String, String>,
+    pub(super) node_assets_loaded: bool,
     pub(super) edges: HashMap<String, StarMapEdge>,
     pub(super) embeds: HashMap<String, StarMapEmbed>,
     pub(super) links: HashMap<String, StarMapLink>,
@@ -79,6 +83,8 @@ impl StarMapStore {
             app_data_root: app_data_root.to_path_buf(),
             starmap_id: starmap_id.to_string(),
             nodes: HashMap::new(),
+            node_assets: HashMap::new(),
+            node_assets_loaded: false,
             edges: HashMap::new(),
             embeds: HashMap::new(),
             links: HashMap::new(),
@@ -125,6 +131,67 @@ impl StarMapStore {
 
     pub fn get_node(&self, node_id: &str) -> Option<&StarMapNode> {
         self.nodes.get(node_id)
+    }
+
+    /// 当前画布实例对应的共享素材 ID。旧数据尚未登记时，实例 ID 自身就是
+    /// 共享本体 ID。
+    pub fn asset_id_for_node(&self, instance_id: &str) -> String {
+        self.node_assets
+            .get(instance_id)
+            .cloned()
+            .unwrap_or_else(|| instance_id.to_string())
+    }
+
+    pub fn set_node_asset(&mut self, instance_id: &str, asset_id: &str) {
+        self.node_assets
+            .insert(instance_id.to_string(), asset_id.to_string());
+        self.node_assets_loaded = true;
+    }
+
+    pub(super) fn ensure_node_assets_loaded(&mut self) {
+        if self.node_assets_loaded {
+            return;
+        }
+        self.node_assets_loaded = true;
+        let Ok(index) = crate::starmap::library::load_library_index(&self.app_data_root) else {
+            return;
+        };
+        for record in index.node_instances {
+            if record.starmap_id == self.starmap_id {
+                self.node_assets
+                    .insert(record.instance_id, record.target_node_id);
+            }
+        }
+    }
+
+    /// 把共享定义同步到当前画布的全部实例（只改共享字段，保留实例位置）。
+    /// 返回受影响的实例 ID。
+    pub fn apply_shared_node_definition(
+        &mut self,
+        definition: &crate::starmap::types::StarMapNodeDefinition,
+    ) -> Vec<String> {
+        self.ensure_node_assets_loaded();
+        let ids: Vec<String> = self
+            .nodes
+            .iter()
+            .filter(|(instance_id, _)| {
+                self.node_assets
+                    .get(instance_id.as_str())
+                    .map(|asset_id| asset_id == &definition.asset_id)
+                    .unwrap_or(false)
+            })
+            .map(|(instance_id, _)| instance_id.clone())
+            .collect();
+        for instance_id in &ids {
+            if let Some(node) = self.nodes.get_mut(instance_id) {
+                definition.apply_to_node(node);
+                self.dirty_nodes.insert(instance_id.clone());
+            }
+        }
+        if !ids.is_empty() {
+            self.dirty_graph_meta = true;
+        }
+        ids
     }
 
     pub fn get_edge(&self, edge_id: &str) -> Option<&StarMapEdge> {

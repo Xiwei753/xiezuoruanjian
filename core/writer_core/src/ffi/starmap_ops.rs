@@ -805,6 +805,257 @@ pub unsafe extern "C" fn writer_core_plan_cross_layer_connection(
     }
 }
 
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `scope_json` points to a valid, null-terminated C string.
+pub unsafe extern "C" fn writer_core_list_starmap_library_json(
+    scope_json: *const c_char,
+) -> *mut c_char {
+    let scope = match c_str_to_rust(scope_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid scope_json: error {}", e)),
+    };
+    match with_app_service(|svc| {
+        svc.list_starmap_library_json(&scope)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => data,
+        Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure all pointers point to valid, null-terminated C strings.
+pub unsafe extern "C" fn writer_core_create_starmap_library_folder_json(
+    scope_json: *const c_char,
+    parent_folder_id: *const c_char,
+    name: *const c_char,
+) -> *mut c_char {
+    let scope = match c_str_to_rust(scope_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid scope_json: error {}", e)),
+    };
+    let parent = if parent_folder_id.is_null() {
+        None
+    } else {
+        match c_str_to_rust(parent_folder_id) {
+            Ok(s) if s.is_empty() => None,
+            Ok(s) => Some(s),
+            Err(e) => {
+                return err_json(
+                    "INVALID_ARGUMENT",
+                    &format!("Invalid parent_folder_id: error {}", e),
+                )
+            }
+        }
+    };
+    let name = match c_str_to_rust(name) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid name: error {}", e)),
+    };
+    match with_app_service(|svc| {
+        svc.create_starmap_library_folder_json(&scope, parent, &name)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => data,
+        Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure all pointers point to valid, null-terminated C strings.
+pub unsafe extern "C" fn writer_core_move_starmap_library_entry_json(
+    entry_id: *const c_char,
+    scope_json: *const c_char,
+    parent_folder_id: *const c_char,
+) -> *mut c_char {
+    let entry_id = match c_str_to_rust(entry_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid entry_id: error {}", e)),
+    };
+    let scope = match c_str_to_rust(scope_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid scope_json: error {}", e)),
+    };
+    let parent = if parent_folder_id.is_null() {
+        None
+    } else {
+        match c_str_to_rust(parent_folder_id) {
+            Ok(s) if s.is_empty() => None,
+            Ok(s) => Some(s),
+            Err(e) => {
+                return err_json(
+                    "INVALID_ARGUMENT",
+                    &format!("Invalid parent_folder_id: error {}", e),
+                )
+            }
+        }
+    };
+    match with_app_service(|svc| {
+        svc.move_starmap_library_entry_json(&entry_id, &scope, parent)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => data,
+        Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure all pointers point to valid, null-terminated C strings.
+pub unsafe extern "C" fn writer_core_add_starmap_node_reference(
+    starmap_id: *const c_char,
+    asset_id: *const c_char,
+    x: f64,
+    y: f64,
+) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid starmap_id: error {}", e)),
+    };
+    let asset_id = match c_str_to_rust(asset_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid asset_id: error {}", e)),
+    };
+    match with_app_service(|svc| {
+        svc.add_starmap_node_reference(&sid, &asset_id, x, y)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure all pointers point to valid, null-terminated C strings.
+pub unsafe extern "C" fn writer_core_add_starmap_reference(
+    host_starmap_id: *const c_char,
+    target_starmap_id: *const c_char,
+    x: f64,
+    y: f64,
+) -> *mut c_char {
+    let host = match c_str_to_rust(host_starmap_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid host: error {}", e)),
+    };
+    let target = match c_str_to_rust(target_starmap_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid target: error {}", e)),
+    };
+    match with_app_service(|svc| {
+        svc.add_starmap_reference(&host, &target, x, y)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure all pointers point to valid, null-terminated C strings.
+pub unsafe extern "C" fn writer_core_copy_starmap_library_asset_json(
+    target_json: *const c_char,
+    scope_json: *const c_char,
+    title: *const c_char,
+) -> *mut c_char {
+    let target = match c_str_to_rust(target_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid target_json: error {}", e)),
+    };
+    let scope = match c_str_to_rust(scope_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid scope_json: error {}", e)),
+    };
+    let title = if title.is_null() {
+        None
+    } else {
+        c_str_to_rust(title).ok().filter(|s| !s.is_empty())
+    };
+    match with_app_service(|svc| {
+        svc.copy_starmap_library_asset_json(&target, &scope, title)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => data,
+        Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `target_json` points to a valid, null-terminated C string.
+pub unsafe extern "C" fn writer_core_list_starmap_asset_references_json(
+    target_json: *const c_char,
+) -> *mut c_char {
+    let target = match c_str_to_rust(target_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid target_json: error {}", e)),
+    };
+    match with_app_service(|svc| {
+        svc.list_starmap_asset_references_json(&target)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => data,
+        Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `target_json` points to a valid, null-terminated C string.
+pub unsafe extern "C" fn writer_core_delete_starmap_library_asset_json(
+    target_json: *const c_char,
+) -> *mut c_char {
+    let target = match c_str_to_rust(target_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid target_json: error {}", e)),
+    };
+    match with_app_service(|svc| {
+        svc.delete_starmap_library_asset_json(&target)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure all pointers point to valid, null-terminated C strings.
+pub unsafe extern "C" fn writer_core_remove_starmap_instance(
+    starmap_id: *const c_char,
+    instance_id: *const c_char,
+    is_embed: bool,
+) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid starmap_id: error {}", e)),
+    };
+    let instance_id = match c_str_to_rust(instance_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid instance_id: error {}", e)),
+    };
+    match with_app_service(|svc| {
+        svc.remove_starmap_instance(&sid, &instance_id, is_embed)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
+    }
+}
+
 // --- FFI 内部输入 DTO ---
 // 统一采用 camelCase 字段命名，与 route DTO（StarMapNavigationRouteDto 等）一致。
 

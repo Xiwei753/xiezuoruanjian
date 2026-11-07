@@ -4,11 +4,13 @@
 //! 这些类型通过 JSON 序列化持久化，且被 FFI 层和平台端共享。
 //! 新增字段必须使用 `#[serde(default)]` 以保持向前兼容。
 
+mod asset;
 mod embed;
 mod graph;
 mod link;
 pub mod reference;
 
+pub use asset::*;
 pub use embed::*;
 pub use graph::*;
 pub use link::*;

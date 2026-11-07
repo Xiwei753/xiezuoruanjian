@@ -1,7 +1,7 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, StarMapNodeContent, StarMapAnchor, StarMapPortal, StarMapNodeStyle, StarMapProvenance, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, StarMapNodeContent, StarMapAnchor, StarMapPortal, StarMapNodeStyle, StarMapProvenance, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch, StarMapLibraryView, StarMapLibraryFolder, StarMapLibraryEntry, StarMapAssetReference } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapNode, decodeStarMapEdge, decodeStarMapEmbed, decodeCreateStarmapChildEmbedResult, decodeArray } from '../codec/CoreWireDecoders'
+import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapNode, decodeStarMapEdge, decodeStarMapEmbed, decodeCreateStarmapChildEmbedResult, decodeArray, decodeStarMapLibraryView, decodeStarMapLibraryFolder, decodeStarMapLibraryEntry, decodeStarMapAssetReference } from '../codec/CoreWireDecoders'
 import util from '@ohos.util'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
@@ -314,6 +314,69 @@ export class NativeStarMapBridge {
         data: plan
       }
       return result
-    } catch (e) { return nativeError<StarMapCrossLayerConnectionPlan>(e) }
+  // ─── 素材库（#1037）───
+  // 库目录只保存归属与分类；加入画布产生引用实例，正文写回共享本体。
+  async listStarMapLibrary(scopeJson: string): Promise<ResultEnvelope<StarMapLibraryView>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeListStarMapLibrary(scopeJson)
+      return this.core.decodeEnvelope<StarMapLibraryView>(jsonStr, decodeStarMapLibraryView)
+    } catch (e) { return nativeError<StarMapLibraryView>(e) }
+  }
+
+  async createStarMapLibraryFolder(scopeJson: string, parentFolderId: string, name: string): Promise<ResultEnvelope<StarMapLibraryFolder>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeCreateStarMapLibraryFolder(scopeJson, parentFolderId, name)
+      return this.core.decodeEnvelope<StarMapLibraryFolder>(jsonStr, decodeStarMapLibraryFolder)
+    } catch (e) { return nativeError<StarMapLibraryFolder>(e) }
+  }
+
+  async moveStarMapLibraryEntry(entryId: string, scopeJson: string, parentFolderId: string): Promise<ResultEnvelope<StarMapLibraryEntry>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeMoveStarMapLibraryEntry(entryId, scopeJson, parentFolderId)
+      return this.core.decodeEnvelope<StarMapLibraryEntry>(jsonStr, decodeStarMapLibraryEntry)
+    } catch (e) { return nativeError<StarMapLibraryEntry>(e) }
+  }
+
+  async addStarMapNodeReference(starmapId: string, assetId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeAddStarMapNodeReference(starmapId, assetId, position.x, position.y)
+      return this.core.decodeEnvelope<StarMapNode>(jsonStr, decodeStarMapNode)
+    } catch (e) { return nativeError<StarMapNode>(e) }
+  }
+
+  async addStarMapReference(hostStarmapId: string, targetStarmapId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapEmbed>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeAddStarMapReference(hostStarmapId, targetStarmapId, position.x, position.y)
+      return this.core.decodeEnvelope<StarMapEmbed>(jsonStr, decodeStarMapEmbed)
+    } catch (e) { return nativeError<StarMapEmbed>(e) }
+  }
+
+  async copyStarMapLibraryAsset(targetJson: string, scopeJson: string, title: string): Promise<ResultEnvelope<string>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeCopyStarMapLibraryAsset(targetJson, scopeJson, title)
+      return this.core.parseEnvelope<string>(jsonStr)
+    } catch (e) { return nativeError<string>(e) }
+  }
+
+  async listStarMapAssetReferences(targetJson: string): Promise<ResultEnvelope<StarMapAssetReference[]>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeListStarMapAssetReferences(targetJson)
+      return this.core.decodeEnvelope<StarMapAssetReference[]>(jsonStr,
+        (d: Object) => decodeArray<StarMapAssetReference>(d, decodeStarMapAssetReference, 'StarMapAssetReference'))
+    } catch (e) { return nativeError<StarMapAssetReference[]>(e) }
+  }
+
+  async deleteStarMapLibraryAsset(targetJson: string): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeDeleteStarMapLibraryAsset(targetJson)
+      return this.core.parseEnvelope<boolean>(jsonStr)
+    } catch (e) { return nativeError<boolean>(e) }
+  }
+
+  async removeStarMapInstance(starmapId: string, instanceId: string, isEmbed: boolean): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeRemoveStarMapInstance(starmapId, instanceId, isEmbed)
+      return this.core.parseEnvelope<boolean>(jsonStr)
+    } catch (e) { return nativeError<boolean>(e) }
   }
 }

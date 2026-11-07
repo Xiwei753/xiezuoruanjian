@@ -228,7 +228,9 @@ impl AppDataGroup {
         let path = path.replace('\\', "/");
         match self {
             Self::Global => path == "settings.sync.json" || is_agent_conversation_path(&path),
-            Self::StarmapIndex => path == "starmaps/index.json",
+            Self::StarmapIndex => {
+                path == "starmaps/index.json" || path.starts_with("starmaps/library/")
+            }
             Self::Starmap(id) => {
                 path == format!("starmaps/{id}.meta.json")
                     || path.starts_with(&format!("starmaps/{id}/"))

@@ -192,6 +192,54 @@ export interface StarMapLink {
   updatedAt: number
 }
 
+// ─── 素材库（#1037）───
+
+export interface StarMapAssetRef {
+  kind: string  // "node" | "starmap"
+  assetId: string
+}
+
+export interface StarMapAssetScope {
+  kind: string  // "global" | "project"
+  projectId?: string
+}
+
+export interface StarMapLibraryEntry {
+  entryId: string
+  parentFolderId: string | null
+  scope: StarMapAssetScope
+  target: StarMapAssetRef
+  createdAt: number
+  updatedAt: number
+}
+
+export interface StarMapLibraryFolder {
+  folderId: string
+  parentFolderId: string | null
+  scope: StarMapAssetScope
+  name: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface StarMapLibraryEntryView {
+  entry: StarMapLibraryEntry
+  title: string
+}
+
+export interface StarMapLibraryView {
+  scope: StarMapAssetScope
+  entries: StarMapLibraryEntryView[]
+  folders: StarMapLibraryFolder[]
+}
+
+export interface StarMapAssetReference {
+  target: StarMapAssetRef
+  projectId: string | null
+  starmapId: string
+  instanceId: string
+}
+
 // ─── 图 ───
 
 // StarMapGraphDto

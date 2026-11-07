@@ -25,6 +25,7 @@ use crate::starmap::store::meta::{
     DeletedSinceLastSync, DeletionEntry, GraphMeta, CURRENT_SCHEMA_VERSION,
 };
 use crate::starmap::store::relation_index::{EdgeRelationIndex, EmbedHostIndex, LinkRelationIndex};
+use crate::starmap::types::StarMapLibraryIndex;
 use crate::starmap::StarMapIndexRecord;
 use crate::sync::content_class::{resolve_lww, LwwRecord, LwwWinner};
 
@@ -40,6 +41,25 @@ fn normalize_path(rel_path: &str) -> String {
 /// 判断 rel_path 是否是星图全局索引文件 `starmaps/index.json`。
 pub(crate) fn is_starmap_index_path(rel_path: &str) -> bool {
     normalize_path(rel_path) == "starmaps/index.json"
+}
+
+/// 判断 rel_path 是否是素材库索引文件 `starmaps/library/index.json`。
+pub(crate) fn is_starmap_library_index_path(rel_path: &str) -> bool {
+    normalize_path(rel_path) == "starmaps/library/index.json"
+}
+
+/// 判断 rel_path 是否是共享节点本体文件
+/// `starmaps/library/nodes/<bucket>/<asset_id>.json`。
+pub(crate) fn is_starmap_library_node_path(rel_path: &str) -> bool {
+    let normalized = normalize_path(rel_path);
+    let parts: Vec<&str> = normalized.split('/').collect();
+    parts.len() == 5
+        && parts[0] == "starmaps"
+        && parts[1] == "library"
+        && parts[2] == "nodes"
+        && is_valid_bucket(parts[3])
+        && parts[4].ends_with(".json")
+        && parts[4].len() > ".json".len()
 }
 
 /// 判断 rel_path 是否是星图 graph.json 文件 `starmaps/<id>/graph.json`。
@@ -95,6 +115,8 @@ pub(crate) fn is_starmap_object_file_path(rel_path: &str) -> bool {
 /// 包括：index.json、graph.json、meta.json、对象文件。
 pub(crate) fn is_starmap_content_path(rel_path: &str) -> bool {
     is_starmap_index_path(rel_path)
+        || is_starmap_library_index_path(rel_path)
+        || is_starmap_library_node_path(rel_path)
         || is_starmap_graph_meta_path(rel_path)
         || is_starmap_meta_path(rel_path)
         || is_starmap_object_file_path(rel_path)
@@ -820,6 +842,157 @@ pub(crate) fn merge_starmap_index(
 }
 
 // ===========================================================================
+// 素材库索引三方合并
+// ===========================================================================
+
+fn parse_library_index(bytes: Option<&[u8]>) -> Result<StarMapLibraryIndex> {
+    match bytes {
+        Some(b) => Ok(serde_json::from_slice(b)?),
+        None => Ok(StarMapLibraryIndex::default()),
+    }
+}
+
+/// 按稳定 ID 合并素材库记录。
+///
+/// 同 ID 的归属、父目录、位置都以 `updated_at` 决胜；一侧删除、另一侧
+/// 未修改时接受删除；删除与修改同时出现时保留修改，避免另一端刚移动的
+/// 素材因本端删除目录记录而丢失。顺序先 base、再 local 新增、最后 incoming 新增。
+fn merge_library_records<T>(
+    base: &[T],
+    local: &[T],
+    incoming: &[T],
+    id_of: impl Fn(&T) -> &str,
+    updated_at: impl Fn(&T) -> u64,
+) -> Vec<T>
+where
+    T: Clone + PartialEq,
+{
+    let base_map: HashMap<&str, &T> = base.iter().map(|r| (id_of(r), r)).collect();
+    let local_map: HashMap<&str, &T> = local.iter().map(|r| (id_of(r), r)).collect();
+    let incoming_map: HashMap<&str, &T> = incoming.iter().map(|r| (id_of(r), r)).collect();
+
+    let mut ordered_ids: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for record in base {
+        let id = id_of(record).to_string();
+        if seen.insert(id.clone()) {
+            ordered_ids.push(id);
+        }
+    }
+    for record in local {
+        let id = id_of(record).to_string();
+        if seen.insert(id.clone()) {
+            ordered_ids.push(id);
+        }
+    }
+    for record in incoming {
+        let id = id_of(record).to_string();
+        if seen.insert(id.clone()) {
+            ordered_ids.push(id);
+        }
+    }
+
+    let mut merged: Vec<T> = Vec::new();
+    for id in ordered_ids {
+        let base_record = base_map.get(id.as_str()).copied();
+        let local_record = local_map.get(id.as_str()).copied();
+        let incoming_record = incoming_map.get(id.as_str()).copied();
+        if local_record == incoming_record {
+            if let Some(record) = local_record {
+                merged.push(record.clone());
+            }
+            continue;
+        }
+        if local_record == base_record {
+            if let Some(record) = incoming_record {
+                merged.push(record.clone());
+            }
+            continue;
+        }
+        if incoming_record == base_record {
+            if let Some(record) = local_record {
+                merged.push(record.clone());
+            }
+            continue;
+        }
+        match (local_record, incoming_record) {
+            (Some(local_record), Some(incoming_record)) => {
+                if updated_at(local_record) > updated_at(incoming_record) {
+                    merged.push(local_record.clone());
+                } else {
+                    merged.push(incoming_record.clone());
+                }
+            }
+            // 删除与修改冲突：保留仍存在的一侧，不丢素材归属或画布位置。
+            (Some(record), None) | (None, Some(record)) => merged.push(record.clone()),
+            (None, None) => {}
+        }
+    }
+    merged
+}
+
+/// 素材库索引 `starmaps/library/index.json` 三方语义合并。
+///
+/// 条目、文件夹、节点实例均按稳定 ID 合并；跨库移动只改变 entry 记录，
+/// 不改变素材本体或画布实例。节点本体内容由对象文件级合并处理。
+pub(crate) fn merge_starmap_library_index(
+    base: Option<&[u8]>,
+    local: Option<&[u8]>,
+    incoming: Option<&[u8]>,
+) -> Result<StarmapMergeResult> {
+    let base_index = parse_library_index(base)?;
+    let local_index = parse_library_index(local)?;
+    let incoming_index = parse_library_index(incoming)?;
+
+    let mut entries = merge_library_records(
+        &base_index.entries,
+        &local_index.entries,
+        &incoming_index.entries,
+        |entry| entry.entry_id.as_str(),
+        |entry| entry.updated_at,
+    );
+    let folders = merge_library_records(
+        &base_index.folders,
+        &local_index.folders,
+        &incoming_index.folders,
+        |folder| folder.folder_id.as_str(),
+        |folder| folder.updated_at,
+    );
+    let node_instances = merge_library_records(
+        &base_index.node_instances,
+        &local_index.node_instances,
+        &incoming_index.node_instances,
+        |instance| instance.instance_id.as_str(),
+        |instance| instance.updated_at,
+    );
+
+    // 文件夹删除后，仍保留的条目挂回根目录，避免产生悬空父目录。
+    let folder_ids: HashSet<&str> = folders.iter().map(|f| f.folder_id.as_str()).collect();
+    for entry in &mut entries {
+        if entry
+            .parent_folder_id
+            .as_deref()
+            .is_some_and(|parent| !folder_ids.contains(parent))
+        {
+            entry.parent_folder_id = None;
+        }
+    }
+
+    let merged = StarMapLibraryIndex {
+        schema_version: base_index
+            .schema_version
+            .max(local_index.schema_version)
+            .max(incoming_index.schema_version),
+        entries,
+        folders,
+        node_instances,
+        updated_at: local_index.updated_at.max(incoming_index.updated_at),
+    };
+    let merged_bytes = serde_json::to_vec_pretty(&merged)?;
+    Ok(finalize_merge_result(&merged_bytes, base, local, incoming))
+}
+
+// ===========================================================================
 // GraphMeta 三方合并
 // ===========================================================================
 
@@ -1140,7 +1313,7 @@ fn dir_to_object_type(dir: &str) -> Option<&'static str> {
 pub(crate) fn parse_object_path(rel_path: &std::path::Path) -> Option<(String, String)> {
     let rel_str = rel_path.to_string_lossy().replace('\\', "/");
     let parts: Vec<&str> = rel_str.split('/').collect();
-    if parts.len() == 5 {
+    if parts.len() == 5 && parts[0] == "starmaps" && parts[1] != "library" {
         if let Some(obj_type) = dir_to_object_type(parts[2]) {
             let file_name = parts[4];
             if file_name.ends_with(".json") && file_name.len() > ".json".len() {

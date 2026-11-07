@@ -36,6 +36,82 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
             holder.service.listStarmaps()
         }
 
+    override fun listStarmapLibraryJson(scopeJson: String): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.listStarmapLibraryJson(scopeJson)
+        }
+
+    override fun createStarmapLibraryFolderJson(
+        scopeJson: String,
+        parentFolderId: String?,
+        name: String,
+    ): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.createStarmapLibraryFolderJson(scopeJson, parentFolderId, name)
+        }
+
+    override fun moveStarmapLibraryEntryJson(
+        entryId: String,
+        scopeJson: String,
+        parentFolderId: String?,
+    ): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.moveStarmapLibraryEntryJson(entryId, scopeJson, parentFolderId)
+        }
+
+    override fun addStarmapNodeReference(
+        starmapId: String,
+        assetId: String,
+        x: Float,
+        y: Float,
+    ): BridgeResult<StarMapNodeDto> =
+        holder.wrapResult {
+            holder.service.addStarmapNodeReference(starmapId, assetId, x.toDouble(), y.toDouble())
+        }
+
+    override fun addStarmapReference(
+        hostStarmapId: String,
+        targetStarmapId: String,
+        x: Float,
+        y: Float,
+    ): BridgeResult<StarMapEmbedDto> =
+        holder.wrapResult {
+            holder.service.addStarmapReference(
+                hostStarmapId,
+                targetStarmapId,
+                x.toDouble(),
+                y.toDouble(),
+            )
+        }
+
+    override fun copyStarmapLibraryAssetJson(
+        targetJson: String,
+        scopeJson: String,
+        title: String?,
+    ): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.copyStarmapLibraryAssetJson(targetJson, scopeJson, title)
+        }
+
+    override fun listStarmapAssetReferencesJson(targetJson: String): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.listStarmapAssetReferencesJson(targetJson)
+        }
+
+    override fun deleteStarmapLibraryAssetJson(targetJson: String): BridgeResult<Boolean> =
+        holder.wrapResult {
+            holder.service.deleteStarmapLibraryAssetJson(targetJson)
+        }
+
+    override fun removeStarmapInstance(
+        starmapId: String,
+        instanceId: String,
+        isEmbed: Boolean,
+    ): BridgeResult<Boolean> =
+        holder.wrapResult {
+            holder.service.removeStarmapInstance(starmapId, instanceId, isEmbed)
+        }
+
     @Suppress("OverridingDeprecatedMember")
     @Deprecated("Use getStarmapPhasedSnapshot for progressive loading. getStarMapGraph performs full graph load.")
     override fun getStarMapGraph(starmapId: String): BridgeResult<StarMapGraphDto> {

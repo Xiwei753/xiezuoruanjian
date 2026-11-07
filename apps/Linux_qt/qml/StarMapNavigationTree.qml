@@ -68,6 +68,7 @@ Rectangle {
             routeKey: String(model.routeKey || ""),
             objectKey: String(model.objectKey || ""),
             objectId: String(model.objectId || ""),
+            assetId: String(model.assetId || ""),
             rowKind: String(model.rowKind || "root"),
             parentStarmapId: String(model.parentStarmapId || ""),
             instanceId: String(model.instanceId || ""),

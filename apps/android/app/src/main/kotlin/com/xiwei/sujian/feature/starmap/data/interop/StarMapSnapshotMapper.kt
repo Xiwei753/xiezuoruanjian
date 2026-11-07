@@ -27,6 +27,7 @@ internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache =
                 edges = edges,
                 embeds = embeds,
                 links = links,
+                assetBindings = assetBindings,
             ),
         nodes = nodes.associateByTo(mutableMapOf()) { it.id },
         edges = edges.associateByTo(mutableMapOf()) { it.id },

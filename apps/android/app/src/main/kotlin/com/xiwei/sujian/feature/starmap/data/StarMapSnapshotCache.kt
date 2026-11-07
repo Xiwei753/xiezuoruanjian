@@ -158,6 +158,7 @@ internal class StarMapSnapshotCache {
                 edges = cache.edges.values.toList(),
                 embeds = cache.embeds.values.toList(),
                 links = cache.links.values.toList(),
+                assetBindings = meta.assetBindings,
             )
     }
 

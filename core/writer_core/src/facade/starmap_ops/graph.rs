@@ -45,6 +45,18 @@ fn first_free_embed_position(
     crate::starmap::types::StarMapPoint::default()
 }
 
+fn patch_has_shared_node_fields(patch: &crate::starmap::types::StarMapNodePatch) -> bool {
+    patch.title.is_some()
+        || patch.kind.is_some()
+        || patch.payload.is_some()
+        || patch.tags.is_some()
+        || patch.content.is_some()
+        || patch.anchors.is_some()
+        || patch.portal.is_some()
+        || patch.style.is_some()
+        || patch.provenance.is_some()
+}
+
 impl super::super::WriterCore {
     pub fn get_starmap_graph(
         &self,
@@ -68,6 +80,62 @@ impl super::super::WriterCore {
         default_x: f64,
         default_y: f64,
     ) -> Result<crate::starmap::types::StarMapNode> {
+        self.add_starmap_node_inner(starmap_id, node, default_x, default_y, None)
+    }
+
+    /// 把库中已有节点素材放入画布，创建独立实例。
+    pub fn add_starmap_node_reference(
+        &self,
+        starmap_id: &str,
+        asset_id: &str,
+        position: crate::starmap::types::StarMapPoint,
+        title: Option<String>,
+    ) -> Result<crate::starmap::types::StarMapNode> {
+        let definition = crate::starmap::library::load_node_definition(
+            &self.app_data_root,
+            asset_id,
+        )?
+        .ok_or_else(|| {
+            crate::error::Error::Other(format!("node asset not found: {asset_id}"))
+        })?;
+        let now = crate::starmap::now_epoch();
+        let instance_id = format!("n_{}", uuid::Uuid::new_v4());
+        let mut node = crate::starmap::types::StarMapNode {
+            id: instance_id,
+            title: title.unwrap_or(definition.title),
+            kind: definition.kind,
+            payload: definition.payload,
+            tags: definition.tags,
+            content: definition.content,
+            anchors: definition.anchors,
+            portal: definition.portal,
+            position: position.clone(),
+            style: definition.style,
+            provenance: definition.provenance,
+            created_at: now,
+            updated_at: now,
+        };
+        if node.title.is_empty() {
+            node.title = "未命名节点".to_string();
+        }
+        self.add_starmap_node_inner(
+            starmap_id,
+            node,
+            position.x,
+            position.y,
+            Some(asset_id.to_string()),
+        )
+    }
+
+    fn add_starmap_node_inner(
+        &self,
+        starmap_id: &str,
+        node: crate::starmap::types::StarMapNode,
+        default_x: f64,
+        default_y: f64,
+        shared_asset_id: Option<String>,
+    ) -> Result<crate::starmap::types::StarMapNode> {
+        crate::starmap::library::ensure_library_index(&self.app_data_root)?;
         let mut stores = self
             .starmap_stores
             .lock()
@@ -100,10 +168,24 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
+        let asset_id = shared_asset_id.unwrap_or_else(|| node.id.clone());
+        let project_id = crate::starmap::get_starmap(&self.app_data_root, starmap_id)
+            .ok()
+            .and_then(|meta| meta.project_id);
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
-        let result = store.add_node(node);
+        store.set_node_asset(&node.id, &asset_id);
+        let result = store.add_node(node.clone());
         store.enqueue_save(SaveQueueEntry::Node);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+        crate::starmap::library::ensure_node_asset(
+            &self.app_data_root,
+            starmap_id,
+            project_id.as_deref(),
+            &asset_id,
+            &result.id,
+            &result,
+            &result.position,
+        )?;
         Ok(result)
     }
 
@@ -192,10 +274,58 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
-        let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
-        let result = store.update_node(node_id, &patch)?;
-        store.enqueue_save(SaveQueueEntry::Node);
-        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        let project_id = crate::starmap::get_starmap(&self.app_data_root, starmap_id)
+            .ok()
+            .and_then(|meta| meta.project_id);
+        let (asset_id, result) = {
+            let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
+            let asset_id = store.asset_id_for_node(node_id);
+            let result = store.update_node(node_id, &patch)?;
+            store.enqueue_save(SaveQueueEntry::Node);
+            store.enqueue_save(SaveQueueEntry::GraphMeta);
+            (asset_id, result)
+        };
+
+        crate::starmap::library::ensure_node_asset(
+            &self.app_data_root,
+            starmap_id,
+            project_id.as_deref(),
+            &asset_id,
+            &result.id,
+            &result,
+            &result.position,
+        )?;
+        crate::starmap::library::update_instance_position(
+            &self.app_data_root,
+            starmap_id,
+            &result.id,
+            &result.position,
+        )?;
+
+        // 共享内容变更写回素材本体，并同步到所有已加载/未加载画布中的实例。
+        // 位置属于当前画布，不进入共享定义。
+        if patch_has_shared_node_fields(&patch) {
+            let definition = crate::starmap::types::StarMapNodeDefinition::from_node(
+                asset_id.clone(),
+                &result,
+            );
+            crate::starmap::library::save_node_definition(&self.app_data_root, &definition)?;
+
+            let mut loaded_starmaps = std::collections::HashSet::new();
+            for (loaded_id, loaded_store) in stores.iter_mut() {
+                let affected = loaded_store.apply_shared_node_definition(&definition);
+                if !affected.is_empty() {
+                    loaded_starmaps.insert(loaded_id.clone());
+                    loaded_store.enqueue_save(SaveQueueEntry::Node);
+                    loaded_store.enqueue_save(SaveQueueEntry::GraphMeta);
+                }
+            }
+            crate::starmap::library::sync_definition_to_instance_files(
+                &self.app_data_root,
+                &definition,
+                &loaded_starmaps,
+            )?;
+        }
 
         // Portal/Anchor 变更会改变路径解析结果，失效持久化索引。
         // 下次查询时从真实数据惰性重建。
@@ -651,6 +781,15 @@ impl super::super::WriterCore {
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
         store.enqueue_save(SaveQueueEntry::DeleteLink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 删除画布引用只移除实例归属，素材本体与其他画布的引用保持不变。
+        if let CascadeOrigin::Node(node_id) = &origin {
+            crate::starmap::library::remove_instance_record(
+                &self.app_data_root,
+                starmap_id,
+                node_id,
+            )?;
+        }
 
         // 增量更新持久化路径依赖索引：移除所有被删来源的依赖事实。
         // 避免下次查询时从零扫描全库重建索引。

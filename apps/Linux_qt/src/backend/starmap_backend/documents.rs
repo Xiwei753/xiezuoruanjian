@@ -401,4 +401,187 @@ impl AppBackend {
             .into()
         }
     }
+
+    // ── 素材库 ──
+
+    pub(crate) fn list_starmap_library_json(&self, scope_json: QString) -> QString {
+        if let Some(core) = self.core_api() {
+            starmap_bridge::list_starmap_library(&core, &scope_json.to_string()).into()
+        } else {
+            "{}".into()
+        }
+    }
+
+    pub(crate) fn create_starmap_library_folder_json(
+        &mut self,
+        scope_json: QString,
+        parent_folder_id: QString,
+        name: QString,
+    ) -> QString {
+        let parent = parent_folder_id.to_string();
+        let parent_ref = if parent.is_empty() {
+            None
+        } else {
+            Some(parent.as_str())
+        };
+        if let Some(core) = self.core_api() {
+            starmap_bridge::create_starmap_library_folder(
+                &core,
+                &scope_json.to_string(),
+                parent_ref,
+                &name.to_string(),
+            )
+            .into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    pub(crate) fn move_starmap_library_entry_json(
+        &mut self,
+        entry_id: QString,
+        scope_json: QString,
+        parent_folder_id: QString,
+    ) -> QString {
+        let parent = parent_folder_id.to_string();
+        let parent_ref = if parent.is_empty() {
+            None
+        } else {
+            Some(parent.as_str())
+        };
+        if let Some(core) = self.core_api() {
+            starmap_bridge::move_starmap_library_entry(
+                &core,
+                &entry_id.to_string(),
+                &scope_json.to_string(),
+                parent_ref,
+            )
+            .into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    pub(crate) fn add_starmap_node_reference_json(
+        &mut self,
+        starmap_id: QString,
+        asset_id: QString,
+        x: f64,
+        y: f64,
+    ) -> QString {
+        if let Some(core) = self.core_api() {
+            starmap_bridge::add_starmap_node_reference(
+                &core,
+                &starmap_id.to_string(),
+                &asset_id.to_string(),
+                x,
+                y,
+            )
+            .into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    pub(crate) fn add_starmap_reference_json(
+        &mut self,
+        host_starmap_id: QString,
+        target_starmap_id: QString,
+        x: f64,
+        y: f64,
+    ) -> QString {
+        if let Some(core) = self.core_api() {
+            starmap_bridge::add_starmap_reference(
+                &core,
+                &host_starmap_id.to_string(),
+                &target_starmap_id.to_string(),
+                x,
+                y,
+            )
+            .into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    pub(crate) fn copy_starmap_library_asset_json(
+        &mut self,
+        target_json: QString,
+        scope_json: QString,
+        title: QString,
+    ) -> QString {
+        let title_string = title.to_string();
+        let title_ref = if title_string.is_empty() {
+            None
+        } else {
+            Some(title_string.as_str())
+        };
+        if let Some(core) = self.core_api() {
+            starmap_bridge::copy_starmap_library_asset(
+                &core,
+                &target_json.to_string(),
+                &scope_json.to_string(),
+                title_ref,
+            )
+            .into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    pub(crate) fn list_starmap_asset_references_json(&self, target_json: QString) -> QString {
+        if let Some(core) = self.core_api() {
+            starmap_bridge::list_starmap_asset_references(&core, &target_json.to_string()).into()
+        } else {
+            "[]".into()
+        }
+    }
+
+    pub(crate) fn delete_starmap_library_asset_json(&mut self, target_json: QString) -> QString {
+        if let Some(core) = self.core_api() {
+            starmap_bridge::delete_starmap_library_asset(&core, &target_json.to_string()).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    pub(crate) fn remove_starmap_instance_json(
+        &mut self,
+        starmap_id: QString,
+        instance_id: QString,
+        is_embed: bool,
+    ) -> QString {
+        if let Some(core) = self.core_api() {
+            starmap_bridge::remove_starmap_instance(
+                &core,
+                &starmap_id.to_string(),
+                &instance_id.to_string(),
+                is_embed,
+            )
+            .into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
 }

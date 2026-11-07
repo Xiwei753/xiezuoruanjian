@@ -139,6 +139,16 @@ char*  writer_core_resolve_starmap_path(const char* root_starmap_id, const char*
 // 跨层连线宿主规划：入参是 {"from": StarMapTargetPathDto, "to": StarMapTargetPathDto}
 // 的 JSON，返回含 hostStarmapId / hostSegments / from / to 的 ResultEnvelope。
 char*  writer_core_plan_cross_layer_connection(const char* json);
+// 素材库（#1037）：库目录与共享节点本体；引用实例仍属于各画布。
+char*  writer_core_list_starmap_library_json(const char* scope_json);
+char*  writer_core_create_starmap_library_folder_json(const char* scope_json, const char* parent_folder_id, const char* name);
+char*  writer_core_move_starmap_library_entry_json(const char* entry_id, const char* scope_json, const char* parent_folder_id);
+char*  writer_core_add_starmap_node_reference(const char* starmap_id, const char* asset_id, double x, double y);
+char*  writer_core_add_starmap_reference(const char* host_starmap_id, const char* target_starmap_id, double x, double y);
+char*  writer_core_copy_starmap_library_asset_json(const char* target_json, const char* scope_json, const char* title);
+char*  writer_core_list_starmap_asset_references_json(const char* target_json);
+char*  writer_core_delete_starmap_library_asset_json(const char* target_json);
+char*  writer_core_remove_starmap_instance(const char* starmap_id, const char* instance_id, bool is_embed);
 
 // ── Sync ──
 // All sync functions use JSON-in/JSON-out via ResultEnvelope.

@@ -2,7 +2,7 @@ import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, BuiltinThemeDto } from './dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch } from './dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch, StarMapLibraryView, StarMapLibraryFolder, StarMapLibraryEntry, StarMapAssetReference } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 import { SearchContext, SearchResultPage } from './dto/SearchDtos'
 import { WritingActivitySegmentInput } from './dto/StatsDtos'
@@ -59,6 +59,17 @@ export interface IWriterCoreBridge {
   resolveStarMapPath(rootStarmapId: string, segments: StarMapPathSegment[]): Promise<ResultEnvelope<StarMapResolvedPath>>
   // 跨层连线宿主规划：Core 决定 Edge/Link 落在哪张图（自环/不可解析/不同根会被拒绝）。
   planStarMapCrossLayerConnection(from: StarMapTargetPath, to: StarMapTargetPath): Promise<ResultEnvelope<StarMapCrossLayerConnectionPlan>>
+
+  // StarMap 素材库（#1037）：库目录保存归属，画布保存引用实例。
+  listStarMapLibrary(scopeJson: string): Promise<ResultEnvelope<StarMapLibraryView>>
+  createStarMapLibraryFolder(scopeJson: string, parentFolderId: string, name: string): Promise<ResultEnvelope<StarMapLibraryFolder>>
+  moveStarMapLibraryEntry(entryId: string, scopeJson: string, parentFolderId: string): Promise<ResultEnvelope<StarMapLibraryEntry>>
+  addStarMapNodeReference(starmapId: string, assetId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>>
+  addStarMapReference(hostStarmapId: string, targetStarmapId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapEmbed>>
+  copyStarMapLibraryAsset(targetJson: string, scopeJson: string, title: string): Promise<ResultEnvelope<string>>
+  listStarMapAssetReferences(targetJson: string): Promise<ResultEnvelope<StarMapAssetReference[]>>
+  deleteStarMapLibraryAsset(targetJson: string): Promise<ResultEnvelope<boolean>>
+  removeStarMapInstance(starmapId: string, instanceId: string, isEmbed: boolean): Promise<ResultEnvelope<boolean>>
 
   // Settings
   getLocalSettings(): Promise<ResultEnvelope<LocalSettings>>

@@ -2,7 +2,7 @@ import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import { WideLayoutMode, WideLayoutState } from '../../../app/navigation/wide/WideLayoutMode'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapPathSegment, StarMapPoint, StarMapTargetPath } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapPathSegment, StarMapPoint, StarMapTargetPath, StarMapAssetRef } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
@@ -35,6 +35,7 @@ import { StarMapSyncBarrier } from '../platform/StarMapSyncBarrier'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { StarMapScene } from './StarMapScene'
+import { StarMapLibraryPanel } from './StarMapLibraryPanel'
 import { StarMapProofReplayPanel } from './StarMapProofReplayPanel'
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 import { AnnotationObjectRefDto } from '../../../corebridge/dto/AnnotationDtos'
@@ -108,6 +109,8 @@ export struct StarMapScreen {
   @State private starMapToolPanelOpen: boolean = false
   @State private selectedStarMapTool: string = 'ai'
   @State private starMapProofVisible: boolean = false
+  /** 窄屏素材库抽屉；宽屏直接常驻左栏。 */
+  @State private libraryDrawerOpen: boolean = false
 
   // 全局视角相机（#818/#1009）：当前活动画布只有这一台相机。
   // 工具栏 +/- 和画布双指捏合改的都是它；节点和入口都只是这张画布里的内容。
@@ -1018,10 +1021,78 @@ export struct StarMapScreen {
     // motionProgress 变化时由 StarMapScene 的 @Watch 自动处理重画
   }
 
+  private libraryScopeJson(projectId: string): string {
+    return projectId.length > 0
+      ? JSON.stringify({ kind: 'project', projectId: projectId })
+      : ''
+  }
+
+  /** 从库中插入引用：只新增当前画布实例，共享本体仍由 Core 管理。 */
+  private async insertLibraryAsset(target: StarMapAssetRef, _title: string): Promise<void> {
+    if (this.starmapId.length === 0) {
+      return
+    }
+    const position: StarMapPoint = {
+      x: this.cameraWidthCenter(),
+      y: this.cameraHeightCenter()
+    }
+    const result = target.kind === 'starmap'
+      ? await this.bridge.addStarMapReference(this.starmapId, target.assetId, position)
+      : await this.bridge.addStarMapNodeReference(this.starmapId, target.assetId, position)
+    if (result.success) {
+      await this.loadStarMap()
+      this.libraryDrawerOpen = false
+    } else {
+      this.errorMessage = result.userMessage ?? '插入素材失败'
+    }
+  }
+
+  private cameraWidthCenter(): number {
+    return (this.canvasWidth / 2 - this.cameraOffsetX) / this.cameraScale
+  }
+
+  private cameraHeightCenter(): number {
+    return (this.canvasHeight / 2 - this.cameraOffsetY) / this.cameraScale
+  }
+
+  @Builder
+  LibraryColumn() {
+    Column() {
+      StarMapLibraryPanel({
+        scopeJson: '{"kind":"global"}',
+        scopeLabel: '全局素材库',
+        otherScopeJson: this.libraryScopeJson(this.annotationProjectId),
+        canInsert: this.starmapId.length > 0,
+        onInsert: (target: StarMapAssetRef, title: string): void => {
+          this.insertLibraryAsset(target, title)
+        }
+      })
+        .layoutWeight(1)
+
+      Divider().color($r('sys.color.comp_divider'))
+
+      StarMapLibraryPanel({
+        scopeJson: this.libraryScopeJson(this.annotationProjectId),
+        scopeLabel: '当前作品素材库',
+        otherScopeJson: '{"kind":"global"}',
+        canInsert: this.starmapId.length > 0,
+        onInsert: (target: StarMapAssetRef, title: string): void => {
+          this.insertLibraryAsset(target, title)
+        }
+      })
+        .layoutWeight(1)
+    }
+    .width(248)
+    .height('100%')
+    .backgroundColor($r('sys.color.background_secondary'))
+    .border({ width: { right: 1 }, color: $r('sys.color.comp_divider') })
+  }
+
   @Builder
   StarMapContent() {
     if (this.isWideLayout()) {
       Row() {
+        this.LibraryColumn()
         this.StarMapCanvas()
 
         if (this.starMapToolPanelOpen) {
@@ -1119,6 +1190,23 @@ export struct StarMapScreen {
             void this.exitActiveCanvas()
           })
           .position({ x: 12, y: 12 })
+      }
+
+      if (!this.isWideLayout()) {
+        Button(this.libraryDrawerOpen ? '收起素材库' : '素材库')
+          .fontSize(13)
+          .height(36)
+          .padding({ left: 12, right: 12 })
+          .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
+          .fontColor(this.themeConfig.colors.onSurface)
+          .position({ x: 12, y: this.activePath.length > 0 ? 56 : 12 })
+          .onClick(() => {
+            this.libraryDrawerOpen = !this.libraryDrawerOpen
+          })
+
+        if (this.libraryDrawerOpen) {
+          this.LibraryColumn()
+        }
       }
 
       if (!this.isWideLayout() && this.annotationProjectId.length > 0 &&

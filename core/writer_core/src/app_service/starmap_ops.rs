@@ -69,6 +69,89 @@ impl super::WriterAppService {
         self.api.delete_starmap_node(&starmap_id, &node_id)
     }
 
+    pub fn list_starmap_library_json(
+        &self,
+        scope_json: String,
+    ) -> Result<String, WriterError> {
+        self.api.list_starmap_library_json(&scope_json)
+    }
+
+    pub fn create_starmap_library_folder_json(
+        &self,
+        scope_json: String,
+        parent_folder_id: Option<String>,
+        name: String,
+    ) -> Result<String, WriterError> {
+        self.api
+            .create_starmap_library_folder_json(&scope_json, parent_folder_id, &name)
+    }
+
+    pub fn move_starmap_library_entry_json(
+        &self,
+        entry_id: String,
+        scope_json: String,
+        parent_folder_id: Option<String>,
+    ) -> Result<String, WriterError> {
+        self.api
+            .move_starmap_library_entry_json(&entry_id, &scope_json, parent_folder_id)
+    }
+
+    pub fn add_starmap_node_reference(
+        &self,
+        starmap_id: String,
+        asset_id: String,
+        x: f64,
+        y: f64,
+    ) -> Result<StarMapNodeDto, WriterError> {
+        self.api
+            .add_starmap_node_reference(&starmap_id, &asset_id, x, y)
+    }
+
+    pub fn add_starmap_reference(
+        &self,
+        host_starmap_id: String,
+        target_starmap_id: String,
+        x: f64,
+        y: f64,
+    ) -> Result<StarMapEmbedDto, WriterError> {
+        self.api
+            .add_starmap_reference(&host_starmap_id, &target_starmap_id, x, y)
+    }
+
+    pub fn copy_starmap_library_asset_json(
+        &self,
+        target_json: String,
+        scope_json: String,
+        title: Option<String>,
+    ) -> Result<String, WriterError> {
+        self.api
+            .copy_starmap_library_asset_json(&target_json, &scope_json, title)
+    }
+
+    pub fn list_starmap_asset_references_json(
+        &self,
+        target_json: String,
+    ) -> Result<String, WriterError> {
+        self.api.list_starmap_asset_references_json(&target_json)
+    }
+
+    pub fn delete_starmap_library_asset_json(
+        &self,
+        target_json: String,
+    ) -> Result<bool, WriterError> {
+        self.api.delete_starmap_library_asset_json(&target_json)
+    }
+
+    pub fn remove_starmap_instance(
+        &self,
+        starmap_id: String,
+        instance_id: String,
+        is_embed: bool,
+    ) -> Result<bool, WriterError> {
+        self.api
+            .remove_starmap_instance(&starmap_id, &instance_id, is_embed)
+    }
+
     pub fn add_starmap_edge(
         &self,
         starmap_id: String,

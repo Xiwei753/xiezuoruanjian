@@ -611,6 +611,7 @@ fn main() {
     emit_qsb_validation();
     println!("cargo:rerun-if-changed=qml/DesktopLayoutState.qml");
     println!("cargo:rerun-if-changed=qml/StarMapNavigationTree.qml");
+    println!("cargo:rerun-if-changed=qml/StarMapLibraryPanel.qml");
     println!("cargo:rerun-if-changed=qml/CorrectionPanel.qml");
     // Issue #757 评论 5818193510 第 5 点：同步冲突解决面板。
     println!("cargo:rerun-if-changed=qml/SyncConflictPanel.qml");

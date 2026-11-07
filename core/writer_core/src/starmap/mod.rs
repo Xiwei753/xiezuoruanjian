@@ -14,6 +14,7 @@
 
 pub mod connections;
 pub mod graph;
+pub mod library;
 pub mod migration;
 pub mod navigation;
 pub mod package_storage;
@@ -115,6 +116,7 @@ pub(crate) fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
 
     let path = index_path(app_data_root);
     if !path.exists() {
+        let _ = library::ensure_library_index(app_data_root)?;
         return Ok(StarMapIndexRecord {
             schema_version: migration::NEW_INDEX_SCHEMA_VERSION,
             starmap_ids: vec![],
@@ -131,6 +133,9 @@ pub(crate) fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
             version: idx.schema_version.to_string(),
         });
     }
+    // 素材库目录同样在首次读取星图索引时完成一次性迁移；迁移只读文件，
+    // 不回调 load_index，避免递归。
+    let _ = library::ensure_library_index(app_data_root)?;
     Ok(idx)
 }
 
@@ -262,6 +267,9 @@ fn create_starmap_entry(
     }
     idx.updated_at = now;
     save_index(app_data_root, &idx)?;
+    // 星图本身也是库中的一类素材。库归属与 meta.project_id 独立，
+    // 这里只负责让新星图出现在默认库目录中，不反向决定星图身份。
+    library::ensure_starmap_asset(app_data_root, &meta)?;
     Ok(meta)
 }
 

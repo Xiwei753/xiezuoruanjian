@@ -18,6 +18,50 @@ import uniffi.writer_core.StarMapReferenceDto
 internal interface StarMapBridgeOps {
     fun listStarMaps(): BridgeResult<List<StarMapMetaDto>>
 
+    fun listStarmapLibraryJson(scopeJson: String): BridgeResult<String>
+
+    fun createStarmapLibraryFolderJson(
+        scopeJson: String,
+        parentFolderId: String?,
+        name: String,
+    ): BridgeResult<String>
+
+    fun moveStarmapLibraryEntryJson(
+        entryId: String,
+        scopeJson: String,
+        parentFolderId: String?,
+    ): BridgeResult<String>
+
+    fun addStarmapNodeReference(
+        starmapId: String,
+        assetId: String,
+        x: Float,
+        y: Float,
+    ): BridgeResult<StarMapNodeDto>
+
+    fun addStarmapReference(
+        hostStarmapId: String,
+        targetStarmapId: String,
+        x: Float,
+        y: Float,
+    ): BridgeResult<StarMapEmbedDto>
+
+    fun copyStarmapLibraryAssetJson(
+        targetJson: String,
+        scopeJson: String,
+        title: String?,
+    ): BridgeResult<String>
+
+    fun listStarmapAssetReferencesJson(targetJson: String): BridgeResult<String>
+
+    fun deleteStarmapLibraryAssetJson(targetJson: String): BridgeResult<Boolean>
+
+    fun removeStarmapInstance(
+        starmapId: String,
+        instanceId: String,
+        isEmbed: Boolean,
+    ): BridgeResult<Boolean>
+
     @Deprecated("Use getStarmapPhasedSnapshot for progressive loading.")
     fun getStarMapGraph(starmapId: String): BridgeResult<StarMapGraphDto>
 

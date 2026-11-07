@@ -40,6 +40,90 @@ class StarMapRepository internal constructor(
         }
     }
 
+    fun listStarmapLibraryJson(scopeJson: String): BridgeResult<String> =
+        bridge.listStarmapLibraryJson(scopeJson)
+
+    fun createStarmapLibraryFolder(
+        scopeJson: String,
+        parentFolderId: String?,
+        name: String,
+    ): BridgeResult<String> =
+        bridge.createStarmapLibraryFolderJson(scopeJson, parentFolderId, name)
+
+    fun moveStarmapLibraryEntry(
+        entryId: String,
+        scopeJson: String,
+        parentFolderId: String?,
+    ): BridgeResult<String> =
+        bridge.moveStarmapLibraryEntryJson(entryId, scopeJson, parentFolderId)
+
+    fun addStarmapNodeReference(
+        starmapId: String,
+        assetId: String,
+        x: Float,
+        y: Float,
+    ): BridgeResult<StarMapGraphNode> {
+        return when (val result = bridge.addStarmapNodeReference(starmapId, assetId, x, y)) {
+            is BridgeResult.Success -> {
+                cache.putNode(starmapId, result.data.id, result.data)
+                BridgeResult.Success(result.data.toGraphNode())
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun addStarmapReference(
+        hostStarmapId: String,
+        targetStarmapId: String,
+        x: Float,
+        y: Float,
+    ): BridgeResult<StarMapEmbedData> {
+        return when (
+            val result =
+                bridge.addStarmapReference(hostStarmapId, targetStarmapId, x, y)
+        ) {
+            is BridgeResult.Success -> {
+                cache.putEmbed(hostStarmapId, result.data.instanceId, result.data)
+                BridgeResult.Success(result.data.toModel())
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun copyStarmapLibraryAsset(
+        targetJson: String,
+        scopeJson: String,
+        title: String?,
+    ): BridgeResult<String> =
+        bridge.copyStarmapLibraryAssetJson(targetJson, scopeJson, title)
+
+    fun listStarmapAssetReferencesJson(targetJson: String): BridgeResult<String> =
+        bridge.listStarmapAssetReferencesJson(targetJson)
+
+    fun deleteStarmapLibraryAsset(targetJson: String): BridgeResult<Boolean> =
+        bridge.deleteStarmapLibraryAssetJson(targetJson)
+
+    fun removeStarmapInstance(
+        starmapId: String,
+        instanceId: String,
+        isEmbed: Boolean,
+    ): BridgeResult<Boolean> {
+        return when (val result = bridge.removeStarmapInstance(starmapId, instanceId, isEmbed)) {
+            is BridgeResult.Success -> {
+                if (isEmbed) {
+                    cache.removeEmbed(starmapId, instanceId)
+                } else {
+                    cache.removeNode(starmapId, instanceId)
+                }
+                BridgeResult.Success(true)
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
     fun createStarmap(
         title: String,
         desc: String,

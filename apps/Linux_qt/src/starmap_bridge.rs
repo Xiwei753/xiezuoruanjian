@@ -68,6 +68,86 @@ pub fn list_starmaps(api: &WriterCoreApi) -> String {
     envelope(api.list_starmaps())
 }
 
+pub fn list_starmap_library(api: &WriterCoreApi, scope_json: &str) -> String {
+    envelope(api.list_starmap_library_json(scope_json))
+}
+
+pub fn create_starmap_library_folder(
+    api: &WriterCoreApi,
+    scope_json: &str,
+    parent_folder_id: Option<&str>,
+    name: &str,
+) -> String {
+    envelope(api.create_starmap_library_folder_json(
+        scope_json,
+        parent_folder_id.map(ToOwned::to_owned),
+        name,
+    ))
+}
+
+pub fn move_starmap_library_entry(
+    api: &WriterCoreApi,
+    entry_id: &str,
+    scope_json: &str,
+    parent_folder_id: Option<&str>,
+) -> String {
+    envelope(api.move_starmap_library_entry_json(
+        entry_id,
+        scope_json,
+        parent_folder_id.map(ToOwned::to_owned),
+    ))
+}
+
+pub fn add_starmap_node_reference(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    asset_id: &str,
+    x: f64,
+    y: f64,
+) -> String {
+    envelope(api.add_starmap_node_reference(starmap_id, asset_id, x, y))
+}
+
+pub fn add_starmap_reference(
+    api: &WriterCoreApi,
+    host_starmap_id: &str,
+    target_starmap_id: &str,
+    x: f64,
+    y: f64,
+) -> String {
+    envelope(api.add_starmap_reference(host_starmap_id, target_starmap_id, x, y))
+}
+
+pub fn copy_starmap_library_asset(
+    api: &WriterCoreApi,
+    target_json: &str,
+    scope_json: &str,
+    title: Option<&str>,
+) -> String {
+    envelope(api.copy_starmap_library_asset_json(
+        target_json,
+        scope_json,
+        title.map(ToOwned::to_owned),
+    ))
+}
+
+pub fn list_starmap_asset_references(api: &WriterCoreApi, target_json: &str) -> String {
+    envelope(api.list_starmap_asset_references_json(target_json))
+}
+
+pub fn delete_starmap_library_asset(api: &WriterCoreApi, target_json: &str) -> String {
+    envelope(api.delete_starmap_library_asset_json(target_json))
+}
+
+pub fn remove_starmap_instance(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    instance_id: &str,
+    is_embed: bool,
+) -> String {
+    envelope(api.remove_starmap_instance(starmap_id, instance_id, is_embed))
+}
+
 pub fn list_starmaps_for_project(api: &WriterCoreApi, project_id: &str) -> String {
     envelope(api.list_starmaps_for_project(project_id))
 }

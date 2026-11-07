@@ -19,6 +19,7 @@ pub mod resolved_theme_snapshot;
 pub(crate) mod search_backend;
 /// Issue #1014：星图导航树 QAbstractItemModel（Linux Qt 平台端）。
 pub mod starmap_tree_model;
+pub mod starmap_library_model;
 /// Issue #843：异步串行统计写入器，避免统计 I/O 阻塞 UI 线程。
 pub(crate) mod stats_writer;
 

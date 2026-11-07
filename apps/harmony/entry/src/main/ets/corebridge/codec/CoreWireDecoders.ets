@@ -2598,3 +2598,148 @@ export function decodeSearchResultPage(data: Object): DecodeResult<SearchResultP
   if (!nextCursorR.ok || nextCursorR.value === undefined) { return err<SearchResultPage>(`nextCursor: ${nextCursorR.error ?? 'decode failed'}`) }
   return ok<SearchResultPage>({ items: itemsR.value, nextCursor: nextCursorR.value })
 }
+
+// ─── 素材库（#1037）───
+
+function decodeStarMapAssetRef(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapAssetRef> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<import('../dto/StarMapDtos').StarMapAssetRef>('StarMapAssetRef: expected object')
+  }
+  const kind: string | null = reqStr(data, 'kind')
+  if (kind === null) { return err<import('../dto/StarMapDtos').StarMapAssetRef>('kind missing') }
+  const assetId: string | null = reqStr(data, 'assetId')
+  if (assetId === null) { return err<import('../dto/StarMapDtos').StarMapAssetRef>('assetId missing') }
+  const value: import('../dto/StarMapDtos').StarMapAssetRef = { kind: kind, assetId: assetId }
+  return ok(value)
+}
+
+function decodeStarMapAssetScope(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapAssetScope> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<import('../dto/StarMapDtos').StarMapAssetScope>('StarMapAssetScope: expected object')
+  }
+  const kind: string | null = reqStr(data, 'kind')
+  if (kind === null) { return err<import('../dto/StarMapDtos').StarMapAssetScope>('kind missing') }
+  if (kind === 'project') {
+    const projectId: string | null = reqStr(data, 'projectId')
+    if (projectId === null) { return err<import('../dto/StarMapDtos').StarMapAssetScope>('projectId missing') }
+    const value: import('../dto/StarMapDtos').StarMapAssetScope = { kind: kind, projectId: projectId }
+    return ok(value)
+  }
+  const value: import('../dto/StarMapDtos').StarMapAssetScope = { kind: kind }
+  return ok(value)
+}
+
+export function decodeStarMapLibraryEntry(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapLibraryEntry> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<import('../dto/StarMapDtos').StarMapLibraryEntry>('StarMapLibraryEntry: expected object')
+  }
+  const entryId: string | null = reqStr(data, 'entryId')
+  if (entryId === null) { return err<import('../dto/StarMapDtos').StarMapLibraryEntry>('entryId missing') }
+  const createdAt: number | null = reqNum(data, 'createdAt')
+  if (createdAt === null) { return err<import('../dto/StarMapDtos').StarMapLibraryEntry>('createdAt missing') }
+  const updatedAt: number | null = reqNum(data, 'updatedAt')
+  if (updatedAt === null) { return err<import('../dto/StarMapDtos').StarMapLibraryEntry>('updatedAt missing') }
+  const parentR: DecodeResult<string | null> = nullStr(data, 'parentFolderId')
+  if (!parentR.ok || parentR.value === undefined) { return err<import('../dto/StarMapDtos').StarMapLibraryEntry>(`parentFolderId: ${parentR.error ?? 'decode failed'}`) }
+  const scopeObj: Object | null = reqObj(data, 'scope')
+  if (scopeObj === null) { return err<import('../dto/StarMapDtos').StarMapLibraryEntry>('scope missing') }
+  const scopeR = decodeStarMapAssetScope(scopeObj)
+  if (!scopeR.ok || scopeR.value === undefined) { return err<import('../dto/StarMapDtos').StarMapLibraryEntry>(`scope: ${scopeR.error}`) }
+  const targetObj: Object | null = reqObj(data, 'target')
+  if (targetObj === null) { return err<import('../dto/StarMapDtos').StarMapLibraryEntry>('target missing') }
+  const targetR = decodeStarMapAssetRef(targetObj)
+  if (!targetR.ok || targetR.value === undefined) { return err<import('../dto/StarMapDtos').StarMapLibraryEntry>(`target: ${targetR.error}`) }
+  const value: import('../dto/StarMapDtos').StarMapLibraryEntry = {
+    entryId: entryId,
+    parentFolderId: parentR.value,
+    scope: scopeR.value,
+    target: targetR.value,
+    createdAt: createdAt,
+    updatedAt: updatedAt
+  }
+  return ok(value)
+}
+
+export function decodeStarMapLibraryFolder(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapLibraryFolder> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<import('../dto/StarMapDtos').StarMapLibraryFolder>('StarMapLibraryFolder: expected object')
+  }
+  const folderId: string | null = reqStr(data, 'folderId')
+  if (folderId === null) { return err<import('../dto/StarMapDtos').StarMapLibraryFolder>('folderId missing') }
+  const name: string | null = reqStr(data, 'name')
+  if (name === null) { return err<import('../dto/StarMapDtos').StarMapLibraryFolder>('name missing') }
+  const createdAt: number | null = reqNum(data, 'createdAt')
+  if (createdAt === null) { return err<import('../dto/StarMapDtos').StarMapLibraryFolder>('createdAt missing') }
+  const updatedAt: number | null = reqNum(data, 'updatedAt')
+  if (updatedAt === null) { return err<import('../dto/StarMapDtos').StarMapLibraryFolder>('updatedAt missing') }
+  const parentR: DecodeResult<string | null> = nullStr(data, 'parentFolderId')
+  if (!parentR.ok || parentR.value === undefined) { return err<import('../dto/StarMapDtos').StarMapLibraryFolder>(`parentFolderId: ${parentR.error ?? 'decode failed'}`) }
+  const scopeObj: Object | null = reqObj(data, 'scope')
+  if (scopeObj === null) { return err<import('../dto/StarMapDtos').StarMapLibraryFolder>('scope missing') }
+  const scopeR = decodeStarMapAssetScope(scopeObj)
+  if (!scopeR.ok || scopeR.value === undefined) { return err<import('../dto/StarMapDtos').StarMapLibraryFolder>(`scope: ${scopeR.error}`) }
+  const value: import('../dto/StarMapDtos').StarMapLibraryFolder = {
+    folderId: folderId,
+    parentFolderId: parentR.value,
+    scope: scopeR.value,
+    name: name,
+    createdAt: createdAt,
+    updatedAt: updatedAt
+  }
+  return ok(value)
+}
+
+export function decodeStarMapLibraryView(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapLibraryView> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<import('../dto/StarMapDtos').StarMapLibraryView>('StarMapLibraryView: expected object')
+  }
+  const scopeObj: Object | null = reqObj(data, 'scope')
+  if (scopeObj === null) { return err<import('../dto/StarMapDtos').StarMapLibraryView>('scope missing') }
+  const scopeR = decodeStarMapAssetScope(scopeObj)
+  if (!scopeR.ok || scopeR.value === undefined) { return err<import('../dto/StarMapDtos').StarMapLibraryView>(`scope: ${scopeR.error}`) }
+  const entriesArr: Array<Object> | null = reqArray(data, 'entries')
+  if (entriesArr === null) { return err<import('../dto/StarMapDtos').StarMapLibraryView>('entries missing') }
+  const entries: import('../dto/StarMapDtos').StarMapLibraryEntryView[] = []
+  for (let i = 0; i < entriesArr.length; i++) {
+    const itemObj: Object | null = reqObj(entriesArr[i], 'entry')
+    if (itemObj === null) { return err<import('../dto/StarMapDtos').StarMapLibraryView>(`entries[${i}].entry missing`) }
+    const entryR = decodeStarMapLibraryEntry(itemObj)
+    if (!entryR.ok || entryR.value === undefined) { return err<import('../dto/StarMapDtos').StarMapLibraryView>(`entries[${i}]: ${entryR.error}`) }
+    const title: string | null = reqStr(entriesArr[i], 'title')
+    if (title === null) { return err<import('../dto/StarMapDtos').StarMapLibraryView>(`entries[${i}].title missing`) }
+    entries.push({ entry: entryR.value, title: title })
+  }
+  const foldersArr: Array<Object> | null = reqArray(data, 'folders')
+  if (foldersArr === null) { return err<import('../dto/StarMapDtos').StarMapLibraryView>('folders missing') }
+  const foldersR = decodeArray<import('../dto/StarMapDtos').StarMapLibraryFolder>(foldersArr as Object, decodeStarMapLibraryFolder, 'folders')
+  if (!foldersR.ok || foldersR.value === undefined) { return err<import('../dto/StarMapDtos').StarMapLibraryView>(foldersR.error ?? 'folders decode failed') }
+  const value: import('../dto/StarMapDtos').StarMapLibraryView = {
+    scope: scopeR.value,
+    entries: entries,
+    folders: foldersR.value
+  }
+  return ok(value)
+}
+
+export function decodeStarMapAssetReference(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapAssetReference> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<import('../dto/StarMapDtos').StarMapAssetReference>('StarMapAssetReference: expected object')
+  }
+  const starmapId: string | null = reqStr(data, 'starmapId')
+  if (starmapId === null) { return err<import('../dto/StarMapDtos').StarMapAssetReference>('starmapId missing') }
+  const instanceId: string | null = reqStr(data, 'instanceId')
+  if (instanceId === null) { return err<import('../dto/StarMapDtos').StarMapAssetReference>('instanceId missing') }
+  const projectR: DecodeResult<string | null> = nullStr(data, 'projectId')
+  if (!projectR.ok || projectR.value === undefined) { return err<import('../dto/StarMapDtos').StarMapAssetReference>(`projectId: ${projectR.error ?? 'decode failed'}`) }
+  const targetObj: Object | null = reqObj(data, 'target')
+  if (targetObj === null) { return err<import('../dto/StarMapDtos').StarMapAssetReference>('target missing') }
+  const targetR = decodeStarMapAssetRef(targetObj)
+  if (!targetR.ok || targetR.value === undefined) { return err<import('../dto/StarMapDtos').StarMapAssetReference>(`target: ${targetR.error}`) }
+  const value: import('../dto/StarMapDtos').StarMapAssetReference = {
+    target: targetR.value,
+    projectId: projectR.value,
+    starmapId: starmapId,
+    instanceId: instanceId
+  }
+  return ok(value)
+}

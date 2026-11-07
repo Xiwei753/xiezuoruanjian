@@ -704,10 +704,214 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapGraphDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        self.core_write()
+        let mut graph: crate::api::types::StarMapGraphDto = self
+            .core_write()
             .get_starmap_graph(starmap_id)
             .map(Into::into)
+            .map_err(WriterError::from)?;
+        graph.asset_bindings = self.starmap_asset_bindings(starmap_id)?;
+        Ok(graph)
+    }
+
+    fn starmap_asset_bindings(
+        &self,
+        starmap_id: &str,
+    ) -> ApiResult<Vec<crate::api::types::StarMapNodeAssetBindingDto>> {
+        crate::starmap::library::instance_asset_bindings_for_starmap(
+            &self.app_data_root,
+            starmap_id,
+        )
+        .map(|bindings| {
+            bindings
+                .into_iter()
+                .map(
+                    |(instance_id, asset_id)| crate::api::types::StarMapNodeAssetBindingDto {
+                        instance_id,
+                        asset_id,
+                    },
+                )
+                .collect()
+        })
+        .map_err(WriterError::from)
+    }
+
+    // ── 全局 / 作品素材库 ──
+
+    fn parse_library_scope(
+        scope_json: &str,
+    ) -> ApiResult<crate::starmap::types::StarMapAssetScope> {
+        serde_json::from_str(scope_json).map_err(WriterError::from)
+    }
+
+    pub fn list_starmap_library_json(&self, scope_json: &str) -> ApiResult<String> {
+        let scope = Self::parse_library_scope(scope_json)?;
+        let (entries, folders) = self
+            .core_write()
+            .list_starmap_library(&scope)
+            .map_err(WriterError::from)?;
+        let entries = entries
+            .into_iter()
+            .map(|entry| {
+                let title = crate::starmap::library::asset_title(
+                    &self.app_data_root,
+                    &entry.target,
+                )
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+                serde_json::json!({ "entry": entry, "title": title })
+            })
+            .collect::<Vec<_>>();
+        Self::json_string(&serde_json::json!({
+            "scope": scope,
+            "entries": entries,
+            "folders": folders,
+        }))
+    }
+
+    pub fn create_starmap_library_folder_json(
+        &self,
+        scope_json: &str,
+        parent_folder_id: Option<String>,
+        name: &str,
+    ) -> ApiResult<String> {
+        let scope = Self::parse_library_scope(scope_json)?;
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let folder = self
+            .core_write()
+            .create_starmap_library_folder(&scope, parent_folder_id, name)
+            .map_err(WriterError::from)?;
+        Self::json_string(&folder)
+    }
+
+    pub fn move_starmap_library_entry_json(
+        &self,
+        entry_id: &str,
+        scope_json: &str,
+        parent_folder_id: Option<String>,
+    ) -> ApiResult<String> {
+        let scope = Self::parse_library_scope(scope_json)?;
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let entry = self
+            .core_write()
+            .move_starmap_library_entry(entry_id, &scope, parent_folder_id)
+            .map_err(WriterError::from)?;
+        Self::json_string(&entry)
+    }
+
+    pub fn add_starmap_node_reference(
+        &self,
+        starmap_id: &str,
+        asset_id: &str,
+        x: f64,
+        y: f64,
+    ) -> ApiResult<crate::api::types::StarMapNodeDto> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let position = crate::starmap::types::StarMapPoint { x, y };
+        let result = self
+            .core_write()
+            .add_starmap_node_reference(starmap_id, asset_id, position, None)
+            .map_err(WriterError::from)?;
+        let node_content = extract_node_search_body(&result.content, &result.tags);
+        let project_id = get_starmap_project_id(self, starmap_id);
+        let entry = crate::search::extractor::extract_starmap_node_entry(
+            starmap_id,
+            &result.id,
+            project_id.as_deref(),
+            &result.title,
+            &node_content,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
+        Ok(result.into())
+    }
+
+    pub fn add_starmap_reference(
+        &self,
+        host_starmap_id: &str,
+        target_starmap_id: &str,
+        x: f64,
+        y: f64,
+    ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        self.core_write()
+            .add_starmap_reference(
+                host_starmap_id,
+                target_starmap_id,
+                crate::starmap::types::StarMapPoint { x, y },
+            )
+            .map(Into::into)
             .map_err(Into::into)
+    }
+
+    pub fn copy_starmap_library_asset_json(
+        &self,
+        target_json: &str,
+        scope_json: &str,
+        title: Option<String>,
+    ) -> ApiResult<String> {
+        let target = serde_json::from_str(target_json).map_err(WriterError::from)?;
+        let scope = Self::parse_library_scope(scope_json)?;
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let copied = self
+            .core_write()
+            .copy_starmap_library_asset(&target, &scope, title)
+            .map_err(WriterError::from)?;
+        Self::json_string(&copied)
+    }
+
+    pub fn list_starmap_asset_references_json(&self, target_json: &str) -> ApiResult<String> {
+        let target = serde_json::from_str(target_json).map_err(WriterError::from)?;
+        let refs = self
+            .core_write()
+            .list_starmap_asset_references(&target)
+            .map_err(WriterError::from)?;
+        Self::json_string(&refs)
+    }
+
+    pub fn delete_starmap_library_asset_json(&self, target_json: &str) -> ApiResult<bool> {
+        let target: crate::starmap::types::StarMapAssetRef =
+            serde_json::from_str(target_json).map_err(WriterError::from)?;
+        if matches!(
+            target.kind,
+            crate::starmap::types::StarMapAssetKind::StarMap
+        ) {
+            // 星图本体删除必须走完整 durable 删除事务；该入口自身会做引用保护，
+            // 并在成功后清理素材库归属与实例映射。
+            self.delete_starmap(&target.asset_id)?;
+            return Ok(true);
+        }
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        self.core_write()
+            .delete_starmap_library_asset(&target)
+            .map_err(WriterError::from)?;
+        Ok(true)
+    }
+
+    pub fn remove_starmap_instance(
+        &self,
+        starmap_id: &str,
+        instance_id: &str,
+        is_embed: bool,
+    ) -> ApiResult<bool> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        self.core_write()
+            .remove_starmap_instance(starmap_id, instance_id, is_embed)
+            .map_err(WriterError::from)?;
+        Ok(true)
     }
 
     /// 按 `root starmap + 路径段` 解析当前层星图。
@@ -1168,6 +1372,19 @@ impl WriterCoreApi {
             starmap_id,
         ) {
             log::warn!("failed to append delete_starmap structure event: {error}");
+        }
+        let library_target =
+            crate::starmap::types::StarMapAssetRef::starmap(starmap_id.to_string());
+        if let Err(error) =
+            crate::starmap::library::remove_entries_for_asset(&self.app_data_root, &library_target)
+        {
+            log::warn!("delete_starmap: failed to remove library entry: {error}");
+        }
+        if let Err(error) = crate::starmap::library::remove_starmap_instance_records(
+            &self.app_data_root,
+            starmap_id,
+        ) {
+            log::warn!("delete_starmap: failed to remove library node instances: {error}");
         }
         Ok(true)
     }
@@ -1973,10 +2190,13 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let core_request: crate::starmap::store::PhasedSnapshotRequest = request.clone().into();
-        self.core_write()
+        let mut snapshot: crate::api::types::StarMapPhasedSnapshotDto = self
+            .core_write()
             .get_starmap_phased_snapshot(starmap_id, &core_request)
             .map(crate::api::types::StarMapPhasedSnapshotDto::from)
-            .map_err(Into::into)
+            .map_err(WriterError::from)?;
+        snapshot.asset_bindings = self.starmap_asset_bindings(starmap_id)?;
+        Ok(snapshot)
     }
 
     // -----------------------------------------------------------------

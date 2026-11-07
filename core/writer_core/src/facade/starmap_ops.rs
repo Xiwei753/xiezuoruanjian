@@ -9,6 +9,7 @@ use crate::starmap::store::{LoadPhase, SaveQueueEntry, StarMapStore};
 //   - graph.rs：graph / node / edge / embed / link 数据操作
 //   - patch.rs：candidate graph patch 模拟（只被 graph.rs 调用）
 mod graph;
+mod library;
 mod patch;
 
 impl super::WriterCore {

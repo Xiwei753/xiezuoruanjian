@@ -283,9 +283,11 @@ impl StagingRun {
             ContentClass, LwwWinner, ThreeWayResult,
         };
         use crate::sync::staging::starmap_merge::{
-            is_starmap_graph_meta_path, is_starmap_index_path, is_starmap_meta_path,
-            is_starmap_object_file_path, merge_starmap_graph_with_object_versions,
-            parse_object_path, ObjectMergeDecision, StarmapMergeResult,
+            is_starmap_graph_meta_path, is_starmap_index_path, is_starmap_library_index_path,
+            is_starmap_library_node_path, is_starmap_meta_path, is_starmap_object_file_path,
+            merge_starmap_graph_with_object_versions,
+            merge_starmap_object_with_versions, parse_object_path, ObjectMergeDecision,
+            StarmapMergeResult,
         };
 
         let staging_root = self.staging_root();
@@ -569,6 +571,58 @@ impl StagingRun {
                 // 此前在主循环内立即合并 index.json，不感知各图 graph 生命周期
                 // 决策，导致删除-修改冲突的星图从全局索引消失。
                 continue;
+            } else if is_starmap_library_index_path(&rel_str) {
+                // 素材库索引：推迟到所有星图合并后按条目 ID 三方合并。
+                continue;
+            } else if is_starmap_library_node_path(&rel_str) {
+                // 共享节点本体：按对象 ID 做三方合并，保留双端独立新增，
+                // 内容冲突再用 manifest 的更新时间事实决胜。
+                let local_record = build_local_lww_record_with_manifest(
+                    live_root,
+                    &rel,
+                    &local,
+                    &live_device_id,
+                    &live_tombstones,
+                    Some(&live_manifest),
+                );
+                let incoming_record = staging_manifest
+                    .get(&rel_str)
+                    .and_then(|record| build_remote_lww_record_from_manifest(record, &incoming));
+                let decision = merge_starmap_object_with_versions(
+                    base.as_deref(),
+                    local.as_deref(),
+                    incoming.as_deref(),
+                    local_record.as_ref(),
+                    incoming_record.as_ref(),
+                );
+                match decision {
+                    ObjectMergeDecision::NoOp => plan.noop.push(rel),
+                    ObjectMergeDecision::KeepLocal => plan.keep_local.push(rel),
+                    ObjectMergeDecision::ApplyIncoming(content) => {
+                        plan.content_actions.push(CommitAction::Apply {
+                            rel_path: rel,
+                            content,
+                        });
+                    }
+                    ObjectMergeDecision::Delete => {
+                        if local.is_some() {
+                            plan.content_actions.push(CommitAction::Delete { rel_path: rel });
+                        } else {
+                            plan.noop.push(rel);
+                        }
+                    }
+                    ObjectMergeDecision::Conflict(kind) => {
+                        plan.conflict.push(StagingConflict {
+                            rel_path: rel,
+                            base_hash: md5_hex(&base),
+                            local_hash: md5_hex(&local),
+                            incoming_hash: md5_hex(&incoming),
+                            kind,
+                            remote_snapshot_path: None,
+                            remote_graph_snapshot_dir: None,
+                        });
+                    }
+                }
             } else if is_starmap_graph_meta_path(&rel_str) {
                 // 星图 graph.json：由循环后的统一合并处理，此处跳过
                 // （issue #902 第十轮复核）。
@@ -949,6 +1003,43 @@ impl StagingRun {
                         // index.json 不会走整图删除路径（Delete 变体仅用于
                         // graph.json 的整图删除）。此处兜底处理，避免漏分支。
                         plan.noop.push(index_rel);
+                    }
+                }
+            }
+        }
+
+        // --- 处理素材库索引 index.json ---
+        // 条目、文件夹和节点实例按稳定 ID 合并；跨库移动只改归属记录。
+        {
+            use crate::sync::staging::starmap_merge::{
+                merge_starmap_library_index, StarmapMergeResult,
+            };
+            let library_index_rel = PathBuf::from("starmaps/library/index.json");
+            let index_base = read_opt_bytes(&base_root.join(&library_index_rel))?;
+            let index_local = read_opt_bytes(&live_root.join(&library_index_rel))?;
+            let index_incoming = read_opt_bytes(&staging_root.join(&library_index_rel))?;
+
+            if index_base.is_some() || index_local.is_some() || index_incoming.is_some() {
+                match merge_starmap_library_index(
+                    index_base.as_deref(),
+                    index_local.as_deref(),
+                    index_incoming.as_deref(),
+                )? {
+                    StarmapMergeResult::NoOp => {
+                        plan.noop.push(library_index_rel);
+                    }
+                    StarmapMergeResult::KeepLocal => {
+                        plan.keep_local.push(library_index_rel);
+                    }
+                    StarmapMergeResult::ApplyIncoming(content)
+                    | StarmapMergeResult::ApplyMerged(content) => {
+                        plan.content_actions.push(CommitAction::Apply {
+                            rel_path: library_index_rel,
+                            content,
+                        });
+                    }
+                    StarmapMergeResult::Delete => {
+                        plan.noop.push(library_index_rel);
                     }
                 }
             }

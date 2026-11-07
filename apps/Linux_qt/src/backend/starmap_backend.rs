@@ -45,6 +45,49 @@ pub struct StarMapBackend {
         qt_method!(fn(&mut self, starmap_id: QString, project_id: QString) -> QString),
     get_main_starmap_json: qt_method!(fn(&self, project_id: QString) -> QString),
     unbind_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
+    list_starmap_library_json: qt_method!(fn(&self, scope_json: QString) -> QString),
+    create_starmap_library_folder_json: qt_method!(
+        fn(
+            &mut self,
+            scope_json: QString,
+            parent_folder_id: QString,
+            name: QString,
+        ) -> QString
+    ),
+    move_starmap_library_entry_json: qt_method!(
+        fn(
+            &mut self,
+            entry_id: QString,
+            scope_json: QString,
+            parent_folder_id: QString,
+        ) -> QString
+    ),
+    add_starmap_node_reference_json: qt_method!(
+        fn(
+            &mut self,
+            starmap_id: QString,
+            asset_id: QString,
+            x: f64,
+            y: f64,
+        ) -> QString
+    ),
+    add_starmap_reference_json: qt_method!(
+        fn(
+            &mut self,
+            host_starmap_id: QString,
+            target_starmap_id: QString,
+            x: f64,
+            y: f64,
+        ) -> QString
+    ),
+    copy_starmap_library_asset_json: qt_method!(
+        fn(&mut self, target_json: QString, scope_json: QString, title: QString) -> QString
+    ),
+    list_starmap_asset_references_json: qt_method!(fn(&self, target_json: QString) -> QString),
+    delete_starmap_library_asset_json: qt_method!(fn(&mut self, target_json: QString) -> QString),
+    remove_starmap_instance_json: qt_method!(
+        fn(&mut self, starmap_id: QString, instance_id: QString, is_embed: bool) -> QString
+    ),
     get_starmap_graph_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
     workspace_changes_since_json: qt_method!(fn(&self, offset: u64) -> QString),
     get_starmap_graph: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
@@ -530,6 +573,88 @@ impl StarMapBackend {
             .unwrap_or_else(|_| {
                 QString::from(crate::backend::json_utils::borrow_conflict_error_json())
             })
+    }
+    fn list_starmap_library_json(&self, scope_json: QString) -> QString {
+        self.with_app(|app| app.list_starmap_library_json(scope_json))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    fn create_starmap_library_folder_json(
+        &mut self,
+        scope_json: QString,
+        parent_folder_id: QString,
+        name: QString,
+    ) -> QString {
+        self.with_app_mut(|app| {
+            app.create_starmap_library_folder_json(scope_json, parent_folder_id, name)
+        })
+        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+    }
+    fn move_starmap_library_entry_json(
+        &mut self,
+        entry_id: QString,
+        scope_json: QString,
+        parent_folder_id: QString,
+    ) -> QString {
+        self.with_app_mut(|app| {
+            app.move_starmap_library_entry_json(entry_id, scope_json, parent_folder_id)
+        })
+        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+    }
+    fn add_starmap_node_reference_json(
+        &mut self,
+        starmap_id: QString,
+        asset_id: QString,
+        x: f64,
+        y: f64,
+    ) -> QString {
+        self.with_app_mut(|app| app.add_starmap_node_reference_json(starmap_id, asset_id, x, y))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
+    }
+    fn add_starmap_reference_json(
+        &mut self,
+        host_starmap_id: QString,
+        target_starmap_id: QString,
+        x: f64,
+        y: f64,
+    ) -> QString {
+        self.with_app_mut(|app| {
+            app.add_starmap_reference_json(host_starmap_id, target_starmap_id, x, y)
+        })
+        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+    }
+    fn copy_starmap_library_asset_json(
+        &mut self,
+        target_json: QString,
+        scope_json: QString,
+        title: QString,
+    ) -> QString {
+        self.with_app_mut(|app| {
+            app.copy_starmap_library_asset_json(target_json, scope_json, title)
+        })
+        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+    }
+    fn list_starmap_asset_references_json(&self, target_json: QString) -> QString {
+        self.with_app(|app| app.list_starmap_asset_references_json(target_json))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    fn delete_starmap_library_asset_json(&mut self, target_json: QString) -> QString {
+        self.with_app_mut(|app| app.delete_starmap_library_asset_json(target_json))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
+    }
+    fn remove_starmap_instance_json(
+        &mut self,
+        starmap_id: QString,
+        instance_id: QString,
+        is_embed: bool,
+    ) -> QString {
+        self.with_app_mut(|app| {
+            app.remove_starmap_instance_json(starmap_id, instance_id, is_embed)
+        })
+        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
     }
     /// QML 传来的 graph DTO JSON → Core StarMapGraph（边渲染入口共用）。
     fn core_graph_from_dto_json(
