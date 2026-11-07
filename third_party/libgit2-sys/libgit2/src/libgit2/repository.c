@@ -2128,7 +2128,8 @@ static bool is_chmod_supported(const char *file_path)
 	if (p_stat(file_path, &st1) < 0)
 		return false;
 
-	if (p_chmod(file_path, st1.st_mode ^ S_IXUSR) < 0) /* lgtm[cpp/toctou-race-condition] -- probe only toggles this repository file's executable bit; a race can at worst disable a filesystem optimization. */
+	// codeql[cpp/toctou-race-condition] -- probe only toggles this repository file's executable bit; a race can at worst disable a filesystem optimization.
+	if (p_chmod(file_path, st1.st_mode ^ S_IXUSR) < 0) /* codeql[cpp/toctou-race-condition] */
 		return false;
 
 	if (p_stat(file_path, &st2) < 0)

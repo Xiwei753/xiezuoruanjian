@@ -74,7 +74,8 @@ bool ntlm_des_encrypt(
 
 	mbedtls_des_init(&ctx);
 
-	if (mbedtls_des_setkey_enc(&ctx, *key) || /* lgtm[cpp/weak-cryptographic-algorithm] -- NTLMv1 wire protocol mandates DES; this is compatibility code, not a chosen cipher. */
+	// codeql[cpp/weak-cryptographic-algorithm] -- NTLMv1 wire protocol mandates DES; this is compatibility code, not a chosen cipher.
+	if (mbedtls_des_setkey_enc(&ctx, *key) || /* codeql[cpp/weak-cryptographic-algorithm] */
 	    mbedtls_des_crypt_ecb(&ctx, *plaintext, *out)) {
 		ntlm_client_set_errmsg(ntlm, "DES encryption failed");
 		goto done;
