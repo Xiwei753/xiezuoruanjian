@@ -12,6 +12,8 @@ mod graph;
 mod library;
 mod patch;
 
+pub use library::{StarMapAssetCopyResult, StarMapCopyResult};
+
 impl super::WriterCore {
     pub fn list_starmaps(&self) -> Result<Vec<crate::starmap::StarMapMeta>> {
         crate::starmap::list_starmaps(&self.app_data_root)

@@ -2,6 +2,34 @@
 
 use super::*;
 
+/// 复制星图时创建的对象及其新旧 ID 映射，供 API 层补全历史与贡献事件。
+pub struct StarMapCopyResult {
+    pub root: crate::starmap::StarMapMeta,
+    pub starmaps: Vec<crate::starmap::StarMapMeta>,
+    pub nodes: Vec<(String, String)>,
+    pub embeds: Vec<(String, String)>,
+    pub edges: Vec<(String, String)>,
+    pub links: Vec<(String, String)>,
+    pub starmap_map: std::collections::HashMap<String, String>,
+    pub node_maps: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, String>,
+    >,
+    pub embed_maps: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, String>,
+    >,
+    pub change_paths: Vec<std::path::PathBuf>,
+}
+
+pub enum StarMapAssetCopyResult {
+    Node {
+        asset: crate::starmap::types::StarMapAssetRef,
+        definition: crate::starmap::types::StarMapNodeDefinition,
+    },
+    StarMap(StarMapCopyResult),
+}
+
 impl super::super::WriterCore {
     pub fn list_starmap_library(
         &self,
@@ -172,7 +200,7 @@ impl super::super::WriterCore {
         target: &crate::starmap::types::StarMapAssetRef,
         scope: &crate::starmap::types::StarMapAssetScope,
         title: Option<String>,
-    ) -> Result<crate::starmap::types::StarMapAssetRef> {
+    ) -> Result<StarMapAssetCopyResult> {
         match target.kind {
             crate::starmap::types::StarMapAssetKind::Node => {
                 let definition = crate::starmap::library::load_node_definition(
@@ -186,9 +214,12 @@ impl super::super::WriterCore {
                     ))
                 })?;
                 let asset_id = format!("n_{}", uuid::Uuid::new_v4());
+                let now = crate::starmap::now_epoch();
                 let copied = crate::starmap::types::StarMapNodeDefinition {
                     asset_id: asset_id.clone(),
                     title: title.unwrap_or(definition.title),
+                    created_at: now,
+                    updated_at: now,
                     ..definition
                 };
                 crate::starmap::library::save_node_definition(
@@ -206,14 +237,15 @@ impl super::super::WriterCore {
                     crate::starmap::now_epoch(),
                 );
                 crate::starmap::library::save_library_index(&self.app_data_root, &index)?;
-                Ok(crate::starmap::types::StarMapAssetRef::node(asset_id))
+                Ok(StarMapAssetCopyResult::Node {
+                    asset: crate::starmap::types::StarMapAssetRef::node(asset_id),
+                    definition: copied,
+                })
             }
             crate::starmap::types::StarMapAssetKind::StarMap => {
                 let copied =
                     self.copy_starmap_canvas(&target.asset_id, title, scope)?;
-                Ok(crate::starmap::types::StarMapAssetRef::starmap(
-                    copied.starmap_id,
-                ))
+                Ok(StarMapAssetCopyResult::StarMap(copied))
             }
         }
     }
@@ -223,20 +255,55 @@ impl super::super::WriterCore {
         source_starmap_id: &str,
         title: Option<String>,
         scope: &crate::starmap::types::StarMapAssetScope,
-    ) -> Result<crate::starmap::StarMapMeta> {
-        let mut created_starmaps = Vec::new();
-        let mut created_nodes = Vec::new();
-        let result = self.copy_starmap_canvas_inner(
-            source_starmap_id,
-            title,
-            scope,
-            &mut created_starmaps,
-            &mut created_nodes,
-        );
-        if result.is_err() {
+    ) -> Result<StarMapCopyResult> {
+        let placeholder_root =
+            crate::starmap::get_starmap(&self.app_data_root, source_starmap_id)?;
+        let mut result = StarMapCopyResult {
+            root: placeholder_root,
+            starmaps: Vec::new(),
+            nodes: Vec::new(),
+            embeds: Vec::new(),
+            edges: Vec::new(),
+            links: Vec::new(),
+            starmap_map: std::collections::HashMap::new(),
+            node_maps: std::collections::HashMap::new(),
+            embed_maps: std::collections::HashMap::new(),
+            change_paths: Vec::new(),
+        };
+        let copied =
+            self.copy_starmap_canvas_inner(source_starmap_id, title, scope, &mut result);
+        if copied.is_err() {
+            let created_starmaps = result
+                .starmaps
+                .iter()
+                .map(|meta| meta.starmap_id.clone())
+                .collect::<Vec<_>>();
+            let created_nodes = result
+                .nodes
+                .iter()
+                .map(|(_, node_id)| node_id.clone())
+                .collect::<Vec<_>>();
             self.cleanup_failed_starmap_copy(&created_starmaps, &created_nodes);
         }
+        let meta = copied?;
+        result.root = meta;
+        // 副本完整落盘后再汇总路径，确保 service 能一次性写入 Graph / 对象 /
+        // 素材定义和索引的全部 Workspace 变更。
+        result.change_paths.push(std::path::PathBuf::from("starmaps/index.json"));
+        for meta in &result.starmaps {
+            result.change_paths.push(
+                crate::starmap::package_storage::graph_meta_rel_path(&meta.starmap_id),
+            );
+        }
         result
+            .change_paths
+            .push(crate::starmap::library::library_index_rel_path());
+        result
+            .change_paths
+            .push(crate::starmap::library::reference_index_rel_path());
+        result.change_paths.sort();
+        result.change_paths.dedup();
+        Ok(result)
     }
 
     fn copy_starmap_canvas_inner(
@@ -244,8 +311,7 @@ impl super::super::WriterCore {
         source_starmap_id: &str,
         title: Option<String>,
         scope: &crate::starmap::types::StarMapAssetScope,
-        created_starmaps: &mut Vec<String>,
-        created_nodes: &mut Vec<String>,
+        result: &mut StarMapCopyResult,
     ) -> Result<crate::starmap::StarMapMeta> {
         use crate::starmap::semantic::StarMapTargetDetail;
         use crate::starmap::types::StarMapTargetPath;
@@ -295,7 +361,9 @@ impl super::super::WriterCore {
                 &source.description,
                 Some(source.accent_color.as_str()),
             )?;
-            created_starmaps.push(new_starmap_id.clone());
+            result.change_paths.push(std::path::PathBuf::from(format!(
+                "starmaps/{new_starmap_id}.meta.json"
+            )));
             let project_id = if is_root {
                 scope.project_id()
             } else {
@@ -309,6 +377,7 @@ impl super::super::WriterCore {
                 )?;
                 meta.project_id = Some(project_id.to_string());
             }
+            result.starmaps.push(meta.clone());
             starmap_map.insert(starmap_id.clone(), new_starmap_id);
         }
 
@@ -335,10 +404,11 @@ impl super::super::WriterCore {
                     )
                 })
                 .collect::<HashMap<_, _>>();
-            created_nodes.extend(nodes.values().cloned());
             node_maps.insert(starmap_id.clone(), nodes);
             embed_maps.insert(starmap_id.clone(), embeds);
         }
+        result.node_maps = node_maps.clone();
+        result.embed_maps = embed_maps.clone();
 
         // 节点先不带 portal 写入，确保所有画布所有实例都已存在；portal 在
         // 第二轮统一重映射，避免环形/前向 portal 因目标实例尚未创建而失败。
@@ -368,6 +438,20 @@ impl super::super::WriterCore {
                     node.position.x,
                     node.position.y,
                 )?;
+                let node_id = nodes
+                    .get(&node.id)
+                    .expect("node id assigned")
+                    .clone();
+                result.nodes.push((new_starmap_id.clone(), node_id.clone()));
+                result.change_paths.push(
+                    crate::starmap::package_storage::node_rel_path(
+                        &new_starmap_id,
+                        &node_id,
+                    ),
+                );
+                result.change_paths.push(
+                    crate::starmap::library::node_definition_rel_path(&node_id),
+                );
             }
         }
 
@@ -458,7 +542,15 @@ impl super::super::WriterCore {
                 )?;
                 copied.created_at = crate::starmap::now_epoch();
                 copied.updated_at = copied.created_at;
+                let embed_id = copied.instance_id.clone();
                 self.add_starmap_embed(&new_starmap_id, copied)?;
+                result.embeds.push((new_starmap_id.clone(), embed_id.clone()));
+                result.change_paths.push(
+                    crate::starmap::package_storage::embed_rel_path(
+                        &new_starmap_id,
+                        &embed_id,
+                    ),
+                );
             }
         }
 
@@ -489,7 +581,15 @@ impl super::super::WriterCore {
                 )?;
                 copied.created_at = crate::starmap::now_epoch();
                 copied.updated_at = copied.created_at;
+                let edge_id = copied.id.clone();
                 self.add_starmap_edge(&new_starmap_id, copied)?;
+                result.edges.push((new_starmap_id.clone(), edge_id.clone()));
+                result.change_paths.push(
+                    crate::starmap::package_storage::edge_rel_path(
+                        &new_starmap_id,
+                        &edge_id,
+                    ),
+                );
             }
         }
 
@@ -520,7 +620,14 @@ impl super::super::WriterCore {
                 )?;
                 copied.created_at = crate::starmap::now_epoch();
                 copied.updated_at = copied.created_at;
+                let link_id = copied.link_id.clone();
                 self.add_starmap_link(&new_starmap_id, copied)?;
+                result
+                    .links
+                    .push((new_starmap_id.clone(), link_id.clone()));
+                result.change_paths.push(
+                    crate::starmap::package_storage::link_rel_path(&new_starmap_id, &link_id),
+                );
             }
         }
 
@@ -529,6 +636,7 @@ impl super::super::WriterCore {
             .expect("root starmap copied")
             .clone();
         let meta = crate::starmap::get_starmap(&self.app_data_root, &new_root_id)?;
+        result.starmap_map = starmap_map;
         crate::starmap::library::ensure_starmap_asset(&self.app_data_root, &meta)?;
         crate::starmap::library::assign_entry_scope(
             &self.app_data_root,
@@ -536,8 +644,8 @@ impl super::super::WriterCore {
             scope,
             None,
         )?;
-        for starmap_id in created_starmaps.iter() {
-            self.flush_starmap_store(starmap_id)?;
+        for meta in result.starmaps.iter() {
+            self.flush_starmap_store(&meta.starmap_id)?;
         }
         Ok(meta)
     }

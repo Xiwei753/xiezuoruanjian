@@ -252,6 +252,17 @@ impl StarMapNodeDefinition {
         }
     }
 
+    /// 用共享本体组装画布实例，并保留实例自身的创建时间与位置版本。
+    ///
+    /// `updated_at` 取实例与本体修订的较大值，既让位置移动后的乐观并发
+    /// 检查看到新版本，也保证本体内容更新后旧版本会冲突。
+    pub fn instantiate_instance(&self, instance: &StarMapNodeInstance) -> super::StarMapNode {
+        let mut node = self.instantiate(&instance.instance_id, instance.position.clone());
+        node.created_at = instance.created_at;
+        node.updated_at = instance.updated_at.max(self.updated_at);
+        node
+    }
+
     /// 把共享内容写回画布实例，保留实例 ID、位置和实例本身的时间戳更新。
     pub fn apply_to_node(&self, node: &mut super::StarMapNode) {
         node.title = self.title.clone();

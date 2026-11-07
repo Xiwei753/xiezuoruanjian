@@ -130,7 +130,7 @@ impl StarMapStore {
                 target_node_id, definition.asset_id
             )));
         }
-        Ok(definition.instantiate(node_id, instance.position))
+        Ok(definition.instantiate_instance(&instance))
     }
 
     /// 严格加载单个 edge：同 `try_load_node` 的 fail-closed 语义。

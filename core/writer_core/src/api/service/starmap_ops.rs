@@ -1023,34 +1023,143 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmaps_contribution_transaction()?;
-        self.prepare_library_paths(&mut contribution_txn, true)?;
-        contribution_txn
-            .prepare_paths(&[self.app_data_root.join("starmaps/index.json")])?;
+        // 复制会新建多张星图、节点定义、实例和全部关联对象。整棵 starmaps
+        // 目录作为事务根备份，任何一步失败都能连同索引、事件一起回滚。
+        contribution_txn.prepare_paths(&[self.app_data_root.join("starmaps")])?;
         let copied = self
             .core_write()
             .copy_starmap_library_asset(&target, &scope, title)
             .map_err(WriterError::from)?;
-        let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
-            .add_upsert(std::path::PathBuf::from("starmaps/index.json"))
-            .add_upsert(crate::starmap::library::library_index_rel_path());
-        match copied.kind {
-            crate::starmap::types::StarMapAssetKind::Node => {
-                change_set = change_set.add_upsert(
-                    crate::starmap::library::node_definition_rel_path(&copied.asset_id),
-                );
-            }
-            crate::starmap::types::StarMapAssetKind::StarMap => {
-                change_set = change_set.add_upsert(std::path::PathBuf::from("starmaps").join(
-                    format!("{}.meta.json", copied.asset_id),
+        // 复制不是新的手写输入；沿用当前事务 ID，但以系统来源记录，避免把
+        // 副本正文再次计入人类输入速度。
+        let mutation_context = crate::writing_stats::current_mutation_context();
+        let context = crate::writing_stats::MutationContext::system()
+            .with_transaction_id(mutation_context.transaction_id().to_string());
+        match copied {
+            crate::facade::StarMapAssetCopyResult::Node { asset, definition } => {
+                // 素材本体创建独立于画布：记录一次 Create，容器为空，因此不会
+                // 进入按画布聚合的写作字数；后续拖入画布只记录 Link。
+                let mut graph = crate::starmap::types::StarMapGraph::default();
+                graph.starmap_id = String::new();
+                graph.nodes.push(definition.instantiate(
+                    &asset.asset_id,
+                    crate::starmap::types::StarMapPoint { x: 0.0, y: 0.0 },
                 ));
+                let delta = crate::writing_stats::starmap_proof::StarMapProofDelta::for_object(
+                    "",
+                    crate::writing_stats::ContributionObjectType::StarMapNode,
+                    &asset.asset_id,
+                    crate::writing_stats::ContributionOperation::Create,
+                    None,
+                    Some(&graph),
+                );
+                self.record_contribution_event_with_context_and_delta(
+                    &context,
+                    scope.project_id().unwrap_or_default(),
+                    crate::writing_stats::ContributionObjectType::StarMapNode,
+                    &asset.asset_id,
+                    crate::writing_stats::ContributionOperation::Create,
+                    None,
+                    None,
+                    Some(crate::writing_stats::ContributionObjectSnapshot::object(
+                        definition.updated_at.to_string(),
+                        definition.title.clone(),
+                    )),
+                    Some(delta),
+                )?;
+                let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+                    .add_upsert(crate::starmap::library::node_definition_rel_path(
+                        &asset.asset_id,
+                    ))
+                    .add_upsert(crate::starmap::library::library_index_rel_path());
+                self.commit_library_transaction(
+                    &mut contribution_txn,
+                    &change_set,
+                    "copy_starmap_library_asset",
+                )?;
+                Self::json_string(&asset)
+            }
+            crate::facade::StarMapAssetCopyResult::StarMap(result) => {
+                let mut graphs = std::collections::HashMap::new();
+                let mut projects = std::collections::HashMap::new();
+                let roots_after = crate::starmap::load_index(&self.app_data_root)
+                    .ok()
+                    .map(|index| index.root_starmap_ids);
+                for meta in &result.starmaps {
+                    let graph = self
+                        .get_starmap_graph_snapshot(&meta.starmap_id)
+                        .ok_or_else(|| {
+                            WriterError::Other(format!(
+                                "copied starmap graph missing: {}",
+                                meta.starmap_id
+                            ))
+                        })?;
+                    graphs.insert(meta.starmap_id.clone(), graph);
+                    projects.insert(meta.starmap_id.clone(), meta.project_id.clone());
+                }
+                // 先记录每张新画布的 Meta/Create，再按实际创建顺序记录对象。
+                for meta in &result.starmaps {
+                    self.record_starmap_meta_with_context(
+                        &context,
+                        meta.project_id.as_deref(),
+                        &meta.starmap_id,
+                        crate::writing_stats::ContributionOperation::Create,
+                        None,
+                        Some(meta),
+                        roots_after.clone(),
+                    )?;
+                }
+                let object_lists = [
+                    (
+                        crate::writing_stats::ContributionObjectType::StarMapNode,
+                        &result.nodes,
+                    ),
+                    (
+                        crate::writing_stats::ContributionObjectType::StarMapEmbed,
+                        &result.embeds,
+                    ),
+                    (
+                        crate::writing_stats::ContributionObjectType::StarMapEdge,
+                        &result.edges,
+                    ),
+                    (
+                        crate::writing_stats::ContributionObjectType::StarMapLink,
+                        &result.links,
+                    ),
+                ];
+                for (object_type, objects) in object_lists {
+                    for (starmap_id, object_id) in objects {
+                        let graph = graphs.get(starmap_id).ok_or_else(|| {
+                            WriterError::Other(format!(
+                                "copied starmap graph missing for object {object_id}: {starmap_id}"
+                            ))
+                        })?;
+                        self.record_starmap_object_with_context(
+                            &context,
+                            projects.get(starmap_id).and_then(|p| p.as_deref()),
+                            starmap_id,
+                            object_type,
+                            object_id,
+                            crate::writing_stats::ContributionOperation::Create,
+                            None,
+                            Some(graph),
+                        )?;
+                    }
+                }
+                let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
+                for path in &result.change_paths {
+                    change_set = change_set.add_upsert(path.clone());
+                }
+                let asset =
+                    crate::starmap::types::StarMapAssetRef::starmap(result.root.starmap_id);
+                self.commit_library_transaction(
+                    &mut contribution_txn,
+                    &change_set,
+                    "copy_starmap_library_asset",
+                )?;
+                Self::json_string(&asset)
             }
         }
-        self.commit_library_transaction(
-            &mut contribution_txn,
-            &change_set,
-            "copy_starmap_library_asset",
-        )?;
-        Self::json_string(&copied)
     }
 
     pub fn list_starmap_asset_references_json(&self, target_json: &str) -> ApiResult<String> {
@@ -2134,7 +2243,7 @@ impl WriterCoreApi {
             None
         };
         let affected_instances = if shared_changed {
-            self.shared_node_instances(starmap_id, node_id)
+            self.shared_node_instances(starmap_id, node_id)?
         } else {
             vec![(starmap_id.to_string(), node_id.to_string())]
         };
@@ -3010,34 +3119,88 @@ impl WriterCoreApi {
     }
 
     /// 枚举共享节点素材在全部画布中的实例；来源画布自身必须包含在内。
-    fn shared_node_instances(&self, starmap_id: &str, node_id: &str) -> Vec<(String, String)> {
-        let asset_id = crate::starmap::library::instance_asset_bindings_for_starmap(
+    ///
+    /// 反向索引可能因旧数据或中断写入损坏。此时必须从画布实例文件重建后
+    /// 重试，不能在索引读取失败时退化成“只更新来源实例”，否则其它画布的
+    /// 回放链会缺少这次共享内容变更。
+    fn shared_node_instances(
+        &self,
+        starmap_id: &str,
+        node_id: &str,
+    ) -> ApiResult<Vec<(String, String)>> {
+        let bindings = match crate::starmap::library::instance_asset_bindings_for_starmap(
             &self.app_data_root,
             starmap_id,
-        )
-        .ok()
-        .and_then(|bindings| {
-            bindings
-                .into_iter()
-                .find(|(instance_id, _)| instance_id == node_id)
-                .map(|(_, asset_id)| asset_id)
-        })
-        .unwrap_or_else(|| node_id.to_string());
-        let mut instances: Vec<(String, String)> =
-            crate::starmap::library::instances_for_asset(&self.app_data_root, &asset_id)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|instance| (instance.starmap_id, instance.instance_id))
-                .collect();
+        ) {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                log::warn!(
+                    "shared node bindings unreadable for {starmap_id}, rebuilding references: {error}"
+                );
+                crate::starmap::library::rebuild_reference_index(&self.app_data_root)
+                    .map_err(WriterError::from)?;
+                crate::starmap::library::instance_asset_bindings_for_starmap(
+                    &self.app_data_root,
+                    starmap_id,
+                )
+                .map_err(WriterError::from)?
+            }
+        };
+        let asset_id = bindings
+            .into_iter()
+            .find(|(instance_id, _)| instance_id == node_id)
+            .map(|(_, asset_id)| asset_id)
+            .unwrap_or_else(|| node_id.to_string());
+        let mut instances = match crate::starmap::library::instances_for_asset(
+            &self.app_data_root,
+            &asset_id,
+        ) {
+            Ok(instances) => instances,
+            Err(error) => {
+                log::warn!(
+                    "shared node references unreadable for {asset_id}, rebuilding references: {error}"
+                );
+                crate::starmap::library::rebuild_reference_index(&self.app_data_root)
+                    .map_err(WriterError::from)?;
+                crate::starmap::library::instances_for_asset(&self.app_data_root, &asset_id)
+                    .map_err(WriterError::from)?
+            }
+        }
+        .into_iter()
+        .map(|instance| (instance.starmap_id, instance.instance_id))
+        .collect::<Vec<_>>();
         if !instances
             .iter()
             .any(|(owner, instance)| owner == starmap_id && instance == node_id)
         {
-            instances.push((starmap_id.to_string(), node_id.to_string()));
+            // 索引缺失或陈旧时同样会表现为“找不到来源实例”。重建后再失败
+            // 说明画布实例文件本身不一致，必须中止共享内容写入，避免其它
+            // 画布静默缺少本次变更事件。
+            log::warn!(
+                "shared node source {starmap_id}/{node_id} absent from references, rebuilding"
+            );
+            crate::starmap::library::rebuild_reference_index(&self.app_data_root)
+                .map_err(WriterError::from)?;
+            instances = crate::starmap::library::instances_for_asset(
+                &self.app_data_root,
+                &asset_id,
+            )
+            .map_err(WriterError::from)?
+            .into_iter()
+            .map(|instance| (instance.starmap_id, instance.instance_id))
+            .collect();
+            if !instances
+                .iter()
+                .any(|(owner, instance)| owner == starmap_id && instance == node_id)
+            {
+                return Err(WriterError::Other(format!(
+                    "shared node source {starmap_id}/{node_id} missing after rebuilding references"
+                )));
+            }
         }
         instances.sort();
         instances.dedup();
-        instances
+        Ok(instances)
     }
 
     fn enqueue_starmap_node_search_update(

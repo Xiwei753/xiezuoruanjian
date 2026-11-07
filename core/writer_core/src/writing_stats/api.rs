@@ -875,9 +875,19 @@ impl StatsApi {
         &self,
         contribution_events: &[ContributionEvent],
     ) -> Vec<WritingInputEvent> {
-        use crate::writing_stats::contribution::{ContributionObjectType, MutationActor};
+        use crate::writing_stats::contribution::{
+            ContributionObjectType, ContributionOperation, MutationActor,
+        };
         let mut synthetic = Vec::new();
         for event in contribution_events {
+            if matches!(
+                event.operation,
+                ContributionOperation::Link | ContributionOperation::Unlink
+            ) {
+                // 引用/取消引用及共享内容传播只用于画布结构与回放，
+                // 已存在的正文不能被再次计入创作字数。
+                continue;
+            }
             if !matches!(
                 event.object_type,
                 ContributionObjectType::StarMap

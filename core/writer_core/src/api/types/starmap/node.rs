@@ -20,7 +20,9 @@ pub struct StarMapNodeDto {
     pub style: StarMapNodeStyleDto,
     #[serde(default)]
     pub provenance: StarMapProvenanceDto,
+    /// 画布实例创建时间，不使用共享本体的创建时间。
     pub created_at: u64,
+    /// 实例位置修订与共享本体修订的较大值；用于乐观并发检查。
     pub updated_at: u64,
 }
 

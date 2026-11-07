@@ -36,6 +36,8 @@ mod sync_ops;
 mod sync_state_ops;
 mod writing_stats_ops;
 
+pub use starmap_ops::{StarMapAssetCopyResult, StarMapCopyResult};
+
 #[cfg(all(test, feature = "github-api"))]
 mod sync_ops_tests;
 
