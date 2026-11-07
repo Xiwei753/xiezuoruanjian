@@ -80,6 +80,8 @@ struct CachedBranchCommitment {
     history_complete: bool,
     commitment: StateCommitment,
     generation: u64,
+    /// 只有持久化成功并发布后才允许用于生成检查点，避免读到未落盘状态。
+    committed: bool,
 }
 
 enum BranchCommitmentState {
@@ -717,6 +719,7 @@ impl ContributionStore {
                 history_complete: branch.history_complete,
                 commitment: branch.commitment,
                 generation,
+                committed: true,
             }),
             None => BranchCommitmentState::Unusable {
                 position,
@@ -779,7 +782,10 @@ impl ContributionStore {
             }
             if let Some(entry) = cache.get_mut(&key) {
                 match entry {
-                    BranchCommitmentState::Ready(entry) => entry.generation = generation,
+                    BranchCommitmentState::Ready(entry) => {
+                        entry.generation = generation;
+                        entry.committed = true;
+                    }
                     BranchCommitmentState::Unusable {
                         generation: cached_generation,
                         ..
@@ -806,6 +812,7 @@ impl ContributionStore {
                 history_complete: branch.history_complete,
                 commitment: branch.commitment,
                 generation,
+                committed: true,
             }),
         );
     }
@@ -825,7 +832,7 @@ impl ContributionStore {
         let BranchCommitmentState::Ready(entry) = cache.get(&key)? else {
             return None;
         };
-        if entry.generation != generation || entry.position != position {
+        if !entry.committed || entry.generation != generation || entry.position != position {
             return None;
         }
         let root = entry.commitment.root_hex();
@@ -915,6 +922,7 @@ impl ContributionStore {
                 let mut commitment_ok = false;
                 if hash_ok {
                     if let BranchCommitmentState::Ready(entry) = cache_state {
+                        entry.committed = false;
                         if entry.position == branch_position
                             && entry.commitment.apply_delta(delta).is_ok()
                         {
@@ -971,6 +979,7 @@ impl ContributionStore {
                             history_complete: baseline.history_complete,
                             commitment: StateCommitment::from_state(&baseline.state()),
                             generation,
+                            committed: false,
                         });
                     }
                 }
@@ -978,6 +987,7 @@ impl ContributionStore {
             let mut used_commitment = false;
             if let BranchCommitmentState::Ready(entry) = cache_state {
                 if entry.position == branch_position {
+                    entry.committed = false;
                     delta.format_version = STARMAP_PROOF_FORMAT_VERSION;
                     delta.branch_position = Some(branch_position);
                     if entry.commitment.apply_delta(&delta).is_ok() {
