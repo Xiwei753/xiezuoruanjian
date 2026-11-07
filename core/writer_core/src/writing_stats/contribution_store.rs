@@ -79,7 +79,6 @@ struct CachedBranchCommitment {
     chain_head: String,
     history_complete: bool,
     commitment: StateCommitment,
-    generation: u64,
     /// 只有持久化成功并发布后才允许用于生成检查点，避免读到未落盘状态。
     committed: bool,
 }
@@ -88,11 +87,7 @@ enum BranchCommitmentState {
     /// 已成功重建、可继续增量 apply 的完整对象索引 + Merkle 树。
     Ready(CachedBranchCommitment),
     /// 当前事件库状态下无法安全重建；记住失败位置避免每次写入都重复全量扫描。
-    Unusable {
-        position: u64,
-        chain_head: String,
-        generation: u64,
-    },
+    Unusable { position: u64, chain_head: String },
 }
 
 /// 进程级分支承诺缓存。`ContributionStore` 会被临时构造多个实例，因此缓存
@@ -690,23 +685,15 @@ impl ContributionStore {
         starmap_id: &str,
         position: u64,
         chain_head: &str,
-        generation: u64,
     ) {
         let current = match cache.get(key) {
             Some(BranchCommitmentState::Ready(entry)) => {
-                entry.generation == generation
-                    && entry.position == position
-                    && entry.chain_head == chain_head
+                entry.position == position && entry.chain_head == chain_head
             }
             Some(BranchCommitmentState::Unusable {
                 position: cached_position,
                 chain_head: cached_head,
-                generation: cached_generation,
-            }) => {
-                *cached_generation == generation
-                    && *cached_position == position
-                    && cached_head == chain_head
-            }
+            }) => *cached_position == position && cached_head == chain_head,
             None => false,
         };
         if current {
@@ -718,13 +705,11 @@ impl ContributionStore {
                 chain_head: branch.chain_head,
                 history_complete: branch.history_complete,
                 commitment: branch.commitment,
-                generation,
                 committed: true,
             }),
             None => BranchCommitmentState::Unusable {
                 position,
                 chain_head: chain_head.to_string(),
-                generation,
             },
         };
         if cache.len() >= 512 && !cache.contains_key(key) {
@@ -749,12 +734,11 @@ impl ContributionStore {
         cache.retain(|key, _| key.app_data_root != self.cache_root);
     }
 
-    /// 持久化成功并更新代数后，才把本批推进的缓存标记为已提交。
+    /// 持久化成功后才把本批推进的缓存标记为已提交。
     fn publish_branch_commitments(
         &self,
         targets: &[(String, String, u64)],
         chains: &HashMap<(String, String), String>,
-        generation: u64,
     ) {
         let mut cache = branch_commitment_cache()
             .lock()
@@ -772,7 +756,6 @@ impl ContributionStore {
                 Some(BranchCommitmentState::Unusable {
                     position: cached_position,
                     chain_head,
-                    ..
                 }) => *cached_position == *position && *chain_head == expected_head,
                 None => false,
             };
@@ -781,22 +764,14 @@ impl ContributionStore {
                 continue;
             }
             if let Some(entry) = cache.get_mut(&key) {
-                match entry {
-                    BranchCommitmentState::Ready(entry) => {
-                        entry.generation = generation;
-                        entry.committed = true;
-                    }
-                    BranchCommitmentState::Unusable {
-                        generation: cached_generation,
-                        ..
-                    } => *cached_generation = generation,
+                if let BranchCommitmentState::Ready(entry) = entry {
+                    entry.committed = true;
                 }
             }
         }
     }
 
     fn cache_branch_commitment(&self, origin: &str, starmap_id: &str, branch: BranchCommitment) {
-        let generation = self.replay_generation();
         let mut cache = branch_commitment_cache()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -811,7 +786,6 @@ impl ContributionStore {
                 chain_head: branch.chain_head,
                 history_complete: branch.history_complete,
                 commitment: branch.commitment,
-                generation,
                 committed: true,
             }),
         );
@@ -824,7 +798,10 @@ impl ContributionStore {
         starmap_id: &str,
         position: u64,
     ) -> Option<StarMapProofCheckpoint> {
-        let generation = self.replay_generation();
+        let (count, chain_head) = self.read_branch_replay_state(origin, starmap_id).ok()?;
+        if count != position {
+            return None;
+        }
         let cache = branch_commitment_cache()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -832,7 +809,7 @@ impl ContributionStore {
         let BranchCommitmentState::Ready(entry) = cache.get(&key)? else {
             return None;
         };
-        if !entry.committed || entry.generation != generation || entry.position != position {
+        if !entry.committed || entry.position != position || entry.chain_head != chain_head {
             return None;
         }
         let root = entry.commitment.root_hex();
@@ -858,7 +835,6 @@ impl ContributionStore {
         let mut branch_counts: HashMap<(String, String), u64> = HashMap::new();
         let mut branch_keys: HashMap<(String, String), BranchCommitmentKey> = HashMap::new();
         let mut checkpoint_targets: BTreeMap<(String, String), u64> = BTreeMap::new();
-        let generation = self.replay_generation();
         let mut commitment_cache = branch_commitment_cache()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -911,7 +887,6 @@ impl ContributionStore {
                 &starmap_id,
                 branch_position,
                 &head,
-                generation,
             );
             let cache_state = commitment_cache.get_mut(&cache_key).ok_or_else(|| {
                 Error::Other("starmap branch commitment cache missing after insert".to_string())
@@ -941,7 +916,6 @@ impl ContributionStore {
                     *cache_state = BranchCommitmentState::Unusable {
                         position: branch_position.saturating_add(1),
                         chain_head: delta.event_hash.clone().unwrap_or_default(),
-                        generation,
                     };
                 }
                 if let Some(hash) = delta.event_hash.clone() {
@@ -978,7 +952,6 @@ impl ContributionStore {
                             chain_head: String::new(),
                             history_complete: baseline.history_complete,
                             commitment: StateCommitment::from_state(&baseline.state()),
-                            generation,
                             committed: false,
                         });
                     }
@@ -1005,7 +978,6 @@ impl ContributionStore {
                 *cache_state = BranchCommitmentState::Unusable {
                     position: branch_position.saturating_add(1),
                     chain_head: head.clone(),
-                    generation,
                 };
             }
             let identity = ReplayEventIdentity {
@@ -1327,8 +1299,8 @@ impl ContributionStore {
         // 元数据和分支计数落稳后才删 journal；中途崩溃时下次重放会重新
         // 扫描真实事件并修正计数，避免沿用旧缓存跳过位置。
         fs::remove_file(&pending_path)?;
-        let generation = self.bump_replay_generation();
-        self.publish_branch_commitments(&checkpoint_targets, &metadata.chains, generation);
+        self.bump_replay_generation();
+        self.publish_branch_commitments(&checkpoint_targets, &metadata.chains);
         commitment_guard.committed = true;
         self.cache_written_event_ids(&origin, &written_ids);
         // 检查点回放会通过 load_all_events 重入 pending recovery；先释放写锁，
@@ -1614,6 +1586,17 @@ pub fn invalidate_stats_event_store(app_data_root: &Path) {
         .join(".contribution-generation");
     let value = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default() as u64;
     let _ = atomic_write_string(&path, &value.to_string());
+    // 同步替换可能改写任意来源分区；显式清掉该 app data 根的分支承诺缓存。
+    // 本地单分支写入不会走到这里，因此不会让其它星图的有效缓存过期。
+    invalidate_branch_commitment_cache_for_root(app_data_root);
+}
+
+fn invalidate_branch_commitment_cache_for_root(app_data_root: &Path) {
+    let root = fs::canonicalize(app_data_root).unwrap_or_else(|_| app_data_root.to_path_buf());
+    let mut cache = branch_commitment_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.retain(|key, _| key.app_data_root != root);
 }
 
 /// 解析本机统计事件分区使用的稳定设备 ID。
