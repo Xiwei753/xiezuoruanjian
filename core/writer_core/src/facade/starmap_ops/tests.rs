@@ -360,3 +360,238 @@ fn remove_starmap_store_invalidates_index() {
         "remove 应失效路径依赖索引"
     );
 }
+
+/// 复制根图时，根/嵌套身份按源索引保留：复制起点成为新根图，
+/// 其它原本是独立根图的源图仍为根图，原本是嵌套子图的仍为嵌套子图。
+#[test]
+fn copy_starmap_preserves_explicit_root_identity() {
+    let temp = tempdir().unwrap();
+    let core = new_core(temp.path());
+
+    let root = create_starmap(&core, "根图");
+    let (nested, _embed, _changes, tx_id) = core
+        .create_starmap_child_embed(&root, "嵌套子图", StarMapPoint::default())
+        .unwrap();
+    crate::storage::journal::starmap_child_embed::ack_child_embed_history(temp.path(), &tx_id)
+        .unwrap();
+
+    let independent = create_starmap(&core, "独立根图");
+    embed_child(&core, &root, &independent, "em_independent_root");
+
+    let copy = core
+        .copy_starmap_library_asset(
+            &crate::starmap::types::StarMapAssetRef::starmap(root.clone()),
+            &crate::starmap::types::StarMapAssetScope::Global,
+            None,
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+    let copied = match copy {
+        crate::facade::StarMapAssetCopyResult::StarMap(copied) => copied,
+        crate::facade::StarMapAssetCopyResult::Node { .. } => {
+            panic!("复制星图必须返回星图结果")
+        }
+    };
+
+    assert_eq!(copied.starmaps.len(), 3);
+    let copied_root = copied.starmap_map.get(&root).unwrap();
+    let copied_nested = copied.starmap_map.get(&nested.starmap_id).unwrap();
+    let copied_independent = copied.starmap_map.get(&independent).unwrap();
+
+    let roots = core
+        .list_root_starmaps()
+        .unwrap()
+        .into_iter()
+        .map(|meta| meta.starmap_id)
+        .collect::<Vec<_>>();
+    assert!(roots.contains(&root));
+    assert!(roots.contains(&independent));
+    assert!(roots.contains(copied_root));
+    assert!(roots.contains(copied_independent));
+    assert!(
+        !roots.contains(&nested.starmap_id),
+        "复制前是嵌套子图，复制后不能补登为根图"
+    );
+    assert!(
+        !roots.contains(copied_nested),
+        "复制出的嵌套子图不能出现在一级星图列表"
+    );
+}
+
+/// 复制时 Portal 段必须切换当前源画布，后续段和终点在新目标图中映射：
+/// 覆盖 EnterPortal → Node 与 EnterPortal → EnterEmbed → Anchor。
+#[test]
+fn copy_starmap_remaps_full_paths_through_portals() {
+    let temp = tempdir().unwrap();
+    let core = new_core(temp.path());
+
+    let a = create_starmap(&core, "A");
+    let b = create_starmap(&core, "B");
+    let c = create_starmap(&core, "C");
+    embed_child(&core, &a, &b, "em_a_b");
+    embed_child(&core, &b, &c, "em_b_c");
+
+    let node = |id: &str, anchors: Vec<crate::starmap::semantic::StarMapAnchor>| {
+        crate::starmap::types::StarMapNode {
+            id: id.to_string(),
+            title: id.to_string(),
+            kind: crate::starmap::types::StarMapNodeKind::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::starmap::semantic::StarMapNodeContent::Empty,
+            anchors,
+            portal: None,
+            position: StarMapPoint::default(),
+            style: crate::starmap::types::StarMapNodeStyle::default(),
+            provenance: StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    };
+
+    let mut c_node = node(
+        "n_c",
+        vec![crate::starmap::semantic::StarMapAnchor {
+            anchor_id: "anchor_1".to_string(),
+            target: crate::starmap::semantic::StarMapAnchorTarget::Project {
+                project_id: "p1".to_string(),
+            },
+            label: None,
+            role: Default::default(),
+        }],
+    );
+    c_node.title = "锚点目标".to_string();
+    core.add_starmap_node(&c, c_node, 0.0, 0.0).unwrap();
+    core.add_starmap_node(&b, node("n_b", vec![]), 0.0, 0.0)
+        .unwrap();
+
+    let mut portal_node = node("n_portal", vec![]);
+    portal_node.portal = Some(crate::starmap::semantic::StarMapPortal {
+        destination_starmap_id: b.clone(),
+        destination_target: None,
+    });
+    core.add_starmap_node(&a, portal_node, 0.0, 0.0)
+        .unwrap();
+
+    let endpoint = |target: StarMapTargetDetail| StarMapTargetPath {
+        starmap_id: a.clone(),
+        segments: vec![],
+        target,
+    };
+    core.add_starmap_edge(
+        &a,
+        crate::starmap::types::StarMapEdge {
+            id: "edge_portal_node".to_string(),
+            from: endpoint(StarMapTargetDetail::Starmap),
+            to: StarMapTargetPath {
+                starmap_id: a.clone(),
+                segments: vec![StarMapPathSegment::EnterPortal {
+                    node_id: "n_portal".to_string(),
+                }],
+                target: StarMapTargetDetail::Node {
+                    node_id: "n_b".to_string(),
+                },
+            },
+            kind: StarMapEdgeKind::References,
+            label: Some("portal-node".to_string()),
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        },
+    )
+    .unwrap();
+    core.add_starmap_edge(
+        &a,
+        crate::starmap::types::StarMapEdge {
+            id: "edge_portal_embed_anchor".to_string(),
+            from: endpoint(StarMapTargetDetail::Starmap),
+            to: StarMapTargetPath {
+                starmap_id: a.clone(),
+                segments: vec![
+                    StarMapPathSegment::EnterPortal {
+                        node_id: "n_portal".to_string(),
+                    },
+                    StarMapPathSegment::EnterEmbed {
+                        instance_id: "em_b_c".to_string(),
+                    },
+                ],
+                target: StarMapTargetDetail::Anchor {
+                    node_id: "n_c".to_string(),
+                    anchor_id: "anchor_1".to_string(),
+                },
+            },
+            kind: StarMapEdgeKind::References,
+            label: Some("portal-embed-anchor".to_string()),
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        },
+    )
+    .unwrap();
+
+    let copy = core
+        .copy_starmap_library_asset(
+            &crate::starmap::types::StarMapAssetRef::starmap(a.clone()),
+            &crate::starmap::types::StarMapAssetScope::Global,
+            None,
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+    let copied = match copy {
+        crate::facade::StarMapAssetCopyResult::StarMap(copied) => copied,
+        crate::facade::StarMapAssetCopyResult::Node { .. } => {
+            panic!("复制星图必须返回星图结果")
+        }
+    };
+
+    let new_a = copied.starmap_map.get(&a).unwrap();
+    let new_portal = copied.node_maps.get(&a).unwrap().get("n_portal").unwrap();
+    let new_b = copied.node_maps.get(&b).unwrap().get("n_b").unwrap();
+    let new_c = copied.node_maps.get(&c).unwrap().get("n_c").unwrap();
+    let new_embed = copied.embed_maps.get(&b).unwrap().get("em_b_c").unwrap();
+
+    let graph = core.get_starmap_graph(new_a).unwrap();
+    let portal_node_edge = graph
+        .edges
+        .iter()
+        .find(|edge| edge.label.as_deref() == Some("portal-node"))
+        .unwrap();
+    assert_eq!(portal_node_edge.to.starmap_id, *new_a);
+    assert_eq!(
+        portal_node_edge.to.segments,
+        vec![StarMapPathSegment::EnterPortal {
+            node_id: new_portal.clone()
+        }]
+    );
+    assert_eq!(
+        portal_node_edge.to.target,
+        StarMapTargetDetail::Node {
+            node_id: new_b.clone()
+        }
+    );
+
+    let portal_embed_edge = graph
+        .edges
+        .iter()
+        .find(|edge| edge.label.as_deref() == Some("portal-embed-anchor"))
+        .unwrap();
+    assert_eq!(portal_embed_edge.to.starmap_id, *new_a);
+    assert_eq!(
+        portal_embed_edge.to.segments,
+        vec![
+            StarMapPathSegment::EnterPortal {
+                node_id: new_portal.clone()
+            },
+            StarMapPathSegment::EnterEmbed {
+                instance_id: new_embed.clone()
+            },
+        ]
+    );
+    assert_eq!(
+        portal_embed_edge.to.target,
+        StarMapTargetDetail::Anchor {
+            node_id: new_c.clone(),
+            anchor_id: "anchor_1".to_string()
+        }
+    );
+}

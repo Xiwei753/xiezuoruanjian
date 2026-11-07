@@ -340,6 +340,12 @@ impl super::super::WriterCore {
 
         let source_meta = crate::starmap::get_starmap(&self.app_data_root, source_starmap_id)?;
         let new_root_title = title.unwrap_or_else(|| format!("{} 副本", source_meta.title));
+        // 根身份是索引里显式登记的事实，不能靠 Embed 关系反推。复制起点
+        // 必须成为新根图；其它被复制图保留其原有的根/嵌套身份。
+        let source_root_ids = crate::starmap::load_index(&self.app_data_root)?
+            .root_starmap_ids
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
 
         // 先完整遍历源画布可达的全部子画布。复制必须覆盖所有内部引用，
         // 否则子图仍指向原对象，后续编辑会穿透到副本。
@@ -485,19 +491,30 @@ impl super::super::WriterCore {
                 .get(starmap_id)
                 .expect("copy map covers collected starmaps")
                 .clone();
-            let is_root = starmap_id == source_starmap_id;
-            let new_title = if is_root {
+            let is_copy_root = starmap_id == source_starmap_id
+                || source_root_ids.contains(starmap_id);
+            let new_title = if starmap_id == source_starmap_id {
                 new_root_title.clone()
             } else {
                 source.title.clone()
             };
-            let mut meta = crate::starmap::create_starmap_with_id(
-                &self.app_data_root,
-                &new_starmap_id,
-                &new_title,
-                &source.description,
-                Some(source.accent_color.as_str()),
-            )?;
+            let mut meta = if is_copy_root {
+                crate::starmap::create_starmap_with_id(
+                    &self.app_data_root,
+                    &new_starmap_id,
+                    &new_title,
+                    &source.description,
+                    Some(source.accent_color.as_str()),
+                )?
+            } else {
+                crate::starmap::create_nested_starmap_with_id(
+                    &self.app_data_root,
+                    &new_starmap_id,
+                    &new_title,
+                    &source.description,
+                    Some(source.accent_color.as_str()),
+                )?
+            };
             result.change_paths.push(std::path::PathBuf::from(format!(
                 "starmaps/{new_starmap_id}.meta.json"
             )));
@@ -852,13 +869,33 @@ fn remap_copy_path(
                 current_source = target;
             }
             crate::starmap::types::StarMapPathSegment::EnterPortal { node_id } => {
-                if let Some(map) = node_maps.get(&current_source) {
-                    *node_id = map.get(node_id).cloned().ok_or_else(|| {
+                // Portal 段不是单纯的节点 ID 替换：解析器穿过 Portal 后，
+                // 当前画布会切换为 portal.destination_starmap_id。复制时必须
+                // 同步更新 current_source，后续 EnterEmbed 和终点才会在正确的
+                // 目标图映射中继续解析。
+                let source_node_id = node_id.clone();
+                let portal_target = graph
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == source_node_id)
+                    .and_then(|node| node.portal.as_ref())
+                    .map(|portal| portal.destination_starmap_id.clone())
+                    .ok_or_else(|| {
                         crate::error::Error::Other(format!(
-                            "copy starmap: missing portal node remap {current_source}/{node_id}"
+                            "copy starmap: missing portal {current_source}/{source_node_id}"
                         ))
                     })?;
-                }
+                let map = node_maps.get(&current_source).ok_or_else(|| {
+                    crate::error::Error::Other(format!(
+                        "copy starmap: missing node remap context {current_source}"
+                    ))
+                })?;
+                *node_id = map.get(&source_node_id).cloned().ok_or_else(|| {
+                    crate::error::Error::Other(format!(
+                        "copy starmap: missing portal node remap {current_source}/{source_node_id}"
+                    ))
+                })?;
+                current_source = portal_target;
             }
         }
     }
@@ -886,4 +923,222 @@ fn remap_copy_target(
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod copy_path_tests {
+    use super::remap_copy_path;
+    use crate::starmap::semantic::{
+        StarMapNodeContent, StarMapPortal, StarMapProvenance, StarMapTargetDetail,
+    };
+    use crate::starmap::types::reference::StarMapTargetPath;
+    use crate::starmap::types::{
+        StarMapEmbed, StarMapGraph, StarMapNode, StarMapNodeKind, StarMapNodeStyle,
+        StarMapPathSegment, StarMapPoint,
+    };
+    use std::collections::HashMap;
+
+    fn node(id: &str, portal: Option<StarMapPortal>) -> StarMapNode {
+        StarMapNode {
+            id: id.to_string(),
+            title: id.to_string(),
+            kind: StarMapNodeKind::Note,
+            payload: None,
+            tags: vec![],
+            content: StarMapNodeContent::Empty,
+            anchors: vec![],
+            portal,
+            position: StarMapPoint::default(),
+            style: StarMapNodeStyle::default(),
+            provenance: StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn graph(
+        starmap_id: &str,
+        nodes: Vec<StarMapNode>,
+        embeds: Vec<StarMapEmbed>,
+    ) -> StarMapGraph {
+        StarMapGraph {
+            starmap_id: starmap_id.to_string(),
+            nodes,
+            embeds,
+            ..StarMapGraph::default()
+        }
+    }
+
+    fn embed(instance_id: &str, host: &str, target: &str) -> StarMapEmbed {
+        StarMapEmbed {
+            instance_id: instance_id.to_string(),
+            target_starmap_id: target.to_string(),
+            label: None,
+            position: StarMapPoint::default(),
+            host_path: StarMapTargetPath {
+                starmap_id: host.to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Starmap,
+            },
+            provenance: StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn node_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(old, new)| ((*old).to_string(), (*new).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn remap_copy_path_enters_portal_target_canvas_before_node_target() {
+        let source_graphs = HashMap::from([
+            (
+                "A".to_string(),
+                graph(
+                    "A",
+                    vec![node(
+                        "p_old",
+                        Some(StarMapPortal {
+                            destination_starmap_id: "B".to_string(),
+                            destination_target: None,
+                        }),
+                    )],
+                    vec![],
+                ),
+            ),
+            (
+                "B".to_string(),
+                graph("B", vec![node("b_old", None)], vec![]),
+            ),
+        ]);
+        let mut path = StarMapTargetPath {
+            starmap_id: "A".to_string(),
+            segments: vec![StarMapPathSegment::EnterPortal {
+                node_id: "p_old".to_string(),
+            }],
+            target: StarMapTargetDetail::Node {
+                node_id: "b_old".to_string(),
+            },
+        };
+
+        remap_copy_path(
+            &mut path,
+            &HashMap::from([
+                ("A".to_string(), "A2".to_string()),
+                ("B".to_string(), "B2".to_string()),
+            ]),
+            &HashMap::from([
+                ("A".to_string(), node_map(&[("p_old", "p_new")])),
+                ("B".to_string(), node_map(&[("b_old", "b_new")])),
+            ]),
+            &HashMap::new(),
+            &source_graphs,
+        )
+        .unwrap();
+
+        assert_eq!(path.starmap_id, "A2");
+        assert_eq!(
+            path.segments,
+            vec![StarMapPathSegment::EnterPortal {
+                node_id: "p_new".to_string()
+            }]
+        );
+        assert_eq!(
+            path.target,
+            StarMapTargetDetail::Node {
+                node_id: "b_new".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn remap_copy_path_enters_portal_then_embed_before_anchor_target() {
+        let source_graphs = HashMap::from([
+            (
+                "A".to_string(),
+                graph(
+                    "A",
+                    vec![node(
+                        "p_old",
+                        Some(StarMapPortal {
+                            destination_starmap_id: "B".to_string(),
+                            destination_target: None,
+                        }),
+                    )],
+                    vec![],
+                ),
+            ),
+            (
+                "B".to_string(),
+                graph(
+                    "B",
+                    vec![],
+                    vec![embed("e_old", "B", "C")],
+                ),
+            ),
+            (
+                "C".to_string(),
+                graph("C", vec![node("c_old", None)], vec![]),
+            ),
+        ]);
+        let mut path = StarMapTargetPath {
+            starmap_id: "A".to_string(),
+            segments: vec![
+                StarMapPathSegment::EnterPortal {
+                    node_id: "p_old".to_string(),
+                },
+                StarMapPathSegment::EnterEmbed {
+                    instance_id: "e_old".to_string(),
+                },
+            ],
+            target: StarMapTargetDetail::Anchor {
+                node_id: "c_old".to_string(),
+                anchor_id: "anchor_1".to_string(),
+            },
+        };
+
+        remap_copy_path(
+            &mut path,
+            &HashMap::from([
+                ("A".to_string(), "A2".to_string()),
+                ("B".to_string(), "B2".to_string()),
+                ("C".to_string(), "C2".to_string()),
+            ]),
+            &HashMap::from([
+                ("A".to_string(), node_map(&[("p_old", "p_new")])),
+                ("B".to_string(), HashMap::new()),
+                ("C".to_string(), node_map(&[("c_old", "c_new")])),
+            ]),
+            &HashMap::from([(
+                "B".to_string(),
+                node_map(&[("e_old", "e_new")]),
+            )]),
+            &source_graphs,
+        )
+        .unwrap();
+
+        assert_eq!(path.starmap_id, "A2");
+        assert_eq!(
+            path.segments,
+            vec![
+                StarMapPathSegment::EnterPortal {
+                    node_id: "p_new".to_string()
+                },
+                StarMapPathSegment::EnterEmbed {
+                    instance_id: "e_new".to_string()
+                },
+            ]
+        );
+        assert_eq!(
+            path.target,
+            StarMapTargetDetail::Anchor {
+                node_id: "c_new".to_string(),
+                anchor_id: "anchor_1".to_string()
+            }
+        );
+    }
 }
