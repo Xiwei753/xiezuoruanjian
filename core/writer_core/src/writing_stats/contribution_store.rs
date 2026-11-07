@@ -27,7 +27,7 @@ use crate::writing_stats::starmap_proof::{
     LEGACY_STARMAP_PROOF_FORMAT_VERSION, LEGACY_V2_STARMAP_PROOF_FORMAT_VERSION,
     LEGACY_V3_STARMAP_PROOF_FORMAT_VERSION, STARMAP_PROOF_FORMAT_VERSION,
 };
-use crate::writing_stats::starmap_replay::{is_starmap_event, sort_events};
+use crate::writing_stats::starmap_replay::is_starmap_event;
 
 const EVENTS_ROOT: &str = "stats/events";
 const PENDING_ROOT: &str = "stats/pending/contributions";
@@ -35,6 +35,7 @@ const OBJECTS_SUFFIX: &str = ".objects.jsonl";
 
 pub struct ContributionStore {
     app_data_root: PathBuf,
+    cache_root: PathBuf,
     origin_device_id: Mutex<Option<String>>,
     event_id_cache: Mutex<HashMap<String, OriginEventIdCache>>,
 }
@@ -66,10 +67,64 @@ struct BranchCommitment {
     commitment: StateCommitment,
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct BranchCommitmentKey {
+    app_data_root: PathBuf,
+    origin_device_id: String,
+    starmap_id: String,
+}
+
+struct CachedBranchCommitment {
+    position: u64,
+    chain_head: String,
+    history_complete: bool,
+    commitment: StateCommitment,
+    generation: u64,
+}
+
+enum BranchCommitmentState {
+    /// 已成功重建、可继续增量 apply 的完整对象索引 + Merkle 树。
+    Ready(CachedBranchCommitment),
+    /// 当前事件库状态下无法安全重建；记住失败位置避免每次写入都重复全量扫描。
+    Unusable {
+        position: u64,
+        chain_head: String,
+        generation: u64,
+    },
+}
+
+/// 进程级分支承诺缓存。`ContributionStore` 会被临时构造多个实例，因此缓存
+/// 不能挂在 Store 上；键包含规范化 app data 根、来源设备和星图。
+static BRANCH_COMMITMENT_CACHE: OnceLock<
+    Mutex<HashMap<BranchCommitmentKey, BranchCommitmentState>>,
+> = OnceLock::new();
+
+fn branch_commitment_cache() -> &'static Mutex<HashMap<BranchCommitmentKey, BranchCommitmentState>>
+{
+    BRANCH_COMMITMENT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+struct BranchCommitmentWriteGuard<'a> {
+    store: &'a ContributionStore,
+    keys: Vec<(String, String)>,
+    committed: bool,
+}
+
+impl Drop for BranchCommitmentWriteGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.store.invalidate_branch_commitments(&self.keys);
+        }
+    }
+}
+
 impl ContributionStore {
     pub fn new(app_data_root: &Path) -> Self {
+        let cache_root =
+            fs::canonicalize(app_data_root).unwrap_or_else(|_| app_data_root.to_path_buf());
         Self {
             app_data_root: app_data_root.to_path_buf(),
+            cache_root,
             origin_device_id: Mutex::new(None),
             event_id_cache: Mutex::new(HashMap::new()),
         }
@@ -126,9 +181,10 @@ impl ContributionStore {
             .unwrap_or(0)
     }
 
-    fn bump_replay_generation(&self) {
+    fn bump_replay_generation(&self) -> u64 {
         let value = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default() as u64;
         let _ = atomic_write_string(&self.generation_path(), &value.to_string());
+        value
     }
 
     /// 事件库真实存储指纹：同步直接搬入文件时也能让回放缓存失效。
@@ -360,9 +416,12 @@ impl ContributionStore {
         }
     }
 
-    /// 读取 `(after, target]` 区间内已落盘的分支事件。
+    /// 读取 `[after, target)` 区间内已落盘的分支事件。
     ///
-    /// 只从最新日期文件向前扫描，凑够目标区间即停止；任何缺少
+    /// `after/target` 是已应用事件数：位置 N 的检查点对应 branch_position
+    /// `0..N-1`，因此需要补齐的是 `after <= branch_position < target`。
+    /// 只从最新日期文件向前扫描，凑够目标位置即停止；日期文件与分支位置
+    /// 不一定严格同序，因此不因遇到单个旧位置提前结束。任何缺少
     /// `branch_position` 的旧事件都视为无法增量重建，返回 `None` 走完整回放。
     fn recent_starmap_events(
         &self,
@@ -391,9 +450,9 @@ impl ContributionStore {
         paths.sort_by(|left, right| right.file_name().cmp(&left.file_name()));
         let wanted = target.saturating_sub(after);
         let mut events = Vec::new();
+        let mut seen = HashSet::new();
         for path in paths {
             let file = fs::File::open(&path).ok()?;
-            let mut reached_older = false;
             for line in BufReader::new(file).lines() {
                 let Ok(line) = line else {
                     continue;
@@ -412,13 +471,15 @@ impl ContributionStore {
                     // 它们自然不参与；找不到时末尾的连续性检查会失败。
                     continue;
                 };
-                if position <= after {
-                    reached_older = true;
-                } else if position <= target {
-                    events.push(event);
+                if position < after || position >= target {
+                    continue;
                 }
+                if !seen.insert(position) {
+                    return None;
+                }
+                events.push(event);
             }
-            if events.len() as u64 >= wanted || reached_older {
+            if events.len() as u64 >= wanted {
                 break;
             }
         }
@@ -428,7 +489,7 @@ impl ContributionStore {
                 .as_ref()
                 .and_then(|delta| delta.branch_position)
         });
-        let mut expected = after.saturating_add(1);
+        let mut expected = after;
         for event in &events {
             if event
                 .replay_delta
@@ -440,7 +501,7 @@ impl ContributionStore {
             }
             expected = expected.saturating_add(1);
         }
-        (expected == target.saturating_add(1)).then_some(events)
+        (events.len() as u64 == wanted && expected == target).then_some(events)
     }
 
     fn expected_event_hash(
@@ -493,6 +554,20 @@ impl ContributionStore {
         starmap_id: &str,
         target: u64,
     ) -> Option<BranchCommitment> {
+        if let Some(branch) =
+            self.load_branch_commitment_from_checkpoint(origin, starmap_id, target)
+        {
+            return Some(branch);
+        }
+        self.load_branch_commitment_from_baseline(origin, starmap_id, target)
+    }
+
+    fn load_branch_commitment_from_checkpoint(
+        &self,
+        origin: &str,
+        starmap_id: &str,
+        target: u64,
+    ) -> Option<BranchCommitment> {
         let headers = list_checkpoint_headers(&self.app_data_root, origin, starmap_id).ok()?;
         let header = headers
             .into_iter()
@@ -506,7 +581,22 @@ impl ContributionStore {
         }
         let mut position = header.position;
         let mut chain_head = checkpoint.event_chain_head.clone();
-        for event in self.recent_starmap_events(origin, starmap_id, position, target)? {
+        let first_position = header.position.saturating_sub(1);
+        let mut events = self.recent_starmap_events(origin, starmap_id, first_position, target)?;
+        if header.position > 0 {
+            // 检查点必须锚定它声明的那个事件；否则不能把它当作可信起点。
+            let anchor = events.first()?;
+            let anchor_delta = anchor.replay_delta.as_ref()?;
+            if anchor_delta.branch_position != Some(first_position)
+                || anchor_delta.event_hash.as_deref() != Some(chain_head.as_str())
+                || (anchor_delta.format_version == STARMAP_PROOF_FORMAT_VERSION
+                    && anchor_delta.state_root_after.as_deref() != Some(header.state_root.as_str()))
+            {
+                return None;
+            }
+            events.remove(0);
+        }
+        for event in events {
             let delta = event.replay_delta.as_ref()?;
             if delta.branch_position != Some(position) {
                 return None;
@@ -538,15 +628,233 @@ impl ContributionStore {
         })
     }
 
+    /// 没有可用状态根检查点时，从首条事件已签名的 baseline 顺序重放整个
+    /// 分支（只在进程启动/缓存缺失时发生一次），使 v4 事件可以持续写出。
+    fn load_branch_commitment_from_baseline(
+        &self,
+        origin: &str,
+        starmap_id: &str,
+        target: u64,
+    ) -> Option<BranchCommitment> {
+        let events = self.recent_starmap_events(origin, starmap_id, 0, target)?;
+        let baseline = events.first()?.replay_delta.as_ref()?.baseline.as_ref()?;
+        let mut commitment = StateCommitment::from_state(&baseline.state());
+        let mut position = 0u64;
+        let mut chain_head = String::new();
+        for event in &events {
+            let delta = event.replay_delta.as_ref()?;
+            if delta.branch_position != Some(position) {
+                return None;
+            }
+            if delta.prev_event_hash.as_deref()
+                != (!chain_head.is_empty()).then_some(chain_head.as_str())
+            {
+                return None;
+            }
+            let expected = Self::expected_event_hash(event, &chain_head, position)?;
+            if delta.event_hash.as_deref() != Some(expected.as_str()) {
+                return None;
+            }
+            commitment.apply_delta(delta).ok()?;
+            if delta.format_version == STARMAP_PROOF_FORMAT_VERSION
+                && delta.state_root_after.as_deref() != Some(commitment.root_hex().as_str())
+            {
+                return None;
+            }
+            chain_head = delta.event_hash.clone()?;
+            position = position.saturating_add(1);
+        }
+        (position == target).then_some(BranchCommitment {
+            position,
+            chain_head,
+            history_complete: baseline.history_complete,
+            commitment,
+        })
+    }
+
+    fn branch_commitment_key(&self, origin: &str, starmap_id: &str) -> BranchCommitmentKey {
+        BranchCommitmentKey {
+            app_data_root: self.cache_root.clone(),
+            origin_device_id: origin.to_string(),
+            starmap_id: starmap_id.to_string(),
+        }
+    }
+
+    fn ensure_branch_commitment_cache(
+        &self,
+        cache: &mut HashMap<BranchCommitmentKey, BranchCommitmentState>,
+        key: &BranchCommitmentKey,
+        origin: &str,
+        starmap_id: &str,
+        position: u64,
+        chain_head: &str,
+        generation: u64,
+    ) {
+        let current = match cache.get(key) {
+            Some(BranchCommitmentState::Ready(entry)) => {
+                entry.generation == generation
+                    && entry.position == position
+                    && entry.chain_head == chain_head
+            }
+            Some(BranchCommitmentState::Unusable {
+                position: cached_position,
+                chain_head: cached_head,
+                generation: cached_generation,
+            }) => {
+                *cached_generation == generation
+                    && *cached_position == position
+                    && cached_head == chain_head
+            }
+            None => false,
+        };
+        if current {
+            return;
+        }
+        let state = match self.load_branch_commitment(origin, starmap_id, position) {
+            Some(branch) => BranchCommitmentState::Ready(CachedBranchCommitment {
+                position: branch.position,
+                chain_head: branch.chain_head,
+                history_complete: branch.history_complete,
+                commitment: branch.commitment,
+                generation,
+            }),
+            None => BranchCommitmentState::Unusable {
+                position,
+                chain_head: chain_head.to_string(),
+                generation,
+            },
+        };
+        if cache.len() >= 512 && !cache.contains_key(key) {
+            cache.clear();
+        }
+        cache.insert(key.clone(), state);
+    }
+
+    fn invalidate_branch_commitments(&self, keys: &[(String, String)]) {
+        let mut cache = branch_commitment_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (origin, starmap_id) in keys {
+            cache.remove(&self.branch_commitment_key(origin, starmap_id));
+        }
+    }
+
+    fn invalidate_all_branch_commitments(&self) {
+        let mut cache = branch_commitment_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.retain(|key, _| key.app_data_root != self.cache_root);
+    }
+
+    /// 持久化成功并更新代数后，才把本批推进的缓存标记为已提交。
+    fn publish_branch_commitments(
+        &self,
+        targets: &[(String, String, u64)],
+        chains: &HashMap<(String, String), String>,
+        generation: u64,
+    ) {
+        let mut cache = branch_commitment_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (origin, starmap_id, position) in targets {
+            let key = self.branch_commitment_key(origin, starmap_id);
+            let expected_head = chains
+                .get(&(origin.clone(), starmap_id.clone()))
+                .cloned()
+                .unwrap_or_default();
+            let keep = match cache.get(&key) {
+                Some(BranchCommitmentState::Ready(entry)) => {
+                    entry.position == *position && entry.chain_head == expected_head
+                }
+                Some(BranchCommitmentState::Unusable {
+                    position: cached_position,
+                    chain_head,
+                    ..
+                }) => *cached_position == *position && *chain_head == expected_head,
+                None => false,
+            };
+            if !keep {
+                cache.remove(&key);
+                continue;
+            }
+            if let Some(entry) = cache.get_mut(&key) {
+                match entry {
+                    BranchCommitmentState::Ready(entry) => entry.generation = generation,
+                    BranchCommitmentState::Unusable {
+                        generation: cached_generation,
+                        ..
+                    } => *cached_generation = generation,
+                }
+            }
+        }
+    }
+
+    fn cache_branch_commitment(&self, origin: &str, starmap_id: &str, branch: BranchCommitment) {
+        let generation = self.replay_generation();
+        let mut cache = branch_commitment_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key = self.branch_commitment_key(origin, starmap_id);
+        if cache.len() >= 512 && !cache.contains_key(&key) {
+            cache.clear();
+        }
+        cache.insert(
+            key,
+            BranchCommitmentState::Ready(CachedBranchCommitment {
+                position: branch.position,
+                chain_head: branch.chain_head,
+                history_complete: branch.history_complete,
+                commitment: branch.commitment,
+                generation,
+            }),
+        );
+    }
+
+    /// 直接用已发布的增量承诺生成检查点，避免再次反序列化/重建整图。
+    fn checkpoint_from_branch_cache(
+        &self,
+        origin: &str,
+        starmap_id: &str,
+        position: u64,
+    ) -> Option<StarMapProofCheckpoint> {
+        let generation = self.replay_generation();
+        let cache = branch_commitment_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key = self.branch_commitment_key(origin, starmap_id);
+        let BranchCommitmentState::Ready(entry) = cache.get(&key)? else {
+            return None;
+        };
+        if entry.generation != generation || entry.position != position {
+            return None;
+        }
+        let root = entry.commitment.root_hex();
+        Some(
+            StarMapProofCheckpoint::new_with_state_root(
+                starmap_id,
+                origin,
+                position,
+                entry.commitment.to_state(),
+                &root,
+                crate::writing_stats::starmap_checkpoint::CHECKPOINT_REASON_PERIODIC,
+                entry.history_complete,
+            )
+            .with_event_chain_head(&entry.chain_head),
+        )
+    }
+
     /// 追加时分配来源设备内持久、单调的排序序号，并按星图分支内事件数建立
     /// 哈希链；同时返回需要维护检查点的分支目标。
     fn assign_replay_metadata(&self, events: &mut [ContributionEvent]) -> Result<ReplayMetadata> {
         let mut sequences: HashMap<String, u64> = HashMap::new();
         let mut chains: HashMap<(String, String), String> = HashMap::new();
         let mut branch_counts: HashMap<(String, String), u64> = HashMap::new();
-        let mut branch_commitments: HashMap<(String, String), Option<BranchCommitment>> =
-            HashMap::new();
+        let mut branch_keys: HashMap<(String, String), BranchCommitmentKey> = HashMap::new();
         let mut checkpoint_targets: BTreeMap<(String, String), u64> = BTreeMap::new();
+        let generation = self.replay_generation();
+        let mut commitment_cache = branch_commitment_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for event in events {
             let Some(delta) = event.replay_delta.as_ref() else {
                 continue;
@@ -577,37 +885,56 @@ impl ContributionStore {
                 let (count, head) = self.read_branch_replay_state(&origin, &starmap_id)?;
                 branch_counts.insert(chain_key.clone(), count);
                 chains.entry(chain_key.clone()).or_insert(head);
-                branch_commitments.insert(
+                branch_keys.insert(
                     chain_key.clone(),
-                    self.load_branch_commitment(&origin, &starmap_id, count),
+                    self.branch_commitment_key(&origin, &starmap_id),
                 );
             }
             let branch_position = *branch_counts.get(&chain_key).ok_or_else(|| {
                 Error::Other("starmap branch count missing after insert".to_string())
             })?;
+            let head = chains.get(&chain_key).cloned().unwrap_or_default();
+            let cache_key = branch_keys.get(&chain_key).cloned().ok_or_else(|| {
+                Error::Other("starmap branch commitment key missing after insert".to_string())
+            })?;
+            self.ensure_branch_commitment_cache(
+                &mut commitment_cache,
+                &cache_key,
+                &origin,
+                &starmap_id,
+                branch_position,
+                &head,
+                generation,
+            );
+            let cache_state = commitment_cache.get_mut(&cache_key).ok_or_else(|| {
+                Error::Other("starmap branch commitment cache missing after insert".to_string())
+            })?;
             if delta.event_hash.is_some() {
-                let head = chains.get(&chain_key).cloned().unwrap_or_default();
                 let hash_ok = Self::expected_event_hash(event, &head, branch_position)
                     .is_some_and(|expected| delta.event_hash.as_deref() == Some(expected.as_str()));
                 let mut commitment_ok = false;
                 if hash_ok {
-                    if let Some(Some(cache)) = branch_commitments.get_mut(&chain_key) {
-                        if cache.position == branch_position
-                            && cache.commitment.apply_delta(delta).is_ok()
+                    if let BranchCommitmentState::Ready(entry) = cache_state {
+                        if entry.position == branch_position
+                            && entry.commitment.apply_delta(delta).is_ok()
                         {
                             let root_ok = delta.format_version != STARMAP_PROOF_FORMAT_VERSION
                                 || delta.state_root_after.as_deref()
-                                    == Some(cache.commitment.root_hex().as_str());
+                                    == Some(entry.commitment.root_hex().as_str());
                             if root_ok {
-                                cache.position = cache.position.saturating_add(1);
-                                cache.chain_head = delta.event_hash.clone().unwrap_or_default();
+                                entry.position = entry.position.saturating_add(1);
+                                entry.chain_head = delta.event_hash.clone().unwrap_or_default();
                                 commitment_ok = true;
                             }
                         }
                     }
                 }
                 if !commitment_ok {
-                    branch_commitments.insert(chain_key.clone(), None);
+                    *cache_state = BranchCommitmentState::Unusable {
+                        position: branch_position.saturating_add(1),
+                        chain_head: delta.event_hash.clone().unwrap_or_default(),
+                        generation,
+                    };
                 }
                 if let Some(hash) = delta.event_hash.clone() {
                     chains.insert(chain_key.clone(), hash);
@@ -619,7 +946,6 @@ impl ContributionStore {
                 checkpoint_targets.insert(chain_key, *next);
                 continue;
             }
-            let head = chains.get(&chain_key).cloned().unwrap_or_default();
             let mut delta = event.replay_delta.take().ok_or_else(|| {
                 Error::Other("starmap replay delta missing while assigning hash".to_string())
             })?;
@@ -630,43 +956,35 @@ impl ContributionStore {
                 delta.after_state_hash = Some(proof_object_sha256(delta.after.as_ref()));
             }
             delta.prev_event_hash = (!head.is_empty()).then_some(head.clone());
-            if branch_position == 0
-                && branch_commitments
-                    .get(&chain_key)
-                    .is_none_or(|cache| cache.is_none())
-            {
+            if branch_position == 0 {
                 // 首条事件携带的已签名 baseline 就是位置 0 的真实状态；
                 // 直接用它建立承诺，首条事件也能写成 v4 并带状态根。
                 if let Some(baseline) = delta.baseline.as_ref() {
-                    branch_commitments.insert(
-                        chain_key.clone(),
-                        Some(BranchCommitment {
+                    let needs_baseline = match cache_state {
+                        BranchCommitmentState::Ready(entry) => entry.position != 0,
+                        BranchCommitmentState::Unusable { .. } => true,
+                    };
+                    if needs_baseline {
+                        *cache_state = BranchCommitmentState::Ready(CachedBranchCommitment {
                             position: 0,
                             chain_head: String::new(),
                             history_complete: baseline.history_complete,
                             commitment: StateCommitment::from_state(&baseline.state()),
-                        }),
-                    );
+                            generation,
+                        });
+                    }
                 }
             }
             let mut used_commitment = false;
-            let mut commitment_failed = false;
-            if let Some(Some(cache)) = branch_commitments.get_mut(&chain_key) {
-                if cache.position == branch_position {
+            if let BranchCommitmentState::Ready(entry) = cache_state {
+                if entry.position == branch_position {
                     delta.format_version = STARMAP_PROOF_FORMAT_VERSION;
                     delta.branch_position = Some(branch_position);
-                    if cache.commitment.apply_delta(&delta).is_ok() {
-                        delta.state_root_after = Some(cache.commitment.root_hex());
+                    if entry.commitment.apply_delta(&delta).is_ok() {
+                        delta.state_root_after = Some(entry.commitment.root_hex());
                         used_commitment = true;
-                    } else {
-                        commitment_failed = true;
                     }
-                } else {
-                    commitment_failed = true;
                 }
-            }
-            if commitment_failed {
-                branch_commitments.insert(chain_key.clone(), None);
             }
             if !used_commitment {
                 // 无法增量重建状态承诺时退回旧 v3 事件：不带状态根，
@@ -674,6 +992,11 @@ impl ContributionStore {
                 delta.format_version = LEGACY_V3_STARMAP_PROOF_FORMAT_VERSION;
                 delta.branch_position = None;
                 delta.state_root_after = None;
+                *cache_state = BranchCommitmentState::Unusable {
+                    position: branch_position.saturating_add(1),
+                    chain_head: head.clone(),
+                    generation,
+                };
             }
             let identity = ReplayEventIdentity {
                 event_id: &event.event_id,
@@ -697,11 +1020,20 @@ impl ContributionStore {
             delta.event_hash = Some(event_hash.clone());
             event.replay_delta = Some(delta);
             chains.insert(chain_key.clone(), event_hash.clone());
-            if used_commitment {
-                if let Some(Some(cache)) = branch_commitments.get_mut(&chain_key) {
-                    cache.position = cache.position.saturating_add(1);
-                    cache.chain_head = event_hash;
+            match cache_state {
+                BranchCommitmentState::Ready(entry) if used_commitment => {
+                    entry.position = entry.position.saturating_add(1);
+                    entry.chain_head = event_hash;
                 }
+                BranchCommitmentState::Unusable {
+                    position,
+                    chain_head,
+                    ..
+                } => {
+                    *position = branch_position.saturating_add(1);
+                    *chain_head = event_hash;
+                }
+                _ => {}
             }
             let next = branch_counts.get_mut(&chain_key).ok_or_else(|| {
                 Error::Other("starmap branch count missing after event insert".to_string())
@@ -752,18 +1084,25 @@ impl ContributionStore {
             if position.saturating_sub(last) < STARMAP_CHECKPOINT_INTERVAL {
                 continue;
             }
-            if let Some(branch) = self.load_branch_commitment(origin, starmap_id, *position) {
-                let root = branch.commitment.root_hex();
-                let checkpoint = StarMapProofCheckpoint::new(
-                    starmap_id,
-                    origin,
-                    *position,
-                    branch.commitment.to_state(),
-                    crate::writing_stats::starmap_checkpoint::CHECKPOINT_REASON_PERIODIC,
-                    branch.history_complete,
-                )
-                .with_event_chain_head(&branch.chain_head)
-                .with_state_root(&root);
+            let checkpoint = self
+                .checkpoint_from_branch_cache(origin, starmap_id, *position)
+                .or_else(|| {
+                    let branch = self.load_branch_commitment(origin, starmap_id, *position)?;
+                    let root = branch.commitment.root_hex();
+                    let checkpoint = StarMapProofCheckpoint::new_with_state_root(
+                        starmap_id,
+                        origin,
+                        *position,
+                        branch.commitment.to_state(),
+                        &root,
+                        crate::writing_stats::starmap_checkpoint::CHECKPOINT_REASON_PERIODIC,
+                        branch.history_complete,
+                    )
+                    .with_event_chain_head(&branch.chain_head);
+                    self.cache_branch_commitment(origin, starmap_id, branch);
+                    Some(checkpoint)
+                });
+            if let Some(checkpoint) = checkpoint {
                 if let Err(error) = append_starmap_checkpoint(&self.app_data_root, &checkpoint) {
                     log::warn!("failed to append periodic starmap checkpoint: {error}");
                 }
@@ -912,6 +1251,22 @@ impl ContributionStore {
         if prepared.is_empty() {
             return Ok(0);
         }
+        let commitment_keys: Vec<(String, String)> = prepared
+            .iter()
+            .filter_map(|event| {
+                event
+                    .replay_delta
+                    .as_ref()
+                    .map(|delta| (event.origin_device_id.clone(), delta.starmap_id.clone()))
+            })
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let mut commitment_guard = BranchCommitmentWriteGuard {
+            store: self,
+            keys: commitment_keys,
+            committed: false,
+        };
         let metadata = self.assign_replay_metadata(&mut prepared)?;
         let checkpoint_targets = metadata.checkpoint_targets.clone();
         let transaction_id = prepared
@@ -962,7 +1317,9 @@ impl ContributionStore {
         // 元数据和分支计数落稳后才删 journal；中途崩溃时下次重放会重新
         // 扫描真实事件并修正计数，避免沿用旧缓存跳过位置。
         fs::remove_file(&pending_path)?;
-        self.bump_replay_generation();
+        let generation = self.bump_replay_generation();
+        self.publish_branch_commitments(&checkpoint_targets, &metadata.chains, generation);
+        commitment_guard.committed = true;
         self.cache_written_event_ids(&origin, &written_ids);
         // 检查点回放会通过 load_all_events 重入 pending recovery；先释放写锁，
         // 否则同一线程会在不可重入的全局锁上死锁。
@@ -1085,6 +1442,7 @@ impl ContributionStore {
         self.persist_baseline_checkpoints(&all_events);
         self.rebuild_replay_indexes(&all_events)?;
         self.bump_replay_generation();
+        self.invalidate_all_branch_commitments();
         for (origin, ids) in written_by_origin {
             self.cache_written_event_ids(&origin, &ids);
         }
@@ -1304,4 +1662,147 @@ pub fn object_type_key(object_type: ContributionObjectType) -> &'static str {
 
 pub fn operation_key(operation: ContributionOperation) -> &'static str {
     operation.as_str()
+}
+
+#[cfg(test)]
+mod starmap_tail_tests {
+    use super::*;
+
+    fn write_events(root: &Path, date: &str, positions: impl IntoIterator<Item = u64>) {
+        let dir = root.join(EVENTS_ROOT).join("device1");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{date}{OBJECTS_SUFFIX}"));
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        for position in positions {
+            let event = serde_json::json!({
+                "eventId": format!("event-{position}"),
+                "originDeviceId": "device1",
+                "occurredAtMs": position,
+                "projectId": "",
+                "objectType": "starmap_node",
+                "objectId": format!("node-{position}"),
+                "containerId": "sm1",
+                "operation": "create",
+                "actor": "human",
+                "entrypoint": "ui",
+                "transactionId": format!("transaction-{position}"),
+                "replayDelta": {
+                    "starmapId": "sm1",
+                    "objectType": "starmap_node",
+                    "objectId": format!("node-{position}"),
+                    "operation": "create",
+                    "branchPosition": position
+                }
+            });
+            writeln!(file, "{event}").unwrap();
+        }
+    }
+
+    fn temp_root() -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("sujian-starmap-tail-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn reads_single_first_event() {
+        let root = temp_root();
+        write_events(&root, "2024-01-01", 0..1);
+        let store = ContributionStore::new(&root);
+        let events = store.recent_starmap_events("device1", "sm1", 0, 1).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0]
+                .replay_delta
+                .as_ref()
+                .and_then(|delta| delta.branch_position),
+            Some(0)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reads_one_event_after_checkpoint() {
+        let root = temp_root();
+        write_events(&root, "2024-01-01", 0..65);
+        let store = ContributionStore::new(&root);
+        let events = store
+            .recent_starmap_events("device1", "sm1", 64, 65)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0]
+                .replay_delta
+                .as_ref()
+                .and_then(|delta| delta.branch_position),
+            Some(64)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reads_full_interval_after_checkpoint() {
+        let root = temp_root();
+        write_events(&root, "2024-01-01", 0..128);
+        let store = ContributionStore::new(&root);
+        let events = store
+            .recent_starmap_events("device1", "sm1", 64, 128)
+            .unwrap();
+        assert_eq!(events.len(), 64);
+        assert_eq!(
+            events.first().and_then(|event| event
+                .replay_delta
+                .as_ref()
+                .and_then(|delta| delta.branch_position)),
+            Some(64)
+        );
+        assert_eq!(
+            events.last().and_then(|event| event
+                .replay_delta
+                .as_ref()
+                .and_then(|delta| delta.branch_position)),
+            Some(127)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reads_interval_split_across_date_files() {
+        let root = temp_root();
+        write_events(&root, "2024-01-01", 0..100);
+        write_events(&root, "2024-01-02", 100..128);
+        let store = ContributionStore::new(&root);
+        let events = store
+            .recent_starmap_events("device1", "sm1", 64, 128)
+            .unwrap();
+        assert_eq!(events.len(), 64);
+        assert_eq!(
+            events.last().and_then(|event| event
+                .replay_delta
+                .as_ref()
+                .and_then(|delta| delta.branch_position)),
+            Some(127)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_interval_with_missing_position() {
+        let root = temp_root();
+        write_events(
+            &root,
+            "2024-01-01",
+            (0..64).filter(|position| *position != 10),
+        );
+        let store = ContributionStore::new(&root);
+        assert!(store
+            .recent_starmap_events("device1", "sm1", 0, 64)
+            .is_none());
+        let _ = fs::remove_dir_all(root);
+    }
 }

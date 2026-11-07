@@ -596,16 +596,22 @@ pub fn commitment_object_sha256(object: Option<&StarMapProofObject>) -> String {
 mod tests {
     use super::*;
 
+    fn node(id: &str) -> StarMapNode {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "title": "",
+            "kind": "note",
+            "position": { "x": 0.0, "y": 0.0 },
+            "createdAt": 0,
+            "updatedAt": 0
+        }))
+        .unwrap()
+    }
+
     fn sample_state() -> StarMapProofState {
         let mut state = StarMapProofState::empty("sm1");
-        state.graph.nodes.push(StarMapNode {
-            id: "n1".to_string(),
-            ..StarMapNode::default()
-        });
-        state.graph.nodes.push(StarMapNode {
-            id: "n2".to_string(),
-            ..StarMapNode::default()
-        });
+        state.graph.nodes.push(node("n1"));
+        state.graph.nodes.push(node("n2"));
         state
     }
 
@@ -625,12 +631,7 @@ mod tests {
             None,
         );
         let mut delta = delta;
-        delta.after = Some(StarMapProofObject::Node {
-            node: StarMapNode {
-                id: "n3".to_string(),
-                ..StarMapNode::default()
-            },
-        });
+        delta.after = Some(StarMapProofObject::Node { node: node("n3") });
         commitment.apply_delta(&delta).unwrap();
         let rebuilt = StateCommitment::from_state(&commitment.to_state());
         assert_eq!(commitment.root_hex(), rebuilt.root_hex());

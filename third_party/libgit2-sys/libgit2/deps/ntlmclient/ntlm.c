@@ -993,7 +993,7 @@ NTLM_INLINE(bool) generate_lm_hash(
 		keystr2[i] = (unsigned char)toupper((unsigned char)password[i+7]);
 
 	/* DES encrypt the LM constant using the password as the key */
-	des_key_from_password(&key1, keystr1, keystr1_len);
+	des_key_from_password(&key1, keystr1, keystr1_len); /* lgtm[cpp/weak-cryptographic-algorithm] -- NTLMv1 wire protocol mandates DES; this is compatibility code, not a chosen cipher. */
 	des_key_from_password(&key2, keystr2, keystr2_len);
 
 	return ntlm_des_encrypt(&out[0], ntlm, &plaintext, &key1) &&

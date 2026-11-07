@@ -115,6 +115,27 @@ impl StarMapProofCheckpoint {
         history_complete: bool,
     ) -> Self {
         let state_root = StateCommitment::from_state(&state).root_hex();
+        Self::new_with_state_root(
+            starmap_id,
+            device_id,
+            position,
+            state,
+            &state_root,
+            reason,
+            history_complete,
+        )
+    }
+
+    /// 已知增量承诺根时直接落检查点，避免再次为完整图重建 Merkle 树。
+    pub fn new_with_state_root(
+        starmap_id: &str,
+        device_id: &str,
+        position: u64,
+        state: StarMapProofState,
+        state_root: &str,
+        reason: &str,
+        history_complete: bool,
+    ) -> Self {
         let state_sha256 = state_sha256(&state);
         Self {
             format_version: STARMAP_CHECKPOINT_FORMAT_VERSION,
@@ -124,7 +145,7 @@ impl StarMapProofCheckpoint {
             event_chain_head: String::new(),
             state,
             state_sha256,
-            state_root,
+            state_root: state_root.to_string(),
             created_at_ms: chrono::Utc::now().timestamp_millis(),
             reason: reason.to_string(),
             source_device_id: device_id.to_string(),
