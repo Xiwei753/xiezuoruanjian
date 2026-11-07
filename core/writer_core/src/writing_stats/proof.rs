@@ -19,11 +19,9 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::editor::transaction::{
-    EditorChange, EditorSelection, EditorTransactionCause,
-};
 use crate::editor::kernel::ContentDigest;
 pub(crate) use crate::editor::kernel::CONTENT_DIGEST_VERSION;
+use crate::editor::transaction::{EditorChange, EditorSelection, EditorTransactionCause};
 use crate::writing_stats::WritingInputEvent;
 
 pub const PROOF_FORMAT_VERSION: u32 = 1;
@@ -78,9 +76,7 @@ pub struct ProofEditPayload {
 impl ProofEditPayload {
     /// 是否有可回放的正文变更。纯光标/选区事务不应产生证明事件。
     pub fn has_content_change(&self) -> bool {
-        self.changes
-            .iter()
-            .any(|change| !change.text().is_empty())
+        self.changes.iter().any(|change| !change.text().is_empty())
     }
 }
 
@@ -298,10 +294,7 @@ pub fn apply_changes(text: &mut String, changes: &[EditorChange]) -> crate::Resu
 /// 只接受同一设备、同一章节的事件。`baseline_text` 是链起点之前的正文；
 /// 如果事件标记 `starts_new_chain`，则以该基线重新开始。没有基线时按空正文
 /// 开始，并在结果中记录错误，避免把缺失历史伪装成完整证明。
-pub fn verify_event_chain(
-    events: &[WritingInputEvent],
-    baseline_text: &str,
-) -> ProofVerification {
+pub fn verify_event_chain(events: &[WritingInputEvent], baseline_text: &str) -> ProofVerification {
     let mut result = ProofVerification {
         final_text: baseline_text.to_string(),
         valid: true,
@@ -361,19 +354,17 @@ pub fn verify_event_chain(
         }
         if &proof.prev_event_hash != &previous_event_hash {
             result.valid = false;
-            result.errors.push(format!(
-                "事件 {} 的 prev_event_hash 断裂",
-                event.event_id
-            ));
+            result
+                .errors
+                .push(format!("事件 {} 的 prev_event_hash 断裂", event.event_id));
         }
 
         let expected_hash = compute_event_hash(event);
         if expected_hash != proof.event_hash {
             result.valid = false;
-            result.errors.push(format!(
-                "事件 {} 的 event_hash 校验失败",
-                event.event_id
-            ));
+            result
+                .errors
+                .push(format!("事件 {} 的 event_hash 校验失败", event.event_id));
         }
 
         if !proof.before_text_sha256.is_empty()
@@ -388,10 +379,14 @@ pub fn verify_event_chain(
 
         if let Err(error) = apply_changes(&mut result.final_text, &proof.changes) {
             result.valid = false;
-            result.errors.push(format!("事件 {}: {error}", event.event_id));
+            result
+                .errors
+                .push(format!("事件 {}: {error}", event.event_id));
         } else if let Err(error) = digest.apply_changes(&proof.changes) {
             result.valid = false;
-            result.errors.push(format!("事件 {} 摘要: {error}", event.event_id));
+            result
+                .errors
+                .push(format!("事件 {} 摘要: {error}", event.event_id));
         }
         let expected_after = chain_content_hash(&proof.before_content_hash, &proof.changes);
         if expected_after != proof.after_content_hash {

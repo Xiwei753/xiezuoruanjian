@@ -20,9 +20,7 @@ use crate::writing_stats::proof::{
     text_digest_matches, text_sha256, ProofContinuityGap,
 };
 use crate::writing_stats::store::StatsStore;
-use crate::writing_stats::{
-    EventSource, WritingActivitySegment, WritingInputEvent,
-};
+use crate::writing_stats::{EventSource, WritingActivitySegment, WritingInputEvent};
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -212,10 +210,9 @@ impl ProofReplaySession {
                     candidates.push(device.clone());
                 }
             }
-            for device in checkpoint::list_proof_devices(
-                store.app_data_root(),
-                &request.chapter_id,
-            )? {
+            for device in
+                checkpoint::list_proof_devices(store.app_data_root(), &request.chapter_id)?
+            {
                 if !candidates.iter().any(|value| value == &device) {
                     candidates.push(device);
                 }
@@ -268,20 +265,13 @@ impl ProofReplaySession {
             })
             .collect();
         let baseline_text = request.baseline_text.clone().unwrap_or_default();
-        let mut chain_errors = validate_full_chain(
-            &events,
-            &checkpoints,
-            &gap_baselines,
-            &baseline_text,
-        );
+        let mut chain_errors =
+            validate_full_chain(&events, &checkpoints, &gap_baselines, &baseline_text);
         for gap in &gaps {
             if text_sha256(&gap.baseline_text) != gap.baseline_text_sha256
                 || content_hash_of_text(&gap.baseline_text) != gap.baseline_content_hash
             {
-                chain_errors.push(format!(
-                    "连续性缺口 {} 的基线正文摘要不一致",
-                    gap.event_id
-                ));
+                chain_errors.push(format!("连续性缺口 {} 的基线正文摘要不一致", gap.event_id));
             }
         }
         let state = initial_state(
@@ -348,17 +338,15 @@ impl ProofReplaySession {
                 apply_event(&mut state, event);
                 state.position += 1;
             }
-            apply_trailing_gap_baseline(
-                &mut state,
-                target,
-                self.events.len(),
-                &self.gap_baselines,
-            );
+            apply_trailing_gap_baseline(&mut state, target, self.events.len(), &self.gap_baselines);
         }
 
         let mut errors = state.errors.clone();
         errors.extend(self.chain_errors.iter().cloned());
-        let next_timestamp_ms = self.events.get(state.position).map(|event| event.timestamp_ms);
+        let next_timestamp_ms = self
+            .events
+            .get(state.position)
+            .map(|event| event.timestamp_ms);
         let first_timestamp_ms = self.events.first().map_or(0, |event| event.timestamp_ms);
         let last_timestamp_ms = self.events.last().map_or(0, |event| event.timestamp_ms);
         ProofReplayFrame {
@@ -373,8 +361,16 @@ impl ProofReplaySession {
             source: state.source.clone(),
             position: state.position,
             total_events: self.events.len(),
-            first_seq: self.events.first().and_then(|event| event.proof.as_ref().map(|proof| proof.seq)).unwrap_or(0),
-            last_seq: self.events.last().and_then(|event| event.proof.as_ref().map(|proof| proof.seq)).unwrap_or(0),
+            first_seq: self
+                .events
+                .first()
+                .and_then(|event| event.proof.as_ref().map(|proof| proof.seq))
+                .unwrap_or(0),
+            last_seq: self
+                .events
+                .last()
+                .and_then(|event| event.proof.as_ref().map(|proof| proof.seq))
+                .unwrap_or(0),
             first_timestamp_ms,
             last_timestamp_ms,
             next_timestamp_ms,
@@ -438,29 +434,21 @@ fn validate_full_chain(
         };
         if let Some(checkpoint) = checkpoint_by_seq.get(&proof.seq) {
             if checkpoint.text != state.text {
-                errors.push(format!(
-                    "检查点 {} 的正文与按事件重放结果不一致",
-                    proof.seq
-                ));
+                errors.push(format!("检查点 {} 的正文与按事件重放结果不一致", proof.seq));
             }
             if checkpoint.content_hash != state.expected_content_hash {
-                errors.push(format!(
-                    "检查点 {} 的内容摘要与事件链不一致",
-                    proof.seq
-                ));
+                errors.push(format!("检查点 {} 的内容摘要与事件链不一致", proof.seq));
             }
         }
     }
 
     let last_seq = state.seq;
-    for checkpoint in checkpoints.iter().filter(|checkpoint| {
-        checkpoint.seq > 0 && checkpoint.reason != "continuity_gap"
-    }) {
+    for checkpoint in checkpoints
+        .iter()
+        .filter(|checkpoint| checkpoint.seq > 0 && checkpoint.reason != "continuity_gap")
+    {
         if checkpoint.seq > last_seq {
-            errors.push(format!(
-                "检查点 {} 没有对应的事件",
-                checkpoint.seq
-            ));
+            errors.push(format!("检查点 {} 没有对应的事件", checkpoint.seq));
         }
     }
     errors.dedup();
@@ -479,7 +467,12 @@ fn target_position(
     if let Some(target_seq) = target_seq {
         return events
             .iter()
-            .position(|event| event.proof.as_ref().is_some_and(|proof| proof.seq > target_seq))
+            .position(|event| {
+                event
+                    .proof
+                    .as_ref()
+                    .is_some_and(|proof| proof.seq > target_seq)
+            })
             .unwrap_or(events.len());
     }
     if let Some(target_time) = target_time_ms {
@@ -502,7 +495,10 @@ fn request_gap_baseline<'a>(
     gap_baselines: &'a BTreeMap<u64, ProofCheckpoint>,
 ) -> Option<&'a ProofCheckpoint> {
     if let Some(target_seq) = request.target_seq {
-        return gap_baselines.range(..=target_seq).next_back().map(|(_, value)| value);
+        return gap_baselines
+            .range(..=target_seq)
+            .next_back()
+            .map(|(_, value)| value);
     }
     if request.target_index.is_some() {
         return None;
@@ -529,7 +525,10 @@ fn initial_state(
             position: events
                 .iter()
                 .take_while(|event| {
-                    event.proof.as_ref().is_some_and(|proof| proof.seq <= gap.seq)
+                    event
+                        .proof
+                        .as_ref()
+                        .is_some_and(|proof| proof.seq <= gap.seq)
                 })
                 .count(),
             seq: gap.seq,
@@ -588,7 +587,10 @@ fn initial_state(
                 events
                     .iter()
                     .take_while(|event| {
-                        event.proof.as_ref().is_some_and(|proof| proof.seq <= checkpoint.seq)
+                        event
+                            .proof
+                            .as_ref()
+                            .is_some_and(|proof| proof.seq <= checkpoint.seq)
                     })
                     .count()
             };
@@ -700,7 +702,10 @@ fn checkpoint_is_valid(checkpoint: &ProofCheckpoint, events: &[WritingInputEvent
             && checkpoint.event_hash.is_empty();
     }
     let Some(event) = events.iter().find(|event| {
-        event.proof.as_ref().is_some_and(|proof| proof.seq == checkpoint.seq)
+        event
+            .proof
+            .as_ref()
+            .is_some_and(|proof| proof.seq == checkpoint.seq)
     }) else {
         return false;
     };
@@ -726,10 +731,9 @@ fn apply_event(state: &mut ReplayState, event: &WritingInputEvent) {
         if !proof.before_text_sha256.is_empty()
             && !text_digest_matches(&proof.before_text_sha256, &state.text, &state.digest)
         {
-            state.errors.push(format!(
-                "事件 {} 新链基线正文摘要不一致",
-                event.event_id
-            ));
+            state
+                .errors
+                .push(format!("事件 {} 新链基线正文摘要不一致", event.event_id));
         }
         state.digest = ContentDigest::from_text(&state.text);
         state.expected_content_hash = content_hash_of_text(&state.text);
@@ -756,17 +760,25 @@ fn apply_event(state: &mut ReplayState, event: &WritingInputEvent) {
         ));
     }
     if !proof.prev_event_hash.is_empty() && proof.prev_event_hash != state.previous_event_hash {
-        state.errors.push(format!("事件 {} 的 prev_event_hash 断裂", event.event_id));
+        state
+            .errors
+            .push(format!("事件 {} 的 prev_event_hash 断裂", event.event_id));
     }
     if compute_event_hash(event) != proof.event_hash {
-        state.errors.push(format!("事件 {} 的 event_hash 校验失败", event.event_id));
+        state
+            .errors
+            .push(format!("事件 {} 的 event_hash 校验失败", event.event_id));
     }
     if let Err(error) = apply_changes(&mut state.text, &proof.changes) {
-        state.errors.push(format!("事件 {} 应用失败: {error}", event.event_id));
+        state
+            .errors
+            .push(format!("事件 {} 应用失败: {error}", event.event_id));
         return;
     }
     if let Err(error) = state.digest.apply_changes(&proof.changes) {
-        state.errors.push(format!("事件 {} 摘要更新失败: {error}", event.event_id));
+        state
+            .errors
+            .push(format!("事件 {} 摘要更新失败: {error}", event.event_id));
         return;
     }
     let after = chain_content_hash(&proof.before_content_hash, &proof.changes);
@@ -830,9 +842,7 @@ pub fn export_chapter_proof(
         .load_all_events()?
         .into_iter()
         .filter(|event| {
-            event.chapter_id == chapter_id
-                && event.device_id == device_id
-                && event.proof.is_some()
+            event.chapter_id == chapter_id && event.device_id == device_id && event.proof.is_some()
         })
         .collect();
     events.sort_by_key(|event| event.proof.as_ref().map_or(0, |proof| proof.seq));
@@ -846,9 +856,7 @@ pub fn export_chapter_proof(
     let activity_segments: Vec<WritingActivitySegment> = store
         .load_all_segments()?
         .into_iter()
-        .filter(|segment| {
-            segment.chapter_id == chapter_id && segment.device_id == device_id
-        })
+        .filter(|segment| segment.chapter_id == chapter_id && segment.device_id == device_id)
         .collect();
 
     Ok(ProofExportPackage {

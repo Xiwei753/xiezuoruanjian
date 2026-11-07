@@ -553,10 +553,7 @@ pub fn append_continuity_gap(
     if path.is_file() {
         let text = fs::read_to_string(&path)?;
         let existing: ProofContinuityGap = serde_json::from_str(&text).map_err(|error| {
-            crate::Error::Other(format!(
-                "连续性缺口记录损坏 {}: {error}",
-                path.display()
-            ))
+            crate::Error::Other(format!("连续性缺口记录损坏 {}: {error}", path.display()))
         })?;
         if existing == *gap {
             return Ok(false);
@@ -597,10 +594,7 @@ pub fn load_continuity_gaps(
             }
             let text = fs::read_to_string(&path)?;
             let gap: ProofContinuityGap = serde_json::from_str(&text).map_err(|error| {
-                crate::Error::Other(format!(
-                    "连续性缺口记录损坏 {}: {error}",
-                    path.display()
-                ))
+                crate::Error::Other(format!("连续性缺口记录损坏 {}: {error}", path.display()))
             })?;
             if gap.device_id == device_id && gap.chapter_id == chapter_id {
                 gaps.push(gap);
@@ -666,10 +660,7 @@ pub fn load_device_continuity_gaps(
 }
 
 /// 列出某章节存在 checkpoint 或缺口记录的设备，供回放选择本机基线。
-pub fn list_proof_devices(
-    app_data_root: &Path,
-    chapter_id: &str,
-) -> crate::Result<Vec<String>> {
+pub fn list_proof_devices(app_data_root: &Path, chapter_id: &str) -> crate::Result<Vec<String>> {
     let root = app_data_root.join("stats/events");
     if !root.is_dir() {
         return Ok(Vec::new());
