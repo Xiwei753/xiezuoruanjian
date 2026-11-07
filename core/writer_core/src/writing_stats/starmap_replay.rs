@@ -20,6 +20,7 @@ use crate::writing_stats::contribution::{
 use crate::writing_stats::contribution_store::ContributionStore;
 use crate::writing_stats::starmap_checkpoint::{
     list_checkpoint_headers, load_checkpoint_at, StarMapCheckpointHeader, StarMapProofCheckpoint,
+    STARMAP_CHECKPOINT_INTERVAL,
 };
 use crate::writing_stats::starmap_proof::{
     compute_legacy_replay_event_hash, compute_replay_event_hash, compute_v2_replay_event_hash,
@@ -571,6 +572,8 @@ pub struct StarMapReplaySession {
     checkpoint_replay_hashes: HashMap<u64, String>,
     /// 只有完整重放才收集检查点状态摘要。
     collect_checkpoint_hashes: bool,
+    /// 位置 0 基线无法被首条已签名事件独立证明时的持久错误。
+    baseline_error: Option<String>,
     history_complete: bool,
     cursor_position: u64,
     cursor_state: StarMapProofState,
@@ -639,6 +642,7 @@ impl StarMapReplaySession {
             checkpoint_positions: HashSet::new(),
             checkpoint_replay_hashes: HashMap::new(),
             collect_checkpoint_hashes: false,
+            baseline_error: None,
             history_complete: true,
             cursor_position: 0,
             cursor_state: StarMapProofState::empty(&request.starmap_id),
@@ -658,6 +662,7 @@ impl StarMapReplaySession {
         // 打开时只做一次线性事件链校验；检查点整图状态留到实际跳转/导出
         // 时再按需重建，避免历史累积后每次打开都重复哈希全部旧图。
         session.prefix_validation = validate_event_chain(&session.events, &session.baseline_state);
+        session.verify_baseline_checkpoint();
         session.time_index = build_time_index(&session.events);
         session.checkpoint_headers.retain(|header| {
             checkpoint_header_anchors(
@@ -679,27 +684,8 @@ impl StarMapReplaySession {
     }
 
     fn initialize_baseline(&mut self) {
-        // 检查点位置 0 是明确保存的基线；没有基线时，如果事件本身携带
-        // baseline（旧星图第一次记录），也用它恢复真实起点。
-        if self
-            .checkpoint_headers
-            .iter()
-            .any(|header| header.position == 0)
-        {
-            if let Ok(Some(checkpoint)) =
-                load_checkpoint_at(&self.root, &self.device_id, &self.request.starmap_id, 0)
-            {
-                self.checkpoint_cache
-                    .insert(0, Arc::new(checkpoint.clone()));
-                self.cursor_state = checkpoint.state.clone();
-                self.baseline_state = checkpoint.state.clone();
-                self.cursor_checkpoint_position = 0;
-                if !checkpoint.history_complete {
-                    self.history_complete = false;
-                }
-                return;
-            }
-        }
+        // 第一条星图事件的 baseline 已参与事件哈希，是唯一可独立证明的起点。
+        // 位置 0 的检查点只是它的缓存，必须在首条事件通过哈希链校验后核对。
         if let Some(baseline) = self
             .events
             .first()
@@ -709,16 +695,41 @@ impl StarMapReplaySession {
             self.cursor_state = baseline.state();
             self.baseline_state = self.cursor_state.clone();
             self.cursor_checkpoint_position = 0;
-            self.history_complete = false;
+            self.history_complete = baseline.history_complete;
             return;
+        }
+        if self.events.is_empty() {
+            return;
+        }
+        // 旧分支没有已签名的首条 baseline：位置 0 快照只能用于显示，
+        // 不能作为可信手写来源。
+        self.baseline_error = Some(
+            "starmap baseline cannot be independently verified from the signed first event"
+                .to_string(),
+        );
+        self.history_complete = false;
+        let mut used_unverified_checkpoint = false;
+        if self
+            .checkpoint_headers
+            .iter()
+            .any(|header| header.position == 0)
+        {
+            if let Ok(Some(checkpoint)) =
+                load_checkpoint_at(&self.root, &self.device_id, &self.request.starmap_id, 0)
+            {
+                self.cursor_state = checkpoint.state.clone();
+                self.baseline_state = checkpoint.state.clone();
+                self.cursor_checkpoint_position = 0;
+                used_unverified_checkpoint = true;
+            }
         }
         let starts_with_create = self.events.first().is_some_and(|event| {
             event.object_type == ContributionObjectType::StarMap
                 && event.operation == ContributionOperation::Create
         });
         // 跨设备接力：新设备分支没有自己的创建历史时，以其它设备封存的真实
-        // 图为基线，并明确标记此前历史不完整。
-        if !starts_with_create {
+        // 图为基线；但缺少首条签名 baseline 时同样只能用于显示。
+        if !used_unverified_checkpoint && !starts_with_create {
             if let Ok(Some(other)) =
                 crate::writing_stats::starmap_checkpoint::find_other_branch_baseline(
                     &self.root,
@@ -726,18 +737,62 @@ impl StarMapReplaySession {
                     &self.device_id,
                 )
             {
-                // 跨设备基线必须同时成为游标和回退基线；否则向后拖动时
-                // reset_cursor_to 会退回空图，把真实历史整段抹掉。
                 self.cursor_state = other.state;
                 self.baseline_state = self.cursor_state.clone();
                 self.cursor_checkpoint_position = 0;
-                self.history_complete = false;
-                return;
             }
         }
-        // 从空白开始：只有第一条事件确实是创建星图时才宣称历史完整。
-        if !self.events.is_empty() && !starts_with_create {
-            self.history_complete = false;
+        self.remove_position_zero_checkpoint();
+    }
+
+    fn remove_position_zero_checkpoint(&mut self) {
+        self.checkpoint_headers
+            .retain(|header| header.position != 0);
+        self.checkpoint_cache.remove(&0);
+        self.checkpoint_validation.remove(&0);
+        self.checkpoint_positions.remove(&0);
+    }
+
+    /// 首条事件通过哈希链校验后，用其中已签名的 baseline 核对位置 0 快照。
+    fn verify_baseline_checkpoint(&mut self) {
+        let Some(baseline) = self
+            .events
+            .first()
+            .and_then(|event| event.replay_delta.as_ref())
+            .and_then(|delta| delta.baseline.as_ref())
+        else {
+            return;
+        };
+        if self.prefix_validation.valid.get(1).copied() != Some(true) {
+            self.baseline_error = Some(
+                "starmap first-event baseline cannot be verified because the event chain is invalid"
+                    .to_string(),
+            );
+            self.remove_position_zero_checkpoint();
+            return;
+        }
+        if !self
+            .checkpoint_headers
+            .iter()
+            .any(|header| header.position == 0)
+        {
+            return;
+        }
+        let expected = state_sha256(&baseline.state());
+        match load_checkpoint_at(&self.root, &self.device_id, &self.request.starmap_id, 0) {
+            Ok(Some(checkpoint))
+                if checkpoint.state_sha256 == expected && checkpoint.hash_matches() =>
+            {
+                self.checkpoint_cache.insert(0, Arc::new(checkpoint));
+                self.checkpoint_validation.insert(0, true);
+            }
+            _ => {
+                self.baseline_error = Some(
+                    "starmap baseline checkpoint at position 0 does not match the signed first-event baseline"
+                        .to_string(),
+                );
+                self.remove_position_zero_checkpoint();
+            }
         }
     }
 
@@ -785,6 +840,15 @@ impl StarMapReplaySession {
             .max()
     }
 
+    /// 只扫描轻量 headers，选出 `(from, to]` 中最近的检查点位置。
+    fn latest_checkpoint_position_in_range(&self, from: u64, to: u64) -> Option<u64> {
+        self.checkpoint_headers
+            .iter()
+            .filter(|header| header.position >= from && header.position <= to)
+            .map(|header| header.position)
+            .max()
+    }
+
     /// 载入检查点整图；缓存用 `Arc` 共享，调用方只在自己需要恢复游标时克隆状态。
     fn load_checkpoint(&mut self, position: u64) -> Option<Arc<StarMapProofCheckpoint>> {
         if let Some(cached) = self.checkpoint_cache.get(&position) {
@@ -804,7 +868,10 @@ impl StarMapReplaySession {
         Some(checkpoint)
     }
 
-    /// 从基线独立重放事件到 `position`，得到该位置的真实整图摘要。
+    /// 独立重放事件到 `position`，得到该位置的真实整图摘要。
+    ///
+    /// 向前验证时复用当前游标状态，只补 `cursor_position..position`；
+    /// 向后验证才从基线重放，避免大跨度跳转每次都从 0 开始。
     fn reconstructed_state_hash(&self, position: u64) -> Option<String> {
         if position > self.events.len() as u64 {
             return None;
@@ -812,8 +879,13 @@ impl StarMapReplaySession {
         if position == 0 {
             return Some(state_sha256(&self.baseline_state));
         }
-        let mut state = IndexedProofState::from_state(&self.baseline_state);
-        for event in &self.events[..position as usize] {
+        let (start, base) = if position >= self.cursor_position {
+            (self.cursor_position, &self.cursor_state)
+        } else {
+            (0, &self.baseline_state)
+        };
+        let mut state = IndexedProofState::from_state(base);
+        for event in &self.events[start as usize..position as usize] {
             let delta = event.replay_delta.as_ref()?;
             state.apply_delta(delta).ok()?;
         }
@@ -909,9 +981,21 @@ impl StarMapReplaySession {
     fn apply_to(&mut self, target: u64) {
         if target < self.cursor_position {
             self.reset_cursor_to(target);
+        } else if target > self.cursor_position
+            && target - self.cursor_position >= STARMAP_CHECKPOINT_INTERVAL
+        {
+            // 大跨度向前定位：只挑 `(cursor, target]` 中最新的检查点，
+            // 校验一次后恢复，再应用剩余增量。相邻小步播放不读完整快照。
+            if let Some(position) =
+                self.latest_checkpoint_position_in_range(self.cursor_position + 1, target)
+            {
+                if self.validate_checkpoint_at(position) {
+                    self.restore_checkpoint(position);
+                }
+            }
         }
         // 连续向前播放只需要应用增量事件；既不读取整图快照，也不深拷贝
-        // 检查点状态。检查点只用于回退/随机跳转。
+        // 检查点状态。检查点只用于回退/随机跳转/大跨度前进定位。
         let from = self.cursor_position as usize;
         let to = target as usize;
         for index in from..to {
@@ -1065,6 +1149,11 @@ impl StarMapReplaySession {
             .get(target as usize)
             .map(|event| event.occurred_at_ms);
         let mut errors = self.errors.clone();
+        if let Some(error) = &self.baseline_error {
+            if !errors.iter().any(|existing| existing == error) {
+                errors.push(error.clone());
+            }
+        }
         let valid = errors.is_empty();
         StarMapReplayFrame {
             starmap_id: self.request.starmap_id.clone(),

@@ -18,6 +18,7 @@ use crate::writing_stats::contribution::{
 use crate::writing_stats::starmap_checkpoint::{
     append_starmap_checkpoint, ensure_checkpoint_storage, has_starmap_checkpoints,
     StarMapProofCheckpoint, CHECKPOINT_REASON_BASELINE_INCOMPLETE, CHECKPOINT_REASON_CREATED,
+    STARMAP_CHECKPOINT_INTERVAL,
 };
 use crate::writing_stats::starmap_proof::{
     compute_replay_event_hash, proof_object_sha256, ReplayEventIdentity,
@@ -478,7 +479,7 @@ impl ContributionStore {
             .ok()
             .flatten()
             .unwrap_or(0);
-            if position.saturating_sub(last) < 64 {
+            if position.saturating_sub(last) < STARMAP_CHECKPOINT_INTERVAL {
                 continue;
             }
             let request = crate::writing_stats::starmap_replay::StarMapReplayRequest::for_position(

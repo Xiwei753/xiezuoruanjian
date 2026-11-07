@@ -24,6 +24,8 @@ use crate::writing_stats::starmap_proof::{
 pub const STARMAP_CHECKPOINT_FORMAT_VERSION: u32 = 2;
 pub const LEGACY_STARMAP_CHECKPOINT_FORMAT_VERSION: u32 = 1;
 pub const STARMAP_CHECKPOINT_INDEX_FORMAT_VERSION: u32 = 1;
+/// 周期检查点间隔；回放定位也用它区分相邻播放与大跨度跳转。
+pub const STARMAP_CHECKPOINT_INTERVAL: u64 = 64;
 pub const CHECKPOINT_REASON_BASELINE_INCOMPLETE: &str = "baselineIncomplete";
 pub const CHECKPOINT_REASON_CREATED: &str = "created";
 pub const CHECKPOINT_REASON_PERIODIC: &str = "periodic";
