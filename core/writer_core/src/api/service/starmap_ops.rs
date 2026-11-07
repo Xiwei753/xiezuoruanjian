@@ -1976,7 +1976,7 @@ impl WriterCoreApi {
             if before_graphs.contains_key(affected_starmap) {
                 continue;
             }
-            if let Some(graph) = self.get_starmap_graph_snapshot(affected_starmap) {
+            if let Some(graph) = self.read_unloaded_starmap_graph(affected_starmap) {
                 before_graphs.insert(affected_starmap.clone(), graph);
             }
         }
@@ -2779,6 +2779,18 @@ impl WriterCoreApi {
                 );
             }
         }
+    }
+
+    /// 读取画布当前图快照，但不把它装入 WriterCore 的长期 store 表。
+    /// 共享内容更新前用它保存其它画布的 before，避免预热改变 facade 的
+    /// 已加载集合与校验上下文。
+    fn read_unloaded_starmap_graph(
+        &self,
+        starmap_id: &str,
+    ) -> Option<crate::starmap::types::StarMapGraph> {
+        let mut store = crate::starmap::store::StarMapStore::new(&self.app_data_root, starmap_id);
+        store.ensure_fully_loaded().ok()?;
+        Some(store.to_starmap_graph())
     }
 
     /// 枚举共享节点素材在全部画布中的实例。
