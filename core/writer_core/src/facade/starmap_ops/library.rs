@@ -200,6 +200,9 @@ impl super::super::WriterCore {
         target: &crate::starmap::types::StarMapAssetRef,
         scope: &crate::starmap::types::StarMapAssetScope,
         title: Option<String>,
+        prepare_paths: &mut dyn FnMut(
+            &[std::path::PathBuf],
+        ) -> Result<()>,
     ) -> Result<StarMapAssetCopyResult> {
         match target.kind {
             crate::starmap::types::StarMapAssetKind::Node => {
@@ -222,6 +225,14 @@ impl super::super::WriterCore {
                     updated_at: now,
                     ..definition
                 };
+                prepare_paths(&[
+                    crate::starmap::library::node_definition_abs_path(
+                        &self.app_data_root,
+                        &asset_id,
+                    ),
+                    crate::starmap::library::library_index_abs_path(&self.app_data_root),
+                    self.app_data_root.join("app-meta/sync/state.local.json"),
+                ])?;
                 crate::starmap::library::save_node_definition(
                     &self.app_data_root,
                     &copied,
@@ -243,8 +254,12 @@ impl super::super::WriterCore {
                 })
             }
             crate::starmap::types::StarMapAssetKind::StarMap => {
-                let copied =
-                    self.copy_starmap_canvas(&target.asset_id, title, scope)?;
+                let copied = self.copy_starmap_canvas(
+                    &target.asset_id,
+                    title,
+                    scope,
+                    prepare_paths,
+                )?;
                 Ok(StarMapAssetCopyResult::StarMap(copied))
             }
         }
@@ -255,6 +270,9 @@ impl super::super::WriterCore {
         source_starmap_id: &str,
         title: Option<String>,
         scope: &crate::starmap::types::StarMapAssetScope,
+        prepare_paths: &mut dyn FnMut(
+            &[std::path::PathBuf],
+        ) -> Result<()>,
     ) -> Result<StarMapCopyResult> {
         let placeholder_root =
             crate::starmap::get_starmap(&self.app_data_root, source_starmap_id)?;
@@ -271,7 +289,7 @@ impl super::super::WriterCore {
             change_paths: Vec::new(),
         };
         let copied =
-            self.copy_starmap_canvas_inner(source_starmap_id, title, scope, &mut result);
+            self.copy_starmap_canvas_inner(source_starmap_id, title, scope, &mut result, prepare_paths);
         if copied.is_err() {
             let created_starmaps = result
                 .starmaps
@@ -312,6 +330,9 @@ impl super::super::WriterCore {
         title: Option<String>,
         scope: &crate::starmap::types::StarMapAssetScope,
         result: &mut StarMapCopyResult,
+        prepare_paths: &mut dyn FnMut(
+            &[std::path::PathBuf],
+        ) -> Result<()>,
     ) -> Result<crate::starmap::StarMapMeta> {
         use crate::starmap::semantic::StarMapTargetDetail;
         use crate::starmap::types::StarMapTargetPath;
@@ -344,41 +365,10 @@ impl super::super::WriterCore {
 
         let mut starmap_map = HashMap::new();
         for starmap_id in &order {
-            let source = source_metas
-                .get(starmap_id)
-                .expect("source meta collected with graph");
-            let new_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
-            let is_root = starmap_id == source_starmap_id;
-            let new_title = if is_root {
-                new_root_title.clone()
-            } else {
-                source.title.clone()
-            };
-            let mut meta = crate::starmap::create_starmap_with_id(
-                &self.app_data_root,
-                &new_starmap_id,
-                &new_title,
-                &source.description,
-                Some(source.accent_color.as_str()),
-            )?;
-            result.change_paths.push(std::path::PathBuf::from(format!(
-                "starmaps/{new_starmap_id}.meta.json"
-            )));
-            let project_id = if is_root {
-                scope.project_id()
-            } else {
-                source.project_id.as_deref()
-            };
-            if let Some(project_id) = project_id {
-                crate::starmap::bind_starmap_to_project(
-                    &self.app_data_root,
-                    &new_starmap_id,
-                    project_id,
-                )?;
-                meta.project_id = Some(project_id.to_string());
-            }
-            result.starmaps.push(meta.clone());
-            starmap_map.insert(starmap_id.clone(), new_starmap_id);
+            starmap_map.insert(
+                starmap_id.clone(),
+                format!("sm_{}", uuid::Uuid::new_v4()),
+            );
         }
 
         let mut node_maps: HashMap<String, HashMap<String, String>> = HashMap::new();
@@ -409,6 +399,72 @@ impl super::super::WriterCore {
         }
         result.node_maps = node_maps.clone();
         result.embed_maps = embed_maps.clone();
+
+        // 写入前先把本次会改动的已有索引和全新目标路径交给事务登记。
+        // 新画布目录作为不存在根整体撤销，不备份任何旧画布内容。
+        let starmaps_dir = self.app_data_root.join("starmaps");
+        let mut prepare = vec![
+            starmaps_dir.join("index.json"),
+            crate::starmap::library::library_index_abs_path(&self.app_data_root),
+            crate::starmap::library::reference_index_abs_path(&self.app_data_root),
+            self.app_data_root.join("app-meta/sync/state.local.json"),
+        ];
+        for new_starmap_id in starmap_map.values() {
+            prepare.push(crate::starmap::package_storage::starmap_pkg_dir(
+                &self.app_data_root,
+                new_starmap_id,
+            ));
+            prepare.push(starmaps_dir.join(format!("{new_starmap_id}.meta.json")));
+        }
+        for nodes in node_maps.values() {
+            for node_id in nodes.values() {
+                prepare.push(crate::starmap::library::node_definition_abs_path(
+                    &self.app_data_root,
+                    node_id,
+                ));
+            }
+        }
+        prepare_paths(&prepare)?;
+
+        for starmap_id in &order {
+            let source = source_metas
+                .get(starmap_id)
+                .expect("source meta collected with graph");
+            let new_starmap_id = starmap_map
+                .get(starmap_id)
+                .expect("copy map covers collected starmaps")
+                .clone();
+            let is_root = starmap_id == source_starmap_id;
+            let new_title = if is_root {
+                new_root_title.clone()
+            } else {
+                source.title.clone()
+            };
+            let mut meta = crate::starmap::create_starmap_with_id(
+                &self.app_data_root,
+                &new_starmap_id,
+                &new_title,
+                &source.description,
+                Some(source.accent_color.as_str()),
+            )?;
+            result.change_paths.push(std::path::PathBuf::from(format!(
+                "starmaps/{new_starmap_id}.meta.json"
+            )));
+            let project_id = if is_root {
+                scope.project_id()
+            } else {
+                source.project_id.as_deref()
+            };
+            if let Some(project_id) = project_id {
+                crate::starmap::bind_starmap_to_project(
+                    &self.app_data_root,
+                    &new_starmap_id,
+                    project_id,
+                )?;
+                meta.project_id = Some(project_id.to_string());
+            }
+            result.starmaps.push(meta.clone());
+        }
 
         // 节点先不带 portal 写入，确保所有画布所有实例都已存在；portal 在
         // 第二轮统一重映射，避免环形/前向 portal 因目标实例尚未创建而失败。

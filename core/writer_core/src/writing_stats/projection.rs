@@ -1357,6 +1357,7 @@ impl ContributionCounts {
         self.operations += 1;
         match event.operation {
             ContributionOperation::Create => self.created_objects += 1,
+            ContributionOperation::Copy => self.created_objects += 1,
             ContributionOperation::Update => self.updated_objects += 1,
             ContributionOperation::Delete => self.deleted_objects += 1,
             ContributionOperation::Link => self.linked_objects += 1,

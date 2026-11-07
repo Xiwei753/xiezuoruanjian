@@ -206,6 +206,7 @@ impl ContributionObjectType {
 #[serde(rename_all = "snake_case")]
 pub enum ContributionOperation {
     Create,
+    Copy,
     Update,
     Delete,
     Link,
@@ -216,6 +217,7 @@ impl ContributionOperation {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Create => "create",
+            Self::Copy => "copy",
             Self::Update => "update",
             Self::Delete => "delete",
             Self::Link => "link",

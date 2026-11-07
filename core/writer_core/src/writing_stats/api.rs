@@ -882,7 +882,9 @@ impl StatsApi {
         for event in contribution_events {
             if matches!(
                 event.operation,
-                ContributionOperation::Link | ContributionOperation::Unlink
+                ContributionOperation::Link
+                    | ContributionOperation::Unlink
+                    | ContributionOperation::Copy
             ) {
                 // 引用/取消引用及共享内容传播只用于画布结构与回放，
                 // 已存在的正文不能被再次计入创作字数。

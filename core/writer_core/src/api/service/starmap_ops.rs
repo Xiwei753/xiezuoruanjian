@@ -1023,13 +1023,18 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmaps_contribution_transaction()?;
-        // 复制会新建多张星图、节点定义、实例和全部关联对象。整棵 starmaps
-        // 目录作为事务根备份，任何一步失败都能连同索引、事件一起回滚。
-        contribution_txn.prepare_paths(&[self.app_data_root.join("starmaps")])?;
-        let copied = self
-            .core_write()
-            .copy_starmap_library_asset(&target, &scope, title)
-            .map_err(WriterError::from)?;
+        let copied = {
+            let mut prepare_paths = |paths: &[std::path::PathBuf]| {
+                contribution_txn.prepare_paths(paths)
+            };
+            self.core_write().copy_starmap_library_asset(
+                &target,
+                &scope,
+                title,
+                &mut prepare_paths,
+            )
+            .map_err(WriterError::from)?
+        };
         // 复制不是新的手写输入；沿用当前事务 ID，但以系统来源记录，避免把
         // 副本正文再次计入人类输入速度。
         let mutation_context = crate::writing_stats::current_mutation_context();
@@ -1037,8 +1042,9 @@ impl WriterCoreApi {
             .with_transaction_id(mutation_context.transaction_id().to_string());
         match copied {
             crate::facade::StarMapAssetCopyResult::Node { asset, definition } => {
-                // 素材本体创建独立于画布：记录一次 Create，容器为空，因此不会
-                // 进入按画布聚合的写作字数；后续拖入画布只记录 Link。
+                let mut copy_batch = self.begin_contribution_batch();
+                // 素材本体创建独立于画布：记录一次 Copy，容器为空。Copy 只
+                // 进入证明链，不进入写作字数投影；后续拖入画布只记录 Link。
                 let mut graph = crate::starmap::types::StarMapGraph::default();
                 graph.starmap_id = String::new();
                 graph.nodes.push(definition.instantiate(
@@ -1049,7 +1055,7 @@ impl WriterCoreApi {
                     "",
                     crate::writing_stats::ContributionObjectType::StarMapNode,
                     &asset.asset_id,
-                    crate::writing_stats::ContributionOperation::Create,
+                    crate::writing_stats::ContributionOperation::Copy,
                     None,
                     Some(&graph),
                 );
@@ -1058,7 +1064,7 @@ impl WriterCoreApi {
                     scope.project_id().unwrap_or_default(),
                     crate::writing_stats::ContributionObjectType::StarMapNode,
                     &asset.asset_id,
-                    crate::writing_stats::ContributionOperation::Create,
+                    crate::writing_stats::ContributionOperation::Copy,
                     None,
                     None,
                     Some(crate::writing_stats::ContributionObjectSnapshot::object(
@@ -1067,6 +1073,7 @@ impl WriterCoreApi {
                     )),
                     Some(delta),
                 )?;
+                self.commit_contribution_batch(&mut copy_batch);
                 let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
                     .add_upsert(crate::starmap::library::node_definition_rel_path(
                         &asset.asset_id,
@@ -1080,6 +1087,7 @@ impl WriterCoreApi {
                 Self::json_string(&asset)
             }
             crate::facade::StarMapAssetCopyResult::StarMap(result) => {
+                let mut copy_batch = self.begin_contribution_batch();
                 let mut graphs = std::collections::HashMap::new();
                 let mut projects = std::collections::HashMap::new();
                 let roots_after = crate::starmap::load_index(&self.app_data_root)
@@ -1140,12 +1148,13 @@ impl WriterCoreApi {
                             starmap_id,
                             object_type,
                             object_id,
-                            crate::writing_stats::ContributionOperation::Create,
+                            crate::writing_stats::ContributionOperation::Copy,
                             None,
                             Some(graph),
                         )?;
                     }
                 }
+                self.commit_contribution_batch(&mut copy_batch);
                 let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
                 for path in &result.change_paths {
                     change_set = change_set.add_upsert(path.clone());

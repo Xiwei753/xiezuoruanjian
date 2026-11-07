@@ -289,6 +289,38 @@ fn collect_rebased_anchor_paths(
     }
 }
 
+fn is_starmap_node_instance_path(path: &std::path::Path) -> bool {
+    let components = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>();
+    components.len() == 6
+        && components[0] == "starmaps"
+        && components[1] != "library"
+        && components[2] == "nodes"
+        && components[5].ends_with(".json")
+}
+
+/// 同步直接落盘画布实例后，本机派生的引用索引必须立即失效重建。
+/// 索引仍只留在本机，不进入 Git；但下一次共享编辑必须能看到这些新实例。
+fn refresh_starmap_references_after_commit(
+    live_root: &Path,
+    actions: &[crate::sync::staging::CommitAction],
+) -> crate::error::Result<()> {
+    let touched = actions.iter().any(|action| {
+        let rel = match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, .. }
+            | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
+        };
+        is_starmap_node_instance_path(rel)
+    });
+    if !touched || !live_root.join("starmaps/library/index.json").is_file() {
+        return Ok(());
+    }
+    crate::starmap::library::rebuild_reference_index(live_root)?;
+    Ok(())
+}
+
 /// 将 commit plan 中的 Apply/Delete 变更通过 SaveTransaction 写回 live root。
 ///
 /// 删除 `git_finalize_recovery` 参数。
@@ -336,6 +368,7 @@ pub(crate) fn apply_commit_plan_to_live(
         }
     }
     tx.commit()?;
+    refresh_starmap_references_after_commit(live_root, content_actions)?;
     Ok(tx)
 }
 
@@ -436,6 +469,7 @@ fn apply_commit_plan_with_sync_state_merge_for_group(
         }
     }
     tx.commit()?;
+    refresh_starmap_references_after_commit(live_root, content_actions)?;
     Ok(tx)
 }
 
