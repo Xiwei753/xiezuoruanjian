@@ -263,7 +263,11 @@ impl StarMapNodeDefinition {
         node
     }
 
-    /// 把共享内容写回画布实例，保留实例 ID、位置和实例本身的时间戳更新。
+    /// 把共享内容写回画布实例，保留实例 ID、位置和实例自身的创建时间。
+    ///
+    /// 本体 `created_at` 只属于共享定义；同一实例的创建时间在画布引用时
+    /// 已经固定，不能被共享内容传播覆盖。`updated_at` 与
+    /// `instantiate_instance` 使用同一合并规则，取实例修订和本体修订的较大值。
     pub fn apply_to_node(&self, node: &mut super::StarMapNode) {
         node.title = self.title.clone();
         node.kind = self.kind.clone();
@@ -274,7 +278,6 @@ impl StarMapNodeDefinition {
         node.portal = self.portal.clone();
         node.style = self.style.clone();
         node.provenance = self.provenance.clone();
-        node.created_at = self.created_at;
         node.updated_at = node.updated_at.max(self.updated_at);
     }
 }
@@ -310,5 +313,40 @@ mod tests {
             project_id: "p1".to_string(),
         };
         assert_eq!(moved.target.asset_id, entry.target.asset_id);
+    }
+
+    #[test]
+    fn applying_shared_definition_preserves_instance_creation_time() {
+        use crate::starmap::semantic::{StarMapNodeContent, StarMapProvenance};
+        use crate::starmap::types::{
+            StarMapNode, StarMapNodeKind, StarMapNodeStyle, StarMapPoint,
+        };
+
+        let source = StarMapNode {
+            id: "n1".to_string(),
+            title: "旧标题".to_string(),
+            kind: StarMapNodeKind::Note,
+            payload: None,
+            tags: vec![],
+            content: StarMapNodeContent::Empty,
+            anchors: vec![],
+            portal: None,
+            position: StarMapPoint::default(),
+            style: StarMapNodeStyle::default(),
+            provenance: StarMapProvenance::default(),
+            created_at: 1,
+            updated_at: 10,
+        };
+        let definition = StarMapNodeDefinition::from_node("asset_1", &source);
+        let mut instance = definition.instantiate("n_instance", StarMapPoint { x: 3.0, y: 4.0 });
+        instance.created_at = 8;
+        instance.updated_at = 5;
+
+        definition.apply_to_node(&mut instance);
+
+        assert_eq!(instance.id, "n_instance");
+        assert_eq!(instance.position, StarMapPoint { x: 3.0, y: 4.0 });
+        assert_eq!(instance.created_at, 8, "共享传播不得改写实例创建时间");
+        assert_eq!(instance.updated_at, 10, "实例修订与本体修订取较大值");
     }
 }

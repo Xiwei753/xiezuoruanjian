@@ -2702,10 +2702,10 @@ impl WriterCoreApi {
         core: &crate::facade::WriterCore,
         committed_paths: &[crate::sync::commit_helpers::CommittedPath],
     ) -> crate::error::Result<()> {
-        let changed_starmap_ids: std::collections::HashSet<String> = committed_paths
-            .iter()
-            .filter_map(|p| extract_starmap_id_from_committed_path(&p.path))
-            .collect();
+        let changed_starmap_ids = starmap_ids_for_committed_paths(
+            core,
+            committed_paths.iter().map(|path| path.path.as_path()),
+        )?;
         for starmap_id in &changed_starmap_ids {
             // 问题1：不再 flush dirty（已在 commit 前 flush），只 evict Store。
             // 问题2：evict 失败传播错误，不 log::warn 后继续。
@@ -2927,11 +2927,17 @@ impl WriterCoreApi {
         // 星图冲突解决后 evict Store + 失效路径依赖索引，与同步 commit 后
         // `coordinate_stores_after_commit` 一致：commit 前已 flush dirty（上面已做），
         // 此处只 evict 变化的星图 Store（移除缓存，下次访问从 live 磁盘重新加载
-        // 合并后的结果）并失效路径依赖索引。
-        if applied && is_starmap_conflict_path(path) {
-            if let Some(starmap_id) = extract_starmap_id_from_conflict_path(path) {
+        // 合并后的结果）并失效路径依赖索引。共享节点定义变更要通过派生引用索引
+        // 找出所有受影响的真实画布，不能把 `library` 当成一张星图。
+        if applied {
+            let conflict_path = std::path::Path::new(path);
+            if classify_starmap_committed_path(conflict_path).is_some() {
                 let core = self.core_write();
-                core.evict_starmap_store_after_commit(&starmap_id)?;
+                let changed_starmap_ids =
+                    starmap_ids_for_committed_paths(&core, std::iter::once(conflict_path))?;
+                for starmap_id in &changed_starmap_ids {
+                    core.evict_starmap_store_after_commit(starmap_id)?;
+                }
                 core.invalidate_path_dependency_index();
             }
         }
@@ -3099,47 +3105,93 @@ impl WriterCoreApi {
     }
 }
 
-/// 从 workspace-relative 路径提取星图 ID。
+/// workspace-relative 星图路径的语义分类。
 ///
-/// 路径格式：
-/// - `starmaps/{id}.meta.json` → `Some(id)`
-/// - `starmaps/{id}/...` → `Some(id)`
-/// - `starmaps/index.json` → `None`（不对应特定星图）
-/// - 其他路径 → `None`
+/// 同步 commit 后要失效 Store，但共享节点定义位于
+/// `starmaps/library/nodes/...`，不能再被解析成一张名为 `library` 的画布。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StarmapCommittedPath {
+    /// 某张真实画布：`starmaps/{id}.meta.json` 或 `starmaps/{id}/...`
+    Canvas(String),
+    /// 共享节点定义：`starmaps/library/nodes/{bucket}/{asset_id}.json`
+    SharedNode(String),
+    /// 素材库索引/派生索引等不属于单张画布的库文件。
+    LibraryIndex,
+}
+
+/// 从 workspace-relative 路径分类星图变更。
 ///
-/// 同步 per-target commit 后用此函数从 `committed_paths` 提取发生变化的星图 ID，
-/// 以便移除内存中已过期的 Store（问题2）。
-fn extract_starmap_id_from_committed_path(path: &std::path::Path) -> Option<String> {
+/// `starmaps/index.json` 不对应任何画布或共享定义，返回 `None`。
+fn classify_starmap_committed_path(
+    path: &std::path::Path,
+) -> Option<StarmapCommittedPath> {
     let rel = path.to_str()?;
     let rest = rel.strip_prefix("starmaps/")?;
-    if rest == "index.json" {
+    if rest.is_empty() || rest == "index.json" {
         return None;
+    }
+    if rest == "library" || rest.starts_with("library/") {
+        if let Some(asset_path) = rest.strip_prefix("library/nodes/") {
+            let mut parts = asset_path.split('/');
+            let bucket = parts.next()?;
+            let file = parts.next()?;
+            if !bucket.is_empty() && parts.next().is_none() {
+                if let Some(asset_id) = file.strip_suffix(".json") {
+                    if !asset_id.is_empty() {
+                        return Some(StarmapCommittedPath::SharedNode(asset_id.to_string()));
+                    }
+                }
+            }
+        }
+        return Some(StarmapCommittedPath::LibraryIndex);
     }
     // starmaps/{id}.meta.json
     if let Some(id) = rest.strip_suffix(".meta.json") {
-        return Some(id.to_string());
+        if !id.is_empty() {
+            return Some(StarmapCommittedPath::Canvas(id.to_string()));
+        }
+        return None;
     }
     // starmaps/{id}/...
     if let Some(slash_idx) = rest.find('/') {
-        return Some(rest[..slash_idx].to_string());
+        let id = &rest[..slash_idx];
+        if !id.is_empty() {
+            return Some(StarmapCommittedPath::Canvas(id.to_string()));
+        }
     }
     None
 }
 
-/// 冲突路径是否指向星图数据（`starmaps/` 前缀）。
+/// 收集一次 commit / 冲突解决后需要 evict 的真实画布 ID。
 ///
-/// `resolve_conflict_take_remote` 据此判断解决后是否需要 evict Store +
-/// 失效路径依赖索引（Issue #902 第十九轮问题1）。
-fn is_starmap_conflict_path(path: &str) -> bool {
-    path.starts_with("starmaps/")
-}
-
-/// 从冲突路径（workspace-relative 字符串）提取星图 ID。
-///
-/// 与 `extract_starmap_id_from_committed_path` 同语义，但接受 `&str` 而非 `&Path`，
-/// 供 `resolve_conflict_take_remote` 直接使用冲突 DTO 里的 `path` 字段。
-fn extract_starmap_id_from_conflict_path(path: &str) -> Option<String> {
-    extract_starmap_id_from_committed_path(std::path::Path::new(path))
+/// 共享节点定义变更通过同步 commit 后已刷新的派生引用索引定位所有引用画布；
+/// 库索引本身不产生画布缓存失效。
+fn starmap_ids_for_committed_paths<'a>(
+    core: &crate::facade::WriterCore,
+    paths: impl IntoIterator<Item = &'a std::path::Path>,
+) -> crate::error::Result<std::collections::HashSet<String>> {
+    let mut starmap_ids = std::collections::HashSet::new();
+    let mut shared_assets = std::collections::HashSet::new();
+    for path in paths {
+        match classify_starmap_committed_path(path) {
+            Some(StarmapCommittedPath::Canvas(starmap_id)) => {
+                starmap_ids.insert(starmap_id);
+            }
+            Some(StarmapCommittedPath::SharedNode(asset_id)) => {
+                shared_assets.insert(asset_id);
+            }
+            Some(StarmapCommittedPath::LibraryIndex) | None => {}
+        }
+    }
+    for asset_id in shared_assets {
+        for instance in crate::starmap::library::instances_for_asset(
+            &core.app_data_root,
+            &asset_id,
+        )? {
+            starmap_ids.insert(instance.starmap_id);
+        }
+    }
+    Ok(starmap_ids)
 }
 
 #[cfg(test)]
@@ -3202,51 +3254,46 @@ mod tests {
         assert!(result.unwrap());
     }
 
-    /// `extract_starmap_id_from_committed_path` 从 workspace-relative 路径提取星图 ID。
-    ///
-    /// 覆盖 meta 文件、graph/节点/边文件、index.json 以及非星图路径（问题2）。
+    /// `classify_starmap_committed_path` 区分真实画布、共享定义和库索引。
     #[test]
-    fn extract_starmap_id_from_committed_path_identifies_starmap_files() {
-        use super::extract_starmap_id_from_committed_path;
+    fn classify_starmap_committed_paths_keeps_library_out_of_canvases() {
+        use super::{StarmapCommittedPath, classify_starmap_committed_path};
         use std::path::PathBuf;
 
-        // meta 文件
+        let canvas = |path: &str| {
+            classify_starmap_committed_path(&PathBuf::from(path))
+        };
         assert_eq!(
-            extract_starmap_id_from_committed_path(&PathBuf::from("starmaps/sm_1.meta.json")),
-            Some("sm_1".to_string())
+            canvas("starmaps/sm_1.meta.json"),
+            Some(StarmapCommittedPath::Canvas("sm_1".to_string()))
         );
-        // graph 文件
         assert_eq!(
-            extract_starmap_id_from_committed_path(&PathBuf::from("starmaps/sm_1/graph.json")),
-            Some("sm_1".to_string())
+            canvas("starmaps/sm_1/graph.json"),
+            Some(StarmapCommittedPath::Canvas("sm_1".to_string()))
         );
-        // 节点文件（嵌套目录）
         assert_eq!(
-            extract_starmap_id_from_committed_path(&PathBuf::from(
-                "starmaps/sm_1/nodes/00/n1.json"
-            )),
-            Some("sm_1".to_string())
+            canvas("starmaps/sm_1/nodes/00/n1.json"),
+            Some(StarmapCommittedPath::Canvas("sm_1".to_string()))
         );
-        // 边文件
         assert_eq!(
-            extract_starmap_id_from_committed_path(&PathBuf::from("starmaps/sm_1/edges/e1.json")),
-            Some("sm_1".to_string())
+            canvas("starmaps/sm_1/edges/e1.json"),
+            Some(StarmapCommittedPath::Canvas("sm_1".to_string()))
         );
-        // index.json 不对应特定星图
         assert_eq!(
-            extract_starmap_id_from_committed_path(&PathBuf::from("starmaps/index.json")),
-            None
+            canvas("starmaps/library/nodes/af/asset_1.json"),
+            Some(StarmapCommittedPath::SharedNode("asset_1".to_string()))
         );
-        // 非星图路径
         assert_eq!(
-            extract_starmap_id_from_committed_path(&PathBuf::from("projects/p1/chapter.json")),
-            None
+            canvas("starmaps/library/index.json"),
+            Some(StarmapCommittedPath::LibraryIndex)
         );
-        // starmaps 前缀但无后续分隔
         assert_eq!(
-            extract_starmap_id_from_committed_path(&PathBuf::from("starmaps/")),
-            None
+            canvas("starmaps/library/references.json"),
+            Some(StarmapCommittedPath::LibraryIndex)
         );
+        assert_eq!(canvas("starmaps/index.json"), None);
+        assert_eq!(canvas("projects/p1/chapter.json"), None);
+        assert_eq!(canvas("starmaps/"), None);
     }
 }
 
@@ -3338,4 +3385,63 @@ fn chapter_key_from_path_str(path: &str, default_project_id: Option<&str>) -> Op
         parts.get(volumes + 1)?,
         parts.get(chapters + 1)?
     ))
+}
+
+#[cfg(test)]
+mod shared_definition_path_tests {
+    use super::{StarmapCommittedPath, classify_starmap_committed_path, starmap_ids_for_committed_paths};
+    use crate::facade::WriterCore;
+    use crate::starmap::semantic::{StarMapNodeContent, StarMapProvenance};
+    use crate::starmap::types::{StarMapNode, StarMapNodeKind, StarMapNodeStyle, StarMapPoint};
+    use tempfile::tempdir;
+
+    fn node(id: &str) -> StarMapNode {
+        StarMapNode {
+            id: id.to_string(),
+            title: id.to_string(),
+            kind: StarMapNodeKind::Note,
+            payload: None,
+            tags: vec![],
+            content: StarMapNodeContent::Empty,
+            anchors: vec![],
+            portal: None,
+            position: StarMapPoint::default(),
+            style: StarMapNodeStyle::default(),
+            provenance: StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    /// 同步共享定义后，所有引用该 asset 的画布都必须进入 evict 集合。
+    #[test]
+    fn shared_node_definition_path_resolves_all_referencing_canvases() {
+        let temp = tempdir().unwrap();
+        let projects_root = temp.path().join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+        let core = WriterCore::new(temp.path(), &projects_root);
+
+        let first = core.create_starmap("画布 A", "", None).unwrap().starmap_id;
+        let second = core.create_starmap("画布 B", "", None).unwrap().starmap_id;
+        let source = node("n_shared");
+        core.add_starmap_node(&first, source, 0.0, 0.0).unwrap();
+        core.add_starmap_node_reference(
+            &second,
+            "n_shared",
+            StarMapPoint::default(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let definition_path = crate::starmap::library::node_definition_rel_path("n_shared");
+        assert_eq!(
+            classify_starmap_committed_path(&definition_path),
+            Some(StarmapCommittedPath::SharedNode("n_shared".to_string()))
+        );
+
+        let affected = starmap_ids_for_committed_paths(&core, [definition_path.as_path()]).unwrap();
+        assert!(affected.contains(&first));
+        assert!(affected.contains(&second));
+    }
 }

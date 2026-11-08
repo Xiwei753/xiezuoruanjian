@@ -595,3 +595,29 @@ fn copy_starmap_remaps_full_paths_through_portals() {
         }
     );
 }
+
+/// 引用位置的作品归属以当前 StarMapMeta.project_id 为准：
+/// 画布从作品甲移到乙后，反向索引里旧的项目字段不能继续冒充归属。
+#[test]
+fn asset_reference_project_follows_current_starmap_meta() {
+    let temp = tempdir().unwrap();
+    let core = new_core(temp.path());
+
+    let starmap_id = create_starmap(&core, "素材归属");
+    add_node(&core, &starmap_id, "n_shared");
+    core.bind_starmap_to_project(&starmap_id, "p1").unwrap();
+
+    let target = crate::starmap::types::StarMapAssetRef::node("n_shared");
+    let refs = core.list_starmap_asset_references(&target).unwrap();
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].project_id.as_deref(), Some("p1"));
+
+    core.bind_starmap_to_project(&starmap_id, "p2").unwrap();
+    let refs = core.list_starmap_asset_references(&target).unwrap();
+    assert_eq!(refs.len(), 1);
+    assert_eq!(
+        refs[0].project_id.as_deref(),
+        Some("p2"),
+        "作品移动后引用位置必须返回当前作品归属"
+    );
+}

@@ -129,14 +129,16 @@ impl super::super::WriterCore {
                     &self.app_data_root,
                     &target.asset_id,
                 )? {
+                    // 作品归属以当前 StarmapMeta 为唯一权威；派生引用索引只定位
+                    // 画布/实例，其中的 project_id 可能停留在绑定前的旧值。
+                    // 仅在画布元数据缺失的旧数据上保留只读兼容回退。
+                    let project_id = match project_by_starmap.get(&instance.starmap_id) {
+                        Some(project_id) => project_id.clone(),
+                        None => instance.project_id.clone(),
+                    };
                     refs.push(StarMapAssetReference {
                         target: target.clone(),
-                        project_id: instance.project_id.or_else(|| {
-                            project_by_starmap
-                                .get(&instance.starmap_id)
-                                .cloned()
-                                .flatten()
-                        }),
+                        project_id,
                         starmap_id: instance.starmap_id,
                         instance_id: instance.instance_id,
                     });
