@@ -764,6 +764,45 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
                 }
             }
             (Some(local_rec), Some(remote_rec)) => {
+                // 统计事件 JSONL 是追加式事件流：远端整文件 LWW 会覆盖本机
+                // 离线 MCP 新写入的事件。按事件 ID 合并本地与远端，保留两侧
+                // 所有不同事件，再把合并结果作为本地待上传版本。
+                if local_rec.op == "upsert"
+                    && remote_rec.op == "upsert"
+                    && local_rec.content_hash != remote_rec.content_hash
+                    && path.ends_with(".jsonl")
+                    && crate::sync::types::stats_device_id_for_event_path(&path).is_some()
+                {
+                    let remote_path = format!("{}/{}", source_remote_prefix, path);
+                    if let Some(remote_obj) = provider.read(&remote_path)? {
+                        let local_path = sync_root.join(&path);
+                        let local_bytes = std::fs::read(&local_path).map_err(|error| {
+                            crate::Error::Io(std::io::Error::other(format!(
+                                "read local stats events {}: {error}",
+                                local_path.display()
+                            )))
+                        })?;
+                        let merged_bytes = merge_stats_jsonl(&local_bytes, &remote_obj.content);
+                        crate::storage::transaction::atomic_write_bytes(
+                            &local_path,
+                            &merged_bytes,
+                        )?;
+                        let merged_hash = crate::sync::hash::content_md5(&merged_bytes);
+                        let merged_at = chrono::Utc::now().timestamp_millis();
+                        let mut merged_rec = local_rec.clone();
+                        merged_rec.content_hash = merged_hash.clone();
+                        merged_rec.updated_at_ms = merged_at;
+                        merged_rec.deleted_at_ms = None;
+                        merged_rec.device_id = state.device_id.clone();
+                        merged_rec.op = "upsert".to_string();
+                        merged_manifest_files.insert(path.clone(), merged_rec);
+                        state.known_files.insert(path.clone(), merged_hash);
+                        state.known_files_updated_at.insert(path.clone(), merged_at);
+                        to_upload.push(path);
+                        continue;
+                    }
+                }
+
                 let base_hash = state
                     .known_files
                     .get(&path)
@@ -1376,6 +1415,46 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
         manifest_json,
         merged_manifest: sync_manifest,
     })
+}
+
+/// 按事件 ID 合并两份 JSONL 统计事件流。
+///
+/// 先保留本地顺序，再追加远端中尚未出现的事件。事件行缺稳定 ID 时退化为
+/// 整行去重；空行不写入。输出始终以换行结尾，便于追加式读取。
+fn merge_stats_jsonl(local: &[u8], remote: &[u8]) -> Vec<u8> {
+    use std::collections::HashSet;
+
+    let mut seen = HashSet::new();
+    let mut lines: Vec<String> = Vec::new();
+    for source in [local, remote] {
+        for line in source.split(|byte| *byte == b'\n') {
+            let line = line.trim_ascii();
+            if line.is_empty() {
+                continue;
+            }
+            let key = serde_json::from_slice::<serde_json::Value>(line)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("eventId")
+                        .or_else(|| value.get("event_id"))
+                        .or_else(|| value.get("sessionId"))
+                        .or_else(|| value.get("id"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| String::from_utf8_lossy(line).into_owned());
+            if seen.insert(key) {
+                lines.push(String::from_utf8_lossy(line).into_owned());
+            }
+        }
+    }
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let mut merged = lines.join("\n").into_bytes();
+    merged.push(b'\n');
+    merged
 }
 
 #[cfg(test)]

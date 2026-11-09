@@ -46,6 +46,8 @@ pub mod generation_gc;
 /// 同步哈希语义集中模块（MD5 内容哈希 / Git blob OID / 旧基线归一化）。
 pub(crate) mod hash;
 pub mod lww;
+/// 成功 Core 事务留下的本地对象变更事实（同步版本投影的提交时间/设备来源）。
+pub(crate) mod local_mutations;
 ///   待删除同步 target 的持久化（provider-neutral）。
 pub mod path;
 pub mod pending_deleted;

@@ -40,7 +40,13 @@ Rectangle {
     id: root
     required property var dt
     property var editorBackendRef: null
+    property var starmapBackendRef: null
     property var appState: ({})
+
+    // 同机 MCP / 其它进程写入后，Core 会在工作区事件流发布统计事件。
+    // 首次轮询只建立偏移基线（页面打开时已主动请求快照），之后有事件才刷新。
+    property double _workspaceEventOffset: 0
+    property bool _workspaceEventBaselineReady: false
     color: Kirigami.Theme.backgroundColor
 
     // ── Explorer 请求簿记：同一时刻只允许一个在途请求，用递增 requestId 丢弃迟到结果 ──
@@ -190,6 +196,27 @@ Rectangle {
         root.editorBackendRef.request_writing_stats_explorer(root.activeRequestId, preset, customStart, customEnd)
     }
 
+    // 只消费 Core 事件流，不在 QML 读盘或自行聚合统计。
+    function pollStatsWorkspaceChanges() {
+        if (!root.starmapBackendRef) return
+        var raw = root.starmapBackendRef.workspace_changes_since_json(root._workspaceEventOffset)
+        if (!raw || raw.success === undefined || !raw.success) return
+        var page = raw.data || {}
+        root._workspaceEventOffset = Number(page.nextOffset || 0)
+        var wasReady = root._workspaceEventBaselineReady
+        root._workspaceEventBaselineReady = true
+        if (!wasReady) return
+        var events = page.events || []
+        for (var i = 0; i < events.length; i++) {
+            var event = events[i]
+            if (event.kind === "stats" || event.kind === "starmap"
+                    || event.kind === "starmapStructure") {
+                root.requestStats()
+                return
+            }
+        }
+    }
+
     function openPeriod(preset) {
         if (preset === "custom") {
             // 手稿约定：自选卡点开先弹起止日期 Dialog，确认后才以实际区间展开。
@@ -227,7 +254,15 @@ Rectangle {
         requestStats()
     }
     onVisibleChanged: if (visible) {
+        _workspaceEventBaselineReady = false
         requestStats()
+    }
+
+    Timer {
+        interval: 1500
+        repeat: true
+        running: root.visible && root.starmapBackendRef !== null
+        onTriggered: root.pollStatsWorkspaceChanges()
     }
 
     // ── Explorer 快照按 requestId 过滤迟到结果 ──

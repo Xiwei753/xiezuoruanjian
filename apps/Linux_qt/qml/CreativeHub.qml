@@ -228,6 +228,7 @@ Rectangle {
                 sourceComponent: StatsPreviewPage {
                     dt: root.dt
                     editorBackendRef: root.editorBackendRef
+                    starmapBackendRef: root.starmapBackendRef
                     appState: root.appState
                 }
             }

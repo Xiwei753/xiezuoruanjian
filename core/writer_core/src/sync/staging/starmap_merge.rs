@@ -27,7 +27,7 @@ use crate::starmap::store::meta::{
 use crate::starmap::store::relation_index::{EdgeRelationIndex, EmbedHostIndex, LinkRelationIndex};
 use crate::starmap::types::StarMapLibraryIndex;
 use crate::starmap::StarMapIndexRecord;
-use crate::sync::content_class::{resolve_lww, LwwRecord, LwwWinner};
+use crate::sync::content_class::LwwRecord;
 
 // ===========================================================================
 // 路径识别
@@ -196,38 +196,18 @@ pub(crate) fn merge_starmap_object(
 
 /// 带持久版本记录的对象级三方合并。
 ///
-/// 内容三方比较能确定“只有一侧修改”时仍直接采用该侧；只有真正无法由
-/// 内容判断的双侧修改（含删除-修改）才用两侧 manifest 的持久
-/// `updated_at_ms` / `deleted_at_ms` + `device_id` 做统一 LWW 决胜。
-/// 记录缺失时保留原有冲突行为，不凭空制造版本。
+/// 内容三方比较能确定“只有一侧修改”时仍直接采用该侧；真正无法由内容
+/// 判断的双侧修改（含删除-修改）必须保持显式冲突，交给既有冲突快照/解决
+/// 流程。时间戳只用于事件排序和候选提示，不能在这里静默抹掉另一侧已经
+/// 提交的对象内容（尤其是离线 MCP 写入）。
 pub(crate) fn merge_starmap_object_with_versions(
     base: Option<&[u8]>,
     local: Option<&[u8]>,
     incoming: Option<&[u8]>,
-    local_record: Option<&LwwRecord>,
-    incoming_record: Option<&LwwRecord>,
+    _local_record: Option<&LwwRecord>,
+    _incoming_record: Option<&LwwRecord>,
 ) -> ObjectMergeDecision {
-    let decision = merge_starmap_object_by_content(base, local, incoming);
-    if !matches!(decision, ObjectMergeDecision::Conflict(_)) {
-        return decision;
-    }
-    let (Some(local_record), Some(incoming_record)) = (local_record, incoming_record) else {
-        return decision;
-    };
-    match resolve_lww(local_record, incoming_record) {
-        LwwWinner::Remote => match incoming {
-            Some(content) => ObjectMergeDecision::ApplyIncoming(content.to_vec()),
-            None => ObjectMergeDecision::Delete,
-        },
-        LwwWinner::Local => {
-            if local.is_some() {
-                ObjectMergeDecision::KeepLocal
-            } else {
-                ObjectMergeDecision::Delete
-            }
-        }
-        LwwWinner::Tie => ObjectMergeDecision::NoOp,
-    }
+    merge_starmap_object_by_content(base, local, incoming)
 }
 
 /// 纯内容三方比较（不读取版本记录）。
@@ -1513,6 +1493,45 @@ pub(crate) fn resolve_graph_lifecycle(
     }
 }
 
+/// 依据持久哈希事实解析整图生命周期。
+///
+/// staging 的 base 目录来自 Prepare 时的 live，不能直接当作“上次同步共同
+/// 基线”；这里改为用 known_files 的基线存在性与两侧是否真实变化来判断。
+/// 时间戳不参与删除取舍：本地有未同步修改时，远端删除只能形成冲突。
+pub(crate) fn resolve_graph_lifecycle_with_change_facts(
+    base_exists: bool,
+    local_exists: bool,
+    incoming_exists: bool,
+    local_changed: bool,
+    incoming_changed: bool,
+) -> GraphLifecycleDecision {
+    if !base_exists {
+        return GraphLifecycleDecision::Normal;
+    }
+    if local_exists && incoming_exists {
+        return GraphLifecycleDecision::Normal;
+    }
+    if local_exists && !incoming_exists {
+        return if local_changed {
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: false,
+            }
+        } else {
+            GraphLifecycleDecision::Delete
+        };
+    }
+    if !local_exists && incoming_exists {
+        return if incoming_changed {
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: true,
+            }
+        } else {
+            GraphLifecycleDecision::Delete
+        };
+    }
+    GraphLifecycleDecision::Delete
+}
+
 /// 统一处理 graph.json 和对象文件的合并，做一致性协调。
 ///
 /// # 一致性协调
@@ -1566,6 +1585,7 @@ pub(crate) fn merge_starmap_graph_with_objects(
         meta_local,
         meta_incoming,
         objects,
+        None,
         &HashMap::new(),
     )
 }
@@ -1590,6 +1610,7 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
         Option<Vec<u8>>,
         Option<Vec<u8>>,
     )],
+    lifecycle_override: Option<GraphLifecycleDecision>,
     object_versions: &HashMap<String, (Option<LwwRecord>, Option<LwwRecord>)>,
 ) -> Result<StarmapGraphMergeOutput> {
     // --- 1. 解析 graph 成员并确定对象保留边界 ---
@@ -1597,14 +1618,16 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
     let local_meta = parse_graph_meta(graph_local)?;
     let incoming_meta = parse_graph_meta(graph_incoming)?;
 
-    let lifecycle_decision = resolve_graph_lifecycle(
-        graph_base,
-        graph_local,
-        graph_incoming,
-        meta_base,
-        meta_local,
-        meta_incoming,
-    );
+    let lifecycle_decision = lifecycle_override.unwrap_or_else(|| {
+        resolve_graph_lifecycle(
+            graph_base,
+            graph_local,
+            graph_incoming,
+            meta_base,
+            meta_local,
+            meta_incoming,
+        )
+    });
 
     // --- 整图生命周期决策（issue #902 第十二轮复核）---
     // 删除或删除-修改冲突必须优先于对象级决策，不能用孤儿对象复活整图。

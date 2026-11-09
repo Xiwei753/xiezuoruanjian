@@ -7,6 +7,7 @@
 //! 推进到 `object_applied` 的事务则补写事件，避免“对象已改、来源丢失”。
 
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::storage::atomic_write_string;
+use crate::sync::local_mutations::{self, LocalMutationRecord};
+use crate::sync::types::{SyncScope, SyncState};
 use crate::writing_stats::contribution::ContributionEvent;
 use crate::writing_stats::contribution_store::ContributionStore;
 
@@ -42,6 +45,15 @@ struct ContributionTransactionManifest {
     phase: TransactionPhase,
     roots: Vec<BackupRoot>,
     events: Vec<ContributionEvent>,
+    /// 对象真正落盘后计算出的本地同步变更事实；与事件一起在恢复时补写。
+    #[serde(default)]
+    mutations: Vec<LocalMutationRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct SyncRoot {
+    root: PathBuf,
+    scope: SyncScope,
 }
 
 thread_local! {
@@ -55,6 +67,8 @@ pub(crate) struct ContributionTransaction {
     roots: Vec<BackupRoot>,
     phase: TransactionPhase,
     owns_transaction: bool,
+    /// 本次事务涉及的同步根（App 根 + 可选的独立作品根）。
+    sync_roots: Vec<SyncRoot>,
     /// 本次事务修改过的画布。文件回滚后，API 层据此直接淘汰已加载 Store，
     /// 防止内存继续暴露失败修改；提交成功时保留 Store 的最终状态。
     affected_starmaps: Vec<String>,
@@ -62,6 +76,40 @@ pub(crate) struct ContributionTransaction {
 
 impl ContributionTransaction {
     pub(crate) fn begin(app_data_root: &Path, roots: Vec<PathBuf>) -> Result<Self> {
+        Self::begin_with_sync_roots(
+            app_data_root,
+            roots,
+            vec![SyncRoot {
+                root: app_data_root.to_path_buf(),
+                scope: SyncScope::App,
+            }],
+        )
+    }
+
+    /// 作品注释事务同时覆盖 App 根和独立作品根，变更事实必须落到各自的账本。
+    pub(crate) fn begin_with_project_root(
+        app_data_root: &Path,
+        roots: Vec<PathBuf>,
+        project_root: &Path,
+    ) -> Result<Self> {
+        let mut sync_roots = vec![SyncRoot {
+            root: app_data_root.to_path_buf(),
+            scope: SyncScope::App,
+        }];
+        if project_root != app_data_root {
+            sync_roots.push(SyncRoot {
+                root: project_root.to_path_buf(),
+                scope: SyncScope::Project,
+            });
+        }
+        Self::begin_with_sync_roots(app_data_root, roots, sync_roots)
+    }
+
+    fn begin_with_sync_roots(
+        app_data_root: &Path,
+        roots: Vec<PathBuf>,
+        sync_roots: Vec<SyncRoot>,
+    ) -> Result<Self> {
         let nested = ACTIVE_EVENTS.with(|slot| slot.borrow().is_some());
         if nested {
             return Ok(Self::noop(app_data_root));
@@ -92,6 +140,7 @@ impl ContributionTransaction {
             roots,
             phase: TransactionPhase::BackingUp,
             owns_transaction: true,
+            sync_roots,
             affected_starmaps: Vec::new(),
         };
         transaction.write_manifest(Vec::new())?;
@@ -112,6 +161,7 @@ impl ContributionTransaction {
             roots: Vec::new(),
             phase: TransactionPhase::Committed,
             owns_transaction: false,
+            sync_roots: Vec::new(),
             affected_starmaps: Vec::new(),
         }
     }
@@ -141,19 +191,21 @@ impl ContributionTransaction {
     }
 
     fn write_manifest(&self, events: Vec<ContributionEvent>) -> Result<()> {
-        self.write_manifest_for_phase(self.phase, events)
+        self.write_manifest_for_phase(self.phase, events, Vec::new())
     }
 
     fn write_manifest_for_phase(
         &self,
         phase: TransactionPhase,
         events: Vec<ContributionEvent>,
+        mutations: Vec<LocalMutationRecord>,
     ) -> Result<()> {
         let manifest = ContributionTransactionManifest {
             transaction_id: self.transaction_id.clone(),
             phase,
             roots: self.roots.clone(),
             events,
+            mutations,
         };
         fs::create_dir_all(&self.dir)?;
         atomic_write_string(
@@ -258,6 +310,76 @@ impl ContributionTransaction {
         Ok(true)
     }
 
+    /// 对比事务备份与当前磁盘，生成对象级本地变更事实。
+    ///
+    /// 事务在写对象前已登记并备份根路径，因此提交时无需再依赖调用方逐个上报：
+    /// 文件新增/内容变化 → upsert，备份存在但当前文件消失 → delete。基线取
+    /// `state.known_files`（最后一次同步的共同基线），不拿事务前本地内容冒充基线。
+    fn capture_mutations(&self) -> Result<Vec<LocalMutationRecord>> {
+        let device_id = ContributionStore::new(&self.app_data_root).resolve_origin_device_id()?;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut states: HashMap<String, SyncState> = HashMap::new();
+        let mut captured: HashMap<(String, String), LocalMutationRecord> = HashMap::new();
+
+        for root in &self.roots {
+            let source = Path::new(&root.source);
+            let Some((sync_root, base_rel)) = self.sync_root_for(source) else {
+                continue;
+            };
+            let key = sync_root.root.to_string_lossy().into_owned();
+            if !states.contains_key(&key) {
+                let state = crate::sync::SyncService::load_sync_state_read_only(
+                    &sync_root.root,
+                    Some(&device_id),
+                )?;
+                states.insert(key.clone(), state);
+            }
+            let state = &states[&key];
+            let records = capture_root_mutations(
+                root,
+                &sync_root.root,
+                sync_root.scope,
+                &base_rel,
+                &self.transaction_id,
+                &device_id,
+                &state.known_files,
+                now_ms,
+            )?;
+            for record in records {
+                captured.insert((key.clone(), record.path.clone()), record);
+            }
+        }
+
+        let mut records: Vec<LocalMutationRecord> = captured.into_values().collect();
+        records.sort_by(|left, right| {
+            left.sync_root
+                .cmp(&right.sync_root)
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        Ok(records)
+    }
+
+    fn sync_root_for(&self, path: &Path) -> Option<(&SyncRoot, String)> {
+        let mut best: Option<(&SyncRoot, String)> = None;
+        for sync_root in &self.sync_roots {
+            let Ok(relative) = path.strip_prefix(&sync_root.root) else {
+                continue;
+            };
+            if relative.as_os_str().is_empty() {
+                continue;
+            }
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            // 作品根位于 App 根之下时，取更精确（相对路径更短）的根。
+            if best
+                .as_ref()
+                .map_or(true, |(_, existing)| relative.len() < existing.len())
+            {
+                best = Some((sync_root, relative));
+            }
+        }
+        best
+    }
+
     /// 对象已经持久化后调用：先写 `object_applied` 清单，再幂等追加事件。
     /// 事件追加失败时清单保留，下次工作区写入通过恢复流程补写；对象本身不回滚。
     pub(crate) fn commit(&mut self) -> Result<()> {
@@ -267,10 +389,24 @@ impl ContributionTransaction {
         let events = ACTIVE_EVENTS
             .with(|slot| slot.borrow_mut().take())
             .unwrap_or_default();
+        let mutations = self.capture_mutations()?;
         // 只有 ObjectApplied 清单真正落盘后才能把内存阶段推进；否则写盘失败时
         // Drop 仍必须按 Prepared 回滚对象，不能因为内存阶段提前改变而漏回滚。
-        self.write_manifest_for_phase(TransactionPhase::ObjectApplied, events.clone())?;
+        self.write_manifest_for_phase(
+            TransactionPhase::ObjectApplied,
+            events.clone(),
+            mutations.clone(),
+        )?;
         self.phase = TransactionPhase::ObjectApplied;
+
+        if let Err(error) = append_mutation_facts(&mutations) {
+            log::warn!(
+                "contribution transaction {} could not append local mutation facts yet: {error}",
+                self.transaction_id
+            );
+            self.owns_transaction = false;
+            return Err(error);
+        }
 
         let store = ContributionStore::new(&self.app_data_root);
         if let Err(error) = store.record_events(events.clone()) {
@@ -282,10 +418,18 @@ impl ContributionTransaction {
             return Err(error);
         }
 
-        self.write_manifest_for_phase(TransactionPhase::Committed, events)?;
+        self.write_manifest_for_phase(TransactionPhase::Committed, events, mutations)?;
         self.phase = TransactionPhase::Committed;
         let _ = fs::remove_dir_all(&self.dir);
         self.owns_transaction = false;
+
+        if let Err(error) = crate::storage::workspace_events::append_stats_event(
+            &self.app_data_root,
+            &self.transaction_id,
+            store.replay_generation(),
+        ) {
+            log::warn!("failed to append stats workspace change event: {error}");
+        }
         Ok(())
     }
 }
@@ -299,6 +443,215 @@ impl Drop for ContributionTransaction {
             );
         }
     }
+}
+
+fn append_mutation_facts(records: &[LocalMutationRecord]) -> Result<()> {
+    let mut grouped: HashMap<String, Vec<LocalMutationRecord>> = HashMap::new();
+    for record in records {
+        grouped
+            .entry(record.sync_root.clone())
+            .or_default()
+            .push(record.clone());
+    }
+    for (sync_root, records) in grouped {
+        local_mutations::append_batch(Path::new(&sync_root), &records)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_root_mutations(
+    root: &BackupRoot,
+    sync_root: &Path,
+    scope: SyncScope,
+    base_rel: &str,
+    transaction_id: &str,
+    device_id: &str,
+    known_files: &HashMap<String, String>,
+    now_ms: i64,
+) -> Result<Vec<LocalMutationRecord>> {
+    let source = Path::new(&root.source);
+    let backup = Path::new(&root.backup);
+    let source_is_dir = source.is_dir();
+    let backup_is_dir = root.existed && backup.is_dir();
+
+    let mut records = Vec::new();
+    if source_is_dir || backup_is_dir {
+        let current = if source_is_dir {
+            walk_relative_files(source)?
+        } else {
+            HashMap::new()
+        };
+        let previous = if backup_is_dir {
+            walk_relative_files(backup)?
+        } else {
+            HashMap::new()
+        };
+        let mut paths: HashSet<String> = current.keys().cloned().collect();
+        paths.extend(previous.keys().cloned());
+        for sub_path in paths {
+            let rel_path = if sub_path.is_empty() {
+                base_rel.to_string()
+            } else if base_rel.is_empty() {
+                sub_path.clone()
+            } else {
+                format!("{base_rel}/{sub_path}")
+            };
+            if rel_path.is_empty() || !local_mutations::is_sync_business_path(&rel_path, scope) {
+                continue;
+            }
+            let current_file = current.get(&sub_path);
+            let previous_file = previous.get(&sub_path);
+            let current_hash = current_file.map(|path| hash_file(path)).transpose()?;
+            let previous_hash = previous_file.map(|path| hash_file(path)).transpose()?;
+            if current_hash == previous_hash {
+                continue;
+            }
+            let base_hash = known_files.get(&rel_path).cloned();
+            match current_hash {
+                Some(content_hash) => records.push(make_mutation_record(
+                    transaction_id,
+                    sync_root,
+                    &rel_path,
+                    "upsert",
+                    base_hash,
+                    content_hash,
+                    device_id,
+                    now_ms,
+                    current_file.and_then(|path| local_mutations::object_revision(path)),
+                )),
+                None => {
+                    // 没有共同基线时不能把“本地曾经存在的文件消失”传给远端；
+                    // 远端可能从未见过它，凭空 delete 会误删或制造假删除。
+                    if base_hash.is_some() {
+                        records.push(make_mutation_record(
+                            transaction_id,
+                            sync_root,
+                            &rel_path,
+                            "delete",
+                            base_hash,
+                            String::new(),
+                            device_id,
+                            now_ms,
+                            None,
+                        ));
+                    }
+                }
+            }
+        }
+        return Ok(records);
+    }
+
+    if !local_mutations::is_sync_business_path(base_rel, scope) {
+        return Ok(records);
+    }
+    let current_hash = source.is_file().then(|| hash_file(source)).transpose()?;
+    let previous_hash = if root.existed && backup.is_file() {
+        Some(hash_file(backup)?)
+    } else {
+        None
+    };
+    if current_hash == previous_hash {
+        return Ok(records);
+    }
+    let base_hash = known_files.get(base_rel).cloned();
+    match current_hash {
+        Some(content_hash) => records.push(make_mutation_record(
+            transaction_id,
+            sync_root,
+            base_rel,
+            "upsert",
+            base_hash,
+            content_hash,
+            device_id,
+            now_ms,
+            source
+                .is_file()
+                .then(|| local_mutations::object_revision(source))
+                .flatten(),
+        )),
+        None => {
+            if base_hash.is_some() {
+                records.push(make_mutation_record(
+                    transaction_id,
+                    sync_root,
+                    base_rel,
+                    "delete",
+                    base_hash,
+                    String::new(),
+                    device_id,
+                    now_ms,
+                    None,
+                ));
+            }
+        }
+    }
+    Ok(records)
+}
+
+fn make_mutation_record(
+    transaction_id: &str,
+    sync_root: &Path,
+    rel_path: &str,
+    op: &str,
+    base_hash: Option<String>,
+    content_hash: String,
+    device_id: &str,
+    now_ms: i64,
+    object_revision: Option<u64>,
+) -> LocalMutationRecord {
+    let (object_type, object_id) = local_mutations::object_identity(rel_path);
+    LocalMutationRecord {
+        schema_version: 1,
+        transaction_id: transaction_id.to_string(),
+        sync_root: sync_root.to_string_lossy().into_owned(),
+        path: rel_path.to_string(),
+        object_type,
+        object_id,
+        op: op.to_string(),
+        base_hash,
+        content_hash,
+        updated_at_ms: now_ms,
+        deleted_at_ms: (op == "delete").then_some(now_ms),
+        device_id: device_id.to_string(),
+        object_revision,
+    }
+}
+
+fn walk_relative_files(root: &Path) -> Result<HashMap<String, PathBuf>> {
+    let mut files = HashMap::new();
+    for entry in walkdir::WalkDir::new(root).into_iter() {
+        let entry = entry.map_err(|error| {
+            Error::Io(std::io::Error::other(format!(
+                "contribution transaction walk failed under {}: {error}",
+                root.display()
+            )))
+        })?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|error| {
+                Error::Io(std::io::Error::other(format!(
+                    "contribution transaction path normalization failed: {error}"
+                )))
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
+        files.insert(relative, entry.path().to_path_buf());
+    }
+    Ok(files)
+}
+
+fn hash_file(path: &Path) -> Result<String> {
+    crate::sync::hash::content_md5_file(path).map_err(|error| {
+        Error::Io(std::io::Error::other(format!(
+            "contribution transaction hash failed for {}: {error}",
+            path.display()
+        )))
+    })
 }
 
 /// 当前事务内暂存事件；没有活动事务时返回 `false`。
@@ -355,8 +708,16 @@ pub(crate) fn recover_pending(app_data_root: &Path) -> Result<()> {
                 let _ = fs::remove_dir_all(&dir);
             }
             TransactionPhase::ObjectApplied => {
+                append_mutation_facts(&manifest.mutations)?;
                 let store = ContributionStore::new(app_data_root);
                 store.record_events(manifest.events)?;
+                if let Err(error) = crate::storage::workspace_events::append_stats_event(
+                    app_data_root,
+                    &manifest.transaction_id,
+                    store.replay_generation(),
+                ) {
+                    log::warn!("failed to append recovered stats workspace event: {error}");
+                }
                 let _ = fs::remove_dir_all(&dir);
             }
             TransactionPhase::Committed => {

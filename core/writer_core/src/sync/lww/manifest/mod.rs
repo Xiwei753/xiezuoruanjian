@@ -219,6 +219,10 @@ fn build_local_snapshot(
         None => SyncService::load_sync_state_read_only(sync_root, preferred)?,
     };
 
+    // Core 成功事务留下的对象级变更事实。账本只在本机有效；当前真实 hash
+    // 与事实一致时才采用其提交时间/设备，避免外部手工改文件后冒用旧时间。
+    let local_mutations = crate::sync::local_mutations::load_latest(sync_root)?;
+
     // 3. scan 当前文件。
     let local_entries = match app_group {
         Some(group) => crate::sync::scanner::scan_for_sync_group(sync_root, scope, Some(group))?,
@@ -233,6 +237,19 @@ fn build_local_snapshot(
         {
             let path = entry.relative_path.clone();
             let local_hash = entry.file_hash.clone();
+
+            // 账本存在但当前磁盘 hash 已不一致：说明文件被外部工具改过，
+            // 本事实已过期，记录诊断后回退到 manifest/mtime。
+            if let Some(mutation) = local_mutations.get(&path) {
+                if mutation.is_upsert() && mutation.content_hash != local_hash {
+                    log::warn!(
+                        "[sync] local mutation hash mismatch for {}: fact={} disk={} — falling back to manifest/mtime",
+                        path,
+                        mutation.content_hash,
+                        local_hash
+                    );
+                }
+            }
 
             // 当前 hash 与 old manifest record hash 相同
             // → 直接 clone old manifest record，保留原 device_id。
@@ -257,6 +274,36 @@ fn build_local_snapshot(
                         path,
                         old_rec.op
                     );
+                }
+            }
+
+            // 旧 manifest 没有可复用的当前版本时，Core 事务事实优先于 mtime：
+            // MCP 在应用退出后写入时，只有账本保存了真实提交时间与设备身份。
+            if let Some(mutation) = local_mutations.get(&path) {
+                if mutation.is_upsert() && mutation.content_hash == local_hash {
+                    if let Some(base_hash) = mutation.base_hash.as_deref() {
+                        if state.known_files.get(&path).map(String::as_str) != Some(base_hash) {
+                            log::warn!(
+                                "[sync] local mutation base mismatch for {}: fact={} known={:?}",
+                                path,
+                                base_hash,
+                                state.known_files.get(&path)
+                            );
+                        }
+                    }
+                    records.insert(
+                        path.clone(),
+                        ManifestFileRecord {
+                            path,
+                            content_hash: local_hash,
+                            updated_at_ms: mutation.updated_at_ms,
+                            deleted_at_ms: None,
+                            device_id: mutation.device_id.clone(),
+                            op: "upsert".to_string(),
+                            schema_version: 1,
+                        },
+                    );
+                    continue;
                 }
             }
 
@@ -304,6 +351,17 @@ fn build_local_snapshot(
             continue;
         }
         if !sync_root.join(path).exists() {
+            // Core 事务已持久化的删除事实：只要基线与同步状态一致，就直接
+            // 生成真实 delete record，不把文件消失误报成“缺失无删除证据”。
+            if let Some(mutation) = local_mutations.get(path) {
+                let known_hash = state.known_files.get(path).cloned().unwrap_or_default();
+                if mutation.is_delete()
+                    && mutation.base_hash.as_deref() == Some(known_hash.as_str())
+                {
+                    records.insert(path.clone(), delete_record_from_mutation(path, mutation));
+                    continue;
+                }
+            }
             // A committed manifest delete is already durable deletion evidence;
             // it must not also be reported as an unexplained missing local file.
             if old_manifest_records
@@ -387,6 +445,15 @@ fn build_local_snapshot(
         // 文件实际存在 → 上面 step 3 已处理（whitelisted 之外或被跳过的）。
         if sync_root.join(path).exists() {
             continue;
+        }
+        // 先采用 Core 事务的删除事实（基线必须与旧 manifest 记录一致）。
+        if let Some(mutation) = local_mutations.get(path) {
+            if mutation.is_delete()
+                && mutation.base_hash.as_deref() == Some(old_rec.content_hash.as_str())
+            {
+                records.insert(path.clone(), delete_record_from_mutation(path, mutation));
+                continue;
+            }
         }
         // 文件不存在 → 查找 tombstone。
         if let Some(tombstone) = state.tombstones.iter().find(|t| t.original_path == *path) {
@@ -546,6 +613,22 @@ pub(super) fn build_remote_records(
     }
 
     Ok(remote_records)
+}
+
+fn delete_record_from_mutation(
+    path: &str,
+    mutation: &crate::sync::local_mutations::LocalMutationRecord,
+) -> ManifestFileRecord {
+    let deleted_at_ms = mutation.deleted_at_ms.unwrap_or(mutation.updated_at_ms);
+    ManifestFileRecord {
+        path: path.to_string(),
+        content_hash: String::new(),
+        updated_at_ms: deleted_at_ms,
+        deleted_at_ms: Some(deleted_at_ms),
+        device_id: mutation.device_id.clone(),
+        op: "delete".to_string(),
+        schema_version: 1,
+    }
 }
 
 /// 读取文件 mtime，失败时返回 `Err`。

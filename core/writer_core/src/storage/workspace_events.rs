@@ -24,6 +24,12 @@ pub struct WorkspaceChangeEvent {
     pub object_type: String,
     pub object_id: String,
     pub revision: u64,
+    /// 产生本次变更的 Core 事务；旧事件没有该字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaction_id: Option<String>,
+    /// 统计事件存储代际，供统计页判断是否需要重新请求快照。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats_generation: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,6 +51,29 @@ pub fn append_event(
     object_id: &str,
     revision: u64,
 ) -> Result<()> {
+    append_event_with_metadata(
+        app_data_root,
+        kind,
+        starmap_id,
+        object_type,
+        object_id,
+        revision,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn append_event_with_metadata(
+    app_data_root: &Path,
+    kind: &str,
+    starmap_id: &str,
+    object_type: &str,
+    object_id: &str,
+    revision: u64,
+    transaction_id: Option<&str>,
+    stats_generation: Option<u64>,
+) -> Result<()> {
     let path = events_path(app_data_root);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -59,10 +88,30 @@ pub fn append_event(
         object_type: object_type.to_string(),
         object_id: object_id.to_string(),
         revision,
+        transaction_id: transaction_id.map(str::to_string),
+        stats_generation,
     };
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(file, "{}", serde_json::to_string(&event)?)?;
     Ok(())
+}
+
+/// 事务成功提交后发布统计事件存储变更，桌面统计页据此重新请求快照。
+pub fn append_stats_event(
+    app_data_root: &Path,
+    transaction_id: &str,
+    stats_generation: u64,
+) -> Result<()> {
+    append_event_with_metadata(
+        app_data_root,
+        "stats",
+        "",
+        "",
+        "",
+        0,
+        Some(transaction_id),
+        Some(stats_generation),
+    )
 }
 
 /// 星图结构变化（新建 / 绑定 / 嵌入 / 解绑 / 删除）事件。

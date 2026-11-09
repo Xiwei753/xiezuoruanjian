@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -314,6 +315,10 @@ impl StagingRun {
             .as_ref()
             .map(|s| s.tombstones.clone())
             .unwrap_or_default();
+        let empty_known_files = HashMap::new();
+        let live_known_files = live_sync_state
+            .as_ref()
+            .map_or(&empty_known_files, |state| &state.known_files);
 
         // 读取 base/live 的持久 manifest，保留三方对象版本时间事实；
         // 不能用当前文件系统 mtime 覆盖已有记录。
@@ -522,13 +527,35 @@ impl StagingRun {
                 None
             };
 
-            let local_eq_base = opt_bytes_eq(&local, &base);
-            let incoming_eq_base = opt_bytes_eq(&incoming, &base);
+            let local_eq_base_bytes = opt_bytes_eq(&local, &base);
+            let incoming_eq_base_bytes = opt_bytes_eq(&incoming, &base);
             let local_eq_incoming = opt_bytes_eq(&local, &incoming);
+            // 同步基线必须来自 known_files。staging base 是 Prepare 时 live，
+            // 只能在没有持久基线（首次同步）时沿用旧比较。
+            let known_base_hash = known_hash_for(&live_known_files, &rel);
+            let matches_known = |bytes: &Option<Vec<u8>>| {
+                known_base_hash.as_deref().is_some_and(|known| {
+                    bytes
+                        .as_deref()
+                        .is_some_and(|bytes| crate::sync::hash::content_md5(bytes) == known)
+                })
+            };
+            let local_eq_base = if known_base_hash.is_some() {
+                matches_known(&local)
+            } else {
+                local_eq_base_bytes
+            };
+            let incoming_eq_base = if known_base_hash.is_some() {
+                matches_known(&incoming)
+            } else {
+                incoming_eq_base_bytes
+            };
 
             if is_document_content_path(&rel_str) {
-                // 正文：走 three_way_resolve，BothChanged 才冲突。
-                let base_hash = md5_hex(&base);
+                // 正文：走 three_way_resolve，BothChanged 才冲突。基线必须来自
+                // known_files（最后一次同步共同基线），不能拿 Prepare 时 live
+                // 快照冒充——离线写入的本地正文会被误判成“本地未改”。
+                let base_hash = known_hash_for(&live_known_files, &rel).unwrap_or_default();
                 let local_hash = md5_hex(&local);
                 let incoming_hash = md5_hex(&incoming);
                 match three_way_resolve(&base_hash, &local_hash, &incoming_hash) {
@@ -588,8 +615,14 @@ impl StagingRun {
                 let incoming_record = staging_manifest
                     .get(&rel_str)
                     .and_then(|record| build_remote_lww_record_from_manifest(record, &incoming));
+                let library_base = select_object_baseline(
+                    &live_known_files,
+                    &rel,
+                    local.as_deref(),
+                    incoming.as_deref(),
+                );
                 let decision = merge_starmap_object_with_versions(
-                    base.as_deref(),
+                    library_base.as_deref(),
                     local.as_deref(),
                     incoming.as_deref(),
                     local_record.as_ref(),
@@ -612,9 +645,10 @@ impl StagingRun {
                         }
                     }
                     ObjectMergeDecision::Conflict(kind) => {
+                        let base_hash = known_hash_for(&live_known_files, &rel).unwrap_or_default();
                         plan.conflict.push(StagingConflict {
                             rel_path: rel,
-                            base_hash: md5_hex(&base),
+                            base_hash,
                             local_hash: md5_hex(&local),
                             incoming_hash: md5_hex(&incoming),
                             kind,
@@ -734,28 +768,80 @@ impl StagingRun {
             // 刚创建的空星图只有 meta+index、无 graph.json，
             // 不能因 graph_meta_path 为 None 就跳过整个分组。
             let meta_rel = group.meta_path.clone();
-            let (meta_base, meta_local, meta_incoming) = if let Some(mr) = &meta_rel {
+            let (meta_local, meta_incoming) = if let Some(mr) = &meta_rel {
                 (
-                    read_opt_bytes(&base_root.join(mr))?,
                     read_opt_bytes(&live_root.join(mr))?,
                     read_opt_bytes(&staging_root.join(mr))?,
                 )
             } else {
-                (None, None, None)
+                (None, None)
             };
+            let meta_base = meta_rel.as_deref().and_then(|meta_rel| {
+                select_baseline_bytes(
+                    &live_known_files,
+                    meta_rel,
+                    meta_local.as_deref(),
+                    meta_incoming.as_deref(),
+                )
+            });
 
             let graph_rel = group.graph_meta_path.clone();
-            let (graph_base, graph_local, graph_incoming) = if let Some(graph_rel) = &graph_rel {
+            let (graph_local, graph_incoming) = if let Some(graph_rel) = &graph_rel {
                 (
-                    read_opt_bytes(&base_root.join(graph_rel))?,
                     read_opt_bytes(&live_root.join(graph_rel))?,
                     read_opt_bytes(&staging_root.join(graph_rel))?,
                 )
             } else {
                 // 图文件不存在时仍合并 object_paths：starmap_merge 将没有成员引用的
                 // 对象判为孤儿并生成 Delete，不让恢复到 staging 的文件被跳过。
-                (None, None, None)
+                (None, None)
             };
+            let graph_base = graph_rel.as_deref().and_then(|graph_rel| {
+                select_baseline_bytes(
+                    &live_known_files,
+                    graph_rel,
+                    graph_local.as_deref(),
+                    graph_incoming.as_deref(),
+                )
+            });
+
+            // 整图生命周期不能把 staging base（Prepare 时 live）当共同基线：
+            // 用 known_files 判断基线是否存在，以及两侧是否真实修改。
+            let base_exists = [graph_rel.as_deref(), meta_rel.as_deref()]
+                .into_iter()
+                .flatten()
+                .any(|rel| {
+                    live_known_files.contains_key(&rel.to_string_lossy().replace('\\', "/"))
+                });
+            let local_exists = graph_local.is_some() || meta_local.is_some();
+            let incoming_exists = graph_incoming.is_some() || meta_incoming.is_some();
+            let local_changed = path_changed_vs_known(
+                &live_known_files,
+                graph_rel.as_deref(),
+                graph_local.as_deref(),
+            ) || path_changed_vs_known(
+                &live_known_files,
+                meta_rel.as_deref(),
+                meta_local.as_deref(),
+            );
+            let incoming_changed = path_changed_vs_known(
+                &live_known_files,
+                graph_rel.as_deref(),
+                graph_incoming.as_deref(),
+            ) || path_changed_vs_known(
+                &live_known_files,
+                meta_rel.as_deref(),
+                meta_incoming.as_deref(),
+            );
+            let lifecycle_override = Some(
+                crate::sync::staging::starmap_merge::resolve_graph_lifecycle_with_change_facts(
+                    base_exists,
+                    local_exists,
+                    incoming_exists,
+                    local_changed,
+                    incoming_changed,
+                ),
+            );
 
             // 读取每个对象文件的三方 bytes
             // (rel_path, object_type, object_id, base, local, incoming)
@@ -773,9 +859,14 @@ impl StagingRun {
                     Some(t) => t,
                     None => continue,
                 };
-                let obj_base = read_opt_bytes(&base_root.join(obj_rel))?;
                 let obj_local = read_opt_bytes(&live_root.join(obj_rel))?;
                 let obj_incoming = read_opt_bytes(&staging_root.join(obj_rel))?;
+                let obj_base = select_object_baseline(
+                    &live_known_files,
+                    obj_rel,
+                    obj_local.as_deref(),
+                    obj_incoming.as_deref(),
+                );
                 objects.push((
                     obj_rel.clone(),
                     object_type,
@@ -816,6 +907,7 @@ impl StagingRun {
                 meta_local.as_deref(),
                 meta_incoming.as_deref(),
                 &objects,
+                lifecycle_override,
                 &object_versions,
             )?;
 
@@ -829,7 +921,8 @@ impl StagingRun {
             if let (Some(graph_rel), Some(graph_conflict_kind)) =
                 (&graph_rel, output.graph_conflict)
             {
-                let graph_base_hash = md5_hex(&graph_base);
+                let graph_base_hash =
+                    known_hash_for(&live_known_files, graph_rel).unwrap_or_default();
                 let graph_local_hash = md5_hex(&graph_local);
                 let graph_incoming_hash = md5_hex(&graph_incoming);
                 plan.conflict.push(StagingConflict {
@@ -875,7 +968,7 @@ impl StagingRun {
             // 对象决策装入 CommitPlan
             for (idx, (obj_rel, decision)) in output.object_decisions.iter().enumerate() {
                 let (_, _, _, obj_base, obj_local, obj_incoming) = &objects[idx];
-                let base_hash = md5_hex(obj_base);
+                let base_hash = known_hash_for(&live_known_files, obj_rel).unwrap_or_default();
                 let local_hash = md5_hex(obj_local);
                 let incoming_hash = md5_hex(obj_incoming);
                 match decision {
@@ -955,7 +1048,7 @@ impl StagingRun {
                         };
                         plan.conflict.push(StagingConflict {
                             rel_path: mr.clone(),
-                            base_hash: md5_hex(&meta_base),
+                            base_hash: known_hash_for(live_known_files, mr).unwrap_or_default(),
                             local_hash: md5_hex(&meta_local),
                             incoming_hash: md5_hex(&meta_incoming),
                             kind,
@@ -974,9 +1067,14 @@ impl StagingRun {
         {
             use crate::sync::staging::starmap_merge::{merge_starmap_index, StarmapMergeResult};
             let index_rel = PathBuf::from("starmaps/index.json");
-            let index_base = read_opt_bytes(&base_root.join(&index_rel))?;
             let index_local = read_opt_bytes(&live_root.join(&index_rel))?;
             let index_incoming = read_opt_bytes(&staging_root.join(&index_rel))?;
+            let index_base = select_baseline_bytes(
+                live_known_files,
+                &index_rel,
+                index_local.as_deref(),
+                index_incoming.as_deref(),
+            );
 
             // 只在三方至少一方存在时处理；三方都不存在则跳过
             if index_base.is_some() || index_local.is_some() || index_incoming.is_some() {
@@ -1015,9 +1113,14 @@ impl StagingRun {
                 merge_starmap_library_index, StarmapMergeResult,
             };
             let library_index_rel = PathBuf::from("starmaps/library/index.json");
-            let index_base = read_opt_bytes(&base_root.join(&library_index_rel))?;
             let index_local = read_opt_bytes(&live_root.join(&library_index_rel))?;
             let index_incoming = read_opt_bytes(&staging_root.join(&library_index_rel))?;
+            let index_base = select_baseline_bytes(
+                live_known_files,
+                &library_index_rel,
+                index_local.as_deref(),
+                index_incoming.as_deref(),
+            );
 
             if index_base.is_some() || index_local.is_some() || index_incoming.is_some() {
                 match merge_starmap_library_index(
@@ -1747,6 +1850,84 @@ fn collect_starmap_json(live_root: &Path, path: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// 当两侧内容都相对共同基线变化且彼此不同时，用唯一哨兵表示“基线存在但
+/// 内容未知”。对象内容矩阵只比较相等关系，不会把哨兵当成真实对象内容。
+const BASELINE_SENTINEL: &[u8] = b"\0sujian-sync-baseline-sentinel\0";
+
+fn known_hash_for(known_files: &HashMap<String, String>, rel: &Path) -> Option<String> {
+    known_files
+        .get(&rel.to_string_lossy().replace('\\', "/"))
+        .cloned()
+}
+
+/// graph/meta 的 base bytes：只有一侧相对基线未改时才可用该侧内容充当基线；
+/// 两侧都改时返回 None（成员表走保守并集，不拿当前本地冒充基线）。
+fn select_baseline_bytes(
+    known_files: &HashMap<String, String>,
+    rel: &Path,
+    local: Option<&[u8]>,
+    incoming: Option<&[u8]>,
+) -> Option<Vec<u8>> {
+    let base_hash = known_hash_for(known_files, rel)?;
+    let local_hash = local.map(crate::sync::hash::content_md5);
+    let incoming_hash = incoming.map(crate::sync::hash::content_md5);
+    if local_hash.as_deref() == Some(base_hash.as_str()) {
+        return local.map(<[u8]>::to_vec);
+    }
+    if incoming_hash.as_deref() == Some(base_hash.as_str()) {
+        return incoming.map(<[u8]>::to_vec);
+    }
+    if local_hash.is_some() && local_hash == incoming_hash {
+        return local.map(<[u8]>::to_vec);
+    }
+    None
+}
+
+/// 对象文件的三方 base：用 known_files 基线 hash 驱动内容矩阵。
+///
+/// - 本地未改 → base=local，远端修改/删除可安全应用；
+/// - 远端未改 → base=incoming，本地修改/删除可安全保留；
+/// - 两侧修改相同 → base=local（NoOp）；
+/// - 两侧都改且不同（含删除-修改）→ 哨兵，强制显式冲突，绝不按时间戳
+///   静默丢弃本地离线 MCP 版本。
+fn select_object_baseline(
+    known_files: &HashMap<String, String>,
+    rel: &Path,
+    local: Option<&[u8]>,
+    incoming: Option<&[u8]>,
+) -> Option<Vec<u8>> {
+    let base_hash = known_hash_for(known_files, rel)?;
+    let local_hash = local.map(crate::sync::hash::content_md5);
+    let incoming_hash = incoming.map(crate::sync::hash::content_md5);
+    if local_hash.as_deref() == Some(base_hash.as_str()) {
+        return local.map(<[u8]>::to_vec);
+    }
+    if incoming_hash.as_deref() == Some(base_hash.as_str()) {
+        return incoming.map(<[u8]>::to_vec);
+    }
+    if local_hash.is_some() && local_hash == incoming_hash {
+        return local.map(<[u8]>::to_vec);
+    }
+    Some(BASELINE_SENTINEL.to_vec())
+}
+
+fn path_changed_vs_known(
+    known_files: &HashMap<String, String>,
+    rel: Option<&Path>,
+    bytes: Option<&[u8]>,
+) -> bool {
+    let Some(rel) = rel else {
+        return false;
+    };
+    let key = rel.to_string_lossy().replace('\\', "/");
+    match (bytes, known_files.get(&key)) {
+        (Some(bytes), Some(known)) => crate::sync::hash::content_md5(bytes) != *known,
+        (Some(_), None) => true,
+        (None, Some(_)) => true,
+        (None, None) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1796,6 +1977,32 @@ mod tests {
         fs::write(&path, content).expect("write file");
     }
 
+    /// 写入上次同步共同基线；离线对象是否“未改”必须以 known_files 判断，
+    /// 不能拿 Prepare 时 live 快照冒充基线。
+    fn write_known_files(live_root: &Path, entries: &[(&str, &[u8])]) {
+        let known_files = entries
+            .iter()
+            .map(|(path, content)| {
+                (
+                    (*path).to_string(),
+                    crate::sync::hash::content_md5(content),
+                )
+            })
+            .collect();
+        let state = crate::sync::types::SyncState {
+            known_files,
+            device_id: "test-device".to_string(),
+            ..Default::default()
+        };
+        write_file(
+            live_root,
+            "app-meta/sync/state.local.json",
+            serde_json::to_string(&state)
+                .expect("serialize sync state")
+                .as_bytes(),
+        );
+    }
+
     // --- 问题1 集成回归：live 仍有对象文件时 content_actions 含 Delete ---
 
     #[test]
@@ -1824,6 +2031,13 @@ mod tests {
         // base 有相同的文件
         write_file(&base_root, "starmaps/sm1/graph.json", &graph_with_n1);
         write_file(&base_root, "starmaps/sm1/nodes/00/n1.json", node_content);
+        write_known_files(
+            &live_root,
+            &[
+                ("starmaps/sm1/graph.json", graph_with_n1.as_slice()),
+                ("starmaps/sm1/nodes/00/n1.json", node_content.as_slice()),
+            ],
+        );
 
         // staging（incoming）有 graph.json（不含 n1），没有 n1.json
         write_file(&staging_root, "starmaps/sm1/graph.json", &graph_without_n1);
@@ -1871,6 +2085,13 @@ mod tests {
         // base 有相同的文件
         write_file(&base_root, "starmaps/sm1/graph.json", &graph_with_n1);
         write_file(&base_root, "starmaps/sm1/nodes/00/n1.json", node_content);
+        write_known_files(
+            &live_root,
+            &[
+                ("starmaps/sm1/graph.json", graph_with_n1.as_slice()),
+                ("starmaps/sm1/nodes/00/n1.json", node_content.as_slice()),
+            ],
+        );
 
         // staging（incoming）没有 graph.json 和 n1.json（整图删除）
 

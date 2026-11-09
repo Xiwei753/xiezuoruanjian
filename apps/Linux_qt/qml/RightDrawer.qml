@@ -286,6 +286,7 @@ Rectangle {
                 StatsPreviewPage {
                     dt: root.dt
                     editorBackendRef: root.editorBackendRef
+                    starmapBackendRef: root.starmapBackendRef
                     appState: root.appState
                     visible: root.selectedTool === "stats"
                     anchors.fill: parent

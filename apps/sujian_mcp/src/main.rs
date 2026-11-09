@@ -345,7 +345,12 @@ async fn main() {
         }
     );
 
-    let server = SujianMcpServer::new(McpContext::new(&app_data_root, &projects_root, scope));
+    let context = McpContext::new(&app_data_root, &projects_root, scope);
+    if let Err(error) = context.validate_roots() {
+        eprintln!("sujian_mcp: {error}");
+        std::process::exit(1);
+    }
+    let server = SujianMcpServer::new(context);
 
     #[cfg(unix)]
     if let Mode::UnixSocket(path) = mode {

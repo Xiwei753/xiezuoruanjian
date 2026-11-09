@@ -300,9 +300,10 @@ impl WriterCoreApi {
         project_id: &str,
     ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
     {
-        crate::writing_stats::contribution_transaction::ContributionTransaction::begin(
+        crate::writing_stats::contribution_transaction::ContributionTransaction::begin_with_project_root(
             &self.app_data_root,
             vec![self.projects_root.join(project_id).join("annotations")],
+            &self.projects_root.join(project_id),
         )
         .map_err(Into::into)
     }

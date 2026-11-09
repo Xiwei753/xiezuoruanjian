@@ -63,6 +63,65 @@ impl McpContext {
         WriterCoreApi::new(&self.app_data_root, &self.projects_root)
     }
 
+    /// 校验桌面端传入的根目录与固定作用域一致。
+    ///
+    /// MCP server 绝不能因为参数缺失/拼错就悄悄创建一个新的空工作区：那会让
+    /// Agent 在错误目录里“成功”写入，而真实作品与星图完全看不到这些修改。
+    /// 这里只读检查，不创建任何目录。
+    pub fn validate_roots(&self) -> Result<(), String> {
+        if !self.app_data_root.is_dir() {
+            return Err(format!(
+                "应用数据根目录不存在或不是目录：{}；请从素笺桌面端重新发起 MCP 会话，不会自动创建空工作区",
+                self.app_data_root.display()
+            ));
+        }
+        let looks_like_workspace = self.app_data_root.join("app-meta").is_dir()
+            || self.app_data_root.join("starmaps").is_dir()
+            || self.app_data_root.join("settings.sync.json").is_file()
+            || !self.scope.project_id.is_empty()
+            || !self.scope.root_starmap_id.is_empty();
+        if !looks_like_workspace {
+            return Err(format!(
+                "应用数据根目录 {} 不包含素笺工作区数据；请检查 --app-data-root 参数，不会自动初始化新工作区",
+                self.app_data_root.display()
+            ));
+        }
+        if !self.scope.project_id.is_empty() {
+            validate_scope_segment("作品", &self.scope.project_id)?;
+            if !self.projects_root.is_dir() {
+                return Err(format!(
+                    "作品根目录不存在或不是目录：{}",
+                    self.projects_root.display()
+                ));
+            }
+            let project_root = self.projects_root.join(&self.scope.project_id);
+            if !project_root.is_dir() {
+                return Err(format!(
+                    "当前 MCP 会话绑定的作品 {} 不在作品根目录 {} 下",
+                    self.scope.project_id,
+                    self.projects_root.display()
+                ));
+            }
+        }
+        if !self.scope.root_starmap_id.is_empty() {
+            validate_scope_segment("星图", &self.scope.root_starmap_id)?;
+            let starmap_id = &self.scope.root_starmap_id;
+            let graph_dir = self.app_data_root.join("starmaps").join(starmap_id);
+            let meta_path = self
+                .app_data_root
+                .join("starmaps")
+                .join(format!("{starmap_id}.meta.json"));
+            if !graph_dir.is_dir() && !meta_path.is_file() {
+                return Err(format!(
+                    "当前 MCP 会话绑定的根星图 {} 不在应用数据根目录 {} 下",
+                    starmap_id,
+                    self.app_data_root.display()
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn scope(&self) -> &McpScope {
         &self.scope
     }
@@ -582,6 +641,18 @@ pub fn api_error(error: WriterError) -> ErrorData {
 
 fn scope_error(message: impl Into<String>) -> ErrorData {
     ErrorData::new(ErrorCode::INVALID_REQUEST, message.into(), None)
+}
+
+fn validate_scope_segment(label: &str, value: &str) -> Result<(), String> {
+    if value == "."
+        || value == ".."
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains('\0')
+    {
+        return Err(format!("MCP 会话绑定的{label} ID {value} 不是合法目录段"));
+    }
+    Ok(())
 }
 
 pub fn invalid_params(message: impl Into<String>) -> ErrorData {
