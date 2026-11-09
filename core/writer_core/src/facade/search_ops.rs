@@ -98,6 +98,15 @@ impl super::WriterCore {
         service.enqueue_update(update);
     }
 
+    /// 图形对象事务提交后一次性发布搜索索引更新，避免事务回滚后索引残留。
+    pub fn enqueue_search_index_updates(&self, updates: Vec<SearchIndexUpdate>) {
+        let mut service = self
+            .search_service
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        service.enqueue_updates(updates);
+    }
+
     pub fn remove_search_index_by_prefix(&self, prefix: &str) {
         let mut service = self
             .search_service

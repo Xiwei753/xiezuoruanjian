@@ -72,7 +72,17 @@ impl SearchIndexService {
     }
 
     pub fn enqueue_update(&mut self, update: SearchIndexUpdate) {
-        self.update_queue.enqueue(update);
+        self.enqueue_updates(vec![update]);
+    }
+
+    /// 批量发布已随对象事务提交的索引更新，仅触发一次队列应用。
+    pub fn enqueue_updates(&mut self, updates: Vec<SearchIndexUpdate>) {
+        if updates.is_empty() {
+            return;
+        }
+        for update in updates {
+            self.update_queue.enqueue(update);
+        }
         self.apply_queue();
     }
 

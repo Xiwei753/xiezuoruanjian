@@ -40,10 +40,12 @@ fn node_patch_has_shared_fields(patch: &crate::api::types::StarMapNodePatchDto) 
 ///
 /// 事务在 Prepared 阶段回滚文件后，Guard 会立即淘汰这些 Store，禁止把失败
 /// 修改留在内存中；ObjectApplied 阶段仍由贡献事务清单负责补写事件，不淘汰
-/// 已落盘的 Store。
+/// 已落盘的 Store。图形对象的搜索索引更新也随本 Guard 暂存，仅在对象真正
+/// 持久化后发布，避免回滚后搜索仍能命中已删除的对象。
 struct StarmapStoreTransaction<'a> {
     api: &'a WriterCoreApi,
     transaction: crate::writing_stats::contribution_transaction::ContributionTransaction,
+    pending_search_updates: Vec<crate::search::SearchIndexUpdate>,
 }
 
 impl<'a> StarmapStoreTransaction<'a> {
@@ -51,6 +53,7 @@ impl<'a> StarmapStoreTransaction<'a> {
         Ok(Self {
             api,
             transaction: api.begin_starmaps_contribution_transaction()?,
+            pending_search_updates: Vec::new(),
         })
     }
 
@@ -58,11 +61,21 @@ impl<'a> StarmapStoreTransaction<'a> {
         api: &'a WriterCoreApi,
         transaction: crate::writing_stats::contribution_transaction::ContributionTransaction,
     ) -> Self {
-        Self { api, transaction }
+        Self {
+            api,
+            transaction,
+            pending_search_updates: Vec::new(),
+        }
     }
 
     fn include_starmaps(&mut self, starmap_ids: &[String]) {
         self.transaction.register_affected_starmaps(starmap_ids);
+    }
+
+    /// 图形对象对应的搜索索引更新先随事务暂存，不能立即写入全局索引。
+    /// 提交成功或对象已持久化（ObjectApplied）后才发布；Prepared 回滚时丢弃。
+    fn enqueue_search_update(&mut self, update: crate::search::SearchIndexUpdate) {
+        self.pending_search_updates.push(update);
     }
 }
 
@@ -83,13 +96,23 @@ impl std::ops::DerefMut for StarmapStoreTransaction<'_> {
 impl Drop for StarmapStoreTransaction<'_> {
     fn drop(&mut self) {
         let affected = self.transaction.affected_starmaps().to_vec();
+        let pending_search_updates = std::mem::take(&mut self.pending_search_updates);
         match self.transaction.rollback_prepared() {
             Ok(true) if !affected.is_empty() => {
                 self.api
                     .core_write()
                     .evict_starmap_stores_after_rollback(&affected);
             }
-            Ok(_) => {}
+            Ok(true) => {}
+            Ok(false) => {
+                // Prepared 回滚会返回 true 并丢弃索引更新；只有对象真正持久化
+                // （Committed，或事件待补写的 ObjectApplied）才发布搜索索引。
+                if self.transaction.objects_persisted() && !pending_search_updates.is_empty() {
+                    self.api
+                        .core_write()
+                        .enqueue_search_index_updates(pending_search_updates);
+                }
+            }
             Err(error) => {
                 log::error!("starmap contribution rollback failed: {error}");
             }
@@ -214,7 +237,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             &result.label.clone().unwrap_or_default(),
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -269,7 +292,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             result.label.as_deref().unwrap_or_default(),
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -363,7 +386,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             &starmap_meta.title,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: starmap_entry.object_id.clone(),
             scope: starmap_entry.scope,
@@ -379,7 +402,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             &embed.label.clone().unwrap_or_default(),
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: embed_entry.object_id.clone(),
             scope: embed_entry.scope,
@@ -524,7 +547,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             &result.label.clone().unwrap_or_default(),
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -590,7 +613,7 @@ impl WriterCoreApi {
             before.as_ref(),
             None,
         )?;
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_embed:{}:{}", starmap_id, instance_id),
             scope: crate::search::SearchScope::All,
@@ -640,7 +663,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             &label,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -707,7 +730,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             &label,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -753,7 +776,7 @@ impl WriterCoreApi {
             before.as_ref(),
             None,
         )?;
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_link:{}:{}", starmap_id, link_id),
             scope: crate::search::SearchScope::All,
@@ -972,7 +995,7 @@ impl WriterCoreApi {
             &result.title,
             &node_content,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -1056,7 +1079,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             result.label.as_deref().unwrap_or_default(),
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -1529,7 +1552,7 @@ impl WriterCoreApi {
             &result.title,
             &node_content,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -2412,7 +2435,11 @@ impl WriterCoreApi {
                      {affected_starmap} after update"
                 )));
             };
-            self.enqueue_starmap_node_search_update(affected_starmap, after_node);
+            self.enqueue_starmap_node_search_update(
+                &mut contribution_txn,
+                affected_starmap,
+                after_node,
+            );
             let before_graph = before_graphs.get(affected_starmap);
             if affected_starmap == starmap_id && affected_instance == node_id {
                 self.record_starmap_object_with_context_and_trajectory(
@@ -2443,7 +2470,7 @@ impl WriterCoreApi {
             }
         }
         if !origin_recorded {
-            self.enqueue_starmap_node_search_update(starmap_id, &result);
+            self.enqueue_starmap_node_search_update(&mut contribution_txn, starmap_id, &result);
             self.record_starmap_object_with_context_and_trajectory(
                 &context,
                 project_id.as_deref(),
@@ -2510,7 +2537,7 @@ impl WriterCoreApi {
         )?;
         let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write().delete_starmap_node(starmap_id, node_id)?;
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_node:{}:{}", starmap_id, node_id),
             scope: crate::search::SearchScope::All,
@@ -2575,7 +2602,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             &label,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -2632,7 +2659,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             &label,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -2679,7 +2706,7 @@ impl WriterCoreApi {
         )?;
         let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write().delete_starmap_edge(starmap_id, edge_id)?;
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_edge:{}:{}", starmap_id, edge_id),
             scope: crate::search::SearchScope::All,
@@ -3321,6 +3348,7 @@ impl WriterCoreApi {
 
     fn enqueue_starmap_node_search_update(
         &self,
+        transaction: &mut StarmapStoreTransaction<'_>,
         starmap_id: &str,
         node: &crate::starmap::types::StarMapNode,
     ) {
@@ -3333,7 +3361,7 @@ impl WriterCoreApi {
             &node.title,
             &node_content,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        transaction.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,

@@ -131,6 +131,15 @@ impl ContributionTransaction {
         &self.affected_starmaps
     }
 
+    /// 对象文件是否已经真正落盘。`Prepared` 尚未写入，`ObjectApplied` 已写入
+    /// 但事件可能待补写，两者必须区分处理搜索索引等派生内存状态。
+    pub(crate) fn objects_persisted(&self) -> bool {
+        matches!(
+            self.phase,
+            TransactionPhase::ObjectApplied | TransactionPhase::Committed
+        )
+    }
+
     fn write_manifest(&self, events: Vec<ContributionEvent>) -> Result<()> {
         self.write_manifest_for_phase(self.phase, events)
     }
