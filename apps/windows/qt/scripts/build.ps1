@@ -14,7 +14,7 @@ if ($QtRoot) {
 
 Push-Location $AppDir
 try {
-    $cargoArgs = @("build", "-p", "sujian-windows-qt")
+    $cargoArgs = @("build", "-p", "sujian-windows-qt", "-p", "sujian_mcp")
     if ($Configuration -eq "release") {
         $cargoArgs += "--release"
     }

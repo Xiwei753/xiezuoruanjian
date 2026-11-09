@@ -11,9 +11,13 @@ $RepoRoot = Resolve-Path (Join-Path $AppDir "..\..\..")
 $Profile = if ($Configuration -eq "release") { "release" } else { "debug" }
 $TargetDir = Join-Path $RepoRoot "target\$Profile"
 $Exe = Join-Path $TargetDir "sujian-windows-qt.exe"
+$McpExe = Join-Path $TargetDir "sujian_mcp.exe"
 
 if (-not (Test-Path $Exe)) {
     throw "找不到 $Exe，请先执行 build.ps1"
+}
+if (-not (Test-Path $McpExe)) {
+    throw "找不到 $McpExe，请先执行 build.ps1（会同时构建 sujian_mcp）"
 }
 
 if (-not $OutputDir) {
@@ -50,12 +54,7 @@ Get-ChildItem $TargetDir -Filter "*.dll" | ForEach-Object {
     Copy-Item $_.FullName $OutputDir -Force
 }
 
-# MCP sidecar（若已构建）。
-foreach ($name in @("sujian-mcp.exe", "sujian_mcp.exe")) {
-    $mcp = Join-Path $TargetDir $name
-    if (Test-Path $mcp) {
-        Copy-Item $mcp $OutputDir -Force
-    }
-}
+# MCP sidecar：Cargo 实际产物名为 sujian_mcp.exe，客户端按该稳定文件名查找。
+Copy-Item $McpExe $OutputDir -Force
 
 Write-Host "Windows Qt 发布目录：$OutputDir"

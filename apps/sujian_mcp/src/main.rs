@@ -2,9 +2,13 @@ mod context;
 mod server;
 mod tools;
 
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use crate::context::{McpContext, McpScope};
 use crate::server::SujianMcpServer;
@@ -14,11 +18,14 @@ use rmcp::transport::stdio;
 enum Mode {
     Stdio,
     /// 沙箱外运行的 broker：监听 Unix socket，接受沙箱内 bridge 的连接。
+    #[cfg(unix)]
     UnixSocket(PathBuf),
     /// 沙箱内运行的 stdio 桥：把 stdin/stdout 转发到沙箱外 broker。
+    #[cfg(unix)]
     StdioBridge(PathBuf),
 }
 
+#[cfg(unix)]
 fn usage() -> &'static str {
     "sujian_mcp — local MCP server for Sujian\n\
      \n\
@@ -47,6 +54,31 @@ fn usage() -> &'static str {
      diagnostics go to stderr."
 }
 
+#[cfg(not(unix))]
+fn usage() -> &'static str {
+    "sujian_mcp — local MCP server for Sujian\n\
+     \n\
+     Usage: sujian_mcp [--app-data-root <DIR>] [--projects-root <DIR>]\n\
+              [--project-id <ID>] [--root-starmap-id <ID>] [--active-starmap-id <ID>]\n\
+              [--starmap-path <JSON>] [--starmap-route <KEY>] [--agent-identity <TEXT>]\n\
+     \n\
+     Options:\n\
+       --app-data-root <DIR>  Sujian application data root (default: $SUJIAN_APP_DATA_ROOT,\n\
+                              then %LOCALAPPDATA%/sujian or %APPDATA%/sujian)\n\
+       --projects-root <DIR>  Projects/workspace root (default: $SUJIAN_PROJECTS_ROOT,\n\
+                              then <app-data-root>/projects)\n\
+       --project-id <ID>      Authorized Sujian project scope (default: $SUJIAN_PROJECT_ID)\n\
+       --root-starmap-id <ID> Authorized root starmap scope (default: $SUJIAN_ROOT_STARMAP_ID)\n\
+       --active-starmap-id <ID> Reported active canvas id, verified against the Core path\n\
+       --starmap-path <JSON>  StarMapPathSegmentDto[] from the root starmap (default: $SUJIAN_STARMAP_PATH)\n\
+       --starmap-route <KEY>  Desktop route key for diagnostics (default: $SUJIAN_STARMAP_ROUTE)\n\
+       --agent-identity <TEXT> Executor name recorded in the MCP write audit\n\
+       -h, --help             Show this help\n\
+     \n\
+     This Windows build only supports MCP over stdio (no --unix-socket/--stdio-bridge);\n\
+     diagnostics go to stderr."
+}
+
 fn next_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     args.next()
         .ok_or_else(|| format!("missing value for {flag}"))
@@ -56,12 +88,28 @@ fn default_app_data_root() -> Result<PathBuf, String> {
     if let Some(value) = std::env::var_os("SUJIAN_APP_DATA_ROOT") {
         return Ok(PathBuf::from(value));
     }
-    if let Some(value) = std::env::var_os("XDG_DATA_HOME") {
-        return Ok(PathBuf::from(value).join("sujian"));
+    #[cfg(unix)]
+    {
+        if let Some(value) = std::env::var_os("XDG_DATA_HOME") {
+            return Ok(PathBuf::from(value).join("sujian"));
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return Ok(PathBuf::from(home).join(".local/share/sujian"));
+        }
     }
-    std::env::var_os("HOME")
-        .map(|home| PathBuf::from(home).join(".local/share/sujian"))
-        .ok_or_else(|| "cannot determine app data root; pass --app-data-root".to_string())
+    #[cfg(windows)]
+    {
+        if let Some(value) = std::env::var_os("LOCALAPPDATA") {
+            return Ok(PathBuf::from(value).join("sujian"));
+        }
+        if let Some(value) = std::env::var_os("APPDATA") {
+            return Ok(PathBuf::from(value).join("sujian"));
+        }
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            return Ok(PathBuf::from(home).join(".local/share/sujian"));
+        }
+    }
+    Err("cannot determine app data root; pass --app-data-root".to_string())
 }
 
 fn env_scope_string(env: &str) -> Option<String> {
@@ -71,7 +119,9 @@ fn env_scope_string(env: &str) -> Option<String> {
 fn parse_args() -> Result<(PathBuf, PathBuf, Mode, McpScope), String> {
     let mut app_data_root = None;
     let mut projects_root = None;
+    #[cfg(unix)]
     let mut unix_socket = None;
+    #[cfg(unix)]
     let mut stdio_bridge = None;
     let mut project_id = env_scope_string("SUJIAN_PROJECT_ID");
     let mut root_starmap_id = env_scope_string("SUJIAN_ROOT_STARMAP_ID");
@@ -106,11 +156,19 @@ fn parse_args() -> Result<(PathBuf, PathBuf, Mode, McpScope), String> {
             "--agent-identity" => {
                 agent_identity = Some(next_value(&mut args, &arg)?);
             }
+            #[cfg(unix)]
             "--unix-socket" => {
                 unix_socket = Some(PathBuf::from(next_value(&mut args, &arg)?));
             }
+            #[cfg(unix)]
             "--stdio-bridge" => {
                 stdio_bridge = Some(PathBuf::from(next_value(&mut args, &arg)?));
+            }
+            #[cfg(not(unix))]
+            "--unix-socket" | "--stdio-bridge" => {
+                return Err(format!(
+                    "{arg} 仅支持 Unix 平台；Windows 版本请使用不带该参数的 stdio 模式"
+                ));
             }
             "-h" | "--help" => {
                 eprintln!("{}", usage());
@@ -127,6 +185,7 @@ fn parse_args() -> Result<(PathBuf, PathBuf, Mode, McpScope), String> {
     let projects_root = projects_root
         .or_else(|| std::env::var_os("SUJIAN_PROJECTS_ROOT").map(PathBuf::from))
         .unwrap_or_else(|| app_data_root.join("projects"));
+    #[cfg(unix)]
     let mode = if let Some(path) = stdio_bridge {
         if unix_socket.is_some() {
             return Err("--stdio-bridge 与 --unix-socket 不能同时使用".to_string());
@@ -137,6 +196,8 @@ fn parse_args() -> Result<(PathBuf, PathBuf, Mode, McpScope), String> {
     } else {
         Mode::Stdio
     };
+    #[cfg(not(unix))]
+    let mode = Mode::Stdio;
     let scope = McpScope {
         project_id: project_id.unwrap_or_default(),
         root_starmap_id: root_starmap_id.unwrap_or_default(),
@@ -150,6 +211,7 @@ fn parse_args() -> Result<(PathBuf, PathBuf, Mode, McpScope), String> {
     Ok((app_data_root, projects_root, mode, scope))
 }
 
+#[cfg(unix)]
 fn run_stdio_bridge(path: &Path) -> Result<(), String> {
     let mut stream = std::os::unix::net::UnixStream::connect(path)
         .map_err(|error| format!("连接 MCP broker {} 失败：{error}", path.display()))?;
@@ -192,6 +254,7 @@ fn run_stdio_bridge(path: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(unix)]
 async fn serve_unix(path: PathBuf, server: SujianMcpServer) {
     if let Err(error) = std::fs::remove_file(&path) {
         if error.kind() != std::io::ErrorKind::NotFound {
@@ -243,6 +306,7 @@ async fn main() {
         }
     };
 
+    #[cfg(unix)]
     if let Mode::StdioBridge(path) = &mode {
         if let Err(error) = run_stdio_bridge(path) {
             eprintln!("sujian_mcp: {error}");
@@ -250,6 +314,8 @@ async fn main() {
         }
         return;
     }
+    #[cfg(not(unix))]
+    drop(mode);
 
     eprintln!(
         "sujian_mcp: app data root = {}\nsujian_mcp: projects root = {}\n\
@@ -281,6 +347,7 @@ async fn main() {
 
     let server = SujianMcpServer::new(McpContext::new(&app_data_root, &projects_root, scope));
 
+    #[cfg(unix)]
     if let Mode::UnixSocket(path) = mode {
         serve_unix(path, server).await;
         return;

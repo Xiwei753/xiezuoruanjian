@@ -1,7 +1,7 @@
 //! 当前作品与 MCP Server 的绑定（Windows）。
 //!
 //! Windows 不使用 Unix socket broker：Agent 以当前用户身份运行，直接启动
-//! `sujian-mcp.exe` 的 stdio 入口。写事务仍由 Core 的权限接口执行。
+//! `sujian_mcp.exe` 的 stdio 入口。写事务仍由 Core 的权限接口执行。
 
 use std::path::{Path, PathBuf};
 
@@ -18,10 +18,10 @@ fn find_in_path() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for directory in std::env::split_paths(&path) {
         for name in [
-            "sujian-mcp.exe",
             "sujian_mcp.exe",
-            "sujian-mcp",
+            "sujian-mcp.exe",
             "sujian_mcp",
+            "sujian-mcp",
         ] {
             let candidate = directory.join(name);
             if candidate.is_file() {
@@ -41,7 +41,7 @@ fn resolve_command() -> Option<String> {
     }
     if let Ok(current) = std::env::current_exe() {
         if let Some(parent) = current.parent() {
-            for name in ["sujian-mcp.exe", "sujian_mcp.exe"] {
+            for name in ["sujian_mcp.exe", "sujian-mcp.exe"] {
                 let candidate = parent.join(name);
                 if candidate.is_file() {
                     return Some(candidate.to_string_lossy().into_owned());
@@ -62,7 +62,7 @@ pub fn bind_current_project(
         return McpBinding {
             launch: None,
             command: None,
-            status: "未找到随包安装的 sujian-mcp.exe".to_string(),
+            status: "未找到随包安装的 sujian_mcp.exe".to_string(),
         };
     };
     let path_segments = if scope.path_segments_json.trim().is_empty() {
