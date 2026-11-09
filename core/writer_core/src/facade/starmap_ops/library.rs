@@ -6,7 +6,14 @@ use super::*;
 pub struct StarMapCopyResult {
     pub root: crate::starmap::StarMapMeta,
     pub starmaps: Vec<crate::starmap::StarMapMeta>,
+    /// 本次复制预生成的全部新画布 ID；清理不依赖哪些 meta 已创建成功。
+    pub created_starmap_ids: Vec<String>,
+    /// `(starmap_id, instance_id)`，按实际创建顺序供贡献事件使用。
     pub nodes: Vec<(String, String)>,
+    /// 本次复制预生成的全部共享本体 ID；即使实例尚未创建也必须能清理。
+    pub created_asset_ids: Vec<String>,
+    /// 本次复制预生成的全部画布实例 `(starmap_id, instance_id)`。
+    pub created_instance_ids: Vec<(String, String)>,
     pub embeds: Vec<(String, String)>,
     pub edges: Vec<(String, String)>,
     pub links: Vec<(String, String)>,
@@ -281,7 +288,10 @@ impl super::super::WriterCore {
         let mut result = StarMapCopyResult {
             root: placeholder_root,
             starmaps: Vec::new(),
+            created_starmap_ids: Vec::new(),
             nodes: Vec::new(),
+            created_asset_ids: Vec::new(),
+            created_instance_ids: Vec::new(),
             embeds: Vec::new(),
             edges: Vec::new(),
             links: Vec::new(),
@@ -293,17 +303,7 @@ impl super::super::WriterCore {
         let copied =
             self.copy_starmap_canvas_inner(source_starmap_id, title, scope, &mut result, prepare_paths);
         if copied.is_err() {
-            let created_starmaps = result
-                .starmaps
-                .iter()
-                .map(|meta| meta.starmap_id.clone())
-                .collect::<Vec<_>>();
-            let created_nodes = result
-                .nodes
-                .iter()
-                .map(|(_, node_id)| node_id.clone())
-                .collect::<Vec<_>>();
-            self.cleanup_failed_starmap_copy(&created_starmaps, &created_nodes);
+            self.cleanup_failed_starmap_copy(&result);
         }
         let meta = copied?;
         result.root = meta;
@@ -394,6 +394,9 @@ impl super::super::WriterCore {
                 source_instance_assets.insert((starmap_id.clone(), node.id.clone()), asset_id);
             }
         }
+        result.created_asset_ids = asset_map.values().cloned().collect();
+        result.created_asset_ids.sort();
+        result.created_asset_ids.dedup();
         let mut copied_definitions = Vec::with_capacity(asset_map.len());
         for (source_asset_id, new_asset_id) in &asset_map {
             let definition = crate::starmap::library::load_node_definition(
@@ -422,6 +425,9 @@ impl super::super::WriterCore {
                 format!("sm_{}", uuid::Uuid::new_v4()),
             );
         }
+        result.created_starmap_ids = starmap_map.values().cloned().collect();
+        result.created_starmap_ids.sort();
+        result.created_starmap_ids.dedup();
 
         let mut node_maps: HashMap<String, HashMap<String, String>> = HashMap::new();
         let mut embed_maps: HashMap<String, HashMap<String, String>> = HashMap::new();
@@ -449,6 +455,16 @@ impl super::super::WriterCore {
             node_maps.insert(starmap_id.clone(), nodes);
             embed_maps.insert(starmap_id.clone(), embeds);
         }
+        result.created_instance_ids = node_maps
+            .iter()
+            .flat_map(|(starmap_id, instances)| {
+                instances
+                    .values()
+                    .map(move |instance_id| (starmap_id.clone(), instance_id.clone()))
+            })
+            .collect();
+        result.created_instance_ids.sort();
+        result.created_instance_ids.dedup();
         result.node_maps = node_maps.clone();
         result.embed_maps = embed_maps.clone();
 
@@ -777,23 +793,29 @@ impl super::super::WriterCore {
         Ok(meta)
     }
 
-    fn cleanup_failed_starmap_copy(
-        &self,
-        starmap_ids: &[String],
-        node_ids: &[String],
-    ) {
-        for node_id in node_ids {
+    fn cleanup_failed_starmap_copy(&self, result: &StarMapCopyResult) {
+        // 共享本体是复制前预写的内容源，和实例身份完全不同。必须按新
+        // asset_id 各清一次，不能拿 result.nodes 里的实例 ID 当本体 ID。
+        for asset_id in &result.created_asset_ids {
             let _ = crate::starmap::library::delete_node_definition(
                 &self.app_data_root,
-                node_id,
+                asset_id,
             );
             let _ = crate::starmap::library::remove_entries_for_asset(
                 &self.app_data_root,
-                &crate::starmap::types::StarMapAssetRef::node(node_id.clone()),
+                &crate::starmap::types::StarMapAssetRef::node(asset_id.clone()),
             );
         }
-        for starmap_id in starmap_ids.iter().rev() {
-            let _ = self.flush_starmap_store(starmap_id);
+        for (starmap_id, instance_id) in &result.created_instance_ids {
+            let _ = crate::starmap::library::remove_instance_record(
+                &self.app_data_root,
+                starmap_id,
+                instance_id,
+            );
+        }
+        // 计划中的新画布即使只在 meta 阶段失败也要清掉；删除整个包目录前
+        // 不 flush 失败 Store，避免把半成品再次写回磁盘。
+        for starmap_id in result.created_starmap_ids.iter().rev() {
             self.remove_starmap_store(starmap_id);
             let _ = crate::starmap::library::remove_starmap_instance_records(
                 &self.app_data_root,
@@ -815,14 +837,20 @@ impl super::super::WriterCore {
                 &crate::starmap::types::StarMapAssetRef::starmap(starmap_id.clone()),
             );
         }
-        if let Ok(mut index) = crate::starmap::load_index(&self.app_data_root) {
-            index.starmap_ids.retain(|id| !starmap_ids.contains(id));
-            index.root_starmap_ids.retain(|id| !starmap_ids.contains(id));
-            index
-                .main_starmap_by_project
-                .retain(|_, id| !starmap_ids.contains(id));
-            index.updated_at = crate::starmap::now_epoch();
-            let _ = crate::starmap::save_index(&self.app_data_root, &index);
+        if !result.created_starmap_ids.is_empty() {
+            if let Ok(mut index) = crate::starmap::load_index(&self.app_data_root) {
+                index
+                    .starmap_ids
+                    .retain(|id| !result.created_starmap_ids.contains(id));
+                index
+                    .root_starmap_ids
+                    .retain(|id| !result.created_starmap_ids.contains(id));
+                index
+                    .main_starmap_by_project
+                    .retain(|_, id| !result.created_starmap_ids.contains(id));
+                index.updated_at = crate::starmap::now_epoch();
+                let _ = crate::starmap::save_index(&self.app_data_root, &index);
+            }
         }
     }
 }

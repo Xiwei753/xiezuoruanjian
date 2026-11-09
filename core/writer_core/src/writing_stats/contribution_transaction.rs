@@ -55,6 +55,9 @@ pub(crate) struct ContributionTransaction {
     roots: Vec<BackupRoot>,
     phase: TransactionPhase,
     owns_transaction: bool,
+    /// 本次事务修改过的画布。文件回滚后，API 层据此直接淘汰已加载 Store，
+    /// 防止内存继续暴露失败修改；提交成功时保留 Store 的最终状态。
+    affected_starmaps: Vec<String>,
 }
 
 impl ContributionTransaction {
@@ -89,6 +92,7 @@ impl ContributionTransaction {
             roots,
             phase: TransactionPhase::BackingUp,
             owns_transaction: true,
+            affected_starmaps: Vec::new(),
         };
         transaction.write_manifest(Vec::new())?;
         transaction.copy_backups()?;
@@ -108,7 +112,23 @@ impl ContributionTransaction {
             roots: Vec::new(),
             phase: TransactionPhase::Committed,
             owns_transaction: false,
+            affected_starmaps: Vec::new(),
         }
+    }
+
+    /// 登记本次事务会修改内存与磁盘的画布集合。回滚时由 API 层统一淘汰这些
+    /// Store；事务成功提交后则保留它们的最终内存状态。
+    pub(crate) fn register_affected_starmaps(&mut self, starmap_ids: &[String]) {
+        if !self.owns_transaction {
+            return;
+        }
+        self.affected_starmaps.extend(starmap_ids.iter().cloned());
+        self.affected_starmaps.sort();
+        self.affected_starmaps.dedup();
+    }
+
+    pub(crate) fn affected_starmaps(&self) -> &[String] {
+        &self.affected_starmaps
     }
 
     fn write_manifest(&self, events: Vec<ContributionEvent>) -> Result<()> {
@@ -210,6 +230,25 @@ impl ContributionTransaction {
         Ok(())
     }
 
+    /// Prepared 阶段主动回滚。返回 `true` 表示文件已恢复到事务开始前，调用方
+    /// 必须同步淘汰受影响的已加载 Store；`ObjectApplied` 阶段不在这里回滚，
+    /// 继续沿用“对象已生效、事件待恢复”的既有语义。
+    pub(crate) fn rollback_prepared(&mut self) -> Result<bool> {
+        if !self.owns_transaction {
+            return Ok(false);
+        }
+        ACTIVE_EVENTS.with(|slot| {
+            slot.borrow_mut().take();
+        });
+        if self.phase != TransactionPhase::Prepared {
+            return Ok(false);
+        }
+        self.restore()?;
+        let _ = fs::remove_dir_all(&self.dir);
+        self.owns_transaction = false;
+        Ok(true)
+    }
+
     /// 对象已经持久化后调用：先写 `object_applied` 清单，再幂等追加事件。
     /// 事件追加失败时清单保留，下次工作区写入通过恢复流程补写；对象本身不回滚。
     pub(crate) fn commit(&mut self) -> Result<()> {
@@ -244,21 +283,11 @@ impl ContributionTransaction {
 
 impl Drop for ContributionTransaction {
     fn drop(&mut self) {
-        if !self.owns_transaction {
-            return;
-        }
-        ACTIVE_EVENTS.with(|slot| {
-            slot.borrow_mut().take();
-        });
-        if self.phase == TransactionPhase::Prepared {
-            if let Err(error) = self.restore() {
-                log::error!(
-                    "contribution transaction {} rollback failed: {error}",
-                    self.transaction_id
-                );
-                return;
-            }
-            let _ = fs::remove_dir_all(&self.dir);
+        if let Err(error) = self.rollback_prepared() {
+            log::error!(
+                "contribution transaction {} rollback failed: {error}",
+                self.transaction_id
+            );
         }
     }
 }

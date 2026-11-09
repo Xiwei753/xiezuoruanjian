@@ -36,6 +36,60 @@ fn node_patch_has_shared_fields(patch: &crate::api::types::StarMapNodePatchDto) 
         || patch.provenance.is_some()
 }
 
+/// 把贡献事务与受影响的已加载画布绑定。
+///
+/// 事务在 Prepared 阶段回滚文件后，Guard 会立即淘汰这些 Store，禁止把失败
+/// 修改留在内存中；ObjectApplied 阶段仍由贡献事务清单负责补写事件，不淘汰
+/// 已落盘的 Store。
+struct StarmapStoreTransaction<'a> {
+    api: &'a WriterCoreApi,
+    transaction: crate::writing_stats::contribution_transaction::ContributionTransaction,
+}
+
+impl<'a> StarmapStoreTransaction<'a> {
+    fn begin(api: &'a WriterCoreApi) -> ApiResult<Self> {
+        Ok(Self {
+            api,
+            transaction: api.begin_starmaps_contribution_transaction()?,
+        })
+    }
+
+    fn include_starmaps(&mut self, starmap_ids: &[String]) {
+        self.transaction.register_affected_starmaps(starmap_ids);
+    }
+}
+
+impl std::ops::Deref for StarmapStoreTransaction<'_> {
+    type Target = crate::writing_stats::contribution_transaction::ContributionTransaction;
+
+    fn deref(&self) -> &Self::Target {
+        &self.transaction
+    }
+}
+
+impl std::ops::DerefMut for StarmapStoreTransaction<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.transaction
+    }
+}
+
+impl Drop for StarmapStoreTransaction<'_> {
+    fn drop(&mut self) {
+        let affected = self.transaction.affected_starmaps().to_vec();
+        match self.transaction.rollback_prepared() {
+            Ok(true) if !affected.is_empty() => {
+                self.api
+                    .core_write()
+                    .evict_starmap_stores_after_rollback(&affected);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                log::error!("starmap contribution rollback failed: {error}");
+            }
+        }
+    }
+}
+
 impl WriterCoreApi {
     pub fn list_starmaps_json(&self) -> ApiResult<String> {
         let value = self
@@ -1022,7 +1076,7 @@ impl WriterCoreApi {
         let scope = Self::parse_library_scope(scope_json)?;
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmaps_contribution_transaction()?;
+        let mut contribution_txn = StarmapStoreTransaction::begin(self)?;
         let copied = {
             let mut prepare_paths = |paths: &[std::path::PathBuf]| {
                 contribution_txn.prepare_paths(paths)
@@ -1087,6 +1141,12 @@ impl WriterCoreApi {
                 Self::json_string(&asset)
             }
             crate::facade::StarMapAssetCopyResult::StarMap(result) => {
+                let copied_starmaps = result
+                    .starmaps
+                    .iter()
+                    .map(|meta| meta.starmap_id.clone())
+                    .collect::<Vec<_>>();
+                contribution_txn.include_starmaps(&copied_starmaps);
                 let mut copy_batch = self.begin_contribution_batch();
                 let mut graphs = std::collections::HashMap::new();
                 let mut projects = std::collections::HashMap::new();
@@ -2226,7 +2286,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapNodeDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = StarmapStoreTransaction::begin(self)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -2262,6 +2322,7 @@ impl WriterCoreApi {
             .collect();
         affected_starmaps.sort();
         affected_starmaps.dedup();
+        contribution_txn.include_starmaps(&affected_starmaps);
         let mut before_graphs = std::collections::HashMap::new();
         if let Some(graph) = before.as_ref() {
             before_graphs.insert(starmap_id.to_string(), graph.clone());

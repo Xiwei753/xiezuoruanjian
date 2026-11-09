@@ -152,6 +152,22 @@ impl super::WriterCore {
         Ok(())
     }
 
+    /// 事务在 Prepared 阶段回滚后淘汰受影响的 Store，不 flush 失败状态。
+    ///
+    /// 共享内容会直接改已加载画布的内存；复制也会建立新 Store。文件恢复后
+    /// 必须丢弃这些内存对象，下一次读取从恢复后的磁盘懒加载。
+    pub(crate) fn evict_starmap_stores_after_rollback(&self, starmap_ids: &[String]) {
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for starmap_id in starmap_ids {
+            stores.remove(starmap_id);
+        }
+        drop(stores);
+        self.invalidate_path_dependency_index();
+    }
+
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
         let _ =
             crate::starmap::bind_starmap_to_project(&self.app_data_root, starmap_id, project_id)?;
