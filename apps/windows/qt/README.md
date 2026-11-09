@@ -28,7 +28,7 @@
 
 ## 构建
 
-前置：Windows 10/11 x64、MSVC、Rust `x86_64-pc-windows-msvc`、Qt 6.7+
+前置：Windows 10/11 x64、MSVC、Rust `x86_64-pc-windows-msvc`、Qt 6.8+
 MSVC x64（`qmake.exe` 在 `PATH`，或设置 `QMAKE` / `QT_ROOT`）。
 
 ```powershell

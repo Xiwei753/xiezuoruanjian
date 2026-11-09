@@ -28,7 +28,7 @@ fn main() {
 
     let qt = detect_qt6().unwrap_or_else(|| {
         panic!(
-            "未找到 Qt6（>= 6.7）。请设置 QMAKE 或 QT_ROOT，或把 qmake.exe 加入 PATH。\
+            "未找到 Qt6（>= 6.8）。请设置 QMAKE 或 QT_ROOT，或把 qmake.exe 加入 PATH。\
              需要 MSVC x64 版 Qt6 与 Rust x86_64-pc-windows-msvc。"
         )
     });
@@ -511,7 +511,7 @@ fn qt_version_meets_minimum(version: &str) -> bool {
     let major: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
     let minor: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
     let patch: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    Version::new(major, minor, patch) >= Version::new(6, 7, 0)
+    Version::new(major, minor, patch) >= Version::new(6, 8, 0)
 }
 
 fn qmetaobject_include_dir() -> PathBuf {
