@@ -22,9 +22,11 @@ pub fn collect_installed_executables(manual_paths: &[String]) -> Vec<DiscoveredE
         let path = PathBuf::from(path);
         if path.is_dir() {
             for name in SUPPORTED_PROGRAMS {
-                let candidate = path.join(name);
-                if is_executable_file(&candidate) {
-                    push(&mut entries, &mut seen, candidate, "manual");
+                for candidate in program_candidates(name) {
+                    let candidate = path.join(candidate);
+                    if is_executable_file(&candidate) {
+                        push(&mut entries, &mut seen, candidate, "manual");
+                    }
                 }
             }
         } else if is_executable_file(&path) {
@@ -68,27 +70,65 @@ pub fn find_program(name: &str) -> Option<PathBuf> {
     }
     let search_path = std::env::var_os("PATH")?;
     for directory in std::env::split_paths(&search_path) {
-        let candidate = directory.join(name);
-        if is_executable_file(&candidate) {
-            return Some(candidate);
+        for candidate_name in program_candidates(name) {
+            let candidate = directory.join(candidate_name);
+            if is_executable_file(&candidate) {
+                return Some(candidate);
+            }
         }
     }
     None
 }
 
+/// Windows 的 npm 全局命令通常落成 `.cmd` / `.bat`，原生安装则是 `.exe`。
+/// Unix 仍按原始程序名查找，行为不变。
+fn program_candidates(name: &str) -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let path = Path::new(name);
+        if path.extension().is_some() {
+            return vec![path.to_path_buf()];
+        }
+        vec![
+            PathBuf::from(format!("{name}.exe")),
+            PathBuf::from(format!("{name}.cmd")),
+            PathBuf::from(format!("{name}.bat")),
+            PathBuf::from(name),
+        ]
+    }
+    #[cfg(not(windows))]
+    {
+        vec![PathBuf::from(name)]
+    }
+}
+
 fn is_executable_file(path: &Path) -> bool {
-    path.is_file()
-        && path
-            .metadata()
-            .map(|metadata| {
-                use std::os::unix::fs::PermissionsExt;
-                metadata.permissions().mode() & 0o111 != 0
-            })
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn executable_name(path: &Path) -> Option<String> {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_string)
+    let name = path.file_name().and_then(|name| name.to_str())?;
+    #[cfg(windows)]
+    {
+        let lower = name.to_ascii_lowercase();
+        for extension in [".exe", ".cmd", ".bat"] {
+            if lower.ends_with(extension) {
+                return Some(name[..name.len() - extension.len()].to_string());
+            }
+        }
+    }
+    Some(name.to_string())
 }

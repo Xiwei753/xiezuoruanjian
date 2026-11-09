@@ -10,6 +10,7 @@
 //! 共享退出状态，不再直接持有或回收 `Child`。关闭、超时回收都只由这个线程
 //! 执行，避免 reader EOF 与外部 close 同时 `kill`。
 
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
@@ -405,6 +406,17 @@ fn supervise(
     }
 }
 
+fn exit_was_signal(status: ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        status.signal().is_some()
+    }
+    #[cfg(not(unix))]
+    {
+        status.code().is_none()
+    }
+}
+
 fn finish(
     shared: &SharedState,
     info: ExitInfo,
@@ -430,7 +442,7 @@ fn finish(
         )
     } else if let Some(reason) = info.requested_close.as_ref() {
         format!("素笺主动请求结束（原因：{}）", reason.description())
-    } else if info.status.and_then(|status| status.signal()).is_some() {
+    } else if info.status.is_some_and(exit_was_signal) {
         "结束来源：外部信号（素笺未发送结束信号）".to_string()
     } else {
         "结束来源未知（素笺未发送结束信号，仅有退出码）".to_string()

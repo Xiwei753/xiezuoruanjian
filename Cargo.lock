@@ -3148,6 +3148,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sujian-windows-qt"
+version = "1.0.0"
+dependencies = [
+ "arboard",
+ "bitflags",
+ "chrono",
+ "cpp",
+ "cpp_build",
+ "log",
+ "qmetaobject",
+ "rfd",
+ "semver",
+ "serde",
+ "serde_json",
+ "uuid",
+ "writer-platform-windows",
+ "writer_core",
+ "writer_diagnostics",
+ "writer_platform_api",
+]
+
+[[package]]
 name = "sujian_mcp"
 version = "1.0.0"
 dependencies = [
@@ -4308,6 +4330,19 @@ dependencies = [
 
 [[package]]
 name = "writer-platform-linux"
+version = "0.1.0"
+dependencies = [
+ "keyring",
+ "reqwest",
+ "uuid",
+ "writer_core",
+ "writer_diagnostics",
+ "writer_platform_api",
+ "writer_uniffi",
+]
+
+[[package]]
+name = "writer-platform-windows"
 version = "0.1.0"
 dependencies = [
  "keyring",

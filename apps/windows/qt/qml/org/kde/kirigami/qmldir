@@ -1,0 +1,8 @@
+module org.kde.kirigami
+singleton Units 1.0 Units.qml
+singleton Theme 1.0 Theme.qml
+singleton ApplicationHeaderStyle 1.0 ApplicationHeaderStyle.qml
+ApplicationWindow 1.0 ApplicationWindow.qml
+Heading 1.0 Heading.qml
+Icon 1.0 Icon.qml
+ShadowedRectangle 1.0 ShadowedRectangle.qml

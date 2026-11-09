@@ -1,0 +1,2 @@
+module org.kde.kirigamiaddons.delegates
+RoundedItemDelegate 1.0 RoundedItemDelegate.qml

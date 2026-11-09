@@ -30,11 +30,25 @@ impl Default for AgentCliPreferences {
 }
 
 pub fn config_path() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-        .unwrap_or_else(|| PathBuf::from(".config"));
-    base.join("sujian").join("agent-cli.json")
+    #[cfg(windows)]
+    {
+        let base = std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("USERPROFILE")
+                    .map(|home| PathBuf::from(home).join("AppData/Roaming"))
+            })
+            .unwrap_or_else(|| PathBuf::from("AppData/Roaming"));
+        return base.join("sujian").join("agent-cli.json");
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+            .unwrap_or_else(|| PathBuf::from(".config"));
+        base.join("sujian").join("agent-cli.json")
+    }
 }
 
 pub fn load() -> AgentCliPreferences {

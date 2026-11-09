@@ -1,0 +1,9 @@
+module org.kde.kirigamiaddons.formcard
+FormCard 1.0 FormCard.qml
+FormHeader 1.0 FormHeader.qml
+FormButtonDelegate 1.0 FormButtonDelegate.qml
+FormTextFieldDelegate 1.0 FormTextFieldDelegate.qml
+FormSwitchDelegate 1.0 FormSwitchDelegate.qml
+FormSpinBoxDelegate 1.0 FormSpinBoxDelegate.qml
+FormComboBoxDelegate 1.0 FormComboBoxDelegate.qml
+FormTextDelegate 1.0 FormTextDelegate.qml

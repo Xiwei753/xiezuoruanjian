@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -252,7 +253,7 @@ impl RpcClient {
                     )
                 } else if let Some(reason) = requested_close {
                     ExitCause::RequestedClose(reason)
-                } else if status.and_then(|status| status.signal()).is_some() {
+                } else if status.is_some_and(exit_was_signal) {
                     ExitCause::ExternalSignal
                 } else {
                     ExitCause::SelfExit
@@ -577,6 +578,17 @@ enum ExitCause {
     ExternalSignal,
     /// 素笺没有请求结束，只有退出码；无法判断真正来源。
     SelfExit,
+}
+
+fn exit_was_signal(status: ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        status.signal().is_some()
+    }
+    #[cfg(not(unix))]
+    {
+        status.code().is_none()
+    }
 }
 
 fn describe_exit(

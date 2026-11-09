@@ -9,7 +9,7 @@
 
 - Android：主力移动端。
 - Linux Qt：主力桌面端。
-- Windows：原生客户端路线，独立于 Linux Qt。
+- Windows Qt：Qt6/QML 客户端，复用 Linux Qt 的通用实现，仅平台差异独立装配。
 - HarmonyOS：保留原生客户端骨架和 Rust Core 接入。
 
 ## 仓库结构

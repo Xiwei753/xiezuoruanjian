@@ -58,14 +58,7 @@ pub fn probe_executable(
 ) -> AgentProbe {
     let mut probe = AgentProbe::default();
     let path = Path::new(&executable.launch_path);
-    let launchable = path.is_file()
-        && path
-            .metadata()
-            .map(|metadata| {
-                use std::os::unix::fs::PermissionsExt;
-                metadata.permissions().mode() & 0o111 != 0
-            })
-            .unwrap_or(false);
+    let launchable = is_launchable_file(path);
     probe.launchability = if launchable {
         "launchable"
     } else {
@@ -198,14 +191,42 @@ fn config_status(paths: &[String]) -> String {
     }
 }
 
+fn is_launchable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn home_dir() -> Option<std::ffi::OsString> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("HOME")
+    }
+}
+
 pub(crate) fn expand(path: &str) -> std::path::PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
+        if let Some(home) = home_dir() {
             return std::path::PathBuf::from(home).join(rest);
         }
     }
     if path == "~" {
-        if let Some(home) = std::env::var_os("HOME") {
+        if let Some(home) = home_dir() {
             return std::path::PathBuf::from(home);
         }
     }

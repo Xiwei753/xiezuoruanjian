@@ -1,0 +1,44 @@
+[package]
+name = "sujian-windows-qt"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+name = "sujian_windows_qt"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sujian-windows-qt"
+path = "src/main.rs"
+test = false
+bench = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+ai = ["writer_core/ai"]
+
+[dependencies]
+writer_core = { path = "../../../core/writer_core", features = ["git-https", "github-api"] }
+writer_platform_api = { path = "../../../core/writer_platform_api" }
+writer_diagnostics = { path = "../../../core/writer_diagnostics" }
+# 复用 Linux 前端中平台无关的 Rust 源码时，源码里的 writer_platform_linux 名称
+# 指向 Windows 平台适配层；这样不会把 Linux 专有依赖带进 Windows 包。
+writer_platform_linux = { package = "writer-platform-windows", path = "../../../platform/rust/windows" }
+arboard = "3.4.1"
+rfd = "0.14.1"
+qmetaobject = "0.2.10"
+serde_json = "1.0.149"
+serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1.8", features = ["v4"] }
+chrono = "0.4"
+cpp = "0.5.11"
+log = "0.4"
+bitflags = "2"
+
+[build-dependencies]
+cpp_build = "0.5.11"
+qmetaobject = "0.2.10"
+semver = "1"
