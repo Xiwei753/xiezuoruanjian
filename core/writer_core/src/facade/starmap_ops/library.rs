@@ -455,14 +455,21 @@ impl super::super::WriterCore {
             node_maps.insert(starmap_id.clone(), nodes);
             embed_maps.insert(starmap_id.clone(), embeds);
         }
-        result.created_instance_ids = node_maps
-            .iter()
-            .flat_map(|(starmap_id, instances)| {
+        let mut created_instance_ids =
+            Vec::with_capacity(node_maps.values().map(HashMap::len).sum());
+        for (old_starmap_id, instances) in &node_maps {
+            let Some(new_starmap_id) = starmap_map.get(old_starmap_id) else {
+                return Err(crate::error::Error::Other(format!(
+                    "copy starmap: missing target canvas mapping for {old_starmap_id}"
+                )));
+            };
+            created_instance_ids.extend(
                 instances
                     .values()
-                    .map(move |instance_id| (starmap_id.clone(), instance_id.clone()))
-            })
-            .collect();
+                    .map(|instance_id| (new_starmap_id.clone(), instance_id.clone())),
+            );
+        }
+        result.created_instance_ids = created_instance_ids;
         result.created_instance_ids.sort();
         result.created_instance_ids.dedup();
         result.node_maps = node_maps.clone();

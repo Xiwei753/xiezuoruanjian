@@ -54,6 +54,13 @@ impl<'a> StarmapStoreTransaction<'a> {
         })
     }
 
+    fn from_transaction(
+        api: &'a WriterCoreApi,
+        transaction: crate::writing_stats::contribution_transaction::ContributionTransaction,
+    ) -> Self {
+        Self { api, transaction }
+    }
+
     fn include_starmaps(&mut self, starmap_ids: &[String]) {
         self.transaction.register_affected_starmaps(starmap_ids);
     }
@@ -91,6 +98,17 @@ impl Drop for StarmapStoreTransaction<'_> {
 }
 
 impl WriterCoreApi {
+    /// 所有会修改 `StarMapStore` 内存态的来源事务统一从这里开始：
+    /// 创建 Guard 时立即登记宿主画布；跨画布影响再用 `include_starmaps` 追加。
+    fn begin_starmap_store_transaction(
+        &self,
+        starmap_id: &str,
+    ) -> ApiResult<StarmapStoreTransaction<'_>> {
+        let mut transaction = StarmapStoreTransaction::begin(self)?;
+        transaction.include_starmaps(&[starmap_id.to_string()]);
+        Ok(transaction)
+    }
+
     pub fn list_starmaps_json(&self) -> ApiResult<String> {
         let value = self
             .core_write()
@@ -174,7 +192,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let result = self
             .core_write()
             .add_starmap_embed(starmap_id, embed.try_into().map_err(WriterError::from)?)
@@ -226,7 +244,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(host_starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(host_starmap_id)?;
         // 根身份与 Embed 同属一次来源事务：index 在修改前登记备份，
         // 宿主图文件在 add 之后、flush 之前登记，保证失败时可整体回滚。
         contribution_txn.prepare_paths(&[self.app_data_root.join("starmaps/index.json")])?;
@@ -310,12 +328,18 @@ impl WriterCoreApi {
         let embed_instance_id =
             crate::storage::journal::starmap_child_embed::new_embed_instance_id();
         let journal_tx_id = crate::storage::journal::starmap_child_embed::new_journal_token();
-        let mut contribution_txn = self.begin_starmap_child_embed_contribution_transaction(
+        let contribution_transaction = self.begin_starmap_child_embed_contribution_transaction(
             host_starmap_id,
             &child_starmap_id,
             &embed_instance_id,
             &journal_tx_id,
         )?;
+        let mut contribution_txn =
+            StarmapStoreTransaction::from_transaction(self, contribution_transaction);
+        contribution_txn.include_starmaps(&[
+            host_starmap_id.to_string(),
+            child_starmap_id.clone(),
+        ]);
         let mut contribution_batch = self.begin_contribution_batch();
         let core_position: crate::starmap::types::StarMapPoint = position.into();
         let (starmap_meta, embed, change_set, tx_id) = self
@@ -455,7 +479,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -524,7 +548,7 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         // 删除最后一个入口可能改写根身份 index；先登记备份，再修改图与 index。
         contribution_txn.prepare_paths(&[self.app_data_root.join("starmaps/index.json")])?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
@@ -593,7 +617,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapLinkDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let result = self
             .core_write()
             .add_starmap_link(starmap_id, link.try_into().map_err(WriterError::from)?)
@@ -646,7 +670,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapLinkDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -707,7 +731,7 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -923,7 +947,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapNodeDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let instance_id = format!("n_{}", uuid::Uuid::new_v4());
         contribution_txn.prepare_paths(&[
             self.app_data_root
@@ -995,7 +1019,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(host_starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(host_starmap_id)?;
         let embed_instance_id =
             crate::storage::journal::starmap_child_embed::new_embed_instance_id();
         contribution_txn.prepare_paths(&[
@@ -1478,7 +1502,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapNodeDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         contribution_txn.prepare_paths(&[
             crate::starmap::library::library_index_abs_path(&self.app_data_root),
             crate::starmap::library::reference_index_abs_path(&self.app_data_root),
@@ -2286,7 +2310,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapNodeDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = StarmapStoreTransaction::begin(self)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -2470,7 +2494,7 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         contribution_txn.prepare_paths(&[
             crate::starmap::library::reference_index_abs_path(&self.app_data_root),
         ])?;
@@ -2528,7 +2552,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapEdgeDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let result = self
             .core_write()
             .add_starmap_edge(starmap_id, edge.try_into().map_err(WriterError::from)?)
@@ -2581,7 +2605,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapEdgeDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -2642,7 +2666,7 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -2959,6 +2983,10 @@ impl WriterCoreApi {
     ) -> Result<crate::api::types::CreateCrossCanvasEdgeResultDto, WriterError> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        // 跨画布边同样先建立来源事务 Guard；宿主图要等 Core 完成规划后才能确定，
+        // 因此在写入 Store 前先保留一个空 Guard，拿到结果后立即登记宿主并备份
+        // 尚未 flush 的 Edge/GraphMeta 路径。
+        let mut contribution_txn = StarmapStoreTransaction::begin(self)?;
         let from_core: crate::starmap::connections::StarMapEndpointSelection =
             from.try_into().map_err(|e: crate::error::Error| {
                 WriterError::Other(format!(
@@ -2992,6 +3020,20 @@ impl WriterCoreApi {
 
         let project_id = get_starmap_project_id(self, &result.owner_starmap_id);
         let edge_id = result.edge.id.clone();
+        contribution_txn.include_starmaps(std::slice::from_ref(&result.owner_starmap_id));
+        contribution_txn.prepare_paths(&[
+            self.app_data_root.join(
+                crate::starmap::package_storage::edge_rel_path(
+                    &result.owner_starmap_id,
+                    &edge_id,
+                ),
+            ),
+            self.app_data_root.join(
+                crate::starmap::package_storage::graph_meta_rel_path(
+                    &result.owner_starmap_id,
+                ),
+            ),
+        ])?;
         let after_graph = self.get_starmap_graph_snapshot(&result.owner_starmap_id);
         self.record_starmap_object(
             project_id.as_deref(),
@@ -3001,6 +3043,10 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Create,
             None,
             after_graph.as_ref(),
+        )?;
+        self.finish_starmap_contribution_transaction(
+            &result.owner_starmap_id,
+            &mut contribution_txn,
         )?;
 
         Ok(crate::api::types::CreateCrossCanvasEdgeResultDto {
