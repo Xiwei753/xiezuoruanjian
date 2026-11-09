@@ -8,6 +8,7 @@ use cpp::cpp;
 
 cpp! {{
     #include <QGuiApplication>
+    #include <QKeyEvent>
     #include <QString>
     #include <QProcessEnvironment>
 
@@ -57,6 +58,8 @@ public:
         }
 
         bool can_accept_plain_text_key() const { return !ime_composing; }
+
+        bool should_ignore_key_event(const QKeyEvent*) const { return false; }
 
     };
     #endif

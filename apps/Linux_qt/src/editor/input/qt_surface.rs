@@ -240,6 +240,10 @@ cpp! {{
 
         // ── Layer 1 → Layer 2: KeyPress 分支 ──
         bool handle_key_press(QObject* obj, QKeyEvent* ke) {
+            // Platform IME may need to suppress repeated/IME-process key events
+            // before they become a second text edit transaction.
+            if (ime_adapter.should_ignore_key_event(ke)) return true;
+
             // ── Standard shortcut matching via QKeySequence ──
             if (try_shortcut(ke)) return true;
 

@@ -7,7 +7,7 @@ pub mod starmap_circle_clip;
 pub mod starmap_edge_layer;
 pub mod starmap_grid_item;
 pub mod starmap_object_layer;
-pub mod windows_render_host;
+pub mod windows_render_backend;
 
 /// 星图渲染诊断统计（仅计数，不含正文）。
 pub fn starmap_render_statistics_json() -> String {
@@ -20,11 +20,14 @@ pub fn starmap_render_statistics_json() -> String {
     let grid =
         serde_json::from_str::<serde_json::Value>(&starmap_grid_item::render_statistics_json())
             .unwrap_or(serde_json::Value::Null);
+    let backend: serde_json::Value =
+        serde_json::from_str(&windows_render_backend::render_backend_json())
+            .unwrap_or(serde_json::Value::Null);
     serde_json::json!({
         "edgeLayer": edge,
         "objectLayer": object,
         "grid": grid,
-        "renderHost": windows_render_host::render_statistics_json(),
+        "renderBackend": backend,
     })
     .to_string()
 }

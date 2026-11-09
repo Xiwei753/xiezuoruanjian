@@ -29,6 +29,27 @@ enum ScanCommand {
     Shutdown,
 }
 
+/// 手动添加的 CLI 路径是否可执行。
+///
+/// Windows 的 npm/pipx shim 是 `.cmd` / `.bat`，没有 Unix 执行位；
+/// 只看文件存在，真正的启动由 `Command`/PATHEXT 处理。
+fn is_executable_path(path: &std::path::Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 #[derive(Default)]
 struct AgentCliBridge {
     tx: Mutex<Option<Sender<ScanCommand>>>,
@@ -353,14 +374,7 @@ impl AgentCliBackend {
         // 只规范化为绝对路径，不解析符号链接：npm/pipx/cargo 的 shim 往往
         // 必须通过自身路径启动，canonical target 只应在发现阶段用于去重。
         let path = std::path::absolute(&path).unwrap_or_else(|_| std::path::PathBuf::from(&path));
-        let executable = path.is_file()
-            && std::fs::metadata(&path)
-                .map(|metadata| {
-                    use std::os::unix::fs::PermissionsExt;
-                    metadata.permissions().mode() & 0o111 != 0
-                })
-                .unwrap_or(false);
-        if !executable {
+        if !is_executable_path(&path) {
             self.set_last_error(format!("可执行文件不存在或不可执行：{}", path.display()));
             return;
         }

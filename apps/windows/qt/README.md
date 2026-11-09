@@ -12,11 +12,15 @@
   TSF/IME `PlatformImeAdapter`；preedit/commit/replacement 仍走共享
   `platform_ime.rs` 写入 Rust EditorKernel。
 - `src/native/windows_appearance.cpp`：读取 Windows 深浅色设置并应用 Qt 调色板。
-- `src/native/windows_render_host.rs`：Windows Qt Quick Scene Graph/RHI 宿主。
+- `src/windows_overrides/native/windows_render_backend.rs`：读取真实
+  `QQuickWindow` RHI 后端并核对 D3D11/HLSL 着色器；实际绘制复用共享 QSG 图层。
 - `src/agent_runtime/`：Windows 专属工作目录与 MCP 启动；其余 Agent 运行时复用
   共享实现。
-- `qml/org/kde/`：Qt6/QML 下的 Kirigami / FormCard / delegates / DatePopup
-  兼容模块，让 Linux 通用 QML 无需复制即可运行。
+- `generated/main.qml`、`qml/SettingsDialog.qml`、`qml/WindowsSettingsPage.qml`：
+  Windows 自己的 Controls 壳层与设置页（main.qml 由 Linux 壳层自动生成）；
+  `qml/KdeSettingsPage.qml` 通过 QRC alias 覆盖虚拟入口。
+- `qml/org/kde/`：仅为通用 QML 提供 Kirigami / FormCard / delegates /
+  DatePopup 兼容组件，不承载 Windows 顶层窗口或设置页。
 - `build.rs`：生成 QRC 清单、探测 Windows Qt6、校验 `.qsb` 的 HLSL 变体并
   编译 Windows 平台 C++。构建时还会把 `apps/Linux_qt/src` 镜像到
   `src/shared/`（已忽略），并用 `src/windows_overrides/` 覆盖平台差异文件。

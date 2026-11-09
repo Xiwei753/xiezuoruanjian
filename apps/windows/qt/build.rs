@@ -18,13 +18,11 @@ const CPP_STANDARD_FLAG: &str = "/std:c++17";
 const LINUX_QT_DIR: &str = "../../Linux_qt";
 
 fn main() {
-    prepare_shared_sources();
-    generate_qrc_resources();
-    emit_qsb_rerun();
-    inject_build_env_vars();
-
+    println!("cargo:rerun-if-changed=build.rs");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
-        println!("cargo:warning=sujian-windows-qt: 非 Windows 目标，跳过 Qt/C++ 探测与 cpp_build");
+        println!(
+            "cargo:warning=sujian-windows-qt: 非 Windows 目标，跳过 QRC/翻译/Qt 探测与 cpp_build"
+        );
         return;
     }
 
@@ -39,6 +37,13 @@ fn main() {
         qt.version, qt.source
     );
 
+    prepare_shared_sources();
+    prepare_windows_main_qml();
+    let translation = compile_translations(&qt);
+    generate_qrc_resources(&translation);
+    emit_qsb_rerun(&qt);
+    inject_build_env_vars();
+
     let qmetaobject_dir = qmetaobject_include_dir();
     println!(
         "cargo:rerun-if-changed={}",
@@ -52,6 +57,7 @@ fn main() {
     }
     config.flag(CPP_STANDARD_FLAG);
     config.file("src/windows_overrides/windows_appearance.cpp");
+    println!("cargo:rustc-link-lib=imm32");
     config.build("src/lib.rs");
 }
 
@@ -100,8 +106,8 @@ fn prepare_shared_sources() {
             "src/shared/native/mod.rs",
         ),
         (
-            "src/windows_overrides/native/windows_render_host.rs",
-            "src/shared/native/windows_render_host.rs",
+            "src/windows_overrides/native/windows_render_backend.rs",
+            "src/shared/native/windows_render_backend.rs",
         ),
     ] {
         if let Some(parent) = Path::new(to).parent() {
@@ -125,12 +131,86 @@ fn copy_rs_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 从 Linux `main.qml` 生成 Windows 壳层：根节点改用 Qt Quick Controls
+/// `ApplicationWindow`，去掉 Kirigami `pageStack` 专属行；通用页面和
+/// Theme/Units token 仍直接复用，避免维护整份分叉副本。
+fn prepare_windows_main_qml() {
+    let src_path = Path::new(LINUX_QT_DIR).join("qml/main.qml");
+    println!("cargo:rerun-if-changed={}", src_path.display());
+    let source = fs::read_to_string(&src_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败：{e}", src_path.display()));
+    let generated = source
+        .replace("Kirigami.ApplicationWindow {", "ApplicationWindow {")
+        .replace(
+            "    pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None\n",
+            "",
+        );
+    if generated == source {
+        panic!("Windows main.qml 生成失败：未找到可替换的 Kirigami.ApplicationWindow");
+    }
+    let out_dir = Path::new("generated");
+    fs::create_dir_all(out_dir).expect("创建 generated 失败");
+    fs::write(out_dir.join("main.qml"), generated).expect("写入 generated/main.qml 失败");
+}
+
+/// 用 Qt 官方 `lrelease.exe` 从 Linux 共享的 `.ts` 生成 Windows 自己的 `.qm`。
+/// 不依赖 Linux 构建留下的 `apps/Linux_qt/i18n/zh_CN.qm` 副产物。
+fn compile_translations(qt: &Qt6BuildInfo) -> PathBuf {
+    let ts = Path::new(LINUX_QT_DIR).join("i18n/zh_CN.ts");
+    println!("cargo:rerun-if-changed={}", ts.display());
+    if !ts.is_file() {
+        panic!("找不到翻译源文件：{}", ts.display());
+    }
+
+    let mut candidates = vec![qt.bin_dir.join("lrelease.exe"), qt.bin_dir.join("lrelease")];
+    if let Ok(root) = std::env::var("QT_ROOT") {
+        let root = PathBuf::from(root);
+        candidates.push(root.join("bin/lrelease.exe"));
+        candidates.push(root.join("bin/lrelease"));
+    }
+    if let Ok(value) = std::env::var("LRELEASE") {
+        candidates.insert(0, PathBuf::from(value));
+    }
+    for name in ["lrelease.exe", "lrelease", "lrelease6.exe", "lrelease6"] {
+        if let Some(found) = find_in_path(name) {
+            candidates.push(found);
+        }
+    }
+    let lrelease = candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| {
+            panic!("未找到 Qt lrelease。请设置 LRELEASE，或确保 Qt 的 bin 目录包含 lrelease.exe。")
+        });
+
+    let out_dir = Path::new("generated/i18n");
+    fs::create_dir_all(out_dir).expect("创建 generated/i18n 失败");
+    let qm = out_dir.join("zh_CN.qm");
+    let output = Command::new(&lrelease)
+        .arg(&ts)
+        .arg("-qm")
+        .arg(&qm)
+        .arg("-compress")
+        .arg("-removeidentical")
+        .output()
+        .unwrap_or_else(|e| panic!("运行 lrelease 失败：{e}"));
+    if !output.status.success() {
+        panic!(
+            "lrelease 失败（{}）：{}",
+            lrelease.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    println!("cargo:warning=Windows Qt 翻译已生成：{}", qm.display());
+    qm
+}
+
 /// 生成 `$OUT_DIR/qrc_resources.rs`。
 ///
 /// qmetaobject 的 qrc! 宏按 Cargo.toml 所在目录解析物理路径；这里把
 /// Linux_qt 的通用 QML/JS、Windows 专有 QML、着色器、图标和翻译统一登记到
 /// 同一个虚拟根路径。Windows qml 中同名 alias 优先，避免通用文件覆盖平台文件。
-fn generate_qrc_resources() {
+fn generate_qrc_resources(translation: &Path) {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR 未设置"));
     let mut entries: Vec<(String, String)> = Vec::new();
     let mut aliases = std::collections::BTreeSet::new();
@@ -152,6 +232,14 @@ fn generate_qrc_resources() {
         push_entry(&mut entries, &mut aliases, path, &rel);
     });
 
+    // Windows 壳层：由 Linux main.qml 生成，只替换窗口根类型。
+    push_entry(
+        &mut entries,
+        &mut aliases,
+        Path::new("generated/main.qml"),
+        "main.qml",
+    );
+
     // Linux 通用 QML：只登记目录顶层文件（与 Linux main.rs 的 qrc 清单一致）。
     let linux_qml = Path::new(LINUX_QT_DIR).join("qml");
     collect_top_level_files(&linux_qml, &mut |path| {
@@ -162,11 +250,19 @@ fn generate_qrc_resources() {
         if !matches!(ext, "qml" | "js") {
             return;
         }
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         if name.starts_with("tst_") {
             return;
         }
-        push_entry(&mut entries, &mut aliases, path, &format!("{name}"));
+        // Windows 专有文件已先登记时，同名 Linux 入口不再重复登记。
+        if aliases.contains(&name) {
+            return;
+        }
+        push_entry(&mut entries, &mut aliases, path, &name);
     });
 
     // 星图 QSG 着色器（qsb 已包含 HLSL/D3D11 变体）。
@@ -194,9 +290,7 @@ fn generate_qrc_resources() {
     push_entry(&mut entries, &mut aliases, &icon, "icons/sujian.svg");
     println!("cargo:rerun-if-changed={}", icon.display());
 
-    let translation = Path::new(LINUX_QT_DIR).join("i18n/zh_CN.qm");
-    push_entry(&mut entries, &mut aliases, &translation, "i18n/zh_CN.qm");
-    println!("cargo:rerun-if-changed={}", translation.display());
+    push_entry(&mut entries, &mut aliases, translation, "i18n/zh_CN.qm");
 
     let mut generated = String::from(
         "// 由 apps/windows/qt/build.rs 生成。\n\
@@ -209,7 +303,6 @@ fn generate_qrc_resources() {
 
     let output = out_dir.join("qrc_resources.rs");
     fs::write(&output, generated).expect("写入 qrc_resources.rs 失败");
-    println!("cargo:rerun-if-changed=build.rs");
 }
 
 fn push_entry(
@@ -256,8 +349,8 @@ fn collect_files(dir: &Path, f: &mut impl FnMut(&Path)) {
     }
 }
 
-fn emit_qsb_rerun() {
-    let qsb = find_qsb_tool();
+fn emit_qsb_rerun(qt: &Qt6BuildInfo) {
+    let qsb = find_qsb_tool(qt);
     for name in [
         "starmap_edge.vert.qsb",
         "starmap_edge.frag.qsb",
@@ -302,14 +395,14 @@ fn emit_qsb_rerun() {
     println!("cargo:rerun-if-env-changed=QSB");
 }
 
-fn find_qsb_tool() -> Option<PathBuf> {
+fn find_qsb_tool(qt: &Qt6BuildInfo) -> Option<PathBuf> {
     if let Ok(value) = std::env::var("QSB") {
         let path = PathBuf::from(value.trim());
         if path.is_file() {
             return Some(path);
         }
     }
-    let mut candidates = Vec::new();
+    let mut candidates = vec![qt.bin_dir.join("qsb.exe"), qt.bin_dir.join("qsb")];
     if let Ok(root) = std::env::var("QT_ROOT") {
         let root = PathBuf::from(root);
         candidates.push(root.join("bin/qsb.exe"));
@@ -327,6 +420,7 @@ struct Qt6BuildInfo {
     source: &'static str,
     version: String,
     include_paths: Vec<PathBuf>,
+    bin_dir: PathBuf,
 }
 
 fn detect_qt6() -> Option<Qt6BuildInfo> {
@@ -350,11 +444,19 @@ fn detect_qt6() -> Option<Qt6BuildInfo> {
         if !qmake.is_file() {
             continue;
         }
-        let version = qmake_query(&qmake, "QT_VERSION")?;
+        let Some(version) = qmake_query(&qmake, "QT_VERSION") else {
+            continue;
+        };
         if !qt_version_meets_minimum(&version) {
             continue;
         }
-        let headers = PathBuf::from(qmake_query(&qmake, "QT_INSTALL_HEADERS")?);
+        let Some(headers) = qmake_query(&qmake, "QT_INSTALL_HEADERS") else {
+            continue;
+        };
+        let headers = PathBuf::from(headers);
+        let bin_dir = qmake_query(&qmake, "QT_INSTALL_BINS")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| qmake.parent().map(Path::to_path_buf).unwrap_or_default());
         let mut include_paths = vec![headers.clone()];
         for module in QT6_MODULES {
             let path = headers.join(format!("Qt{module}"));
@@ -369,6 +471,7 @@ fn detect_qt6() -> Option<Qt6BuildInfo> {
             source: "qmake",
             version,
             include_paths,
+            bin_dir,
         });
     }
     None

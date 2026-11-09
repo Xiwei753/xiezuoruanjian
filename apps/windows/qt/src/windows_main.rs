@@ -16,7 +16,6 @@ use crate::native::starmap_circle_clip::StarMapCircleClip;
 use crate::native::starmap_edge_layer::StarMapEdgeLayer;
 use crate::native::starmap_grid_item::StarMapGridItem;
 use crate::native::starmap_object_layer::StarMapObjectLayer;
-use crate::native::windows_render_host::WindowsRenderHost;
 use crate::platform::linux_qt::runtime_environment;
 use crate::sujian_editor_item;
 
@@ -398,7 +397,6 @@ pub fn run() {
     qmetaobject::qml_register_type::<StarMapEdgeLayer>(c"Sujian", 1, 0, c"StarMapEdgeLayer");
     qmetaobject::qml_register_type::<StarMapObjectLayer>(c"Sujian", 1, 0, c"StarMapObjectLayer");
     qmetaobject::qml_register_type::<StarMapGridItem>(c"Sujian", 1, 0, c"StarMapGridItem");
-    qmetaobject::qml_register_type::<WindowsRenderHost>(c"Sujian", 1, 0, c"WindowsRenderHost");
     startup_mark("qt_runtime_probe_ready", "Qt runtime probed");
 
     let qml_path = "qrc:/main.qml";
