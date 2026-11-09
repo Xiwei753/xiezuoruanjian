@@ -94,6 +94,14 @@ fn prepare_shared_sources() {
             "src/shared/agent_runtime/mcp_binding.rs",
         ),
         (
+            "src/windows_overrides/backend/desktop_integration.rs",
+            "src/shared/backend/desktop_integration.rs",
+        ),
+        (
+            "src/windows_overrides/backend/system_utils.rs",
+            "src/shared/backend/system_utils.rs",
+        ),
+        (
             "src/windows_overrides/editor/platform.rs",
             "src/shared/editor/input/platform.rs",
         ),

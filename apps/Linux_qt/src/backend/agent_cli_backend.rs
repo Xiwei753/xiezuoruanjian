@@ -8,7 +8,6 @@
 // =============================================================================
 
 use qmetaobject::prelude::*;
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -393,38 +392,10 @@ impl AgentCliBackend {
     /// 打开一个位于用户 HOME 的普通终端。外部 TUI 由用户自行启动，
     /// 素笺不注入工作区路径、不执行 OpenCode/Codex，也不创建新会话。
     fn open_terminal(&mut self) {
-        let Some(home) = user_home() else {
-            self.set_last_error("无法确定用户 HOME，不能打开终端".to_string());
-            return;
-        };
-        for program in [
-            "xdg-terminal-exec",
-            "konsole",
-            "gnome-terminal",
-            "kgx",
-            "x-terminal-emulator",
-            "kitty",
-            "alacritty",
-            "foot",
-            "wezterm",
-            "xterm",
-        ] {
-            let mut command = Command::new(program);
-            command
-                .current_dir(&home)
-                .env("PWD", &home)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            if command.spawn().is_ok() {
-                self.set_last_error(String::new());
-                return;
-            }
+        match super::desktop_integration::open_terminal() {
+            Ok(()) => self.set_last_error(String::new()),
+            Err(error) => self.set_last_error(error),
         }
-        self.set_last_error(
-            "无法打开终端：未找到可用的终端程序（xdg-terminal-exec、konsole、gnome-terminal、kgx、x-terminal-emulator、kitty、alacritty、foot、wezterm 或 xterm）"
-                .to_string(),
-        );
     }
 
     fn open_agent_docs(&mut self, agent_id: QString) {
@@ -444,23 +415,10 @@ impl AgentCliBackend {
             self.set_last_error("该 Agent 没有声明文档地址".to_string());
             return;
         };
-        let mut attempts = vec![
-            ("xdg-open", vec![url.clone()]),
-            ("gio", vec!["open".to_string(), url]),
-        ];
-        for (program, args) in attempts.drain(..) {
-            let spawned = Command::new(program)
-                .args(args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-            if spawned.is_ok() {
-                self.set_last_error(String::new());
-                return;
-            }
+        match super::desktop_integration::open_url(&url) {
+            Ok(()) => self.set_last_error(String::new()),
+            Err(error) => self.set_last_error(error),
         }
-        self.set_last_error("无法打开文档：未找到 xdg-open 或 gio".to_string());
     }
 
     fn open_agent_login(&mut self, agent_id: QString) {
@@ -482,47 +440,12 @@ impl AgentCliBackend {
             self.set_last_error("该 Agent 没有可用的启动路径".to_string());
             return;
         }
-        let Some(home) = user_home() else {
-            self.set_last_error("无法确定用户 HOME，不能打开终端".to_string());
-            return;
-        };
         let login_args = installation.descriptor.login_args.clone();
-        for (program, terminal_args) in terminal_attempts() {
-            let mut command = Command::new(program);
-            command
-                .args(terminal_args)
-                .arg(&launch_path)
-                .args(&login_args)
-                .current_dir(&home)
-                .env("PWD", &home)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            if command.spawn().is_ok() {
-                self.set_last_error(String::new());
-                return;
-            }
+        match super::desktop_integration::open_agent_login(&launch_path, &login_args) {
+            Ok(()) => self.set_last_error(String::new()),
+            Err(error) => self.set_last_error(error),
         }
-        self.set_last_error("无法打开终端执行 Agent 登录".to_string());
     }
-}
-
-fn user_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .filter(|path| path.is_dir())
-}
-
-/// 每种终端执行命令的参数前缀不同；只有登录需要传入具体命令。
-fn terminal_attempts() -> Vec<(&'static str, Vec<String>)> {
-    vec![
-        ("xdg-terminal-exec", Vec::new()),
-        ("konsole", vec!["-e".to_string()]),
-        ("gnome-terminal", vec!["--".to_string()]),
-        ("x-terminal-emulator", vec!["-e".to_string()]),
-        ("kgx", vec!["--".to_string()]),
-        ("xterm", vec!["-e".to_string()]),
-    ]
 }
 
 impl Default for AgentCliBackend {

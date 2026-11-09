@@ -69,8 +69,9 @@ extern "C" int sujian_kde_color_scheme_apply(const char *mode)
     }
 
     const QString requested = QString::fromUtf8(mode).trimmed().toLower();
+    const bool system = requested == QLatin1String("system");
     bool dark = false;
-    if (requested == QLatin1String("system")) {
+    if (system) {
         dark = systemPrefersDark();
     } else if (requested == QLatin1String("dark")) {
         dark = true;
@@ -80,10 +81,21 @@ extern "C" int sujian_kde_color_scheme_apply(const char *mode)
         return 1;
     }
 
-    applyPalette(dark);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    if (system) {
+        // Qt 6.8+ 显式 Dark/Light 会覆盖系统颜色方案；system 必须回到 Unknown，
+        // 让 Windows/Qt 自己推送系统主题变化。
+        QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Unknown);
+        return 0;
+    }
     QGuiApplication::styleHints()->setColorScheme(
         dark ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light);
+    // setColorScheme 可能触发 Qt 重新套用默认调色板；随后写入应用自定义调色板，
+    // 保证显式浅色/深色选择最终生效。
+    applyPalette(dark);
+#else
+    // Qt 6.7 没有 QStyleHints::setColorScheme，只能用调色板表达当前选择。
+    applyPalette(dark);
 #endif
     return 0;
 }

@@ -4,6 +4,7 @@
 
 #[allow(clippy::misnamed_getters)]
 pub mod app_backend;
+pub mod desktop_integration;
 /// Issue #1014：Agent CLI 动态发现与选择的 QObject 后端。
 pub mod agent_cli_backend;
 /// Issue #1016：统一 Agent 会话运行时 QObject 后端。
