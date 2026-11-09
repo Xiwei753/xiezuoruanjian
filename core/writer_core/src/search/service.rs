@@ -86,6 +86,28 @@ impl SearchIndexService {
         self.apply_queue();
     }
 
+    /// 按来源事务中的原始顺序发布搜索动作。
+    ///
+    /// 前缀删除前先应用已入队更新，再直接删除后端条目，保证后续动作仍按
+    /// 事务记录的顺序生效；全部处理完后再统一应用一次队列。
+    pub fn apply_transaction_actions(&mut self, actions: Vec<SearchIndexTransactionAction>) {
+        if actions.is_empty() {
+            return;
+        }
+        for action in actions {
+            match action {
+                SearchIndexTransactionAction::Update(update) => {
+                    self.update_queue.enqueue(update);
+                }
+                SearchIndexTransactionAction::DeletePrefix(prefix) => {
+                    self.apply_queue();
+                    self.backend.remove_by_prefix(&prefix);
+                }
+            }
+        }
+        self.apply_queue();
+    }
+
     fn apply_queue(&mut self) {
         let updates = self.update_queue.drain();
         for update in updates {

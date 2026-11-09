@@ -40,12 +40,12 @@ fn node_patch_has_shared_fields(patch: &crate::api::types::StarMapNodePatchDto) 
 ///
 /// 事务在 Prepared 阶段回滚文件后，Guard 会立即淘汰这些 Store，禁止把失败
 /// 修改留在内存中；ObjectApplied 阶段仍由贡献事务清单负责补写事件，不淘汰
-/// 已落盘的 Store。图形对象的搜索索引更新也随本 Guard 暂存，仅在对象真正
-/// 持久化后发布，避免回滚后搜索仍能命中已删除的对象。
-struct StarmapStoreTransaction<'a> {
+/// 已落盘的 Store。星图本体/图形对象的搜索索引更新也随本 Guard 暂存，仅在
+/// 来源对象真正持久化后发布，避免回滚后搜索仍能命中已创建、改名或删除的对象。
+pub(crate) struct StarmapStoreTransaction<'a> {
     api: &'a WriterCoreApi,
     transaction: crate::writing_stats::contribution_transaction::ContributionTransaction,
-    pending_search_updates: Vec<crate::search::SearchIndexUpdate>,
+    pending_search_actions: Vec<crate::search::SearchIndexTransactionAction>,
 }
 
 impl<'a> StarmapStoreTransaction<'a> {
@@ -53,18 +53,18 @@ impl<'a> StarmapStoreTransaction<'a> {
         Ok(Self {
             api,
             transaction: api.begin_starmaps_contribution_transaction()?,
-            pending_search_updates: Vec::new(),
+            pending_search_actions: Vec::new(),
         })
     }
 
-    fn from_transaction(
+    pub(crate) fn from_transaction(
         api: &'a WriterCoreApi,
         transaction: crate::writing_stats::contribution_transaction::ContributionTransaction,
     ) -> Self {
         Self {
             api,
             transaction,
-            pending_search_updates: Vec::new(),
+            pending_search_actions: Vec::new(),
         }
     }
 
@@ -72,10 +72,17 @@ impl<'a> StarmapStoreTransaction<'a> {
         self.transaction.register_affected_starmaps(starmap_ids);
     }
 
-    /// 图形对象对应的搜索索引更新先随事务暂存，不能立即写入全局索引。
+    /// 图形/本体对应的搜索索引更新先随事务暂存，不能立即写入全局索引。
     /// 提交成功或对象已持久化（ObjectApplied）后才发布；Prepared 回滚时丢弃。
-    fn enqueue_search_update(&mut self, update: crate::search::SearchIndexUpdate) {
-        self.pending_search_updates.push(update);
+    pub(crate) fn enqueue_search_update(&mut self, update: crate::search::SearchIndexUpdate) {
+        self.pending_search_actions
+            .push(crate::search::SearchIndexTransactionAction::Update(update));
+    }
+
+    /// 删除星图时按前缀清理派生索引；动作与同事务其他更新保持顺序。
+    fn enqueue_search_prefix_delete(&mut self, prefix: String) {
+        self.pending_search_actions
+            .push(crate::search::SearchIndexTransactionAction::DeletePrefix(prefix));
     }
 }
 
@@ -96,7 +103,7 @@ impl std::ops::DerefMut for StarmapStoreTransaction<'_> {
 impl Drop for StarmapStoreTransaction<'_> {
     fn drop(&mut self) {
         let affected = self.transaction.affected_starmaps().to_vec();
-        let pending_search_updates = std::mem::take(&mut self.pending_search_updates);
+        let pending_search_actions = std::mem::take(&mut self.pending_search_actions);
         match self.transaction.rollback_prepared() {
             Ok(true) if !affected.is_empty() => {
                 self.api
@@ -105,12 +112,12 @@ impl Drop for StarmapStoreTransaction<'_> {
             }
             Ok(true) => {}
             Ok(false) => {
-                // Prepared 回滚会返回 true 并丢弃索引更新；只有对象真正持久化
+                // Prepared 回滚会返回 true 并丢弃索引动作；只有对象真正持久化
                 // （Committed，或事件待补写的 ObjectApplied）才发布搜索索引。
-                if self.transaction.objects_persisted() && !pending_search_updates.is_empty() {
+                if self.transaction.objects_persisted() && !pending_search_actions.is_empty() {
                     self.api
                         .core_write()
-                        .enqueue_search_index_updates(pending_search_updates);
+                        .apply_search_index_transaction_actions(pending_search_actions);
                 }
             }
             Err(error) => {
@@ -145,8 +152,10 @@ impl WriterCoreApi {
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
         let mut contribution_batch = self.begin_contribution_batch();
-        let mut contribution_txn =
-            self.begin_starmap_creation_contribution_transaction(&starmap_id)?;
+        let mut contribution_txn = StarmapStoreTransaction::from_transaction(
+            self,
+            self.begin_starmap_creation_contribution_transaction(&starmap_id)?,
+        );
         let history_token = crate::storage::journal::workspace_change::new_token();
         self.register_starmap_history_journal(&mut contribution_txn, &history_token)?;
         //   走 _with_changes 入口，记录本地 history。
@@ -168,7 +177,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             title,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -1400,8 +1409,10 @@ impl WriterCoreApi {
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_batch = self.begin_contribution_batch();
         let starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
-        let mut contribution_txn =
-            self.begin_starmap_creation_contribution_transaction(&starmap_id)?;
+        let mut contribution_txn = StarmapStoreTransaction::from_transaction(
+            self,
+            self.begin_starmap_creation_contribution_transaction(&starmap_id)?,
+        );
         let history_token = crate::storage::journal::workspace_change::new_token();
         self.register_starmap_history_journal(&mut contribution_txn, &history_token)?;
         //   用 _with_changes 版本拿变更集，
@@ -1421,7 +1432,7 @@ impl WriterCoreApi {
             project_id,
             title,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -1598,7 +1609,10 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapMetaDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = StarmapStoreTransaction::from_transaction(
+            self,
+            self.begin_starmap_contribution_transaction(starmap_id)?,
+        );
         let history_token = crate::storage::journal::workspace_change::new_token();
         // rename 直接写 meta：必须在修改前登记具体文件，来源事务才能回滚。
         contribution_txn.prepare_paths(&[self
@@ -1623,7 +1637,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             new_title,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -1656,8 +1670,10 @@ impl WriterCoreApi {
     pub fn delete_starmap(&self, starmap_id: &str) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn =
-            self.begin_starmap_delete_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = StarmapStoreTransaction::from_transaction(
+            self,
+            self.begin_starmap_delete_contribution_transaction(starmap_id)?,
+        );
         let history_token = crate::storage::journal::workspace_change::new_token();
         // 删除 journal 本身也是本次来源事务的产物：先登记为“原本不存在”，
         // 来源回滚时随对象一起删除，避免恢复流程重放已回滚的删除。
@@ -1737,7 +1753,8 @@ impl WriterCoreApi {
             );
         }
         //   搜索索引删除：本地删除已 durable 成功（apply + mark_local_applied），
-        // 现在才清派生搜索索引。搜索索引是派生数据，不能先于删除事实改变。
+        // 现在才把删除动作挂到来源事务；只有事务 Committed/ObjectApplied 后
+        // 才真正清理派生索引，Prepared 回滚时原搜索条目保持不变。
         for prefix in &[
             format!("starmap:{}", starmap_id),
             format!("starmap_node:{}:", starmap_id),
@@ -1745,7 +1762,7 @@ impl WriterCoreApi {
             format!("starmap_link:{}:", starmap_id),
             format!("starmap_embed:{}:", starmap_id),
         ] {
-            self.remove_search_index_by_prefix(prefix);
+            contribution_txn.enqueue_search_prefix_delete(prefix.clone());
         }
         let context = crate::writing_stats::current_mutation_context();
         self.record_starmap_meta_with_context(
@@ -1849,7 +1866,10 @@ impl WriterCoreApi {
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = StarmapStoreTransaction::from_transaction(
+            self,
+            self.begin_starmap_contribution_transaction(starmap_id)?,
+        );
         let history_token = crate::storage::journal::workspace_change::new_token();
         // bind 直接写 meta，并可能先写 index；两者都要进入来源事务备份清单。
         contribution_txn.prepare_paths(&[
@@ -1878,7 +1898,7 @@ impl WriterCoreApi {
             Some(project_id),
             &meta.title,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -1897,7 +1917,7 @@ impl WriterCoreApi {
                     &node.title,
                     &node_content,
                 );
-                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
                     action: crate::search::SearchIndexAction::Upsert,
                     object_id: entry.object_id.clone(),
                     scope: entry.scope,
@@ -1915,7 +1935,7 @@ impl WriterCoreApi {
                         Some(project_id),
                         label,
                     );
-                    self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
                         action: crate::search::SearchIndexAction::Upsert,
                         object_id: entry.object_id.clone(),
                         scope: entry.scope,
@@ -1934,7 +1954,7 @@ impl WriterCoreApi {
                         Some(project_id),
                         label,
                     );
-                    self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
                         action: crate::search::SearchIndexAction::Upsert,
                         object_id: entry.object_id.clone(),
                         scope: entry.scope,
@@ -1952,7 +1972,7 @@ impl WriterCoreApi {
                     Some(project_id),
                     label,
                 );
-                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
                     action: crate::search::SearchIndexAction::Upsert,
                     object_id: entry.object_id.clone(),
                     scope: entry.scope,
@@ -2002,7 +2022,10 @@ impl WriterCoreApi {
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = StarmapStoreTransaction::from_transaction(
+            self,
+            self.begin_starmap_contribution_transaction(starmap_id)?,
+        );
         let history_token = crate::storage::journal::workspace_change::new_token();
         // unbind 直接写 meta，并可能先写 index；两者都要进入来源事务备份清单。
         contribution_txn.prepare_paths(&[
@@ -2028,7 +2051,7 @@ impl WriterCoreApi {
             .map_err(WriterError::from)?;
         let entry =
             crate::search::extractor::extract_starmap_title_entry(starmap_id, None, &meta.title);
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -2047,7 +2070,7 @@ impl WriterCoreApi {
                     &node.title,
                     &node_content,
                 );
-                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
                     action: crate::search::SearchIndexAction::Upsert,
                     object_id: entry.object_id.clone(),
                     scope: entry.scope,
@@ -2062,7 +2085,7 @@ impl WriterCoreApi {
                     let entry = crate::search::extractor::extract_starmap_edge_entry(
                         starmap_id, &edge.id, None, label,
                     );
-                    self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
                         action: crate::search::SearchIndexAction::Upsert,
                         object_id: entry.object_id.clone(),
                         scope: entry.scope,
@@ -2081,7 +2104,7 @@ impl WriterCoreApi {
                         None,
                         label,
                     );
-                    self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
                         action: crate::search::SearchIndexAction::Upsert,
                         object_id: entry.object_id.clone(),
                         scope: entry.scope,
@@ -2099,7 +2122,7 @@ impl WriterCoreApi {
                     None,
                     label,
                 );
-                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
                     action: crate::search::SearchIndexAction::Upsert,
                     object_id: entry.object_id.clone(),
                     scope: entry.scope,

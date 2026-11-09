@@ -13,6 +13,8 @@ use crate::api::types::{
 };
 use crate::api::WriterError;
 
+use super::starmap_ops::StarmapStoreTransaction;
+
 const DEFAULT_CHAPTER_PAGE_CHARS: usize = 8_000;
 const MAX_CHAPTER_PAGE_CHARS: usize = 50_000;
 
@@ -382,8 +384,10 @@ impl WriterCoreApi {
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_batch = self.begin_contribution_batch();
         let starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
-        let mut contribution_txn =
-            self.begin_starmap_creation_contribution_transaction(&starmap_id)?;
+        let mut contribution_txn = StarmapStoreTransaction::from_transaction(
+            self,
+            self.begin_starmap_creation_contribution_transaction(&starmap_id)?,
+        );
         let history_token = crate::storage::journal::workspace_change::new_token();
         self.register_starmap_history_journal(&mut contribution_txn, &history_token)?;
         let (created, change_set) = self
@@ -409,7 +413,7 @@ impl WriterCoreApi {
             Some(project_id),
             &meta.title,
         );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,

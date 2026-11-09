@@ -107,6 +107,18 @@ impl super::WriterCore {
         service.enqueue_updates(updates);
     }
 
+    /// 按来源事务记录顺序发布 Upsert/Delete/前缀删除动作。
+    pub fn apply_search_index_transaction_actions(
+        &self,
+        actions: Vec<crate::search::SearchIndexTransactionAction>,
+    ) {
+        let mut service = self
+            .search_service
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        service.apply_transaction_actions(actions);
+    }
+
     pub fn remove_search_index_by_prefix(&self, prefix: &str) {
         let mut service = self
             .search_service

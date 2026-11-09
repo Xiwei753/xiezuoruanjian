@@ -228,6 +228,18 @@ pub struct SearchIndexUpdate {
     pub target: Option<SearchTarget>,
 }
 
+/// 随来源事务暂存的搜索索引动作。
+///
+/// 创建/重命名/作品归属使用 [`Self::Update`]；删除整张星图需要按对象前缀
+/// 清理派生索引，用 [`Self::DeletePrefix`] 表示。动作必须按原顺序发布，
+/// 不能把前缀删除和后续 Upsert 拆到两个阶段，否则同一事务内可能重新写回
+/// 已删除对象。
+#[derive(Debug, Clone)]
+pub enum SearchIndexTransactionAction {
+    Update(SearchIndexUpdate),
+    DeletePrefix(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexEntry {
