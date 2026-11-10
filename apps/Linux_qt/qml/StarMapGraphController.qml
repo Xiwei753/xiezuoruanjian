@@ -54,6 +54,13 @@ QtObject {
     property real worldAnchorY: 0
     // 记录上一个 key，切图时只释放旧画布缓存，不整表清空。
     property string _lastSceneCacheKey: ""
+    // 图内容身份：同一 starmapId 且数据未变时不重复测量布局 / 重建模型。
+    // 交互 route 身份仍由 sceneCacheKey 单独承担。
+    property string _graphContentKey: ""
+    // 分段耗时：区分 Core 读取/QML 模型与几何构建，避免把同步 QML
+    // 耗时误当成 GPU 帧耗时。
+    property real lastGraphLoadMs: 0
+    property real lastModelBuildMs: 0
     // Issue #796 评论 5886483653: 子星图 Embed 显示模型，从 graphData.embeds 派生。
     property var embedsModel: []
 
@@ -269,17 +276,35 @@ QtObject {
         if (starmapId === "") return;
         if (!ensureBackend()) return;
 
+        var loadStarted = Date.now();
         var res = normalizeBackendResult(starmapBackendRef.get_starmap_graph(starmapId), qsTr("加载星图数据失败"));
+        lastGraphLoadMs = Date.now() - loadStarted;
         if (res.success) {
             clearError();
-            graphData = res.data.graph;
+            var graph = res.data.graph;
+            var contentKey = String(starmapId) + "::" + JSON.stringify(graph);
+            // 同图同内容只复用已有模型；只有内容 revision 变化才重新测量
+            // 布局、生成边/对象 JSON，镜头与选区更新不进入这里。
+            if (graphData && contentKey === _graphContentKey && !_sceneCacheDirty) {
+                lastModelBuildMs = 0;
+                if (invalidatePreview === true)
+                    invalidatePreviewCache();
+                return;
+            }
+            _graphContentKey = contentKey;
+            graphData = graph;
             _sceneCacheDirty = true;
             if (invalidatePreview === true)
                 invalidatePreviewCache();
             // 结构通知与几何缓存提交分离：先更新模型、同步一次缓存并算一次边，
             // 最后才通知视图；视图不再触发第二遍全图计算。
+            var buildStarted = Date.now();
             buildModels(false);
             computeEdgeRenders(null);
+            lastModelBuildMs = Date.now() - buildStarted;
+            console.debug("[starmap-perf] starmap=" + starmapId
+                          + " graphLoadMs=" + lastGraphLoadMs
+                          + " modelBuildMs=" + lastModelBuildMs);
             graphChanged();
         } else {
             setError(qsTr("加载星图数据失败"));

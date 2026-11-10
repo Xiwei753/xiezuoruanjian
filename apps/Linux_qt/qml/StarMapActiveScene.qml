@@ -256,15 +256,21 @@ Item {
         // 正常切图由 Canvas 先 flushPendingNodeEdit()；能走到这里说明旧画面
         // 已被替换，不能再把旧草稿写进新图。显式结束会话，不留悬挂输入层。
         finishActiveNodeEdit()
-        reloadActiveGraph()
+        // 新图数据/模型/排版放到下一轮事件循环，切换画布的过渡帧不阻塞。
+        Qt.callLater(reloadActiveGraph)
     }
     onScenePathKeyChanged: {
         graphController.pathKey = scene.scenePathKey
     }
+    property double _sceneCreatedAtMs: Date.now()
     Component.onCompleted: {
         // 保证测量器先就位，首帧加载就按真实排版建图级快照。
         graphController.textMeasurer = nodeMeasurer
         reloadActiveGraph()
+        console.debug("[starmap-perf] scene=" + starmapId
+                      + " createMs=" + (Date.now() - _sceneCreatedAtMs)
+                      + " graphLoadMs=" + graphController.lastGraphLoadMs
+                      + " modelBuildMs=" + graphController.lastModelBuildMs)
     }
 
     readonly property bool ready: starmapId !== "" && graphController.graphData !== null

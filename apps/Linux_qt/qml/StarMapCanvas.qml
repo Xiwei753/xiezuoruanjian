@@ -612,11 +612,13 @@ Item {
         }
         if (!ok)
             return false
-        // 新实例已经写入 Core；重建当前 Scene 读取同一张图，不在这里复制节点状态。
-        var wasActive = activeSceneLoader.active
-        activeSceneLoader.active = false
-        activeSceneLoader.active = wasActive
-        treeStructureChanged()
+        // 新实例已经写入 Core；走 GraphController 已有的增量读取入口，
+        // 不销毁并重建整个 Scene，避免插入一个素材也触发全量委托创建。
+        var scene = activeScene()
+        if (scene && scene.graphController)
+            scene.graphController.loadGraph(true)
+        else
+            treeStructureChanged()
         return true
     }
 
@@ -639,6 +641,9 @@ Item {
     property real _zoomRoundWorldX: 0
     property real _zoomRoundWorldY: 0
     property real _zoomTargetLevel: 1.0
+    // 缩放帧只判断是否命中穿越入口；真正的场景准备放到下一轮事件循环，
+    // 避免把 Loader/委托/文字排版塞进当前缩放帧。
+    property bool _canvasSwitchScheduled: false
     // 滚轮累计的目标比例（下一档从它继续乘，滚轮手感连续）。
     readonly property real zoomTargetLevel: _zoomTargetLevel
     // 只由缩放补间写的显示帧值；变化时推进显示镜头。
@@ -713,6 +718,21 @@ Item {
     // 显示镜头每帧的唯一推进：先确定 z(t)，再按本轮锚点的世界位置反推 pan，
     // 然后只用**正在显示**的投影直径评估画布穿越（放大只进场、缩小只退场）。
     // 命中与穿越因此永远与看得见的画面一致，绝不从尚未显示的未来缩放值跳过。
+    function scheduleCanvasTraversal(zoomingIn, screenX, screenY) {
+        if (_canvasSwitchScheduled)
+            return
+        _canvasSwitchScheduled = true
+        var anchorX = screenX
+        var anchorY = screenY
+        Qt.callLater(function() {
+            canvasArea._canvasSwitchScheduled = false
+            if (zoomingIn)
+                canvasArea.maybeEnterEmbedAt(anchorX, anchorY)
+            else
+                canvasArea.maybeExitCanvas()
+        })
+    }
+
     function applyDisplayedZoom(target, screenX, screenY) {
         target = normalizedZoom(target, zoomLevel)
         var previous = zoomLevel
@@ -724,16 +744,14 @@ Item {
                  finiteDifference(screenY, finiteProduct(_zoomRoundWorldY, target)))
         var zoomingIn = target > previous
         var zoomingOut = target < previous
-        var switched = -1
-        if (zoomingIn) {
-            switched = maybeEnterEmbedAt(screenX, screenY)
-        } else if (zoomingOut) {
-            switched = maybeExitCanvas()
-        }
+        // 本帧只推进镜头并做穿越命中的轻量判定；场景装载/切换放到下一轮
+        // 事件循环，避免同步执行 loadGraph/buildModels/委托与文字排版。
+        if (zoomingIn || zoomingOut)
+            scheduleCanvasTraversal(zoomingIn, screenX, screenY)
         var displayedScene = activeScene()
         if (displayedScene && displayedScene.noteZoomFrame)
             displayedScene.noteZoomFrame(Date.now() - frameStarted)
-        return switched
+        return -1
     }
 
     // 锚点世界位置：用"当前显示帧"现算一次。演出 / 切画布之后锚点不会指向
@@ -1769,6 +1787,7 @@ Item {
             id: outgoingSceneLoader
             anchors.fill: parent
             active: canvasArea.outgoingStarmapId !== "" && viewportMotion.active
+            asynchronous: true
             sourceComponent: outgoingSceneComponent
         }
     }
@@ -1822,6 +1841,7 @@ Item {
             id: activeSceneLoader
             anchors.fill: parent
             active: canvasArea.currentStarmapId !== ""
+            asynchronous: true
             sourceComponent: activeSceneComponent
             onLoaded: {
                 if (item && item.ready) {
