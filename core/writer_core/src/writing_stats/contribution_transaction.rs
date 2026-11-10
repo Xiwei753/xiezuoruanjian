@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::storage::atomic_write_string;
 use crate::sync::local_mutations::{self, LocalMutationRecord};
-use crate::sync::types::{SyncScope, SyncState};
+use crate::sync::types::{AppDataGroup, SyncScope, SyncState};
 use crate::writing_stats::contribution::ContributionEvent;
 use crate::writing_stats::contribution_store::ContributionStore;
 
@@ -318,7 +318,7 @@ impl ContributionTransaction {
     fn capture_mutations(&self) -> Result<Vec<LocalMutationRecord>> {
         let device_id = ContributionStore::new(&self.app_data_root).resolve_origin_device_id()?;
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let mut states: HashMap<String, SyncState> = HashMap::new();
+        let mut state_cache: HashMap<(String, String), SyncState> = HashMap::new();
         let mut captured: HashMap<(String, String), LocalMutationRecord> = HashMap::new();
 
         for root in &self.roots {
@@ -327,14 +327,36 @@ impl ContributionTransaction {
                 continue;
             };
             let key = sync_root.root.to_string_lossy().into_owned();
-            if !states.contains_key(&key) {
-                let state = crate::sync::SyncService::load_sync_state_read_only(
-                    &sync_root.root,
-                    Some(&device_id),
-                )?;
-                states.insert(key.clone(), state);
-            }
-            let state = &states[&key];
+            // 每个文件按自己的 AppDataGroup 读取基线；不能拿聚合 state 冒充
+            // 星图/统计分组的 known_files，否则已同步对象的删除事实会丢失。
+            let mut base_hash_for = |rel_path: &str| -> Result<Option<String>> {
+                let group = if sync_root.scope == SyncScope::App {
+                    crate::sync::config_store::app_data_group_for_path(rel_path)
+                } else {
+                    None
+                };
+                let group_key = group.as_ref().map(AppDataGroup::id).unwrap_or_default();
+                let cache_key = (key.clone(), group_key);
+                if !state_cache.contains_key(&cache_key) {
+                    let state = match group.as_ref() {
+                        Some(group) => {
+                            crate::sync::SyncService::load_sync_state_read_only_for_group(
+                                &sync_root.root,
+                                group,
+                                Some(&device_id),
+                            )?
+                        }
+                        None => crate::sync::SyncService::load_sync_state_read_only(
+                            &sync_root.root,
+                            Some(&device_id),
+                        )?,
+                    };
+                    state_cache.insert(cache_key.clone(), state);
+                }
+                Ok(state_cache
+                    .get(&cache_key)
+                    .and_then(|state| state.known_files.get(rel_path).cloned()))
+            };
             let records = capture_root_mutations(
                 root,
                 &sync_root.root,
@@ -342,7 +364,7 @@ impl ContributionTransaction {
                 &base_rel,
                 &self.transaction_id,
                 &device_id,
-                &state.known_files,
+                &mut base_hash_for,
                 now_ms,
             )?;
             for record in records {
@@ -467,7 +489,7 @@ fn capture_root_mutations(
     base_rel: &str,
     transaction_id: &str,
     device_id: &str,
-    known_files: &HashMap<String, String>,
+    base_hash_for: &mut dyn FnMut(&str) -> Result<Option<String>>,
     now_ms: i64,
 ) -> Result<Vec<LocalMutationRecord>> {
     let source = Path::new(&root.source);
@@ -507,7 +529,7 @@ fn capture_root_mutations(
             if current_hash == previous_hash {
                 continue;
             }
-            let base_hash = known_files.get(&rel_path).cloned();
+            let base_hash = base_hash_for(&rel_path)?;
             match current_hash {
                 Some(content_hash) => records.push(make_mutation_record(
                     transaction_id,
@@ -554,7 +576,7 @@ fn capture_root_mutations(
     if current_hash == previous_hash {
         return Ok(records);
     }
-    let base_hash = known_files.get(base_rel).cloned();
+    let base_hash = base_hash_for(base_rel)?;
     match current_hash {
         Some(content_hash) => records.push(make_mutation_record(
             transaction_id,

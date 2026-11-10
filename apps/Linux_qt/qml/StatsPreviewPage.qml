@@ -196,16 +196,28 @@ Rectangle {
         root.editorBackendRef.request_writing_stats_explorer(root.activeRequestId, preset, customStart, customEnd)
     }
 
+    // 后端返回 QString JSON；同时兼容直接返回对象的测试/旧桥接。
+    function normalizeWorkspaceChangeResult(raw) {
+        if (raw && raw.success !== undefined) return raw
+        if (typeof raw === "string") {
+            try {
+                var parsed = JSON.parse(raw)
+                if (parsed && parsed.success !== undefined) return parsed
+            } catch (error) {
+            }
+        }
+        return null
+    }
+
     // 只消费 Core 事件流，不在 QML 读盘或自行聚合统计。
     function pollStatsWorkspaceChanges() {
         if (!root.starmapBackendRef) return
         var raw = root.starmapBackendRef.workspace_changes_since_json(root._workspaceEventOffset)
-        if (!raw || raw.success === undefined || !raw.success) return
-        var page = raw.data || {}
+        var result = normalizeWorkspaceChangeResult(raw)
+        if (!result || !result.success) return
+        var page = result.data || {}
         root._workspaceEventOffset = Number(page.nextOffset || 0)
-        var wasReady = root._workspaceEventBaselineReady
         root._workspaceEventBaselineReady = true
-        if (!wasReady) return
         var events = page.events || []
         for (var i = 0; i < events.length; i++) {
             var event = events[i]

@@ -279,31 +279,37 @@ fn build_local_snapshot(
 
             // 旧 manifest 没有可复用的当前版本时，Core 事务事实优先于 mtime：
             // MCP 在应用退出后写入时，只有账本保存了真实提交时间与设备身份。
+            // 只有账本基线仍等于该分组最后共同基线时才可信；基线被同步改写后，
+            // 旧事实必须回退到 manifest/mtime，不能继续冒充当前版本。
             if let Some(mutation) = local_mutations.get(&path) {
                 if mutation.is_upsert() && mutation.content_hash == local_hash {
-                    if let Some(base_hash) = mutation.base_hash.as_deref() {
-                        if state.known_files.get(&path).map(String::as_str) != Some(base_hash) {
-                            log::warn!(
-                                "[sync] local mutation base mismatch for {}: fact={} known={:?}",
-                                path,
-                                base_hash,
-                                state.known_files.get(&path)
-                            );
+                    let base_matches = match mutation.base_hash.as_deref() {
+                        Some(base_hash) => {
+                            state.known_files.get(&path).map(String::as_str) == Some(base_hash)
                         }
+                        None => !state.known_files.contains_key(&path),
+                    };
+                    if base_matches {
+                        records.insert(
+                            path.clone(),
+                            ManifestFileRecord {
+                                path,
+                                content_hash: local_hash,
+                                updated_at_ms: mutation.updated_at_ms,
+                                deleted_at_ms: None,
+                                device_id: mutation.device_id.clone(),
+                                op: "upsert".to_string(),
+                                schema_version: 1,
+                            },
+                        );
+                        continue;
                     }
-                    records.insert(
-                        path.clone(),
-                        ManifestFileRecord {
-                            path,
-                            content_hash: local_hash,
-                            updated_at_ms: mutation.updated_at_ms,
-                            deleted_at_ms: None,
-                            device_id: mutation.device_id.clone(),
-                            op: "upsert".to_string(),
-                            schema_version: 1,
-                        },
+                    log::warn!(
+                        "[sync] local mutation base mismatch for {}: fact={:?} known={:?} — falling back to manifest/mtime",
+                        path,
+                        mutation.base_hash,
+                        state.known_files.get(&path)
                     );
-                    continue;
                 }
             }
 

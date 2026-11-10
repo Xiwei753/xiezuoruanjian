@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::sync::types::SyncScope;
+use crate::sync::types::{AppDataGroup, SyncScope};
 use crate::sync::SyncService;
 
 pub(crate) const LOCAL_MUTATIONS_PATH: &str = "app-meta/sync/local-mutations.jsonl";
@@ -115,6 +115,62 @@ pub(crate) fn append_batch(
 /// 文件路径是否属于账本自身；扫描/事务捕获都必须忽略它。
 pub(crate) fn is_ledger_path(rel_path: &str) -> bool {
     rel_path.replace('\\', "/") == LOCAL_MUTATIONS_PATH
+}
+
+/// 同步成功提交后，删除已被共同基线确认的账本事实。
+///
+/// 只压缩指定分组：其他分组的事实仍可能尚未发布。upsert 只有在组级
+/// `known_files` 已等于该事实的 content_hash 时才算确认；delete 只有在该路径
+/// 已从组级 known_files 消失时才算确认。
+pub(crate) fn compact_confirmed(
+    sync_root: &Path,
+    group: &AppDataGroup,
+    known_files: &HashMap<String, String>,
+) -> crate::error::Result<()> {
+    let path = ledger_path(sync_root);
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut kept = Vec::new();
+    let mut changed = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<LocalMutationRecord>(line) {
+            Ok(record) => {
+                let same_group =
+                    crate::sync::config_store::app_data_group_for_path(&record.path).as_ref()
+                        == Some(group);
+                let confirmed = same_group
+                    && if record.is_upsert() {
+                        known_files.get(&record.path) == Some(&record.content_hash)
+                    } else if record.is_delete() {
+                        !known_files.contains_key(&record.path)
+                    } else {
+                        false
+                    };
+                if confirmed {
+                    changed = true;
+                } else {
+                    kept.push(line.to_string());
+                }
+            }
+            Err(_) => kept.push(line.to_string()),
+        }
+    }
+    if !changed {
+        return Ok(());
+    }
+    let mut output = kept.join("\n");
+    if !output.is_empty() {
+        output.push('\n');
+    }
+    crate::storage::atomic_write_string(&path, &output)?;
+    Ok(())
 }
 
 /// 从同步对象相对路径解析稳定对象身份。

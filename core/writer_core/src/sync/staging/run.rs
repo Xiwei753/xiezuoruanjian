@@ -551,7 +551,36 @@ impl StagingRun {
                 incoming_eq_base_bytes
             };
 
-            if is_document_content_path(&rel_str) {
+            if rel_str.ends_with(".jsonl")
+                && crate::sync::types::stats_device_id_for_event_path(&rel_str).is_some()
+            {
+                // 统计事件是追加式事实：按 event ID 去重合并，任何一侧的新事件
+                // 都不能被整文件快照覆盖；远端删除同样不能删除本机事件。
+                match (local.as_deref(), incoming.as_deref()) {
+                    (None, None) => plan.noop.push(rel),
+                    (Some(_), None) => plan.keep_local.push(rel),
+                    (None, Some(remote)) => {
+                        plan.content_actions.push(CommitAction::Apply {
+                            rel_path: rel,
+                            content: remote.to_vec(),
+                        });
+                    }
+                    (Some(local_bytes), Some(remote_bytes)) => {
+                        let merged =
+                            crate::sync::lww::merge_stats_jsonl(local_bytes, remote_bytes);
+                        if merged.is_empty() {
+                            plan.noop.push(rel);
+                        } else if merged == local_bytes {
+                            plan.keep_local.push(rel);
+                        } else {
+                            plan.content_actions.push(CommitAction::Apply {
+                                rel_path: rel,
+                                content: merged,
+                            });
+                        }
+                    }
+                }
+            } else if is_document_content_path(&rel_str) {
                 // 正文：走 three_way_resolve，BothChanged 才冲突。基线必须来自
                 // known_files（最后一次同步共同基线），不能拿 Prepare 时 live
                 // 快照冒充——离线写入的本地正文会被误判成“本地未改”。
@@ -967,7 +996,7 @@ impl StagingRun {
 
             // 对象决策装入 CommitPlan
             for (idx, (obj_rel, decision)) in output.object_decisions.iter().enumerate() {
-                let (_, _, _, obj_base, obj_local, obj_incoming) = &objects[idx];
+                let (_, _, _, _obj_base, obj_local, obj_incoming) = &objects[idx];
                 let base_hash = known_hash_for(&live_known_files, obj_rel).unwrap_or_default();
                 let local_hash = md5_hex(obj_local);
                 let incoming_hash = md5_hex(obj_incoming);

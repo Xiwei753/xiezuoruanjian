@@ -519,6 +519,143 @@ pub(crate) fn apply_commit_failure_to_target(
 /// `content_actions` 由调用方过滤（`ConflictMetadataOnly` 会过滤掉 transfer
 /// 冲突路径），`engine_state_actions` 直接用 `plan.engine_state_actions`
 /// （只剩 `manifest.sync.json`）。
+/// 统计事件 JSONL 的最终合并必须在 live 提交锁内完成。
+///
+/// transfer 阶段的 staging 快照可能早于独立 MCP 的追加；这里在
+/// `WorkspaceWriteLock` 下重新读取当前 live 与 staging，按 event ID 求并集，
+/// 再把最终字节、known_files 和 manifest 记录一起推进到提交事务。
+fn refresh_stats_event_actions(
+    live_root: &Path,
+    staging_root: &Path,
+    group: &crate::sync::types::AppDataGroup,
+    content_actions: &mut [crate::sync::staging::CommitAction],
+    engine_state_actions: &mut Vec<crate::sync::staging::CommitAction>,
+    merged_state: &mut crate::sync::types::SyncState,
+) -> crate::error::Result<()> {
+    let mut changed: Vec<(String, String, i64)> = Vec::new();
+    for action in content_actions.iter_mut() {
+        let rel_path = match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, .. }
+            | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path.clone(),
+        };
+        let rel_str = rel_path.to_string_lossy().to_string();
+        if !rel_str.ends_with(".jsonl")
+            || crate::sync::types::stats_device_id_for_event_path(&rel_str).is_none()
+        {
+            continue;
+        }
+        let live_bytes = match std::fs::read(live_root.join(&rel_path)) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "read live stats events {}: {error}",
+                    live_root.join(&rel_path).display()
+                ))))
+            }
+        };
+        let staging_bytes = match std::fs::read(staging_root.join(&rel_path)) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "read staging stats events {}: {error}",
+                    staging_root.join(&rel_path).display()
+                ))))
+            }
+        };
+        let merged = crate::sync::lww::merge_stats_jsonl(
+            live_bytes.as_deref().unwrap_or_default(),
+            staging_bytes.as_deref().unwrap_or_default(),
+        );
+        if merged.is_empty() {
+            continue;
+        }
+        let merged_hash = crate::sync::hash::content_md5(&merged);
+        let merged_at = chrono::Utc::now().timestamp_millis();
+        *action = crate::sync::staging::CommitAction::Apply {
+            rel_path: rel_path.clone(),
+            content: merged,
+        };
+        merged_state
+            .known_files
+            .insert(rel_str.clone(), merged_hash.clone());
+        merged_state
+            .known_files_updated_at
+            .insert(rel_str.clone(), merged_at);
+        changed.push((rel_str, merged_hash, merged_at));
+    }
+
+    if changed.is_empty() {
+        return Ok(());
+    }
+
+    let manifest_rel = group.local_manifest_path();
+    let manifest_path = PathBuf::from(&manifest_rel);
+    let manifest_index = engine_state_actions.iter().position(|action| match action {
+        crate::sync::staging::CommitAction::Apply { rel_path, .. }
+        | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path == &manifest_path,
+    });
+    let mut manifest: crate::sync::types::SyncManifest = match manifest_index {
+        Some(index) => match &engine_state_actions[index] {
+            crate::sync::staging::CommitAction::Apply { content, .. } => {
+                serde_json::from_slice(content).map_err(|error| {
+                    crate::Error::Other(format!(
+                        "parse merged app group manifest {}: {error}",
+                        manifest_rel
+                    ))
+                })?
+            }
+            crate::sync::staging::CommitAction::Delete { .. } => {
+                crate::sync::types::SyncManifest { files: Vec::new() }
+            }
+        },
+        None => match std::fs::read(live_root.join(&manifest_rel)) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
+                crate::Error::Other(format!("parse live app group manifest {}: {error}", manifest_rel))
+            })?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::sync::types::SyncManifest { files: Vec::new() }
+            }
+            Err(error) => {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "read live app group manifest {}: {error}",
+                    manifest_rel
+                ))))
+            }
+        },
+    };
+    for (rel_path, content_hash, updated_at_ms) in changed {
+        if let Some(record) = manifest.files.iter_mut().find(|record| record.path == rel_path) {
+            record.content_hash = content_hash;
+            record.updated_at_ms = updated_at_ms;
+            record.deleted_at_ms = None;
+            record.device_id = merged_state.device_id.clone();
+            record.op = "upsert".to_string();
+        } else {
+            manifest.files.push(crate::sync::types::ManifestFileRecord {
+                path: rel_path,
+                content_hash,
+                updated_at_ms,
+                deleted_at_ms: None,
+                device_id: merged_state.device_id.clone(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            });
+        }
+    }
+    let manifest_bytes = serde_json::to_vec(&manifest)?;
+    let action = crate::sync::staging::CommitAction::Apply {
+        rel_path: manifest_path,
+        content: manifest_bytes,
+    };
+    match manifest_index {
+        Some(index) => engine_state_actions[index] = action,
+        None => engine_state_actions.push(action),
+    }
+    Ok(())
+}
+
 fn apply_commit_plan_with_optional_merge(
     run: &crate::sync::staging::StagingRun,
     live_root: &Path,
@@ -527,6 +664,20 @@ fn apply_commit_plan_with_optional_merge(
     backup_mode: bool,
     proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
 ) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
+    let stats_group = match run.app_group() {
+        Some(group @ crate::sync::types::AppDataGroup::StatsDevice(_)) => Some(group.clone()),
+        _ => None,
+    };
+    // 统计事件是独立 MCP 可并发追加的唯一内容。plan 到 apply 之间必须持有
+    // 与 MCP 相同的跨进程工作区锁，并在锁内重新读取 live/staging 求并集。
+    let _workspace_lock = match &stats_group {
+        Some(_) => Some(crate::storage::WorkspaceWriteLock::acquire(live_root)?),
+        None => None,
+    };
+    let mut content_actions = content_actions.to_vec();
+    let mut engine_state_actions = plan.engine_state_actions.clone();
+    let mut committed_state: Option<crate::sync::types::SyncState> = None;
+
     let result = if plan.needs_sync_state_merge {
         let base_root = run.base_root();
         let staging_root = run.staging_root();
@@ -548,10 +699,21 @@ fn apply_commit_plan_with_optional_merge(
                 .retain(|conflict| conflict.local_path != *path);
             merged_conflicts.retain(|conflict| conflict.local_path != *path);
         }
+        if let Some(group) = &stats_group {
+            refresh_stats_event_actions(
+                live_root,
+                &staging_root,
+                group,
+                &mut content_actions,
+                &mut engine_state_actions,
+                &mut merged_state,
+            )?;
+        }
+        committed_state = Some(merged_state.clone());
         apply_commit_plan_with_sync_state_merge_for_group(
             live_root,
-            content_actions,
-            &plan.engine_state_actions,
+            &content_actions,
+            &engine_state_actions,
             &merged_state,
             &merged_conflicts,
             app_group,
@@ -561,12 +723,33 @@ fn apply_commit_plan_with_optional_merge(
     } else {
         apply_commit_plan_to_live(
             live_root,
-            content_actions,
-            &plan.engine_state_actions,
+            &content_actions,
+            &engine_state_actions,
             backup_mode,
             proof_recovery_records,
         )
     };
+
+    if result.is_ok() {
+        if let Some(group) = run.app_group() {
+            let state = match &committed_state {
+                Some(state) => Some(state.clone()),
+                None => crate::sync::SyncService::load_sync_state_read_only_for_group(
+                    live_root, group, None,
+                )
+                .ok(),
+            };
+            if let Some(state) = state {
+                if let Err(error) = crate::sync::local_mutations::compact_confirmed(
+                    live_root,
+                    group,
+                    &state.known_files,
+                ) {
+                    log::warn!("local mutation ledger compaction failed: {error}");
+                }
+            }
+        }
+    }
     if result.is_ok()
         && matches!(
             run.app_group(),
