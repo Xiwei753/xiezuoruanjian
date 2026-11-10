@@ -411,20 +411,20 @@ fn make_graph_meta_json(starmap_id: &str, node_ids: &[&str], updated_at: u64) ->
     serde_json::to_vec_pretty(&record).expect("serialize graph meta")
 }
 
-/// 构造 StarMapNode 的 JSON bytes（只填反序列化必填字段）。
+/// 构造 `StarMapNodeInstance` 的 JSON bytes。
 ///
-/// `rebuild_derived_indexes` 会把节点对象反序列化为 `StarMapNode`，
-/// 需要 id/title/kind/position/createdAt/updatedAt 字段。
+/// 画布节点文件只保存素材引用，`kind`/`title` 属于
+/// `StarMapNodeDefinition`，不在实例文件中。
 fn make_node_json(node_id: &str) -> Vec<u8> {
     let record = serde_json::json!({
-        "id": node_id,
-        "title": node_id,
-        "kind": "note",
+        "instanceId": node_id,
+        "targetNodeId": format!("def-{node_id}"),
         "position": { "x": 0.0, "y": 0.0 },
+        "starmapId": "sm_x",
         "createdAt": 0,
         "updatedAt": 0,
     });
-    serde_json::to_vec_pretty(&record).expect("serialize node")
+    serde_json::to_vec_pretty(&record).expect("serialize node instance")
 }
 
 /// issue #902 第八轮复核：starmaps/index.json 走语义合并而非整文件 LWW。
@@ -721,4 +721,44 @@ fn prepare_staging_runs_records_stats_migration_failure_per_group() {
     assert!(!runs[0].staging_root().join("stats/events").exists());
     // 其它独立组照常 seed，不受影响。
     assert!(runs[1].prepare_error().is_none());
+}
+
+/// 节点文件必须是 StarMapNodeInstance；身份错配应带出星图、对象和路径，
+/// 不能退化成旧的 missing field `id`。
+#[test]
+fn starmap_node_instance_identity_mismatch_reports_path() {
+    let graph = make_graph_meta_json("sm_x", &["n1"], 0);
+    let bad_instance = serde_json::to_vec_pretty(&serde_json::json!({
+        "instanceId": "other",
+        "targetNodeId": "def-n1",
+        "position": { "x": 0.0, "y": 0.0 },
+        "starmapId": "sm_x",
+        "createdAt": 0,
+        "updatedAt": 0,
+    }))
+    .unwrap();
+    let objects = vec![(
+        PathBuf::from("starmaps/sm_x/nodes/n1/n1.json"),
+        "node".to_string(),
+        "n1".to_string(),
+        None,
+        Some(bad_instance),
+        None,
+    )];
+    let error = merge_starmap_graph_with_objects(
+        "sm_x",
+        None,
+        Some(&graph),
+        None,
+        None,
+        None,
+        None,
+        &objects,
+    )
+    .expect_err("identity mismatch must fail");
+    let message = error.to_string();
+    assert!(message.contains("starmaps/sm_x/nodes/"), "{message}");
+    assert!(message.contains("object_type=node"), "{message}");
+    assert!(message.contains("member_id=n1"), "{message}");
+    assert!(message.contains("instance_id=other"), "{message}");
 }

@@ -1048,7 +1048,7 @@ impl crate::sync::SyncService {
         graph.edge_relation_index = derived.edge_relation_index;
         graph.embed_host_index = derived.embed_host_index;
         graph.link_relation_index = derived.link_relation_index;
-        graph.node_kind_counts = derived.node_kind_counts;
+        // node_kind_counts 是素材库定义的派生缓存，不从画布实例文件重建。
 
         // 更新 updated_at
         let now_ms = u64::try_from(
@@ -1323,27 +1323,10 @@ impl crate::sync::SyncService {
             });
         }
 
-        let mut node_kind_counts: std::collections::HashMap<String, u32> =
-            std::collections::HashMap::new();
-        for node_id in &graph.node_ids {
-            let Some(node) = Self::parse_member_object::<crate::starmap::types::StarMapNode>(
-                object_contents,
-                "node",
-                node_id,
-            )?
-            else {
-                continue;
-            };
-            *node_kind_counts
-                .entry(format!("{:?}", node.kind))
-                .or_insert(0) += 1;
-        }
-
         Ok(crate::sync::staging::starmap_merge::DerivedIndexes {
             edge_relation_index,
             embed_host_index,
             link_relation_index,
-            node_kind_counts,
         })
     }
 
@@ -1743,7 +1726,7 @@ impl crate::sync::SyncService {
         graph.edge_relation_index = derived.edge_relation_index;
         graph.embed_host_index = derived.embed_host_index;
         graph.link_relation_index = derived.link_relation_index;
-        graph.node_kind_counts = derived.node_kind_counts;
+        // node_kind_counts 是素材库定义的派生缓存，不从画布实例文件重建。
 
         // 更新 updated_at
         let now_ms = u64::try_from(
@@ -2024,7 +2007,6 @@ impl crate::sync::SyncService {
         remote_graph.edge_relation_index = derived.edge_relation_index;
         remote_graph.embed_host_index = derived.embed_host_index;
         remote_graph.link_relation_index = derived.link_relation_index;
-        remote_graph.node_kind_counts = derived.node_kind_counts;
 
         let now_ms = u64::try_from(
             std::time::SystemTime::now()

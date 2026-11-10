@@ -40,6 +40,26 @@ ColumnLayout {
     property string activeOperationKind: ""
     property int lastManualSyncRequestSerial: -1
 
+    // 本轮手动同步请求摘要。与持久化的 last_full_sync_state 分开显示，
+    // 避免把旧 recoverable_error 当成今天这次点击的结果。
+    readonly property var lastManualSyncRequest: {
+        if (!root.syncBackendRef) return ({})
+        var raw = root.syncBackendRef.last_manual_sync_request
+        if (!raw) return ({})
+        try { return JSON.parse(raw) } catch (e) { return ({}) }
+    }
+
+    function shortRequestId(id) {
+        var text = String(id || "")
+        return text.length > 8 ? text.slice(0, 8) : text
+    }
+
+    function formatRequestTime(seconds) {
+        var value = Number(seconds || 0)
+        if (value <= 0) return ""
+        return Qt.formatDateTime(new Date(value * 1000), "yyyy-MM-dd HH:mm:ss")
+    }
+
     // 结果区与原始诊断文本（原 TextArea/TextEdit 的文本源）。
     property string resultText: ""
     property string lastSyncReport: ""
@@ -927,6 +947,20 @@ ColumnLayout {
             syncConfigFeedback.message = ""
             syncConfigFeedback.visible = false
         }
+    }
+
+    Label {
+        Layout.fillWidth: true
+        Layout.maximumWidth: root.cardWidth
+        Layout.alignment: Qt.AlignHCenter
+        visible: String(root.lastManualSyncRequest.requestId || "").length > 0
+        text: qsTr("本次请求 %1 · %2 · %3")
+            .arg(root.shortRequestId(root.lastManualSyncRequest.requestId))
+            .arg(root.formatRequestTime(root.lastManualSyncRequest.requestedAt))
+            .arg(root.lastManualSyncRequest.status || "")
+        color: Kirigami.Theme.disabledTextColor
+        font.pixelSize: Math.round(Kirigami.Units.gridUnit * 0.7)
+        wrapMode: Text.Wrap
     }
 
     // ── 结果/日志区 ──

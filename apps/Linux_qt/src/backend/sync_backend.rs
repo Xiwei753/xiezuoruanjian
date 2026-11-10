@@ -120,6 +120,8 @@ pub struct SyncBackend {
     #[allow(dead_code)]
     sync_can_run: qt_property!(bool; READ sync_can_run NOTIFY sync_status_changed),
     manual_sync_pending: qt_property!(bool; READ manual_sync_pending NOTIFY sync_status_changed),
+    /// 本轮手动同步请求摘要（JSON）。用于界面区分“本次请求”与持久历史结果。
+    last_manual_sync_request: qt_property!(QString; READ last_manual_sync_request NOTIFY sync_status_changed),
     #[allow(dead_code)]
     sync_block_reason: qt_property!(QString; READ sync_block_reason NOTIFY sync_status_changed),
     #[allow(dead_code)]
@@ -533,6 +535,11 @@ impl SyncBackend {
     fn manual_sync_pending(&self) -> bool {
         self.snap().manual_sync_pending
     }
+    fn last_manual_sync_request(&self) -> QString {
+        self.with_app(|app| app.last_manual_sync_request_json())
+            .unwrap_or_else(|_| "{}".to_string())
+            .into()
+    }
     fn sync_block_reason(&self) -> QString {
         self.with_app(|app| app.sync_block_reason())
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
@@ -611,6 +618,9 @@ impl SyncBackend {
                     request_id, source
                 ),
             );
+        } else {
+            // 请求摘要是本轮状态，不依赖后续 Core 历史结果通知。
+            self.sync_status_changed();
         }
         request_id.into()
     }

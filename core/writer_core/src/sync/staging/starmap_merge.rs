@@ -1173,7 +1173,6 @@ pub(crate) struct DerivedIndexes {
     pub edge_relation_index: Vec<EdgeRelationIndex>,
     pub embed_host_index: Vec<EmbedHostIndex>,
     pub link_relation_index: Vec<LinkRelationIndex>,
-    pub node_kind_counts: HashMap<String, u32>,
 }
 
 /// 从合并后的对象文件内容重建派生索引。
@@ -1188,19 +1187,24 @@ pub(crate) struct DerivedIndexes {
 /// - `edge_relation_index`：从 edge 对象的 `from`/`to` 构建
 /// - `embed_host_index`：从 embed 对象的 `host_path` 构建
 /// - `link_relation_index`：从 link 对象的 `source`/`target` 构建
-/// - `node_kind_counts`：从 node 对象的 `kind` 字段统计计数
+///
+/// 节点文件按 `StarMapNodeInstance` 解析；`kind` 属于素材库
+/// `StarMapNodeDefinition`，不在画布实例文件中，因此这里不再统计
+/// `node_kind_counts`，该派生缓存由统一存储加载/重建路径维护。
 #[allow(clippy::too_many_lines)]
 pub(crate) fn rebuild_derived_indexes(
-    _starmap_id: &str,
+    starmap_id: &str,
     member_ids: &MergedMemberIds,
     object_contents: &HashMap<(String, String), Vec<u8>>,
 ) -> Result<DerivedIndexes> {
-    use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapLink};
+    use crate::starmap::package_storage::bucket_for_id;
+    use crate::starmap::types::{
+        StarMapEdge, StarMapEmbed, StarMapLink, StarMapNodeInstance,
+    };
 
     let mut edge_relation_index: Vec<EdgeRelationIndex> = Vec::new();
     let mut embed_host_index: Vec<EmbedHostIndex> = Vec::new();
     let mut link_relation_index: Vec<LinkRelationIndex> = Vec::new();
-    let mut node_kind_counts: HashMap<String, u32> = HashMap::new();
 
     // 重建 edge_relation_index
     for edge_id in &member_ids.edge_ids {
@@ -1240,14 +1244,37 @@ pub(crate) fn rebuild_derived_indexes(
         }
     }
 
-    // 重建 node_kind_counts
+    // 校验节点实例身份。画布节点文件只保存实例引用，不含 kind/title 等
+    // 素材定义字段；按旧 StarMapNode 解析会把整个星图组打成 missing field id。
     for node_id in &member_ids.node_ids {
         let key = ("node".to_string(), node_id.clone());
         if let Some(bytes) = object_contents.get(&key) {
-            let node: crate::starmap::types::StarMapNode = serde_json::from_slice(bytes)?;
-            *node_kind_counts
-                .entry(format!("{:?}", node.kind))
-                .or_insert(0) += 1;
+            let rel_path = format!(
+                "starmaps/{starmap_id}/nodes/{}/{node_id}.json",
+                bucket_for_id(node_id)
+            );
+            let instance: StarMapNodeInstance =
+                serde_json::from_slice(bytes).map_err(|error| {
+                    crate::Error::Other(format!(
+                        "parse starmap node instance failed: path={rel_path} \
+                         object_type=node object_id={node_id} starmap_id={starmap_id}: {error}"
+                    ))
+                })?;
+            if instance.instance_id != *node_id {
+                return Err(crate::Error::Other(format!(
+                    "starmap node instance identity mismatch: path={rel_path} \
+                     object_type=node member_id={node_id} instance_id={} starmap_id={starmap_id}",
+                    instance.instance_id
+                )));
+            }
+            if !instance.starmap_id.is_empty() && instance.starmap_id != starmap_id {
+                return Err(crate::Error::Other(format!(
+                    "starmap node instance belongs to another graph: path={rel_path} \
+                     object_type=node object_id={node_id} instance_starmap_id={} \
+                     starmap_id={starmap_id}",
+                    instance.starmap_id
+                )));
+            }
         }
     }
 
@@ -1255,7 +1282,6 @@ pub(crate) fn rebuild_derived_indexes(
         edge_relation_index,
         embed_host_index,
         link_relation_index,
-        node_kind_counts,
     })
 }
 
@@ -1895,7 +1921,18 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
         edge_relation_index: derived.edge_relation_index,
         embed_host_index: derived.embed_host_index,
         link_relation_index: derived.link_relation_index,
-        node_kind_counts: derived.node_kind_counts,
+        // 节点类型计数属于素材库定义派生的缓存，不能从画布实例文件推断。
+        // 合并只保留已有缓存；统一 StarMapStore 加载/重建路径会在素材定义
+        // 可用时重新计算，避免跨组同步假设素材库已经先完成。
+        node_kind_counts: local_meta
+            .as_ref()
+            .map(|meta| meta.node_kind_counts.clone())
+            .or_else(|| {
+                incoming_meta
+                    .as_ref()
+                    .map(|meta| meta.node_kind_counts.clone())
+            })
+            .unwrap_or_default(),
         node_revisions: revisions.node,
         edge_revisions: revisions.edge,
         embed_revisions: revisions.embed,

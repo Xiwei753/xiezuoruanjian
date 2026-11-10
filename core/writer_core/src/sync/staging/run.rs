@@ -947,7 +947,15 @@ impl StagingRun {
                 &objects,
                 lifecycle_override,
                 &object_versions,
-            )?;
+            )
+            .map_err(|error| {
+                crate::Error::Other(format!(
+                    "compute_commit_plan: starmap '{starmap_id}' merge failed \
+                     (base/local/incoming): graph={graph_rel:?} meta={meta_rel:?} \
+                     object_count={}: {error}",
+                    objects.len()
+                ))
+            })?;
 
             // 收集生命周期决策，供 index.json 合并使用（issue #902 第十二轮复核）。
             // DeleteModifyConflict 的星图不会被 merge_starmap_index 从全局索引移除。

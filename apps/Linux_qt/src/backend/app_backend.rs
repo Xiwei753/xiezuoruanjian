@@ -482,6 +482,18 @@ impl AppBackend {
         }
     }
 
+    /// 本轮手动同步请求摘要：把“本次请求”与 Core 持久化的历史结果分开显示。
+    pub(crate) fn last_manual_sync_request_json(&self) -> String {
+        serde_json::json!({
+            "seen": self.manual_sync_request_seen_this_startup,
+            "requestId": self.last_manual_sync_request_id,
+            "source": self.last_manual_sync_request_source,
+            "requestedAt": self.last_manual_sync_request_at,
+            "status": self.last_manual_sync_request_status,
+        })
+        .to_string()
+    }
+
     /// 将 AppBackend 当前状态同步到 DomainSnapshot。
     ///
     /// 调用时机：QML 属性变更后、同步操作完成后等需要刷新 QML 绑定的场景。
