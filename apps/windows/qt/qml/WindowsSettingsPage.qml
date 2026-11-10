@@ -26,6 +26,11 @@ ScrollView {
     property bool updatingValues: false
     property bool settingsDirty: false
 
+    property var builtinThemes: {
+        if (!settingsBackendRef) return []
+        try { return JSON.parse(settingsBackendRef.list_builtin_themes_json()) } catch (e) { return [] }
+    }
+
     contentWidth: availableWidth
     clip: true
 
@@ -138,12 +143,44 @@ ScrollView {
 
                 RowLayout {
                     Layout.fillWidth: true
+                    Label { text: qsTr("内置主题"); Layout.fillWidth: true }
+                    ComboBox {
+                        id: builtinThemeCombo
+                        model: root.builtinThemes.map(function(theme) {
+                            return theme.name || theme.theme_id
+                        })
+                        currentIndex: {
+                            var selectedId = root.themeControllerRef
+                                ? root.themeControllerRef.selected_builtin_theme_id : ""
+                            for (var i = 0; i < root.builtinThemes.length; ++i) {
+                                if (root.builtinThemes[i].theme_id === selectedId)
+                                    return i
+                            }
+                            return -1
+                        }
+                        onActivated: function(index) {
+                            if (!root.themeControllerRef || root.updatingValues) return
+                            var theme = root.builtinThemes[index]
+                            if (!theme || !theme.theme_id) return
+                            root.themeControllerRef.set_selected_builtin_theme_id(theme.theme_id)
+                            root.settingsDirty = true
+                            root.saveAndNotify()
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
                     Label { text: qsTr("工作区"); Layout.fillWidth: true }
                     Label {
                         text: root.workspaceBackendRef ? root.workspaceBackendRef.workspace_path : qsTr("未加载")
                         elide: Text.ElideMiddle
-                        Layout.maximumWidth: root.width * 0.55
+                        Layout.maximumWidth: root.width * 0.45
                         color: palette.mid
+                    }
+                    Button {
+                        text: qsTr("切换工作区")
+                        onClicked: root.switchWorkspaceRequested()
                     }
                 }
             }
@@ -199,10 +236,22 @@ ScrollView {
                 }
 
                 Switch {
+                    id: autoSaveSwitch
                     Layout.fillWidth: true
                     text: qsTr("自动保存")
                     checked: root.settingsBackendRef ? root.settingsBackendRef.setting_auto_save_enabled : true
                     onToggled: root.setSetting("setting_auto_save_enabled", checked)
+                }
+
+                SpinBox {
+                    Layout.fillWidth: true
+                    visible: autoSaveSwitch.checked
+                    from: 1; to: 10; stepSize: 1
+                    value: root.settingsBackendRef
+                        ? Math.max(1, Math.min(10, Math.round(root.settingsBackendRef.setting_auto_save_delay_ms / 1000)))
+                        : 5
+                    textFromValue: function(value) { return value + qsTr(" 秒") }
+                    onValueModified: root.setSetting("setting_auto_save_delay_ms", value * 1000)
                 }
 
                 Switch {
