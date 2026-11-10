@@ -2433,6 +2433,25 @@ impl WriterCoreApi {
         crate::sync::types::TargetSyncResult,
         Vec<crate::sync::commit_helpers::CommittedPath>,
     ) {
+        // Issue #1039 复核：同步 Commit 与独立 MCP 写事务必须共享应用数据根上的
+        // 跨进程工作区锁。锁必须先于 state_lock 获取，并覆盖 live 读取、Store
+        // flush、三方 plan、SaveTransaction、组级 state/manifest 写回与账本压缩；
+        // 否则 MCP 在 plan 读取 live 后写入的对象会被旧计划覆盖。
+        let _workspace_lock = match crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
+        {
+            Ok(lock) => lock,
+            Err(error) => {
+                let mut target_with_error = target_sync_result.clone();
+                target_with_error.result.status = crate::sync::SyncStatus::RecoverableError(
+                    "workspace_write_lock_failed".to_string(),
+                );
+                target_with_error.result.error = Some(format!(
+                    "cannot acquire workspace write lock before sync commit: {error}"
+                ));
+                return (target_with_error, Vec::new());
+            }
+        };
+
         // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 sync root 的
         // state/conflict mutation。整段 Commit（三方 merge + SaveTransaction 写回 +
         // record_staging_conflicts）持有该 project root 的共享锁，防止 UI resolve

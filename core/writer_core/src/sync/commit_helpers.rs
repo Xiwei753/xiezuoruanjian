@@ -668,11 +668,16 @@ fn apply_commit_plan_with_optional_merge(
         Some(group @ crate::sync::types::AppDataGroup::StatsDevice(_)) => Some(group.clone()),
         _ => None,
     };
-    // 统计事件是独立 MCP 可并发追加的唯一内容。plan 到 apply 之间必须持有
-    // 与 MCP 相同的跨进程工作区锁，并在锁内重新读取 live/staging 求并集。
-    let _workspace_lock = match &stats_group {
-        Some(_) => Some(crate::storage::WorkspaceWriteLock::acquire(live_root)?),
-        None => None,
+    // plan 到 apply 之间必须持有与 MCP 相同的跨进程工作区锁。统计事件还需要
+    // 在锁内重新读取 live/staging 求并集；其它 App 组至少保证 live 写回与
+    // mutation ledger 压缩不与 MCP 写事务交错。作品 target 的外层提交入口
+    // 已持有应用数据根锁，这里无需重复获取。
+    let _workspace_lock = if run.app_group().is_some() {
+        Some(crate::storage::WorkspaceWriteLock::acquire(
+            run.app_data_root(),
+        )?)
+    } else {
+        None
     };
     let mut content_actions = content_actions.to_vec();
     let mut engine_state_actions = plan.engine_state_actions.clone();
@@ -1161,6 +1166,26 @@ pub(crate) fn apply_staging_commits_for_targets(
             TargetCommitMode::Skip
         };
 
+        // Issue #1039 复核：所有会读写 live 的提交分支都与 MCP 共用应用数据根上的
+        // 跨进程工作区锁，并一直持有到 SaveTransaction 与账本压缩结束。不能只为
+        // StatsDevice 组加锁，否则星图/素材组的 plan 与 compact_confirmed 仍会与
+        // MCP 写事务竞争。
+        let _workspace_lock = if matches!(mode, TargetCommitMode::Skip) {
+            None
+        } else {
+            match crate::storage::WorkspaceWriteLock::acquire(run.app_data_root()) {
+                Ok(lock) => Some(lock),
+                Err(error) => {
+                    target_results.push(TargetCommitResult::Failed(format!(
+                        "workspace_write_lock_failed: {error}"
+                    )));
+                    target_conflicts.push(Vec::new());
+                    run.cleanup();
+                    continue;
+                }
+            }
+        };
+
         match mode {
             TargetCommitMode::Skip => {
                 log::warn!(
@@ -1544,6 +1569,24 @@ pub(crate) fn commit_single_target_staging(
         TargetCommitMode::ReplaceProject
     } else {
         target_commit_mode(&target.result.status)
+    };
+
+    // 直接调用本入口的提交也必须遵守与 MCP 共享的工作区锁约定。
+    let _workspace_lock = if matches!(mode, TargetCommitMode::Skip) {
+        None
+    } else {
+        match crate::storage::WorkspaceWriteLock::acquire(run.app_data_root()) {
+            Ok(lock) => Some(lock),
+            Err(error) => {
+                return (
+                    TargetCommitResult::Failed(format!(
+                        "workspace_write_lock_failed: {error}"
+                    )),
+                    Vec::new(),
+                    Vec::new(),
+                );
+            }
+        }
     };
 
     match mode {

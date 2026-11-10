@@ -37,6 +37,9 @@ const STAGING_SUBDIR: &str = "staging";
 pub struct StagingRun {
     run_root: PathBuf,
     run_id: String,
+    /// 应用数据根。提交阶段与 MCP 写事务共用这把跨进程工作区锁；
+    /// 即使 target_live_root 是作品目录，锁也必须落在应用数据根。
+    app_data_root: PathBuf,
     /// Commit 阶段需要知道这个 staging run 对应的 live root，
     /// 才能调 `compute_commit_plan(live_root)` 做三方比较并把变更写回 live。
     target_live_root: PathBuf,
@@ -59,6 +62,7 @@ impl StagingRun {
         Ok(Self {
             run_root,
             run_id,
+            app_data_root: parent.to_path_buf(),
             target_live_root,
             app_group: None,
             prepare_error: None,
@@ -87,6 +91,11 @@ impl StagingRun {
     /// Commit 阶段要写回的 live root。
     pub fn target_live_root(&self) -> &Path {
         &self.target_live_root
+    }
+
+    /// 应用数据根；同步提交与 MCP 写事务共享的工作区锁在这里。
+    pub fn app_data_root(&self) -> &Path {
+        &self.app_data_root
     }
 
     /// App group associated with this run, if it is a grouped App target.
