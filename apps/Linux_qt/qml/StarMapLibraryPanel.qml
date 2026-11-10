@@ -237,7 +237,7 @@ Rectangle {
                         } else if (mouse.button === Qt.RightButton) {
                             contextMenu.rowKind = delegateRoot.rowKind
                             contextMenu.assetId = delegateRoot.assetId
-                            contextMenu.title = delegateRoot.title
+                            contextMenu.assetTitle = delegateRoot.title
                             contextMenu.targetJson = delegateRoot.targetJson
                             contextMenu.scopeJson = delegateRoot.scopeJson
                             contextMenu.entryId = delegateRoot.entryId
@@ -308,7 +308,7 @@ Rectangle {
         id: contextMenu
         property string rowKind: ""
         property string assetId: ""
-        property string title: ""
+        property string assetTitle: ""
         property string targetJson: ""
         property string scopeJson: ""
         property string entryId: ""
@@ -327,7 +327,7 @@ Rectangle {
             visible: contextMenu.rowKind !== "folder"
             onTriggered: root.assetActivated(contextMenu.rowKind,
                                               contextMenu.assetId,
-                                              contextMenu.title,
+                                              contextMenu.assetTitle,
                                               contextMenu.scopeJson,
                                               contextMenu.targetJson)
         }
@@ -336,7 +336,7 @@ Rectangle {
             visible: contextMenu.rowKind !== "folder"
             onTriggered: root.copyRequested(contextMenu.targetJson,
                                             contextMenu.scopeJson,
-                                            contextMenu.title)
+                                            contextMenu.assetTitle)
         }
         MenuItem {
             text: root.otherScopeJson === "" ? qsTr("移动归属")
@@ -356,7 +356,7 @@ Rectangle {
         MenuItem {
             text: qsTr("查看全部引用")
             visible: contextMenu.rowKind !== "folder"
-            onTriggered: root.showReferences(contextMenu.targetJson, contextMenu.title)
+            onTriggered: root.showReferences(contextMenu.targetJson, contextMenu.assetTitle)
         }
         MenuSeparator {
             visible: contextMenu.rowKind !== "folder"
@@ -364,7 +364,7 @@ Rectangle {
         MenuItem {
             text: qsTr("删除素材本体")
             visible: contextMenu.rowKind !== "folder"
-            onTriggered: root.removeAsset(contextMenu.targetJson, contextMenu.title)
+            onTriggered: root.removeAsset(contextMenu.targetJson, contextMenu.assetTitle)
         }
     }
 
