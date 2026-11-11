@@ -2900,6 +2900,10 @@ impl WriterCoreApi {
         project_id: Option<&str>,
         path: &str,
     ) -> ApiResult<bool> {
+        // 与 MCP/自动同步共用应用数据根的跨进程写锁；锁顺序固定为
+        // workspace → state，避免与同步提交互相交错。
+        let _workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
+            .map_err(crate::api::error::WriterError::from)?;
         // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 target root 的
         // state/conflict mutation。resolve 拿同一把 root lock，与 Commit 互斥：
         // resolve 先拿锁 → Commit 后读 live 时能看到已解决的状态；
@@ -2929,6 +2933,11 @@ impl WriterCoreApi {
         project_id: Option<&str>,
         path: &str,
     ) -> ApiResult<bool> {
+        // 冲突解决会直接替换/删除 live 星图对象，必须与独立 MCP 写事务、
+        // 同步提交共用同一把应用数据根写锁，并保持到索引刷新结束。
+        let _workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
+            .map_err(crate::api::error::WriterError::from)?;
+
         // 冲突事务开始前协调 dirty Store，避免脏 Store 覆盖冲突解决结果。
         self.core_write().flush_all_starmap_stores()?;
 
@@ -2973,6 +2982,9 @@ impl WriterCoreApi {
         project_id: Option<&str>,
         path: &str,
     ) -> ApiResult<bool> {
+        // 与 MCP/自动同步共用应用数据根写锁；锁顺序固定为 workspace → state。
+        let _workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
+            .map_err(crate::api::error::WriterError::from)?;
         // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 target root 的
         // state/conflict mutation。resolve 拿同一把 root lock，与 Commit 互斥：
         // resolve 先拿锁 → Commit 后读 live 时能看到已解决的状态；
