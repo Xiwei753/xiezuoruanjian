@@ -78,6 +78,9 @@ Item {
     property var previewRequestGenerations: ({})
     // key = targetStarmapId，value = 当前在途请求 id；用于丢弃过期结果。
     property var previewRequests: ({})
+
+    // 跨 Scene 共享的图 DTO / revision 缓存（Canvas 持有）。
+    property var graphDataCache: null
     property int previewRequestSerial: 0
 
     // ── Issue #949：过渡的显示层开关（不参与命中 / 业务状态）──
@@ -224,6 +227,7 @@ Item {
         starmapId: scene.starmapId
         starmapBackendRef: scene.starmapBackendRef
         pathKey: scene.scenePathKey
+        graphDataCache: scene.graphDataCache
         selectionController: scene.selectionController
         onGraphChanged: {
             // Issue #1029：图变更只刷新编辑会话；边几何由 loadGraph / 提交路径
@@ -273,7 +277,9 @@ Item {
                       + " modelBuildMs=" + graphController.lastModelBuildMs)
     }
 
-    readonly property bool ready: starmapId !== "" && graphController.graphData !== null
+    readonly property bool ready: starmapId !== ""
+        && graphController.graphData !== null
+        && graphController.loadedStarmapId === starmapId
     readonly property string errorMessage: graphController.errorMessage
     function clearError() { graphController.clearError() }
 

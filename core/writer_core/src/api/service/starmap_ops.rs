@@ -826,11 +826,12 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapGraphDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut graph: crate::api::types::StarMapGraphDto = self
+        let (graph, package_revision) = self
             .core_write()
-            .get_starmap_graph(starmap_id)
-            .map(Into::into)
+            .get_starmap_graph_with_revision(starmap_id)
             .map_err(WriterError::from)?;
+        let mut graph: crate::api::types::StarMapGraphDto = graph.into();
+        graph.package_revision = package_revision;
         graph.asset_bindings = self.starmap_asset_bindings(starmap_id)?;
         Ok(graph)
     }

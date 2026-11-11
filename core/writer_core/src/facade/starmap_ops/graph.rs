@@ -62,6 +62,16 @@ impl super::super::WriterCore {
         &self,
         starmap_id: &str,
     ) -> Result<crate::starmap::types::StarMapGraph> {
+        self.get_starmap_graph_with_revision(starmap_id)
+            .map(|(graph, _)| graph)
+    }
+
+    /// 同时返回图的 package revision，平台端用 `starmapId + revision` 作为
+    /// 图数据缓存身份。
+    pub fn get_starmap_graph_with_revision(
+        &self,
+        starmap_id: &str,
+    ) -> Result<(crate::starmap::types::StarMapGraph, u64)> {
         let mut stores = self
             .starmap_stores
             .lock()
@@ -70,7 +80,7 @@ impl super::super::WriterCore {
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_fully_loaded()?;
-        Ok(store.to_starmap_graph())
+        Ok((store.to_starmap_graph(), store.package_revision()))
     }
 
     pub fn add_starmap_node(

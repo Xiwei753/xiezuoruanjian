@@ -57,6 +57,11 @@ QtObject {
     // 图内容身份：同一 starmapId 且数据未变时不重复测量布局 / 重建模型。
     // 交互 route 身份仍由 sceneCacheKey 单独承担。
     property string _graphContentKey: ""
+    // 共享图数据缓存（Canvas 持有）：按 starmapId 保存 DTO + revision 身份，
+    // 同一 route 往返 / 新建 Scene 时不再重复读 Core。写入成功后必须 force 刷新。
+    property var graphDataCache: null
+    property string loadedStarmapId: ""
+    property string loadedGraphKey: ""
     // 分段耗时：区分 Core 读取/QML 模型与几何构建，避免把同步 QML
     // 耗时误当成 GPU 帧耗时。
     property real lastGraphLoadMs: 0
@@ -163,7 +168,7 @@ QtObject {
                 needLoadGraph = true
         }
         if (needLoadGraph)
-            loadGraph()
+            loadGraph(true)
         if (structureEventSeen)
             structureChanged()
         if (events.length > 0)
@@ -225,6 +230,8 @@ QtObject {
         var nextGraph = copyObject(graphData)
         nextGraph[collection] = nextItems
         graphData = nextGraph
+        if (graphDataCache)
+            graphDataCache[starmapId] = { graph: nextGraph, contentKey: _graphContentKey }
         _sceneCacheDirty = true
         invalidatePreviewCache()
         return true
@@ -241,7 +248,7 @@ QtObject {
 
     function _reloadOnConflict(res) {
         if (res && res.errorCode === "CONFLICT") {
-            loadGraph()
+            loadGraph(true)
             return true
         }
         return false
@@ -276,23 +283,51 @@ QtObject {
         if (starmapId === "") return;
         if (!ensureBackend()) return;
 
+        // 同图缓存命中：只重建当前 Scene 的模型，不再读 Core，也不做整图
+        // JSON 序列化。写入成功 / 工作区事件 / 冲突重载必须传 true 强制刷新。
+        var cached = graphDataCache ? graphDataCache[starmapId] : null
+        if (invalidatePreview !== true && cached && cached.graph) {
+            if (loadedStarmapId === starmapId && graphData === cached.graph)
+                return;
+            graphData = cached.graph;
+            _graphContentKey = cached.contentKey;
+            loadedStarmapId = starmapId;
+            loadedGraphKey = cached.contentKey;
+            _sceneCacheDirty = true;
+            var cachedBuildStarted = Date.now();
+            buildModels(false);
+            computeEdgeRenders(null);
+            lastGraphLoadMs = 0;
+            lastModelBuildMs = Date.now() - cachedBuildStarted;
+            graphChanged();
+            return;
+        }
+
         var loadStarted = Date.now();
         var res = normalizeBackendResult(starmapBackendRef.get_starmap_graph(starmapId), qsTr("加载星图数据失败"));
         lastGraphLoadMs = Date.now() - loadStarted;
         if (res.success) {
             clearError();
             var graph = res.data.graph;
-            var contentKey = String(starmapId) + "::" + JSON.stringify(graph);
-            // 同图同内容只复用已有模型；只有内容 revision 变化才重新测量
-            // 布局、生成边/对象 JSON，镜头与选区更新不进入这里。
+            // Core 的 package_revision 是跨 Scene 稳定的内容身份；不再每次
+            // JSON.stringify 整张图。
+            var revision = graph && graph.packageRevision !== undefined
+                    ? String(graph.packageRevision) : "0";
+            var contentKey = String(starmapId) + "::" + revision;
             if (graphData && contentKey === _graphContentKey && !_sceneCacheDirty) {
                 lastModelBuildMs = 0;
+                loadedStarmapId = starmapId;
+                loadedGraphKey = contentKey;
                 if (invalidatePreview === true)
                     invalidatePreviewCache();
                 return;
             }
+            if (graphDataCache)
+                graphDataCache[starmapId] = { graph: graph, contentKey: contentKey }
             _graphContentKey = contentKey;
             graphData = graph;
+            loadedStarmapId = starmapId;
+            loadedGraphKey = contentKey;
             _sceneCacheDirty = true;
             if (invalidatePreview === true)
                 invalidatePreviewCache();
@@ -303,6 +338,7 @@ QtObject {
             computeEdgeRenders(null);
             lastModelBuildMs = Date.now() - buildStarted;
             console.debug("[starmap-perf] starmap=" + starmapId
+                          + " revision=" + revision
                           + " graphLoadMs=" + lastGraphLoadMs
                           + " modelBuildMs=" + lastModelBuildMs);
             graphChanged();

@@ -643,7 +643,10 @@ Item {
     property real _zoomTargetLevel: 1.0
     // 缩放帧只判断是否命中穿越入口；真正的场景准备放到下一轮事件循环，
     // 避免把 Loader/委托/文字排版塞进当前缩放帧。
+    // 兼容旧名：单份 pendingTraversal 会覆盖同一事件循环内的后续滚动。
     property bool _canvasSwitchScheduled: false
+    property var pendingTraversal: null
+    property int traversalGeneration: 0
     // 滚轮累计的目标比例（下一档从它继续乘，滚轮手感连续）。
     readonly property real zoomTargetLevel: _zoomTargetLevel
     // 只由缩放补间写的显示帧值；变化时推进显示镜头。
@@ -719,15 +722,32 @@ Item {
     // 然后只用**正在显示**的投影直径评估画布穿越（放大只进场、缩小只退场）。
     // 命中与穿越因此永远与看得见的画面一致，绝不从尚未显示的未来缩放值跳过。
     function scheduleCanvasTraversal(zoomingIn, screenX, screenY) {
-        if (_canvasSwitchScheduled)
-            return
-        _canvasSwitchScheduled = true
-        var anchorX = screenX
-        var anchorY = screenY
+        // 同一事件循环内可能连续收到多帧滚轮/捏合事件。保留最新一份意图，
+        // 而不是锁定第一帧的方向与锚点；执行前再核对 route 与方向。
+        traversalGeneration += 1
+        var generation = traversalGeneration
+        pendingTraversal = {
+            generation: generation,
+            zoomingIn: zoomingIn,
+            screenX: screenX,
+            screenY: screenY,
+            zoomLevel: zoomLevel,
+            routeKey: routeKey
+        }
         Qt.callLater(function() {
-            canvasArea._canvasSwitchScheduled = false
-            if (zoomingIn)
-                canvasArea.maybeEnterEmbedAt(anchorX, anchorY)
+            var pending = canvasArea.pendingTraversal
+            if (!pending || pending.generation !== generation)
+                return
+            canvasArea.pendingTraversal = null
+            if (canvasArea.routeKey !== pending.routeKey)
+                return
+            // 反向滚动后旧方向失效；锚点使用最新一帧的屏幕位置。
+            if (pending.zoomingIn && canvasArea.zoomLevel < pending.zoomLevel)
+                return
+            if (!pending.zoomingIn && canvasArea.zoomLevel > pending.zoomLevel)
+                return
+            if (pending.zoomingIn)
+                canvasArea.maybeEnterEmbedAt(pending.screenX, pending.screenY)
             else
                 canvasArea.maybeExitCanvas()
         })
@@ -1726,6 +1746,9 @@ Item {
 
     // 菜单辅助状态：菜单归属就是当前活动画布。
     property var menuOwnerContent: null
+    // 跨 Scene 复用的图 DTO 缓存：key = starmapId，value = { graph, contentKey }。
+    // 写入成功 / 工作区事件走 loadGraph(true) 强制刷新。
+    property var _graphDataCache: ({})
     property var selectedNodeForMenu: null
     property var selectedEdgeForMenu: null
     property var selectedEmbedForMenu: null
@@ -1803,6 +1826,7 @@ Item {
             pathSegments: canvasArea.outgoingRoute ? canvasArea.outgoingRoute.segments : []
             scenePathKey: canvasArea.outgoingRouteKey
             starmapBackendRef: canvasArea.starmapBackendRef
+            graphDataCache: canvasArea._graphDataCache
             selectionController: canvasArea.selectionController
             interactionController: canvasArea.sharedInteraction
             menuHost: canvasArea
@@ -1874,6 +1898,7 @@ Item {
             pathSegments: canvasArea.currentRoute.segments
             scenePathKey: canvasArea.routeKey
             starmapBackendRef: canvasArea.starmapBackendRef
+            graphDataCache: canvasArea._graphDataCache
             selectionController: canvasArea.selectionController
             interactionController: canvasArea.sharedInteraction
             menuHost: canvasArea

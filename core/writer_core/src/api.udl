@@ -685,6 +685,7 @@ dictionary StarMapGraphDto {
     sequence<StarMapEmbedDto> embeds;
     sequence<StarMapLinkDto> links;
     sequence<StarMapNodeAssetBindingDto> asset_bindings;
+    u64 package_revision;
 };
 
 dictionary StarMapNodeDto {

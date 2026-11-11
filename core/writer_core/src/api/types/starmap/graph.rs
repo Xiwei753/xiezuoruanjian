@@ -20,6 +20,9 @@ pub struct StarMapGraphDto {
     pub links: Vec<StarMapLinkDto>,
     #[serde(default)]
     pub asset_bindings: Vec<StarMapNodeAssetBindingDto>,
+    /// Core 图的 package revision；平台端只作为内容缓存身份，不写回业务数据。
+    #[serde(default)]
+    pub package_revision: u64,
 }
 
 impl From<crate::starmap::types::StarMapGraph> for StarMapGraphDto {
@@ -32,6 +35,7 @@ impl From<crate::starmap::types::StarMapGraph> for StarMapGraphDto {
             embeds: g.embeds.into_iter().map(Into::into).collect(),
             links: g.links.into_iter().map(Into::into).collect(),
             asset_bindings: Vec::new(),
+            package_revision: 0,
         }
     }
 }
