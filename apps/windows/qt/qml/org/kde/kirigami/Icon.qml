@@ -1,13 +1,18 @@
 import QtQuick
 
-Text {
+Item {
     id: root
 
     property string source: ""
     property int sourceSize: 16
+    property color color: Theme.textColor
 
-    // Keep the same KDE icon names used by the shared Linux QML pages.
-    // Windows doesn't ship Breeze icons, so map them to available system glyphs.
+    // The shared QML uses the Kirigami Icon's Item geometry and color.
+    // Text.implicitWidth/implicitHeight are read-only in Qt 6, so draw the
+    // fallback glyph inside an Item instead of assigning them on Text.
+    implicitWidth: sourceSize
+    implicitHeight: sourceSize
+
     function glyphFor(name) {
         switch (name || "") {
         case "arrow-left": return "\u2190"
@@ -30,16 +35,13 @@ Text {
         }
     }
 
-    text: glyphFor(source)
-    // The shared QML controls specify icon dimensions through width or
-    // implicitWidth, not through a Kirigami-specific sourceSize property.
-    // The implicit geometry must not depend on contentWidth/Height here,
-    // otherwise font-size bindings would loop as the icon grows.
-    implicitWidth: sourceSize
-    implicitHeight: sourceSize
-    font.pixelSize: Math.max(1, Math.min(width, height))
-    font.family: "Segoe UI Symbol"
-    color: Theme.textColor
-    horizontalAlignment: Text.AlignHCenter
-    verticalAlignment: Text.AlignVCenter
+    Text {
+        anchors.fill: parent
+        text: root.glyphFor(root.source)
+        font.pixelSize: Math.max(1, Math.min(root.width, root.height))
+        font.family: "Segoe UI Symbol"
+        color: root.color
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
+    }
 }
