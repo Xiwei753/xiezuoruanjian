@@ -430,6 +430,9 @@ pub fn run() {
 
     let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();
+    // Qt 6 的内置 QML 模块搜索路径：Windows Kirigami 兼容组件以
+    // qrc:/qt/qml/org/kde/.../qmldir 注册在这里。
+    engine.add_import_path("qrc:/qt/qml".into());
     engine.add_import_path("qrc:/".into());
     log_desktop_runtime_profile(&qt_ver, qml_path);
     log_input_method_diagnostics();
