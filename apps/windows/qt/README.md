@@ -28,7 +28,7 @@
 
 ## 构建
 
-前置：Windows 10/11 x64、MSVC、Rust `x86_64-pc-windows-msvc`、Qt 6.8+
+前置：Windows 10/11 x64、MSVC、Rust `x86_64-pc-windows-msvc`、Qt 6.11+
 MSVC x64（`qmake.exe` 在 `PATH`，或设置 `QMAKE` / `QT_ROOT`），
 以及 Python 3（构建期间获取带 SHA-256 校验的离线纠错模型和 Windows ONNX Runtime）。
 
