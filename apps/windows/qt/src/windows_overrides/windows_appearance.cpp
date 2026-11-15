@@ -1,14 +1,21 @@
 // Windows 深浅色应用桥。
 //
 // 与 Linux 的 KDE 配色桥保持同一个 C 符号和返回值约定，Rust 侧
-// native/kde_color_scheme.rs 无需分叉。只切换应用调色板，不改正文渲染。
+// native/kde_color_scheme.rs 无需分叉。Windows 不手写视觉 token：显式
+// 深浅色由 Qt 颜色方案（Qt/Breeze/Kirigami 主题链）推导，这里只做切换。
+// 另外为便携包注册随包 Breeze 图标主题的搜索路径，供 Kirigami.Icon 与
+// KIconThemes 在无系统 KDE 安装的 Windows 机器上找到真实图标。
 
 #include <QApplication>
-#include <QColor>
+#include <QCoreApplication>
+#include <QDir>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QPalette>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QString>
+#include <QStringList>
 #include <QStyleHints>
 #include <QtGlobal>
 
@@ -23,43 +30,6 @@ bool systemPrefersDark()
     return settings.value(QStringLiteral("AppsUseLightTheme"), 1).toInt() == 0;
 }
 
-void applyPalette(bool dark)
-{
-    QPalette palette;
-    if (dark) {
-        palette.setColor(QPalette::Window, QColor(32, 32, 32));
-        palette.setColor(QPalette::WindowText, QColor(238, 238, 238));
-        palette.setColor(QPalette::Base, QColor(24, 24, 24));
-        palette.setColor(QPalette::AlternateBase, QColor(40, 40, 40));
-        palette.setColor(QPalette::Text, QColor(238, 238, 238));
-        palette.setColor(QPalette::Button, QColor(45, 45, 45));
-        palette.setColor(QPalette::ButtonText, QColor(238, 238, 238));
-        palette.setColor(QPalette::Highlight, QColor(0, 120, 212));
-        palette.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
-        palette.setColor(QPalette::ToolTipBase, QColor(45, 45, 45));
-        palette.setColor(QPalette::ToolTipText, QColor(238, 238, 238));
-        palette.setColor(QPalette::PlaceholderText, QColor(160, 160, 160));
-        palette.setColor(QPalette::Disabled, QPalette::Text, QColor(130, 130, 130));
-        palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(130, 130, 130));
-    } else {
-        palette.setColor(QPalette::Window, QColor(243, 243, 243));
-        palette.setColor(QPalette::WindowText, QColor(32, 32, 32));
-        palette.setColor(QPalette::Base, QColor(255, 255, 255));
-        palette.setColor(QPalette::AlternateBase, QColor(247, 247, 247));
-        palette.setColor(QPalette::Text, QColor(32, 32, 32));
-        palette.setColor(QPalette::Button, QColor(251, 251, 251));
-        palette.setColor(QPalette::ButtonText, QColor(32, 32, 32));
-        palette.setColor(QPalette::Highlight, QColor(0, 120, 212));
-        palette.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
-        palette.setColor(QPalette::ToolTipBase, QColor(255, 255, 255));
-        palette.setColor(QPalette::ToolTipText, QColor(32, 32, 32));
-        palette.setColor(QPalette::PlaceholderText, QColor(120, 120, 120));
-        palette.setColor(QPalette::Disabled, QPalette::Text, QColor(160, 160, 160));
-        palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(160, 160, 160));
-    }
-    QApplication::setPalette(palette);
-}
-
 } // namespace
 
 extern "C" int sujian_kde_color_scheme_apply(const char *mode)
@@ -69,31 +39,49 @@ extern "C" int sujian_kde_color_scheme_apply(const char *mode)
     }
 
     const QString requested = QString::fromUtf8(mode).trimmed().toLower();
-    const bool system = requested == QLatin1String("system");
-    bool dark = false;
-    if (system) {
-        dark = systemPrefersDark();
-    } else if (requested == QLatin1String("dark")) {
-        dark = true;
-    } else if (requested == QLatin1String("light")) {
-        dark = false;
-    } else {
-        return 1;
-    }
-
-    if (system) {
+    if (requested == QLatin1String("system")) {
         // 先清除显式设置过的调色板角色，否则 qt 只会刷新系统默认 palette 条目，
-        // 手动深色留下的 QPalette 会继续生效。再回到 Unknown，让 Qt/Windows
-        // 自己推送系统主题变化。
+        // 手动深色留下的 QPalette 会继续生效。再回到 Unknown，让 Qt/Breeze
+        // 自己按 Windows 深浅色推送系统主题变化。
         QGuiApplication::setPalette(QPalette());
         QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Unknown);
         return 0;
     }
 
+    bool dark = false;
+    if (requested == QLatin1String("dark")) {
+        dark = true;
+    } else if (requested != QLatin1String("light")) {
+        return 1;
+    }
+
+    // 配色不再手写 Windows 独立调色板：颜色由 Qt 颜色方案驱动，控件、
+    // Kirigami Theme 与共享 QML 主题取同一来源。
     QGuiApplication::styleHints()->setColorScheme(
         dark ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light);
-    // setColorScheme 可能触发 Qt 重新套用默认调色板；随后写入应用自定义调色板，
-    // 保证显式浅色/深色选择最终生效。
-    applyPalette(dark);
     return 0;
+}
+
+extern "C" void sujian_windows_icon_theme_init(const char *app_dir)
+{
+    if (app_dir == nullptr) {
+        return;
+    }
+    const QDir dir(QString::fromUtf8(app_dir));
+
+    QStringList paths;
+    // 便携包随包 Breeze 图标主题（deploy.ps1 复制到 exe 旁的 share/icons）。
+    const QString bundled = dir.filePath(QStringLiteral("share/icons"));
+    if (QDir(bundled).exists()) {
+        paths << bundled;
+    }
+    // 开发机 / Craft 安装的数据目录兜底。
+    const QStringList dataDirs =
+        QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
+    for (const QString &dataDir : dataDirs) {
+        paths << dataDir + QStringLiteral("/icons");
+    }
+    QIcon::setThemeSearchPaths(paths);
+    QIcon::setThemeName(QStringLiteral("breeze"));
+    QIcon::setFallbackThemeName(QStringLiteral("breeze"));
 }

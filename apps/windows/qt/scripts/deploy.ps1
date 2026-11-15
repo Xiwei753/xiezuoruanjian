@@ -2,6 +2,7 @@ param(
     [ValidateSet("debug", "release")]
     [string]$Configuration = "release",
     [string]$QtRoot = $env:QT_ROOT,
+    [string]$CraftRoot = $env:CRAFT_ROOT,
     [string]$OutputDir = ""
 )
 
@@ -36,13 +37,11 @@ $Windeployqt = if ($QtRoot) {
 }
 
 # QRC 已把 QML 编译进 exe；windeployqt 仍需要扫描 qmldir 才能收集 Qt 模块。
-$WindowsQml = Join-Path $AppDir "qml"
+# 共享 QML 与 Linux 同源。org.kde.* QML 模块（Kirigami/KirigamiAddons 等）
+# 不是 Qt 官方模块，windeployqt 不会收集，由下方 Craft 部署段随包复制。
 $LinuxQml = Join-Path $RepoRoot "apps\Linux_qt\qml"
 $CommonArgs = @("--dir", $OutputDir, "--compiler-runtime")
 if ($Configuration -eq "release") { $CommonArgs += "--release" } else { $CommonArgs += "--debug" }
-
-& $Windeployqt @CommonArgs "--qmldir" $WindowsQml $Exe
-if ($LASTEXITCODE -ne 0) { throw "windeployqt (Windows QML) 失败" }
 
 & $Windeployqt @CommonArgs "--qmldir" $LinuxQml $Exe
 if ($LASTEXITCODE -ne 0) { throw "windeployqt (共享 QML) 失败" }
@@ -96,6 +95,64 @@ foreach ($name in @("MSVCP140.dll", "MSVCP140_1.dll", "MSVCP140_2.dll", "VCRUNTI
     }
 }
 Write-Host "MSVC x64 CRT 已部署：$CrtDir"
+
+# KDE Kirigami / KirigamiAddons / qqc2-desktop-style / KIconThemes / Breeze
+# 运行时由 KDE Craft 构建并与构建用 Qt 同一 MSVC ABI（共享 QML 的
+# Kirigami.ApplicationWindow、FormCard 等直接使用真实 KDE 组件，不再使用
+# 仓库内手写替身）。windeployqt 不收集非 Qt 的 org.kde.* 模块，必须从
+# CraftRoot 随包复制，并通过 qt.conf 的 QmlImports = qml 定位。
+if (-not $CraftRoot) {
+    throw "需要 -CraftRoot 或环境变量 CRAFT_ROOT 指向 KDE Craft 安装，以便随包部署 Kirigami 运行时。"
+}
+$CraftRootPath = (Resolve-Path $CraftRoot).Path
+$CraftQml = Join-Path $CraftRootPath "qml"
+if (-not (Test-Path -LiteralPath (Join-Path $CraftQml "org\kde\kirigami\qmldir") -PathType Leaf)) {
+    throw "Craft 安装缺少 org.kde.kirigami QML 模块：$CraftQml（请先 craft 安装 kde/kirigami）"
+}
+$KdeQmlTarget = Join-Path $OutputDir "qml\org\kde"
+New-Item -ItemType Directory -Force -Path $KdeQmlTarget | Out-Null
+Copy-Item -Path (Join-Path $CraftQml "org\kde\*") -Destination $KdeQmlTarget -Recurse -Force
+foreach ($rel in @(
+    "kirigami\qmldir",
+    "kirigamiaddons\formcard\qmldir",
+    "kirigamiaddons\delegates\qmldir",
+    "kirigamiaddons\dateandtime\qmldir"
+)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $KdeQmlTarget $rel) -PathType Leaf)) {
+        throw "KDE QML 模块部署不完整：缺少 org/kde/$rel（CraftRoot: $CraftRootPath）"
+    }
+}
+$DesktopStyleSource = Join-Path $CraftQml "QtQuick\Controls\org.kde.desktop"
+if (Test-Path -LiteralPath $DesktopStyleSource -PathType Container) {
+    $StyleTarget = Join-Path $OutputDir "qml\QtQuick\Controls"
+    New-Item -ItemType Directory -Force -Path $StyleTarget | Out-Null
+    Copy-Item -LiteralPath $DesktopStyleSource -Destination $StyleTarget -Recurse -Force
+}
+$KdeRuntimeDlls = Get-ChildItem -LiteralPath (Join-Path $CraftRootPath "bin") -Filter "lib*.dll" -ErrorAction SilentlyContinue
+foreach ($dll in $KdeRuntimeDlls) {
+    Copy-Item -LiteralPath $dll.FullName -Destination $OutputDir -Force
+}
+if (-not $KdeRuntimeDlls) {
+    throw "CraftRoot bin 目录缺少 KDE 运行库 DLL：$CraftRootPath\bin"
+}
+$IconSourceRoot = Join-Path $CraftRootPath "share\icons"
+if (Test-Path -LiteralPath $IconSourceRoot -PathType Container) {
+    $IconTarget = Join-Path $OutputDir "share\icons"
+    New-Item -ItemType Directory -Force -Path $IconTarget | Out-Null
+    Get-ChildItem -LiteralPath $IconSourceRoot -Directory -Filter "breeze*" | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $IconTarget -Recurse -Force
+    }
+}
+if (-not (Test-Path -LiteralPath (Join-Path $OutputDir "share\icons\breeze") -PathType Container)) {
+    throw "Breeze 图标主题未随包部署（CraftRoot: $CraftRootPath）"
+}
+$LicenseSource = Join-Path $CraftRootPath "share\licenses"
+if (Test-Path -LiteralPath $LicenseSource -PathType Container) {
+    $LicenseTarget = Join-Path $OutputDir "share\licenses"
+    New-Item -ItemType Directory -Force -Path $LicenseTarget | Out-Null
+    Copy-Item -Path (Join-Path $LicenseSource "*") -Destination $LicenseTarget -Recurse -Force
+}
+Write-Host "KDE Kirigami 运行时与 Breeze 图标已随包部署（来源：$CraftRootPath）"
 
 # Bundle MacBERT4CSC and the native Windows ONNX Runtime fetched by build.ps1.
 $CorrectionRoot = Join-Path $AppDir "generated\correction"

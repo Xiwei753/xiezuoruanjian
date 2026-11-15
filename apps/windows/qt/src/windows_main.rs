@@ -6,6 +6,7 @@
 use qmetaobject::log::{install_message_handler, QMessageLogContext, QtMsgType};
 use qmetaobject::prelude::*;
 use qmetaobject::QString;
+use std::ffi::CString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -220,7 +221,28 @@ fn log_input_method_diagnostics() {
     app_main_cpp::log_input_method_diagnostics();
 }
 
-const QRC_RESOURCE_REVISION: &str = concat!(env!("CARGO_PKG_VERSION"), ":windows_qml_resources_v1");
+const QRC_RESOURCE_REVISION: &str = concat!(env!("CARGO_PKG_VERSION"), ":windows_qml_resources_v2");
+
+extern "C" {
+    // 由 src/windows_overrides/windows_appearance.cpp 提供。
+    fn sujian_windows_icon_theme_init(app_dir: *const std::os::raw::c_char);
+}
+
+/// 让 Kirigami.Icon / KIconThemes 在无系统 KDE 安装的 Windows 机器上
+/// 找到便携包随带的 Breeze 图标主题。
+fn init_bundled_icon_theme() {
+    let Some(app_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    else {
+        return;
+    };
+    let Ok(dir) = CString::new(app_dir.to_string_lossy().as_bytes()) else {
+        return;
+    };
+    // SAFETY: dir 是以 NUL 结尾的有效 C 字符串，仅在本调用期间被读取。
+    unsafe { sujian_windows_icon_theme_init(dir.as_ptr()) };
+}
 
 struct DesktopRuntimeProfile {
     runtime_profile: String,
@@ -327,6 +349,11 @@ fn configure_bundled_correction_assets() {
 
 pub fn run() {
     configure_bundled_correction_assets();
+    // Windows 上 Qt Quick Controls 默认选择 windows style；与 Linux KDE/Plasma
+    // 一致地强制使用随包部署的 org.kde.desktop（qqc2-desktop-style），
+    // 控件形状、间距和配色因此由同一份 KDE 样式与共享 QML 主题决定。
+    std::env::set_var("QT_QUICK_CONTROLS_STYLE", "org.kde.desktop");
+    init_bundled_icon_theme();
     diagnostics::init_build_identity();
     let app_version = env!("CARGO_PKG_VERSION");
     let build_key = diagnostics::effective_build_key().to_string();
@@ -430,22 +457,16 @@ pub fn run() {
 
     let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();
-    // Qt 6 的内置 QML 模块搜索路径：Windows Kirigami 兼容组件以
-    // qrc:/qt/qml/org/kde/.../qmldir 注册在这里。
-    engine.add_import_path("qrc:/qt/qml".into());
+    // org.kde.kirigami / kirigamiaddons / qqc2-desktop style 不再以手写 QRC
+    // 替身承载：开发机由 Qt 安装目录（QT_INSTALL_QML，Craft 的 qml/）提供，
+    // 便携包由 exe 旁的 qml/ 目录提供（qt.conf QmlImports = qml）。
     engine.add_import_path("qrc:/".into());
 
     // Check actual registered resource paths, not just whether the source QML
     // files exist in the repository. They must be visible to this Qt process.
-    for path in [
-        ":/main.qml",
-        ":/qt/qml/org/kde/kirigami/qmldir",
-        ":/qt/qml/org/kde/kirigami/Theme.qml",
-        ":/qt/qml/org/kde/kirigami/Units.qml",
-        ":/qt/qml/org/kde/kirigamiaddons/formcard/qmldir",
-        ":/qt/qml/org/kde/kirigamiaddons/delegates/qmldir",
-        ":/qt/qml/org/kde/kirigamiaddons/dateandtime/qmldir",
-    ] {
+    // KDE QML 模块来自外部文件系统，缺失会在 QML 加载阶段以
+    // "is not installed" 捕获并退出。
+    for path in [":/main.qml", ":/i18n/zh_CN.qm"] {
         let exists = app_main_cpp::qrc_resource_exists(path);
         eprintln!("[WindowsQmlResource] {path}: exists={exists}");
         if !exists {

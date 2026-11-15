@@ -1,7 +1,9 @@
 //! Windows Qt 前端构建脚本。
 //!
 //! 负责：
-//! 1. 生成 QRC 资源清单（Linux 通用 QML + Windows 平台 QML 覆盖）。
+//! 1. 生成 QRC 资源清单（与 Linux 共用同一份通用 QML，包括 Kirigami
+//!    ApplicationWindow 壳层 main.qml；org.kde.* QML 模块由随包部署的
+//!    KDE Craft 运行时提供，不再在仓库内保留手写替身）。
 //! 2. 在 Windows 目标上探测 Qt6，编译 Windows 平台 C++，并校验 `.qsb`。
 //! 3. 注入诊断所需的构建身份环境变量。
 //!
@@ -40,7 +42,6 @@ fn main() {
     );
 
     prepare_shared_sources();
-    prepare_windows_main_qml();
     let translation = compile_translations(&qt);
     generate_qrc_resources(&translation);
     emit_qsb_rerun(&qt);
@@ -144,28 +145,6 @@ fn copy_rs_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 从 Linux `main.qml` 生成 Windows 壳层：根节点改用 Qt Quick Controls
-/// `ApplicationWindow`，去掉 Kirigami `pageStack` 专属行；通用页面和
-/// Theme/Units token 仍直接复用，避免维护整份分叉副本。
-fn prepare_windows_main_qml() {
-    let src_path = Path::new(LINUX_QT_DIR).join("qml/main.qml");
-    println!("cargo:rerun-if-changed={}", src_path.display());
-    let source = fs::read_to_string(&src_path)
-        .unwrap_or_else(|e| panic!("读取 {} 失败：{e}", src_path.display()));
-    let generated = source
-        .replace("Kirigami.ApplicationWindow {", "ApplicationWindow {")
-        .replace(
-            "    pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None\n",
-            "",
-        );
-    if generated == source {
-        panic!("Windows main.qml 生成失败：未找到可替换的 Kirigami.ApplicationWindow");
-    }
-    let out_dir = Path::new("generated");
-    fs::create_dir_all(out_dir).expect("创建 generated 失败");
-    fs::write(out_dir.join("main.qml"), generated).expect("写入 generated/main.qml 失败");
-}
-
 /// 用 Qt 官方 `lrelease.exe` 从 Linux 共享的 `.ts` 生成 Windows 自己的 `.qm`。
 /// 不依赖 Linux 构建留下的 `apps/Linux_qt/i18n/zh_CN.qm` 副产物。
 fn compile_translations(qt: &Qt6BuildInfo) -> PathBuf {
@@ -221,47 +200,20 @@ fn compile_translations(qt: &Qt6BuildInfo) -> PathBuf {
 /// 生成 `$OUT_DIR/qrc_resources.rs`。
 ///
 /// qmetaobject 的 qrc! 宏按 Cargo.toml 所在目录解析物理路径；这里把
-/// Linux_qt 的通用 QML/JS、Windows 专有 QML、着色器、图标和翻译统一登记到
-/// 同一个虚拟根路径。Windows qml 中同名 alias 优先，避免通用文件覆盖平台文件。
+/// Linux_qt 的通用 QML/JS（含完整 Kirigami main.qml 壳层）、着色器、图标和
+/// 翻译统一登记到同一个虚拟根路径。org.kde.* QML 模块不在 QRC 内，由
+/// 开发机 Qt 安装或便携包 `qml/` 目录（qt.conf）在运行时提供。
 fn generate_qrc_resources(translation: &Path) {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR 未设置"));
     let mut entries: Vec<(String, String)> = Vec::new();
     let mut aliases = std::collections::BTreeSet::new();
 
-    // Windows 专有 QML：递归登记，保持 org/kde/... 模块目录结构。
-    collect_files(Path::new("qml"), &mut |path| {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or_default();
-        let is_qmldir = path.file_name().is_some_and(|name| name == "qmldir");
-        // Qt QML modules use the extensionless file named "qmldir". Checking
-        // Path::extension() alone silently omits every module descriptor.
-        if !matches!(ext, "qml" | "js") && !is_qmldir {
-            return;
-        }
-        let rel = path
-            .strip_prefix("qml")
-            .expect("qml 路径前缀")
-            .to_string_lossy()
-            .replace('\\', "/");
-        // Qt 6.5+ 在 qrc:/qt/qml 下自动发现 QML 模块。Windows 的 Kirigami
-        // 兼容模块必须放在该标准模块路径；其他页面仍放在原 qrc 根目录。
-        let alias = if rel.starts_with("org/kde/") {
-            format!("qt/qml/{rel}")
-        } else {
-            rel
-        };
-        push_entry(&mut entries, &mut aliases, path, &alias);
-    });
+    // 与 Linux 共用完整 main.qml：根窗口保持 Kirigami.ApplicationWindow，
+    // 由随包部署的 KDE Kirigami QML 模块承载，不再生成 Windows 替换版。
+    let main_qml = Path::new(LINUX_QT_DIR).join("qml/main.qml");
+    println!("cargo:rerun-if-changed={}", main_qml.display());
+    push_entry(&mut entries, &mut aliases, &main_qml, "main.qml");
 
-    // Windows 壳层：由 Linux main.qml 生成，只替换窗口根类型。
-    push_entry(
-        &mut entries,
-        &mut aliases,
-        Path::new("generated/main.qml"),
-        "main.qml",
-    );
     // Linux 通用 QML：只登记目录顶层文件（与 Linux main.rs 的 qrc 清单一致）。
     let linux_qml = Path::new(LINUX_QT_DIR).join("qml");
     collect_top_level_files(&linux_qml, &mut |path| {
@@ -280,7 +232,7 @@ fn generate_qrc_resources(translation: &Path) {
         if name.starts_with("tst_") {
             return;
         }
-        // Windows 专有文件已先登记时，同名 Linux 入口不再重复登记。
+        // main.qml 已作为入口显式登记，其余同名顶层文件不再重复登记。
         if aliases.contains(&name) {
             return;
         }
@@ -351,21 +303,6 @@ fn collect_top_level_files(dir: &Path, f: &mut impl FnMut(&Path)) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_file() {
-            f(&path);
-        }
-    }
-}
-
-fn collect_files(dir: &Path, f: &mut impl FnMut(&Path)) {
-    println!("cargo:rerun-if-changed={}", dir.display());
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_files(&path, f);
-        } else {
             f(&path);
         }
     }

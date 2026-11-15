@@ -33,26 +33,44 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Install Qt 6.11 MSVC
+      - name: Install Qt 6.11 MSVC and KDE runtime via Craft
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          # aqtinstall 3.3.0 cannot parse the official Qt 6.11+ Windows
-          # repository layout (upstream miurahr/aqtinstall#1000).
-          # Pin a commit containing that upstream fix until the next release.
-          python -m pip install "git+https://github.com/miurahr/aqtinstall.git@5a49f2b391ae8ee1d3c0dd87f8b33c1d49a4deb7"
-          if ($LASTEXITCODE -ne 0) { throw "Installing patched aqtinstall failed" }
-          $qtDirBase = Join-Path $env:GITHUB_WORKSPACE "_qt"
-          python -m aqt install-qt windows desktop 6.11.3 win64_msvc2022_64 --outputdir $qtDirBase --modules qtshadertools
-          if ($LASTEXITCODE -ne 0) { throw "Installing Qt 6.11.3 failed" }
-          $qtDir = Join-Path $qtDirBase "6.11.3/msvc2022_64"
-          if (-not (Test-Path -LiteralPath (Join-Path $qtDir "bin/qmake.exe"))) {
-            throw "Qt 6.11.3 installation missing qmake.exe: $qtDir"
+          # Windows 便携包必须携带真正的 KDE Kirigami / KirigamiAddons /
+          # qqc2-desktop-style / KIconThemes / Breeze 运行时，与 Linux 共享 QML
+          # （Kirigami.ApplicationWindow、FormCard 等）保持同一实现。
+          # 按 KDE 官方文档用 Craft 安装（develop.kde.org/docs/getting-started/
+          # kirigami/setup-cpp/）；Craft 同时提供本项目构建所需的 Qt 6.11 MSVC
+          # x64，以此统一 Qt/KDE 的 ABI 来源，不并存两套 Qt。KDE CI 使用同一
+          # CraftConfig.ini，其缓存服务器提供 MSVC 预编译二进制。
+          git clone --depth=1 https://invent.kde.org/packaging/ci-utilities.git
+          python ci-utilities/prepare-craft.py --platform windows-msvc2022-amd64
+          if ($LASTEXITCODE -ne 0) { throw "Preparing KDE Craft failed" }
+          foreach ($package in @(
+            "qt6/qtshadertools",
+            "qt6/qttools",
+            "kde/kirigami",
+            "kde/kirigami-addons",
+            "kde/kiconthemes",
+            "kde/qqc2-desktop-style",
+            "kde/breeze"
+          )) {
+            python CraftRoot/bin/craft.py --target windows-msvc2022-amd64 $package
+            if ($LASTEXITCODE -ne 0) { throw "Craft install failed for $package" }
           }
-          Add-Content -LiteralPath $env:GITHUB_ENV -Value "QT_ROOT_DIR=$qtDir"
-          Add-Content -LiteralPath $env:GITHUB_ENV -Value "QT_PLUGIN_PATH=$(Join-Path $qtDir 'plugins')"
-          Add-Content -LiteralPath $env:GITHUB_ENV -Value "QML2_IMPORT_PATH=$(Join-Path $qtDir 'qml')"
-          Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $qtDir "bin")
+          $craftRoot = (Resolve-Path "./CraftRoot").Path
+          if (-not (Test-Path -LiteralPath (Join-Path $craftRoot "bin/qmake.exe"))) {
+            throw "Craft Qt installation missing qmake.exe: $craftRoot"
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $craftRoot "qml/org/kde/kirigami/qmldir"))) {
+            throw "Craft installation missing org.kde.kirigami QML module: $craftRoot"
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "CRAFT_ROOT=$craftRoot"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "QT_ROOT_DIR=$craftRoot"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "QT_PLUGIN_PATH=$(Join-Path $craftRoot 'plugins')"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "QML2_IMPORT_PATH=$(Join-Path $craftRoot 'qml')"
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $craftRoot "bin")
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
