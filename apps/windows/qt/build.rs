@@ -234,7 +234,10 @@ fn generate_qrc_resources(translation: &Path) {
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or_default();
-        if !matches!(ext, "qml" | "js" | "qmldir") {
+        let is_qmldir = path.file_name().is_some_and(|name| name == "qmldir");
+        // Qt QML modules use the extensionless file named "qmldir". Checking
+        // Path::extension() alone silently omits every module descriptor.
+        if !matches!(ext, "qml" | "js") && !is_qmldir {
             return;
         }
         let rel = path
