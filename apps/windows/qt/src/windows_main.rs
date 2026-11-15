@@ -434,6 +434,27 @@ pub fn run() {
     // qrc:/qt/qml/org/kde/.../qmldir 注册在这里。
     engine.add_import_path("qrc:/qt/qml".into());
     engine.add_import_path("qrc:/".into());
+
+    // Check actual registered resource paths, not just whether the source QML
+    // files exist in the repository. They must be visible to this Qt process.
+    for path in [
+        ":/main.qml",
+        ":/qt/qml/org/kde/kirigami/qmldir",
+        ":/qt/qml/org/kde/kirigami/Theme.qml",
+        ":/qt/qml/org/kde/kirigami/Units.qml",
+        ":/qt/qml/org/kde/kirigamiaddons/formcard/qmldir",
+        ":/qt/qml/org/kde/kirigamiaddons/delegates/qmldir",
+        ":/qt/qml/org/kde/kirigamiaddons/dateandtime/qmldir",
+    ] {
+        let exists = app_main_cpp::qrc_resource_exists(path);
+        eprintln!("[WindowsQmlResource] {path}: exists={exists}");
+        if !exists {
+            startup_mark("qml_resource_missing", path);
+            startup_mark_exit(1);
+            std::process::exit(1);
+        }
+    }
+
     log_desktop_runtime_profile(&qt_ver, qml_path);
     log_input_method_diagnostics();
     set_application_icon();
@@ -462,6 +483,11 @@ pub fn run() {
         std::process::exit(1);
     }
     startup_mark("qml_load_ready", "QML loaded");
+    if std::env::var_os("SUJIAN_QML_PROBE").is_some() {
+        eprintln!("SUJIAN_QML_PROBE_OK");
+        startup_mark_exit(0);
+        std::process::exit(0);
+    }
 
     app_main_cpp::install_window_state_probe();
     app_main_cpp::install_graphics_runtime_probe();
