@@ -1,0 +1,47 @@
+name: Windows Qt QML version audit
+on:
+  push:
+    paths:
+      - '.github/workflows/windows_qml_version_audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+      - name: List Qt 6.8 QML incompatibilities
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $qmlLint = Join-Path $env:QT_ROOT_DIR "bin/qmllint.exe"
+          if (-not (Test-Path $qmlLint)) {
+            $qmlLint = Get-ChildItem -Path $env:QT_ROOT_DIR -Filter "qmllint.exe" -Recurse -File | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $qmlLint) { throw "Qt 6.8 qmllint.exe not found" }
+          $windowsQml = (Resolve-Path "./apps/windows/qt/qml").Path
+          $sharedQml = (Resolve-Path "./apps/Linux_qt/qml").Path
+          $files = @(
+            Get-ChildItem $windowsQml -Filter "*.qml" -Recurse -File
+            Get-ChildItem $sharedQml -Filter "*.qml" -File | Where-Object { $_.Name -notlike 'tst_*' }
+          )
+          $matches = 0
+          foreach ($file in $files) {
+            $lines = & $qmlLint -I $windowsQml -I $sharedQml $file.FullName 2>&1
+            foreach ($line in $lines) {
+              $text = "$line"
+              if ($text -match '(?i)(does not exist|cannot assign|is read.only|not writable|unknown property|invalid property|deprecated|was not found)') {
+                Write-Host "QML_AUDIT $($file.FullName) :: $text"
+                $matches++
+              }
+            }
+          }
+          Write-Host "QML_AUDIT_FILES=$($files.Count)"
+          Write-Host "QML_AUDIT_MATCHES=$matches"
