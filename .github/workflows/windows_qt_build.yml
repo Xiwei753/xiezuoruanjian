@@ -42,22 +42,50 @@ jobs:
           # （Kirigami.ApplicationWindow、FormCard 等）保持同一实现。
           # 使用 KDE Craft (packaging/craft) 安装；Craft 同时提供本项目构建所需
           # 的 Qt 6 MSVC x64，以此统一 Qt/KDE 的 ABI 来源，不并存两套 Qt。
-          # KDE CI 使用同一 CraftConfig.ini，其缓存服务器提供 MSVC 预编译二进制。
+
+          # 修复 TLS 证书验证：Craft 自带 PEM 可能过期或不包含所需根证书，
+          # 使用 certifi CA bundle 统一 Python/curl 的 CA 来源，不跳过验证。
+          $certBundle = python -c "import certifi; print(certifi.where())"
+          $env:SSL_CERT_FILE = $certBundle
+          $env:REQUESTS_CA_BUNDLE = $certBundle
+          $env:CURL_CA_BUNDLE = $certBundle
+
           git clone --depth=1 https://invent.kde.org/packaging/craft.git
           python craft/setup/CraftBootstrap.py --prefix C:/CraftRoot --branch master --use-defaults
           if ($LASTEXITCODE -ne 0) { throw "Craft bootstrap failed" }
+
+          # 配置 CraftSettings.ini：使用 26.05 缓存（已发布 Windows MSVC x64
+          # Qt 6.11 预编译二进制；26.10 Windows CI 尚未跟进，manifest 返回 404）。
+          # BuildType 与 KDE CI 一致为 RelWithDebInfo。
+          python -c @'
+          import configparser
+          config = configparser.ConfigParser()
+          config.read(r'C:/CraftRoot/etc/CraftSettings.ini')
+          if not config.has_section('Packager'):
+              config.add_section('Packager')
+          config.set('Packager', 'CacheVersion', '26.05')
+          if not config.has_section('Compile'):
+              config.add_section('Compile')
+          config.set('Compile', 'BuildType', 'RelWithDebInfo')
+          with open(r'C:/CraftRoot/etc/CraftSettings.ini', 'w') as f:
+              config.write(f)
+          '@
+          if ($LASTEXITCODE -ne 0) { throw "CraftSettings.ini configuration failed" }
+
           $craftExe = "C:/CraftRoot/craft/bin/craft.py"
-          $craftTarget = "windows-cl-msvc2022-x86_64"
+          # Craft 的 --target 是包版本/构建目标，不是平台 ABI；ABI 通过
+          # CraftSettings.ini 的 [General] ABI 选择，由 bootstrap 自动写入。
+          # 蓝图路径使用完整层级路径（tier1/tier3/unreleased）。
           foreach ($package in @(
             "qt6/qtshadertools",
             "qt6/qttools",
-            "kde/kirigami",
-            "kde/kirigami-addons",
-            "kde/kiconthemes",
-            "kde/qqc2-desktop-style",
-            "kde/breeze"
+            "kde/frameworks/tier1/kirigami",
+            "kde/unreleased/kirigami-addons",
+            "kde/frameworks/tier3/kiconthemes",
+            "kde/frameworks/tier3/qqc2-desktop-style",
+            "kde/frameworks/tier1/breeze-icons"
           )) {
-            python $craftExe --target $craftTarget $package
+            python $craftExe $package
             if ($LASTEXITCODE -ne 0) { throw "Craft install failed for $package" }
           }
           $craftRoot = "C:/CraftRoot"

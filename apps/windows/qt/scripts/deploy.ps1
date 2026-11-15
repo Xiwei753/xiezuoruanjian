@@ -101,13 +101,30 @@ Write-Host "MSVC x64 CRT 已部署：$CrtDir"
 # Kirigami.ApplicationWindow、FormCard 等直接使用真实 KDE 组件，不再使用
 # 仓库内手写替身）。windeployqt 不收集非 Qt 的 org.kde.* 模块，必须从
 # CraftRoot 随包复制，并通过 qt.conf 的 QmlImports = qml 定位。
+#
+# KDE Frameworks DLL 命名不以 "lib" 开头（如 KF6Kirigami.dll），不能仅凭
+# lib*.dll 筛选；需复制 CraftRoot/bin 下全部 DLL，并按 Qt 目录层级部署
+# QML 模块和插件（imageformats/iconengines/styles），确保递归依赖闭包完整。
 if (-not $CraftRoot) {
     throw "需要 -CraftRoot 或环境变量 CRAFT_ROOT 指向 KDE Craft 安装，以便随包部署 Kirigami 运行时。"
 }
 $CraftRootPath = (Resolve-Path $CraftRoot).Path
+
+# 1. 复制 CraftRoot/bin 下全部 DLL（KDE Frameworks DLL 不以 lib 开头）
+$CraftBin = Join-Path $CraftRootPath "bin"
+$AllDlls = Get-ChildItem -LiteralPath $CraftBin -Filter "*.dll" -ErrorAction SilentlyContinue
+if (-not $AllDlls) {
+    throw "CraftRoot bin 目录缺少 DLL：$CraftBin"
+}
+foreach ($dll in $AllDlls) {
+    Copy-Item -LiteralPath $dll.FullName -Destination $OutputDir -Force
+}
+Write-Host "已复制 $($AllDlls.Count) 个 DLL 从 $CraftBin"
+
+# 2. 复制 KDE QML 模块（org/kde/*）
 $CraftQml = Join-Path $CraftRootPath "qml"
 if (-not (Test-Path -LiteralPath (Join-Path $CraftQml "org\kde\kirigami\qmldir") -PathType Leaf)) {
-    throw "Craft 安装缺少 org.kde.kirigami QML 模块：$CraftQml（请先 craft 安装 kde/kirigami）"
+    throw "Craft 安装缺少 org.kde.kirigami QML 模块：$CraftQml（请先 craft 安装 kde/frameworks/tier1/kirigami）"
 }
 $KdeQmlTarget = Join-Path $OutputDir "qml\org\kde"
 New-Item -ItemType Directory -Force -Path $KdeQmlTarget | Out-Null
@@ -122,19 +139,31 @@ foreach ($rel in @(
         throw "KDE QML 模块部署不完整：缺少 org/kde/$rel（CraftRoot: $CraftRootPath）"
     }
 }
+
+# 3. 复制 QQC2 Desktop Style（QtQuick/Controls/org.kde.desktop）
 $DesktopStyleSource = Join-Path $CraftQml "QtQuick\Controls\org.kde.desktop"
 if (Test-Path -LiteralPath $DesktopStyleSource -PathType Container) {
     $StyleTarget = Join-Path $OutputDir "qml\QtQuick\Controls"
     New-Item -ItemType Directory -Force -Path $StyleTarget | Out-Null
     Copy-Item -LiteralPath $DesktopStyleSource -Destination $StyleTarget -Recurse -Force
+} else {
+    throw "Craft 安装缺少 QQC2 Desktop Style：$DesktopStyleSource（请先 craft 安装 kde/frameworks/tier3/qqc2-desktop-style）"
 }
-$KdeRuntimeDlls = Get-ChildItem -LiteralPath (Join-Path $CraftRootPath "bin") -Filter "lib*.dll" -ErrorAction SilentlyContinue
-foreach ($dll in $KdeRuntimeDlls) {
-    Copy-Item -LiteralPath $dll.FullName -Destination $OutputDir -Force
+
+# 4. 复制 Qt 插件（KDE 组件依赖 imageformats/iconengines/styles）
+$CraftPlugins = Join-Path $CraftRootPath "plugins"
+if (Test-Path -LiteralPath $CraftPlugins -PathType Container) {
+    foreach ($pluginDir in @("imageformats", "iconengines", "styles")) {
+        $srcDir = Join-Path $CraftPlugins $pluginDir
+        if (Test-Path -LiteralPath $srcDir -PathType Container) {
+            $dstDir = Join-Path $OutputDir "plugins\$pluginDir"
+            New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
+            Copy-Item -Path (Join-Path $srcDir "*.dll") -Destination $dstDir -Force
+        }
+    }
 }
-if (-not $KdeRuntimeDlls) {
-    throw "CraftRoot bin 目录缺少 KDE 运行库 DLL：$CraftRootPath\bin"
-}
+
+# 5. 复制 Breeze 图标主题
 $IconSourceRoot = Join-Path $CraftRootPath "share\icons"
 if (Test-Path -LiteralPath $IconSourceRoot -PathType Container) {
     $IconTarget = Join-Path $OutputDir "share\icons"
@@ -146,6 +175,8 @@ if (Test-Path -LiteralPath $IconSourceRoot -PathType Container) {
 if (-not (Test-Path -LiteralPath (Join-Path $OutputDir "share\icons\breeze") -PathType Container)) {
     throw "Breeze 图标主题未随包部署（CraftRoot: $CraftRootPath）"
 }
+
+# 6. 复制许可证
 $LicenseSource = Join-Path $CraftRootPath "share\licenses"
 if (Test-Path -LiteralPath $LicenseSource -PathType Container) {
     $LicenseTarget = Join-Path $OutputDir "share\licenses"
