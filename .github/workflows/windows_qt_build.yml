@@ -59,6 +59,42 @@ jobs:
           & ./apps/windows/qt/scripts/build.ps1 -Configuration release -QtRoot $env:QT_ROOT_DIR
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Run Windows Qt QML startup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $deployDir = (Resolve-Path "./apps/windows/qt/dist/release").Path
+          $exe = Join-Path $deployDir "sujian-windows-qt.exe"
+          $offscreen = Join-Path $env:QT_ROOT_DIR "plugins/platforms/qoffscreen.dll"
+          if (-not (Test-Path -LiteralPath $offscreen)) {
+            throw "Qt offscreen platform plugin missing: $offscreen"
+          }
+          Copy-Item -LiteralPath $offscreen -Destination (Join-Path $deployDir "platforms") -Force
+
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:QT_QUICK_BACKEND = "software"
+          $env:SUJIAN_QML_PROBE = "1"
+          $env:QML_IMPORT_TRACE = "1"
+          $stdout = Join-Path $env:RUNNER_TEMP "sujian-qml-probe-stdout.txt"
+          $stderr = Join-Path $env:RUNNER_TEMP "sujian-qml-probe-stderr.txt"
+          $process = Start-Process -FilePath $exe -WorkingDirectory $deployDir -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          try {
+            if (-not $process.WaitForExit(45000)) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              throw "Windows Qt QML startup did not finish within 45 seconds"
+            }
+            $code = $process.ExitCode
+          } finally {
+            Write-Host "--- Windows QML startup stdout ---"
+            if (Test-Path $stdout) { Get-Content -LiteralPath $stdout -Tail 70 | ForEach-Object { Write-Host $_ } }
+            Write-Host "--- Windows QML startup stderr ---"
+            if (Test-Path $stderr) { Get-Content -LiteralPath $stderr -Tail 160 | ForEach-Object { Write-Host $_ } }
+          }
+          if ($code -ne 0) { throw "Windows Qt QML startup failed: exit code $code" }
+          if (-not (Select-String -LiteralPath $stderr -Pattern "SUJIAN_QML_PROBE_OK" -Quiet)) {
+            throw "Windows Qt QML startup did not reach the loaded state"
+          }
+
       - name: Upload Windows Qt portable package
         uses: actions/upload-artifact@v7
         with:
