@@ -41,7 +41,8 @@ pwsh -File apps/windows/qt/scripts/build.ps1 -Configuration release -QtRoot C:\Q
 
 发布目录内包含 Qt/QML 插件、`sujian_mcp.exe`、VC++ 运行库、
 `models/macbert4csc/`（474 MB FP32 模型及 tokenizer）和
-`onnxruntime.dll` / `onnxruntime_providers_shared.dll`。Windows 桌面端构建
+`onnxruntime.dll` / `onnxruntime_providers_shared.dll`，以及用于便携部署的
+`qt.conf`（`Plugins = .`、`QmlImports = qml`）。Windows 桌面端构建
 启用 `sujian-windows-qt/ai`；启动时从可执行文件所在目录设置内置模型和
 运行库路径，用户设置的外部模型路径仍优先。下载和校验逻辑复用
 `crates/sujian-proof/tools/fetch_model.py` 与同一份 `model_manifest.json`。

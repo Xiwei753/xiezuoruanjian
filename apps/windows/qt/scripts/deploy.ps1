@@ -119,4 +119,12 @@ foreach ($name in @("onnxruntime.dll", "onnxruntime_providers_shared.dll")) {
 }
 Write-Host "Windows 内置纠错模型和 ONNX Runtime 已部署：$ModelTarget"
 
+# Resolve Qt plugins/QML from the portable application directory on ordinary
+# Windows machines that do not have a developer Qt installation.
+$QtConfig = Join-Path $AppDir "qt.conf"
+if (-not (Test-Path -LiteralPath $QtConfig -PathType Leaf)) {
+    throw "缺少 Windows Qt 便携包的 qt.conf：$QtConfig"
+}
+Copy-Item -LiteralPath $QtConfig -Destination (Join-Path $OutputDir "qt.conf") -Force
+
 Write-Host "Windows Qt 发布目录：$OutputDir"
