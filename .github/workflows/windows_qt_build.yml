@@ -86,15 +86,17 @@ jobs:
           # bootstrap 内部执行 `craft craft` 时会通过这两个蓝图重新下载
           # core 和 KDE 蓝图库。不固定 revision 则 defaultTarget = "master"
           # 会拉取滚动 master（26.10 配方），与 26.05 缓存不匹配。
-          # svnTargets 格式: URL|branch|revision（第三段为空=分支最新）
+          # svnTargets 格式: URL|branch|revision；GitSource 不允许同时设置
+          # branch 和 revision（if repoTag and repoBranch → fail），
+          # 所以用空 branch + SHA：URL||<SHA>
           $craftCoreBlueprint = Join-Path $craftSource "blueprints\craft\craft-core\craft-core.py"
           $content = Get-Content -LiteralPath $craftCoreBlueprint -Raw
-          $content = $content -replace 'self\.defaultTarget = "master"', 'self.svnTargets["master"] = f"https://invent.kde.org/packaging/craft.git|master|760cf4a90e8f0a8eeca2d102b337114b706d83d3"`n        self.defaultTarget = "master"'
+          $content = $content.Replace('self.defaultTarget = "master"', 'self.svnTargets["master"] = "https://invent.kde.org/packaging/craft.git||760cf4a90e8f0a8eeca2d102b337114b706d83d3"' + "`n        " + 'self.defaultTarget = "master"')
           Set-Content -LiteralPath $craftCoreBlueprint -Value $content -NoNewline
 
           $kdeBlueprint = Join-Path $craftSource "blueprints\craft\craft-blueprints-kde\craft-blueprints-kde.py"
           $content = Get-Content -LiteralPath $kdeBlueprint -Raw
-          $content = $content -replace 'self\.defaultTarget = "master"', 'self.svnTargets["master"] = f"https://invent.kde.org/packaging/craft-blueprints-kde.git|master|73fcfc635e497069fa3f4b900d8aea65a1dfca7d"`n        self.defaultTarget = "master"'
+          $content = $content.Replace('self.defaultTarget = "master"', 'self.svnTargets["master"] = "https://invent.kde.org/packaging/craft-blueprints-kde.git||73fcfc635e497069fa3f4b900d8aea65a1dfca7d"' + "`n        " + 'self.defaultTarget = "master"')
           Set-Content -LiteralPath $kdeBlueprint -Value $content -NoNewline
 
           # 3. 使用 --localDev 启动 bootstrap：将修改过的 Craft 源复制到
