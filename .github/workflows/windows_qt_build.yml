@@ -1,0 +1,62 @@
+name: Sujian Windows Qt x64 Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/windows/qt/**'
+      - 'apps/Linux_qt/**'
+      - 'apps/sujian_mcp/**'
+      - 'core/**'
+      - 'crates/**'
+      - 'platform/rust/windows/**'
+      - 'third_party/libgit2-sys/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/windows_qt_build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Build Windows Qt x64
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust MSVC
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Qt 6.8 MSVC
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: 'qttools qtshadertools'
+          cache: true
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sujian-windows-qt-x64
+
+      - name: Build and deploy Windows Qt
+        shell: pwsh
+        run: |
+          & ./apps/windows/qt/scripts/build.ps1 -Configuration release -QtRoot $env:QT_ROOT_DIR
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows Qt portable package
+        uses: actions/upload-artifact@v7
+        with:
+          name: sujian-windows-qt-x64
+          path: apps/windows/qt/dist/release/
+          if-no-files-found: error
+          compression-level: 0
