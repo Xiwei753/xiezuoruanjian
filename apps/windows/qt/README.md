@@ -29,7 +29,8 @@
 ## 构建
 
 前置：Windows 10/11 x64、MSVC、Rust `x86_64-pc-windows-msvc`、Qt 6.8+
-MSVC x64（`qmake.exe` 在 `PATH`，或设置 `QMAKE` / `QT_ROOT`）。
+MSVC x64（`qmake.exe` 在 `PATH`，或设置 `QMAKE` / `QT_ROOT`），
+以及 Python 3（构建期间获取带 SHA-256 校验的离线纠错模型和 Windows ONNX Runtime）。
 
 ```powershell
 pwsh -File apps/windows/qt/scripts/build.ps1 -Configuration release -QtRoot C:\Qt\6.8.0\msvc2022_64
@@ -37,6 +38,13 @@ pwsh -File apps/windows/qt/scripts/build.ps1 -Configuration release -QtRoot C:\Q
 
 产物在 `target/release/sujian-windows-qt.exe`，发布目录为
 `apps/windows/qt/dist/release/`。
+
+发布目录内包含 Qt/QML 插件、`sujian_mcp.exe`、VC++ 运行库、
+`models/macbert4csc/`（474 MB FP32 模型及 tokenizer）和
+`onnxruntime.dll` / `onnxruntime_providers_shared.dll`。Windows 桌面端构建
+启用 `sujian-windows-qt/ai`；启动时从可执行文件所在目录设置内置模型和
+运行库路径，用户设置的外部模型路径仍优先。下载和校验逻辑复用
+`crates/sujian-proof/tools/fetch_model.py` 与同一份 `model_manifest.json`。
 
 ## 边界
 

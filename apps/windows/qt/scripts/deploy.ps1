@@ -97,4 +97,26 @@ foreach ($name in @("MSVCP140.dll", "MSVCP140_1.dll", "MSVCP140_2.dll", "VCRUNTI
 }
 Write-Host "MSVC x64 CRT 已部署：$CrtDir"
 
+# Bundle MacBERT4CSC and the native Windows ONNX Runtime fetched by build.ps1.
+$CorrectionRoot = Join-Path $AppDir "generated\correction"
+$ModelSource = Join-Path $CorrectionRoot "macbert4csc"
+$ModelTarget = Join-Path $OutputDir "models\macbert4csc"
+foreach ($name in @("model.onnx", "vocab.txt", "tokenizer.json", "calibrator.json")) {
+    if (-not (Test-Path -LiteralPath (Join-Path $ModelSource $name) -PathType Leaf)) {
+        throw "Windows 中文纠错模型不完整：缺少 $name"
+    }
+}
+New-Item -ItemType Directory -Force -Path $ModelTarget | Out-Null
+Copy-Item -Path (Join-Path $ModelSource "*") -Destination $ModelTarget -Recurse -Force
+
+$RuntimeSource = Join-Path $CorrectionRoot "runtime"
+foreach ($name in @("onnxruntime.dll", "onnxruntime_providers_shared.dll")) {
+    $source = Join-Path $RuntimeSource $name
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Windows ONNX Runtime 不完整：缺少 $name"
+    }
+    Copy-Item -LiteralPath $source -Destination $OutputDir -Force
+}
+Write-Host "Windows 内置纠错模型和 ONNX Runtime 已部署：$ModelTarget"
+
 Write-Host "Windows Qt 发布目录：$OutputDir"

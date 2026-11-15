@@ -47,6 +47,12 @@ jobs:
         with:
           shared-key: sujian-windows-qt-x64
 
+      - name: Cache Windows correction model
+        uses: actions/cache@v4
+        with:
+          path: apps/windows/qt/generated/correction/
+          key: windows-correction-v1-${{ hashFiles('crates/sujian-proof/assets/model_manifest.json') }}
+
       - name: Build and deploy Windows Qt
         shell: pwsh
         run: |

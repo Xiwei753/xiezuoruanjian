@@ -63,6 +63,16 @@
       "sha256": "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3",
       "library": "lib/libonnxruntime.so.1.22.0"
     },
+    "windows-x64": {
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip",
+      "format": "zip",
+      "bytes": 72368545,
+      "sha256": "174c616efc0271194488642a72f1a514e01487da4dfe84c49296d66e40ebe0da",
+      "library": "lib/onnxruntime.dll",
+      "extra_libraries": [
+        "lib/onnxruntime_providers_shared.dll"
+      ]
+    },
     "harmony-arm64": {
       "version": "1.26.0-harmony-sdk26.0.0.105",
       "local_library": "third_party/onnxruntime/harmony/arm64-v8a/libonnxruntime.so",

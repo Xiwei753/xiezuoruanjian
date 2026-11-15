@@ -178,37 +178,47 @@ def fetch_runtime(manifest: dict, platform: str, output: Path, cache_dir: Path) 
     archive_name = Path(runtime["url"]).name
     cached = cache_dir / "onnxruntime" / version / archive_name
     source = ensure_cached(runtime["url"], runtime["bytes"], runtime["sha256"], cached)
-    target = output / Path(runtime["library"]).name
-    part = target.with_name(target.name + ".part")
+    # The archive itself is byte-for-byte verified above. Deploy its Windows
+    # CPU-provider companion library alongside the main runtime DLL.
     archive_format = runtime.get("format", "tar.gz")
-    if archive_format == "zip":
-        with zipfile.ZipFile(source) as archive:
-            member = next(
-                (
-                    item
-                    for item in archive.infolist()
-                    if item.filename.endswith(runtime["library"])
-                ),
-                None,
-            )
-            if member is None:
-                raise SystemExit(f"{platform}: runtime archive lacks {runtime['library']}")
-            part.write_bytes(archive.read(member))
-    elif archive_format == "tar.gz":
-        with tarfile.open(source, "r:gz") as tar:
-            member = next(
-                (item for item in tar.getmembers() if item.name.endswith(runtime["library"])),
-                None,
-            )
-            if member is None:
-                raise SystemExit(f"{platform}: runtime archive lacks {runtime['library']}")
-            extracted = tar.extractfile(member)
-            if extracted is None:
-                raise SystemExit(f"{platform}: runtime archive entry is not a file")
-            part.write_bytes(extracted.read())
-    else:
-        raise SystemExit(f"{platform}: unsupported runtime archive format {archive_format}")
-    os.replace(part, target)
+    libraries = [runtime["library"], *runtime.get("extra_libraries", [])]
+    for library in libraries:
+        target = output / Path(library).name
+        part = target.with_name(target.name + ".part")
+        part.unlink(missing_ok=True)
+        try:
+            if archive_format == "zip":
+                with zipfile.ZipFile(source) as archive:
+                    member = next(
+                        (
+                            item
+                            for item in archive.infolist()
+                            if item.filename.endswith(library)
+                        ),
+                        None,
+                    )
+                    if member is None:
+                        raise SystemExit(f"{platform}: runtime archive lacks {library}")
+                    with archive.open(member) as packed, part.open("wb") as extracted:
+                        shutil.copyfileobj(packed, extracted, length=1024 * 1024)
+            elif archive_format == "tar.gz":
+                with tarfile.open(source, "r:gz") as tar:
+                    member = next(
+                        (item for item in tar.getmembers() if item.name.endswith(library)),
+                        None,
+                    )
+                    if member is None:
+                        raise SystemExit(f"{platform}: runtime archive lacks {library}")
+                    packed = tar.extractfile(member)
+                    if packed is None:
+                        raise SystemExit(f"{platform}: runtime archive entry is not a file")
+                    with packed, part.open("wb") as extracted:
+                        shutil.copyfileobj(packed, extracted, length=1024 * 1024)
+            else:
+                raise SystemExit(f"{platform}: unsupported runtime archive format {archive_format}")
+            os.replace(part, target)
+        finally:
+            part.unlink(missing_ok=True)
     print(f"ONNX Runtime ready: {output} (cache: {cache_dir})")
 
 
@@ -222,7 +232,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--runtime",
-        choices=["linux-x64", "harmony-arm64"],
+        choices=["linux-x64", "windows-x64", "harmony-arm64"],
         help="also fetch a native runtime",
     )
     parser.add_argument("--runtime-output", type=Path, help="directory for the runtime library")

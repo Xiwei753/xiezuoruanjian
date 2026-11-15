@@ -301,7 +301,32 @@ fn install_translator() {
     app_main_cpp::install_translator();
 }
 
+/// Resolve bundled resources relative to the executable, independent of the
+/// current working directory. Respect explicit user/developer overrides.
+fn configure_bundled_correction_assets() {
+    let Ok(executable) = std::env::current_exe() else {
+        return;
+    };
+    let Some(app_dir) = executable.parent() else {
+        return;
+    };
+    let model_dir = app_dir.join("models").join("macbert4csc");
+    if std::env::var_os("SUJIAN_CORRECTION_MODEL_DIR").is_none()
+        && model_dir.join("model.onnx").is_file()
+        && model_dir.join("vocab.txt").is_file()
+        && model_dir.join("tokenizer.json").is_file()
+    {
+        std::env::set_var("SUJIAN_CORRECTION_MODEL_DIR", model_dir);
+    }
+
+    let runtime = app_dir.join("onnxruntime.dll");
+    if std::env::var_os("SUJIAN_ONNXRUNTIME_LIB").is_none() && runtime.is_file() {
+        std::env::set_var("SUJIAN_ONNXRUNTIME_LIB", runtime);
+    }
+}
+
 pub fn run() {
+    configure_bundled_correction_assets();
     diagnostics::init_build_identity();
     let app_version = env!("CARGO_PKG_VERSION");
     let build_key = diagnostics::effective_build_key().to_string();
