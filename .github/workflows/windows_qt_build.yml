@@ -43,34 +43,45 @@ jobs:
           # 使用 KDE Craft (packaging/craft) 安装；Craft 同时提供本项目构建所需
           # 的 Qt 6 MSVC x64，以此统一 Qt/KDE 的 ABI 来源，不并存两套 Qt。
 
-          # 修复 TLS 证书验证：Craft 自带 PEM 可能过期或不包含所需根证书，
-          # 使用 certifi CA bundle 统一 Python/curl 的 CA 来源，不跳过验证。
+          # 1. 先安装 certifi（GitHub Actions Windows runner 的 Python 可能没有），
+          #    再设置 TLS 环境变量。CraftBootstrap.py 在 Windows 上依赖 certifi
+          #    设置 SSLContext，否则 invent.kde.org 的证书验证会失败。
+          python -m pip install certifi
+          if ($LASTEXITCODE -ne 0) { throw "pip install certifi failed" }
           $certBundle = python -c "import certifi; print(certifi.where())"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to locate certifi CA bundle" }
           $env:SSL_CERT_FILE = $certBundle
           $env:REQUESTS_CA_BUNDLE = $certBundle
           $env:CURL_CA_BUNDLE = $certBundle
 
-          git clone --depth=1 https://invent.kde.org/packaging/craft.git
-          python craft/setup/CraftBootstrap.py --prefix C:/CraftRoot --branch master --use-defaults
-          if ($LASTEXITCODE -ne 0) { throw "Craft bootstrap failed" }
+          # 2. 克隆 Craft 到临时目录，在 bootstrap 前修改源码：
+          #    - CraftCoreSettings.ini: CacheVersion 26.10 → 26.05（26.10 Windows
+          #      缓存不存在，manifest 返回 404；26.05 有 Windows MSVC x64 Qt 6.11）
+          #    - cmake-base.py: CMake 下载源从 cmake.org 改为 Kitware GitHub
+          #      releases（cmake.org TLS 证书链验证失败 curl 60）
+          $craftSource = Join-Path $env:RUNNER_TEMP "craft-source"
+          git clone --depth=1 https://invent.kde.org/packaging/craft.git $craftSource
 
-          # 配置 CraftSettings.ini：使用 26.05 缓存（已发布 Windows MSVC x64
-          # Qt 6.11 预编译二进制；26.10 Windows CI 尚未跟进，manifest 返回 404）。
-          # BuildType 与 KDE CI 一致为 RelWithDebInfo。
-          python -c @'
-          import configparser
-          config = configparser.ConfigParser()
-          config.read(r'C:/CraftRoot/etc/CraftSettings.ini')
-          if not config.has_section('Packager'):
-              config.add_section('Packager')
-          config.set('Packager', 'CacheVersion', '26.05')
-          if not config.has_section('Compile'):
-              config.add_section('Compile')
-          config.set('Compile', 'BuildType', 'RelWithDebInfo')
-          with open(r'C:/CraftRoot/etc/CraftSettings.ini', 'w') as f:
-              config.write(f)
-          '@
-          if ($LASTEXITCODE -ne 0) { throw "CraftSettings.ini configuration failed" }
+          # 修改 CacheVersion：CraftCoreSettings.ini 是默认设置文件，
+          # _readSettings 先读它再读 CraftSettings.ini，修改它即可覆盖默认值。
+          $coreSettings = Join-Path $craftSource "etc\CraftCoreSettings.ini"
+          $content = Get-Content -LiteralPath $coreSettings -Raw
+          $content = $content -replace 'CacheVersion = 26\.10', 'CacheVersion = 26.05'
+          Set-Content -LiteralPath $coreSettings -Value $content -NoNewline
+
+          # 修改 CMake 下载源：将 cmake.org/files/ 替换为 GitHub releases
+          $cmakeBlueprint = Join-Path $craftSource "blueprints\dev-utils\cmake-base\cmake-base.py"
+          $content = Get-Content -LiteralPath $cmakeBlueprint -Raw
+          # Windows ZIP 下载源
+          $content = $content -replace 'https://cmake\.org/files/v\{majorMinorStr\}/cmake-\{ver\}-windows-', 'https://github.com/Kitware/CMake/releases/download/v{ver}/cmake-{ver}-windows-'
+          # SHA-256 清单下载源
+          $content = $content -replace 'https://cmake\.org/files/v\{majorMinorStr\}/cmake-\{ver\}-SHA-256\.txt', 'https://github.com/Kitware/CMake/releases/download/v{ver}/cmake-{ver}-SHA-256.txt'
+          Set-Content -LiteralPath $cmakeBlueprint -Value $content -NoNewline
+
+          # 3. 使用 --localDev 启动 bootstrap：将修改过的 Craft 源复制到
+          #    craft-tmp 后执行，确保 CacheVersion 和 CMake 源在第一次下载前生效。
+          python (Join-Path $craftSource "setup\CraftBootstrap.py") --prefix C:/CraftRoot --branch master --use-defaults --localDev $craftSource
+          if ($LASTEXITCODE -ne 0) { throw "Craft bootstrap failed" }
 
           $craftExe = "C:/CraftRoot/craft/bin/craft.py"
           # Craft 的 --target 是包版本/构建目标，不是平台 ABI；ABI 通过
