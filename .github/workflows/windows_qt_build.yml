@@ -34,13 +34,25 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Install Qt 6.11 MSVC
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.11.3'
-          target: desktop
-          arch: win64_msvc2022_64
-          modules: 'qtshadertools'
-          cache: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # aqtinstall 3.3.0 cannot parse the official Qt 6.11+ Windows
+          # repository layout (upstream miurahr/aqtinstall#1000).
+          # Pin a commit containing that upstream fix until the next release.
+          python -m pip install "git+https://github.com/miurahr/aqtinstall.git@5a49f2b391ae8ee1d3c0dd87f8b33c1d49a4deb7"
+          if ($LASTEXITCODE -ne 0) { throw "Installing patched aqtinstall failed" }
+          $qtDirBase = Join-Path $env:GITHUB_WORKSPACE "_qt"
+          python -m aqt install-qt windows desktop 6.11.3 win64_msvc2022_64 --outputdir $qtDirBase --modules qtshadertools
+          if ($LASTEXITCODE -ne 0) { throw "Installing Qt 6.11.3 failed" }
+          $qtDir = Join-Path $qtDirBase "6.11.3/msvc2022_64"
+          if (-not (Test-Path -LiteralPath (Join-Path $qtDir "bin/qmake.exe"))) {
+            throw "Qt 6.11.3 installation missing qmake.exe: $qtDir"
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "QT_ROOT_DIR=$qtDir"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "QT_PLUGIN_PATH=$(Join-Path $qtDir 'plugins')"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "QML2_IMPORT_PATH=$(Join-Path $qtDir 'qml')"
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $qtDir "bin")
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
