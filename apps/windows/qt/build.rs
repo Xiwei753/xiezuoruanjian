@@ -16,6 +16,7 @@ use std::process::Command;
 const QT6_MODULES: &[&str] = &["Core", "Gui", "Widgets", "Qml", "Quick", "QuickControls2"];
 const CPP_STANDARD_FLAG: &str = "/std:c++17";
 const MSVC_CORRECT_CPP_VERSION_FLAG: &str = "/Zc:__cplusplus";
+const MSVC_CONFORMING_MODE_FLAG: &str = "/permissive-";
 const LINUX_QT_DIR: &str = "../../Linux_qt";
 
 fn main() {
@@ -58,6 +59,8 @@ fn main() {
     }
     config.flag(CPP_STANDARD_FLAG);
     config.flag(MSVC_CORRECT_CPP_VERSION_FLAG);
+    config.flag(MSVC_CONFORMING_MODE_FLAG);
+    config.define("NOMINMAX", None);
     config.file("src/windows_overrides/windows_appearance.cpp");
     println!("cargo:rustc-link-lib=imm32");
     config.build("src/lib.rs");
