@@ -39,7 +39,7 @@ jobs:
           version: '6.8.3'
           target: desktop
           arch: win64_msvc2022_64
-          modules: 'qttools qtshadertools'
+          modules: 'qtshadertools'
           cache: true
 
       - name: Cache Rust artifacts
