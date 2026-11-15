@@ -40,13 +40,14 @@ jobs:
           # Windows 便携包必须携带真正的 KDE Kirigami / KirigamiAddons /
           # qqc2-desktop-style / KIconThemes / Breeze 运行时，与 Linux 共享 QML
           # （Kirigami.ApplicationWindow、FormCard 等）保持同一实现。
-          # 按 KDE 官方文档用 Craft 安装（develop.kde.org/docs/getting-started/
-          # kirigami/setup-cpp/）；Craft 同时提供本项目构建所需的 Qt 6.11 MSVC
-          # x64，以此统一 Qt/KDE 的 ABI 来源，不并存两套 Qt。KDE CI 使用同一
-          # CraftConfig.ini，其缓存服务器提供 MSVC 预编译二进制。
-          git clone --depth=1 https://invent.kde.org/packaging/ci-utilities.git
-          python ci-utilities/prepare-craft.py --platform windows-msvc2022-amd64
-          if ($LASTEXITCODE -ne 0) { throw "Preparing KDE Craft failed" }
+          # 使用 KDE Craft (packaging/craft) 安装；Craft 同时提供本项目构建所需
+          # 的 Qt 6 MSVC x64，以此统一 Qt/KDE 的 ABI 来源，不并存两套 Qt。
+          # KDE CI 使用同一 CraftConfig.ini，其缓存服务器提供 MSVC 预编译二进制。
+          git clone --depth=1 https://invent.kde.org/packaging/craft.git
+          python craft/setup/CraftBootstrap.py --prefix C:/CraftRoot --branch master --use-defaults
+          if ($LASTEXITCODE -ne 0) { throw "Craft bootstrap failed" }
+          $craftExe = "C:/CraftRoot/craft/bin/craft.py"
+          $craftTarget = "windows-cl-msvc2022-x86_64"
           foreach ($package in @(
             "qt6/qtshadertools",
             "qt6/qttools",
@@ -56,10 +57,10 @@ jobs:
             "kde/qqc2-desktop-style",
             "kde/breeze"
           )) {
-            python CraftRoot/bin/craft.py --target windows-msvc2022-amd64 $package
+            python $craftExe --target $craftTarget $package
             if ($LASTEXITCODE -ne 0) { throw "Craft install failed for $package" }
           }
-          $craftRoot = (Resolve-Path "./CraftRoot").Path
+          $craftRoot = "C:/CraftRoot"
           if (-not (Test-Path -LiteralPath (Join-Path $craftRoot "bin/qmake.exe"))) {
             throw "Craft Qt installation missing qmake.exe: $craftRoot"
           }
