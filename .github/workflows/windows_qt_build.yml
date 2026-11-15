@@ -99,6 +99,17 @@ jobs:
           $content = $content.Replace('self.defaultTarget = "master"', 'self.svnTargets["master"] = "https://invent.kde.org/packaging/craft-blueprints-kde.git||73fcfc635e497069fa3f4b900d8aea65a1dfca7d"' + "`n        " + 'self.defaultTarget = "master"')
           Set-Content -LiteralPath $kdeBlueprint -Value $content -NoNewline
 
+          # 固定 bootstrap shelf 中的 revision：CraftBootstrap.setUp 在首次
+          # `craft craft` 成功后执行 `craft --unshelve bootstrap.shelf`，而
+          # unShelve 的第一个动作是无条件 `--update` Craft Core 和蓝图库。
+          # 不在 shelf 中写入 revision 则 update 会切回 master（26.10 配方）。
+          # 在 shelf 的对应节写入 revision，GitSource.fetch 会读取它并覆盖
+          # repoTag、清空 repoBranch，从而保持固定 SHA。
+          $bootstrapPy = Join-Path $craftSource "setup\CraftBootstrap.py"
+          $content = Get-Content -LiteralPath $bootstrapPy -Raw
+          $content = $content.Replace('        config.write(f)', '        config.add_section("craft/craft-core")' + "`n        " + 'config["craft/craft-core"]["revision"] = "760cf4a90e8f0a8eeca2d102b337114b706d83d3"' + "`n        " + 'config.add_section("craft/craft-blueprints-kde")' + "`n        " + 'config["craft/craft-blueprints-kde"]["revision"] = "73fcfc635e497069fa3f4b900d8aea65a1dfca7d"' + "`n        " + 'config.write(f)')
+          Set-Content -LiteralPath $bootstrapPy -Value $content -NoNewline
+
           # 3. 使用 --localDev 启动 bootstrap：将修改过的 Craft 源复制到
           #    craft-tmp 后执行，确保所有修补在第一次下载前生效。
           python (Join-Path $craftSource "setup\CraftBootstrap.py") --prefix C:/CraftRoot --branch master --use-defaults --localDev $craftSource
