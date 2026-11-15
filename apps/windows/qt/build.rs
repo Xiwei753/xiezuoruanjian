@@ -41,6 +41,7 @@ fn main() {
 
     prepare_shared_sources();
     prepare_windows_main_qml();
+    prepare_windows_starmap_scene_content();
     let translation = compile_translations(&qt);
     generate_qrc_resources(&translation);
     emit_qsb_rerun(&qt);
@@ -166,6 +167,28 @@ fn prepare_windows_main_qml() {
     fs::write(out_dir.join("main.qml"), generated).expect("写入 generated/main.qml 失败");
 }
 
+/// Qt 6.8 does not have ShapePath.cosmeticStroke (introduced in Qt 6.11).
+/// Windows keeps exactly the same constant screen-space line width by
+/// compensating for the parent Shape's uniform Scale. Linux QML is unchanged.
+fn prepare_windows_starmap_scene_content() {
+    let src_path = Path::new(LINUX_QT_DIR).join("qml/StarMapSceneContent.qml");
+    println!("cargo:rerun-if-changed={}", src_path.display());
+    let source = fs::read_to_string(&src_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败：{e}", src_path.display()));
+    let old = "            strokeWidth: 1.5\n            cosmeticStroke: true";
+    if !source.contains(old) {
+        panic!("Windows star map preview adaptation failed: cosmeticStroke layout changed");
+    }
+    let generated = source.replace(
+        old,
+        "            strokeWidth: overview.fitScale > 0 ? 1.5 / overview.fitScale : 1.5",
+    );
+    let out_dir = Path::new("generated");
+    fs::create_dir_all(out_dir).expect("创建 generated 失败");
+    fs::write(out_dir.join("StarMapSceneContent.qml"), generated)
+        .expect("写入 Windows StarMapSceneContent.qml 失败");
+}
+
 /// 用 Qt 官方 `lrelease.exe` 从 Linux 共享的 `.ts` 生成 Windows 自己的 `.qm`。
 /// 不依赖 Linux 构建留下的 `apps/Linux_qt/i18n/zh_CN.qm` 副产物。
 fn compile_translations(qt: &Qt6BuildInfo) -> PathBuf {
@@ -261,6 +284,14 @@ fn generate_qrc_resources(translation: &Path) {
         &mut aliases,
         Path::new("generated/main.qml"),
         "main.qml",
+    );
+    // Windows Qt 6.8-specific scene stroke adapter; replaces only this QRC
+    // alias, leaving the single shared Linux QML source untouched.
+    push_entry(
+        &mut entries,
+        &mut aliases,
+        Path::new("generated/StarMapSceneContent.qml"),
+        "StarMapSceneContent.qml",
     );
 
     // Linux 通用 QML：只登记目录顶层文件（与 Linux main.rs 的 qrc 清单一致）。
