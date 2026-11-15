@@ -54,6 +54,13 @@ jobs:
           $env:REQUESTS_CA_BUNDLE = $certBundle
           $env:CURL_CA_BUNDLE = $certBundle
 
+          # 清除 Android 环境变量：GitHub windows-2022 runner 默认设置
+          # ANDROID_SDK_ROOT 和 ANDROID_NDK，导致 CraftBootstrap.isAndroid()
+          # 返回 True，强制 BuildType = MinSizeRel（覆盖模板的 RelWithDebInfo），
+          # 进而请求 26.05/.../MinSizeRel/manifest.json → 404。
+          Remove-Item Env:ANDROID_SDK_ROOT -ErrorAction SilentlyContinue
+          Remove-Item Env:ANDROID_NDK -ErrorAction SilentlyContinue
+
           # 2. 克隆 Craft 并固定到与 26.05 Windows 缓存匹配的提交。
           #    提交 760cf4a（2026-05-25）的 CraftCoreSettings.ini 已有
           #    CacheVersion = 26.05，CraftSettings.ini.template 已有
@@ -75,8 +82,23 @@ jobs:
           $content = $content -replace 'https://cmake\.org/files/v\{majorMinorStr\}/cmake-\{ver\}-SHA-256\.txt', 'https://github.com/Kitware/CMake/releases/download/v{ver}/cmake-{ver}-SHA-256.txt'
           Set-Content -LiteralPath $cmakeBlueprint -Value $content -NoNewline
 
+          # 固定 craft-core 和 craft-blueprints-kde 的 revision：
+          # bootstrap 内部执行 `craft craft` 时会通过这两个蓝图重新下载
+          # core 和 KDE 蓝图库。不固定 revision 则 defaultTarget = "master"
+          # 会拉取滚动 master（26.10 配方），与 26.05 缓存不匹配。
+          # svnTargets 格式: URL|branch|revision（第三段为空=分支最新）
+          $craftCoreBlueprint = Join-Path $craftSource "blueprints\craft\craft-core\craft-core.py"
+          $content = Get-Content -LiteralPath $craftCoreBlueprint -Raw
+          $content = $content -replace 'self\.defaultTarget = "master"', 'self.svnTargets["master"] = f"https://invent.kde.org/packaging/craft.git|master|760cf4a90e8f0a8eeca2d102b337114b706d83d3"`n        self.defaultTarget = "master"'
+          Set-Content -LiteralPath $craftCoreBlueprint -Value $content -NoNewline
+
+          $kdeBlueprint = Join-Path $craftSource "blueprints\craft\craft-blueprints-kde\craft-blueprints-kde.py"
+          $content = Get-Content -LiteralPath $kdeBlueprint -Raw
+          $content = $content -replace 'self\.defaultTarget = "master"', 'self.svnTargets["master"] = f"https://invent.kde.org/packaging/craft-blueprints-kde.git|master|73fcfc635e497069fa3f4b900d8aea65a1dfca7d"`n        self.defaultTarget = "master"'
+          Set-Content -LiteralPath $kdeBlueprint -Value $content -NoNewline
+
           # 3. 使用 --localDev 启动 bootstrap：将修改过的 Craft 源复制到
-          #    craft-tmp 后执行，确保 CMake 源在第一次下载前生效。
+          #    craft-tmp 后执行，确保所有修补在第一次下载前生效。
           python (Join-Path $craftSource "setup\CraftBootstrap.py") --prefix C:/CraftRoot --branch master --use-defaults --localDev $craftSource
           if ($LASTEXITCODE -ne 0) { throw "Craft bootstrap failed" }
 
