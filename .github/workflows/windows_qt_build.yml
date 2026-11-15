@@ -62,11 +62,20 @@ jobs:
           $craftSource = Join-Path $env:RUNNER_TEMP "craft-source"
           git clone --depth=1 https://invent.kde.org/packaging/craft.git $craftSource
 
-          # 修改 CacheVersion：CraftCoreSettings.ini 是默认设置文件，
+          # 修改 CacheVersion 和 BuildType：CraftCoreSettings.ini 是默认设置文件，
           # _readSettings 先读它再读 CraftSettings.ini，修改它即可覆盖默认值。
+          # 26.05 缓存只有 RelWithDebInfo 和 Release（无 MinSizeRel），必须确保
+          # BuildType = RelWithDebInfo，否则 Craft 会请求 MinSizeRel/manifest.json → 404。
           $coreSettings = Join-Path $craftSource "etc\CraftCoreSettings.ini"
           $content = Get-Content -LiteralPath $coreSettings -Raw
           $content = $content -replace 'CacheVersion = 26\.10', 'CacheVersion = 26.05'
+          if ($content -notmatch '\[Compile\]') {
+            $content += "`n[Compile]`nBuildType = RelWithDebInfo`n"
+          } elseif ($content -notmatch 'BuildType') {
+            $content = $content -replace '(\[Compile\][^\[]*)', "`$1BuildType = RelWithDebInfo`n"
+          } else {
+            $content = $content -replace 'BuildType = \w+', 'BuildType = RelWithDebInfo'
+          }
           Set-Content -LiteralPath $coreSettings -Value $content -NoNewline
 
           # 修改 CMake 下载源：将 cmake.org/files/ 替换为 GitHub releases
@@ -140,6 +149,15 @@ jobs:
             throw "Qt offscreen platform plugin missing: $offscreen"
           }
           Copy-Item -LiteralPath $offscreen -Destination (Join-Path $deployDir "platforms") -Force
+
+          # 清除 Craft/Qt 开发环境变量，确保 EXE 从便携包目录加载 QML/插件/DLL，
+          # 而不是从构建机的 CraftRoot 加载未随包部署的模块。
+          Remove-Item Env:QT_PLUGIN_PATH -ErrorAction SilentlyContinue
+          Remove-Item Env:QML2_IMPORT_PATH -ErrorAction SilentlyContinue
+          Remove-Item Env:QML_IMPORT_PATH -ErrorAction SilentlyContinue
+          Remove-Item Env:QT_QPA_PLATFORM_PLUGIN_PATH -ErrorAction SilentlyContinue
+          $craftBin = (Join-Path $env:CRAFT_ROOT "bin")
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -ne $craftBin }) -join ';'
 
           $env:QT_QPA_PLATFORM = "offscreen"
           $env:QT_QUICK_BACKEND = "software"

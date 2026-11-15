@@ -156,7 +156,7 @@ if (Test-Path -LiteralPath $CraftPlugins -PathType Container) {
     foreach ($pluginDir in @("imageformats", "iconengines", "styles")) {
         $srcDir = Join-Path $CraftPlugins $pluginDir
         if (Test-Path -LiteralPath $srcDir -PathType Container) {
-            $dstDir = Join-Path $OutputDir "plugins\$pluginDir"
+            $dstDir = Join-Path $OutputDir $pluginDir
             New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
             Copy-Item -Path (Join-Path $srcDir "*.dll") -Destination $dstDir -Force
         }
