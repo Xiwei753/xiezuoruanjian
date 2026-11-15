@@ -242,7 +242,14 @@ fn generate_qrc_resources(translation: &Path) {
             .expect("qml 路径前缀")
             .to_string_lossy()
             .replace('\\', "/");
-        push_entry(&mut entries, &mut aliases, path, &rel);
+        // Qt 6.5+ 在 qrc:/qt/qml 下自动发现 QML 模块。Windows 的 Kirigami
+        // 兼容模块必须放在该标准模块路径；其他页面仍放在原 qrc 根目录。
+        let alias = if rel.starts_with("org/kde/") {
+            format!("qt/qml/{rel}")
+        } else {
+            rel
+        };
+        push_entry(&mut entries, &mut aliases, path, &alias);
     });
 
     // Windows 壳层：由 Linux main.qml 生成，只替换窗口根类型。
