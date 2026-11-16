@@ -133,24 +133,17 @@ foreach ($rel in @(
     "kirigami\qmldir",
     "kirigamiaddons\formcard\qmldir",
     "kirigamiaddons\delegates\qmldir",
-    "kirigamiaddons\dateandtime\qmldir"
+    "kirigamiaddons\dateandtime\qmldir",
+    "desktop\qmldir",
+    "desktop\private\qmldir",
+    "qqc2desktopstyle\private\qmldir"
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $KdeQmlTarget $rel) -PathType Leaf)) {
         throw "KDE QML 模块部署不完整：缺少 org/kde/$rel（CraftRoot: $CraftRootPath）"
     }
 }
 
-# 3. 复制 QQC2 Desktop Style（QtQuick/Controls/org.kde.desktop）
-$DesktopStyleSource = Join-Path $CraftQml "QtQuick\Controls\org.kde.desktop"
-if (Test-Path -LiteralPath $DesktopStyleSource -PathType Container) {
-    $StyleTarget = Join-Path $OutputDir "qml\QtQuick\Controls"
-    New-Item -ItemType Directory -Force -Path $StyleTarget | Out-Null
-    Copy-Item -LiteralPath $DesktopStyleSource -Destination $StyleTarget -Recurse -Force
-} else {
-    throw "Craft 安装缺少 QQC2 Desktop Style：$DesktopStyleSource（请先 craft 安装 kde/frameworks/tier3/qqc2-desktop-style）"
-}
-
-# 4. 复制 Qt 插件（KDE 组件依赖 imageformats/iconengines/styles）
+# 3. 复制 Qt 插件（KDE 组件依赖 imageformats/iconengines/styles）
 $CraftPlugins = Join-Path $CraftRootPath "plugins"
 if (Test-Path -LiteralPath $CraftPlugins -PathType Container) {
     foreach ($pluginDir in @("imageformats", "iconengines", "styles")) {
