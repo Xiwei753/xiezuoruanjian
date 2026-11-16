@@ -817,10 +817,13 @@ pub unsafe extern "C" fn writer_core_list_starmap_library_json(
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid scope_json: error {}", e)),
     };
     match with_app_service(|svc| {
-        svc.list_starmap_library_json(&scope)
+        svc.list_starmap_library_json(scope)
             .map_err(|e| format!("{}", e))
     }) {
-        Ok(data) => data,
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
         Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
     }
 }
@@ -857,10 +860,13 @@ pub unsafe extern "C" fn writer_core_create_starmap_library_folder_json(
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid name: error {}", e)),
     };
     match with_app_service(|svc| {
-        svc.create_starmap_library_folder_json(&scope, parent, &name)
+        svc.create_starmap_library_folder_json(scope, parent, name)
             .map_err(|e| format!("{}", e))
     }) {
-        Ok(data) => data,
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
         Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
     }
 }
@@ -897,10 +903,13 @@ pub unsafe extern "C" fn writer_core_move_starmap_library_entry_json(
         }
     };
     match with_app_service(|svc| {
-        svc.move_starmap_library_entry_json(&entry_id, &scope, parent)
+        svc.move_starmap_library_entry_json(entry_id, scope, parent)
             .map_err(|e| format!("{}", e))
     }) {
-        Ok(data) => data,
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
         Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
     }
 }
@@ -924,7 +933,7 @@ pub unsafe extern "C" fn writer_core_add_starmap_node_reference(
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid asset_id: error {}", e)),
     };
     match with_app_service(|svc| {
-        svc.add_starmap_node_reference(&sid, &asset_id, x, y)
+        svc.add_starmap_node_reference(sid, asset_id, x, y)
             .map_err(|e| format!("{}", e))
     }) {
         Ok(data) => ok_json(data),
@@ -951,7 +960,7 @@ pub unsafe extern "C" fn writer_core_add_starmap_reference(
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid target: error {}", e)),
     };
     match with_app_service(|svc| {
-        svc.add_starmap_reference(&host, &target, x, y)
+        svc.add_starmap_reference(host, target, x, y)
             .map_err(|e| format!("{}", e))
     }) {
         Ok(data) => ok_json(data),
@@ -982,10 +991,13 @@ pub unsafe extern "C" fn writer_core_copy_starmap_library_asset_json(
         c_str_to_rust(title).ok().filter(|s| !s.is_empty())
     };
     match with_app_service(|svc| {
-        svc.copy_starmap_library_asset_json(&target, &scope, title)
+        svc.copy_starmap_library_asset_json(target, scope, title)
             .map_err(|e| format!("{}", e))
     }) {
-        Ok(data) => data,
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
         Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
     }
 }
@@ -1002,10 +1014,13 @@ pub unsafe extern "C" fn writer_core_list_starmap_asset_references_json(
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid target_json: error {}", e)),
     };
     match with_app_service(|svc| {
-        svc.list_starmap_asset_references_json(&target)
+        svc.list_starmap_asset_references_json(target)
             .map_err(|e| format!("{}", e))
     }) {
-        Ok(data) => data,
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
         Err(e) => err_json("STARMAP_LIBRARY_ERROR", &e),
     }
 }
@@ -1022,7 +1037,7 @@ pub unsafe extern "C" fn writer_core_delete_starmap_library_asset_json(
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid target_json: error {}", e)),
     };
     match with_app_service(|svc| {
-        svc.delete_starmap_library_asset_json(&target)
+        svc.delete_starmap_library_asset_json(target)
             .map_err(|e| format!("{}", e))
     }) {
         Ok(data) => ok_json(data),
@@ -1048,7 +1063,7 @@ pub unsafe extern "C" fn writer_core_remove_starmap_instance(
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid instance_id: error {}", e)),
     };
     match with_app_service(|svc| {
-        svc.remove_starmap_instance(&sid, &instance_id, is_embed)
+        svc.remove_starmap_instance(sid, instance_id, is_embed)
             .map_err(|e| format!("{}", e))
     }) {
         Ok(data) => ok_json(data),

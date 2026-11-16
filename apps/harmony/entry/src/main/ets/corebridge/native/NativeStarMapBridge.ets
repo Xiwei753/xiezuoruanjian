@@ -314,6 +314,11 @@ export class NativeStarMapBridge {
         data: plan
       }
       return result
+    } catch (e) {
+      return nativeError<StarMapCrossLayerConnectionPlan>(e)
+    }
+  }
+
   // ─── 素材库（#1037）───
   // 库目录只保存归属与分类；加入画布产生引用实例，正文写回共享本体。
   async listStarMapLibrary(scopeJson: string): Promise<ResultEnvelope<StarMapLibraryView>> {

@@ -259,7 +259,7 @@ pub unsafe extern "C" fn writer_core_get_starmap_stats_json(
         Err(error) => return err_json("INVALID_ARGUMENT", &format!("invalid project id: {error}")),
     };
     match with_app_service(|svc| {
-        svc.get_starmap_stats_json(&start_date, &end_date, project_id.as_deref())
+        svc.get_starmap_stats_json(start_date, end_date, project_id)
             .map_err(|error| error.to_string())
     }) {
         Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
