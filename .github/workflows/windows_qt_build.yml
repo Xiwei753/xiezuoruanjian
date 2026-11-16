@@ -120,8 +120,8 @@ jobs:
           # CraftSettings.ini 的 [General] ABI 选择，由 bootstrap 自动写入。
           # 蓝图路径使用完整层级路径（tier1/tier3/unreleased）。
           foreach ($package in @(
-            "qt6/qtshadertools",
-            "qt6/qttools",
+            "libs/qt6/qtshadertools",
+            "libs/qt6/qttools",
             "kde/frameworks/tier1/kirigami",
             "kde/unreleased/kirigami-addons",
             "kde/frameworks/tier3/kiconthemes",
