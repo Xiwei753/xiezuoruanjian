@@ -1,8 +1,7 @@
 //! Windows 网络状态探测与缓存。
 //!
-//! Windows 的联网状态由系统 WLAN/以太网服务维护，桌面前端只需要知道是否在线、
-//! 是否计费以及代理地址。这里使用环境代理与保守的在线判断，避免启动时调用
-//! PowerShell/WinHTTP 造成额外延迟。
+//! 使用 Windows Network List Manager COM 接口获取真实联网状态和计费信息，
+//! 避免启动时调用 PowerShell/WinHTTP 造成额外延迟。
 
 use std::sync::{Mutex, OnceLock};
 
@@ -46,39 +45,75 @@ pub(crate) fn detect_network_state() -> NetworkState {
         .map(parse_proxy)
         .unwrap_or((None, None));
 
+    let (is_connected, is_metered) = query_network_status();
+
     NetworkState {
-        is_connected: std::env::var("SUJIAN_FORCE_OFFLINE").is_err(),
-        is_metered: false,
+        is_connected,
+        is_metered,
         proxy_host,
         proxy_port,
     }
 }
 
-fn parse_proxy(url: &str) -> (Option<String>, Option<u16>) {
-    let url = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .unwrap_or(url);
-    let without_auth = url.split('@').next_back().unwrap_or(url);
+fn query_network_status() -> (bool, bool) {
+    use windows::core::Interface;
+    use windows::Win32::Networking::NetworkListManager::{
+        INetworkCostManager, INetworkListManager, NetworkListManager,
+    };
+    use windows::Win32::System::Com::{
+        CLSCTX_ALL, CoCreateInstance, CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED,
+    };
 
-    // IPv6 形如 [::1]:7890，普通主机形如 127.0.0.1:7890。
-    if let Some(rest) = without_auth.strip_prefix('[') {
-        if let Some((host, tail)) = rest.split_once(']') {
-            let port = tail
-                .strip_prefix(':')
-                .and_then(|value| value.trim().parse::<u16>().ok());
-            return (Some(host.to_string()), port);
-        }
+    let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    if hr.is_err() {
+        return (true, false);
     }
 
-    let mut parts = without_auth.split(':');
-    let host = parts.next().unwrap_or("").trim();
-    let port = parts
-        .next()
-        .and_then(|value| value.trim().parse::<u16>().ok());
-    if host.is_empty() {
-        (None, port)
-    } else {
-        (Some(host.to_string()), port)
-    }
+    let result = unsafe {
+        let manager: windows::core::Result<INetworkListManager> =
+            CoCreateInstance(&NetworkListManager, None, CLSCTX_ALL);
+
+        let manager = match manager {
+            Ok(m) => m,
+            Err(_) => return (true, false),
+        };
+
+        let is_connected = manager
+            .IsConnectedToInternet()
+            .map(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let is_metered = manager
+            .cast::<INetworkCostManager>()
+            .ok()
+            .and_then(|cost_manager| {
+                let mut cost_raw: u32 = 0;
+                let result = cost_manager.GetCost(&mut cost_raw, std::ptr::null());
+                if result.is_ok() {
+                    const NLM_COST_FLAG_UNRESTRICTED: u32 = 0x1;
+                    Some(cost_raw & NLM_COST_FLAG_UNRESTRICTED == 0)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(false);
+
+        (is_connected, is_metered)
+    };
+
+    unsafe { CoUninitialize() };
+
+    result
+}
+
+fn parse_proxy(url_str: &str) -> (Option<String>, Option<u16>) {
+    let parsed = match url::Url::parse(url_str) {
+        Ok(u) => u,
+        Err(_) => return (None, None),
+    };
+
+    let host = parsed.host_str().map(|h| h.to_string());
+    let port = parsed.port();
+
+    (host, port)
 }

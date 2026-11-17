@@ -1,7 +1,9 @@
-//! Linux 平台服务组装。
+//! 桌面平台服务组装。
 //!
 //! 聚合目录解析、平台初始化、配置存储、安全存储、网络探测与同步传输，
-//! 构造 `PlatformServices` 注入 Core。
+//! 构造 `PlatformServices` 注入 Core。Linux 与 Windows 共用同一份源文件，
+//! 通过 `super::` 引用各平台自己的 `dirs`、`init`、`network`、`secure_storage`、
+//! `transport` 模块。
 
 use writer_platform_api::{
     FileConfigStore, PlatformServices, SecureStorage, SyncTransport, TransportError,

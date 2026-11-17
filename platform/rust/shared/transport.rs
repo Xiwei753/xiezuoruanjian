@@ -1,7 +1,7 @@
-//! Windows 同步 HTTP 传输实现。
+//! 桌面平台同步 HTTP 传输实现。
 //!
 //! 基于 `reqwest` 阻塞客户端提供 `SyncTransport` 实现，仅在 `github-api`
-//! feature 启用时编译。
+//! feature 启用时编译。Linux 与 Windows 共用同一份源文件。
 
 use writer_platform_api::{HttpRequest, HttpResponse, SyncTransport, TransportError};
 

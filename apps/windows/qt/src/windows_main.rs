@@ -45,16 +45,31 @@ fn startup_mark_exit(code: i32) {
 }
 
 fn process_is_running(pid: u32) -> bool {
-    std::process::Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| {
-            let text = String::from_utf8_lossy(&output.stdout);
-            text.contains(&pid.to_string())
-        })
-        .unwrap_or(true)
+    use std::ffi::c_void;
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+
+    extern "system" {
+        fn OpenProcess(
+            dwDesiredAccess: u32,
+            bInheritHandle: i32,
+            dwProcessId: u32,
+        ) -> *mut c_void;
+        fn GetExitCodeProcess(hProcess: *mut c_void, lpExitCode: *mut u32) -> i32;
+        fn CloseHandle(hObject: *mut c_void) -> i32;
+    }
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut exit_code = 0u32;
+        let result = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        result != 0 && exit_code == STILL_ACTIVE
+    }
 }
 
 fn begin_app_lifecycle(log_dir: &std::path::Path, session_id: &str) {
@@ -373,6 +388,7 @@ pub fn run() {
 
     match std::panic::catch_unwind(writer_platform_linux::create_platform_services) {
         Ok(services) => {
+            backend::app_backend::set_desktop_platform_init(services.init);
             if let Some(factory) = services.sync_transport_factory {
                 backend::app_backend::set_linux_sync_transport_factory(factory);
             }

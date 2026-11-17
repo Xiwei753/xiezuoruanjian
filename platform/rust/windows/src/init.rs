@@ -1,5 +1,7 @@
 //! Windows 平台初始化与设备 ID 派生。
 
+use std::io::Write;
+
 use writer_platform_api::{FileConfigStore, PlatformInit, PlatformKind};
 
 use super::dirs::{runtime_log_dir, xdg_cache_dir, xdg_config_dir, xdg_state_dir};
@@ -11,7 +13,7 @@ pub fn resolve_platform_init() -> PlatformInit {
     let log_dir = runtime_log_dir();
 
     PlatformInit {
-        platform: PlatformKind::Desktop,
+        platform: PlatformKind::Windows,
         app_data_dir,
         cache_dir,
         log_dir,
@@ -38,28 +40,55 @@ fn derive_or_load_device_id() -> String {
     }
 
     let new_id = uuid::Uuid::new_v4().to_string();
+
     if let Some(parent) = device_id_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let tmp_path = device_id_path.with_extension("tmp");
-    if std::fs::write(&tmp_path, &new_id).is_ok() {
-        let _ = std::fs::rename(&tmp_path, &device_id_path);
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&device_id_path)
+    {
+        let _ = file.write_all(new_id.as_bytes());
+        let _ = file.sync_all();
+        return new_id;
     }
+
+    if let Ok(existing) = std::fs::read_to_string(&device_id_path) {
+        let trimmed = existing.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+
+    let _ = writer_core::storage::atomic_write_bytes(&device_id_path, new_id.as_bytes());
+
+    if let Ok(existing) = std::fs::read_to_string(&device_id_path) {
+        let trimmed = existing.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+
     new_id
 }
 
 fn windows_locale() -> String {
-    std::env::var("LANG")
-        .or_else(|_| std::env::var("LC_ALL"))
-        .unwrap_or_else(|_| "zh_CN".to_string())
-        .split('.')
-        .next()
-        .unwrap_or("zh_CN")
-        .to_string()
+    use windows::Win32::Globalization::GetUserDefaultLocaleName;
+
+    let mut buf = [0u16; 85];
+    let len = unsafe { GetUserDefaultLocaleName(&mut buf) };
+    if len > 0 {
+        let locale = String::from_utf16_lossy(&buf[..(len - 1) as usize]);
+        locale.replace('-', "_")
+    } else {
+        "zh_CN".to_string()
+    }
 }
 
 fn windows_timezone() -> String {
-    std::env::var("TZ").unwrap_or_else(|_| "UTC".to_string())
+    iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string())
 }
 
 pub fn init_default_config_store() {

@@ -23,7 +23,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// 平台本地桌面设置文件名，落在 `xdg_config_dir()`（`~/.config/writer`）下。
+/// 平台本地桌面设置文件名，落在 `xdg_config_dir()` 下。
+#[cfg(windows)]
+const DESKTOP_SETTINGS_FILE: &str = "windows_qt_desktop.json";
+#[cfg(not(windows))]
 const DESKTOP_SETTINGS_FILE: &str = "linux_qt_desktop.json";
 
 /// 旧 Core 本地设置文件名。位于用户工作区数据根目录（`app_data_root`）下，
@@ -270,15 +273,8 @@ fn write_to_disk(settings: &DesktopSettings) -> Result<(), String> {
 }
 
 fn write_to_disk_at(path: &Path, settings: &DesktopSettings) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     let json = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
-    // 先写临时文件再原子重命名，避免中途失败留下半个 JSON。
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &json).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
-    Ok(())
+    writer_core::storage::atomic_write_bytes(path, &json).map_err(|e| e.to_string())
 }
 
 /// 读取当前平台本地桌面设置。

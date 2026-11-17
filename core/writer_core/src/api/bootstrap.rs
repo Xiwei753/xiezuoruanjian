@@ -1307,6 +1307,33 @@ pub fn bootstrap_core_api<P1: AsRef<Path>, P2: AsRef<Path>>(
     Ok(api)
 }
 
+/// 与 [`bootstrap_core_api`] 相同，但接受 `&PlatformInit` 以注入平台身份。
+///
+/// 在 API 已构造、Git layout 已注入后调用 `api.set_platform_identity`，
+/// 确保写作统计事件分区和同步证明不退化为 `Desktop`。
+pub fn bootstrap_core_api_with_init<P1: AsRef<Path>, P2: AsRef<Path>>(
+    app_data_root: P1,
+    projects_root: P2,
+    sync_transport_factory: Option<writer_platform_api::SyncTransportFactory>,
+    secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
+    init: &writer_platform_api::PlatformInit,
+) -> std::result::Result<WriterCoreApi, WriterError> {
+    let app_data_root_path = app_data_root.as_ref();
+    let layout = bootstrap_workspace(app_data_root_path)?;
+    let api = WriterCoreApi::with_platform_services(
+        app_data_root,
+        projects_root,
+        sync_transport_factory,
+        secure_storage,
+    );
+    api.set_workspace_git_layout(layout);
+    api.set_platform_identity(&init.device_id, init.platform);
+    if let Err(e) = api.search_service_rebuild(None) {
+        log::warn!("Failed to rebuild search index on bootstrap_core_api_with_init: {e}");
+    }
+    Ok(api)
+}
+
 /// 用已 bootstrap 的 layout 构造 `WriterCoreApi`，不执行 bootstrap。
 ///
 /// 供平台端普通 getter 使用：用打开 workspace 时保存的 layout 快照构造 API，
@@ -1327,6 +1354,29 @@ pub fn with_layout_core_api<P1: AsRef<Path>, P2: AsRef<Path>>(
         secure_storage,
     );
     api.set_workspace_git_layout(layout.clone());
+    api
+}
+
+/// 与 [`with_layout_core_api`] 相同，但接受 `&PlatformInit` 以注入平台身份。
+///
+/// 在 API 已构造、Git layout 已注入后调用 `api.set_platform_identity`，
+/// 确保写作统计事件分区和同步证明不退化为 `Desktop`。
+pub fn with_layout_core_api_with_init<P1: AsRef<Path>, P2: AsRef<Path>>(
+    app_data_root: P1,
+    projects_root: P2,
+    layout: &crate::storage::git_repo_layout::GitRepoLayout,
+    sync_transport_factory: Option<writer_platform_api::SyncTransportFactory>,
+    secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
+    init: &writer_platform_api::PlatformInit,
+) -> WriterCoreApi {
+    let api = WriterCoreApi::with_platform_services(
+        app_data_root,
+        projects_root,
+        sync_transport_factory,
+        secure_storage,
+    );
+    api.set_workspace_git_layout(layout.clone());
+    api.set_platform_identity(&init.device_id, init.platform);
     api
 }
 

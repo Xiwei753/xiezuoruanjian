@@ -86,6 +86,7 @@ static LINUX_SYNC_TRANSPORT_FACTORY: OnceLock<writer_platform_api::SyncTransport
     OnceLock::new();
 static LINUX_SECURE_STORAGE: OnceLock<std::sync::Arc<dyn writer_platform_api::SecureStorage>> =
     OnceLock::new();
+static DESKTOP_PLATFORM_INIT: OnceLock<writer_platform_api::PlatformInit> = OnceLock::new();
 
 pub fn set_linux_sync_transport_factory(factory: writer_platform_api::SyncTransportFactory) {
     LINUX_SYNC_TRANSPORT_FACTORY.set(factory).ok();
@@ -93,6 +94,10 @@ pub fn set_linux_sync_transport_factory(factory: writer_platform_api::SyncTransp
 
 pub fn set_linux_secure_storage(storage: std::sync::Arc<dyn writer_platform_api::SecureStorage>) {
     LINUX_SECURE_STORAGE.set(storage).ok();
+}
+
+pub fn set_desktop_platform_init(init: writer_platform_api::PlatformInit) {
+    DESKTOP_PLATFORM_INIT.set(init).ok();
 }
 
 pub(crate) fn current_network_state() -> writer_platform_api::NetworkState {
@@ -105,14 +110,22 @@ pub(crate) fn create_core_api(
 ) -> std::result::Result<WriterCoreApi, writer_core::api::WriterError> {
     let sync_transport = LINUX_SYNC_TRANSPORT_FACTORY.get().cloned();
     let secure_storage = LINUX_SECURE_STORAGE.get().cloned();
-    // 统一走 Core workspace bootstrap：确保 .git 存在、恢复未完成删除事务、
-    // 注入正确的 GitRepoLayout。不再裸构造未 bootstrap 的 WriterCoreApi。
-    writer_core::api::bootstrap::bootstrap_core_api(
-        app_data_root,
-        projects_root,
-        sync_transport,
-        secure_storage,
-    )
+    if let Some(init) = DESKTOP_PLATFORM_INIT.get() {
+        writer_core::api::bootstrap::bootstrap_core_api_with_init(
+            app_data_root,
+            projects_root,
+            sync_transport,
+            secure_storage,
+            init,
+        )
+    } else {
+        writer_core::api::bootstrap::bootstrap_core_api(
+            app_data_root,
+            projects_root,
+            sync_transport,
+            secure_storage,
+        )
+    }
 }
 
 /// bootstrap workspace 并返回 (WriterCoreApi, GitRepoLayout)。
@@ -149,13 +162,24 @@ pub(crate) fn with_layout_core_api(
 ) -> WriterCoreApi {
     let sync_transport = LINUX_SYNC_TRANSPORT_FACTORY.get().cloned();
     let secure_storage = LINUX_SECURE_STORAGE.get().cloned();
-    writer_core::api::bootstrap::with_layout_core_api(
-        app_data_root,
-        projects_root,
-        layout,
-        sync_transport,
-        secure_storage,
-    )
+    if let Some(init) = DESKTOP_PLATFORM_INIT.get() {
+        writer_core::api::bootstrap::with_layout_core_api_with_init(
+            app_data_root,
+            projects_root,
+            layout,
+            sync_transport,
+            secure_storage,
+            init,
+        )
+    } else {
+        writer_core::api::bootstrap::with_layout_core_api(
+            app_data_root,
+            projects_root,
+            layout,
+            sync_transport,
+            secure_storage,
+        )
+    }
 }
 
 fn get_debug_config() -> &'static DebugConfig {

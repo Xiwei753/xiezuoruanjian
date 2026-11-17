@@ -644,6 +644,7 @@ fn main() {
     startup_mark("platform_services_begin", "create platform services");
     match std::panic::catch_unwind(writer_platform_linux::create_platform_services) {
         Ok(services) => {
+            sujian_linux_qt::backend::app_backend::set_desktop_platform_init(services.init);
             if let Some(factory) = services.sync_transport_factory {
                 sujian_linux_qt::backend::app_backend::set_linux_sync_transport_factory(factory);
             }

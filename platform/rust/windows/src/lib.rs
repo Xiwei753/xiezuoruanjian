@@ -19,8 +19,11 @@ mod dirs;
 mod init;
 mod network;
 mod secure_storage;
+#[path = "../../shared/services.rs"]
 mod services;
+#[path = "../../shared/startup_diagnostics.rs"]
 mod startup_diagnostics;
+#[path = "../../shared/transport.rs"]
 mod transport;
 
 pub use dirs::{

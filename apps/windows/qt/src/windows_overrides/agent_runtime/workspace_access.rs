@@ -1,8 +1,21 @@
-//! Windows 下 Agent 的工作目录。
+//! Windows 下 Agent 的工作目录与权限边界声明。
 //!
-//! Windows 没有 bubblewrap 这样的无特权只读沙箱。这里不伪装沙箱：Agent 以
-//! 当前用户身份运行，工作目录固定在应用私有目录，正文读写仍通过
-//! `sujian-mcp` 的权限接口完成。比赛博朋克式的“假 bwrap”更诚实。
+//! ## 权限边界（Issue #1045 第七部分）
+//!
+//! Windows 没有 bubblewrap 这样的无特权只读沙箱。当前实现中 Agent 以当前
+//! 用户身份运行，`working_dir` 只改变当前目录，**不改变文件访问权限**。
+//! Agent 若有终端/文件工具，仍能直接访问当前用户可读写的正文工作区。
+//! MCP 只限制经由 MCP 协议的读写；操作系统层面不保证"AI 默认没有正文写入
+//! 权限"。
+//!
+//! 若要提供操作系统级权限限制，需要：
+//! - 给 Agent 建立真正受限的 Windows 进程身份（如 AppContainer 能力集）
+//! - 或通过文件 ACL 限制 Agent 进程对正文目录的访问
+//! - MCP Server 单独持有读写授权，通过消息协议代理允许的操作
+//! - 仅设置 `current_dir` 或 Windows Job Object 都不能形成文件访问边界
+//!
+//! 该项关系到独立的进程权限设计，不在本议题中实现。当前实现保持诚实：
+//! 不伪装沙箱，明确声明端侧能力边界。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

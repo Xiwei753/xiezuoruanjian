@@ -437,10 +437,10 @@ impl AppBackend {
             self.debug_warn("workspace", "save_last_workspace_path_failed", &e);
         }
 
-        // 写入 current_device.json 设备信息
-        if let Err(e) = api.ensure_device_info("desktop", "desktop") {
-            self.debug_log("workspace", "ensure_device_info_failed", &format!("{}", e));
-        }
+        // 平台身份由 set_desktop_platform_init 注入的 PlatformInit 统一处理，
+        // 不再在此硬编码 ensure_device_info("desktop", "desktop")。
+        // set_platform_identity 已在 bootstrap_core_api_with_init /
+        // with_layout_core_api_with_init 中调用，保留旧设备 ID 并纠正平台。
 
         // Issue #729 评论 5764768372：不再在此发 workspace_opened/content/state 信号。
         // 由调用方（WorkspaceBackend wrapper 或 sync_operations）根据

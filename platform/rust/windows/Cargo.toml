@@ -23,3 +23,12 @@ writer_uniffi = { path = "../../../core/writer_uniffi" }
 uuid = { version = "1.8", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"], optional = true }
 keyring = { version = "4", features = ["v1"], optional = true }
+iana-time-zone = "0.1"
+url = "2"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Networking_NetworkListManager",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+] }
