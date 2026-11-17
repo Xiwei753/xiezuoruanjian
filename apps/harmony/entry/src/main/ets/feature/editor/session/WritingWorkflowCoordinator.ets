@@ -99,6 +99,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   private listener: WritingWorkflowListener | null = null
   // 页面在会话打开后恢复平台侧编辑器状态（接续选区 / viewport）的回调。
   private sessionOpenedHook: ((snap: EditorSessionSnapshot) => Promise<void>) | null = null
+  // Issue #1034 评论 #7：RichEditor 桥接的 whenIdle，保存/同步/关闭前先 await 桥接队列空闲，
+  // 再 await coordinator.whenIdle，确保用户最后几字已进入 Core。
+  private bridgeWhenIdle: (() => Promise<void>) | null = null
 
   // 路由上下文：chapterId/projectId/volumeId/navPathStack。
   // chapterId 公开：同步事务（ActiveWritingSession）需要按当前章节复核 Core 落盘内容。
@@ -167,6 +170,16 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // 会话 open 成功后，页面恢复接续选区 / viewport（平台侧状态）用。
   setSessionOpenedHook(hook: ((snap: EditorSessionSnapshot) => Promise<void>) | null): void {
     this.sessionOpenedHook = hook
+  }
+
+  setBridgeWhenIdle(fn: (() => Promise<void>) | null): void {
+    this.bridgeWhenIdle = fn
+  }
+
+  private async awaitBridgeIdle(): Promise<void> {
+    if (this.bridgeWhenIdle !== null) {
+      await this.bridgeWhenIdle()
+    }
   }
 
   // 页面离开时调用：停止编辑会话状态回流，避免 close 后仍有回调。
@@ -315,6 +328,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #629 评论 5308748920 问题3：手动/自动保存入口。
   // 先取得稳定 snapshot（flush + whenIdle），再调 ensureSnapshotSaved 精确保存这份文本。
   async saveChapter(isAutoSave: boolean = false): Promise<boolean> {
+    await this.awaitBridgeIdle()
     await this.editorCoordinator.whenIdle()
     const snap = this.editorCoordinator.getSnapshot()
     const targetText: string = snap ? snap.text : this.content
@@ -430,6 +444,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #927：返回真实成功/失败结果（只开一次保存事务），失败时保留 hasUnsavedChanges，
   // 调用方不得把「回调已调用」当成「已经落盘」。
   async performBackgroundSave(): Promise<boolean> {
+    await this.awaitBridgeIdle()
     await this.editorCoordinator.whenIdle()
     // 无待保存变化：本次后台事务直接成功，不产生多余 Core 写入。
     if (!this.hasUnsavedChanges) {
@@ -458,6 +473,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     try {
       // 同一会话边界：先提交 IME composition，再等输入队列空闲，再取稳定 snapshot。
       const finishResult = await this.finishActiveComposition()
+      await this.awaitBridgeIdle()
       await this.editorCoordinator.whenIdle()
       const snap = this.editorCoordinator.getSnapshot()
       if (finishResult.success === false || snap === null ||
@@ -508,6 +524,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       return true
     }
     // 磁盘已变化：确认没有仍在排队的编辑命令，再决定能否回填。
+    await this.awaitBridgeIdle()
     await this.editorCoordinator.whenIdle()
     const snap = this.editorCoordinator.getSnapshot()
     if (snap === null) {
@@ -559,6 +576,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   async clearDocument(): Promise<void> {
     this.isSaving = true
     this.emit(null, null)
+    await this.awaitBridgeIdle()
     await this.editorCoordinator.whenIdle()
     const snap = this.editorCoordinator.getSnapshot()
     if (!snap) {
@@ -643,6 +661,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       // 1. finish 当前 composition：最后的中文 preedit 提交进 committed 正文。
       const finishResult = await this.finishActiveComposition()
       // 2. 等 coordinator 命令队列空闲（snapshot 已包含最后输入）
+      await this.awaitBridgeIdle()
       await this.editorCoordinator.whenIdle()
       // 3. composition 唯一真源是 Core snapshot。finish 失败 / snapshot 丢失 / composition 仍在 → 拒绝关闭。
       const afterFinish = this.editorCoordinator.getSnapshot()

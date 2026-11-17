@@ -1,6 +1,8 @@
 // NativeRichEditorBridge — RichEditor 与 EditorSessionCoordinator 之间的输入桥接。
 // Issue #1034 评论 #5：用 ArkUI 原生 RichEditor 替换自研编辑器。
 // Issue #1034 评论 #6 修复：正确使用 RichEditorController API、串行事务队列、UTF-8/UTF-16 坐标转换。
+// Issue #1034 评论 #7 修复：getSpans offsetInSpan 截取、deleteSpans() 无参数清空、
+//   computeDiff 按 code point、whenIdle 注入保存链路、事务失败恢复。
 //
 // 职责：
 // - RichEditor onWillChange → 只做校验（返回 true 允许改变），不调用 coordinator。
@@ -33,6 +35,7 @@ export class NativeRichEditorBridge {
   private programmaticUpdate: boolean = false
   private lastAppliedRevision: number = -1
   private editQueue: Promise<void> = Promise.resolve()
+  private pendingPaste: boolean = false
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -58,6 +61,15 @@ export class NativeRichEditorBridge {
     return this.lastAppliedRevision
   }
 
+  // 返回当前 editQueue 尾部，供保存/同步/关闭链路在 coordinator.whenIdle 之前 await。
+  whenIdle(): Promise<void> {
+    return this.editQueue
+  }
+
+  setPendingPaste(): void {
+    this.pendingPaste = true
+  }
+
   // onWillChange 只做校验：允许所有改变。
   // 编辑事实派发在 onDidChange 中完成，避免 onWillChange 中调用 coordinator 但不等结果。
   onWillChange(_value: RichEditorChangeValue): boolean {
@@ -72,13 +84,22 @@ export class NativeRichEditorBridge {
     }
 
     // 从 RichEditor 获取改动后插入的文本内容
+    // Issue #1034 评论 #7：getSpans 返回整段 span 的 value，本次有效范围在 offsetInSpan。
+    // 只拼接每个 span 的 value.substring(offsetInSpan[0], offsetInSpan[1])，
+    // 多段按 spanPosition.start 排序。
     const insertedSpans = this.richEditorController.getSpans({
       start: rangeAfter.start,
       end: rangeAfter.end
     })
+    // 按 spanPosition.start 排序后拼接 offsetInSpan 范围内的文本
+    const sortedSpans = insertedSpans.sort((a: RichEditorTextSpanResult, b: RichEditorTextSpanResult): number => {
+      return a.spanPosition.start - b.spanPosition.start
+    })
     let insertedText = ''
-    for (const span of insertedSpans) {
-      insertedText += span.value
+    for (const span of sortedSpans) {
+      const offsetStart = span.offsetInSpan[0]
+      const offsetEnd = span.offsetInSpan[1]
+      insertedText += span.value.substring(offsetStart, offsetEnd)
     }
 
     // 从本地镜像推算被删除的旧文本
@@ -93,6 +114,10 @@ export class NativeRichEditorBridge {
     const previousText = this.currentText
     this.currentText = newText
 
+    // 确定编辑原因
+    const cause: EditorTransactionCause = this.pendingPaste ? EditorTransactionCause.Paste : EditorTransactionCause.Typing
+    this.pendingPaste = false
+
     // 串行提交编辑事实给 coordinator
     this.editQueue = this.editQueue.then(async () => {
       const snap = this.coordinator.getSnapshot()
@@ -106,12 +131,29 @@ export class NativeRichEditorBridge {
       const byteEnd = TextOffsetMapper.utf16ToUtf8(previousText, rangeBefore.end)
 
       let result: ResultEnvelope<EditorEditResult> | null = null
+      let transactionFailed = false
       if (oldText.length > 0 && insertedText.length > 0) {
-        result = await this.coordinator.replace(byteStart, byteEnd, insertedText, oldText, EditorTransactionCause.Typing)
+        result = await this.coordinator.replace(byteStart, byteEnd, insertedText, oldText, cause)
+        if (!result.success) {
+          transactionFailed = true
+        }
       } else if (oldText.length > 0) {
         result = await this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
+        if (!result.success) {
+          transactionFailed = true
+        }
       } else if (insertedText.length > 0) {
-        result = await this.coordinator.insert(byteStart, insertedText, EditorTransactionCause.Typing)
+        result = await this.coordinator.insert(byteStart, insertedText, cause)
+        if (!result.success) {
+          transactionFailed = true
+        }
+      }
+
+      // 事务失败时从 Core snapshot 恢复，不让本地镜像与 Core 分叉
+      if (transactionFailed) {
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidChange: transaction failed, recovering from Core')
+        await this.recoverFromCore()
+        return
       }
 
       // 如果 Core 调整了选区位置，更新 RichEditor 的选区
@@ -156,21 +198,89 @@ export class NativeRichEditorBridge {
   }
 
   // 计算最小文本差量
+  // Issue #1034 评论 #7：按完整 Unicode code point 求前后缀，避免 surrogate pair 内部断裂。
   private computeDiff(oldText: string, newText: string): TextDiff {
+    // 前缀：按 code point 比较
     let prefixLen = 0
-    while (prefixLen < oldText.length && prefixLen < newText.length &&
-           oldText.charAt(prefixLen) === newText.charAt(prefixLen)) {
-      prefixLen++
+    while (prefixLen < oldText.length && prefixLen < newText.length) {
+      const oldCp = oldText.codePointAt(prefixLen)
+      const newCp = newText.codePointAt(prefixLen)
+      if (oldCp !== newCp) {
+        break
+      }
+      // code point > 0xFFFF 表示是 surrogate pair，占 2 个 UTF-16 code unit
+      prefixLen += (oldCp > 0xFFFF) ? 2 : 1
     }
-    let suffixLen = 0
-    while (suffixLen < oldText.length - prefixLen && suffixLen < newText.length - prefixLen &&
-           oldText.charAt(oldText.length - 1 - suffixLen) === newText.charAt(newText.length - 1 - suffixLen)) {
-      suffixLen++
+
+    // 后缀：从末尾按 code point 回退
+    let oldSuffixStart = oldText.length
+    let newSuffixStart = newText.length
+    while (oldSuffixStart > prefixLen && newSuffixStart > prefixLen) {
+      // 判断 oldText 中最后一个 code point 的长度
+      let oldCpLen = 1
+      if (oldSuffixStart >= 2) {
+        const lastUnit = oldText.charCodeAt(oldSuffixStart - 1)
+        const prevUnit = oldText.charCodeAt(oldSuffixStart - 2)
+        if (lastUnit >= 0xDC00 && lastUnit <= 0xDFFF && prevUnit >= 0xD800 && prevUnit <= 0xDBFF) {
+          oldCpLen = 2
+        }
+      }
+      // 判断 newText 中最后一个 code point 的长度
+      let newCpLen = 1
+      if (newSuffixStart >= 2) {
+        const lastUnit = newText.charCodeAt(newSuffixStart - 1)
+        const prevUnit = newText.charCodeAt(newSuffixStart - 2)
+        if (lastUnit >= 0xDC00 && lastUnit <= 0xDFFF && prevUnit >= 0xD800 && prevUnit <= 0xDBFF) {
+          newCpLen = 2
+        }
+      }
+
+      const oldCp = oldText.codePointAt(oldSuffixStart - oldCpLen)
+      const newCp = newText.codePointAt(newSuffixStart - newCpLen)
+      if (oldCp !== newCp) {
+        break
+      }
+      oldSuffixStart -= oldCpLen
+      newSuffixStart -= newCpLen
     }
+
     return {
       start: prefixLen,
-      end: oldText.length - suffixLen,
-      replacement: newText.substring(prefixLen, newText.length - suffixLen)
+      end: oldSuffixStart,
+      replacement: newText.substring(prefixLen, newSuffixStart)
+    }
+  }
+
+  // 从 Core snapshot 恢复：事务失败或需要强制对齐时调用。
+  // 把 RichEditor 和本地镜像回归到 Core 同一版本，选区也同步恢复。
+  private async recoverFromCore(): Promise<void> {
+    const snap = this.coordinator.getSnapshot()
+    if (snap === null || this.richEditorController === null) {
+      return
+    }
+
+    this.programmaticUpdate = true
+    try {
+      if (this.currentText !== snap.text) {
+        const diff = this.computeDiff(this.currentText, snap.text)
+        if (diff.start < diff.end || diff.replacement.length > 0) {
+          this.richEditorController.deleteSpans({ start: diff.start, end: diff.end })
+          if (diff.replacement.length > 0) {
+            this.richEditorController.addTextSpan(diff.replacement, { offset: diff.start })
+          }
+        }
+        this.currentText = snap.text
+      }
+
+      const utf16Cursor = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
+      const utf16Anchor = TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionAnchor)
+      this.richEditorController.setSelection(utf16Anchor, utf16Cursor)
+
+      this.lastAppliedRevision = snap.revision
+    } catch (e) {
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `recoverFromCore error: ${JSON.stringify(e)}`)
+    } finally {
+      this.programmaticUpdate = false
     }
   }
 
@@ -212,6 +322,7 @@ export class NativeRichEditorBridge {
   }
 
   // 初始加载：把 Core 返回的初始正文写入 RichEditor。
+  // Issue #1034 评论 #7：使用 deleteSpans() 无参数清空全部内容。
   async loadInitialText(text: string, cursorByteOffset: number): Promise<void> {
     if (this.richEditorController === null) {
       return
@@ -219,7 +330,7 @@ export class NativeRichEditorBridge {
 
     this.programmaticUpdate = true
     try {
-      this.richEditorController.deleteSpans({ start: 0, end: -1 })
+      this.richEditorController.deleteSpans()
       this.richEditorController.addTextSpan(text, { offset: 0 })
       this.currentText = text
 
