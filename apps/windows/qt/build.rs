@@ -259,15 +259,8 @@ fn generate_qrc_resources(translation: &Path) {
         if aliases.contains(&name) {
             return;
         }
-        // KDE FormSpinBoxDelegate exposes a value alias (valueChanged),
-        // not the inner Qt SpinBox's valueModified signal. Keep the Linux
-        // source untouched and embed a Windows-specific corrected copy.
-        if name == "SyncPage.qml" {
-            let override_path = generate_windows_sync_page(path);
-            push_entry(&mut entries, &mut aliases, &override_path, &name);
-        } else {
-            push_entry(&mut entries, &mut aliases, path, &name);
-        }
+        let resource_path = windows_qml_resource(path);
+        push_entry(&mut entries, &mut aliases, &resource_path, &name);
     });
 
     // 星图 QSG 着色器（qsb 已包含 HLSL/D3D11 变体）。
@@ -310,25 +303,42 @@ fn generate_qrc_resources(translation: &Path) {
     fs::write(&output, generated).expect("写入 qrc_resources.rs 失败");
 }
 
-/// Generate a Windows-only QML asset from the shared source. The original
-/// Linux QML stays canonical; Windows corrects the KDE FormSpinBoxDelegate
-/// handler to match the public `value` property alias of Kirigami Addons.
-fn generate_windows_sync_page(source: &Path) -> PathBuf {
-    const INVALID_HANDLER: &str = "            onValueModified: {";
-    const CORRECT_HANDLER: &str = "            onValueChanged: {";
+/// Resolve a shared QML file for the Windows QRC. Kirigami Addons
+/// FormSpinBoxDelegate exposes `value` (and thus `valueChanged`), but does
+/// not forward the internal Qt SpinBox's `valueModified` signal. Generate
+/// Windows-specific QML where that incompatible handler is used, without
+/// modifying Linux QML or maintaining duplicate copies of whole pages.
+fn windows_qml_resource(source: &Path) -> PathBuf {
+    const INVALID_HANDLER: &str = "onValueModified:";
+    const CORRECT_HANDLER: &str = "onValueChanged:";
 
-    let qml = fs::read_to_string(source).expect("读取共享 SyncPage.qml 失败");
+    let qml = fs::read_to_string(source).expect("读取共享 Qt QML 失败");
+    if !qml.contains(INVALID_HANDLER) {
+        return source.to_path_buf();
+    }
+
+    // All existing occurrences come from FormCard.FormSpinBoxDelegate
+    // (seven on KdeSettingsPage, one on SyncPage). Reject unknown files to
+    // avoid rewriting a valid QtQuick.Controls.SpinBox valueModified handler.
+    let name = source.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let expected = match name {
+        "KdeSettingsPage.qml" => 7,
+        "SyncPage.qml" => 1,
+        _ => panic!("未识别的 QML valueModified 用法：{}", source.display()),
+    };
     assert_eq!(
         qml.matches(INVALID_HANDLER).count(),
-        1,
-        "共享 SyncPage.qml 的同步间隔处理器已发生变化，请更新 Windows QML 映射"
+        expected,
+        "共享 QML 的 FormSpinBoxDelegate 事件处理器已变化：{}",
+        source.display()
     );
+    assert!(qml.contains("FormCard.FormSpinBoxDelegate {"));
 
-    let target = PathBuf::from("generated/qml/SyncPage.qml");
+    let target = PathBuf::from("generated/qml").join(name);
     fs::create_dir_all(target.parent().expect("生成路径无父目录"))
         .expect("创建 Windows QML 输出目录失败");
     fs::write(&target, qml.replace(INVALID_HANDLER, CORRECT_HANDLER))
-        .expect("生成 Windows SyncPage.qml 失败");
+        .expect("生成 Windows Qt QML 失败");
     target
 }
 
