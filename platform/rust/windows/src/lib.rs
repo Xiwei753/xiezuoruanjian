@@ -19,6 +19,8 @@ mod dirs;
 mod init;
 mod network;
 mod secure_storage;
+#[path = "../../shared/device_id.rs"]
+mod device_id;
 #[path = "../../shared/services.rs"]
 mod services;
 #[path = "../../shared/startup_diagnostics.rs"]

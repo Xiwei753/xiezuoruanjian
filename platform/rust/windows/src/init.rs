@@ -1,7 +1,5 @@
 //! Windows 平台初始化与设备 ID 派生。
 
-use std::io::Write;
-
 use writer_platform_api::{FileConfigStore, PlatformInit, PlatformKind};
 
 use super::dirs::{runtime_log_dir, xdg_cache_dir, xdg_config_dir, xdg_state_dir};
@@ -18,7 +16,7 @@ pub fn resolve_platform_init() -> PlatformInit {
         cache_dir,
         log_dir,
         no_backup_dir: None,
-        device_id: derive_or_load_device_id(),
+        device_id: super::device_id::load_or_create_device_id(&xdg_state_dir()),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         locale: windows_locale(),
         timezone: windows_timezone(),
@@ -26,52 +24,6 @@ pub fn resolve_platform_init() -> PlatformInit {
         tls_ca_dir: None,
         tls_ca_required: false,
     }
-}
-
-fn derive_or_load_device_id() -> String {
-    let state_dir = xdg_state_dir();
-    let device_id_path = state_dir.join("device_id");
-
-    if let Ok(existing) = std::fs::read_to_string(&device_id_path) {
-        let trimmed = existing.trim().to_string();
-        if !trimmed.is_empty() {
-            return trimmed;
-        }
-    }
-
-    let new_id = uuid::Uuid::new_v4().to_string();
-
-    if let Some(parent) = device_id_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&device_id_path)
-    {
-        let _ = file.write_all(new_id.as_bytes());
-        let _ = file.sync_all();
-        return new_id;
-    }
-
-    if let Ok(existing) = std::fs::read_to_string(&device_id_path) {
-        let trimmed = existing.trim().to_string();
-        if !trimmed.is_empty() {
-            return trimmed;
-        }
-    }
-
-    let _ = writer_core::storage::atomic_write_bytes(&device_id_path, new_id.as_bytes());
-
-    if let Ok(existing) = std::fs::read_to_string(&device_id_path) {
-        let trimmed = existing.trim().to_string();
-        if !trimmed.is_empty() {
-            return trimmed;
-        }
-    }
-
-    new_id
 }
 
 fn windows_locale() -> String {

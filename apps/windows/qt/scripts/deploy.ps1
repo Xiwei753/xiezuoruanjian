@@ -36,9 +36,6 @@ $Windeployqt = if ($QtRoot) {
     (Get-Command windeployqt.exe -ErrorAction Stop).Source
 }
 
-# QRC 已把 QML 编译进 exe；windeployqt 仍需要扫描 qmldir 才能收集 Qt 模块。
-# 共享 QML 与 Linux 同源。org.kde.* QML 模块（Kirigami/KirigamiAddons 等）
-# 不是 Qt 官方模块，windeployqt 不会收集，由下方 Craft 部署段随包复制。
 $LinuxQml = Join-Path $RepoRoot "apps\Linux_qt\qml"
 $CommonArgs = @("--dir", $OutputDir, "--compiler-runtime")
 if ($Configuration -eq "release") { $CommonArgs += "--release" } else { $CommonArgs += "--debug" }
@@ -48,16 +45,13 @@ if ($LASTEXITCODE -ne 0) { throw "windeployqt (共享 QML) 失败" }
 
 Copy-Item $Exe $OutputDir -Force
 
-# 平台适配动态库与其它随包 Rust/第三方 DLL。
 Get-ChildItem $TargetDir -Filter "*.dll" | ForEach-Object {
     Copy-Item $_.FullName $OutputDir -Force
 }
 
-# MCP sidecar：Cargo 实际产物名为 sujian_mcp.exe，客户端按该稳定文件名查找。
 Copy-Item $McpExe $OutputDir -Force
 
-# 便携版需要应用本地的 MSVC 运行库。只从 Visual Studio 官方 Redist
-# 目录部署可再分发 CRT，不能从 Windows System32 / debug_nonredist 取文件。
+# 便携版需要应用本地的 MSVC 运行库。
 $CrtCandidates = [System.Collections.Generic.List[string]]::new()
 if ($env:VCToolsRedistDir) {
     $CrtCandidates.Add((Join-Path $env:VCToolsRedistDir "x64\Microsoft.VC143.CRT"))
@@ -97,102 +91,88 @@ foreach ($name in @("MSVCP140.dll", "MSVCP140_1.dll", "MSVCP140_2.dll", "VCRUNTI
 Write-Host "MSVC x64 CRT 已部署：$CrtDir"
 
 # KDE Kirigami / KirigamiAddons / qqc2-desktop-style / KIconThemes / Breeze
-# 运行时由 KDE Craft 构建并与构建用 Qt 同一 MSVC ABI（共享 QML 的
-# Kirigami.ApplicationWindow、FormCard 等直接使用真实 KDE 组件，不再使用
-# 仓库内手写替身）。windeployqt 不收集非 Qt 的 org.kde.* 模块，必须从
-# CraftRoot 随包复制，并通过 qt.conf 的 QmlImports = qml 定位。
+# 运行时由 KDE Craft 构建。windeployqt 不收集非 Qt 的 org.kde.* 模块，
+# 必须从 CraftRoot 随包复制，并通过 qt.conf 的 QmlImports = qml 定位。
 #
-# 不再全量复制 CraftRoot/bin 下所有 DLL，改为从 EXE/MCP/QML 插件/Qt 插件
-# 入口解析 PE imported DLL 依赖，递归复制 CraftRoot 内实际需要的 DLL 闭包。
+# 使用 dumpbin /DEPENDENTS 递归解析 PE 依赖闭包，只复制实际需要的 DLL。
+# KDE QML 以 main.qml 的实际 import 模块为入口，不扫描整个 Craft QML 树。
 if (-not $CraftRoot) {
     throw "需要 -CraftRoot 或环境变量 CRAFT_ROOT 指向 KDE Craft 安装，以便随包部署 Kirigami 运行时。"
 }
 $CraftRootPath = (Resolve-Path $CraftRoot).Path
 $CraftBin = Join-Path $CraftRootPath "bin"
+$CraftQml = Join-Path $CraftRootPath "qml"
+$CraftPlugins = Join-Path $CraftRootPath "plugins"
 
-# --- PE 依赖闭包解析 ---
+# --- dumpbin /DEPENDENTS 依赖闭包解析 ---
 
-function Convert-RvaToOffset {
-    param([byte[]]$Bytes, [uint32]$Rva, [int]$SectionOffset, [uint16]$NumSections)
-    for ($i = 0; $i -lt $NumSections; $i++) {
-        $secOffset = $SectionOffset + $i * 40
-        if ($secOffset + 40 -gt $Bytes.Length) { return -1 }
-        $virtualSize = [BitConverter]::ToUInt32($Bytes, $secOffset + 8)
-        $virtualAddress = [BitConverter]::ToUInt32($Bytes, $secOffset + 12)
-        $rawOffset = [BitConverter]::ToUInt32($Bytes, $secOffset + 20)
-        if ($Rva -ge $virtualAddress -and $Rva -lt ($virtualAddress + $virtualSize)) {
-            return [int]($Rva - $virtualAddress + $rawOffset)
+function Get-Dumpbin {
+    $cmd = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    $searchRoots = [System.Collections.Generic.List[string]]::new()
+    if ($env:VCINSTALLDIR) {
+        $searchRoots.Add((Join-Path $env:VCINSTALLDIR "Tools\MSVC"))
+    }
+    $ProgramFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+    $VsWhere = Join-Path $ProgramFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path -LiteralPath $VsWhere) {
+        $VsInstall = (& $VsWhere -latest -products "*" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
+        if ($VsInstall) {
+            $searchRoots.Add((Join-Path $VsInstall "VC\Tools\MSVC"))
         }
     }
-    return -1
+    foreach ($root in $searchRoots) {
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+        $latest = Get-ChildItem -LiteralPath $root -Directory | Sort-Object Name -Descending | Select-Object -First 1
+        if ($latest) {
+            $dumpbin = Join-Path $latest.FullName "bin\Hostx64\x64\dumpbin.exe"
+            if (Test-Path -LiteralPath $dumpbin -PathType Leaf) { return $dumpbin }
+        }
+    }
+    return $null
 }
 
-function Get-PeImports {
-    param([string]$Path)
-    $imports = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    try {
-        $bytes = [System.IO.File]::ReadAllBytes($Path)
-        if ($bytes.Length -lt 64) { return $imports }
-        $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
-        if ($peOffset -lt 0 -or $peOffset -ge $bytes.Length) { return $imports }
-        if ([BitConverter]::ToInt32($bytes, $peOffset) -ne 0x00004550) { return $imports }
-        $numSections = [BitConverter]::ToUInt16($bytes, $peOffset + 6)
-        $optHeaderSize = [BitConverter]::ToUInt16($bytes, $peOffset + 20)
-        $optHeaderOffset = $peOffset + 24
-        $magic = [BitConverter]::ToUInt16($bytes, $optHeaderOffset)
-        if ($magic -eq 0x20B) {
-            $dataDirOffset = $optHeaderOffset + 112
-        } elseif ($magic -eq 0x10B) {
-            $dataDirOffset = $optHeaderOffset + 96
-        } else {
-            return $imports
+function Get-PeDependencies {
+    param([string]$FilePath, [string]$Dumpbin)
+
+    $output = & $Dumpbin /DEPENDENTS $FilePath 2>&1
+    if ($LASTEXITCODE -ne 0) { return @() }
+
+    $deps = @()
+    $inSection = $false
+    foreach ($line in ($output -split "`r?`n")) {
+        if ($line -match "Section contains the following imports") {
+            $inSection = $true
+            continue
         }
-        $importDirRva = [BitConverter]::ToUInt32($bytes, $dataDirOffset + 8)
-        if ($importDirRva -eq 0) { return $imports }
-        $sectionOffset = $optHeaderOffset + $optHeaderSize
-        $importFileOffset = Convert-RvaToOffset -Bytes $bytes -Rva $importDirRva -SectionOffset $sectionOffset -NumSections $numSections
-        if ($importFileOffset -lt 0) { return $imports }
-        $offset = $importFileOffset
-        while ($offset -lt $bytes.Length - 20) {
-            $nameRva = [BitConverter]::ToUInt32($bytes, $offset + 12)
-            $originalFirstThunk = [BitConverter]::ToUInt32($bytes, $offset)
-            if ($originalFirstThunk -eq 0 -and $nameRva -eq 0) { break }
-            if ($nameRva -ne 0) {
-                $nameOffset = Convert-RvaToOffset -Bytes $bytes -Rva $nameRva -SectionOffset $sectionOffset -NumSections $numSections
-                if ($nameOffset -ge 0 -and $nameOffset -lt $bytes.Length) {
-                    $sb = [System.Text.StringBuilder]::new()
-                    $i = $nameOffset
-                    while ($i -lt $bytes.Length -and $bytes[$i] -ne 0) {
-                        [void]$sb.Append([char]$bytes[$i])
-                        $i++
-                    }
-                    $imports.Add($sb.ToString()) | Out-Null
-                }
+        if ($inSection) {
+            if ($line -match "^\s+(\S+\.dll)\s*$") {
+                $deps += $matches[1]
+            } elseif ($line -match "^\s*$" -and $deps.Count -gt 0) {
+                break
             }
-            $offset += 20
         }
-    } catch {
-        # Ignore parse errors for non-PE files
     }
-    return $imports
+    return $deps
 }
 
 function Resolve-DllClosure {
     param(
         [string[]]$RootFiles,
         [string]$CraftBin,
-        [string]$OutputDir
+        [string]$OutputDir,
+        [string]$Dumpbin
     )
+
     $needed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $queue = [System.Collections.Generic.Queue[string]]::new()
 
-    # DLLs already in OutputDir (from windeployqt and Rust target) are roots too
     $existingDlls = Get-ChildItem -LiteralPath $OutputDir -Filter "*.dll" -ErrorAction SilentlyContinue
     foreach ($dll in $existingDlls) {
         if ($needed.Add($dll.Name)) { $queue.Enqueue($dll.FullName) }
     }
 
-    # Add explicit root files
     foreach ($file in $RootFiles) {
         $queue.Enqueue($file)
     }
@@ -200,12 +180,13 @@ function Resolve-DllClosure {
     while ($queue.Count -gt 0) {
         $file = $queue.Dequeue()
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue }
-        $imports = Get-PeImports -Path $file
-        foreach ($import in $imports) {
-            if ($needed.Contains($import)) { continue }
-            $craftDll = Join-Path $CraftBin $import
+
+        $deps = Get-PeDependencies -FilePath $file -Dumpbin $Dumpbin
+        foreach ($dep in $deps) {
+            if ($needed.Contains($dep)) { continue }
+            $craftDll = Join-Path $CraftBin $dep
             if (Test-Path -LiteralPath $craftDll -PathType Leaf) {
-                $needed.Add($import) | Out-Null
+                $needed.Add($dep) | Out-Null
                 $queue.Enqueue($craftDll)
             }
         }
@@ -214,27 +195,57 @@ function Resolve-DllClosure {
     return $needed
 }
 
-# 1. 收集 PE 依赖闭包，只复制 CraftRoot/bin 中实际需要的 DLL
+$Dumpbin = Get-Dumpbin
+if (-not $Dumpbin) {
+    throw "找不到 dumpbin.exe，请确保 Visual Studio 环境已初始化（运行 vcvars64.bat 或在 VS Developer PowerShell 中执行）"
+}
+Write-Host "使用 dumpbin：$Dumpbin"
+
+# 1. 确定根文件集
 $RootFiles = [System.Collections.Generic.List[string]]::new()
 $RootFiles.Add($Exe)
 $RootFiles.Add($McpExe)
 
-# KDE QML 插件 DLL 作为显式根集
-$CraftQml = Join-Path $CraftRootPath "qml"
+# KDE QML 模块入口：只收集实际 import 的模块目录下的 DLL
+# 从 main.qml 及其他 QML 文件的 import 语句确定的模块列表：
+#   org.kde.kirigami, org.kde.kirigamiaddons.formcard,
+#   org.kde.kirigamiaddons.delegates, org.kde.kirigamiaddons.dateandtime,
+#   org.kde.desktop, org.kde.qqc2desktopstyle
 if (-not (Test-Path -LiteralPath (Join-Path $CraftQml "org\kde\kirigami\qmldir") -PathType Leaf)) {
     throw "Craft 安装缺少 org.kde.kirigami QML 模块：$CraftQml（请先 craft 安装 kde/frameworks/tier1/kirigami）"
 }
-$kdeQmlDlls = Get-ChildItem -LiteralPath $CraftQml -Filter "*.dll" -Recurse -ErrorAction SilentlyContinue
-foreach ($dll in $kdeQmlDlls) { $RootFiles.Add($dll.FullName) }
-
-# Qt 插件 DLL 作为显式根集（KDE 组件依赖 imageformats/iconengines/styles）
-$CraftPlugins = Join-Path $CraftRootPath "plugins"
-if (Test-Path -LiteralPath $CraftPlugins -PathType Container) {
-    $pluginDlls = Get-ChildItem -LiteralPath $CraftPlugins -Filter "*.dll" -Recurse -ErrorAction SilentlyContinue
-    foreach ($dll in $pluginDlls) { $RootFiles.Add($dll.FullName) }
+$KdeQmlModules = @(
+    "org\kde\kirigami",
+    "org\kde\kirigamiaddons\formcard",
+    "org\kde\kirigamiaddons\delegates",
+    "org\kde\kirigamiaddons\dateandtime",
+    "org\kde\desktop",
+    "org\kde\qqc2desktopstyle"
+)
+foreach ($mod in $KdeQmlModules) {
+    $modDir = Join-Path $CraftQml $mod
+    if (Test-Path -LiteralPath $modDir -PathType Container) {
+        $modDlls = Get-ChildItem -LiteralPath $modDir -Filter "*.dll" -Recurse -ErrorAction SilentlyContinue
+        foreach ($dll in $modDlls) { $RootFiles.Add($dll.FullName) }
+    } else {
+        Write-Host "警告：KDE QML 模块目录不存在：$modDir"
+    }
 }
 
-$NeededDlls = Resolve-DllClosure -RootFiles $RootFiles -CraftBin $CraftBin -OutputDir $OutputDir
+# Qt 插件入口：只收集实际需要的插件目录下的 DLL
+$NeededPluginDirs = @("imageformats", "iconengines", "styles")
+if (Test-Path -LiteralPath $CraftPlugins -PathType Container) {
+    foreach ($pluginDir in $NeededPluginDirs) {
+        $srcDir = Join-Path $CraftPlugins $pluginDir
+        if (Test-Path -LiteralPath $srcDir -PathType Container) {
+            $pluginDlls = Get-ChildItem -LiteralPath $srcDir -Filter "*.dll" -ErrorAction SilentlyContinue
+            foreach ($dll in $pluginDlls) { $RootFiles.Add($dll.FullName) }
+        }
+    }
+}
+
+# 2. 解析 PE 依赖闭包
+$NeededDlls = Resolve-DllClosure -RootFiles $RootFiles -CraftBin $CraftBin -OutputDir $OutputDir -Dumpbin $Dumpbin
 
 if ($NeededDlls.Count -eq 0) {
     throw "PE 依赖闭包解析结果为空，CraftRoot/bin 可能缺少 DLL：$CraftBin"
@@ -244,12 +255,19 @@ foreach ($dllName in $NeededDlls) {
     $src = Join-Path $CraftBin $dllName
     Copy-Item -LiteralPath $src -Destination $OutputDir -Force
 }
-Write-Host "已复制 $($NeededDlls.Count) 个 DLL 从 $CraftBin（PE 依赖闭包）"
+Write-Host "已复制 $($NeededDlls.Count) 个 DLL 从 $CraftBin（dumpbin PE 依赖闭包）"
 
-# 2. 复制 KDE QML 模块（org/kde/*）
+# 3. 复制 KDE QML 模块（只复制实际需要的模块）
 $KdeQmlTarget = Join-Path $OutputDir "qml\org\kde"
 New-Item -ItemType Directory -Force -Path $KdeQmlTarget | Out-Null
-Copy-Item -Path (Join-Path $CraftQml "org\kde\*") -Destination $KdeQmlTarget -Recurse -Force
+foreach ($mod in $KdeQmlModules) {
+    $srcMod = Join-Path $CraftQml $mod
+    $dstMod = Join-Path $KdeQmlTarget $mod
+    if (Test-Path -LiteralPath $srcMod -PathType Container) {
+        New-Item -ItemType Directory -Force -Path $dstMod | Out-Null
+        Copy-Item -Path (Join-Path $srcMod "*") -Destination $dstMod -Recurse -Force
+    }
+}
 foreach ($rel in @(
     "kirigami\qmldir",
     "kirigamiaddons\formcard\qmldir",
@@ -264,9 +282,9 @@ foreach ($rel in @(
     }
 }
 
-# 3. 复制 Qt 插件（KDE 组件依赖 imageformats/iconengines/styles）
+# 4. 复制 Qt 插件（只复制实际需要的插件目录）
 if (Test-Path -LiteralPath $CraftPlugins -PathType Container) {
-    foreach ($pluginDir in @("imageformats", "iconengines", "styles")) {
+    foreach ($pluginDir in $NeededPluginDirs) {
         $srcDir = Join-Path $CraftPlugins $pluginDir
         if (Test-Path -LiteralPath $srcDir -PathType Container) {
             $dstDir = Join-Path $OutputDir $pluginDir
@@ -276,7 +294,7 @@ if (Test-Path -LiteralPath $CraftPlugins -PathType Container) {
     }
 }
 
-# 4. 复制许可证
+# 5. 复制许可证
 $LicenseSource = Join-Path $CraftRootPath "share\licenses"
 if (Test-Path -LiteralPath $LicenseSource -PathType Container) {
     $LicenseTarget = Join-Path $OutputDir "share\licenses"
@@ -307,8 +325,6 @@ foreach ($name in @("onnxruntime.dll", "onnxruntime_providers_shared.dll")) {
 }
 Write-Host "Windows 内置纠错模型和 ONNX Runtime 已部署：$ModelTarget"
 
-# Resolve Qt plugins/QML from the portable application directory on ordinary
-# Windows machines that do not have a developer Qt installation.
 $QtConfig = Join-Path $AppDir "qt.conf"
 if (-not (Test-Path -LiteralPath $QtConfig -PathType Leaf)) {
     throw "缺少 Windows Qt 便携包的 qt.conf：$QtConfig"

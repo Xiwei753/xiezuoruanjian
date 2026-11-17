@@ -1,7 +1,7 @@
 //! Windows 网络状态探测与缓存。
 //!
-//! 使用 Windows Network List Manager COM 接口获取真实联网状态和计费信息，
-//! 避免启动时调用 PowerShell/WinHTTP 造成额外延迟。
+//! 使用 Windows Network List Manager COM 接口获取真实联网状态和计费信息。
+//! COM 生命周期通过 RAII guard 管理，查询失败时保留缓存值而非伪造状态。
 
 use std::sync::{Mutex, OnceLock};
 
@@ -29,7 +29,6 @@ pub fn get_cached_network_state() -> NetworkState {
 
 pub fn refresh_network_state() -> NetworkState {
     let state = detect_network_state();
-    cache_network_state(&state);
     state
 }
 
@@ -45,65 +44,81 @@ pub(crate) fn detect_network_state() -> NetworkState {
         .map(parse_proxy)
         .unwrap_or((None, None));
 
-    let (is_connected, is_metered) = query_network_status();
-
-    NetworkState {
-        is_connected,
-        is_metered,
-        proxy_host,
-        proxy_port,
+    match query_network_status() {
+        Ok((is_connected, is_metered)) => {
+            let state = NetworkState {
+                is_connected,
+                is_metered,
+                proxy_host,
+                proxy_port,
+            };
+            cache_network_state(&state);
+            state
+        }
+        Err(_) => {
+            let cached = get_cached_network_state();
+            NetworkState {
+                is_connected: cached.is_connected,
+                is_metered: cached.is_metered,
+                proxy_host,
+                proxy_port,
+            }
+        }
     }
 }
 
-fn query_network_status() -> (bool, bool) {
+struct ComGuard;
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows::Win32::System::Com::CoUninitialize();
+        }
+    }
+}
+
+fn query_network_status() -> Result<(bool, bool), ()> {
     use windows::core::Interface;
     use windows::Win32::Networking::NetworkListManager::{
         INetworkCostManager, INetworkListManager, NetworkListManager,
     };
     use windows::Win32::System::Com::{
-        CLSCTX_ALL, CoCreateInstance, CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED,
+        CLSCTX_ALL, CoCreateInstance, CoInitializeEx, COINIT_MULTITHREADED,
     };
 
     let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     if hr.is_err() {
-        return (true, false);
+        return Err(());
     }
 
-    let result = unsafe {
-        let manager: windows::core::Result<INetworkListManager> =
-            CoCreateInstance(&NetworkListManager, None, CLSCTX_ALL);
+    let _com_guard = ComGuard;
 
-        let manager = match manager {
-            Ok(m) => m,
-            Err(_) => return (true, false),
-        };
+    let manager: windows::core::Result<INetworkListManager> =
+        unsafe { CoCreateInstance(&NetworkListManager, None, CLSCTX_ALL) };
 
-        let is_connected = manager
-            .IsConnectedToInternet()
-            .map(|v| v.as_bool())
-            .unwrap_or(true);
+    let manager = manager.map_err(|_| ())?;
 
-        let is_metered = manager
-            .cast::<INetworkCostManager>()
-            .ok()
-            .and_then(|cost_manager| {
-                let mut cost_raw: u32 = 0;
-                let result = cost_manager.GetCost(&mut cost_raw, std::ptr::null());
-                if result.is_ok() {
-                    const NLM_COST_FLAG_UNRESTRICTED: u32 = 0x1;
-                    Some(cost_raw & NLM_COST_FLAG_UNRESTRICTED == 0)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(false);
+    let is_connected = unsafe {
+        manager.IsConnectedToInternet()
+    }
+    .map(|v| v.as_bool())
+    .map_err(|_| ())?;
 
-        (is_connected, is_metered)
-    };
+    let is_metered = manager
+        .cast::<INetworkCostManager>()
+        .ok()
+        .and_then(|cost_manager| {
+            let mut cost_raw: u32 = 0;
+            let result = unsafe { cost_manager.GetCost(&mut cost_raw, std::ptr::null()) };
+            if result.is_ok() {
+                const NLM_COST_FLAG_UNRESTRICTED: u32 = 0x1;
+                Some(cost_raw & NLM_COST_FLAG_UNRESTRICTED == 0)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(false);
 
-    unsafe { CoUninitialize() };
-
-    result
+    Ok((is_connected, is_metered))
 }
 
 fn parse_proxy(url_str: &str) -> (Option<String>, Option<u16>) {
