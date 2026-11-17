@@ -19,13 +19,9 @@ import {
 import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
 import { EditorStatsQueue } from '../stats/EditorStatsQueue'
 import { WritingSessionTracker } from '../stats/WritingSessionTracker'
-import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { EditorEditResult, EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
 import { EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
-import { EditorInputAdapter } from '../input/EditorInputAdapter'
-import { SelectionController } from '../selection/SelectionController'
-import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
-import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
+import { NativeRichEditorBridge } from '../input/NativeRichEditorBridge'
 import { SujianEditor } from './SujianEditor'
 import { ProofReplayPanel } from './ProofReplayPanel'
 import { WideWritingWorkbench } from './wide/WideWritingWorkbench'
@@ -40,8 +36,6 @@ import { ContinuationSnapshotStore } from '../../../platform/continuity/Continua
 import { NearbyDeviceSyncCoordinator } from '../../../platform/peer/NearbyDeviceSyncCoordinator'
 import { HarmonyShareService } from '../../../platform/share/HarmonyShareService'
 import { SharePayload } from '../../../platform/share/SharePayload'
-import { EditorViewportState } from '../render/EditorViewportState'
-import { EditorViewportController } from '../render/EditorViewportController'
 import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
@@ -57,8 +51,6 @@ import { TrustedDeviceService } from '../../../platform/device/TrustedDeviceServ
 import { HdsWritingDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWritingDestinationApi23'
 import { sortedHeaderTrailingActions } from '../../../app/navigation/NavigationHeaderActionModel'
 import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
-import { EditorPresentationUpdate } from '../motion/EditorPresentationUpdate'
-import { EditorMotionPolicy } from '../motion/EditorMotionPolicy'
 import { ProjectWorkspaceViewModel } from '../../project/presentation/ProjectWorkspaceViewModel'
 import { CorrectionCoordinator, CorrectionPresentationState } from '../correction/CorrectionCoordinator'
 import { MappedCorrectionSuggestion } from '../correction/CorrectionDtos'
@@ -196,33 +188,9 @@ export struct WritingScreen {
   @State lastSaveFailed: boolean = false
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State adaptiveState: AdaptiveState = getAdaptiveState()
-  // Issue #879：用单个 @State presentationUpdate 替代分离的 editorSnapshot + editorEditResult。
-  @State presentationUpdate: EditorPresentationUpdate | null = null
-  // Issue #879：运动策略，从 LocalSettings 构造，设置变化时同步更新。
-  @State motionPolicy: EditorMotionPolicy = EditorMotionPolicy.fromSettings({
-    editorFontSize: 16,
-    editorLineSpacingMultiplier: 1.8,
-    themeMode: 'system',
-    appearanceMode: 'system',
-    colorSource: 'built_in',
-    dynamicColorEnabled: false,
-    selectedBuiltinThemeId: '',
-    selectedPaletteId: '',
-    locale: null,
-    autoSaveEnabled: true,
-    autoSaveDelayMs: 30000,
-    autoIndentEnabled: true,
-    autoIndentWidth: 2,
-    editorTypingAnimationEnabled: false,
-    editorSmoothCursorEnabled: false,
-    editorTypingAnimationDurationMs: 100,
-    editorSmoothCursorDurationMs: 80,
-    aiEnabled: false,
-    statsDeviceId: null,
-    editorCoordinatedTextCursorAnimationEnabled: false,
-    diagnosticsEnabled: false,
-    diagnosticsVerbose: false
-  })
+  // Issue #1034：RichEditor 桥接，替代旧的 presentationUpdate/motionPolicy。
+  // RichEditor 自行处理滚动、选区、IME；输入通过 NativeRichEditorBridge 转发给 coordinator。
+  private richEditorBridge: NativeRichEditorBridge = new NativeRichEditorBridge(this.editorCoordinator)
   // Issue #629 评论14 第1项：宽屏双栏模式下的目录数据。
   @State volumeTrees: VolumeTree[] = []
   // Issue #829 手稿：章节树的作品名分组头。
@@ -245,7 +213,7 @@ export struct WritingScreen {
   // Issue #829：手稿把最右 ToolRail 固定成“星图 / AI”。
   @State selectedToolKey: string = 'starmap'
   // 当前 UI 滚动位置（viewport），接续恢复时只设 UI，不写 Core。
-  @State currentViewport: EditorViewportState | null = null
+  @State currentViewport: object | null = null
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination。
   @State useHdsNav: boolean = false
   // Issue #784 评论5857397503 第4点 / Issue #825 复核第2项：headerActions 由 WritingScreen
@@ -277,11 +245,8 @@ export struct WritingScreen {
   private annotationBridge: NativeAnnotationBridge = new NativeAnnotationBridge()
   private annotationEditQueue: Promise<void> = Promise.resolve()
   private correctionModelCleanupQueue: Promise<void> = Promise.resolve()
-  private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.editorCoordinator)
-  private selectionController: SelectionController = new SelectionController(this.editorCoordinator)
-  private harmonyImeConnection: HarmonyImeConnection = new HarmonyImeConnection()
-  // Issue #629 评论6 Part A：统一语义输入调度器。
-  private dispatcher: EditorSemanticDispatcher = new EditorSemanticDispatcher(this.inputAdapter, this.selectionController, this.editorCoordinator)
+  // Issue #1034：旧的自研编辑器组件（inputAdapter/selectionController/harmonyImeConnection/dispatcher）
+  // 已移除，RichEditor 自行处理 IME/选区/输入。
   // Share 生命周期服务（Issue #629 评论 5 第 7 节）：碰一碰/隔空传送由页面拥有生命周期。
   private shareService: HarmonyShareService = HarmonyShareService.getInstance()
   // Issue #829 评论 #5995146525：写作统计上报队列（串行、异步、与编辑事务同源）。
@@ -294,11 +259,9 @@ export struct WritingScreen {
   private writingWorkflow: WritingWorkflowCoordinator = new WritingWorkflowCoordinator(
     this.bridge,
     this.editorCoordinator,
-    this.dispatcher,
     this.editorStatsQueue,
     this.writingSessionTracker,
     NavigationTransactionCoordinator.getInstance(),
-    this.harmonyImeConnection,
     this.writingTextProvider
   )
   // Issue #920 A：卷/章节创建/删除复用工作区 ViewModel 的共享业务入口，写作页不再维护第二套规则。
@@ -311,10 +274,7 @@ export struct WritingScreen {
   private continuationPublishTimer: number = -1
   private lastContinuationPublishAt: number = 0
   private pendingContinuationSnapshotId: string = ''
-  // Issue #629 评论6 Part C：父子 viewport 恢复通道 controller。
-  private viewportController: EditorViewportController = new EditorViewportController()
-  // Issue #778 任务8：唯一 owner scroller，传给 SujianEditor 和 HDS 壳层做沉浸联动。
-  private editorScroller: Scroller = new Scroller()
+  // Issue #1034：viewportController 和 editorScroller 已移除，RichEditor 自行处理滚动。
   // Issue #629 评论14 第2项：离开守卫唯一 token。
   private leaveGuardToken: number = -1
   // Issue #923：活跃写作会话注册 token（aboutToDisappear 精确注销自身）。
@@ -483,19 +443,8 @@ export struct WritingScreen {
     const snap = update.snapshot
     if (snap !== null) {
       this.correctionCoordinator.acceptSnapshot(this.projectId, this.chapterId, snap, update.editResult)
-      // Issue #879：把 snapshot + editResult + sessionId 保存在一个 @State presentationUpdate 中。
-      const layoutSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
-        snap,
-        this.settings.editorFontSize,
-        this.settings.editorLineSpacingMultiplier,
-        this.settings.autoIndentEnabled,
-        this.settings.autoIndentWidth
-      )
-      this.presentationUpdate = new EditorPresentationUpdate(
-        layoutSnapshot,
-        update.editResult,
-        this.editorCoordinator.getSessionId() ?? 0
-      )
+      // Issue #1034：不再构造 EditorPresentationUpdate，改为通过 richEditorBridge.syncFromCore() 同步。
+      void this.richEditorBridge.syncFromCore()
       if (update.editResult !== null && update.editResult.cause !== EditorTransactionCause.Load &&
           update.editResult.displayPatches.length > 0) {
         void this.persistAnnotationEditAndRefresh(snap, update.editResult)
@@ -606,10 +555,8 @@ export struct WritingScreen {
   }
 
   private handleSystemBack(): void {
-    if (this.harmonyImeConnection.canDismissForBack()) {
-      this.harmonyImeConnection.dismissForBack()
-      return
-    }
+    this.writingWorkflow.requestLeave()
+  }
     this.writingWorkflow.requestLeave()
   }
 
@@ -727,9 +674,8 @@ export struct WritingScreen {
       await this.editorCoordinator.setSelection(startByte, endByte)
       const restored = this.editorCoordinator.getSnapshot()
       if (restored !== null) {
-        const revealUtf16: number = TextOffsetMapper.utf8ToUtf16(restored.text, startByte)
-        this.viewportController.reveal(revealUtf16)
-      }
+        // Issue #1034：viewportController 已移除，RichEditor 自行处理滚动位置。
+      // 搜索定位通过 coordinator.setSelection 设置选区，RichEditor 会自动滚动到选区位置。
       // 搜索定位只消费一次；后续章节切换不能把旧范围继续套到新正文。
       params.searchByteStart = undefined
       params.searchByteEnd = undefined
@@ -737,10 +683,7 @@ export struct WritingScreen {
     }
 
     // viewport 只恢复到 UI 滚动位置，不写 Core。通过父子 controller 通道恢复。
-    if (canRestoreEditorState && params.viewport !== undefined) {
-      this.currentViewport = params.viewport
-      this.viewportController.restore(params.viewport)
-    }
+    // Issue #1034：viewport 恢复由 RichEditor 自行处理，不再通过 viewportController。
 
     // 恢复后写入当前状态（UTF-8 → UTF-16 转换在 updateContinuationState 内完成）。
     this.updateContinuationState()
@@ -1204,30 +1147,14 @@ export struct WritingScreen {
   // 按新的自动保存间隔重配 observer，并让顶栏草稿对齐。
   private applyPublishedSettings(settings: LocalSettings): void {
     this.settings = settings
-    // Issue #879：设置变化时同步更新运动策略。
-    this.motionPolicy = EditorMotionPolicy.fromSettings(settings)
+    // Issue #1034：motionPolicy 已移除，RichEditor 自行处理动画。
     // 队列里还有用户点出来的目标时不把草稿拽回旧值（pending 目标由 applyEditorFormat 队列自己收尾）。
     if (!this.hasPendingEditorFormat) {
       this.editorFormatDraftFontSize = settings.editorFontSize
       this.editorFormatDraftLineSpacing = settings.editorLineSpacingMultiplier
     }
-    // Issue #768 评论5838296806：设置真相变化后，如果 coordinator 已有 snapshot，
-    // 同步重建 presentationUpdate（editResult=null 表示布局重建，不是编辑事务）。
-    const existingSnap = this.editorCoordinator.getSnapshot()
-    if (existingSnap !== null) {
-      const newLayoutSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
-        existingSnap,
-        this.settings.editorFontSize,
-        this.settings.editorLineSpacingMultiplier,
-        this.settings.autoIndentEnabled,
-        this.settings.autoIndentWidth
-      )
-      this.presentationUpdate = new EditorPresentationUpdate(
-        newLayoutSnapshot,
-        null,
-        this.editorCoordinator.getSessionId() ?? 0
-      )
-    }
+    // Issue #1034：不再重建 presentationUpdate，改为通过 richEditorBridge.syncFromCore() 同步。
+    void this.richEditorBridge.syncFromCore()
     // Issue #705：主题真相是 appearanceMode（与 SettingsScreen 同一读法）。
     const appearanceMode = this.settings.appearanceMode || this.settings.themeMode || 'system'
     this.themeAdapter.updateFromSettings({
@@ -1399,11 +1326,11 @@ export struct WritingScreen {
 
   // Issue #825 复核第 3 项：撤销/重做走唯一的 EditorSemanticDispatcher 串行队列（与输入同一条顺序边界）。
   private applyUndo(): void {
-    this.dispatcher.dispatchFireAndForget({ kind: 'undo' })
+    void this.editorCoordinator.undo()
   }
 
   private applyRedo(): void {
-    this.dispatcher.dispatchFireAndForget({ kind: 'redo' })
+    void this.editorCoordinator.redo()
   }
 
   // Issue #825 复核5第4点：ToolbarCenter 的字号 / 行距是 Core 设置里的真实字段，写回 saveLocalSettings 落盘。
@@ -1504,7 +1431,6 @@ export struct WritingScreen {
         onShown: () => {
           NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0)
         },
-        scroller: this.editorScroller,
         headerActions: this.headerActions,
         // Issue #920 A / #972：宽屏由 WideWritingWorkbench 整页排版，HDS 标题栏必须让位。
         showTitleBar: !(this.layoutMode === WideLayoutMode.Wide)
@@ -1738,8 +1664,8 @@ export struct WritingScreen {
           .justifyContent(FlexAlign.Center)
         } else {
           SujianEditor({
-            scroller: this.editorScroller,
-            presentationUpdate: this.presentationUpdate,
+            editorCoordinator: this.editorCoordinator,
+            richEditorBridge: this.richEditorBridge,
             correctionSuggestions: this.correctionSuggestions,
             annotationRanges: this.annotationRanges,
             hasHyperlinkAt: (utf16Offset: number, revision: number, text: string): boolean =>
@@ -1749,16 +1675,8 @@ export struct WritingScreen {
               void this.activateHyperlinkAt(utf16Offset, revision, text)
               return true
             },
-            motionPolicy: this.motionPolicy,
-            harmonyImeConnection: this.harmonyImeConnection,
-            inputAdapter: this.inputAdapter,
-            selectionController: this.selectionController,
-            dispatcher: this.dispatcher,
-            viewportController: this.viewportController,
-            onViewportChange: (state: EditorViewportState): void => {
-              this.currentViewport = state
-              this.updateContinuationState()
-            }
+            fontSize: this.settings.editorFontSize,
+            lineSpacingMultiplier: this.settings.editorLineSpacingMultiplier
           })
             .width('100%')
             .layoutWeight(1)
@@ -2053,8 +1971,7 @@ export struct WritingScreen {
       if (anchor.data.chapterId === this.chapterId && anchor.data.projectId === this.projectId) {
         const selected = await this.editorCoordinator.setSelection(anchor.data.startByte, anchor.data.endByte)
         if (selected.success) {
-          this.viewportController.reveal(TextOffsetMapper.utf8ToUtf16(
-            this.editorCoordinator.getSnapshot()?.text ?? '', anchor.data.startByte))
+          // Issue #1034：viewportController 已移除，RichEditor 自行滚动到选区位置。
         }
         return
       }
@@ -2402,7 +2319,7 @@ export struct WritingScreen {
     const revealUtf16: number = restored !== null
       ? TextOffsetMapper.utf8ToUtf16(restored.text, startByte)
       : suggestion.startUtf16
-    this.viewportController.reveal(revealUtf16)
+    // Issue #1034：viewportController 已移除，RichEditor 自行滚动到选区位置。
   }
 
   private async ignoreCorrection(suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope): Promise<void> {

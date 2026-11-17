@@ -9,8 +9,8 @@
 // 边界：
 // - 正文真值仍在 EditorSessionCoordinator（Core snapshot），本类**不重造编辑内核**，
 //   也不持有第二套可编辑正文状态；`content` 只是回流给 UI 的显示投影。
-// - 所有编辑命令入口仍是唯一的 EditorSessionCoordinator / EditorSemanticDispatcher。
-// - 平台文案（资源字符串）、IME 键盘收起、接续 / 分享 payload、滚动 viewport 等
+// - 所有编辑命令入口仍是唯一的 EditorSessionCoordinator。
+// - 平台文案（资源字符串）、接续 / 分享 payload、滚动 viewport 等
 //   仍由页面处理；本类通过 WritingTextKey 文案键与会话打开回调与其协作。
 //
 // Issue #629 评论6/7/8/9/11/14 的各项 close / save / leave 语义原样迁移到这里。
@@ -21,11 +21,10 @@ import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { EditorSessionSnapshot, EditorEditResult, EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorSessionCoordinator, EditorStateUpdate } from './EditorSessionCoordinator'
-import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
 import { EditorStatsQueue } from '../stats/EditorStatsQueue'
 import { WritingSessionTracker } from '../stats/WritingSessionTracker'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
-import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
+import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { Routes, WritingRouteParams } from '../../../app/navigation/Routes'
 import { ActiveWritingSession, SyncBarrierBeginResult } from './ActiveWritingSessionRegistry'
 
@@ -91,11 +90,9 @@ interface ActiveSaveTask {
 export class WritingWorkflowCoordinator implements ActiveWritingSession {
   private bridge: IWriterCoreBridge
   private editorCoordinator: EditorSessionCoordinator
-  private dispatcher: EditorSemanticDispatcher
   private statsQueue: EditorStatsQueue
   private writingSessionTracker: WritingSessionTracker
   private navigation: NavigationTransactionCoordinator
-  private imeConnection: HarmonyImeConnection
   private textProvider: WritingTextProvider
 
   // 页面监听器（显示状态回流）。
@@ -135,25 +132,20 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #923：同步屏障状态（与 endSyncBarrier 成对）。
   // held=本次同步持有本会话屏障；sealed=传输期间封锁输入（防止往将被替换的 live 章节写旧内存内容）。
   private syncBarrierHeld: boolean = false
-  private syncBarrierSealed: boolean = false
 
   constructor(
     bridge: IWriterCoreBridge,
     editorCoordinator: EditorSessionCoordinator,
-    dispatcher: EditorSemanticDispatcher,
     statsQueue: EditorStatsQueue,
     writingSessionTracker: WritingSessionTracker,
     navigation: NavigationTransactionCoordinator,
-    imeConnection: HarmonyImeConnection,
     textProvider: WritingTextProvider
   ) {
     this.bridge = bridge
     this.editorCoordinator = editorCoordinator
-    this.dispatcher = dispatcher
     this.statsQueue = statsQueue
     this.writingSessionTracker = writingSessionTracker
     this.navigation = navigation
-    this.imeConnection = imeConnection
     this.textProvider = textProvider
     // Issue #629 评论9 第4项：listener 改 typed EditorStateUpdate；本类消费后回流显示状态。
     this.editorCoordinator.setStateListener((update: EditorStateUpdate): void => {
@@ -323,7 +315,6 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #629 评论 5308748920 问题3：手动/自动保存入口。
   // 先取得稳定 snapshot（flush + whenIdle），再调 ensureSnapshotSaved 精确保存这份文本。
   async saveChapter(isAutoSave: boolean = false): Promise<boolean> {
-    await this.dispatcher.flush()
     await this.editorCoordinator.whenIdle()
     const snap = this.editorCoordinator.getSnapshot()
     const targetText: string = snap ? snap.text : this.content
@@ -439,7 +430,6 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #927：返回真实成功/失败结果（只开一次保存事务），失败时保留 hasUnsavedChanges，
   // 调用方不得把「回调已调用」当成「已经落盘」。
   async performBackgroundSave(): Promise<boolean> {
-    await this.dispatcher.flush()
     await this.editorCoordinator.whenIdle()
     // 无待保存变化：本次后台事务直接成功，不产生多余 Core 写入。
     if (!this.hasUnsavedChanges) {
@@ -466,13 +456,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     }
     this.syncBarrierHeld = true
     try {
-      // 先封住输入：传输期间不得继续往将被替换的 live 章节写旧内存内容。
-      // sealed 只拒绝新命令，已排队命令仍可 drain（与关闭事务同一语义）。
-      this.dispatcher.seal()
-      this.syncBarrierSealed = true
-      // 同一会话边界：先提交 IME composition，再 drain 输入，再取稳定 snapshot。
-      const finishResult = await this.dispatcher.finishActiveComposition()
-      await this.dispatcher.flush()
+      // 同一会话边界：先提交 IME composition，再等输入队列空闲，再取稳定 snapshot。
+      const finishResult = await this.finishActiveComposition()
       await this.editorCoordinator.whenIdle()
       const snap = this.editorCoordinator.getSnapshot()
       if (finishResult.success === false || snap === null ||
@@ -523,7 +508,6 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       return true
     }
     // 磁盘已变化：确认没有仍在排队的编辑命令，再决定能否回填。
-    await this.dispatcher.flush()
     await this.editorCoordinator.whenIdle()
     const snap = this.editorCoordinator.getSnapshot()
     if (snap === null) {
@@ -565,22 +549,41 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
 
   // 释放同步屏障（同步成功 / 失败 / 冲突都必须调用；与 beginSyncBarrier 成对且幂等）。
   endSyncBarrier(): void {
-    if (this.syncBarrierSealed) {
-      this.dispatcher.unseal()
-      this.syncBarrierSealed = false
-    }
     this.syncBarrierHeld = false
   }
 
   // ── 清空正文 ──
 
   // Issue #629 评论 5 第 4 节 + 评论9 第4项 + 评论11 第1项：
-  // 清空正文走 Dispatcher 的 clearDocument 语义命令，不绕过队列直接 replace。
+  // 清空正文：先等已有输入命令完成，再 replace 整个文本为空。
   async clearDocument(): Promise<void> {
-    // dispatch clearDocument：命令进 Dispatcher 队列，保证之前的输入先执行。
     this.isSaving = true
     this.emit(null, null)
-    const result = await this.dispatcher.dispatch({ kind: 'clearDocument' })
+    await this.editorCoordinator.whenIdle()
+    const snap = this.editorCoordinator.getSnapshot()
+    if (!snap) {
+      this.isSaving = false
+      this.lastSaveFailed = true
+      this.saveMessage = this.textProvider(WritingTextKey.ClearFailed)
+      this.emit(null, null)
+      return
+    }
+    // 若有活跃 composition，先取消再清空。
+    if (snap.composition !== null && snap.composition !== undefined) {
+      const cancelResult = await this.editorCoordinator.cancelComposition(
+        snap.composition.sessionId, snap.composition.generation)
+      if (!cancelResult.success) {
+        this.isSaving = false
+        this.lastSaveFailed = true
+        this.saveMessage = this.textProvider(WritingTextKey.ClearFailed)
+        this.emit(null, null)
+        return
+      }
+    }
+    const fullText: string = snap.text
+    const utf8EndByte: number = TextOffsetMapper.utf16ToUtf8(fullText, fullText.length)
+    const result = await this.editorCoordinator.replace(
+      0, utf8EndByte, '', fullText, EditorTransactionCause.Programmatic)
     this.isSaving = false
     this.emit(null, null)
     if (!result.success) {
@@ -605,11 +608,10 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // ── 关闭 / 离开 ──
 
   // Issue #629 评论6 Part G + 评论7 第5项 + 评论8 第2/3项：统一幂等关闭事务。
-  // seal（拒新输入）→ finishActiveComposition → drain dispatcher → coordinator idle
-  // → 保存稳定 snapshot → 保存成功后 detach IME → close Core session。
+  // finishActiveComposition → whenIdle → save → closeAsync。
   // 幂等：closeTask 复用同一 Promise；失败后重置允许重试。
   async performGracefulClose(): Promise<boolean> {
-    // 无编辑会话（零章节工作台）：没有 session 需要 close/save/detach，直接允许离开。
+    // 无编辑会话（零章节工作台）：没有 session 需要 close/save，直接允许离开。
     if (this.chapterId.length === 0 && this.editorCoordinator.getSessionId() === null) {
       return true
     }
@@ -635,54 +637,41 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   }
 
   // Issue #629 评论7 第5项：真实关闭逻辑（拆出，由 performGracefulClose 幂等包装）。
-  // Issue #629 评论8 第3项 + 评论9 第2项：顺序
-  //   seal → finishActiveComposition → drain → whenIdle → save → closeAsync → detach。
+  // 顺序：finishActiveComposition → whenIdle → save → closeAsync。
   private async doGracefulClose(): Promise<boolean> {
-    // 1. dispatcher 进入 sealed：拒绝新的普通输入命令（已排队命令仍可 drain）
-    this.dispatcher.seal()
     try {
-      // 2. 同一 dispatcher 队列里 finish 当前 composition：最后的中文 preedit 提交进 committed 正文。
-      const finishResult = await this.dispatcher.finishActiveComposition()
-      // 3. drain dispatcher（所有已排队语义输入应用完）
-      await this.dispatcher.flush()
-      // 4. 等 coordinator 命令队列空闲（snapshot 已包含最后输入）
+      // 1. finish 当前 composition：最后的中文 preedit 提交进 committed 正文。
+      const finishResult = await this.finishActiveComposition()
+      // 2. 等 coordinator 命令队列空闲（snapshot 已包含最后输入）
       await this.editorCoordinator.whenIdle()
-      // 5. composition 唯一真源是 Core snapshot。finish 失败 / snapshot 丢失 / composition 仍在 → 拒绝关闭。
+      // 3. composition 唯一真源是 Core snapshot。finish 失败 / snapshot 丢失 / composition 仍在 → 拒绝关闭。
       const afterFinish = this.editorCoordinator.getSnapshot()
       if (finishResult.success === false || afterFinish === null ||
         (afterFinish.composition !== null && afterFinish.composition !== undefined)) {
-        this.dispatcher.unseal()
         return false
       }
-      // 6. Issue #829：等写作统计真正写完再离开。统计没写进去不该拦住用户离开，失败只记日志。
+      // 4. Issue #829：等写作统计真正写完再离开。统计没写进去不该拦住用户离开，失败只记日志。
       const statsBarrier: number = this.statsQueue.currentSeq()
       const statsFlushed: boolean = await this.flushEditorStatsQueue(statsBarrier)
       if (!statsFlushed) {
         console.warn(`[WritingWorkflowCoordinator] 写作统计未全部落盘（丢弃 ${this.statsQueue.dropped()} 条）`)
       }
-      // 7. 保存稳定 snapshot（此时不再读可能已变化的 this.content）
+      // 5. 保存稳定 snapshot（此时不再读可能已变化的 this.content）
       const savedText: string = afterFinish.text
       if (savedText !== this.lastSavedContent) {
         const settled: boolean = await this.ensureSnapshotSaved(savedText, false)
         if (!settled) {
-          // 保存失败：不 detach、不 close、不 pop；解锁输入让用户继续编辑（下次返回重试）。
-          this.dispatcher.unseal()
           return false
         }
       }
-      // 7. 关闭编辑会话。Issue #629 评论9 第2项：先 closeAsync，成功后才 detach IME。
+      // 6. 关闭编辑会话。Issue #629 评论9 第2项：先 closeAsync。
       // Issue #629 评论11 第3项：close 必须 success===true && data===true 才算成功。
       const closeResult = await this.editorCoordinator.closeAsync()
       if (!closeResult.success || closeResult.data !== true) {
-        this.dispatcher.unseal()
         return false
       }
-      // 8. Core close 成功后才 detach IME（不可逆清理放到最后）。
-      await this.imeConnection.detach()
       return true
     } catch (err) {
-      // 异常路径按失败处理：不 pop（正文仍在活跃会话），解锁输入允许重试，不 detach IME。
-      this.dispatcher.unseal()
       return false
     }
   }
@@ -738,6 +727,18 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   }
 
   // ── 内部工具 ──
+
+  // 提交当前活跃的 IME composition（如果有）。
+  // composition 唯一真源是 Core snapshot：从 snapshot.composition 读 sessionId/generation。
+  // 无 composition 时 no-op（返回 success）。
+  private async finishActiveComposition(): Promise<ResultEnvelope<EditorEditResult>> {
+    const snap = this.editorCoordinator.getSnapshot()
+    if (!snap || snap.composition === null || snap.composition === undefined) {
+      return { success: true }
+    }
+    const comp = snap.composition
+    return this.editorCoordinator.finishComposition(comp.sessionId, comp.generation)
+  }
 
   // 等写作统计队列写完 barrier 及之前入队的那些事件。
   private flushEditorStatsQueue(barrier: number): Promise<boolean> {
