@@ -3,13 +3,18 @@
 // Issue #1034 评论 #6 修复：正确使用 RichEditorController API、串行事务队列、UTF-8/UTF-16 坐标转换。
 // Issue #1034 评论 #7 修复：getSpans offsetInSpan 截取、deleteSpans() 无参数清空、
 //   computeDiff 按 code point、whenIdle 注入保存链路、事务失败恢复。
+// Issue #1034 评论 #8 补全：IME 预编辑/提交区分、事务失败队列收敛恢复。
 //
 // 职责：
 // - RichEditor onWillChange → 只做校验（返回 true 允许改变），不调用 coordinator。
+// - RichEditor aboutToIMEInput → 标记 IME 预编辑开始，记录基线文本。
 // - RichEditor onDidChange(rangeBefore, rangeAfter) → 从前后文本差量计算编辑事实，
-//   串行提交给 EditorSessionCoordinator。
+//   IME 预编辑期间只更新本地镜像不提交 Core；非预编辑期间串行提交给 coordinator。
+// - RichEditor onDidIMEInput → IME 提交后，将累积差量作为一次 TypingCommit 事务提交给 Core。
 // - RichEditor onSelectionChange → 将稳定选区映射后传给 EditorSessionCoordinator.setSelection()。
 // - 维护 programmaticUpdate 标记和有序 revision，区分用户编辑与程序回放。
+// - 事务失败时不立即 recoverFromCore，而是将恢复任务排到队列末尾，
+//   以 Core 最新文本为基线重放尚未提交的编辑，避免丢失后续输入。
 // - Core 外部加载/撤销/同步更新通过 revision 比较、最小文本差量更新 RichEditor；
 //   文本 revision 对齐和 selection/cursor 更新独立处理。
 
@@ -28,6 +33,15 @@ interface TextDiff {
   replacement: string
 }
 
+interface PendingEdit {
+  previousText: string
+  rangeBeforeStart: number
+  rangeBeforeEnd: number
+  insertedText: string
+  oldText: string
+  cause: EditorTransactionCause
+}
+
 export class NativeRichEditorBridge {
   private coordinator: EditorSessionCoordinator
   private richEditorController: RichEditorController | null = null
@@ -36,6 +50,10 @@ export class NativeRichEditorBridge {
   private lastAppliedRevision: number = -1
   private editQueue: Promise<void> = Promise.resolve()
   private pendingPaste: boolean = false
+  private pendingEdits: PendingEdit[] = []
+  private imeComposing: boolean = false
+  private imeComposingStartText: string = ''
+  private recoveryScheduled: boolean = false
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -78,19 +96,17 @@ export class NativeRichEditorBridge {
 
   // onDidChange：内容已改变后，从 rangeBefore/rangeAfter 和本地镜像计算编辑事实，
   // 串行提交给 coordinator。
+  // Issue #1034 评论 #8：IME 预编辑期间只更新本地镜像，不提交 Core 事务；
+  // 事务失败时不立即 recoverFromCore，而是排到队列末尾收敛恢复。
   onDidChange(rangeBefore: TextRange, rangeAfter: TextRange): void {
     if (this.programmaticUpdate || this.richEditorController === null) {
       return
     }
 
-    // 从 RichEditor 获取改动后插入的文本内容
-    // Issue #1034 评论 #8：getSpans 返回 Array<RichEditorImageSpanResult | RichEditorTextSpanResult>，
-    // 需按 union 类型筛选纯文本 Span；排序用 spanPosition.spanRange[0]（不是不存在的 spanPosition.start）。
     const insertedSpans = this.richEditorController.getSpans({
       start: rangeAfter.start,
       end: rangeAfter.end
     })
-    // 筛选纯文本 Span，按 spanPosition.spanRange[0] 排序
     const textSpans: RichEditorTextSpanResult[] = []
     for (const span of insertedSpans) {
       if ((span as RichEditorTextSpanResult).value !== undefined) {
@@ -109,23 +125,32 @@ export class NativeRichEditorBridge {
       insertedText += span.value.substring(offsetStart, offsetEnd)
     }
 
-    // 从本地镜像推算被删除的旧文本
     const oldText = this.currentText.substring(rangeBefore.start, rangeBefore.end)
 
-    // 推算改动后的完整文本
     const newText = this.currentText.substring(0, rangeBefore.start)
       + insertedText
       + this.currentText.substring(rangeBefore.end)
 
-    // 立即更新本地镜像（不等 coordinator 异步操作完成）
     const previousText = this.currentText
     this.currentText = newText
 
-    // 确定编辑原因
+    if (this.imeComposing) {
+      return
+    }
+
     const cause: EditorTransactionCause = this.pendingPaste ? EditorTransactionCause.Paste : EditorTransactionCause.Typing
     this.pendingPaste = false
 
-    // 串行提交编辑事实给 coordinator
+    const pendingEdit: PendingEdit = {
+      previousText: previousText,
+      rangeBeforeStart: rangeBefore.start,
+      rangeBeforeEnd: rangeBefore.end,
+      insertedText: insertedText,
+      oldText: oldText,
+      cause: cause
+    }
+    this.pendingEdits.push(pendingEdit)
+
     this.editQueue = this.editQueue.then(async () => {
       const snap = this.coordinator.getSnapshot()
       if (snap === null) {
@@ -133,7 +158,6 @@ export class NativeRichEditorBridge {
         return
       }
 
-      // 从当笔前镜像换算 UTF-8 byte offset
       const byteStart = TextOffsetMapper.utf16ToUtf8(previousText, rangeBefore.start)
       const byteEnd = TextOffsetMapper.utf16ToUtf8(previousText, rangeBefore.end)
 
@@ -147,8 +171,6 @@ export class NativeRichEditorBridge {
         result = await this.coordinator.insert(byteStart, insertedText, cause)
       }
 
-      // Issue #1034 评论 #8：不仅检查 success，还要检查 outcome。
-      // staleRevision/invalidOffset/invalidRange 是业务拒绝结果，需从 Core snapshot 对齐。
       if (result !== null) {
         if (!result.success || result.data === undefined ||
             (result.data.outcome !== EditorEditOutcome.Applied &&
@@ -158,14 +180,98 @@ export class NativeRichEditorBridge {
         }
       }
 
-      // 事务失败时从 Core snapshot 恢复，不让本地镜像与 Core 分叉
       if (transactionFailed) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidChange: transaction failed, recovering from Core')
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidChange: transaction failed, scheduling recovery')
+        this.scheduleRecovery()
+        return
+      }
+
+      const editIndex = this.pendingEdits.indexOf(pendingEdit)
+      if (editIndex >= 0) {
+        this.pendingEdits.splice(editIndex, 1)
+      }
+
+      if (result !== null && result.success && result.data !== undefined &&
+          result.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection) {
+        const newSnap = this.coordinator.getSnapshot()
+        if (newSnap !== null && this.richEditorController !== null) {
+          const utf16Cursor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.cursor)
+          const utf16Anchor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.selectionAnchor)
+          this.richEditorController.setSelection(utf16Anchor, utf16Cursor)
+        }
+      }
+
+      const newSnap = this.coordinator.getSnapshot()
+      if (newSnap !== null) {
+        this.lastAppliedRevision = newSnap.revision
+      }
+    }).catch(e => {
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onDidChange error: ${JSON.stringify(e)}`)
+      this.scheduleRecovery()
+    })
+  }
+
+  // Issue #1034 评论 #8：IME 预编辑开始——标记 composing 状态，记录基线文本。
+  aboutToIMEInput(_insertValue: RichEditorInsertValue): boolean {
+    this.imeComposing = true
+    this.imeComposingStartText = this.currentText
+    return true
+  }
+
+  // Issue #1034 评论 #8：IME 提交完成——将累积差量作为一次 TypingCommit 事务提交给 Core。
+  onDidIMEInput(_range: TextRange): void {
+    if (!this.imeComposing) {
+      return
+    }
+    this.imeComposing = false
+
+    const diff = this.computeDiff(this.imeComposingStartText, this.currentText)
+    if (diff.start >= diff.end && diff.replacement.length === 0) {
+      return
+    }
+
+    const baselineText = this.imeComposingStartText
+    const diffStart = diff.start
+    const diffEnd = diff.end
+    const diffReplacement = diff.replacement
+    const diffOldText = baselineText.substring(diffStart, diffEnd)
+
+    this.editQueue = this.editQueue.then(async () => {
+      const snap = this.coordinator.getSnapshot()
+      if (snap === null) {
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidIMEInput: no active session')
+        return
+      }
+
+      if (snap.text !== baselineText) {
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidIMEInput: Core text changed during IME composition, recovering')
         await this.recoverFromCore()
         return
       }
 
-      // 如果 Core 调整了选区位置，更新 RichEditor 的选区
+      const byteStart = TextOffsetMapper.utf16ToUtf8(baselineText, diffStart)
+      const byteEnd = TextOffsetMapper.utf16ToUtf8(baselineText, diffEnd)
+
+      let result: ResultEnvelope<EditorEditResult> | null = null
+      if (diffOldText.length > 0 && diffReplacement.length > 0) {
+        result = await this.coordinator.replace(byteStart, byteEnd, diffReplacement, diffOldText, EditorTransactionCause.TypingCommit)
+      } else if (diffOldText.length > 0) {
+        result = await this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
+      } else if (diffReplacement.length > 0) {
+        result = await this.coordinator.insert(byteStart, diffReplacement, EditorTransactionCause.TypingCommit)
+      }
+
+      if (result !== null) {
+        if (!result.success || result.data === undefined ||
+            (result.data.outcome !== EditorEditOutcome.Applied &&
+             result.data.outcome !== EditorEditOutcome.AppliedWithAdjustedSelection &&
+             result.data.outcome !== EditorEditOutcome.NoChange)) {
+          hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidIMEInput: transaction failed, recovering')
+          await this.recoverFromCore()
+          return
+        }
+      }
+
       if (result !== null && result.success && result.data !== undefined &&
           result.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection) {
         const newSnap = this.coordinator.getSnapshot()
@@ -181,8 +287,8 @@ export class NativeRichEditorBridge {
         this.lastAppliedRevision = newSnap.revision
       }
     }).catch(async e => {
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onDidChange error: ${JSON.stringify(e)}`)
-      // Issue #1034 评论 #8：异常也触发恢复路径，不让 whenIdle 误判成功。
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onDidIMEInput error: ${JSON.stringify(e)}`)
+      this.imeComposing = false
       await this.recoverFromCore()
     })
   }
@@ -260,6 +366,76 @@ export class NativeRichEditorBridge {
       end: oldSuffixStart,
       replacement: newText.substring(prefixLen, newSuffixStart)
     }
+  }
+
+  // Issue #1034 评论 #8：将恢复任务排到队列末尾，避免覆盖后续输入。
+  // recoveryScheduled 确保同一时间只排一个恢复任务。
+  private scheduleRecovery(): void {
+    if (this.recoveryScheduled) {
+      return
+    }
+    this.recoveryScheduled = true
+    this.editQueue = this.editQueue.then(async () => {
+      this.recoveryScheduled = false
+      await this.recoverWithPendingEdits()
+    }).catch(e => {
+      this.recoveryScheduled = false
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `scheduleRecovery error: ${JSON.stringify(e)}`)
+    })
+  }
+
+  // Issue #1034 评论 #8：队列收敛恢复——以 Core 最新文本为基线，重放尚未提交的编辑。
+  // 如果 Core 文本与第一笔未提交编辑的 previousText 相同，说明 Core 没有其他变更，
+  // 可以安全地将所有未提交编辑合并为一次差量提交；否则放弃重放，直接从 Core 恢复。
+  private async recoverWithPendingEdits(): Promise<void> {
+    if (this.pendingEdits.length === 0) {
+      return
+    }
+
+    const snap = this.coordinator.getSnapshot()
+    if (snap === null || this.richEditorController === null) {
+      return
+    }
+
+    if (snap.text === this.pendingEdits[0].previousText) {
+      const baselineText = this.pendingEdits[0].previousText
+      const diff = this.computeDiff(baselineText, this.currentText)
+      if (diff.start < diff.end || diff.replacement.length > 0) {
+        const byteStart = TextOffsetMapper.utf16ToUtf8(baselineText, diff.start)
+        const byteEnd = TextOffsetMapper.utf16ToUtf8(baselineText, diff.end)
+        const oldText = baselineText.substring(diff.start, diff.end)
+
+        let result: ResultEnvelope<EditorEditResult> | null = null
+        if (oldText.length > 0 && diff.replacement.length > 0) {
+          result = await this.coordinator.replace(byteStart, byteEnd, diff.replacement, oldText, EditorTransactionCause.Programmatic)
+        } else if (oldText.length > 0) {
+          result = await this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
+        } else if (diff.replacement.length > 0) {
+          result = await this.coordinator.insert(byteStart, diff.replacement, EditorTransactionCause.Programmatic)
+        }
+
+        if (result !== null && result.success && result.data !== undefined &&
+            (result.data.outcome === EditorEditOutcome.Applied ||
+             result.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection ||
+             result.data.outcome === EditorEditOutcome.NoChange)) {
+          this.pendingEdits = []
+          const newSnap = this.coordinator.getSnapshot()
+          if (newSnap !== null) {
+            this.lastAppliedRevision = newSnap.revision
+            if (result.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection && this.richEditorController !== null) {
+              const utf16Cursor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.cursor)
+              const utf16Anchor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.selectionAnchor)
+              this.richEditorController.setSelection(utf16Anchor, utf16Cursor)
+            }
+          }
+          return
+        }
+      }
+    }
+
+    hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'recoverWithPendingEdits: falling back to recoverFromCore')
+    this.pendingEdits = []
+    await this.recoverFromCore()
   }
 
   // 从 Core snapshot 恢复：事务失败或需要强制对齐时调用。
