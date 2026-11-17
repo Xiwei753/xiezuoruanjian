@@ -12,7 +12,7 @@ import { DesignTokens } from '../../../ui/theme/DesignTokens'
 
 @ComponentV2
 export struct StarMapLibraryPanel {
-  @Param @Watch('onScopeChanged') scopeJson: string = '{"kind":"global"}'
+  @Param scopeJson: string = '{"kind":"global"}'
   @Param scopeLabel: string = '全局素材库'
   @Param otherScopeJson: string = ''
   @Param canInsert: boolean = true
@@ -39,6 +39,7 @@ export struct StarMapLibraryPanel {
     this.reload()
   }
 
+  @Monitor('scopeJson')
   private onScopeChanged(): void {
     this.reload()
   }
@@ -89,8 +90,12 @@ export struct StarMapLibraryPanel {
       title: parentFolderId.length > 0 ? '新建子文件夹' : '新建素材文件夹',
       placeholder: '文件夹名称',
       initialText: '',
+      secondaryLabel: '',
+      secondaryPlaceholder: '',
+      secondaryInitialText: '',
       confirmLabel: '创建',
-      onConfirm: (text: string): void => {
+      onCancel: (): void => {},
+      onConfirm: (text: string, _secondaryText: string): void => {
         const name = text.trim()
         if (name.length === 0) {
           return

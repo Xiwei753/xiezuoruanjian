@@ -42,7 +42,7 @@ export class StatsWriteBarrierRegistry {
     let clean: boolean = true
     for (const flusher of snapshot) {
       try {
-        const result: boolean = await flusher()
+        const result: boolean = await Promise.resolve(flusher())
         if (!result) {
           clean = false
         }
