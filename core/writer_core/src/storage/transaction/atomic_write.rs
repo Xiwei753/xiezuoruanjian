@@ -62,11 +62,8 @@ pub fn atomic_write_bytes(path: &Path, content: &[u8]) -> crate::Result<()> {
     Ok(())
 }
 
-/// fsync 目录（持久化目录项）。
-///
-/// Unix 上对目录 handle 调 `sync_all` 持久化目录项（rename/unlink/create 的结果）。
-/// Windows 上 `sync_all` 对目录 handle 是合法但通常为 no-op，保留调用以统一代码路径。
-/// 目录不存在视为成功（调用方可能尚未创建子目录）。
+/// Unix: fsync 目录以持久化 rename/create/remove 等目录项。
+#[cfg(unix)]
 pub fn sync_dir(path: &Path) -> crate::Result<()> {
     let path = if path.as_os_str().is_empty() {
         Path::new(".")
@@ -75,6 +72,16 @@ pub fn sync_dir(path: &Path) -> crate::Result<()> {
     };
     let dir = File::open(path)?;
     dir.sync_all()?;
+    Ok(())
+}
+
+/// Windows: 文件内容由文件句柄的 sync_all() 持久化。
+///
+/// std::fs::File::open(目录) 没有 FILE_FLAG_BACKUP_SEMANTICS，会触发
+/// ERROR_ACCESS_DENIED (os error 5)，使已经完成的 rename 被误报为失败。
+/// Windows 没有与 Unix 目录 fsync 对等的 std::fs 调用，因此无需再次打开目录。
+#[cfg(windows)]
+pub fn sync_dir(_path: &Path) -> crate::Result<()> {
     Ok(())
 }
 
