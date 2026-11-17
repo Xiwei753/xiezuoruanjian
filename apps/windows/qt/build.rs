@@ -62,6 +62,29 @@ fn main() {
     config.flag(MSVC_CORRECT_CPP_VERSION_FLAG);
     config.flag(MSVC_CONFORMING_MODE_FLAG);
     config.define("NOMINMAX", None);
+
+    // Craft builds Breeze as a DLL-backed Qt resource library (SKIP_INSTALL_ICONS=ON).
+    // Link the official library instead of expecting a share/icons/breeze directory.
+    let craft_root = std::env::var_os("CRAFT_ROOT")
+        .or_else(|| std::env::var_os("QT_ROOT"))
+        .map(PathBuf::from)
+        .expect("Windows Qt requires CRAFT_ROOT or QT_ROOT for KF6BreezeIcons");
+    let breeze_include = craft_root.join("include").join("KF6").join("BreezeIcons");
+    let breeze_lib_dir = craft_root.join("lib");
+    assert!(
+        breeze_include.join("breezeicons.h").is_file(),
+        "Craft installation lacks KF6BreezeIcons headers: {}",
+        breeze_include.display()
+    );
+    assert!(
+        breeze_lib_dir.join("KF6BreezeIcons.lib").is_file(),
+        "Craft installation lacks KF6BreezeIcons import library: {}",
+        breeze_lib_dir.display()
+    );
+    config.include(&breeze_include);
+    println!("cargo:rustc-link-search=native={}", breeze_lib_dir.display());
+    println!("cargo:rustc-link-lib=dylib=KF6BreezeIcons");
+
     config.file("src/windows_overrides/windows_appearance.cpp");
     println!("cargo:rustc-link-lib=imm32");
     config.build("src/lib.rs");
