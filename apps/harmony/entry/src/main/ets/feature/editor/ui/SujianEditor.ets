@@ -64,8 +64,8 @@ export struct SujianEditor {
   }
 
   // 字号/行距变化时更新 RichEditor 的文本样式
-  // Issue #1034 评论 #7：lineSpacingMultiplier 不是 RichEditor 组件属性，
-  // 通过 setTypingStyle 设定后续输入样式，updateSpanStyle 更新已有文本。
+  // Issue #1034 评论 #8：updateSpanStyle 官方签名是单参数：
+  // updateSpanStyle({ start, end, textStyle: { fontSize, lineHeight } })
   private onFormatChanged(): void {
     if (!this.richEditorController) {
       return
@@ -76,9 +76,22 @@ export struct SujianEditor {
       lineHeight: lineHeight
     })
     this.richEditorController.updateSpanStyle({
-      fontSize: this.fontSize,
-      lineHeight: lineHeight
-    }, { start: 0, end: -1 })
+      start: 0,
+      end: -1,
+      textStyle: {
+        fontSize: this.fontSize,
+        lineHeight: lineHeight
+      }
+    })
+  }
+
+  // Issue #1034 评论 #8：初始化顺序——先加载正文，再应用格式。
+  // onReady 只调用此方法一次，避免 onFormatChanged 落在空内容上。
+  private async initializeEditor(): Promise<void> {
+    if (this.richEditorBridge) {
+      await this.richEditorBridge.syncFromCore()
+    }
+    this.onFormatChanged()
   }
 
   // 从 Core snapshot 同步正文到 RichEditor（程序回放）
@@ -114,11 +127,10 @@ export struct SujianEditor {
           hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'RichEditor onReady')
           if (this.richEditorBridge) {
             this.richEditorBridge.setController(this.richEditorController)
-            // Issue #1034 评论 #7：onReady 后立即加载当前会话正文
-            this.richEditorBridge.syncFromCore()
+            // Issue #1034 评论 #8：先 await syncFromCore 加载正文，再应用格式，
+            // 避免 onFormatChanged 落在空内容上。
+            this.initializeEditor()
           }
-          // 应用字号/行高到 typing style 和已有文本
-          this.onFormatChanged()
         })
         .onWillChange((value: RichEditorChangeValue): boolean => {
           if (this.richEditorBridge) {

@@ -84,16 +84,23 @@ export class NativeRichEditorBridge {
     }
 
     // 从 RichEditor 获取改动后插入的文本内容
-    // Issue #1034 评论 #7：getSpans 返回整段 span 的 value，本次有效范围在 offsetInSpan。
-    // 只拼接每个 span 的 value.substring(offsetInSpan[0], offsetInSpan[1])，
-    // 多段按 spanPosition.start 排序。
+    // Issue #1034 评论 #8：getSpans 返回 Array<RichEditorImageSpanResult | RichEditorTextSpanResult>，
+    // 需按 union 类型筛选纯文本 Span；排序用 spanPosition.spanRange[0]（不是不存在的 spanPosition.start）。
     const insertedSpans = this.richEditorController.getSpans({
       start: rangeAfter.start,
       end: rangeAfter.end
     })
-    // 按 spanPosition.start 排序后拼接 offsetInSpan 范围内的文本
-    const sortedSpans = insertedSpans.sort((a: RichEditorTextSpanResult, b: RichEditorTextSpanResult): number => {
-      return a.spanPosition.start - b.spanPosition.start
+    // 筛选纯文本 Span，按 spanPosition.spanRange[0] 排序
+    const textSpans: RichEditorTextSpanResult[] = []
+    for (const span of insertedSpans) {
+      if ((span as RichEditorTextSpanResult).value !== undefined) {
+        textSpans.push(span as RichEditorTextSpanResult)
+      } else {
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidChange: non-text span encountered, skipping')
+      }
+    }
+    const sortedSpans = textSpans.sort((a: RichEditorTextSpanResult, b: RichEditorTextSpanResult): number => {
+      return a.spanPosition.spanRange[0] - b.spanPosition.spanRange[0]
     })
     let insertedText = ''
     for (const span of sortedSpans) {
@@ -134,17 +141,19 @@ export class NativeRichEditorBridge {
       let transactionFailed = false
       if (oldText.length > 0 && insertedText.length > 0) {
         result = await this.coordinator.replace(byteStart, byteEnd, insertedText, oldText, cause)
-        if (!result.success) {
-          transactionFailed = true
-        }
       } else if (oldText.length > 0) {
         result = await this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
-        if (!result.success) {
-          transactionFailed = true
-        }
       } else if (insertedText.length > 0) {
         result = await this.coordinator.insert(byteStart, insertedText, cause)
-        if (!result.success) {
+      }
+
+      // Issue #1034 评论 #8：不仅检查 success，还要检查 outcome。
+      // staleRevision/invalidOffset/invalidRange 是业务拒绝结果，需从 Core snapshot 对齐。
+      if (result !== null) {
+        if (!result.success || result.data === undefined ||
+            (result.data.outcome !== EditorEditOutcome.Applied &&
+             result.data.outcome !== EditorEditOutcome.AppliedWithAdjustedSelection &&
+             result.data.outcome !== EditorEditOutcome.NoChange)) {
           transactionFailed = true
         }
       }
@@ -171,8 +180,10 @@ export class NativeRichEditorBridge {
       if (newSnap !== null) {
         this.lastAppliedRevision = newSnap.revision
       }
-    }).catch(e => {
+    }).catch(async e => {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onDidChange error: ${JSON.stringify(e)}`)
+      // Issue #1034 评论 #8：异常也触发恢复路径，不让 whenIdle 误判成功。
+      await this.recoverFromCore()
     })
   }
 
