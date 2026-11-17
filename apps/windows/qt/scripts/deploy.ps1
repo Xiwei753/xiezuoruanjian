@@ -137,22 +137,28 @@ function Get-PeDependencies {
     param([string]$FilePath, [string]$Dumpbin)
 
     $output = & $Dumpbin /DEPENDENTS $FilePath 2>&1
-    if ($LASTEXITCODE -ne 0) { return @() }
+    if ($LASTEXITCODE -ne 0) {
+        throw "dumpbin /DEPENDENTS 失败（退出码 $LASTEXITCODE）：$FilePath"
+    }
 
     $deps = @()
     $inSection = $false
     foreach ($line in ($output -split "`r?`n")) {
-        if ($line -match "Section contains the following imports") {
+        if ($line -match "^\s*Image has the following (?:delay load )?dependencies:\s*$") {
             $inSection = $true
             continue
         }
         if ($inSection) {
-            if ($line -match "^\s+(\S+\.dll)\s*$") {
+            if ($line -match "^\s*Summary\s*$") { break }
+            if ($line -match "^\s*(\S+\.dll)\s*$") {
                 $deps += $matches[1]
             } elseif ($line -match "^\s*$" -and $deps.Count -gt 0) {
                 break
             }
         }
+    }
+    if ($deps.Count -eq 0) {
+        Write-Warning "dumpbin /DEPENDENTS 解析出零个依赖：$FilePath"
     }
     return $deps
 }
@@ -258,7 +264,7 @@ foreach ($dllName in $NeededDlls) {
 Write-Host "已复制 $($NeededDlls.Count) 个 DLL 从 $CraftBin（dumpbin PE 依赖闭包）"
 
 # 3. 复制 KDE QML 模块（只复制实际需要的模块）
-$KdeQmlTarget = Join-Path $OutputDir "qml\org\kde"
+$KdeQmlTarget = Join-Path $OutputDir "qml"
 New-Item -ItemType Directory -Force -Path $KdeQmlTarget | Out-Null
 foreach ($mod in $KdeQmlModules) {
     $srcMod = Join-Path $CraftQml $mod
@@ -268,6 +274,7 @@ foreach ($mod in $KdeQmlModules) {
         Copy-Item -Path (Join-Path $srcMod "*") -Destination $dstMod -Recurse -Force
     }
 }
+$KdeChecksRoot = Join-Path $OutputDir "qml\org\kde"
 foreach ($rel in @(
     "kirigami\qmldir",
     "kirigamiaddons\formcard\qmldir",
@@ -277,7 +284,7 @@ foreach ($rel in @(
     "desktop\private\qmldir",
     "qqc2desktopstyle\private\qmldir"
 )) {
-    if (-not (Test-Path -LiteralPath (Join-Path $KdeQmlTarget $rel) -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $KdeChecksRoot $rel) -PathType Leaf)) {
         throw "KDE QML 模块部署不完整：缺少 org/kde/$rel（CraftRoot: $CraftRootPath）"
     }
 }

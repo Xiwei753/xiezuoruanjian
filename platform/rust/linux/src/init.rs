@@ -18,7 +18,8 @@ pub fn resolve_platform_init() -> PlatformInit {
         cache_dir,
         log_dir,
         no_backup_dir: None,
-        device_id: super::device_id::load_or_create_device_id(&xdg_state_dir()),
+        device_id: super::device_id::load_or_create_device_id(&xdg_state_dir())
+            .unwrap_or_else(|e| panic!("Failed to load or create device_id: {e}")),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         locale: std::env::var("LANG")
             .unwrap_or_else(|_| "en_US.UTF-8".to_string())
