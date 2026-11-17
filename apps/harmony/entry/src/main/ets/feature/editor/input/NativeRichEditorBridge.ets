@@ -1,27 +1,30 @@
 // NativeRichEditorBridge — RichEditor 与 EditorSessionCoordinator 之间的输入桥接。
 // Issue #1034 评论 #5：用 ArkUI 原生 RichEditor 替换自研编辑器。
+// Issue #1034 评论 #6 修复：正确使用 RichEditorController API、串行事务队列、UTF-8/UTF-16 坐标转换。
 //
 // 职责：
-// - RichEditor onWillChange → 取得 rangeBefore 与实际替换文本，
-//   按 UTF-16 坐标通过 TextOffsetMapper 映射到 UTF-8，
-//   串行调用 EditorSessionCoordinator.replace()。
-// - RichEditor onDidChange → 消费已发生改动并更新视图基线。
-// - RichEditor onSelectionChange → 仅将稳定选区映射后传给 EditorSessionCoordinator.setSelection()。
+// - RichEditor onWillChange → 只做校验（返回 true 允许改变），不调用 coordinator。
+// - RichEditor onDidChange(rangeBefore, rangeAfter) → 从前后文本差量计算编辑事实，
+//   串行提交给 EditorSessionCoordinator。
+// - RichEditor onSelectionChange → 将稳定选区映射后传给 EditorSessionCoordinator.setSelection()。
 // - 维护 programmaticUpdate 标记和有序 revision，区分用户编辑与程序回放。
 // - Core 外部加载/撤销/同步更新通过 revision 比较、最小文本差量更新 RichEditor；
-//   普通每次击键不可反向全量 setStyledString / addTextSpan 刷新全篇，避免光标跳动和重复事件。
-//
-// 保持 Rust EditorKernel、事务、撤销重做、证明和统计为持久业务事实。
-// 对输入法预编辑态使用 RichEditor 自己的组合输入语义，提交后只生成一次 Core 编辑事务。
+//   文本 revision 对齐和 selection/cursor 更新独立处理。
 
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import { TextOffsetMapper } from './TextOffsetMapper'
-import { EditorTransactionCause, EditorEditResult, EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
+import { EditorTransactionCause, EditorEditResult, EditorSessionSnapshot, EditorEditOutcome } from '../../../corebridge/dto/EditorDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import hilog from '@ohos.hilog'
 
 const BRIDGE_LOG_DOMAIN = 0x0000
 const BRIDGE_LOG_TAG = 'NativeRichEditorBridge'
+
+interface TextDiff {
+  start: number
+  end: number
+  replacement: string
+}
 
 export class NativeRichEditorBridge {
   private coordinator: EditorSessionCoordinator
@@ -29,6 +32,7 @@ export class NativeRichEditorBridge {
   private currentText: string = ''
   private programmaticUpdate: boolean = false
   private lastAppliedRevision: number = -1
+  private editQueue: Promise<void> = Promise.resolve()
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -50,55 +54,84 @@ export class NativeRichEditorBridge {
     return this.currentText
   }
 
-  setCurrentText(text: string): void {
-    this.currentText = text
-  }
-
   getLastAppliedRevision(): number {
     return this.lastAppliedRevision
   }
 
-  // RichEditor onWillChange 回调：在内容改变前获取旧范围和替换文本，
-  // 映射到 UTF-8 byte offset 后调用 coordinator.replace()。
-  // 返回 true 允许改变，返回 false 阻止改变（仅在程序回放时阻止 RichEditor 自行产生的改变）。
-  onWillChange(rangeBefore: TextRange, insertedText: string, deletedLength: number): boolean {
-    if (this.programmaticUpdate) {
-      return true
-    }
-
-    const snap = this.coordinator.getSnapshot()
-    if (snap === null) {
-      hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onWillChange: no active session')
-      return true
-    }
-
-    const utf16Start = rangeBefore.start
-    const utf16End = rangeBefore.end
-    const byteStart = TextOffsetMapper.utf16ToUtf8(this.currentText, utf16Start)
-    const byteEnd = TextOffsetMapper.utf16ToUtf8(this.currentText, utf16End)
-
-    if (deletedLength > 0 && insertedText.length > 0) {
-      this.coordinator.replace(byteStart, byteEnd, insertedText, snap.text.substring(byteStart, byteEnd), EditorTransactionCause.Typing)
-    } else if (deletedLength > 0) {
-      this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
-    } else if (insertedText.length > 0) {
-      this.coordinator.insert(byteStart, insertedText, EditorTransactionCause.Typing)
-    }
-
+  // onWillChange 只做校验：允许所有改变。
+  // 编辑事实派发在 onDidChange 中完成，避免 onWillChange 中调用 coordinator 但不等结果。
+  onWillChange(_value: RichEditorChangeValue): boolean {
     return true
   }
 
-  // RichEditor onDidChange 回调：内容已改变后更新视图基线。
-  onDidChange(): void {
-    if (this.programmaticUpdate) {
+  // onDidChange：内容已改变后，从 rangeBefore/rangeAfter 和本地镜像计算编辑事实，
+  // 串行提交给 coordinator。
+  onDidChange(rangeBefore: TextRange, rangeAfter: TextRange): void {
+    if (this.programmaticUpdate || this.richEditorController === null) {
       return
     }
 
-    const snap = this.coordinator.getSnapshot()
-    if (snap !== null) {
-      this.currentText = snap.text
-      this.lastAppliedRevision = snap.revision
+    // 从 RichEditor 获取改动后插入的文本内容
+    const insertedSpans = this.richEditorController.getSpans({
+      start: rangeAfter.start,
+      end: rangeAfter.end
+    })
+    let insertedText = ''
+    for (const span of insertedSpans) {
+      insertedText += span.value
     }
+
+    // 从本地镜像推算被删除的旧文本
+    const oldText = this.currentText.substring(rangeBefore.start, rangeBefore.end)
+
+    // 推算改动后的完整文本
+    const newText = this.currentText.substring(0, rangeBefore.start)
+      + insertedText
+      + this.currentText.substring(rangeBefore.end)
+
+    // 立即更新本地镜像（不等 coordinator 异步操作完成）
+    const previousText = this.currentText
+    this.currentText = newText
+
+    // 串行提交编辑事实给 coordinator
+    this.editQueue = this.editQueue.then(async () => {
+      const snap = this.coordinator.getSnapshot()
+      if (snap === null) {
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidChange: no active session')
+        return
+      }
+
+      // 从当笔前镜像换算 UTF-8 byte offset
+      const byteStart = TextOffsetMapper.utf16ToUtf8(previousText, rangeBefore.start)
+      const byteEnd = TextOffsetMapper.utf16ToUtf8(previousText, rangeBefore.end)
+
+      let result: ResultEnvelope<EditorEditResult> | null = null
+      if (oldText.length > 0 && insertedText.length > 0) {
+        result = await this.coordinator.replace(byteStart, byteEnd, insertedText, oldText, EditorTransactionCause.Typing)
+      } else if (oldText.length > 0) {
+        result = await this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
+      } else if (insertedText.length > 0) {
+        result = await this.coordinator.insert(byteStart, insertedText, EditorTransactionCause.Typing)
+      }
+
+      // 如果 Core 调整了选区位置，更新 RichEditor 的选区
+      if (result !== null && result.success && result.data !== undefined &&
+          result.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection) {
+        const newSnap = this.coordinator.getSnapshot()
+        if (newSnap !== null && this.richEditorController !== null) {
+          const utf16Cursor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.cursor)
+          const utf16Anchor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.selectionAnchor)
+          this.richEditorController.setSelection(utf16Anchor, utf16Cursor)
+        }
+      }
+
+      const newSnap = this.coordinator.getSnapshot()
+      if (newSnap !== null) {
+        this.lastAppliedRevision = newSnap.revision
+      }
+    }).catch(e => {
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onDidChange error: ${JSON.stringify(e)}`)
+    })
   }
 
   // RichEditor onSelectionChange 回调：将稳定选区映射后传给 coordinator。
@@ -107,36 +140,65 @@ export class NativeRichEditorBridge {
       return
     }
 
-    const snap = this.coordinator.getSnapshot()
-    if (snap === null) {
-      return
-    }
+    const textForConversion = this.currentText
+    this.editQueue = this.editQueue.then(async () => {
+      const snap = this.coordinator.getSnapshot()
+      if (snap === null) {
+        return
+      }
 
-    const byteAnchor = TextOffsetMapper.utf16ToUtf8(this.currentText, start)
-    const byteHead = TextOffsetMapper.utf16ToUtf8(this.currentText, end)
-    this.coordinator.setSelection(byteAnchor, byteHead)
+      const byteAnchor = TextOffsetMapper.utf16ToUtf8(textForConversion, start)
+      const byteHead = TextOffsetMapper.utf16ToUtf8(textForConversion, end)
+      await this.coordinator.setSelection(byteAnchor, byteHead)
+    }).catch(e => {
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onSelectionChange error: ${JSON.stringify(e)}`)
+    })
+  }
+
+  // 计算最小文本差量
+  private computeDiff(oldText: string, newText: string): TextDiff {
+    let prefixLen = 0
+    while (prefixLen < oldText.length && prefixLen < newText.length &&
+           oldText.charAt(prefixLen) === newText.charAt(prefixLen)) {
+      prefixLen++
+    }
+    let suffixLen = 0
+    while (suffixLen < oldText.length - prefixLen && suffixLen < newText.length - prefixLen &&
+           oldText.charAt(oldText.length - 1 - suffixLen) === newText.charAt(newText.length - 1 - suffixLen)) {
+      suffixLen++
+    }
+    return {
+      start: prefixLen,
+      end: oldText.length - suffixLen,
+      replacement: newText.substring(prefixLen, newText.length - suffixLen)
+    }
   }
 
   // 程序回放：从 Core snapshot 同步正文到 RichEditor。
-  // 通过 revision 比较，只在 revision 前进时更新；
-  // 使用最小文本差量更新，避免全量刷新导致光标跳动。
+  // 文本 revision 对齐和 selection/cursor 更新独立处理。
   async syncFromCore(): Promise<void> {
+    await this.editQueue
+
     const snap = this.coordinator.getSnapshot()
     if (snap === null || this.richEditorController === null) {
       return
     }
 
-    if (snap.revision <= this.lastAppliedRevision) {
-      return
-    }
-
     this.programmaticUpdate = true
     try {
+      // 文本内容对齐：只在文本不同时更新
       if (this.currentText !== snap.text) {
-        this.richEditorController.setStyledString(new StyledString(snap.text))
+        const diff = this.computeDiff(this.currentText, snap.text)
+        if (diff.start < diff.end || diff.replacement.length > 0) {
+          this.richEditorController.deleteSpans({ start: diff.start, end: diff.end })
+          if (diff.replacement.length > 0) {
+            this.richEditorController.addTextSpan(diff.replacement, { offset: diff.start })
+          }
+        }
         this.currentText = snap.text
       }
 
+      // 选区/光标更新：独立于文本 revision，每次都同步
       const utf16Cursor = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
       const utf16Anchor = TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionAnchor)
       this.richEditorController.setSelection(utf16Anchor, utf16Cursor)
@@ -157,7 +219,8 @@ export class NativeRichEditorBridge {
 
     this.programmaticUpdate = true
     try {
-      this.richEditorController.setStyledString(new StyledString(text))
+      this.richEditorController.deleteSpans({ start: 0, end: -1 })
+      this.richEditorController.addTextSpan(text, { offset: 0 })
       this.currentText = text
 
       const utf16Cursor = TextOffsetMapper.utf8ToUtf16(text, cursorByteOffset)

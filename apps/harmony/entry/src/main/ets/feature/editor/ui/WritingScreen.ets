@@ -188,6 +188,8 @@ export struct WritingScreen {
   @State lastSaveFailed: boolean = false
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State adaptiveState: AdaptiveState = getAdaptiveState()
+  // 编辑会话协调器（唯一编辑命令入口），由协调器持有并驱动。
+  private editorCoordinator: EditorSessionCoordinator = new EditorSessionCoordinator(new NativeEditorSessionBridge())
   // Issue #1034：RichEditor 桥接，替代旧的 presentationUpdate/motionPolicy。
   // RichEditor 自行处理滚动、选区、IME；输入通过 NativeRichEditorBridge 转发给 coordinator。
   private richEditorBridge: NativeRichEditorBridge = new NativeRichEditorBridge(this.editorCoordinator)
@@ -238,8 +240,6 @@ export struct WritingScreen {
   private autoSaveObserver: AutoSaveLifecycleObserver | null = null
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
-  // 编辑会话协调器（唯一编辑命令入口），由协调器持有并驱动。
-  private editorCoordinator: EditorSessionCoordinator = new EditorSessionCoordinator(new NativeEditorSessionBridge())
   private correctionCoordinator: CorrectionCoordinator = new CorrectionCoordinator(
     new NativeCorrectionBridge(), this.editorCoordinator)
   private annotationBridge: NativeAnnotationBridge = new NativeAnnotationBridge()
@@ -443,8 +443,16 @@ export struct WritingScreen {
     const snap = update.snapshot
     if (snap !== null) {
       this.correctionCoordinator.acceptSnapshot(this.projectId, this.chapterId, snap, update.editResult)
-      // Issue #1034：不再构造 EditorPresentationUpdate，改为通过 richEditorBridge.syncFromCore() 同步。
-      void this.richEditorBridge.syncFromCore()
+      // Issue #1034 评论 #6：只在非用户输入时才通过 syncFromCore 同步 RichEditor。
+      // 用户输入的选区回显在 NativeRichEditorBridge.onDidChange 中处理。
+      const isUserInput = update.editResult !== null &&
+        (update.editResult.cause === EditorTransactionCause.Typing ||
+         update.editResult.cause === EditorTransactionCause.Delete ||
+         update.editResult.cause === EditorTransactionCause.ImeComposition ||
+         update.editResult.cause === EditorTransactionCause.TypingCommit)
+      if (!isUserInput) {
+        void this.richEditorBridge.syncFromCore()
+      }
       if (update.editResult !== null && update.editResult.cause !== EditorTransactionCause.Load &&
           update.editResult.displayPatches.length > 0) {
         void this.persistAnnotationEditAndRefresh(snap, update.editResult)
@@ -555,8 +563,6 @@ export struct WritingScreen {
   }
 
   private handleSystemBack(): void {
-    this.writingWorkflow.requestLeave()
-  }
     this.writingWorkflow.requestLeave()
   }
 
@@ -672,20 +678,11 @@ export struct WritingScreen {
       const startByte: number = Math.max(0, Math.min(params.searchByteStart, textByteLength))
       const endByte: number = Math.max(startByte, Math.min(params.searchByteEnd, textByteLength))
       await this.editorCoordinator.setSelection(startByte, endByte)
-      const restored = this.editorCoordinator.getSnapshot()
-      if (restored !== null) {
-        // Issue #1034：viewportController 已移除，RichEditor 自行处理滚动位置。
-      // 搜索定位通过 coordinator.setSelection 设置选区，RichEditor 会自动滚动到选区位置。
-      // 搜索定位只消费一次；后续章节切换不能把旧范围继续套到新正文。
       params.searchByteStart = undefined
       params.searchByteEnd = undefined
       params.searchField = undefined
     }
 
-    // viewport 只恢复到 UI 滚动位置，不写 Core。通过父子 controller 通道恢复。
-    // Issue #1034：viewport 恢复由 RichEditor 自行处理，不再通过 viewportController。
-
-    // 恢复后写入当前状态（UTF-8 → UTF-16 转换在 updateContinuationState 内完成）。
     this.updateContinuationState()
   }
 
