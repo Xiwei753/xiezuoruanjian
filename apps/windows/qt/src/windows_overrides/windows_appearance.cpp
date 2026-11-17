@@ -6,14 +6,14 @@
 // 另外为便携包注册随包 Breeze 图标主题的搜索路径，供 Kirigami.Icon 与
 // KIconThemes 在无系统 KDE 安装的 Windows 机器上找到真实图标。
 
+#include <breezeicons.h>
+
 #include <QApplication>
 #include <QCoreApplication>
-#include <QDir>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QPalette>
 #include <QSettings>
-#include <QStandardPaths>
 #include <QString>
 #include <QStringList>
 #include <QStyleHints>
@@ -67,19 +67,13 @@ extern "C" void sujian_windows_icon_theme_init(const char *app_dir)
     if (app_dir == nullptr) {
         return;
     }
-    const QDir dir(QString::fromUtf8(app_dir));
+    // KDE's Windows Craft package embeds Breeze in KF6BreezeIcons.dll.
+    // initIcons registers the Qt resource tree at :/icons/breeze.
+    BreezeIcons::initIcons();
 
-    QStringList paths;
-    // 便携包随包 Breeze 图标主题（deploy.ps1 复制到 exe 旁的 share/icons）。
-    const QString bundled = dir.filePath(QStringLiteral("share/icons"));
-    if (QDir(bundled).exists()) {
-        paths << bundled;
-    }
-    // 开发机 / Craft 安装的数据目录兜底。
-    const QStringList dataDirs =
-        QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
-    for (const QString &dataDir : dataDirs) {
-        paths << dataDir + QStringLiteral("/icons");
+    QStringList paths = QIcon::themeSearchPaths();
+    if (!paths.contains(QStringLiteral(":/icons"))) {
+        paths.prepend(QStringLiteral(":/icons"));
     }
     QIcon::setThemeSearchPaths(paths);
     QIcon::setThemeName(QStringLiteral("breeze"));
