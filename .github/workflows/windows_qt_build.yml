@@ -206,10 +206,46 @@ jobs:
             throw "Windows Qt QML startup did not reach the loaded state"
           }
 
-      - name: Upload Windows Qt portable package
+      - name: Compress Windows Qt portable package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = (Resolve-Path "./apps/windows/qt/dist/release").Path
+          $dist = (Resolve-Path "./apps/windows/qt/dist").Path
+          $archive = Join-Path $dist "sujian-windows-qt-x64.7z"
+          $sevenZip = Join-Path $env:ProgramFiles "7-Zip\\7z.exe"
+          if (-not (Test-Path -LiteralPath $sevenZip -PathType Leaf)) {
+            $sevenZip = (Get-Command 7z.exe -ErrorAction Stop).Source
+          }
+
+          # List the heaviest files so Qt/KDE dependencies can be trimmed based on
+          # actual package contents rather than guessing which DLLs to omit.
+          $files = Get-ChildItem -LiteralPath $root -File -Recurse
+          $total = ($files | Measure-Object -Property Length -Sum).Sum
+          Write-Host ("Windows portable content: {0:N1} MiB, {1} files" -f ($total / 1MB), $files.Count)
+          $files | Sort-Object Length -Descending | Select-Object -First 20 | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($root, $_.FullName)
+            Write-Host ("{0,8:N1} MiB  {1}" -f ($_.Length / 1MB), $relative)
+          }
+
+          # Create one solid LZMA2 archive, including the release directory
+          # itself. Windows 11 can extract .7z directly.
+          Push-Location $dist
+          try {
+            & $sevenZip a -t7z -m0=lzma2 -mx=7 -md=64m -mmt=on -ms=on $archive "release"
+            if ($LASTEXITCODE -ne 0) { throw "7-Zip failed: exit code $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+          }
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+            throw "Windows package archive missing: $archive"
+          }
+          $packedBytes = (Get-Item -LiteralPath $archive).Length
+          Write-Host ("Windows portable archive: {0:N1} MiB (was {1:N1} MiB)" -f ($packedBytes / 1MB), ($total / 1MB))
+
+      - name: Upload Windows Qt compressed package
         uses: actions/upload-artifact@v7
         with:
-          name: sujian-windows-qt-x64
-          path: apps/windows/qt/dist/release/
+          path: apps/windows/qt/dist/sujian-windows-qt-x64.7z
           if-no-files-found: error
-          compression-level: 0
+          archive: false

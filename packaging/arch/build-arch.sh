@@ -9,11 +9,11 @@ WORK="$DIST/makepkg"
 bash "$ROOT/packaging/linux/stage-native-package.sh" "$STAGE" arch
 mkdir -p "$WORK"
 cp "$ROOT/packaging/arch/PKGBUILD" "$WORK/PKGBUILD"
-# 保留发行版原生 makepkg 设置，只把主安装包压缩固定为 zstd 1 级。
+# 保留发行版原生 makepkg 设置，安装包采用 zstd 6 级压缩。
 cp /etc/makepkg.conf "$WORK/makepkg.conf"
 cat >> "$WORK/makepkg.conf" <<'FAST_COMPRESSION'
 PKGEXT='.pkg.tar.zst'
-COMPRESSZST=(zstd -c -z -q -1 -)
+COMPRESSZST=(zstd -c -z -q -6 -)
 FAST_COMPRESSION
 VERSION="$(awk '/^\[package\]/{in_package=1;next} in_package && /^version = /{gsub(/"/,"",$3);print $3;exit}' "$ROOT/apps/Linux_qt/Cargo.toml")"
 [[ -n "$VERSION" ]] || { echo "无法读取 Linux Qt 包版本" >&2; exit 1; }
