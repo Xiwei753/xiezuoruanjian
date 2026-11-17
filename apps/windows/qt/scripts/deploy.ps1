@@ -156,19 +156,6 @@ if (Test-Path -LiteralPath $CraftPlugins -PathType Container) {
     }
 }
 
-# 5. 复制 Breeze 图标主题
-$IconSourceRoot = Join-Path $CraftRootPath "share\icons"
-if (Test-Path -LiteralPath $IconSourceRoot -PathType Container) {
-    $IconTarget = Join-Path $OutputDir "share\icons"
-    New-Item -ItemType Directory -Force -Path $IconTarget | Out-Null
-    Get-ChildItem -LiteralPath $IconSourceRoot -Directory -Filter "breeze*" | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination $IconTarget -Recurse -Force
-    }
-}
-if (-not (Test-Path -LiteralPath (Join-Path $OutputDir "share\icons\breeze") -PathType Container)) {
-    throw "Breeze 图标主题未随包部署（CraftRoot: $CraftRootPath）"
-}
-
 # 6. 复制许可证
 $LicenseSource = Join-Path $CraftRootPath "share\licenses"
 if (Test-Path -LiteralPath $LicenseSource -PathType Container) {
@@ -176,7 +163,7 @@ if (Test-Path -LiteralPath $LicenseSource -PathType Container) {
     New-Item -ItemType Directory -Force -Path $LicenseTarget | Out-Null
     Copy-Item -Path (Join-Path $LicenseSource "*") -Destination $LicenseTarget -Recurse -Force
 }
-Write-Host "KDE Kirigami 运行时与 Breeze 图标已随包部署（来源：$CraftRootPath）"
+Write-Host "KDE Kirigami 与 Breeze 图标资源库已随包部署（来源：$CraftRootPath）"
 
 # Bundle MacBERT4CSC and the native Windows ONNX Runtime fetched by build.ps1.
 $CorrectionRoot = Join-Path $AppDir "generated\correction"
