@@ -35,9 +35,13 @@ export struct SujianEditor {
   private richEditorController: RichEditorController = new RichEditorController()
   @State private initialized: boolean = false
   private previousCorrectionRanges: number[] = []
-  private previousAnnotationRanges: number[] = []
+  private previousTagBackgroundRanges: number[] = []
+  private previousLinkUnderlineRanges: number[] = []
 
   aboutToDisappear(): void {
+    if (this.richEditorBridge) {
+      this.richEditorBridge.beginSession()
+    }
   }
 
   // 纠错建议变化时更新 RichEditor 中的样式
@@ -50,7 +54,6 @@ export struct SujianEditor {
 
     const lineHeight: number = this.fontSize * this.lineSpacingMultiplier
 
-    // 清除上一轮纠错装饰范围
     for (let i = 0; i < this.previousCorrectionRanges.length; i += 2) {
       const start = this.previousCorrectionRanges[i]
       const end = this.previousCorrectionRanges[i + 1]
@@ -60,8 +63,7 @@ export struct SujianEditor {
         textStyle: {
           fontSize: this.fontSize,
           lineHeight: lineHeight,
-          decorationType: TextDecorationType.None,
-          decorationColor: Color.Transparent
+          decoration: { type: TextDecorationType.None }
         }
       })
     }
@@ -71,7 +73,6 @@ export struct SujianEditor {
       return
     }
 
-    // 应用新一轮纠错装饰范围
     for (const suggestion of this.correctionSuggestions) {
       this.richEditorController.updateSpanStyle({
         start: suggestion.startUtf16,
@@ -79,9 +80,11 @@ export struct SujianEditor {
         textStyle: {
           fontSize: this.fontSize,
           lineHeight: lineHeight,
-          decorationType: TextDecorationType.Underline,
-          decorationColor: '#E74C3C',
-          decorationStyle: TextDecorationStyle.WAVY
+          decoration: {
+            type: TextDecorationType.Underline,
+            color: '#E74C3C',
+            style: TextDecorationStyle.WAVY
+          }
         }
       })
       this.previousCorrectionRanges.push(suggestion.startUtf16, suggestion.endUtf16)
@@ -90,6 +93,8 @@ export struct SujianEditor {
 
   // 标注范围变化时更新 RichEditor 中的样式
   // Issue #1034 评论 #8：通过 updateSpanStyle 实现标注背景和链接下划线。
+  // Issue #1034 评论 #10：linkUnderline 用 deleteSpans + addTextSpan 重建带 gesture.onClick 的 span；
+  //   tagBackground 继续用 updateSpanStyle；程序性改 Span 时隔离编辑事实回调。
   // AnnotationRangeDto 的 startByte/endByte 是 UTF-8，需转换为 UTF-16。
   private onAnnotationRangesChanged(): void {
     if (!this.richEditorController) {
@@ -98,31 +103,64 @@ export struct SujianEditor {
 
     const lineHeight: number = this.fontSize * this.lineSpacingMultiplier
 
-    // 清除上一轮标注装饰范围
-    for (let i = 0; i < this.previousAnnotationRanges.length; i += 2) {
-      const start = this.previousAnnotationRanges[i]
-      const end = this.previousAnnotationRanges[i + 1]
+    if (this.richEditorBridge) {
+      this.richEditorBridge.setProgrammaticUpdate(true)
+    }
+
+    // 清除上一轮 tagBackground 装饰范围
+    for (let i = 0; i < this.previousTagBackgroundRanges.length; i += 2) {
+      const start = this.previousTagBackgroundRanges[i]
+      const end = this.previousTagBackgroundRanges[i + 1]
       this.richEditorController.updateSpanStyle({
         start: start,
         end: end,
         textStyle: {
           fontSize: this.fontSize,
           lineHeight: lineHeight,
-          decorationType: TextDecorationType.None,
-          decorationColor: Color.Transparent,
-          backgroundColor: Color.Transparent
+          textBackgroundStyle: { color: Color.Transparent }
         }
       })
     }
-    this.previousAnnotationRanges = []
+    this.previousTagBackgroundRanges = []
+
+    // 清除上一轮 linkUnderline：deleteSpans + addTextSpan 恢复普通文本（无 gesture）
+    for (let i = 0; i < this.previousLinkUnderlineRanges.length; i += 2) {
+      const start = this.previousLinkUnderlineRanges[i]
+      const end = this.previousLinkUnderlineRanges[i + 1]
+      const spans = this.richEditorController.getSpans({ start, end })
+      let textContent = ''
+      for (const span of spans) {
+        if ((span as RichEditorTextSpanResult).value !== undefined) {
+          const textSpan = span as RichEditorTextSpanResult
+          textContent += textSpan.value.substring(textSpan.offsetInSpan[0], textSpan.offsetInSpan[1])
+        }
+      }
+      this.richEditorController.deleteSpans({ start, end })
+      if (textContent.length > 0) {
+        this.richEditorController.addTextSpan(textContent, {
+          offset: start,
+          style: {
+            fontSize: this.fontSize,
+            lineHeight: lineHeight,
+            decoration: { type: TextDecorationType.None }
+          }
+        })
+      }
+    }
+    this.previousLinkUnderlineRanges = []
 
     if (this.annotationRanges.length === 0) {
+      if (this.richEditorBridge) {
+        this.richEditorBridge.setProgrammaticUpdate(false)
+      }
       return
     }
 
-    // 获取当前文本用于 UTF-8 → UTF-16 坐标转换
     const text: string = this.richEditorBridge !== null ? this.richEditorBridge.getCurrentText() : ''
     if (text.length === 0) {
+      if (this.richEditorBridge) {
+        this.richEditorBridge.setProgrammaticUpdate(false)
+      }
       return
     }
 
@@ -137,24 +175,50 @@ export struct SujianEditor {
           textStyle: {
             fontSize: this.fontSize,
             lineHeight: lineHeight,
-            backgroundColor: '#3498DB33'
+            textBackgroundStyle: { color: '#3498DB33' }
           }
         })
+        this.previousTagBackgroundRanges.push(startUtf16, endUtf16)
       } else if (range.kind === 'linkUnderline') {
-        this.richEditorController.updateSpanStyle({
-          start: startUtf16,
-          end: endUtf16,
-          textStyle: {
-            fontSize: this.fontSize,
-            lineHeight: lineHeight,
-            decorationType: TextDecorationType.Underline,
-            decorationColor: '#3498DB',
-            decorationStyle: TextDecorationStyle.SOLID
+        const spans = this.richEditorController.getSpans({ start: startUtf16, end: endUtf16 })
+        let textContent = ''
+        for (const span of spans) {
+          if ((span as RichEditorTextSpanResult).value !== undefined) {
+            const textSpan = span as RichEditorTextSpanResult
+            textContent += textSpan.value.substring(textSpan.offsetInSpan[0], textSpan.offsetInSpan[1])
           }
-        })
+        }
+        this.richEditorController.deleteSpans({ start: startUtf16, end: endUtf16 })
+        if (textContent.length > 0) {
+          const linkOffset = startUtf16
+          const linkText = textContent
+          this.richEditorController.addTextSpan(textContent, {
+            offset: startUtf16,
+            style: {
+              fontSize: this.fontSize,
+              lineHeight: lineHeight,
+              decoration: {
+                type: TextDecorationType.Underline,
+                color: '#3498DB',
+                style: TextDecorationStyle.SOLID
+              }
+            },
+            gesture: {
+              onClick: () => {
+                if (this.richEditorBridge) {
+                  const revision = this.richEditorBridge.getLastAppliedRevision()
+                  this.onHyperlinkTap(linkOffset, revision, linkText)
+                }
+              }
+            }
+          })
+        }
+        this.previousLinkUnderlineRanges.push(startUtf16, endUtf16)
       }
+    }
 
-      this.previousAnnotationRanges.push(startUtf16, endUtf16)
+    if (this.richEditorBridge) {
+      this.richEditorBridge.setProgrammaticUpdate(false)
     }
   }
 
@@ -255,16 +319,6 @@ export struct SujianEditor {
         .onDidIMEInput((range: TextRange): void => {
           if (this.richEditorBridge) {
             this.richEditorBridge.onDidIMEInput(range)
-          }
-        })
-        .onSpanClick((span: RichEditorTextSpanResult) => {
-          // Issue #1034 评论 #8：超链接 span 点击回调。
-          // spanPosition.spanRange 给出 span 在文档中的 UTF-16 范围。
-          const spanStart = span.spanPosition.spanRange[0]
-          const text = this.richEditorBridge !== null ? this.richEditorBridge.getCurrentText() : ''
-          const revision = this.richEditorBridge !== null ? this.richEditorBridge.getLastAppliedRevision() : -1
-          if (this.hasHyperlinkAt(spanStart, revision, text)) {
-            this.onHyperlinkTap(spanStart, revision, text)
           }
         })
         .onFocus(() => {
