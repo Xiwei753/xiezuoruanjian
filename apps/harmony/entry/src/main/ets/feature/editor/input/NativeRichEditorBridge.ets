@@ -342,7 +342,7 @@ export class NativeRichEditorBridge {
 
       const byteAnchor = TextOffsetMapper.utf16ToUtf8(textForConversion, start)
       const byteHead = TextOffsetMapper.utf16ToUtf8(textForConversion, end)
-      await this.coordinator.setSelection(byteAnchor, byteHead)
+      await this.coordinator.setSelectionWithExpectedSession(byteAnchor, byteHead, sessionAtEvent)
 
       if (sessionAtEvent !== this.sessionId) {
         return
@@ -583,6 +583,9 @@ export class NativeRichEditorBridge {
   }
 
   // 程序回放：从 Core snapshot 同步正文到 RichEditor。
+  // Issue #1034 评论 #16：仅当正文实际改变时更新文本，不主动 setSelection，
+  // 避免系统选区经 Core 异步回写形成闭环，干扰原生手柄拖选。
+  // 外部明确要求定位选区的场景（跳转纠错/搜索结果定位）走 syncSelectionFromCore()。
   // 有 pendingEdits/imeComposing/idleError 时不覆盖 RichEditor，保留用户可见正文。
   async syncFromCore(): Promise<void> {
     const sessionAtEntry = this.sessionId
@@ -602,28 +605,56 @@ export class NativeRichEditorBridge {
       return
     }
 
+    if (this.currentText === snap.text) {
+      this.lastAppliedRevision = snap.revision
+      this.confirmedText = snap.text
+      this.confirmedRevision = snap.revision
+      return
+    }
+
     this.programmaticUpdate = true
     try {
-      if (this.currentText !== snap.text) {
-        const diff = this.computeDiff(this.currentText, snap.text)
-        if (diff.start < diff.end || diff.replacement.length > 0) {
-          this.richEditorController.deleteSpans({ start: diff.start, end: diff.end })
-          if (diff.replacement.length > 0) {
-            this.richEditorController.addTextSpan(diff.replacement, { offset: diff.start })
-          }
+      const diff = this.computeDiff(this.currentText, snap.text)
+      if (diff.start < diff.end || diff.replacement.length > 0) {
+        this.richEditorController.deleteSpans({ start: diff.start, end: diff.end })
+        if (diff.replacement.length > 0) {
+          this.richEditorController.addTextSpan(diff.replacement, { offset: diff.start })
         }
-        this.currentText = snap.text
       }
-
-      const utf16Cursor = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
-      const utf16Anchor = TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionAnchor)
-      this.richEditorController.setSelection(utf16Anchor, utf16Cursor)
+      this.currentText = snap.text
 
       this.lastAppliedRevision = snap.revision
       this.confirmedText = snap.text
       this.confirmedRevision = snap.revision
     } catch (e) {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `syncFromCore error: ${JSON.stringify(e)}`)
+    } finally {
+      this.programmaticUpdate = false
+    }
+  }
+
+  // Issue #1034 评论 #16：外部明确要求定位选区的场景（跳转纠错/搜索结果定位）。
+  // 从 Core snapshot 读取选区并设置到 RichEditor，不修改正文。
+  async syncSelectionFromCore(): Promise<void> {
+    const sessionAtEntry = this.sessionId
+    await this.editQueue
+
+    if (this.sessionId !== sessionAtEntry) {
+      return
+    }
+
+    const snap = this.coordinator.getSnapshot()
+    if (snap === null || this.richEditorController === null) {
+      return
+    }
+
+    this.programmaticUpdate = true
+    try {
+      const utf16Cursor = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
+      const utf16Anchor = TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionAnchor)
+      this.richEditorController.setSelection(utf16Anchor, utf16Cursor)
+    } catch (e) {
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `syncSelectionFromCore error: ${JSON.stringify(e)}`)
     } finally {
       this.programmaticUpdate = false
     }

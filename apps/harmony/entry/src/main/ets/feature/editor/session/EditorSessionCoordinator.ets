@@ -18,7 +18,7 @@
 
 import { IEditorSessionBridge } from '../interop/IEditorSessionBridge'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
-import { EditorTransactionCause, EditorSessionSnapshot, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
+import { EditorTransactionCause, EditorSessionSnapshot, EditorEditResult, EditorEditOutcome, EditorOperationKind } from '../../../corebridge/dto/EditorDtos'
 import { EditorSessionState, EditStateOutcome } from './EditorSessionState'
 import { SerialCommandQueue } from './editor_patch_logic'
 
@@ -223,6 +223,50 @@ export class EditorSessionCoordinator {
 
   async setSelection(anchorByteOffset: number, headByteOffset: number): Promise<ResultEnvelope<EditorEditResult>> {
     return this.enqueueEdit((sid, rev) => this.bridge.setSelection(sid, anchorByteOffset, headByteOffset, rev))
+  }
+
+  // Issue #1034 评论 #16：选区命令出队时核对 expectedCoreSessionId，失配时取消旧选区命令。
+  // 防止切章后旧章节的选区命令用新章节的 sessionId 执行，导致选区被错误地设置到新章节。
+  async setSelectionWithExpectedSession(
+    anchorByteOffset: number,
+    headByteOffset: number,
+    expectedCoreSessionId: number
+  ): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.commandQueue.enqueue<ResultEnvelope<EditorEditResult>>(async () => {
+      if (!this.state) {
+        return this.noSession<EditorEditResult>()
+      }
+      if (this.state.sessionId !== expectedCoreSessionId) {
+        const rev = this.state.snapshot.revision
+        return { success: true, data: {
+          outcome: EditorEditOutcome.NoChange,
+          transactionId: 0,
+          baseRevision: rev,
+          newRevision: rev,
+          displayPatches: [],
+          oldSelectionAnchor: this.state.snapshot.selectionAnchor,
+          oldSelectionHead: this.state.snapshot.cursor,
+          newSelectionAnchor: this.state.snapshot.selectionAnchor,
+          newSelectionHead: this.state.snapshot.cursor,
+          cause: EditorTransactionCause.Programmatic,
+          operationKind: EditorOperationKind.CursorOnly,
+          contentDelta: { insertedChars: 0, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 }
+        } }
+      }
+      const sessionId = this.state.sessionId
+      const expectedRevision = this.state.snapshot.revision
+      const result = await this.bridge.setSelection(sessionId, anchorByteOffset, headByteOffset, expectedRevision)
+      if (result.success && result.data) {
+        const outcome: EditStateOutcome = this.state.withEditResult(result.data)
+        if (outcome.ok) {
+          this.state = outcome.state
+          this.notifyListener(result.data)
+        } else {
+          await this.recoverFromCoreSnapshot(result.data)
+        }
+      }
+      return result
+    })
   }
 
   async undo(): Promise<ResultEnvelope<EditorEditResult>> {

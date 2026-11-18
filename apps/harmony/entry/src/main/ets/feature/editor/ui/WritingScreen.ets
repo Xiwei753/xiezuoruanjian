@@ -20,7 +20,7 @@ import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
 import { EditorStatsQueue } from '../stats/EditorStatsQueue'
 import { WritingSessionTracker } from '../stats/WritingSessionTracker'
 import { EditorEditResult, EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
-import { EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
+import { EditorTransactionCause, EditorOperationKind } from '../../../corebridge/dto/EditorDtos'
 import { NativeRichEditorBridge } from '../input/NativeRichEditorBridge'
 import { SujianEditor } from './SujianEditor'
 import { ProofReplayPanel } from './ProofReplayPanel'
@@ -447,12 +447,16 @@ export struct WritingScreen {
       this.correctionCoordinator.acceptSnapshot(this.projectId, this.chapterId, snap, update.editResult)
       // Issue #1034 评论 #6：只在非用户输入时才通过 syncFromCore 同步 RichEditor。
       // 用户输入的选区回显在 NativeRichEditorBridge.onDidChange 中处理。
+      // Issue #1034 评论 #16：CursorOnly（选区上报）不触发 syncFromCore，
+      // 避免系统选区经 Core 异步回写形成闭环，干扰原生手柄拖选。
       const isUserInput = update.editResult !== null &&
         (update.editResult.cause === EditorTransactionCause.Typing ||
          update.editResult.cause === EditorTransactionCause.Delete ||
          update.editResult.cause === EditorTransactionCause.ImeComposition ||
          update.editResult.cause === EditorTransactionCause.TypingCommit)
-      if (!isUserInput) {
+      const isCursorOnly = update.editResult !== null &&
+        update.editResult.operationKind === EditorOperationKind.CursorOnly
+      if (!isUserInput && !isCursorOnly) {
         void this.richEditorBridge.syncFromCore()
       }
       if (update.editResult !== null && update.editResult.cause !== EditorTransactionCause.Load &&
@@ -665,9 +669,11 @@ export struct WritingScreen {
         const anchorByte: number = TextOffsetMapper.utf16ToUtf8(restoreText, params.selection[0])
         const headByte: number = TextOffsetMapper.utf16ToUtf8(restoreText, params.selection[1])
         await this.editorCoordinator.setSelection(anchorByte, headByte)
+        await this.richEditorBridge.syncSelectionFromCore()
       } else if (params.cursor !== undefined) {
         const cursorByte: number = TextOffsetMapper.utf16ToUtf8(restoreText, params.cursor)
         await this.editorCoordinator.setSelection(cursorByte, cursorByte)
+        await this.richEditorBridge.syncSelectionFromCore()
       }
     }
 
@@ -680,6 +686,7 @@ export struct WritingScreen {
       const startByte: number = Math.max(0, Math.min(params.searchByteStart, textByteLength))
       const endByte: number = Math.max(startByte, Math.min(params.searchByteEnd, textByteLength))
       await this.editorCoordinator.setSelection(startByte, endByte)
+      await this.richEditorBridge.syncSelectionFromCore()
       params.searchByteStart = undefined
       params.searchByteEnd = undefined
       params.searchField = undefined
@@ -2314,6 +2321,7 @@ export struct WritingScreen {
       return
     }
     this.correctionSheetOpen = false
+    await this.richEditorBridge.syncSelectionFromCore()
     const restored = this.editorCoordinator.getSnapshot()
     const revealUtf16: number = restored !== null
       ? TextOffsetMapper.utf8ToUtf16(restored.text, startByte)
