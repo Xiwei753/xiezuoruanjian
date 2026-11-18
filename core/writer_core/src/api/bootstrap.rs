@@ -1361,7 +1361,7 @@ pub fn with_layout_core_api<P1: AsRef<Path>, P2: AsRef<Path>>(
 ///
 /// 使用 `set_platform_identity_memory`（纯内存注入），不执行磁盘 I/O 或
 /// 同步证明恢复。完整的持久化身份纠正只在 `bootstrap_core_api_with_init`
-/// 或 `create_core_api_with_layout` 真正打开工作区时执行一次。
+/// 或 `with_layout_core_api_with_init_persistent` 真正打开工作区时执行一次。
 pub fn with_layout_core_api_with_init<P1: AsRef<Path>, P2: AsRef<Path>>(
     app_data_root: P1,
     projects_root: P2,
@@ -1378,6 +1378,31 @@ pub fn with_layout_core_api_with_init<P1: AsRef<Path>, P2: AsRef<Path>>(
     );
     api.set_workspace_git_layout(layout.clone());
     api.set_platform_identity_memory(&init.device_id, init.platform);
+    api
+}
+
+/// 与 [`with_layout_core_api_with_init`] 相同，但执行完整的持久化身份纠正
+///（`set_platform_identity`，含 `reconcile_platform_identity` 和
+/// `recover_pending_sync_proof_intents`）。
+///
+/// 只在打开/切换工作区时调用一次。热路径请用
+/// [`with_layout_core_api_with_init`]（纯内存注入）。
+pub fn with_layout_core_api_with_init_persistent<P1: AsRef<Path>, P2: AsRef<Path>>(
+    app_data_root: P1,
+    projects_root: P2,
+    layout: &crate::storage::git_repo_layout::GitRepoLayout,
+    sync_transport_factory: Option<writer_platform_api::SyncTransportFactory>,
+    secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
+    init: &writer_platform_api::PlatformInit,
+) -> WriterCoreApi {
+    let api = WriterCoreApi::with_platform_services(
+        app_data_root,
+        projects_root,
+        sync_transport_factory,
+        secure_storage,
+    );
+    api.set_workspace_git_layout(layout.clone());
+    api.set_platform_identity(&init.device_id, init.platform);
     api
 }
 

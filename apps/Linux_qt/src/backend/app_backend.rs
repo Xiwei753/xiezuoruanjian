@@ -134,8 +134,8 @@ pub(crate) fn create_core_api(
 /// AppBackend.current_workspace_git_layout，后续普通 core_api() getter
 /// 和后台同步线程用此 layout 构造 API，不再重新 bootstrap。
 ///
-/// 此处执行一次完整的持久化身份纠正（`set_platform_identity`），热路径
-/// `with_layout_core_api` 只做纯内存注入。
+/// 此处通过 `with_layout_core_api_with_init_persistent` 执行一次完整的
+/// 持久化身份纠正，热路径 `with_layout_core_api` 只做纯内存注入。
 pub(crate) fn create_core_api_with_layout(
     app_data_root: &str,
     projects_root: &str,
@@ -146,15 +146,28 @@ pub(crate) fn create_core_api_with_layout(
     ),
     writer_core::api::WriterError,
 > {
-    // 先 bootstrap workspace（ensure .git + recover），拿到 layout。
     let layout =
         writer_core::api::bootstrap::bootstrap_workspace(std::path::Path::new(app_data_root))?;
-    // 用 layout 构造 API，不再重新 bootstrap。
-    let api = with_layout_core_api(app_data_root, projects_root, &layout);
-    // 打开工作区时执行一次完整的持久化身份纠正（含 reconcile + sync proof recovery）。
-    if let Some(init) = DESKTOP_PLATFORM_INIT.get() {
-        api.set_platform_identity(&init.device_id, init.platform);
-    }
+    let sync_transport = LINUX_SYNC_TRANSPORT_FACTORY.get().cloned();
+    let secure_storage = LINUX_SECURE_STORAGE.get().cloned();
+    let api = if let Some(init) = DESKTOP_PLATFORM_INIT.get() {
+        writer_core::api::bootstrap::with_layout_core_api_with_init_persistent(
+            app_data_root,
+            projects_root,
+            &layout,
+            sync_transport,
+            secure_storage,
+            init,
+        )
+    } else {
+        writer_core::api::bootstrap::with_layout_core_api(
+            app_data_root,
+            projects_root,
+            &layout,
+            sync_transport,
+            secure_storage,
+        )
+    };
     Ok((api, layout))
 }
 
