@@ -1,10 +1,10 @@
 // NativeRichEditorBridge — RichEditor 与 EditorSessionCoordinator 之间的输入桥接。
-// Issue #1034 评论 #5/#6/#7/#8/#10/#11/#12 修复历史见 git log。
-// Issue #1034 评论 #13 修复：
-//   - 多等待者数组 IdleWaiter[]，并发 whenIdle 不互相覆盖
-//   - beginSession reject 旧 session 等待者，不静默丢弃
-//   - whenIdle（普通保存）不调用 stopEditing；finishEditingAndWhenIdle（退出/同步）才调用
-//   - checkIdle 不自行修改 imeComposing，状态转换集中在 onDidIMEInput
+// Issue #1034 评论 #5/#6/#7/#8/#10/#11/#12/#13 修复历史见 git log。
+// Issue #1034 评论 #14 修复：
+//   - enqueuePendingEdit 只追加 pendingEdits 并唤醒唯一消费者 drainPendingEdits
+//   - drainPendingEdits 消费者协程：队首处理、每笔 rebase、失败不放行下一笔
+//   - sessionId 检查在 await 前后都做，防止切章后旧任务修改新会话状态
+//   - 移除 scheduleRecovery/recoverWithPendingEdits，逻辑合并到 drainPendingEdits
 //
 // 职责：
 // - RichEditor onWillChange → 只做校验（返回 true 允许改变），不调用 coordinator。
@@ -16,7 +16,8 @@
 // - whenIdle 为事件驱动队列稳定屏障：只等已提交队列事务，不调用 stopEditing()。
 // - finishEditingAndWhenIdle 为退出/同步屏障：先 stopEditing() 结束预编辑，再等队列稳定。
 // - checkIdle 只观察明确完成的状态，不自行把 imeComposing 改成 false。
-// - 事务失败时从 Core 最新 snapshot 重新映射剩余 edits、保持原 cause 逐笔重放。
+// - drainPendingEdits 为唯一消费者协程：从队首处理，每笔执行前检查 snap.text 与
+//   edit.beforeText 的关联并 rebase，失败设置 idleError 不放行下一笔。
 // - 真实内容冲突无法映射时保留 pending 内容和错误状态，whenIdle 报告失败。
 // - syncFromCore 有 pendingEdits/imeComposing/idleError 时不覆盖 RichEditor。
 // - 切章时以 session ID 隔离旧回调，旧队列不可触碰新章节 UI。
@@ -65,7 +66,7 @@ export class NativeRichEditorBridge {
   private pendingEdits: PendingEdit[] = []
   private imeComposing: boolean = false
   private imeComposingStartText: string = ''
-  private recoveryScheduled: boolean = false
+  private drainRunning: boolean = false
   private sessionId: number = 0
   private localSequence: number = 0
   private confirmedText: string = ''
@@ -156,7 +157,7 @@ export class NativeRichEditorBridge {
         return
       }
 
-      if (this.pendingEdits.length > 0 || this.recoveryScheduled) {
+      if (this.pendingEdits.length > 0 || this.drainRunning) {
         return
       }
 
@@ -205,7 +206,7 @@ export class NativeRichEditorBridge {
     this.idleError = null
     this.imeComposing = false
     this.imeComposingStartText = ''
-    this.recoveryScheduled = false
+    this.drainRunning = false
     this.localSequence = 0
   }
 
@@ -342,78 +343,122 @@ export class NativeRichEditorBridge {
     })
   }
 
-  // 统一的事务提交函数：推入 pendingEdits 队列，在 editQueue 中逐笔提交。
-  // 成功移除并调用 checkIdle；失败调用 scheduleRecovery。
+  // 只将不可变编辑追加到 pendingEdits 并唤醒唯一消费者 drainPendingEdits。
+  // 不为每个 edit 单独排一个能绕过失败的 editQueue.then。
   private enqueuePendingEdit(pendingEdit: PendingEdit): void {
     this.pendingEdits.push(pendingEdit)
+    this.wakeDrain()
+  }
 
+  // 唤醒唯一消费者协程。如果消费者已在运行则不重复唤醒。
+  private wakeDrain(): void {
+    if (this.drainRunning) {
+      return
+    }
+    this.drainRunning = true
     this.editQueue = this.editQueue.then(async () => {
+      try {
+        await this.drainPendingEdits()
+      } catch (e) {
+        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `drainPendingEdits error: ${JSON.stringify(e)}`)
+      }
+      this.drainRunning = false
+      this.checkIdle()
+    }).catch(e => {
+      this.drainRunning = false
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `wakeDrain error: ${JSON.stringify(e)}`)
+      this.checkIdle()
+    })
+  }
+
+  // 唯一消费者协程：从队首处理，单笔事务确定 Applied 后才取下一笔。
+  // 每笔执行前检查 snap.text 与 edit.beforeText 的关联并 rebase。
+  // 失败设置 idleError，不从队列移除，不放行下一笔。
+  // sessionId 检查在 await 前后都做，防止切章后旧任务修改新会话状态。
+  private async drainPendingEdits(): Promise<void> {
+    while (this.pendingEdits.length > 0) {
       if (this.idleError !== null) {
         return
       }
-      if (pendingEdit.sessionId !== this.sessionId) {
-        return
-      }
-      const editIndex = this.pendingEdits.indexOf(pendingEdit)
-      if (editIndex < 0) {
-        return
+
+      const edit = this.pendingEdits[0]
+      if (edit.sessionId !== this.sessionId) {
+        this.pendingEdits.shift()
+        continue
       }
 
       const snap = this.coordinator.getSnapshot()
       if (snap === null) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'enqueuePendingEdit: no active session')
+        this.idleError = 'No active session'
+        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
         return
       }
 
-      const byteStart = TextOffsetMapper.utf16ToUtf8(pendingEdit.beforeText, pendingEdit.startUtf16)
-      const byteEnd = TextOffsetMapper.utf16ToUtf8(pendingEdit.beforeText, pendingEdit.endUtf16)
+      const baselineText = snap.text
+      let mappedStart: number
+      let mappedEnd: number
+
+      if (baselineText === edit.beforeText) {
+        mappedStart = edit.startUtf16
+        mappedEnd = edit.endUtf16
+      } else {
+        const mapped = this.mapEditToBaseline(edit, baselineText)
+        if (mapped === null) {
+          this.idleError = `Cannot map pending edit at offset ${edit.startUtf16}: overlapping diff`
+          hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+          return
+        }
+        const currentSlice = baselineText.substring(mapped.startUtf16, mapped.endUtf16)
+        if (currentSlice !== edit.oldText) {
+          this.idleError = `Cannot map pending edit at offset ${edit.startUtf16}: text mismatch`
+          hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+          return
+        }
+        mappedStart = mapped.startUtf16
+        mappedEnd = mapped.endUtf16
+      }
+
+      const byteStart = TextOffsetMapper.utf16ToUtf8(baselineText, mappedStart)
+      const byteEnd = TextOffsetMapper.utf16ToUtf8(baselineText, mappedEnd)
 
       let result: ResultEnvelope<EditorEditResult> | null = null
-      let transactionFailed = false
-      if (pendingEdit.oldText.length > 0 && pendingEdit.insertedText.length > 0) {
-        result = await this.coordinator.replace(byteStart, byteEnd, pendingEdit.insertedText, pendingEdit.oldText, pendingEdit.cause)
-      } else if (pendingEdit.oldText.length > 0) {
+      if (edit.oldText.length > 0 && edit.insertedText.length > 0) {
+        result = await this.coordinator.replace(byteStart, byteEnd, edit.insertedText, edit.oldText, edit.cause)
+      } else if (edit.oldText.length > 0) {
         result = await this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
-      } else if (pendingEdit.insertedText.length > 0) {
-        result = await this.coordinator.insert(byteStart, pendingEdit.insertedText, pendingEdit.cause)
+      } else if (edit.insertedText.length > 0) {
+        result = await this.coordinator.insert(byteStart, edit.insertedText, edit.cause)
       }
 
-      if (result !== null) {
-        if (!result.success || result.data === undefined ||
-            (result.data.outcome !== EditorEditOutcome.Applied &&
-             result.data.outcome !== EditorEditOutcome.AppliedWithAdjustedSelection &&
-             result.data.outcome !== EditorEditOutcome.NoChange)) {
-          transactionFailed = true
-        }
-      }
-
-      if (transactionFailed) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'enqueuePendingEdit: transaction failed, scheduling recovery')
-        this.scheduleRecovery()
+      // await 后再次检查 sessionId，防止切章后旧任务修改新会话状态
+      if (edit.sessionId !== this.sessionId) {
         return
       }
 
-      this.pendingEdits.splice(editIndex, 1)
+      if (result === null || !result.success || result.data === undefined ||
+          (result.data.outcome !== EditorEditOutcome.Applied &&
+           result.data.outcome !== EditorEditOutcome.AppliedWithAdjustedSelection &&
+           result.data.outcome !== EditorEditOutcome.NoChange)) {
+        this.idleError = `Transaction failed for edit at offset ${edit.startUtf16}`
+        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+        return
+      }
+
+      this.pendingEdits.shift()
 
       const newSnap = this.coordinator.getSnapshot()
-      if (newSnap !== null) {
+      if (newSnap !== null && edit.sessionId === this.sessionId) {
         this.confirmedText = newSnap.text
         this.confirmedRevision = newSnap.revision
         this.lastAppliedRevision = newSnap.revision
-        if (result !== null && result.success && result.data !== undefined &&
-            result.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection &&
-         this.richEditorController !== null) {
+        if (result.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection &&
+            this.richEditorController !== null) {
           const utf16Cursor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.cursor)
           const utf16Anchor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.selectionAnchor)
           this.richEditorController.setSelection(utf16Anchor, utf16Cursor)
         }
       }
-
-      this.checkIdle()
-    }).catch(e => {
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `enqueuePendingEdit error: ${JSON.stringify(e)}`)
-      this.scheduleRecovery()
-    })
+    }
   }
 
   // 计算最小文本差量（按完整 Unicode code point 求前后缀）
@@ -482,99 +527,6 @@ export class NativeRichEditorBridge {
     }
 
     return null
-  }
-
-  private scheduleRecovery(): void {
-    if (this.recoveryScheduled) {
-      return
-    }
-    this.recoveryScheduled = true
-    this.editQueue = this.editQueue.then(async () => {
-      this.recoveryScheduled = false
-      await this.recoverWithPendingEdits()
-      this.checkIdle()
-    }).catch(e => {
-      this.recoveryScheduled = false
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `scheduleRecovery error: ${JSON.stringify(e)}`)
-      this.checkIdle()
-    })
-  }
-
-  // 逐笔映射重放：从 Core 最新 snapshot 开始，用 mapEditToBaseline 映射偏移，
-  // 保持原 cause 逐笔提交。无法映射或提交失败时设置 idleError，停止重放。
-  private async recoverWithPendingEdits(): Promise<void> {
-    if (this.pendingEdits.length === 0) {
-      return
-    }
-
-    const snap = this.coordinator.getSnapshot()
-    if (snap === null || this.richEditorController === null) {
-      return
-    }
-
-    let baselineText = snap.text
-
-    while (this.pendingEdits.length > 0) {
-      const edit = this.pendingEdits[0]
-      if (edit.sessionId !== this.sessionId) {
-        this.pendingEdits.shift()
-        continue
-      }
-
-      const mapped = this.mapEditToBaseline(edit, baselineText)
-      if (mapped === null) {
-        this.idleError = `Cannot map pending edit at offset ${edit.startUtf16}: overlapping diff`
-        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-        return
-      }
-
-      const currentSlice = baselineText.substring(mapped.startUtf16, mapped.endUtf16)
-      if (currentSlice !== edit.oldText) {
-        this.idleError = `Cannot map pending edit at offset ${edit.startUtf16}: text mismatch`
-        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-        return
-      }
-
-      const byteStart = TextOffsetMapper.utf16ToUtf8(baselineText, mapped.startUtf16)
-      const byteEnd = TextOffsetMapper.utf16ToUtf8(baselineText, mapped.endUtf16)
-
-      let result: ResultEnvelope<EditorEditResult> | null = null
-      if (edit.oldText.length > 0 && edit.insertedText.length > 0) {
-        result = await this.coordinator.replace(byteStart, byteEnd, edit.insertedText, edit.oldText, edit.cause)
-      } else if (edit.oldText.length > 0) {
-        result = await this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
-      } else if (edit.insertedText.length > 0) {
-        result = await this.coordinator.insert(byteStart, edit.insertedText, edit.cause)
-      }
-
-      if (result === null || !result.success || result.data === undefined ||
-          (result.data.outcome !== EditorEditOutcome.Applied &&
-           result.data.outcome !== EditorEditOutcome.AppliedWithAdjustedSelection &&
-           result.data.outcome !== EditorEditOutcome.NoChange)) {
-        this.idleError = `Recovery failed for edit at offset ${edit.startUtf16}`
-        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-        return
-      }
-
-      baselineText = baselineText.substring(0, mapped.startUtf16)
-        + edit.insertedText
-        + baselineText.substring(mapped.endUtf16)
-
-      this.pendingEdits.shift()
-
-      const newSnap = this.coordinator.getSnapshot()
-      if (newSnap !== null) {
-        this.confirmedText = newSnap.text
-        this.confirmedRevision = newSnap.revision
-        this.lastAppliedRevision = newSnap.revision
-        if (result.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection &&
-            this.richEditorController !== null) {
-          const utf16Cursor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.cursor)
-          const utf16Anchor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.selectionAnchor)
-          this.richEditorController.setSelection(utf16Anchor, utf16Cursor)
-        }
-      }
-    }
   }
 
   // 从 Core snapshot 恢复：事务失败或需要强制对齐时调用。
