@@ -333,6 +333,7 @@ export struct WritingScreen {
       this.applyWorkflowUpdate(update)
     })
     this.writingWorkflow.setBridgeWhenIdle((): Promise<void> => this.richEditorBridge.whenIdle())
+    this.writingWorkflow.setBridgeFinishEditingAndWhenIdle((): Promise<void> => this.richEditorBridge.finishEditingAndWhenIdle())
 
     // Issue #923：把本页工作流登记为活跃写作会话（宽窄屏共用同一实例，
     // 不按布局创建第二份同步会话）；同步事务从这里取得保存屏障与同步后的会话回填入口。

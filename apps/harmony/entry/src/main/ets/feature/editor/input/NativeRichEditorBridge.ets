@@ -1,9 +1,10 @@
 // NativeRichEditorBridge — RichEditor 与 EditorSessionCoordinator 之间的输入桥接。
-// Issue #1034 评论 #5/#6/#7/#8/#10/#11 修复历史见 git log。
-// Issue #1034 评论 #12 修复：
-//   - blur() → stopEditing()（官方真实 API）
-//   - awaitQueueStable 改为事件驱动 checkIdle，避免微任务自旋和 idleError 永不返回
-//   - syncFromCore 有 pendingEdits/imeComposing/idleError 时不覆盖 RichEditor
+// Issue #1034 评论 #5/#6/#7/#8/#10/#11/#12 修复历史见 git log。
+// Issue #1034 评论 #13 修复：
+//   - 多等待者数组 IdleWaiter[]，并发 whenIdle 不互相覆盖
+//   - beginSession reject 旧 session 等待者，不静默丢弃
+//   - whenIdle（普通保存）不调用 stopEditing；finishEditingAndWhenIdle（退出/同步）才调用
+//   - checkIdle 不自行修改 imeComposing，状态转换集中在 onDidIMEInput
 //
 // 职责：
 // - RichEditor onWillChange → 只做校验（返回 true 允许改变），不调用 coordinator。
@@ -12,8 +13,9 @@
 //   IME 预编辑期间只更新本地镜像不提交 Core；非预编辑期间串行提交给 coordinator。
 // - RichEditor onDidIMEInput → 通过 getPreviewText() 确认预上屏消失后才提交差量，
 //   封装为 PendingEdit(cause=TypingCommit) 统一排队逐笔确认及失败重放。
-// - whenIdle 为事件驱动队列稳定屏障：先检查 idleError，再等 editQueue tail，
-//   条件不满足时等待状态变化通知（checkIdle 由各完成路径调用），不自旋。
+// - whenIdle 为事件驱动队列稳定屏障：只等已提交队列事务，不调用 stopEditing()。
+// - finishEditingAndWhenIdle 为退出/同步屏障：先 stopEditing() 结束预编辑，再等队列稳定。
+// - checkIdle 只观察明确完成的状态，不自行把 imeComposing 改成 false。
 // - 事务失败时从 Core 最新 snapshot 重新映射剩余 edits、保持原 cause 逐笔重放。
 // - 真实内容冲突无法映射时保留 pending 内容和错误状态，whenIdle 报告失败。
 // - syncFromCore 有 pendingEdits/imeComposing/idleError 时不覆盖 RichEditor。
@@ -46,6 +48,12 @@ interface PendingEdit {
   cause: EditorTransactionCause
 }
 
+interface IdleWaiter {
+  sessionId: number
+  resolve: () => void
+  reject: (e: Error) => void
+}
+
 export class NativeRichEditorBridge {
   private coordinator: EditorSessionCoordinator
   private richEditorController: RichEditorController | null = null
@@ -63,8 +71,7 @@ export class NativeRichEditorBridge {
   private confirmedText: string = ''
   private confirmedRevision: number = -1
   private idleError: string | null = null
-  private idleResolver: (() => void) | null = null
-  private idleRejecter: ((e: Error) => void) | null = null
+  private idleWaiters: IdleWaiter[] = []
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -90,36 +97,47 @@ export class NativeRichEditorBridge {
     return this.lastAppliedRevision
   }
 
-  // 事件驱动队列稳定屏障：先 stopEditing 结束预编辑，再等 checkIdle 确认所有条件满足。
+  // 普通保存屏障：只等已提交队列事务，不调用 stopEditing()。
+  // imeComposing 时不 resolve，等待 onDidIMEInput 将 imeComposing 设为 false 后再继续。
   whenIdle(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this.idleWaiters.push({ sessionId: this.sessionId, resolve: resolve, reject: reject })
+      this.checkIdle()
+    })
+  }
+
+  // 退出章节/同步屏障：先 stopEditing() 结束预编辑，再等队列稳定。
+  finishEditingAndWhenIdle(): Promise<void> {
     if (this.imeComposing && this.richEditorController !== null) {
       this.richEditorController.stopEditing()
     }
     return new Promise<void>((resolve, reject) => {
-      this.idleResolver = resolve
-      this.idleRejecter = reject
+      this.idleWaiters.push({ sessionId: this.sessionId, resolve: resolve, reject: reject })
       this.checkIdle()
     })
   }
 
   // 事件驱动检查：先查 idleError，再等 editQueue tail，条件不满足时等待状态变化通知。
   // 不自旋等待已 resolved 的 Promise；由各完成路径调用 checkIdle 触发重新检查。
+  // 不自行修改 imeComposing；状态转换集中在 onDidIMEInput 统一处理。
   private checkIdle(): void {
-    if (this.idleResolver === null) {
+    if (this.idleWaiters.length === 0) {
       return
     }
 
     if (this.idleError !== null) {
-      const rejecter = this.idleRejecter
-      this.idleResolver = null
-      this.idleRejecter = null
-      rejecter(new Error(this.idleError))
+      const error = new Error(this.idleError)
+      const waiters = this.idleWaiters
+      this.idleWaiters = []
+      for (const w of waiters) {
+        w.reject(error)
+      }
       return
     }
 
     const currentTail = this.editQueue
     currentTail.then(() => {
-      if (this.idleResolver === null) {
+      if (this.idleWaiters.length === 0) {
         return
       }
 
@@ -129,10 +147,12 @@ export class NativeRichEditorBridge {
       }
 
       if (this.idleError !== null) {
-        const rejecter = this.idleRejecter
-        this.idleResolver = null
-        this.idleRejecter = null
-        rejecter(new Error(this.idleError))
+        const error = new Error(this.idleError)
+        const waiters = this.idleWaiters
+        this.idleWaiters = []
+        for (const w of waiters) {
+          w.reject(error)
+        }
         return
       }
 
@@ -141,19 +161,23 @@ export class NativeRichEditorBridge {
       }
 
       if (this.imeComposing) {
-        if (this.richEditorController !== null) {
-          const previewText = this.richEditorController.getPreviewText()
-          if (previewText.offset >= 0 && previewText.value.length > 0) {
-            return
-          }
-        }
-        this.imeComposing = false
+        return
       }
 
-      const resolver = this.idleResolver
-      this.idleResolver = null
-      this.idleRejecter = null
-      resolver()
+      const currentSession = this.sessionId
+      const resolved: IdleWaiter[] = []
+      const remaining: IdleWaiter[] = []
+      for (const w of this.idleWaiters) {
+        if (w.sessionId === currentSession) {
+          resolved.push(w)
+        } else {
+          remaining.push(w)
+        }
+      }
+      this.idleWaiters = remaining
+      for (const w of resolved) {
+        w.resolve()
+      }
     })
   }
 
@@ -161,19 +185,28 @@ export class NativeRichEditorBridge {
     this.pendingPaste = true
   }
 
-  // 切章时调用：增加 sessionId 隔离旧回调，清空队列和错误状态。
+  // 切章时调用：增加 sessionId 隔离旧回调，reject 旧 session 等待者，清空队列和错误状态。
   beginSession(): void {
+    const oldSession = this.sessionId
     this.sessionId++
+
+    const error = new Error(`Session ${oldSession} cancelled by beginSession`)
+    const remaining: IdleWaiter[] = []
+    for (const w of this.idleWaiters) {
+      if (w.sessionId === oldSession) {
+        w.reject(error)
+      } else {
+        remaining.push(w)
+      }
+    }
+    this.idleWaiters = remaining
+
     this.pendingEdits = []
     this.idleError = null
     this.imeComposing = false
     this.imeComposingStartText = ''
     this.recoveryScheduled = false
     this.localSequence = 0
-    if (this.idleResolver !== null) {
-      this.idleResolver = null
-      this.idleRejecter = null
-    }
   }
 
   onWillChange(_value: RichEditorChangeValue): boolean {

@@ -101,7 +101,11 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   private sessionOpenedHook: ((snap: EditorSessionSnapshot) => Promise<void>) | null = null
   // Issue #1034 评论 #7：RichEditor 桥接的 whenIdle，保存/同步/关闭前先 await 桥接队列空闲，
   // 再 await coordinator.whenIdle，确保用户最后几字已进入 Core。
+  // Issue #1034 评论 #13：拆为两个入口：
+  // - bridgeWhenIdle：普通保存，只等已提交队列事务，不调用 stopEditing()
+  // - bridgeFinishEditingAndWhenIdle：退出/同步，先 stopEditing() 结束预编辑再等队列稳定
   private bridgeWhenIdle: (() => Promise<void>) | null = null
+  private bridgeFinishEditingAndWhenIdle: (() => Promise<void>) | null = null
 
   // 路由上下文：chapterId/projectId/volumeId/navPathStack。
   // chapterId 公开：同步事务（ActiveWritingSession）需要按当前章节复核 Core 落盘内容。
@@ -176,9 +180,19 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     this.bridgeWhenIdle = fn
   }
 
+  setBridgeFinishEditingAndWhenIdle(fn: (() => Promise<void>) | null): void {
+    this.bridgeFinishEditingAndWhenIdle = fn
+  }
+
   private async awaitBridgeIdle(): Promise<void> {
     if (this.bridgeWhenIdle !== null) {
       await this.bridgeWhenIdle()
+    }
+  }
+
+  private async awaitBridgeFinishEditing(): Promise<void> {
+    if (this.bridgeFinishEditingAndWhenIdle !== null) {
+      await this.bridgeFinishEditingAndWhenIdle()
     }
   }
 
@@ -473,7 +487,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     try {
       // 同一会话边界：先提交 IME composition，再等输入队列空闲，再取稳定 snapshot。
       const finishResult = await this.finishActiveComposition()
-      await this.awaitBridgeIdle()
+      await this.awaitBridgeFinishEditing()
       await this.editorCoordinator.whenIdle()
       const snap = this.editorCoordinator.getSnapshot()
       if (finishResult.success === false || snap === null ||
@@ -576,7 +590,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   async clearDocument(): Promise<void> {
     this.isSaving = true
     this.emit(null, null)
-    await this.awaitBridgeIdle()
+    await this.awaitBridgeFinishEditing()
     await this.editorCoordinator.whenIdle()
     const snap = this.editorCoordinator.getSnapshot()
     if (!snap) {
@@ -661,7 +675,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       // 1. finish 当前 composition：最后的中文 preedit 提交进 committed 正文。
       const finishResult = await this.finishActiveComposition()
       // 2. 等 coordinator 命令队列空闲（snapshot 已包含最后输入）
-      await this.awaitBridgeIdle()
+      await this.awaitBridgeFinishEditing()
       await this.editorCoordinator.whenIdle()
       // 3. composition 唯一真源是 Core snapshot。finish 失败 / snapshot 丢失 / composition 仍在 → 拒绝关闭。
       const afterFinish = this.editorCoordinator.getSnapshot()
