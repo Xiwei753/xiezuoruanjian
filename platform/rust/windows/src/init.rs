@@ -4,27 +4,26 @@ use writer_platform_api::{FileConfigStore, PlatformInit, PlatformKind};
 
 use super::dirs::{runtime_log_dir, xdg_cache_dir, xdg_config_dir, xdg_state_dir};
 
-pub fn resolve_platform_init() -> PlatformInit {
+pub fn resolve_platform_init() -> std::io::Result<PlatformInit> {
     let config_dir = xdg_config_dir();
     let app_data_dir = config_dir.clone();
     let cache_dir = xdg_cache_dir();
     let log_dir = runtime_log_dir();
 
-    PlatformInit {
+    Ok(PlatformInit {
         platform: PlatformKind::Windows,
         app_data_dir,
         cache_dir,
         log_dir,
         no_backup_dir: None,
-        device_id: super::device_id::load_or_create_device_id(&xdg_state_dir())
-            .unwrap_or_else(|e| panic!("Failed to load or create device_id: {e}")),
+        device_id: super::device_id::load_or_create_device_id(&xdg_state_dir())?,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         locale: windows_locale(),
         timezone: windows_timezone(),
         tls_ca_bundle: None,
         tls_ca_dir: None,
         tls_ca_required: false,
-    }
+    })
 }
 
 fn windows_locale() -> String {

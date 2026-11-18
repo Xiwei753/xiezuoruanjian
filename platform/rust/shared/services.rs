@@ -16,8 +16,8 @@ use super::secure_storage::create_secure_storage;
 #[cfg(feature = "github-api")]
 use super::transport::ReqwestSyncTransport;
 
-pub fn create_platform_services() -> PlatformServices {
-    let init = resolve_platform_init();
+pub fn create_platform_services() -> std::io::Result<PlatformServices> {
+    let init = resolve_platform_init()?;
     let config_dir = xdg_config_dir();
     let config_store: Option<Box<dyn writer_platform_api::ConfigStore>> =
         Some(Box::new(FileConfigStore::new(config_dir)));
@@ -38,11 +38,11 @@ pub fn create_platform_services() -> PlatformServices {
     let network_state = detect_network_state();
     cache_network_state(&network_state);
 
-    PlatformServices {
+    Ok(PlatformServices {
         init,
         config_store,
         secure_storage,
         network_state: Some(network_state),
         sync_transport_factory,
-    }
+    })
 }

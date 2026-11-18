@@ -138,6 +138,20 @@ impl WriterCoreApi {
         }
     }
 
+    /// 纯内存注入平台身份，不执行磁盘 I/O 或同步证明恢复。
+    ///
+    /// 供热路径构造临时 API 时使用：只设置内存中的 `preferred_device_id`
+    /// 和 `preferred_platform`，不触发 `reconcile_platform_identity`
+    /// 或 `recover_pending_sync_proof_intents`。
+    pub(crate) fn set_platform_identity_memory(
+        &self,
+        device_id: &str,
+        platform: writer_platform_api::PlatformKind,
+    ) {
+        let core = self.core_write();
+        core.set_platform_identity_memory(device_id, platform);
+    }
+
     ///   在写事务完成后记录本地历史（显式 paths）。
     ///
     /// `paths` 为 workspace-relative paths。**空 paths 直接返回空结果，

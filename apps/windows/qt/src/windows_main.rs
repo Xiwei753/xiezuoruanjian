@@ -386,9 +386,9 @@ pub fn run() {
     startup_mark("platform_store_begin", "init default config store");
     writer_platform_linux::init_default_config_store();
 
-    match std::panic::catch_unwind(writer_platform_linux::create_platform_services) {
+    let platform_init = match writer_platform_linux::create_platform_services() {
         Ok(services) => {
-            backend::app_backend::set_desktop_platform_init(services.init);
+            backend::app_backend::set_desktop_platform_init(services.init.clone());
             if let Some(factory) = services.sync_transport_factory {
                 backend::app_backend::set_linux_sync_transport_factory(factory);
             }
@@ -398,12 +398,17 @@ pub fn run() {
                 ));
             }
             startup_mark("platform_services_ready", "platform services initialized");
+            services.init
         }
-        Err(_) => startup_mark(
-            "platform_services_failed",
-            "create_platform_services panicked",
-        ),
-    }
+        Err(e) => {
+            startup_mark(
+                "platform_services_failed",
+                &format!("create_platform_services failed: {e}"),
+            );
+            eprintln!("FATAL: create_platform_services failed: {e}");
+            std::process::exit(1);
+        }
+    };
 
     std::thread::Builder::new()
         .name("net-monitor".into())
@@ -413,7 +418,6 @@ pub fn run() {
         })
         .ok();
 
-    let platform_init = writer_platform_linux::resolve_platform_init();
     let session_id = uuid::Uuid::new_v4().to_string();
     writer_platform_linux::init_diagnostics(
         &platform_init,

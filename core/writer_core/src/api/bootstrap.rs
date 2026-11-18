@@ -1359,8 +1359,9 @@ pub fn with_layout_core_api<P1: AsRef<Path>, P2: AsRef<Path>>(
 
 /// 与 [`with_layout_core_api`] 相同，但接受 `&PlatformInit` 以注入平台身份。
 ///
-/// 在 API 已构造、Git layout 已注入后调用 `api.set_platform_identity`，
-/// 确保写作统计事件分区和同步证明不退化为 `Desktop`。
+/// 使用 `set_platform_identity_memory`（纯内存注入），不执行磁盘 I/O 或
+/// 同步证明恢复。完整的持久化身份纠正只在 `bootstrap_core_api_with_init`
+/// 或 `create_core_api_with_layout` 真正打开工作区时执行一次。
 pub fn with_layout_core_api_with_init<P1: AsRef<Path>, P2: AsRef<Path>>(
     app_data_root: P1,
     projects_root: P2,
@@ -1376,7 +1377,7 @@ pub fn with_layout_core_api_with_init<P1: AsRef<Path>, P2: AsRef<Path>>(
         secure_storage,
     );
     api.set_workspace_git_layout(layout.clone());
-    api.set_platform_identity(&init.device_id, init.platform);
+    api.set_platform_identity_memory(&init.device_id, init.platform);
     api
 }
 

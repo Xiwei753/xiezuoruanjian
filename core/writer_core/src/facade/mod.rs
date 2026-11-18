@@ -209,6 +209,21 @@ impl WriterCore {
         Ok(())
     }
 
+    /// 纯内存注入平台身份，不执行磁盘 I/O。
+    ///
+    /// 供热路径（如 `with_layout_core_api_with_init`）使用：只设置本对象的
+    /// `preferred_device_id` 和 `preferred_platform`，不调
+    /// `reconcile_platform_identity`，不读/写设备信息文件。
+    /// 完整的持久化身份纠正只在真正打开工作区时执行一次。
+    pub(crate) fn set_platform_identity_memory(
+        &self,
+        device_id: &str,
+        platform: writer_platform_api::PlatformKind,
+    ) {
+        self.set_preferred_device_id(device_id);
+        self.set_preferred_platform(platform);
+    }
+
     /// 事件入口解析平台：平台初始化的确认值优先于调用方字符串。
     pub(crate) fn effective_platform(&self, hinted: &str) -> writer_platform_api::PlatformKind {
         self.preferred_platform()

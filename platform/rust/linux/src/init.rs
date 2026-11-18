@@ -4,22 +4,19 @@ use writer_platform_api::{FileConfigStore, PlatformInit, PlatformKind};
 
 use super::dirs::{runtime_log_dir, xdg_cache_dir, xdg_config_dir, xdg_state_dir};
 
-pub fn resolve_platform_init() -> PlatformInit {
+pub fn resolve_platform_init() -> std::io::Result<PlatformInit> {
     let config_dir = xdg_config_dir();
     let app_data_dir = config_dir.clone();
     let cache_dir = xdg_cache_dir();
-    // 运行时日志统一落到 ~/.sujianxiezuo/diagnostics/runtime/，避免
-    // xdg_cache_dir()（已是 ~/.cache/writer）再 join("writer") 造成的双重 writer。
     let log_dir = runtime_log_dir();
 
-    PlatformInit {
+    Ok(PlatformInit {
         platform: PlatformKind::Desktop,
         app_data_dir,
         cache_dir,
         log_dir,
         no_backup_dir: None,
-        device_id: super::device_id::load_or_create_device_id(&xdg_state_dir())
-            .unwrap_or_else(|e| panic!("Failed to load or create device_id: {e}")),
+        device_id: super::device_id::load_or_create_device_id(&xdg_state_dir())?,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         locale: std::env::var("LANG")
             .unwrap_or_else(|_| "en_US.UTF-8".to_string())
@@ -31,7 +28,7 @@ pub fn resolve_platform_init() -> PlatformInit {
         tls_ca_bundle: None,
         tls_ca_dir: None,
         tls_ca_required: false,
-    }
+    })
 }
 
 fn local_timezone() -> String {

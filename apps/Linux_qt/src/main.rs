@@ -643,9 +643,9 @@ fn main() {
     startup_mark("platform_store_ready", "default config store initialized");
 
     startup_mark("platform_services_begin", "create platform services");
-    match std::panic::catch_unwind(writer_platform_linux::create_platform_services) {
+    let platform_init = match writer_platform_linux::create_platform_services() {
         Ok(services) => {
-            sujian_linux_qt::backend::app_backend::set_desktop_platform_init(services.init);
+            sujian_linux_qt::backend::app_backend::set_desktop_platform_init(services.init.clone());
             if let Some(factory) = services.sync_transport_factory {
                 sujian_linux_qt::backend::app_backend::set_linux_sync_transport_factory(factory);
             }
@@ -654,16 +654,18 @@ fn main() {
                     std::sync::Arc::from(secure_storage),
                 );
             }
-            // 初始网络状态已在 create_platform_services 内缓存
             startup_mark("platform_services_ready", "platform services initialized");
+            services.init
         }
-        Err(_) => {
+        Err(e) => {
             startup_mark(
                 "platform_services_failed",
-                "create_platform_services panicked",
+                &format!("create_platform_services failed: {e}"),
             );
+            eprintln!("FATAL: create_platform_services failed: {e}");
+            std::process::exit(1);
         }
-    }
+    };
 
     // 启动后台线程定时刷新网络状态（每 30 秒）
     std::thread::Builder::new()
@@ -679,9 +681,6 @@ fn main() {
     // diagnostics::init_build_identity() 初始化（见上方 Issue #803 评论 5905373722），
     // 此处只标记 writer_diagnostics init 阶段。
     startup_mark("shared_diagnostics_begin", "init writer_diagnostics");
-    // 初始化共享 Rust 诊断后端（接管 log::* 和 panic 落盘）。
-    // 日志目录、平台名、设备 ID 等由 PlatformInit 决定，build_key 用运行时有效值。
-    let platform_init = writer_platform_linux::resolve_platform_init();
     let session_id = uuid::Uuid::new_v4().to_string();
     writer_platform_linux::init_diagnostics(
         &platform_init,
