@@ -1,23 +1,27 @@
 // NativeRichEditorBridge — RichEditor 与 EditorSessionCoordinator 之间的输入桥接。
 // Issue #1034 评论 #5：用 ArkUI 原生 RichEditor 替换自研编辑器。
-// Issue #1034 评论 #6 修复：正确使用 RichEditorController API、串行事务队列、UTF-8/UTF-16 坐标转换。
-// Issue #1034 评论 #7 修复：getSpans offsetInSpan 截取、deleteSpans() 无参数清空、
-//   computeDiff 按 code point、whenIdle 注入保存链路、事务失败恢复。
-// Issue #1034 评论 #8 补全：IME 预编辑/提交区分、事务失败队列收敛恢复。
-// Issue #1034 评论 #10 修复：IME 预编辑由真实预上屏状态决定、PendingEdit 不可变结构、
-//   逐笔重放保持原 cause、whenIdle 报告失败、切章 session ID 隔离。
+// Issue #1034 评论 #6/#7/#8/#10 修复历史见 git log。
+// Issue #1034 评论 #11 修复：
+//   - 编译错误：loadInitialText 中 utf16ToUtf16 → utf8ToUtf16
+//   - IME commit 封装为 PendingEdit 统一排队，失败可重放
+//   - whenIdle 改为队列稳定屏障，不再漏掉失败时新增的恢复任务
+//   - 失败重放用 computeDiff 映射偏移，插入操作不再被错误映射
+//   - whenIdle 不再把预上屏文字当已提交正文，先 blur 再等队列稳定
 //
 // 职责：
 // - RichEditor onWillChange → 只做校验（返回 true 允许改变），不调用 coordinator。
 // - RichEditor aboutToIMEInput → 读取 previewText 判断是否预编辑开始，首次冻结基线。
 // - RichEditor onDidChange(rangeBefore, rangeAfter) → 从前后文本差量计算编辑事实，
 //   IME 预编辑期间只更新本地镜像不提交 Core；非预编辑期间串行提交给 coordinator。
-// - RichEditor onDidIMEInput → 通过 getPreviewText() 确认预上屏消失后才提交差量。
+// - RichEditor onDidIMEInput → 通过 getPreviewText() 确认预上屏消失后才提交差量，
+//   封装为 PendingEdit(cause=TypingCommit) 统一排队逐笔确认及失败重放。
 // - RichEditor onSelectionChange → 将稳定选区映射后传给 EditorSessionCoordinator.setSelection()。
 // - 维护 programmaticUpdate 标记和有序 revision，区分用户编辑与程序回放。
 // - 事务失败时从 Core 最新 snapshot 重新映射剩余 edits、保持原 cause 逐笔重放。
 // - 真实内容冲突无法映射时保留 pending 内容和错误状态，whenIdle 报告失败。
 // - 切章时以 session ID 隔离旧回调，旧队列不可触碰新章节 UI。
+// - whenIdle 为队列稳定屏障：循环等待直到 tail 不变、所有 PendingEdit 已确认、
+//   无待处理恢复/预编辑，才返回。保存/同步/关闭入口先 blur 结束预编辑再等屏障。
 // - Core 外部加载/撤销/同步更新通过 revision 比较、最小文本差量更新 RichEditor。
 
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
@@ -89,17 +93,49 @@ export class NativeRichEditorBridge {
     return this.lastAppliedRevision
   }
 
-  // 返回当前 editQueue 尾部，供保存/同步/关闭链路在 coordinator.whenIdle 之前 await。
-  // 如果 IME 预编辑还在，先结算差量。
-  // 如果有未解决的 idleError，抛出错误。
+  // 队列稳定屏障：循环等待直到 tail 不变、所有 PendingEdit 已确认、
+  // 无待处理恢复/预编辑，才返回。如果有 idleError 则 reject。
+  // 如果 IME 预编辑还在，先 blur 触发输入法结束预编辑，再等屏障。
   whenIdle(): Promise<void> {
-    if (this.imeComposing) {
-      this.settleImeComposition()
+    if (this.imeComposing && this.richEditorController !== null) {
+      this.richEditorController.blur()
     }
-    return this.editQueue.then(() => {
-      if (this.idleError !== null) {
-        throw new Error(this.idleError)
+    return this.awaitQueueStable()
+  }
+
+  private awaitQueueStable(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const check = (): void => {
+        const currentTail = this.editQueue
+        currentTail.then(() => {
+          if (this.editQueue !== currentTail) {
+            check()
+            return
+          }
+          if (this.pendingEdits.length > 0 || this.recoveryScheduled) {
+            check()
+            return
+          }
+          if (this.imeComposing) {
+            if (this.richEditorController !== null) {
+              const previewText = this.richEditorController.getPreviewText()
+              if (previewText.offset >= 0 && previewText.value.length > 0) {
+                check()
+                return
+              }
+            }
+            this.imeComposing = false
+          }
+          if (this.idleError !== null) {
+            reject(new Error(this.idleError))
+            return
+          }
+          resolve()
+        }).catch(e => {
+          reject(e)
+        })
       }
+      check()
     })
   }
 
@@ -118,14 +154,12 @@ export class NativeRichEditorBridge {
     this.localSequence = 0
   }
 
-  // onWillChange 只做校验：允许所有改变。
   onWillChange(_value: RichEditorChangeValue): boolean {
     return true
   }
 
   // onDidChange：内容已改变后，从 rangeBefore/rangeAfter 和本地镜像计算编辑事实，
-  // 串行提交给 coordinator。
-  // IME 预编辑期间只更新本地镜像，不提交 Core 事务。
+  // 串行提交给 coordinator。IME 预编辑期间只更新本地镜像，不提交 Core 事务。
   onDidChange(rangeBefore: TextRange, rangeAfter: TextRange): void {
     if (this.programmaticUpdate || this.richEditorController === null) {
       return
@@ -180,6 +214,83 @@ export class NativeRichEditorBridge {
       oldText: oldText,
       cause: cause
     }
+    this.enqueuePendingEdit(pendingEdit)
+  }
+
+  // aboutToIMEInput 读取 previewText 判断是否预编辑开始。
+  // 只有当 insertValue.previewText 非空时才标记 composing，首次冻结基线。
+  aboutToIMEInput(insertValue: RichEditorInsertValue): boolean {
+    if (insertValue.previewText !== undefined && insertValue.previewText.length > 0) {
+      if (!this.imeComposing) {
+        this.imeComposing = true
+        this.imeComposingStartText = this.currentText
+      }
+    }
+    return true
+  }
+
+  // onDidIMEInput 通过 getPreviewText() 确认预上屏消失后才提交差量。
+  // 预上屏还在时不做提交；预上屏消失后封装为 PendingEdit(cause=TypingCommit) 统一排队。
+  // 取消预上屏时差量为空，不提交事务（不当删除记录）。
+  onDidIMEInput(_range: TextRange): void {
+    if (this.richEditorController !== null) {
+      const previewText = this.richEditorController.getPreviewText()
+      if (previewText.offset >= 0 && previewText.value.length > 0) {
+        return
+      }
+    }
+
+    if (!this.imeComposing) {
+      return
+    }
+    this.imeComposing = false
+
+    const diff = this.computeDiff(this.imeComposingStartText, this.currentText)
+    if (diff.start >= diff.end && diff.replacement.length === 0) {
+      return
+    }
+
+    const baselineText = this.imeComposingStartText
+    const diffOldText = baselineText.substring(diff.start, diff.end)
+
+    const pendingEdit: PendingEdit = {
+      sessionId: this.sessionId,
+      localSequence: this.localSequence++,
+      baseRevision: this.lastAppliedRevision,
+      beforeText: baselineText,
+      startUtf16: diff.start,
+      endUtf16: diff.end,
+      insertedText: diff.replacement,
+      oldText: diffOldText,
+      cause: EditorTransactionCause.TypingCommit
+    }
+    this.enqueuePendingEdit(pendingEdit)
+  }
+
+  // RichEditor onSelectionChange 回调：将稳定选区映射后传给 coordinator。
+  onSelectionChange(start: number, end: number): void {
+    if (this.programmaticUpdate) {
+      return
+    }
+
+    const textForConversion = this.currentText
+    this.editQueue = this.editQueue.then(async () => {
+      const snap = this.coordinator.getSnapshot()
+      if (snap === null) {
+        return
+      }
+
+      const byteAnchor = TextOffsetMapper.utf16ToUtf8(textForConversion, start)
+      const byteHead = TextOffsetMapper.utf16ToUtf8(textForConversion, end)
+      await this.coordinator.setSelection(byteAnchor, byteHead)
+    }).catch(e => {
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onSelectionChange error: ${JSON.stringify(e)}`)
+    })
+  }
+
+  // 统一的事务提交函数：推入 pendingEdits 队列，在 editQueue 中逐笔提交。
+  // 成功移除；失败调用 scheduleRecovery。被 onDidChange/onDidIMEInput 共用。
+  private enqueuePendingEdit(pendingEdit: PendingEdit): void {
     this.pendingEdits.push(pendingEdit)
 
     this.editQueue = this.editQueue.then(async () => {
@@ -196,7 +307,7 @@ export class NativeRichEditorBridge {
 
       const snap = this.coordinator.getSnapshot()
       if (snap === null) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidChange: no active session')
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'enqueuePendingEdit: no active session')
         return
       }
 
@@ -223,7 +334,7 @@ export class NativeRichEditorBridge {
       }
 
       if (transactionFailed) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidChange: transaction failed, scheduling recovery')
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'enqueuePendingEdit: transaction failed, scheduling recovery')
         this.scheduleRecovery()
         return
       }
@@ -244,128 +355,8 @@ export class NativeRichEditorBridge {
         }
       }
     }).catch(e => {
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onDidChange error: ${JSON.stringify(e)}`)
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `enqueuePendingEdit error: ${JSON.stringify(e)}`)
       this.scheduleRecovery()
-    })
-  }
-
-  // Issue #1034 评论 #10：aboutToIMEInput 读取 previewText 判断是否预编辑开始。
-  // 只有当 insertValue.previewText 非空时才标记 composing，首次冻结基线。
-  aboutToIMEInput(insertValue: RichEditorInsertValue): boolean {
-    if (insertValue.previewText !== undefined && insertValue.previewText.length > 0) {
-      if (!this.imeComposing) {
-        this.imeComposing = true
-        this.imeComposingStartText = this.currentText
-      }
-    }
-    return true
-  }
-
-  // Issue #1034 评论 #10：onDidIMEInput 通过 getPreviewText() 确认预上屏消失后才提交差量。
-  // 预上屏还在时不做提交；预上屏消失后计算基线和最终文本差量生成一笔 TypingCommit 事务。
-  // 取消预上屏时差量为空，不提交事务（不当删除记录）。
-  onDidIMEInput(_range: TextRange): void {
-    if (this.richEditorController !== null) {
-      const previewText = this.richEditorController.getPreviewText()
-      if (previewText.offset >= 0 && previewText.value.length > 0) {
-        return
-      }
-    }
-
-    if (!this.imeComposing) {
-      return
-    }
-    this.imeComposing = false
-
-    const diff = this.computeDiff(this.imeComposingStartText, this.currentText)
-    if (diff.start >= diff.end && diff.replacement.length === 0) {
-      return
-    }
-
-    const baselineText = this.imeComposingStartText
-    const diffStart = diff.start
-    const diffEnd = diff.end
-    const diffReplacement = diff.replacement
-    const diffOldText = baselineText.substring(diffStart, diffEnd)
-
-    this.editQueue = this.editQueue.then(async () => {
-      if (this.idleError !== null) {
-        return
-      }
-
-      const snap = this.coordinator.getSnapshot()
-      if (snap === null) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidIMEInput: no active session')
-        return
-      }
-
-      if (snap.text !== baselineText) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidIMEInput: Core text changed during IME composition, scheduling recovery')
-        this.scheduleRecovery()
-        return
-      }
-
-      const byteStart = TextOffsetMapper.utf16ToUtf8(baselineText, diffStart)
-      const byteEnd = TextOffsetMapper.utf16ToUtf8(baselineText, diffEnd)
-
-      let result: ResultEnvelope<EditorEditResult> | null = null
-      if (diffOldText.length > 0 && diffReplacement.length > 0) {
-        result = await this.coordinator.replace(byteStart, byteEnd, diffReplacement, diffOldText, EditorTransactionCause.TypingCommit)
-      } else if (diffOldText.length > 0) {
-        result = await this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
-      } else if (diffReplacement.length > 0) {
-        result = await this.coordinator.insert(byteStart, diffReplacement, EditorTransactionCause.TypingCommit)
-      }
-
-      if (result !== null) {
-        if (!result.success || result.data === undefined ||
-            (result.data.outcome !== EditorEditOutcome.Applied &&
-             result.data.outcome !== EditorEditOutcome.AppliedWithAdjustedSelection &&
-             result.data.outcome !== EditorEditOutcome.NoChange)) {
-          hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'onDidIMEInput: transaction failed, scheduling recovery')
-          this.scheduleRecovery()
-          return
-        }
-      }
-
-      const newSnap = this.coordinator.getSnapshot()
-      if (newSnap !== null) {
-        this.confirmedText = newSnap.text
-        this.confirmedRevision = newSnap.revision
-        this.lastAppliedRevision = newSnap.revision
-        if (result !== null && result.success && result.data !== undefined &&
-            result.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection &&
-            this.richEditorController !== null) {
-          const utf16Cursor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.cursor)
-          const utf16Anchor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.selectionAnchor)
-          this.richEditorController.setSelection(utf16Anchor, utf16Cursor)
-        }
-      }
-    }).catch(e => {
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onDidIMEInput error: ${JSON.stringify(e)}`)
-      this.imeComposing = false
-      this.scheduleRecovery()
-    })
-  }
-
-  // RichEditor onSelectionChange 回调：将稳定选区映射后传给 coordinator。
-  onSelectionChange(start: number, end: number): void {
-    if (this.programmaticUpdate) {
-      return
-    }
-
-    const textForConversion = this.currentText
-    this.editQueue = this.editQueue.then(async () => {
-      const snap = this.coordinator.getSnapshot()
-      if (snap === null) {
-        return
-      }
-
-      const byteAnchor = TextOffsetMapper.utf16ToUtf8(textForConversion, start)
-      const byteHead = TextOffsetMapper.utf16ToUtf8(textForConversion, end)
-      await this.coordinator.setSelection(byteAnchor, byteHead)
-    }).catch(e => {
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onSelectionChange error: ${JSON.stringify(e)}`)
     })
   }
 
@@ -417,8 +408,29 @@ export class NativeRichEditorBridge {
     }
   }
 
-  // Issue #1034 评论 #10：将恢复任务排到队列末尾，避免覆盖后续输入。
-  // recoveryScheduled 确保同一时间只排一个恢复任务。
+  // 将 edit 的偏移从 edit.beforeText 映射到 baselineText。
+  // 如果 baselineText === edit.beforeText，直接返回原偏移。
+  // 否则用 computeDiff 找到差异区域，按差异位置调整偏移。
+  // 差异与 edit 范围重叠时返回 null（无法映射）。
+  private mapEditToBaseline(edit: PendingEdit, baselineText: string): { startUtf16: number, endUtf16: number } | null {
+    if (baselineText === edit.beforeText) {
+      return { startUtf16: edit.startUtf16, endUtf16: edit.endUtf16 }
+    }
+
+    const diff = this.computeDiff(edit.beforeText, baselineText)
+    const diffLenDelta = diff.replacement.length - (diff.end - diff.start)
+
+    if (diff.end <= edit.startUtf16) {
+      return { startUtf16: edit.startUtf16 + diffLenDelta, endUtf16: edit.endUtf16 + diffLenDelta }
+    }
+
+    if (diff.start >= edit.endUtf16) {
+      return { startUtf16: edit.startUtf16, endUtf16: edit.endUtf16 }
+    }
+
+    return null
+  }
+
   private scheduleRecovery(): void {
     if (this.recoveryScheduled) {
       return
@@ -433,9 +445,8 @@ export class NativeRichEditorBridge {
     })
   }
 
-  // Issue #1034 评论 #10：逐笔映射重放——从 Core 最新 snapshot 开始，
-  // 逐笔检查 pendingEdit 在 Core 文本中的对应位置是否匹配。
-  // 匹配则保持原 cause 提交；不匹配则设置 idleError，停止重放。
+  // 逐笔映射重放：从 Core 最新 snapshot 开始，用 mapEditToBaseline 映射偏移，
+  // 保持原 cause 逐笔提交。无法映射或提交失败时设置 idleError，停止重放。
   private async recoverWithPendingEdits(): Promise<void> {
     if (this.pendingEdits.length === 0) {
       return
@@ -455,15 +466,22 @@ export class NativeRichEditorBridge {
         continue
       }
 
-      const currentSlice = baselineText.substring(edit.startUtf16, edit.endUtf16)
-      if (currentSlice !== edit.oldText) {
-        this.idleError = `Cannot map pending edit at offset ${edit.startUtf16}`
+      const mapped = this.mapEditToBaseline(edit, baselineText)
+      if (mapped === null) {
+        this.idleError = `Cannot map pending edit at offset ${edit.startUtf16}: overlapping diff`
         hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
         return
       }
 
-      const byteStart = TextOffsetMapper.utf16ToUtf8(baselineText, edit.startUtf16)
-      const byteEnd = TextOffsetMapper.utf16ToUtf8(baselineText, edit.endUtf16)
+      const currentSlice = baselineText.substring(mapped.startUtf16, mapped.endUtf16)
+      if (currentSlice !== edit.oldText) {
+        this.idleError = `Cannot map pending edit at offset ${edit.startUtf16}: text mismatch`
+        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+        return
+      }
+
+      const byteStart = TextOffsetMapper.utf16ToUtf8(baselineText, mapped.startUtf16)
+      const byteEnd = TextOffsetMapper.utf16ToUtf8(baselineText, mapped.endUtf16)
 
       let result: ResultEnvelope<EditorEditResult> | null = null
       if (edit.oldText.length > 0 && edit.insertedText.length > 0) {
@@ -483,9 +501,9 @@ export class NativeRichEditorBridge {
         return
       }
 
-      baselineText = baselineText.substring(0, edit.startUtf16)
+      baselineText = baselineText.substring(0, mapped.startUtf16)
         + edit.insertedText
-        + baselineText.substring(edit.endUtf16)
+        + baselineText.substring(mapped.endUtf16)
 
       this.pendingEdits.shift()
 
@@ -505,7 +523,6 @@ export class NativeRichEditorBridge {
   }
 
   // 从 Core snapshot 恢复：事务失败或需要强制对齐时调用。
-  // 把 RichEditor 和本地镜像回归到 Core 同一版本，选区也同步恢复。
   private async recoverFromCore(): Promise<void> {
     const snap = this.coordinator.getSnapshot()
     if (snap === null || this.richEditorController === null) {
@@ -537,76 +554,6 @@ export class NativeRichEditorBridge {
     } finally {
       this.programmaticUpdate = false
     }
-  }
-
-  // 结算 IME 预编辑态：在保存/同步/关闭之前调用。
-  // 如果预上屏还在，提交当前差量作为 TypingCommit 事务。
-  private settleImeComposition(): void {
-    if (!this.imeComposing) {
-      return
-    }
-    this.imeComposing = false
-
-    const diff = this.computeDiff(this.imeComposingStartText, this.currentText)
-    if (diff.start >= diff.end && diff.replacement.length === 0) {
-      return
-    }
-
-    const baselineText = this.imeComposingStartText
-    const diffStart = diff.start
-    const diffEnd = diff.end
-    const diffReplacement = diff.replacement
-    const diffOldText = baselineText.substring(diffStart, diffEnd)
-
-    this.editQueue = this.editQueue.then(async () => {
-      if (this.idleError !== null) {
-        return
-      }
-
-      const snap = this.coordinator.getSnapshot()
-      if (snap === null) {
-        return
-      }
-
-      if (snap.text !== baselineText) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'settleImeComposition: Core text changed, scheduling recovery')
-        this.scheduleRecovery()
-        return
-      }
-
-      const byteStart = TextOffsetMapper.utf16ToUtf8(baselineText, diffStart)
-      const byteEnd = TextOffsetMapper.utf16ToUtf8(baselineText, diffEnd)
-
-      let result: ResultEnvelope<EditorEditResult> | null = null
-      if (diffOldText.length > 0 && diffReplacement.length > 0) {
-        result = await this.coordinator.replace(byteStart, byteEnd, diffReplacement, diffOldText, EditorTransactionCause.TypingCommit)
-      } else if (diffOldText.length > 0) {
-        result = await this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
-      } else if (diffReplacement.length > 0) {
-        result = await this.coordinator.insert(byteStart, diffReplacement, EditorTransactionCause.TypingCommit)
-      }
-
-      if (result !== null) {
-        if (!result.success || result.data === undefined ||
-            (result.data.outcome !== EditorEditOutcome.Applied &&
-             result.data.outcome !== EditorEditOutcome.AppliedWithAdjustedSelection &&
-             result.data.outcome !== EditorEditOutcome.NoChange)) {
-          hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'settleImeComposition: transaction failed, scheduling recovery')
-          this.scheduleRecovery()
-          return
-        }
-      }
-
-      const newSnap = this.coordinator.getSnapshot()
-      if (newSnap !== null) {
-        this.confirmedText = newSnap.text
-        this.confirmedRevision = newSnap.revision
-        this.lastAppliedRevision = newSnap.revision
-      }
-    }).catch(e => {
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `settleImeComposition error: ${JSON.stringify(e)}`)
-      this.scheduleRecovery()
-    })
   }
 
   // 程序回放：从 Core snapshot 同步正文到 RichEditor。
@@ -657,7 +604,7 @@ export class NativeRichEditorBridge {
       this.richEditorController.addTextSpan(text, { offset: 0 })
       this.currentText = text
 
-      const utf16Cursor = TextOffsetMapper.utf16ToUtf16(text, cursorByteOffset)
+      const utf16Cursor = TextOffsetMapper.utf8ToUtf16(text, cursorByteOffset)
       this.richEditorController.setSelection(utf16Cursor, utf16Cursor)
 
       const snap = this.coordinator.getSnapshot()

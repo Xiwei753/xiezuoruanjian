@@ -107,80 +107,28 @@ export struct SujianEditor {
       this.richEditorBridge.setProgrammaticUpdate(true)
     }
 
-    // 清除上一轮 tagBackground 装饰范围
-    for (let i = 0; i < this.previousTagBackgroundRanges.length; i += 2) {
-      const start = this.previousTagBackgroundRanges[i]
-      const end = this.previousTagBackgroundRanges[i + 1]
-      this.richEditorController.updateSpanStyle({
-        start: start,
-        end: end,
-        textStyle: {
-          fontSize: this.fontSize,
-          lineHeight: lineHeight,
-          textBackgroundStyle: { color: Color.Transparent }
-        }
-      })
-    }
-    this.previousTagBackgroundRanges = []
-
-    // 清除上一轮 linkUnderline：deleteSpans + addTextSpan 恢复普通文本（无 gesture）
-    for (let i = 0; i < this.previousLinkUnderlineRanges.length; i += 2) {
-      const start = this.previousLinkUnderlineRanges[i]
-      const end = this.previousLinkUnderlineRanges[i + 1]
-      const spans = this.richEditorController.getSpans({ start, end })
-      let textContent = ''
-      for (const span of spans) {
-        if ((span as RichEditorTextSpanResult).value !== undefined) {
-          const textSpan = span as RichEditorTextSpanResult
-          textContent += textSpan.value.substring(textSpan.offsetInSpan[0], textSpan.offsetInSpan[1])
-        }
-      }
-      this.richEditorController.deleteSpans({ start, end })
-      if (textContent.length > 0) {
-        this.richEditorController.addTextSpan(textContent, {
-          offset: start,
-          style: {
-            fontSize: this.fontSize,
-            lineHeight: lineHeight,
-            decoration: { type: TextDecorationType.None }
-          }
-        })
-      }
-    }
-    this.previousLinkUnderlineRanges = []
-
-    if (this.annotationRanges.length === 0) {
-      if (this.richEditorBridge) {
-        this.richEditorBridge.setProgrammaticUpdate(false)
-      }
-      return
-    }
-
-    const text: string = this.richEditorBridge !== null ? this.richEditorBridge.getCurrentText() : ''
-    if (text.length === 0) {
-      if (this.richEditorBridge) {
-        this.richEditorBridge.setProgrammaticUpdate(false)
-      }
-      return
-    }
-
-    for (const range of this.annotationRanges) {
-      const startUtf16 = TextOffsetMapper.utf8ToUtf16(text, range.startByte)
-      const endUtf16 = TextOffsetMapper.utf8ToUtf16(text, range.endByte)
-
-      if (range.kind === 'tagBackground') {
+    try {
+      // 清除上一轮 tagBackground 装饰范围
+      for (let i = 0; i < this.previousTagBackgroundRanges.length; i += 2) {
+        const start = this.previousTagBackgroundRanges[i]
+        const end = this.previousTagBackgroundRanges[i + 1]
         this.richEditorController.updateSpanStyle({
-          start: startUtf16,
-          end: endUtf16,
+          start: start,
+          end: end,
           textStyle: {
             fontSize: this.fontSize,
             lineHeight: lineHeight,
-            textBackgroundStyle: { color: '#3498DB33' }
+            textBackgroundStyle: { color: Color.Transparent }
           }
         })
-        this.previousTagBackgroundRanges.push(startUtf16, endUtf16)
-      } else if (range.kind === 'linkUnderline') {
-        const spans = this.richEditorController.getSpans({ start: startUtf16, end: endUtf16 })
+      }
+      this.previousTagBackgroundRanges = []
+
+      // 清除上一轮 linkUnderline：deleteSpans + addTextSpan 恢复普通文本（无 gesture）
+      for (let i = 0; i < this.previousLinkUnderlineRanges.length; i += 2) {
+        const start = this.previousLinkUnderlineRanges[i]
+        const end = this.previousLinkUnderlineRanges[i + 1]
+        const spans = this.richEditorController.getSpans({ start, end })
         let textContent = ''
         for (const span of spans) {
           if ((span as RichEditorTextSpanResult).value !== undefined) {
@@ -188,37 +136,87 @@ export struct SujianEditor {
             textContent += textSpan.value.substring(textSpan.offsetInSpan[0], textSpan.offsetInSpan[1])
           }
         }
-        this.richEditorController.deleteSpans({ start: startUtf16, end: endUtf16 })
+        this.richEditorController.deleteSpans({ start, end })
         if (textContent.length > 0) {
-          const linkOffset = startUtf16
-          const linkText = textContent
           this.richEditorController.addTextSpan(textContent, {
-            offset: startUtf16,
+            offset: start,
             style: {
               fontSize: this.fontSize,
               lineHeight: lineHeight,
-              decoration: {
-                type: TextDecorationType.Underline,
-                color: '#3498DB',
-                style: TextDecorationStyle.SOLID
-              }
-            },
-            gesture: {
-              onClick: () => {
-                if (this.richEditorBridge) {
-                  const revision = this.richEditorBridge.getLastAppliedRevision()
-                  this.onHyperlinkTap(linkOffset, revision, linkText)
-                }
-              }
+              decoration: { type: TextDecorationType.None }
             }
           })
         }
-        this.previousLinkUnderlineRanges.push(startUtf16, endUtf16)
       }
-    }
+      this.previousLinkUnderlineRanges = []
 
-    if (this.richEditorBridge) {
-      this.richEditorBridge.setProgrammaticUpdate(false)
+      if (this.annotationRanges.length === 0) {
+        return
+      }
+
+      const text: string = this.richEditorBridge !== null ? this.richEditorBridge.getCurrentText() : ''
+      if (text.length === 0) {
+        return
+      }
+
+      for (const range of this.annotationRanges) {
+        const startUtf16 = TextOffsetMapper.utf8ToUtf16(text, range.startByte)
+        const endUtf16 = TextOffsetMapper.utf8ToUtf16(text, range.endByte)
+
+        if (range.kind === 'tagBackground') {
+          this.richEditorController.updateSpanStyle({
+            start: startUtf16,
+            end: endUtf16,
+            textStyle: {
+              fontSize: this.fontSize,
+              lineHeight: lineHeight,
+              textBackgroundStyle: { color: '#3498DB33' }
+            }
+          })
+          this.previousTagBackgroundRanges.push(startUtf16, endUtf16)
+        } else if (range.kind === 'linkUnderline') {
+          const spans = this.richEditorController.getSpans({ start: startUtf16, end: endUtf16 })
+          let textContent = ''
+          for (const span of spans) {
+            if ((span as RichEditorTextSpanResult).value !== undefined) {
+              const textSpan = span as RichEditorTextSpanResult
+              textContent += textSpan.value.substring(textSpan.offsetInSpan[0], textSpan.offsetInSpan[1])
+            }
+          }
+          this.richEditorController.deleteSpans({ start: startUtf16, end: endUtf16 })
+          if (textContent.length > 0) {
+            const linkOffset = startUtf16
+            this.richEditorController.addTextSpan(textContent, {
+              offset: startUtf16,
+              style: {
+                fontSize: this.fontSize,
+                lineHeight: lineHeight,
+                decoration: {
+                  type: TextDecorationType.Underline,
+                  color: '#3498DB',
+                  style: TextDecorationStyle.SOLID
+                }
+              },
+              gesture: {
+                onClick: () => {
+                  if (this.richEditorBridge) {
+                    const fullText = this.richEditorBridge.getCurrentText()
+                    const revision = this.richEditorBridge.getLastAppliedRevision()
+                    if (this.hasHyperlinkAt(linkOffset, revision, fullText)) {
+                      this.onHyperlinkTap(linkOffset, revision, fullText)
+                    }
+                  }
+                }
+              }
+            })
+          }
+          this.previousLinkUnderlineRanges.push(startUtf16, endUtf16)
+        }
+      }
+    } finally {
+      if (this.richEditorBridge) {
+        this.richEditorBridge.setProgrammaticUpdate(false)
+      }
     }
   }
 
