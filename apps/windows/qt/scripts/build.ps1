@@ -24,7 +24,7 @@ try {
         throw "准备 Windows 内置纠错模型及 ONNX Runtime 失败，退出码 $LASTEXITCODE"
     }
 
-    $cargoArgs = @("build", "-p", "sujian-windows-qt", "-p", "sujian_mcp", "--features", "sujian-windows-qt/ai")
+    $cargoArgs = @("build", "-p", "sujian-windows-qt", "-p", "sujian_mcp", "--features", "sujian-windows-qt/ai", "--bin", "sujian-agent-host", "--bin", "sujian-mcp-bridge")
     if ($Configuration -eq "release") {
         $cargoArgs += "--release"
     }

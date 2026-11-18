@@ -13,12 +13,20 @@ $Profile = if ($Configuration -eq "release") { "release" } else { "debug" }
 $TargetDir = Join-Path $RepoRoot "target\$Profile"
 $Exe = Join-Path $TargetDir "sujian-windows-qt.exe"
 $McpExe = Join-Path $TargetDir "sujian_mcp.exe"
+$AgentHostExe = Join-Path $TargetDir "sujian-agent-host.exe"
+$McpBridgeExe = Join-Path $TargetDir "sujian-mcp-bridge.exe"
 
 if (-not (Test-Path $Exe)) {
     throw "找不到 $Exe，请先执行 build.ps1"
 }
 if (-not (Test-Path $McpExe)) {
     throw "找不到 $McpExe，请先执行 build.ps1（会同时构建 sujian_mcp）"
+}
+if (-not (Test-Path $AgentHostExe)) {
+    throw "找不到 $AgentHostExe，请先执行 build.ps1（会同时构建 sujian-agent-host）"
+}
+if (-not (Test-Path $McpBridgeExe)) {
+    throw "找不到 $McpBridgeExe，请先执行 build.ps1（会同时构建 sujian-mcp-bridge）"
 }
 
 if (-not $OutputDir) {
@@ -44,6 +52,8 @@ if ($Configuration -eq "release") { $CommonArgs += "--release" } else { $CommonA
 if ($LASTEXITCODE -ne 0) { throw "windeployqt (共享 QML) 失败" }
 
 Copy-Item $Exe $OutputDir -Force
+Copy-Item $AgentHostExe $OutputDir -Force
+Copy-Item $McpBridgeExe $OutputDir -Force
 
 Get-ChildItem $TargetDir -Filter "*.dll" | ForEach-Object {
     Copy-Item $_.FullName $OutputDir -Force
@@ -233,6 +243,8 @@ Write-Host "使用 dumpbin：$Dumpbin"
 $RootFiles = [System.Collections.Generic.List[string]]::new()
 $RootFiles.Add($Exe)
 $RootFiles.Add($McpExe)
+$RootFiles.Add($AgentHostExe)
+$RootFiles.Add($McpBridgeExe)
 
 # KDE QML 模块入口：只收集实际 import 的模块目录下的 DLL
 # 从 main.qml 及其他 QML 文件的 import 语句确定的模块列表：

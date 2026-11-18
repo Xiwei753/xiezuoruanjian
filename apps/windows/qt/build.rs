@@ -30,6 +30,15 @@ fn main() {
         return;
     }
 
+    if std::env::var_os("SUJIAN_SKIP_QT").is_some() {
+        println!(
+            "cargo:warning=sujian-windows-qt: SUJIAN_SKIP_QT 已设置，跳过 Qt6 探测与 cpp_build"
+        );
+        prepare_shared_sources();
+        inject_build_env_vars();
+        return;
+    }
+
     let qt = detect_qt6().unwrap_or_else(|| {
         panic!(
             "未找到 Qt6（>= 6.11）。请设置 QMAKE 或 QT_ROOT，或把 qmake.exe 加入 PATH。\
@@ -111,12 +120,20 @@ fn prepare_shared_sources() {
             "src/shared/platform/linux_qt/runtime_environment.rs",
         ),
         (
+            "src/windows_overrides/agent_runtime/mod.rs",
+            "src/shared/agent_runtime/mod.rs",
+        ),
+        (
             "src/windows_overrides/agent_runtime/workspace_access.rs",
             "src/shared/agent_runtime/workspace_access.rs",
         ),
         (
             "src/windows_overrides/agent_runtime/mcp_binding.rs",
             "src/shared/agent_runtime/mcp_binding.rs",
+        ),
+        (
+            "src/windows_overrides/agent_runtime/windows_sandbox.rs",
+            "src/shared/agent_runtime/windows_sandbox.rs",
         ),
         (
             "src/windows_overrides/backend/desktop_integration.rs",

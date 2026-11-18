@@ -3163,6 +3163,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+ "windows",
  "writer-platform-windows",
  "writer_core",
  "writer_diagnostics",
