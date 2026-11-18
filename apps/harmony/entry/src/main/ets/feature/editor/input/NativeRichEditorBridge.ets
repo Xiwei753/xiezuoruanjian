@@ -323,15 +323,24 @@ export class NativeRichEditorBridge {
   }
 
   // RichEditor onSelectionChange 回调：将稳定选区映射后传给 coordinator。
+  // Issue #1034 评论 #17：分别捕获本地 sessionToken 和 Core sessionId，
+  // 本地 token 用于隔离异步回调，Core sessionId 用于跨章节校验。
   onSelectionChange(start: number, end: number): void {
     if (this.programmaticUpdate) {
       return
     }
 
     const textForConversion = this.currentText
-    const sessionAtEvent = this.sessionId
+    const localSessionToken = this.sessionId
+    const expectedCoreSessionId = this.coordinator.getSessionId()
+    if (expectedCoreSessionId === null) {
+      return
+    }
     this.editQueue = this.editQueue.then(async () => {
-      if (sessionAtEvent !== this.sessionId) {
+      if (localSessionToken !== this.sessionId) {
+        return
+      }
+      if (this.coordinator.getSessionId() !== expectedCoreSessionId) {
         return
       }
 
@@ -342,9 +351,9 @@ export class NativeRichEditorBridge {
 
       const byteAnchor = TextOffsetMapper.utf16ToUtf8(textForConversion, start)
       const byteHead = TextOffsetMapper.utf16ToUtf8(textForConversion, end)
-      await this.coordinator.setSelectionWithExpectedSession(byteAnchor, byteHead, sessionAtEvent)
+      await this.coordinator.setSelectionWithExpectedSession(byteAnchor, byteHead, expectedCoreSessionId)
 
-      if (sessionAtEvent !== this.sessionId) {
+      if (localSessionToken !== this.sessionId) {
         return
       }
     }).catch(e => {
