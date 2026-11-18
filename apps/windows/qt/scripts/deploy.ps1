@@ -171,7 +171,10 @@ function Resolve-DllClosure {
 
     $scanned = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $craftToCopy = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $unresolved = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $queue = [System.Collections.Generic.Queue[string]]::new()
+
+    $systemDir = [System.Environment]::SystemDirectory
 
     $existingDlls = Get-ChildItem -LiteralPath $OutputDir -Filter "*.dll" -ErrorAction SilentlyContinue
     foreach ($dll in $existingDlls) {
@@ -193,16 +196,28 @@ function Resolve-DllClosure {
         foreach ($dep in $deps) {
             if ($scanned.Contains($dep)) { continue }
             $scanned.Add($dep) | Out-Null
-            $craftDll = Join-Path $CraftBin $dep
+
             $outputDll = Join-Path $OutputDir $dep
-            if ((Test-Path -LiteralPath $craftDll -PathType Leaf) -and
-                -not (Test-Path -LiteralPath $outputDll -PathType Leaf)) {
+            $craftDll = Join-Path $CraftBin $dep
+            $systemDll = Join-Path $systemDir $dep
+
+            if (Test-Path -LiteralPath $outputDll -PathType Leaf) {
+                continue
+            } elseif (Test-Path -LiteralPath $craftDll -PathType Leaf) {
                 $craftToCopy.Add($dep) | Out-Null
                 $queue.Enqueue($craftDll)
-            } elseif (Test-Path -LiteralPath $craftDll -PathType Leaf) {
-                $queue.Enqueue($craftDll)
+            } elseif ($dep -match '^api-ms-win-' -or $dep -match '^ext-ms-' -or
+                      (Test-Path -LiteralPath $systemDll -PathType Leaf)) {
+                continue
+            } else {
+                $unresolved.Add($dep) | Out-Null
             }
         }
+    }
+
+    if ($unresolved.Count -gt 0) {
+        $list = $unresolved -join "`n  "
+        throw "以下 DLL 依赖无法在任何来源找到（既不在 OutputDir、CraftBin，也不是 Windows 系统 DLL）：`n  $list`n请检查 CraftRoot/bin 是否完整，或确认这些 DLL 是否为系统提供。"
     }
 
     return $craftToCopy
