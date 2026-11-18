@@ -424,7 +424,7 @@ ScrollView {
                                 root.saveAndNotify()
                             }
                         }
-                        FormCard.FormSpinBoxDelegate {
+                        UserValueSpinBoxDelegate {
                             id: fontSizeSpin
                             label: qsTr("字体大小")
                             // range from Core settings_presentation: min=12, max=72, step=1
@@ -439,7 +439,7 @@ ScrollView {
                                 root.debouncedSave()
                             }
                         }
-                        FormCard.FormSpinBoxDelegate {
+                        UserValueSpinBoxDelegate {
                             id: lineSpacingSpin
                             label: qsTr("行距倍数")
                             // range from Core settings_presentation: min=1.0, max=3.0, step=0.1（以 0.1 为整数刻度）
@@ -520,7 +520,7 @@ ScrollView {
                             description: qsTr("回车时自动添加缩进")
                             onToggled: root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", autoIndent.checked)
                         }
-                        FormCard.FormSpinBoxDelegate {
+                        UserValueSpinBoxDelegate {
                             id: autoIndentWidthSpin
                             label: qsTr("首行缩进宽度")
                             // range from Core settings_presentation: min=0.0, max=8.0, step=0.5（以 0.5 为整数刻度）
@@ -544,7 +544,7 @@ ScrollView {
                             onToggled: root.setCoordinatedAnimation(coordinatedAnim.checked)
                         }
                         // Issue #815 评论 5955090551: 协同动画时长 = caret track 时长 = 打字动画时长。
-                        FormCard.FormSpinBoxDelegate {
+                        UserValueSpinBoxDelegate {
                             id: coordinatedAnimDuration
                             visible: coordinatedAnim.checked
                             label: qsTr("协同动画时长")
@@ -565,7 +565,7 @@ ScrollView {
                             description: qsTr("输入时字符从光标处吐出；关闭后正文仍即时更新，平滑光标可独立生效")
                             onToggled: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", typingAnim.checked)
                         }
-                        FormCard.FormSpinBoxDelegate {
+                        UserValueSpinBoxDelegate {
                             id: typingAnimDuration
                             visible: !coordinatedAnim.checked
                             label: qsTr("打字动画持续时间")
@@ -585,7 +585,7 @@ ScrollView {
                             description: qsTr("光标移动更顺滑，与打字动画相互独立")
                             onToggled: root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", smoothCursor.checked)
                         }
-                        FormCard.FormSpinBoxDelegate {
+                        UserValueSpinBoxDelegate {
                             id: smoothCursorDuration
                             visible: !coordinatedAnim.checked
                             label: qsTr("平滑光标持续时间")
@@ -711,7 +711,7 @@ ScrollView {
                             description: qsTr("切换到另一个工作区目录")
                             onClicked: root.switchWorkspaceRequested()
                         }
-                        FormCard.FormSpinBoxDelegate {
+                        UserValueSpinBoxDelegate {
                             id: autoSaveDelaySpin
                             label: qsTr("自动保存延迟")
                             // range from Core settings_presentation: min=1, max=10, step=1

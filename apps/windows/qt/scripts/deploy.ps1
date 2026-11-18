@@ -134,7 +134,7 @@ function Get-Dumpbin {
 }
 
 function Get-PeDependencies {
-    param([string]$FilePath, [string]$Dumpbin)
+    param([string]$FilePath, [string]$Dumpbin, [switch]$IsCritical)
 
     $output = & $Dumpbin /DEPENDENTS $FilePath 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -152,13 +152,11 @@ function Get-PeDependencies {
             if ($line -match "^\s*Summary\s*$") { break }
             if ($line -match "^\s*(\S+\.dll)\s*$") {
                 $deps += $matches[1]
-            } elseif ($line -match "^\s*$" -and $deps.Count -gt 0) {
-                break
             }
         }
     }
-    if ($deps.Count -eq 0) {
-        Write-Warning "dumpbin /DEPENDENTS 解析出零个依赖：$FilePath"
+    if ($deps.Count -eq 0 -and $IsCritical) {
+        throw "dumpbin /DEPENDENTS 解析出零个依赖（核心入口应有导入表）：$FilePath"
     }
     return $deps
 }
@@ -179,7 +177,9 @@ function Resolve-DllClosure {
         if ($needed.Add($dll.Name)) { $queue.Enqueue($dll.FullName) }
     }
 
+    $rootSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($file in $RootFiles) {
+        $rootSet.Add($file) | Out-Null
         $queue.Enqueue($file)
     }
 
@@ -187,7 +187,8 @@ function Resolve-DllClosure {
         $file = $queue.Dequeue()
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue }
 
-        $deps = Get-PeDependencies -FilePath $file -Dumpbin $Dumpbin
+        $isCritical = $rootSet.Contains($file)
+        $deps = Get-PeDependencies -FilePath $file -Dumpbin $Dumpbin -IsCritical:$isCritical
         foreach ($dep in $deps) {
             if ($needed.Contains($dep)) { continue }
             $craftDll = Join-Path $CraftBin $dep

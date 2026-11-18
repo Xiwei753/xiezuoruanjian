@@ -751,7 +751,7 @@ ColumnLayout {
             }
         }
 
-        FormCard.FormSpinBoxDelegate {
+        UserValueSpinBoxDelegate {
             id: syncIntervalSpin
             visible: autoSyncSwitch.checked
             label: qsTr("同步间隔")
