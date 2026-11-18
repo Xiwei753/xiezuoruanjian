@@ -224,6 +224,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/SyncConflictPanel.qml" as "SyncConflictPanel.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",
     "qml/KdeSettingsPage.qml" as "KdeSettingsPage.qml",
+    "qml/UserValueSpinBoxDelegate.qml" as "UserValueSpinBoxDelegate.qml",
     "qml/DashboardGrid.qml" as "DashboardGrid.qml",
     "qml/DashboardSection.qml" as "DashboardSection.qml",
     "qml/ActionRegistryPage.qml" as "ActionRegistryPage.qml",
