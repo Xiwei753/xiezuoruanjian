@@ -329,7 +329,12 @@ export class NativeRichEditorBridge {
     }
 
     const textForConversion = this.currentText
+    const sessionAtEvent = this.sessionId
     this.editQueue = this.editQueue.then(async () => {
+      if (sessionAtEvent !== this.sessionId) {
+        return
+      }
+
       const snap = this.coordinator.getSnapshot()
       if (snap === null) {
         return
@@ -338,6 +343,10 @@ export class NativeRichEditorBridge {
       const byteAnchor = TextOffsetMapper.utf16ToUtf8(textForConversion, start)
       const byteHead = TextOffsetMapper.utf16ToUtf8(textForConversion, end)
       await this.coordinator.setSelection(byteAnchor, byteHead)
+
+      if (sessionAtEvent !== this.sessionId) {
+        return
+      }
     }).catch(e => {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onSelectionChange error: ${JSON.stringify(e)}`)
     })
@@ -351,22 +360,32 @@ export class NativeRichEditorBridge {
   }
 
   // 唤醒唯一消费者协程。如果消费者已在运行则不重复唤醒。
+  // 消费者带本地不可变的 sessionToken，旧消费者完成后不改新 session 的 drainRunning。
   private wakeDrain(): void {
     if (this.drainRunning) {
       return
     }
     this.drainRunning = true
+    const sessionToken = this.sessionId
     this.editQueue = this.editQueue.then(async () => {
       try {
         await this.drainPendingEdits()
       } catch (e) {
         hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `drainPendingEdits error: ${JSON.stringify(e)}`)
+        if (sessionToken === this.sessionId) {
+          this.idleError = `Unexpected error in drainPendingEdits: ${JSON.stringify(e)}`
+        }
       }
-      this.drainRunning = false
+      if (sessionToken === this.sessionId) {
+        this.drainRunning = false
+      }
       this.checkIdle()
     }).catch(e => {
-      this.drainRunning = false
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `wakeDrain error: ${JSON.stringify(e)}`)
+      if (sessionToken === this.sessionId) {
+        this.drainRunning = false
+        this.idleError = `Unexpected error in wakeDrain: ${JSON.stringify(e)}`
+      }
       this.checkIdle()
     })
   }
