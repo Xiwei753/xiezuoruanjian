@@ -169,12 +169,13 @@ function Resolve-DllClosure {
         [string]$Dumpbin
     )
 
-    $needed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $scanned = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $craftToCopy = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $queue = [System.Collections.Generic.Queue[string]]::new()
 
     $existingDlls = Get-ChildItem -LiteralPath $OutputDir -Filter "*.dll" -ErrorAction SilentlyContinue
     foreach ($dll in $existingDlls) {
-        if ($needed.Add($dll.Name)) { $queue.Enqueue($dll.FullName) }
+        if ($scanned.Add($dll.Name)) { $queue.Enqueue($dll.FullName) }
     }
 
     $rootSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -190,16 +191,21 @@ function Resolve-DllClosure {
         $isCritical = $rootSet.Contains($file)
         $deps = Get-PeDependencies -FilePath $file -Dumpbin $Dumpbin -IsCritical:$isCritical
         foreach ($dep in $deps) {
-            if ($needed.Contains($dep)) { continue }
+            if ($scanned.Contains($dep)) { continue }
+            $scanned.Add($dep) | Out-Null
             $craftDll = Join-Path $CraftBin $dep
-            if (Test-Path -LiteralPath $craftDll -PathType Leaf) {
-                $needed.Add($dep) | Out-Null
+            $outputDll = Join-Path $OutputDir $dep
+            if ((Test-Path -LiteralPath $craftDll -PathType Leaf) -and
+                -not (Test-Path -LiteralPath $outputDll -PathType Leaf)) {
+                $craftToCopy.Add($dep) | Out-Null
+                $queue.Enqueue($craftDll)
+            } elseif (Test-Path -LiteralPath $craftDll -PathType Leaf) {
                 $queue.Enqueue($craftDll)
             }
         }
     }
 
-    return $needed
+    return $craftToCopy
 }
 
 $Dumpbin = Get-Dumpbin
@@ -252,17 +258,16 @@ if (Test-Path -LiteralPath $CraftPlugins -PathType Container) {
 }
 
 # 2. 解析 PE 依赖闭包
-$NeededDlls = Resolve-DllClosure -RootFiles $RootFiles -CraftBin $CraftBin -OutputDir $OutputDir -Dumpbin $Dumpbin
+$CraftDllsToCopy = Resolve-DllClosure -RootFiles $RootFiles -CraftBin $CraftBin -OutputDir $OutputDir -Dumpbin $Dumpbin
 
-if ($NeededDlls.Count -eq 0) {
-    throw "PE 依赖闭包解析结果为空，CraftRoot/bin 可能缺少 DLL：$CraftBin"
-}
-
-foreach ($dllName in $NeededDlls) {
+foreach ($dllName in $CraftDllsToCopy) {
     $src = Join-Path $CraftBin $dllName
+    if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
+        throw "Craft DLL 消失（解析时存在，复制时缺失）：$src"
+    }
     Copy-Item -LiteralPath $src -Destination $OutputDir -Force
 }
-Write-Host "已复制 $($NeededDlls.Count) 个 DLL 从 $CraftBin（dumpbin PE 依赖闭包）"
+Write-Host "已复制 $($CraftDllsToCopy.Count) 个 DLL 从 $CraftBin（dumpbin PE 依赖闭包）"
 
 # 3. 复制 KDE QML 模块（只复制实际需要的模块）
 $KdeQmlTarget = Join-Path $OutputDir "qml"
