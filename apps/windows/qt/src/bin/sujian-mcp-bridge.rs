@@ -7,13 +7,12 @@
 
 use std::io::{self, Read, Write};
 use std::os::windows::io::FromRawHandle;
-use std::ptr;
 use std::thread;
 
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE};
+use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, ReadFile, WriteFile, FILE_SHARE_NONE, OPEN_EXISTING,
+    CreateFileW, FILE_SHARE_NONE, OPEN_EXISTING,
 };
 
 fn wide(s: &str) -> Vec<u16> {
@@ -53,7 +52,7 @@ fn main() {
             PCWSTR(pipe_wide.as_ptr()),
             GENERIC_READ.0 | GENERIC_WRITE.0,
             FILE_SHARE_NONE,
-            ptr::null(),
+            None,
             OPEN_EXISTING,
             0,
             None,
@@ -65,8 +64,7 @@ fn main() {
         std::process::exit(3);
     }
 
-    let mut pipe_file = unsafe { std::fs::File::from_raw_handle(pipe_handle.0 as *mut _) };
-
+    let pipe_file = unsafe { std::fs::File::from_raw_handle(pipe_handle.0 as *mut _) };
     let pipe_write = pipe_file.try_clone().expect("clone pipe handle");
 
     let stdin_thread = thread::spawn(move || {
@@ -107,6 +105,4 @@ fn main() {
 
     stdin_thread.join().ok();
     stdout_thread.join().ok();
-
-    unsafe { let _ = CloseHandle(pipe_handle); }
 }

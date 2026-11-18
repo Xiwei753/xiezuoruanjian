@@ -2,12 +2,14 @@
 //!
 //! Issue #1045：Windows AppContainer 沙箱实现。
 //!
-//! MCP broker 在沙箱外启动（1`sujian_mcp.exe` 以 stdio 方式运行），
+//! MCP broker 在沙箱外启动（`sujian_mcp.exe` 以 stdio 方式运行），
 //! 通过 named pipe 与沙箱内的 `sujian-mcp-bridge.exe` 通信。
 //! 沙箱内 CLI 看到的 MCP 配置指向 bridge，不含任何可绕过 Core 的写权限。
+//!
+//! Named pipe 使用 `\\.\pipe\LOCAL\...` 命名空间（AppContainer 要求），
+//! 并通过 ACL 显式授予对应 AppContainer SID 连接权限。
 
 use std::ffi::OsStr;
-use std::io::{Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
@@ -16,13 +18,24 @@ use std::ptr;
 use std::thread;
 
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows::Win32::Foundation::{
+    CloseHandle, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE,
+};
+use windows::Win32::Security::{
+    InitializeSecurityDescriptor, PACL, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+    SetSecurityDescriptorDacl, SECURITY_DESCRIPTOR,
+};
+use windows::Win32::Security::Authorization::{
+    SetEntriesInAclW, EXPLICIT_ACCESS_W, SET_ACCESS, TRUSTEE_IS_SID, TRUSTEE_IS_GROUP,
+    TRUSTEE_W,
+};
 use windows::Win32::System::Pipes::{
-    CreateNamedPipeW, ConnectNamedPipe, PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE,
+    ConnectNamedPipe, CreateNamedPipeW, PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE,
     PIPE_READMODE_BYTE, PIPE_WAIT,
 };
 
 use super::events::{AgentLaunchContext, McpScope, McpServerLaunch};
+use super::windows_sandbox::AppContainerProfile;
 
 #[derive(Debug, Clone)]
 pub struct McpBinding {
@@ -65,7 +78,7 @@ fn resolve_command() -> Option<String> {
 }
 
 fn resolve_bridge_command() -> Option<String> {
-    if let Some(override_path) = std::env::var_os("SUJIAN+MCP_BRIDGE_BIN") {
+    if let Some(override_path) = std::env::var_os("SUJIAN_MCP_BRIDGE_BIN") {
         let path = PathBuf::from(override_path);
         if path.is_file() {
             return Some(path.to_string_lossy().into_owned());
@@ -169,6 +182,56 @@ pub fn bind_current_project(
     }
 }
 
+/// 为 AppContainer SID 创建命名管道的安全描述符。
+fn create_pipe_security_attributes(
+    sid_ptr: *mut core::ffi::c_void,
+) -> Result<(SECURITY_ATTRIBUTES, Box<SECURITY_DESCRIPTOR>), String> {
+    let explicit_access = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: 0x120089u32,
+        grfAccessMode: SET_ACCESS,
+        grfInheritance: 0,
+        Trustee: TRUSTEE_W {
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_GROUP,
+            ptstrName: sid_ptr,
+            ..Default::default()
+        },
+    };
+
+    let mut new_acl: PACL = ptr::null_mut();
+    unsafe {
+        let result = SetEntriesInAclW(1, &explicit_access, ptr::null(), &mut new_acl);
+        if result != 0 {
+            return Err(format!("SetEntriesInAclW: error {result}"));
+        }
+    }
+
+    let mut sd = Box::new(SECURITY_DESCRIPTOR::default());
+    unsafe {
+        InitializeSecurityDescriptor(
+            PSECURITY_DESCRIPTOR(sd.as_mut() as *mut _ as *mut _),
+            1,
+        )
+        .map_err(|e| format!("InitializeSecurityDescriptor: {e}"))?;
+
+        SetSecurityDescriptorDacl(
+            PSECURITY_DESCRIPTOR(sd.as_mut() as *mut _ as *mut _),
+            true,
+            Some(new_acl),
+            false,
+        )
+        .map_err(|e| format!("SetSecurityDescriptorDacl: {e}"))?;
+    }
+
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: sd.as_mut() as *mut _ as *mut _,
+        bInheritHandle: windows::Win32::Foundation::BOOL(0),
+    };
+
+    Ok((sa, sd))
+}
+
 /// 沙箱外的 MCP broker 生命周期。
 ///
 /// Agent 在 AppContainer 沙箱里运行，它启动的 `sujian-mcp-bridge.exe` 连接到
@@ -176,6 +239,9 @@ pub fn bind_current_project(
 /// 方式运行，通过 named pipe 与 bridge 双向转发 JSON-RPC。
 pub struct McpBroker {
     children: Vec<Child>,
+    pipe_handles: Vec<HANDLE>,
+    #[allow(dead_code)]
+    security_descriptors: Vec<Box<SECURITY_DESCRIPTOR>>,
 }
 
 impl McpBroker {
@@ -186,6 +252,9 @@ impl McpBroker {
 
 impl Drop for McpBroker {
     fn drop(&mut self) {
+        for handle in &self.pipe_handles {
+            unsafe { let _ = CloseHandle(*handle); }
+        }
         for child in &mut self.children {
             let _ = child.kill();
             let _ = child.wait();
@@ -206,13 +275,25 @@ pub fn prepare_mcp_brokers(
         "未找到 sujian-mcp-bridge.exe，无法建立 MCP named pipe 桥".to_string()
     })?;
 
+    let profile = AppContainerProfile::for_agent(&ctx.agent_id)
+        .map_err(|e| format!("创建 AppContainer profile 失败: {e}"))?;
+
     let mut children = Vec::new();
     let mut bridges = Vec::new();
+    let mut pipe_handles = Vec::new();
+    let mut security_descriptors = Vec::new();
 
     for (index, server) in ctx.mcp_servers.iter().enumerate() {
-        let pipe_name = format!("Sujian.Mcp.{}.{}", uuid::Uuid::new_v4(), index);
+        let pipe_name = format!(
+            "LOCAL\\Sujian.Mcp.{}.{}",
+            uuid::Uuid::new_v4(),
+            index
+        );
         let pipe_path = format!(r"\\.\pipe\{}", pipe_name);
         let pipe_wide = wide(&pipe_path);
+
+        let (sa, sd) = create_pipe_security_attributes(profile.sid().as_ptr())?;
+        security_descriptors.push(sd);
 
         let pipe_handle = unsafe {
             CreateNamedPipeW(
@@ -223,7 +304,7 @@ pub fn prepare_mcp_brokers(
                 65536,
                 65536,
                 0,
-                ptr::null(),
+                Some(&sa),
             )
         };
 
@@ -231,6 +312,9 @@ pub fn prepare_mcp_brokers(
             for c in &mut children {
                 let _ = c.kill();
                 let _ = c.wait();
+            }
+            for h in &pipe_handles {
+                unsafe { let _ = CloseHandle(*h); }
             }
             return Err(format!("CreateNamedPipeW 失败: {}", pipe_path));
         }
@@ -250,25 +334,23 @@ pub fn prepare_mcp_brokers(
         let broker_stdin = child.stdin.take();
         let broker_stdout = child.stdout.take();
 
-        let pipe_path_for_relay = pipe_path.clone();
-        let pipe_handle_for_connect = pipe_handle;
-        let pipe_handle_for_relay = pipe_handle;
+        let pipe_handle_for_relay = duplicate_handle(pipe_handle)?;
 
         thread::spawn(move || {
             unsafe {
-                let _ = ConnectNamedPipe(pipe_handle_for_connect, ptr::null_mut());
+                let _ = ConnectNamedPipe(pipe_handle_for_relay, ptr::null_mut());
             }
 
-            let pipe_file = unsafe { std::fs::File::from_raw_handle(pipe_handle_for_relay.0 as *mut _) };
-
-            let pipe_for_read = pipe_file.try_clone().unwrap_or_else(|_| {
+            let pipe_file_read = unsafe {
+                std::fs::File::from_raw_handle(pipe_handle_for_relay.0 as *mut _)
+            };
+            let pipe_file_write = pipe_file_read.try_clone().unwrap_or_else(|_| {
                 unsafe { std::fs::File::from_raw_handle(pipe_handle_for_relay.0 as *mut _) }
             });
-            let pipe_for_write = pipe_file;
 
             let stdin_handle = thread::spawn(move || {
                 if let Some(mut broker_stdin) = broker_stdin {
-                    let mut pipe = pipe_for_read;
+                    let mut pipe = pipe_file_read;
                     let mut buf = [0u8; 4096];
                     loop {
                         match pipe.read(&mut buf) {
@@ -287,7 +369,7 @@ pub fn prepare_mcp_brokers(
 
             let stdout_handle = thread::spawn(move || {
                 if let Some(mut broker_stdout) = broker_stdout {
-                    let mut pipe = pipe_for_write;
+                    let mut pipe = pipe_file_write;
                     let mut buf = [0u8; 4096];
                     loop {
                         match broker_stdout.read(&mut buf) {
@@ -306,23 +388,45 @@ pub fn prepare_mcp_brokers(
 
             stdin_handle.join().ok();
             stdout_handle.join().ok();
-
-            unsafe { let _ = CloseHandle(pipe_handle_for_relay); }
-            let _ = pipe_path_for_relay;
         });
 
         children.push(child);
+        pipe_handles.push(pipe_handle);
 
         bridges.push(McpServerLaunch {
             name: server.name.clone(),
             command: bridge_command.clone(),
             args: vec!["--pipe".to_string(), pipe_path.clone()],
-            env: server.env.clone(),
+            env: Vec::new(),
         });
     }
 
     Ok((
         bridges,
-        Some(McpBroker { children }),
+        Some(McpBroker {
+            children,
+            pipe_handles,
+            security_descriptors,
+        }),
     ))
+}
+
+fn duplicate_handle(source: HANDLE) -> Result<HANDLE, String> {
+    let current_process = unsafe {
+        windows::Win32::System::Threading::GetCurrentProcess()
+    };
+    let mut target: HANDLE = INVALID_HANDLE_VALUE;
+    unsafe {
+        DuplicateHandle(
+            current_process,
+            source,
+            current_process,
+            &mut target,
+            0,
+            false,
+            windows::Win32::Foundation::DUPLICATE_SAME_ACCESS,
+        )
+        .map_err(|e| format!("DuplicateHandle: {e}"))?;
+    }
+    Ok(target)
 }
