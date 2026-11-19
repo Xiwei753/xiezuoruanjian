@@ -18,7 +18,7 @@
 import hilog from '@ohos.hilog'
 import { util } from '@kit.ArkTS'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { EditorSessionSnapshot, EditorEditResult, EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
+import { EditorSessionSnapshot, EditorEditResult, EditorTransactionCause, EditorOperationKind } from '../../../corebridge/dto/EditorDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorSessionCoordinator, EditorStateUpdate } from './EditorSessionCoordinator'
 import { EditorStatsQueue } from '../stats/EditorStatsQueue'
@@ -242,6 +242,11 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     this.content = snap.text
     this.hasUnsavedChanges = snap.text !== this.lastSavedContent
     if (update.editResult !== null) {
+      // Issue #1034 评论 #18：CursorOnly（选区上报）跳过 stats UUID/enqueueChange 等仅供正文内容变更的路径
+      if (update.editResult.operationKind === EditorOperationKind.CursorOnly) {
+        this.emit(snap, update.editResult)
+        return
+      }
       const delta = update.editResult.contentDelta
       this.wordCount = Math.max(0, this.wordCount + delta.insertedNonWhitespaceChars - delta.deletedNonWhitespaceChars)
       // Issue #981：统计事件身份和发生时刻在编辑事务当场固定，异步队列不再补时刻；

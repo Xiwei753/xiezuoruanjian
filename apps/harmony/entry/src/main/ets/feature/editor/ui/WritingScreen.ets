@@ -444,7 +444,15 @@ export struct WritingScreen {
 
     const snap = update.snapshot
     if (snap !== null) {
-      this.correctionCoordinator.acceptSnapshot(this.projectId, this.chapterId, snap, update.editResult)
+      // Issue #1034 评论 #18：CursorOnly 仅更新依赖选区的接续状态，
+      // 跳过纠错扫描、标注刷新、分享 payload 等正文未变化时的工作。
+      const isCursorOnly = update.editResult !== null &&
+        update.editResult.operationKind === EditorOperationKind.CursorOnly
+
+      if (!isCursorOnly) {
+        this.correctionCoordinator.acceptSnapshot(this.projectId, this.chapterId, snap, update.editResult)
+      }
+
       // Issue #1034 评论 #6：只在非用户输入时才通过 syncFromCore 同步 RichEditor。
       // 用户输入的选区回显在 NativeRichEditorBridge.onDidChange 中处理。
       // Issue #1034 评论 #16：CursorOnly（选区上报）不触发 syncFromCore，
@@ -454,20 +462,24 @@ export struct WritingScreen {
          update.editResult.cause === EditorTransactionCause.Delete ||
          update.editResult.cause === EditorTransactionCause.ImeComposition ||
          update.editResult.cause === EditorTransactionCause.TypingCommit)
-      const isCursorOnly = update.editResult !== null &&
-        update.editResult.operationKind === EditorOperationKind.CursorOnly
       if (!isUserInput && !isCursorOnly) {
         void this.richEditorBridge.syncFromCore()
       }
-      if (update.editResult !== null && update.editResult.cause !== EditorTransactionCause.Load &&
-          update.editResult.displayPatches.length > 0) {
-        void this.persistAnnotationEditAndRefresh(snap, update.editResult)
-      } else if (update.editResult === null || update.editResult.cause === EditorTransactionCause.Load) {
-        void this.refreshChapterAnnotations(snap)
+
+      if (!isCursorOnly) {
+        if (update.editResult !== null && update.editResult.cause !== EditorTransactionCause.Load &&
+            update.editResult.displayPatches.length > 0) {
+          void this.persistAnnotationEditAndRefresh(snap, update.editResult)
+        } else if (update.editResult === null || update.editResult.cause === EditorTransactionCause.Load) {
+          void this.refreshChapterAnnotations(snap)
+        }
       }
+
       this.updateContinuationState()
-      // 内容变化时更新碰一碰/隔空传送 payload（Issue #629 评论 5 第 7 节）。
-      this.updateSharePayload()
+
+      if (!isCursorOnly) {
+        this.updateSharePayload()
+      }
     } else {
       if (state.isLoading || state.errorMessage.length > 0) {
         this.correctionCoordinator.clear()

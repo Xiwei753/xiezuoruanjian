@@ -55,6 +55,14 @@ interface IdleWaiter {
   reject: (e: Error) => void
 }
 
+interface SelectionIntent {
+  localSessionToken: number
+  expectedCoreSessionId: number
+  startUtf16: number
+  endUtf16: number
+  textForConversion: string
+}
+
 export class NativeRichEditorBridge {
   private coordinator: EditorSessionCoordinator
   private richEditorController: RichEditorController | null = null
@@ -73,6 +81,9 @@ export class NativeRichEditorBridge {
   private confirmedRevision: number = -1
   private idleError: string | null = null
   private idleWaiters: IdleWaiter[] = []
+  // Issue #1034 评论 #18：选区 latest-wins 合并上报
+  private pendingSelectionIntent: SelectionIntent | null = null
+  private selectionFlushTimerId: number = -1
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -100,7 +111,9 @@ export class NativeRichEditorBridge {
 
   // 普通保存屏障：只等已提交队列事务，不调用 stopEditing()。
   // imeComposing 时不 resolve，等待 onDidIMEInput 将 imeComposing 设为 false 后再继续。
+  // Issue #1034 评论 #18：先 flush pending 选区意图，确保保存取得的 snapshot 与用户最后可见选区一致。
   whenIdle(): Promise<void> {
+    this.flushLatestSelection()
     return new Promise<void>((resolve, reject) => {
       this.idleWaiters.push({ sessionId: this.sessionId, resolve: resolve, reject: reject })
       this.checkIdle()
@@ -108,10 +121,12 @@ export class NativeRichEditorBridge {
   }
 
   // 退出章节/同步屏障：先 stopEditing() 结束预编辑，再等队列稳定。
+  // Issue #1034 评论 #18：先 flush pending 选区意图，确保退出/同步取得的 snapshot 与用户最后可见选区一致。
   finishEditingAndWhenIdle(): Promise<void> {
     if (this.imeComposing && this.richEditorController !== null) {
       this.richEditorController.stopEditing()
     }
+    this.flushLatestSelection()
     return new Promise<void>((resolve, reject) => {
       this.idleWaiters.push({ sessionId: this.sessionId, resolve: resolve, reject: reject })
       this.checkIdle()
@@ -165,6 +180,12 @@ export class NativeRichEditorBridge {
         return
       }
 
+      // Issue #1034 评论 #18：有 pending 选区意图时先 flush，等新的 editQueue tail 完成后再检查
+      if (this.pendingSelectionIntent !== null) {
+        this.flushLatestSelection()
+        return
+      }
+
       const currentSession = this.sessionId
       const resolved: IdleWaiter[] = []
       const remaining: IdleWaiter[] = []
@@ -208,6 +229,12 @@ export class NativeRichEditorBridge {
     this.imeComposingStartText = ''
     this.drainRunning = false
     this.localSequence = 0
+    // Issue #1034 评论 #18：取消旧 session 的选区防抖定时器和意图
+    if (this.selectionFlushTimerId !== -1) {
+      clearTimeout(this.selectionFlushTimerId)
+      this.selectionFlushTimerId = -1
+    }
+    this.pendingSelectionIntent = null
   }
 
   onWillChange(_value: RichEditorChangeValue): boolean {
@@ -322,42 +349,74 @@ export class NativeRichEditorBridge {
     this.enqueuePendingEdit(pendingEdit)
   }
 
-  // RichEditor onSelectionChange 回调：将稳定选区映射后传给 coordinator。
-  // Issue #1034 评论 #17：分别捕获本地 sessionToken 和 Core sessionId，
-  // 本地 token 用于隔离异步回调，Core sessionId 用于跨章节校验。
+  // RichEditor onSelectionChange 回调：用 latest-wins 合并上报，防抖 30ms。
+  // Issue #1034 评论 #18：高频选区变化（拖动手柄）只记录最新意图，
+  // 不为每次事件追加 editQueue.then 和 Core 命令。
+  // 防抖到期或 whenIdle 主动调用时才提交最后一笔选区到 Core。
   onSelectionChange(start: number, end: number): void {
     if (this.programmaticUpdate) {
       return
     }
 
-    const textForConversion = this.currentText
-    const localSessionToken = this.sessionId
     const expectedCoreSessionId = this.coordinator.getSessionId()
     if (expectedCoreSessionId === null) {
       return
     }
+
+    this.pendingSelectionIntent = {
+      localSessionToken: this.sessionId,
+      expectedCoreSessionId: expectedCoreSessionId,
+      startUtf16: start,
+      endUtf16: end,
+      textForConversion: this.currentText
+    }
+
+    if (this.selectionFlushTimerId !== -1) {
+      clearTimeout(this.selectionFlushTimerId)
+    }
+    this.selectionFlushTimerId = setTimeout(() => {
+      this.selectionFlushTimerId = -1
+      this.flushLatestSelection()
+    }, 30)
+  }
+
+  // 单飞消费者：确认本地 token、Core sessionId 及对应文字基线有效，
+  // 等待前面正文 drainPendingEdits 完成，然后只提交当前最后一笔选区。
+  // 不能把正在拖动时的选区事件延迟后又把过期坐标覆盖到更新后的正文上。
+  private flushLatestSelection(): void {
+    if (this.selectionFlushTimerId !== -1) {
+      clearTimeout(this.selectionFlushTimerId)
+      this.selectionFlushTimerId = -1
+    }
+
+    const intent = this.pendingSelectionIntent
+    if (intent === null) {
+      return
+    }
+    this.pendingSelectionIntent = null
+
+    if (intent.localSessionToken !== this.sessionId) {
+      return
+    }
+    if (this.coordinator.getSessionId() !== intent.expectedCoreSessionId) {
+      return
+    }
+
+    const byteAnchor = TextOffsetMapper.utf16ToUtf8(intent.textForConversion, intent.startUtf16)
+    const byteHead = TextOffsetMapper.utf16ToUtf8(intent.textForConversion, intent.endUtf16)
+
     this.editQueue = this.editQueue.then(async () => {
-      if (localSessionToken !== this.sessionId) {
+      if (intent.localSessionToken !== this.sessionId) {
         return
       }
-      if (this.coordinator.getSessionId() !== expectedCoreSessionId) {
+      if (this.coordinator.getSessionId() !== intent.expectedCoreSessionId) {
         return
       }
-
-      const snap = this.coordinator.getSnapshot()
-      if (snap === null) {
-        return
-      }
-
-      const byteAnchor = TextOffsetMapper.utf16ToUtf8(textForConversion, start)
-      const byteHead = TextOffsetMapper.utf16ToUtf8(textForConversion, end)
-      await this.coordinator.setSelectionWithExpectedSession(byteAnchor, byteHead, expectedCoreSessionId)
-
-      if (localSessionToken !== this.sessionId) {
-        return
-      }
+      await this.coordinator.setSelectionWithExpectedSession(byteAnchor, byteHead, intent.expectedCoreSessionId)
     }).catch(e => {
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `onSelectionChange error: ${JSON.stringify(e)}`)
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `flushLatestSelection error: ${JSON.stringify(e)}`)
+    }).then(() => {
+      this.checkIdle()
     })
   }
 
