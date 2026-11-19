@@ -319,6 +319,8 @@ export class NativeRichEditorBridge {
 
   // onDidIMEInput 通过 getPreviewText() 确认预上屏消失后才提交差量。
   // 封装为 PendingEdit(cause=TypingCommit) 统一排队逐笔确认及失败重放。
+  // Issue #1034 评论 #21：IME 结束后重新捕获原生选区并唤醒选区消费者，
+  // 确保 IME 期间被保留的选区意图不会永久丢失。
   onDidIMEInput(_range: TextRange): void {
     if (this.richEditorController !== null) {
       const previewText = this.richEditorController.getPreviewText()
@@ -334,6 +336,8 @@ export class NativeRichEditorBridge {
 
     const diff = this.computeDiff(this.imeComposingStartText, this.currentText)
     if (diff.start >= diff.end && diff.replacement.length === 0) {
+      this.captureCurrentNativeSelection()
+      this.requestSelectionFlush()
       this.checkIdle()
       return
     }
@@ -353,6 +357,9 @@ export class NativeRichEditorBridge {
       cause: EditorTransactionCause.TypingCommit
     }
     this.enqueuePendingEdit(pendingEdit)
+
+    this.captureCurrentNativeSelection()
+    this.requestSelectionFlush()
   }
 
   // RichEditor onSelectionChange 回调：用 latest-wins 合并上报，防抖 30ms。
@@ -399,6 +406,9 @@ export class NativeRichEditorBridge {
         await this.drainSelectionIntent(sessionToken)
       } catch (e) {
         hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `drainSelectionIntent error: ${JSON.stringify(e)}`)
+        if (sessionToken === this.sessionId) {
+          this.idleError = `Selection drain error: ${JSON.stringify(e)}`
+        }
       }
       if (sessionToken === this.sessionId) {
         this.selectionDrainRunning = false
@@ -408,17 +418,18 @@ export class NativeRichEditorBridge {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `requestSelectionFlush error: ${JSON.stringify(e)}`)
       if (sessionToken === this.sessionId) {
         this.selectionDrainRunning = false
+        this.idleError = `Selection flush error: ${JSON.stringify(e)}`
       }
       this.checkIdle()
     })
   }
 
-  // Issue #1034 评论 #19/#20：选区单飞消费者协程。
-  // 从 pendingSelectionIntent 拿最新意图，验证正文基线后提交 Core；
-  // 提交完后若槽位又变更，继续按最新值处理；旧意图在尚未送入 Core 前直接被覆盖。
-  // 正文基线验证：intent.textForConversion 必须与 this.currentText 和 Core snap.text 都一致，
-  // 否则选区坐标已过期，跳过这笔选区。
-  // 选区事务失败：检查 ResultEnvelope，失败时设置 idleError 并 reject 等待者。
+  // Issue #1034 评论 #19/#20/#21：选区单飞消费者协程。
+  // 从 pendingSelectionIntent 拿最新意图，验证正文基线后提交 Core。
+  // 关键语义：pendingSelectionIntent 只有在 Core 确认成功后才清空；
+  // IME 活跃或 Core 正文暂不一致时保留意图并退出，等待后续唤醒。
+  // 选区事务结果完整检查 outcome：Applied/AppliedWithAdjustedSelection/NoChange 才算成功；
+  // staleRevision/invalidOffset/invalidRange 重新采集原生选区并重算。
   private async drainSelectionIntent(sessionToken: number): Promise<void> {
     while (true) {
       if (sessionToken !== this.sessionId) {
@@ -429,36 +440,35 @@ export class NativeRichEditorBridge {
       if (intent === null) {
         return
       }
-      this.pendingSelectionIntent = null
 
       if (intent.localSessionToken !== this.sessionId) {
+        this.pendingSelectionIntent = null
         continue
       }
       if (this.coordinator.getSessionId() !== intent.expectedCoreSessionId) {
+        this.pendingSelectionIntent = null
         continue
       }
 
-      // Issue #1034 评论 #19/#20：验证正文基线——选区 UTF-16 坐标基于 intent.textForConversion，
-      // 若 RichEditor 正文已变（this.currentText !== intent.textForConversion），跳过这笔选区。
+      // 本地正文已变：选区坐标过期，重新采集原生选区
       if (intent.textForConversion !== this.currentText) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'drainSelectionIntent: RichEditor text baseline changed, skipping stale selection')
+        this.pendingSelectionIntent = null
+        this.captureCurrentNativeSelection()
         continue
       }
 
-      // Issue #1034 评论 #20：验证 Core 正文基线——snap.text 才是 Core 真实正文，
-      // 本地文本未变不代表 Core 仍是同一正文（外部纠错/程序编辑/异步事务尚未回流）。
+      // Core 正文暂不一致：保留选区意图，等 drainPendingEdits/syncFromCore 结算后重新唤醒
       const snap = this.coordinator.getSnapshot()
       if (snap === null) {
         return
       }
       if (snap.text !== intent.textForConversion) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'drainSelectionIntent: Core text baseline differs, skipping stale selection')
-        continue
+        return
       }
 
-      // IME 预编辑期间不提交选区，等 onDidIMEInput 上屏事务结算后再处理
+      // IME 预编辑期间：保留选区意图，等 onDidIMEInput 唤醒
       if (this.imeComposing) {
-        continue
+        return
       }
 
       const byteAnchor = TextOffsetMapper.utf16ToUtf8(intent.textForConversion, intent.startUtf16)
@@ -470,13 +480,11 @@ export class NativeRichEditorBridge {
         return
       }
 
-      // Issue #1034 评论 #20：检查选区事务返回值，失败时设置 idleError 并 reject 等待者
-      if (!result.success) {
+      if (!result.success || result.data === undefined) {
         if (result.errorCode === 'SESSION_CHANGED') {
-          // 会话已切换，选区命令被取消，不需要报错
+          this.pendingSelectionIntent = null
           continue
         }
-        // 其他失败：设置 idleError，reject 所有等待者，保留选区意图未落实
         this.idleError = `Selection transaction failed: ${result.errorCode ?? 'UNKNOWN'}`
         hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
         const error = new Error(this.idleError)
@@ -487,6 +495,51 @@ export class NativeRichEditorBridge {
         }
         return
       }
+
+      const outcome = result.data.outcome
+      if (outcome === EditorEditOutcome.Applied ||
+          outcome === EditorEditOutcome.AppliedWithAdjustedSelection ||
+          outcome === EditorEditOutcome.NoChange) {
+        this.pendingSelectionIntent = null
+        continue
+      }
+
+      // staleRevision / invalidOffset / invalidRange：重新采集原生选区并重算
+      this.pendingSelectionIntent = null
+      this.captureCurrentNativeSelection()
+      continue
+    }
+  }
+
+  // Issue #1034 评论 #21：从 RichEditorController 重新捕获当前原生选区。
+  // 折叠光标用 getCaretOffset()，有选区时用 getSelection().selection。
+  private captureCurrentNativeSelection(): void {
+    if (this.richEditorController === null) {
+      return
+    }
+    const expectedCoreSessionId = this.coordinator.getSessionId()
+    if (expectedCoreSessionId === null) {
+      return
+    }
+
+    let startUtf16: number
+    let endUtf16: number
+    const sel = this.richEditorController.getSelection()
+    if (sel.selection.start === sel.selection.end) {
+      const caretOffset = this.richEditorController.getCaretOffset()
+      startUtf16 = caretOffset
+      endUtf16 = caretOffset
+    } else {
+      startUtf16 = sel.selection.start
+      endUtf16 = sel.selection.end
+    }
+
+    this.pendingSelectionIntent = {
+      localSessionToken: this.sessionId,
+      expectedCoreSessionId: expectedCoreSessionId,
+      startUtf16: startUtf16,
+      endUtf16: endUtf16,
+      textForConversion: this.currentText
     }
   }
 
