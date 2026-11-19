@@ -22,8 +22,8 @@ use windows::Win32::Security::Isolation::{
 };
 use windows::Win32::Security::{
     FreeSid, CreateWellKnownSid, PACL, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
-    SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES, WELL_KNOWN_SID_TYPE, OBJECT_SECURITY_INFORMATION,
-    DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES, WELL_KNOWN_SID_TYPE,
+    DACL_SECURITY_INFORMATION,
 };
 use windows::Win32::Security::Authorization::{
     GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W,
@@ -37,9 +37,9 @@ use windows::Win32::System::JobObjects::{
 use windows::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
     InitializeProcThreadAttributeList, ResumeThread, UpdateProcThreadAttribute,
-    WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-    STARTUPINFOEXW, STARTUPINFOW,
+    WaitForSingleObject, CREATE_SUSPENDED, EXTENDED_STARTUPINFO_PRESENT,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+    PROCESS_INFORMATION, STARTUPINFOEXW, STARTUPINFOW,
 };
 
 const APPCONTAINER_PREFIX: &str = "Sujian.Agent.";
@@ -51,7 +51,8 @@ fn wide(s: &str) -> Vec<u16> {
         .collect()
 }
 
-/// 拥有 PSID 所有权的 RAII 包装器，Drop 时调用 FreeSid。
+/// 拥有 `CreateAppContainerProfile`/`DeriveAppContainerSidFromAppContainerName`
+/// 返回的 PSID 的 RAII 包装器。Drop 时调用 `FreeSid`。
 pub struct OwnedSid {
     sid: PSID,
 }
@@ -82,10 +83,6 @@ pub struct AppContainerProfile {
 }
 
 impl AppContainerProfile {
-    /// 创建或复用 AppContainer profile。
-    ///
-    /// 先尝试 `CreateAppContainerProfile`（首次创建），若 profile 已存在则
-    /// 用 `DeriveAppContainerSidFromAppContainerName` 获取 SID。
     pub fn for_agent(agent_id: &str) -> Result<Self, String> {
         let name = format!("{APPCONTAINER_PREFIX}{agent_id}");
         let name_wide = wide(&name);
@@ -120,22 +117,53 @@ impl AppContainerProfile {
     }
 }
 
-/// 拥有 SECURITY_CAPABILITIES 所有数据的结构体。
+/// 持有 `CreateWellKnownSid` 输出缓冲区的 RAII 结构。
 ///
-/// SID_AND_ATTRIBUTES 数组中的 SID 指针指向此结构体拥有的 OwnedSid，
-/// 确保在 CreateProcessW 使用期间所有指针有效。
-pub struct SandboxCapabilities {
-    app_container_sid: OwnedSid,
-    internet_client_sid: OwnedSid,
-    private_network_sid: OwnedSid,
+/// `CreateWellKnownSid` 往调用方提供的缓冲区写入，不能用 `FreeSid` 释放。
+/// 缓冲区由 `Vec<u8>` 持有，`SID_AND_ATTRIBUTES` 中存指向它的裸指针。
+pub struct WellKnownSid {
+    buffer: Vec<u8>,
+}
+
+impl WellKnownSid {
+    pub fn new(sid_type: WELL_KNOWN_SID_TYPE) -> Result<Self, String> {
+        let mut buffer = vec![0u8; 256];
+        let mut sid_len = buffer.len() as u32;
+        unsafe {
+            CreateWellKnownSid(
+                sid_type,
+                ptr::null(),
+                buffer.as_mut_ptr() as *mut _,
+                &mut sid_len,
+            )
+            .map_err(|e| format!("CreateWellKnownSid: {e}"))?;
+        }
+        buffer.truncate(sid_len as usize);
+        Ok(Self { buffer })
+    }
+
+    pub fn as_ptr(&self) -> *mut core::ffi::c_void {
+        self.buffer.as_ptr() as *mut _
+    }
+}
+
+/// 拥有 `SECURITY_CAPABILITIES` 所有数据的结构体。
+///
+/// 借用 `AppContainerProfile` 的 SID（不复制），Capability SID 由
+/// `WellKnownSid` 持有（`Vec<u8>` 缓冲区，不用 `FreeSid`）。
+/// 所有指针在 `Self` 存活期间有效，直至 `CreateProcessW` 返回。
+pub struct SandboxCapabilities<'a> {
+    profile: &'a AppContainerProfile,
+    internet_client_sid: WellKnownSid,
+    private_network_sid: WellKnownSid,
     capabilities: Vec<SID_AND_ATTRIBUTES>,
 }
 
-impl SandboxCapabilities {
-    pub fn new(profile: &AppContainerProfile) -> Result<Self, String> {
+impl<'a> SandboxCapabilities<'a> {
+    pub fn new(profile: &'a AppContainerProfile) -> Result<Self, String> {
         let internet_client_sid =
-            create_well_known_sid(WELL_KNOWN_SID_TYPE::WinCapabilityInternetClientSid)?;
-        let private_network_sid = create_well_known_sid(
+            WellKnownSid::new(WELL_KNOWN_SID_TYPE::WinCapabilityInternetClientSid)?;
+        let private_network_sid = WellKnownSid::new(
             WELL_KNOWN_SID_TYPE::WinCapabilityPrivateNetworkClientServerSid,
         )?;
 
@@ -151,42 +179,21 @@ impl SandboxCapabilities {
         ];
 
         Ok(Self {
-            app_container_sid: OwnedSid {
-                sid: PSID(profile.sid.as_ptr()),
-            },
+            profile,
             internet_client_sid,
             private_network_sid,
             capabilities,
         })
     }
 
-    /// 返回 SECURITY_CAPABILITIES 引用，所有指针在 Self 存活期间有效。
     pub fn as_security_capabilities(&self) -> SECURITY_CAPABILITIES {
         SECURITY_CAPABILITIES {
-            AppContainerSid: self.app_container_sid.as_psid(),
+            AppContainerSid: self.profile.sid.as_psid(),
             Capabilities: self.capabilities.as_ptr() as *mut _,
             CapabilityCount: self.capabilities.len() as u32,
             Reserved: 0,
         }
     }
-}
-
-fn create_well_known_sid(sid_type: WELL_KNOWN_SID_TYPE) -> Result<OwnedSid, String> {
-    let mut sid_buffer = vec![0u8; 256];
-    let mut sid_len = sid_buffer.len() as u32;
-    unsafe {
-        CreateWellKnownSid(
-            sid_type,
-            ptr::null(),
-            sid_buffer.as_mut_ptr() as *mut _,
-            &mut sid_len,
-        )
-        .map_err(|e| format!("CreateWellKnownSid: {e}"))?;
-    }
-    sid_buffer.truncate(sid_len as usize);
-    let psid = PSID(sid_buffer.as_mut_ptr() as *mut _);
-    std::mem::forget(sid_buffer);
-    Ok(OwnedSid { sid: psid })
 }
 
 /// 受限进程句柄。Drop 时自动关闭所有句柄。
@@ -198,7 +205,6 @@ pub struct SandboxProcess {
 }
 
 impl SandboxProcess {
-    /// 等待进程退出并返回退出码。
     pub fn wait_exit(&self) -> Result<u32, String> {
         unsafe {
             let result = WaitForSingleObject(self.handle, u32::MAX);
@@ -327,7 +333,7 @@ pub fn spawn_in_appcontainer(
     program: &str,
     args: &[String],
     working_dir: &Path,
-    capabilities: &SandboxCapabilities,
+    capabilities: &SandboxCapabilities<'_>,
     stdin_read: HANDLE,
     stdout_write: HANDLE,
     stderr_write: HANDLE,
@@ -391,11 +397,12 @@ pub fn spawn_in_appcontainer(
     let mut cmd_line_wide = wide(&cmd_line);
     let working_dir_wide = wide(&working_dir.to_string_lossy());
 
-    let job_handle = unsafe { CreateJobObjectW(ptr::null(), PCWSTR(ptr::null())) };
-    if job_handle == INVALID_HANDLE_VALUE {
-    unsafe { DeleteProcThreadAttributeList(startup_info.lpAttributeList); }
-        return Err("CreateJobObjectW failed".to_string());
-    }
+    let job_handle = unsafe { CreateJobObjectW(ptr::null(), PCWSTR(ptr::null())) }
+        .map_err(|e| {
+            unsafe { DeleteProcThreadAttributeList(startup_info.lpAttributeList); }
+            format!("CreateJobObjectW: {e}")
+        })?;
+
     let mut job_info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     job_info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     unsafe {
@@ -405,7 +412,13 @@ pub fn spawn_in_appcontainer(
             &job_info as *const _ as *const _,
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
         )
-        .map_err(|e| format!("SetInformationJobObject: {e}"))?;
+        .map_err(|e| {
+            unsafe {
+                DeleteProcThreadAttributeList(startup_info.lpAttributeList);
+                let _ = CloseHandle(job_handle);
+            }
+            format!("SetInformationJobObject: {e}")
+        })?;
     }
 
     let mut process_info = PROCESS_INFORMATION::default();
@@ -416,7 +429,7 @@ pub fn spawn_in_appcontainer(
             ptr::null(),
             ptr::null(),
             true,
-            EXTENDED_STARTUPINFO_PRESENT | PROCESS_CREATION_FLAGS(CREATE_SUSPENDED),
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
             ptr::null(),
             PCWSTR(working_dir_wide.as_ptr()),
             &mut startup_info.StartupInfo as *mut _ as *mut STARTUPINFOW,
@@ -424,20 +437,20 @@ pub fn spawn_in_appcontainer(
         )
     };
 
-    unsafe { DeleteProcThreadAttributeList(startup_info.lpAttributeList) };
+    unsafe { DeleteProcThreadAttributeList(startup_info.lpAttributeList); }
 
-    if create_result.is_err() {
+    if let Err(e) = create_result {
         unsafe { let _ = CloseHandle(job_handle); }
-        return Err(format!("CreateProcessW: {:?}", create_result.unwrap_err()));
+        return Err(format!("CreateProcessW: {e}"));
     }
 
     unsafe {
         let assign_result = AssignProcessToJobObject(job_handle, process_info.hProcess);
-        if assign_result.is_err() {
+        if let Err(e) = assign_result {
             let _ = CloseHandle(process_info.hProcess);
             let _ = CloseHandle(process_info.hThread);
             let _ = CloseHandle(job_handle);
-            return Err(format!("AssignProcessToJobObject: {:?}", assign_result.unwrap_err()));
+            return Err(format!("AssignProcessToJobObject: {e}"));
         }
 
         ResumeThread(process_info.hThread);
@@ -455,10 +468,7 @@ pub fn spawn_in_appcontainer(
 ///
 /// 参考：https://learn.microsoft.com/en-us/archive/blogs/twistylittlepassagesallalike/everyone-quotes-command-line-arguments-the-wrong-way
 fn build_command_line(program: &str, args: &[String]) -> String {
-    let mut cmd = String::new();
-    cmd.push('"');
-    cmd.push_str(&program.replace('\\', "\\\\"));
-    cmd.push('"');
+    let mut cmd = quote_arg(program);
     for arg in args {
         cmd.push(' ');
         cmd.push_str(&quote_arg(arg));
@@ -500,6 +510,7 @@ fn quote_arg(arg: &str) -> String {
         }
     }
     for _ in 0..backslashes {
+        result.push('\\');
         result.push('\\');
     }
     result.push('"');

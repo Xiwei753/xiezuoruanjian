@@ -19,7 +19,7 @@ use std::thread;
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{
-    CloseHandle, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE, ERROR_PIPE_CONNECTED,
 };
 use windows::Win32::Security::{
     InitializeSecurityDescriptor, PACL, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
@@ -36,6 +36,9 @@ use windows::Win32::System::Pipes::{
 
 use super::events::{AgentLaunchContext, McpScope, McpServerLaunch};
 use super::windows_sandbox::AppContainerProfile;
+
+const FILE_GENERIC_READ: u32 = 0x120089;
+const FILE_GENERIC_WRITE: u32 = 0x120116;
 
 #[derive(Debug, Clone)]
 pub struct McpBinding {
@@ -182,12 +185,32 @@ pub fn bind_current_project(
     }
 }
 
+/// 持有 named pipe 安全描述符和 ACL 的 RAII 结构。
+///
+/// `SECURITY_DESCRIPTOR` 和 ACL 在 `CreateNamedPipeW` 期间必须保持存活，
+/// `Drop` 时释放 `LocalFree` 分配的 ACL。
+struct PipeSecurity {
+    sd: Box<SECURITY_DESCRIPTOR>,
+    acl: PACL,
+}
+
+impl Drop for PipeSecurity {
+    fn drop(&mut self) {
+        if !self.acl.0.is_null() {
+            unsafe { let _ = windows::Win32::Foundation::LocalFree(self.acl.0 as *mut _); }
+        }
+    }
+}
+
 /// 为 AppContainer SID 创建命名管道的安全描述符。
-fn create_pipe_security_attributes(
+///
+/// 授予当前 AppContainer SID `FILE_GENERIC_READ | FILE_GENERIC_WRITE` 权限，
+/// 确保 bridge 能双向读写管道。
+fn create_pipe_security(
     sid_ptr: *mut core::ffi::c_void,
-) -> Result<(SECURITY_ATTRIBUTES, Box<SECURITY_DESCRIPTOR>), String> {
+) -> Result<(SECURITY_ATTRIBUTES, PipeSecurity), String> {
     let explicit_access = EXPLICIT_ACCESS_W {
-        grfAccessPermissions: 0x120089u32,
+        grfAccessPermissions: FILE_GENERIC_READ | FILE_GENERIC_WRITE,
         grfAccessMode: SET_ACCESS,
         grfInheritance: 0,
         Trustee: TRUSTEE_W {
@@ -229,7 +252,7 @@ fn create_pipe_security_attributes(
         bInheritHandle: windows::Win32::Foundation::BOOL(0),
     };
 
-    Ok((sa, sd))
+    Ok((sa, PipeSecurity { sd, acl: new_acl }))
 }
 
 /// 沙箱外的 MCP broker 生命周期。
@@ -241,7 +264,7 @@ pub struct McpBroker {
     children: Vec<Child>,
     pipe_handles: Vec<HANDLE>,
     #[allow(dead_code)]
-    security_descriptors: Vec<Box<SECURITY_DESCRIPTOR>>,
+    pipe_security: Vec<PipeSecurity>,
 }
 
 impl McpBroker {
@@ -281,7 +304,7 @@ pub fn prepare_mcp_brokers(
     let mut children = Vec::new();
     let mut bridges = Vec::new();
     let mut pipe_handles = Vec::new();
-    let mut security_descriptors = Vec::new();
+    let mut pipe_security = Vec::new();
 
     for (index, server) in ctx.mcp_servers.iter().enumerate() {
         let pipe_name = format!(
@@ -292,8 +315,7 @@ pub fn prepare_mcp_brokers(
         let pipe_path = format!(r"\\.\pipe\{}", pipe_name);
         let pipe_wide = wide(&pipe_path);
 
-        let (sa, sd) = create_pipe_security_attributes(profile.sid().as_ptr())?;
-        security_descriptors.push(sd);
+        let (sa, security) = create_pipe_security(profile.sid().as_ptr())?;
 
         let pipe_handle = unsafe {
             CreateNamedPipeW(
@@ -309,6 +331,7 @@ pub fn prepare_mcp_brokers(
         };
 
         if pipe_handle == INVALID_HANDLE_VALUE {
+            drop(security);
             for c in &mut children {
                 let _ = c.kill();
                 let _ = c.wait();
@@ -318,6 +341,8 @@ pub fn prepare_mcp_brokers(
             }
             return Err(format!("CreateNamedPipeW 失败: {}", pipe_path));
         }
+
+        pipe_security.push(security);
 
         let mut broker_cmd = Command::new(&server.command);
         broker_cmd
@@ -337,16 +362,25 @@ pub fn prepare_mcp_brokers(
         let pipe_handle_for_relay = duplicate_handle(pipe_handle)?;
 
         thread::spawn(move || {
-            unsafe {
-                let _ = ConnectNamedPipe(pipe_handle_for_relay, ptr::null_mut());
+            let connect_result = unsafe {
+                ConnectNamedPipe(pipe_handle_for_relay, ptr::null_mut())
+            };
+            if let Err(e) = connect_result {
+                if e.code() != ERROR_PIPE_CONNECTED.to_hresult() {
+                    unsafe { let _ = CloseHandle(pipe_handle_for_relay); }
+                    return;
+                }
             }
 
             let pipe_file_read = unsafe {
                 std::fs::File::from_raw_handle(pipe_handle_for_relay.0 as *mut _)
             };
-            let pipe_file_write = pipe_file_read.try_clone().unwrap_or_else(|_| {
-                unsafe { std::fs::File::from_raw_handle(pipe_handle_for_relay.0 as *mut _) }
-            });
+            let pipe_file_write = match pipe_file_read.try_clone() {
+                Ok(f) => f,
+                Err(_) => {
+                    return;
+                }
+            };
 
             let stdin_handle = thread::spawn(move || {
                 if let Some(mut broker_stdin) = broker_stdin {
@@ -406,7 +440,7 @@ pub fn prepare_mcp_brokers(
         Some(McpBroker {
             children,
             pipe_handles,
-            security_descriptors,
+            pipe_security,
         }),
     ))
 }
