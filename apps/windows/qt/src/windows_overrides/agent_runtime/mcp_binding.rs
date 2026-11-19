@@ -15,7 +15,7 @@ use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::ptr;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use windows::core::PCWSTR;
@@ -33,6 +33,9 @@ use windows::Win32::Security::Authorization::{
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE,
     PIPE_READMODE_BYTE, PIPE_WAIT,
+};
+use windows::Win32::System::Threading::{
+    CancelSynchronousIo, GetCurrentProcess, GetCurrentThread,
 };
 
 use super::events::{AgentLaunchContext, McpScope, McpServerLaunch};
@@ -256,18 +259,48 @@ fn create_pipe_security(
     Ok((sa, PipeSecurity { sd, acl: new_acl }))
 }
 
+/// 单个 MCP relay 的所有资源，统一生命周期管理。
+///
+/// 持有原始 pipe handle、relay 线程使用的 duplicate handle、
+/// relay 线程的 Win32 线程句柄（用于 `CancelSynchronousIo`）、
+/// Rust `JoinHandle`、broker 子进程和 pipe 安全描述符。
+struct RelayWorker {
+    pipe_handle: HANDLE,
+    relay_handle: HANDLE,
+    thread_handle: HANDLE,
+    relay_thread: Option<JoinHandle<()>>,
+    child: Child,
+    _pipe_security: PipeSecurity,
+}
+
+impl RelayWorker {
+    /// 取消并回收 relay 线程：先 kill 子进程让已连接的 I/O 失败，
+    /// 再 `CancelSynchronousIo` 取消阻塞的 `ConnectNamedPipe`，
+    /// 最后 join relay 线程。
+    fn cancel_and_join(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        unsafe { let _ = CancelSynchronousIo(self.thread_handle); }
+        if let Some(thread) = self.relay_thread.take() {
+            let _ = thread.join();
+        }
+    }
+
+    fn close_handles(&self) {
+        unsafe {
+            let _ = CloseHandle(self.thread_handle);
+            let _ = CloseHandle(self.pipe_handle);
+        }
+    }
+}
+
 /// 沙箱外的 MCP broker 生命周期。
 ///
 /// Agent 在 AppContainer 沙箱里运行，它启动的 `sujian-mcp-bridge.exe` 连接到
 /// 这里创建的 named pipe；真正的 `sujian_mcp.exe` broker 在沙箱外以 stdio
 /// 方式运行，通过 named pipe 与 bridge 双向转发 JSON-RPC。
 pub struct McpBroker {
-    children: Vec<Child>,
-    pipe_handles: Vec<HANDLE>,
-    relay_handles: Vec<Arc<Mutex<Option<HANDLE>>>>,
-    relay_threads: Vec<JoinHandle<()>>,
-    #[allow(dead_code)]
-    pipe_security: Vec<PipeSecurity>,
+    workers: Vec<RelayWorker>,
 }
 
 impl McpBroker {
@@ -278,20 +311,11 @@ impl McpBroker {
 
 impl Drop for McpBroker {
     fn drop(&mut self) {
-        for child in &mut self.children {
-            let _ = child.kill();
-            let _ = child.wait();
+        for worker in &mut self.workers {
+            worker.cancel_and_join();
         }
-        for relay_handle in &self.relay_handles {
-            if let Some(handle) = relay_handle.lock().unwrap().take() {
-                unsafe { let _ = CloseHandle(handle); }
-            }
-        }
-        for thread in self.relay_threads.drain(..) {
-            let _ = thread.join();
-        }
-        for handle in &self.pipe_handles {
-            unsafe { let _ = CloseHandle(*handle); }
+        for worker in &self.workers {
+            worker.close_handles();
         }
     }
 }
@@ -312,12 +336,8 @@ pub fn prepare_mcp_brokers(
     let profile = AppContainerProfile::for_agent(&ctx.agent_id)
         .map_err(|e| format!("创建 AppContainer profile 失败: {e}"))?;
 
-    let mut children = Vec::new();
     let mut bridges = Vec::new();
-    let mut pipe_handles = Vec::new();
-    let mut pipe_security = Vec::new();
-    let mut relay_handles = Vec::new();
-    let mut relay_threads = Vec::new();
+    let mut workers = Vec::new();
 
     for (index, server) in ctx.mcp_servers.iter().enumerate() {
         let pipe_name = format!(
@@ -345,17 +365,12 @@ pub fn prepare_mcp_brokers(
 
         if pipe_handle == INVALID_HANDLE_VALUE {
             drop(security);
-            for c in &mut children {
-                let _ = c.kill();
-                let _ = c.wait();
-            }
-            for h in &pipe_handles {
-                unsafe { let _ = CloseHandle(*h); }
+            for w in &mut workers {
+                w.cancel_and_join();
+                w.close_handles();
             }
             return Err(format!("CreateNamedPipeW 失败: {}", pipe_path));
         }
-
-        pipe_security.push(security);
 
         let mut broker_cmd = Command::new(&server.command);
         broker_cmd
@@ -365,39 +380,64 @@ pub fn prepare_mcp_brokers(
             .stderr(Stdio::null())
             .envs(server.env.iter().cloned());
 
-        let mut child = broker_cmd
+        let child = broker_cmd
             .spawn()
-            .map_err(|e| format!("无法启动作品 MCP broker（{}）：{e}", server.command))?;
+            .map_err(|e| {
+                drop(security);
+                unsafe { let _ = CloseHandle(pipe_handle); }
+                for w in &mut workers {
+                    w.cancel_and_join();
+                    w.close_handles();
+                }
+                format!("无法启动作品 MCP broker（{}）：{e}", server.command)
+            })?;
 
         let broker_stdin = child.stdin.take();
         let broker_stdout = child.stdout.take();
 
-        let pipe_handle_for_relay = duplicate_handle(pipe_handle)?;
-        let shared_relay_handle = Arc::new(Mutex::new(Some(pipe_handle_for_relay)));
-        let shared_relay_handle_clone = shared_relay_handle.clone();
+        let relay_handle = duplicate_handle(pipe_handle).map_err(|e| {
+            drop(security);
+            let _ = child.kill();
+            let _ = child.wait();
+            unsafe { let _ = CloseHandle(pipe_handle); }
+            for w in &mut workers {
+                w.cancel_and_join();
+                w.close_handles();
+            }
+            e
+        })?;
+
+        let (thread_handle_tx, thread_handle_rx) = mpsc::channel::<HANDLE>();
 
         let relay_thread = thread::spawn(move || {
-            let connect_handle = {
-                let mut guard = shared_relay_handle_clone.lock().unwrap();
-                guard.take()
-            };
-            let connect_handle = match connect_handle {
-                Some(h) => h,
-                None => return,
-            };
+            let current_process = unsafe { GetCurrentProcess() };
+            let current_thread = unsafe { GetCurrentThread() };
+            let mut real_thread_handle = INVALID_HANDLE_VALUE;
+            unsafe {
+                let _ = DuplicateHandle(
+                    current_process,
+                    current_thread,
+                    current_process,
+                    &mut real_thread_handle,
+                    0,
+                    false,
+                    windows::Win32::Foundation::DUPLICATE_SAME_ACCESS,
+                );
+            }
+            let _ = thread_handle_tx.send(real_thread_handle);
 
             let connect_result = unsafe {
-                ConnectNamedPipe(connect_handle, ptr::null_mut())
+                ConnectNamedPipe(relay_handle, ptr::null_mut())
             };
             if let Err(e) = connect_result {
                 if e.code() != ERROR_PIPE_CONNECTED.to_hresult() {
-                    unsafe { let _ = CloseHandle(connect_handle); }
+                    unsafe { let _ = CloseHandle(relay_handle); }
                     return;
                 }
             }
 
             let pipe_file_read = unsafe {
-                std::fs::File::from_raw_handle(connect_handle.0 as *mut _)
+                std::fs::File::from_raw_handle(relay_handle.0 as *mut _)
             };
             let pipe_file_write = match pipe_file_read.try_clone() {
                 Ok(f) => f,
@@ -406,7 +446,7 @@ pub fn prepare_mcp_brokers(
                 }
             };
 
-            let stdin_handle = thread::spawn(move || {
+            let stdin_thread = thread::spawn(move || {
                 if let Some(mut broker_stdin) = broker_stdin {
                     let mut pipe = pipe_file_read;
                     let mut buf = [0u8; 4096];
@@ -425,7 +465,7 @@ pub fn prepare_mcp_brokers(
                 }
             });
 
-            let stdout_handle = thread::spawn(move || {
+            let stdout_thread = thread::spawn(move || {
                 if let Some(mut broker_stdout) = broker_stdout {
                     let mut pipe = pipe_file_write;
                     let mut buf = [0u8; 4096];
@@ -444,14 +484,20 @@ pub fn prepare_mcp_brokers(
                 }
             });
 
-            stdin_handle.join().ok();
-            stdout_handle.join().ok();
+            stdout_thread.join().ok();
+            drop(stdin_thread);
         });
 
-        children.push(child);
-        pipe_handles.push(pipe_handle);
-        relay_handles.push(shared_relay_handle);
-        relay_threads.push(relay_thread);
+        let thread_handle = thread_handle_rx.recv().unwrap_or(INVALID_HANDLE_VALUE);
+
+        workers.push(RelayWorker {
+            pipe_handle,
+            relay_handle,
+            thread_handle,
+            relay_thread: Some(relay_thread),
+            child,
+            _pipe_security: security,
+        });
 
         bridges.push(McpServerLaunch {
             name: server.name.clone(),
@@ -461,22 +507,11 @@ pub fn prepare_mcp_brokers(
         });
     }
 
-    Ok((
-        bridges,
-        Some(McpBroker {
-            children,
-            pipe_handles,
-            relay_handles,
-            relay_threads,
-            pipe_security,
-        }),
-    ))
+    Ok((bridges, Some(McpBroker { workers })))
 }
 
 fn duplicate_handle(source: HANDLE) -> Result<HANDLE, String> {
-    let current_process = unsafe {
-        windows::Win32::System::Threading::GetCurrentProcess()
-    };
+    let current_process = unsafe { GetCurrentProcess() };
     let mut target: HANDLE = INVALID_HANDLE_VALUE;
     unsafe {
         DuplicateHandle(
