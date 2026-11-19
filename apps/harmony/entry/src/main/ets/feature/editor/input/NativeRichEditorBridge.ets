@@ -81,9 +81,11 @@ export class NativeRichEditorBridge {
   private confirmedRevision: number = -1
   private idleError: string | null = null
   private idleWaiters: IdleWaiter[] = []
-  // Issue #1034 评论 #18：选区 latest-wins 合并上报
+  // Issue #1034 评论 #18/#19：选区 latest-wins 合并上报
   private pendingSelectionIntent: SelectionIntent | null = null
   private selectionFlushTimerId: number = -1
+  // Issue #1034 评论 #19：选区%单飞消费者标记，防止重复追加 editQueue.then
+  private selectionDrainRunning: boolean = false
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -411,11 +413,12 @@ export class NativeRichEditorBridge {
     })
   }
 
-  // Issue #1034 评论 #19：选区单飞消费者协程。
+  // Issue #1034 评论 #19/#20：选区单飞消费者协程。
   // 从 pendingSelectionIntent 拿最新意图，验证正文基线后提交 Core；
   // 提交完后若槽位又变更，继续按最新值处理；旧意图在尚未送入 Core 前直接被覆盖。
-  // 正文基线验证：intent.textForConversion 必须与当前 this.currentText 一致，
-  // 否则选区坐标已过期（RichEditor 正文已变），跳过这笔选区。
+  // 正文基线验证：intent.textForConversion 必须与 this.currentText 和 Core snap.text 都一致，
+  // 否则选区坐标已过期，跳过这笔选区。
+  // 选区事务失败：检查 ResultEnvelope，失败时设置 idleError 并 reject 等待者。
   private async drainSelectionIntent(sessionToken: number): Promise<void> {
     while (true) {
       if (sessionToken !== this.sessionId) {
@@ -435,20 +438,53 @@ export class NativeRichEditorBridge {
         continue
       }
 
-      // Issue #1034 评论 #19：验证正文基线——选区 UTF-16 坐标基于 intent.textForConversion，
-      // 若 RichEditor 正文已变（this.currentText !== intent.textForConversion），
-      // 旧坐标可能指向错误位置，跳过这笔选区。
+      // Issue #1034 评论 #19/#20：验证正文基线——选区 UTF-16 坐标基于 intent.textForConversion，
+      // 若 RichEditor 正文已变（this.currentText !== intent.textForConversion），跳过这笔选区。
       if (intent.textForConversion !== this.currentText) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'drainSelectionIntent: text baseline changed, skipping stale selection')
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'drainSelectionIntent: RichEditor text baseline changed, skipping stale selection')
+        continue
+      }
+
+      // Issue #1034 评论 #20：验证 Core 正文基线——snap.text 才是 Core 真实正文，
+      // 本地文本未变不代表 Core 仍是同一正文（外部纠错/程序编辑/异步事务尚未回流）。
+      const snap = this.coordinator.getSnapshot()
+      if (snap === null) {
+        return
+      }
+      if (snap.text !== intent.textForConversion) {
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'drainSelectionIntent: Core text baseline differs, skipping stale selection')
+        continue
+      }
+
+      // IME 预编辑期间不提交选区，等 onDidIMEInput 上屏事务结算后再处理
+      if (this.imeComposing) {
         continue
       }
 
       const byteAnchor = TextOffsetMapper.utf16ToUtf8(intent.textForConversion, intent.startUtf16)
       const byteHead = TextOffsetMapper.utf16ToUtf8(intent.textForConversion, intent.endUtf16)
 
-      await this.coordinator.setSelectionWithExpectedSession(byteAnchor, byteHead, intent.expectedCoreSessionId)
+      const result = await this.coordinator.setSelectionWithExpectedSession(byteAnchor, byteHead, intent.expectedCoreSessionId)
 
       if (sessionToken !== this.sessionId) {
+        return
+      }
+
+      // Issue #1034 评论 #20：检查选区事务返回值，失败时设置 idleError 并 reject 等待者
+      if (!result.success) {
+        if (result.errorCode === 'SESSION_CHANGED') {
+          // 会话已切换，选区命令被取消，不需要报错
+          continue
+        }
+        // 其他失败：设置 idleError，reject 所有等待者，保留选区意图未落实
+        this.idleError = `Selection transaction failed: ${result.errorCode ?? 'UNKNOWN'}`
+        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+        const error = new Error(this.idleError)
+        const waiters = this.idleWaiters
+        this.idleWaiters = []
+        for (const w of waiters) {
+          w.reject(error)
+        }
         return
       }
     }
