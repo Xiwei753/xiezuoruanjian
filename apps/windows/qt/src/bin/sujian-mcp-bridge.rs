@@ -103,6 +103,7 @@ fn main() {
         }
     });
 
-    stdin_thread.join().ok();
     stdout_thread.join().ok();
+
+    std::process::exit(0);
 }

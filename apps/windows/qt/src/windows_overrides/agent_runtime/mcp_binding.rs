@@ -15,7 +15,8 @@ use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::ptr;
-use std::thread;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{
@@ -263,6 +264,8 @@ fn create_pipe_security(
 pub struct McpBroker {
     children: Vec<Child>,
     pipe_handles: Vec<HANDLE>,
+    relay_handles: Vec<Arc<Mutex<Option<HANDLE>>>>,
+    relay_threads: Vec<JoinHandle<()>>,
     #[allow(dead_code)]
     pipe_security: Vec<PipeSecurity>,
 }
@@ -275,12 +278,20 @@ impl McpBroker {
 
 impl Drop for McpBroker {
     fn drop(&mut self) {
-        for handle in &self.pipe_handles {
-            unsafe { let _ = CloseHandle(*handle); }
-        }
         for child in &mut self.children {
             let _ = child.kill();
             let _ = child.wait();
+        }
+        for relay_handle in &self.relay_handles {
+            if let Some(handle) = relay_handle.lock().unwrap().take() {
+                unsafe { let _ = CloseHandle(handle); }
+            }
+        }
+        for thread in self.relay_threads.drain(..) {
+            let _ = thread.join();
+        }
+        for handle in &self.pipe_handles {
+            unsafe { let _ = CloseHandle(*handle); }
         }
     }
 }
@@ -305,6 +316,8 @@ pub fn prepare_mcp_brokers(
     let mut bridges = Vec::new();
     let mut pipe_handles = Vec::new();
     let mut pipe_security = Vec::new();
+    let mut relay_handles = Vec::new();
+    let mut relay_threads = Vec::new();
 
     for (index, server) in ctx.mcp_servers.iter().enumerate() {
         let pipe_name = format!(
@@ -360,20 +373,31 @@ pub fn prepare_mcp_brokers(
         let broker_stdout = child.stdout.take();
 
         let pipe_handle_for_relay = duplicate_handle(pipe_handle)?;
+        let shared_relay_handle = Arc::new(Mutex::new(Some(pipe_handle_for_relay)));
+        let shared_relay_handle_clone = shared_relay_handle.clone();
 
-        thread::spawn(move || {
+        let relay_thread = thread::spawn(move || {
+            let connect_handle = {
+                let mut guard = shared_relay_handle_clone.lock().unwrap();
+                guard.take()
+            };
+            let connect_handle = match connect_handle {
+                Some(h) => h,
+                None => return,
+            };
+
             let connect_result = unsafe {
-                ConnectNamedPipe(pipe_handle_for_relay, ptr::null_mut())
+                ConnectNamedPipe(connect_handle, ptr::null_mut())
             };
             if let Err(e) = connect_result {
                 if e.code() != ERROR_PIPE_CONNECTED.to_hresult() {
-                    unsafe { let _ = CloseHandle(pipe_handle_for_relay); }
+                    unsafe { let _ = CloseHandle(connect_handle); }
                     return;
                 }
             }
 
             let pipe_file_read = unsafe {
-                std::fs::File::from_raw_handle(pipe_handle_for_relay.0 as *mut _)
+                std::fs::File::from_raw_handle(connect_handle.0 as *mut _)
             };
             let pipe_file_write = match pipe_file_read.try_clone() {
                 Ok(f) => f,
@@ -426,6 +450,8 @@ pub fn prepare_mcp_brokers(
 
         children.push(child);
         pipe_handles.push(pipe_handle);
+        relay_handles.push(shared_relay_handle);
+        relay_threads.push(relay_thread);
 
         bridges.push(McpServerLaunch {
             name: server.name.clone(),
@@ -440,6 +466,8 @@ pub fn prepare_mcp_brokers(
         Some(McpBroker {
             children,
             pipe_handles,
+            relay_handles,
+            relay_threads,
             pipe_security,
         }),
     ))

@@ -493,10 +493,9 @@ fn quote_arg(arg: &str) -> String {
                 backslashes += 1;
             }
             '"' => {
-                for _ in 0..backslashes {
+                for _ in 0..2 * backslashes + 1 {
                     result.push('\\');
                 }
-                result.push('\\');
                 result.push('"');
                 backslashes = 0;
             }
@@ -509,12 +508,56 @@ fn quote_arg(arg: &str) -> String {
             }
         }
     }
-    for _ in 0..backslashes {
-        result.push('\\');
+    for _ in 0..2 * backslashes {
         result.push('\\');
     }
     result.push('"');
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quote_arg;
+
+    #[test]
+    fn quote_arg_no_special() {
+        assert_eq!(quote_arg("hello"), "hello");
+    }
+
+    #[test]
+    fn quote_arg_empty() {
+        assert_eq!(quote_arg(""), "\"\"");
+    }
+
+    #[test]
+    fn quote_arg_space() {
+        assert_eq!(quote_arg("hello world"), "\"hello world\"");
+    }
+
+    #[test]
+    fn quote_arg_backslash() {
+        assert_eq!(quote_arg("C:\\path"), "\"C:\\path\"");
+    }
+
+    #[test]
+    fn quote_arg_trailing_backslash() {
+        assert_eq!(quote_arg("C:\\path\\"), "\"C:\\path\\\\\"");
+    }
+
+    #[test]
+    fn quote_arg_quote_after_backslash() {
+        assert_eq!(quote_arg("a\\\"b"), "\"a\\\\\\\"b\"");
+    }
+
+    #[test]
+    fn quote_arg_multiple_backslashes_before_quote() {
+        assert_eq!(quote_arg("a\\\\\"b"), "\"a\\\\\\\\\\\"b\"");
+    }
+
+    #[test]
+    fn quote_arg_quote_only() {
+        assert_eq!(quote_arg("\""), "\"\\\"\"");
+    }
 }
 
 /// 创建可继承的管道句柄对。

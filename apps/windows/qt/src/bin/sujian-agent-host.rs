@@ -253,14 +253,20 @@ fn main() {
             match stdin.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    unsafe {
-                        let mut written: u32 = 0;
-                        let _ = WriteFile(
+                    let mut total_written: u32 = 0;
+                    let write_result = unsafe {
+                        WriteFile(
                             stdin_handle,
                             Some(&buf[..n]),
-                            &mut written,
+                            &mut total_written,
                             ptr::null(),
-                        );
+                        )
+                    };
+                    if write_result.is_err() {
+                        break;
+                    }
+                    if total_written < n as u32 {
+                        break;
                     }
                 }
                 Err(_) => break,
@@ -326,7 +332,6 @@ fn main() {
 
         drop(sandbox_process);
 
-        stdin_thread.join().ok();
         stdout_thread.join().ok();
         stderr_thread.join().ok();
 
