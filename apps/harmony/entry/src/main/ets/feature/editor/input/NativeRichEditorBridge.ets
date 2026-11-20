@@ -443,14 +443,12 @@ export class NativeRichEditorBridge {
     })
   }
 
-  // Issue #1034 评论 #19/#20/#21/#22：选区单飞消费者协程。
-  // 从 pendingSelectionIntent 拿最新意图，验证正文基线后提交 Core。
+  // Issue #1034 评论 #19/#20/#21/#22/#23：选区单飞消费者协程。
   // 关键语义：pendingSelectionIntent 只有在 Core 确认成功后才清空；
   // IME 活跃或 Core 正文暂不一致时保留意图并退出，等待后续唤醒。
-  // 选区事务结果完整检查 outcome：Applied/AppliedWithAdjustedSelection/NoChange 才算成功；
-  // staleRevision/invalidOffset/invalidRange 重新采集原生选区并重算。
-  // Issue #1034 评论 #22：清空 pendingSelectionIntent 前用对象身份比较，
-  // 确保只清空当前正在处理的意图，不覆盖飞行期间 onSelectionChange 更新的最新选区。
+  // Issue #1034 评论 #22：清空 pendingSelectionIntent 前用对象身份比较。
+  // Issue #1034 评论 #23：严格 UTF-16→UTF-8 转换；按 outcome 分开处理，
+  // InvalidOffset/InvalidRange/StaleRevision 不无限重试相同错误坐标。
   private async drainSelectionIntent(sessionToken: number): Promise<void> {
     while (true) {
       if (sessionToken !== this.sessionId) {
@@ -498,8 +496,15 @@ export class NativeRichEditorBridge {
         return
       }
 
-      const byteAnchor = TextOffsetMapper.utf16ToUtf8(intent.textForConversion, intent.startUtf16)
-      const byteHead = TextOffsetMapper.utf16ToUtf8(intent.textForConversion, intent.endUtf16)
+      // Issue #1034 评论 #23：严格 UTF-16→UTF-8 转换，非法 offset 直接失败
+      const byteAnchor = TextOffsetMapper.utf16ToUtf8Checked(intent.textForConversion, intent.startUtf16)
+      const byteHead = TextOffsetMapper.utf16ToUtf8Checked(intent.textForConversion, intent.endUtf16)
+      if (byteAnchor === null || byteHead === null) {
+        this.idleError = `Invalid selection offset: anchor=${intent.startUtf16}, head=${intent.endUtf16}, textLen=${intent.textForConversion.length}`
+        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+        this.rejectAllWaiters()
+        return
+      }
 
       const result = await this.coordinator.setSelectionWithExpectedSession(byteAnchor, byteHead, intent.expectedCoreSessionId)
 
@@ -516,12 +521,7 @@ export class NativeRichEditorBridge {
         }
         this.idleError = `Selection transaction failed: ${result.errorCode ?? 'UNKNOWN'}`
         hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-        const error = new Error(this.idleError)
-        const waiters = this.idleWaiters
-        this.idleWaiters = []
-        for (const w of waiters) {
-          w.reject(error)
-        }
+        this.rejectAllWaiters()
         return
       }
 
@@ -535,12 +535,63 @@ export class NativeRichEditorBridge {
         continue
       }
 
-      // staleRevision / invalidOffset / invalidRange：重新采集原生选区并重算
-      if (this.pendingSelectionIntent === intent) {
-        this.pendingSelectionIntent = null
-        this.captureCurrentNativeSelection()
+      // Issue #1034 评论 #23：按 outcome 分开处理，不无限重试相同错误
+      if (outcome === EditorEditOutcome.StaleRevision) {
+        const newSnap = this.coordinator.getSnapshot()
+        if (newSnap !== null && newSnap.text !== intent.textForConversion) {
+          return
+        }
+        if (this.pendingSelectionIntent === intent) {
+          this.pendingSelectionIntent = null
+          this.captureCurrentNativeSelection()
+        }
+        if (this.isSameSelectionPosition(this.pendingSelectionIntent, intent)) {
+          this.idleError = 'StaleRevision with no text change: selection cannot be applied'
+          hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+          this.rejectAllWaiters()
+          return
+        }
+        continue
       }
-      continue
+
+      if (outcome === EditorEditOutcome.InvalidOffset || outcome === EditorEditOutcome.InvalidRange) {
+        if (this.pendingSelectionIntent === intent) {
+          this.pendingSelectionIntent = null
+          this.captureCurrentNativeSelection()
+        }
+        if (this.isSameSelectionPosition(this.pendingSelectionIntent, intent)) {
+          this.idleError = `${outcome === EditorEditOutcome.InvalidOffset ? 'InvalidOffset' : 'InvalidRange'}: selection cannot be corrected`
+          hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+          this.rejectAllWaiters()
+          return
+        }
+        continue
+      }
+
+      this.idleError = `Unknown selection outcome: ${outcome}`
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+      this.rejectAllWaiters()
+      return
+    }
+  }
+
+  // Issue #1034 评论 #23：比较选区意图的位置和正文是否相同（值比较，非身份比较）
+  private isSameSelectionPosition(a: SelectionIntent | null, b: SelectionIntent): boolean {
+    if (a === null) {
+      return false
+    }
+    return a.startUtf16 === b.startUtf16 &&
+           a.endUtf16 === b.endUtf16 &&
+           a.textForConversion === b.textForConversion
+  }
+
+  // Issue #1034 评论 #23：reject 所有 IdleWaiter 的辅助方法
+  private rejectAllWaiters(): void {
+    const error = new Error(this.idleError ?? 'Unknown error')
+    const waiters = this.idleWaiters
+    this.idleWaiters = []
+    for (const w of waiters) {
+      w.reject(error)
     }
   }
 

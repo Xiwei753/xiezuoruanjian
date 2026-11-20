@@ -6,12 +6,17 @@
 // 本 .ets 文件保留 TextOffsetMapper class 静态 API 供 ArkTS 端调用，
 // 静态方法体委托给 text_offset_mapper.ts 的函数。
 
-import { utf16ToUtf8 as utf16ToUtf8Impl, utf8ToUtf16 as utf8ToUtf16Impl } from './text_offset_mapper'
+import { utf16ToUtf8 as utf16ToUtf8Impl, utf16ToUtf8Checked as utf16ToUtf8CheckedImpl, utf8ToUtf16 as utf8ToUtf16Impl } from './text_offset_mapper'
 
 export class TextOffsetMapper {
   // UTF-16 code unit offset → UTF-8 byte offset
   static utf16ToUtf8(text: string, utf16Offset: number): number {
     return utf16ToUtf8Impl(text, utf16Offset)
+  }
+
+  // Issue #1034 评论 #23：严格版 UTF-16→UTF-8，非法 offset 返回 null
+  static utf16ToUtf8Checked(text: string, utf16Offset: number): number | null {
+    return utf16ToUtf8CheckedImpl(text, utf16Offset)
   }
 
   // UTF-8 byte offset → UTF-16 code unit offset

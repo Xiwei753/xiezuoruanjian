@@ -40,6 +40,26 @@ export function utf16ToUtf8(text: string, utf16Offset: number): number {
   return utf8ByteLength(sub)
 }
 
+/**
+ * UTF-16 code unit offset → UTF-8 byte offset（严格版）。
+ * 校验：有限整数、0 <= offset <= text.length、offset 不落在代理对中间。
+ * 返回 null 表示 offset 非法（落在代理对中间或超出范围）。
+ * Issue #1034 评论 #23：选区/编辑命令必须使用此版本，避免孤立代理项产生非法 Core 字节边界。
+ */
+export function utf16ToUtf8Checked(text: string, utf16Offset: number): number | null {
+  if (!Number.isFinite(utf16Offset) || utf16Offset < 0 || utf16Offset > text.length) {
+    return null
+  }
+  // 检查 offset 是否落在代理对中间：如果 offset 处是低代理项，说明前一个 code unit 是高代理项
+  if (utf16Offset > 0 && utf16Offset < text.length) {
+    const code = text.charCodeAt(utf16Offset)
+    if (code >= 0xDC00 && code <= 0xDFFF) {
+      return null
+    }
+  }
+  return utf16ToUtf8(text, utf16Offset)
+}
+
 /** UTF-8 byte offset → UTF-16 code unit offset。 */
 export function utf8ToUtf16(text: string, utf8Offset: number): number {
   if (utf8Offset <= 0) return 0
