@@ -19,7 +19,7 @@ import {
 import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
 import { EditorStatsQueue } from '../stats/EditorStatsQueue'
 import { WritingSessionTracker } from '../stats/WritingSessionTracker'
-import { EditorEditResult, EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
+import { EditorEditResult, EditorSessionSnapshot, EditorEditOutcome } from '../../../corebridge/dto/EditorDtos'
 import { EditorTransactionCause, EditorOperationKind } from '../../../corebridge/dto/EditorDtos'
 import { NativeRichEditorBridge } from '../input/NativeRichEditorBridge'
 import { SujianEditor } from './SujianEditor'
@@ -677,15 +677,30 @@ export struct WritingScreen {
 
     if (canRestoreEditorState) {
       // selection 优先；无 selection 时用 cursor。offset 是 UTF-16，转成 Core UTF-8 byte offset。
+      // Issue #1034 评论 #24：用严格版 utf16ToUtf8Checked，非法 offset 不静默钳位。
       if (params.selection !== undefined && params.selection.length >= 2) {
-        const anchorByte: number = TextOffsetMapper.utf16ToUtf8(restoreText, params.selection[0])
-        const headByte: number = TextOffsetMapper.utf16ToUtf8(restoreText, params.selection[1])
-        await this.editorCoordinator.setSelection(anchorByte, headByte)
-        await this.richEditorBridge.syncSelectionFromCore()
+        const anchorByte: number | null = TextOffsetMapper.utf16ToUtf8Checked(restoreText, params.selection[0])
+        const headByte: number | null = TextOffsetMapper.utf16ToUtf8Checked(restoreText, params.selection[1])
+        if (anchorByte !== null && headByte !== null) {
+          const selResult = await this.editorCoordinator.setSelection(anchorByte, headByte)
+          if (selResult.success && selResult.data !== undefined &&
+              (selResult.data.outcome === EditorEditOutcome.Applied ||
+               selResult.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection ||
+               selResult.data.outcome === EditorEditOutcome.NoChange)) {
+            await this.richEditorBridge.syncSelectionFromCore()
+          }
+        }
       } else if (params.cursor !== undefined) {
-        const cursorByte: number = TextOffsetMapper.utf16ToUtf8(restoreText, params.cursor)
-        await this.editorCoordinator.setSelection(cursorByte, cursorByte)
-        await this.richEditorBridge.syncSelectionFromCore()
+        const cursorByte: number | null = TextOffsetMapper.utf16ToUtf8Checked(restoreText, params.cursor)
+        if (cursorByte !== null) {
+          const selResult = await this.editorCoordinator.setSelection(cursorByte, cursorByte)
+          if (selResult.success && selResult.data !== undefined &&
+              (selResult.data.outcome === EditorEditOutcome.Applied ||
+               selResult.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection ||
+               selResult.data.outcome === EditorEditOutcome.NoChange)) {
+            await this.richEditorBridge.syncSelectionFromCore()
+          }
+        }
       }
     }
 

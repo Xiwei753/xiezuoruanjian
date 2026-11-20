@@ -719,8 +719,14 @@ export class NativeRichEditorBridge {
         mappedEnd = mapped.endUtf16
       }
 
-      const byteStart = TextOffsetMapper.utf16ToUtf8(baselineText, mappedStart)
-      const byteEnd = TextOffsetMapper.utf16ToUtf8(baselineText, mappedEnd)
+      // Issue #1034 评论 #24：严格 UTF-16→UTF-8 转换，非法 offset 不提交 Core
+      const byteStart = TextOffsetMapper.utf16ToUtf8Checked(baselineText, mappedStart)
+      const byteEnd = TextOffsetMapper.utf16ToUtf8Checked(baselineText, mappedEnd)
+      if (byteStart === null || byteEnd === null) {
+        this.idleError = `Invalid edit offset: start=${mappedStart}, end=${mappedEnd}, textLen=${baselineText.length}`
+        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+        return
+      }
 
       let result: ResultEnvelope<EditorEditResult> | null = null
       if (edit.oldText.length > 0 && edit.insertedText.length > 0) {
