@@ -246,26 +246,32 @@ fn main() {
     let stdout_handle = stdout_read;
     let stderr_handle = stderr_read;
 
+    let stdin_handle_raw = stdin_handle.0 as usize;
     let stdin_thread = thread::spawn(move || {
+        let stdin_handle = HANDLE(stdin_handle_raw as *mut _);
         let mut stdin = io::stdin();
         let mut buf = [0u8; 4096];
         loop {
             match stdin.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let mut total_written: u32 = 0;
-                    let write_result = unsafe {
-                        WriteFile(
-                            stdin_handle,
-                            Some(&buf[..n]),
-                            &mut total_written,
-                            ptr::null(),
-                        )
-                    };
-                    if write_result.is_err() {
-                        break;
+                    let mut offset = 0;
+                    while offset < n {
+                        let mut written: u32 = 0;
+                        let write_result = unsafe {
+                            WriteFile(
+                                stdin_handle,
+                                Some(&buf[offset..n]),
+                                Some(&mut written),
+                                None,
+                            )
+                        };
+                        if write_result.is_err() || written == 0 {
+                            break;
+                        }
+                        offset += written as usize;
                     }
-                    if total_written < n as u32 {
+                    if offset < n {
                         break;
                     }
                 }
@@ -275,7 +281,9 @@ fn main() {
         unsafe { let _ = CloseHandle(stdin_handle) };
     });
 
+    let stdout_handle_raw = stdout_handle.0 as usize;
     let stdout_thread = thread::spawn(move || {
+        let stdout_handle = HANDLE(stdout_handle_raw as *mut _);
         let mut stdout = io::stdout();
         let mut buf = [0u8; 4096];
         loop {
@@ -284,8 +292,8 @@ fn main() {
                 ReadFile(
                     stdout_handle,
                     Some(&mut buf),
-                    &mut read,
-                    ptr::null(),
+                    Some(&mut read),
+                    None,
                 )
             };
             if result.is_err() || read == 0 {
@@ -299,7 +307,9 @@ fn main() {
         unsafe { let _ = CloseHandle(stdout_handle) };
     });
 
+    let stderr_handle_raw = stderr_handle.0 as usize;
     let stderr_thread = thread::spawn(move || {
+        let stderr_handle = HANDLE(stderr_handle_raw as *mut _);
         let mut stderr = io::stderr();
         let mut buf = [0u8; 4096];
         loop {
@@ -308,8 +318,8 @@ fn main() {
                 ReadFile(
                     stderr_handle,
                     Some(&mut buf),
-                    &mut read,
-                    ptr::null(),
+                    Some(&mut read),
+                    None,
                 )
             };
             if result.is_err() || read == 0 {

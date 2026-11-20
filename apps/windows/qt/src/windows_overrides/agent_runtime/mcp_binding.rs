@@ -391,7 +391,11 @@ pub fn prepare_mcp_brokers(
             }
         };
 
+        let pipe_handle_raw = pipe_handle.0 as usize;
+        let stop_event_raw = stop_event.0 as usize;
         let relay_thread = thread::spawn(move || {
+            let pipe_handle = HANDLE(pipe_handle_raw as *mut _);
+            let stop_event = HANDLE(stop_event_raw as *mut _);
             relay_main(pipe_handle, stop_event, broker_stdin, broker_stdout);
         });
 
@@ -430,7 +434,7 @@ fn relay_main(
     connect_overlapped.hEvent = connect_event;
 
     let connect_result = unsafe {
-        ConnectNamedPipe(pipe_handle, &mut connect_overlapped)
+        ConnectNamedPipe(pipe_handle, Some(&mut connect_overlapped))
     };
 
     // Classify ConnectNamedPipe return status
@@ -499,7 +503,12 @@ fn relay_main(
     unsafe { let _ = CloseHandle(connect_event); }
 
     // Bidirectional forwarding with two sub-threads
+    let pipe_handle_raw = pipe_handle.0 as usize;
+    let stop_event_raw = stop_event.0 as usize;
+
     let stdin_thread = thread::spawn(move || {
+        let pipe_handle = HANDLE(pipe_handle_raw as *mut _);
+        let stop_event = HANDLE(stop_event_raw as *mut _);
         if let Some(mut broker_stdin) = broker_stdin {
             let mut buf = [0u8; 4096];
             loop {
@@ -512,7 +521,7 @@ fn relay_main(
 
                 let mut bytes_read: u32 = 0;
                 let read_result = unsafe {
-                    ReadFile(pipe_handle, Some(&mut buf), &mut bytes_read, &mut read_overlapped)
+                    ReadFile(pipe_handle, Some(&mut buf), Some(&mut bytes_read), Some(&mut read_overlapped))
                 };
 
                 if read_result.is_ok() {
@@ -576,6 +585,8 @@ fn relay_main(
     });
 
     let stdout_thread = thread::spawn(move || {
+        let pipe_handle = HANDLE(pipe_handle_raw as *mut _);
+        let stop_event = HANDLE(stop_event_raw as *mut _);
         if let Some(mut broker_stdout) = broker_stdout {
             let mut buf = [0u8; 4096];
             loop {
@@ -585,62 +596,66 @@ fn relay_main(
                     Err(_) => break,
                 };
 
-                let write_event = match create_event() {
-                    Ok(h) => h,
-                    Err(_) => break,
-                };
+                let mut offset = 0;
+                while offset < n {
+                    let write_event = match create_event() {
+                        Ok(h) => h,
+                        Err(_) => return,
+                    };
 
-                let mut write_overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
-                write_overlapped.hEvent = write_event;
+                    let mut write_overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+                    write_overlapped.hEvent = write_event;
 
-                let mut bytes_written: u32 = 0;
-                let write_result = unsafe {
-                    WriteFile(pipe_handle, Some(&buf[..n]), &mut bytes_written, &mut write_overlapped)
-                };
+                    let mut bytes_written: u32 = 0;
+                    let write_result = unsafe {
+                        WriteFile(pipe_handle, Some(&buf[offset..n]), Some(&mut bytes_written), Some(&mut write_overlapped))
+                    };
 
-                if write_result.is_ok() {
-                    // Immediate completion
-                    unsafe { let _ = CloseHandle(write_event); }
-                    continue;
-                }
-
-                let err = unsafe { GetLastError() };
-                if err != windows::Win32::Foundation::ERROR_IO_PENDING {
-                    unsafe { let _ = CloseHandle(write_event); }
-                    break;
-                }
-
-                // Pending — wait for write_event or stop_event
-                let wait_result = unsafe {
-                    WaitForMultipleObjects(
-                        &[write_event, stop_event],
-                        false,
-                        windows::Win32::System::Threading::INFINITE,
-                    )
-                };
-                let wait_val = wait_result.0;
-
-                if wait_val == WAIT_FAILED.0 || wait_val == WAIT_OBJECT_0.0 + 1 {
-                    // stop_event or wait failed — cancel and exit
-                    unsafe {
-                        let _ = CancelIoEx(pipe_handle, Some(&mut write_overlapped));
-                        let mut dummy: u32 = 0;
-                        let _ = GetOverlappedResult(pipe_handle, &mut write_overlapped, &mut dummy, true);
+                    if write_result.is_ok() {
+                        unsafe { let _ = CloseHandle(write_event); }
+                        if bytes_written == 0 {
+                            return;
+                        }
+                        offset += bytes_written as usize;
+                        continue;
                     }
+
+                    let err = unsafe { GetLastError() };
+                    if err != windows::Win32::Foundation::ERROR_IO_PENDING {
+                        unsafe { let _ = CloseHandle(write_event); }
+                        return;
+                    }
+
+                    let wait_result = unsafe {
+                        WaitForMultipleObjects(
+                            &[write_event, stop_event],
+                            false,
+                            windows::Win32::System::Threading::INFINITE,
+                        )
+                    };
+                    let wait_val = wait_result.0;
+
+                    if wait_val == WAIT_FAILED.0 || wait_val == WAIT_OBJECT_0.0 + 1 {
+                        unsafe {
+                            let _ = CancelIoEx(pipe_handle, Some(&mut write_overlapped));
+                            let mut dummy: u32 = 0;
+                            let _ = GetOverlappedResult(pipe_handle, &mut write_overlapped, &mut dummy, true);
+                        }
+                        unsafe { let _ = CloseHandle(write_event); }
+                        return;
+                    }
+
+                    let mut transferred: u32 = 0;
+                    let overlapped_result = unsafe {
+                        GetOverlappedResult(pipe_handle, &mut write_overlapped, &mut transferred, true)
+                    };
+
                     unsafe { let _ = CloseHandle(write_event); }
-                    break;
-                }
 
-                // write_event signaled — get result
-                let mut transferred: u32 = 0;
-                let overlapped_result = unsafe {
-                    GetOverlappedResult(pipe_handle, &mut write_overlapped, &mut transferred, true)
-                };
-
-                unsafe { let _ = CloseHandle(write_event); }
-
-                if overlapped_result.is_err() {
-                    break;
+                    if overlapped_result.is_err() || transferred == 0 {
+                        return;
+                    }
+                    offset += transferred as usize;
                 }
             }
         }
