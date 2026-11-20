@@ -12,7 +12,7 @@ use std::thread;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_SHARE_NONE, OPEN_EXISTING,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_NONE, OPEN_EXISTING,
 };
 
 fn wide(s: &str) -> Vec<u16> {
@@ -54,15 +54,18 @@ fn main() {
             FILE_SHARE_NONE,
             None,
             OPEN_EXISTING,
-            0,
+            FILE_FLAGS_AND_ATTRIBUTES(0),
             None,
         )
     };
 
-    if pipe_handle.is_invalid() {
-        eprintln!("sujian-mcp-bridge: 无法连接 named pipe: {pipe_path}");
-        std::process::exit(3);
-    }
+    let pipe_handle = match pipe_handle {
+        Ok(handle) => handle,
+        Err(e) => {
+            eprintln!("sujian-mcp-bridge: 无法连接 named pipe: {pipe_path}: {e}");
+            std::process::exit(3);
+        }
+    };
 
     let pipe_file = unsafe { std::fs::File::from_raw_handle(pipe_handle.0 as *mut _) };
     let pipe_write = pipe_file.try_clone().expect("clone pipe handle");

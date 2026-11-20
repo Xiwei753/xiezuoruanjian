@@ -13,15 +13,15 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use windows::core::PCWSTR;
+use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, BOOL, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+    CloseHandle, BOOL, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
 };
 use windows::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
 };
 use windows::Win32::Security::{
-    FreeSid, CreateWellKnownSid, PACL, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
+    FreeSid, CreateWellKnownSid, ACL, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
     SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES, WELL_KNOWN_SID_TYPE,
     DACL_SECURITY_INFORMATION,
 };
@@ -132,8 +132,8 @@ impl WellKnownSid {
         unsafe {
             CreateWellKnownSid(
                 sid_type,
-                ptr::null(),
-                buffer.as_mut_ptr() as *mut _,
+                None,
+                PSID(buffer.as_mut_ptr().cast()),
                 &mut sid_len,
             )
             .map_err(|e| format!("CreateWellKnownSid: {e}"))?;
@@ -266,7 +266,7 @@ pub fn grant_directory_access(
             },
         };
 
-        let mut existing_dacl: PACL = ptr::null_mut();
+        let mut existing_dacl: *mut ACL = ptr::null_mut();
         let mut security_descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
 
         unsafe {
@@ -288,15 +288,14 @@ pub fn grant_directory_access(
                 ));
             }
 
-            let mut new_acl: PACL = ptr::null_mut();
+            let mut new_acl: *mut ACL = ptr::null_mut();
             let merge_result = SetEntriesInAclW(
-                1,
-                &explicit_access,
-                existing_dacl,
+                Some(&[explicit_access]),
+                if existing_dacl.is_null() { None } else { Some(existing_dacl) },
                 &mut new_acl,
             );
             if merge_result != 0 {
-                let _ = windows::Win32::Foundation::LocalFree(security_descriptor.0 as *mut _);
+                let _ = windows::Win32::Foundation::LocalFree(HLOCAL(security_descriptor.0));
                 return Err(format!("SetEntriesInAclW: error {merge_result}"));
             }
 
@@ -309,14 +308,14 @@ pub fn grant_directory_access(
                 Some(new_acl),
                 None,
             );
-            let _ = windows::Win32::Foundation::LocalFree(new_acl.0 as *mut _);
-            let _ = windows::Win32::Foundation::LocalFree(security_descriptor.0 as *mut _);
+            let _ = windows::Win32::Foundation::LocalFree(HLOCAL(new_acl.cast()));
+            let _ = windows::Win32::Foundation::LocalFree(HLOCAL(security_descriptor.0));
 
-            if set_result.is_err() {
+            if set_result.0 != 0 {
                 return Err(format!(
-                    "SetNamedSecurityInfoW for {}: {:?}",
+                    "SetNamedSecurityInfoW for {}: error {}",
                     dir.display(),
-                    set_result.unwrap_err()
+                    set_result.0
                 ));
             }
         }
@@ -373,10 +372,10 @@ pub fn spawn_in_appcontainer(
             startup_info.lpAttributeList,
             0,
             PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
-            &security_capabilities as *const _ as *const _,
+            Some(&security_capabilities as *const _ as *const _),
             std::mem::size_of::<SECURITY_CAPABILITIES>(),
-            ptr::null_mut(),
-            ptr::null_mut(),
+            None,
+            None,
         )
         .map_err(|e| format!("UpdateProcThreadAttribute(CAPABILITIES): {e}"))?;
 
@@ -385,10 +384,10 @@ pub fn spawn_in_appcontainer(
             startup_info.lpAttributeList,
             0,
             PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-            inherit_handles.as_mut_ptr() as *const _,
+            Some(inherit_handles.as_mut_ptr() as *const _),
             std::mem::size_of::<[HANDLE; 3]>(),
-            ptr::null_mut(),
-            ptr::null_mut(),
+            None,
+            None,
         )
         .map_err(|e| format!("UpdateProcThreadAttribute(HANDLE_LIST): {e}"))?;
     }
@@ -397,7 +396,7 @@ pub fn spawn_in_appcontainer(
     let mut cmd_line_wide = wide(&cmd_line);
     let working_dir_wide = wide(&working_dir.to_string_lossy());
 
-    let job_handle = unsafe { CreateJobObjectW(ptr::null(), PCWSTR(ptr::null())) }
+    let job_handle = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
         .map_err(|e| {
             unsafe { DeleteProcThreadAttributeList(startup_info.lpAttributeList); }
             format!("CreateJobObjectW: {e}")
@@ -424,13 +423,13 @@ pub fn spawn_in_appcontainer(
     let mut process_info = PROCESS_INFORMATION::default();
     let create_result = unsafe {
         CreateProcessW(
-            PCWSTR(ptr::null()),
-            cmd_line_wide.as_mut_ptr(),
-            ptr::null(),
-            ptr::null(),
+            PCWSTR::null(),
+            PWSTR(cmd_line_wide.as_mut_ptr()),
+            None,
+            None,
             true,
             EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
-            ptr::null(),
+            None,
             PCWSTR(working_dir_wide.as_ptr()),
             &mut startup_info.StartupInfo as *mut _ as *mut STARTUPINFOW,
             &mut process_info,
@@ -588,7 +587,7 @@ pub fn make_non_inheritable(handle: HANDLE) -> Result<(), String> {
     unsafe {
         windows::Win32::Foundation::SetHandleInformation(
             handle,
-            windows::Win32::Foundation::HANDLE_FLAG_INHERIT,
+            windows::Win32::Foundation::HANDLE_FLAG_INHERIT.0,
             windows::Win32::Foundation::HANDLE_FLAGS(0),
         )
         .map_err(|e| format!("SetHandleInformation: {e}"))?;

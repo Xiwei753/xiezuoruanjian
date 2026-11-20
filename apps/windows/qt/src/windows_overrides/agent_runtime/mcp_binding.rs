@@ -23,11 +23,11 @@ use std::thread::{self, JoinHandle};
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{
-    CloseHandle, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, DuplicateHandle, HANDLE, HLOCAL, INVALID_HANDLE_VALUE,
     ERROR_PIPE_CONNECTED, WAIT_OBJECT_0, WAIT_FAILED, GetLastError,
 };
 use windows::Win32::Security::{
-    InitializeSecurityDescriptor, PACL, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+    InitializeSecurityDescriptor, ACL, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
     SetSecurityDescriptorDacl, SECURITY_DESCRIPTOR,
 };
 use windows::Win32::Security::Authorization::{
@@ -200,13 +200,13 @@ pub fn bind_current_project(
 /// 持有 named pipe 安全描述符和 ACL 的 RAII 结构。
 struct PipeSecurity {
     sd: Box<SECURITY_DESCRIPTOR>,
-    acl: PACL,
+    acl: *mut ACL,
 }
 
 impl Drop for PipeSecurity {
     fn drop(&mut self) {
-        if !self.acl.0.is_null() {
-            unsafe { let _ = windows::Win32::Foundation::LocalFree(self.acl.0 as *mut _); }
+        if !self.acl.is_null() {
+            unsafe { let _ = windows::Win32::Foundation::LocalFree(HLOCAL(self.acl.cast())); }
         }
     }
 }
@@ -226,9 +226,9 @@ fn create_pipe_security(
         },
     };
 
-    let mut new_acl: PACL = ptr::null_mut();
+    let mut new_acl: *mut ACL = ptr::null_mut();
     unsafe {
-        let result = SetEntriesInAclW(1, &explicit_access, ptr::null(), &mut new_acl);
+        let result = SetEntriesInAclW(Some(&[explicit_access]), None, &mut new_acl);
         if result != 0 {
             return Err(format!("SetEntriesInAclW: error {result}"));
         }
@@ -245,7 +245,7 @@ fn create_pipe_security(
         SetSecurityDescriptorDacl(
             PSECURITY_DESCRIPTOR(sd.as_mut() as *mut _ as *mut _),
             true,
-            Some(new_acl),
+            Some(new_acl as *const ACL),
             false,
         )
         .map_err(|e| format!("SetSecurityDescriptorDacl: {e}"))?;
