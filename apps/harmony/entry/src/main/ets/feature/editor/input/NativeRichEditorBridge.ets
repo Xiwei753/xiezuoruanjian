@@ -182,12 +182,31 @@ export class NativeRichEditorBridge {
         return
       }
 
-      // Issue #1034 评论 #18/#19：有 pending 选区意图或选区消费者在运行时不算空闲
+      // Issue #1034 评论 #18/#19/#22：有 pending 选区意图时检查等待条件，
+      // 不无条件 requestSelectionFlush 避免无限循环。
       if (this.pendingSelectionIntent !== null) {
+        if (this.imeComposing) {
+          return
+        }
+        if (this.pendingEdits.length > 0 || this.drainRunning) {
+          return
+        }
+        if (this.selectionDrainRunning) {
+          return
+        }
+        const snap = this.coordinator.getSnapshot()
+        if (snap !== null && snap.text !== this.currentText) {
+          this.idleError = 'Selection intent pending but Core text diverged with no pending edits'
+          hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+          const error = new Error(this.idleError)
+          const waiters = this.idleWaiters
+          this.idleWaiters = []
+          for (const w of waiters) {
+            w.reject(error)
+          }
+          return
+        }
         this.requestSelectionFlush()
-        return
-      }
-      if (this.selectionDrainRunning) {
         return
       }
 
@@ -424,12 +443,14 @@ export class NativeRichEditorBridge {
     })
   }
 
-  // Issue #1034 评论 #19/#20/#21：选区单飞消费者协程。
+  // Issue #1034 评论 #19/#20/#21/#22：选区单飞消费者协程。
   // 从 pendingSelectionIntent 拿最新意图，验证正文基线后提交 Core。
   // 关键语义：pendingSelectionIntent 只有在 Core 确认成功后才清空；
   // IME 活跃或 Core 正文暂不一致时保留意图并退出，等待后续唤醒。
   // 选区事务结果完整检查 outcome：Applied/AppliedWithAdjustedSelection/NoChange 才算成功；
   // staleRevision/invalidOffset/invalidRange 重新采集原生选区并重算。
+  // Issue #1034 评论 #22：清空 pendingSelectionIntent 前用对象身份比较，
+  // 确保只清空当前正在处理的意图，不覆盖飞行期间 onSelectionChange 更新的最新选区。
   private async drainSelectionIntent(sessionToken: number): Promise<void> {
     while (true) {
       if (sessionToken !== this.sessionId) {
@@ -442,18 +463,24 @@ export class NativeRichEditorBridge {
       }
 
       if (intent.localSessionToken !== this.sessionId) {
-        this.pendingSelectionIntent = null
+        if (this.pendingSelectionIntent === intent) {
+          this.pendingSelectionIntent = null
+        }
         continue
       }
       if (this.coordinator.getSessionId() !== intent.expectedCoreSessionId) {
-        this.pendingSelectionIntent = null
+        if (this.pendingSelectionIntent === intent) {
+          this.pendingSelectionIntent = null
+        }
         continue
       }
 
       // 本地正文已变：选区坐标过期，重新采集原生选区
       if (intent.textForConversion !== this.currentText) {
-        this.pendingSelectionIntent = null
-        this.captureCurrentNativeSelection()
+        if (this.pendingSelectionIntent === intent) {
+          this.pendingSelectionIntent = null
+          this.captureCurrentNativeSelection()
+        }
         continue
       }
 
@@ -482,7 +509,9 @@ export class NativeRichEditorBridge {
 
       if (!result.success || result.data === undefined) {
         if (result.errorCode === 'SESSION_CHANGED') {
-          this.pendingSelectionIntent = null
+          if (this.pendingSelectionIntent === intent) {
+            this.pendingSelectionIntent = null
+          }
           continue
         }
         this.idleError = `Selection transaction failed: ${result.errorCode ?? 'UNKNOWN'}`
@@ -500,19 +529,24 @@ export class NativeRichEditorBridge {
       if (outcome === EditorEditOutcome.Applied ||
           outcome === EditorEditOutcome.AppliedWithAdjustedSelection ||
           outcome === EditorEditOutcome.NoChange) {
-        this.pendingSelectionIntent = null
+        if (this.pendingSelectionIntent === intent) {
+          this.pendingSelectionIntent = null
+        }
         continue
       }
 
       // staleRevision / invalidOffset / invalidRange：重新采集原生选区并重算
-      this.pendingSelectionIntent = null
-      this.captureCurrentNativeSelection()
+      if (this.pendingSelectionIntent === intent) {
+        this.pendingSelectionIntent = null
+        this.captureCurrentNativeSelection()
+      }
       continue
     }
   }
 
-  // Issue #1034 评论 #21：从 RichEditorController 重新捕获当前原生选区。
-  // 折叠光标用 getCaretOffset()，有选区时用 getSelection().selection。
+  // Issue #1034 评论 #21/#22：从 RichEditorController 重新捕获当前原生选区。
+  // RichEditorSelection.selection 是长度为 2 的数组 [start, end]，
+  // 折叠光标用 getCaretOffset() 获取更准确的位置。
   private captureCurrentNativeSelection(): void {
     if (this.richEditorController === null) {
       return
@@ -522,16 +556,22 @@ export class NativeRichEditorBridge {
       return
     }
 
+    const sel = this.richEditorController.getSelection()
+    if (sel === undefined || sel === null) {
+      return
+    }
+
     let startUtf16: number
     let endUtf16: number
-    const sel = this.richEditorController.getSelection()
-    if (sel.selection.start === sel.selection.end) {
+    const selectionStart = sel.selection[0]
+    const selectionEnd = sel.selection[1]
+    if (selectionStart === selectionEnd) {
       const caretOffset = this.richEditorController.getCaretOffset()
       startUtf16 = caretOffset
       endUtf16 = caretOffset
     } else {
-      startUtf16 = sel.selection.start
-      endUtf16 = sel.selection.end
+      startUtf16 = selectionStart
+      endUtf16 = selectionEnd
     }
 
     this.pendingSelectionIntent = {
