@@ -201,9 +201,13 @@ export class EditorSessionCoordinator {
     }
     const sid = this.state.sessionId
     const snapResult = await this.bridge.snapshot(sid)
+    // Issue #1034 评论 #30：await 后确认 session 身份未变，
+    // 防止 open()/close() 在飞行期间替换 this.state 后用旧章节快照覆盖新会话
     if (snapResult.success && snapResult.data) {
-      this.state = EditorSessionState.fromCreate(sid, snapResult.data)
-      this.notifyListener(sourceEditResult)
+      if (this.state && this.state.sessionId === sid) {
+        this.state = EditorSessionState.fromCreate(sid, snapResult.data)
+        this.notifyListener(sourceEditResult)
+      }
     }
     // snapResult 失败时无法恢复；保留旧 state。不抛错（避免阻塞命令队列后续命令），
     // 但调用方通过 result.success/data.outcome 已知本次命令失败。
@@ -243,8 +247,15 @@ export class EditorSessionCoordinator {
           this.state.snapshot.text !== expectedText) {
         return { success: false, errorCode: 'STALE_BASELINE' }
       }
+      const targetSessionId = this.state.sessionId
+      const targetRevision = this.state.snapshot.revision
       const result = await this.bridge.replace(
-        this.state.sessionId, byteOffsetStart, byteOffsetEnd, replacement, expectedText, cause, this.state.snapshot.revision)
+        targetSessionId, byteOffsetStart, byteOffsetEnd, replacement, expectedText, cause, targetRevision)
+      // Issue #1034 评论 #30：await 后再次核对 session 身份，
+      // 防止 open()/close() 在飞行期间替换 this.state
+      if (!this.state || this.state.sessionId !== targetSessionId) {
+        return { success: false, errorCode: 'SESSION_CHANGED' }
+      }
       if (result.success && result.data) {
         const outcome: EditStateOutcome = this.state.withEditResult(result.data)
         if (outcome.ok) {

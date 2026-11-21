@@ -263,6 +263,8 @@ export class NativeRichEditorBridge {
     }
     this.pendingSelectionIntent = null
     this.selectionDrainRunning = false
+    // Issue #1034 评论 #30：重置 StaleRevision 失败记录，防止跨章节泄漏
+    this.lastStaleRevision = null
   }
 
   onWillChange(_value: RichEditorChangeValue): boolean {
@@ -532,6 +534,8 @@ export class NativeRichEditorBridge {
       if (outcome === EditorEditOutcome.Applied ||
           outcome === EditorEditOutcome.AppliedWithAdjustedSelection ||
           outcome === EditorEditOutcome.NoChange) {
+        // Issue #1034 评论 #30：选区成功后清空 StaleRevision 失败记录
+        this.lastStaleRevision = null
         if (this.pendingSelectionIntent === intent) {
           this.pendingSelectionIntent = null
         }
@@ -540,8 +544,10 @@ export class NativeRichEditorBridge {
 
       // Issue #1034 评论 #23：按 outcome 分开处理，不无限重试相同错误
       if (outcome === EditorEditOutcome.StaleRevision) {
-        // Issue #1034 评论 #28：StaleRevision 只表示 Core 版本不一致，不比较文本。
+        // Issue #1034 评论 #28/#30：StaleRevision 只表示 Core 版本不一致，不比较文本。
         // 与 InvalidOffset/InvalidRange 区分处理：版本过期时按版本恢复，坐标非法时按坐标恢复。
+        // lastStaleRevision 只在 pendingSelectionIntent===intent 时设置，
+        // 防止旧意图的失败记录泄漏到新意图或跨会话残留。
         const newSnap = this.coordinator.getSnapshot()
         if (newSnap !== null && newSnap.text !== intent.textForConversion) {
           // Core 正文确实变化：保留 latest-wins 意图，等正文收敛后重新计算字节坐标
@@ -549,19 +555,19 @@ export class NativeRichEditorBridge {
         }
         // Core 正文相同但 revision 已前进：以新 revision 重新提交选区
         const currentRevision = newSnap !== null ? newSnap.revision : null
-        if (currentRevision !== null && currentRevision === this.lastStaleRevision) {
-          // 同一 revision 再次返回 StaleRevision：Core snapshot 恢复失败，报告明确错误
-          this.idleError = 'StaleRevision: same revision retry failed, Core snapshot recovery may have failed'
-          hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-          this.rejectAllWaiters()
-          return
-        }
-        this.lastStaleRevision = currentRevision
-        // 重新捕获原生选区并通过 coordinator 在新 revision 上重新提交
         if (this.pendingSelectionIntent === intent) {
+          // 当前意图仍然是 pendingSelectionIntent：检查是否同一 revision 重复失败
+          if (currentRevision !== null && currentRevision === this.lastStaleRevision) {
+            this.idleError = 'StaleRevision: same revision retry failed, Core snapshot recovery may have failed'
+            hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+            this.rejectAllWaiters()
+            return
+          }
+          this.lastStaleRevision = currentRevision
           this.pendingSelectionIntent = null
           this.captureCurrentNativeSelection()
         }
+        // pendingSelectionIntent 已被新意图覆盖：不设置 lastStaleRevision，让新意图独立处理
         continue
       }
 
