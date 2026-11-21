@@ -397,7 +397,17 @@ pub fn spawn_in_appcontainer(
         .map_err(|e| format!("UpdateProcThreadAttribute(HANDLE_LIST): {e}"))?;
     }
 
-    let cmd_line = build_command_line(program, args);
+    let (app_name, cmd_line) = if is_batch_file(program) {
+        let system_root = std::env::var("SystemRoot")
+            .unwrap_or_else(|_| "C:\\Windows".to_string());
+        let cmd_exe = format!("{system_root}\\System32\\cmd.exe");
+        let cmd_line = build_cmd_command_line(program, args);
+        (cmd_exe, cmd_line)
+    } else {
+        let cmd_line = build_command_line(program, args);
+        (program.to_string(), cmd_line)
+    };
+    let app_name_wide = wide(&app_name);
     let mut cmd_line_wide = wide(&cmd_line);
     let working_dir_wide = wide(&working_dir.to_string_lossy());
 
@@ -428,7 +438,7 @@ pub fn spawn_in_appcontainer(
     let mut process_info = PROCESS_INFORMATION::default();
     let create_result = unsafe {
         CreateProcessW(
-            PCWSTR::null(),
+            PCWSTR(app_name_wide.as_ptr()),
             PWSTR(cmd_line_wide.as_mut_ptr()),
             None,
             None,
@@ -466,6 +476,66 @@ pub fn spawn_in_appcontainer(
         pid: process_info.dwProcessId,
         job_handle,
     })
+}
+
+/// 判断路径是否为 `.cmd` 或 `.bat` 批处理文件（大小写不敏感）。
+fn is_batch_file(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .map(|ext| {
+            let ext_lower = ext.to_string_lossy().to_lowercase();
+            ext_lower == "cmd" || ext_lower == "bat"
+        })
+        .unwrap_or(false)
+}
+
+/// 为 cmd.exe `/c` 上下文编码单个参数。
+///
+/// cmd.exe 的引号语义与 C argv 不同：引号在 cmd.exe 中只是字面字符，
+/// 不构成"引号区域"。特殊字符 `& | < > ^ ( ) % !` 在引号内外都有语义，
+/// 必须用 `^` 转义。`%` 需要双写为 `%%` 防止环境变量展开。
+/// 含空格或空参数需要引号包裹，但引号本身也要 `^` 转义以防注入。
+fn quote_arg_cmd(arg: &str) -> String {
+    let needs_quotes = arg.is_empty() || arg.contains(' ') || arg.contains('\t');
+    let mut result = String::new();
+    if needs_quotes {
+        result.push_str("^\"");
+    }
+    for ch in arg.chars() {
+        match ch {
+            '%' => {
+                result.push_str("%%");
+            }
+            '&' | '|' | '<' | '>' | '^' | '(' | ')' | '!' => {
+                result.push('^');
+                result.push(ch);
+            }
+            '"' => {
+                result.push_str("^\"");
+            }
+            _ => {
+                result.push(ch);
+            }
+        }
+    }
+    if needs_quotes {
+        result.push_str("^\"");
+    }
+    result
+}
+
+/// 构造 `cmd.exe /d /s /c "command"` 命令行，用于启动 `.cmd`/`.bat` 文件。
+///
+/// 内部命令字符串中，脚本路径和参数均用 `quote_arg_cmd` 编码，
+/// 整体用 `^"` 包裹（cmd.exe `/s /c` 会去掉首尾 `^"` 后的引号）。
+fn build_cmd_command_line(script_path: &str, args: &[String]) -> String {
+    let mut inner = String::new();
+    inner.push_str(&quote_arg_cmd(script_path));
+    for arg in args {
+        inner.push(' ');
+        inner.push_str(&quote_arg_cmd(arg));
+    }
+    format!("cmd.exe /d /s /c ^\"{inner}^\"")
 }
 
 /// 按 Windows 命令行解析规则编码参数。
@@ -521,7 +591,7 @@ fn quote_arg(arg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::quote_arg;
+    use super::{build_cmd_command_line, is_batch_file, quote_arg, quote_arg_cmd};
 
     #[test]
     fn quote_arg_no_special() {
@@ -561,6 +631,106 @@ mod tests {
     #[test]
     fn quote_arg_quote_only() {
         assert_eq!(quote_arg("\""), "\"\\\"\"");
+    }
+
+    #[test]
+    fn is_batch_file_cmd() {
+        assert!(is_batch_file("foo.cmd"));
+        assert!(is_batch_file("foo.CMD"));
+        assert!(is_batch_file("C:\\path\\to\\script.cmd"));
+    }
+
+    #[test]
+    fn is_batch_file_bat() {
+        assert!(is_batch_file("foo.bat"));
+        assert!(is_batch_file("foo.BAT"));
+        assert!(is_batch_file("C:\\path\\to\\script.bat"));
+    }
+
+    #[test]
+    fn is_batch_file_not_batch() {
+        assert!(!is_batch_file("foo.exe"));
+        assert!(!is_batch_file("foo.sh"));
+        assert!(!is_batch_file("foo"));
+        assert!(!is_batch_file("foo.cmd.txt"));
+    }
+
+    #[test]
+    fn quote_arg_cmd_simple() {
+        assert_eq!(quote_arg_cmd("hello"), "hello");
+    }
+
+    #[test]
+    fn quote_arg_cmd_empty() {
+        assert_eq!(quote_arg_cmd(""), "^\"^\"");
+    }
+
+    #[test]
+    fn quote_arg_cmd_space() {
+        assert_eq!(quote_arg_cmd("hello world"), "^\"hello world^\"");
+    }
+
+    #[test]
+    fn quote_arg_cmd_percent() {
+        assert_eq!(quote_arg_cmd("foo%bar%"), "foo%%bar%%");
+    }
+
+    #[test]
+    fn quote_arg_cmd_ampersand() {
+        assert_eq!(quote_arg_cmd("a&b"), "a^&b");
+    }
+
+    #[test]
+    fn quote_arg_cmd_pipe() {
+        assert_eq!(quote_arg_cmd("a|b"), "a^|b");
+    }
+
+    #[test]
+    fn quote_arg_cmd_angle_brackets() {
+        assert_eq!(quote_arg_cmd("a<b>c"), "a^<b^>c");
+    }
+
+    #[test]
+    fn quote_arg_cmd_caret() {
+        assert_eq!(quote_arg_cmd("a^b"), "a^^b");
+    }
+
+    #[test]
+    fn quote_arg_cmd_parens() {
+        assert_eq!(quote_arg_cmd("a(b)c"), "a^(b^)c");
+    }
+
+    #[test]
+    fn quote_arg_cmd_exclamation() {
+        assert_eq!(quote_arg_cmd("a!b"), "a^!b");
+    }
+
+    #[test]
+    fn quote_arg_cmd_quote() {
+        assert_eq!(quote_arg_cmd("a\"b"), "a^\"b");
+    }
+
+    #[test]
+    fn quote_arg_cmd_space_with_special() {
+        assert_eq!(quote_arg_cmd("a b&c"), "^\"a b^&c^\"");
+    }
+
+    #[test]
+    fn build_cmd_command_line_simple() {
+        let result = build_cmd_command_line("script.cmd", &[]);
+        assert_eq!(result, "cmd.exe /d /s /c ^\"script.cmd^\"");
+    }
+
+    #[test]
+    fn build_cmd_command_line_with_args() {
+        let result = build_cmd_command_line("script.cmd", &["arg1".to_string(), "arg2".to_string()]);
+        assert_eq!(result, "cmd.exe /d /s /c ^\"script.cmd arg1 arg2^\"");
+    }
+
+    #[test]
+    fn build_cmd_command_line_with_special_args() {
+        let result = build_cmd_command_line("script.cmd", &["a&b".to_string()]);
+        assert_eq!(result, "cmd.exe /d /s /c ^\"script.cmd a^&b^\"");
     }
 }
 
