@@ -86,6 +86,9 @@ export class NativeRichEditorBridge {
   private selectionFlushTimerId: number = -1
   // Issue #1034 评论 #19：选区%单飞消费者标记，防止重复追加 editQueue.then
   private selectionDrainRunning: boolean = false
+  // Issue #1034 评论 #28：记录上次 StaleRevision 时的 Core revision，
+  // 只有 revision 已变化时才允许对同一位置重新提交选区
+  private lastStaleRevision: number | null = null
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -537,19 +540,27 @@ export class NativeRichEditorBridge {
 
       // Issue #1034 评论 #23：按 outcome 分开处理，不无限重试相同错误
       if (outcome === EditorEditOutcome.StaleRevision) {
+        // Issue #1034 评论 #28：StaleRevision 只表示 Core 版本不一致，不比较文本。
+        // 与 InvalidOffset/InvalidRange 区分处理：版本过期时按版本恢复，坐标非法时按坐标恢复。
         const newSnap = this.coordinator.getSnapshot()
         if (newSnap !== null && newSnap.text !== intent.textForConversion) {
+          // Core 正文确实变化：保留 latest-wins 意图，等正文收敛后重新计算字节坐标
           return
         }
-        if (this.pendingSelectionIntent === intent) {
-          this.pendingSelectionIntent = null
-          this.captureCurrentNativeSelection()
-        }
-        if (this.isSameSelectionPosition(this.pendingSelectionIntent, intent)) {
-          this.idleError = 'StaleRevision with no text change: selection cannot be applied'
+        // Core 正文相同但 revision 已前进：以新 revision 重新提交选区
+        const currentRevision = newSnap !== null ? newSnap.revision : null
+        if (currentRevision !== null && currentRevision === this.lastStaleRevision) {
+          // 同一 revision 再次返回 StaleRevision：Core snapshot 恢复失败，报告明确错误
+          this.idleError = 'StaleRevision: same revision retry failed, Core snapshot recovery may have failed'
           hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
           this.rejectAllWaiters()
           return
+        }
+        this.lastStaleRevision = currentRevision
+        // 重新捕获原生选区并通过 coordinator 在新 revision 上重新提交
+        if (this.pendingSelectionIntent === intent) {
+          this.pendingSelectionIntent = null
+          this.captureCurrentNativeSelection()
         }
         continue
       }

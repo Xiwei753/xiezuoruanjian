@@ -648,20 +648,21 @@ export struct WritingScreen {
       params.snapshotHash !== undefined &&
       (params.contentHash === undefined || params.contentHash === this.lastSavedContentHash) &&
       !this.hasUnsavedChanges) {
-      // 源设备冻结的未保存正文已通过附近设备快照到达。只有目标正文仍是同一份
-      // 落盘基线（contentHash 相同）且本地没有新修改时才替换，避免覆盖目标新输入。
-      // 源设备冻结的未保存正文可能尚未到达：先按 payload 的源 networkId 主动
-      // 请求一次，再订阅同一 snapshotId 等待真正送达。连接/请求失败不阻塞页面。
+      // Issue #1034 评论 #27：await 前捕获不可变基线，防止 await 期间本地编辑导致旧快照覆盖新输入
+      const baselineSessionId: number | null = this.editorCoordinator.getSessionId()
+      const baselineRevision: number | null = this.editorCoordinator.getRevision()
+      const baselineText: string = snap.text
       if (params.sourceNetworkId !== undefined && params.sourceNetworkId.length > 0) {
         await NearbyDeviceSyncCoordinator.getInstance().requestContinuationFromDevice(
           params.sourceNetworkId, params.snapshotId, params.snapshotHash)
       }
       const snapshotText: string | null =
         await this.waitForContinuationSnapshot(params.snapshotId, params.snapshotHash)
-      if (snapshotText !== null) {
-        const textByteLength: number = TextOffsetMapper.utf16ToUtf8(snap.text, snap.text.length)
-        const applied = await this.editorCoordinator.replace(
-          0, textByteLength, snapshotText, snap.text, EditorTransactionCause.Programmatic)
+      if (snapshotText !== null && baselineSessionId !== null && baselineRevision !== null) {
+        const textByteLength: number = TextOffsetMapper.utf16ToUtf8(baselineText, baselineText.length)
+        const applied = await this.editorCoordinator.replaceIfUnchanged(
+          baselineSessionId, baselineRevision, baselineText,
+          0, textByteLength, snapshotText, EditorTransactionCause.Programmatic)
         if (applied.success && applied.data !== undefined &&
             (applied.data.outcome === EditorEditOutcome.Applied ||
              applied.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection ||

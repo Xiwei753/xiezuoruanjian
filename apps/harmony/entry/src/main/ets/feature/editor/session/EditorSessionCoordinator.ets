@@ -221,6 +221,43 @@ export class EditorSessionCoordinator {
     return this.enqueueEdit((sid, rev) => this.bridge.replace(sid, byteOffsetStart, byteOffsetEnd, text, originalText, cause, rev))
   }
 
+  // Issue #1034 评论 #27：条件替换 — 在 commandQueue 的执行闭包内核对 sessionId/revision/text，
+  // 只有基线未变才执行 bridge.replace，防止远端快照 await 期间本地编辑导致旧快照覆盖新输入。
+  async replaceIfUnchanged(
+    expectedSessionId: number,
+    expectedRevision: number,
+    expectedText: string,
+    byteOffsetStart: number,
+    byteOffsetEnd: number,
+    replacement: string,
+    cause: EditorTransactionCause
+  ): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.commandQueue.enqueue<ResultEnvelope<EditorEditResult>>(async () => {
+      if (!this.state) {
+        return this.noSession<EditorEditResult>()
+      }
+      if (this.state.sessionId !== expectedSessionId) {
+        return { success: false, errorCode: 'SESSION_CHANGED' }
+      }
+      if (this.state.snapshot.revision !== expectedRevision ||
+          this.state.snapshot.text !== expectedText) {
+        return { success: false, errorCode: 'STALE_BASELINE' }
+      }
+      const result = await this.bridge.replace(
+        this.state.sessionId, byteOffsetStart, byteOffsetEnd, replacement, expectedText, cause, this.state.snapshot.revision)
+      if (result.success && result.data) {
+        const outcome: EditStateOutcome = this.state.withEditResult(result.data)
+        if (outcome.ok) {
+          this.state = outcome.state
+          this.notifyListener(result.data)
+        } else {
+          await this.recoverFromCoreSnapshot(result.data)
+        }
+      }
+      return result
+    })
+  }
+
   async setSelection(anchorByteOffset: number, headByteOffset: number): Promise<ResultEnvelope<EditorEditResult>> {
     return this.enqueueEdit((sid, rev) => this.bridge.setSelection(sid, anchorByteOffset, headByteOffset, rev))
   }
