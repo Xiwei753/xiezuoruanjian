@@ -21,13 +21,13 @@ use std::process::{Child, Command, Stdio};
 use std::ptr;
 use std::thread::{self, JoinHandle};
 
-use windows::core::PCWSTR;
+use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, DuplicateHandle, HANDLE, HLOCAL, INVALID_HANDLE_VALUE,
     ERROR_PIPE_CONNECTED, WAIT_OBJECT_0, WAIT_FAILED, GetLastError,
 };
 use windows::Win32::Security::{
-    InitializeSecurityDescriptor, ACL, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+    InitializeSecurityDescriptor, ACL, ACE_FLAGS, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
     SetSecurityDescriptorDacl, SECURITY_DESCRIPTOR,
 };
 use windows::Win32::Security::Authorization::{
@@ -36,14 +36,14 @@ use windows::Win32::Security::Authorization::{
 };
 use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE,
+    ConnectNamedPipe, CreateNamedPipeW, PIPE_TYPE_BYTE,
     PIPE_READMODE_BYTE, PIPE_WAIT,
 };
 use windows::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, SetEvent, WaitForMultipleObjects,
 };
 use windows::Win32::Storage::FileSystem::{
-    ReadFile, WriteFile, FILE_FLAG_OVERLAPPED,
+    ReadFile, WriteFile, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
 };
 
 use super::events::{AgentLaunchContext, McpScope, McpServerLaunch};
@@ -247,11 +247,11 @@ fn create_pipe_security(
     let explicit_access = EXPLICIT_ACCESS_W {
         grfAccessPermissions: FILE_GENERIC_READ | FILE_GENERIC_WRITE,
         grfAccessMode: SET_ACCESS,
-        grfInheritance: 0,
+        grfInheritance: ACE_FLAGS(0),
         Trustee: TRUSTEE_W {
             TrusteeForm: TRUSTEE_IS_SID,
             TrusteeType: TRUSTEE_IS_GROUP,
-            ptstrName: sid_ptr,
+            ptstrName: PWSTR(sid_ptr.cast()),
             ..Default::default()
         },
     };

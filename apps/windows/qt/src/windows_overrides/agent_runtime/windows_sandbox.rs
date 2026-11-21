@@ -21,9 +21,9 @@ use windows::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
 };
 use windows::Win32::Security::{
-    FreeSid, CreateWellKnownSid, ACL, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
+    FreeSid, CreateWellKnownSid, ACL, ACE_FLAGS, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
     SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES, WELL_KNOWN_SID_TYPE,
-    DACL_SECURITY_INFORMATION,
+    DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, CONTAINER_INHERIT_ACE,
 };
 use windows::Win32::Security::Authorization::{
     GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W,
@@ -36,10 +36,10 @@ use windows::Win32::System::JobObjects::{
 };
 use windows::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, ResumeThread, UpdateProcThreadAttribute,
-    WaitForSingleObject, CREATE_SUSPENDED, EXTENDED_STARTUPINFO_PRESENT,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, ResumeThread,
+    UpdateProcThreadAttribute, WaitForSingleObject, CREATE_SUSPENDED, EXTENDED_STARTUPINFO_PRESENT,
     PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-    PROCESS_INFORMATION, STARTUPINFOEXW, STARTUPINFOW,
+    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
 };
 
 const APPCONTAINER_PREFIX: &str = "Sujian.Agent.";
@@ -169,11 +169,11 @@ impl<'a> SandboxCapabilities<'a> {
 
         let capabilities = vec![
             SID_AND_ATTRIBUTES {
-                Sid: internet_client_sid.as_ptr(),
+                Sid: PSID(internet_client_sid.as_ptr()),
                 Attributes: 0,
             },
             SID_AND_ATTRIBUTES {
-                Sid: private_network_sid.as_ptr(),
+                Sid: PSID(private_network_sid.as_ptr()),
                 Attributes: 0,
             },
         ];
@@ -257,11 +257,11 @@ pub fn grant_directory_access(
         let explicit_access = EXPLICIT_ACCESS_W {
             grfAccessPermissions: access_mode,
             grfAccessMode: SET_ACCESS,
-            grfInheritance: 0x03,
+            grfInheritance: OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
             Trustee: TRUSTEE_W {
                 TrusteeForm: TRUSTEE_IS_SID,
                 TrusteeType: TRUSTEE_IS_GROUP,
-                ptstrName: sid_ptr as *mut _,
+                ptstrName: PWSTR(sid_ptr.cast()),
                 ..Default::default()
             },
         };
@@ -341,7 +341,7 @@ pub fn spawn_in_appcontainer(
 
     let mut startup_info = STARTUPINFOEXW::default();
     startup_info.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-    startup_info.StartupInfo.dwFlags |= 0x00000100;
+    startup_info.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
     startup_info.StartupInfo.hStdInput = stdin_read;
     startup_info.StartupInfo.hStdOutput = stdout_write;
     startup_info.StartupInfo.hStdError = stderr_write;
@@ -350,14 +350,18 @@ pub fn spawn_in_appcontainer(
     let mut attr_list_size: usize = 0;
     unsafe {
         InitializeProcThreadAttributeList(
-            ptr::null_mut(),
+            LPPROC_THREAD_ATTRIBUTE_LIST::default(),
             attribute_count,
             0,
             &mut attr_list_size,
         )
     };
-    let mut attr_list_buffer = vec![0u8; attr_list_size];
-    startup_info.lpAttributeList = attr_list_buffer.as_mut_ptr() as *mut _;
+    let mut attr_list_buffer = vec![
+        0usize;
+        (attr_list_size + std::mem::size_of::<usize>() - 1) / std::mem::size_of::<usize>()
+    ];
+    startup_info.lpAttributeList =
+        LPPROC_THREAD_ATTRIBUTE_LIST(attr_list_buffer.as_mut_ptr().cast());
 
     unsafe {
         InitializeProcThreadAttributeList(
