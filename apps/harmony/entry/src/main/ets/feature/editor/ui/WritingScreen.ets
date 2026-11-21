@@ -662,9 +662,17 @@ export struct WritingScreen {
         const textByteLength: number = TextOffsetMapper.utf16ToUtf8(snap.text, snap.text.length)
         const applied = await this.editorCoordinator.replace(
           0, textByteLength, snapshotText, snap.text, EditorTransactionCause.Programmatic)
-        if (applied.success) {
-          restoreText = snapshotText
-          canRestoreEditorState = true
+        if (applied.success && applied.data !== undefined &&
+            (applied.data.outcome === EditorEditOutcome.Applied ||
+             applied.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection ||
+             applied.data.outcome === EditorEditOutcome.NoChange)) {
+          const actual = this.editorCoordinator.getSnapshot()
+          if (actual !== null && actual.text === snapshotText &&
+              (params.snapshotHash === undefined ||
+               this.computeSnapshotHash(actual.text) === params.snapshotHash)) {
+            restoreText = actual.text
+            canRestoreEditorState = true
+          }
         }
       }
     }
@@ -676,11 +684,15 @@ export struct WritingScreen {
     }
 
     if (canRestoreEditorState) {
-      // selection 优先；无 selection 时用 cursor。offset 是 UTF-16，转成 Core UTF-8 byte offset。
-      // Issue #1034 评论 #24：用严格版 utf16ToUtf8Checked，非法 offset 不静默钳位。
+      const latestSnap = this.editorCoordinator.getSnapshot()
+      if (latestSnap === null) {
+        this.updateContinuationState()
+        return
+      }
+      const coreText = latestSnap.text
       if (params.selection !== undefined && params.selection.length >= 2) {
-        const anchorByte: number | null = TextOffsetMapper.utf16ToUtf8Checked(restoreText, params.selection[0])
-        const headByte: number | null = TextOffsetMapper.utf16ToUtf8Checked(restoreText, params.selection[1])
+        const anchorByte: number | null = TextOffsetMapper.utf16ToUtf8Checked(coreText, params.selection[0])
+        const headByte: number | null = TextOffsetMapper.utf16ToUtf8Checked(coreText, params.selection[1])
         if (anchorByte !== null && headByte !== null) {
           const selResult = await this.editorCoordinator.setSelection(anchorByte, headByte)
           if (selResult.success && selResult.data !== undefined &&
@@ -691,7 +703,7 @@ export struct WritingScreen {
           }
         }
       } else if (params.cursor !== undefined) {
-        const cursorByte: number | null = TextOffsetMapper.utf16ToUtf8Checked(restoreText, params.cursor)
+        const cursorByte: number | null = TextOffsetMapper.utf16ToUtf8Checked(coreText, params.cursor)
         if (cursorByte !== null) {
           const selResult = await this.editorCoordinator.setSelection(cursorByte, cursorByte)
           if (selResult.success && selResult.data !== undefined &&
@@ -709,14 +721,22 @@ export struct WritingScreen {
     if (params.searchField === 'body'
       && params.searchByteStart !== undefined
       && params.searchByteEnd !== undefined) {
-      const textByteLength: number = TextOffsetMapper.utf16ToUtf8(restoreText, restoreText.length)
-      const startByte: number = Math.max(0, Math.min(params.searchByteStart, textByteLength))
-      const endByte: number = Math.max(startByte, Math.min(params.searchByteEnd, textByteLength))
-      await this.editorCoordinator.setSelection(startByte, endByte)
-      await this.richEditorBridge.syncSelectionFromCore()
-      params.searchByteStart = undefined
-      params.searchByteEnd = undefined
-      params.searchField = undefined
+      const searchSnap = this.editorCoordinator.getSnapshot()
+      if (searchSnap !== null) {
+        const textByteLength: number = TextOffsetMapper.utf16ToUtf8(searchSnap.text, searchSnap.text.length)
+        const startByte: number = Math.max(0, Math.min(params.searchByteStart, textByteLength))
+        const endByte: number = Math.max(startByte, Math.min(params.searchByteEnd, textByteLength))
+        const searchResult = await this.editorCoordinator.setSelection(startByte, endByte)
+        if (searchResult.success && searchResult.data !== undefined &&
+            (searchResult.data.outcome === EditorEditOutcome.Applied ||
+             searchResult.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection ||
+             searchResult.data.outcome === EditorEditOutcome.NoChange)) {
+          await this.richEditorBridge.syncSelectionFromCore()
+          params.searchByteStart = undefined
+          params.searchByteEnd = undefined
+          params.searchField = undefined
+        }
+      }
     }
 
     this.updateContinuationState()
