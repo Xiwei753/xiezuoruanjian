@@ -267,7 +267,7 @@ pub fn grant_directory_access(
         };
 
         let mut existing_dacl: *mut ACL = ptr::null_mut();
-        let mut security_descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+        let mut security_descriptor = PSECURITY_DESCRIPTOR::default();
 
         unsafe {
             let result = GetNamedSecurityInfoW(
@@ -294,9 +294,9 @@ pub fn grant_directory_access(
                 if existing_dacl.is_null() { None } else { Some(existing_dacl) },
                 &mut new_acl,
             );
-            if merge_result != 0 {
+            if merge_result.0 != 0 {
                 let _ = windows::Win32::Foundation::LocalFree(HLOCAL(security_descriptor.0));
-                return Err(format!("SetEntriesInAclW: error {merge_result}"));
+                return Err(format!("SetEntriesInAclW: error {}", merge_result.0));
             }
 
             let set_result = SetNamedSecurityInfoW(

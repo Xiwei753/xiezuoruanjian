@@ -211,6 +211,36 @@ impl Drop for PipeSecurity {
     }
 }
 
+/// 临时持有 ACL 指针的 RAII 守卫，确保错误路径不泄漏 LocalFree 分配的 ACL。
+/// 成功时通过 `into_raw` 转移所有权到 `PipeSecurity`，避免重复释放。
+struct OwnedAcl {
+    ptr: *mut ACL,
+}
+
+impl OwnedAcl {
+    fn new(ptr: *mut ACL) -> Self {
+        Self { ptr }
+    }
+
+    fn as_ptr(&self) -> *const ACL {
+        self.ptr as *const ACL
+    }
+
+    fn into_raw(self) -> *mut ACL {
+        let ptr = self.ptr;
+        std::mem::forget(self);
+        ptr
+    }
+}
+
+impl Drop for OwnedAcl {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() {
+            unsafe { let _ = windows::Win32::Foundation::LocalFree(HLOCAL(self.ptr.cast())); }
+        }
+    }
+}
+
 fn create_pipe_security(
     sid_ptr: *mut core::ffi::c_void,
 ) -> Result<(SECURITY_ATTRIBUTES, PipeSecurity), String> {
@@ -229,10 +259,12 @@ fn create_pipe_security(
     let mut new_acl: *mut ACL = ptr::null_mut();
     unsafe {
         let result = SetEntriesInAclW(Some(&[explicit_access]), None, &mut new_acl);
-        if result != 0 {
-            return Err(format!("SetEntriesInAclW: error {result}"));
+        if result.0 != 0 {
+            return Err(format!("SetEntriesInAclW: error {}", result.0));
         }
     }
+
+    let acl_guard = OwnedAcl::new(new_acl);
 
     let mut sd = Box::new(SECURITY_DESCRIPTOR::default());
     unsafe {
@@ -245,7 +277,7 @@ fn create_pipe_security(
         SetSecurityDescriptorDacl(
             PSECURITY_DESCRIPTOR(sd.as_mut() as *mut _ as *mut _),
             true,
-            Some(new_acl as *const ACL),
+            Some(acl_guard.as_ptr()),
             false,
         )
         .map_err(|e| format!("SetSecurityDescriptorDacl: {e}"))?;
@@ -257,7 +289,7 @@ fn create_pipe_security(
         bInheritHandle: windows::Win32::Foundation::BOOL(0),
     };
 
-    Ok((sa, PipeSecurity { sd, acl: new_acl }))
+    Ok((sa, PipeSecurity { sd, acl: acl_guard.into_raw() }))
 }
 
 fn create_event() -> Result<HANDLE, String> {
