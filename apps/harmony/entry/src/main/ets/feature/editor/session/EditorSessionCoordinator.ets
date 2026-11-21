@@ -96,7 +96,9 @@ export class EditorSessionCoordinator {
     const result = await this.bridge.close(sid)
     // Issue #629 评论11 第3项：只有 success===true && data===true 才视为关闭成功。
     // 旧实现只判断 success（FFI 返回 { success:true, data:false } 时会误清 state）。
-    if (result.success && result.data === true) {
+    // Issue #1034 评论 #31：只有当前 state 仍是同一 session 时才清空，
+    // 防止 open() 在 close 飞行期间已建立新会话被误清
+    if (result.success && result.data === true && this.state !== null && this.state.sessionId === sid) {
       this.state = null
     }
     return result
@@ -152,6 +154,11 @@ export class EditorSessionCoordinator {
       // 出队时才读 revision — 这是串行队列的核心：避免并发命令拿到同一个 expectedRevision
       const expectedRevision = this.state.snapshot.revision
       const result = await bridgeCall(sessionId, expectedRevision)
+      // Issue #1034 评论 #31：await 后核对 session 身份，
+      // 防止 open()/close() 在飞行期间替换 this.state
+      if (!this.state || this.state.sessionId !== sessionId) {
+        return { success: false, errorCode: 'SESSION_CHANGED' }
+      }
       if (result.success && result.data) {
         const outcome: EditStateOutcome = this.state.withEditResult(result.data)
         if (outcome.ok) {

@@ -61,6 +61,9 @@ interface SelectionIntent {
   startUtf16: number
   endUtf16: number
   textForConversion: string
+  // Issue #1034 评论 #31：本意图上次 StaleRevision 失败时的 Core revision，
+  // null 表示全新意图无失败历史；同一意图同一 revision 重复失败才报告错误
+  retriedAtRevision: number | null
 }
 
 export class NativeRichEditorBridge {
@@ -86,10 +89,6 @@ export class NativeRichEditorBridge {
   private selectionFlushTimerId: number = -1
   // Issue #1034 评论 #19：选区%单飞消费者标记，防止重复追加 editQueue.then
   private selectionDrainRunning: boolean = false
-  // Issue #1034 评论 #28：记录上次 StaleRevision 时的 Core revision，
-  // 只有 revision 已变化时才允许对同一位置重新提交选区
-  private lastStaleRevision: number | null = null
-
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
   }
@@ -263,8 +262,6 @@ export class NativeRichEditorBridge {
     }
     this.pendingSelectionIntent = null
     this.selectionDrainRunning = false
-    // Issue #1034 评论 #30：重置 StaleRevision 失败记录，防止跨章节泄漏
-    this.lastStaleRevision = null
   }
 
   onWillChange(_value: RichEditorChangeValue): boolean {
@@ -405,7 +402,8 @@ export class NativeRichEditorBridge {
       expectedCoreSessionId: expectedCoreSessionId,
       startUtf16: start,
       endUtf16: end,
-      textForConversion: this.currentText
+      textForConversion: this.currentText,
+      retriedAtRevision: null
     }
 
     if (this.selectionFlushTimerId !== -1) {
@@ -534,8 +532,6 @@ export class NativeRichEditorBridge {
       if (outcome === EditorEditOutcome.Applied ||
           outcome === EditorEditOutcome.AppliedWithAdjustedSelection ||
           outcome === EditorEditOutcome.NoChange) {
-        // Issue #1034 评论 #30：选区成功后清空 StaleRevision 失败记录
-        this.lastStaleRevision = null
         if (this.pendingSelectionIntent === intent) {
           this.pendingSelectionIntent = null
         }
@@ -544,10 +540,9 @@ export class NativeRichEditorBridge {
 
       // Issue #1034 评论 #23：按 outcome 分开处理，不无限重试相同错误
       if (outcome === EditorEditOutcome.StaleRevision) {
-        // Issue #1034 评论 #28/#30：StaleRevision 只表示 Core 版本不一致，不比较文本。
+        // Issue #1034 评论 #28/#31：StaleRevision 只表示 Core 版本不一致，不比较文本。
         // 与 InvalidOffset/InvalidRange 区分处理：版本过期时按版本恢复，坐标非法时按坐标恢复。
-        // lastStaleRevision 只在 pendingSelectionIntent===intent 时设置，
-        // 防止旧意图的失败记录泄漏到新意图或跨会话残留。
+        // 重试记录关联到本意图的 retriedAtRevision，不跨意图、跨会话泄漏。
         const newSnap = this.coordinator.getSnapshot()
         if (newSnap !== null && newSnap.text !== intent.textForConversion) {
           // Core 正文确实变化：保留 latest-wins 意图，等正文收敛后重新计算字节坐标
@@ -556,18 +551,17 @@ export class NativeRichEditorBridge {
         // Core 正文相同但 revision 已前进：以新 revision 重新提交选区
         const currentRevision = newSnap !== null ? newSnap.revision : null
         if (this.pendingSelectionIntent === intent) {
-          // 当前意图仍然是 pendingSelectionIntent：检查是否同一 revision 重复失败
-          if (currentRevision !== null && currentRevision === this.lastStaleRevision) {
+          // 当前意图仍然是 pendingSelectionIntent：检查本意图是否已在同一 revision 上失败过
+          if (currentRevision !== null && intent.retriedAtRevision === currentRevision) {
             this.idleError = 'StaleRevision: same revision retry failed, Core snapshot recovery may have failed'
             hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
             this.rejectAllWaiters()
             return
           }
-          this.lastStaleRevision = currentRevision
           this.pendingSelectionIntent = null
-          this.captureCurrentNativeSelection()
+          this.captureCurrentNativeSelection(currentRevision)
         }
-        // pendingSelectionIntent 已被新意图覆盖：不设置 lastStaleRevision，让新意图独立处理
+        // pendingSelectionIntent 已被新意图覆盖：新意图有自己的 retriedAtRevision，不受旧意图影响
         continue
       }
 
@@ -615,7 +609,7 @@ export class NativeRichEditorBridge {
   // Issue #1034 评论 #21/#22：从 RichEditorController 重新捕获当前原生选区。
   // RichEditorSelection.selection 是长度为 2 的数组 [start, end]，
   // 折叠光标用 getCaretOffset() 获取更准确的位置。
-  private captureCurrentNativeSelection(): void {
+  private captureCurrentNativeSelection(retriedAtRevision: number | null = null): void {
     if (this.richEditorController === null) {
       return
     }
@@ -647,7 +641,8 @@ export class NativeRichEditorBridge {
       expectedCoreSessionId: expectedCoreSessionId,
       startUtf16: startUtf16,
       endUtf16: endUtf16,
-      textForConversion: this.currentText
+      textForConversion: this.currentText,
+      retriedAtRevision: retriedAtRevision
     }
   }
 
