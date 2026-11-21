@@ -43,6 +43,7 @@ use windows::Win32::System::Threading::{
 };
 
 const APPCONTAINER_PREFIX: &str = "Sujian.Agent.";
+const SE_GROUP_ENABLED: u32 = 0x00000004;
 
 fn wide(s: &str) -> Vec<u16> {
     OsStr::new(s)
@@ -170,11 +171,11 @@ impl<'a> SandboxCapabilities<'a> {
         let capabilities = vec![
             SID_AND_ATTRIBUTES {
                 Sid: PSID(internet_client_sid.as_ptr()),
-                Attributes: 0,
+                Attributes: SE_GROUP_ENABLED,
             },
             SID_AND_ATTRIBUTES {
                 Sid: PSID(private_network_sid.as_ptr()),
-                Attributes: 0,
+                Attributes: SE_GROUP_ENABLED,
             },
         ];
 
