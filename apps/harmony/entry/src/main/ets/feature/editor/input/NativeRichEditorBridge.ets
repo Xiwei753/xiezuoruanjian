@@ -522,6 +522,10 @@ export class NativeRichEditorBridge {
           }
           continue
         }
+        // Issue #1034 评论 #32：旧意图的异步回包失败不能覆盖新意图
+        if (this.pendingSelectionIntent !== intent) {
+          continue
+        }
         this.idleError = `Selection transaction failed: ${result.errorCode ?? 'UNKNOWN'}`
         hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
         this.rejectAllWaiters()
@@ -566,10 +570,12 @@ export class NativeRichEditorBridge {
       }
 
       if (outcome === EditorEditOutcome.InvalidOffset || outcome === EditorEditOutcome.InvalidRange) {
-        if (this.pendingSelectionIntent === intent) {
-          this.pendingSelectionIntent = null
-          this.captureCurrentNativeSelection()
+        // Issue #1034 评论 #32：旧意图的失败不能覆盖新意图
+        if (this.pendingSelectionIntent !== intent) {
+          continue
         }
+        this.pendingSelectionIntent = null
+        this.captureCurrentNativeSelection()
         if (this.isSameSelectionPosition(this.pendingSelectionIntent, intent)) {
           this.idleError = `${outcome === EditorEditOutcome.InvalidOffset ? 'InvalidOffset' : 'InvalidRange'}: selection cannot be corrected`
           hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
@@ -579,6 +585,10 @@ export class NativeRichEditorBridge {
         continue
       }
 
+      // Issue #1034 评论 #32：旧意图的异步回包失败不能覆盖新意图
+      if (this.pendingSelectionIntent !== intent) {
+        continue
+      }
       this.idleError = `Unknown selection outcome: ${outcome}`
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
       this.rejectAllWaiters()
