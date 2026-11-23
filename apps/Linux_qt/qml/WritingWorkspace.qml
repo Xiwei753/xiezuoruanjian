@@ -563,9 +563,11 @@ Rectangle {
     function saveActiveViewState() {
         if (!editorController.projectId || !editorController.chapterId)
             return
+        // Issue #1047 复审：恢复未完成时保存“待恢复目标书签”，不能用恢复中途
+        // 的临时 contentY/暂存光标覆盖原书签。
         root.saveChapterViewState(editorController.projectId,
                                   editorController.chapterId,
-                                  editorViewport.captureViewState())
+                                  editorViewport.captureEffectiveViewState())
     }
 
     // Issue #1051 复审：跨卷移动的完整顺序是“保存正在编辑的正文 -> Core 原子
@@ -619,6 +621,9 @@ Rectangle {
             editorController.chapterId = d.chapterId || cId;
             editorController.chapterTitle = d.title || cTitle || "";
             editorViewport.snapNextCursorUpdate();
+            // Issue #1047 复审：书签恢复绑定到当前章节身份，定时器执行前复核。
+            editorViewport.viewIdentityProjectId = editorController.projectId;
+            editorViewport.viewIdentityChapterId = editorController.chapterId;
             // Issue #1047：恢复该章节上次的阅读位置；没有记录才回顶部。
             // 旧行为是切章后无条件 resetScroll()，会丢掉每章独立书签。
             var savedView = root.workspaceBackendRef

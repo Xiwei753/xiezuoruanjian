@@ -38,6 +38,14 @@ Item {
     property var pendingRestoreViewState: null
     property int restoreScrollAttempts: 0
     property bool restoreCursorApplied: false
+    // Issue #1047 复审：待恢复书签绑定的章节身份。WritingWorkspace 在载入
+    // 成功后设置；定时器执行前必须复核，避免上一章的恢复落到下一章。
+    property string viewIdentityProjectId: ""
+    property string viewIdentityChapterId: ""
+    property string pendingRestoreProjectId: ""
+    property string pendingRestoreChapterId: ""
+    // 程序自身写 contentY 时置位，用于区分“恢复写入”和用户主动滚动。
+    property bool applyingRestoreScroll: false
 
     signal explicitClearRequested()
     signal proofReplayRequested()
@@ -67,6 +75,22 @@ Item {
         };
     }
 
+    // Issue #1047 复审：保存时优先使用“待恢复的目标书签”，而不是恢复中途的
+    // 临时 contentY/暂存光标；只有用户已主动滚动（恢复已被取消）或恢复已完成，
+    // 才返回当前真实视口。切章保存、离开路由、关闭窗口都走这个入口。
+    function captureEffectiveViewState() {
+        if (restoringViewState
+                && pendingRestoreViewState
+                && pendingRestoreProjectId === viewIdentityProjectId
+                && pendingRestoreChapterId === viewIdentityChapterId) {
+            return {
+                cursorCharIndex: Number(pendingRestoreViewState.cursorCharIndex || 0),
+                scrollY: Number(pendingRestoreViewState.scrollY || 0)
+            };
+        }
+        return captureViewState();
+    }
+
     // Issue #1047：恢复章节阅读位置。先设光标，再把 contentY 落到
     // clamp(保存值, 0, contentHeight - height)；排版尚未稳定时由定时器重试。
     // state 为空表示该章节没有记录，按“首次进入”留在顶部。
@@ -81,6 +105,8 @@ Item {
         }
         restoringViewState = true;
         pendingRestoreViewState = state;
+        pendingRestoreProjectId = viewIdentityProjectId;
+        pendingRestoreChapterId = viewIdentityChapterId;
         restoreScrollAttempts = 0;
         restoreCursorApplied = false;
         // 光标与 contentY 都等新章节排版出高度后再落，避免用旧布局算 caret。
@@ -94,11 +120,19 @@ Item {
         restoreSettleTimer.stop();
         restoringViewState = false;
         pendingRestoreViewState = null;
+        pendingRestoreProjectId = "";
+        pendingRestoreChapterId = "";
     }
 
     function tryApplyRestoredScroll() {
         if (!restoringViewState || !pendingRestoreViewState)
             return false;
+        // 章节身份已变化：上一章的延迟恢复不得写入下一章编辑器。
+        if (pendingRestoreProjectId !== viewIdentityProjectId
+                || pendingRestoreChapterId !== viewIdentityChapterId) {
+            cancelViewStateRestore();
+            return false;
+        }
         var flick = editorScroll.contentItem;
         if (!flick || editorScroll.contentHeight <= 0)
             return false;
@@ -108,8 +142,10 @@ Item {
             restoreCursorApplied = true;
         }
         var maxY = Math.max(0, editorScroll.contentHeight - editorScroll.height);
+        applyingRestoreScroll = true;
         flick.contentY = Math.max(0, Math.min(
             Number(pendingRestoreViewState.scrollY || 0), maxY));
+        applyingRestoreScroll = false;
         return true;
     }
 
@@ -117,6 +153,8 @@ Item {
         restoreScrollTimer.stop();
         restoreSettleTimer.stop();
         pendingRestoreViewState = null;
+        pendingRestoreProjectId = "";
+        pendingRestoreChapterId = "";
         restoringViewState = false;
         restoreCursorApplied = false;
         // Issue #1047 复审：恢复完成后不要立刻自动跟随光标。用户离开时的阅读
@@ -169,6 +207,17 @@ Item {
         target: editorScroll.contentItem
         ignoreUnknownSignals: true
         function onContentYChanged() {
+            if (root.applyingRestoreScroll)
+                return;
+            if (root.restoringViewState) {
+                // 恢复期间用户主动滚动：放弃书签恢复，之后按用户新位置保存。
+                // 排版变化引起的自动 clamp 不算用户滚动，继续等待恢复完成。
+                var userScrolling = editorScroll.editorIsScrolling
+                        || (contentItem && (contentItem.moving || contentItem.flicking));
+                if (!userScrolling)
+                    return;
+                root.cancelViewStateRestore();
+            }
             root.noteViewStateChanged();
         }
     }
