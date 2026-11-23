@@ -61,7 +61,7 @@ import { CorrectionSuggestionsPanel } from '../correction/CorrectionSuggestionsP
 import { CorrectionResourceImporter } from '../correction/CorrectionResourceImporter'
 import { NativeAnnotationBridge } from '../../../corebridge/native/NativeAnnotationBridge'
 import {
-  AnnotationEditDto, AnnotationObjectRefDto, AnnotationRangeDto, AnnotationTargetDto, AnnotationTextAnchorDto,
+  AnnotationEditDto, AnnotationObjectRefDto, AnnotationTargetDto, AnnotationTextAnchorDto,
   ChapterAnnotationsDto
 } from '../../../corebridge/dto/AnnotationDtos'
 import { AnnotationPanel } from '../annotation/AnnotationPanel'
@@ -148,7 +148,6 @@ export struct WritingScreen {
   @State annotationPanelOpen: boolean = false
   @State proofReplayOpen: boolean = false
   @State annotationTarget: AnnotationObjectRefDto | null = null
-  @State annotationRanges: AnnotationRangeDto[] = []
   @State annotationErrorMessage: string = ''
   @State chapterAnnotations: ChapterAnnotationsDto | null = null
   @State annotationBaselineId: string = ''
@@ -442,7 +441,6 @@ export struct WritingScreen {
       this.pendingAnnotationEdits = 0
       this.nextAnnotationEditBaseRevision = -1
       this.chapterAnnotations = null
-      this.annotationRanges = []
       this.annotationTarget = null
       this.annotationPanelOpen = false
     }
@@ -2249,53 +2247,8 @@ export struct WritingScreen {
     const current = this.editorCoordinator.getSnapshot()
     if (current === null || current.revision !== snapshot.revision || current.chapterId !== snapshot.chapterId) return
     this.chapterAnnotations = annotations
-    const liveAnchors = new Map<string, AnnotationTextAnchorDto>()
-    annotations.anchors.forEach((anchor: AnnotationTextAnchorDto): void => {
-      if (anchor.projectId === annotations.projectId && anchor.chapterId === annotations.chapterId &&
-        anchor.deletedAtMs === null && anchor.startByte >= 0 && anchor.endByte > anchor.startByte) {
-        liveAnchors.set(anchor.anchorId, anchor)
-      }
-    })
-
-    const tagAnchorIds: Set<string> = new Set<string>()
-    annotations.bindings.forEach((binding): void => {
-      const target = binding.target
-      if (binding.deletedAtMs !== null || binding.projectId !== annotations.projectId ||
-        target.kind !== 'textAnchor' || target.projectId !== annotations.projectId ||
-        !liveAnchors.has(target.objectId)) return
-      tagAnchorIds.add(target.objectId)
-    })
-
-    const linkedAnchorIds: Set<string> = new Set<string>()
-    annotations.links.forEach((link): void => {
-      const source = link.source
-      if (link.deletedAtMs !== null || link.origin !== 'manual' || source.kind !== 'textAnchor' ||
-        source.projectId !== annotations.projectId || !liveAnchors.has(source.objectId)) return
-      linkedAnchorIds.add(source.objectId)
-    })
-
-    const ranges: AnnotationRangeDto[] = []
-    tagAnchorIds.forEach((anchorId: string): void => {
-      const anchor = liveAnchors.get(anchorId)
-      if (anchor !== undefined) {
-        ranges.push({ startByte: anchor.startByte, endByte: anchor.endByte,
-          textRevision: annotations.textRevision, kind: 'tagBackground' })
-      }
-    })
-    linkedAnchorIds.forEach((anchorId: string): void => {
-      const anchor = liveAnchors.get(anchorId)
-      if (anchor !== undefined) {
-        ranges.push({ startByte: anchor.startByte, endByte: anchor.endByte,
-          textRevision: annotations.textRevision, kind: 'linkUnderline' })
-      }
-    })
-    annotations.autoMatches.forEach((match): void => {
-      if (match.endByte > match.startByte && (match.candidates.length > 0 || match.entryIds.length > 0)) {
-        ranges.push({ startByte: match.startByte, endByte: match.endByte,
-          textRevision: annotations.textRevision, kind: 'linkUnderline' })
-      }
-    })
-    this.annotationRanges = ranges
+    // 原生属性字符串没有局部装饰更新通道，标注高亮/链接下划线改由标注面板呈现；
+    // 这里只保留章节标注数据本身，不构造正文装饰范围。
     this.annotationErrorMessage = ''
   }
 
