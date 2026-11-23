@@ -40,9 +40,9 @@ cpp! {{
     extern "C" void sujian_ime_preedit(void* rust_item, const ushort* text, int text_len, int cursor);
     extern "C" void sujian_ime_preedit_attrs(void* rust_item, const ushort* text, int text_len, int cursor, const int* attr_types, const int* attr_starts, const int* attr_lengths, int attr_count, const int* attr_formats);
     extern "C" void sujian_ime_cancel(void* rust_item);
-    // Issue #1052：IME 事件是否合法/是否重复投递由 Rust 侧按真实
-    // composition session / revision / selection 身份判定，Qt 事件层不再查询
-    // 时间窗或自行丢弃 replacement 事件。
+    // Issue #1052：Qt 事件层不查询时间窗、不自行丢弃 replacement 事件，也不
+    // 按事件参数猜"重复投递"；每条合法 QInputMethodEvent 都由 Rust 侧按
+    // composition session 的 revision 锚点校验后交给 Core 一次。
     extern "C" void sujian_request_repaint(void* rust_item);
     extern "C" void sujian_flush_pointer_moves(void* rust_item);
     extern "C" void sujian_finish_pointer_sequence(void* rust_item);
@@ -247,6 +247,19 @@ cpp! {{
             // before they become a second text edit transaction.
             if (ime_adapter.should_ignore_key_event(ke)) return true;
 
+            // ── Issue #1052: 组合态下 KeyPress 不得再提交文本事务 ──
+            // 输入法组合期间，Backspace/Delete/Return/Tab 属于输入法（编辑
+            // preedit、提交候选词）。它们会先命中 try_shortcut 的
+            // QKeySequence::Backspace/Delete 或下方通用 handle_key_and_text，
+            // 变成一笔独立的 Core 正文事务；紧接着同一原生动作的
+            // QEvent::InputMethod（commit 或 replacement）又改一次正文，等于
+            // 同一文本事务提交两次。Qt 不提供原生唯一事件序号，平台层无法在
+            // 事后区分这两次提交，所以在按键入口直接截断这几类键。
+            // QEvent::InputMethod 是组合态唯一的文本事务入口。
+            // 其余按键（方向键/Home/End/ESC/带 Ctrl/Alt/Meta 的快捷键）不改写
+            // 正文，仍按原路径处理。
+            if (ime_adapter.ime_composing && commits_text_on_key_press(ke)) return true;
+
             // ── Standard shortcut matching via QKeySequence ──
             if (try_shortcut(ke)) return true;
 
@@ -295,6 +308,24 @@ cpp! {{
                 && ke->key() != Qt::Key_PageUp
                 && ke->key() != Qt::Key_PageDown
                 && ime_adapter.can_accept_plain_text_key();
+        }
+
+        // Issue #1052: 组合态下会经 KeyPress 路径改写正文的按键。
+        //
+        // 这些键在 `handle_key_and_text` 里分别是"插入 \n/\t"或"向前/向后删除
+        // 一笔正文"。组合态下它们只属于输入法：正文改动必须由同一原生动作的
+        // `QInputMethodEvent` 承担，否则同一文本事务会被提交两次。
+        bool commits_text_on_key_press(QKeyEvent* ke) const {
+            switch (ke->key()) {
+            case Qt::Key_Backspace:
+            case Qt::Key_Delete:
+            case Qt::Key_Return:
+            case Qt::Key_Enter:
+            case Qt::Key_Tab:
+                return true;
+            default:
+                return false;
+            }
         }
 
         bool try_shortcut(QKeyEvent* ke) {
@@ -361,11 +392,12 @@ cpp! {{
             //
             // Issue #1052 新评论第一点：Qt 官方 QInputMethodEvent 允许用空
             // commitString + replacement 合法删除已提交文本，无 preedit 并不能
-            // 证明它是快捷键附带的误事件，因此这里不再按时间窗猜来源、也不再
-            // 直接丢弃。事件的合法性（真实 composition session / revision /
-            // selection 锚点）与“是否同一原生动作的重复投递”统一由 Rust 侧
-            // sujian_ime_replace_and_commit 按事件身份判定；所有正文修改仍只经
-            // Core EditorCommand 的一笔事务。
+            // 证明它是快捷键附带的误事件，因此这里不按时间窗猜来源、也不直接
+            // 丢弃。Qt 也不提供原生唯一事件序号，所以连续两个独立的
+            // InputMethodEvent 必须按到达顺序各交给 Core 一次，不能因为
+            // "上一条参数相同"推断为重复投递。本函数是组合态文本事务的唯一
+            // 入口：Rust 侧只校验真实 composition session 的 revision 锚点，
+            // 所有正文修改仍只经 Core EditorCommand 的一笔事务。
             bool has_commit = !commit.isEmpty();
             bool has_replacement = ime->replacementLength() > 0;
             bool has_ime_action = has_commit || has_replacement;
