@@ -177,7 +177,7 @@ export class HarmonyDiagnosticsRuntimeSnapshot {
     if (snapshot === null) {
       return JSON.stringify({
         'error': 'no editor runtime snapshot available',
-        'schemaVersion': 3
+        'schemaVersion': 4
       }, null, 2)
     }
     return JSON.stringify(snapshot, null, 2)

@@ -114,10 +114,25 @@ export interface RichEditorRuntimeSnapshot {
   wordBreak: string                     // 实际段落断行策略，如 'BREAK_WORD'；未知为 'unknown'
   lineBreakStrategy: string             // 实际换行策略，如 'HIGH_QUALITY'；未知为 'unknown'
   textAlign: string                     // 实际段落对齐，如 'Start'；未知为 'unknown'
-  punctuationOverflow: boolean          // 是否按 API 能力启用行尾标点溢出
-  compressLeadingPunctuation: boolean   // 是否按 API 能力启用行首标点压缩
-  paragraphStyleApplied: boolean        // getParagraphs 读到的段落样式是否与预期一致
-  paragraphStyleError: string | null    // 应用/读取段落样式失败的真实原因
+  // 标点排版：API 支持 / 原生属性调用 / 错误分开记录，不把 API 版本当成已生效。
+  // 无属性 readback：callSucceeded=true 仅表示原生方法调用成功，实际排版效果由系统在布局时体现。
+  punctuationOverflowSupported: boolean
+  punctuationOverflowCallSucceeded: boolean
+  punctuationOverflowError: string | null
+  compressLeadingPunctuationSupported: boolean
+  compressLeadingPunctuationCallSucceeded: boolean
+  compressLeadingPunctuationError: string | null
+  // 段落样式：遍历 getParagraphs 全部段落后的读回结果。
+  paragraphStyleChecked: boolean        // 是否成功读取并检查过段落样式
+  checkedParagraphCount: number         // 本次检查的段落数
+  mismatchedParagraphCount: number      // 样式与预期不一致的段落数
+  firstMismatchParagraphRange: string   // 首个不一致段落的原生范围，如 '[12, 24)'
+  paragraphStyleApplied: boolean        // 全部段落匹配预期才为 true（空文档为 false）
+  paragraphStyleError: string | null    // 应用/读取段落样式失败或段落不一致的真实原因
+  // 新输入/新段落继承（setTypingParagraphStyle，API 20+）。
+  typingParagraphStyleSupported: boolean
+  typingParagraphStyleApplied: boolean
+  typingParagraphStyleError: string | null
   deviceApiLevel: number                // 设备 SDK API Level（0 表示未知）
   fontSizeVp: number
   lineSpacingMultiplier: number

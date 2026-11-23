@@ -64,22 +64,36 @@ interface DecorationSegment extends DecorationRange {
 // compressLeadingPunctuation（API 23+）与 punctuationOverflow（API 26+）都是
 // RichEditorAttribute，用 AttributeModifier 按设备能力启用，不手写断行/空格操作。
 class RichEditorPunctuationModifier implements AttributeModifier<RichEditorAttribute> {
+  // Issue #1053 评论 7100350617：记录原生属性调用的真实结果（无 readback，不伪称已读回）。
+  compressLeadingPunctuationCallSucceeded: boolean = false
+  compressLeadingPunctuationError: string | null = null
+  punctuationOverflowCallSucceeded: boolean = false
+  punctuationOverflowError: string | null = null
+
   applyNormalAttribute(instance: RichEditorAttribute): void {
     const resolver = PlatformApiResolver.getInstance()
     if (resolver.isApiAtLeast(EDITOR_COMPRESS_LEADING_PUNCTUATION_MIN_API)) {
       try {
         instance.compressLeadingPunctuation(true)
+        this.compressLeadingPunctuationCallSucceeded = true
+        this.compressLeadingPunctuationError = null
       } catch (e) {
+        this.compressLeadingPunctuationCallSucceeded = false
+        this.compressLeadingPunctuationError = JSON.stringify(e)
         hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG,
-          `compressLeadingPunctuation unavailable: ${JSON.stringify(e)}`)
+          `compressLeadingPunctuation unavailable: ${this.compressLeadingPunctuationError}`)
       }
     }
     if (resolver.isApiAtLeast(EDITOR_PUNCTUATION_OVERFLOW_MIN_API)) {
       try {
         instance.punctuationOverflow(true)
+        this.punctuationOverflowCallSucceeded = true
+        this.punctuationOverflowError = null
       } catch (e) {
+        this.punctuationOverflowCallSucceeded = false
+        this.punctuationOverflowError = JSON.stringify(e)
         hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG,
-          `punctuationOverflow unavailable: ${JSON.stringify(e)}`)
+          `punctuationOverflow unavailable: ${this.punctuationOverflowError}`)
       }
     }
   }
@@ -114,8 +128,16 @@ export struct SujianEditor {
   private appliedWordBreakLabel: string = 'unknown'
   private appliedTextAlignLabel: string = 'unknown'
   private appliedLineBreakStrategyLabel: string = 'unknown'
+  private paragraphStyleChecked: boolean = false
+  private checkedParagraphCount: number = 0
+  private mismatchedParagraphCount: number = 0
+  private firstMismatchParagraphRange: string = ''
   private paragraphStyleApplied: boolean = false
   private paragraphStyleError: string | null = null
+  // 新输入/新段落是否继承原生段落样式（setTypingParagraphStyle，API 20+）。
+  private typingParagraphStyleSupported: boolean = false
+  private typingParagraphStyleApplied: boolean = false
+  private typingParagraphStyleError: string | null = null
   private snapshotTimerId: number = -1
 
   aboutToDisappear(): void {
@@ -349,13 +371,19 @@ export struct SujianEditor {
       lineBreakStrategy: LineBreakStrategy.HIGH_QUALITY
     }
     // setTypingParagraphStyle 自 API 20 起可用；低版本或组件未绑定时捕获异常，
-    // 已有段落仍由 updateParagraphStyle 修正。
-    if (PlatformApiResolver.getInstance().isApiAtLeast(EDITOR_TYPING_PARAGRAPH_STYLE_MIN_API)) {
+    // 已有段落仍由 updateParagraphStyle 修正。调用结果单独记录：
+    // 旧段落正确不代表后续新输入会继承正确折行规则。
+    this.typingParagraphStyleSupported =
+      PlatformApiResolver.getInstance().isApiAtLeast(EDITOR_TYPING_PARAGRAPH_STYLE_MIN_API)
+    this.typingParagraphStyleApplied = false
+    this.typingParagraphStyleError = null
+    if (this.typingParagraphStyleSupported) {
       try {
         this.richEditorController.setTypingParagraphStyle(style)
+        this.typingParagraphStyleApplied = true
       } catch (e) {
-        hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG,
-          `setTypingParagraphStyle unavailable: ${JSON.stringify(e)}`)
+        this.typingParagraphStyleError = `setTypingParagraphStyle failed: ${JSON.stringify(e)}`
+        hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, this.typingParagraphStyleError)
       }
     }
     try {
@@ -365,6 +393,11 @@ export struct SujianEditor {
         style: style
       })
     } catch (e) {
+      // 段落样式没有写入成功，读回结论一并失效，不能沿用上一轮的 checked 状态。
+      this.paragraphStyleChecked = false
+      this.checkedParagraphCount = 0
+      this.mismatchedParagraphCount = 0
+      this.firstMismatchParagraphRange = ''
       this.paragraphStyleApplied = false
       this.paragraphStyleError = `updateParagraphStyle failed: ${JSON.stringify(e)}`
       hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, this.paragraphStyleError)
@@ -382,25 +415,56 @@ export struct SujianEditor {
     }
     try {
       const paragraphs = this.richEditorController.getParagraphs({ start: -1, end: -1 })
+      this.paragraphStyleChecked = true
       if (paragraphs === undefined || paragraphs === null || paragraphs.length === 0) {
+        // 空文档没有段落可核实：不能当作已生效。
+        this.checkedParagraphCount = 0
+        this.mismatchedParagraphCount = 0
+        this.firstMismatchParagraphRange = ''
         this.paragraphStyleApplied = false
-        this.paragraphStyleError = 'getParagraphs returned no paragraph'
+        this.paragraphStyleError = 'no-paragraph'
       } else {
-        const style = paragraphs[0].style
-        this.appliedWordBreakLabel = this.wordBreakLabel(style.wordBreak)
-        this.appliedTextAlignLabel = this.textAlignLabel(style.textAlign)
-        this.appliedLineBreakStrategyLabel = this.lineBreakStrategyLabel(style.lineBreakStrategy)
-        this.paragraphStyleApplied =
-          this.appliedWordBreakLabel === EDITOR_EXPECTED_WORD_BREAK_LABEL &&
-          this.appliedTextAlignLabel === EDITOR_EXPECTED_TEXT_ALIGN_LABEL &&
-          this.appliedLineBreakStrategyLabel === EDITOR_EXPECTED_LINE_BREAK_STRATEGY_LABEL
-        this.paragraphStyleError = this.paragraphStyleApplied
+        let mismatchCount = 0
+        let firstRange = ''
+        let firstSummary = ''
+        for (const paragraph of paragraphs) {
+          const style = paragraph.style
+          const wordBreakLabel = this.wordBreakLabel(style.wordBreak)
+          const textAlignLabel = this.textAlignLabel(style.textAlign)
+          const strategyLabel = this.lineBreakStrategyLabel(style.lineBreakStrategy)
+          const matched = wordBreakLabel === EDITOR_EXPECTED_WORD_BREAK_LABEL &&
+            textAlignLabel === EDITOR_EXPECTED_TEXT_ALIGN_LABEL &&
+            strategyLabel === EDITOR_EXPECTED_LINE_BREAK_STRATEGY_LABEL
+          if (!matched) {
+            if (mismatchCount === 0) {
+              firstRange = `[${paragraph.range[0]}, ${paragraph.range[1]})`
+              firstSummary = `wordBreak=${wordBreakLabel}`
+                + ` lineBreakStrategy=${strategyLabel}`
+                + ` textAlign=${textAlignLabel}`
+            }
+            mismatchCount++
+          }
+          // 快照仍展示首段实际值，供人工核对；总体结论以全部段落为准。
+          if (paragraphs[0] === paragraph) {
+            this.appliedWordBreakLabel = wordBreakLabel
+            this.appliedTextAlignLabel = textAlignLabel
+            this.appliedLineBreakStrategyLabel = strategyLabel
+          }
+        }
+        this.checkedParagraphCount = paragraphs.length
+        this.mismatchedParagraphCount = mismatchCount
+        this.paragraphStyleApplied = mismatchCount === 0
+        this.firstMismatchParagraphRange = firstRange
+        this.paragraphStyleError = mismatchCount === 0
           ? null
-          : `paragraph style mismatch wordBreak=${this.appliedWordBreakLabel}`
-            + ` lineBreakStrategy=${this.appliedLineBreakStrategyLabel}`
-            + ` textAlign=${this.appliedTextAlignLabel}`
+          : `${mismatchCount}/${paragraphs.length} paragraph(s) style mismatch`
+            + ` firstRange=${firstRange} ${firstSummary}`
       }
     } catch (e) {
+      this.paragraphStyleChecked = false
+      this.checkedParagraphCount = 0
+      this.mismatchedParagraphCount = 0
+      this.firstMismatchParagraphRange = ''
       this.paragraphStyleApplied = false
       this.paragraphStyleError = `getParagraphs failed: ${JSON.stringify(e)}`
       hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, this.paragraphStyleError)
@@ -597,8 +661,8 @@ export struct SujianEditor {
 
     const resolver = PlatformApiResolver.getInstance()
     const snapshot: RichEditorRuntimeSnapshot = {
-      // Issue #1053 评论 7100110974：新增实际段落样式/标点排版/API 事实。
-      schemaVersion: 3,
+      // Issue #1053 评论 7100350617：段落读回/属性调用/API 支持分开记录。
+      schemaVersion: 4,
       hasActiveSession: coreSnapshot !== null,
       sessionId: coreSessionId !== null ? coreSessionId : -1,
       nativeRevision: bridge !== null ? bridge.getLastAppliedRevision() : -1,
@@ -626,10 +690,21 @@ export struct SujianEditor {
       wordBreak: this.appliedWordBreakLabel,
       lineBreakStrategy: this.appliedLineBreakStrategyLabel,
       textAlign: this.appliedTextAlignLabel,
-      punctuationOverflow: resolver.isApiAtLeast(EDITOR_PUNCTUATION_OVERFLOW_MIN_API),
-      compressLeadingPunctuation: resolver.isApiAtLeast(EDITOR_COMPRESS_LEADING_PUNCTUATION_MIN_API),
+      punctuationOverflowSupported: resolver.isApiAtLeast(EDITOR_PUNCTUATION_OVERFLOW_MIN_API),
+      punctuationOverflowCallSucceeded: this.punctuationModifier.punctuationOverflowCallSucceeded,
+      punctuationOverflowError: this.punctuationModifier.punctuationOverflowError,
+      compressLeadingPunctuationSupported: resolver.isApiAtLeast(EDITOR_COMPRESS_LEADING_PUNCTUATION_MIN_API),
+      compressLeadingPunctuationCallSucceeded: this.punctuationModifier.compressLeadingPunctuationCallSucceeded,
+      compressLeadingPunctuationError: this.punctuationModifier.compressLeadingPunctuationError,
+      paragraphStyleChecked: this.paragraphStyleChecked,
+      checkedParagraphCount: this.checkedParagraphCount,
+      mismatchedParagraphCount: this.mismatchedParagraphCount,
+      firstMismatchParagraphRange: this.firstMismatchParagraphRange,
       paragraphStyleApplied: this.paragraphStyleApplied,
       paragraphStyleError: this.paragraphStyleError,
+      typingParagraphStyleSupported: this.typingParagraphStyleSupported,
+      typingParagraphStyleApplied: this.typingParagraphStyleApplied,
+      typingParagraphStyleError: this.typingParagraphStyleError,
       deviceApiLevel: resolver.getApiLevel(),
       fontSizeVp: this.fontSize,
       lineSpacingMultiplier: this.lineSpacingMultiplier,
