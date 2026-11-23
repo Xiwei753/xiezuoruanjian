@@ -19,7 +19,7 @@ import { HarmonyThemeAdapter } from '../../ui/theme/HarmonyThemeAdapter'
 import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStore'
 import { AdaptiveContext } from '../../ui/adaptive/AdaptiveContext'
 import { NavigationTransactionCoordinator } from '../../app/navigation/NavigationTransactionCoordinator'
-import { EditorRuntimeSnapshotStore, CaretRectSnapshot, CurrentLineMetricsSnapshot } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
+import { EditorRuntimeSnapshotStore } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
 import { ScreenRole } from '../../app/navigation/ScreenSemantics'
 import { WidthClass } from '../../corebridge/dto/PlatformDtos'
 import { PlatformApiResolver } from '../version/PlatformApiResolver'
@@ -66,67 +66,9 @@ interface UiRuntimeDto {
 }
 
 // ── Editor runtime DTO ─────────────────────────────────────────
-// 与 Exporter 中 EditorRuntimeAttachment interface 字段完全对齐。
-interface EditorRuntimeDto {
-  hasActiveSession: boolean
-  revision: number
-  generation: number
-  textUtf8Bytes: number
-  textUtf16Length: number
-  cursorByteOffset: number
-  cursorUtf16Offset: number
-  selectionAnchorByte: number
-  selectionHeadByte: number
-  hasComposition: boolean
-  compositionStartByte: number
-  compositionEndByte: number
-  fontSizeVp: number
-  lineSpacingMultiplier: number
-  effectiveLineHeightVp: number
-  firstLineIndentEnabled: boolean
-  firstLineIndentChars: number
-  effectiveFirstLineIndentVp: number
-  viewportWidthPx: number
-  viewportHeightPx: number
-  contentWidthPx: number
-  contentHeightPx: number
-  systemLayoutLineCount: number
-  caretRect: CaretRectSnapshot | null
-  selectionRectCount: number
-  currentLineMetrics: CurrentLineMetricsSnapshot | null
-  imeAttached: boolean
-  editorFocused: boolean
-  currentScrollX: number
-  currentScrollY: number
-  leadingWhitespaceCountOfCurrentParagraph: number
-  layoutSource: string
-  usingLayoutManager: boolean
-  apiLevel: number
-  lastLayoutError: string | null
-  fallbackCount: number
-  isEditorMounted: boolean
-  capturedAtMs: number
-  layoutRevision: number
-  layoutGeneration: number
-  layoutCompositionGeneration: number
-  visualCaretAffinity: string
-  displayedSessionId: number
-  displayedRevision: number
-  displayedLayoutLineCount: number
-  candidateSessionId: number
-  candidateRevision: number
-  candidateLayoutLineCount: number
-  isMotionAnimating: boolean
-  displayedFrameAnimating: boolean
-  displayedMotionWindowCount: number
-  staticClipMode: string
-  staticClipLayoutRevision: number
-  staticClipLayoutGeneration: number
-  staticVisibleRanges: string
-  motionGlyphRanges: string
-  staticMaskRectCount: number
-  staticMaskEmpty: boolean
-}
+// Issue #1053：编辑器快照改为原生 RichEditor 的真实事实（RichEditorRuntimeSnapshot），
+// 字段定义与序列化只有一份（EditorRuntimeSnapshotStore），这里不再维护第二份 DTO，
+// 避免 Store 与导出字段漂移。快照不含正文字符，只有长度/换行数/hash/偏移/尺寸。
 
 export class HarmonyDiagnosticsRuntimeSnapshot {
   private static instance: HarmonyDiagnosticsRuntimeSnapshot
@@ -227,73 +169,18 @@ export class HarmonyDiagnosticsRuntimeSnapshot {
     return JSON.stringify(dto, null, 2)
   }
 
-  // 编辑器运行态 JSON — 从 EditorRuntimeSnapshotStore 读取编辑器状态。
+  // 编辑器运行态 JSON — 原生 RichEditor 事实快照（Issue #1053）。
+  // 直接序列化 EditorRuntimeSnapshotStore 的 RichEditorRuntimeSnapshot：
+  // 字段定义与导出结构保持同一份，避免两份 DTO 漂移。快照不含正文字符。
   getEditorRuntimeJson(): string {
     const snapshot = EditorRuntimeSnapshotStore.getInstance().getSnapshot()
     if (snapshot === null) {
-      return JSON.stringify({ 'error': 'no editor runtime snapshot available' }, null, 2)
+      return JSON.stringify({
+        'error': 'no editor runtime snapshot available',
+        'schemaVersion': 2
+      }, null, 2)
     }
-    const dto: EditorRuntimeDto = {
-      hasActiveSession: snapshot.hasActiveSession,
-      revision: snapshot.revision,
-      generation: snapshot.generation,
-      textUtf8Bytes: snapshot.textUtf8Bytes,
-      textUtf16Length: snapshot.textUtf16Length,
-      cursorByteOffset: snapshot.cursorByteOffset,
-      cursorUtf16Offset: snapshot.cursorUtf16Offset,
-      selectionAnchorByte: snapshot.selectionAnchorByte,
-      selectionHeadByte: snapshot.selectionHeadByte,
-      hasComposition: snapshot.hasComposition,
-      compositionStartByte: snapshot.compositionStartByte,
-      compositionEndByte: snapshot.compositionEndByte,
-      fontSizeVp: snapshot.fontSizeVp,
-      lineSpacingMultiplier: snapshot.lineSpacingMultiplier,
-      effectiveLineHeightVp: snapshot.effectiveLineHeightVp,
-      firstLineIndentEnabled: snapshot.firstLineIndentEnabled,
-      firstLineIndentChars: snapshot.firstLineIndentChars,
-      effectiveFirstLineIndentVp: snapshot.effectiveFirstLineIndentVp,
-      viewportWidthPx: snapshot.viewportWidthPx,
-      viewportHeightPx: snapshot.viewportHeightPx,
-      contentWidthPx: snapshot.contentWidthPx,
-      contentHeightPx: snapshot.contentHeightPx,
-      systemLayoutLineCount: snapshot.systemLayoutLineCount,
-      caretRect: snapshot.caretRect,
-      selectionRectCount: snapshot.selectionRectCount,
-      currentLineMetrics: snapshot.currentLineMetrics,
-      imeAttached: snapshot.imeAttached,
-      editorFocused: snapshot.editorFocused,
-      currentScrollX: snapshot.currentScrollX,
-      currentScrollY: snapshot.currentScrollY,
-      leadingWhitespaceCountOfCurrentParagraph: snapshot.leadingWhitespaceCountOfCurrentParagraph,
-      layoutSource: snapshot.layoutSource,
-      usingLayoutManager: snapshot.usingLayoutManager,
-      apiLevel: snapshot.apiLevel,
-      lastLayoutError: snapshot.lastLayoutError,
-      fallbackCount: snapshot.fallbackCount,
-      isEditorMounted: snapshot.isEditorMounted,
-      capturedAtMs: snapshot.capturedAtMs,
-      layoutRevision: snapshot.layoutRevision,
-      layoutGeneration: snapshot.layoutGeneration,
-      layoutCompositionGeneration: snapshot.layoutCompositionGeneration,
-      visualCaretAffinity: snapshot.visualCaretAffinity,
-      displayedSessionId: snapshot.displayedSessionId,
-      displayedRevision: snapshot.displayedRevision,
-      displayedLayoutLineCount: snapshot.displayedLayoutLineCount,
-      candidateSessionId: snapshot.candidateSessionId,
-      candidateRevision: snapshot.candidateRevision,
-      candidateLayoutLineCount: snapshot.candidateLayoutLineCount,
-      isMotionAnimating: snapshot.isMotionAnimating,
-      displayedFrameAnimating: snapshot.displayedFrameAnimating,
-      displayedMotionWindowCount: snapshot.displayedMotionWindowCount,
-      staticClipMode: snapshot.staticClipMode,
-      staticClipLayoutRevision: snapshot.staticClipLayoutRevision,
-      staticClipLayoutGeneration: snapshot.staticClipLayoutGeneration,
-      staticVisibleRanges: snapshot.staticVisibleRanges,
-      motionGlyphRanges: snapshot.motionGlyphRanges,
-      staticMaskRectCount: snapshot.staticMaskRectCount,
-      staticMaskEmpty: snapshot.staticMaskEmpty
-    }
-    return JSON.stringify(dto, null, 2)
+    return JSON.stringify(snapshot, null, 2)
   }
 
   // 构建三个运行态 JSON 和归档元数据，一次性投递给归档 Worker。

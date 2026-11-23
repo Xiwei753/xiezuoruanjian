@@ -26,7 +26,7 @@ import { HarmonyThemeAdapter, ThemeObserver, ThemeConfig } from '../../ui/theme/
 import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStore'
 import {
   EditorRuntimeSnapshotStore,
-  EditorRuntimeSnapshot,
+  RichEditorRuntimeSnapshot,
   EditorSnapshotObserver
 } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
 import { ScreenRole } from '../../app/navigation/ScreenSemantics'
@@ -136,7 +136,7 @@ export class HarmonyDiagnosticsCheckpoint {
     }
     NavigationChromeStore.getInstance().subscribe(this.navObserver)
 
-    this.editorObserver = (_snapshot: EditorRuntimeSnapshot | null): void => {
+    this.editorObserver = (_snapshot: RichEditorRuntimeSnapshot | null): void => {
       this.persistRuntimeSnapshot()
     }
     EditorRuntimeSnapshotStore.getInstance().addObserver(this.editorObserver)

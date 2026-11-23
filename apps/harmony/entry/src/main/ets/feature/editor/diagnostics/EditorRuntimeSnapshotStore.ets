@@ -1,139 +1,185 @@
-// EditorRuntimeSnapshotStore — 编辑器运行时状态快照存储。
+// EditorRuntimeSnapshotStore — 原生 RichEditor 运行时事实快照存储。
 //
-// 负责：
-// 1. 收集编辑器运行时状态（脱敏，不含正文内容）
-// 2. SujianEditor 在关键生命周期点调用 updateSnapshot 更新状态
-// 3. 诊断导出器从 getSnapshot 读取快照，导出为 editor_runtime_sanitized.json
+// Issue #1053：自研排版的运动层/静态遮罩/首行缩进等字段已不存在，改为系统
+// RichEditor 的真实事实：
+// - 会话与版本：session/revision
+// - 文本事实（不含正文）：native/core 的 UTF-16 长度、换行数、FNV-1a hash
+// - 原生结构：Span 数、硬换行段落数、getLayoutManager().getLineCount()
+// - 编辑器/内容区尺寸（px）、光标与选区（UTF-16）
+// - 焦点、编辑态、IME 预编辑状态
+// - 选用的 wordBreak/textAlign
+// - 最近一次原生文本操作类型与范围
+// - 保存/退出屏障处的原生↔Core 对齐事实
+// - 当前行 LineMetrics（只抓光标所在行）
 //
 // 关键原则：
-// - 不存储正文内容（text 字段），只存长度和偏移
-// - 不存储用户可识别的信息
-// - 线程安全不需要考虑（ArkUI 单线程模型）
-//
-// Issue #768：补齐 Issue 要求的全部诊断字段。updateSnapshot 接收完整快照，
-// 不用 Partial<T>（ArkTS 严格模式不支持 mapped type）也不用对象 spread 合并
-// （ArkTS 不支持异构类型 spread）。SujianEditor 持有全部状态，每次构造完整快照传入，
-// 保证诊断数据一致（不会出现部分字段是旧值、部分是新值的混合状态）。
-
-// 光标矩形快照（px，相对组件左上）。
-export interface CaretRectSnapshot {
-  x: number
-  y: number
-  width: number
-  height: number
-}
+// - 快照不包含正文字符，只记录长度、换行数、hash、偏移与尺寸。
+// - ArkTS 单线程模型，不需要锁；updateSnapshot 每次接收完整快照，避免新旧字段混合。
+// - Store → HarmonyDiagnosticsRuntimeSnapshot → Checkpoint → Exporter 沿用现有诊断链，
+//   落盘仍由归档 Worker 合并处理。
 
 // 当前行度量快照。startIndex/endIndex 为 UTF-16 code unit offset。
-// Issue #768 评论5837824666：从真实 LayoutManager.LineMetrics 记录完整字段，
-// 不再从 renderResult.lines 拼残缺的 currentLineMetrics。
-export interface CurrentLineMetricsSnapshot {
+export interface RichEditorLineMetricsSnapshot {
+  lineIndex: number
   startIndex: number
   endIndex: number
   height: number
+  width: number
   baseline: number
   left: number
   topHeight: number
 }
 
-// 编辑器运行时快照 — 全部脱敏，不含正文内容。
-// Issue #768 要求的字段全部包含。
-export interface EditorRuntimeSnapshot {
+// 最近一次原生文本操作（不含正文原文）。
+export interface NativeTextOperationSnapshot {
+  kind: string                  // 'typing' | 'ime-commit' | 'paste' | 'programmatic-sync' | 'initial-load'
+  beforeUtf16Length: number     // 操作前本地镜像长度
+  afterUtf16Length: number      // 操作后本地镜像长度
+  rangeBeforeStartUtf16: number // 原生 onDidChange rangeBefore 起点（无法解析时 -1）
+  rangeBeforeEndUtf16: number   // 原生 onDidChange rangeBefore 终点（无法解析时 -1）
+  rangeAfterStartUtf16: number  // 原生 onDidChange rangeAfter 起点（无法解析时 -1）
+  rangeAfterEndUtf16: number    // 原生 onDidChange rangeAfter 终点（无法解析时 -1）
+  startUtf16: number            // 实际提交 Core 的编辑起点（UTF-16）
+  endUtf16: number              // 实际提交 Core 的编辑终点（UTF-16，操作前坐标）
+  replacedUtf16Length: number   // 被替换长度
+  insertedUtf16Length: number   // 插入长度
+  spanCountInRange: number      // 编辑范围内原生 Span 数
+  nonTextSpanCount: number      // 编辑范围内的非文本 Span 数（正常应为 0）
+  imeComposition: boolean       // 操作发生时是否处于 IME 预编辑
+  programmatic: boolean         // 是否程序性样式/文本更新
+  coreRevision: number          // 操作发生时的 Core revision
+  factError: boolean            // 该次操作是否触发原生事实错误
+  atMs: number
+}
+
+// 原生全文镜像与 Core 正文的对齐事实（保存/退出屏障记录，不含正文）。
+export interface NativeCoreAlignmentSnapshot {
+  stage: string                 // 'save-when-idle' | 'exit-finish-editing' | 'sync-from-core' | 'initial-load'
+  matched: boolean              // 本地镜像与 Core 正文是否一致
+  nativeUtf16Length: number
+  coreUtf16Length: number
+  nativeNewlineCount: number
+  coreNewlineCount: number
+  nativeHash: string
+  coreHash: string
+  mirrorMatchesEditor: boolean  // 本地镜像是否等于从原生 Span 重建的全文
+  firstMismatchUtf16: number    // 镜像与原生全文的首个差异 offset（-1 表示一致或无法重建）
+  detail: string                // 事实描述，不含正文字符
+  atMs: number
+}
+
+// 原生 RichEditor 运行时快照 — 全部脱敏，不含正文内容。
+export interface RichEditorRuntimeSnapshot {
+  schemaVersion: number
+
   // 会话/版本
-  hasActiveSession: boolean             // 是否有活跃编辑会话
-  revision: number                      // 当前编辑器 revision
-  generation: number                    // Core 编辑状态 generation
+  hasActiveSession: boolean
+  sessionId: number                     // Core 会话 ID（无会话时 -1）
+  nativeRevision: number                // 已应用到原生编辑器的 Core revision（未知时 -1）
+  coreRevision: number                  // Core snapshot revision（无快照时 -1）
 
-  // 文本长度（不含内容）
-  textUtf8Bytes: number                 // 正文 UTF-8 字节数
-  textUtf16Length: number               // 正文 UTF-16 code unit 数
+  // 文本事实（不含正文字符）
+  nativeTextUtf16Length: number
+  nativeNewlineCount: number
+  nativeTextHash: string
+  coreTextUtf16Length: number
+  coreNewlineCount: number
+  coreTextHash: string
+  nativeCoreTextMatched: boolean        // 本地镜像与 Core 正文是否逐字符一致
+  nativeCoreDiverged: boolean           // 屏障发现原生与 Core 相异且原生正文有效；阻止异步回写覆盖原生内容
 
-  // 光标/选区（byte offset）
-  cursorByteOffset: number              // 光标 UTF-8 byte 偏移
-  cursorUtf16Offset: number             // 光标 UTF-16 code unit 偏移
-  selectionAnchorByte: number           // 选区锚点 UTF-8 byte 偏移
-  selectionHeadByte: number             // 选区终点 UTF-8 byte 偏移
+  // 原生结构
+  nativeSpanCount: number
+  paragraphCount: number                // 硬换行段落数 = 换行数 + 1
+  layoutLineCount: number               // 系统布局行数（LayoutManager.getLineCount）
 
-  // composition
-  hasComposition: boolean               // 是否有输入法 composition
-  compositionStartByte: number          // composition 起点 UTF-8 byte 偏移（无 composition 时 -1）
-  compositionEndByte: number            // composition 终点 UTF-8 byte 偏移（无 composition 时 -1）
+  // 光标/选区（UTF-16）
+  caretUtf16: number
+  selectionStartUtf16: number
+  selectionEndUtf16: number
 
-  // 排版设置
-  fontSizeVp: number                    // 字号 vp
-  lineSpacingMultiplier: number         // 行高倍数
-  effectiveLineHeightVp: number         // 实际行高 = fontSize * lineSpacingMultiplier
-  firstLineIndentEnabled: boolean       // 首行缩进开关
-  firstLineIndentChars: number          // 首行缩进字符数（autoIndentWidth）
-  effectiveFirstLineIndentVp: number    // 实际首行缩进 = enabled ? indentChars * fontSize : 0
+  // 编辑器/内容尺寸（px，来自 onAreaChange 实测）
+  editorWidthPx: number
+  editorHeightPx: number
+  contentWidthPx: number                // 正文排版内容区宽度
+  contentHeightPx: number
+  horizontalPaddingVp: number
 
-  // 视口/内容尺寸（px）
-  viewportWidthPx: number               // 视口宽度
-  viewportHeightPx: number              // 视口高度
-  contentWidthPx: number                // 内容区域宽度
-  contentHeightPx: number               // 内容区域高度
+  // 排版
+  wordBreak: string                     // 原生段落断行策略，如 'BREAK_ALL'
+  textAlign: string                     // 原生段落对齐，如 'Start'
+  fontSizeVp: number
+  lineSpacingMultiplier: number
+  effectiveLineHeightVp: number
 
-  // 布局几何
-  systemLayoutLineCount: number         // 系统布局行数
-  caretRect: CaretRectSnapshot | null   // 光标矩形
-  selectionRectCount: number            // 选区矩形数
-  currentLineMetrics: CurrentLineMetricsSnapshot | null  // 当前行度量
+  // 焦点/IME
+  editorFocused: boolean
+  editing: boolean                      // RichEditor onEditingChange 状态
+  imeComposing: boolean                 // 是否处于 IME 预编辑
+  previewTextUtf16Length: number        // 预上屏文本长度（无预上屏为 0）
 
-  // IME/焦点/滚动
-  imeAttached: boolean                  // IME 是否连接
-  editorFocused: boolean                // 编辑器是否获焦
-  currentScrollX: number                // 当前水平滚动偏移 px
-  currentScrollY: number                // 当前垂直滚动偏移 px
+  // 最近原生文本操作与对齐事实
+  lastNativeOperation: NativeTextOperationSnapshot | null
+  lastNativeCoreAlignment: NativeCoreAlignmentSnapshot | null
+  nativeFactError: string | null
 
-  // 段落前导空白
-  leadingWhitespaceCountOfCurrentParagraph: number  // 当前段落前导空白字符数
+  // 当前行度量（只抓光标所在行）
+  currentLineMetrics: RichEditorLineMetricsSnapshot | null
 
-  // 布局来源/降级（保留现有有用字段）
-  layoutSource: string                  // 'system' | 'fallback' | 'none'
-  usingLayoutManager: boolean           // 是否使用系统 LayoutManager
-  apiLevel: number                      // 当前 API Level
-  lastLayoutError: string | null        // 最后一次布局错误信息
-  fallbackCount: number                 // fallback 次数累计
-
-  // Issue #768 评论5837824666：布局身份字段。
-  // 记录当前已发布的布局对应的 snapshot 身份，供诊断方判断是否出现"新 revision + 旧 layout"。
-  // 若 revision !== layoutRevision，说明布局还没跟上 snapshot 变化。
-  layoutRevision: number                // 布局对应的 snapshot revision
-  layoutGeneration: number              // 布局对应的 snapshot generation
-  layoutCompositionGeneration: number   // 布局对应的 snapshot compositionGeneration
-  visualCaretAffinity: string           // 布局对应的 visual caret affinity ('upstream' | 'downstream')
-
-  // Issue #1021：显示帧/候选布局/静态遮罩的版本与可见区证据。
-  // displayed* 与 staticClip* 必须在同一次 executeDisplaySwitch 中一起切换；
-  // candidate* 只描述后台候选，不得作为主 Text 静态遮罩的输入。
-  displayedSessionId: number            // 已显示帧的 sessionId（无显示帧时为 -1）
-  displayedRevision: number             // 已显示帧对应的 snapshot revision（未知时为 -1）
-  displayedLayoutLineCount: number      // 已显示帧使用的行布局数量
-  candidateSessionId: number            // 后台候选 sessionId（无候选时为 -1）
-  candidateRevision: number             // 后台候选 revision（无候选时为 -1）
-  candidateLayoutLineCount: number      // 后台候选行布局数量
-  isMotionAnimating: boolean            // 主 Text 运动动画是否正在运行
-  displayedFrameAnimating: boolean      // displayedVisualFrame.isAnimating
-  displayedMotionWindowCount: number    // displayedVisualFrame.motionGlyphWindows.length
-  staticClipMode: string                // 'full' | 'mask' | 'motion-only' | 'fallback-full'
-  staticClipLayoutRevision: number      // staticClipCommands 对应行布局的 revision（-1 表示未知）
-  staticClipLayoutGeneration: number    // staticClipCommands 对应行布局的 generation（-1 表示未知）
-  staticVisibleRanges: string           // 静态可见 UTF-16 区间，如 '0-3,5-8'
-  motionGlyphRanges: string             // 运动层接管 UTF-16 区间，如 '3-5'
-  staticMaskRectCount: number           // 最终静态遮罩矩形数量
-  staticMaskEmpty: boolean              // staticClipCommands 是否为空路径（M0 0 Z）
-
-  // Issue #768 评论5835171266 第5项：编辑器挂载状态和快照时间戳。
-  isEditorMounted: boolean              // 编辑器是否仍挂载（aboutToDisappear 时设 false）
-  capturedAtMs: number                  // 快照捕获时间戳（Date.now()）
+  // 挂载状态与快照时间戳
+  isEditorMounted: boolean
+  capturedAtMs: number
 }
 
 // Issue #773 评论 5845033983：observer 类型，让 Checkpoint 能订阅 editor 状态变化。
 // 不反向 import Checkpoint（避免循环依赖）。
-export type EditorSnapshotObserver = (snapshot: EditorRuntimeSnapshot | null) => void
+export type EditorSnapshotObserver = (snapshot: RichEditorRuntimeSnapshot | null) => void
+
+// ── 诊断用纯函数（只输出事实，不保存正文） ─────────────────────
+
+// 统计硬换行数量。
+export function countNewlines(text: string): number {
+  let count = 0
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) {
+      count++
+    }
+  }
+  return count
+}
+
+// FNV-1a 32 位 hash，输出 8 位十六进制。只用于判断两份正文是否同一内容。
+export function hashTextUtf16(text: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    hash = hash ^ text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  const hex = (hash >>> 0).toString(16)
+  let padded = ''
+  for (let i = hex.length; i < 8; i++) {
+    padded += '0'
+  }
+  return padded + hex
+}
+
+// 返回两段文本首个不同的 UTF-16 offset；完全一致返回 -1。
+export function firstMismatchUtf16(a: string, b: string): number {
+  const shared = Math.min(a.length, b.length)
+  for (let i = 0; i < shared; i++) {
+    if (a.charCodeAt(i) !== b.charCodeAt(i)) {
+      return i
+    }
+  }
+  if (a.length !== b.length) {
+    return shared
+  }
+  return -1
+}
 
 export class EditorRuntimeSnapshotStore {
   private static instance: EditorRuntimeSnapshotStore
-  private snapshot: EditorRuntimeSnapshot | null = null
+  private snapshot: RichEditorRuntimeSnapshot | null = null
   // Issue #773 评论 5845033983：observer 列表，Checkpoint 订阅 editor 状态变化。
   private observers: EditorSnapshotObserver[] = []
 
@@ -164,92 +210,27 @@ export class EditorRuntimeSnapshotStore {
     }
   }
 
-  // SujianEditor 调用，更新完整快照。
-  // 接收完整 EditorRuntimeSnapshot（所有字段必填），直接替换当前快照。
-  // SujianEditor 持有全部状态，每次从自身字段构造完整快照传入，
-  // 保证诊断数据一致，不会出现新旧字段混合。
-  updateSnapshot(snapshot: EditorRuntimeSnapshot): void {
+  // SujianEditor 调用，更新完整快照（所有字段必填），保证诊断数据一致。
+  updateSnapshot(snapshot: RichEditorRuntimeSnapshot): void {
     this.snapshot = snapshot
     this.notifyObservers()
   }
 
   // 诊断导出器调用，读取当前快照。
-  getSnapshot(): EditorRuntimeSnapshot | null {
+  getSnapshot(): RichEditorRuntimeSnapshot | null {
     return this.snapshot
   }
 
-  // Issue #768 评论5835171266 第5项：编辑器卸载时标记 isEditorMounted=false。
-  // 不清空快照，保留最后状态供离页后导出诊断。下次打开编辑器时 updateSnapshot 会覆盖。
+  // 编辑器卸载时标记 isEditorMounted=false。
+  // 不清空快照，保留最后状态供离页后导出诊断；下次打开编辑器时 updateSnapshot 覆盖。
   markEditorUnmounted(): void {
     if (this.snapshot !== null) {
-      // 构造新快照，把 isEditorMounted 设为 false，其余字段保留。
-      // ArkTS 不支持异构 spread，必须逐字段构造。
-      const old = this.snapshot
-      this.snapshot = {
-        hasActiveSession: old.hasActiveSession,
-        revision: old.revision,
-        generation: old.generation,
-        textUtf8Bytes: old.textUtf8Bytes,
-        textUtf16Length: old.textUtf16Length,
-        cursorByteOffset: old.cursorByteOffset,
-        cursorUtf16Offset: old.cursorUtf16Offset,
-        selectionAnchorByte: old.selectionAnchorByte,
-        selectionHeadByte: old.selectionHeadByte,
-        hasComposition: old.hasComposition,
-        compositionStartByte: old.compositionStartByte,
-        compositionEndByte: old.compositionEndByte,
-        fontSizeVp: old.fontSizeVp,
-        lineSpacingMultiplier: old.lineSpacingMultiplier,
-        effectiveLineHeightVp: old.effectiveLineHeightVp,
-        firstLineIndentEnabled: old.firstLineIndentEnabled,
-        firstLineIndentChars: old.firstLineIndentChars,
-        effectiveFirstLineIndentVp: old.effectiveFirstLineIndentVp,
-        viewportWidthPx: old.viewportWidthPx,
-        viewportHeightPx: old.viewportHeightPx,
-        contentWidthPx: old.contentWidthPx,
-        contentHeightPx: old.contentHeightPx,
-        systemLayoutLineCount: old.systemLayoutLineCount,
-        caretRect: old.caretRect,
-        selectionRectCount: old.selectionRectCount,
-        currentLineMetrics: old.currentLineMetrics,
-        imeAttached: old.imeAttached,
-        editorFocused: old.editorFocused,
-        currentScrollX: old.currentScrollX,
-        currentScrollY: old.currentScrollY,
-        leadingWhitespaceCountOfCurrentParagraph: old.leadingWhitespaceCountOfCurrentParagraph,
-        layoutSource: old.layoutSource,
-        usingLayoutManager: old.usingLayoutManager,
-        apiLevel: old.apiLevel,
-        lastLayoutError: old.lastLayoutError,
-        fallbackCount: old.fallbackCount,
-        layoutRevision: old.layoutRevision,
-        layoutGeneration: old.layoutGeneration,
-        layoutCompositionGeneration: old.layoutCompositionGeneration,
-        visualCaretAffinity: old.visualCaretAffinity,
-        displayedSessionId: old.displayedSessionId,
-        displayedRevision: old.displayedRevision,
-        displayedLayoutLineCount: old.displayedLayoutLineCount,
-        candidateSessionId: old.candidateSessionId,
-        candidateRevision: old.candidateRevision,
-        candidateLayoutLineCount: old.candidateLayoutLineCount,
-        isMotionAnimating: old.isMotionAnimating,
-        displayedFrameAnimating: old.displayedFrameAnimating,
-        displayedMotionWindowCount: old.displayedMotionWindowCount,
-        staticClipMode: old.staticClipMode,
-        staticClipLayoutRevision: old.staticClipLayoutRevision,
-        staticClipLayoutGeneration: old.staticClipLayoutGeneration,
-        staticVisibleRanges: old.staticVisibleRanges,
-        motionGlyphRanges: old.motionGlyphRanges,
-        staticMaskRectCount: old.staticMaskRectCount,
-        staticMaskEmpty: old.staticMaskEmpty,
-        isEditorMounted: false,
-        capturedAtMs: old.capturedAtMs,
-      }
+      this.snapshot.isEditorMounted = false
       this.notifyObservers()
     }
   }
 
-  // 清空快照（仅在完全重置时使用，aboutToDisappear 不再调用）。
+  // 清空快照（仅在完全重置时使用，aboutToDisappear 不调用）。
   clear(): void {
     this.snapshot = null
     this.notifyObservers()
