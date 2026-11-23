@@ -97,10 +97,14 @@ interface NativeRangeText {
   endUtf16: number
 }
 
-// IME 提交后的范围签名：用于忽略同一次提交随后重复触发的 onDidChange。
-interface ImeCommitSignature {
-  start: number
-  end: number
+// IME 提交结算标记：只用于识别「同一次原生变更」随后重复触发的 onDidChange。
+// 生命周期由下一次 onWillChange 截断；匹配时必须同时核对 rangeBefore/rangeAfter
+// 与原生更新后的片段，不能仅凭旧镜像里的字符猜测。
+interface ImeCommitSettled {
+  rangeAfterStart: number
+  rangeAfterEnd: number
+  replacedStartUtf16: number
+  replacedEndUtf16: number
   insertedText: string
 }
 
@@ -210,8 +214,8 @@ export class NativeRichEditorBridge {
   private imeRangeBeforeStartUtf16: number = -1
   private imeRangeBeforeEndUtf16: number = -1
   private imeRangeBeforeRecorded: boolean = false
-  // 上一次 IME 提交的范围签名，供 onDidChange 去重。
-  private lastImeCommit: ImeCommitSignature | null = null
+  // 上一次 IME 提交结算标记；下一次 onWillChange 立即失效，避免遗留到后续真实输入。
+  private imeCommitSettled: ImeCommitSettled | null = null
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -658,10 +662,12 @@ export class NativeRichEditorBridge {
     this.imeRangeBeforeStartUtf16 = -1
     this.imeRangeBeforeEndUtf16 = -1
     this.imeRangeBeforeRecorded = false
-    this.lastImeCommit = null
+    this.imeCommitSettled = null
   }
 
+  // 新的原生变更开始：上一次 IME 提交的结算标记只对同一变更生命周期有效。
   onWillChange(_value: RichEditorChangeValue): boolean {
+    this.imeCommitSettled = null
     return true
   }
 
@@ -683,10 +689,11 @@ export class NativeRichEditorBridge {
     // Issue #1053 评论 7099290808：输入热路径只提取 rangeAfter 的局部片段，
     // 只有 Range 缺失/不一致、非文本 Span、原生异常等条件出现时才读取全文重建。
     const previousText = this.currentText
-    const imeCommitSignature = this.lastImeCommit
-    this.lastImeCommit = null
-    if (imeCommitSignature !== null && this.isImeCommitDuplicate(imeCommitSignature, rangeAfter)) {
-      // 同一次 IME 提交随后重复触发的 onDidChange：已由 onDidIMEInput 结算，忽略。
+    // Issue #1053 评论 7099755130：只用「同一变更生命周期」的结算标记跳过 IME 提交的重复回调；
+    // 标记随后失效，且匹配要核对 rangeBefore/rangeAfter 与原生更新后的片段。
+    const settledImeCommit = this.imeCommitSettled
+    this.imeCommitSettled = null
+    if (settledImeCommit !== null && this.isSettledImeChange(settledImeCommit, rangeBefore, rangeAfter)) {
       return
     }
 
@@ -815,19 +822,38 @@ export class NativeRichEditorBridge {
     this.notifyStateListener('native-change', paragraphsChanged)
   }
 
-  // IME 提交去重：同一提交的 range 与片段已在 onDidIMEInput 中结算，重复的 onDidChange 不再二次应用。
-  private isImeCommitDuplicate(signature: ImeCommitSignature, rangeAfter: TextRange): boolean {
-    if (signature.insertedText.length === 0) {
+  // 判断当前 onDidChange 是否就是已由 onDidIMEInput 结算的同一次 IME 变更：
+  //   1. 标记未过期（下一次 onWillChange 会清空），且 rangeAfter 与 IME 事件一致；
+  //   2. 从原生 Span 读取的更新后片段等于 IME 提交片段（原生新内容，而不是旧镜像）；
+  //   3. rangeBefore 与预测替换范围核对，不一致只记录事实（预测可能来自选区快照）。
+  private isSettledImeChange(settled: ImeCommitSettled, rangeBefore: TextRange, rangeAfter: TextRange): boolean {
+    if (settled.insertedText.length === 0) {
       return false
     }
     const afterStart = rangeAfter.start ?? -1
-    // 缺省 end 按 TextRange 语义视为文本末尾；提交回调通常给出明确范围，
-    // 这里用提交签名兜底，最终仍以镜像中是否已存在同一片段为准。
-    const afterEnd = rangeAfter.end ?? signature.end
-    if (afterStart !== signature.start || afterEnd !== signature.end) {
+    const afterEnd = rangeAfter.end ?? -1
+    if (afterStart !== settled.rangeAfterStart || afterEnd !== settled.rangeAfterEnd) {
       return false
     }
-    return this.currentText.substring(signature.start, signature.end) === signature.insertedText
+    // 以原生更新后的真实片段为准（不是旧镜像里的字符）：
+    const rangeText = this.extractRangeText({ start: afterStart, end: afterEnd })
+    if (rangeText === null || rangeText.nonTextSpanCount > 0) {
+      return false
+    }
+    if (rangeText.text !== settled.insertedText) {
+      return false
+    }
+    const beforeStart = rangeBefore.start ?? -1
+    const beforeEnd = rangeBefore.end ?? beforeStart
+    if (beforeStart !== settled.replacedStartUtf16 || beforeEnd !== settled.replacedEndUtf16) {
+      // 替换范围预测与回调报告不一致：记录事实，但仍视为同一 IME 变更。
+      // rangeAfter + 原生片段 + 「下一次 onWillChange 即失效」的生命周期已足以确认归属；
+      // 后续真实编辑一定会先触发 onWillChange 清空标记，不会走到这里。
+      this.reportNativeFactError('ime-commit',
+        `settled IME rangeBefore mismatch callback=[${beforeStart},${beforeEnd})`
+          + ` predicted=[${settled.replacedStartUtf16},${settled.replacedEndUtf16})`)
+    }
+    return true
   }
 
   // 按编辑增量维护换行数（O(插入/删除片段长度)，不遍历整章）。
@@ -1050,10 +1076,19 @@ export class NativeRichEditorBridge {
           + countNewlines(insertedText)
           - countNewlines(baselineText.substring(replaceStart, replaceEnd)))
     }
-    // 同一次 IME 提交随后重复触发的 onDidChange 用「提交范围 + 片段」签名去重。
-    this.lastImeCommit = usedFullRead
-      ? { start: diff.start, end: diff.start + diff.replacement.length, insertedText: diff.replacement }
-      : { start: rawRangeStart, end: rawRangeEnd, insertedText: insertedText }
+    // 仅为「同一次原生变更」记录结算标记：下一次 onWillChange 会清空，
+    // 不会把后续真实编辑误判为重复回调。
+    if (diff.start < diff.end || diff.replacement.length > 0) {
+      this.imeCommitSettled = {
+        rangeAfterStart: rawRangeStart >= 0 ? rawRangeStart : diff.start,
+        rangeAfterEnd: rawRangeStart >= 0 ? rawRangeEnd : diff.start + diff.replacement.length,
+        replacedStartUtf16: diff.start,
+        replacedEndUtf16: diff.end,
+        insertedText: diff.replacement
+      }
+    } else {
+      this.imeCommitSettled = null
+    }
 
     this.recordNativeOperation({
       kind: 'ime-commit',
