@@ -41,11 +41,15 @@ import hilog from '@ohos.hilog'
 const BRIDGE_LOG_DOMAIN = 0x0000
 const BRIDGE_LOG_TAG = 'NativeRichEditorBridge'
 
-// Issue #1053：原生编辑器状态事件。paragraphsChanged 只在段落结构真正变化时置 true，
-// 组件据此重新发布正文段落样式；纯选区/光标变化不会触发全文重新排版。
+// Issue #1054 复审：原生编辑器状态事件。
+// paragraphsChanged 只在段落结构真正变化时置 true；newParagraphStarts 给出本次
+// 插入文本中新段落的 UTF-16 起点，组件用它核验新段落是否继承了全文段落样式。
+// 纯选区/光标变化不会触发全文重新排版。
 export interface NativeEditorStateEvent {
   kind: string
   paragraphsChanged: boolean
+  newParagraphStarts: number[]
+  becameNonEmpty: boolean
 }
 
 export type NativeEditorStateListener = (event: NativeEditorStateEvent) => void
@@ -286,6 +290,8 @@ export class NativeRichEditorBridge {
   }
 
   // 保存路径复核：目标为空且 session/revision 与用户清空事务完全一致才允许空覆盖。
+  // 保存协调器在入队时会把该判定冻结进不可变 SaveRequest；后续非空编辑可以清掉这里的
+  // 当前意图，但不会撤销已经入队的合法空快照授权。
   isLegitimateEmptyDocument(sessionId: number, revision: number): boolean {
     const intent = this.emptyDocumentIntent
     return intent !== null && intent.sessionId === sessionId && intent.revision === revision
@@ -794,7 +800,8 @@ export class NativeRichEditorBridge {
         programmatic: false,
         factError: factError
       })
-      this.notifyStateListener('native-change', paragraphsChanged)
+      this.notifyStateListener('native-change', paragraphsChanged,
+        this.insertedParagraphStarts(insertedText, startUtf16), becameNonEmpty)
       return
     }
 
@@ -826,7 +833,8 @@ export class NativeRichEditorBridge {
         programmatic: false,
         factError: factError
       })
-      this.notifyStateListener('native-change', paragraphsChanged)
+      this.notifyStateListener('native-change', paragraphsChanged,
+        this.insertedParagraphStarts(insertedText, startUtf16), becameNonEmpty)
       return
     }
 
@@ -866,7 +874,8 @@ export class NativeRichEditorBridge {
       cause: cause
     }
     this.enqueuePendingEdit(pendingEdit)
-    this.notifyStateListener('native-change', paragraphsChanged)
+    this.notifyStateListener('native-change', paragraphsChanged,
+      this.insertedParagraphStarts(insertedText, startUtf16), becameNonEmpty)
   }
 
   // 预编辑结算：从冻结基线到当前镜像只提交一笔差量。
@@ -1330,7 +1339,8 @@ export class NativeRichEditorBridge {
 
       if (edit.sessionId === this.sessionId) {
         const paragraphsChanged = edit.insertedText.indexOf('\n') >= 0 || edit.oldText.indexOf('\n') >= 0
-        this.notifyStateListener('edit-settled', paragraphsChanged)
+        this.notifyStateListener('edit-settled', paragraphsChanged,
+          this.insertedParagraphStarts(edit.insertedText, edit.startUtf16))
       }
     }
   }
@@ -1509,15 +1519,33 @@ export class NativeRichEditorBridge {
     hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, message)
   }
 
-  private notifyStateListener(kind: string, paragraphsChanged: boolean): void {
+  private notifyStateListener(kind: string, paragraphsChanged: boolean,
+    newParagraphStarts: number[] = [], becameNonEmpty: boolean = false): void {
     if (this.stateListener === null) {
       return
     }
     try {
-      this.stateListener({ kind: kind, paragraphsChanged: paragraphsChanged })
+      this.stateListener({
+        kind: kind,
+        paragraphsChanged: paragraphsChanged,
+        newParagraphStarts: newParagraphStarts,
+        becameNonEmpty: becameNonEmpty
+      })
     } catch (e) {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `state listener error: ${JSON.stringify(e)}`)
     }
+  }
+
+  // 本次替换文本里由 '\n' 形成的新段落起点（UTF-16，绝对位置）。
+  // 只用于核对段落样式继承，不参与 Core 正文事务。
+  private insertedParagraphStarts(insertedText: string, insertionStart: number): number[] {
+    const starts: number[] = []
+    for (let i = 0; i < insertedText.length; i++) {
+      if (insertedText.charCodeAt(i) === 10) {
+        starts.push(insertionStart + i + 1)
+      }
+    }
+    return starts
   }
 
   private validateNativeCoreAlignment(stage: string): NativeCoreAlignmentResult {

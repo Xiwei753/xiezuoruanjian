@@ -137,6 +137,10 @@ export interface RichEditorRuntimeSnapshot {
   firstMismatchParagraphRange: string   // 首个不一致段落的原生范围，如 '[12, 24)'
   paragraphStyleApplied: boolean        // 全部段落匹配预期才为 true（空文档为 false）
   paragraphStyleError: string | null    // 应用/读取段落样式失败或段落不一致的真实原因
+  // 新增段落样式继承：只核对本次插入换行形成的新段落，不触发全文重排。
+  inheritedParagraphChecked: number
+  inheritedParagraphMismatch: number
+  inheritedParagraphError: string | null
   // 新输入/新段落继承（setTypingParagraphStyle，API 20+）。
   typingParagraphStyleSupported: boolean
   typingParagraphStyleApplied: boolean

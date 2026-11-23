@@ -10,15 +10,13 @@
 //     ParagraphStyle.textIndent 表达（见 StyledParagraphIndent）。
 //   - 属性字符串模式不支持组件级 onWillChange/onDidChange/aboutToIMEInput/onDidIMEInput，
 //     用户编辑由 controller.onContentChanged 提供（见 NativeRichEditorBridge）。
-//   - 样式重建只在初始打开、切章、段落结构变化、设置变化和装饰变化时发布；
-//     不随每次按键/选区调用 setStyledString，避免全量重渲染和滚动跳变。
+//   - setStyledString 会全量重绘并把末尾滚进视口，因此只在初次装载/换章和用户显式
+//     修改全局排版设置时调用；普通输入换行依赖段落样式继承，纠错/标注改为面板呈现，
+//     不再用全量替换画一条装饰线。
 // 系统组件自行处理纵向滚动、长按选区、拖拽选择、手柄、粘贴、系统 IME 与无障碍。
 
 import { NativeRichEditorBridge, NativeEditorStateEvent } from '../input/NativeRichEditorBridge'
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
-import { MappedCorrectionSuggestion } from '../correction/CorrectionDtos'
-import { AnnotationRangeDto } from '../../../corebridge/dto/AnnotationDtos'
-import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import {
   StyledParagraphIndentOptions,
   buildParagraphIndentStyles,
@@ -47,16 +45,6 @@ const EDITOR_EXPECTED_TEXT_ALIGN_LABEL = 'Start'
 // compressLeadingPunctuation 自 API 23 起可用，punctuationOverflow 自 API 26 起可用。
 const EDITOR_COMPRESS_LEADING_PUNCTUATION_MIN_API = 23
 const EDITOR_PUNCTUATION_OVERFLOW_MIN_API = 26
-// StyledString 的 BackgroundColorStyle 自 API 14 起可用；低版本只保留链接/纠错下划线。
-const EDITOR_TEXT_BACKGROUND_MIN_API = 14
-const EDITOR_TAG_BACKGROUND_COLOR = '#3498DB33'
-const EDITOR_LINK_UNDERLINE_COLOR = '#3498DB'
-const EDITOR_CORRECTION_UNDERLINE_COLOR = '#E74C3C'
-
-interface DecorationRange {
-  start: number
-  end: number
-}
 
 // 原生选区（UTF-16；不可读时为 -1）。
 interface NativeSelectionOffsets {
@@ -111,8 +99,6 @@ class RichEditorPunctuationModifier implements AttributeModifier<RichEditorAttri
 export struct SujianEditor {
   editorCoordinator: EditorSessionCoordinator | null = null
   richEditorBridge: NativeRichEditorBridge | null = null
-  @Prop @Watch('onCorrectionSuggestionsChanged') correctionSuggestions: MappedCorrectionSuggestion[] = []
-  @Prop @Watch('onAnnotationRangesChanged') annotationRanges: AnnotationRangeDto[] = []
   hasHyperlinkAt: (utf16Offset: number, revision: number, text: string) => boolean =
     (_utf16Offset: number, _revision: number, _text: string): boolean => false
   onHyperlinkTap: (utf16Offset: number, revision: number, text: string) => boolean =
@@ -141,18 +127,25 @@ export struct SujianEditor {
   private firstMismatchParagraphRange: string = ''
   private paragraphStyleApplied: boolean = false
   private paragraphStyleError: string | null = null
+  // 新增段落的继承核对（只读，不触发 setStyledString）。
+  private paragraphVerifyTimer: number = -1
+  private pendingParagraphStarts: number[] = []
+  private inheritedParagraphChecked: number = 0
+  private inheritedParagraphMismatch: number = 0
+  private inheritedParagraphError: string | null = null
   private snapshotTimerId: number = -1
-  // 段落结构变化后的样式重发合并到下一 tick，避免在 onDidChange 回调内重入组件。
-  private paragraphRestyleTimer: number = -1
+  // 预编辑期间暂缓的全量样式发布；IME 提交后补一次，避免空文档首字样式丢失。
+  private pendingFullStylePublish: boolean = false
   // 正文样式全量发布次数（诊断用）。
   private stylePublishCount: number = 0
 
   aboutToDisappear(): void {
     this.cancelSnapshotTimer()
-    if (this.paragraphRestyleTimer !== -1) {
-      clearTimeout(this.paragraphRestyleTimer)
-      this.paragraphRestyleTimer = -1
+    if (this.paragraphVerifyTimer !== -1) {
+      clearTimeout(this.paragraphVerifyTimer)
+      this.paragraphVerifyTimer = -1
     }
+    this.pendingParagraphStarts = []
     if (this.richEditorBridge) {
       this.richEditorBridge.captureDiagnosticsFacts()
     }
@@ -168,8 +161,10 @@ export struct SujianEditor {
 
   // ── 正文属性字符串构建 ─────────────────────────────────────────
 
-  // 唯一正文样式构建入口：字体、行高、段落首行缩进、标注背景、链接下划线、纠错波浪线。
-  // 只读取当前文本与设置，不产生 Core 编辑事务。
+  // 唯一正文样式构建入口：字体、行高、段落首行缩进。
+  // 只读取当前文本与设置，不产生 Core 编辑事务；调用方只限初次装载/换章与全局排版设置。
+  // 纠错波浪线与标注背景/链接下划线不再写入正文属性字符串：StyledString 没有局部
+  // 更新通道，写入新装饰只能全量 setStyledString；这些信息改由校对/标注面板呈现。
   private buildDocument(text: string): MutableStyledString {
     const styles: StyleOptions[] = []
     if (text.length > 0) {
@@ -196,107 +191,32 @@ export struct SujianEditor {
       for (let i = 0; i < paragraphStyles.length; i++) {
         styles.push(paragraphStyles[i])
       }
-      this.appendAnnotationStyles(styles, text)
-      this.appendCorrectionStyles(styles, text)
     }
     return new MutableStyledString(text, styles)
   }
 
-  // 标注只改绘制样式：tagBackground → 文本背景色；linkUnderline → 实线下划线。
-  private appendAnnotationStyles(styles: StyleOptions[], text: string): void {
-    if (this.annotationRanges.length === 0 || text.length === 0) {
-      return
-    }
-    const allowBackground: boolean =
-      PlatformApiResolver.getInstance().isApiAtLeast(EDITOR_TEXT_BACKGROUND_MIN_API)
-    for (let i = 0; i < this.annotationRanges.length; i++) {
-      const range = this.annotationRanges[i]
-      const startUtf16 = TextOffsetMapper.utf8ToUtf16(text, range.startByte)
-      const endUtf16 = TextOffsetMapper.utf8ToUtf16(text, range.endByte)
-      const clipped = this.clipDecorationRange(startUtf16, endUtf16, text.length)
-      if (clipped === null) {
-        continue
-      }
-      if (range.kind === 'tagBackground' && allowBackground) {
-        styles.push({
-          start: clipped.start,
-          length: clipped.end - clipped.start,
-          styledKey: StyledStringKey.BACKGROUND_COLOR,
-          styledValue: new BackgroundColorStyle({ color: EDITOR_TAG_BACKGROUND_COLOR })
-        })
-      } else if (range.kind === 'linkUnderline') {
-        styles.push({
-          start: clipped.start,
-          length: clipped.end - clipped.start,
-          styledKey: StyledStringKey.DECORATION,
-          styledValue: new DecorationStyle({
-            type: TextDecorationType.Underline,
-            color: EDITOR_LINK_UNDERLINE_COLOR,
-            style: TextDecorationStyle.SOLID
-          })
-        })
-      }
-    }
-  }
-
-  // 纠错波浪线最后追加：与链接下划线重叠时优先显示纠错样式。
-  private appendCorrectionStyles(styles: StyleOptions[], text: string): void {
-    for (let i = 0; i < this.correctionSuggestions.length; i++) {
-      const suggestion = this.correctionSuggestions[i]
-      const clipped = this.clipDecorationRange(suggestion.startUtf16, suggestion.endUtf16, text.length)
-      if (clipped === null) {
-        continue
-      }
-      styles.push({
-        start: clipped.start,
-        length: clipped.end - clipped.start,
-        styledKey: StyledStringKey.DECORATION,
-        styledValue: new DecorationStyle({
-          type: TextDecorationType.Underline,
-          color: EDITOR_CORRECTION_UNDERLINE_COLOR,
-          style: TextDecorationStyle.WAVY
-        })
-      })
-    }
-  }
-
-  private clipDecorationRange(start: number, end: number, textLength: number): DecorationRange | null {
-    const clippedStart = Math.max(0, Math.min(start, textLength))
-    const clippedEnd = Math.max(0, Math.min(end, textLength))
-    if (clippedEnd <= clippedStart) {
-      return null
-    }
-    return { start: clippedStart, end: clippedEnd }
-  }
-
-  // 纠错建议变化：只重发样式，不生成 Core 编辑事务。
-  private onCorrectionSuggestionsChanged(): void {
-    this.publishStyledDocument('correction')
-  }
-
-  // 标注范围变化：只重发样式，不删除/重建正文 Span。
-  private onAnnotationRangesChanged(): void {
-    this.publishStyledDocument('annotation')
-  }
-
-  // 字号/行距变化：重发字体与行高样式。
+  // 字号/行距变化：全局排版设置，允许一次全量发布，随后恢复选区/光标可视位置。
   private onFormatChanged(): void {
     this.publishStyledDocument('format')
   }
 
-  // 首行缩进设置变化：重发段落样式。
+  // 首行缩进设置变化：全局排版设置，允许一次全量发布。
   private onIndentSettingsChanged(): void {
     this.publishStyledDocument('indent')
   }
 
-  // 全量发布正文属性字符串。只在非逐键事件（打开/切章/段落结构/设置/装饰）调用。
-  // setStyledString 会全量重渲染并可能滚动到底部，因此必须恢复原有选区/光标。
+  // 全量发布正文属性字符串。只允许初次装载/换章与用户显式修改全局排版设置（字号、
+  // 行距、首行缩进）时调用；普通输入换行依赖全文 ParagraphStyle 的段样式继承，
+  // 纠错/标注改由各自面板呈现，均不再触发 setStyledString。
+  // setStyledString 会全量重渲染并把末尾滚进视口，因此必须恢复原选区，再把光标
+  // 所在范围滚回可见区域。
   private publishStyledDocument(reason: string): void {
     if (!this.editorReady || this.richEditorBridge === null) {
       return
     }
     if (this.richEditorBridge.isImeComposing()) {
-      // 预编辑期间不重发全文，等提交后由下一笔编辑/保存屏障收敛。
+      // 预编辑期间不重发全文；记住这次请求，IME 提交后补发一次。
+      this.pendingFullStylePublish = true
       hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `style publish deferred during IME: ${reason}`)
       return
     }
@@ -313,7 +233,9 @@ export struct SujianEditor {
     this.richEditorBridge.setProgrammaticUpdate(true)
     try {
       this.richEditorController.setStyledString(this.buildDocument(text))
+      this.pendingFullStylePublish = false
       this.restoreSelectionSnapshot(previousSelection, text.length)
+      this.restoreCaretVisibility(previousSelection, text.length)
       this.stylePublishCount++
       this.refreshPublishedStyleFacts(text)
     } catch (e) {
@@ -350,6 +272,21 @@ export struct SujianEditor {
       this.richEditorController.setSelection(start, end)
     } catch (e) {
       hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `restore selection failed: ${JSON.stringify(e)}`)
+    }
+  }
+
+  // setStyledString 的全量重绘会把末尾滚进视口；恢复选区后把光标所在范围滚回可见区域。
+  // 这里只修复可见位置，不改变选区与正文。
+  private restoreCaretVisibility(selection: EditorSelectionSnapshot | null, textLength: number): void {
+    if (selection === null) {
+      return
+    }
+    const start = Math.max(0, Math.min(selection.start, textLength))
+    const end = Math.max(start, Math.min(selection.end, textLength))
+    try {
+      this.richEditorController.scrollToVisible({ start: start, end: end })
+    } catch (e) {
+      hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `restore caret visibility failed: ${JSON.stringify(e)}`)
     }
   }
 
@@ -470,28 +407,103 @@ export struct SujianEditor {
     return `unknown(${value})`
   }
 
-  // 原生编辑器状态变化：程序性同步与初始加载的正文样式已由桥接构建器写好；
-  // 只有用户编辑新增/删除段落时才需要重新发布段落样式（仍不随普通输入重排全文）。
+  // 原生编辑器状态变化：普通用户输入不再重建属性字符串。
+  // - 空文档首次有字：空属性字符串没有可承载样式的位置，只在这一笔补一次全文样式；
+  // - 插入换行：新段落继承覆盖全文的 ParagraphStyle，只核对继承结果，不 setStyledString；
+  // - 其它编辑：正文事务仍只由 NativeRichEditorBridge 提交，组件不产生 Core 编辑。
   private handleNativeEditorState(event: NativeEditorStateEvent): void {
     if (!this.editorReady) {
       return
     }
-    if (event.paragraphsChanged &&
-        (event.kind === 'native-change' || event.kind === 'ime-commit' || event.kind === 'edit-settled')) {
-      this.scheduleParagraphRestyle()
+    if (event.becameNonEmpty) {
+      this.publishStyledDocument('first-content')
+    } else if (event.paragraphsChanged && event.newParagraphStarts.length > 0) {
+      this.scheduleParagraphInheritanceCheck(event.newParagraphStarts)
+    }
+    if (event.kind === 'ime-commit' && this.pendingFullStylePublish &&
+        this.richEditorBridge !== null && !this.richEditorBridge.isImeComposing()) {
+      this.publishStyledDocument('ime-commit')
     }
     this.scheduleRuntimeSnapshot()
   }
 
-  // 段落结构变化后按下一 tick 重发样式：不在 onDidChange 回调内重入 setStyledString。
-  private scheduleParagraphRestyle(): void {
-    if (this.paragraphRestyleTimer !== -1) {
+  // 只读核对：新增段落的段首是否继承了全文 ParagraphStyle.textIndent。
+  // 发现缺失时记录真实诊断原因，绝不为了补一条样式再全量替换整章。
+  private scheduleParagraphInheritanceCheck(starts: number[]): void {
+    for (let i = 0; i < starts.length; i++) {
+      if (this.pendingParagraphStarts.indexOf(starts[i]) < 0) {
+        this.pendingParagraphStarts.push(starts[i])
+      }
+    }
+    if (this.paragraphVerifyTimer !== -1) {
       return
     }
-    this.paragraphRestyleTimer = setTimeout(() => {
-      this.paragraphRestyleTimer = -1
-      this.publishStyledDocument('paragraphs')
+    this.paragraphVerifyTimer = setTimeout(() => {
+      this.paragraphVerifyTimer = -1
+      this.verifyInheritedParagraphStyles()
     }, 0)
+  }
+
+  private verifyInheritedParagraphStyles(): void {
+    const starts = this.pendingParagraphStarts
+    this.pendingParagraphStarts = []
+    if (!this.editorReady || this.richEditorBridge === null) {
+      return
+    }
+    const text = this.richEditorBridge.getCurrentText()
+    let checked = 0
+    let mismatch = 0
+    let firstStart = -1
+    let detail = ''
+    if (text.length === 0) {
+      this.inheritedParagraphChecked = 0
+      this.inheritedParagraphMismatch = 0
+      this.inheritedParagraphError = null
+      return
+    }
+    const expectedIndent: number = resolveTextIndentVp({
+      fontSize: this.fontSize,
+      autoIndentEnabled: this.autoIndentEnabled,
+      autoIndentWidth: this.autoIndentWidth
+    })
+    try {
+      const styled: MutableStyledString = this.richEditorController.getStyledString()
+      for (let i = 0; i < starts.length; i++) {
+        const start = starts[i]
+        if (start < 0 || start >= text.length) {
+          continue
+        }
+        checked++
+        let matched = false
+        try {
+          const styles: SpanStyle[] = styled.getStyles(start, 1, StyledStringKey.PARAGRAPH_STYLE)
+          for (let s = 0; s < styles.length; s++) {
+            const paragraphStyle = styles[s].styledValue as ParagraphStyle
+            if (paragraphStyle !== undefined && paragraphStyle !== null &&
+                paragraphStyle.textIndent !== undefined &&
+                Math.abs(paragraphStyle.textIndent - expectedIndent) < 0.01) {
+              matched = true
+            }
+          }
+        } catch (e) {
+          matched = false
+        }
+        if (!matched) {
+          mismatch++
+          if (firstStart < 0) {
+            firstStart = start
+            detail = `new paragraph at ${start} missing inherited textIndent ${expectedIndent}`
+          }
+        }
+      }
+      this.inheritedParagraphChecked = checked
+      this.inheritedParagraphMismatch = mismatch
+      this.inheritedParagraphError = mismatch === 0 ? null : detail
+    } catch (e) {
+      this.inheritedParagraphChecked = 0
+      this.inheritedParagraphMismatch = 0
+      this.inheritedParagraphError = `getStyledString failed while checking paragraph inheritance: ${JSON.stringify(e)}`
+    }
   }
 
   // 超链接命中改用 RichEditor 自身点击事件 + 原生 LayoutManager 字形定位。
@@ -587,7 +599,7 @@ export struct SujianEditor {
     const resolver = PlatformApiResolver.getInstance()
     const snapshot: RichEditorRuntimeSnapshot = {
       // Issue #1054：属性字符串模式，Span 级事实不再可读。
-      schemaVersion: 5,
+      schemaVersion: 6,
       hasActiveSession: coreSnapshot !== null,
       sessionId: coreSessionId !== null ? coreSessionId : -1,
       nativeRevision: bridge !== null ? bridge.getLastAppliedRevision() : -1,
@@ -626,6 +638,9 @@ export struct SujianEditor {
       firstMismatchParagraphRange: this.firstMismatchParagraphRange,
       paragraphStyleApplied: this.paragraphStyleApplied,
       paragraphStyleError: this.paragraphStyleError,
+      inheritedParagraphChecked: this.inheritedParagraphChecked,
+      inheritedParagraphMismatch: this.inheritedParagraphMismatch,
+      inheritedParagraphError: this.inheritedParagraphError,
       typingParagraphStyleSupported: false,
       typingParagraphStyleApplied: false,
       typingParagraphStyleError: 'styled-string-mode',

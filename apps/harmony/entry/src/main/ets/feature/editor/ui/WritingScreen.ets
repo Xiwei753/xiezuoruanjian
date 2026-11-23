@@ -1667,7 +1667,7 @@ export struct WritingScreen {
           resourceState: this.correctionResourceState,
           resourceMessage: this.correctionResourceMessage,
           checkMessage: this.correctionCheckMessage,
-          onCheckChapter: (): void => { void this.correctionCoordinator.checkChapter() },
+          onCheckChapter: (): void => { void this.checkCurrentChapter() },
           onApply: (suggestion: MappedCorrectionSuggestion): void => { void this.applyCorrection(suggestion) },
           onIgnore: (suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope): void => {
             void this.ignoreCorrection(suggestion, scope)
@@ -1747,8 +1747,6 @@ export struct WritingScreen {
           SujianEditor({
             editorCoordinator: this.editorCoordinator,
             richEditorBridge: this.richEditorBridge,
-            correctionSuggestions: this.correctionSuggestions,
-            annotationRanges: this.annotationRanges,
             hasHyperlinkAt: (utf16Offset: number, revision: number, text: string): boolean =>
               this.hasHyperlinkAt(utf16Offset, revision, text),
             onHyperlinkTap: (utf16Offset: number, revision: number, text: string): boolean => {
@@ -2299,6 +2297,39 @@ export struct WritingScreen {
     })
     this.annotationRanges = ranges
     this.annotationErrorMessage = ''
+  }
+
+  /**
+   * Issue #1054 复审：“校对本章”的唯一入口。
+   * 先固定 chapter/session，再依次结束 IME 预编辑、排空原生输入队列并核对
+   * native/mirror/Core，最后等 Core 命令队列空闲；全部完成后才冻结 revision 发起校对。
+   * 任一步失败都通过 CorrectionCoordinator 的可见状态报错，不再静默校对旧正文。
+   */
+  private async checkCurrentChapter(): Promise<void> {
+    const projectId = this.projectId
+    const chapterId = this.chapterId
+    const sessionId = this.editorCoordinator.getSessionId()
+    if (projectId.length === 0 || chapterId.length === 0 || sessionId === null) {
+      this.correctionCoordinator.reportCheckBarrierFailure('当前没有打开的章节会话，无法校对本章')
+      return
+    }
+    if (!this.correctionCoordinator.beginCheckRequest()) {
+      return
+    }
+    try {
+      await this.richEditorBridge.finishEditingAndWhenIdle()
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
+      this.correctionCoordinator.reportCheckBarrierFailure(`校对前输入结算失败：${detail}`)
+      return
+    }
+    await this.editorCoordinator.whenIdle()
+    if (this.projectId !== projectId || this.chapterId !== chapterId ||
+        this.editorCoordinator.getSessionId() !== sessionId) {
+      this.correctionCoordinator.reportCheckBarrierFailure('章节会话已切换，请重新打开校对面板后再试')
+      return
+    }
+    await this.correctionCoordinator.checkChapterAfterInputBarrier(projectId, chapterId, sessionId)
   }
 
   private async applyCorrection(suggestion: MappedCorrectionSuggestion): Promise<void> {

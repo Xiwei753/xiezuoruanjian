@@ -47,41 +47,27 @@ export function listParagraphRanges(text: string): StyledParagraphRange[] {
   return ranges
 }
 
-// 构造每个真实段落的 PARAGRAPH_STYLE。
-// 段落样式按段首字符定位；空段落（没有字符可缩进）不设置，避免把样式作用到下一段。
+// 构造整篇正文的 PARAGRAPH_STYLE 占位。
+//
+// 所有段落共用同一个首行缩进值，因此只需要一条覆盖全文的样式占位：
+// 每个段落的段首字符都落在该范围内，新增/拆分段落时新字符也会继承这段样式，
+// 不需要在每次换行后重建全文属性字符串（setStyledString 会全量重绘并滚动到末尾）。
 // wordBreak / textAlign 与 Issue #1053 的原生排版策略保持一致；
 // ArkUI 属性字符串的 ParagraphStyle 没有 lineBreakStrategy 字段，不能伪造该属性。
 export function buildParagraphIndentStyles(text: string,
   options: StyledParagraphIndentOptions): StyleOptions[] {
-  const styles: StyleOptions[] = []
   if (text.length === 0) {
-    return styles
+    return []
   }
   const indentVp: number = resolveTextIndentVp(options)
-  const ranges: StyledParagraphRange[] = listParagraphRanges(text)
-  for (let i = 0; i < ranges.length; i++) {
-    const range = ranges[i]
-    // 段落样式按段首字符定位。空段落（首段为空、连续空行、末尾空段）没有自身字符，
-    // 退回承载它的换行符位置；缩进值对所有段落相同，不会改变相邻段落的视觉结果。
-    let anchor = range.start
-    if (range.end <= range.start) {
-      if (anchor >= text.length) {
-        anchor = text.length - 1
-      }
-      if (anchor < 0) {
-        continue
-      }
-    }
-    styles.push({
-      start: anchor,
-      length: 1,
-      styledKey: StyledStringKey.PARAGRAPH_STYLE,
-      styledValue: new ParagraphStyle({
-        textAlign: TextAlign.Start,
-        wordBreak: WordBreak.BREAK_WORD,
-        textIndent: LengthMetrics.vp(indentVp)
-      })
+  return [{
+    start: 0,
+    length: text.length,
+    styledKey: StyledStringKey.PARAGRAPH_STYLE,
+    styledValue: new ParagraphStyle({
+      textAlign: TextAlign.Start,
+      wordBreak: WordBreak.BREAK_WORD,
+      textIndent: LengthMetrics.vp(indentVp)
     })
-  }
-  return styles
+  }]
 }

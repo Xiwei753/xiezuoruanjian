@@ -409,23 +409,12 @@ export class CorrectionCoordinator {
   }
 
   /**
-   * 用户主动“校对本章”：Issue #1054 串行入口。
-   * 先等当前会话输入队列空闲，固定同一快照 revision 再请求 Core；返回后只投影同一
-   * project/chapter/session/revision 的结果。无会话、资源准备中/失败、Core 错误都要
-   * 给出界面可见的 errorMessage/checkMessage，不能静默返回。
+   * Issue #1054 复审：页面在开始完整输入屏障（原生队列 + Core 队列）前先占用一次
+   * “校对本章”操作。同步置 isChecking，避免屏障期间重复点击启动第二次校对。
    */
-  async checkChapter(): Promise<void> {
+  beginCheckRequest(): boolean {
     if (this.isChecking) {
-      return
-    }
-    const baseRequest = this.current
-    const initialSessionId = this.editor.getSessionId()
-    const initialSnapshot = this.editor.getSnapshot()
-    if (baseRequest === null || initialSessionId === null || initialSnapshot === null) {
-      this.errorMessage = '当前没有打开的章节会话，无法校对本章'
-      this.checkMessage = ''
-      this.notify()
-      return
+      return false
     }
     this.isChecking = true
     this.errorMessage = ''
@@ -435,25 +424,74 @@ export class CorrectionCoordinator {
       this.pendingScanTimer = -1
     }
     this.pendingScanSnapshot = null
-    // 先作废旧扫描；等输入队列空闲后再固定本请求的 generation/revision。
+    // 先作废旧扫描；真正的 revision 在完整屏障结束后再冻结。
     this.requestGeneration++
     this.notify()
-    try {
-      await this.editor.whenIdle()
-      const sessionId = this.editor.getSessionId()
-      const snap = this.editor.getSnapshot()
-      if (sessionId === null || snap === null) {
-        this.errorMessage = '章节会话已关闭，校对未执行'
+    return true
+  }
+
+  // 页面侧完整输入屏障失败（IME 未结算、原生/镜像/Core 未对齐、章节已切换）：
+  // 用同一条校对状态通道显示原因，不能让面板继续展示旧建议或误报“未发现问题”。
+  reportCheckBarrierFailure(message: string): void {
+    this.isChecking = false
+    this.suggestions = []
+    this.errorMessage = message
+    this.checkMessage = ''
+    this.notify()
+    this.notifyScanCompleted()
+  }
+
+  private resourceLabel(): string {
+    switch (this.resourceState) {
+      case 'ready':
+        return 'AI 校对'
+      case 'rulesOnly':
+        return '仅规则/词典'
+      case 'preparing':
+        return '模型准备中，本次仅规则/词典'
+      default:
+        return ''
+    }
+  }
+
+  /**
+   * 完整输入屏障之后的校对入口：调用方已 await bridge.finishEditingAndWhenIdle()
+   * 与 editor.whenIdle()，并固定了 project/chapter/session。这里只做：
+   * 等待进行中的模型准备结束 → 重读真实资源状态 → 冻结当前 revision → Core 校对 →
+   * 仅投影同一 session/revision 的结果。报错全部走 errorMessage/checkMessage。
+   */
+  async checkChapterAfterInputBarrier(expectedProjectId: string, expectedChapterId: string,
+    expectedSessionId: number): Promise<void> {
+    if (!this.isChecking) {
+      if (!this.beginCheckRequest()) {
         return
       }
-      if (sessionId !== baseRequest.sessionId || baseRequest.projectId.length === 0 ||
-          baseRequest.chapterId.length === 0) {
+    }
+    try {
+      const pendingModel = this.bundledModelPromise
+      if (pendingModel !== null) {
+        // 等待准备结束；失败原因由 prepareBundledModel 写入资源状态，随后重读。
+        await pendingModel.then((): void => {}, (): void => {})
+      }
+      await this.refreshResourceState()
+      const sessionId = this.editor.getSessionId()
+      const snap = this.editor.getSnapshot()
+      const baseRequest = this.current
+      if (sessionId === null || snap === null || baseRequest === null) {
+        this.errorMessage = '章节会话已关闭，校对未执行'
+        this.checkMessage = ''
+        return
+      }
+      if (sessionId !== expectedSessionId || baseRequest.projectId !== expectedProjectId ||
+          baseRequest.chapterId !== expectedChapterId || expectedProjectId.length === 0 ||
+          expectedChapterId.length === 0) {
         this.errorMessage = '章节会话已切换，请重新打开校对面板后再试'
+        this.checkMessage = ''
         return
       }
       const request: CorrectionRequestSnapshot = {
-        projectId: baseRequest.projectId,
-        chapterId: baseRequest.chapterId,
+        projectId: expectedProjectId,
+        chapterId: expectedChapterId,
         sessionId: sessionId,
         text: snap.text,
         revision: snap.revision
@@ -466,11 +504,40 @@ export class CorrectionCoordinator {
       this.acceptCheckResult(generation, request, result, false)
     } catch (e) {
       this.errorMessage = `校对请求失败：${String(e)}`
+      this.checkMessage = ''
     } finally {
       this.isChecking = false
       this.notify()
       this.notifyScanCompleted()
     }
+  }
+
+  /**
+   * 兼容入口：调用方没有做原生输入屏障时，至少等 Core 命令队列空闲后复用上面的
+   * 冻结/投影逻辑。面板按钮走 WritingScreen.checkCurrentChapter() 的完整屏障入口。
+   */
+  async checkChapter(): Promise<void> {
+    if (!this.beginCheckRequest()) {
+      return
+    }
+    const baseRequest = this.current
+    const initialSessionId = this.editor.getSessionId()
+    if (baseRequest === null || initialSessionId === null) {
+      this.reportCheckBarrierFailure('当前没有打开的章节会话，无法校对本章')
+      return
+    }
+    try {
+      await this.editor.whenIdle()
+    } catch (e) {
+      this.reportCheckBarrierFailure(`校对前输入结算失败：${String(e)}`)
+      return
+    }
+    if (this.editor.getSessionId() !== initialSessionId) {
+      this.reportCheckBarrierFailure('章节会话已切换，请重新打开校对面板后再试')
+      return
+    }
+    await this.checkChapterAfterInputBarrier(
+      baseRequest.projectId, baseRequest.chapterId, initialSessionId)
   }
 
   private acceptCheckResult(generation: number, snapshot: CorrectionRequestSnapshot,
@@ -519,9 +586,13 @@ export class CorrectionCoordinator {
     this.suggestions = mapped
     this.errorMessage = ''
     if (!silent) {
-      this.checkMessage = mapped.length > 0
+      const baseMessage = mapped.length > 0
         ? `检查完成：发现 ${mapped.length} 条建议`
         : '检查完成：未发现问题'
+      // 资源标签必须来自刚重读的 Core 状态：模型准备失败但固定规则可用时，
+      // 不能把“规则未发现”展示成 AI 校对完成。
+      const label = this.resourceLabel()
+      this.checkMessage = label.length > 0 ? `[${label}] ${baseMessage}` : baseMessage
     }
     this.notify()
   }
