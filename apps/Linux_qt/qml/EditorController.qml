@@ -883,6 +883,15 @@ QtObject {
         if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) return;
         if (!editorBackendRef.request_correction_snapshot) return;
         if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return;
+        // Issue #1055 复审：编辑事务连续性重建也会走到这里。编辑器实际载入的
+        // 文档与 controller 当前身份不一致时，读到的正文可能已属于另一章，
+        // 绝不能用旧 ID 投递。
+        if (loadedEditorDocumentIdentity() !== editorDocumentIdentity()) {
+            logWriterWarning("correction_snapshot_identity_mismatch",
+                "loaded=" + loadedEditorDocumentIdentity()
+                + ", current=" + editorDocumentIdentity());
+            return;
+        }
         correctionScanDebounceTimer.stop();
 
         var snapshotText = getEditorPlainText();
@@ -1886,10 +1895,10 @@ QtObject {
         // WritingWorkspace 提交给 controller 的值同源），避免请求参数与
         // authoritative 身份不一致导致所有保存被误判为过期快照。
         var loadedData = result.data || {};
-        markEditorDocumentLoaded(
-            String(loadedData.projectId || pId),
-            String(loadedData.volumeId || vId),
-            String(loadedData.chapterId || cId));
+        var loadedProjectId = String(loadedData.projectId || pId);
+        var loadedVolumeId = String(loadedData.volumeId || vId);
+        var loadedChapterId = String(loadedData.chapterId || cId);
+        markEditorDocumentLoaded(loadedProjectId, loadedVolumeId, loadedChapterId);
         // 即使同一章节文本相同，新页面 / 新 EditorKernel 也是新的 Core
         // 标注会话；必须领取进程级唯一 ID，不能沿用旧页面的数字 epoch。
         beginAnnotationDocumentSession();
@@ -1902,12 +1911,26 @@ QtObject {
         lastPotentialExplicitClearAtMs = 0;
         releaseCorrectionSession(controller.projectId, controller.chapterId);
         invalidateCorrectionResults();
-        syncCorrectionTracking(content, Number(targetEditorItem.text_revision), pId, cId);
+        syncCorrectionTracking(content, Number(targetEditorItem.text_revision),
+            loadedProjectId, loadedChapterId);
         refreshCorrectionEntityNames(pId);
         isLoadingChapter = false;
         // Issue #954：章节打开只恢复 Core 缓存中仍有效的校对结果；未校对过的
         // 段落由后续编辑事务或手动“检查本章”补算，不因切章重扫整章。
-        requestCorrectionSnapshot();
+        // Issue #1055 复审：正文已经换成新章节，但 controller.projectId/volumeId/
+        // chapterId 由外层 WritingWorkspace 在本次调用返回后才提交。直接调用会
+        // 用新正文 + 旧章节 ID 投递快照，因此排到下一事件循环；身份或 epoch
+        // 对不上（期间又切到 C）就丢弃这次恢复。
+        var snapshotEpoch = correctionDocumentEpoch;
+        Qt.callLater(function() {
+            if (correctionDocumentEpoch !== snapshotEpoch) return;
+            if (controller.projectId !== loadedProjectId
+                    || controller.volumeId !== loadedVolumeId
+                    || controller.chapterId !== loadedChapterId) return;
+            if (loadedEditorDocumentIdentity() !== editorDocumentIdentity()) return;
+            if (isLoadingChapter) return;
+            requestCorrectionSnapshot();
+        });
 
         // 成功信号由外层 WritingWorkspace 在章节身份、选中状态和视口都提交后发出。
         // 这里只负责载入正文，避免搜索定位回调在身份尚未更新时重入 openChapter。

@@ -267,19 +267,24 @@ fn record_active_correction_document(project_id: &str, chapter_id: &str, session
 /// True when this job no longer belongs to the document the writer is looking
 /// at. Only coalescable display/scan jobs consult it; edit mappings must keep
 /// their revision order even after the chapter changed.
+///
+/// `None` means the previous document was explicitly released and no newer
+/// scan request has claimed a document yet; a coalescable job popped in that
+/// window must not initialize a model for a chapter the writer already left.
 fn correction_job_document_obsolete(job: &CorrectionJob) -> bool {
     let queue = correction_queue();
     let active = match queue.active_document.lock() {
         Ok(active) => active,
         Err(poisoned) => poisoned.into_inner(),
     };
-    active
-        .as_ref()
-        .is_some_and(|(project_id, chapter_id, session_id)| {
+    match active.as_ref() {
+        None => true,
+        Some((project_id, chapter_id, session_id)) => {
             project_id != &job.project_id
                 || chapter_id != &job.chapter_id
                 || *session_id > job.session_id
-        })
+        }
+    }
 }
 
 fn submit_correction_job(
