@@ -62,6 +62,9 @@ export interface NativeCoreAlignmentSnapshot {
   coreNewlineCount: number
   nativeHash: string
   coreHash: string
+  nativeSpanCount: number       // 原生全文 Span 总数（含非文本 Span；仅在屏障完整读取时计算）
+  nativeRevision: number        // 本次事实对应的已应用 Core revision（未知时 -1）
+  coreRevision: number          // 本次事实读取时的 Core revision（未知时 -1）
   mirrorMatchesEditor: boolean  // 本地镜像是否等于从原生 Span 重建的全文
   firstMismatchUtf16: number    // 镜像与原生全文的首个差异 offset（-1 表示一致或无法重建）
   detail: string                // 事实描述，不含正文字符
@@ -78,19 +81,21 @@ export interface RichEditorRuntimeSnapshot {
   nativeRevision: number                // 已应用到原生编辑器的 Core revision（未知时 -1）
   coreRevision: number                  // Core snapshot revision（无快照时 -1）
 
-  // 文本事实（不含正文字符）
+  // 文本事实（不含正文字符）。
+  // Issue #1053 评论 7099290808：长度/换行数按编辑增量维护；hash 与全量 Span 数
+  // 只在保存/退出屏障或失焦/导出前完整计算一次，并与 revision 绑定（见 lastNativeCoreAlignment）。
   nativeTextUtf16Length: number
   nativeNewlineCount: number
-  nativeTextHash: string
+  nativeTextHash: string                // 上次屏障的稳定态 hash；未知时为空串
   coreTextUtf16Length: number
   coreNewlineCount: number
-  coreTextHash: string
-  nativeCoreTextMatched: boolean        // 本地镜像与 Core 正文是否逐字符一致
+  coreTextHash: string                  // 上次屏障的稳定态 hash；未知时为空串
+  nativeCoreTextMatched: boolean        // 上次屏障三方校验结果（非实时逐字符比较）
   nativeCoreDiverged: boolean           // 屏障发现原生与 Core 相异且原生正文有效；阻止异步回写覆盖原生内容
 
   // 原生结构
-  nativeSpanCount: number
-  paragraphCount: number                // 硬换行段落数 = 换行数 + 1
+  nativeSpanCount: number               // 上次屏障完整读取的 Span 总数；未知时 -1
+  paragraphCount: number                // 硬换行段落数 = 增量维护的换行数 + 1
   layoutLineCount: number               // 系统布局行数（LayoutManager.getLineCount）
 
   // 光标/选区（UTF-16）

@@ -17,9 +17,7 @@ import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolv
 import {
   EditorRuntimeSnapshotStore,
   RichEditorRuntimeSnapshot,
-  RichEditorLineMetricsSnapshot,
-  countNewlines,
-  hashTextUtf16
+  RichEditorLineMetricsSnapshot
 } from '../diagnostics/EditorRuntimeSnapshotStore'
 import hilog from '@ohos.hilog'
 
@@ -84,7 +82,10 @@ export struct SujianEditor {
 
   aboutToDisappear(): void {
     this.cancelSnapshotTimer()
-    // 先落一份挂载中的最后快照，再把 Store 标记为已卸载（保留最后状态供离页后导出）。
+    // 离页是非热路径：先刷新完整事实，再落一份挂载中的最后快照，最后标记已卸载。
+    if (this.richEditorBridge) {
+      this.richEditorBridge.captureDiagnosticsFacts()
+    }
     this.publishRuntimeSnapshot()
     EditorRuntimeSnapshotStore.getInstance().markEditorUnmounted()
     if (this.richEditorBridge) {
@@ -453,6 +454,12 @@ export struct SujianEditor {
     const coreText = coreSnapshot !== null ? coreSnapshot.text : ''
     const nativeText = bridge !== null ? bridge.getCurrentText() : ''
     const coreSessionId = coordinator !== null ? coordinator.getSessionId() : null
+    // Issue #1053 评论 7099290808：热路径快照只用增量维护的轻量事实；
+    // 全文 hash / 全量 Span 数来自上次保存屏障的稳定态校验，不再每 150ms 遍历整章。
+    const alignment = bridge !== null ? bridge.getLastNativeCoreAlignment() : null
+    const nativeNewlineCount = bridge !== null ? bridge.getNativeNewlineCount() : 0
+    const coreNewlineCount = bridge !== null ? bridge.getCoreNewlineCount() : 0
+    const nativeSpanCount = bridge !== null ? bridge.getNativeSpanCount() : -1
     const caretUtf16 = this.readCaretUtf16()
     const selection = this.readNativeSelection()
     const editorWidthPx = this.vpToPx(this.editorWidthVp)
@@ -465,15 +472,15 @@ export struct SujianEditor {
       nativeRevision: bridge !== null ? bridge.getLastAppliedRevision() : -1,
       coreRevision: coreSnapshot !== null ? coreSnapshot.revision : -1,
       nativeTextUtf16Length: nativeText.length,
-      nativeNewlineCount: countNewlines(nativeText),
-      nativeTextHash: hashTextUtf16(nativeText),
+      nativeNewlineCount: nativeNewlineCount,
+      nativeTextHash: alignment !== null ? alignment.nativeHash : '',
       coreTextUtf16Length: coreText.length,
-      coreNewlineCount: countNewlines(coreText),
-      coreTextHash: hashTextUtf16(coreText),
-      nativeCoreTextMatched: coreSnapshot !== null && nativeText === coreText,
+      coreNewlineCount: coreNewlineCount,
+      coreTextHash: alignment !== null ? alignment.coreHash : '',
+      nativeCoreTextMatched: alignment !== null ? alignment.matched : false,
       nativeCoreDiverged: bridge !== null ? bridge.isNativeCoreDiverged() : false,
-      nativeSpanCount: this.readNativeSpanCount(),
-      paragraphCount: countNewlines(nativeText) + 1,
+      nativeSpanCount: nativeSpanCount,
+      paragraphCount: nativeNewlineCount + 1,
       layoutLineCount: this.readLayoutLineCount(),
       caretUtf16: caretUtf16,
       selectionStartUtf16: selection.start,
@@ -538,16 +545,6 @@ export struct SujianEditor {
       return previewText !== undefined && previewText !== null ? previewText.value.length : 0
     } catch (e) {
       return 0
-    }
-  }
-
-  private readNativeSpanCount(): number {
-    try {
-      const spans = this.richEditorController.getSpans()
-      // getSpans 在 controller 未绑定组件时返回 undefined。
-      return spans !== undefined && spans !== null ? spans.length : -1
-    } catch (e) {
-      return -1
     }
   }
 
@@ -689,6 +686,10 @@ export struct SujianEditor {
         .onBlur(() => {
           hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'RichEditor focus lost')
           this.editorFocused = false
+          // 失焦是非热路径：刷新一次完整事实（全文 Span 数与 hash），再更新诊断快照。
+          if (this.richEditorBridge) {
+            this.richEditorBridge.captureDiagnosticsFacts()
+          }
           this.publishRuntimeSnapshot()
         })
     }

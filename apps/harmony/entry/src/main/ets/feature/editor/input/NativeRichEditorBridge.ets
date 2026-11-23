@@ -67,6 +67,8 @@ export interface NativeCoreAlignmentResult {
   nativeText: string             // 原生全文（仅用于本会话收敛，不落诊断）
   nativeUtf16Length: number
   coreUtf16Length: number
+  nativeSpanCount: number        // 原生全文 Span 总数（完整读取时统计）
+  nativeRevision: number
   firstMismatchUtf16: number     // 镜像与原生全文的首个差异；一致为 -1
   mismatchToCoreUtf16: number    // 镜像与 Core 正文的首个差异；一致为 -1
   appliedRevision: number        // 原生镜像最后一次成功应用的 Core revision
@@ -93,6 +95,13 @@ interface NativeRangeText {
   nonTextSpanCount: number
   startUtf16: number
   endUtf16: number
+}
+
+// IME 提交后的范围签名：用于忽略同一次提交随后重复触发的 onDidChange。
+interface ImeCommitSignature {
+  start: number
+  end: number
+  insertedText: string
 }
 
 // 记录一次原生文本操作所需的字段（补 coreRevision/atMs 后落到快照）。
@@ -187,6 +196,22 @@ export class NativeRichEditorBridge {
   private nativeTextReady: boolean = false
   // Core 先行推进时刷新原生镜像的单飞标记，避免 checkIdle 重入。
   private nativeCoreRefreshRunning: boolean = false
+  // Issue #1053 评论 7099290808：换行数按编辑增量维护，快照不再每 150ms 遍历整章。
+  private nativeNewlineCount: number = 0
+  private coreNewlineCount: number = 0
+  // 最近一次 readNativeFullText 统计到的 Span 总数（-1 表示未知）。
+  private lastReadNativeSpanCount: number = -1
+  // IME 预编辑开始时冻结的替换范围（UTF-16，基线坐标）与基线换行数。
+  private imeReplaceStartUtf16: number = -1
+  private imeReplaceEndUtf16: number = -1
+  private imeComposingStartNewlineCount: number = 0
+  // 预编辑期间第一次 onDidChange 的 rangeBefore（镜像坐标，即预编辑基线坐标），
+  // 是组件真正替换的范围；优先于 aboutToIMEInput 时的选区快照。
+  private imeRangeBeforeStartUtf16: number = -1
+  private imeRangeBeforeEndUtf16: number = -1
+  private imeRangeBeforeRecorded: boolean = false
+  // 上一次 IME 提交的范围签名，供 onDidChange 去重。
+  private lastImeCommit: ImeCommitSignature | null = null
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -231,6 +256,24 @@ export class NativeRichEditorBridge {
 
   getNativeFactError(): string | null {
     return this.nativeFactError
+  }
+
+  // Issue #1053 评论 7099290808：增量维护的换行数，供诊断快照按事件读取（O(1)）。
+  getNativeNewlineCount(): number {
+    return this.nativeNewlineCount
+  }
+
+  getCoreNewlineCount(): number {
+    return this.coreNewlineCount
+  }
+
+  getNativeSpanCount(): number {
+    return this.lastReadNativeSpanCount
+  }
+
+  // 非热路径：在失焦/退出/导出前刷新一次完整事实（全文 Span 数、hash 与三方对齐）。
+  captureDiagnosticsFacts(): void {
+    this.validateNativeCoreAlignment('diagnostics')
   }
 
   isNativeCoreDiverged(): boolean {
@@ -392,6 +435,7 @@ export class NativeRichEditorBridge {
         this.reportNativeFactError('barrier',
           `mirror diverged from native text firstMismatch=${alignment.firstMismatchUtf16}`)
         this.currentText = alignment.nativeText
+        this.nativeNewlineCount = countNewlines(alignment.nativeText)
       }
       void this.convergeNativeTextToCore()
     })
@@ -421,6 +465,8 @@ export class NativeRichEditorBridge {
         return
       }
       this.currentText = snap.text
+      this.nativeNewlineCount = countNewlines(snap.text)
+      this.coreNewlineCount = this.nativeNewlineCount
       this.nativeTextReady = true
       this.lastAppliedRevision = snap.revision
       this.confirmedText = snap.text
@@ -470,6 +516,7 @@ export class NativeRichEditorBridge {
           this.reportNativeFactError('converge',
             `mirror behind native text firstMismatch=${firstMismatchUtf16(this.currentText, editorText)}`)
           this.currentText = editorText
+          this.nativeNewlineCount = countNewlines(editorText)
         }
         if (this.lastAppliedRevision !== snap.revision) {
           // Core 在收敛前被其它路径推进：交给 checkIdle 的 coreAdvanced 分支刷新原生。
@@ -479,6 +526,7 @@ export class NativeRichEditorBridge {
           this.lastAppliedRevision = snap.revision
           this.confirmedText = snap.text
           this.confirmedRevision = snap.revision
+          this.coreNewlineCount = countNewlines(snap.text)
           this.nativeCoreDiverged = false
           this.nativeCoreDivergedSessionId = null
           this.refreshSelectionAfterConvergence()
@@ -507,6 +555,7 @@ export class NativeRichEditorBridge {
             this.lastAppliedRevision = after.revision
             this.confirmedText = after.text
             this.confirmedRevision = after.revision
+            this.coreNewlineCount = countNewlines(after.text)
             this.nativeCoreDiverged = false
             this.nativeCoreDivergedSessionId = null
             this.refreshSelectionAfterConvergence()
@@ -600,6 +649,16 @@ export class NativeRichEditorBridge {
     this.confirmedText = ''
     this.confirmedRevision = -1
     this.lastAppliedRevision = -1
+    this.nativeNewlineCount = 0
+    this.coreNewlineCount = 0
+    this.lastReadNativeSpanCount = -1
+    this.imeReplaceStartUtf16 = -1
+    this.imeReplaceEndUtf16 = -1
+    this.imeComposingStartNewlineCount = 0
+    this.imeRangeBeforeStartUtf16 = -1
+    this.imeRangeBeforeEndUtf16 = -1
+    this.imeRangeBeforeRecorded = false
+    this.lastImeCommit = null
   }
 
   onWillChange(_value: RichEditorChangeValue): boolean {
@@ -621,11 +680,18 @@ export class NativeRichEditorBridge {
       return
     }
 
+    // Issue #1053 评论 7099290808：输入热路径只提取 rangeAfter 的局部片段，
+    // 只有 Range 缺失/不一致、非文本 Span、原生异常等条件出现时才读取全文重建。
     const previousText = this.currentText
+    const imeCommitSignature = this.lastImeCommit
+    this.lastImeCommit = null
+    if (imeCommitSignature !== null && this.isImeCommitDuplicate(imeCommitSignature, rangeAfter)) {
+      // 同一次 IME 提交随后重复触发的 onDidChange：已由 onDidIMEInput 结算，忽略。
+      return
+    }
+
     const beforeRange = this.resolveTextRange(rangeBefore, previousText.length)
     const rangeText = this.extractRangeText(rangeAfter)
-    // Issue #1053 评论 7098652618：非 IME 输入也必须与原生最终全文核对（非热路径基准，一次 getSpans）。
-    const nativeFullText = this.readNativeFullText()
 
     let factDetail = ''
     if (beforeRange === null) {
@@ -673,8 +739,10 @@ export class NativeRichEditorBridge {
       this.currentText = previousText.substring(0, startUtf16)
         + insertedText
         + previousText.substring(endUtf16)
+      this.updateNativeNewlineDelta(oldText, insertedText)
     } else {
-      // 原生 Range 与镜像不一致：以原生全文 Span 为真相重建，并保留事实错误供诊断。
+      // 异常路径：以原生全文 Span 为真相完整重建（不进入逐键热路径）。
+      const nativeFullText = this.readNativeFullText()
       if (nativeFullText === null) {
         this.reportNativeFactError('onDidChange', `${factDetail}; native full text unavailable`)
         this.idleError = `Native text fact mismatch and native full text unavailable: ${factDetail}`
@@ -695,26 +763,10 @@ export class NativeRichEditorBridge {
         insertedText = recovered.replacement
         oldText = previousText.substring(startUtf16, endUtf16)
         this.currentText = nativeFullText
+        this.nativeNewlineCount = countNewlines(nativeFullText)
         this.reportNativeFactError('onDidChange',
           `${factDetail}; recovered from native full text start=${startUtf16} end=${endUtf16} insertedLen=${insertedText.length}`)
       }
-    }
-
-    // 严格 Range 重建成功时做全文一致性核对；不一致以原生全文为准重新形成编辑事务。
-    if (!factError && nativeFullText !== null && nativeFullText !== this.currentText) {
-      factError = true
-      const recovered = this.computeDiff(previousText, nativeFullText)
-      startUtf16 = recovered.start
-      endUtf16 = recovered.end
-      insertedText = recovered.replacement
-      oldText = previousText.substring(startUtf16, endUtf16)
-      this.currentText = nativeFullText
-      this.reportNativeFactError('onDidChange',
-        `range reconstruction mismatch mirrorLen=${previousText.length} nativeLen=${nativeFullText.length}`
-          + `; recovered start=${startUtf16} end=${endUtf16} insertedLen=${insertedText.length}`)
-    } else if (!factError && nativeFullText === null) {
-      factError = true
-      this.reportNativeFactError('onDidChange', 'native full text unavailable for range verification')
     }
 
     const paragraphsChanged = insertedText.indexOf('\n') >= 0 || oldText.indexOf('\n') >= 0
@@ -763,9 +815,30 @@ export class NativeRichEditorBridge {
     this.notifyStateListener('native-change', paragraphsChanged)
   }
 
+  // IME 提交去重：同一提交的 range 与片段已在 onDidIMEInput 中结算，重复的 onDidChange 不再二次应用。
+  private isImeCommitDuplicate(signature: ImeCommitSignature, rangeAfter: TextRange): boolean {
+    if (signature.insertedText.length === 0) {
+      return false
+    }
+    const afterStart = rangeAfter.start ?? -1
+    // 缺省 end 按 TextRange 语义视为文本末尾；提交回调通常给出明确范围，
+    // 这里用提交签名兜底，最终仍以镜像中是否已存在同一片段为准。
+    const afterEnd = rangeAfter.end ?? signature.end
+    if (afterStart !== signature.start || afterEnd !== signature.end) {
+      return false
+    }
+    return this.currentText.substring(signature.start, signature.end) === signature.insertedText
+  }
+
+  // 按编辑增量维护换行数（O(插入/删除片段长度)，不遍历整章）。
+  private updateNativeNewlineDelta(oldSlice: string, newSlice: string): void {
+    this.nativeNewlineCount = Math.max(0,
+      this.nativeNewlineCount + countNewlines(newSlice) - countNewlines(oldSlice))
+  }
+
   // IME 预编辑期间的镜像更新：rangeAfter 的 Span 文本可能少于声明范围（预上屏未落到 Span）。
-  // Issue #1053 评论 7098652618：取不到预上屏文本时保持镜像，不能把镜像里的用户文字当成删除；
-  // IME 提交后由 onDidIMEInput 从已提交的原生 Span 重新取最终正文并计算真正差量。
+  // Issue #1053 评论 7099290808：预上屏不是已提交正文，取不到文本时保持镜像；
+  // 提交后的最终正文由 onDidIMEInput 按本次输入 Range 片段 + 预编辑基线重建。
   private applyImeCompositionChange(rangeBefore: TextRange, rangeAfter: TextRange): void {
     const previousText = this.currentText
     const rangeText = this.extractRangeText(rangeAfter)
@@ -774,6 +847,13 @@ export class NativeRichEditorBridge {
     const start = Math.max(0, Math.min(rawStart, previousText.length))
     const end = Math.max(start, Math.min(rawEnd, previousText.length))
     const declaredLength = Math.max(0, (rangeAfter.end ?? start) - (rangeAfter.start ?? start))
+
+    if (!this.imeRangeBeforeRecorded) {
+      // 第一次预编辑变化：rangeBefore 是组件实际替换的范围（镜像此时仍是预编辑基线）。
+      this.imeRangeBeforeRecorded = true
+      this.imeRangeBeforeStartUtf16 = start
+      this.imeRangeBeforeEndUtf16 = end
+    }
 
     if (rangeText === null || (rangeText.text.length === 0 && declaredLength > 0)) {
       // 预上屏文字尚未落到 Span：只记录事实，镜像保持提交前正文。
@@ -802,9 +882,10 @@ export class NativeRichEditorBridge {
     }
 
     const insertedText = rangeText.text
-    this.currentText = previousText.substring(0, start) + insertedText + previousText.substring(end)
-
     const replacedText = previousText.substring(start, end)
+    this.currentText = previousText.substring(0, start) + insertedText + previousText.substring(end)
+    this.updateNativeNewlineDelta(replacedText, insertedText)
+
     const paragraphsChanged = insertedText.indexOf('\n') >= 0 || replacedText.indexOf('\n') >= 0
 
     this.recordNativeOperation({
@@ -830,21 +911,51 @@ export class NativeRichEditorBridge {
   }
 
   // aboutToIMEInput 读取 previewText 判断是否预编辑开始。
+  // Issue #1053 评论 7099290808：冻结基线时同时记录预编辑替换范围（选区/插入点），
+  // 供 onDidIMEInput 用本次输入 Range 片段重建最终正文，避免每次提交读取全文。
   aboutToIMEInput(insertValue: RichEditorInsertValue): boolean {
     if (insertValue.previewText !== undefined && insertValue.previewText.length > 0) {
       if (!this.imeComposing) {
         this.imeComposing = true
         this.imeComposingStartText = this.currentText
+        this.imeComposingStartNewlineCount = this.nativeNewlineCount
+        this.imeReplaceStartUtf16 = -1
+        this.imeReplaceEndUtf16 = -1
+        this.imeRangeBeforeStartUtf16 = -1
+        this.imeRangeBeforeEndUtf16 = -1
+        this.imeRangeBeforeRecorded = false
+        if (this.richEditorController !== null) {
+          try {
+            const selection = this.richEditorController.getSelection()
+            if (selection !== undefined && selection !== null && selection.selection.length >= 2) {
+              const first = selection.selection[0]
+              const second = selection.selection[1]
+              const selectionStart = Math.min(first, second)
+              const selectionEnd = Math.max(first, second)
+              if (selectionStart >= 0 && selectionEnd <= this.imeComposingStartText.length) {
+                this.imeReplaceStartUtf16 = selectionStart
+                this.imeReplaceEndUtf16 = selectionEnd
+              }
+            }
+          } catch (e) {
+            hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `aboutToIMEInput getSelection error: ${JSON.stringify(e)}`)
+          }
+        }
+        if (this.imeReplaceStartUtf16 < 0) {
+          const insertOffset = insertValue.insertOffset
+          const offset = Math.max(0, Math.min(insertOffset, this.imeComposingStartText.length))
+          this.imeReplaceStartUtf16 = offset
+          this.imeReplaceEndUtf16 = offset
+        }
       }
     }
     return true
   }
 
-  // onDidIMEInput 通过 getPreviewText() 确认预上屏消失后才提交差量。
-  // 封装为 PendingEdit(cause=TypingCommit) 统一排队逐笔确认及失败重放。
-  // Issue #1034 评论 #21：IME 结束后重新捕获原生选区并唤醒选区消费者，
-  // 确保 IME 期间被保留的选区意图不会永久丢失。
-  onDidIMEInput(_range: TextRange): void {
+  // onDidIMEInput：回调 TextRange 就是「输入法本次输入内容的范围」。
+  // 用该范围提取最终提交片段，结合预编辑开始时冻结的基线与替换范围重建最终正文；
+  // 只有片段事实无法重建时才完整读取原生全文恢复。预编辑阶段不向 Core 发送半成品。
+  onDidIMEInput(range: TextRange): void {
     if (this.richEditorController !== null) {
       const previewText = this.richEditorController.getPreviewText()
       if (previewText.offset >= 0 && previewText.value.length > 0) {
@@ -858,32 +969,91 @@ export class NativeRichEditorBridge {
     this.imeComposing = false
 
     const baselineText = this.imeComposingStartText
-    const mirrorBeforeCommit = this.currentText
-    // Issue #1053 评论 7098652618：IME 完成后必须从已提交的原生 Span 重新取得最终正文，
-    // 再对提交前基线求真正差量；预编辑期间缺失的 Span 不能当作删除了用户文字。
-    const committedText = this.readNativeFullText()
-    if (committedText === null) {
-      this.reportNativeFactError('ime-commit', 'native full text unavailable after IME commit')
-      this.idleError = 'IME commit failed: native full text unavailable'
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-      this.rejectAllWaiters()
-      return
+    const previousMirror = this.currentText
+    // 优先使用预编辑第一次 onDidChange 的 rangeBefore（组件实际替换范围），
+    // 没有则退回 aboutToIMEInput 冻结的选区/插入点。
+    const replacementStartHint = this.imeRangeBeforeStartUtf16 >= 0
+      ? this.imeRangeBeforeStartUtf16
+      : this.imeReplaceStartUtf16
+    const replacementEndHint = this.imeRangeBeforeEndUtf16 >= 0
+      ? this.imeRangeBeforeEndUtf16
+      : this.imeReplaceEndUtf16
+    const hasReplacementHint = replacementStartHint >= 0
+    const replaceStart = hasReplacementHint
+      ? Math.max(0, Math.min(replacementStartHint, baselineText.length))
+      : -1
+    const replaceEnd = hasReplacementHint
+      ? Math.max(replaceStart,
+        Math.min(Math.max(replacementEndHint, replaceStart), baselineText.length))
+      : -1
+    const rawRangeStart = range.start ?? -1
+    const rawRangeEnd = range.end ?? -1
+    let committedText: string | null = null
+    let insertedText = ''
+    let usedFullRead = false
+    let fragmentSpanCount = 0
+    let fragmentNonTextSpanCount = 0
+
+    if (hasReplacementHint && rawRangeStart >= 0 && rawRangeEnd >= rawRangeStart) {
+      const rangeText = this.extractRangeText({ start: rawRangeStart, end: rawRangeEnd })
+      if (rangeText !== null && rangeText.nonTextSpanCount === 0 &&
+          rangeText.text.length === rawRangeEnd - rawRangeStart) {
+        insertedText = rangeText.text
+        fragmentSpanCount = rangeText.spanCount
+        fragmentNonTextSpanCount = rangeText.nonTextSpanCount
+        if (rawRangeStart === replaceStart) {
+          committedText = baselineText.substring(0, replaceStart) + insertedText + baselineText.substring(replaceEnd)
+        } else {
+          this.reportNativeFactError('ime-commit',
+            `IME range start mismatch rangeStart=${rawRangeStart} replaceStart=${replaceStart}`)
+        }
+      } else {
+        this.reportNativeFactError('ime-commit',
+          `IME range fragment extraction failed start=${rawRangeStart} end=${rawRangeEnd}`)
+      }
     }
-    // 预编辑期间镜像应保持提交前基线；若已被预上屏文本污染，记录事实错误。
-    // 无论镜像是否漂移，提交后的正文一律以原生最终全文为准。
-    let imeFactError = false
-    if (mirrorBeforeCommit !== baselineText) {
+
+    if (committedText === null) {
+      // 片段事实无法重建（异常路径）：完整读取原生全文恢复。
+      usedFullRead = true
+      committedText = this.readNativeFullText()
+      if (committedText === null) {
+        this.reportNativeFactError('ime-commit', 'native full text unavailable after IME commit')
+        this.idleError = 'IME commit failed: native full text unavailable'
+        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+        this.rejectAllWaiters()
+        return
+      }
+    }
+
+    // 预编辑期间镜像应保持提交前基线；若为其它内容（非本次提交结果），记录事实错误。
+    // 提交回调先于 onDidIMEInput 到达时镜像已等于本次提交结果，属于正常情况。
+    let imeFactError = usedFullRead
+    if (previousMirror !== baselineText && previousMirror !== committedText) {
       imeFactError = true
       this.reportNativeFactError('ime-commit',
-        `mirror diverged during composition mirrorLen=${mirrorBeforeCommit.length}`
+        `mirror diverged during composition mirrorLen=${previousMirror.length}`
           + ` baselineLen=${baselineText.length} nativeLen=${committedText.length}`)
     }
+
     this.currentText = committedText
-    const diff = this.computeDiff(baselineText, committedText)
-    const rangeText = this.extractRangeText({
-      start: diff.start,
-      end: diff.start + diff.replacement.length
-    })
+    let diff: TextDiff
+    if (usedFullRead) {
+      diff = this.computeDiff(baselineText, committedText)
+      insertedText = diff.replacement
+      this.nativeNewlineCount = countNewlines(committedText)
+    } else {
+      diff = { start: replaceStart, end: replaceEnd, replacement: insertedText }
+      // 以预编辑基线换行数 + 本次替换片段增量重算，避免预编辑期中间态计数叠加。
+      this.nativeNewlineCount = Math.max(0,
+        this.imeComposingStartNewlineCount
+          + countNewlines(insertedText)
+          - countNewlines(baselineText.substring(replaceStart, replaceEnd)))
+    }
+    // 同一次 IME 提交随后重复触发的 onDidChange 用「提交范围 + 片段」签名去重。
+    this.lastImeCommit = usedFullRead
+      ? { start: diff.start, end: diff.start + diff.replacement.length, insertedText: diff.replacement }
+      : { start: rawRangeStart, end: rawRangeEnd, insertedText: insertedText }
 
     this.recordNativeOperation({
       kind: 'ime-commit',
@@ -891,14 +1061,14 @@ export class NativeRichEditorBridge {
       afterUtf16Length: this.currentText.length,
       rangeBeforeStartUtf16: diff.start,
       rangeBeforeEndUtf16: diff.end,
-      rangeAfterStartUtf16: diff.start,
-      rangeAfterEndUtf16: diff.start + diff.replacement.length,
+      rangeAfterStartUtf16: rawRangeStart >= 0 ? rawRangeStart : diff.start,
+      rangeAfterEndUtf16: rawRangeStart >= 0 ? rawRangeEnd : diff.start + diff.replacement.length,
       startUtf16: diff.start,
       endUtf16: diff.end,
       replacedUtf16Length: diff.end - diff.start,
       insertedUtf16Length: diff.replacement.length,
-      spanCountInRange: rangeText !== null ? rangeText.spanCount : 0,
-      nonTextSpanCount: rangeText !== null ? rangeText.nonTextSpanCount : 0,
+      spanCountInRange: fragmentSpanCount,
+      nonTextSpanCount: fragmentNonTextSpanCount,
       imeComposition: false,
       programmatic: this.programmaticUpdate,
       factError: imeFactError
@@ -1329,6 +1499,17 @@ export class NativeRichEditorBridge {
 
       const newSnap = this.coordinator.getSnapshot()
       if (newSnap !== null && edit.sessionId === this.sessionId) {
+        // Issue #1053 评论 7099290808：按已应用的替换片段增量维护 Core 换行数；
+        // 长度不符（Core 归一化了正文）时才完整重算。
+        const expectedLength = baselineText.length - (mappedEnd - mappedStart) + edit.insertedText.length
+        if (result.data.outcome === EditorEditOutcome.NoChange) {
+          // 正文未变，换行数保持不变。
+        } else if (newSnap.text.length === expectedLength) {
+          this.coreNewlineCount = Math.max(0,
+            this.coreNewlineCount + countNewlines(edit.insertedText) - countNewlines(edit.oldText))
+        } else {
+          this.coreNewlineCount = countNewlines(newSnap.text)
+        }
         this.confirmedText = newSnap.text
         this.confirmedRevision = newSnap.revision
         this.lastAppliedRevision = newSnap.revision
@@ -1472,6 +1653,7 @@ export class NativeRichEditorBridge {
       for (const span of textSpans) {
         text += span.value
       }
+      this.lastReadNativeSpanCount = textSpans.length + nonTextSpanCount
       if (nonTextSpanCount > 0) {
         this.reportNativeFactError('readNativeFullText', `document contains ${nonTextSpanCount} non-text span(s)`)
       }
@@ -1579,6 +1761,9 @@ export class NativeRichEditorBridge {
       coreNewlineCount: coreNewlines,
       nativeHash: nativeHash,
       coreHash: coreHash,
+      nativeSpanCount: this.lastReadNativeSpanCount,
+      nativeRevision: appliedRevision,
+      coreRevision: coreRevision,
       mirrorMatchesEditor: mirrorMatchesEditor,
       firstMismatchUtf16: firstMismatch,
       detail: detail,
@@ -1595,6 +1780,8 @@ export class NativeRichEditorBridge {
       nativeText: editorText !== null ? editorText : nativeText,
       nativeUtf16Length: nativeText.length,
       coreUtf16Length: coreText.length,
+      nativeSpanCount: this.lastReadNativeSpanCount,
+      nativeRevision: appliedRevision,
       firstMismatchUtf16: firstMismatch,
       mismatchToCoreUtf16: mismatchToCore,
       appliedRevision: appliedRevision,
@@ -1635,6 +1822,8 @@ export class NativeRichEditorBridge {
         }
         this.currentText = snap.text
       }
+      this.nativeNewlineCount = countNewlines(snap.text)
+      this.coreNewlineCount = this.nativeNewlineCount
 
       const utf16Cursor = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
       const utf16Anchor = TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionAnchor)
@@ -1700,6 +1889,8 @@ export class NativeRichEditorBridge {
     }
 
     if (this.currentText === snap.text) {
+      this.nativeNewlineCount = countNewlines(this.currentText)
+      this.coreNewlineCount = this.nativeNewlineCount
       this.lastAppliedRevision = snap.revision
       this.confirmedText = snap.text
       this.confirmedRevision = snap.revision
@@ -1747,6 +1938,8 @@ export class NativeRichEditorBridge {
         }
       }
       this.currentText = snap.text
+      this.nativeNewlineCount = countNewlines(snap.text)
+      this.coreNewlineCount = this.nativeNewlineCount
 
       const writtenRange = this.extractRangeText({
         start: diff.start,
@@ -1836,6 +2029,8 @@ export class NativeRichEditorBridge {
       this.richEditorController.deleteSpans()
       this.richEditorController.addTextSpan(text, { offset: 0 })
       this.currentText = text
+      this.nativeNewlineCount = countNewlines(text)
+      this.coreNewlineCount = this.nativeNewlineCount
 
       const writtenRange = this.extractRangeText({ start: 0, end: text.length })
       if (writtenRange !== null) {
