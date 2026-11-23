@@ -677,8 +677,15 @@ export class NativeRichEditorBridge {
     }
     const rangeStart: number = value.range.start ?? 0
     const rangeEnd: number = value.range.end ?? rangeStart
-    const insertedText: string = value.replacementString !== undefined
-      ? value.replacementString.getString() : ''
+    let insertedText: string = ''
+    if (value.replacementString !== undefined && value.replacementString !== null) {
+      try {
+        insertedText = value.replacementString.getString()
+      } catch (e) {
+        insertedText = ''
+        this.reportNativeFactError('onContentWillChange', `replacementString unavailable: ${JSON.stringify(e)}`)
+      }
+    }
     // previewText 只有携带非空预览内容时才代表未提交的预编辑。
     let preview: boolean = false
     if (value.previewText !== undefined && value.previewText !== null) {
@@ -1312,7 +1319,7 @@ export class NativeRichEditorBridge {
           this.nativeCoreDivergedSessionId = null
         }
         // Issue #1054：记录/清理“用户删除至空”的合法意图。
-        this.updateEmptyDocumentIntent(edit, baselineText, newSnap.text)
+        this.updateEmptyDocumentIntent(edit, baselineText, newSnap.text, mappedStart, mappedEnd)
         if (result.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection &&
             this.richEditorController !== null) {
           const utf16Cursor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.cursor)
@@ -1330,7 +1337,8 @@ export class NativeRichEditorBridge {
 
   // 只在编辑事务把整章正文由非空删成空、且删除范围覆盖全部旧正文时记录意图。
   // 程序性初始空视图、卸载、切章不会进入这里；新的非空提交会清理旧意图。
-  private updateEmptyDocumentIntent(edit: PendingEdit, baselineText: string, newText: string): void {
+  private updateEmptyDocumentIntent(edit: PendingEdit, baselineText: string, newText: string,
+    mappedStart: number, mappedEnd: number): void {
     if (newText.length > 0) {
       this.emptyDocumentIntent = null
       return
@@ -1339,8 +1347,9 @@ export class NativeRichEditorBridge {
     if (coreSessionId === null || baselineText.length === 0) {
       return
     }
+    // 以映射到当前 Core 基线的删除范围判断：一次性覆盖整章旧正文才算合法清空事务。
     const deletesWholeDocument: boolean = edit.insertedText.length === 0 &&
-      edit.oldText.length === baselineText.length && edit.oldText === baselineText
+      mappedStart === 0 && mappedEnd >= baselineText.length
     if (!deletesWholeDocument) {
       return
     }
