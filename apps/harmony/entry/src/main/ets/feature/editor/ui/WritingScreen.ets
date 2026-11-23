@@ -2159,7 +2159,8 @@ export struct WritingScreen {
     }
     this.pendingAnnotationEdits += 1
     const task = this.annotationEditQueue.then(async (): Promise<void> => {
-      if (projectId.length === 0 || chapterId.length === 0 || snapshot.chapterId !== chapterId) return
+      if (projectId.length === 0 || chapterId.length === 0 ||
+        snapshot.chapterId !== this.writingWorkflow.chapterSessionTargetId()) return
       if (this.annotationBaselineId.length === 0 || this.annotationBaselineRevision !== edit.baseRevision) {
         await this.annotationBaselineRefresh
       }
@@ -2202,7 +2203,7 @@ export struct WritingScreen {
       if (this.pendingAnnotationEdits === 0) {
         this.nextAnnotationEditBaseRevision = -1
         const current = this.editorCoordinator.getSnapshot()
-        if (current !== null && current.chapterId === this.chapterId &&
+        if (current !== null && current.chapterId === this.writingWorkflow.chapterSessionTargetId() &&
           current.revision !== this.annotationBaselineRevision) {
           await this.refreshChapterAnnotations(current)
         }
@@ -2220,7 +2221,8 @@ export struct WritingScreen {
   }
 
   private async loadChapterAnnotations(snapshot: EditorSessionSnapshot, allowBaselineAdvanceWhileEditing: boolean): Promise<void> {
-    if (this.projectId.length === 0 || this.chapterId.length === 0 || snapshot.chapterId !== this.chapterId) return
+    if (this.projectId.length === 0 || this.chapterId.length === 0 ||
+      snapshot.chapterId !== this.writingWorkflow.chapterSessionTargetId()) return
     const requestedBaselineId: string = this.annotationBaselineId
     const result = await this.annotationBridge.getChapterAnnotations(
       this.projectId, this.chapterId, snapshot.revision, snapshot.text, requestedBaselineId)
@@ -2238,8 +2240,10 @@ export struct WritingScreen {
       return
     }
     const annotations = result.data
-    if (snapshot.chapterId !== this.chapterId || annotations.projectId !== this.projectId ||
-      annotations.chapterId !== snapshot.chapterId ||
+    // snapshot.chapterId 是 Core 会话 target 身份（chapter-body:...），标注 DTO 仍是真实章节 UUID。
+    if (snapshot.chapterId !== this.writingWorkflow.chapterSessionTargetId() ||
+      annotations.projectId !== this.projectId ||
+      annotations.chapterId !== this.chapterId ||
       annotations.textRevision !== snapshot.revision) return
     const mayAdvanceBaseline: boolean = allowBaselineAdvanceWhileEditing || this.pendingAnnotationEdits === 0 ||
       (this.annotationBaselineId.length === 0 && snapshot.revision === this.nextAnnotationEditBaseRevision)

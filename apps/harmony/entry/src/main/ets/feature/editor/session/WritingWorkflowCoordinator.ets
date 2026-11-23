@@ -195,7 +195,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // `correction_session_identity()` 要求拆分后是 4 段 `chapter-body:projectId:volumeId:chapterId`，
   // 与 Android 端保持同一协议；裸 chapterId 会令校对请求被 Core 拒绝。
   // 只有编辑 session target 使用复合标识，业务 loadChapter/saveChapter 仍按真正章节 UUID 工作。
-  private chapterSessionTargetId(): string {
+  // 公开给页面核对 Core snapshot.chapter_id（Core 原样回传 target_id）。
+  chapterSessionTargetId(): string {
     return `chapter-body:${this.projectId}:${this.volumeId}:${this.chapterId}`
   }
 
