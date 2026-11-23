@@ -237,6 +237,12 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.chapterBridge.saveChapter(chapterId, text)
   }
 
+  // Issue #1054：显式空覆盖意图透传到 Core；普通 saveChapter 的安全语义不变。
+  async saveChapterWithOptions(chapterId: string, text: string,
+    allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    return this.chapterBridge.saveChapterWithOptions(chapterId, text, allowEmptyOverwrite)
+  }
+
   async clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     return this.chapterBridge.clearChapter(chapterId)
   }

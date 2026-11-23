@@ -97,6 +97,50 @@ static napi_value NativeSaveChapter(napi_env env, napi_callback_info info) {
     return result;
 }
 
+static napi_value NativeSaveChapterWithOptions(napi_env env, napi_callback_info info) {
+    size_t argc = 5;
+    napi_value args[5];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char project_id[256] = {0};
+    char volume_id[256] = {0};
+    char chapter_id[256] = {0};
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
+    }
+    if (argc >= 2) {
+        napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
+    }
+    if (argc >= 3) {
+        napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
+    }
+
+    // Chapter content can be large, use dynamic allocation.
+    char* content = nullptr;
+    if (argc >= 4) {
+        size_t content_len = 0;
+        napi_get_value_string_utf8(env, args[3], nullptr, 0, &content_len);
+        content = new char[content_len + 1];
+        napi_get_value_string_utf8(env, args[3], content, content_len + 1, &content_len);
+    } else {
+        content = new char[1];
+        content[0] = '\0';
+    }
+
+    // Issue #1054：空覆盖意图必须由调用方显式给出布尔值；缺省按 false，
+    // 保持 Core 对意外空覆盖的拒绝。
+    bool allow_empty_overwrite = false;
+    if (argc >= 5) {
+        napi_get_value_bool(env, args[4], &allow_empty_overwrite);
+    }
+
+    napi_value result = ReturnJsonString(env,
+        writer_core_save_chapter_with_options(project_id, volume_id, chapter_id, content,
+                                              allow_empty_overwrite));
+    delete[] content;
+    return result;
+}
+
 static napi_value NativeRenameChapter(napi_env env, napi_callback_info info) {
     size_t argc = 4;
     napi_value args[4];
@@ -184,6 +228,7 @@ napi_property_descriptor* getChapterDescriptors(size_t* count) {
         {"nativeCreateChapter", nullptr, NativeCreateChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeOpenChapter", nullptr, NativeOpenChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeSaveChapter", nullptr, NativeSaveChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeSaveChapterWithOptions", nullptr, NativeSaveChapterWithOptions, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeRenameChapter", nullptr, NativeRenameChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeDeleteChapter", nullptr, NativeDeleteChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeReorderChapters", nullptr, NativeReorderChapters, nullptr, nullptr, nullptr, napi_default, nullptr},

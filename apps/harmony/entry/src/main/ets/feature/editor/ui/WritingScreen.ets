@@ -140,6 +140,10 @@ export struct WritingScreen {
   @State correctionSuggestions: MappedCorrectionSuggestion[] = []
   @State correctionIsChecking: boolean = false
   @State correctionErrorMessage: string = ''
+  // Issue #1054：校对资源/模型状态与最近一次检查结果必须真实显示，不能只写日志。
+  @State correctionResourceState: string = 'uninitialized'
+  @State correctionResourceMessage: string = '校对资源尚未初始化'
+  @State correctionCheckMessage: string = ''
   @State correctionSheetOpen: boolean = false
   @State annotationPanelOpen: boolean = false
   @State proofReplayOpen: boolean = false
@@ -312,6 +316,9 @@ export struct WritingScreen {
       this.correctionSuggestions = state.suggestions
       this.correctionIsChecking = state.isChecking
       this.correctionErrorMessage = state.errorMessage
+      this.correctionResourceState = state.resourceState
+      this.correctionResourceMessage = state.resourceMessage
+      this.correctionCheckMessage = state.checkMessage
     })
     this.correctionCoordinator.setScanCompletionListener((): void => {
       void this.cleanupInactiveCorrectionModels().catch(() => {})
@@ -335,6 +342,11 @@ export struct WritingScreen {
     })
     this.writingWorkflow.setBridgeWhenIdle((): Promise<void> => this.richEditorBridge.whenIdle())
     this.writingWorkflow.setBridgeFinishEditingAndWhenIdle((): Promise<void> => this.richEditorBridge.finishEditingAndWhenIdle())
+    // Issue #1054：保存路径只接受“用户删除事务把当前非空会话删空”的精确 session/revision 意图，
+    // 程序性初始空视图或未加载章节不会产生该意图。
+    this.writingWorkflow.setEmptyDocumentIntentCheck(
+      (sessionId: number, revision: number): boolean =>
+        this.richEditorBridge.isLegitimateEmptyDocument(sessionId, revision))
 
     // Issue #923：把本页工作流登记为活跃写作会话（宽窄屏共用同一实例，
     // 不按布局创建第二份同步会话）；同步事务从这里取得保存屏障与同步后的会话回填入口。
@@ -409,7 +421,11 @@ export struct WritingScreen {
     this.lifecycle.addObserver(this.shareLifecycleObserver!)
 
     // Issue #629 评论14 第2项：注册当前 WritingScreen 的离开守卫（协调器的 performGracefulClose）。
+    // Issue #1054：守卫绑定本页真实的 NavPathStack 与 Writing 路由，只有本次导航确实移除
+    // Writing 时才执行保存/关闭；设置页、搜索页等子页面 pop 不再误触发写作会话关闭。
     this.leaveGuardToken = NavigationTransactionCoordinator.getInstance().registerLeaveGuard(
+      this.navPathStack,
+      Routes.Writing,
       (): Promise<boolean> => this.writingWorkflow.performGracefulClose()
     )
   }
@@ -431,6 +447,10 @@ export struct WritingScreen {
       this.annotationPanelOpen = false
     }
     const hashChanged: boolean = state.lastSavedContentHash !== this.lastSavedContentHash
+    if (hashChanged) {
+      // Issue #1054：记录最近一次成功保存的磁盘基线 hash（仅诊断，不参与保存判定）。
+      this.richEditorBridge.setSaveBaselineHash(state.lastSavedContentHash)
+    }
     this.content = state.content
     this.wordCount = state.wordCount
     this.hasUnsavedChanges = state.hasUnsavedChanges
@@ -1306,6 +1326,7 @@ export struct WritingScreen {
         proofingSuggestionCount: this.correctionSuggestions.length,
         isProofing: this.correctionIsChecking,
         onOpenProofing: (): void => {
+          void this.correctionCoordinator.refreshResourceState()
           this.correctionSheetOpen = true
         },
         onOpenAnnotation: (): void => {
@@ -1584,6 +1605,8 @@ export struct WritingScreen {
       .backgroundColor($r('sys.color.comp_background_gray'))
       .enabled(this.chapterId.length > 0)
       .onClick(() => {
+        // Issue #1054：打开校对面板时主动读取 Core 资源状态，界面不再只有空白建议列表。
+        void this.correctionCoordinator.refreshResourceState()
         this.correctionSheetOpen = true
       })
   }
@@ -1641,6 +1664,9 @@ export struct WritingScreen {
           suggestions: this.correctionSuggestions,
           isChecking: this.correctionIsChecking,
           errorMessage: this.correctionErrorMessage,
+          resourceState: this.correctionResourceState,
+          resourceMessage: this.correctionResourceMessage,
+          checkMessage: this.correctionCheckMessage,
           onCheckChapter: (): void => { void this.correctionCoordinator.checkChapter() },
           onApply: (suggestion: MappedCorrectionSuggestion): void => { void this.applyCorrection(suggestion) },
           onIgnore: (suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope): void => {
@@ -1731,7 +1757,10 @@ export struct WritingScreen {
               return true
             },
             fontSize: this.settings.editorFontSize,
-            lineSpacingMultiplier: this.settings.editorLineSpacingMultiplier
+            lineSpacingMultiplier: this.settings.editorLineSpacingMultiplier,
+            // Issue #1054：首行缩进与 Qt 共用同一设置语义，只影响视觉排版。
+            autoIndentEnabled: this.settings.autoIndentEnabled,
+            autoIndentWidth: this.settings.autoIndentWidth
           })
             .width('100%')
             .layoutWeight(1)
@@ -2293,7 +2322,8 @@ export struct WritingScreen {
     const result = await this.correctionCoordinator.ensureBundledModel(
       (): Promise<string> => CorrectionResourceImporter.ensureBundledModel(context.resourceManager, appDataRoot))
     if (!result.success) {
-      hilog.warn(0x0000, 'WritingScreen', 'bundled correction model fallback skipped: %{public}s',
+      // Issue #1054：失败状态已由协调器写入校对视图；这里保留可检索日志。
+      hilog.warn(0x0000, 'WritingScreen', 'bundled correction model fallback failed: %{public}s',
         result.userMessage ?? result.errorCode ?? 'unknown')
     }
   }

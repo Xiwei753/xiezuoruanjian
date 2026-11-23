@@ -106,6 +106,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // - bridgeFinishEditingAndWhenIdle：退出/同步，先 stopEditing() 结束预编辑再等队列稳定
   private bridgeWhenIdle: (() => Promise<void>) | null = null
   private bridgeFinishEditingAndWhenIdle: (() => Promise<void>) | null = null
+  // Issue #1054：合法空文档意图由原生编辑事务记录（精确 sessionId/revision）。
+  // 保存路径只凭这个事实决定是否允许空覆盖，不用 UI 的初始 content='' 推断。
+  private emptyDocumentIntentCheck: ((sessionId: number, revision: number) => boolean) | null = null
 
   // 路由上下文：chapterId/projectId/volumeId/navPathStack。
   // chapterId 公开：同步事务（ActiveWritingSession）需要按当前章节复核 Core 落盘内容。
@@ -182,6 +185,31 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
 
   setBridgeFinishEditingAndWhenIdle(fn: (() => Promise<void>) | null): void {
     this.bridgeFinishEditingAndWhenIdle = fn
+  }
+
+  // Issue #1054：由页面把原生桥接的“合法清空意图”校验注入保存链路。
+  setEmptyDocumentIntentCheck(fn: ((sessionId: number, revision: number) => boolean) | null): void {
+    this.emptyDocumentIntentCheck = fn
+  }
+
+  // 目标正文为空时，只有当前稳定快照确实为空、且 session/revision 与用户删除事务完全一致，
+  // 才允许空覆盖。显式清空命令（clearDocument）另行传入 allowEmptyOverwrite。
+  private canOverwriteEmpty(targetText: string, allowEmptyOverwrite: boolean): boolean {
+    if (targetText.length > 0) {
+      return false
+    }
+    const sessionId = this.editorCoordinator.getSessionId()
+    const snap = this.editorCoordinator.getSnapshot()
+    if (sessionId === null || snap === null || snap.text.length !== 0) {
+      return false
+    }
+    if (allowEmptyOverwrite) {
+      return true
+    }
+    if (this.emptyDocumentIntentCheck === null) {
+      return false
+    }
+    return this.emptyDocumentIntentCheck(sessionId, snap.revision)
   }
 
   // Issue #1053 评论 7098652618：屏障结果决定保存/同步/关闭能否继续。
@@ -392,7 +420,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #629 评论 5308748920 问题3：统一保存接口，保证指定 targetText 落盘。
   // 若 activeSave 正好保存 targetText 且成功，直接 true；
   // 若目标不同，先 await 旧任务，再启动一次精确保存 targetText 的新事务。
-  async ensureSnapshotSaved(targetText: string, isAutoSave: boolean): Promise<boolean> {
+  async ensureSnapshotSaved(targetText: string, isAutoSave: boolean,
+    allowEmptyOverwrite: boolean = false): Promise<boolean> {
     // 若有进行中保存任务，先等它结束
     if (this.activeSave !== null) {
       const prev = this.activeSave
@@ -412,7 +441,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       }
     }
     // 启动一次精确保存 targetText 的新事务
-    const task: Promise<boolean> = this.doSaveChapter(targetText, isAutoSave)
+    const task: Promise<boolean> = this.doSaveChapter(targetText, isAutoSave, allowEmptyOverwrite)
     const saveEntry: ActiveSaveTask = { text: targetText, task: task }
     this.activeSave = saveEntry
     task.then(
@@ -433,7 +462,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #629 评论 5308748920 问题3：真实持久化函数，只接受显式 targetText。
   // 不在里面重新抓"当前正文"（避免保存期间新输入被误存）。
   // 结算：lastSavedContent 按 targetText；再取 latestSnapshot 结算 hasUnsavedChanges / wordCount。
-  private async doSaveChapter(targetText: string, isAutoSave: boolean): Promise<boolean> {
+  private async doSaveChapter(targetText: string, isAutoSave: boolean,
+    allowEmptyOverwrite: boolean): Promise<boolean> {
     this.isSaving = true
     this.isAutoSaving = isAutoSave
     this.saveMessage = ''
@@ -442,8 +472,13 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     this.emit(null, null)
 
     try {
-      // 只保存这份 targetText（不重新抓当前正文）
-      const result = await this.bridge.saveChapter(this.chapterId, targetText)
+      // 只保存这份 targetText（不重新抓当前正文）。
+      // Issue #1054：空正文只有在合法清空意图匹配时才走带 allow_empty_overwrite 的显式入口；
+      // 其它空字符串仍走默认安全接口，由 Core 拒绝意外空覆盖。
+      const allowEmpty: boolean = this.canOverwriteEmpty(targetText, allowEmptyOverwrite)
+      const result = allowEmpty
+        ? await this.bridge.saveChapterWithOptions(this.chapterId, targetText, true)
+        : await this.bridge.saveChapter(this.chapterId, targetText)
       if (result.success && result.data) {
         // Issue #829 评论 #5995146525：这里不再上报写作统计（改由编辑事务同源上报）。
         this.lastSavedContent = targetText
@@ -477,7 +512,10 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         return true
       } else {
         this.lastSaveFailed = true
-        this.saveMessage = this.textProvider(WritingTextKey.SaveFailed)
+        // 空覆盖被 Core 安全机制拒绝时给出可区分的原因，不把合法清空和存储错误混在一起。
+        this.saveMessage = result.errorCode === 'EMPTY_OVERWRITE_BLOCKED'
+          ? '正文为空但未确认清空意图，本次未覆盖磁盘内容'
+          : this.textProvider(WritingTextKey.SaveFailed)
         this.emit(null, null)
         return false
       }
@@ -682,7 +720,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       return
     }
     // clear 之后用户立刻打的新字允许继续进入 Dispatcher；ensureSnapshotSaved('') 只保存空基线。
-    const saved: boolean = await this.ensureSnapshotSaved('', false)
+    // 显式“清空章节”是独立用户指令，允许空覆盖；普通输入法删除仍依赖编辑事务意图。
+    const saved: boolean = await this.ensureSnapshotSaved('', false, true)
     if (saved) {
       this.saveMessage = this.textProvider(WritingTextKey.Cleared)
       this.scheduleSaveMessageClear()

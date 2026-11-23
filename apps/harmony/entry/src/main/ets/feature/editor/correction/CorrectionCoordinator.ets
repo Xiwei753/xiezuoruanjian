@@ -11,10 +11,16 @@ import {
   MappedCorrectionSuggestion
 } from './CorrectionDtos'
 
+// Issue #1054：校对资源/模型的真实生命周期状态，界面必须能区分。
+export type CorrectionResourceState = 'uninitialized' | 'preparing' | 'ready' | 'rulesOnly' | 'error'
+
 export interface CorrectionPresentationState {
   suggestions: MappedCorrectionSuggestion[]
   isChecking: boolean
   errorMessage: string
+  resourceState: CorrectionResourceState
+  resourceMessage: string
+  checkMessage: string
 }
 
 export type CorrectionStateListener = (state: CorrectionPresentationState) => void
@@ -41,6 +47,10 @@ export class CorrectionCoordinator {
   private suggestions: MappedCorrectionSuggestion[] = []
   private isChecking: boolean = false
   private errorMessage: string = ''
+  // Issue #1054：资源状态与最近一次“校对本章”的结果。
+  private resourceState: CorrectionResourceState = 'uninitialized'
+  private resourceMessage: string = '校对资源尚未初始化'
+  private checkMessage: string = ''
   private requestGeneration: number = 0
   private pendingScanTimer: number = -1
   private pendingScanSnapshot: CorrectionRequestSnapshot | null = null
@@ -51,7 +61,9 @@ export class CorrectionCoordinator {
   private applyEpoch: number = 0
   // Issue #958：内置模型兜底由会话打开回调触发；只有确认已有用户模型或内置模型
   // 成功交给 Core 后，本实例才不再重复尝试（失败保持可重试，不阻断编辑）。
+  // Issue #1054：同一会话单飞 Promise + 明确状态机，避免并发重复准备/重复切换。
   private bundledModelAttempted: boolean = false
+  private bundledModelPromise: Promise<ResultEnvelope<boolean>> | null = null
 
   constructor(bridge: ICorrectionBridge, editor: EditorSessionCoordinator) {
     this.bridge = bridge
@@ -78,7 +90,10 @@ export class CorrectionCoordinator {
     const state: CorrectionPresentationState = {
       suggestions: this.suggestions,
       isChecking: this.isChecking,
-      errorMessage: this.errorMessage
+      errorMessage: this.errorMessage,
+      resourceState: this.resourceState,
+      resourceMessage: this.resourceMessage,
+      checkMessage: this.checkMessage
     }
     this.listener(state)
   }
@@ -153,6 +168,7 @@ export class CorrectionCoordinator {
     this.suggestions = []
     this.isChecking = false
     this.errorMessage = ''
+    this.checkMessage = ''
     this.notify()
   }
 
@@ -175,47 +191,117 @@ export class CorrectionCoordinator {
     return this.bridge.getModelPathStatus(path)
   }
 
+  // ── 资源状态（Issue #1054） ─────────────────────────────────────
+
+  // 主动读取 Core 资源状态：面板打开、模型准备完成、失败后都可刷新。
+  async refreshResourceState(): Promise<void> {
+    try {
+      const status = await this.bridge.getResourceStatus()
+      if (!status.success || status.data === undefined) {
+        this.resourceState = 'error'
+        this.resourceMessage = `无法读取校对资源：${status.userMessage ?? status.errorCode ?? '未知错误'}`
+        this.notify()
+        return
+      }
+      this.applyResourceStatus(status.data)
+    } catch (e) {
+      this.resourceState = 'error'
+      this.resourceMessage = `读取校对资源失败：${String(e)}`
+      this.notify()
+    }
+  }
+
+  private applyResourceStatus(status: CorrectionResourceStatusDto): void {
+    const modelUsable: boolean = status.modelConfigured && status.modelFileAvailable &&
+      !status.modelMigrationRequired
+    if (modelUsable) {
+      this.resourceState = 'ready'
+      this.resourceMessage = 'AI 校对模型可用'
+    } else if (status.bundledLexiconAvailable) {
+      this.resourceState = 'rulesOnly'
+      this.resourceMessage = status.modelMigrationRequired
+        ? '旧模型格式待迁移，当前仅使用内置词典/固定规则校对'
+        : '当前仅使用内置词典/固定规则校对'
+    } else {
+      this.resourceState = 'error'
+      this.resourceMessage = '未找到可用的校对模型或词典资源'
+    }
+    this.notify()
+  }
+
   /**
-   * Issue #985: 内置 MacBERT4CSC ONNX 模型兜底，由会话打开回调触发：
-   * - Core 已配置用户模型（`modelConfigured`）时直接跳过，用户模型优先、不覆盖；
-   * - 未配置时先让调用方准备内置模型文件（prepare 返回沙箱路径），再走既有
-   *   `setModelPath` 交给 Core 校验切换；
-   * - 只有确认已有用户模型或内置模型成功交给 Core 后才记为已处理；首次初始化
-   *   失败（状态不可用 / 准备失败 / 切换失败）保持可重试，由后续会话打开再试；
-   * - 失败返回错误 envelope，由调用方记 warning；编辑与固定规则不受影响。
-   * `data === true` 表示本次真正配置了内置模型。
+   * Issue #985 / #1054：内置 MacBERT4CSC ONNX 模型兜底。
+   * - 同一会话单飞：并发调用复用同一个 Promise，状态为 preparing；
+   * - Core 已配置有效用户模型时直接跳过，用户模型优先；
+   * - 未配置时由调用方准备内置模型文件，再走既有 setModelPath 交给 Core；
+   * - 成功标记 attempted；失败进入 error 状态并保留可重试，不阻断编辑。
    */
   async ensureBundledModel(prepare: () => Promise<string>): Promise<ResultEnvelope<boolean>> {
     if (this.bundledModelAttempted) {
       return { success: true, data: false }
     }
+    const inFlight = this.bundledModelPromise
+    if (inFlight !== null) {
+      return inFlight
+    }
+    const task: Promise<ResultEnvelope<boolean>> = this.prepareBundledModel(prepare)
+    this.bundledModelPromise = task
+    try {
+      return await task
+    } finally {
+      if (this.bundledModelPromise === task) {
+        this.bundledModelPromise = null
+      }
+    }
+  }
+
+  private async prepareBundledModel(prepare: () => Promise<string>): Promise<ResultEnvelope<boolean>> {
+    this.resourceState = 'preparing'
+    this.resourceMessage = '正在准备内置校对模型…'
+    this.notify()
     const status = await this.bridge.getResourceStatus()
     if (!status.success || status.data === undefined) {
+      this.resourceState = 'error'
+      this.resourceMessage = `无法读取校对资源：${status.userMessage ?? status.errorCode ?? '未知错误'}`
+      this.notify()
       return {
         success: false,
         errorCode: status.errorCode ?? 'RESOURCE_STATUS_UNAVAILABLE',
-        userMessage: status.userMessage
+        userMessage: this.resourceMessage
       }
     }
-    // 旧版 .klm 也会是 modelConfigured=true，但 Core 已拒绝该格式；
-    // 只有新 ONNX 目录完整可用时才跳过迁移。
-    if (status.data.modelConfigured && !status.data.modelMigrationRequired &&
-        status.data.modelFileAvailable) {
+    const modelUsable: boolean = status.data.modelConfigured && status.data.modelFileAvailable &&
+      !status.data.modelMigrationRequired
+    if (modelUsable) {
       this.bundledModelAttempted = true
+      this.applyResourceStatus(status.data)
       return { success: true, data: false }
     }
     let path = ''
     try {
       path = await prepare()
     } catch (e) {
-      return { success: false, errorCode: 'BUNDLED_MODEL_PREPARE_FAILED', userMessage: String(e) }
+      this.resourceState = 'error'
+      this.resourceMessage = `内置模型准备失败：${String(e)}`
+      this.notify()
+      return { success: false, errorCode: 'BUNDLED_MODEL_PREPARE_FAILED', userMessage: this.resourceMessage }
     }
     if (path.length === 0) {
-      return { success: false, errorCode: 'BUNDLED_MODEL_PREPARE_FAILED', userMessage: '内置模型路径为空' }
+      this.resourceState = 'error'
+      this.resourceMessage = '内置模型路径为空'
+      this.notify()
+      return { success: false, errorCode: 'BUNDLED_MODEL_PREPARE_FAILED', userMessage: this.resourceMessage }
     }
     const result = await this.bridge.setModelPath(path)
     if (result.success) {
       this.bundledModelAttempted = true
+      this.resourceState = 'ready'
+      this.resourceMessage = '内置 AI 校对模型已就绪'
+      this.notify()
+    } else {
+      this.resourceState = 'error'
+      this.resourceMessage = `校对模型加载失败：${result.userMessage ?? result.errorCode ?? '未知错误'}`
+      this.notify()
     }
     return result
   }
@@ -322,27 +408,67 @@ export class CorrectionCoordinator {
     }
   }
 
-  /** User-triggered whole-chapter correction uses the same Core engine and snapshot identity. */
+  /**
+   * 用户主动“校对本章”：Issue #1054 串行入口。
+   * 先等当前会话输入队列空闲，固定同一快照 revision 再请求 Core；返回后只投影同一
+   * project/chapter/session/revision 的结果。无会话、资源准备中/失败、Core 错误都要
+   * 给出界面可见的 errorMessage/checkMessage，不能静默返回。
+   */
   async checkChapter(): Promise<void> {
-    const snapshot = this.current
-    if (snapshot === null) {
+    if (this.isChecking) {
       return
     }
+    const baseRequest = this.current
+    const initialSessionId = this.editor.getSessionId()
+    const initialSnapshot = this.editor.getSnapshot()
+    if (baseRequest === null || initialSessionId === null || initialSnapshot === null) {
+      this.errorMessage = '当前没有打开的章节会话，无法校对本章'
+      this.checkMessage = ''
+      this.notify()
+      return
+    }
+    this.isChecking = true
+    this.errorMessage = ''
+    this.checkMessage = ''
     if (this.pendingScanTimer >= 0) {
       clearTimeout(this.pendingScanTimer)
       this.pendingScanTimer = -1
     }
     this.pendingScanSnapshot = null
+    // 先作废旧扫描；等输入队列空闲后再固定本请求的 generation/revision。
     this.requestGeneration++
-    const generation = this.requestGeneration
-    this.isChecking = true
-    this.errorMessage = ''
     this.notify()
     try {
+      await this.editor.whenIdle()
+      const sessionId = this.editor.getSessionId()
+      const snap = this.editor.getSnapshot()
+      if (sessionId === null || snap === null) {
+        this.errorMessage = '章节会话已关闭，校对未执行'
+        return
+      }
+      if (sessionId !== baseRequest.sessionId || baseRequest.projectId.length === 0 ||
+          baseRequest.chapterId.length === 0) {
+        this.errorMessage = '章节会话已切换，请重新打开校对面板后再试'
+        return
+      }
+      const request: CorrectionRequestSnapshot = {
+        projectId: baseRequest.projectId,
+        chapterId: baseRequest.chapterId,
+        sessionId: sessionId,
+        text: snap.text,
+        revision: snap.revision
+      }
+      this.current = request
+      this.requestGeneration++
+      const generation = this.requestGeneration
       const result = await this.bridge.checkChapter(
-        snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision)
-      this.acceptCheckResult(generation, snapshot, result, false)
+        request.sessionId, request.projectId, request.chapterId, request.revision)
+      this.acceptCheckResult(generation, request, result, false)
+    } catch (e) {
+      this.errorMessage = `校对请求失败：${String(e)}`
     } finally {
+      this.isChecking = false
+      this.notify()
       this.notifyScanCompleted()
     }
   }
@@ -355,7 +481,10 @@ export class CorrectionCoordinator {
     const current = this.currentRequest(generation)
     if (current === null) {
       if (!silent) {
+        // 校对返回时正文/会话已推进：结果不能投影到新 revision，给出可见原因。
         this.invalidate()
+        this.errorMessage = '章节内容或会话已变化，本次校对结果已丢弃，请重新校对'
+        this.notify()
       }
       return
     }
@@ -370,7 +499,9 @@ export class CorrectionCoordinator {
       }
       this.isChecking = false
       this.suggestions = []
-      this.errorMessage = result.userMessage ?? result.errorCode ?? '校对暂不可用'
+      this.checkMessage = ''
+      const reason = result.userMessage ?? result.errorCode ?? '未知错误'
+      this.errorMessage = `校对失败：${reason}`
       this.notify()
       return
     }
@@ -387,6 +518,11 @@ export class CorrectionCoordinator {
     // Core already merged cached and freshly scanned segments; replace wholesale.
     this.suggestions = mapped
     this.errorMessage = ''
+    if (!silent) {
+      this.checkMessage = mapped.length > 0
+        ? `检查完成：发现 ${mapped.length} 条建议`
+        : '检查完成：未发现问题'
+    }
     this.notify()
   }
 

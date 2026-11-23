@@ -12,29 +12,45 @@ import {
 } from './CorrectionDtos'
 import { CorrectionIgnoreScope, ICorrectionBridge } from './ICorrectionBridge'
 import { decodeEditorEditResult } from '../../../corebridge/codec/CoreWireDecoders'
+import hilog from '@ohos.hilog'
+
+const CORRECTION_LOG_DOMAIN = 0x0000
+const CORRECTION_LOG_TAG = 'NativeCorrectionBridge'
 
 /** Native NAPI bridge. The native correction handlers run on an async worker. */
 export class NativeCorrectionBridge implements ICorrectionBridge {
   private core: NativeCoreModule = new NativeCoreModule()
 
   async setModelPath(path: string): Promise<ResultEnvelope<boolean>> {
+    const startedAt = Date.now()
     try {
       const pending: Promise<string> =
         this.core.getNativeModule().nativeCorrectionSetModelPath(path) as Promise<string>
       const jsonStr: string = await pending
-      return this.core.parseEnvelope<boolean>(jsonStr)
+      const result = this.core.parseEnvelope<boolean>(jsonStr)
+      this.logEnvelope('setModelPath', startedAt, result, -1)
+      return result
     } catch (e) {
+      this.logThrown('setModelPath', startedAt, e)
       return this.nativeError<boolean>(e)
     }
   }
 
   async getResourceStatus(): Promise<ResultEnvelope<CorrectionResourceStatusDto>> {
+    const startedAt = Date.now()
     try {
       const pending: Promise<string> =
         this.core.getNativeModule().nativeCorrectionGetResourceStatus() as Promise<string>
       const jsonStr: string = await pending
-      return this.core.decodeEnvelope<CorrectionResourceStatusDto>(jsonStr, decodeCorrectionResourceStatus)
+      const result = this.core.decodeEnvelope<CorrectionResourceStatusDto>(jsonStr, decodeCorrectionResourceStatus)
+      const modelState: string = result.data !== undefined
+        ? `configured=${result.data.modelConfigured} available=${result.data.modelFileAvailable}`
+          + ` migration=${result.data.modelMigrationRequired} lexicon=${result.data.bundledLexiconAvailable}`
+        : 'unknown'
+      this.logEnvelope('getResourceStatus', startedAt, result, -1, modelState)
+      return result
     } catch (e) {
+      this.logThrown('getResourceStatus', startedAt, e)
       return this.nativeError<CorrectionResourceStatusDto>(e)
     }
   }
@@ -106,24 +122,36 @@ export class NativeCorrectionBridge implements ICorrectionBridge {
 
   async scanPending(sessionId: number, projectId: string, chapterId: string,
     textRevision: number, text: string): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>> {
+    const startedAt = Date.now()
     try {
       const pending: Promise<string> = this.core.getNativeModule().nativeCorrectionScanPending(
         sessionId, projectId, chapterId, textRevision, text) as Promise<string>
       const jsonStr: string = await pending
-      return this.core.decodeEnvelope<CorrectionChapterSnapshotDto>(jsonStr, decodeCorrectionChapterSnapshot)
+      const result = this.core.decodeEnvelope<CorrectionChapterSnapshotDto>(
+        jsonStr, decodeCorrectionChapterSnapshot)
+      const count: number = result.data !== undefined ? result.data.suggestions.length : -1
+      this.logEnvelope('scanPending', startedAt, result, count)
+      return result
     } catch (e) {
+      this.logThrown('scanPending', startedAt, e)
       return this.nativeError<CorrectionChapterSnapshotDto>(e)
     }
   }
 
   async checkChapter(sessionId: number, projectId: string, chapterId: string,
     textRevision: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>> {
+    const startedAt = Date.now()
     try {
       const pending: Promise<string> = this.core.getNativeModule().nativeCorrectionCheckChapter(
         sessionId, projectId, chapterId, textRevision) as Promise<string>
       const jsonStr: string = await pending
-      return this.core.decodeEnvelope<CorrectionChapterSnapshotDto>(jsonStr, decodeCorrectionChapterSnapshot)
+      const result = this.core.decodeEnvelope<CorrectionChapterSnapshotDto>(
+        jsonStr, decodeCorrectionChapterSnapshot)
+      const count: number = result.data !== undefined ? result.data.suggestions.length : -1
+      this.logEnvelope('checkChapter', startedAt, result, count)
+      return result
     } catch (e) {
+      this.logThrown('checkChapter', startedAt, e)
       return this.nativeError<CorrectionChapterSnapshotDto>(e)
     }
   }
@@ -175,6 +203,27 @@ export class NativeCorrectionBridge implements ICorrectionBridge {
     } catch (e) {
       return this.nativeError<EditorEditResult>(e)
     }
+  }
+
+  // Issue #1054：只记录调用结果、耗时、模型状态与建议数量，不记录正文内容。
+  private logEnvelope<T>(operation: string, startedAt: number, result: ResultEnvelope<T>,
+    suggestionCount: number, extra: string = ''): void {
+    const elapsedMs = Date.now() - startedAt
+    const suffix = suggestionCount >= 0 ? ` suggestions=${suggestionCount}` : ''
+    const detail = extra.length > 0 ? ` ${extra}` : ''
+    if (result.success) {
+      hilog.info(CORRECTION_LOG_DOMAIN, CORRECTION_LOG_TAG,
+        `correction ${operation} ok elapsedMs=${elapsedMs}${suffix}${detail}`)
+    } else {
+      hilog.warn(CORRECTION_LOG_DOMAIN, CORRECTION_LOG_TAG,
+        `correction ${operation} failed elapsedMs=${elapsedMs} errorCode=${result.errorCode ?? 'UNKNOWN'}`
+          + ` message=${result.userMessage ?? ''}${suffix}${detail}`)
+    }
+  }
+
+  private logThrown(operation: string, startedAt: number, e: Object): void {
+    hilog.error(CORRECTION_LOG_DOMAIN, CORRECTION_LOG_TAG,
+      `correction ${operation} threw elapsedMs=${Date.now() - startedAt} error=${String(e)}`)
   }
 
   private nativeError<T>(e: Object): ResultEnvelope<T> {

@@ -10,6 +10,10 @@ export struct CorrectionSuggestionsPanel {
   @Prop suggestions: MappedCorrectionSuggestion[] = []
   @Prop isChecking: boolean = false
   @Prop errorMessage: string = ''
+  // Issue #1054：资源生命周期与“校对本章”的实际结果都要可见。
+  @Prop resourceState: string = 'uninitialized'
+  @Prop resourceMessage: string = ''
+  @Prop checkMessage: string = ''
   onCheckChapter: (() => void) | null = null
   onApply: ((suggestion: MappedCorrectionSuggestion) => void) | null = null
   onIgnore: ((suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope) => void) | null = null
@@ -51,6 +55,32 @@ export struct CorrectionSuggestionsPanel {
       case 'warning': return '提醒'
       default: return '参考'
     }
+  }
+
+  private resourceColor(): ResourceColor {
+    if (this.resourceState === 'error') {
+      return $r('sys.color.ohos_id_color_alert')
+    }
+    if (this.resourceState === 'rulesOnly') {
+      return $r('sys.color.ohos_id_color_warning')
+    }
+    return $r('sys.color.font_secondary')
+  }
+
+  private resourceLabel(): string {
+    if (this.resourceState === 'preparing') {
+      return '资源准备中'
+    }
+    if (this.resourceState === 'ready') {
+      return '模型可用'
+    }
+    if (this.resourceState === 'rulesOnly') {
+      return '仅词典/规则'
+    }
+    if (this.resourceState === 'error') {
+      return '资源不可用'
+    }
+    return '资源未初始化'
   }
 
   private severityColor(suggestion: MappedCorrectionSuggestion): ResourceColor {
@@ -128,10 +158,32 @@ export struct CorrectionSuggestionsPanel {
       }
       .width('100%')
 
+      if (this.resourceMessage.length > 0) {
+        Text(`校对资源：${this.resourceLabel()} · ${this.resourceMessage}`)
+          .fontSize(12)
+          .fontColor(this.resourceColor())
+          .width('100%')
+      }
+
       if (this.errorMessage.length > 0) {
         Text(this.errorMessage)
           .fontSize(12)
-          .fontColor($r('sys.color.ohos_id_color_warning'))
+          .fontColor($r('sys.color.ohos_id_color_alert'))
+          .width('100%')
+      }
+
+      if (this.checkMessage.length > 0) {
+        Text(this.checkMessage)
+          .fontSize(12)
+          .fontColor($r('sys.color.font_secondary'))
+          .width('100%')
+      }
+
+      if (!this.isChecking && this.suggestions.length === 0 &&
+          this.errorMessage.length === 0 && this.checkMessage.length === 0) {
+        Text('点击“校对本章”开始检查；没有建议时会显示检查结果。')
+          .fontSize(12)
+          .fontColor($r('sys.color.font_secondary'))
           .width('100%')
       }
 

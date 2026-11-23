@@ -261,6 +261,42 @@ pub unsafe extern "C" fn writer_core_save_chapter(
     chapter_id: *const c_char,
     content: *const c_char,
 ) -> *mut c_char {
+    save_chapter_json(project_id, volume_id, chapter_id, content, false)
+}
+
+/// Issue #1054：带显式空覆盖意图的章节保存。
+///
+/// 编辑器只有在“非空 Core 会话被用户的删除事务变为空”并记录精确
+/// sessionId/revision 意图后，才会传 `allow_empty_overwrite = true`。
+/// 普通 `writer_core_save_chapter` 仍固定传 false，保留 Core 对意外空覆盖的拒绝。
+///
+/// # Safety
+/// `project_id`, `volume_id`, `chapter_id`, and `content` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_save_chapter_with_options(
+    project_id: *const c_char,
+    volume_id: *const c_char,
+    chapter_id: *const c_char,
+    content: *const c_char,
+    allow_empty_overwrite: bool,
+) -> *mut c_char {
+    save_chapter_json(
+        project_id,
+        volume_id,
+        chapter_id,
+        content,
+        allow_empty_overwrite,
+    )
+}
+
+unsafe fn save_chapter_json(
+    project_id: *const c_char,
+    volume_id: *const c_char,
+    chapter_id: *const c_char,
+    content: *const c_char,
+    allow_empty_overwrite: bool,
+) -> *mut c_char {
     let pid = match c_str_to_rust(project_id) {
         Ok(s) => s,
         Err(e) => {
@@ -294,7 +330,7 @@ pub unsafe extern "C" fn writer_core_save_chapter(
     };
     match with_app_service(|svc| {
         let receipt = svc
-            .save_chapter_content_with_options(pid, vid, cid, text, false)
+            .save_chapter_content_with_options(pid, vid, cid, text, allow_empty_overwrite)
             .map_err(|e| format!("{}", e))?;
         Ok(receipt)
     }) {

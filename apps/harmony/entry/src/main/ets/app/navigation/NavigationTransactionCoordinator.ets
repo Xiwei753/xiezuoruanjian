@@ -28,11 +28,19 @@ interface NavigationIntent {
 interface GuardLease {
   token: number
   guard: () => Promise<boolean>
+  // Issue #1054：守卫只属于注册它的真实 destination（栈 + 路由）。
+  // 只有本次导航确实会移除该路由时才执行，设置页/搜索页等子页面 pop 不再误关写作会话。
+  ownerStack: NavPathStack
+  ownerRoute: string
 }
 
 // Issue #629 评论14 第2项：导航事务队列条目（命名 interface，避免对象字面量类型）。
 interface NavigationTaskEntry {
   intent: NavigationIntent
+  // Issue #1054：本次导航的来源栈及实际会被移除的路由。
+  // 守卫按 removedRoutes 匹配 owner，而不是对所有导航无条件执行。
+  sourceStack: NavPathStack | null
+  removedRoutes: string[]
   task: Promise<boolean>
   resolve: (v: boolean) => void
   // false 表示目标栈尚未注册等无法执行的客观原因，调用方据此保留当前页面/浮层。
@@ -42,6 +50,7 @@ interface NavigationTaskEntry {
 // Issue #629 评论14 第2项：正在执行的导航事务（命名 interface，避免对象字面量类型）。
 interface ActiveNavigationTask {
   intent: NavigationIntent
+  sourceStack: NavPathStack | null
   task: Promise<boolean>
 }
 
@@ -88,6 +97,7 @@ export class NavigationTransactionCoordinator {
   // Issue #629 评论14 第2项：当前活跃守卫 lease。
   // 新 Writing 注册时替换 active lease；unregisterLeaveGuard(token) 只有 token 等于当前 lease 才清掉。
   // 这样旧实例迟到的 disappear 不会删新 guard，也不会在一次 pop 时把底下页面的 session 一起 close。
+  // Issue #1054：lease 还记录 ownerStack/ownerRoute，只有本次导航移除该路由时才执行守卫。
   private activeGuardLease: GuardLease | null = null
   // Issue #629 评论14 第2项：导航事务串行队列。
   // 去重同时检查 pendingTasks + activeTask（正在执行的任务不能从"可去重集合"里消失）。
@@ -229,11 +239,12 @@ export class NavigationTransactionCoordinator {
   // Issue #629 评论14 第2项：注册离开守卫，返回唯一 token。
   // 多个 Writing destination 生命周期重叠时，每个实例有唯一 token。
   // guard 返回 boolean：true 表示可以离开（保存成功），false 表示不能离开（保存失败）。
-  registerLeaveGuard(guard: () => Promise<boolean>): number {
+  registerLeaveGuard(ownerStack: NavPathStack, ownerRoute: string, guard: () => Promise<boolean>): number {
     const token: number = this.nextGuardToken++
     // Issue #629 评论14 第2项：新 Writing 注册时替换 active lease。
     // coordinator 只持有当前 active guard；旧实例迟到的 disappear 不会删新 guard。
-    const lease: GuardLease = { token, guard }
+    // Issue #1054：守卫绑定真实 destination 的栈与路由，导航任务按 removedRoutes 匹配。
+    const lease: GuardLease = { token, guard, ownerStack, ownerRoute }
     this.activeGuardLease = lease
     return token
   }
@@ -251,16 +262,20 @@ export class NavigationTransactionCoordinator {
   // 队列消费：前一个 task 完成后才执行下一个。
   private enqueueNavigation(
     intent: NavigationIntent,
-    execute: () => void
+    sourceStack: NavPathStack | null,
+    removedRoutes: string[],
+    execute: () => boolean | void
   ): Promise<boolean> {
     // Issue #629 评论14 第2项：去重同时检查 pendingTasks + activeTask。
     // 正在执行的任务不能从"可去重集合"里消失，否则 shift() 后新请求查不到它会再入队导致 double pop。
+    // Issue #1054：去重键还必须包含实际来源栈；不同 Tab 的 pop 不能共用一笔任务。
     for (const entry of this.pendingTasks) {
-      if (entry.intent.dedupeKey === intent.dedupeKey) {
+      if (entry.intent.dedupeKey === intent.dedupeKey && entry.sourceStack === sourceStack) {
         return entry.task
       }
     }
-    if (this.activeTask !== null && this.activeTask.intent.dedupeKey === intent.dedupeKey) {
+    if (this.activeTask !== null && this.activeTask.intent.dedupeKey === intent.dedupeKey &&
+        this.activeTask.sourceStack === sourceStack) {
       return this.activeTask.task
     }
 
@@ -270,10 +285,63 @@ export class NavigationTransactionCoordinator {
       resolveTask = resolve
     })
 
-    const taskEntry: NavigationTaskEntry = { intent, task, resolve: resolveTask!, execute }
+    const taskEntry: NavigationTaskEntry = {
+      intent,
+      sourceStack,
+      removedRoutes,
+      task,
+      resolve: resolveTask!,
+      execute
+    }
     this.pendingTasks.push(taskEntry)
     this.processQueue()
     return task
+  }
+
+  // Issue #1054：读取目标栈当前路由（getAllPathName 从栈底到栈顶，末位为栈顶）。
+  // 失败时返回空数组，调用方按“无可移除路由”处理，不冒充成功。
+  private stackRouteNames(stack: NavPathStack | null): string[] {
+    if (stack === null) {
+      return []
+    }
+    try {
+      const names: string[] = stack.getAllPathName()
+      return names !== undefined && names !== null ? names : []
+    } catch (_e) {
+      return []
+    }
+  }
+
+  private stackTopRoute(stack: NavPathStack | null): string {
+    const names: string[] = this.stackRouteNames(stack)
+    return names.length > 0 ? names[names.length - 1] : ''
+  }
+
+  // Issue #1054：出队时重新读取来源栈校验意图，避免等待期间栈已被其它事务改变。
+  // 返回 null 表示意图已失效，调用方必须 resolve(false)，不能弹错页面。
+  private verifyNavigationEntry(entry: NavigationTaskEntry): string[] | null {
+    if (entry.intent.kind === 'TabNavigate') {
+      // 跨 tab 导航只切换/压栈，不移除当前页面；目标栈在执行时还会重新读取，
+      // 未注册则 execute 返回 false，调用方保留浮层。
+      return []
+    }
+    if (entry.sourceStack === null) {
+      return null
+    }
+    const currentNames: string[] = this.stackRouteNames(entry.sourceStack)
+    if (currentNames.length === 0) {
+      return null
+    }
+    if (entry.intent.kind === 'ClearAndRebuild') {
+      // 清栈重建仍以当前完整栈为准，守卫按实际移除的全部路由匹配。
+      return currentNames
+    }
+    const topRoute: string = currentNames[currentNames.length - 1]
+    if (entry.removedRoutes.length === 0 || entry.removedRoutes[0] !== topRoute) {
+      // Pop/ReplacePath 的目标页面在等待期间已变化：拒绝本次执行。
+      return null
+    }
+    return [topRoute]
   }
 
   private async processQueue(): Promise<void> {
@@ -286,17 +354,39 @@ export class NavigationTransactionCoordinator {
       const entry = this.pendingTasks.shift()!
       // Issue #629 评论14 第2项：shift 后立即设置 activeTask，
       // 使得新入队的相同 dedupeKey 请求可以复用正在执行的 Promise。
-      const active: ActiveNavigationTask = { intent: entry.intent, task: entry.task }
+      const active: ActiveNavigationTask = {
+        intent: entry.intent,
+        sourceStack: entry.sourceStack,
+        task: entry.task
+      }
       this.activeTask = active
       try {
+        // Issue #1054：出队时重新读取来源栈，确认本次仍会移除同一路由。
+        const actualRemovedRoutes: string[] | null = this.verifyNavigationEntry(entry)
+        if (actualRemovedRoutes === null) {
+          entry.resolve(false)
+          continue
+        }
+        entry.removedRoutes = actualRemovedRoutes
+
         // Issue #629 评论14 第2项：只执行当前 active guard（不是遍历所有历史 guard）。
+        // Issue #1054：只有来源栈一致且本次确实移除守卫所属路由时才执行。
+        // 设置页/搜索页等子页面 pop 不会移除 Writing，底层写作会话保持运行。
         let canLeave: boolean = true
         const lease = this.activeGuardLease
-        if (lease !== null) {
+        if (lease !== null && entry.sourceStack === lease.ownerStack &&
+            entry.removedRoutes.includes(lease.ownerRoute)) {
           canLeave = await lease.guard()
         }
 
         if (canLeave) {
+          // 守卫是异步的；执行前再读一次来源栈，防止等待期间页面已被其它事务改变。
+          const routesAfterGuard: string[] | null = this.verifyNavigationEntry(entry)
+          if (routesAfterGuard === null) {
+            entry.resolve(false)
+            continue
+          }
+          entry.removedRoutes = routesAfterGuard
           const accepted: boolean | void = entry.execute()
           entry.resolve(accepted !== false)
         } else {
@@ -319,20 +409,28 @@ export class NavigationTransactionCoordinator {
   // 串行排队，guard 成功才 activeTabStack.pop()；失败留在本页。
   // Issue #767：操作当前活动 tab 的 stack。
   safePop(): Promise<boolean> {
-    const intent: NavigationIntent = { kind: 'Pop', dedupeKey: 'pop' }
-    return this.enqueueNavigation(intent, (): void => {
-      if (this.activeTabStack !== null) {
-        this.activeTabStack.pop()
+    const stack: NavPathStack | null = this.activeTabStack
+    const topRoute: string = this.stackTopRoute(stack)
+    const intent: NavigationIntent = { kind: 'Pop', dedupeKey: `pop:${topRoute}` }
+    const removedRoutes: string[] = topRoute.length > 0 ? [topRoute] : []
+    return this.enqueueNavigation(intent, stack, removedRoutes, (): boolean => {
+      if (stack === null || topRoute.length === 0) {
+        return false
       }
+      stack.pop()
+      return true
     })
   }
 
   // Issue #629 评论14 第2项：安全的 clear + rebuild。
   // 串行排队，guard 成功才执行 rebuild（含 navPathStack.clear() + pushPath 重建）；
   // 失败保持当前页面，不清栈。
-  safeClearAndRebuild(dedupeKey: string, rebuild: () => void): Promise<boolean> {
+  safeClearAndRebuild(dedupeKey: string, rebuild: () => void,
+    targetStack: NavPathStack | null = null): Promise<boolean> {
     const intent: NavigationIntent = { kind: 'ClearAndRebuild', dedupeKey }
-    return this.enqueueNavigation(intent, rebuild)
+    const stack: NavPathStack | null = targetStack !== null ? targetStack : this.activeTabStack
+    const removedRoutes: string[] = this.stackRouteNames(stack)
+    return this.enqueueNavigation(intent, stack, removedRoutes, rebuild)
   }
 
   // Issue #629 评论14 第2项：安全的 replace path。
@@ -341,15 +439,26 @@ export class NavigationTransactionCoordinator {
   // Issue #767：操作当前活动 tab 的 stack。
   safeReplacePath(targetKey: string, replace: () => void): Promise<boolean> {
     const intent: NavigationIntent = { kind: 'ReplacePath', dedupeKey: `replace:${targetKey}` }
-    return this.enqueueNavigation(intent, replace)
+    const stack: NavPathStack | null = this.activeTabStack
+    const topRoute: string = this.stackTopRoute(stack)
+    const removedRoutes: string[] = topRoute.length > 0 ? [topRoute] : []
+    return this.enqueueNavigation(intent, stack, removedRoutes, replace)
   }
 
   // Issue #768：安全的 pop（显式目标栈版本）。
   // 接受显式 targetStack，不再从 activeTabStack 猜，避免全局活动栈与当前页面持有的栈不对齐时弹错栈。
   safePopWithStack(targetStack: NavPathStack): Promise<boolean> {
-    const intent: NavigationIntent = { kind: 'Pop', dedupeKey: 'pop' }
-    return this.enqueueNavigation(intent, (): void => {
+    const topRoute: string = this.stackTopRoute(targetStack)
+    // Issue #1054：目标页面也进入去重键；同一栈上不同页面的 pop 不能共用一笔任务。
+    const intent: NavigationIntent = { kind: 'Pop', dedupeKey: `pop:${topRoute}` }
+    const removedRoutes: string[] = topRoute.length > 0 ? [topRoute] : []
+    return this.enqueueNavigation(intent, targetStack, removedRoutes, (): boolean => {
+      // 空栈/等待期间栈顶已变化时不冒充成功。
+      if (topRoute.length === 0 || this.stackTopRoute(targetStack) !== topRoute) {
+        return false
+      }
       targetStack.pop()
+      return true
     })
   }
 
@@ -357,7 +466,9 @@ export class NavigationTransactionCoordinator {
   // 接受显式 targetStack，不再从 activeTabStack 猜。
   safeReplacePathWithStack(targetStack: NavPathStack, targetKey: string, replace: () => void): Promise<boolean> {
     const intent: NavigationIntent = { kind: 'ReplacePath', dedupeKey: `replace:${targetKey}` }
-    return this.enqueueNavigation(intent, replace)
+    const topRoute: string = this.stackTopRoute(targetStack)
+    const removedRoutes: string[] = topRoute.length > 0 ? [topRoute] : []
+    return this.enqueueNavigation(intent, targetStack, removedRoutes, replace)
   }
 
   // Issue #982：跨一级 Tab 导航。
@@ -370,8 +481,9 @@ export class NavigationTransactionCoordinator {
     param: Object,
     dedupeKey: string
   ): Promise<boolean> {
-    const intent: NavigationIntent = { kind: 'TabNavigate', dedupeKey: `tabnav:${dedupeKey}` }
-    return this.enqueueNavigation(intent, (): boolean => {
+    const intent: NavigationIntent = { kind: 'TabNavigate', dedupeKey: `tabnav:${tabIndex}:${dedupeKey}` }
+    const sourceStack: NavPathStack | null = this.getTabStack(tabIndex)
+    return this.enqueueNavigation(intent, sourceStack, [], (): boolean => {
       const targetStack: NavPathStack | null = this.getTabStack(tabIndex)
       if (targetStack === null) {
         return false

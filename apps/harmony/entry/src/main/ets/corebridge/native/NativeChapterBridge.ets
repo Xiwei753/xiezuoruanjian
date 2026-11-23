@@ -48,6 +48,20 @@ export class NativeChapterBridge {
     } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
   }
 
+  // Issue #1054：空正文保存必须由调用方显式声明意图；普通 saveChapter 仍走安全接口。
+  async saveChapterWithOptions(chapterId: string, text: string,
+    allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    const loc = await this.core.resolveChapterLocation(chapterId)
+    if (!loc) {
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
+    }
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeSaveChapterWithOptions(
+        loc.projectId, loc.volumeId, chapterId, text, allowEmptyOverwrite)
+      return this.core.decodeEnvelope<ChapterSaveReceipt>(jsonStr, decodeChapterSaveReceipt)
+    } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
+  }
+
   async clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     const loc = await this.core.resolveChapterLocation(chapterId)
     if (!loc) {

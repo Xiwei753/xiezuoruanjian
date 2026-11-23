@@ -31,6 +31,9 @@ export interface IWriterCoreBridge {
   listChapters(volumeId: string): Promise<ResultEnvelope<ChapterMeta[]>>
   loadChapter(chapterId: string): Promise<ResultEnvelope<ChapterContent>>
   saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
+  // Issue #1054：显式空覆盖意图。只有编辑器确认“用户删除事务把非空正文变空”且匹配
+  // 精确 sessionId/revision 时才传 true；普通 saveChapter 仍拒绝意外空覆盖。
+  saveChapterWithOptions(chapterId: string, text: string, allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>>
   clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
   createChapter(volumeId: string, name: string): Promise<ResultEnvelope<ChapterMeta>>
   renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>>

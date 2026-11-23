@@ -17,7 +17,8 @@ import { HeaderTitleBarStack } from './HeaderTitleBarStack'
 export struct HdsSettingsDestinationApi23 {
   @BuilderParam contentBuilder: () => void
   @Param title: string | Resource = ''
-  @Param onBack: (() => void) | null = null
+  // Issue #1054：返回回调返回 true 表示本页已接管 pop；false 交还系统/上层页面处理。
+  @Param onBack: (() => boolean) | null = null
   @Param onShown: (() => void) | null = null
 
   // stackBuilder 是 CustomBuilder，组件调用必须写在 @Builder 里。
@@ -78,10 +79,12 @@ export struct HdsSettingsDestinationApi23 {
       }
     } as HdsNavigationTitleBarOptions)
     .onBackPressed(() => {
+      // Issue #1054：只有 Settings 仍是栈顶且已启动 pop 时才返回 true；
+      // 否则返回 false，避免消费返回事件却没有任何可见路由变化。
       if (this.onBack) {
-        this.onBack()
+        return this.onBack()
       }
-      return true
+      return false
     })
     .onShown(() => {
       if (this.onShown) {

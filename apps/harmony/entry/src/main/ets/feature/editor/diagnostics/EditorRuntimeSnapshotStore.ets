@@ -48,6 +48,14 @@ export interface NativeTextOperationSnapshot {
   imeComposition: boolean       // 操作发生时是否处于 IME 预编辑
   programmatic: boolean         // 是否程序性样式/文本更新
   coreRevision: number          // 操作发生时的 Core revision
+  // Issue #1054：变更来源与内容指纹，区分用户编辑/IME/程序性重建，不记录正文原文。
+  changeSequence: number        // 原生变更序号（递增）
+  source: string                // 'user' | 'ime' | 'programmatic' | 'unknown'
+  onWillChangeStartUtf16: number // onContentChanged.onWillChange 的替换起点（未知 -1）
+  onWillChangeEndUtf16: number   // onContentChanged.onWillChange 的替换终点（未知 -1）
+  beforeHash: string            // 操作前镜像 hash（不记录正文）
+  afterHash: string             // 操作后镜像 hash（不记录正文）
+  saveBaselineHash: string      // 最近一次成功保存的磁盘基线 hash（未知为空串）
   factError: boolean            // 该次操作是否触发原生事实错误
   atMs: number
 }
@@ -148,6 +156,8 @@ export interface RichEditorRuntimeSnapshot {
   lastNativeOperation: NativeTextOperationSnapshot | null
   lastNativeCoreAlignment: NativeCoreAlignmentSnapshot | null
   nativeFactError: string | null
+  // Issue #1054：最近一次成功保存的磁盘基线 hash（只记录 hash，不记录正文）。
+  saveBaselineHash: string
 
   // 当前行度量（只抓光标所在行）
   currentLineMetrics: RichEditorLineMetricsSnapshot | null

@@ -66,9 +66,10 @@ export struct AppNavigation {
     const targetTab: number = continuationTabIndex(payload)
     const dedupeKey =
       `continuation:${payload.snapshotSequence ?? 0}:${payload.screen ?? 'writing'}:${payload.projectId ?? ''}:${payload.chapterId ?? ''}`
+    // Issue #1054：把目标栈交给协调器，守卫按本次实际移除的路由匹配（清栈 = 全部路由）。
+    const targetStack: NavPathStack | null = NavigationTransactionCoordinator.getInstance().getTabStack(targetTab)
     await NavigationTransactionCoordinator.getInstance().safeClearAndRebuild(dedupeKey, (): void => {
       const coordinator = NavigationTransactionCoordinator.getInstance()
-      const targetStack: NavPathStack | null = coordinator.getTabStack(targetTab)
       if (targetStack === null) {
         hilog.error(0x0000, 'AppNavigation', 'applyContinuation: target stack not registered')
         return
@@ -196,7 +197,7 @@ export struct AppNavigation {
       }
 
       this.continuationPayload = payload
-    })
+    }, targetStack)
   }
 
   private legacyContinuationScreen(payload: ContinuationPayload, targetTab: number): string {

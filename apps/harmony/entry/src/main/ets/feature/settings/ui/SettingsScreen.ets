@@ -36,6 +36,8 @@ export struct SettingsScreen {
   // Issue #982：搜索结果跳到具体分类 / 具体设置项时从路由参数读取。
   private initialSection: string = ''
   private initialSettingKey: string = ''
+  // Issue #1054：设置页返回失败时暴露真实原因，而不是静默消费返回事件。
+  @Local routeErrorMessage: string = ''
 
   aboutToAppear() {
     hilog.info(0x0000, 'SettingsScreen', 'route name=Settings')
@@ -86,8 +88,37 @@ export struct SettingsScreen {
 
   // ── 安全返回 ──
   // Issue #768 评论5838296806：使用 @Param 传入的 NavPathStack，不再依赖全局 activeTabStack。
-  private goBack(): void {
-    this.navCoordinator.safePopWithStack(this.navPathStack)
+  // Issue #1054：只有 Settings 是栈顶时才处理本次返回；并消费 safePopWithStack 的真实结果，
+  // 失败时给出可见原因，不把“事件已消费”当成“页面已返回”。
+  private isSettingsTop(): boolean {
+    try {
+      const names: string[] = this.navPathStack.getAllPathName()
+      return names.length > 0 && names[names.length - 1] === Routes.Settings
+    } catch (_e) {
+      return false
+    }
+  }
+
+  private requestGoBack(): boolean {
+    if (!this.isSettingsTop()) {
+      return false
+    }
+    void this.goBack()
+    return true
+  }
+
+  private async goBack(): Promise<void> {
+    const ok: boolean = await this.navCoordinator.safePopWithStack(this.navPathStack)
+    if (ok) {
+      this.routeErrorMessage = ''
+      return
+    }
+    this.routeErrorMessage = '设置页返回失败：当前页面栈已变化，请返回后重试'
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: this.routeErrorMessage })
+    } catch (_e) {
+      // Toast 失败不影响状态字段暴露真实原因。
+    }
   }
 
   build() {
@@ -99,7 +130,7 @@ export struct SettingsScreen {
       // 让内容始终在页面上下文执行，避免 this 变成壳组件导致 adaptiveState undefined。
       HdsSettingsDestinationApi23({
         title: $r('app.string.settings'),
-        onBack: () => { this.goBack() },
+        onBack: (): boolean => this.requestGoBack(),
         onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, this.screenTabIndex) }
       }) {
         SettingsContent({
@@ -107,7 +138,7 @@ export struct SettingsScreen {
           initialSettingKey: this.initialSettingKey,
           screenTabIndex: this.screenTabIndex,
           onOpenGlobalSearch: (section: string): void => { this.openGlobalSearch(section) },
-          onRequestClose: () => { this.goBack() }
+          onRequestClose: (): void => { void this.goBack() }
         })
       }
     } else {
@@ -117,16 +148,13 @@ export struct SettingsScreen {
           initialSettingKey: this.initialSettingKey,
           screenTabIndex: this.screenTabIndex,
           onOpenGlobalSearch: (section: string): void => { this.openGlobalSearch(section) },
-          onRequestClose: () => { this.goBack() }
+          onRequestClose: (): void => { void this.goBack() }
         })
       }
       // Issue #768：启用 NavDestination 原生标题栏（含系统返回按钮），删除手写返回 Image。
       .hideTitleBar(false)
       .title($r('app.string.settings'))
-      .onBackPressed(() => {
-        this.goBack()
-        return true
-      })
+      .onBackPressed(() => this.requestGoBack())
       .onShown(() => {
         NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, this.screenTabIndex)
       })

@@ -75,6 +75,9 @@ char*  writer_core_list_chapters(const char* project_id, const char* volume_id);
 char*  writer_core_create_chapter(const char* project_id, const char* volume_id, const char* name);
 char*  writer_core_open_chapter(const char* project_id, const char* volume_id, const char* chapter_id);
 char*  writer_core_save_chapter(const char* project_id, const char* volume_id, const char* chapter_id, const char* content);
+// Issue #1054：显式空覆盖意图的章节保存。只有编辑器确认“用户删除事务把非空正文变空”
+// 并匹配精确 sessionId/revision 时才传 true；普通 saveChapter 仍拒绝意外空覆盖。
+char*  writer_core_save_chapter_with_options(const char* project_id, const char* volume_id, const char* chapter_id, const char* content, bool allow_empty_overwrite);
 
 // ── Recent edits ──
 char*  writer_core_get_recent_edits(void);
