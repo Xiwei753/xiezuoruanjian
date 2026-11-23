@@ -110,9 +110,15 @@ export interface RichEditorRuntimeSnapshot {
   contentHeightPx: number
   horizontalPaddingVp: number
 
-  // 排版
-  wordBreak: string                     // 原生段落断行策略，如 'BREAK_ALL'
-  textAlign: string                     // 原生段落对齐，如 'Start'
+  // 排版（Issue #1053 评论 7100110974：读取 getParagraphs 的实际生效值，而不是请求常量）
+  wordBreak: string                     // 实际段落断行策略，如 'BREAK_WORD'；未知为 'unknown'
+  lineBreakStrategy: string             // 实际换行策略，如 'HIGH_QUALITY'；未知为 'unknown'
+  textAlign: string                     // 实际段落对齐，如 'Start'；未知为 'unknown'
+  punctuationOverflow: boolean          // 是否按 API 能力启用行尾标点溢出
+  compressLeadingPunctuation: boolean   // 是否按 API 能力启用行首标点压缩
+  paragraphStyleApplied: boolean        // getParagraphs 读到的段落样式是否与预期一致
+  paragraphStyleError: string | null    // 应用/读取段落样式失败的真实原因
+  deviceApiLevel: number                // 设备 SDK API Level（0 表示未知）
   fontSizeVp: number
   lineSpacingMultiplier: number
   effectiveLineHeightVp: number

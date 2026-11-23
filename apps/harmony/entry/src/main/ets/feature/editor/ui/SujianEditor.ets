@@ -28,9 +28,14 @@ const EDITOR_TOP_PADDING_VP = 20
 const EDITOR_BOTTOM_PADDING_VP = 32
 // Issue #1053：快照是内存态更新，150ms 合并一次即可；落盘仍由 Checkpoint/Worker 合并。
 const EDITOR_SNAPSHOT_DEBOUNCE_MS = 150
-// Issue #1053：原生段落断行策略是 RichEditorParagraphStyle 属性，不是 RichEditorTextStyle。
-const EDITOR_NATIVE_WORD_BREAK_LABEL = 'BREAK_ALL'
-const EDITOR_NATIVE_TEXT_ALIGN_LABEL = 'Start'
+// Issue #1053 评论 7100110974：中文标点排版使用系统正常断行 + 高质量换行策略，
+// 不能再用 BREAK_ALL 覆盖系统断行；标点溢出/行首压缩按 API 版本启用。
+const EDITOR_EXPECTED_WORD_BREAK_LABEL = 'BREAK_WORD'
+const EDITOR_EXPECTED_TEXT_ALIGN_LABEL = 'Start'
+const EDITOR_EXPECTED_LINE_BREAK_STRATEGY_LABEL = 'HIGH_QUALITY'
+// compressLeadingPunctuation 自 API 23 起可用，punctuationOverflow 自 API 26 起可用。
+const EDITOR_COMPRESS_LEADING_PUNCTUATION_MIN_API = 23
+const EDITOR_PUNCTUATION_OVERFLOW_MIN_API = 26
 const EDITOR_TAG_BACKGROUND_COLOR = '#3498DB33'
 const EDITOR_LINK_UNDERLINE_COLOR = '#3498DB'
 const EDITOR_CORRECTION_UNDERLINE_COLOR = '#E74C3C'
@@ -53,6 +58,31 @@ interface NativeSelectionOffsets {
 interface DecorationSegment extends DecorationRange {
   hasTagBackground: boolean
   hasLinkUnderline: boolean
+}
+
+// Issue #1053 评论 7100110974：中文标点原生排版属性做 API 版本隔离。
+// compressLeadingPunctuation（API 23+）与 punctuationOverflow（API 26+）都是
+// RichEditorAttribute，用 AttributeModifier 按设备能力启用，不手写断行/空格操作。
+class RichEditorPunctuationModifier implements AttributeModifier<RichEditorAttribute> {
+  applyNormalAttribute(instance: RichEditorAttribute): void {
+    const resolver = PlatformApiResolver.getInstance()
+    if (resolver.isApiAtLeast(EDITOR_COMPRESS_LEADING_PUNCTUATION_MIN_API)) {
+      try {
+        instance.compressLeadingPunctuation(true)
+      } catch (e) {
+        hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG,
+          `compressLeadingPunctuation unavailable: ${JSON.stringify(e)}`)
+      }
+    }
+    if (resolver.isApiAtLeast(EDITOR_PUNCTUATION_OVERFLOW_MIN_API)) {
+      try {
+        instance.punctuationOverflow(true)
+      } catch (e) {
+        hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG,
+          `punctuationOverflow unavailable: ${JSON.stringify(e)}`)
+      }
+    }
+  }
 }
 
 @Component
@@ -78,6 +108,14 @@ export struct SujianEditor {
   private nativeEditing: boolean = false
   private editorWidthVp: number = 0
   private editorHeightVp: number = 0
+  // Issue #1053 评论 7100110974：原生标点排版按 API 版本启用（AttributeModifier）。
+  private punctuationModifier: RichEditorPunctuationModifier = new RichEditorPunctuationModifier()
+  // 非热路径读取到的原生实际段落样式（诊断报告真实值）。
+  private appliedWordBreakLabel: string = 'unknown'
+  private appliedTextAlignLabel: string = 'unknown'
+  private appliedLineBreakStrategyLabel: string = 'unknown'
+  private paragraphStyleApplied: boolean = false
+  private paragraphStyleError: string | null = null
   private snapshotTimerId: number = -1
 
   aboutToDisappear(): void {
@@ -303,9 +341,12 @@ export struct SujianEditor {
     if (!this.editorReady) {
       return
     }
+    // Issue #1053 评论 7100110974：使用系统正常断行 + 高质量换行策略。
+    // BREAK_ALL 会绕过 lineBreakStrategy，也无法得到中文标点的系统行首/行尾优化。
     const style: RichEditorParagraphStyle = {
       textAlign: TextAlign.Start,
-      wordBreak: WordBreak.BREAK_ALL
+      wordBreak: WordBreak.BREAK_WORD,
+      lineBreakStrategy: LineBreakStrategy.HIGH_QUALITY
     }
     // setTypingParagraphStyle 自 API 20 起可用；低版本或组件未绑定时捕获异常，
     // 已有段落仍由 updateParagraphStyle 修正。
@@ -324,9 +365,98 @@ export struct SujianEditor {
         style: style
       })
     } catch (e) {
-      hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG,
-        `updateParagraphStyle failed: ${JSON.stringify(e)}`)
+      this.paragraphStyleApplied = false
+      this.paragraphStyleError = `updateParagraphStyle failed: ${JSON.stringify(e)}`
+      hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, this.paragraphStyleError)
+      this.publishRuntimeSnapshot()
+      return
     }
+    this.refreshAppliedParagraphStyleFacts()
+  }
+
+  // Issue #1053 评论 7100110974：非热路径读取原生实际段落样式（初始化/切章/样式变更后），
+  // 诊断不能再固定上报常量。完整正文段落只在此时读取，不进入逐键热路径。
+  private refreshAppliedParagraphStyleFacts(): void {
+    if (!this.editorReady) {
+      return
+    }
+    try {
+      const paragraphs = this.richEditorController.getParagraphs({ start: -1, end: -1 })
+      if (paragraphs === undefined || paragraphs === null || paragraphs.length === 0) {
+        this.paragraphStyleApplied = false
+        this.paragraphStyleError = 'getParagraphs returned no paragraph'
+      } else {
+        const style = paragraphs[0].style
+        this.appliedWordBreakLabel = this.wordBreakLabel(style.wordBreak)
+        this.appliedTextAlignLabel = this.textAlignLabel(style.textAlign)
+        this.appliedLineBreakStrategyLabel = this.lineBreakStrategyLabel(style.lineBreakStrategy)
+        this.paragraphStyleApplied =
+          this.appliedWordBreakLabel === EDITOR_EXPECTED_WORD_BREAK_LABEL &&
+          this.appliedTextAlignLabel === EDITOR_EXPECTED_TEXT_ALIGN_LABEL &&
+          this.appliedLineBreakStrategyLabel === EDITOR_EXPECTED_LINE_BREAK_STRATEGY_LABEL
+        this.paragraphStyleError = this.paragraphStyleApplied
+          ? null
+          : `paragraph style mismatch wordBreak=${this.appliedWordBreakLabel}`
+            + ` lineBreakStrategy=${this.appliedLineBreakStrategyLabel}`
+            + ` textAlign=${this.appliedTextAlignLabel}`
+      }
+    } catch (e) {
+      this.paragraphStyleApplied = false
+      this.paragraphStyleError = `getParagraphs failed: ${JSON.stringify(e)}`
+      hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, this.paragraphStyleError)
+    }
+    this.publishRuntimeSnapshot()
+  }
+
+  private wordBreakLabel(value: WordBreak | undefined): string {
+    if (value === undefined) {
+      return 'default'
+    }
+    if (value === WordBreak.BREAK_WORD) {
+      return 'BREAK_WORD'
+    }
+    if (value === WordBreak.BREAK_ALL) {
+      return 'BREAK_ALL'
+    }
+    if (value === WordBreak.NORMAL) {
+      return 'NORMAL'
+    }
+    return `unknown(${value})`
+  }
+
+  private textAlignLabel(value: TextAlign | undefined): string {
+    if (value === undefined) {
+      return 'default'
+    }
+    if (value === TextAlign.Start) {
+      return 'Start'
+    }
+    if (value === TextAlign.Center) {
+      return 'Center'
+    }
+    if (value === TextAlign.End) {
+      return 'End'
+    }
+    if (value === TextAlign.JUSTIFY) {
+      return 'JUSTIFY'
+    }
+    return `unknown(${value})`
+  }
+
+  private lineBreakStrategyLabel(value: LineBreakStrategy | undefined): string {
+    if (value === undefined) {
+      return 'default'
+    }
+    if (value === LineBreakStrategy.HIGH_QUALITY) {
+      return 'HIGH_QUALITY'
+    }
+    if (value === LineBreakStrategy.GREEDY) {
+      return 'GREEDY'
+    }
+    if (value === LineBreakStrategy.BALANCED) {
+      return 'BALANCED'
+    }
+    return `unknown(${value})`
   }
 
   // 字号/行距变化时更新 RichEditor 的文本样式
@@ -465,8 +595,10 @@ export struct SujianEditor {
     const editorWidthPx = this.vpToPx(this.editorWidthVp)
     const editorHeightPx = this.vpToPx(this.editorHeightVp)
 
+    const resolver = PlatformApiResolver.getInstance()
     const snapshot: RichEditorRuntimeSnapshot = {
-      schemaVersion: 2,
+      // Issue #1053 评论 7100110974：新增实际段落样式/标点排版/API 事实。
+      schemaVersion: 3,
       hasActiveSession: coreSnapshot !== null,
       sessionId: coreSessionId !== null ? coreSessionId : -1,
       nativeRevision: bridge !== null ? bridge.getLastAppliedRevision() : -1,
@@ -491,8 +623,14 @@ export struct SujianEditor {
       contentWidthPx: editorWidthPx,
       contentHeightPx: editorHeightPx,
       horizontalPaddingVp: EDITOR_HORIZONTAL_PADDING_VP,
-      wordBreak: EDITOR_NATIVE_WORD_BREAK_LABEL,
-      textAlign: EDITOR_NATIVE_TEXT_ALIGN_LABEL,
+      wordBreak: this.appliedWordBreakLabel,
+      lineBreakStrategy: this.appliedLineBreakStrategyLabel,
+      textAlign: this.appliedTextAlignLabel,
+      punctuationOverflow: resolver.isApiAtLeast(EDITOR_PUNCTUATION_OVERFLOW_MIN_API),
+      compressLeadingPunctuation: resolver.isApiAtLeast(EDITOR_COMPRESS_LEADING_PUNCTUATION_MIN_API),
+      paragraphStyleApplied: this.paragraphStyleApplied,
+      paragraphStyleError: this.paragraphStyleError,
+      deviceApiLevel: resolver.getApiLevel(),
       fontSizeVp: this.fontSize,
       lineSpacingMultiplier: this.lineSpacingMultiplier,
       effectiveLineHeightVp: this.fontSize * this.lineSpacingMultiplier,
@@ -615,6 +753,8 @@ export struct SujianEditor {
         .width('100%')
         .height('100%')
         .padding(0)
+        // 中文标点原生排版：按 API 能力启用行首压缩与行尾溢出。
+        .attributeModifier(this.punctuationModifier)
         .barState(BarState.Auto)
         .caretColor(this.caretColor)
         .onReady(() => {
