@@ -24,7 +24,8 @@ import {
   resolveTextIndentVp
 } from '../input/StyledParagraphIndent'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
-import { LengthMetrics } from '@kit.ArkUI'
+import { FrameCallback, LengthMetrics } from '@kit.ArkUI'
+import { SmoothCaretOverlay, SmoothCaretVisual } from './SmoothCaretOverlay'
 import {
   EditorRuntimeSnapshotStore,
   RichEditorRuntimeSnapshot,
@@ -45,6 +46,10 @@ const EDITOR_EXPECTED_TEXT_ALIGN_LABEL = 'Start'
 // compressLeadingPunctuation 自 API 23 起可用，punctuationOverflow 自 API 26 起可用。
 const EDITOR_COMPRESS_LEADING_PUNCTUATION_MIN_API = 23
 const EDITOR_PUNCTUATION_OVERFLOW_MIN_API = 26
+// Issue #1056：光标一次跨越超过该距离（vp）视为远距离跳转，直接定位而不做跨屏插值。
+const EDITOR_SMOOTH_CARET_JUMP_DISTANCE_VP = 120
+// getCaretRect 自 API 18 起支持；低版本设备不启用自绘光标，保持原生 caretColor。
+const EDITOR_SMOOTH_CARET_MIN_API = 18
 
 // 原生选区（UTF-16；不可读时为 -1）。
 interface NativeSelectionOffsets {
@@ -95,6 +100,24 @@ class RichEditorPunctuationModifier implements AttributeModifier<RichEditorAttri
   }
 }
 
+// Issue #1056：在本帧渲染结束后的下一帧空闲时刷新光标几何。
+// getCaretRect 只有在原生排版完成后才对应新位置；这里用 onIdle 而不是同步读取，
+// 避免在旧布局上先画一帧自绘光标。
+class EditorCaretFrameCallback extends FrameCallback {
+  private action: (() => void) | null = null
+
+  setAction(action: (() => void) | null): void {
+    this.action = action
+  }
+
+  onIdle(_timeLeftInNano: number): void {
+    const action = this.action
+    if (action !== null) {
+      action()
+    }
+  }
+}
+
 @Component
 export struct SujianEditor {
   editorCoordinator: EditorSessionCoordinator | null = null
@@ -108,7 +131,22 @@ export struct SujianEditor {
   // Issue #1054：与 Linux Qt 共用同一首行缩进设置语义。
   @Prop @Watch('onIndentSettingsChanged') autoIndentEnabled: boolean = true
   @Prop @Watch('onIndentSettingsChanged') autoIndentWidth: number = 2
+  // Issue #1056：平滑光标只做 ArkUI 展示层动画；光标移动动画以光标自身设置为准。
+  @Prop @Watch('onSmoothCursorSettingChanged') smoothCursorEnabled: boolean = false
+  @Prop smoothCursorDurationMs: number = 0
   caretColor: ResourceColor = $r('sys.color.ohos_id_color_text_primary')
+  // 自绘光标目标几何（vp，相对 RichEditor）。visible=true 时原生 caretColor 置透明。
+  @State private caretVisual: SmoothCaretVisual = {
+    visible: false,
+    x: 0,
+    y: 0,
+    width: 2,
+    height: 0,
+    jumpToken: 0
+  }
+  private caretFrameCallback: EditorCaretFrameCallback = new EditorCaretFrameCallback()
+  private caretRefreshPosted: boolean = false
+  private caretRefreshJump: boolean = false
   private richEditorController: RichEditorStyledStringController = new RichEditorStyledStringController()
   // 原生组件 onReady 后才允许改属性字符串，避免对未绑定的 controller 操作。
   private editorReady: boolean = false
@@ -142,7 +180,17 @@ export struct SujianEditor {
   // 正文样式全量发布次数（诊断用）。
   private stylePublishCount: number = 0
 
+  aboutToAppear(): void {
+    this.caretFrameCallback.setAction((): void => {
+      this.onCaretFrame()
+    })
+  }
+
   aboutToDisappear(): void {
+    // 卸载时清掉帧合并/动画状态，避免旧页面回调继续驱动视觉层。
+    this.caretFrameCallback.setAction(null)
+    this.caretRefreshPosted = false
+    this.caretRefreshJump = false
     this.cancelSnapshotTimer()
     if (this.paragraphVerifyTimer !== -1) {
       clearTimeout(this.paragraphVerifyTimer)
@@ -244,6 +292,8 @@ export struct SujianEditor {
       this.pendingFullStylePublish = false
       this.restoreSelectionSnapshot(previousSelection, text.length)
       this.restoreCaretVisibility(previousSelection, text.length)
+      // 全量重绘会滚动视口：把自绘光标直接对齐到新的原生位置。
+      this.scheduleCaretGeometryRefresh(true)
       this.stylePublishCount++
       this.refreshPublishedStyleFacts(text)
     } catch (e) {
@@ -564,6 +614,7 @@ export struct SujianEditor {
     if (this.richEditorBridge) {
       await this.richEditorBridge.syncFromCore()
     }
+    this.scheduleCaretGeometryRefresh(true)
     this.publishRuntimeSnapshot()
   }
 
@@ -571,6 +622,7 @@ export struct SujianEditor {
     if (this.richEditorBridge) {
       await this.richEditorBridge.syncFromCore()
       this.refreshPublishedStyleFacts(this.richEditorBridge.getCurrentText())
+      this.scheduleCaretGeometryRefresh(true)
       this.publishRuntimeSnapshot()
     }
   }
@@ -579,6 +631,8 @@ export struct SujianEditor {
     if (this.richEditorBridge) {
       await this.richEditorBridge.loadInitialText(text, cursorByteOffset)
       this.refreshPublishedStyleFacts(text)
+      // 切章/换文后选区与视口都换了：自绘光标直接定位。
+      this.scheduleCaretGeometryRefresh(true)
       this.publishRuntimeSnapshot()
     }
   }
@@ -784,6 +838,126 @@ export struct SujianEditor {
     }
   }
 
+  // ── 平滑光标视觉层（Issue #1056） ─────────────────────────────
+
+  private onSmoothCursorSettingChanged(): void {
+    if (!this.smoothCursorEnabled) {
+      this.hideSmoothCaret()
+      return
+    }
+    this.scheduleCaretGeometryRefresh(true)
+  }
+
+  private onCaretFrame(): void {
+    this.caretRefreshPosted = false
+    const jump: boolean = this.caretRefreshJump
+    this.caretRefreshJump = false
+    this.refreshCaretVisual(jump)
+  }
+
+  // 合并到下一帧空闲：本帧原生排版/渲染完成后再取 getCaretRect，避免在旧布局上画一帧。
+  // 连续输入只更新目标位置，多次请求合并为一次读取与一次属性动画。
+  private scheduleCaretGeometryRefresh(jump: boolean): void {
+    if (!this.smoothCursorEnabled) {
+      this.hideSmoothCaret()
+      return
+    }
+    if (jump) {
+      this.caretRefreshJump = true
+    }
+    if (this.caretRefreshPosted) {
+      return
+    }
+    this.caretRefreshPosted = true
+    try {
+      this.getUIContext().postFrameCallback(this.caretFrameCallback)
+    } catch (e) {
+      // UI 上下文暂不可用：退回同步刷新，至少不让下一次输入丢失光标更新。
+      this.caretRefreshPosted = false
+      const pendingJump: boolean = this.caretRefreshJump
+      this.caretRefreshJump = false
+      this.refreshCaretVisual(pendingJump)
+    }
+  }
+
+  private hideSmoothCaret(): void {
+    if (!this.caretVisual.visible) {
+      return
+    }
+    const previous: SmoothCaretVisual = this.caretVisual
+    this.caretVisual = {
+      visible: false,
+      x: previous.x,
+      y: previous.y,
+      width: previous.width,
+      height: previous.height,
+      jumpToken: previous.jumpToken
+    }
+  }
+
+  // 只读原生几何：只有焦点、折叠选区且 getCaretRect 有值时才显示自绘光标；
+  // 失焦、选区非折叠、位置不可获取、关闭动画时隐藏浮层并恢复原生 caretColor。
+  // 这里不调用 setSelection / setStyledString，也不产生任何 Core 编辑事务。
+  private refreshCaretVisual(forceJump: boolean): void {
+    if (!this.smoothCursorEnabled || !this.editorReady || !this.editorFocused ||
+      !PlatformApiResolver.getInstance().isApiAtLeast(EDITOR_SMOOTH_CARET_MIN_API)) {
+      this.hideSmoothCaret()
+      return
+    }
+    const selection: NativeSelectionOffsets = this.readNativeSelection()
+    if (selection.start < 0 || selection.end < 0 || selection.start !== selection.end) {
+      this.hideSmoothCaret()
+      return
+    }
+    let rect: RectResult | undefined = undefined
+    try {
+      rect = this.richEditorController.getCaretRect()
+    } catch (e) {
+      rect = undefined
+    }
+    if (rect === undefined || rect === null) {
+      // 官方接口在未绑定/未闪烁时可能返回 undefined：不硬造 (0,0) 光标。
+      this.hideSmoothCaret()
+      return
+    }
+    const x: number = rect.x
+    const y: number = rect.y
+    const width: number = rect.width
+    const height: number = rect.height
+    if (!Number.isFinite(x) || !Number.isFinite(y) ||
+      !Number.isFinite(width) || !Number.isFinite(height) || height <= 0) {
+      this.hideSmoothCaret()
+      return
+    }
+    // 完整滚出可视区域：与原生光标一致，不把浮层留在旧屏幕位置。
+    if (this.editorHeightVp > 0 && (y + height <= 0 || y >= this.editorHeightVp)) {
+      this.hideSmoothCaret()
+      return
+    }
+    if (this.editorWidthVp > 0 && (x + width <= 0 || x >= this.editorWidthVp)) {
+      this.hideSmoothCaret()
+      return
+    }
+    const previous: SmoothCaretVisual = this.caretVisual
+    const distanceJump: boolean = previous.visible &&
+      (Math.abs(x - previous.x) > EDITOR_SMOOTH_CARET_JUMP_DISTANCE_VP ||
+        Math.abs(y - previous.y) > EDITOR_SMOOTH_CARET_JUMP_DISTANCE_VP)
+    const jump: boolean = forceJump || !previous.visible || distanceJump
+    // 几何没有变化时不重复写状态：连续触摸/滚动事件不能堆积无意义的浮层重渲染。
+    if (previous.visible && previous.x === x && previous.y === y &&
+      previous.width === width && previous.height === height) {
+      return
+    }
+    this.caretVisual = {
+      visible: true,
+      x: x,
+      y: y,
+      width: width,
+      height: height,
+      jumpToken: jump ? previous.jumpToken + 1 : previous.jumpToken
+    }
+  }
+
   build() {
     Stack() {
       RichEditor({ controller: this.richEditorController })
@@ -792,7 +966,8 @@ export struct SujianEditor {
         .padding(0)
         .attributeModifier(this.punctuationModifier)
         .barState(BarState.Auto)
-        .caretColor(this.caretColor)
+        // 自绘光标可见时隐藏原生光标，避免出现两个光标；其余情况恢复原生颜色。
+        .caretColor(this.caretVisual.visible ? Color.Transparent : this.caretColor)
         .onReady(() => {
           hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'RichEditor onReady (styled string)')
           if (this.richEditorBridge) {
@@ -811,10 +986,12 @@ export struct SujianEditor {
                 if (this.richEditorBridge !== null) {
                   this.richEditorBridge.onContentDidChange(rangeBefore, rangeAfter)
                 }
+                this.scheduleCaretGeometryRefresh(false)
                 this.scheduleRuntimeSnapshot()
               }
             })
             this.editorReady = true
+            this.scheduleCaretGeometryRefresh(true)
             this.initializeEditor()
           }
         })
@@ -824,6 +1001,7 @@ export struct SujianEditor {
             const end: number = value.end ?? start
             this.richEditorBridge.onSelectionChange(start, end)
           }
+          this.scheduleCaretGeometryRefresh(false)
           this.scheduleRuntimeSnapshot()
         })
         .onPaste(() => {
@@ -834,12 +1012,18 @@ export struct SujianEditor {
         .enablePreviewText(true)
         .onEditingChange((isEditing: boolean) => {
           this.nativeEditing = isEditing
+          this.scheduleCaretGeometryRefresh(false)
           this.scheduleRuntimeSnapshot()
         })
         .onAreaChange((_oldArea: Area, newArea: Area): void => {
           this.editorWidthVp = Number(newArea.width)
           this.editorHeightVp = Number(newArea.height)
+          this.scheduleCaretGeometryRefresh(true)
           this.scheduleRuntimeSnapshot()
+        })
+        // 滚动/拖选会移动原生视口但不会改变选区：触摸期间直接跟随，避免浮层停在旧位置。
+        .onTouch((_event: TouchEvent): void => {
+          this.scheduleCaretGeometryRefresh(true)
         })
         .onClick((event: ClickEvent) => {
           this.handleContentClick(event)
@@ -847,16 +1031,31 @@ export struct SujianEditor {
         .onFocus(() => {
           hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'RichEditor focus acquired')
           this.editorFocused = true
+          this.scheduleCaretGeometryRefresh(true)
           this.scheduleRuntimeSnapshot()
         })
         .onBlur(() => {
           hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'RichEditor focus lost')
           this.editorFocused = false
+          this.caretRefreshJump = false
+          this.hideSmoothCaret()
           if (this.richEditorBridge) {
             this.richEditorBridge.captureDiagnosticsFacts()
           }
           this.publishRuntimeSnapshot()
         })
+
+      // Issue #1056：平滑光标视觉层挂在 RichEditor 上方同一 Stack；不参与编辑事务。
+      if (this.smoothCursorEnabled) {
+        SmoothCaretOverlay({
+          visual: this.caretVisual,
+          durationMs: this.smoothCursorDurationMs,
+          color: this.caretColor
+        })
+          .width('100%')
+          .height('100%')
+          .hitTestBehavior(HitTestMode.Transparent)
+      }
     }
     .width('100%')
     .height('100%')

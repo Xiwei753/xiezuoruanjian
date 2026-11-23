@@ -540,6 +540,21 @@ export class CorrectionCoordinator {
       baseRequest.projectId, baseRequest.chapterId, initialSessionId)
   }
 
+  // Issue #1056：Core 会话身份错误（target_id 与 project/chapter 不匹配）表示编辑会话与章节错位，
+  // 不是模型或资源不可用。其它失败仍按真实 errorCode/userMessage 呈现。
+  private describeCheckFailure(result: ResultEnvelope<CorrectionChapterSnapshotDto>): string {
+    const errorCode: string = result.errorCode ?? ''
+    const userMessage: string = result.userMessage ?? ''
+    if (errorCode === 'CORRECTION_ERROR' &&
+        userMessage.indexOf('does not match the active chapter session') >= 0) {
+      return '当前编辑会话与章节不一致，请重新打开章节后再试'
+    }
+    if (userMessage.length > 0) {
+      return userMessage
+    }
+    return errorCode.length > 0 ? errorCode : '未知错误'
+  }
+
   private acceptCheckResult(generation: number, snapshot: CorrectionRequestSnapshot,
     result: ResultEnvelope<CorrectionChapterSnapshotDto>, silent: boolean): void {
     if (generation !== this.requestGeneration) {
@@ -567,8 +582,7 @@ export class CorrectionCoordinator {
       this.isChecking = false
       this.suggestions = []
       this.checkMessage = ''
-      const reason = result.userMessage ?? result.errorCode ?? '未知错误'
-      this.errorMessage = `校对失败：${reason}`
+      this.errorMessage = `校对失败：${this.describeCheckFailure(result)}`
       this.notify()
       return
     }

@@ -1754,6 +1754,9 @@ export struct WritingScreen {
             },
             fontSize: this.settings.editorFontSize,
             lineSpacingMultiplier: this.settings.editorLineSpacingMultiplier,
+            // Issue #1056：光标动画设置接入编辑器展示层；文字动画开关不混作光标开关。
+            smoothCursorEnabled: this.settings.editorSmoothCursorEnabled,
+            smoothCursorDurationMs: this.settings.editorSmoothCursorDurationMs,
             // Issue #1054：首行缩进与 Qt 共用同一设置语义，只影响视觉排版。
             autoIndentEnabled: this.settings.autoIndentEnabled,
             autoIndentWidth: this.settings.autoIndentWidth

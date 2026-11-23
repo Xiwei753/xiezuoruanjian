@@ -191,6 +191,14 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     this.listener = listener
   }
 
+  // Issue #1056：Core 编辑会话的唯一 target 身份。
+  // `correction_session_identity()` 要求拆分后是 4 段 `chapter-body:projectId:volumeId:chapterId`，
+  // 与 Android 端保持同一协议；裸 chapterId 会令校对请求被 Core 拒绝。
+  // 只有编辑 session target 使用复合标识，业务 loadChapter/saveChapter 仍按真正章节 UUID 工作。
+  private chapterSessionTargetId(): string {
+    return `chapter-body:${this.projectId}:${this.volumeId}:${this.chapterId}`
+  }
+
   // 会话 open 成功后，页面恢复接续选区 / viewport（平台侧状态）用。
   setSessionOpenedHook(hook: ((snap: EditorSessionSnapshot) => Promise<void>) | null): void {
     this.sessionOpenedHook = hook
@@ -412,7 +420,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         this.hasUnsavedChanges = false
         // 打开编辑会话，用 Core 管理正文。open 成功后 listener 自动回流显示状态。
         // Issue #653 评论 5608056955：close 在离开时统一做，open 不接收 isPersistent。
-        const snapResult = await this.editorCoordinator.open(this.chapterId, result.data.content)
+        // Issue #1056：编辑会话 target 使用与 Core/Android 统一的复合章节身份。
+        const snapResult = await this.editorCoordinator.open(this.chapterSessionTargetId(), result.data.content)
         if (!snapResult.success) {
           this.errorMessage = this.textProvider(WritingTextKey.LoadChapterFailed)
         } else if (snapResult.data) {
@@ -690,7 +699,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     if (!closed.success || closed.data !== true) {
       return false
     }
-    const reopened = await this.editorCoordinator.open(this.chapterId, diskContent)
+    const reopened = await this.editorCoordinator.open(this.chapterSessionTargetId(), diskContent)
     if (!reopened.success || !reopened.data) {
       return false
     }
