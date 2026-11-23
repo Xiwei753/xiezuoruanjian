@@ -758,26 +758,112 @@ fn commit_move_chapter_plan(
         return Err(error);
     }
 
-    // 业务事实已提交。旧目录内容已被逐文件删除，这里只尽力移除空目录：
-    // 失败（例如有并发写入留下的文件）只记 warning，不回滚已提交的事务。
-    match fs::remove_dir(&plan.source_dir) {
-        Ok(()) => {
-            if let Err(error) = crate::storage::sync_parent(&plan.source_dir) {
-                log::warn!(
-                    "move_chapter_to_volume: fsync stale chapter dir parent failed: {}: {}",
-                    plan.source_dir.display(),
-                    error
-                );
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => log::warn!(
-            "move_chapter_to_volume: committed but failed to remove empty old chapter dir {}: {}",
+    // 业务事实已提交。旧目录内容已被逐文件删除，这里只清理已确认为空的
+    // 目录树；源章节目录可能含嵌套子目录，必须自底向上逐层删除，否则单次
+    // `remove_dir` 会因 `DirectoryNotEmpty` 永远清不掉。残留的非空内容
+    // （例如并发写入的文件）保留并只记 warning，不回滚已提交的事务。
+    if let Err(error) = prune_empty_source_chapter_dir(&plan.source_dir) {
+        log::warn!(
+            "move_chapter_to_volume: committed but failed to prune old chapter dir {}: {}",
             plan.source_dir.display(),
             error
-        ),
+        );
     }
     Ok(())
+}
+
+/// 清理跨卷移动完成后已确认为空的源章节目录树。
+///
+/// 只从最深层子目录向上调用 `fs::remove_dir` 删除**空目录**；任何意外新增的
+/// 非空内容（并发写入、未纳入事务的文件）都会保留，并在最后返回错误。绝不
+/// 使用 `remove_dir_all` 删除未经事务覆盖的文件，也不重新猜测要删除哪些正文
+/// 文件——删除范围始终来自 plan/journal 的 `change_set`。
+pub fn prune_empty_source_chapter_dir(source_dir: &Path) -> Result<()> {
+    let metadata = match fs::symlink_metadata(source_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_dir() {
+        return Err(crate::error::Error::Other(format!(
+            "prune_empty_source_chapter_dir: {} is not a directory",
+            source_dir.display()
+        )));
+    }
+
+    let mut dirs = Vec::new();
+    let mut pending = vec![source_dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        dirs.push(dir.clone());
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            // 符号链接等非目录项不跟随；它们会让父目录删除失败并保留下来。
+            if entry.file_type()?.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    // 最深层优先：子目录清空后父目录才可能变空。
+    dirs.sort_by_key(|dir| std::cmp::Reverse(dir.components().count()));
+
+    let mut leftovers = Vec::new();
+    for dir in dirs {
+        match fs::remove_dir(&dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => leftovers.push(format!("{}: {}", dir.display(), error)),
+        }
+    }
+    if !leftovers.is_empty() {
+        return Err(crate::error::Error::Other(format!(
+            "prune_empty_source_chapter_dir: kept non-empty entries under {}: {}",
+            source_dir.display(),
+            leftovers.join("; ")
+        )));
+    }
+    if let Err(error) = crate::storage::sync_parent(source_dir) {
+        log::warn!(
+            "prune_empty_source_chapter_dir: fsync parent of {} failed: {}",
+            source_dir.display(),
+            error
+        );
+    }
+    Ok(())
+}
+
+/// 目录树下是否仍存在任何文件（含符号链接等非目录项）。
+///
+/// `DeleteTree` 的完成语义是“子树里不再有文件”；残留的空目录由
+/// [`prune_empty_source_chapter_dir`] 收尾，不能据此判定文件事务未执行。
+fn tree_has_remaining_files(path: &Path) -> bool {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_dir() {
+                return true;
+            }
+        }
+        // 路径已不存在：子树没有文件。
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        // 读取失败时保守地当作仍有残留，避免误判移动完成。
+        Err(_) => return true,
+    }
+
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => return true,
+        };
+        for entry in entries {
+            let Ok(entry) = entry else { return true };
+            match entry.file_type() {
+                Ok(file_type) if file_type.is_dir() => pending.push(entry.path()),
+                // 文件、符号链接或无法判定的条目都算残留。
+                Ok(_) | Err(_) => return true,
+            }
+        }
+    }
+    false
 }
 
 /// 从 project_root 提取作品 ID（与 `plan_delete_chapter` 一致）。
@@ -880,7 +966,13 @@ pub fn move_chapter_to_volume_with_changes(
                 scan_error
             );
         }
-        if move_change_set_complete(workspace_root, &change_set, &planned_move) {
+        if recovered_move_settled(
+            workspace_root,
+            &change_set,
+            &planned_move,
+            project_root,
+            &journal.token,
+        ) {
             return Ok((change_set, token));
         }
         // 2) 源章节目录仍在时，按 journal 的同一计划再收敛一次；成功才允许
@@ -891,17 +983,20 @@ pub fn move_chapter_to_volume_with_changes(
             .join("chapters")
             .join(&planned_move.chapter_id);
         if source_dir.exists() {
-            match apply_planned_move_chapter(project_root, &planned_move) {
-                Ok(()) => {
-                    if move_change_set_complete(workspace_root, &change_set, &planned_move) {
-                        return Ok((change_set, token));
-                    }
-                }
-                Err(replay_error) => log::warn!(
+            if let Err(replay_error) = apply_planned_move_chapter(project_root, &planned_move) {
+                log::warn!(
                     "move_chapter_to_volume: replay for journal {} failed: {}",
                     journal.token,
                     replay_error
-                ),
+                );
+            } else if recovered_move_settled(
+                workspace_root,
+                &change_set,
+                &planned_move,
+                project_root,
+                &journal.token,
+            ) {
+                return Ok((change_set, token));
             }
         }
         return Err(error);
@@ -930,11 +1025,54 @@ pub fn apply_planned_move_chapter(
     apply_move_chapter_plan(project_root, &plan)
 }
 
+/// 收尾一次已完成的跨卷移动：只清理源章节的**空目录树**。
+///
+/// 恢复路径在 `move_change_set_complete()` 判定文件与两卷 order 均已完整后
+/// 调用；残留的非空内容保留并返回错误，不重新猜测要删除哪些正文文件。
+pub fn prune_planned_move_source_dir(
+    project_root: &Path,
+    planned: &crate::storage::journal::workspace_change::PlannedChapterMove,
+) -> Result<()> {
+    let source_dir = project_root
+        .join("volumes")
+        .join(&planned.source_volume_id)
+        .join("chapters")
+        .join(&planned.chapter_id);
+    prune_empty_source_chapter_dir(&source_dir)
+}
+
+/// 恢复路径的完成判定：change_set 完整时顺带清理残留的空源章节目录。
+///
+/// 清理失败只记 warning，不回退“文件事务已完成”的事实——残留内容不会被
+/// 删除，下一次启动仍会按 journal 重试收尾。
+fn recovered_move_settled(
+    workspace_root: &Path,
+    change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
+    planned: &crate::storage::journal::workspace_change::PlannedChapterMove,
+    project_root: &Path,
+    journal_token: &str,
+) -> bool {
+    if !move_change_set_complete(workspace_root, change_set, planned) {
+        return false;
+    }
+    if let Err(error) = prune_planned_move_source_dir(project_root, planned) {
+        log::warn!(
+            "move_chapter_to_volume: journal {} recovered but old chapter dir still has \
+             contents: {}",
+            journal_token,
+            error
+        );
+    }
+    true
+}
+
 /// 核对一次跨卷移动的最终磁盘状态是否与 journal/change_set 完全一致。
 ///
 /// 不能只看两个 `chapter.meta.json` 是否存在：章节目录内可能有同步冲突副本，
-/// 两卷 order 也可能只写了一部分。这里逐条检查 `Upsert` 目标存在、`Delete`/
-/// `DeleteTree` 目标消失，再验证两卷 order 连续、章节位于目标下标。
+/// 两卷 order 也可能只写了一部分。这里逐条检查 `Upsert` 目标存在、`Delete`
+/// 目标消失、`DeleteTree` 子树里不再有文件，再验证两卷 order 连续、章节位于
+/// 目标下标。`DeleteTree` 残留的空目录由
+/// [`prune_empty_source_chapter_dir`] 收尾，不参与“文件事务是否完成”的判断。
 ///
 /// `workspace_root` 是 journal 里 workspace-relative 路径的根（即 app_data_root）。
 pub fn move_change_set_complete(
@@ -951,8 +1089,13 @@ pub fn move_change_set_complete(
                     return false;
                 }
             }
-            WorkspaceHistoryChange::Delete(rel) | WorkspaceHistoryChange::DeleteTree(rel) => {
+            WorkspaceHistoryChange::Delete(rel) => {
                 if workspace_root.join(rel).exists() {
+                    return false;
+                }
+            }
+            WorkspaceHistoryChange::DeleteTree(rel) => {
+                if tree_has_remaining_files(&workspace_root.join(rel)) {
                     return false;
                 }
             }

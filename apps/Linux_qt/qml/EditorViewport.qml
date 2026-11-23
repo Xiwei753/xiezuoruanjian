@@ -250,8 +250,14 @@ Item {
             if (root.restoringViewState) {
                 // 恢复期间用户主动滚动：放弃书签恢复，之后按用户新位置保存。
                 // 排版变化引起的自动 clamp 不算用户滚动，继续等待恢复完成。
+                // Issue #1047 复审：这里是 `Connections` 的处理器，`contentItem`
+                // 不是本地变量也不能靠 target 注入作用域；统一经 `editorScroll`
+                // 读取。`editorIsScrolling` 已包含 contentItem.moving/flicking、
+                // 滚动条与桌面滚轮状态。
                 var userScrolling = editorScroll.editorIsScrolling
-                        || (contentItem && (contentItem.moving || contentItem.flicking));
+                        || (editorScroll.contentItem
+                            && (editorScroll.contentItem.moving
+                                || editorScroll.contentItem.flicking));
                 if (!userScrolling)
                     return;
                 root.cancelViewStateRestore();

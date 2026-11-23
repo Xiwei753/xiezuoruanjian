@@ -631,13 +631,16 @@ fn recover_pending_phase(
 /// 顺序固定：
 /// 1. 先用 `scan_pending_transactions(project_root)` 重放该项目下未完成的
 ///    `SaveTransaction`（移动事务在 Prepared/FilesCommitted 阶段崩溃时，
-///    文件可能只写了一半）；
-/// 2. 核验两卷章节目录的最终状态：
-///    - 目标卷章节 meta 已存在、源卷章节 meta 已消失 → 文件事务完成，
-///      推进 `LocalApplied` 后进入 history；
-///    - 源卷章节 meta 仍在、目标卷章节 meta 尚未出现 → 用 journal 的
-///      `planned_move` 重新执行同一个移动，再核验；
-///    - 两者都在/都不在 → 状态无法判定，保留 journal 并告警，不能清日志。
+///    文件可能只写了一半）；只要还有条目重放失败就保留 manifest/journal，
+///    下次启动继续；
+/// 2. 用 journal 的完整 `change_set` 核验最终磁盘状态（`Upsert` 目标存在、
+///    `Delete` 目标消失、`DeleteTree` 子树里不再有文件）与两卷 order，
+///    不再只看源/目标 `chapter.meta.json` 是否存在：
+///    - 文件与两卷 order 已完整 → 清理残留的空源章节目录，推进
+///      `LocalApplied` 后进入 history；
+///    - 未完整且源卷章节 meta 仍在 → 用 journal 的 `planned_move` 重新执行
+///      同一个移动，再核验；
+///    - 未完整且源卷 meta 已消失 → 无法重放，保留 journal 并告警，不能清日志。
 ///
 /// 返回 `true` 表示已推进到 `LocalApplied`，可以继续补 history。
 fn recover_pending_move_phase(
@@ -695,9 +698,10 @@ fn recover_pending_move_phase(
         return false;
     }
 
-    // 逐条核对 journal 的完整 change_set（Upsert 存在、Delete/DeleteTree 消失）
-    // 与两卷 order；不能只看两个 meta 是否存在。
+    // 逐条核对 journal 的完整 change_set（Upsert 存在、Delete 目标消失、
+    // DeleteTree 子树不再有文件）与两卷 order；不能只看两个 meta 是否存在。
     if crate::chapter::move_change_set_complete(app_data_root, &rec.changes, planned) {
+        prune_recovered_move_source_dir(&project_root, planned, &rec.journal_token);
         return mark_move_local_applied(app_data_root, rec);
     }
 
@@ -718,17 +722,41 @@ fn recover_pending_move_phase(
             return false;
         }
         if crate::chapter::move_change_set_complete(app_data_root, &rec.changes, planned) {
+            prune_recovered_move_source_dir(&project_root, planned, &rec.journal_token);
             return mark_move_local_applied(app_data_root, rec);
         }
+        log::warn!(
+            "recover_workspace_change_transactions: MoveChapter journal {} replay finished \
+             but the change set is still incomplete — journal retained",
+            rec.journal_token
+        );
+        return false;
     }
 
     log::warn!(
         "recover_workspace_change_transactions: MoveChapter journal {} does not match the \
-         persisted change set (source_meta_exists={}) — journal retained",
-        rec.journal_token,
-        source_meta.exists()
+         persisted change set (source_meta_exists=false, replay unavailable) — journal retained",
+        rec.journal_token
     );
     false
+}
+
+/// 文件事务与两卷 order 已完整后，清理残留的空源章节目录。
+///
+/// 只删空目录；意外残留的文件保留并告警，不阻断已完成移动的 history 补齐。
+fn prune_recovered_move_source_dir(
+    project_root: &Path,
+    planned: &crate::storage::journal::workspace_change::PlannedChapterMove,
+    journal_token: &str,
+) {
+    if let Err(error) = crate::chapter::prune_planned_move_source_dir(project_root, planned) {
+        log::warn!(
+            "recover_workspace_change_transactions: MoveChapter journal {} change set is \
+             complete but the old chapter dir still has contents: {}",
+            journal_token,
+            error
+        );
+    }
 }
 
 /// 把 MoveChapter journal 推进到 `LocalApplied`；失败时保留 Pending 并返回 false。
