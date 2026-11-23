@@ -49,8 +49,8 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true
             Layout.preferredHeight: Kirigami.Units.gridUnit * 2.4
-            anchors.leftMargin: Kirigami.Units.smallSpacing
-            anchors.rightMargin: Kirigami.Units.smallSpacing
+            Layout.leftMargin: Kirigami.Units.smallSpacing
+            Layout.rightMargin: Kirigami.Units.smallSpacing
             Label {
                 Layout.fillWidth: true
                 text: root.selectedTool === "ai" ? qsTr("AI") : qsTr("标签与引用")
@@ -63,7 +63,7 @@ Rectangle {
                 onClicked: root.closeRequested()
             }
         }
-        Rectangle { Layout.fillWidth: true; height: 1; color: Kirigami.Theme.disabledTextColor; opacity: 0.35 }
+        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Kirigami.Theme.disabledTextColor; opacity: 0.35 }
 
         TagsPanel {
             id: tagsPanel

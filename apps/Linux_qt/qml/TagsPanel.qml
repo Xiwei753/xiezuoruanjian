@@ -295,47 +295,59 @@ Rectangle {
     }
     Component.onCompleted: refresh()
 
-    ColumnLayout {
+    // Issue #1050：右栏改为单一滚动区 + 内容驱动高度。外层 ScrollView 统一
+    // 滚动，内部 ColumnLayout 只按内容取高；空列表折叠为零高并另起一行显示
+    // 空态文本，不再让多个 ListView/ScrollView 分摊面板剩余高度。
+    ScrollView {
+        id: panelScroll
         anchors.fill: parent
-        anchors.margins: Kirigami.Units.smallSpacing
-        spacing: Kirigami.Units.smallSpacing
+        padding: Kirigami.Units.smallSpacing
+        contentWidth: availableWidth
+        clip: true
 
-        RowLayout {
-            Layout.fillWidth: true
-            Label {
+        ColumnLayout {
+            width: panelScroll.availableWidth
+            spacing: Kirigami.Units.smallSpacing
+
+            RowLayout {
                 Layout.fillWidth: true
-                text: root.targetLabel || qsTr("标签与引用")
-                font.bold: true
-                elide: Text.ElideRight
+                Label {
+                    Layout.fillWidth: true
+                    text: root.targetLabel || qsTr("标签与引用")
+                    font.bold: true
+                    elide: Text.ElideRight
+                }
+                ToolButton {
+                    icon.name: "view-refresh"
+                    display: AbstractButton.IconOnly
+                    enabled: !root.busy
+                    onClicked: root.refresh()
+                    ToolTip.text: qsTr("刷新")
+                    ToolTip.visible: hovered
+                }
             }
-            ToolButton {
-                icon.name: "view-refresh"
-                display: AbstractButton.IconOnly
-                enabled: !root.busy
-                onClicked: root.refresh()
-                ToolTip.text: qsTr("刷新")
-                ToolTip.visible: hovered
+
+            TextField {
+                id: tagSearch
+                Layout.fillWidth: true
+                placeholderText: qsTr("搜索标签")
             }
-        }
 
-        TextField {
-            id: tagSearch
-            Layout.fillWidth: true
-            placeholderText: qsTr("搜索标签")
-        }
-
-        ScrollView {
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.min(tagList.contentHeight, Kirigami.Units.gridUnit * 5)
-            Layout.minimumHeight: Math.min(tagList.contentHeight, Kirigami.Units.gridUnit * 2)
-            clip: true
+            // 标签可能很多：保留 ListView 虚拟化 + 固定最大高度和自身滚动；
+            // 空列表折叠为零高，不占布局间距。
             ListView {
                 id: tagList
+                Layout.fillWidth: true
+                Layout.preferredHeight: visible ? Math.min(contentHeight, Kirigami.Units.gridUnit * 5) : 0
+                Layout.minimumHeight: 0
+                Layout.maximumHeight: Layout.preferredHeight
+                visible: count > 0
+                clip: true
+                spacing: 1
                 model: root.tags.filter(function(tag) {
                     return !tagSearch.text || String(tag.name || "").toLocaleLowerCase()
                         .indexOf(tagSearch.text.trim().toLocaleLowerCase()) >= 0
                 })
-                spacing: 1
                 delegate: RowLayout {
                     required property var modelData
                     width: tagList.width
@@ -361,161 +373,192 @@ Rectangle {
                     }
                 }
             }
-        }
 
-        RowLayout {
-            Layout.fillWidth: true
-            TextField {
-                id: newTagField
+            // 有标签但搜索无结果时空态单独占一行；完全没有标签时不插行，
+            // 让搜索框与新建标签紧挨。
+            Label {
                 Layout.fillWidth: true
-                placeholderText: qsTr("新建标签")
-                onAccepted: root.createTag()
+                visible: root.tags.length > 0 && tagList.count === 0
+                text: qsTr("没有匹配的标签")
+                color: Kirigami.Theme.disabledTextColor
+                elide: Text.ElideRight
             }
-            Button { text: qsTr("添加"); enabled: newTagField.text.trim().length > 0; onClicked: root.createTag() }
-        }
 
-        RowLayout {
-            Layout.fillWidth: true
-            Button {
+            RowLayout {
                 Layout.fillWidth: true
-                text: qsTr("应用标签")
-                enabled: root.targetRef !== null && !root.busy
-                highlighted: true
-                onClicked: root.applyTags()
-            }
-            Button {
-                text: qsTr("合并…")
-                enabled: root.draftTagIds.length > 1
-                onClicked: mergeDialog.open()
-            }
-        }
-
-        RowLayout {
-            Layout.fillWidth: true
-            Label { text: qsTr("链接"); font.bold: true; Layout.fillWidth: true }
-            ToolButton {
-                icon.name: "list-add"
-                display: AbstractButton.IconOnly
-                enabled: root.targetRef !== null
-                onClicked: root.openLinkPicker(null)
-                ToolTip.text: qsTr("添加超链接")
-                ToolTip.visible: hovered
-            }
-        }
-        ListView {
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.min(contentHeight, Kirigami.Units.gridUnit * 5)
-            clip: true
-            model: root.outgoingLinks
-            delegate: RowLayout {
-                required property var modelData
-                width: ListView.view.width
-                ItemDelegate {
+                TextField {
+                    id: newTagField
                     Layout.fillWidth: true
-                    text: root.linkTargetLabel(modelData)
-                    icon.name: "go-jump"
-                    onClicked: root.openLink(modelData)
+                    placeholderText: qsTr("新建标签")
+                    onAccepted: root.createTag()
                 }
-                ToolButton {
-                    icon.name: "overflow-menu"
-                    display: AbstractButton.IconOnly
-                    onClicked: linkActions.popup()
-                }
-                Menu {
-                    id: linkActions
-                    MenuItem { text: qsTr("修改目标"); onTriggered: root.openLinkPicker(modelData) }
-                    MenuItem { text: qsTr("删除链接"); onTriggered: root.deleteLink(modelData) }
-                }
+                Button { text: qsTr("添加"); enabled: newTagField.text.trim().length > 0; onClicked: root.createTag() }
             }
-        }
 
-        Label {
-            Layout.fillWidth: true
-            visible: root.outgoingLinks.length === 0
-            text: qsTr("暂无链接")
-            color: Kirigami.Theme.disabledTextColor
-        }
-
-        Label { text: qsTr("反向引用"); font.bold: true }
-        ListView {
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.min(contentHeight, Kirigami.Units.gridUnit * 5)
-            clip: true
-            model: root.backlinks
-            delegate: ItemDelegate {
-                required property var modelData
-                width: ListView.view.width
-                text: modelData.source ? modelData.source.objectId : qsTr("来源")
-                icon.name: "go-jump"
-                onClicked: root.targetActivated({ objectRef: modelData.source })
-            }
-        }
-
-        Label {
-            Layout.fillWidth: true
-            visible: root.backlinks.length === 0
-            text: qsTr("暂无反向引用")
-            color: Kirigami.Theme.disabledTextColor
-        }
-
-        RowLayout {
-            Layout.fillWidth: true
-            Label { text: qsTr("登记名称"); font.bold: true; Layout.fillWidth: true }
-            ToolButton {
-                icon.name: "list-add"
-                display: AbstractButton.IconOnly
-                onClicked: {
-                    root.activeEntryId = ""
-                    entryNameField.text = ""
-                    entryAliasesField.text = ""
-                    entryMisspellingsField.text = ""
-                    entryAutoLink.checked = true
-                    entryDialog.open()
-                }
-                ToolTip.text: qsTr("登记名称、别名和自动链接")
-                ToolTip.visible: hovered
-            }
-        }
-        ListView {
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.min(contentHeight, Kirigami.Units.gridUnit * 4)
-            clip: true
-            model: root.namedEntries
-            delegate: RowLayout {
-                required property var modelData
-                width: ListView.view.width
-                Label {
+            RowLayout {
+                Layout.fillWidth: true
+                Button {
                     Layout.fillWidth: true
-                    text: String(modelData.canonicalName || "")
-                    elide: Text.ElideRight
+                    text: qsTr("应用标签")
+                    enabled: root.targetRef !== null && !root.busy
+                    highlighted: true
+                    onClicked: root.applyTags()
                 }
-                Label {
-                    text: modelData.autoLinkEnabled ? qsTr("自动") : qsTr("手动")
-                    color: Kirigami.Theme.disabledTextColor
+                Button {
+                    text: qsTr("合并…")
+                    enabled: root.draftTagIds.length > 1
+                    onClicked: mergeDialog.open()
                 }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: qsTr("链接"); font.bold: true; Layout.fillWidth: true }
                 ToolButton {
-                    icon.name: "document-edit"
+                    icon.name: "list-add"
                     display: AbstractButton.IconOnly
-                    onClicked: root.editEntry(modelData)
-                    ToolTip.text: qsTr("编辑名称")
-                    ToolTip.visible: hovered
-                }
-                ToolButton {
-                    icon.name: "edit-delete"
-                    display: AbstractButton.IconOnly
-                    onClicked: root.deleteEntry(modelData)
-                    ToolTip.text: qsTr("删除名称")
+                    enabled: root.targetRef !== null
+                    onClicked: root.openLinkPicker(null)
+                    ToolTip.text: qsTr("添加超链接")
                     ToolTip.visible: hovered
                 }
             }
-        }
 
-        Label {
-            Layout.fillWidth: true
-            visible: root.errorText.length > 0
-            text: root.errorText
-            color: Kirigami.Theme.negativeTextColor
-            wrapMode: Text.Wrap
+            // 链接 / 反向引用 / 登记名称是短列表：Repeater + Column 随内容增高，
+            // 自身不滚动，滚轮统一交给外层 ScrollView。
+            Column {
+                id: linkColumn
+                Layout.fillWidth: true
+                visible: root.outgoingLinks.length > 0
+                spacing: 1
+                Repeater {
+                    model: root.outgoingLinks
+                    delegate: RowLayout {
+                        required property var modelData
+                        width: linkColumn.width
+                        ItemDelegate {
+                            Layout.fillWidth: true
+                            text: root.linkTargetLabel(modelData)
+                            icon.name: "go-jump"
+                            onClicked: root.openLink(modelData)
+                        }
+                        ToolButton {
+                            icon.name: "overflow-menu"
+                            display: AbstractButton.IconOnly
+                            onClicked: linkActions.popup()
+                        }
+                        Menu {
+                            id: linkActions
+                            MenuItem { text: qsTr("修改目标"); onTriggered: root.openLinkPicker(modelData) }
+                            MenuItem { text: qsTr("删除链接"); onTriggered: root.deleteLink(modelData) }
+                        }
+                    }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: root.outgoingLinks.length === 0
+                text: qsTr("暂无链接")
+                color: Kirigami.Theme.disabledTextColor
+            }
+
+            Label { text: qsTr("反向引用"); font.bold: true }
+
+            Column {
+                id: backlinkColumn
+                Layout.fillWidth: true
+                visible: root.backlinks.length > 0
+                spacing: 1
+                Repeater {
+                    model: root.backlinks
+                    delegate: ItemDelegate {
+                        required property var modelData
+                        width: backlinkColumn.width
+                        text: modelData.source ? modelData.source.objectId : qsTr("来源")
+                        icon.name: "go-jump"
+                        onClicked: root.targetActivated({ objectRef: modelData.source })
+                    }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: root.backlinks.length === 0
+                text: qsTr("暂无反向引用")
+                color: Kirigami.Theme.disabledTextColor
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: qsTr("登记名称"); font.bold: true; Layout.fillWidth: true }
+                ToolButton {
+                    icon.name: "list-add"
+                    display: AbstractButton.IconOnly
+                    onClicked: {
+                        root.activeEntryId = ""
+                        entryNameField.text = ""
+                        entryAliasesField.text = ""
+                        entryMisspellingsField.text = ""
+                        entryAutoLink.checked = true
+                        entryDialog.open()
+                    }
+                    ToolTip.text: qsTr("登记名称、别名和自动链接")
+                    ToolTip.visible: hovered
+                }
+            }
+
+            Column {
+                id: entryColumn
+                Layout.fillWidth: true
+                visible: root.namedEntries.length > 0
+                spacing: 1
+                Repeater {
+                    model: root.namedEntries
+                    delegate: RowLayout {
+                        required property var modelData
+                        width: entryColumn.width
+                        Label {
+                            Layout.fillWidth: true
+                            text: String(modelData.canonicalName || "")
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            text: modelData.autoLinkEnabled ? qsTr("自动") : qsTr("手动")
+                            color: Kirigami.Theme.disabledTextColor
+                        }
+                        ToolButton {
+                            icon.name: "document-edit"
+                            display: AbstractButton.IconOnly
+                            onClicked: root.editEntry(modelData)
+                            ToolTip.text: qsTr("编辑名称")
+                            ToolTip.visible: hovered
+                        }
+                        ToolButton {
+                            icon.name: "edit-delete"
+                            display: AbstractButton.IconOnly
+                            onClicked: root.deleteEntry(modelData)
+                            ToolTip.text: qsTr("删除名称")
+                            ToolTip.visible: hovered
+                        }
+                    }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: root.namedEntries.length === 0
+                text: qsTr("暂无登记名称")
+                color: Kirigami.Theme.disabledTextColor
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: root.errorText.length > 0
+                text: root.errorText
+                color: Kirigami.Theme.negativeTextColor
+                wrapMode: Text.Wrap
+            }
         }
     }
 

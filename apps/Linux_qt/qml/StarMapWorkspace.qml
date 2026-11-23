@@ -23,7 +23,8 @@
 // Issue #1014：本页使用全应用统一的三栏骨架。
 //   - 左栏：StarMapNavigationTree，宽度固定跟随 layoutState 全局值（默认 240），
 //     不提供本页 SplitView 拖动入口；
-//   - 中栏：唯一 StarMapCanvas；
+//   - 中栏：唯一 StarMapCanvas；拖放接收层 DropArea 与画布同属一个窗格，
+//     SplitView 只看到左/中/右三个直接子项（Issue #1049）；
 //   - 右栏：StarMapToolDrawer + 56vp StarMapToolRail 作为一个完整容器，
 //     总宽度 = layoutState.paneWidth("starmap.workspace", "right")；
 //     折叠 / 展开整个容器，不再按窗口宽度临时算 260~340 的抽屉宽度。
@@ -619,67 +620,72 @@ Item {
                 }
             }
 
-            // ── 中栏：唯一一块星图画布 ──
-            StarMapCanvas {
-                id: canvas
+            // ── 中栏：唯一一块星图画布；DropArea 作为覆盖层留在同一窗格内 ──
+            Item {
+                id: canvasPane
                 SplitView.fillWidth: true
                 SplitView.minimumWidth: root.canvasMinWidth
-                dt: root.dt
-                onSceneGeometryReady: function(starmapId, routeKey) {
-                    root.sceneGeometryReady(starmapId, routeKey)
-                }
-                onRouteChanged: function(rootStarmapId, segmentsJson, routeKey) {
-                    root.syncTreeRoute(rootStarmapId, segmentsJson, routeKey)
-                }
-                onTreeStructureChanged: navigationTree.reload()
-                onTreeObjectRevealFinished: function(success, objectKey) {
-                    root.finishTreeObjectReveal(success, objectKey)
-                }
-                canvasBackgroundColor: Kirigami.Theme.backgroundColor
-                starmapId: root.starmapId
-                starmapBackendRef: root.starmapBackendRef
-                annotationProjectId: root.annotationProjectId
-                selectionController: sharedSelectionController
-                onAnnotationActionRequested: function(action, targetRef, title) {
-                    root.pendingLinkSource = targetRef
-                    root.selectedTool = "tags"
-                    if (action === "link") {
-                        root.pendingLinkId = ""
-                        root.pendingLinkTarget = null
-                        annotationLinkPicker.open()
-                    } else if (action === "registerName") {
-                        var itemName = String(title || targetRef.objectId)
-                        root.pendingName = itemName
-                        registerNameDialog.open()
-                    } else if (root.embedded) {
-                        root.annotationToolRequested("tags")
-                    } else {
-                        root.requestToolPane("tags")
+
+                StarMapCanvas {
+                    id: canvas
+                    anchors.fill: parent
+                    dt: root.dt
+                    onSceneGeometryReady: function(starmapId, routeKey) {
+                        root.sceneGeometryReady(starmapId, routeKey)
+                    }
+                    onRouteChanged: function(rootStarmapId, segmentsJson, routeKey) {
+                        root.syncTreeRoute(rootStarmapId, segmentsJson, routeKey)
+                    }
+                    onTreeStructureChanged: navigationTree.reload()
+                    onTreeObjectRevealFinished: function(success, objectKey) {
+                        root.finishTreeObjectReveal(success, objectKey)
+                    }
+                    canvasBackgroundColor: Kirigami.Theme.backgroundColor
+                    starmapId: root.starmapId
+                    starmapBackendRef: root.starmapBackendRef
+                    annotationProjectId: root.annotationProjectId
+                    selectionController: sharedSelectionController
+                    onAnnotationActionRequested: function(action, targetRef, title) {
+                        root.pendingLinkSource = targetRef
+                        root.selectedTool = "tags"
+                        if (action === "link") {
+                            root.pendingLinkId = ""
+                            root.pendingLinkTarget = null
+                            annotationLinkPicker.open()
+                        } else if (action === "registerName") {
+                            var itemName = String(title || targetRef.objectId)
+                            root.pendingName = itemName
+                            registerNameDialog.open()
+                        } else if (root.embedded) {
+                            root.annotationToolRequested("tags")
+                        } else {
+                            root.requestToolPane("tags")
+                        }
+                    }
+
+                    onVisibleChanged: {
+                        if (!visible)
+                            canvas.resetInteraction()
                     }
                 }
 
-                onVisibleChanged: {
-                    if (!visible)
-                        canvas.resetInteraction()
-                }
-            }
-
-            DropArea {
-                anchors.fill: canvas
-                keys: ["application/x-sujian-starmap-asset"]
-                onDropped: function(drop) {
-                    var payload = {}
-                    try {
-                        payload = JSON.parse(String(drop.getDataAsString(
-                                    "application/x-sujian-starmap-asset") || "{}"))
-                    } catch (e) {
-                        return
-                    }
-                    if (payload && payload.assetId) {
-                        canvas.insertLibraryAssetAtScreen(String(payload.kind || "node"),
-                                                          String(payload.assetId),
-                                                          drop.x, drop.y)
-                        navigationTree.reload()
+                DropArea {
+                    anchors.fill: parent
+                    keys: ["application/x-sujian-starmap-asset"]
+                    onDropped: function(drop) {
+                        var payload = {}
+                        try {
+                            payload = JSON.parse(String(drop.getDataAsString(
+                                        "application/x-sujian-starmap-asset") || "{}"))
+                        } catch (e) {
+                            return
+                        }
+                        if (payload && payload.assetId) {
+                            canvas.insertLibraryAssetAtScreen(String(payload.kind || "node"),
+                                                              String(payload.assetId),
+                                                              drop.x, drop.y)
+                            navigationTree.reload()
+                        }
                     }
                 }
             }
