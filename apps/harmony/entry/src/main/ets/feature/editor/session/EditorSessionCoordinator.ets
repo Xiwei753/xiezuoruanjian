@@ -20,7 +20,8 @@ import { IEditorSessionBridge } from '../interop/IEditorSessionBridge'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorTransactionCause, EditorSessionSnapshot, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { EditorSessionState, EditStateOutcome } from './EditorSessionState'
-import { SerialCommandQueue } from './editor_patch_logic'
+import { SerialCommandQueue, computeMinimalTextDiff } from './editor_patch_logic'
+import { TextOffsetMapper } from '../input/TextOffsetMapper'
 
 // Issue #629 评论9 第4项：typed 状态更新。listener 回调携带 snapshot 和触发本次更新的 editResult。
 // - open() 成功后回调：editResult=null（初始加载，无编辑命令）。
@@ -260,6 +261,69 @@ export class EditorSessionCoordinator {
         targetSessionId, byteOffsetStart, byteOffsetEnd, replacement, expectedText, cause, targetRevision)
       // Issue #1034 评论 #30：await 后再次核对 session 身份，
       // 防止 open()/close() 在飞行期间替换 this.state
+      if (!this.state || this.state.sessionId !== targetSessionId) {
+        return { success: false, errorCode: 'SESSION_CHANGED' }
+      }
+      if (result.success && result.data) {
+        const outcome: EditStateOutcome = this.state.withEditResult(result.data)
+        if (outcome.ok) {
+          this.state = outcome.state
+          this.notifyListener(result.data)
+        } else {
+          await this.recoverFromCoreSnapshot(result.data)
+        }
+      }
+      return result
+    })
+  }
+
+  /**
+   * Issue #1053 评论 7098652618：原生正文与 Core 已提交正文的增量收敛事务。
+   *
+   * 与 replaceIfUnchanged 的区别：本方法接收目标全文 targetText，在 commandQueue 出队闭包内
+   * 用 expectedText 求最小差量，只提交实际改变的 UTF-8 区间；bridge.replace 的 originalText
+   * 必须是 expectedText 对应区间的切片（replaceIfUnchanged 传整篇 expectedText，只适合整篇替换）。
+   *
+   * 身份/内容条件在出队时复核；失败返回 STALE_BASELINE，调用方重新读取新基线再映射。
+   */
+  async replaceSliceIfUnchanged(
+    expectedSessionId: number,
+    expectedRevision: number,
+    expectedText: string,
+    targetText: string,
+    cause: EditorTransactionCause
+  ): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.commandQueue.enqueue<ResultEnvelope<EditorEditResult>>(async () => {
+      if (!this.state) {
+        return this.noSession<EditorEditResult>()
+      }
+      if (this.state.sessionId !== expectedSessionId) {
+        return { success: false, errorCode: 'SESSION_CHANGED' }
+      }
+      if (this.state.snapshot.revision !== expectedRevision ||
+          this.state.snapshot.text !== expectedText) {
+        return { success: false, errorCode: 'STALE_BASELINE' }
+      }
+      const baselineText = this.state.snapshot.text
+      if (baselineText === targetText) {
+        // 正文已收敛：无需 Core 写入。
+        return { success: false, errorCode: 'STALE_BASELINE' }
+      }
+      const diff = computeMinimalTextDiff(baselineText, targetText)
+      if (diff.start === diff.end && diff.replacement.length === 0) {
+        return { success: false, errorCode: 'STALE_BASELINE' }
+      }
+      // 被替换串必须是 Core 当前基线对应区间的切片，不能整篇传 expectedText。
+      const targetSlice: string = baselineText.substring(diff.start, diff.end)
+      const byteOffsetStart = TextOffsetMapper.utf16ToUtf8Checked(baselineText, diff.start)
+      const byteOffsetEnd = TextOffsetMapper.utf16ToUtf8Checked(baselineText, diff.end)
+      if (byteOffsetStart === null || byteOffsetEnd === null) {
+        return { success: false, errorCode: 'INVALID_OFFSET' }
+      }
+      const targetSessionId = this.state.sessionId
+      const targetRevision = this.state.snapshot.revision
+      const result = await this.bridge.replace(
+        targetSessionId, byteOffsetStart, byteOffsetEnd, diff.replacement, targetSlice, cause, targetRevision)
       if (!this.state || this.state.sessionId !== targetSessionId) {
         return { success: false, errorCode: 'SESSION_CHANGED' }
       }

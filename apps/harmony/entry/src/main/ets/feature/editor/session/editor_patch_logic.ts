@@ -198,6 +198,71 @@ export function applyPatchStrict(
 }
 
 /**
+ * 最小文本差量：把 oldText 变成 newText 时，oldText[start, end) 替换为 replacement。
+ *
+ * Issue #1053 评论 7098652618：原生正文与 Core 已提交正文收敛时，只提交实际改变区间。
+ * 公共前后缀按完整 Unicode code point 比较，避免把 surrogate pair 拆成半个字符；
+ * start/end 是 UTF-16 code unit 下标，可直接用于 substring / TextOffsetMapper。
+ */
+export interface MinimalTextDiff {
+  readonly start: number
+  readonly end: number
+  readonly replacement: string
+}
+
+/**
+ * 计算最小文本差量（按完整 Unicode code point 求公共前后缀）。
+ * oldText === newText 时返回 { start: end: oldText.length, replacement: '' }：
+ * 是空区间替换（正文不变），调用方用 start === end && replacement.length === 0 判定无变化。
+ */
+export function computeMinimalTextDiff(oldText: string, newText: string): MinimalTextDiff {
+  let prefixLen = 0
+  while (prefixLen < oldText.length && prefixLen < newText.length) {
+    const oldCp = oldText.codePointAt(prefixLen)
+    const newCp = newText.codePointAt(prefixLen)
+    if (oldCp === undefined || newCp === undefined || oldCp !== newCp) {
+      break
+    }
+    prefixLen += (oldCp > 0xFFFF) ? 2 : 1
+  }
+
+  let oldSuffixStart = oldText.length
+  let newSuffixStart = newText.length
+  while (oldSuffixStart > prefixLen && newSuffixStart > prefixLen) {
+    let oldCpLen = 1
+    if (oldSuffixStart >= 2) {
+      const lastUnit = oldText.charCodeAt(oldSuffixStart - 1)
+      const prevUnit = oldText.charCodeAt(oldSuffixStart - 2)
+      if (lastUnit >= 0xDC00 && lastUnit <= 0xDFFF && prevUnit >= 0xD800 && prevUnit <= 0xDBFF) {
+        oldCpLen = 2
+      }
+    }
+    let newCpLen = 1
+    if (newSuffixStart >= 2) {
+      const lastUnit = newText.charCodeAt(newSuffixStart - 1)
+      const prevUnit = newText.charCodeAt(newSuffixStart - 2)
+      if (lastUnit >= 0xDC00 && lastUnit <= 0xDFFF && prevUnit >= 0xD800 && prevUnit <= 0xDBFF) {
+        newCpLen = 2
+      }
+    }
+
+    const oldCp = oldText.codePointAt(oldSuffixStart - oldCpLen)
+    const newCp = newText.codePointAt(newSuffixStart - newCpLen)
+    if (oldCp !== newCp) {
+      break
+    }
+    oldSuffixStart -= oldCpLen
+    newSuffixStart -= newCpLen
+  }
+
+  return {
+    start: prefixLen,
+    end: oldSuffixStart,
+    replacement: newText.substring(prefixLen, newSuffixStart),
+  }
+}
+
+/**
  * 从 EditorEditResult 增量更新 snapshot。
  *
  * 成功返回 { ok: true, snapshot }；失败返回 { ok: false, reason }，reason 明确说明失败原因。

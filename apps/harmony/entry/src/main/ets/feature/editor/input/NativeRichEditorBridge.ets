@@ -31,6 +31,7 @@
 // - 切章时以 session ID 隔离旧回调，旧队列不可触碰新章节 UI。
 
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
+import { computeMinimalTextDiff } from '../session/editor_patch_logic'
 import { TextOffsetMapper } from './TextOffsetMapper'
 import { EditorTransactionCause, EditorEditResult, EditorSessionSnapshot, EditorEditOutcome } from '../../../corebridge/dto/EditorDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
@@ -53,6 +54,26 @@ export interface NativeEditorStateEvent {
   paragraphsChanged: boolean
 }
 export type NativeEditorStateListener = (event: NativeEditorStateEvent) => void
+
+// Issue #1053 评论 7098652618：保存/退出屏障的三方校验结果。
+// 放行条件是「原生组件实际全文 === 本地镜像 === Core snapshot.text」，
+// 任何一方不一致都不能 resolve 等待者。
+export interface NativeCoreAlignmentResult {
+  stage: string
+  matched: boolean               // 三方文本完全一致
+  coreAvailable: boolean         // 是否有 Core snapshot
+  nativeAvailable: boolean       // readNativeFullText 是否成功
+  mirrorMatchesEditor: boolean   // 本地镜像 === 原生全文
+  nativeText: string             // 原生全文（仅用于本会话收敛，不落诊断）
+  nativeUtf16Length: number
+  coreUtf16Length: number
+  firstMismatchUtf16: number     // 镜像与原生全文的首个差异；一致为 -1
+  mismatchToCoreUtf16: number    // 镜像与 Core 正文的首个差异；一致为 -1
+  appliedRevision: number        // 原生镜像最后一次成功应用的 Core revision
+  coreRevision: number           // 当前 Core snapshot revision
+  coreAdvanced: boolean          // Core 已由其它编辑路径推进（原生侧没有未结算编辑）
+  detail: string
+}
 
 interface TextDiff {
   start: number
@@ -158,6 +179,14 @@ export class NativeRichEditorBridge {
   private stateListener: NativeEditorStateListener | null = null
   // 保存/退出屏障的阶段名，供 checkIdle 记录对齐事实。
   private barrierStage: string = 'save-when-idle'
+  // Issue #1053 评论 7098652618：原生→Core 收敛事务单飞标记与尝试次数上限。
+  private nativeCoreConvergenceRunning: boolean = false
+  private static readonly NATIVE_CORE_CONVERGENCE_MAX_ATTEMPTS: number = 3
+  // 原生编辑器是否已加载过 Core 正文。未加载时 currentText 只是空占位，
+  // 不能把它当成「原生正文与 Core 不一致」去收敛，否则会把 Core 正文清空。
+  private nativeTextReady: boolean = false
+  // Core 先行推进时刷新原生镜像的单飞标记，避免 checkIdle 重入。
+  private nativeCoreRefreshRunning: boolean = false
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -296,39 +325,234 @@ export class NativeRichEditorBridge {
         }
         const snap = this.coordinator.getSnapshot()
         if (snap !== null && snap.text !== this.currentText) {
-          this.idleError = 'Selection intent pending but Core text diverged with no pending edits'
-          hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-          const error = new Error(this.idleError)
-          const waiters = this.idleWaiters
-          this.idleWaiters = []
-          for (const w of waiters) {
-            w.reject(error)
-          }
+          // Issue #1053 评论 7098652618：Core 落后于原生正文时，基于旧坐标的选区意图不再可靠；
+          // 丢弃它，交给下方收敛事务对齐正文后再按原生选区重新上报。
+          this.pendingSelectionIntent = null
+        } else {
+          this.requestSelectionFlush()
           return
         }
-        this.requestSelectionFlush()
-        return
       }
 
       const currentSession = this.sessionId
-      const resolved: IdleWaiter[] = []
+      const currentWaiters: IdleWaiter[] = []
       const remaining: IdleWaiter[] = []
       for (const w of this.idleWaiters) {
         if (w.sessionId === currentSession) {
-          resolved.push(w)
+          currentWaiters.push(w)
         } else {
           remaining.push(w)
         }
       }
-      this.idleWaiters = remaining
-      // Issue #1053：保存/退出屏障放行前记录原生镜像与 Core 正文的对齐事实。
-      if (resolved.length > 0 && currentSession === this.sessionId) {
-        this.recordNativeCoreAlignment(this.barrierStage)
+      if (currentWaiters.length === 0) {
+        this.idleWaiters = remaining
+        return
       }
-      for (const w of resolved) {
-        w.resolve()
+
+      // Issue #1053 评论 7098652618：只有原生全文、本地镜像、Core 正文三方一致才放行。
+      const alignment = this.validateNativeCoreAlignment(this.barrierStage)
+      const nativeEditorLoaded = this.richEditorController !== null && this.nativeTextReady
+      if (alignment.matched || !alignment.coreAvailable || !nativeEditorLoaded) {
+        // 没有 Core 会话或原生编辑器尚未加载正文：没有可比对的原生编辑事实，保持原关闭语义；
+        // 其它情况必须三方一致，不能把旧 Core 快照当最新正文放行。
+        this.idleWaiters = remaining
+        for (const w of currentWaiters) {
+          w.resolve()
+        }
+        return
       }
+
+      // Core 已由其它编辑路径推进（原生没有未结算编辑）：先把原生镜像刷新到 Core，
+      // 再次校验三方一致后才放行；不把过期镜像反向收敛进 Core。
+      if (alignment.coreAdvanced) {
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+          `core text advanced beyond native mirror: appliedRevision=${alignment.appliedRevision}`
+            + ` coreRevision=${alignment.coreRevision}`)
+        this.idleWaiters = remaining.concat(currentWaiters)
+        if (this.nativeCoreRefreshRunning) {
+          return
+        }
+        this.nativeCoreRefreshRunning = true
+        void this.refreshNativeMirrorFromCore()
+        return
+      }
+
+      // 未对齐：等待者保持挂起，先用原生全文收敛 Core；收敛失败才向等待者返回真实错误。
+      this.idleWaiters = remaining.concat(currentWaiters)
+      if (this.nativeCoreConvergenceRunning) {
+        return
+      }
+      if (!alignment.nativeAvailable) {
+        this.failNativeCoreAlignment(
+          `native full text unavailable; mirrorLen=${alignment.nativeUtf16Length} coreLen=${alignment.coreUtf16Length}`)
+        return
+      }
+      if (!alignment.mirrorMatchesEditor) {
+        // 镜像落后于原生全文：以原生最终文本恢复镜像，再由收敛事务对齐 Core。
+        this.reportNativeFactError('barrier',
+          `mirror diverged from native text firstMismatch=${alignment.firstMismatchUtf16}`)
+        this.currentText = alignment.nativeText
+      }
+      void this.convergeNativeTextToCore()
     })
+  }
+
+  // Core 先行推进时刷新原生正文，刷新后由 checkIdle 重新做三方校验；
+  // 刷新后仍不一致（原生组件不接受程序性写入）则按失败处理，不放行保存。
+  private async refreshNativeMirrorFromCore(): Promise<void> {
+    const sessionAtEntry = this.sessionId
+    try {
+      // Core 是业务事实来源：清除反向分歧保护，允许 syncFromCore 覆盖原生镜像。
+      this.nativeCoreDiverged = false
+      this.nativeCoreDivergedSessionId = null
+      await this.syncFromCore()
+      if (sessionAtEntry !== this.sessionId) {
+        return
+      }
+      const snap = this.coordinator.getSnapshot()
+      const editorText = this.readNativeFullText()
+      if (snap === null || editorText === null) {
+        this.failNativeCoreAlignment('cannot refresh native mirror from core')
+        return
+      }
+      if (editorText !== snap.text) {
+        this.failNativeCoreAlignment(
+          `native editor did not accept core text after refresh nativeLen=${editorText.length} coreLen=${snap.text.length}`)
+        return
+      }
+      this.currentText = snap.text
+      this.nativeTextReady = true
+      this.lastAppliedRevision = snap.revision
+      this.confirmedText = snap.text
+      this.confirmedRevision = snap.revision
+    } catch (e) {
+      this.failNativeCoreAlignment(`refresh native mirror error: ${JSON.stringify(e)}`)
+    } finally {
+      this.nativeCoreRefreshRunning = false
+      if (sessionAtEntry === this.sessionId) {
+        this.checkIdle()
+      }
+    }
+  }
+
+  // Issue #1053 评论 7098652618：原生正文 → Core 已提交正文的收敛事务。
+  // 编辑事实已结算但 Core 落后于原生可见正文时，按最小差量只提交实际改变区间；
+  // coordinator 在 commandQueue 出队闭包内复核 session/revision/text，
+  // 失败时重新读取新基线再映射，不对整章盲目覆盖。
+  private async convergeNativeTextToCore(): Promise<void> {
+    if (this.nativeCoreConvergenceRunning) {
+      return
+    }
+    this.nativeCoreConvergenceRunning = true
+    const sessionAtEntry = this.sessionId
+    let attempts = 0
+    try {
+      while (attempts < NativeRichEditorBridge.NATIVE_CORE_CONVERGENCE_MAX_ATTEMPTS) {
+        if (sessionAtEntry !== this.sessionId) {
+          return
+        }
+        // 新编辑事实仍在结算：交给 drain/IME 处理完成后再由 checkIdle 重新评估。
+        if (this.pendingEdits.length > 0 || this.drainRunning || this.imeComposing) {
+          return
+        }
+        const coreSessionId = this.coordinator.getSessionId()
+        const snap = this.coordinator.getSnapshot()
+        if (coreSessionId === null || snap === null) {
+          this.failNativeCoreAlignment('no active core session during convergence')
+          return
+        }
+        const editorText = this.readNativeFullText()
+        if (editorText === null) {
+          this.failNativeCoreAlignment('native full text unavailable during convergence')
+          return
+        }
+        if (editorText !== this.currentText) {
+          this.reportNativeFactError('converge',
+            `mirror behind native text firstMismatch=${firstMismatchUtf16(this.currentText, editorText)}`)
+          this.currentText = editorText
+        }
+        if (this.lastAppliedRevision !== snap.revision) {
+          // Core 在收敛前被其它路径推进：交给 checkIdle 的 coreAdvanced 分支刷新原生。
+          return
+        }
+        if (snap.text === this.currentText) {
+          this.lastAppliedRevision = snap.revision
+          this.confirmedText = snap.text
+          this.confirmedRevision = snap.revision
+          this.nativeCoreDiverged = false
+          this.nativeCoreDivergedSessionId = null
+          this.refreshSelectionAfterConvergence()
+          return
+        }
+        const diff = this.computeDiff(snap.text, this.currentText)
+        if (diff.start === diff.end && diff.replacement.length === 0) {
+          return
+        }
+        const byteStart = TextOffsetMapper.utf16ToUtf8Checked(snap.text, diff.start)
+        const byteEnd = TextOffsetMapper.utf16ToUtf8Checked(snap.text, diff.end)
+        if (byteStart === null || byteEnd === null) {
+          this.failNativeCoreAlignment(
+            `invalid convergence offsets start=${diff.start} end=${diff.end} coreLen=${snap.text.length}`)
+          return
+        }
+        attempts++
+        const result = await this.coordinator.replaceSliceIfUnchanged(
+          coreSessionId, snap.revision, snap.text, this.currentText, EditorTransactionCause.Programmatic)
+        if (sessionAtEntry !== this.sessionId) {
+          return
+        }
+        if (result.success && result.data !== undefined) {
+          const after = this.coordinator.getSnapshot()
+          if (after !== null && after.text === this.currentText) {
+            this.lastAppliedRevision = after.revision
+            this.confirmedText = after.text
+            this.confirmedRevision = after.revision
+            this.nativeCoreDiverged = false
+            this.nativeCoreDivergedSessionId = null
+            this.refreshSelectionAfterConvergence()
+            return
+          }
+          // Core 已提交但文本仍未完全相等：重新读取基线再映射。
+          continue
+        }
+        if (result.errorCode === 'SESSION_CHANGED') {
+          return
+        }
+        // STALE_BASELINE 等失败：重新读取新基线再映射。
+      }
+      this.failNativeCoreAlignment(
+        `native text did not converge with core after ${attempts} attempt(s)`)
+    } catch (e) {
+      this.failNativeCoreAlignment(`convergence error: ${JSON.stringify(e)}`)
+    } finally {
+      this.nativeCoreConvergenceRunning = false
+      if (sessionAtEntry === this.sessionId) {
+        this.checkIdle()
+      }
+    }
+  }
+
+  // 收敛失败：保留原生正文与编辑状态，向当前会话的等待者返回真实错误，
+  // 让保存/同步/关闭按失败处理，而不是落盘旧 Core 正文。
+  private failNativeCoreAlignment(detail: string): void {
+    // 不写 idleError：本次屏障失败不应毒化后续输入队列；保留原生编辑状态，
+    // 用户继续输入仍按正常路径结算，下次保存/退出屏障会重新尝试对齐。
+    const message = `Native/core text alignment failed stage=${this.barrierStage}: ${detail}`
+    hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, message)
+    const rejected: IdleWaiter[] = []
+    const remaining: IdleWaiter[] = []
+    for (const w of this.idleWaiters) {
+      if (w.sessionId === this.sessionId) {
+        rejected.push(w)
+      } else {
+        remaining.push(w)
+      }
+    }
+    this.idleWaiters = remaining
+    const error = new Error(message)
+    for (const w of rejected) {
+      w.reject(error)
+    }
   }
 
   setPendingPaste(): void {
@@ -370,6 +594,12 @@ export class NativeRichEditorBridge {
     this.nativeFactError = null
     this.nativeCoreDiverged = false
     this.nativeCoreDivergedSessionId = null
+    this.nativeCoreConvergenceRunning = false
+    this.nativeCoreRefreshRunning = false
+    this.nativeTextReady = false
+    this.confirmedText = ''
+    this.confirmedRevision = -1
+    this.lastAppliedRevision = -1
   }
 
   onWillChange(_value: RichEditorChangeValue): boolean {
@@ -394,6 +624,8 @@ export class NativeRichEditorBridge {
     const previousText = this.currentText
     const beforeRange = this.resolveTextRange(rangeBefore, previousText.length)
     const rangeText = this.extractRangeText(rangeAfter)
+    // Issue #1053 评论 7098652618：非 IME 输入也必须与原生最终全文核对（非热路径基准，一次 getSpans）。
+    const nativeFullText = this.readNativeFullText()
 
     let factDetail = ''
     if (beforeRange === null) {
@@ -427,7 +659,7 @@ export class NativeRichEditorBridge {
     const rawAfterStart = rangeAfter.start ?? 0
     const rawAfterEnd = rangeAfter.end ?? (rangeText !== null ? rangeText.endUtf16 : -1)
 
-    const factError = factDetail.length > 0
+    let factError = factDetail.length > 0
     let startUtf16 = 0
     let endUtf16 = 0
     let insertedText = ''
@@ -443,22 +675,46 @@ export class NativeRichEditorBridge {
         + previousText.substring(endUtf16)
     } else {
       // 原生 Range 与镜像不一致：以原生全文 Span 为真相重建，并保留事实错误供诊断。
-      const nativeText = this.readNativeFullText()
-      if (nativeText === null) {
+      if (nativeFullText === null) {
         this.reportNativeFactError('onDidChange', `${factDetail}; native full text unavailable`)
         this.idleError = `Native text fact mismatch and native full text unavailable: ${factDetail}`
         hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
         this.rejectAllWaiters()
         return
       }
-      const recovered = this.computeDiff(previousText, nativeText)
+      if (nativeFullText === previousText) {
+        // 原生正文没有净变化（例如 IME 提交已先行结算后的重复回调）：不提交 Core、不报持久错误。
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+          `onDidChange reported range but native text is unchanged: ${factDetail}`)
+        startUtf16 = previousText.length
+        endUtf16 = previousText.length
+      } else {
+        const recovered = this.computeDiff(previousText, nativeFullText)
+        startUtf16 = recovered.start
+        endUtf16 = recovered.end
+        insertedText = recovered.replacement
+        oldText = previousText.substring(startUtf16, endUtf16)
+        this.currentText = nativeFullText
+        this.reportNativeFactError('onDidChange',
+          `${factDetail}; recovered from native full text start=${startUtf16} end=${endUtf16} insertedLen=${insertedText.length}`)
+      }
+    }
+
+    // 严格 Range 重建成功时做全文一致性核对；不一致以原生全文为准重新形成编辑事务。
+    if (!factError && nativeFullText !== null && nativeFullText !== this.currentText) {
+      factError = true
+      const recovered = this.computeDiff(previousText, nativeFullText)
       startUtf16 = recovered.start
       endUtf16 = recovered.end
       insertedText = recovered.replacement
       oldText = previousText.substring(startUtf16, endUtf16)
-      this.currentText = nativeText
+      this.currentText = nativeFullText
       this.reportNativeFactError('onDidChange',
-        `${factDetail}; recovered from native full text start=${startUtf16} end=${endUtf16} insertedLen=${insertedText.length}`)
+        `range reconstruction mismatch mirrorLen=${previousText.length} nativeLen=${nativeFullText.length}`
+          + `; recovered start=${startUtf16} end=${endUtf16} insertedLen=${insertedText.length}`)
+    } else if (!factError && nativeFullText === null) {
+      factError = true
+      this.reportNativeFactError('onDidChange', 'native full text unavailable for range verification')
     }
 
     const paragraphsChanged = insertedText.indexOf('\n') >= 0 || oldText.indexOf('\n') >= 0
@@ -483,7 +739,7 @@ export class NativeRichEditorBridge {
     })
 
     if (startUtf16 >= endUtf16 && insertedText.length === 0) {
-      // 原生只报告了空编辑（纯样式/无文本变化）：不提交 Core。
+      // 原生只报告了空编辑（纯样式/重复回调/无文本变化）：不提交 Core。
       this.pendingPaste = false
       this.notifyStateListener('native-change', paragraphsChanged)
       return
@@ -507,8 +763,9 @@ export class NativeRichEditorBridge {
     this.notifyStateListener('native-change', paragraphsChanged)
   }
 
-  // IME 预编辑期间的镜像更新：rangeAfter 的 Span 文本可能少于声明范围（预上屏未落到 Span），
-  // 因此不做严格事实判定，只按镜像内可裁剪的 Range 更新本地文本；提交时再算差量。
+  // IME 预编辑期间的镜像更新：rangeAfter 的 Span 文本可能少于声明范围（预上屏未落到 Span）。
+  // Issue #1053 评论 7098652618：取不到预上屏文本时保持镜像，不能把镜像里的用户文字当成删除；
+  // IME 提交后由 onDidIMEInput 从已提交的原生 Span 重新取最终正文并计算真正差量。
   private applyImeCompositionChange(rangeBefore: TextRange, rangeAfter: TextRange): void {
     const previousText = this.currentText
     const rangeText = this.extractRangeText(rangeAfter)
@@ -516,7 +773,35 @@ export class NativeRichEditorBridge {
     const rawEnd = rangeBefore.end ?? rawStart
     const start = Math.max(0, Math.min(rawStart, previousText.length))
     const end = Math.max(start, Math.min(rawEnd, previousText.length))
-    const insertedText = rangeText !== null ? rangeText.text : ''
+    const declaredLength = Math.max(0, (rangeAfter.end ?? start) - (rangeAfter.start ?? start))
+
+    if (rangeText === null || (rangeText.text.length === 0 && declaredLength > 0)) {
+      // 预上屏文字尚未落到 Span：只记录事实，镜像保持提交前正文。
+      hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+        `IME preedit text unavailable start=${rawStart} end=${rawEnd} declared=${declaredLength}`)
+      this.recordNativeOperation({
+        kind: 'typing',
+        beforeUtf16Length: previousText.length,
+        afterUtf16Length: previousText.length,
+        rangeBeforeStartUtf16: rawStart,
+        rangeBeforeEndUtf16: rawEnd,
+        rangeAfterStartUtf16: rangeAfter.start ?? 0,
+        rangeAfterEndUtf16: rangeAfter.end ?? -1,
+        startUtf16: start,
+        endUtf16: end,
+        replacedUtf16Length: 0,
+        insertedUtf16Length: 0,
+        spanCountInRange: rangeText !== null ? rangeText.spanCount : 0,
+        nonTextSpanCount: rangeText !== null ? rangeText.nonTextSpanCount : 0,
+        imeComposition: true,
+        programmatic: false,
+        factError: true
+      })
+      this.notifyStateListener('native-change', false)
+      return
+    }
+
+    const insertedText = rangeText.text
     this.currentText = previousText.substring(0, start) + insertedText + previousText.substring(end)
 
     const replacedText = previousText.substring(start, end)
@@ -529,13 +814,13 @@ export class NativeRichEditorBridge {
       rangeBeforeStartUtf16: rawStart,
       rangeBeforeEndUtf16: rawEnd,
       rangeAfterStartUtf16: rangeAfter.start ?? 0,
-      rangeAfterEndUtf16: rangeAfter.end ?? (rangeText !== null ? rangeText.endUtf16 : -1),
+      rangeAfterEndUtf16: rangeAfter.end ?? (rangeText.endUtf16),
       startUtf16: start,
       endUtf16: end,
       replacedUtf16Length: end - start,
       insertedUtf16Length: insertedText.length,
-      spanCountInRange: rangeText !== null ? rangeText.spanCount : 0,
-      nonTextSpanCount: rangeText !== null ? rangeText.nonTextSpanCount : 0,
+      spanCountInRange: rangeText.spanCount,
+      nonTextSpanCount: rangeText.nonTextSpanCount,
       imeComposition: true,
       programmatic: false,
       factError: false
@@ -573,7 +858,28 @@ export class NativeRichEditorBridge {
     this.imeComposing = false
 
     const baselineText = this.imeComposingStartText
-    const diff = this.computeDiff(baselineText, this.currentText)
+    const mirrorBeforeCommit = this.currentText
+    // Issue #1053 评论 7098652618：IME 完成后必须从已提交的原生 Span 重新取得最终正文，
+    // 再对提交前基线求真正差量；预编辑期间缺失的 Span 不能当作删除了用户文字。
+    const committedText = this.readNativeFullText()
+    if (committedText === null) {
+      this.reportNativeFactError('ime-commit', 'native full text unavailable after IME commit')
+      this.idleError = 'IME commit failed: native full text unavailable'
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+      this.rejectAllWaiters()
+      return
+    }
+    // 预编辑期间镜像应保持提交前基线；若已被预上屏文本污染，记录事实错误。
+    // 无论镜像是否漂移，提交后的正文一律以原生最终全文为准。
+    let imeFactError = false
+    if (mirrorBeforeCommit !== baselineText) {
+      imeFactError = true
+      this.reportNativeFactError('ime-commit',
+        `mirror diverged during composition mirrorLen=${mirrorBeforeCommit.length}`
+          + ` baselineLen=${baselineText.length} nativeLen=${committedText.length}`)
+    }
+    this.currentText = committedText
+    const diff = this.computeDiff(baselineText, committedText)
     const rangeText = this.extractRangeText({
       start: diff.start,
       end: diff.start + diff.replacement.length
@@ -595,7 +901,7 @@ export class NativeRichEditorBridge {
       nonTextSpanCount: rangeText !== null ? rangeText.nonTextSpanCount : 0,
       imeComposition: false,
       programmatic: this.programmaticUpdate,
-      factError: false
+      factError: imeFactError
     })
 
     const paragraphsChanged = diff.replacement.indexOf('\n') >= 0
@@ -1046,52 +1352,10 @@ export class NativeRichEditorBridge {
     }
   }
 
-  // 计算最小文本差量（按完整 Unicode code point 求前后缀）
+  // 计算最小文本差量（按完整 Unicode code point 求前后缀）。
+  // 纯逻辑在 editor_patch_logic.ts，收敛事务与平台差量共用同一实现。
   private computeDiff(oldText: string, newText: string): TextDiff {
-    let prefixLen = 0
-    while (prefixLen < oldText.length && prefixLen < newText.length) {
-      const oldCp = oldText.codePointAt(prefixLen)
-      const newCp = newText.codePointAt(prefixLen)
-      if (oldCp === undefined || newCp === undefined || oldCp !== newCp) {
-        break
-      }
-      prefixLen += (oldCp > 0xFFFF) ? 2 : 1
-    }
-
-    let oldSuffixStart = oldText.length
-    let newSuffixStart = newText.length
-    while (oldSuffixStart > prefixLen && newSuffixStart > prefixLen) {
-      let oldCpLen = 1
-      if (oldSuffixStart >= 2) {
-        const lastUnit = oldText.charCodeAt(oldSuffixStart - 1)
-        const prevUnit = oldText.charCodeAt(oldSuffixStart - 2)
-        if (lastUnit >= 0xDC00 && lastUnit <= 0xDFFF && prevUnit >= 0xD800 && prevUnit <= 0xDBFF) {
-          oldCpLen = 2
-        }
-      }
-      let newCpLen = 1
-      if (newSuffixStart >= 2) {
-        const lastUnit = newText.charCodeAt(newSuffixStart - 1)
-        const prevUnit = newText.charCodeAt(newSuffixStart - 2)
-        if (lastUnit >= 0xDC00 && lastUnit <= 0xDFFF && prevUnit >= 0xD800 && prevUnit <= 0xDBFF) {
-          newCpLen = 2
-        }
-      }
-
-      const oldCp = oldText.codePointAt(oldSuffixStart - oldCpLen)
-      const newCp = newText.codePointAt(newSuffixStart - newCpLen)
-      if (oldCp !== newCp) {
-        break
-      }
-      oldSuffixStart -= oldCpLen
-      newSuffixStart -= newCpLen
-    }
-
-    return {
-      start: prefixLen,
-      end: oldSuffixStart,
-      replacement: newText.substring(prefixLen, newSuffixStart)
-    }
+    return computeMinimalTextDiff(oldText, newText)
   }
 
   // 将 edit 的偏移从 edit.beforeText 映射到 baselineText。
@@ -1260,39 +1524,48 @@ export class NativeRichEditorBridge {
     }
   }
 
-  // 保存/退出屏障：对齐原生全文镜像与已确认 Core 正文的长度、换行数与 hash。
-  // 同时校验本地镜像是否等于从原生 Span 重建的全文；差异只记录事实，不覆盖任何一侧正文。
-  private recordNativeCoreAlignment(stage: string): void {
+  // Issue #1053 评论 7098652618：保存/退出屏障的三方校验。
+  // 放行条件是「原生全文 readNativeFullText() === 本地镜像 currentText === Core snapshot.text」；
+  // 同时记录长度、换行数、hash 与首个差异 offset（不含正文），供诊断与失败报告使用。
+  private validateNativeCoreAlignment(stage: string): NativeCoreAlignmentResult {
     const snap = this.coordinator.getSnapshot()
+    const coreAvailable = snap !== null
     const coreText = snap !== null ? snap.text : ''
     const nativeText = this.currentText
     const editorText = this.readNativeFullText()
-    const mirrorVerified = editorText !== null
-    const mirrorMatchesEditor = mirrorVerified && editorText === nativeText
+    const nativeAvailable = editorText !== null
+    const mirrorMatchesEditor = nativeAvailable && editorText === nativeText
     const firstMismatch = editorText !== null ? firstMismatchUtf16(nativeText, editorText) : -1
-    const matched = snap !== null && nativeText === coreText
+    const mismatchToCore = coreAvailable ? firstMismatchUtf16(nativeText, coreText) : -1
+    const matched = coreAvailable && nativeAvailable && mirrorMatchesEditor && nativeText === coreText
+    const appliedRevision = this.lastAppliedRevision
+    const coreRevision = snap !== null ? snap.revision : -1
+    // Core revision 超出原生已应用 revision：正文由其它编辑路径推进（如纠错采纳），
+    // 原生侧没有未结算编辑，此时以 Core 为准刷新原生，不能反向收敛覆盖 Core。
+    const coreAdvanced = coreAvailable && appliedRevision !== coreRevision
     const nativeNewlines = countNewlines(nativeText)
     const coreNewlines = countNewlines(coreText)
     const nativeHash = hashTextUtf16(nativeText)
     const coreHash = hashTextUtf16(coreText)
 
-    if (snap !== null && mirrorMatchesEditor && !matched) {
+    if (coreAvailable && mirrorMatchesEditor && !matched && !coreAdvanced) {
       // 原生正文是用户可见真相而 Core 落后：保留原生内容，拒绝后续程序性回写覆盖。
       this.nativeCoreDiverged = true
       this.nativeCoreDivergedSessionId = this.coordinator.getSessionId()
     }
 
-    let detail = 'native mirror aligned with core text'
-    if (snap === null) {
+    let detail = 'native full text, local mirror and core text are identical'
+    if (!coreAvailable) {
       detail = 'no core snapshot at alignment barrier'
-    } else if (!mirrorVerified) {
-      detail = `native full text unavailable; nativeLen=${nativeText.length} coreLen=${coreText.length}`
+    } else if (!nativeAvailable) {
+      detail = `native full text unavailable; mirrorLen=${nativeText.length} coreLen=${coreText.length}`
       hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `native-core alignment unverified stage=${stage} ${detail}`)
-    } else if (!matched || !mirrorMatchesEditor) {
-      detail = `nativeLen=${nativeText.length} coreLen=${coreText.length}`
+    } else if (!matched) {
+      detail = `mirrorLen=${nativeText.length} coreLen=${coreText.length}`
         + ` nativeNewlines=${nativeNewlines} coreNewlines=${coreNewlines}`
         + ` nativeHash=${nativeHash} coreHash=${coreHash}`
         + ` mirrorMatchesEditor=${mirrorMatchesEditor} firstMismatch=${firstMismatch}`
+        + ` mismatchToCore=${mismatchToCore}`
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
         `native-core alignment mismatch stage=${stage} ${detail}`)
     }
@@ -1312,6 +1585,35 @@ export class NativeRichEditorBridge {
       atMs: Date.now()
     }
     this.notifyStateListener('barrier-alignment', false)
+
+    return {
+      stage: stage,
+      matched: matched,
+      coreAvailable: coreAvailable,
+      nativeAvailable: nativeAvailable,
+      mirrorMatchesEditor: mirrorMatchesEditor,
+      nativeText: editorText !== null ? editorText : nativeText,
+      nativeUtf16Length: nativeText.length,
+      coreUtf16Length: coreText.length,
+      firstMismatchUtf16: firstMismatch,
+      mismatchToCoreUtf16: mismatchToCore,
+      appliedRevision: appliedRevision,
+      coreRevision: coreRevision,
+      coreAdvanced: coreAdvanced,
+      detail: detail
+    }
+  }
+
+  // 收敛成功后按原生当前选区重新上报：正文坐标已变化，旧选区意图已在收敛前丢弃。
+  private refreshSelectionAfterConvergence(): void {
+    if (this.richEditorController === null || this.coordinator.getSessionId() === null) {
+      return
+    }
+    this.pendingSelectionIntent = null
+    this.captureCurrentNativeSelection()
+    if (this.pendingSelectionIntent !== null) {
+      this.requestSelectionFlush()
+    }
   }
 
   // 从 Core snapshot 恢复：事务失败或需要强制对齐时调用。
@@ -1341,6 +1643,7 @@ export class NativeRichEditorBridge {
       this.lastAppliedRevision = snap.revision
       this.confirmedText = snap.text
       this.confirmedRevision = snap.revision
+      this.nativeTextReady = true
     } catch (e) {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `recoverFromCore error: ${JSON.stringify(e)}`)
     } finally {
@@ -1386,6 +1689,16 @@ export class NativeRichEditorBridge {
       return
     }
 
+    if (this.nativeTextReady && this.currentText !== this.confirmedText) {
+      // Issue #1053 评论 7098652618：原生可见正文还没有全部进入 Core（例如 IME 提交差量失败），
+      // 此时用 Core 旧正文覆盖原生会把用户文字静默吞掉；保留原生正文，交给保存/退出屏障收敛。
+      // 这是待收敛的中间态（例如收敛事务的 notifyListener 先于镜像确认），不记持久事实错误。
+      hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+        `syncFromCore: deferred because confirmed core text lags native mirror`
+          + ` nativeLen=${this.currentText.length} confirmedLen=${this.confirmedText.length}`)
+      return
+    }
+
     if (this.currentText === snap.text) {
       this.lastAppliedRevision = snap.revision
       this.confirmedText = snap.text
@@ -1408,7 +1721,8 @@ export class NativeRichEditorBridge {
         programmatic: true,
         factError: false
       })
-      this.recordNativeCoreAlignment('sync-from-core')
+      this.nativeTextReady = true
+      this.validateNativeCoreAlignment('sync-from-core')
       return
     }
 
@@ -1474,8 +1788,9 @@ export class NativeRichEditorBridge {
     })
     // Issue #1053：段落在程序性替换中新增/删除后，通知组件重新应用原生段落样式。
     // 只按段落结构变化通知，不在每次选区变化时全文重新排版。
+    this.nativeTextReady = true
     this.notifyStateListener('sync-from-core', paragraphsChanged)
-    this.recordNativeCoreAlignment('sync-from-core')
+    this.validateNativeCoreAlignment('sync-from-core')
   }
 
   // Issue #1034 评论 #16：外部明确要求定位选区的场景（跳转纠错/搜索结果定位）。
@@ -1561,7 +1876,8 @@ export class NativeRichEditorBridge {
       programmatic: true,
       factError: false
     })
+    this.nativeTextReady = true
     this.notifyStateListener('initial-load', true)
-    this.recordNativeCoreAlignment('initial-load')
+    this.validateNativeCoreAlignment('initial-load')
   }
 }
