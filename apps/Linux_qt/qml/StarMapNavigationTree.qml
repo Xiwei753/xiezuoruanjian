@@ -335,6 +335,10 @@ Rectangle {
 
         ListView {
             id: treeList
+            // Issue #1048 复审：Qt 6.9+ Flickable 默认接受左键拖动，会移动整个
+            // 列表内容。目录行改为手绘后，左键只属于行的点击/展开；滚轮、
+            // 触控板、滚动条与触屏滚动仍由原生处理。
+            acceptedButtons: Qt.NoButton
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true

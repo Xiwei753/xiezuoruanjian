@@ -171,6 +171,9 @@ Rectangle {
 
         ListView {
             id: libraryList
+            // Issue #1048 复审：素材条目拖出画布由独立 assetDragGhost 承担；
+            // 关闭父列表的左键拖动，避免鼠标拖拽同时被 Flickable 解释为滑动。
+            acceptedButtons: Qt.NoButton
             Layout.fillWidth: true
             Layout.preferredHeight: Math.min(contentHeight, 220)
             clip: true
