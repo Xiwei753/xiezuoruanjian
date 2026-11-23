@@ -827,15 +827,31 @@ export class NativeRichEditorBridge {
   //   2. 从原生 Span 读取的更新后片段等于 IME 提交片段（原生新内容，而不是旧镜像）；
   //   3. rangeBefore 与预测替换范围核对，不一致只记录事实（预测可能来自选区快照）。
   private isSettledImeChange(settled: ImeCommitSettled, rangeBefore: TextRange, rangeAfter: TextRange): boolean {
-    if (settled.insertedText.length === 0) {
-      return false
-    }
     const afterStart = rangeAfter.start ?? -1
     const afterEnd = rangeAfter.end ?? -1
     if (afterStart !== settled.rangeAfterStart || afterEnd !== settled.rangeAfterEnd) {
       return false
     }
-    // 以原生更新后的真实片段为准（不是旧镜像里的字符）：
+    const beforeStart = rangeBefore.start ?? -1
+    const beforeEnd = rangeBefore.end ?? beforeStart
+    const rangeBeforeMatched = beforeStart === settled.replacedStartUtf16 &&
+      beforeEnd === settled.replacedEndUtf16
+
+    if (settled.insertedText.length === 0) {
+      // 纯删除 / 多字符替换为空：rangeAfter 必须塌缩在替换起点；
+      // 原生侧已无可读片段，因此以 rangeAfter 身份 + 生命周期标记确认同一变更。
+      if (afterStart !== afterEnd || afterStart !== settled.replacedStartUtf16) {
+        return false
+      }
+      if (!rangeBeforeMatched) {
+        this.reportNativeFactError('ime-commit',
+          `settled IME delete rangeBefore mismatch callback=[${beforeStart},${beforeEnd})`
+            + ` predicted=[${settled.replacedStartUtf16},${settled.replacedEndUtf16})`)
+      }
+      return true
+    }
+
+    // 插入 / 替换：以原生更新后的真实片段为准（不是旧镜像里的字符）。
     const rangeText = this.extractRangeText({ start: afterStart, end: afterEnd })
     if (rangeText === null || rangeText.nonTextSpanCount > 0) {
       return false
@@ -843,9 +859,7 @@ export class NativeRichEditorBridge {
     if (rangeText.text !== settled.insertedText) {
       return false
     }
-    const beforeStart = rangeBefore.start ?? -1
-    const beforeEnd = rangeBefore.end ?? beforeStart
-    if (beforeStart !== settled.replacedStartUtf16 || beforeEnd !== settled.replacedEndUtf16) {
+    if (!rangeBeforeMatched) {
       // 替换范围预测与回调报告不一致：记录事实，但仍视为同一 IME 变更。
       // rangeAfter + 原生片段 + 「下一次 onWillChange 即失效」的生命周期已足以确认归属；
       // 后续真实编辑一定会先触发 onWillChange 清空标记，不会走到这里。
@@ -1021,21 +1035,32 @@ export class NativeRichEditorBridge {
     let fragmentNonTextSpanCount = 0
 
     if (hasReplacementHint && rawRangeStart >= 0 && rawRangeEnd >= rawRangeStart) {
-      const rangeText = this.extractRangeText({ start: rawRangeStart, end: rawRangeEnd })
-      if (rangeText !== null && rangeText.nonTextSpanCount === 0 &&
-          rangeText.text.length === rawRangeEnd - rawRangeStart) {
-        insertedText = rangeText.text
-        fragmentSpanCount = rangeText.spanCount
-        fragmentNonTextSpanCount = rangeText.nonTextSpanCount
+      if (rawRangeEnd === rawRangeStart) {
+        // 纯删除：本次 IME 输入的 rangeAfter 是零长范围，直接按空文本处理，
+        // 不能因为零长范围查不到 Span 就宣告失败。
         if (rawRangeStart === replaceStart) {
-          committedText = baselineText.substring(0, replaceStart) + insertedText + baselineText.substring(replaceEnd)
+          committedText = baselineText.substring(0, replaceStart) + baselineText.substring(replaceEnd)
         } else {
           this.reportNativeFactError('ime-commit',
-            `IME range start mismatch rangeStart=${rawRangeStart} replaceStart=${replaceStart}`)
+            `IME delete range start mismatch rangeStart=${rawRangeStart} replaceStart=${replaceStart}`)
         }
       } else {
-        this.reportNativeFactError('ime-commit',
-          `IME range fragment extraction failed start=${rawRangeStart} end=${rawRangeEnd}`)
+        const rangeText = this.extractRangeText({ start: rawRangeStart, end: rawRangeEnd })
+        if (rangeText !== null && rangeText.nonTextSpanCount === 0 &&
+            rangeText.text.length === rawRangeEnd - rawRangeStart) {
+          insertedText = rangeText.text
+          fragmentSpanCount = rangeText.spanCount
+          fragmentNonTextSpanCount = rangeText.nonTextSpanCount
+          if (rawRangeStart === replaceStart) {
+            committedText = baselineText.substring(0, replaceStart) + insertedText + baselineText.substring(replaceEnd)
+          } else {
+            this.reportNativeFactError('ime-commit',
+              `IME range start mismatch rangeStart=${rawRangeStart} replaceStart=${replaceStart}`)
+          }
+        } else {
+          this.reportNativeFactError('ime-commit',
+            `IME range fragment extraction failed start=${rawRangeStart} end=${rawRangeEnd}`)
+        }
       }
     }
 
@@ -1079,9 +1104,16 @@ export class NativeRichEditorBridge {
     // 仅为「同一次原生变更」记录结算标记：下一次 onWillChange 会清空，
     // 不会把后续真实编辑误判为重复回调。
     if (diff.start < diff.end || diff.replacement.length > 0) {
+      // 纯删除的 rangeAfter 一定塌缩在删除起点（diff.start）；插入/替换用本次输入范围。
+      const settledAfterStart = diff.replacement.length === 0
+        ? diff.start
+        : (rawRangeStart >= 0 ? rawRangeStart : diff.start)
+      const settledAfterEnd = diff.replacement.length === 0
+        ? diff.start
+        : (rawRangeStart >= 0 ? rawRangeEnd : diff.start + diff.replacement.length)
       this.imeCommitSettled = {
-        rangeAfterStart: rawRangeStart >= 0 ? rawRangeStart : diff.start,
-        rangeAfterEnd: rawRangeStart >= 0 ? rawRangeEnd : diff.start + diff.replacement.length,
+        rangeAfterStart: settledAfterStart,
+        rangeAfterEnd: settledAfterEnd,
         replacedStartUtf16: diff.start,
         replacedEndUtf16: diff.end,
         insertedText: diff.replacement
