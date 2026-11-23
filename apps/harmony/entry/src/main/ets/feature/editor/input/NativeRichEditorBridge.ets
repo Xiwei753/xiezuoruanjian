@@ -756,7 +756,10 @@ export class NativeRichEditorBridge {
       + previousText.substring(endUtf16)
     this.nativeNewlineCount = Math.max(0,
       this.nativeNewlineCount + countNewlines(insertedText) - countNewlines(oldText))
-    const paragraphsChanged: boolean = insertedText.indexOf('\n') >= 0 || oldText.indexOf('\n') >= 0
+    // 空文档第一次有字时需要重新发布段落/字体样式：空属性字符串没有可承载样式的位置。
+    const becameNonEmpty: boolean = previousText.length === 0 && this.currentText.length > 0
+    const paragraphsChanged: boolean = becameNonEmpty ||
+      insertedText.indexOf('\n') >= 0 || oldText.indexOf('\n') >= 0
 
     if (pending !== null && pending.preview) {
       if (!this.imeComposing) {
