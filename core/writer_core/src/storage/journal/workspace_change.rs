@@ -407,6 +407,13 @@ pub struct WorkspaceChangeJournal {
     /// 旧 journal（无此字段）反序列化为 None；非 MoveChapter 操作也必须为 None。
     #[serde(default)]
     pub planned_move: Option<PlannedChapterMove>,
+    /// 章节跨卷移动对应的 `SaveTransaction` ID（`MoveChapter` 专用）。
+    ///
+    /// 恢复时用它把 journal 与项目内的 transaction manifest 关联起来：不能
+    /// 把同一项目其他事务的完成状态误当成本次移动已完成。旧 journal 与
+    /// 非 MoveChapter 操作为 `None`。
+    #[serde(default)]
+    pub transaction_id: Option<String>,
     /// workspace history 成功写入的时间（epoch seconds）。
     ///
     /// 只在 `mark_history_recorded` 时与 `phase = HistoryRecorded` 一起原子落盘，
@@ -446,6 +453,8 @@ pub struct RecoveredWorkspaceChange {
     pub planned_delete: Option<PlannedWorkspaceDelete>,
     /// 原始 journal 的 planned_move，供 Pending 阶段重放章节跨卷移动。
     pub planned_move: Option<PlannedChapterMove>,
+    /// 原始 journal 关联的 SaveTransaction ID（MoveChapter）。
+    pub transaction_id: Option<String>,
 }
 
 impl WorkspaceChangeJournal {
@@ -593,6 +602,7 @@ impl WorkspaceChangeJournal {
             sync_delete_facts,
             planned_delete,
             planned_move: None,
+            transaction_id: None,
             history_recorded_at: None,
         };
         write_journal(app_data_root, &journal)?;
@@ -612,6 +622,7 @@ impl WorkspaceChangeJournal {
         change_set: &WorkspaceChangeSet,
         device_id: &str,
         planned_move: PlannedChapterMove,
+        transaction_id: Option<String>,
     ) -> Result<Self> {
         if token.is_empty() {
             return Err(crate::error::Error::Other(
@@ -638,6 +649,7 @@ impl WorkspaceChangeJournal {
             sync_delete_facts: Vec::new(),
             planned_delete: None,
             planned_move: Some(planned_move),
+            transaction_id,
             history_recorded_at: None,
         };
         write_journal(app_data_root, &journal)?;
@@ -810,6 +822,7 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredWorkspa
                 sync_delete_facts: journal.sync_delete_facts.clone(),
                 planned_delete: journal.planned_delete.clone(),
                 planned_move: journal.planned_move.clone(),
+                transaction_id: journal.transaction_id.clone(),
             }))
         }
         WorkspaceChangePhase::Pending => {
@@ -826,6 +839,7 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredWorkspa
                 sync_delete_facts: journal.sync_delete_facts.clone(),
                 planned_delete: journal.planned_delete.clone(),
                 planned_move: journal.planned_move.clone(),
+                transaction_id: journal.transaction_id.clone(),
             }))
         }
     }
@@ -901,6 +915,7 @@ pub fn upgrade_pending_plan(
         sync_delete_facts,
         planned_delete: Some(planned_delete),
         planned_move: None,
+        transaction_id: None,
         history_recorded_at: None,
     };
     write_journal(app_data_root, &journal)

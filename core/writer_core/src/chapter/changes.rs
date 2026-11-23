@@ -712,6 +712,19 @@ fn build_move_change_set(
 /// manifest 在 live 文件改动前落盘；提交失败时 manifest 留在
 /// `app-meta/transactions/<id>/`（Prepared），恢复扫描按它重放剩余条目。
 fn apply_move_chapter_plan(project_root: &Path, plan: &ChapterMovePlan) -> Result<()> {
+    let mut tx = move_chapter_transaction(project_root, plan)?;
+    commit_move_chapter_plan(tx, plan)
+}
+
+/// 把移动计划写入 `SaveTransaction`（manifest 尚未落盘）。
+///
+/// 调用方可以先构造事务、拿到 `transaction_id` 写进 journal，再调用
+/// [`commit_move_chapter_plan`]；这样 journal 与 manifest 在崩溃恢复时可以
+/// 按同一个 ID 关联。
+fn move_chapter_transaction(
+    project_root: &Path,
+    plan: &ChapterMovePlan,
+) -> Result<crate::storage::transaction::SaveTransaction> {
     let mut tx = crate::storage::transaction::SaveTransaction::new(project_root);
     for (rel, bytes) in &plan.target_files {
         tx.add_bytes(rel, bytes)?;
@@ -722,6 +735,15 @@ fn apply_move_chapter_plan(project_root: &Path, plan: &ChapterMovePlan) -> Resul
     for rel in &plan.source_delete_rels {
         tx.add_delete(rel);
     }
+    Ok(tx)
+}
+
+/// 提交已准备好的移动事务，并尽力移除旧卷空目录。
+fn commit_move_chapter_plan(
+    mut tx: crate::storage::transaction::SaveTransaction,
+    plan: &ChapterMovePlan,
+) -> Result<()> {
+    let transaction_id = tx.transaction_id().to_string();
 
     // 一次提交：manifest 先落盘，再写新卷文件、最后删旧卷文件。
     // 提交中途失败时 manifest 保留，恢复扫描（`scan_pending_transactions`）
@@ -730,7 +752,7 @@ fn apply_move_chapter_plan(project_root: &Path, plan: &ChapterMovePlan) -> Resul
         log::warn!(
             "move_chapter_to_volume: transaction {} commit failed, \
              prepared manifest kept under app-meta/transactions for recovery: {}",
-            tx.transaction_id(),
+            transaction_id,
             error
         );
         return Err(error);
@@ -828,22 +850,60 @@ pub fn move_chapter_to_volume_with_changes(
     let device_id = crate::settings::load_device_info(workspace_root)
         .map(|info| info.device_id)
         .unwrap_or_default();
+    // 先构造事务拿到 ID，再写 journal：恢复时 journal 与 manifest 通过同一个
+    // transaction_id 关联，不能把同项目其他事务的完成状态误当本次移动完成。
+    let tx = move_chapter_transaction(project_root, &plan)?;
+    let transaction_id = Some(tx.transaction_id().to_string());
     // live 前置：journal 必须早于 SaveTransaction 的第一次文件写入。
     let journal = WorkspaceChangeJournal::save_pending_move_with_token(
         workspace_root,
         &token,
         &change_set,
         &device_id,
-        planned_move,
+        planned_move.clone(),
+        transaction_id,
     )?;
 
-    if let Err(error) = apply_move_chapter_plan(project_root, &plan) {
+    if let Err(error) = commit_move_chapter_plan(tx, &plan) {
         log::warn!(
             "move_chapter_to_volume: file transaction failed after journal {} (Pending) \
-             was written — journal and transaction manifest retained for recovery: {}",
+             was written — attempting same-transaction recovery: {}",
             journal.token,
             error
         );
+        // 1) 先让恢复扫描重放同一 manifest（幂等）；部分条目可能已经落盘。
+        let scan = crate::storage::transaction::scan_pending_transactions(project_root);
+        for scan_error in &scan.errors {
+            log::warn!(
+                "move_chapter_to_volume: transaction replay for journal {}: {}",
+                journal.token,
+                scan_error
+            );
+        }
+        if move_change_set_complete(workspace_root, &change_set, &planned_move) {
+            return Ok((change_set, token));
+        }
+        // 2) 源章节目录仍在时，按 journal 的同一计划再收敛一次；成功才允许
+        //    调用方迁移编辑器身份，否则保持错误让上层拒绝继续编辑。
+        let source_dir = project_root
+            .join("volumes")
+            .join(&planned_move.source_volume_id)
+            .join("chapters")
+            .join(&planned_move.chapter_id);
+        if source_dir.exists() {
+            match apply_planned_move_chapter(project_root, &planned_move) {
+                Ok(()) => {
+                    if move_change_set_complete(workspace_root, &change_set, &planned_move) {
+                        return Ok((change_set, token));
+                    }
+                }
+                Err(replay_error) => log::warn!(
+                    "move_chapter_to_volume: replay for journal {} failed: {}",
+                    journal.token,
+                    replay_error
+                ),
+            }
+        }
         return Err(error);
     }
 
@@ -868,6 +928,72 @@ pub fn apply_planned_move_chapter(
         true,
     )?;
     apply_move_chapter_plan(project_root, &plan)
+}
+
+/// 核对一次跨卷移动的最终磁盘状态是否与 journal/change_set 完全一致。
+///
+/// 不能只看两个 `chapter.meta.json` 是否存在：章节目录内可能有同步冲突副本，
+/// 两卷 order 也可能只写了一部分。这里逐条检查 `Upsert` 目标存在、`Delete`/
+/// `DeleteTree` 目标消失，再验证两卷 order 连续、章节位于目标下标。
+///
+/// `workspace_root` 是 journal 里 workspace-relative 路径的根（即 app_data_root）。
+pub fn move_change_set_complete(
+    workspace_root: &Path,
+    change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
+    planned: &crate::storage::journal::workspace_change::PlannedChapterMove,
+) -> bool {
+    use crate::storage::workspace_git::WorkspaceHistoryChange;
+
+    for change in &change_set.changes {
+        match change {
+            WorkspaceHistoryChange::Upsert(rel) => {
+                if !workspace_root.join(rel).exists() {
+                    return false;
+                }
+            }
+            WorkspaceHistoryChange::Delete(rel) | WorkspaceHistoryChange::DeleteTree(rel) => {
+                if workspace_root.join(rel).exists() {
+                    return false;
+                }
+            }
+        }
+    }
+
+    let project_root = workspace_root.join("projects").join(&planned.project_id);
+    let Ok(source_chapters) = list_chapters(&project_root, &planned.source_volume_id) else {
+        return false;
+    };
+    if source_chapters
+        .iter()
+        .any(|chapter| chapter.id == planned.chapter_id)
+        || !chapter_orders_are_contiguous(&source_chapters)
+    {
+        return false;
+    }
+    let Ok(target_chapters) = list_chapters(&project_root, &planned.target_volume_id) else {
+        return false;
+    };
+    if !chapter_orders_are_contiguous(&target_chapters) {
+        return false;
+    }
+    let Some(position) = target_chapters
+        .iter()
+        .position(|chapter| chapter.id == planned.chapter_id)
+    else {
+        return false;
+    };
+    // 计划阶段会把越界下标钳到末尾；恢复核验按同一规则计算期望位置。
+    let expected_position = planned
+        .target_index
+        .min(target_chapters.len().saturating_sub(1));
+    position == expected_position
+}
+
+fn chapter_orders_are_contiguous(chapters: &[crate::chapter::Chapter]) -> bool {
+    chapters
+        .iter()
+        .enumerate()
+        .all(|(index, chapter)| chapter.order == index as i32)
 }
 
 /// 递归列出章节目录下的所有文件，返回 `(章节目录内相对路径, 绝对路径)`。

@@ -569,6 +569,7 @@ fn recover_pending_phase(
             sync_delete_facts: rec.sync_delete_facts.clone(),
             planned_delete: rec.planned_delete.clone(),
             planned_move: rec.planned_move.clone(),
+            transaction_id: rec.transaction_id.clone(),
             history_recorded_at: None,
         };
         if let Err(e) = journal.mark_local_applied(app_data_root) {
@@ -600,6 +601,7 @@ fn recover_pending_phase(
                 sync_delete_facts: rec.sync_delete_facts.clone(),
                 planned_delete: rec.planned_delete.clone(),
                 planned_move: rec.planned_move.clone(),
+                transaction_id: rec.transaction_id.clone(),
                 history_recorded_at: None,
             };
             if let Err(e) = journal.mark_local_applied(app_data_root) {
@@ -662,8 +664,9 @@ fn recover_pending_move_phase(
         return false;
     }
 
-    // 重放项目内未完成的 SaveTransaction。scan 自身保留无法判定的 manifest，
-    // 这里只把错误记录到日志，最终状态仍以两卷目录核验为准。
+    // 重放项目内未完成的 SaveTransaction。只有所有条目都重放成功、且没有
+    // 关联事务留下 missing_files 时，才允许判定本次移动完成；否则保留
+    // manifest/staging 与 journal，下次启动继续重放。
     let scan = crate::storage::transaction::scan_pending_transactions(&project_root);
     for error in &scan.errors {
         log::warn!(
@@ -672,25 +675,39 @@ fn recover_pending_move_phase(
             error
         );
     }
+    let mut incomplete_transactions = Vec::new();
+    for transaction in &scan.transactions {
+        if !transaction.missing_files.is_empty() {
+            incomplete_transactions.push(format!(
+                "{} (missing {:?})",
+                transaction.transaction_id, transaction.missing_files
+            ));
+        }
+    }
+    if !scan.errors.is_empty() || !incomplete_transactions.is_empty() {
+        log::warn!(
+            "recover_workspace_change_transactions: MoveChapter journal {} replay incomplete \
+             (errors={}, incomplete={:?}) — journal and manifest retained",
+            rec.journal_token,
+            scan.errors.len(),
+            incomplete_transactions
+        );
+        return false;
+    }
 
-    let target_meta = project_root
-        .join("volumes")
-        .join(&planned.target_volume_id)
-        .join("chapters")
-        .join(&planned.chapter_id)
-        .join("chapter.meta.json");
+    // 逐条核对 journal 的完整 change_set（Upsert 存在、Delete/DeleteTree 消失）
+    // 与两卷 order；不能只看两个 meta 是否存在。
+    if crate::chapter::move_change_set_complete(app_data_root, &rec.changes, planned) {
+        return mark_move_local_applied(app_data_root, rec);
+    }
+
     let source_meta = project_root
         .join("volumes")
         .join(&planned.source_volume_id)
         .join("chapters")
         .join(&planned.chapter_id)
         .join("chapter.meta.json");
-
-    if target_meta.exists() && !source_meta.exists() {
-        return mark_move_local_applied(app_data_root, rec);
-    }
-
-    if source_meta.exists() && !target_meta.exists() {
+    if source_meta.exists() {
         if let Err(e) = crate::chapter::apply_planned_move_chapter(&project_root, planned) {
             log::warn!(
                 "recover_workspace_change_transactions: MoveChapter journal {} replay failed: \
@@ -700,16 +717,15 @@ fn recover_pending_move_phase(
             );
             return false;
         }
-        if target_meta.exists() && !source_meta.exists() {
+        if crate::chapter::move_change_set_complete(app_data_root, &rec.changes, planned) {
             return mark_move_local_applied(app_data_root, rec);
         }
     }
 
     log::warn!(
-        "recover_workspace_change_transactions: MoveChapter journal {} has ambiguous local \
-         state (target_meta={}, source_meta={}) — journal retained",
+        "recover_workspace_change_transactions: MoveChapter journal {} does not match the \
+         persisted change set (source_meta_exists={}) — journal retained",
         rec.journal_token,
-        target_meta.exists(),
         source_meta.exists()
     );
     false
@@ -731,6 +747,7 @@ fn mark_move_local_applied(
         sync_delete_facts: rec.sync_delete_facts.clone(),
         planned_delete: rec.planned_delete.clone(),
         planned_move: rec.planned_move.clone(),
+        transaction_id: rec.transaction_id.clone(),
         history_recorded_at: None,
     };
     if let Err(e) = journal.mark_local_applied(app_data_root) {
@@ -794,6 +811,7 @@ fn recover_local_applied_phase(
                 sync_delete_facts: rec.sync_delete_facts.clone(),
                 planned_delete: rec.planned_delete.clone(),
                 planned_move: rec.planned_move.clone(),
+                transaction_id: rec.transaction_id.clone(),
                 history_recorded_at: None,
             };
             if let Err(e) = journal.mark_history_recorded(app_data_root) {

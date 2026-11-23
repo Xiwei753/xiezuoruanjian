@@ -2,6 +2,22 @@ use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
 use crate::api::error::WriterError;
 
+/// 跨卷移动的本地结果。
+///
+/// 只要文件事务已经提交，`moved` 就为 `true`，即使 workspace history 尚未
+/// 落盘（`history_pending`）：平台端必须立即把编辑器和树迁移到目标卷，
+/// 残留账本由 journal 在下次启动补齐。文件事务未提交时返回 `Err`。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveChapterOutcome {
+    /// 本地章节目录是否已经完成移动。
+    pub moved: bool,
+    /// workspace history 是否仍待补记（journal 仍在）。
+    pub history_pending: bool,
+    /// 持久 journal token，供诊断与后续幂等补记。
+    pub journal_token: String,
+}
+
 fn get_chapter_title(
     api: &WriterCoreApi,
     project_id: &str,
@@ -294,7 +310,7 @@ impl WriterCoreApi {
         target_volume_id: &str,
         chapter_id: &str,
         target_index: u32,
-    ) -> ApiResult<bool> {
+    ) -> ApiResult<MoveChapterOutcome> {
         // 章节层在触碰 live 文件之前已写入 Pending move journal；文件事务
         // 提交成功后才返回 (change_set, journal token)。history 未成功前
         // 不能清 journal。
@@ -375,49 +391,56 @@ impl WriterCoreApi {
                 }
             }
         }
-        // 文件事务成功，先把 journal 推进到 LocalApplied；随后写 workspace
-        // history。history 失败直接返回错误并保留 journal（LocalApplied），
-        // 由 bootstrap 在下次启动按同一 change set/token 补记。
-        crate::storage::journal::workspace_change::mark_local_applied_by_token(
+        // 文件事务已提交，磁盘上的章节已经属于目标卷。从这一刻起，即使
+        // journal 推进或 workspace history 失败，也不能向平台返回“移动失败”：
+        // 否则编辑器会继续绑定旧卷，形成磁盘与身份分裂。返回结构化
+        // `history_pending`，由 journal 在下次启动补齐账本。
+        let outcome = |history_pending: bool| MoveChapterOutcome {
+            moved: true,
+            history_pending,
+            journal_token: journal_token.clone(),
+        };
+        if let Err(e) = crate::storage::journal::workspace_change::mark_local_applied_by_token(
             &self.app_data_root,
             &journal_token,
-        )
-        .map_err(|e| {
-            WriterError::Other(format!(
-                "move_chapter_to_volume: mark_local_applied failed for journal \
-                 {journal_token}: {e} — journal retained"
-            ))
-        })?;
-        self.record_workspace_change_set_history(&change_set, "move_chapter_to_volume")
-            .map_err(|e| {
-                WriterError::Other(format!(
-                    "move_chapter_to_volume: record_workspace_change_set_history failed for \
-                     journal {journal_token}: {e} — journal retained for recovery"
-                ))
-            })?;
-        // history 成功后才允许 ack + 清理。两步失败都返回错误；journal 此时
-        // 已是 LocalApplied/HistoryRecorded，重启可继续补记或清理。
-        crate::storage::journal::workspace_change::mark_history_recorded_by_token(
+        ) {
+            log::warn!(
+                "move_chapter_to_volume: mark_local_applied failed for journal {journal_token}: \
+                 {e} — files committed, history pending, journal retained"
+            );
+            return Ok(outcome(true));
+        }
+        if let Err(e) =
+            self.record_workspace_change_set_history(&change_set, "move_chapter_to_volume")
+        {
+            log::warn!(
+                "move_chapter_to_volume: record_workspace_change_set_history failed for \
+                 journal {journal_token}: {e} — files committed, journal retained for recovery"
+            );
+            return Ok(outcome(true));
+        }
+        // history 成功后才允许 ack + 清理。ack 失败时 journal 仍停留
+        // LocalApplied；重启会重新 stage 同一 change set（index 无差异时
+        // 返回 oid=None，不会重复提交），因此同样按 history pending 报告。
+        if let Err(e) = crate::storage::journal::workspace_change::mark_history_recorded_by_token(
             &self.app_data_root,
             &journal_token,
-        )
-        .map_err(|e| {
-            WriterError::Other(format!(
+        ) {
+            log::warn!(
                 "move_chapter_to_volume: mark_history_recorded failed for journal \
                  {journal_token}: {e} — journal retained"
-            ))
-        })?;
-        crate::storage::journal::workspace_change::clear_journal_by_token(
+            );
+            return Ok(outcome(true));
+        }
+        if let Err(e) = crate::storage::journal::workspace_change::clear_journal_by_token(
             &self.app_data_root,
             &journal_token,
-        )
-        .map_err(|e| {
-            WriterError::Other(format!(
-                "move_chapter_to_volume: clear_journal failed for journal \
-                 {journal_token}: {e}"
-            ))
-        })?;
-        Ok(true)
+        ) {
+            log::warn!(
+                "move_chapter_to_volume: clear_journal failed for journal {journal_token}: {e}"
+            );
+        }
+        Ok(outcome(false))
     }
 
     /// 打开章节，返回正文内容和元数据。

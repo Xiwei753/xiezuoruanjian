@@ -16,6 +16,7 @@ pub mod sync_api;
 pub mod types;
 
 pub use bootstrap::*;
+pub use chapter_api::MoveChapterOutcome;
 pub use diagnostics_api::*;
 pub use envelope::{ChangedEntityDto, ResultEnvelope};
 pub use error::WriterError;

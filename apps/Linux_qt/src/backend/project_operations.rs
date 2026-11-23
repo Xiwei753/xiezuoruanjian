@@ -1128,15 +1128,17 @@ impl AppBackend {
             &chapter_id_str,
             target_index,
         ) {
-            Ok(_) => ResultEnvelope::success_with_changes(
-                true,
+            // 失败只在文件事务未提交时出现；history 未补记也按成功返回，
+            // 让编辑器立刻迁移到目标卷，避免身份与磁盘分裂。
+            Ok(outcome) => ResultEnvelope::success_with_changes(
+                outcome,
                 Vec::new(),
                 vec![ChangedEntityDto {
                     entity_type: "ChapterMoved".to_string(),
                     entity_id: Some(chapter_id_str.clone()),
                 }],
             ),
-            Err(error) => ResultEnvelope::<bool>::error(error),
+            Err(error) => ResultEnvelope::<writer_core::api::MoveChapterOutcome>::error(error),
         };
         // 一次移动只做一次 Core 调用、一次树重建。
         let success = envelope.success;

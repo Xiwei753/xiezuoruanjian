@@ -230,7 +230,20 @@ pub(crate) fn scan_pending_transactions(target_root: &Path) -> TransactionRecove
         }
 
         let phase = if manifest.proof_intent_ids.is_empty() {
-            let _ = fs::remove_dir_all(&tx_dir);
+            if missing_files.is_empty() {
+                // 全部条目重放成功，事务可判定完成，manifest/staging 不再需要。
+                let _ = fs::remove_dir_all(&tx_dir);
+            } else {
+                // Issue #1051 复审：无 proof intent 不等于恢复完成。只要有
+                // 条目重放失败，staged 文件与 manifest 就是唯一的恢复依据，
+                // 必须保留 Prepared 目录供下次启动继续幂等重放。
+                log::warn!(
+                    "[transaction] recover: tx={} has {} unreplayed file(s), \
+                     preserving Prepared manifest and staging for retry",
+                    manifest.transaction_id,
+                    missing_files.len()
+                );
+            }
             TransactionPhase::Prepared
         } else if missing_files.is_empty() {
             let mut restored = manifest.clone();

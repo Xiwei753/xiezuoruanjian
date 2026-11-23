@@ -583,8 +583,14 @@ Rectangle {
             return false
         var moved = root.projectBackendRef.move_chapter_to_volume(
                     pId, sourceVolumeId, targetVolumeId, cId, targetIndex)
-        if (!moved || moved.success !== true)
+        // 只有文件事务已提交（data.moved === true）才迁移编辑器身份；history
+        // 未补记不算移动失败，journal 会在下次启动补齐。
+        var outcome = (moved && moved.data) ? moved.data : null
+        if (!moved || moved.success !== true || !outcome || outcome.moved !== true)
             return false
+        if (outcome.historyPending === true)
+            console.warn("chapter move history pending, journal:",
+                         String(outcome.journalToken || ""))
         if (movingActiveChapter) {
             editorController.volumeId = targetVolumeId
             // 同步编辑器文档身份，避免保存快照校验因旧卷 ID 拒绝落盘。

@@ -139,13 +139,15 @@ impl super::WriterAppService {
         chapter_id: String,
         target_index: u32,
     ) -> Result<bool, WriterError> {
-        self.api.move_chapter_to_volume(
-            &project_id,
-            &source_volume_id,
-            &target_volume_id,
-            &chapter_id,
-            target_index,
-        )
+        self.api
+            .move_chapter_to_volume(
+                &project_id,
+                &source_volume_id,
+                &target_volume_id,
+                &chapter_id,
+                target_index,
+            )
+            .map(|outcome| outcome.moved)
     }
 
     pub fn open_chapter(
