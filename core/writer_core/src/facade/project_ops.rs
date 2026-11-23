@@ -455,7 +455,11 @@ impl super::WriterCore {
         )
     }
 
-    /// 跨卷移动章节并返回变更集。
+    /// 跨卷移动章节并返回变更集与 journal token。
+    ///
+    /// journal 已在章节层写入 `app_data_root`（workspace root）的
+    /// workspace-change journal；API 层必须用返回的 token 在 history 成功后
+    /// 推进 `HistoryRecorded` 并清理，不能在文件事务成功后就丢弃 token。
     pub fn move_chapter_to_volume_with_changes(
         &self,
         project_id: &str,
@@ -463,7 +467,7 @@ impl super::WriterCore {
         target_volume_id: &str,
         chapter_id: &str,
         target_index: usize,
-    ) -> Result<WorkspaceChangeSet> {
+    ) -> Result<(WorkspaceChangeSet, String)> {
         let project_root = self.project_root(project_id);
         chapter::move_chapter_to_volume_with_changes(
             &project_root,

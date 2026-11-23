@@ -1,13 +1,20 @@
 //! 统一 workspace 变更事务 journal。
 //!
-//! 用于删除和星图元数据/关系写入产生的 `WorkspaceChangeSet` 的持久化事务。
-//! 删除流程固定为：
+//! 用于删除、章节跨卷移动和星图元数据/关系写入产生的 `WorkspaceChangeSet`
+//! 的持久化事务。删除流程固定为：
 //! 1. 先写 pending journal（`save_pending`）
 //! 2. 执行本地物理删除
 //! 3. 标记 local_applied（`mark_local_applied`）
 //! 4. 写 workspace history/tombstone
 //! 5. 标记 history_recorded（`mark_history_recorded`）
 //! 6. 清 journal（`clear_journal`）
+//!
+//! 章节跨卷移动（`MoveChapter`）使用同一套阶段，但 Pending 阶段的可重放材料
+//! 除了 `change_set` 还有 `planned_move`：journal 在 `SaveTransaction` 触碰
+//! live 文件前落盘，文件事务提交后只推进到 `LocalApplied`；必须等对应
+//! workspace history 成功落盘才允许 `HistoryRecorded` + 清理。这样
+//! “文件已移动、变更历史未记录”的时点始终保留至少一份持久恢复依据
+//! （journal 或 `SaveTransaction` manifest）。
 //!
 //! 星图创建/重命名/绑定/解绑/设主图等非删除操作没有本地删除步骤：
 //! journal 在对象与来源事件所属的 contribution transaction 提交前写入，
@@ -63,6 +70,9 @@ pub enum WorkspaceChangeOpType {
     BindStarMap,
     UnbindStarMap,
     SetMainStarMap,
+    /// 章节跨卷移动：文件事务（新卷写入 + 旧卷删除 + 两卷 order）与
+    /// workspace change history 必须形成同一个持久生命周期。
+    MoveChapter,
 }
 
 impl WorkspaceChangeOpType {
@@ -70,6 +80,8 @@ impl WorkspaceChangeOpType {
     ///
     /// 非删除类星图操作在来源事务提交后才允许补 history；Pending 仅表示
     /// contribution transaction 尚未推进，恢复顺序保证对象已经 durable。
+    /// `MoveChapter` 不是单纯的删除：它的 Pending 重放由 `planned_move`
+    /// 驱动（重放文件事务 + 核验两卷目录），不能走删除恢复分支。
     pub fn is_delete(&self) -> bool {
         matches!(
             self,
@@ -140,6 +152,29 @@ pub struct PlannedWorkspaceDelete {
     pub trash_rel_path: String,
     /// 完整的同步删除事实（每个待删文件一条），不允许为空。
     pub sync_delete_facts: Vec<SyncDeleteFact>,
+}
+
+/// 章节跨卷移动的持久恢复计划。
+///
+/// 在 `SaveTransaction` 触碰 live 文件之前随 workspace change journal 落盘，
+/// 供 Pending 阶段恢复判断该 move 是否已经完成，并在“源卷仍在、目标卷尚未
+/// 出现”时重新执行同一个移动。
+///
+/// 只记录稳定 ID 和插入下标；不记录重排后的 order 结果，因为恢复时会按
+/// 当前磁盘状态重新计算（源章节 meta 在删除条目之前不会被移除，重新计算的
+/// 顺序与首次计划一致）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedChapterMove {
+    /// 作品 ID（用于定位 `app_data_root/projects/{project_id}`）。
+    pub project_id: String,
+    /// 源卷 ID。
+    pub source_volume_id: String,
+    /// 目标卷 ID。
+    pub target_volume_id: String,
+    /// 被移动的章节 ID。
+    pub chapter_id: String,
+    /// 插入目标卷时的下标（越界钳制到末尾）。
+    pub target_index: usize,
 }
 
 /// 根据 `sync_delete_facts` 幂等补齐 `sync_root` 的 SyncState tombstone。
@@ -367,6 +402,20 @@ pub struct WorkspaceChangeJournal {
     /// 旧 journal（无此字段）反序列化为 None，恢复时按向后兼容逻辑处理。
     #[serde(default)]
     pub planned_delete: Option<PlannedWorkspaceDelete>,
+    /// `MoveChapter` 的持久恢复计划（稳定 ID + 目标下标）。
+    ///
+    /// 旧 journal（无此字段）反序列化为 None；非 MoveChapter 操作也必须为 None。
+    #[serde(default)]
+    pub planned_move: Option<PlannedChapterMove>,
+    /// workspace history 成功写入的时间（epoch seconds）。
+    ///
+    /// 只在 `mark_history_recorded` 时与 `phase = HistoryRecorded` 一起原子落盘，
+    /// 作为“该 token 的 history 已经 ack”的持久标记。若 history 已写入但
+    /// ack 前崩溃，journal 仍停在 `LocalApplied`，恢复会重新 stage 同一
+    /// change set；`record_workspace_change_set` 以 index tree 与 HEAD tree
+    /// 比较，无差异时返回 `oid = None`，不会产生重复 Git 记录。
+    #[serde(default)]
+    pub history_recorded_at: Option<i64>,
 }
 
 /// recover 返回的待处理记录。
@@ -395,6 +444,8 @@ pub struct RecoveredWorkspaceChange {
     pub sync_delete_facts: Vec<SyncDeleteFact>,
     /// 原始 journal 的 planned_delete，供恢复阶段幂等重放本地删除。
     pub planned_delete: Option<PlannedWorkspaceDelete>,
+    /// 原始 journal 的 planned_move，供 Pending 阶段重放章节跨卷移动。
+    pub planned_move: Option<PlannedChapterMove>,
 }
 
 impl WorkspaceChangeJournal {
@@ -501,6 +552,13 @@ impl WorkspaceChangeJournal {
                         .to_string(),
                 ));
             }
+            (WorkspaceChangeOpType::MoveChapter, _) => {
+                return Err(crate::error::Error::Other(
+                    "save_pending: MoveChapter requires save_pending_move_with_token \
+                     (planned_move is mandatory)"
+                        .to_string(),
+                ));
+            }
             (
                 WorkspaceChangeOpType::CreateStarMap
                 | WorkspaceChangeOpType::RenameStarMap
@@ -524,37 +582,71 @@ impl WorkspaceChangeJournal {
         };
 
         let token = token.to_string();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-            .unwrap_or(0);
         let journal = Self {
             token: token.clone(),
             change_set: change_set.clone(),
             device_id: device_id.to_string(),
             op_type,
-            created_at: now,
+            created_at: now_epoch_secs(),
             phase: WorkspaceChangePhase::Pending,
             delete_target,
             sync_delete_facts,
             planned_delete,
+            planned_move: None,
+            history_recorded_at: None,
         };
-        let journal_path = journal_file_path(app_data_root, &token);
-        if let Some(parent) = journal_path.parent() {
-            fs::create_dir_all(parent)?;
+        write_journal(app_data_root, &journal)?;
+        Ok(journal)
+    }
+
+    /// 写入章节跨卷移动的 pending journal。
+    ///
+    /// 必须在 `SaveTransaction` 触碰 live 文件之前调用；`planned_move` 是
+    /// Pending 阶段判断“文件事务是否已经完成”以及重新执行移动的唯一依据。
+    /// 文件事务提交成功后调用方只推进到 `LocalApplied`，不得清 journal；
+    /// 只有对应的 workspace history 成功落盘后才能
+    /// `mark_history_recorded` + `clear_journal`。
+    pub fn save_pending_move_with_token(
+        app_data_root: &Path,
+        token: &str,
+        change_set: &WorkspaceChangeSet,
+        device_id: &str,
+        planned_move: PlannedChapterMove,
+    ) -> Result<Self> {
+        if token.is_empty() {
+            return Err(crate::error::Error::Other(
+                "save_pending_move_with_token: token must not be empty".to_string(),
+            ));
         }
-        let content = serde_json::to_vec(&journal).map_err(|e| {
-            crate::error::Error::Io(std::io::Error::other(format!(
-                "save_pending: serialize journal: {e}"
-            )))
-        })?;
-        crate::storage::atomic_write_bytes(&journal_path, &content)?;
+        if planned_move.project_id.is_empty()
+            || planned_move.source_volume_id.is_empty()
+            || planned_move.target_volume_id.is_empty()
+            || planned_move.chapter_id.is_empty()
+        {
+            return Err(crate::error::Error::Other(
+                "save_pending_move_with_token: planned_move ids must not be empty".to_string(),
+            ));
+        }
+        let journal = Self {
+            token: token.to_string(),
+            change_set: change_set.clone(),
+            device_id: device_id.to_string(),
+            op_type: WorkspaceChangeOpType::MoveChapter,
+            created_at: now_epoch_secs(),
+            phase: WorkspaceChangePhase::Pending,
+            delete_target: None,
+            sync_delete_facts: Vec::new(),
+            planned_delete: None,
+            planned_move: Some(planned_move),
+            history_recorded_at: None,
+        };
+        write_journal(app_data_root, &journal)?;
         Ok(journal)
     }
 
     /// 推进 phase 到 `LocalApplied` 并落盘。
     ///
-    /// 在本地物理删除成功后调用。
+    /// 在本地物理删除/文件移动成功后调用。
     pub fn mark_local_applied(&self, app_data_root: &Path) -> Result<()> {
         let updated = Self {
             phase: WorkspaceChangePhase::LocalApplied,
@@ -565,10 +657,12 @@ impl WorkspaceChangeJournal {
 
     /// 推进 phase 到 `HistoryRecorded` 并落盘。
     ///
-    /// 在 workspace history 记录成功后调用。
+    /// 在 workspace history 记录成功后调用。`history_recorded_at` 与 phase
+    /// 在同一次原子写中落盘，作为该 token 的 history ack 标记。
     pub fn mark_history_recorded(&self, app_data_root: &Path) -> Result<()> {
         let updated = Self {
             phase: WorkspaceChangePhase::HistoryRecorded,
+            history_recorded_at: Some(now_epoch_secs()),
             ..self.clone()
         };
         write_journal(app_data_root, &updated)
@@ -587,15 +681,61 @@ impl WorkspaceChangeJournal {
     }
 }
 
+/// 读取指定 token 的 journal。
+pub fn load_journal(app_data_root: &Path, token: &str) -> Result<WorkspaceChangeJournal> {
+    if token.is_empty() {
+        return Err(crate::error::Error::Other(
+            "load_journal: token must not be empty".to_string(),
+        ));
+    }
+    let path = journal_file_path(app_data_root, token);
+    let content = fs::read(&path)?;
+    serde_json::from_slice(&content).map_err(|e| {
+        crate::error::Error::Io(std::io::Error::other(format!(
+            "load_journal: parse {}: {e}",
+            path.display()
+        )))
+    })
+}
+
+/// 按 token 推进 journal 到 `LocalApplied`。
+///
+/// 供 API 层在文件事务提交成功后、写 history 之前使用；不持有 journal
+/// 实例的调用方（如 `move_chapter_to_volume`）用它完成阶段推进。
+pub fn mark_local_applied_by_token(app_data_root: &Path, token: &str) -> Result<()> {
+    load_journal(app_data_root, token)?.mark_local_applied(app_data_root)
+}
+
+/// 按 token 推进 journal 到 `HistoryRecorded`（写入 history ack 时间）。
+pub fn mark_history_recorded_by_token(app_data_root: &Path, token: &str) -> Result<()> {
+    load_journal(app_data_root, token)?.mark_history_recorded(app_data_root)
+}
+
+/// 按 token 清理 journal；journal 已不存在时视为成功。
+pub fn clear_journal_by_token(app_data_root: &Path, token: &str) -> Result<()> {
+    if token.is_empty() {
+        return Err(crate::error::Error::Other(
+            "clear_journal_by_token: token must not be empty".to_string(),
+        ));
+    }
+    let path = journal_file_path(app_data_root, token);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(crate::error::Error::Io(error)),
+    }
+}
+
 /// 启动时恢复未完成的 workspace 变更事务。
 ///
 /// 遍历 `app-meta/workspace-change-journals/` 下所有 journal，按阶段返回处理指令：
 /// - `HistoryRecorded`: history 已记，直接清理 journal（返回 None）。
-/// - `LocalApplied`: 本地删除已完成但 history 没写，返回供 bootstrap 补 history。
+/// - `LocalApplied`: 本地删除/文件移动已完成但 history 没写，返回供 bootstrap 补 history。
 /// - `Pending`: 删除操作由 bootstrap 先幂等完成本地删除再推进到 LocalApplied；
+///   `MoveChapter` 由 bootstrap 重放该项目的 SaveTransaction 并核验两卷目录；
 ///   非删除星图操作在来源事务恢复完成后直接推进到 LocalApplied。
 ///
-/// 不再让 Pending 直接进入 history——删除操作必须先完成本地删除，
+/// 不再让 Pending 直接进入 history——删除/移动操作必须先完成本地文件事务，
 /// 所有操作都必须等来源事务恢复并确认对象 durable。
 pub fn recover_unfinished(app_data_root: &Path) -> Result<Vec<RecoveredWorkspaceChange>> {
     let journals_dir = app_data_root.join(WORKSPACE_CHANGE_JOURNALS_DIR);
@@ -669,6 +809,7 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredWorkspa
                 created_at: journal.created_at,
                 sync_delete_facts: journal.sync_delete_facts.clone(),
                 planned_delete: journal.planned_delete.clone(),
+                planned_move: journal.planned_move.clone(),
             }))
         }
         WorkspaceChangePhase::Pending => {
@@ -684,6 +825,7 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredWorkspa
                 created_at: journal.created_at,
                 sync_delete_facts: journal.sync_delete_facts.clone(),
                 planned_delete: journal.planned_delete.clone(),
+                planned_move: journal.planned_move.clone(),
             }))
         }
     }
@@ -707,12 +849,23 @@ pub(crate) fn journal_file_path(app_data_root: &Path, token: &str) -> PathBuf {
 /// 写入 journal 文件（覆盖）。
 fn write_journal(app_data_root: &Path, journal: &WorkspaceChangeJournal) -> Result<()> {
     let path = journal_file_path(app_data_root, &journal.token);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let content = serde_json::to_vec(journal).map_err(|e| {
         crate::error::Error::Io(std::io::Error::other(format!(
             "write_journal: serialize: {e}"
         )))
     })?;
     crate::storage::atomic_write_bytes(&path, &content)
+}
+
+/// 当前 Unix 时间（epoch seconds），用于 journal 的创建与 ack 时间。
+fn now_epoch_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 /// 就地升级旧 Pending journal，补齐 `planned_delete` + `sync_delete_facts`。
@@ -747,6 +900,8 @@ pub fn upgrade_pending_plan(
         delete_target: Some(delete_target),
         sync_delete_facts,
         planned_delete: Some(planned_delete),
+        planned_move: None,
+        history_recorded_at: None,
     };
     write_journal(app_data_root, &journal)
 }

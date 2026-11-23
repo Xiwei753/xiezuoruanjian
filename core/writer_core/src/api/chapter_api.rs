@@ -295,7 +295,10 @@ impl WriterCoreApi {
         chapter_id: &str,
         target_index: u32,
     ) -> ApiResult<bool> {
-        let change_set = self.core_write().move_chapter_to_volume_with_changes(
+        // 章节层在触碰 live 文件之前已写入 Pending move journal；文件事务
+        // 提交成功后才返回 (change_set, journal token)。history 未成功前
+        // 不能清 journal。
+        let (change_set, journal_token) = self.core_write().move_chapter_to_volume_with_changes(
             project_id,
             source_volume_id,
             target_volume_id,
@@ -372,7 +375,48 @@ impl WriterCoreApi {
                 }
             }
         }
-        let _ = self.record_workspace_change_set_history(&change_set, "move_chapter_to_volume");
+        // 文件事务成功，先把 journal 推进到 LocalApplied；随后写 workspace
+        // history。history 失败直接返回错误并保留 journal（LocalApplied），
+        // 由 bootstrap 在下次启动按同一 change set/token 补记。
+        crate::storage::journal::workspace_change::mark_local_applied_by_token(
+            &self.app_data_root,
+            &journal_token,
+        )
+        .map_err(|e| {
+            WriterError::Other(format!(
+                "move_chapter_to_volume: mark_local_applied failed for journal \
+                 {journal_token}: {e} — journal retained"
+            ))
+        })?;
+        self.record_workspace_change_set_history(&change_set, "move_chapter_to_volume")
+            .map_err(|e| {
+                WriterError::Other(format!(
+                    "move_chapter_to_volume: record_workspace_change_set_history failed for \
+                     journal {journal_token}: {e} — journal retained for recovery"
+                ))
+            })?;
+        // history 成功后才允许 ack + 清理。两步失败都返回错误；journal 此时
+        // 已是 LocalApplied/HistoryRecorded，重启可继续补记或清理。
+        crate::storage::journal::workspace_change::mark_history_recorded_by_token(
+            &self.app_data_root,
+            &journal_token,
+        )
+        .map_err(|e| {
+            WriterError::Other(format!(
+                "move_chapter_to_volume: mark_history_recorded failed for journal \
+                 {journal_token}: {e} — journal retained"
+            ))
+        })?;
+        crate::storage::journal::workspace_change::clear_journal_by_token(
+            &self.app_data_root,
+            &journal_token,
+        )
+        .map_err(|e| {
+            WriterError::Other(format!(
+                "move_chapter_to_volume: clear_journal failed for journal \
+                 {journal_token}: {e}"
+            ))
+        })?;
         Ok(true)
     }
 

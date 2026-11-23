@@ -15,6 +15,6 @@ pub use starmap_object_delete::{
     StarMapObjectKind,
 };
 pub use workspace_change::{
-    ensure_sync_tombstones_from_facts, recover_unfinished, RecoveredWorkspaceChange,
-    WorkspaceChangeJournal, WorkspaceChangeOpType, WorkspaceChangePhase,
+    ensure_sync_tombstones_from_facts, recover_unfinished, PlannedChapterMove,
+    RecoveredWorkspaceChange, WorkspaceChangeJournal, WorkspaceChangeOpType, WorkspaceChangePhase,
 };

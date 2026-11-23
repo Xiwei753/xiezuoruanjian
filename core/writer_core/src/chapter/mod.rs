@@ -589,32 +589,6 @@ pub fn delete_chapter(
     Ok(())
 }
 
-/// 跨卷移动章节：把 `chapter_id` 从 `source_volume_id` 移到 `target_volume_id` 的
-/// `target_index` 位置（以移动前目标卷的章节序列为基准，越界时钳制到末尾）。
-///
-/// Issue #1051：目录迁移和两卷 order 重排由
-/// `changes::commit_move_chapter_to_volume` 算成一个完整计划，装进同一个
-/// [`crate::storage::transaction::SaveTransaction`] 一次提交；不再先裸
-/// `fs::rename` 目录、再执行两个可能各自失败的 `reorder_chapters`。
-/// 提交成功后只做 best-effort 的旧空目录清理。
-/// 任一前置校验失败时不会移动任何文件。
-pub fn move_chapter_to_volume(
-    project_root: &Path,
-    source_volume_id: &str,
-    target_volume_id: &str,
-    chapter_id: &str,
-    target_index: usize,
-) -> Result<()> {
-    changes::commit_move_chapter_to_volume(
-        project_root,
-        source_volume_id,
-        target_volume_id,
-        chapter_id,
-        target_index,
-    )
-    .map(|_| ())
-}
-
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_chapters(
     project_root: &Path,

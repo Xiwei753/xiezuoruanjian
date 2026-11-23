@@ -528,6 +528,7 @@ fn recover_message_for_op_type(
         WorkspaceChangeOpType::BindStarMap => "recover_bind_starmap_to_project",
         WorkspaceChangeOpType::UnbindStarMap => "recover_unbind_starmap_from_project",
         WorkspaceChangeOpType::SetMainStarMap => "recover_set_main_starmap_for_project",
+        WorkspaceChangeOpType::MoveChapter => "recover_move_chapter_to_volume",
     }
 }
 
@@ -551,6 +552,11 @@ fn recover_pending_phase(
     // - 来源事务 Prepared 时回滚对象并删除本 journal；
     // - 来源事务 ObjectApplied/Committed 时对象已经 durable。
     // 因而这里的 Pending 只表示来源提交后尚未推进阶段，直接进入 history。
+    if rec.op_type == crate::storage::journal::workspace_change::WorkspaceChangeOpType::MoveChapter
+    {
+        return recover_pending_move_phase(app_data_root, rec);
+    }
+
     if !rec.op_type.is_delete() {
         let journal = crate::storage::journal::workspace_change::WorkspaceChangeJournal {
             token: rec.journal_token.clone(),
@@ -562,6 +568,8 @@ fn recover_pending_phase(
             delete_target: rec.delete_target.clone(),
             sync_delete_facts: rec.sync_delete_facts.clone(),
             planned_delete: rec.planned_delete.clone(),
+            planned_move: rec.planned_move.clone(),
+            history_recorded_at: None,
         };
         if let Err(e) = journal.mark_local_applied(app_data_root) {
             log::warn!(
@@ -591,6 +599,8 @@ fn recover_pending_phase(
                 delete_target: rec.delete_target.clone(),
                 sync_delete_facts: rec.sync_delete_facts.clone(),
                 planned_delete: rec.planned_delete.clone(),
+                planned_move: rec.planned_move.clone(),
+                history_recorded_at: None,
             };
             if let Err(e) = journal.mark_local_applied(app_data_root) {
                 log::warn!(
@@ -612,6 +622,127 @@ fn recover_pending_phase(
             false
         }
     }
+}
+
+/// 处理 Pending 阶段的章节跨卷移动。
+///
+/// 顺序固定：
+/// 1. 先用 `scan_pending_transactions(project_root)` 重放该项目下未完成的
+///    `SaveTransaction`（移动事务在 Prepared/FilesCommitted 阶段崩溃时，
+///    文件可能只写了一半）；
+/// 2. 核验两卷章节目录的最终状态：
+///    - 目标卷章节 meta 已存在、源卷章节 meta 已消失 → 文件事务完成，
+///      推进 `LocalApplied` 后进入 history；
+///    - 源卷章节 meta 仍在、目标卷章节 meta 尚未出现 → 用 journal 的
+///      `planned_move` 重新执行同一个移动，再核验；
+///    - 两者都在/都不在 → 状态无法判定，保留 journal 并告警，不能清日志。
+///
+/// 返回 `true` 表示已推进到 `LocalApplied`，可以继续补 history。
+fn recover_pending_move_phase(
+    app_data_root: &Path,
+    rec: &crate::storage::journal::workspace_change::RecoveredWorkspaceChange,
+) -> bool {
+    let Some(planned) = rec.planned_move.as_ref() else {
+        log::warn!(
+            "recover_workspace_change_transactions: MoveChapter journal {} has no planned_move \
+             — journal retained for manual inspection",
+            rec.journal_token
+        );
+        return false;
+    };
+
+    let project_root = app_data_root.join("projects").join(&planned.project_id);
+    if !project_root.exists() {
+        log::warn!(
+            "recover_workspace_change_transactions: MoveChapter journal {} project root {} \
+             missing — journal retained",
+            rec.journal_token,
+            project_root.display()
+        );
+        return false;
+    }
+
+    // 重放项目内未完成的 SaveTransaction。scan 自身保留无法判定的 manifest，
+    // 这里只把错误记录到日志，最终状态仍以两卷目录核验为准。
+    let scan = crate::storage::transaction::scan_pending_transactions(&project_root);
+    for error in &scan.errors {
+        log::warn!(
+            "recover_workspace_change_transactions: MoveChapter journal {} transaction replay: {}",
+            rec.journal_token,
+            error
+        );
+    }
+
+    let target_meta = project_root
+        .join("volumes")
+        .join(&planned.target_volume_id)
+        .join("chapters")
+        .join(&planned.chapter_id)
+        .join("chapter.meta.json");
+    let source_meta = project_root
+        .join("volumes")
+        .join(&planned.source_volume_id)
+        .join("chapters")
+        .join(&planned.chapter_id)
+        .join("chapter.meta.json");
+
+    if target_meta.exists() && !source_meta.exists() {
+        return mark_move_local_applied(app_data_root, rec);
+    }
+
+    if source_meta.exists() && !target_meta.exists() {
+        if let Err(e) = crate::chapter::apply_planned_move_chapter(&project_root, planned) {
+            log::warn!(
+                "recover_workspace_change_transactions: MoveChapter journal {} replay failed: \
+                 {} — journal retained, will retry on next startup",
+                rec.journal_token,
+                e
+            );
+            return false;
+        }
+        if target_meta.exists() && !source_meta.exists() {
+            return mark_move_local_applied(app_data_root, rec);
+        }
+    }
+
+    log::warn!(
+        "recover_workspace_change_transactions: MoveChapter journal {} has ambiguous local \
+         state (target_meta={}, source_meta={}) — journal retained",
+        rec.journal_token,
+        target_meta.exists(),
+        source_meta.exists()
+    );
+    false
+}
+
+/// 把 MoveChapter journal 推进到 `LocalApplied`；失败时保留 Pending 并返回 false。
+fn mark_move_local_applied(
+    app_data_root: &Path,
+    rec: &crate::storage::journal::workspace_change::RecoveredWorkspaceChange,
+) -> bool {
+    let journal = crate::storage::journal::workspace_change::WorkspaceChangeJournal {
+        token: rec.journal_token.clone(),
+        change_set: rec.changes.clone(),
+        device_id: rec.device_id.clone(),
+        op_type: rec.op_type.clone(),
+        created_at: rec.created_at,
+        phase: crate::storage::journal::workspace_change::WorkspaceChangePhase::Pending,
+        delete_target: rec.delete_target.clone(),
+        sync_delete_facts: rec.sync_delete_facts.clone(),
+        planned_delete: rec.planned_delete.clone(),
+        planned_move: rec.planned_move.clone(),
+        history_recorded_at: None,
+    };
+    if let Err(e) = journal.mark_local_applied(app_data_root) {
+        log::warn!(
+            "recover_workspace_change_transactions: mark_local_applied failed for MoveChapter \
+             journal {}: {} — journal retained",
+            rec.journal_token,
+            e
+        );
+        return false;
+    }
+    true
 }
 
 /// 处理 LocalApplied 阶段：补 history，推进到 HistoryRecorded，清 journal。
@@ -662,6 +793,8 @@ fn recover_local_applied_phase(
                 delete_target: rec.delete_target.clone(),
                 sync_delete_facts: rec.sync_delete_facts.clone(),
                 planned_delete: rec.planned_delete.clone(),
+                planned_move: rec.planned_move.clone(),
+                history_recorded_at: None,
             };
             if let Err(e) = journal.mark_history_recorded(app_data_root) {
                 log::warn!(
@@ -1062,7 +1195,8 @@ fn recover_pending_local_delete_no_target(
         | WorkspaceChangeOpType::RenameStarMap
         | WorkspaceChangeOpType::BindStarMap
         | WorkspaceChangeOpType::UnbindStarMap
-        | WorkspaceChangeOpType::SetMainStarMap => Err(WriterError::Other(format!(
+        | WorkspaceChangeOpType::SetMainStarMap
+        | WorkspaceChangeOpType::MoveChapter => Err(WriterError::Other(format!(
             "recover_pending_local_delete: non-delete op_type {:?} must not reach local delete \
              recovery for journal {}",
             rec.op_type, rec.journal_token
