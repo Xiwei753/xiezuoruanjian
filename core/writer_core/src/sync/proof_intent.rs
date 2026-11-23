@@ -115,10 +115,7 @@ pub(crate) struct ProofIntentSink<'a> {
 }
 
 impl<'a> ProofIntentSink<'a> {
-    pub(crate) fn new(
-        root: &'a Path,
-        source_devices: &'a HashMap<String, String>,
-    ) -> Self {
+    pub(crate) fn new(root: &'a Path, source_devices: &'a HashMap<String, String>) -> Self {
         Self {
             root,
             source_devices,
@@ -781,14 +778,8 @@ fn event_action_index(event_id: &str) -> Option<usize> {
 /// `resolve_origin_device_id()` 只能说明本机写入了这个事务，不能证明原始远端来源；
 /// live 正文在提交后可能被继续编辑，也不能冒充当时的提交快照。
 /// 所以这里只读取事务目录内的不可变材料，并把无法证明的字段原样报告给调用方。
-fn legacy_recovery_gap(
-    transaction: &TransactionRecovery,
-    event_id: &str,
-) -> LegacyRecoveryGap {
-    let mut missing_fields = vec![
-        "occurred_at_ms".to_string(),
-        "source_device_id".to_string(),
-    ];
+fn legacy_recovery_gap(transaction: &TransactionRecovery, event_id: &str) -> LegacyRecoveryGap {
+    let mut missing_fields = vec!["occurred_at_ms".to_string(), "source_device_id".to_string()];
     let Some(workspace_path) = event_workspace_path(event_id) else {
         missing_fields.push("workspace_path".to_string());
         return LegacyRecoveryGap {
@@ -839,15 +830,14 @@ fn legacy_recovery_gap(
     };
     let target_relative = entry.target_relative.replace('\\', "/");
     let normalized_target = target_relative.trim_start_matches('/');
-    let backup = manifest
-        .backup_entries
-        .iter()
-        .find(|backup| match backup {
-            BackupEntry::RestoreFile { target_relative, .. }
-            | BackupEntry::RemoveCreated { target_relative } => {
-                target_relative.replace('\\', "/").trim_start_matches('/') == normalized_target
-            }
-        });
+    let backup = manifest.backup_entries.iter().find(|backup| match backup {
+        BackupEntry::RestoreFile {
+            target_relative, ..
+        }
+        | BackupEntry::RemoveCreated { target_relative } => {
+            target_relative.replace('\\', "/").trim_start_matches('/') == normalized_target
+        }
+    });
     let before_known = match backup {
         Some(BackupEntry::RestoreFile {
             backup_filename, ..
@@ -862,11 +852,7 @@ fn legacy_recovery_gap(
     if !before_known {
         missing_fields.push("before_text".to_string());
     }
-    let after_known = entry.is_delete
-        || transaction
-            .tx_dir
-            .join(&entry.staging_filename)
-            .is_file();
+    let after_known = entry.is_delete || transaction.tx_dir.join(&entry.staging_filename).is_file();
     if !after_known {
         missing_fields.push("after_text".to_string());
     }
@@ -997,17 +983,22 @@ pub(crate) fn recover_pending_state(
     for (transaction_root, scan) in &scans {
         if !scan.errors.is_empty() {
             for error in &scan.errors {
+                let tx_label = error.transaction_id.as_deref().unwrap_or("<unknown>");
                 log::warn!(
-                    "[proof_intent] 正文事务状态未知（{}）: {error}",
-                    transaction_root.display()
+                    "[proof_intent] 正文事务状态未知（{}，tx={}）: {}",
+                    transaction_root.display(),
+                    tx_label,
+                    error.message
                 );
                 state.add_issue(
                     None,
                     None,
                     None,
                     format!(
-                        "正文事务状态未知（{}）: {error}",
-                        transaction_root.display()
+                        "正文事务状态未知（{}，tx={}）: {}",
+                        transaction_root.display(),
+                        tx_label,
+                        error.message
                     ),
                 );
             }
@@ -1388,8 +1379,10 @@ pub(crate) fn cleanup_completed_transactions(
     let scan = scan_pending_transactions(transaction_root);
     for error in &scan.errors {
         log::warn!(
-            "[proof_intent] 清理事务时无法读取 {}: {error}",
-            transaction_root.display()
+            "[proof_intent] 清理事务时无法读取 {}（tx={}）: {}",
+            transaction_root.display(),
+            error.transaction_id.as_deref().unwrap_or("<unknown>"),
+            error.message
         );
     }
     for transaction in scan.transactions {

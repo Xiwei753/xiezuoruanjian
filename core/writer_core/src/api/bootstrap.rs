@@ -629,10 +629,11 @@ fn recover_pending_phase(
 /// 处理 Pending 阶段的章节跨卷移动。
 ///
 /// 顺序固定：
-/// 1. 先用 `scan_pending_transactions(project_root)` 重放该项目下未完成的
+/// 1. 先用 journal 里的 `transaction_id` 只重放本次移动关联的
 ///    `SaveTransaction`（移动事务在 Prepared/FilesCommitted 阶段崩溃时，
-///    文件可能只写了一半）；只要还有条目重放失败就保留 manifest/journal，
-///    下次启动继续；
+///    文件可能只写了一半）；只有该事务还有条目重放失败才保留
+///    manifest/journal。旧 journal 没有 `transaction_id` 时仍扫描项目事务
+///    保持既有重放，但不把无关事务的错误当作本次移动失败；
 /// 2. 用 journal 的完整 `change_set` 核验最终磁盘状态（`Upsert` 目标存在、
 ///    `Delete` 目标消失、`DeleteTree` 子树里不再有文件）与两卷 order，
 ///    不再只看源/目标 `chapter.meta.json` 是否存在：
@@ -667,32 +668,51 @@ fn recover_pending_move_phase(
         return false;
     }
 
-    // 重放项目内未完成的 SaveTransaction。只有所有条目都重放成功、且没有
-    // 关联事务留下 missing_files 时，才允许判定本次移动完成；否则保留
-    // manifest/staging 与 journal，下次启动继续重放。
-    let scan = crate::storage::transaction::scan_pending_transactions(&project_root);
-    for error in &scan.errors {
-        log::warn!(
-            "recover_workspace_change_transactions: MoveChapter journal {} transaction replay: {}",
-            rec.journal_token,
-            error
-        );
-    }
+    // 只把与本次移动关联的事务（journal 持久化的 transaction_id）当作阻断
+    // 条件：同项目其它事务的缺项走它们各自的恢复路径，不能因为
+    // scan_pending_transactions 看到无关 Prepared 目录就拒绝本次已完整落盘
+    // 的移动。旧 journal 没有 transaction_id 时无法按 ID 关联，仍扫描一遍
+    // 项目事务（保持既有重放行为），但完成与否只由 change_set 与磁盘事实
+    // 判定；未完成时保留 journal 与 manifest。
+    let mut replay_errors = Vec::new();
     let mut incomplete_transactions = Vec::new();
-    for transaction in &scan.transactions {
-        if !transaction.missing_files.is_empty() {
-            incomplete_transactions.push(format!(
-                "{} (missing {:?})",
-                transaction.transaction_id, transaction.missing_files
-            ));
+    match rec.transaction_id.as_deref() {
+        Some(transaction_id) => {
+            let scan = crate::storage::transaction::scan_pending_transaction(
+                &project_root,
+                transaction_id,
+            );
+            for error in &scan.errors {
+                replay_errors.push(error.message.clone());
+            }
+            for transaction in &scan.transactions {
+                if !transaction.missing_files.is_empty() {
+                    incomplete_transactions.push(format!(
+                        "{} (missing {:?})",
+                        transaction.transaction_id, transaction.missing_files
+                    ));
+                }
+            }
+        }
+        None => {
+            let scan = crate::storage::transaction::scan_pending_transactions(&project_root);
+            for error in &scan.errors {
+                log::warn!(
+                    "recover_workspace_change_transactions: MoveChapter journal {} has no \
+                     transaction_id; unrelated transaction {} diagnostic: {}",
+                    rec.journal_token,
+                    error.transaction_id.as_deref().unwrap_or("<unknown>"),
+                    error.message
+                );
+            }
         }
     }
-    if !scan.errors.is_empty() || !incomplete_transactions.is_empty() {
+    if !replay_errors.is_empty() || !incomplete_transactions.is_empty() {
         log::warn!(
             "recover_workspace_change_transactions: MoveChapter journal {} replay incomplete \
-             (errors={}, incomplete={:?}) — journal and manifest retained",
+             (errors={:?}, incomplete={:?}) — journal and manifest retained",
             rec.journal_token,
-            scan.errors.len(),
+            replay_errors,
             incomplete_transactions
         );
         return false;

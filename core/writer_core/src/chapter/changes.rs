@@ -963,7 +963,7 @@ pub fn move_chapter_to_volume_with_changes(
             log::warn!(
                 "move_chapter_to_volume: transaction replay for journal {}: {}",
                 journal.token,
-                scan_error
+                scan_error.message
             );
         }
         if recovered_move_settled(

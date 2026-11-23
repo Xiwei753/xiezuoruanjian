@@ -146,6 +146,17 @@ pub struct TransactionRecovery {
     pub target_root: std::path::PathBuf,
 }
 
+/// 一次事务目录扫描的错误，绑定到具体事务。
+///
+/// `transaction_id` 为 `None` 表示错误发生在事务目录枚举层，无法归属到
+/// 某笔事务；manifest 解析失败时用目录名（即事务 ID）兜底。调用方不能靠
+/// 字符串包含关系猜测错误属于哪笔事务。
+#[derive(Debug)]
+pub(crate) struct TransactionRecoveryError {
+    pub transaction_id: Option<String>,
+    pub message: String,
+}
+
 /// 一次事务目录扫描的完整结果。
 ///
 /// `errors` 保留无法解析/无法读取的事务目录；证明恢复不能把这些目录当作
@@ -153,7 +164,7 @@ pub struct TransactionRecovery {
 #[derive(Debug, Default)]
 pub(crate) struct TransactionRecoveryScan {
     pub transactions: Vec<TransactionRecovery>,
-    pub errors: Vec<String>,
+    pub errors: Vec<TransactionRecoveryError>,
 }
 
 #[cfg(test)]
