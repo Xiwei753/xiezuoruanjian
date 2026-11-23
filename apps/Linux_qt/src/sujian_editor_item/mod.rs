@@ -412,6 +412,11 @@ pub struct SujianEditorItem {
 
     #[allow(dead_code)]
     get_plain_text: qt_method!(fn(&self) -> QString),
+    /// Issue #1052：保存路径唯一正文快照入口。一次返回同一 Core 已提交版本的
+    /// `content` / `textRevision` / `authoritativeRevision` / `contentSha256`，
+    /// 保存不得再把正文与 revision 分开读取。
+    #[allow(dead_code)]
+    get_save_snapshot: qt_method!(fn(&mut self) -> QString),
     #[allow(dead_code)]
     set_plain_text: qt_method!(fn(&mut self, text: QString)),
     /// Issue #853: QML uses this only when the document identity changes; it
@@ -718,6 +723,7 @@ impl Default for SujianEditorItem {
             editor_change_applied: Default::default(),
 
             get_plain_text: Default::default(),
+            get_save_snapshot: Default::default(),
             set_plain_text: Default::default(),
             load_document_text: Default::default(),
             reload_plain_text: Default::default(),

@@ -42,6 +42,25 @@ impl SujianEditorItem {
         self.pipeline.text_revision()
     }
 
+    /// Issue #1052：保存路径唯一允许的正文读取入口。
+    ///
+    /// 一次调用从 pipeline 取得同一 Core 已提交版本的 `content`、
+    /// `textRevision`、`authoritativeRevision` 与 `contentSha256`，并返回
+    /// camelCase JSON。保存路径不得再分别调用 `get_plain_text()` 与
+    /// `text_revision` 自行拼快照；pipeline 在返回前已按 Core 权威摘要校验
+    /// mirror 正文，不一致时整体从 kernel 重建。
+    pub(crate) fn get_save_snapshot(&mut self) -> QString {
+        let snapshot = self.pipeline.save_snapshot();
+        serde_json::json!({
+            "content": snapshot.content,
+            "textRevision": snapshot.text_revision,
+            "authoritativeRevision": snapshot.authoritative_revision,
+            "contentSha256": snapshot.content_sha256,
+        })
+        .to_string()
+        .into()
+    }
+
     pub(crate) fn set_plain_text(&mut self, text: QString) {
         self.set_plain_text_from_qml(text);
     }
@@ -68,6 +87,8 @@ impl SujianEditorItem {
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
+        // 文档身份已重置：上一章的 IME 事件指纹不能参与本章去重。
+        crate::editor::input::platform_ime::reset_ime_event_tracker_for_item(self);
         self.emit_content_changed();
     }
 
@@ -93,6 +114,8 @@ impl SujianEditorItem {
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
+        // 切章后丢弃上一章的 IME 事件指纹。
+        crate::editor::input::platform_ime::reset_ime_event_tracker_for_item(self);
         self.emit_content_changed();
     }
 
@@ -129,6 +152,8 @@ impl SujianEditorItem {
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
+        // 外部内容重载同样开始新的文档会话。
+        crate::editor::input::platform_ime::reset_ime_event_tracker_for_item(self);
         self.emit_content_changed();
     }
 

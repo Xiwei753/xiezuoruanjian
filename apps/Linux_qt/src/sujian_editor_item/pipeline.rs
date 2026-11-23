@@ -11,9 +11,10 @@ use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 use qmetaobject::QObject;
 use writer_core::editor::{
-    DisplayPatch, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel, EditorRevision,
-    EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
+    DisplayPatch, EditorChange, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel,
+    EditorRevision, EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
 };
+use writer_core::writing_stats::proof::content_digest_of_text;
 
 /// Qt 侧已确认正文镜像 — 持有与 Rust EditorKernel revision 对应的纯文本快照。
 ///
@@ -364,6 +365,25 @@ pub(crate) struct LinuxEditorPipeline {
     mirror_resync_count: u64,
 }
 
+/// Issue #1052：保存路径唯一允许消费的 Core 权威快照。
+///
+/// `content`、`text_revision`、`authoritative_revision`、`content_sha256`
+/// 必须在同一次 [`LinuxEditorPipeline::save_snapshot`] 调用内一起产出：
+/// 正文和它的版本/摘要一旦分开读取，就可能拼出"旧正文 + 新 revision"
+/// 或"新正文 + 旧摘要"的跨时点组合。调用方不得再用 `committed_text()` /
+/// `text_revision()` 自行拼快照。
+pub(crate) struct SaveSnapshot {
+    /// 与 `text_revision` 同一 Core 已提交版本的纯文本正文。
+    pub content: String,
+    /// 平台正文 revision（正常恒等于 Core kernel revision）。
+    pub text_revision: u64,
+    /// 正文镜像对应的 Core 权威 revision（`kernel.revision()`）。
+    pub authoritative_revision: u64,
+    /// 正文的 Core 内容摘要（`content-v1:`，与
+    /// `EditorEditResult.after_text_sha256` 同一函数产出）。
+    pub content_sha256: String,
+}
+
 /// Issue #819 评论 5967250411 问题 3：Linux 平台内部的编辑结果分类。
 ///
 /// `apply_kernel_outcome` 把 Core `EditorEditOutcome` 拍扁成 `Option<EditorEditResult>`，
@@ -712,6 +732,13 @@ impl LinuxEditorPipeline {
         self.text_revision = kernel_revision;
         self.authoritative_revision = kernel_revision;
         self.authoritative_text_sha256 = authoritative_digest.unwrap_or_default().to_string();
+        // Issue #1052：整体重载意味着 mirror 原先的正文（以及基于它建立的
+        // current_layout_snapshot / pending_promoted_layout）不再描述当前提交版本。
+        // 必须让布局缓存失效，否则下一帧仍可能用错误正文排出的行快照绘制；
+        // 同时推进 layout revision，使绑定旧 canonical 的视觉事务过期。
+        self.current_layout_snapshot = None;
+        self.pending_promoted_layout = None;
+        self.bump_layout_revision();
         self.mirror_resync_count = self.mirror_resync_count.saturating_add(1);
         let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
             std::collections::BTreeMap::new();
@@ -752,7 +779,8 @@ impl LinuxEditorPipeline {
 
     /// Issue #1052：记录一笔已提交 Core 事务的权威 revision/摘要。
     ///
-    /// 只在 mirror 增量应用成功且 revision 与 kernel 一致后调用。保存路径读取的
+    /// 只在 mirror 增量应用成功、revision 与 kernel 一致，且（有正文变更时）
+    /// 内容摘要已与 `result.after_text_sha256` 核对一致后调用。保存路径读取的
     /// `committed_text()` 与这里是同一版本。
     fn record_authoritative_result(&mut self, result: &EditorEditResult) {
         let new_revision = result.new_revision.value();
@@ -768,11 +796,53 @@ impl LinuxEditorPipeline {
 
     /// Issue #1052：把 Core outcome 同步到 mirror，并明确"kernel 权威"。
     ///
-    /// 增量应用成功且 revision 与 kernel 一致时，mirror 就是权威已提交文本；
-    /// 任何失败/revision 不一致都整体从 kernel 重载，并记录 `editor.mirror.resync`。
+    /// 增量应用成功、revision 与 kernel 一致**且**正文摘要与 Core
+    /// `after_text_sha256` 一致时，mirror 才是权威已提交文本。任何失败 /
+    /// revision 不一致 / hash 不一致都整体从 kernel 重载并记录
+    /// `editor.mirror.resync`；hash 不一致额外记录
+    /// `editor.mirror.hash_mismatch`（只含 revision/hash/编辑范围，不含正文）。
+    /// 有正文变更的事务重算整章摘要核对；无正文变更的事务用"摘要必须与上一笔
+    /// 已验证的权威摘要相同"做 O(1) 校验。
     fn sync_mirror_after_outcome(&mut self, result: &EditorEditResult, reason: &str) {
         let applied_ok = self.mirror.apply_edit_result(result).is_ok();
         if applied_ok && self.mirror.revision() == self.kernel.revision() {
+            // Issue #1052：Core 同时给出了权威文本摘要，必须真正核对 mirror
+            // 内容，而不是只比 revision。
+            // - 有正文变更：用同一份 mirror 文本重算摘要并核对（唯一可能引入
+            //   正文偏差的事务类型）；
+            // - 无正文变更（光标/选区）：文本没有被动过，新摘要必须等于上一笔
+            //   已核对过的权威摘要；这样每笔带摘要的事务都被校验，又不会把
+            //   光标/选区热路径变成 O(N) 全篇哈希。
+            if !result.after_text_sha256.is_empty() {
+                let mirror_digest = if result.changes.is_empty() {
+                    None
+                } else {
+                    Some(content_digest_of_text(self.mirror.text()))
+                };
+                let hash_mismatch = match mirror_digest.as_deref() {
+                    Some(mirror_digest) => mirror_digest != result.after_text_sha256,
+                    None => {
+                        !self.authoritative_text_sha256.is_empty()
+                            && result.after_text_sha256 != self.authoritative_text_sha256
+                    }
+                };
+                if hash_mismatch {
+                    self.record_mirror_hash_mismatch(
+                        reason,
+                        mirror_digest.as_deref(),
+                        Some(result),
+                    );
+                    // 只有 Core 结果确实对应 kernel 当前 revision、且该摘要确实
+                    // 是重载后 kernel 正文的摘要时，才把它登记为权威摘要；
+                    // 否则留空 = 摘要未知，不伪造。
+                    let digest = self.kernel_digest_matches(result);
+                    self.reload_mirror_from_kernel(
+                        "hash_mismatch",
+                        digest.then_some(result.after_text_sha256.as_str()),
+                    );
+                    return;
+                }
+            }
             self.record_authoritative_result(result);
             return;
         }
@@ -780,6 +850,139 @@ impl LinuxEditorPipeline {
         let digest_matches_kernel = result.new_revision.value() == self.kernel.revision();
         let digest = digest_matches_kernel.then_some(result.after_text_sha256.as_str());
         self.reload_mirror_from_kernel(reason, digest);
+    }
+
+    /// Issue #1052：`result.after_text_sha256` 是否正是 kernel 当前正文的摘要。
+    ///
+    /// 用于整体重载后决定能否把 Core 结果里的摘要登记为权威摘要。宁可留空，
+    /// 也不让一个对不上 kernel 当前正文的摘要冒充"已知"。
+    fn kernel_digest_matches(&self, result: &EditorEditResult) -> bool {
+        result.new_revision.value() == self.kernel.revision()
+            && content_digest_of_text(&self.kernel.snapshot_text()) == result.after_text_sha256
+    }
+
+    /// Issue #1052：记录 mirror 内容摘要与 Core 权威摘要不一致的诊断事件。
+    ///
+    /// `mirror_digest` 只在本次真的重算过 mirror 摘要时提供；无正文变更的事务
+    /// 不重算整章，传 `None`，诊断字段记为 null。
+    /// 只写 revision / hash / 编辑范围 / 长度，不写正文。
+    fn record_mirror_hash_mismatch(
+        &self,
+        reason: &str,
+        mirror_digest: Option<&str>,
+        result: Option<&EditorEditResult>,
+    ) {
+        let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+            std::collections::BTreeMap::new();
+        fields.insert("reason".to_string(), serde_json::json!(reason));
+        fields.insert(
+            "mirror_revision".to_string(),
+            serde_json::json!(self.mirror.revision()),
+        );
+        fields.insert(
+            "kernel_revision".to_string(),
+            serde_json::json!(self.kernel.revision()),
+        );
+        fields.insert(
+            "authoritative_revision".to_string(),
+            serde_json::json!(self.authoritative_revision),
+        );
+        fields.insert(
+            "mirror_text_sha256".to_string(),
+            match mirror_digest {
+                Some(digest) => serde_json::json!(digest),
+                None => serde_json::Value::Null,
+            },
+        );
+        fields.insert(
+            "authoritative_text_sha256".to_string(),
+            serde_json::json!(self.authoritative_text_sha256),
+        );
+        fields.insert(
+            "text_bytes".to_string(),
+            serde_json::json!(self.mirror.text().len()),
+        );
+        if let Some(result) = result {
+            fields.insert(
+                "transaction_id".to_string(),
+                serde_json::json!(result.transaction_id),
+            );
+            fields.insert(
+                "result_base_revision".to_string(),
+                serde_json::json!(result.base_revision.value()),
+            );
+            fields.insert(
+                "result_new_revision".to_string(),
+                serde_json::json!(result.new_revision.value()),
+            );
+            fields.insert(
+                "expected_text_sha256".to_string(),
+                serde_json::json!(result.after_text_sha256),
+            );
+            fields.insert(
+                "edit_change_count".to_string(),
+                serde_json::json!(result.changes.len()),
+            );
+            if let Some((start, end)) = edit_change_byte_range(&result.changes) {
+                fields.insert("edit_byte_start".to_string(), serde_json::json!(start));
+                fields.insert("edit_byte_end".to_string(), serde_json::json!(end));
+            }
+        }
+        writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            sequence: 0,
+            session_id: String::new(),
+            level: writer_diagnostics::DiagnosticLevel::Warn,
+            origin: writer_diagnostics::DiagnosticOrigin::App,
+            event: "editor.mirror.hash_mismatch".to_string(),
+            target: "editor.mirror".to_string(),
+            message: None,
+            fields,
+        });
+    }
+
+    /// Issue #1052：保存路径的唯一正文读取入口。
+    ///
+    /// 返回前保证：
+    /// 1. mirror revision 与 kernel revision 一致（不一致先整体重载）；
+    /// 2. mirror 正文摘要与 Core 权威摘要一致（`authoritative_text_sha256`
+    ///    非空时核对；不一致先整体重载，并记录 `editor.mirror.hash_mismatch`）；
+    /// 3. 权威摘要未知（新载入文档 / 摘要待重建）时，用同一份正文按 Core 的
+    ///    同一摘要函数计算并登记，而不是留空让调用方自行猜；
+    /// 4. 正文、revision、摘要来自同一次读取，调用方返回后不再单独读正文。
+    pub fn save_snapshot(&mut self) -> SaveSnapshot {
+        if self.mirror.revision() != self.kernel.revision() {
+            // 版本不一致说明 mirror 落后于 kernel，先把权威正文整体取回来。
+            self.reload_mirror_from_kernel("save_snapshot_revision_mismatch", None);
+        }
+        let mut content_sha256 = content_digest_of_text(self.mirror.text());
+        if !self.authoritative_text_sha256.is_empty()
+            && content_sha256 != self.authoritative_text_sha256
+        {
+            self.record_mirror_hash_mismatch(
+                "save_snapshot_hash_mismatch",
+                Some(content_sha256.as_str()),
+                None,
+            );
+            self.reload_mirror_from_kernel("save_snapshot_hash_mismatch", None);
+            content_sha256 = content_digest_of_text(self.mirror.text());
+        }
+        // 整体重载或新载入文档时权威摘要未知：此时 mirror 正文刚来自 kernel，
+        // 用 Core 的同一摘要函数得到的就是 kernel 摘要，可以安全登记。
+        if self.authoritative_text_sha256.is_empty() {
+            self.authoritative_text_sha256 = content_sha256.clone();
+        }
+        // 权威 revision 由正文来源决定：mirror 已与 kernel 同 revision。
+        self.authoritative_revision = self.kernel.revision();
+        // text_revision 是平台正文版本，必须与 Core 权威 revision 同一版本；
+        // 极端路径下若落后，以 kernel 为准修正，保存后才不会用旧 revision 记账。
+        self.text_revision = self.kernel.revision();
+        SaveSnapshot {
+            content: self.mirror.text().to_string(),
+            text_revision: self.text_revision,
+            authoritative_revision: self.authoritative_revision,
+            content_sha256,
+        }
     }
 
     /// 统一处理 `EditorEditOutcome`，把 Applied / AppliedWithAdjustedSelection /
@@ -1276,6 +1479,22 @@ fn source_line_index_in_layout(
         seen_ordinal += 1;
     }
     None
+}
+
+/// Issue #1052：把一笔事务的 `EditorChange` 列表折算成受影响的 byte 范围。
+///
+/// 只用于诊断字段（绝不据此猜正文内容）；无变更返回 `None`。
+fn edit_change_byte_range(changes: &[EditorChange]) -> Option<(usize, usize)> {
+    let mut range: Option<(usize, usize)> = None;
+    for change in changes {
+        let start = change.index().value();
+        let end = start.saturating_add(change.text().len());
+        range = Some(match range {
+            Some((current_start, current_end)) => (current_start.min(start), current_end.max(end)),
+            None => (start, end),
+        });
+    }
+    range
 }
 
 // Issue #808 评论 5918236360: 内嵌测试模块超过生产文件结构上限，测试拆到
