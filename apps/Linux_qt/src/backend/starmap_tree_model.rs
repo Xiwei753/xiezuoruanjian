@@ -218,6 +218,9 @@ pub struct StarmapTreeModel {
     object_key_of: qt_method!(fn(&self, index: QModelIndex) -> QString),
     /// 当前已展开的可导航 routeKey 列表（JSON 数组），刷新后恢复分支使用。
     expanded_keys_json: qt_method!(fn(&self) -> QString),
+    /// 按当前展开状态深度优先展开的扁平行快照（JSON 数组）。
+    /// QML 左栏据此手绘静态目录，不再用 TreeView 的 delegate 几何。
+    visible_rows_json: qt_method!(fn(&self) -> QString),
     set_expanded: qt_method!(fn(&self, route_key: QString, expanded: bool)),
     set_starmap_title: qt_method!(fn(&self, starmap_id: QString, title: QString)),
     remove_starmap: qt_method!(fn(&self, starmap_id: QString)),
@@ -581,8 +584,7 @@ impl StarmapTreeModel {
                     child_segments.push(segment);
                 }
                 let child_route_key = route_key(&root_starmap_id, &child_segments);
-                let child_object_key =
-                    object_key(&parent_route_key, spec.kind, &spec.object_id);
+                let child_object_key = object_key(&parent_route_key, spec.kind, &spec.object_id);
                 state.rows.push(TreeRow {
                     parent: Some(node_id),
                     title: spec.title,
@@ -884,16 +886,12 @@ impl StarmapTreeModel {
             if parent.object_key == key {
                 Some(parent_id)
             } else {
-                parent
-                    .children
-                    .iter()
-                    .copied()
-                    .find(|child_id| {
-                        state
-                            .rows
-                            .get(*child_id)
-                            .is_some_and(|child| child.object_key == key)
-                    })
+                parent.children.iter().copied().find(|child_id| {
+                    state
+                        .rows
+                        .get(*child_id)
+                        .is_some_and(|child| child.object_key == key)
+                })
             }
         };
         child_id.map_or_else(QModelIndex::default, |id| self.index_for_node(id))
@@ -935,6 +933,47 @@ impl StarmapTreeModel {
             .map(TreeRow::route_key)
             .collect();
         QString::from(serde_json::to_string(&keys).unwrap_or_else(|_| "[]".to_string()))
+    }
+
+    fn visible_rows_json(&self) -> QString {
+        fn push_row(state: &TreeState, node_id: usize, out: &mut Vec<serde_json::Value>) {
+            let Some(row) = state.rows.get(node_id) else {
+                return;
+            };
+            let has_children =
+                row.kind.is_navigable() && row.children_state != ChildrenState::Empty;
+            out.push(serde_json::json!({
+                "title": row.title,
+                "rowKind": row.kind.as_str(),
+                "depth": row.depth,
+                "routeKey": row.route_key(),
+                "rootStarmapId": row.root_starmap_id,
+                "routeSegments": segments_json(&row.segments),
+                "objectKey": row.object_key,
+                "objectId": row.object_id,
+                "starmapId": row.starmap_id,
+                "parentStarmapId": row.parent_starmap_id,
+                "instanceId": row.instance_id(),
+                "nodeId": row.node_id(),
+                "revision": row.revision,
+                "assetId": row.asset_id,
+                "hasChildren": has_children,
+                "expanded": row.expanded,
+            }));
+            if !row.expanded {
+                return;
+            }
+            for child_id in &row.children {
+                push_row(state, *child_id, out);
+            }
+        }
+
+        let state = self.state.borrow();
+        let mut rows = Vec::new();
+        for root_id in &state.root_ids {
+            push_row(&state, *root_id, &mut rows);
+        }
+        QString::from(serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string()))
     }
 
     fn set_expanded(&self, route_key: QString, expanded: bool) {

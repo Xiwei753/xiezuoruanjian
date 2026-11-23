@@ -32,11 +32,51 @@ Rectangle {
     signal referenceJumpRequested(var reference)
     signal libraryChanged()
 
+    // Issue #1048：拖拽只移动独立的 ghost 代理，真实 ListView delegate 永远留在原位。
+    // payload 在按住时快照，避免拖动过程中模型刷新导致 ghost 读取到别的行。
+    property var libraryDragSource: null
+    property var libraryDragPayload: ({})
+    property string libraryDragTitle: ""
+
+    function clearLibraryDragSource() {
+        root.libraryDragSource = null
+        root.libraryDragPayload = ({})
+        root.libraryDragTitle = ""
+    }
+
     implicitHeight: contentColumn.implicitHeight
     color: "transparent"
 
     StarmapLibraryModel {
         id: libraryModel
+    }
+
+    // 拖拽可视代理：只有它跟随鼠标，且只在按住拖动时存在。
+    Rectangle {
+        id: assetDragGhost
+        z: 1000
+        width: Math.min(root.width - 8, ghostLabel.implicitWidth + 18)
+        height: 24
+        radius: Kirigami.Units.cornerRadius
+        color: Kirigami.Theme.highlightColor
+        opacity: 0.92
+        visible: root.libraryDragSource !== null
+                 && root.libraryDragSource.drag.active
+
+        Drag.active: visible
+        Drag.source: assetDragGhost
+        Drag.mimeData: root.libraryDragPayload
+        Drag.hotSpot: Qt.point(8, height / 2)
+
+        Label {
+            id: ghostLabel
+            anchors.centerIn: parent
+            width: parent.width - 16
+            text: root.libraryDragTitle
+            elide: Text.ElideRight
+            font.pixelSize: 11
+            color: Kirigami.Theme.highlightedTextColor
+        }
     }
 
     function reload() {
@@ -192,28 +232,43 @@ Rectangle {
                     }
                 }
 
-                Drag.active: dragArea.drag.active
-                Drag.hotSpot.x: dragArea.mouseX
-                Drag.hotSpot.y: dragArea.mouseY
-                Drag.mimeData: delegateRoot.rowKind === "folder"
-                               ? {}
-                               : {
-                                     "application/x-sujian-starmap-asset": JSON.stringify({
-                                         "kind": delegateRoot.rowKind,
-                                         "assetId": delegateRoot.assetId,
-                                         "entryId": delegateRoot.entryId,
-                                         "title": delegateRoot.title,
-                                         "scopeJson": delegateRoot.scopeJson,
-                                         "targetJson": delegateRoot.targetJson
-                                     })
-                                 }
-
                 MouseArea {
                     id: dragArea
                     anchors.fill: parent
                     hoverEnabled: true
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
-                    drag.target: delegateRoot.rowKind === "folder" ? null : delegateRoot
+                    // 文件夹只展开/右键；素材行拖动时移动的是 ghost，不是 delegate。
+                    drag.target: delegateRoot.rowKind === "folder"
+                                 ? null : assetDragGhost
+
+                    onPressed: function(mouse) {
+                        if (delegateRoot.rowKind === "folder"
+                                || mouse.button !== Qt.LeftButton)
+                            return
+                        root.libraryDragSource = dragArea
+                        root.libraryDragTitle = delegateRoot.title
+                        // 与画布 DropArea 的既有 payload 协议保持一致。
+                        root.libraryDragPayload = {
+                            "application/x-sujian-starmap-asset": JSON.stringify({
+                                "kind": delegateRoot.rowKind,
+                                "assetId": delegateRoot.assetId,
+                                "entryId": delegateRoot.entryId,
+                                "title": delegateRoot.title,
+                                "scopeJson": delegateRoot.scopeJson,
+                                "targetJson": delegateRoot.targetJson
+                            })
+                        }
+                        // ghost 从真实行位置起飞；真实行本身不移动。
+                        var origin = delegateRoot.mapToItem(root, 0, 0)
+                        assetDragGhost.x = Math.max(0, Math.min(
+                            root.width - assetDragGhost.width, origin.x + 4))
+                        assetDragGhost.y = origin.y + 2
+                    }
+
+                    // 释放/取消后延后一拍清理：先让 DropArea 完成 onDropped，
+                    // 再撤掉 Drag.active 与 payload，避免取消掉本次拖放。
+                    onReleased: Qt.callLater(root.clearLibraryDragSource)
+                    onCanceled: Qt.callLater(root.clearLibraryDragSource)
 
                     onClicked: function(mouse) {
                         if (delegateRoot.rowKind === "folder") {

@@ -140,8 +140,10 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapCard.qml" as "StarMapCard.qml",
     "qml/StarMapPage.qml" as "StarMapPage.qml",
     "qml/StarMapWorkspace.qml" as "StarMapWorkspace.qml",
-    // Issue #1014：星图工作区左侧层级导航树（Qt 6.8 原生 TreeView + Rust 模型）。
+    // Issue #1014：星图工作区左侧层级导航树；Issue #1048 起由 Rust 行快照
+    // 驱动 ListView + 手绘 StarMapTreeRow，不再使用 TreeView delegate。
     "qml/StarMapNavigationTree.qml" as "StarMapNavigationTree.qml",
+    "qml/StarMapTreeRow.qml" as "StarMapTreeRow.qml",
     // Issue #1037：全局 / 当前作品素材库目录面板。
     "qml/StarMapLibraryPanel.qml" as "StarMapLibraryPanel.qml",
     // Issue #822: 递归的是星图内容，不是视口。StarMapScene.qml 已删除：

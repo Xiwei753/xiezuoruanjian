@@ -611,6 +611,7 @@ fn main() {
     emit_qsb_validation();
     println!("cargo:rerun-if-changed=qml/DesktopLayoutState.qml");
     println!("cargo:rerun-if-changed=qml/StarMapNavigationTree.qml");
+    println!("cargo:rerun-if-changed=qml/StarMapTreeRow.qml");
     println!("cargo:rerun-if-changed=qml/StarMapLibraryPanel.qml");
     println!("cargo:rerun-if-changed=qml/CorrectionPanel.qml");
     // Issue #757 评论 5818193510 第 5 点：同步冲突解决面板。
@@ -958,15 +959,14 @@ fn inspect_qsb(qsb: &Path, path: &str) -> Option<QsbInfo> {
         if !info.shaders.iter().any(|item| item == description) {
             info.shaders.push(description.to_string());
         }
-        let (language_version, variant) = if let Some(value) =
-            description.strip_suffix(" [Standard]")
-        {
-            (value, "standard")
-        } else if let Some(value) = description.strip_suffix(" [Batchable]") {
-            (value, "batchable")
-        } else {
-            continue;
-        };
+        let (language_version, variant) =
+            if let Some(value) = description.strip_suffix(" [Standard]") {
+                (value, "standard")
+            } else if let Some(value) = description.strip_suffix(" [Batchable]") {
+                (value, "batchable")
+            } else {
+                continue;
+            };
         let Some(glsl) = language_version.strip_prefix("GLSL ") else {
             continue;
         };

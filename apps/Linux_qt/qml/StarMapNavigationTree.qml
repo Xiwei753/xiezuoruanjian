@@ -3,8 +3,10 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层
-// 职责：星图工作区左侧的唯一层级导航。使用 Qt 6.8 原生 TreeView +
-//   TreeViewDelegate，数据来自 Rust 的 StarmapTreeModel（QAbstractItemModel）。
+// 职责：星图工作区左侧的唯一层级导航。Issue #1048 起不再使用
+//   TreeView + TreeViewDelegate：Rust 的 StarmapTreeModel 仍作为唯一数据源，
+//   通过 visible_rows_json() 输出按展开状态深度优先展开的扁平行快照，
+//   本文件用 ListView + 手绘 StarMapTreeRow 渲染静态行。
 //
 // 身份：树行不是“文件系统目录”，而是 rootStarmapId + 完整 route segments。
 //   可导航行用 routeKey；普通节点没有可进入画布，用 objectKey 区分并定位。
@@ -16,12 +18,12 @@
 //   - 展开箭头：只有 Embed / Portal 行可展开，第一次展开时才加载下一层；
 //   - 右键行：重命名 / 删除，交给 Workspace 复用 starmapBackend 的方法；
 //   - 顶部 +：在当前画布新建节点或子星图，不再创建独立根星图。
+//   - 目录行本身不可拖动；滚轮只滚动 ListView，不改变任何行的几何或排序。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQml.Models
 import SujianApp 1.0
 import org.kde.kirigami as Kirigami
 
@@ -43,6 +45,8 @@ Rectangle {
     property var contextRow: null
     // 已经成功建出根行的根 ID；用于区分“首次/换根”与同一根普通刷新。
     property string loadedRootStarmapId: ""
+    // 模型按展开状态输出的扁平行快照。
+    property var rows: []
 
     signal routeActivated(string rootStarmapId, string segmentsJson, string routeKey)
     signal objectActivated(string rootStarmapId, string segmentsJson,
@@ -92,20 +96,34 @@ Rectangle {
         return keys
     }
 
-    // 当前 route 的根及每一级祖先 routeKey，用于把 expandToIndex() 在
-    // TreeView 里展开的路径同步回模型，刷新时才能恢复。
-    function clearExpandedDescendants(routeKey) {
-        if (routeKey === "")
+    function reloadRows() {
+        if (!treeModel) {
+            rows = []
             return
-        var keys = expandedRouteKeys()
-        var prefix = routeKey.slice(-1) === "|" ? routeKey : routeKey + "/"
-        for (var i = 0; i < keys.length; ++i) {
-            var key = keys[i]
-            if (key !== routeKey && key.indexOf(prefix) === 0)
-                treeModel.set_expanded(key, false)
+        }
+        try {
+            var parsed = JSON.parse(String(treeModel.visible_rows_json() || "[]"))
+            rows = Array.isArray(parsed) ? parsed : []
+        } catch (e) {
+            rows = []
         }
     }
 
+    function rowIndexForKey(routeKey) {
+        for (var i = 0; i < rows.length; ++i)
+            if (String(rows[i].routeKey || "") === String(routeKey))
+                return i
+        return -1
+    }
+
+    function rowIndexForObjectKey(objectKey) {
+        for (var i = 0; i < rows.length; ++i)
+            if (String(rows[i].objectKey || "") === String(objectKey))
+                return i
+        return -1
+    }
+
+    // 当前 route 的根及每一级祖先 routeKey。
     function routeKeysForPath(rootStarmapId, segmentsJson) {
         var keys = []
         if (!rootStarmapId)
@@ -133,6 +151,18 @@ Rectangle {
         return keys
     }
 
+    function expandModelPath(rootStarmapId, segmentsJson) {
+        var keys = routeKeysForPath(rootStarmapId, segmentsJson)
+        if (keys.length === 0)
+            return
+        // 目标是根行时展开根；否则展开目标的全部祖先，目标本身保持原状。
+        var lastAncestor = keys.length === 1 ? 0 : keys.length - 2
+        for (var i = 0; i <= lastAncestor; ++i) {
+            treeModel.ensure_children_loaded(keys[i])
+            treeModel.set_expanded(keys[i], true)
+        }
+    }
+
     function reload(forceRootExpanded) {
         if (!treeModel)
             return
@@ -142,62 +172,37 @@ Rectangle {
                     || root.currentRouteKey === "")
         // reload 前保存已加载分支的完整 routeKey 和当前普通节点对象键；
         // 刷新后只恢复当前根下仍存在的路径，不把旧根的展开/选中带过来。
-        // 根切换时强制展开新根；同一根普通刷新时保持用户原有展开/折叠。
         var expandedKeys = forceRootExpanded ? [] : expandedRouteKeys()
         var selectedObjectKey = root.currentObjectKey
         treeModel.set_backend_ref(root.starmapBackendRef)
         treeModel.set_root_starmap_id(root.workspaceRootStarmapId)
         treeModel.refresh()
-        treeView.forceLayout()
 
-        // Qt 6.8 的 expandToIndex() 在根行已经可见时会直接返回，不能保证
-        // 根行的子行展开。这里显式取根行并调用 expand(rootRow)。
         var rootKey = String(root.workspaceRootStarmapId || "") + "|"
         if (root.workspaceRootStarmapId !== "") {
             treeModel.ensure_children_loaded(rootKey)
-            treeView.forceLayout()
-        }
-        var rootIndex = treeModel.index_for_key(rootKey)
-        var rootRow = rootIndex ? treeView.rowAtIndex(rootIndex) : -1
-        if (rootRow >= 0)
             root.loadedRootStarmapId = String(root.workspaceRootStarmapId || "")
-        if (rootRow >= 0 && (forceRootExpanded || expandedKeys.indexOf(rootKey) >= 0)) {
-            treeView.expand(rootRow)
-            if (treeView.isExpanded(rootRow))
+            if (forceRootExpanded || expandedKeys.indexOf(rootKey) >= 0)
                 treeModel.set_expanded(rootKey, true)
-            treeView.forceLayout()
         }
 
         for (var i = 0; i < expandedKeys.length; ++i) {
             var key = expandedKeys[i]
             if (key === rootKey)
                 continue
-            var index = treeModel.index_for_key(key)
-            if (!index)
-                continue
-            var row = treeView.rowAtIndex(index)
-            if (row < 0)
-                continue
-            treeView.expand(row)
-            if (treeView.isExpanded(row))
-                treeModel.set_expanded(key, true)
-            treeView.forceLayout()
+            treeModel.ensure_children_loaded(key)
+            treeModel.set_expanded(key, true)
         }
-        if (selectedObjectKey !== "") {
-            var objectIndex = treeModel.index_for_object_key(selectedObjectKey)
-            if (objectIndex) {
-                var objectRow = treeView.rowAtIndex(objectIndex)
-                if (objectRow >= 0) {
-                    if (treeView.selectionModel)
-                        treeView.selectionModel.setCurrentIndex(
-                            objectIndex, ItemSelectionModel.ClearAndSelect)
-                    treeView.positionViewAtRow(objectRow, Qt.AlignVCenter)
-                }
-            }
-        }
+        reloadRows()
+
         if (root.currentRouteKey !== "")
             syncRoute(root.currentRootStarmapId, root.currentSegmentsJson,
                       root.currentRouteKey, false)
+        if (selectedObjectKey !== "") {
+            var objectIndex = rowIndexForObjectKey(selectedObjectKey)
+            if (objectIndex >= 0)
+                treeList.positionViewAtIndex(objectIndex, ListView.Center)
+        }
     }
 
     function syncRoute(rootStarmapId, segmentsJson, routeKey, expandPath) {
@@ -208,40 +213,12 @@ Rectangle {
             return
         if (expandPath === undefined)
             expandPath = true
-        if (expandPath) {
-            // 根行必须先显式展开：expandToIndex() 不会处理已经可见的根行。
-            var rootKey = root.currentRootStarmapId + "|"
-            treeModel.ensure_children_loaded(rootKey)
-            var rootIndex = treeModel.index_for_key(rootKey)
-            var rootRow = rootIndex ? treeView.rowAtIndex(rootIndex) : -1
-            if (rootRow >= 0) {
-                treeView.expand(rootRow)
-                if (treeView.isExpanded(rootRow))
-                    treeModel.set_expanded(rootKey, true)
-                treeView.forceLayout()
-            }
-            var targetIndex = treeModel.index_for_route(root.currentRootStarmapId,
-                                                        root.currentSegmentsJson)
-            if (String(root.currentSegmentsJson || "[]") !== "[]")
-                treeView.expandToIndex(targetIndex)
-            treeView.forceLayout()
-            // expandToIndex() 只改变视图；把实际展开的祖先路径同步回模型。
-            var pathKeys = routeKeysForPath(root.currentRootStarmapId,
-                                            root.currentSegmentsJson)
-            for (var k = 0; k < pathKeys.length; ++k) {
-                var pathIndex = treeModel.index_for_key(pathKeys[k])
-                var pathRow = treeView.rowAtIndex(pathIndex)
-                if (pathRow >= 0 && treeView.isExpanded(pathRow))
-                    treeModel.set_expanded(pathKeys[k], true)
-            }
-        }
-        var index = treeModel.index_for_route(root.currentRootStarmapId, root.currentSegmentsJson)
-        var row = treeView.rowAtIndex(index)
-        if (row < 0)
-            return
-        if (treeView.selectionModel)
-            treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.ClearAndSelect)
-        treeView.positionViewAtRow(row, Qt.AlignVCenter)
+        if (expandPath)
+            expandModelPath(root.currentRootStarmapId, root.currentSegmentsJson)
+        reloadRows()
+        var row = rowIndexForKey(root.currentRouteKey)
+        if (row >= 0)
+            treeList.positionViewAtIndex(row, ListView.Center)
     }
 
     function activateRow(model) {
@@ -270,21 +247,34 @@ Rectangle {
         rowMenu.popup()
     }
 
-    function ensureExpanded(row, model) {
+    function ensureExpanded(model) {
         var key = model ? String(model.routeKey || "") : ""
-        if (key === "" || row < 0 || String(model.rowKind || "") === "node")
+        if (key === "" || String(model.rowKind || "") === "node")
             return
-        // Issue #1016：箭头是真正的展开/收起切换，不再只 expand。
-        if (treeView.isExpanded(row)) {
-            treeView.collapse(row)
+        if (model.expanded === true) {
+            // Issue #1016：收起父行要一并收起后代，避免下次展开时把旧子树
+            // 整段弹回来。当前 rows 快照仍包含这些后代，先收集再逐行复位。
+            collapseDescendants(key)
             treeModel.set_expanded(key, false)
-            clearExpandedDescendants(key)
-            return
-        }
-        if (treeModel.ensure_children_loaded(key)) {
-            treeView.expand(row)
+        } else if (treeModel.ensure_children_loaded(key)) {
             treeModel.set_expanded(key, true)
         }
+        reloadRows()
+    }
+
+    function collapseDescendants(routeKey) {
+        if (routeKey === "")
+            return
+        var prefix = routeKey.slice(-1) === "|" ? routeKey : routeKey + "/"
+        var descendants = []
+        for (var i = 0; i < rows.length; ++i) {
+            var key = String(rows[i].routeKey || "")
+            if (key !== routeKey && key.indexOf(prefix) === 0
+                    && rows[i].expanded === true)
+                descendants.push(key)
+        }
+        for (var j = 0; j < descendants.length; ++j)
+            treeModel.set_expanded(descendants[j], false)
     }
 
     onStarmapBackendRefChanged: reload()
@@ -343,63 +333,24 @@ Rectangle {
             opacity: 0.35
         }
 
-        TreeView {
-            id: treeView
+        ListView {
+            id: treeList
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            model: treeModel
-            // 行点击由 delegate 自己分派“切换画布”；展开只由箭头触发，
-            // 避免点击行的同时误进入另一个星图。
-            pointerNavigationEnabled: false
+            model: root.rows
+            spacing: 0
 
-            delegate: TreeViewDelegate {
-                id: delegate
-
-                indentation: Kirigami.Units.gridUnit
-                leftMargin: Kirigami.Units.smallSpacing
-                rightMargin: Kirigami.Units.smallSpacing
-                highlighted: root.currentObjectKey !== ""
-                    ? String(delegate.model.objectKey || "") === root.currentObjectKey
+            delegate: StarMapTreeRow {
+                width: treeList.width
+                rowData: modelData
+                selected: root.currentObjectKey !== ""
+                    ? String(modelData.objectKey || "") === root.currentObjectKey
                     : (root.currentRouteKey !== ""
-                       && String(delegate.model.routeKey || "") === root.currentRouteKey)
-
-                ToolTip.visible: hovered
-                ToolTip.text: String(delegate.model.title || "")
-
-                onClicked: root.activateRow(delegate.model)
-
-                TapHandler {
-                    acceptedButtons: Qt.RightButton
-                    onSingleTapped: root.openRowMenu(delegate.model)
-                }
-
-                indicator: Item {
-                    id: indicatorItem
-                    readonly property bool hasAnyChildren: delegate.isTreeNode
-                        && String(delegate.model.rowKind || "") !== "node"
-                        && (delegate.hasChildren
-                            || (delegate.model && delegate.model.hasChildren === true))
-                    visible: hasAnyChildren
-                    implicitWidth: visible ? Kirigami.Units.gridUnit : 0
-                    implicitHeight: Kirigami.Units.gridUnit * 1.75
-                    x: !delegate.mirrored
-                       ? delegate.leftMargin + delegate.depth * delegate.indentation
-                       : delegate.width - delegate.leftMargin
-                         - delegate.depth * delegate.indentation - width
-
-                    Kirigami.Icon {
-                        anchors.centerIn: parent
-                        source: delegate.expanded ? "arrow-down" : "arrow-right"
-                        color: Kirigami.Theme.textColor
-                        implicitWidth: Kirigami.Units.iconSizes.small
-                        implicitHeight: Kirigami.Units.iconSizes.small
-                    }
-
-                    TapHandler {
-                        onSingleTapped: root.ensureExpanded(delegate.row, delegate.model)
-                    }
-                }
+                       && String(modelData.routeKey || "") === root.currentRouteKey)
+                onActivated: root.activateRow(rowData)
+                onMenuRequested: root.openRowMenu(rowData)
+                onExpansionToggled: root.ensureExpanded(rowData)
             }
 
             ScrollBar.vertical: ScrollBar {}
@@ -408,7 +359,7 @@ Rectangle {
         Label {
             Layout.fillWidth: true
             Layout.margins: Kirigami.Units.smallSpacing
-            visible: treeView.rows === 0
+            visible: root.rows.length === 0
             text: qsTr("暂无星图")
             color: Kirigami.Theme.disabledTextColor
             horizontalAlignment: Text.AlignHCenter
