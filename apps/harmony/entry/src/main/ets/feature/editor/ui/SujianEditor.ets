@@ -134,6 +134,9 @@ export struct SujianEditor {
   private inheritedParagraphMismatch: number = 0
   private inheritedParagraphError: string | null = null
   private snapshotTimerId: number = -1
+  // 全量样式发布延后到下一 tick，避免在 onDidChange 回调内重入组件。
+  private stylePublishTimer: number = -1
+  private deferredStylePublishReason: string = ''
   // 预编辑期间暂缓的全量样式发布；IME 提交后补一次，避免空文档首字样式丢失。
   private pendingFullStylePublish: boolean = false
   // 正文样式全量发布次数（诊断用）。
@@ -145,6 +148,11 @@ export struct SujianEditor {
       clearTimeout(this.paragraphVerifyTimer)
       this.paragraphVerifyTimer = -1
     }
+    if (this.stylePublishTimer !== -1) {
+      clearTimeout(this.stylePublishTimer)
+      this.stylePublishTimer = -1
+    }
+    this.deferredStylePublishReason = ''
     this.pendingParagraphStarts = []
     if (this.richEditorBridge) {
       this.richEditorBridge.captureDiagnosticsFacts()
@@ -416,15 +424,32 @@ export struct SujianEditor {
       return
     }
     if (event.becameNonEmpty) {
-      this.publishStyledDocument('first-content')
+      this.scheduleDeferredStylePublish('first-content')
     } else if (event.paragraphsChanged && event.newParagraphStarts.length > 0) {
       this.scheduleParagraphInheritanceCheck(event.newParagraphStarts)
     }
     if (event.kind === 'ime-commit' && this.pendingFullStylePublish &&
         this.richEditorBridge !== null && !this.richEditorBridge.isImeComposing()) {
-      this.publishStyledDocument('ime-commit')
+      this.scheduleDeferredStylePublish('ime-commit')
     }
     this.scheduleRuntimeSnapshot()
+  }
+
+  // 空文档首字/IME 提交后的补发需要一次全量样式；延后到下一 tick，
+  // 避免在 onDidChange 内重入组件。多次请求合并，保留第一个原因用于诊断。
+  private scheduleDeferredStylePublish(reason: string): void {
+    if (this.deferredStylePublishReason.length === 0) {
+      this.deferredStylePublishReason = reason
+    }
+    if (this.stylePublishTimer !== -1) {
+      return
+    }
+    this.stylePublishTimer = setTimeout(() => {
+      this.stylePublishTimer = -1
+      const deferredReason = this.deferredStylePublishReason
+      this.deferredStylePublishReason = ''
+      this.publishStyledDocument(deferredReason)
+    }, 0)
   }
 
   // 只读核对：新增段落的段首是否继承了全文 ParagraphStyle.textIndent。
