@@ -65,6 +65,22 @@ pub struct WorkspaceBackend {
     ),
     get_last_navigation_state: qt_method!(fn(&self) -> QJsonObject),
     clear_last_navigation_state: qt_method!(fn(&mut self)),
+    // Issue #1047：每部作品独立的最后章节 + 每章独立阅读视口。
+    save_project_last_chapter: qt_method!(
+        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
+    ),
+    get_project_last_chapter: qt_method!(fn(&self, project_id: QString) -> QJsonObject),
+    save_chapter_view_state: qt_method!(
+        fn(
+            &mut self,
+            project_id: QString,
+            chapter_id: QString,
+            cursor_char_index: i64,
+            scroll_y: f64,
+        ) -> QJsonObject
+    ),
+    get_chapter_view_state:
+        qt_method!(fn(&self, project_id: QString, chapter_id: QString) -> QJsonObject),
     app: AppRef,
 }
 
@@ -247,6 +263,99 @@ impl WorkspaceBackend {
     }
     fn clear_last_navigation_state(&mut self) {
         let _ = writer_core::app_config::clear_last_navigation_state();
+    }
+
+    /// Issue #1047：记录当前作品上次打开的章节。
+    ///
+    /// 返回 `{ success, rawError? }`，QML 只有在 success 为 true 时才更新自己的
+    /// “上次章节”缓存；写入失败不能静默吞掉。
+    fn save_project_last_chapter(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+    ) -> QJsonObject {
+        let project = project_id.to_string();
+        let volume = volume_id.to_string();
+        let chapter = chapter_id.to_string();
+        let json =
+            match writer_core::app_config::save_project_last_chapter(&project, &volume, &chapter) {
+                Ok(()) => serde_json::json!({ "success": true }),
+                Err(message) => serde_json::json!({ "success": false, "rawError": message }),
+            };
+        qjson_object_from_json(&serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    /// 读取作品最后章节；`found` 区分“没有记录”和“记录为空”。
+    fn get_project_last_chapter(&self, project_id: QString) -> QJsonObject {
+        let project = project_id.to_string();
+        let json = match writer_core::app_config::get_project_last_chapter(&project) {
+            Some(entry) => serde_json::json!({
+                "found": true,
+                "projectId": project,
+                "volumeId": entry.volume_id,
+                "chapterId": entry.chapter_id,
+            }),
+            None => serde_json::json!({
+                "found": false,
+                "projectId": project,
+                "volumeId": "",
+                "chapterId": "",
+            }),
+        };
+        qjson_object_from_json(&serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    /// 保存章节光标/滚动位置。Qt 数值是 double/int，先收敛到合法范围，
+    /// 避免负数或非有限值破坏光标与滚动语义。
+    fn save_chapter_view_state(
+        &mut self,
+        project_id: QString,
+        chapter_id: QString,
+        cursor_char_index: i64,
+        scroll_y: f64,
+    ) -> QJsonObject {
+        let project = project_id.to_string();
+        let chapter = chapter_id.to_string();
+        let cursor = u32::try_from(cursor_char_index.max(0)).unwrap_or(u32::MAX);
+        let scroll = if scroll_y.is_finite() {
+            scroll_y.max(0.0) as f32
+        } else {
+            0.0
+        };
+        let state = writer_core::app_config::ChapterViewState {
+            cursor_char_index: cursor,
+            scroll_y: scroll,
+        };
+        let json = match writer_core::app_config::save_chapter_view_state(&project, &chapter, state)
+        {
+            Ok(()) => serde_json::json!({ "success": true }),
+            Err(message) => serde_json::json!({ "success": false, "rawError": message }),
+        };
+        qjson_object_from_json(&serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    /// 读取章节阅读视口；`found` 为 false 时 QML 回落到顶部。
+    fn get_chapter_view_state(&self, project_id: QString, chapter_id: QString) -> QJsonObject {
+        let project = project_id.to_string();
+        let chapter = chapter_id.to_string();
+        let json = match writer_core::app_config::get_chapter_view_state(&project, &chapter) {
+            Some(state) => serde_json::json!({
+                "found": true,
+                "projectId": project,
+                "chapterId": chapter,
+                "cursorCharIndex": state.cursor_char_index,
+                "scrollY": state.scroll_y,
+            }),
+            None => serde_json::json!({
+                "found": false,
+                "projectId": project,
+                "chapterId": chapter,
+                "cursorCharIndex": 0,
+                "scrollY": 0.0,
+            }),
+        };
+        qjson_object_from_json(&serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string()))
     }
 }
 

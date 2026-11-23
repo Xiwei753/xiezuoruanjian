@@ -73,8 +73,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use text_utils::{
-    byte_to_char_index, clamp_to_char_boundary, next_char_boundary, normalize_plain_text,
-    prev_char_boundary,
+    byte_to_char_index, char_to_byte_index, clamp_to_char_boundary, next_char_boundary,
+    normalize_plain_text, prev_char_boundary,
 };
 
 use writer_core::editor::EditorTransactionCause;
@@ -509,6 +509,10 @@ pub struct SujianEditorItem {
     request_text_input_focus: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     snap_next_cursor_update: qt_method!(fn(&mut self)),
+    /// Issue #1047：按 Unicode 字符索引恢复折叠光标（章节阅读位置）。
+    /// 返回是否接受本次设置；内部会把 char 索引转成 UTF-8 byte offset。
+    #[allow(dead_code)]
+    set_cursor_position_chars: qt_method!(fn(&mut self, index: u32) -> bool),
     #[allow(dead_code)]
     verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
 
@@ -750,6 +754,7 @@ impl Default for SujianEditorItem {
             select_word_at: Default::default(),
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),
+            set_cursor_position_chars: Default::default(),
             verify_animation_signal_meta_object: Default::default(),
 
             pipeline,

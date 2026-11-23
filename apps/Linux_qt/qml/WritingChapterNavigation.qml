@@ -39,7 +39,43 @@ Rectangle {
     // 当前选中章节 id（用于列表项高亮）。
     property string currentChapterId: ""
 
+    // Issue #1051：拖动排序需要调用 ProjectBackend 的 reorder/move 接口，
+    // 由 WritingWorkspace 注入（组件自身不查后端，只把拖动结果交给调用方）。
+    property var projectBackendRef: null
+
+    // ── Issue #1051：左树拖动排序状态机 ──
+    // 按住先记录候选源，位移达到 Qt 通用拖动阈值后才进入拖动；
+    // 拖动期间真实 delegate 留在原位，只有 dragPreview 浮层跟随指针。
+    property bool dragActive: false
+    // 拖动结束后吞掉随之而来的 onClicked，避免误开章节/误折叠卷。
+    property bool dragSuppressClick: false
+    property string dragSourceId: ""
+    property string dragSourceKind: ""
+    property string dragSourceVolumeId: ""
+    property string dragSourceTitle: ""
+    property real dragPressX: 0
+    property real dragPressY: 0
+    property real dragPointerX: 0
+    property real dragPointerY: 0
+
+    // 落点：dropTargetIndex 是插入线所在的 model 行下标（0..count），
+    // dropLineY 是插入线在 ListView 内容坐标里的 Y。
+    property int dropTargetIndex: -1
+    property string dropTargetId: ""
+    property string dropTargetKind: ""
+    property string dropTargetVolumeId: ""
+    property bool dropInsertAfter: false
+    property bool dropTargetValid: false
+    property real dropLineY: -1
+
+    // Qt 默认 startDragDistance 为 10 逻辑像素；QML 的 Qt.styleHints 属性
+    // 未在 qmllint 类型信息中暴露，这里用同值常量，保持与 Qt 拖动阈值一致。
+    readonly property int dragThreshold: 10
+
     signal openChapter(string projectId, string volumeId, string chapterId, string chapterTitle)
+    // Issue #1051：跨卷移动了当前正在编辑的章节时通知工作区迁移编辑器身份，
+    // 否则后续自动保存仍会拿旧卷 ID，正文保存会失败。
+    signal chapterMovedToVolume(string projectId, string chapterId, string targetVolumeId)
     signal createVolumeRequested(string projectId)
     signal createChapterRequested(string projectId, string volumeId)
     signal renameItemRequested(var itemData)
@@ -105,6 +141,236 @@ Rectangle {
             if (items[i].type === "chapter" && items[i].volumeId === volumeId) chs.push(items[i])
         }
         return chs
+    }
+
+    // ── Issue #1051：拖动排序 ────────────────────────────────────────────────
+
+    function modelRowHeight(index) {
+        if (index < 0 || index >= treeModel.count) return 0
+        return treeModel.get(index).rowType === "volume" ? root.volumeRowHeight
+                                                         : root.chapterRowHeight
+    }
+
+    function beginDragCandidate(kind, itemId, volumeId, title, mouseX, mouseY) {
+        root.resetDragState()
+        root.dragSourceKind = kind || ""
+        root.dragSourceId = itemId || ""
+        root.dragSourceVolumeId = volumeId || ""
+        root.dragSourceTitle = title || ""
+        root.dragPressX = mouseX
+        root.dragPressY = mouseY
+        root.dragActive = false
+    }
+
+    function resetDragState() {
+        root.dragActive = false
+        root.dragSourceId = ""
+        root.dragSourceKind = ""
+        root.dragSourceVolumeId = ""
+        root.dragSourceTitle = ""
+        root.clearDropTarget()
+    }
+
+    function clearDropTarget() {
+        root.dropTargetIndex = -1
+        root.dropTargetId = ""
+        root.dropTargetKind = ""
+        root.dropTargetVolumeId = ""
+        root.dropInsertAfter = false
+        root.dropTargetValid = false
+        root.dropLineY = -1
+    }
+
+    function setDropTarget(index, targetId, targetKind, targetVolumeId, insertAfter, lineY) {
+        root.dropTargetIndex = index
+        root.dropTargetId = targetId || ""
+        root.dropTargetKind = targetKind || ""
+        root.dropTargetVolumeId = targetVolumeId || ""
+        root.dropInsertAfter = insertAfter
+        root.dropLineY = lineY
+        var isSelf = (targetKind === root.dragSourceKind
+                      && targetId === root.dragSourceId
+                      && targetVolumeId === root.dragSourceVolumeId)
+        root.dropTargetValid = root.projectBackendRef !== null
+                               && root.dragSourceId !== ""
+                               && root.dropTargetId !== ""
+                               && !isSelf
+    }
+
+    // 超过阈值才进入拖动；contentYPos 是 ListView 内容坐标。
+    function updateDrag(mouseX, mouseY, contentYPos) {
+        if (root.dragSourceId === "") return
+        if (!root.dragActive) {
+            var dx = mouseX - root.dragPressX
+            var dy = mouseY - root.dragPressY
+            if (Math.sqrt(dx * dx + dy * dy) < root.dragThreshold) return
+            root.dragActive = true
+        }
+        if (root.dragSourceKind === "volume") root.updateVolumeDropTarget(contentYPos)
+        else if (root.dragSourceKind === "chapter") root.updateChapterDropTarget(contentYPos)
+    }
+
+    // 卷拖动：以「卷块」为落点（卷头 + 其展开的章节）。落点在卷头上半 → 插到
+    // 该卷之前；其余位置 → 插到下一个卷块之前；超出末尾 → 插到最后一个卷块后。
+    function updateVolumeDropTarget(contentYPos) {
+        var y = 0
+        var lastVolumeRow = -1
+        for (var i = 0; i < treeModel.count; i++) {
+            var row = treeModel.get(i)
+            var h = root.modelRowHeight(i)
+            if (row.rowType === "volume") {
+                if (contentYPos < y + h / 2) {
+                    root.setDropTarget(i, row.itemId, "volume", row.itemId, false, y)
+                    return
+                }
+                lastVolumeRow = i
+            }
+            y += h
+        }
+        if (lastVolumeRow >= 0) {
+            var last = treeModel.get(lastVolumeRow)
+            root.setDropTarget(treeModel.count, last.itemId, "volume", last.itemId, true, y)
+        } else {
+            root.clearDropTarget()
+        }
+    }
+
+    // 章节拖动：章节行按上下半区决定插到该行前/后；卷头行插到该卷最前；
+    // 超出末尾追加到最后一个卷。
+    function updateChapterDropTarget(contentYPos) {
+        var y = 0
+        var lastVolumeRow = -1
+        for (var i = 0; i < treeModel.count; i++) {
+            var row = treeModel.get(i)
+            var h = root.modelRowHeight(i)
+            if (row.rowType === "volume") {
+                lastVolumeRow = i
+                if (contentYPos < y + h) {
+                    root.setDropTarget(i + 1, row.itemId, "volume", row.itemId, false, y + h)
+                    return
+                }
+            } else if (contentYPos < y + h) {
+                var insertAfter = contentYPos > y + h / 2
+                root.setDropTarget(insertAfter ? i + 1 : i, row.itemId, "chapter",
+                                   row.itemVolumeId, insertAfter,
+                                   insertAfter ? y + h : y)
+                return
+            }
+            y += h
+        }
+        if (lastVolumeRow >= 0) {
+            var last = treeModel.get(lastVolumeRow)
+            root.setDropTarget(treeModel.count, last.itemId, "volume", last.itemId, true, y)
+        } else {
+            root.clearDropTarget()
+        }
+    }
+
+    function endDrag() {
+        if (!root.dragActive) {
+            // 未达到阈值：按普通单击处理，不落盘。
+            root.resetDragState()
+            return
+        }
+        var sourceId = root.dragSourceId
+        var sourceKind = root.dragSourceKind
+        var sourceVolumeId = root.dragSourceVolumeId
+        var targetId = root.dropTargetId
+        var targetKind = root.dropTargetKind
+        var targetVolumeId = root.dropTargetVolumeId
+        var insertAfter = root.dropInsertAfter
+        var valid = root.dropTargetValid
+        root.resetDragState()
+        // 拖动结束后的 onClicked 不应再触发打开章节/折叠卷。
+        root.dragSuppressClick = true
+        Qt.callLater(function() { root.dragSuppressClick = false })
+        if (valid) {
+            // 延后到当前鼠标事件处理结束再提交：Core 成功后左树会在本轮内
+            // 重建 model，如果在 delegate 的 released 处理器里同步 clear model，
+            // 可能销毁正在派发事件的 delegate。Qt.callLater 让提交发生在
+            // 事件循环下一拍，delegate 已不再参与事件派发。
+            Qt.callLater(function() {
+                root.commitReorder(sourceId, sourceKind, sourceVolumeId,
+                                   targetId, targetKind, targetVolumeId, insertAfter)
+            })
+        }
+    }
+
+    // Issue #1051：把一次 drop 换算成 Core 的完整顺序序列并调用后端。
+    // - 卷排序：volumesArray() 完整 ID 顺序，移出 source 后按目标前/后插入；
+    // - 同卷章排序：chaptersOfVolume() 完整章 ID 顺序重排；
+    // - 跨卷移动章节：一次原子 Core move（不能用两个卷的 reorder 伪造）。
+    // 空位置/相同 ID/位置未变化都不调用 Core。
+    function commitReorder(sourceId, sourceKind, sourceVolumeId,
+                           targetId, targetKind, targetVolumeId, insertAfter) {
+        if (!root.projectBackendRef || !root.workspaceProjectId) return
+        if (!sourceId || !targetId) return
+        if (sourceKind === targetKind && sourceId === targetId
+                && sourceVolumeId === targetVolumeId) return
+
+        if (sourceKind === "volume" && targetKind === "volume") {
+            var vols = root.volumesArray()
+            var ids = []
+            for (var i = 0; i < vols.length; i++) ids.push(vols[i].id)
+            var from = ids.indexOf(sourceId)
+            if (from < 0) return
+            ids.splice(from, 1)
+            var targetAt = ids.indexOf(targetId)
+            if (targetAt < 0) return
+            if (insertAfter) targetAt += 1
+            // 目标插入位置与原位置相同，顺序没变，不写盘。
+            if (targetAt === from) return
+            ids.splice(targetAt, 0, sourceId)
+            root.projectBackendRef.reorder_volumes(root.workspaceProjectId, ids.join(","))
+            return
+        }
+
+        if (sourceKind !== "chapter") return
+
+        if (sourceVolumeId === targetVolumeId) {
+            var chapters = root.chaptersOfVolume(sourceVolumeId)
+            var chapterIds = []
+            for (var j = 0; j < chapters.length; j++) chapterIds.push(chapters[j].id)
+            var chapterFrom = chapterIds.indexOf(sourceId)
+            if (chapterFrom < 0) return
+            chapterIds.splice(chapterFrom, 1)
+            var chapterAt = 0
+            if (targetKind === "chapter") {
+                chapterAt = chapterIds.indexOf(targetId)
+                if (chapterAt < 0) return
+                if (insertAfter) chapterAt += 1
+            } else if (insertAfter) {
+                // 落到本卷末尾（卷头下方的追加位置）。
+                chapterAt = chapterIds.length
+            }
+            if (chapterAt === chapterFrom) return
+            chapterIds.splice(chapterAt, 0, sourceId)
+            root.projectBackendRef.reorder_chapters(root.workspaceProjectId,
+                                                    sourceVolumeId,
+                                                    chapterIds.join(","))
+            return
+        }
+
+        // 跨卷移动：目标卷内插入位置。
+        var targetChapters = root.chaptersOfVolume(targetVolumeId)
+        var insertAt = insertAfter ? targetChapters.length : 0
+        if (targetKind === "chapter") {
+            insertAt = targetChapters.length
+            for (var k = 0; k < targetChapters.length; k++) {
+                if (targetChapters[k].id === targetId) {
+                    insertAt = k + (insertAfter ? 1 : 0)
+                    break
+                }
+            }
+        }
+        var moved = root.projectBackendRef.move_chapter_to_volume(root.workspaceProjectId,
+                                                                  sourceVolumeId,
+                                                                  targetVolumeId,
+                                                                  sourceId,
+                                                                  insertAt)
+        // 只有 Core 确认成功才迁移编辑器身份；失败时树不刷新、身份不变。
+        if (moved && moved.success === true && sourceId === root.currentChapterId)
+            root.chapterMovedToVolume(root.workspaceProjectId, sourceId, targetVolumeId)
     }
 
     // Issue #835：按层级重建 model —— 每卷一行 header，卷展开时紧接其章节行。
@@ -227,6 +493,45 @@ Rectangle {
                         }
                     }
 
+                    // Issue #1051：卷头左键按住可拖动排序。未进入拖动时点按仍
+                    // 切换展开（WritingTreeGroupHeader 内部 MouseArea 被这层
+                    // 左键 MouseArea 覆盖，所以折叠回调在这里补上）。
+                    MouseArea {
+                        visible: model.rowType === "volume"
+                        anchors.fill: parent
+                        // 让出右侧「+ 新章节」按钮的可点区域，保持原行为。
+                        anchors.rightMargin: Math.round(Kirigami.Units.gridUnit * 2)
+                        acceptedButtons: Qt.LeftButton
+                        hoverEnabled: true
+                        z: 5
+                        cursorShape: Qt.PointingHandCursor
+                        onPressed: function(mouse) {
+                            if (mouse.button !== Qt.LeftButton) return
+                            var p = mapToItem(root, mouse.x, mouse.y)
+                            root.dragPointerX = p.x
+                            root.dragPointerY = p.y
+                            root.beginDragCandidate("volume", model.itemId, model.itemId,
+                                                    model.itemTitle || "",
+                                                    mouse.x, mouse.y)
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (!pressed) return
+                            var p = mapToItem(root, mouse.x, mouse.y)
+                            root.dragPointerX = p.x
+                            root.dragPointerY = p.y
+                            var contentPoint = mapToItem(treeListView.contentItem,
+                                                         mouse.x, mouse.y)
+                            root.updateDrag(mouse.x, mouse.y, contentPoint.y)
+                        }
+                        onReleased: root.endDrag()
+                        onCanceled: root.resetDragState()
+                        onClicked: function(mouse) {
+                            if (mouse.button !== Qt.LeftButton) return
+                            if (root.dragSuppressClick) return
+                            root.toggleVolumeExpanded(model.itemId)
+                        }
+                    }
+
                     // ── 章节行 ──
                     Rectangle {
                         id: chapterDelegateBg
@@ -302,7 +607,31 @@ Rectangle {
                             hoverEnabled: true
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             cursorShape: Qt.PointingHandCursor
+                            // Issue #1051：左键按住可拖动章节排序；onClicked 只处理
+                            // 未进入拖动（未超过阈值）的单击。
+                            onPressed: function(mouse) {
+                                if (mouse.button !== Qt.LeftButton) return
+                                var p = mapToItem(root, mouse.x, mouse.y)
+                                root.dragPointerX = p.x
+                                root.dragPointerY = p.y
+                                root.beginDragCandidate("chapter", model.itemId,
+                                                        model.itemVolumeId,
+                                                        model.itemTitle || "",
+                                                        mouse.x, mouse.y)
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (!pressed) return
+                                var p = mapToItem(root, mouse.x, mouse.y)
+                                root.dragPointerX = p.x
+                                root.dragPointerY = p.y
+                                var contentPoint = mapToItem(treeListView.contentItem,
+                                                             mouse.x, mouse.y)
+                                root.updateDrag(mouse.x, mouse.y, contentPoint.y)
+                            }
+                            onReleased: root.endDrag()
+                            onCanceled: root.resetDragState()
                             onClicked: function(mouse) {
+                                if (root.dragSuppressClick) return
                                 if (mouse.button === Qt.LeftButton) {
                                     root.openChapter(model.itemProjectId || root.workspaceProjectId, model.itemVolumeId, model.itemId, model.itemTitle)
                                 } else if (mouse.button === Qt.RightButton) {
@@ -328,6 +657,23 @@ Rectangle {
                             }
                         }
                     }
+                }
+
+                // Issue #1051：拖动目标插入线。显式挂到 ListView 的 contentItem 上，
+                // Y 直接用内容坐标，滚动时跟着内容走（Qt 不会自动 parent 非 delegate 子项）。
+                Rectangle {
+                    id: dropIndicator
+                    parent: treeListView.contentItem
+                    visible: root.dragActive && root.dropLineY >= 0
+                    x: Kirigami.Units.smallSpacing
+                    width: Math.max(0, treeListView.width - Kirigami.Units.smallSpacing * 2)
+                    height: 2
+                    y: root.dropLineY - 1
+                    radius: 1
+                    color: root.dropTargetValid ? Kirigami.Theme.highlightColor
+                                                : Kirigami.Theme.disabledTextColor
+                    opacity: root.dropTargetValid ? 1.0 : 0.6
+                    z: 100
                 }
             }
         }
@@ -399,6 +745,41 @@ Rectangle {
                     title: treeContextMenu.itemTitle
                 })
             }
+        }
+    }
+
+    // Issue #1051：浮动拖拽预览。拖动期间真实 delegate 留在原位，
+    // 只有这个浮层跟随指针，标明正在拖哪一项。
+    Rectangle {
+        id: dragPreview
+        visible: root.dragActive
+        z: 1000
+        width: Math.max(0, Math.min(root.width - Kirigami.Units.smallSpacing,
+                                    Math.max(Kirigami.Units.gridUnit * 8,
+                                             dragPreviewLabel.implicitWidth + Kirigami.Units.gridUnit)))
+        height: root.volumeRowHeight
+        radius: Kirigami.Units.cornerRadius
+        color: Kirigami.Theme.backgroundColor
+        border.width: 1
+        border.color: Kirigami.Theme.highlightColor
+        opacity: 0.94
+        x: Math.max(0, Math.min(root.width - width,
+                                root.dragPointerX + Kirigami.Units.smallSpacing))
+        y: Math.max(0, Math.min(root.height - height,
+                                root.dragPointerY + Kirigami.Units.smallSpacing))
+
+        Label {
+            id: dragPreviewLabel
+            anchors.fill: parent
+            anchors.leftMargin: Kirigami.Units.smallSpacing
+            anchors.rightMargin: Kirigami.Units.smallSpacing
+            verticalAlignment: Text.AlignVCenter
+            text: root.dragSourceTitle
+            color: Kirigami.Theme.textColor
+            font.family: Kirigami.Theme.defaultFont.family
+            font.pointSize: Kirigami.Theme.defaultFont.pointSize
+            font.bold: true
+            elide: Text.ElideRight
         }
     }
 }

@@ -159,6 +159,38 @@ impl SujianEditorItem {
         ) as u32
     }
 
+    /// Issue #1047：按 Unicode 字符索引设置折叠光标，用于恢复章节阅读位置。
+    ///
+    /// QML 的 `cursor_position` 是 char count；这里必须转成 Rust 正文的
+    /// UTF-8 byte offset，不能把 Qt IME 的 UTF-16 偏移直接当 byte offset。
+    /// 超界索引钳到文本末尾，并通过 `set_selection(pos, pos)` 走现有编辑
+    /// kernel 的选区路径，保证 Core 光标与正文 revision 语义不变。
+    ///
+    /// 返回 false 仅当索引无法安全落到 char boundary（正常不会发生：转换
+    /// 函数只会返回合法边界）。
+    pub(crate) fn set_cursor_position_chars(&mut self, index: u32) -> bool {
+        let text = self.pipeline.committed_text();
+        let target = char_to_byte_index(text, index as usize);
+        if !text.is_char_boundary(target) {
+            return false;
+        }
+        if self.pipeline.cursor() == target && !self.pipeline.has_selection() {
+            return true;
+        }
+        // 恢复位置是程序性跳转，不应从上一章位置做 Tween。
+        self.cursor_ctrl.animation = None;
+        self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
+        self.cursor_ctrl.affinity = CaretAffinity::Downstream;
+        let _ = self.pipeline.set_selection(target, target);
+        self.bump_visual_revision();
+        self.cursor_position_changed();
+        self.selection_changed();
+        let _ = self.update_cursor_visual_position();
+        self.request_static_repaint();
+        true
+    }
+
     pub(crate) fn has_selection(&self) -> bool {
         self.pipeline.has_selection()
     }

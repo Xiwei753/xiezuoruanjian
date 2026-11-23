@@ -75,7 +75,8 @@ pub struct ProjectBackend {
         fn(&mut self, project_id: QString, volume_id: QString, new_title: QString) -> QJsonObject
     ),
     delete_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
-    reorder_volumes: qt_method!(fn(&mut self, project_id: QString, ordered_ids_joined: QString)),
+    reorder_volumes:
+        qt_method!(fn(&mut self, project_id: QString, ordered_ids_joined: QString) -> QJsonObject),
     rename_chapter: qt_method!(
         fn(
             &mut self,
@@ -88,7 +89,22 @@ pub struct ProjectBackend {
     delete_chapter:
         qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
     reorder_chapters: qt_method!(
-        fn(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString)
+        fn(
+            &mut self,
+            project_id: QString,
+            volume_id: QString,
+            ordered_ids_joined: QString,
+        ) -> QJsonObject
+    ),
+    move_chapter_to_volume: qt_method!(
+        fn(
+            &mut self,
+            project_id: QString,
+            source_volume_id: QString,
+            target_volume_id: QString,
+            chapter_id: QString,
+            target_index: u32,
+        ) -> QJsonObject
     ),
     select_project: qt_method!(fn(&mut self, project_id: QString)),
     select_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
@@ -346,12 +362,21 @@ impl ProjectBackend {
             self.emit_changed();
         }
     }
-    fn reorder_volumes(&mut self, project_id: QString, ordered_ids_joined: QString) {
-        if self
-            .with_app_mut(|app| app.reorder_volumes(project_id, ordered_ids_joined))
-            .is_ok()
-        {
-            self.emit_changed();
+    /// Issue #1051：排序返回可判定成功/失败的结果对象；只有 Core 真正落盘成功
+    /// 才发 changed 让左树刷新，失败时保留原顺序。
+    fn reorder_volumes(&mut self, project_id: QString, ordered_ids_joined: QString) -> QJsonObject {
+        let result =
+            self.with_app_mut(|app| app.reorder_volumes_json(project_id, ordered_ids_joined));
+        match result {
+            Ok((json, success)) => {
+                if success {
+                    self.emit_changed();
+                }
+                qjson_object_from_json(&json.to_string())
+            }
+            Err(_) => {
+                qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
+            }
         }
     }
     fn rename_chapter(
@@ -383,17 +408,56 @@ impl ProjectBackend {
             self.emit_changed();
         }
     }
+    /// Issue #1051：卷内章节排序，返回可判定成功/失败的结果对象。
     fn reorder_chapters(
         &mut self,
         project_id: QString,
         volume_id: QString,
         ordered_ids_joined: QString,
-    ) {
-        if self
-            .with_app_mut(|app| app.reorder_chapters(project_id, volume_id, ordered_ids_joined))
-            .is_ok()
-        {
-            self.emit_changed();
+    ) -> QJsonObject {
+        let result = self.with_app_mut(|app| {
+            app.reorder_chapters_json(project_id, volume_id, ordered_ids_joined)
+        });
+        match result {
+            Ok((json, success)) => {
+                if success {
+                    self.emit_changed();
+                }
+                qjson_object_from_json(&json.to_string())
+            }
+            Err(_) => {
+                qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
+            }
+        }
+    }
+    /// Issue #1051：跨卷移动章节，返回可判定成功/失败的结果对象。
+    fn move_chapter_to_volume(
+        &mut self,
+        project_id: QString,
+        source_volume_id: QString,
+        target_volume_id: QString,
+        chapter_id: QString,
+        target_index: u32,
+    ) -> QJsonObject {
+        let result = self.with_app_mut(|app| {
+            app.move_chapter_to_volume_json(
+                project_id,
+                source_volume_id,
+                target_volume_id,
+                chapter_id,
+                target_index,
+            )
+        });
+        match result {
+            Ok((json, success)) => {
+                if success {
+                    self.emit_changed();
+                }
+                qjson_object_from_json(&json.to_string())
+            }
+            Err(_) => {
+                qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
+            }
         }
     }
     fn select_project(&mut self, project_id: QString) {

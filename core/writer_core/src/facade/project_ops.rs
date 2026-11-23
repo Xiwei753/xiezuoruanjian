@@ -455,6 +455,26 @@ impl super::WriterCore {
         )
     }
 
+    /// 跨卷移动章节并返回变更集。
+    pub fn move_chapter_to_volume_with_changes(
+        &self,
+        project_id: &str,
+        source_volume_id: &str,
+        target_volume_id: &str,
+        chapter_id: &str,
+        target_index: usize,
+    ) -> Result<WorkspaceChangeSet> {
+        let project_root = self.project_root(project_id);
+        chapter::move_chapter_to_volume_with_changes(
+            &project_root,
+            source_volume_id,
+            target_volume_id,
+            chapter_id,
+            target_index,
+            &self.app_data_root,
+        )
+    }
+
     /// 更新章节备注并返回变更集。
     pub fn update_chapter_note_with_changes(
         &self,

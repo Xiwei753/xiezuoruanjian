@@ -21,8 +21,35 @@
 //! 平台适配层直接使用该实现或提供自己的 `ConfigStore` 实现。
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use writer_platform_api::ConfigStore;
+
+/// 某部作品上次打开的章节（Issue #1047）。
+///
+/// 与全局 `last_chapter_id` 不同：作品之间互不覆盖；打开作品时优先恢复这里
+/// 记录的位置，再回退到全局导航状态。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LastOpenedChapter {
+    #[serde(default)]
+    pub volume_id: String,
+    #[serde(default)]
+    pub chapter_id: String,
+}
+
+/// 章节内的阅读视口（Issue #1047）：光标字符索引 + 纵向滚动像素。
+///
+/// 这是本机 UI 阅读状态，不进入正文、不参与正文同步；字符索引是 Unicode
+/// 标量值索引（Rust `char`），与 UTF-8 byte offset 由编辑 kernel 转换。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterViewState {
+    #[serde(default)]
+    pub cursor_char_index: u32,
+    #[serde(default)]
+    pub scroll_y: f32,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +66,12 @@ pub struct AppConfig {
     pub last_starmap_id: Option<String>,
     #[serde(default)]
     pub last_workspace_path: Option<String>,
+    /// 每部作品上次打开的章节；旧配置缺少该字段时自然为空。
+    #[serde(default)]
+    pub last_chapter_by_project: HashMap<String, LastOpenedChapter>,
+    /// 每部作品下每个章节的光标/滚动位置；第二层键为稳定章节 ID。
+    #[serde(default)]
+    pub chapter_view_by_project: HashMap<String, HashMap<String, ChapterViewState>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -126,6 +159,81 @@ pub fn clear_last_navigation_state() -> Result<(), String> {
     config.last_chapter_id = None;
     config.last_starmap_id = None;
     save_app_config(&config)
+}
+
+/// 记录某部作品上次打开的章节（Issue #1047）。
+///
+/// 与全局导航状态分开保存：切换作品时只更新该作品自己的书签，不会把上一部
+/// 作品的章节带到下一部作品。空 ID 直接拒绝，避免用空记录覆盖真实书签。
+pub fn save_project_last_chapter(
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+) -> Result<(), String> {
+    if project_id.is_empty() || chapter_id.is_empty() {
+        return Err("project_id/chapter_id 不能为空".to_string());
+    }
+    let mut config = load_app_config();
+    config.last_chapter_by_project.insert(
+        project_id.to_string(),
+        LastOpenedChapter {
+            volume_id: volume_id.to_string(),
+            chapter_id: chapter_id.to_string(),
+        },
+    );
+    save_app_config(&config)
+}
+
+/// 读取某部作品上次打开的章节；没有记录时返回 `None`。
+pub fn get_project_last_chapter(project_id: &str) -> Option<LastOpenedChapter> {
+    if project_id.is_empty() {
+        return None;
+    }
+    load_app_config()
+        .last_chapter_by_project
+        .get(project_id)
+        .cloned()
+}
+
+/// 保存某部作品下某章节的光标与滚动位置（Issue #1047）。
+///
+/// NaN/Infinity 会被 serde_json 写成 `null`，读回时会让整份配置回退默认值；
+/// 因此这里把非有限的滚动值收敛为 0，保证配置始终可解析。
+pub fn save_chapter_view_state(
+    project_id: &str,
+    chapter_id: &str,
+    state: ChapterViewState,
+) -> Result<(), String> {
+    if project_id.is_empty() || chapter_id.is_empty() {
+        return Err("project_id/chapter_id 不能为空".to_string());
+    }
+    let sanitized = ChapterViewState {
+        cursor_char_index: state.cursor_char_index,
+        scroll_y: if state.scroll_y.is_finite() {
+            state.scroll_y.max(0.0)
+        } else {
+            0.0
+        },
+    };
+    let mut config = load_app_config();
+    config
+        .chapter_view_by_project
+        .entry(project_id.to_string())
+        .or_default()
+        .insert(chapter_id.to_string(), sanitized);
+    save_app_config(&config)
+}
+
+/// 读取某章节的阅读视口；没有记录时返回 `None`（调用方回到顶部）。
+pub fn get_chapter_view_state(project_id: &str, chapter_id: &str) -> Option<ChapterViewState> {
+    if project_id.is_empty() || chapter_id.is_empty() {
+        return None;
+    }
+    load_app_config()
+        .chapter_view_by_project
+        .get(project_id)
+        .and_then(|views| views.get(chapter_id))
+        .copied()
 }
 
 /// 持久化上次打开的工作区（数据根）路径，供下次启动自动恢复。

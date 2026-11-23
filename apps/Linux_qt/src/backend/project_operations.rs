@@ -5,12 +5,12 @@
 use super::*;
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use writer_core::api::{ChangedEntityDto, ChapterMetaDto, ResultEnvelope, VolumeDto, WriterError};
-use writer_core::search::{
-    extractor, IndexEntry, SearchIndexAction, SearchIndexUpdate,
-};
+use writer_core::search::{extractor, IndexEntry, SearchIndexAction, SearchIndexUpdate};
 
 fn tree_field<'a>(node: &'a serde_json::Value, key: &str) -> &'a str {
-    node.get(key).and_then(serde_json::Value::as_str).unwrap_or("")
+    node.get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
 }
 
 fn search_upsert(entry: IndexEntry) -> SearchIndexUpdate {
@@ -51,7 +51,6 @@ fn chapter_delete_updates(
         "chapter_note:{project_id}:{volume_id}:{chapter_id}"
     )));
 }
-
 
 impl AppBackend {
     pub(crate) fn reconcile_selection_after_tree_reload(&mut self) -> bool {
@@ -191,10 +190,7 @@ impl AppBackend {
             }
         }
         let new_tree_value = serde_json::Value::Array(tree_vec);
-        let new_nodes = new_tree_value
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let new_nodes = new_tree_value.as_array().cloned().unwrap_or_default();
         let mut updates: Vec<SearchIndexUpdate> = Vec::new();
         let mut projects_to_rebuild: Vec<String> = Vec::new();
 
@@ -223,7 +219,13 @@ impl AppBackend {
             let title_changed = previous
                 .map(|old| tree_field(old, "title") != title)
                 .unwrap_or(false);
-            if title_changed {
+            // Issue #1051：章节跨卷移动后 id 不变、volumeId 变了。搜索索引
+            // 的 object_id 含 volume_id，旧卷条目要先删除，正文/备注条目
+            // 需要按新路径重建，否则搜索会指向已不存在的旧卷章节。
+            let volume_changed = previous
+                .map(|old| tree_field(old, "volumeId") != volume_id)
+                .unwrap_or(false);
+            if title_changed || volume_changed {
                 // 章/卷/作品改名后，正文/备注条目的展示标题也要跟着变；
                 // 只重建受影响作品，不扫整个工作区。
                 let rebuild_pid = if kind == "project" {
@@ -249,12 +251,17 @@ impl AppBackend {
         for node in &old_nodes {
             let kind = tree_field(node, "type");
             let id = tree_field(node, "id");
+            let volume_id = tree_field(node, "volumeId");
             if id.is_empty() {
                 continue;
             }
-            let still_exists = new_nodes
-                .iter()
-                .any(|new| tree_field(new, "type") == kind && tree_field(new, "id") == id);
+            let still_exists = new_nodes.iter().any(|new| {
+                tree_field(new, "type") == kind
+                    && tree_field(new, "id") == id
+                    // 章节 id 在不同卷里可复用，跨卷移动后旧卷条目的路径已失效，
+                    // 必须按 (id, volumeId) 判断是否还存在。
+                    && (kind != "chapter" || tree_field(new, "volumeId") == volume_id)
+            });
             if still_exists {
                 continue;
             }
@@ -926,22 +933,60 @@ impl AppBackend {
         Ok(true)
     }
 
-    pub(crate) fn reorder_volumes(&mut self, project_id: QString, ordered_ids_joined: QString) {
-        if let Some(api) = self.core_api() {
-            let ordered_ids_str = ordered_ids_joined.to_string();
-            let ids: Vec<String> = ordered_ids_str
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect();
-            let result = api.reorder_volumes(&project_id.to_string(), &ids);
-            match result {
-                Ok(_) => {
-                    self.reload_tree();
-                }
-                Err(e) => self.set_error(&format!("重排分卷失败: {}", e)),
-            }
+    /// Issue #1051：把 `orderedIdsJoined` 解析成 Core 需要的 ID 列表。
+    fn parse_ordered_ids(ordered_ids_joined: QString) -> Vec<String> {
+        ordered_ids_joined
+            .to_string()
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    /// Issue #1051：卷排序。返回 `(带完整 state 的结果 JSON, 是否成功)`，
+    /// QML 侧据此判定是否需要刷新拖动结果；失败走既有错误 JSON 约定。
+    pub(crate) fn reorder_volumes_json(
+        &mut self,
+        project_id: QString,
+        ordered_ids_joined: QString,
+    ) -> (QString, bool) {
+        let project_id_str = project_id.to_string();
+        let ids = Self::parse_ordered_ids(ordered_ids_joined);
+        if ids.is_empty() {
+            return (
+                self.mutation_error_json(
+                    "error.core_error".to_string(),
+                    "重排分卷失败: 排序结果为空".to_string(),
+                ),
+                false,
+            );
         }
+        let Some(api) = self.core_api() else {
+            return (
+                self.mutation_error_json(
+                    "error.core_error".to_string(),
+                    "核心模块未初始化".to_string(),
+                ),
+                false,
+            );
+        };
+        let envelope = match api.reorder_volumes(&project_id_str, &ids) {
+            Ok(_) => ResultEnvelope::success_with_changes(
+                true,
+                Vec::new(),
+                vec![ChangedEntityDto {
+                    entity_type: "VolumesReordered".to_string(),
+                    entity_id: None,
+                }],
+            ),
+            Err(error) => ResultEnvelope::<bool>::error(error),
+        };
+        // 一次排序只做一次 Core 调用、一次树重建。
+        let success = envelope.success;
+        let json = self.typed_envelope_to_result(envelope, |app, _data| {
+            app.reload_tree();
+        });
+        (json, success)
     }
 
     pub(crate) fn rename_chapter_json(
@@ -998,28 +1043,114 @@ impl AppBackend {
         Ok(true)
     }
 
-    pub(crate) fn reorder_chapters(
+    /// Issue #1051：卷内章节排序。返回 `(结果 JSON, 是否成功)`。
+    pub(crate) fn reorder_chapters_json(
         &mut self,
         project_id: QString,
         volume_id: QString,
         ordered_ids_joined: QString,
-    ) {
-        if let Some(api) = self.core_api() {
-            let ordered_ids_str = ordered_ids_joined.to_string();
-            let ids: Vec<String> = ordered_ids_str
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect();
-            let result =
-                api.reorder_chapters(&project_id.to_string(), &volume_id.to_string(), &ids);
-            match result {
-                Ok(_) => {
-                    self.reload_tree();
-                }
-                Err(e) => self.set_error(&format!("重排章节失败: {}", e)),
-            }
+    ) -> (QString, bool) {
+        let project_id_str = project_id.to_string();
+        let volume_id_str = volume_id.to_string();
+        let ids = Self::parse_ordered_ids(ordered_ids_joined);
+        if ids.is_empty() {
+            return (
+                self.mutation_error_json(
+                    "error.core_error".to_string(),
+                    "重排章节失败: 排序结果为空".to_string(),
+                ),
+                false,
+            );
         }
+        let Some(api) = self.core_api() else {
+            return (
+                self.mutation_error_json(
+                    "error.core_error".to_string(),
+                    "核心模块未初始化".to_string(),
+                ),
+                false,
+            );
+        };
+        let envelope = match api.reorder_chapters(&project_id_str, &volume_id_str, &ids) {
+            Ok(_) => ResultEnvelope::success_with_changes(
+                true,
+                Vec::new(),
+                vec![ChangedEntityDto {
+                    entity_type: "ChaptersReordered".to_string(),
+                    entity_id: None,
+                }],
+            ),
+            Err(error) => ResultEnvelope::<bool>::error(error),
+        };
+        // 一次排序只做一次 Core 调用、一次树重建。
+        let success = envelope.success;
+        let json = self.typed_envelope_to_result(envelope, |app, _data| {
+            app.reload_tree();
+        });
+        (json, success)
+    }
+
+    /// Issue #1051：跨卷移动章节（一次原子 Core 更新）。返回 `(结果 JSON, 是否成功)`。
+    pub(crate) fn move_chapter_to_volume_json(
+        &mut self,
+        project_id: QString,
+        source_volume_id: QString,
+        target_volume_id: QString,
+        chapter_id: QString,
+        target_index: u32,
+    ) -> (QString, bool) {
+        let project_id_str = project_id.to_string();
+        let source_volume_id_str = source_volume_id.to_string();
+        let target_volume_id_str = target_volume_id.to_string();
+        let chapter_id_str = chapter_id.to_string();
+        if source_volume_id_str == target_volume_id_str {
+            return (
+                self.mutation_error_json(
+                    "error.core_error".to_string(),
+                    "移动章节失败: 源卷与目标卷相同".to_string(),
+                ),
+                false,
+            );
+        }
+        let Some(api) = self.core_api() else {
+            return (
+                self.mutation_error_json(
+                    "error.core_error".to_string(),
+                    "核心模块未初始化".to_string(),
+                ),
+                false,
+            );
+        };
+        let envelope = match api.move_chapter_to_volume(
+            &project_id_str,
+            &source_volume_id_str,
+            &target_volume_id_str,
+            &chapter_id_str,
+            target_index,
+        ) {
+            Ok(_) => ResultEnvelope::success_with_changes(
+                true,
+                Vec::new(),
+                vec![ChangedEntityDto {
+                    entity_type: "ChapterMoved".to_string(),
+                    entity_id: Some(chapter_id_str.clone()),
+                }],
+            ),
+            Err(error) => ResultEnvelope::<bool>::error(error),
+        };
+        // 一次移动只做一次 Core 调用、一次树重建。
+        let success = envelope.success;
+        let json = self.typed_envelope_to_result(envelope, |app, _data| {
+            // 正在编辑/选中的章节被移到新卷后，Core 侧选中卷也跟着换到目标卷，
+            // 避免后续按 selected_volume_id 重建的选择态指向旧卷。
+            if app.selected_project_id.as_deref() == Some(project_id_str.as_str())
+                && app.selected_chapter_id.as_deref() == Some(chapter_id_str.as_str())
+            {
+                app.selected_volume_id = Some(target_volume_id_str.clone());
+            }
+            app.reload_tree();
+        });
+        (json, success)
     }
 
     pub(crate) fn select_project(&mut self, project_id: QString) {

@@ -1113,6 +1113,10 @@ interface WriterAppService {
     [Throws=WriterError]
     boolean reorder_chapters(string project_id, string volume_id, sequence<string> ordered_chapter_ids);
 
+    // Issue #1051：跨卷移动章节（目录迁移 + 两卷 order 重排，一次原子 Core 更新）。
+    [Throws=WriterError]
+    boolean move_chapter_to_volume(string project_id, string source_volume_id, string target_volume_id, string chapter_id, u32 target_index);
+
     [Throws=WriterError]
     ChapterContentDto open_chapter(string project_id, string volume_id, string chapter_id);
 

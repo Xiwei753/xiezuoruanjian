@@ -451,6 +451,26 @@ Rectangle {
         function onProofReplayRequested() {
             proofReplayDialog.openForChapter(editorController.chapterId, "")
         }
+        // Issue #1047：光标移动/滚动停止后的节流快照，写入本机阅读书签。
+        function onViewStateChanged(state) {
+            if (!editorController.projectId || !editorController.chapterId)
+                return
+            root.saveChapterViewState(editorController.projectId,
+                                      editorController.chapterId, state)
+        }
+    }
+
+    // Loader 卸载/切路由/关闭作品是最后一个收口点；只用缓存快照，
+    // 不访问可能已销毁的编辑器 Item。
+    Component.onDestruction: {
+        try {
+            if (root.lastViewProjectId && root.lastViewChapterId && root.lastViewState)
+                root.saveChapterViewState(root.lastViewProjectId,
+                                          root.lastViewChapterId,
+                                          root.lastViewState)
+        } catch (e) {
+            // 卸载阶段后端可能已不可用；节流保存已覆盖绝大多数情况。
+        }
     }
 
     // Issue #833 复核：onTreeChanged -> populateTreeModel() 已删，
@@ -466,18 +486,29 @@ Rectangle {
         var sel = (root.appState && root.appState.selected)
                 ? root.appState.selected : null
 
-        if (sel
+        // Issue #1047：先恢复“这部作品上次打开的章节”，再回退到全局选中章节。
+        // 全局 appState.selected 只记录最后一次导航，跨作品打开时会指向别的作品。
+        var initialProjectId = String(root.workspaceProjectId || "")
+                || (sel ? String(sel.projectId || "") : "")
+        var savedChapter = root.readProjectLastChapter(initialProjectId)
+        var opened = false
+        if (savedChapter && savedChapter.volumeId && savedChapter.chapterId) {
+            opened = root.openChapter(initialProjectId, savedChapter.volumeId,
+                                      savedChapter.chapterId, "")
+        }
+        if (!opened
+                && sel
                 && sel.projectId === root.workspaceProjectId
                 && sel.chapterId) {
-            root.openChapter(
+            opened = root.openChapter(
                 sel.projectId,
                 sel.volumeId || "",
                 sel.chapterId,
                 ""
             )
-        } else {
-            editorController.clearActiveChapter()
         }
+        if (!opened)
+            editorController.clearActiveChapter()
 
         root.requestEditorFocus()
         // Issue #762 评论 5826175490 第 3 点：打开作品时立即刷新冲突，不等同步结束
@@ -486,16 +517,69 @@ Rectangle {
         root.refreshWritingStatusData()
     }
 
+    // ── Issue #1047：作品/章节阅读位置书签（本机 UI 状态，不进正文与同步） ──
+    // 缓存最近一次视口快照：Loader 卸载时 editorViewport 可能已不可访问，
+    // 只有这些纯值还能安全交给后端落盘。
+    property string lastViewProjectId: ""
+    property string lastViewChapterId: ""
+    property var lastViewState: null
+
+    function readProjectLastChapter(pId) {
+        if (!pId || !root.workspaceBackendRef)
+            return null
+        var raw = root.workspaceBackendRef.get_project_last_chapter(pId)
+        if (!raw || raw.found !== true || !String(raw.chapterId || ""))
+            return null
+        return {
+            projectId: pId,
+            volumeId: String(raw.volumeId || ""),
+            chapterId: String(raw.chapterId || "")
+        }
+    }
+
+    function rememberProjectChapter(pId, vId, cId) {
+        if (!pId || !cId || !root.workspaceBackendRef)
+            return
+        var raw = root.workspaceBackendRef.save_project_last_chapter(pId, vId || "", cId)
+        if (raw && raw.success !== true)
+            console.warn("save_project_last_chapter failed:", String(raw.rawError || ""))
+    }
+
+    function saveChapterViewState(pId, cId, state) {
+        if (!pId || !cId || !state || !root.workspaceBackendRef)
+            return
+        root.lastViewProjectId = pId
+        root.lastViewChapterId = cId
+        root.lastViewState = state
+        var raw = root.workspaceBackendRef.save_chapter_view_state(
+                    pId, cId,
+                    Math.max(0, Math.floor(Number(state.cursorCharIndex || 0))),
+                    Math.max(0, Number(state.scrollY || 0)))
+        if (raw && raw.success !== true)
+            console.warn("save_chapter_view_state failed:", String(raw.rawError || ""))
+    }
+
+    // 立即保存当前章节视口快照；切章、离开路由、关闭窗口时调用。
+    function saveActiveViewState() {
+        if (!editorController.projectId || !editorController.chapterId)
+            return
+        root.saveChapterViewState(editorController.projectId,
+                                  editorController.chapterId,
+                                  editorViewport.captureViewState())
+    }
+
     function openChapter(pId, vId, cId, cTitle) {
-        if (!pId || !vId || !cId) return;
+        if (!pId || !vId || !cId) return false;
         // Prevent re-opening the same chapter (anti-loop guard)
         if (editorController.projectId === pId &&
             editorController.volumeId === vId &&
             editorController.chapterId === cId &&
             !editorController.isLoadingChapter) {
-            return;
+            return true;
         }
 
+        // Issue #1047：载入新章节前先保存旧章节的位置，避免切章吞掉书签。
+        root.saveActiveViewState()
         editorViewport.snapNextCursorUpdate();
         // loadChapterContentWithIds returns null on failure, result object on success.
         // State is only updated after content is successfully loaded.
@@ -507,12 +591,26 @@ Rectangle {
             editorController.chapterId = d.chapterId || cId;
             editorController.chapterTitle = d.title || cTitle || "";
             editorViewport.snapNextCursorUpdate();
-            // Issue #715: 切章后明确把新章节视口设为顶部。
-            // 旧章节的 contentY 不应继承到新章节，否则动画层会画到错误 Y 坐标。
-            // contentY -> scroll_y 绑定会同步给 Rust，确保两层使用同一滚动坐标。
-            editorViewport.resetScroll();
+            // Issue #1047：恢复该章节上次的阅读位置；没有记录才回顶部。
+            // 旧行为是切章后无条件 resetScroll()，会丢掉每章独立书签。
+            var savedView = root.workspaceBackendRef
+                    ? root.workspaceBackendRef.get_chapter_view_state(
+                          editorController.projectId, editorController.chapterId)
+                    : null
+            if (savedView && savedView.found === true) {
+                editorViewport.restoreViewState({
+                    cursorCharIndex: Number(savedView.cursorCharIndex || 0),
+                    scrollY: Number(savedView.scrollY || 0)
+                })
+            } else {
+                editorViewport.resetScroll()
+            }
             if (root.projectBackendRef)
                 root.projectBackendRef.select_chapter(pId, vId, cId)
+            // Issue #1047：成功选中章节后更新这部作品自己的“上次章节”。
+            root.rememberProjectChapter(editorController.projectId,
+                                        editorController.volumeId,
+                                        editorController.chapterId)
             root.requestEditorFocus();
             // Issue #829：切章后重拉今日统计（统计按 writing event 落盘，
             // 切章是天然的刷新点，不必逐键去查）。
@@ -522,7 +620,9 @@ Rectangle {
             // 章节 ID 已一致，只会选中/滚动，不会再次打开同一章。
             root.chapterLoaded(pId, vId, cId);
             Qt.callLater(editorController.refreshChapterAnnotations)
+            return true;
         }
+        return false;
     }
 
     // Issue #982：从全局搜索结果定位到当前作品的章节正文。需要时先打开章节，
@@ -540,6 +640,9 @@ Rectangle {
                 || editorController.isLoadingChapter) {
             return false;
         }
+        // Issue #1047：搜索命中位置优先。取消章节书签的延迟滚动恢复，
+        // 否则 settle 计时器会把视口拉回书签，覆盖搜索结果定位。
+        editorViewport.cancelViewStateRestore();
         return editorController.revealSearchRange(startByte, endByte);
     }
 
@@ -677,9 +780,25 @@ Rectangle {
                     workspaceProjectId: root.workspaceProjectId
                     workspaceProjectTitle: root.workspaceProjectTitle
                     currentChapterId: editorController.chapterId
+                    // Issue #1051：左树拖动排序/跨卷移动通过 ProjectBackend 落盘。
+                    projectBackendRef: root.projectBackendRef
 
                     onOpenChapter: function(pId, vId, cId, cTitle) {
                         root.openChapter(pId, vId, cId, cTitle)
+                    }
+                    // Issue #1051：跨卷移动了正在编辑的章节时只迁移卷身份，
+                    // 保持章节 ID 与正文不变，确保后续自动保存仍能写回。
+                    onChapterMovedToVolume: function(pId, cId, targetVolumeId) {
+                        if (editorController.projectId === pId
+                                && editorController.chapterId === cId) {
+                            editorController.volumeId = targetVolumeId
+                            // 同步编辑器文档身份，避免保存快照校验因旧卷 ID 拒绝落盘。
+                            if (editorController.rebindEditorVolume)
+                                editorController.rebindEditorVolume(pId, targetVolumeId, cId)
+                            if (root.workspaceBackendRef)
+                                root.workspaceBackendRef.save_project_last_chapter(
+                                            pId, targetVolumeId, cId)
+                        }
                     }
                     onCreateVolumeRequested: function(pId) {
                         root.createVolumeRequested(pId)

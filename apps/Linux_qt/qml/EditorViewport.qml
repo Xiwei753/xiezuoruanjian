@@ -32,9 +32,17 @@ Item {
     property real linkPressY: 0
     property var pendingLinkChoices: []
     property string linkActivationMessage: ""
+    // Issue #1047：章节阅读位置恢复。恢复期间光标/正文信号不得触发自动跟随滚动，
+    // 否则新章节会先被拉到光标处，再把用户原来的阅读位置覆盖掉。
+    property bool restoringViewState: false
+    property var pendingRestoreViewState: null
+    property int restoreScrollAttempts: 0
+    property bool restoreCursorApplied: false
 
     signal explicitClearRequested()
     signal proofReplayRequested()
+    // 节流后的视口变化通知：光标移动或用户滚动停止后发出，工作区据此落盘。
+    signal viewStateChanged(var state)
 
     function requestEditorFocus() {
         if (sujianEditor && sujianEditor.visible && sujianEditor.editor_enabled) {
@@ -44,6 +52,129 @@ Item {
     function resetScroll() {
         if (editorScroll.contentItem) {
             editorScroll.contentItem.contentY = 0;
+        }
+    }
+
+    // Issue #1047：抓取当前章节的阅读位置（光标 char 索引 + 纵向滚动）。
+    function captureViewState() {
+        return {
+            cursorCharIndex: Number(sujianEditor.cursor_position || 0),
+            scrollY: editorScroll.contentItem
+                     ? Number(editorScroll.contentItem.contentY || 0) : 0
+        };
+    }
+
+    // Issue #1047：恢复章节阅读位置。先设光标，再把 contentY 落到
+    // clamp(保存值, 0, contentHeight - height)；排版尚未稳定时由定时器重试。
+    // state 为空表示该章节没有记录，按“首次进入”留在顶部。
+    function restoreViewState(state) {
+        restoreScrollTimer.stop();
+        restoreSettleTimer.stop();
+        if (!state || state.scrollY === undefined) {
+            restoringViewState = false;
+            pendingRestoreViewState = null;
+            resetScroll();
+            return;
+        }
+        restoringViewState = true;
+        pendingRestoreViewState = state;
+        restoreScrollAttempts = 0;
+        restoreCursorApplied = false;
+        // 光标与 contentY 都等新章节排版出高度后再落，避免用旧布局算 caret。
+        restoreScrollTimer.start();
+    }
+
+    // 搜索定位、校对跳转等显式定位优先于书签：取消未完成的恢复，避免
+    // 延迟的 settle 计时器把滚动位置拉回书签。
+    function cancelViewStateRestore() {
+        restoreScrollTimer.stop();
+        restoreSettleTimer.stop();
+        restoringViewState = false;
+        pendingRestoreViewState = null;
+    }
+
+    function tryApplyRestoredScroll() {
+        if (!restoringViewState || !pendingRestoreViewState)
+            return false;
+        var flick = editorScroll.contentItem;
+        if (!flick || editorScroll.contentHeight <= 0)
+            return false;
+        if (!restoreCursorApplied) {
+            var cursor = Math.max(0, Number(pendingRestoreViewState.cursorCharIndex || 0));
+            sujianEditor.set_cursor_position_chars(cursor);
+            restoreCursorApplied = true;
+        }
+        var maxY = Math.max(0, editorScroll.contentHeight - editorScroll.height);
+        flick.contentY = Math.max(0, Math.min(
+            Number(pendingRestoreViewState.scrollY || 0), maxY));
+        return true;
+    }
+
+    function finishRestoreViewState() {
+        restoreScrollTimer.stop();
+        restoreSettleTimer.stop();
+        pendingRestoreViewState = null;
+        restoringViewState = false;
+        restoreCursorApplied = false;
+        // 恢复完成后让自动跟随重新按恢复后的光标位置工作。
+        editorScroll.scheduleEnsureCursorVisible();
+    }
+
+    function noteViewStateChanged() {
+        if (restoringViewState)
+            return;
+        viewStateNotifyTimer.restart();
+    }
+
+    Timer {
+        id: restoreScrollTimer
+        interval: 16
+        repeat: false
+        onTriggered: {
+            root.restoreScrollAttempts += 1;
+            if (root.tryApplyRestoredScroll()) {
+                // 排版高度可能还会再长一点（换行/图片行），再稳定一拍后收口。
+                restoreSettleTimer.start();
+            } else if (root.restoreScrollAttempts < 40) {
+                restoreScrollTimer.restart();
+            } else {
+                root.finishRestoreViewState();
+            }
+        }
+    }
+
+    Timer {
+        id: restoreSettleTimer
+        interval: 120
+        repeat: false
+        onTriggered: {
+            root.tryApplyRestoredScroll();
+            root.finishRestoreViewState();
+        }
+    }
+
+    // Issue #1047：光标移动/滚动后节流保存，切章时另由工作区立即保存快照。
+    Timer {
+        id: viewStateNotifyTimer
+        interval: 700
+        repeat: false
+        onTriggered: root.viewStateChanged(root.captureViewState())
+    }
+
+    Connections {
+        target: editorScroll.contentItem
+        ignoreUnknownSignals: true
+        function onContentYChanged() {
+            root.noteViewStateChanged();
+        }
+    }
+
+    Connections {
+        target: editorScroll
+        ignoreUnknownSignals: true
+        function onContentHeightChanged() {
+            if (root.restoringViewState && root.pendingRestoreViewState)
+                Qt.callLater(root.tryApplyRestoredScroll);
         }
     }
     function snapNextCursorUpdate() {
@@ -273,8 +404,16 @@ Item {
         // Rust 侧先发信号再 update_cursor_visual_position()，故用
         // Qt.callLater() 等本轮 caret target 算完再读 cursor_rect_y。
         // 同一轮即使排了两次 callLater，第二次看到 caret 已可见会直接返回。
-        onCursor_position_changed: editorScroll.scheduleEnsureCursorVisible()
-        onText_changed: editorScroll.scheduleEnsureCursorVisible()
+        onCursor_position_changed: {
+            // Issue #1047：恢复阅读位置期间不跟随光标，避免把 contentY 拉走。
+            if (!root.restoringViewState)
+                editorScroll.scheduleEnsureCursorVisible()
+            root.noteViewStateChanged()
+        }
+        onText_changed: {
+            if (!root.restoringViewState)
+                editorScroll.scheduleEnsureCursorVisible()
+        }
 
         onWidthChanged: {
             Qt.callLater(sujianEditor.flush_content_height)

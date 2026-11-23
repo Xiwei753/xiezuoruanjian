@@ -179,6 +179,9 @@ Kirigami.ApplicationWindow {
     Connections {
         target: appController
         function onInWritingChanged() {
+            // Issue #1047：离开写作路由前保存当前章节阅读位置；Loader 随后卸载。
+            if (!appController.inWriting && writingWorkspaceLoader.item)
+                writingWorkspaceLoader.item.saveActiveViewState()
             window.syncWritingSessionLifecycle()
         }
     }
@@ -1398,6 +1401,9 @@ Kirigami.ApplicationWindow {
     }
 
     onClosing: {
+        // Issue #1047：退出前立即保存当前章节光标/滚动位置。
+        if (appController.inWriting && writingWorkspaceLoader.item)
+            writingWorkspaceLoader.item.saveActiveViewState()
         if (editorBackend) {
             // 先结算当前计时切片并等统计 writer 落盘，确认成功后才正式结束会话，
             // 避免 process::exit 丢掉最后不足 30 秒的切片。
@@ -1547,6 +1553,9 @@ Kirigami.ApplicationWindow {
 
             onBackRequested: {
                 if (window.desktopTopBarMode === "writing") {
+                    // Issue #1047：离开写作区前保存当前章节阅读位置。
+                    if (writingWorkspaceLoader.item)
+                        writingWorkspaceLoader.item.saveActiveViewState()
                     appController.openHub(0);
                     window.debugLog("workspace", "exit_writing_mode", "");
                 } else if (window.desktopTopBarMode === "starmap"
@@ -1791,6 +1800,10 @@ Kirigami.ApplicationWindow {
 
                 onBackToProjects: {
                     // Issue #796 评论 5886483653: 从写作区返回仍回 openHub(0)（作品页）。
+                    // Issue #1047：返回前保存当前章节的阅读位置。
+                    var workspace = writingWorkspaceLoader.item;
+                    if (workspace)
+                        workspace.saveActiveViewState();
                     appController.openHub(0);
                     window.debugLog("workspace", "exit_writing_mode", "");
                 }

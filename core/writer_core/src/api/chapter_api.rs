@@ -282,6 +282,100 @@ impl WriterCoreApi {
         Ok(true)
     }
 
+    /// 跨卷移动章节：把 `chapter_id` 从 `source_volume_id` 移到 `target_volume_id`
+    /// 的 `target_index` 位置（越界钳制到末尾）。
+    ///
+    /// Issue #1051：卷内重排只覆盖「同一卷的全量 ID 顺序」，跨卷移动必须一次原子
+    /// Core 更新完成目录迁移和两卷 order 重排，不能拿两个卷的 reorder 伪造。
+    pub fn move_chapter_to_volume(
+        &self,
+        project_id: &str,
+        source_volume_id: &str,
+        target_volume_id: &str,
+        chapter_id: &str,
+        target_index: u32,
+    ) -> ApiResult<bool> {
+        let change_set = self.core_write().move_chapter_to_volume_with_changes(
+            project_id,
+            source_volume_id,
+            target_volume_id,
+            chapter_id,
+            target_index as usize,
+        )?;
+        // 搜索索引 object_id 含 volume_id：先删旧卷三份条目，再按新卷补写。
+        for prefix in ["chapter_title", "chapter_body", "chapter_note"] {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Delete,
+                object_id: format!(
+                    "{}:{}:{}:{}",
+                    prefix, project_id, source_volume_id, chapter_id
+                ),
+                scope: crate::search::SearchScope::All,
+                title: String::new(),
+                body: String::new(),
+                target: None,
+            });
+        }
+        if let Ok(content) = self
+            .core_read()
+            .open_chapter(project_id, target_volume_id, chapter_id)
+        {
+            let title = content.meta.title.clone();
+            let title_entry = crate::search::extractor::extract_chapter_title_entry(
+                project_id,
+                target_volume_id,
+                chapter_id,
+                &title,
+            );
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Upsert,
+                object_id: title_entry.object_id.clone(),
+                scope: title_entry.scope,
+                title: title_entry.title.clone(),
+                body: title_entry.body.clone(),
+                target: Some(title_entry.target.clone()),
+            });
+            if !content.content.is_empty() {
+                let body_entry = crate::search::extractor::extract_chapter_body_entry(
+                    project_id,
+                    target_volume_id,
+                    chapter_id,
+                    &title,
+                    &content.content,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: body_entry.object_id.clone(),
+                    scope: body_entry.scope,
+                    title: body_entry.title.clone(),
+                    body: body_entry.body.clone(),
+                    target: Some(body_entry.target.clone()),
+                });
+            }
+            if let Some(ref note) = content.meta.note {
+                if !note.is_empty() {
+                    let note_entry = crate::search::extractor::extract_chapter_note_entry(
+                        project_id,
+                        target_volume_id,
+                        chapter_id,
+                        &title,
+                        note,
+                    );
+                    self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                        action: crate::search::SearchIndexAction::Upsert,
+                        object_id: note_entry.object_id.clone(),
+                        scope: note_entry.scope,
+                        title: note_entry.title.clone(),
+                        body: note_entry.body.clone(),
+                        target: Some(note_entry.target.clone()),
+                    });
+                }
+            }
+        }
+        let _ = self.record_workspace_change_set_history(&change_set, "move_chapter_to_volume");
+        Ok(true)
+    }
+
     /// 打开章节，返回正文内容和元数据。
     pub fn open_chapter(
         &self,

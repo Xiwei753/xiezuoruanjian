@@ -75,6 +75,18 @@ pub fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
         .count()
 }
 
+/// 字符索引（char count）→ UTF-8 byte offset。
+///
+/// Issue #1047：QML 的 `cursor_position` 是 Unicode 字符索引；恢复章节阅读
+/// 位置时必须先转成 Rust 正文的 byte offset，不能把 Qt 的 UTF-16 偏移直接
+/// 当 byte offset。超界时钳到文本末尾，返回值一定是合法 char boundary。
+pub fn char_to_byte_index(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .nth(char_index)
+        .map(|(byte_index, _)| byte_index)
+        .unwrap_or(text.len())
+}
+
 #[cfg(test)]
 pub fn byte_index_at_char_offset_in_range(
     text: &str,

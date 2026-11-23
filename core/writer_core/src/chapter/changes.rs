@@ -492,6 +492,113 @@ pub fn reorder_chapters_with_changes(
     Ok(change_set)
 }
 
+/// 跨卷移动章节并返回变更集。
+///
+/// Issue #1051：变更集包含旧卷章节目录的 `DeleteTree`、新卷
+/// `chapter.meta.json` / `chapter.md` 的 `Upsert`，以及两卷中 order 实际变化的
+/// `chapter.meta.json` 的 `Upsert`——与磁盘上真正被改写的文件一一对应。
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+pub fn move_chapter_to_volume_with_changes(
+    project_root: &Path,
+    source_volume_id: &str,
+    target_volume_id: &str,
+    chapter_id: &str,
+    target_index: usize,
+    workspace_root: &Path,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    // 移动前快照：用同一份 order 事实计算哪些 meta 会被重写。
+    let source_chapters = list_chapters(project_root, source_volume_id)?;
+    let target_chapters = list_chapters(project_root, target_volume_id)?;
+
+    move_chapter_to_volume(
+        project_root,
+        source_volume_id,
+        target_volume_id,
+        chapter_id,
+        target_index,
+    )?;
+
+    let meta_rel = |volume_id: &str, id: &str| {
+        let meta_path = project_root
+            .join("volumes")
+            .join(volume_id)
+            .join("chapters")
+            .join(id)
+            .join("chapter.meta.json");
+        meta_path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&meta_path)
+            .to_string_lossy()
+            .replace('\\', "/")
+    };
+
+    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
+
+    // 旧卷章节目录整体从原路径消失。
+    let old_chapter_dir = project_root
+        .join("volumes")
+        .join(source_volume_id)
+        .join("chapters")
+        .join(chapter_id);
+    let old_dir_rel = old_chapter_dir
+        .strip_prefix(workspace_root)
+        .unwrap_or(&old_chapter_dir)
+        .to_string_lossy()
+        .replace('\\', "/");
+    change_set = change_set.add_delete_tree(std::path::PathBuf::from(old_dir_rel));
+
+    // 新卷章节目录：meta + 正文都换了路径。
+    let new_chapter_dir = project_root
+        .join("volumes")
+        .join(target_volume_id)
+        .join("chapters")
+        .join(chapter_id);
+    for file in ["chapter.meta.json", "chapter.md"] {
+        let path = new_chapter_dir.join(file);
+        let rel = path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        change_set = change_set.add_upsert(std::path::PathBuf::from(rel));
+    }
+
+    // 源卷剩余章节的 order 变化。
+    for (index, chapter) in source_chapters
+        .iter()
+        .filter(|c| c.id != chapter_id)
+        .enumerate()
+    {
+        if chapter.order != index as i32 {
+            change_set = change_set.add_upsert(std::path::PathBuf::from(meta_rel(
+                source_volume_id,
+                &chapter.id,
+            )));
+        }
+    }
+
+    // 目标卷（含被移动章节）的 order 变化；被移动章节的 meta 上面已记。
+    let mut target_ids: Vec<String> = target_chapters.iter().map(|c| c.id.clone()).collect();
+    let insert_at = target_index.min(target_ids.len());
+    target_ids.insert(insert_at, chapter_id.to_string());
+    for (index, id) in target_ids.iter().enumerate() {
+        if id == chapter_id {
+            continue;
+        }
+        let old_order = target_chapters
+            .iter()
+            .find(|c| &c.id == id)
+            .map(|c| c.order);
+        if old_order == Some(index as i32) {
+            continue;
+        }
+        change_set =
+            change_set.add_upsert(std::path::PathBuf::from(meta_rel(target_volume_id, id)));
+    }
+
+    Ok(change_set)
+}
+
 /// 更新章节备注并返回变更集。
 ///
 /// 返回 `(Chapter, WorkspaceChangeSet)`，变更集包含 `Upsert(chapter.meta.json)`。

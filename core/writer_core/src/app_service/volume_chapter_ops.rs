@@ -130,6 +130,24 @@ impl super::WriterAppService {
             .reorder_chapters(&project_id, &volume_id, &ordered_chapter_ids)
     }
 
+    /// Issue #1051：跨卷移动章节（目录迁移 + 两卷 order 重排，一次原子 Core 更新）。
+    pub fn move_chapter_to_volume(
+        &self,
+        project_id: String,
+        source_volume_id: String,
+        target_volume_id: String,
+        chapter_id: String,
+        target_index: u32,
+    ) -> Result<bool, WriterError> {
+        self.api.move_chapter_to_volume(
+            &project_id,
+            &source_volume_id,
+            &target_volume_id,
+            &chapter_id,
+            target_index,
+        )
+    }
+
     pub fn open_chapter(
         &self,
         project_id: String,

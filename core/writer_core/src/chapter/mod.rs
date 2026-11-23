@@ -589,6 +589,85 @@ pub fn delete_chapter(
     Ok(())
 }
 
+/// 跨卷移动章节：把 `chapter_id` 从 `source_volume_id` 移到 `target_volume_id` 的
+/// `target_index` 位置（以移动前目标卷的章节序列为基准，越界时钳制到末尾）。
+///
+/// Issue #1051：章节的卷归属由磁盘目录表达（`volumes/{volume_id}/chapters/{chapter_id}`），
+/// 因此一次跨卷移动是两卷目录之间的一次 `rename`；移动后两卷都走
+/// [`reorder_chapters`] 重排 order——只重写 order 实际变化的 `chapter.meta.json`。
+/// 任一前置校验失败时不会移动任何文件。
+pub fn move_chapter_to_volume(
+    project_root: &Path,
+    source_volume_id: &str,
+    target_volume_id: &str,
+    chapter_id: &str,
+    target_index: usize,
+) -> Result<()> {
+    let source_volume_id = crate::delete_guard::validate_id_segment(source_volume_id)?;
+    let target_volume_id = crate::delete_guard::validate_id_segment(target_volume_id)?;
+    let chapter_id = crate::delete_guard::validate_id_segment(chapter_id)?;
+
+    if source_volume_id == target_volume_id {
+        return Err(crate::error::Error::Other(
+            "move_chapter_to_volume: source and target volume are the same".to_string(),
+        ));
+    }
+
+    let volumes_dir = project_root.join("volumes");
+    if !volumes_dir
+        .join(source_volume_id)
+        .join("volume.json")
+        .exists()
+    {
+        return Err(crate::error::Error::VolumeNotFound);
+    }
+    if !volumes_dir
+        .join(target_volume_id)
+        .join("volume.json")
+        .exists()
+    {
+        return Err(crate::error::Error::VolumeNotFound);
+    }
+
+    let source_chapters = list_chapters(project_root, source_volume_id)?;
+    let target_chapters = list_chapters(project_root, target_volume_id)?;
+    if !source_chapters.iter().any(|c| c.id == chapter_id) {
+        return Err(crate::error::Error::ChapterNotFound);
+    }
+
+    let source_dir = volumes_dir
+        .join(source_volume_id)
+        .join("chapters")
+        .join(chapter_id);
+    let target_dir = volumes_dir
+        .join(target_volume_id)
+        .join("chapters")
+        .join(chapter_id);
+    if target_dir.exists() {
+        return Err(crate::error::Error::Other(format!(
+            "move_chapter_to_volume: target already exists: {chapter_id}"
+        )));
+    }
+    if let Some(parent) = target_dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    fs::rename(&source_dir, &target_dir)?;
+
+    let source_ids: Vec<String> = source_chapters
+        .iter()
+        .filter(|c| c.id != chapter_id)
+        .map(|c| c.id.clone())
+        .collect();
+    let mut target_ids: Vec<String> = target_chapters.iter().map(|c| c.id.clone()).collect();
+    let insert_at = target_index.min(target_ids.len());
+    target_ids.insert(insert_at, chapter_id.to_string());
+
+    reorder_chapters(project_root, source_volume_id, &source_ids)?;
+    reorder_chapters(project_root, target_volume_id, &target_ids)?;
+    Ok(())
+}
+
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_chapters(
     project_root: &Path,
