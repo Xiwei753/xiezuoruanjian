@@ -76,6 +76,10 @@ struct CorrectionQueue {
     /// Newest `(session, revision)` submitted for each chapter. Used only to
     /// skip obsolete display/scan jobs; edit mappings are never skipped.
     latest: Mutex<HashMap<(String, String), (u64, u64)>>,
+    /// Document that most recently asked for proofreading. A coalescable job
+    /// popped after the writer already left that chapter must not initialize a
+    /// 474 MB model before returning results nobody can use.
+    active_document: Mutex<Option<(String, String, u64)>>,
 }
 
 static CORRECTION_QUEUE: OnceLock<Arc<CorrectionQueue>> = OnceLock::new();
@@ -86,6 +90,7 @@ fn correction_queue() -> &'static Arc<CorrectionQueue> {
             jobs: Mutex::new(VecDeque::new()),
             wake: Condvar::new(),
             latest: Mutex::new(HashMap::new()),
+            active_document: Mutex::new(None),
         });
         let worker = Arc::clone(&queue);
         if std::thread::Builder::new()
@@ -173,10 +178,16 @@ fn correction_executor(queue: Arc<CorrectionQueue>) {
                         .copied()
                 })
                 .unwrap_or(None);
-            if latest.is_some_and(|(session_id, text_revision)| {
+            let superseded = latest.is_some_and(|(session_id, text_revision)| {
                 job.session_id < session_id
                     || (job.session_id == session_id && job.text_revision < text_revision)
-            }) {
+            });
+            // The job may have been popped while an older chapter was still
+            // current, or the chapter may have been left while this job waited
+            // in the queue. Check again immediately before the expensive Core
+            // call so a stale chapter never opens the model.
+            let stale_document = correction_job_document_obsolete(&job);
+            if superseded || stale_document {
                 record_correction_job_event(
                     "correction.job.skipped",
                     job.request_id,
@@ -184,7 +195,11 @@ fn correction_executor(queue: Arc<CorrectionQueue>) {
                     job.text_revision,
                     job.kind,
                     Some("skipped"),
-                    Some("superseded_revision"),
+                    Some(if stale_document {
+                        "stale_document"
+                    } else {
+                        "superseded_revision"
+                    }),
                     Some(job.queued_at.elapsed().as_millis()),
                     None,
                     Some(queue_depth),
@@ -242,6 +257,31 @@ fn record_correction_latest(
     *entry = (session_id, text_revision);
 }
 
+fn record_active_correction_document(project_id: &str, chapter_id: &str, session_id: u64) {
+    let queue = correction_queue();
+    if let Ok(mut active) = queue.active_document.lock() {
+        *active = Some((project_id.to_string(), chapter_id.to_string(), session_id));
+    }
+}
+
+/// True when this job no longer belongs to the document the writer is looking
+/// at. Only coalescable display/scan jobs consult it; edit mappings must keep
+/// their revision order even after the chapter changed.
+fn correction_job_document_obsolete(job: &CorrectionJob) -> bool {
+    let queue = correction_queue();
+    let active = match queue.active_document.lock() {
+        Ok(active) => active,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    active
+        .as_ref()
+        .is_some_and(|(project_id, chapter_id, session_id)| {
+            project_id != &job.project_id
+                || chapter_id != &job.chapter_id
+                || *session_id > job.session_id
+        })
+}
+
 fn submit_correction_job(
     project_id: String,
     chapter_id: String,
@@ -253,6 +293,9 @@ fn submit_correction_job(
     run: impl FnOnce() -> bool + Send + 'static,
 ) -> Result<(), String> {
     record_correction_latest(&project_id, &chapter_id, session_id, text_revision);
+    if coalescable {
+        record_active_correction_document(&project_id, &chapter_id, session_id);
+    }
     let queue = correction_queue();
     let mut jobs = match queue.jobs.lock() {
         Ok(jobs) => jobs,
@@ -306,6 +349,16 @@ fn submit_correction_job(
 /// map or leaves obsolete jobs waiting behind the shared executor.
 pub(crate) fn release_correction_queue(project_id: &str, chapter_id: &str) {
     let queue = correction_queue();
+    if let Ok(mut active) = queue.active_document.lock() {
+        if active
+            .as_ref()
+            .is_some_and(|(active_project, active_chapter, _)| {
+                active_project == project_id && active_chapter == chapter_id
+            })
+        {
+            *active = None;
+        }
+    }
     let mut latest = match queue.latest.lock() {
         Ok(latest) => latest,
         Err(poisoned) => poisoned.into_inner(),
@@ -318,7 +371,12 @@ pub(crate) fn release_correction_queue(project_id: &str, chapter_id: &str) {
     let queue_depth = jobs.len();
     let mut retained = VecDeque::with_capacity(jobs.len());
     while let Some(job) = jobs.pop_front() {
-        if job.project_id == project_id && job.chapter_id == chapter_id {
+        // Edit mappings are lightweight and keep Core's segment index in
+        // revision order. Dropping one leaves a revision gap and forces the
+        // next chapter check to reconcile the whole text, so they always run;
+        // scan/display jobs for the closed chapter are discarded.
+        if job.project_id == project_id && job.chapter_id == chapter_id && job.kind != "edit_apply"
+        {
             record_correction_job_event(
                 "correction.job.skipped",
                 job.request_id,
@@ -804,20 +862,8 @@ impl AppBackend {
                         edits,
                     )
                     .map_err(|error| error.to_string());
-                if result.is_ok() {
-                    record_correction_latest(
-                        &project_id,
-                        &chapter_id,
-                        session_id,
-                        text_revision,
-                    );
-                }
                 let succeeded = result.is_ok();
-                completion(
-                    request_id,
-                    text_revision,
-                    result.map(|_| "{}".to_string()),
-                );
+                completion(request_id, text_revision, result.map(|_| "{}".to_string()));
                 succeeded
             },
         )

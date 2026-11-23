@@ -35,6 +35,7 @@ struct CorrectionScanMetrics {
     final_suggestions: usize,
     cache_hit: bool,
     model_available: bool,
+    engine_attached: bool,
     resource_fingerprint: String,
 }
 
@@ -58,6 +59,7 @@ impl CorrectionScanMetrics {
             final_suggestions: 0,
             cache_hit: false,
             model_available: scanner.model_available,
+            engine_attached: scanner.engine.is_some(),
             resource_fingerprint: scanner.scanner_fingerprint.clone(),
         }
     }
@@ -98,6 +100,7 @@ impl CorrectionScanMetrics {
             ("final_suggestions", self.final_suggestions.to_string()),
             ("cache_hit", self.cache_hit.to_string()),
             ("model_available", self.model_available.to_string()),
+            ("engine_attached", self.engine_attached.to_string()),
             ("resource_fingerprint", self.resource_fingerprint.clone()),
         ]
     }
@@ -170,7 +173,9 @@ pub(crate) struct CorrectionScanner {
     chapter_id: String,
     session_id: u64,
     text_revision: u64,
-    engine: Arc<CorrectionEngine>,
+    /// `None` for a restore-only scanner: reading the committed chapter cache
+    /// must never open the ONNX session or build an engine.
+    engine: Option<Arc<CorrectionEngine>>,
     model_available: bool,
     /// Fingerprint of the exact lexicon/model/dictionary snapshot captured
     /// when this scanner was built. It must travel with the engine so a
@@ -310,8 +315,37 @@ impl CorrectionScanner {
             chapter_id,
             session_id,
             text_revision,
-            engine,
+            engine: Some(engine),
             model_available,
+            scanner_fingerprint,
+        })
+    }
+
+    /// Build a scanner that may only restore the committed chapter cache.
+    ///
+    /// Chapter open and read-only display refreshes use this path. It computes
+    /// the same resource fingerprint as [`Self::new`] so restored results are
+    /// verified against the current model/dictionary generation, but it never
+    /// resolves the configured model, opens an ONNX session, or builds a
+    /// lexicon. An empty chapter therefore costs one cache lookup, not a
+    /// 500–800 ms model initialization.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn restore_only(
+        store: CorrectionStore,
+        project_id: String,
+        chapter_id: String,
+        session_id: u64,
+        text_revision: u64,
+    ) -> Result<Self, WriterError> {
+        let scanner_fingerprint = store.scanner_fingerprint(&project_id)?;
+        Ok(Self {
+            store,
+            project_id,
+            chapter_id,
+            session_id,
+            text_revision,
+            engine: None,
+            model_available: false,
             scanner_fingerprint,
         })
     }
@@ -436,6 +470,11 @@ impl CorrectionScanner {
             metrics.cache_hit = metrics.cache_valid_segments > 0;
             drop(guard);
             return self.restore_snapshot(&slot, text, scanner_fingerprint, metrics);
+        }
+        if self.engine.is_none() {
+            return Err(WriterError::Other(
+                "correction scanner was created for restore-only use".into(),
+            ));
         }
 
         let mut guard = lock_slot(&slot)?;
@@ -724,8 +763,12 @@ impl CorrectionScanner {
         start: usize,
         end: usize,
     ) -> Result<Vec<CorrectionDiagnostic>, WriterError> {
+        let engine = self
+            .engine
+            .as_ref()
+            .ok_or_else(|| WriterError::Other("correction engine is not available".into()))?;
         let (context_start, context_end) = context_range(text, start, end);
-        self.engine
+        engine
             .scan(&text[context_start..context_end])
             .map(|diagnostics| {
                 diagnostics

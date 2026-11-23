@@ -753,6 +753,43 @@ impl QQuickItem for SujianEditorItem {
                 dpr,
             ));
         }
+        // Issue #1055：只在同步明显拖帧时记一条结构化事件。逐帧写日志会
+        // 自己变成卡顿来源；这里用同一条 editor.visual 诊断，补上 GUI 输入
+        // 停顿真正落到的 Scene Graph 提交边界。
+        if total_elapsed.as_millis() > 8 {
+            let mut fields = std::collections::BTreeMap::new();
+            fields.insert(
+                "paint_node_ms".to_string(),
+                serde_json::json!(total_elapsed.as_secs_f64() * 1000.0),
+            );
+            fields.insert(
+                "needs_relayout".to_string(),
+                serde_json::json!(base_needs_relayout),
+            );
+            fields.insert(
+                "item_width".to_string(),
+                serde_json::json!(f64::from(self.bounding_width())),
+            );
+            fields.insert(
+                "item_height".to_string(),
+                serde_json::json!(f64::from(self.bounding_height())),
+            );
+            fields.insert(
+                "scroll_y".to_string(),
+                serde_json::json!(f64::from(self.current_scroll_y)),
+            );
+            writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                sequence: 0,
+                session_id: String::new(),
+                level: writer_diagnostics::DiagnosticLevel::Info,
+                origin: writer_diagnostics::DiagnosticOrigin::App,
+                event: "editor.visual.frame".to_string(),
+                target: "editor.visual".to_string(),
+                message: None,
+                fields,
+            });
+        }
 
         // Issue #833：给"有正文但渲染帧为空"加一条结构化诊断，不改变渲染逻辑。
         // 条件：committed_text 非空，且 prepared_frame 为 None 或 item width/height <= 1。

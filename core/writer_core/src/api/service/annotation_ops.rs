@@ -245,6 +245,16 @@ impl WriterCoreApi {
                 CorrectionDictionaryEntryKindDto::Person | CorrectionDictionaryEntryKindDto::Place
             )
         });
+        // Read-only correction requests reach this function several times per
+        // chapter open. After the one-time migration and the first publish,
+        // nothing here can change named entries, so never touch AnnotationStore
+        // on that path.
+        if legacy_names.is_empty() && !has_typed_names {
+            if !correction.named_entries_initialized(project_id)? {
+                self.sync_correction_named_entries(project_id)?;
+            }
+            return Ok(());
+        }
         for entry in &dictionary_entries {
             if matches!(
                 entry.kind,
@@ -313,7 +323,8 @@ impl WriterCoreApi {
                 );
             }
         }
-        if !paths.is_empty() {
+        let wrote_named_entries = !paths.is_empty();
+        if wrote_named_entries {
             self.finish_annotation_write(project_id, paths, "migrate_correction_named_entries");
         }
         if !legacy_names.is_empty() {
@@ -322,7 +333,9 @@ impl WriterCoreApi {
         if has_typed_names {
             correction.clear_legacy_typed_entity_dictionary_entries(project_id)?;
         }
-        self.sync_correction_named_entries(project_id)?;
+        if wrote_named_entries || !correction.named_entries_initialized(project_id)? {
+            self.sync_correction_named_entries(project_id)?;
+        }
         Ok(())
     }
 

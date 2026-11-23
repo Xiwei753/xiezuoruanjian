@@ -119,6 +119,13 @@ QtObject {
     property var annotationRefreshRequests: ({})
     property int correctionApplyRequestSerial: 0
     property var correctionApplyRequests: ({})
+    // Issue #1055：同一事件循环只排一次高度刷新；逐键各排一次会把
+    // flush_content_height 和布局/绑定更新叠成多份。
+    property bool contentHeightFlushScheduled: false
+    // 同一正文 revision 已下发的装饰 JSON。标注与校对回调可能连续要求
+    // 刷新同一份装饰，重复全量重建 native 几何只会拖慢光标反馈。
+    property string lastAppliedDecorationJson: ""
+    property double lastAppliedDecorationRevision: -1
     property var editorViewportRef: null
 
     property var annotationRefreshTimer: Timer {
@@ -237,7 +244,7 @@ QtObject {
         target: targetEditorItem ? targetEditorItem : null
         function onText_changed() {
             controller.handlePlainTextChanged();
-            Qt.callLater(targetEditorItem.flush_content_height);
+            controller.scheduleContentHeightFlush();
         }
         // Issue #843: 编辑事务事实从 Rust EditorEditResult 直接传来，
         // cause + inserted/deleted 不再在 QML 中用文本长度 diff 猜。
@@ -415,10 +422,46 @@ QtObject {
         applyTextDecorations();
     }
 
+    // Issue #1055：一次事件循环里的多次 text_changed 合并为一次高度刷新。
+    // 逐键各排一次会让高度信号、绑定求值和布局在同一个事件循环里重复执行。
+    function scheduleContentHeightFlush() {
+        if (contentHeightFlushScheduled) return;
+        contentHeightFlushScheduled = true;
+        Qt.callLater(controller.flushContentHeightAfterEdit);
+    }
+
+    function flushContentHeightAfterEdit() {
+        contentHeightFlushScheduled = false;
+        if (!targetEditorItem || !targetEditorItem.flush_content_height) return;
+        var startedAt = Date.now();
+        targetEditorItem.flush_content_height();
+        var elapsedMs = Date.now() - startedAt;
+        if (elapsedMs >= 4) {
+            logWriterInfo("editor.ui.content_height",
+                "reason=text_changed, flush_ms=" + elapsedMs
+                + ", revision=" + Number(targetEditorItem.text_revision));
+        }
+    }
+
     function applyTextDecorations() {
         if (!targetEditorItem || !targetEditorItem.set_text_decorations_json) return;
         var spans = proofreadingDecorations.concat(annotationDecorations);
-        targetEditorItem.set_text_decorations_json(JSON.stringify(spans));
+        var decorationsJson = JSON.stringify(spans);
+        var revision = Number(targetEditorItem.text_revision);
+        // 标注与校对可能为同一 revision 连续要求刷新；native 几何已经一致时
+        // 不再全量重建。
+        if (decorationsJson === lastAppliedDecorationJson
+                && revision === lastAppliedDecorationRevision) return;
+        lastAppliedDecorationJson = decorationsJson;
+        lastAppliedDecorationRevision = revision;
+        var startedAt = Date.now();
+        targetEditorItem.set_text_decorations_json(decorationsJson);
+        var elapsedMs = Date.now() - startedAt;
+        if (elapsedMs >= 2) {
+            logWriterInfo("editor.ui.decorations",
+                "reason=refresh, apply_ms=" + elapsedMs
+                + ", spans=" + spans.length + ", revision=" + revision);
+        }
     }
 
     // Issue #1032 复审：标注快照也由后台 API 生成。请求带当前章节、正文
@@ -764,6 +807,9 @@ QtObject {
         annotationDecorations = [];
         annotationNavigationSnapshot = null;
         annotationBaselineRevision = -1;
+        // native 装饰已随新文档清空，同一 JSON/revision 的短路缓存也必须失效。
+        lastAppliedDecorationJson = "";
+        lastAppliedDecorationRevision = -1;
         applyTextDecorations();
         // 新 documentEpoch 必须由后台重新建立 baseline；不能让旧周期的
         // revision 或 pending patch 被当成当前文档已应用。
@@ -843,6 +889,19 @@ QtObject {
         var revision = Number(targetEditorItem.text_revision);
         if (!isFinite(revision) || revision < 0) return;
         ensureCorrectionTracking(snapshotText, revision);
+        // Issue #1055：空白章节没有任何可恢复的波线，不必为它排一次后台
+        // 校对任务；Core 的空章快照本来也是空建议。
+        if (snapshotText.length === 0) {
+            correctionCheckPending = false;
+            pendingCorrectionRequestId = 0;
+            pendingCorrectionRevision = -1;
+            pendingCorrectionProjectId = "";
+            pendingCorrectionChapterId = "";
+            pendingCorrectionText = "";
+            pendingCorrectionSilent = false;
+            updateCorrectionSuggestions([]);
+            return;
+        }
 
         correctionRequestSerial += 1;
         if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;

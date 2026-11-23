@@ -643,23 +643,47 @@ impl CorrectionStore {
     /// Supply the canonical annotation entries used by the correction engine.
     /// This cache never persists names; AnnotationStore remains the single
     /// writable source of truth.
+    ///
+    /// A read-only refresh calls this on every scanner setup. Only a real
+    /// entry change may invalidate the lexicon and the strong correction
+    /// engine; rebuilding them unconditionally dropped the model's last strong
+    /// reference and reopened the ONNX session hundreds of milliseconds later.
     pub(crate) fn set_named_entries_for_project(
         &self,
         project_id: &str,
-        entries: Vec<AnnotationNamedEntryDto>,
-    ) -> Result<(), WriterError> {
-        let mut guard =
-            self.inner.named_entries.lock().map_err(|_| {
+        mut entries: Vec<AnnotationNamedEntryDto>,
+    ) -> Result<bool, WriterError> {
+        // Stable order keeps equality independent of AnnotationStore file order.
+        entries.sort_by(|left, right| left.entry_id.cmp(&right.entry_id));
+        {
+            let mut guard = self.inner.named_entries.lock().map_err(|_| {
                 WriterError::Other("correction named entry cache lock poisoned".into())
             })?;
-        guard.insert(project_id.to_string(), entries);
+            if guard.get(project_id).is_some_and(|old| old == &entries) {
+                return Ok(false);
+            }
+            guard.insert(project_id.to_string(), entries);
+        }
         if let Ok(mut lexicons) = self.inner.lexicons.lock() {
             lexicons.remove(project_id);
         }
         if let Ok(mut engines) = self.inner.engines.lock() {
             engines.remove(project_id);
         }
-        Ok(())
+        Ok(true)
+    }
+
+    /// True once this process has published annotation entries for the
+    /// project. A missing cache means a read-only caller must sync once; a
+    /// present (even empty) cache already matches AnnotationStore because
+    /// every annotation write republishes entries.
+    pub(crate) fn named_entries_initialized(&self, project_id: &str) -> Result<bool, WriterError> {
+        Ok(self
+            .inner
+            .named_entries
+            .lock()
+            .map_err(|_| WriterError::Other("correction named entry cache lock poisoned".into()))?
+            .contains_key(project_id))
     }
 
     /// Return the legacy name relations solely for the one-time import into

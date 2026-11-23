@@ -34,6 +34,30 @@ impl WriterCoreApi {
         )
     }
 
+    /// Restore-only scanner: verifies and returns the committed chapter cache
+    /// without resolving the model or building an inference engine.
+    pub(crate) fn correction_restore_scanner(
+        &self,
+        project_id: String,
+        chapter_id: String,
+        session_id: u64,
+        text_revision: u64,
+    ) -> ApiResult<CorrectionScanner> {
+        if project_id.trim().is_empty() || chapter_id.trim().is_empty() {
+            return Err(crate::api::WriterError::Other(
+                "project id and chapter id must be non-empty".into(),
+            ));
+        }
+        self.ensure_named_entries_migrated(&project_id)?;
+        CorrectionScanner::restore_only(
+            self.correction_store()?,
+            project_id,
+            chapter_id,
+            session_id,
+            text_revision,
+        )
+    }
+
     /// Validate and save the user's local ONNX model resource directory. Scans
     /// share the process-cached model; WriterCore never packages the weights.
     pub fn set_correction_model_path(&self, path: String) -> ApiResult<()> {
@@ -335,7 +359,7 @@ impl WriterCoreApi {
         text_revision: u64,
         text: String,
     ) -> ApiResult<CorrectionChapterSnapshotDto> {
-        self.correction_scanner(project_id, chapter_id, session_id, text_revision)?
+        self.correction_restore_scanner(project_id, chapter_id, session_id, text_revision)?
             .chapter_snapshot(&text)
     }
 
