@@ -73,9 +73,10 @@ Rectangle {
     readonly property int dragThreshold: 10
 
     signal openChapter(string projectId, string volumeId, string chapterId, string chapterTitle)
-    // Issue #1051：跨卷移动了当前正在编辑的章节时通知工作区迁移编辑器身份，
-    // 否则后续自动保存仍会拿旧卷 ID，正文保存会失败。
-    signal chapterMovedToVolume(string projectId, string chapterId, string targetVolumeId)
+    // Issue #1051 复审：跨卷移动会移动正文文件，组件不直接调 Core；由工作区
+    // 先保存正在编辑的正文，再提交移动并迁移编辑器身份。
+    signal chapterMoveRequested(string projectId, string sourceVolumeId, string targetVolumeId,
+                                string chapterId, int targetIndex)
     signal createVolumeRequested(string projectId)
     signal createChapterRequested(string projectId, string volumeId)
     signal renameItemRequested(var itemData)
@@ -363,14 +364,10 @@ Rectangle {
                 }
             }
         }
-        var moved = root.projectBackendRef.move_chapter_to_volume(root.workspaceProjectId,
-                                                                  sourceVolumeId,
-                                                                  targetVolumeId,
-                                                                  sourceId,
-                                                                  insertAt)
-        // 只有 Core 确认成功才迁移编辑器身份；失败时树不刷新、身份不变。
-        if (moved && moved.success === true && sourceId === root.currentChapterId)
-            root.chapterMovedToVolume(root.workspaceProjectId, sourceId, targetVolumeId)
+        // 跨卷移动 = 移动正文文件，必须先把正在编辑的章节落盘；
+        // 交给 WritingWorkspace 统一“保存 -> move -> 迁移身份”。
+        root.chapterMoveRequested(root.workspaceProjectId, sourceVolumeId, targetVolumeId,
+                                  sourceId, insertAt)
     }
 
     // Issue #835：按层级重建 model —— 每卷一行 header，卷展开时紧接其章节行。

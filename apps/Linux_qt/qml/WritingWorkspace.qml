@@ -568,6 +568,32 @@ Rectangle {
                                   editorViewport.captureViewState())
     }
 
+    // Issue #1051 复审：跨卷移动的完整顺序是“保存正在编辑的正文 -> Core 原子
+    // 移动 -> 迁移编辑器卷身份”。保存失败时拒绝移动，避免磁盘旧正文被搬走、
+    // 内存新编辑丢失。
+    function requestChapterMove(pId, sourceVolumeId, targetVolumeId, cId, targetIndex) {
+        if (!root.projectBackendRef || !pId || !sourceVolumeId || !targetVolumeId || !cId)
+            return false
+        var movingActiveChapter = editorController.projectId === pId
+                && editorController.chapterId === cId
+        if (movingActiveChapter && editorController.saveCurrentChapter() !== true)
+            return false
+        var moved = root.projectBackendRef.move_chapter_to_volume(
+                    pId, sourceVolumeId, targetVolumeId, cId, targetIndex)
+        if (!moved || moved.success !== true)
+            return false
+        if (movingActiveChapter) {
+            editorController.volumeId = targetVolumeId
+            // 同步编辑器文档身份，避免保存快照校验因旧卷 ID 拒绝落盘。
+            if (editorController.rebindEditorVolume)
+                editorController.rebindEditorVolume(pId, targetVolumeId, cId)
+            if (root.workspaceBackendRef)
+                root.workspaceBackendRef.save_project_last_chapter(
+                            pId, targetVolumeId, cId)
+        }
+        return true
+    }
+
     function openChapter(pId, vId, cId, cTitle) {
         if (!pId || !vId || !cId) return false;
         // Prevent re-opening the same chapter (anti-loop guard)
@@ -578,8 +604,10 @@ Rectangle {
             return true;
         }
 
-        // Issue #1047：载入新章节前先保存旧章节的位置，避免切章吞掉书签。
+        // Issue #1047：载入新章节前先保存旧章节的位置，避免切章吞掉书签；
+        // 同时取消上一章尚未完成的延迟恢复，一个章节身份只允许一个待完成恢复。
         root.saveActiveViewState()
+        editorViewport.cancelViewStateRestore()
         editorViewport.snapNextCursorUpdate();
         // loadChapterContentWithIds returns null on failure, result object on success.
         // State is only updated after content is successfully loaded.
@@ -786,19 +814,12 @@ Rectangle {
                     onOpenChapter: function(pId, vId, cId, cTitle) {
                         root.openChapter(pId, vId, cId, cTitle)
                     }
-                    // Issue #1051：跨卷移动了正在编辑的章节时只迁移卷身份，
-                    // 保持章节 ID 与正文不变，确保后续自动保存仍能写回。
-                    onChapterMovedToVolume: function(pId, cId, targetVolumeId) {
-                        if (editorController.projectId === pId
-                                && editorController.chapterId === cId) {
-                            editorController.volumeId = targetVolumeId
-                            // 同步编辑器文档身份，避免保存快照校验因旧卷 ID 拒绝落盘。
-                            if (editorController.rebindEditorVolume)
-                                editorController.rebindEditorVolume(pId, targetVolumeId, cId)
-                            if (root.workspaceBackendRef)
-                                root.workspaceBackendRef.save_project_last_chapter(
-                                            pId, targetVolumeId, cId)
-                        }
+                    // Issue #1051 复审：跨卷移动先落盘当前正文，再交给 Core 移动；
+                    // 成功后只迁移编辑器卷身份，不重新载入正文。
+                    onChapterMoveRequested: function(pId, sourceVolumeId,
+                                                     targetVolumeId, cId, targetIndex) {
+                        root.requestChapterMove(pId, sourceVolumeId, targetVolumeId,
+                                                cId, targetIndex)
                     }
                     onCreateVolumeRequested: function(pId) {
                         root.createVolumeRequested(pId)

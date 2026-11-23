@@ -50,6 +50,9 @@ Item {
         }
     }
     function resetScroll() {
+        // Issue #1047 复审：回顶部同时取消上一章尚未完成的延迟恢复，
+        // 避免 A 章恢复在 B 章（无书签）打开后仍执行、把 A 的光标写进 B。
+        cancelViewStateRestore();
         if (editorScroll.contentItem) {
             editorScroll.contentItem.contentY = 0;
         }
@@ -116,8 +119,9 @@ Item {
         pendingRestoreViewState = null;
         restoringViewState = false;
         restoreCursorApplied = false;
-        // 恢复完成后让自动跟随重新按恢复后的光标位置工作。
-        editorScroll.scheduleEnsureCursorVisible();
+        // Issue #1047 复审：恢复完成后不要立刻自动跟随光标。用户离开时的阅读
+        // 视口可能远离光标，这里若 ensureCursorVisible 会把视口拉回光标，覆盖
+        // 刚恢复的 scrollY。自动跟随从下一次真实光标移动/输入开始生效。
     }
 
     function noteViewStateChanged() {

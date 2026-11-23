@@ -179,9 +179,7 @@ Kirigami.ApplicationWindow {
     Connections {
         target: appController
         function onInWritingChanged() {
-            // Issue #1047：离开写作路由前保存当前章节阅读位置；Loader 随后卸载。
-            if (!appController.inWriting && writingWorkspaceLoader.item)
-                writingWorkspaceLoader.item.saveActiveViewState()
+            // 视口快照已由 AppController.beforeLeaveWriting 在路由改变前保存。
             window.syncWritingSessionLifecycle()
         }
     }
@@ -1386,6 +1384,14 @@ Kirigami.ApplicationWindow {
         if (appBackend) {
             appBackend.apply_window_dark_mode(designTokens.isDark);
         }
+        // Issue #1047 复审：写作 → Hub / 作品 → 星图 / 关闭工作区都经由
+        // AppController 的路由函数；在 Loader 卸载前由仍存活的 EditorViewport
+        // 即时抓取视口快照，不依赖 700ms 节流缓存。
+        appController.beforeLeaveWriting = function() {
+            var workspace = writingWorkspaceLoader.item;
+            if (workspace)
+                workspace.saveActiveViewState();
+        };
         appController.restoreWorkspace();
         // 启动时同步一次真实前台状态，避免窗口已经 active 却不触发 onActiveChanged。
         window.syncWritingSessionLifecycle();
@@ -1553,9 +1559,7 @@ Kirigami.ApplicationWindow {
 
             onBackRequested: {
                 if (window.desktopTopBarMode === "writing") {
-                    // Issue #1047：离开写作区前保存当前章节阅读位置。
-                    if (writingWorkspaceLoader.item)
-                        writingWorkspaceLoader.item.saveActiveViewState()
+                    // 离开写作区前的视口保存由 AppController.openHub → beforeLeaveWriting 完成。
                     appController.openHub(0);
                     window.debugLog("workspace", "exit_writing_mode", "");
                 } else if (window.desktopTopBarMode === "starmap"
@@ -1800,10 +1804,7 @@ Kirigami.ApplicationWindow {
 
                 onBackToProjects: {
                     // Issue #796 评论 5886483653: 从写作区返回仍回 openHub(0)（作品页）。
-                    // Issue #1047：返回前保存当前章节的阅读位置。
-                    var workspace = writingWorkspaceLoader.item;
-                    if (workspace)
-                        workspace.saveActiveViewState();
+                    // 视口保存由 openHub → beforeLeaveWriting 完成。
                     appController.openHub(0);
                     window.debugLog("workspace", "exit_writing_mode", "");
                 }

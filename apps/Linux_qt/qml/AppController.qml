@@ -38,9 +38,17 @@ QtObject {
     // Issue #796 评论 5886483653: 持久的 hubTab 属性，记录 Hub 一级页要回到哪个 tab。
     // 0=作品, 1=星图, 2=统计。Loader 重建后不会丢，避免永远回默认 0。
     property int hubTab: 0
+    // Issue #1047 复审：离开写作路由前的同步回调。由 main.qml 注入，
+    // 在 route 真正改变、WritingWorkspace Loader 卸载之前即时抓取视口快照。
+    property var beforeLeaveWriting: null
 
     readonly property bool inWriting: route === "writing"
     readonly property bool inStarmap: route === "starmap"
+
+    function notifyLeaveWriting() {
+        if (controller.route === "writing" && controller.beforeLeaveWriting)
+            controller.beforeLeaveWriting();
+    }
 
     signal errorRaised(string message)
     signal stateChanged(var state)
@@ -184,6 +192,9 @@ QtObject {
 
     function openWriting(projectId, projectTitle) {
         if (!projectId || !projectBackendRef) return
+        // 已在写作区切换作品时，先让仍存活的 EditorViewport 保存当前章节视口。
+        if (route === "writing")
+            controller.notifyLeaveWriting();
 
         projectBackendRef.select_project(projectId)
         refreshStateImmediate(qsTr("切换作品失败"))
@@ -205,6 +216,8 @@ QtObject {
     // Issue #801: 从 Hub 星图列表点卡片进入根星图。
     // 星图内部层级由 StarMapWorkspace/Canvas 自己维护，AppController 只管 route。
     function openRootStarmap(id, title) {
+        // 作品写作区 → 星图：Loader 即将卸载，先即时保存阅读位置。
+        controller.notifyLeaveWriting();
         starmapId = id || ""
         starmapTitle = title || qsTr("星图编辑器")
         writingProjectId = ""
@@ -219,6 +232,8 @@ QtObject {
         if (tabIndex !== undefined && tabIndex !== null) {
             hubTab = tabIndex;
         }
+        // 写作 → Hub：保存当前章节视口后再让 Loader 卸载。
+        controller.notifyLeaveWriting();
         route = "hub";
         writingProjectId = "";
         writingProjectTitle = "";
@@ -231,6 +246,8 @@ QtObject {
     function switchWorkspace() {
         var workspaceApi = workspaceBackendRef;
         if (!workspaceApi) return;
+        // 关闭/切换工作区前保存写作区阅读位置。
+        controller.notifyLeaveWriting();
         workspaceApi.switch_workspace();
         route = "hub";
         workspaceApi.clear_last_navigation_state();
