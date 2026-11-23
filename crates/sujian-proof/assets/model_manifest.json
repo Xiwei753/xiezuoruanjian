@@ -58,10 +58,12 @@
     "license": "MIT",
     "notice": "third_party/onnxruntime/NOTICE",
     "linux-x64": {
-      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
-      "bytes": 7798730,
-      "sha256": "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3",
-      "library": "lib/libonnxruntime.so.1.22.0"
+      "url": "https://files.pythonhosted.org/packages/1e/70/342514ade3a33ad9dd505dcee96ff1f0e7be6d0e6e9c911fe0f1505abf42/onnxruntime-1.22.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "format": "zip",
+      "bytes": 16406707,
+      "sha256": "9fe45ee3e756300fccfd8d61b91129a121d3d80e9d38e01f03ff1295badc32b8",
+      "library": "onnxruntime/capi/libonnxruntime.so.1.22.0",
+      "provenance": "Official ONNX Runtime 1.22.0 Linux x64 build from the PyPI wheel; upstream GitHub release assets are no longer available."
     },
     "windows-x64": {
       "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip",

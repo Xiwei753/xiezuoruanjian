@@ -37,6 +37,11 @@ interface TextDiff {
   replacement: string
 }
 
+interface EditRangeMap {
+  startUtf16: number
+  endUtf16: number
+}
+
 interface PendingEdit {
   sessionId: number
   localSequence: number
@@ -297,11 +302,13 @@ export class NativeRichEditorBridge {
       insertedText += span.value.substring(offsetStart, offsetEnd)
     }
 
-    const oldText = this.currentText.substring(rangeBefore.start, rangeBefore.end)
+    const rangeStart: number = rangeBefore.start ?? 0
+    const rangeEnd: number = rangeBefore.end ?? rangeStart
+    const oldText = this.currentText.substring(rangeStart, rangeEnd)
 
-    const newText = this.currentText.substring(0, rangeBefore.start)
+    const newText = this.currentText.substring(0, rangeStart)
       + insertedText
-      + this.currentText.substring(rangeBefore.end)
+      + this.currentText.substring(rangeEnd)
 
     const previousText = this.currentText
     this.currentText = newText
@@ -318,8 +325,8 @@ export class NativeRichEditorBridge {
       localSequence: this.localSequence++,
       baseRevision: this.lastAppliedRevision,
       beforeText: previousText,
-      startUtf16: rangeBefore.start,
-      endUtf16: rangeBefore.end,
+      startUtf16: rangeStart,
+      endUtf16: rangeEnd,
       insertedText: insertedText,
       oldText: oldText,
       cause: cause
@@ -436,7 +443,7 @@ export class NativeRichEditorBridge {
         this.selectionDrainRunning = false
       }
       this.checkIdle()
-    }).catch(e => {
+    }).catch((e: Object) => {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `requestSelectionFlush error: ${JSON.stringify(e)}`)
       if (sessionToken === this.sessionId) {
         this.selectionDrainRunning = false
@@ -684,7 +691,7 @@ export class NativeRichEditorBridge {
         this.drainRunning = false
       }
       this.checkIdle()
-    }).catch(e => {
+    }).catch((e: Object) => {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `wakeDrain error: ${JSON.stringify(e)}`)
       if (sessionToken === this.sessionId) {
         this.drainRunning = false
@@ -796,7 +803,7 @@ export class NativeRichEditorBridge {
     while (prefixLen < oldText.length && prefixLen < newText.length) {
       const oldCp = oldText.codePointAt(prefixLen)
       const newCp = newText.codePointAt(prefixLen)
-      if (oldCp !== newCp) {
+      if (oldCp === undefined || newCp === undefined || oldCp !== newCp) {
         break
       }
       prefixLen += (oldCp > 0xFFFF) ? 2 : 1
@@ -839,7 +846,7 @@ export class NativeRichEditorBridge {
   }
 
   // 将 edit 的偏移从 edit.beforeText 映射到 baselineText。
-  private mapEditToBaseline(edit: PendingEdit, baselineText: string): { startUtf16: number, endUtf16: number } | null {
+  private mapEditToBaseline(edit: PendingEdit, baselineText: string): EditRangeMap | null {
     if (baselineText === edit.beforeText) {
       return { startUtf16: edit.startUtf16, endUtf16: edit.endUtf16 }
     }

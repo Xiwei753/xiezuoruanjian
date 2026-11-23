@@ -185,14 +185,16 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   }
 
   private async awaitBridgeIdle(): Promise<void> {
-    if (this.bridgeWhenIdle !== null) {
-      await this.bridgeWhenIdle()
+    const bridgeWhenIdle = this.bridgeWhenIdle
+    if (bridgeWhenIdle !== null) {
+      await bridgeWhenIdle()
     }
   }
 
   private async awaitBridgeFinishEditing(): Promise<void> {
-    if (this.bridgeFinishEditingAndWhenIdle !== null) {
-      await this.bridgeFinishEditingAndWhenIdle()
+    const bridgeFinishEditingAndWhenIdle = this.bridgeFinishEditingAndWhenIdle
+    if (bridgeFinishEditingAndWhenIdle !== null) {
+      await bridgeFinishEditingAndWhenIdle()
     }
   }
 

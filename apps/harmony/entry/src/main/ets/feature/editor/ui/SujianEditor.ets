@@ -272,7 +272,6 @@ export struct SujianEditor {
         .height('100%')
         .barState(BarState.Auto)
         .caretColor(this.caretColor)
-        .fontSize(this.fontSize)
         .padding({
           left: EDITOR_HORIZONTAL_PADDING_VP,
           right: EDITOR_HORIZONTAL_PADDING_VP,
@@ -299,7 +298,9 @@ export struct SujianEditor {
         })
         .onSelectionChange((value: TextRange): void => {
           if (this.richEditorBridge) {
-            this.richEditorBridge.onSelectionChange(value.start, value.end)
+            const start: number = value.start ?? 0
+            const end: number = value.end ?? start
+            this.richEditorBridge.onSelectionChange(start, end)
           }
         })
         .onPaste(() => {

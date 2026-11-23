@@ -30,6 +30,7 @@ import { WideWritingWorkbench } from './wide/WideWritingWorkbench'
 import { LocalSettingsStore } from '../../../feature/settings/presentation/LocalSettingsStore'
 import { ActiveWritingSessionRegistry } from '../session/ActiveWritingSessionRegistry'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
+import { EditorViewportState } from '../render/EditorViewportState'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { ContinuationSnapshotStore } from '../../../platform/continuity/ContinuationSnapshotStore'
@@ -215,7 +216,7 @@ export struct WritingScreen {
   // Issue #829：手稿把最右 ToolRail 固定成“星图 / AI”。
   @State selectedToolKey: string = 'starmap'
   // 当前 UI 滚动位置（viewport），接续恢复时只设 UI，不写 Core。
-  @State currentViewport: object | null = null
+  @State currentViewport: EditorViewportState | null = null
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination。
   @State useHdsNav: boolean = false
   // Issue #784 评论5857397503 第4点 / Issue #825 复核第2项：headerActions 由 WritingScreen
