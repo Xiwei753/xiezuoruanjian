@@ -330,6 +330,110 @@ extern "C" fn sujian_ime_replace_and_commit(
     }
 }
 
+/// 删除 selection 后的虚拟正文（Qt 两步语义里的 `base_text`）。
+///
+/// Issue #1052: base_text 由 `prefix` / `suffix` 两段借用切片拼成：
+/// `prefix = committed[..selection_start]`、`suffix = committed[selection_end..]`，
+/// 普通 IME 输入不再为每次事件复制整章正文。UTF-16→UTF-8 换算只在实际经过的
+/// 片段上遍历；replacement 跨越 prefix/suffix 边界时，用已走过片段的 UTF-16
+/// 长度换算剩余步数，再在下一段继续。
+struct BaseText<'a> {
+    prefix: &'a str,
+    suffix: &'a str,
+}
+
+impl<'a> BaseText<'a> {
+    /// 从 committed 正文和要删除的 selection 范围构造虚拟正文。
+    ///
+    /// selection 端点 clamp 到 `[0, len]` 并对齐到字符起始边界，与
+    /// `utf16_converter` 的 char boundary 校验一致，避免切片 panic。
+    fn new(committed: &'a str, selection_start: usize, selection_end: usize) -> Self {
+        let start = char_boundary_floor(committed, selection_start);
+        let end = char_boundary_floor(committed, selection_end).max(start);
+        Self {
+            prefix: &committed[..start],
+            suffix: &committed[end..],
+        }
+    }
+
+    /// 把 base_text byte offset 对齐到字符起始边界。
+    fn align(&self, byte_offset: usize) -> usize {
+        if byte_offset <= self.prefix.len() {
+            char_boundary_floor(self.prefix, byte_offset)
+        } else {
+            self.prefix.len() + char_boundary_floor(self.suffix, byte_offset - self.prefix.len())
+        }
+    }
+
+    /// 从 base_text 的 `byte_start` 向前走 `utf16_count` 个 UTF-16 code unit。
+    fn utf16_forward_from(&self, byte_start: usize, utf16_count: usize) -> usize {
+        let start = self.align(byte_start);
+        if utf16_count == 0 {
+            return start;
+        }
+        if start >= self.prefix.len() {
+            // 起点已在 suffix：只遍历 suffix。
+            let suffix_start = start - self.prefix.len();
+            let suffix_end = utf16_forward_from_byte(self.suffix, suffix_start, utf16_count);
+            return self.prefix.len() + suffix_end;
+        }
+        // 起点在 prefix：先只看 prefix 这一段能走多远。
+        let prefix_end = utf16_forward_from_byte(self.prefix, start, utf16_count);
+        if prefix_end < self.prefix.len() {
+            return prefix_end;
+        }
+        // 走满 prefix 仍未耗尽：用 prefix 尾段的 UTF-16 长度换算剩余步数，
+        // 再进入 suffix（base_text 坐标 = prefix.len() + suffix 内偏移）。
+        let consumed = utf16_len(&self.prefix[start..]);
+        if utf16_count <= consumed {
+            return self.prefix.len();
+        }
+        self.prefix.len() + utf16_forward_from_byte(self.suffix, 0, utf16_count - consumed)
+    }
+
+    /// 从 base_text 的 `byte_start` 向后走 `utf16_count` 个 UTF-16 code unit。
+    fn utf16_backward_from(&self, byte_start: usize, utf16_count: usize) -> usize {
+        let start = self.align(byte_start);
+        if utf16_count == 0 || start == 0 {
+            return start;
+        }
+        if start <= self.prefix.len() {
+            // 起点在 prefix：只遍历 prefix。
+            return utf16_backward_from_byte(self.prefix, start, utf16_count);
+        }
+        // 起点在 suffix：先只看 suffix 这一段能退多远。
+        let suffix_offset = start - self.prefix.len();
+        let suffix_pos = utf16_backward_from_byte(self.suffix, suffix_offset, utf16_count);
+        if suffix_pos > 0 {
+            return self.prefix.len() + suffix_pos;
+        }
+        // 退到 suffix 起点仍未耗尽：用 suffix 头段的 UTF-16 长度换算剩余步数，
+        // 再回到 prefix 末尾继续。
+        let consumed = utf16_len(&self.suffix[..suffix_offset]);
+        if utf16_count <= consumed {
+            return self.prefix.len();
+        }
+        utf16_backward_from_byte(self.prefix, self.prefix.len(), utf16_count - consumed)
+    }
+}
+
+/// 把 byte offset clamp 到 `[0, text.len()]` 并对齐到最近的字符起始边界。
+fn char_boundary_floor(text: &str, byte_offset: usize) -> usize {
+    if byte_offset >= text.len() {
+        return text.len();
+    }
+    let mut clamped = byte_offset;
+    while clamped > 0 && !text.is_char_boundary(clamped) {
+        clamped -= 1;
+    }
+    clamped
+}
+
+/// 一段 UTF-8 切片的 UTF-16 code unit 长度（代理对按 2 计）。
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
 /// 把 Qt `QInputMethodEvent` 的 replacementStart/replacementLength（UTF-16
 /// QChar 偏移，相对 preedit 起点）解析成 Qt 两步语义的 `ImeReplaceEvent`。
 ///
@@ -339,12 +443,17 @@ extern "C" fn sujian_ime_replace_and_commit(
 /// 忽略 preedit 区域）。
 ///
 /// Issue #701 评论 5702675971: 旧实现把两步硬合成一个连续 committed byte
-/// range，在 selection 与 replacement 不相邻时会误删中间正文。本函数改成
+/// range，在 selection 与 replacement 不相邻时会误删中间正文。本函数保持
 /// 两步分开的事件模型：
 /// - `selection_byte_range` = `Some((session_replace_start, session_replace_end))`
 ///   if `session_replace_start != session_replace_end` else `None`；
 /// - `replacement_byte_range_after_selection` = base_text 坐标的 (del_start, del_end)，
-///   不再映射回 committed text 坐标。
+///   不映射回 committed text 坐标。
+///
+/// Issue #1052: 不再 `String::with_capacity(committed_text.len())` 组装整章
+/// base_text，而是用 `BaseText` 的两段借用切片表示删掉 selection 后的虚拟正文；
+/// 普通直接插入（replacementLength == 0）只换算插入锚点，返回零长度范围
+/// `(start, start)`。
 ///
 /// 所有 UTF-16→UTF-8 换算只在此处做一次，`editing.rs` 不再二次换算。
 fn resolve_ime_replace_event(
@@ -363,33 +472,33 @@ fn resolve_ime_replace_event(
         None
     };
 
-    // base_text = committed_text 去掉 [session_replace_start, session_replace_end) 段。
-    // Qt replacement 相对 preedit 起点（= session_replace_start in base_text）解释。
-    let mut base_text = String::with_capacity(committed_text.len());
-    base_text.push_str(&committed_text[..session_replace_start]);
-    base_text.push_str(&committed_text[session_replace_end..]);
+    // 第二步的 base_text = committed_text 去掉
+    // [session_replace_start, session_replace_end)，用两段借用切片表示，不复制正文。
+    let base_text = BaseText::new(committed_text, session_replace_start, session_replace_end);
 
-    let anchor_in_base = session_replace_start;
+    // Qt replacement 相对 preedit 起点（= 删掉 selection 后 prefix 的末尾）解释。
+    let anchor_in_base = base_text.prefix.len();
 
     // Qt replacementStart 可正可负：正值向前走，负值向后走。
     let rs_byte = if replace_start < 0 {
-        utf16_backward_from_byte(&base_text, anchor_in_base, (-replace_start) as usize)
+        base_text.utf16_backward_from(anchor_in_base, (-replace_start) as usize)
     } else {
-        utf16_forward_from_byte(&base_text, anchor_in_base, replace_start as usize)
+        base_text.utf16_forward_from(anchor_in_base, replace_start as usize)
     };
-    // replacementLength 总是非负，从 rs_byte 向前走。
-    let re_byte = if replace_length > 0 {
-        utf16_forward_from_byte(&base_text, rs_byte, replace_length as usize)
+    // replacementLength == 0 是普通直接插入（或无删除）：范围退化为零长度插入点，
+    // 不再换算终点，也不触碰正文其余部分。
+    let (del_start, del_end) = if replace_length > 0 {
+        let re_byte = base_text.utf16_forward_from(rs_byte, replace_length as usize);
+        if rs_byte <= re_byte {
+            (rs_byte, re_byte)
+        } else {
+            (re_byte, rs_byte)
+        }
     } else {
-        rs_byte
-    };
-    let (del_start, del_end) = if rs_byte <= re_byte {
-        (rs_byte, re_byte)
-    } else {
-        (re_byte, rs_byte)
+        (rs_byte, rs_byte)
     };
 
-    // Issue #701 评论 5702675971: 不再把 base_text 坐标映射回 committed text 坐标。
+    // Issue #701 评论 5702675971: 不把 base_text 坐标映射回 committed text 坐标。
     // (del_start, del_end) 是 base_text 坐标，直接作为第二步 replacement range。
     // editing.rs 的 EditOp::ImeCommit 顺序执行两步 pipeline edit，
     // 第二步在删完 selection 后的 pipeline text（= base_text）上做 replacement。

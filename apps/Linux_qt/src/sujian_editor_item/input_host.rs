@@ -70,8 +70,13 @@ impl SujianEditorItem {
     ///   无 session 但有选区时直接返回 `pipeline.selection_range()`（Qt 规则：直接
     ///   commit 也应先删除当前 selection）；
     ///   无 session 无选区时退化为 `(cursor, cursor)`。
-    /// - `committed_text`：当前 committed 正文（= `self.pipeline.committed_text()`，不含 preedit）。
-    pub(crate) fn ime_replacement_context(&self) -> (usize, usize, String) {
+    /// - `committed_text`：当前 committed 正文的借用切片
+    ///   （= `self.pipeline.committed_text()`，不含 preedit），生命周期绑定 `&self`；
+    ///   调用方持有借用期间不得再可变借用 editor。
+    ///
+    /// Issue #1052: 不再 `to_string()` 复制整章。普通 IME 输入的坐标换算只借用
+    /// 正文、沿实际经过的片段遍历，热路径上没有 O(N) 正文复制。
+    pub(crate) fn ime_replacement_context(&self) -> (usize, usize, &str) {
         let (rs, re) = if self.pipeline.composition().composition_session.is_some() {
             self.pipeline
                 .composition()
@@ -81,7 +86,7 @@ impl SujianEditorItem {
         } else {
             (self.pipeline.cursor(), self.pipeline.cursor())
         };
-        (rs, re, self.pipeline.committed_text().to_string())
+        (rs, re, self.pipeline.committed_text())
     }
 
     /// Issue #1052: 当前是否真的存在 IME composition 会话。
