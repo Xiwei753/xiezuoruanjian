@@ -101,6 +101,84 @@ impl AnnotationStore {
         self.read_collection("entries")
     }
 
+    /// Cheap version stamp of the named-entry source directory.
+    ///
+    /// Corrections keep a process cache of named entries. Sync and other MCP
+    /// writers modify the same `annotations/entries/*.json` files without
+    /// going through this process, so "already synced once" is not a valid
+    /// cache key. The stamp observes file names, sizes and modification times
+    /// (plus directory metadata for create/delete/rename) without parsing any
+    /// JSON, so callers can detect an external rewrite on each correction
+    /// request instead of re-reading every record.
+    ///
+    /// In-place overwrites are covered by the file-level stamp; atomic
+    /// replace/rename is covered by the directory stamp plus the file's inode
+    /// (Unix), so it is detected even when size and coarse mtime coincide.
+    pub fn named_entries_source_stamp(&self) -> crate::Result<String> {
+        let dir = self.collection_path("entries")?;
+        let mut description = String::new();
+        match fs::read_dir(&dir) {
+            Ok(entries) => {
+                let mut files = Vec::new();
+                for entry in entries {
+                    let entry = entry?;
+                    if !entry.file_type()?.is_file()
+                        || entry.path().extension().and_then(|ext| ext.to_str()) != Some("json")
+                    {
+                        continue;
+                    }
+                    let metadata = entry.metadata()?;
+                    let modified = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or(0);
+                    // Atomic replace creates a new inode even when the file
+                    // size and a coarse mtime happen to match. It is only an
+                    // extra discriminator; the stamp stays opaque per platform.
+                    #[cfg(unix)]
+                    let file_id = {
+                        use std::os::unix::fs::MetadataExt;
+                        metadata.ino()
+                    };
+                    #[cfg(not(unix))]
+                    let file_id = 0u64;
+                    files.push((
+                        entry.file_name().to_string_lossy().into_owned(),
+                        metadata.len(),
+                        modified,
+                        file_id,
+                    ));
+                }
+                files.sort();
+                for (name, len, modified, file_id) in files {
+                    description.push_str(&name);
+                    description.push(':');
+                    description.push_str(&len.to_string());
+                    description.push(':');
+                    description.push_str(&modified.to_string());
+                    description.push(':');
+                    description.push_str(&file_id.to_string());
+                    description.push(';');
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        // Directory mtime catches create/delete/rename even when the file list
+        // happens to keep the same aggregate size and no file was rewritten.
+        if let Ok(metadata) = fs::metadata(&dir) {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                    description.push_str("dir:");
+                    description.push_str(&duration.as_nanos().to_string());
+                }
+            }
+        }
+        Ok(format!("{:x}", md5::compute(description.as_bytes())))
+    }
+
     pub fn get_named_entry(&self, entry_id: &str) -> crate::Result<Option<NamedEntry>> {
         self.read_record("entries", entry_id)
     }

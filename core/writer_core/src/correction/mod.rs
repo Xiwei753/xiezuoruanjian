@@ -83,12 +83,22 @@ struct PersistedCorrectionPreferences {
 
 type ChapterResultCacheRegistry = HashMap<(String, String), Arc<ChapterCorrectionSlot>>;
 
+/// One project's published annotation entries plus the source directory
+/// version they were read from. External sync/MCP writers touch the same
+/// `annotations/entries` files, so the version — not just "this process has
+/// synced once" — decides whether the cache is still usable.
+#[derive(Clone)]
+struct CachedNamedEntries {
+    entries: Vec<AnnotationNamedEntryDto>,
+    source_stamp: String,
+}
+
 struct CorrectionStoreInner {
     path: PathBuf,
     preferences: Mutex<PersistedCorrectionPreferences>,
     /// Read-only projection of annotation NamedEntry records for proofreading.
     /// Writes go through AnnotationStore; this is only a process cache.
-    named_entries: Mutex<HashMap<String, Vec<AnnotationNamedEntryDto>>>,
+    named_entries: Mutex<HashMap<String, CachedNamedEntries>>,
     once_ignored: Mutex<HashSet<OnceIgnoredDiagnostic>>,
     active_project: Mutex<ActiveCorrectionProject>,
     next_lexicon_version: AtomicU64,
@@ -597,7 +607,7 @@ impl CorrectionStore {
         &self,
         project_id: &str,
     ) -> Result<Vec<CorrectionEntityNameDto>, WriterError> {
-        if let Some(entries) = self
+        if let Some(cached) = self
             .inner
             .named_entries
             .lock()
@@ -605,6 +615,7 @@ impl CorrectionStore {
             .get(project_id)
             .cloned()
         {
+            let entries = cached.entries;
             let mut records = entries
                 .iter()
                 .flat_map(|entry| {
@@ -644,14 +655,16 @@ impl CorrectionStore {
     /// This cache never persists names; AnnotationStore remains the single
     /// writable source of truth.
     ///
-    /// A read-only refresh calls this on every scanner setup. Only a real
-    /// entry change may invalidate the lexicon and the strong correction
-    /// engine; rebuilding them unconditionally dropped the model's last strong
-    /// reference and reopened the ONNX session hundreds of milliseconds later.
+    /// A read-only refresh calls this only when the source directory version
+    /// changed. Only a real entry change may invalidate the lexicon and the
+    /// strong correction engine; rebuilding them unconditionally dropped the
+    /// model's last strong reference and reopened the ONNX session hundreds of
+    /// milliseconds later.
     pub(crate) fn set_named_entries_for_project(
         &self,
         project_id: &str,
         mut entries: Vec<AnnotationNamedEntryDto>,
+        source_stamp: String,
     ) -> Result<bool, WriterError> {
         // Stable order keeps equality independent of AnnotationStore file order.
         entries.sort_by(|left, right| left.entry_id.cmp(&right.entry_id));
@@ -659,10 +672,22 @@ impl CorrectionStore {
             let mut guard = self.inner.named_entries.lock().map_err(|_| {
                 WriterError::Other("correction named entry cache lock poisoned".into())
             })?;
-            if guard.get(project_id).is_some_and(|old| old == &entries) {
-                return Ok(false);
+            if let Some(cached) = guard.get_mut(project_id) {
+                if cached.entries == entries {
+                    // Same names, but the source directory was rewritten (for
+                    // example by sync). Record the new version so the next
+                    // request skips the read; the lexicon/engine stay valid.
+                    cached.source_stamp = source_stamp;
+                    return Ok(false);
+                }
             }
-            guard.insert(project_id.to_string(), entries);
+            guard.insert(
+                project_id.to_string(),
+                CachedNamedEntries {
+                    entries,
+                    source_stamp,
+                },
+            );
         }
         if let Ok(mut lexicons) = self.inner.lexicons.lock() {
             lexicons.remove(project_id);
@@ -673,17 +698,22 @@ impl CorrectionStore {
         Ok(true)
     }
 
-    /// True once this process has published annotation entries for the
-    /// project. A missing cache means a read-only caller must sync once; a
-    /// present (even empty) cache already matches AnnotationStore because
-    /// every annotation write republishes entries.
-    pub(crate) fn named_entries_initialized(&self, project_id: &str) -> Result<bool, WriterError> {
+    /// True when the published annotation entries came from the currently
+    /// observed source version. A missing or outdated cache means a read-only
+    /// caller must read AnnotationStore again; annotation writes from another
+    /// process (sync/MCP) change the stamp without going through this process.
+    pub(crate) fn named_entries_initialized(
+        &self,
+        project_id: &str,
+        source_stamp: &str,
+    ) -> Result<bool, WriterError> {
         Ok(self
             .inner
             .named_entries
             .lock()
             .map_err(|_| WriterError::Other("correction named entry cache lock poisoned".into()))?
-            .contains_key(project_id))
+            .get(project_id)
+            .is_some_and(|cached| cached.source_stamp == source_stamp))
     }
 
     /// Return the legacy name relations solely for the one-time import into
@@ -981,14 +1011,14 @@ impl CorrectionStore {
                 relation.kind, relation.canonical, relation.name
             ));
         }
-        if let Some(entries) = self
+        if let Some(cached) = self
             .inner
             .named_entries
             .lock()
             .map_err(|_| WriterError::Other("correction named entry cache lock poisoned".into()))?
             .get(project_id)
         {
-            for entry in entries {
+            for entry in &cached.entries {
                 parts.push(format!("named-entry:{}", entry.canonical_name));
             }
         }
@@ -1016,7 +1046,7 @@ impl CorrectionStore {
             .lock()
             .map_err(|_| WriterError::Other("correction named entry cache lock poisoned".into()))?
             .get(project_id)
-            .cloned()
+            .map(|cached| cached.entries.clone())
             .unwrap_or_default();
         let data_root = self
             .inner

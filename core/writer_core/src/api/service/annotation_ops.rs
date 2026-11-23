@@ -225,6 +225,8 @@ impl WriterCoreApi {
     pub(crate) fn ensure_named_entries_migrated(&self, project_id: &str) -> ApiResult<()> {
         safe_project_id(project_id)?;
         let correction = crate::correction::CorrectionStore::open(&self.app_data_root)?;
+        let store = self.annotation_store(project_id)?;
+        let source_stamp = store.named_entries_source_stamp()?;
         let legacy_names = correction.legacy_entity_name_records(project_id)?;
         let dictionary_entries = correction.dictionary_entry_records(project_id)?;
         let mut grouped: HashMap<String, (HashSet<String>, HashSet<String>)> = HashMap::new();
@@ -246,11 +248,11 @@ impl WriterCoreApi {
             )
         });
         // Read-only correction requests reach this function several times per
-        // chapter open. After the one-time migration and the first publish,
-        // nothing here can change named entries, so never touch AnnotationStore
-        // on that path.
+        // chapter open. The source stamp is the cache key: our own writes and
+        // external sync/MCP writes to annotations/entries both change it.
+        // Reparse every named-entry JSON only when the version changed.
         if legacy_names.is_empty() && !has_typed_names {
-            if !correction.named_entries_initialized(project_id)? {
+            if !correction.named_entries_initialized(project_id, &source_stamp)? {
                 self.sync_correction_named_entries(project_id)?;
             }
             return Ok(());
@@ -264,7 +266,6 @@ impl WriterCoreApi {
             }
         }
 
-        let store = self.annotation_store(project_id)?;
         let existing = store.list_named_entries().map_err(WriterError::from)?;
         let mut by_name = existing
             .into_iter()
@@ -333,22 +334,54 @@ impl WriterCoreApi {
         if has_typed_names {
             correction.clear_legacy_typed_entity_dictionary_entries(project_id)?;
         }
-        if wrote_named_entries || !correction.named_entries_initialized(project_id)? {
+        if wrote_named_entries
+            || !correction.named_entries_initialized(project_id, &source_stamp)?
+        {
             self.sync_correction_named_entries(project_id)?;
         }
         Ok(())
     }
 
+    /// Publish AnnotationStore's current named entries to the correction cache.
+    ///
+    /// The data and the source stamp are read under the same consistency rule:
+    /// if the directory changed between the version snapshots, the records may
+    /// mix two states, so publication is skipped and the next request retries.
     pub(crate) fn sync_correction_named_entries(&self, project_id: &str) -> ApiResult<()> {
-        let entries = self
-            .annotation_store(project_id)?
-            .list_named_entries()
-            .map_err(WriterError::from)?
-            .into_iter()
-            .map(named_entry_to_dto)
-            .collect();
-        crate::correction::CorrectionStore::open(&self.app_data_root)?
-            .set_named_entries_for_project(project_id, entries)?;
+        let store = self.annotation_store(project_id)?;
+        let correction = crate::correction::CorrectionStore::open(&self.app_data_root)?;
+        let mut last_read_error = None;
+        for _ in 0..3 {
+            let before = store.named_entries_source_stamp()?;
+            let entries = match store.list_named_entries() {
+                Ok(entries) => entries,
+                Err(error) => {
+                    // A concurrent atomic replace can remove a file between the
+                    // directory scan and its read; retry against the new state.
+                    last_read_error = Some(error);
+                    continue;
+                }
+            };
+            let after = store.named_entries_source_stamp()?;
+            if before != after {
+                continue;
+            }
+            correction.set_named_entries_for_project(
+                project_id,
+                entries.into_iter().map(named_entry_to_dto).collect(),
+                after,
+            )?;
+            return Ok(());
+        }
+        if let Some(error) = last_read_error {
+            return Err(WriterError::from(error));
+        }
+        // The source kept changing while it was being read. Keep the previous
+        // cache and its old stamp instead of labeling stale records with the
+        // newest version; the next correction request retries.
+        log::warn!(
+            "[correction] named entry source changed while syncing; retrying on next request"
+        );
         Ok(())
     }
 
