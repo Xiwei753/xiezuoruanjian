@@ -349,6 +349,19 @@ pub(crate) struct LinuxEditorPipeline {
     /// EditorLayout::promote_prepared_layout 提升为 current，
     /// 后续 EditorLayout::snapshot 不再重新排版同一 new text。
     pending_promoted_layout: Option<crate::editor::layout::PromotedLayout>,
+    /// Issue #1052：最近一笔已提交 Core 事务的权威 revision。
+    ///
+    /// 来自 Core `EditorEditResult.new_revision`（kernel 的已提交版本），不是
+    /// 平台自己累加的 revision。保存/诊断必须以它为准，不能用任何旧 editor
+    /// snapshot 的 revision 代替。
+    authoritative_revision: u64,
+    /// Issue #1052：与 `authoritative_revision` 配对的 Core 文本摘要
+    /// （`EditorEditResult.after_text_sha256`）。mirror 整体重载等没有 Core
+    /// 结果的路径清空，表示"摘要未知"，绝不伪造。
+    authoritative_text_sha256: String,
+    /// Issue #1052：mirror 与 kernel 不一致、从 kernel 整体重载的次数。
+    /// 增量应用失败时 kernel 是唯一权威，计数用于诊断该路径是否频繁触发。
+    mirror_resync_count: u64,
 }
 
 /// Issue #819 评论 5967250411 问题 3：Linux 平台内部的编辑结果分类。
@@ -472,6 +485,9 @@ impl LinuxEditorPipeline {
             current_layout_snapshot: None,
             layout_revision: LayoutRevision::initial(),
             pending_promoted_layout: None,
+            authoritative_revision: 0,
+            authoritative_text_sha256: String::new(),
+            mirror_resync_count: 0,
         }
     }
 
@@ -590,6 +606,20 @@ impl LinuxEditorPipeline {
         self.text_revision
     }
 
+    /// Issue #1052: 最近一笔已提交 Core 事务的权威 revision。
+    ///
+    /// 来自 Core `EditorEditResult.new_revision`；保存/诊断用它与正文摘要配对，
+    /// 不能拿平台旧 snapshot 的 revision 代替。
+    pub fn authoritative_revision(&self) -> u64 {
+        self.authoritative_revision
+    }
+
+    /// Issue #1052: 与 `authoritative_revision` 配对的 Core 文本摘要
+    /// （`after_text_sha256`）。空字符串表示当前权威版本没有可用摘要。
+    pub fn authoritative_text_sha256(&self) -> &str {
+        &self.authoritative_text_sha256
+    }
+
     /// 视觉帧序号（诊断/订阅用）；正文动画由唯一的 `text_motion` 计划管理。
     pub fn visual_revision(&self) -> u64 {
         self.visual_revision
@@ -657,15 +687,99 @@ impl LinuxEditorPipeline {
 
     /// 从 kernel snapshot 完整重建 mirror。
     ///
-    /// 当 `apply_edit_result` 失败（revision 不连续、range 越界等）或
-    /// `StaleRevision` 时调用，保证 mirror 与 kernel 状态一致。
-    fn reload_mirror_from_kernel(&mut self) {
+    /// Issue #1052：kernel 的已提交文本与 revision 是**权威状态**。mirror 增量
+    /// 应用失败（patch 丢失 / revision 不连续 / 越界）或 `StaleRevision` 时，
+    /// 必须整体回到 kernel，并同步 `text_revision` 到 kernel revision；否则
+    /// mirror 展示的正文已经与 `text_revision`/布局缓存脱节，保存时读到的正文
+    /// 和用户看到的不是同一份，过期快照可能覆盖当前章节。
+    ///
+    /// `authoritative_digest` 只在传入的 Core 结果确实对应 kernel 当前 revision
+    /// 时提供；无法确认时留空，表示"摘要未知"，不伪造。
+    fn reload_mirror_from_kernel(&mut self, reason: &str, authoritative_digest: Option<&str>) {
+        let mirror_revision_before = self.mirror.revision();
+        let text_revision_before = self.text_revision;
+        let kernel_revision = self.kernel.revision();
+        let text = self.kernel.snapshot_text();
+        let text_bytes = text.len();
         self.mirror.load_from_snapshot(
-            self.kernel.snapshot_text(),
+            text,
             self.kernel.cursor(),
-            self.kernel.revision(),
+            kernel_revision,
             self.kernel.selection_anchor(),
         );
+        // mirror 正文已经换成 kernel 的已提交文本，text_revision 必须一起前进，
+        // 否则布局缓存/校对事务会把旧 revision 当成当前版本。
+        self.text_revision = kernel_revision;
+        self.authoritative_revision = kernel_revision;
+        self.authoritative_text_sha256 = authoritative_digest.unwrap_or_default().to_string();
+        self.mirror_resync_count = self.mirror_resync_count.saturating_add(1);
+        let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+            std::collections::BTreeMap::new();
+        fields.insert("reason".to_string(), serde_json::json!(reason));
+        fields.insert(
+            "mirror_revision_before".to_string(),
+            serde_json::json!(mirror_revision_before),
+        );
+        fields.insert(
+            "text_revision_before".to_string(),
+            serde_json::json!(text_revision_before),
+        );
+        fields.insert(
+            "kernel_revision".to_string(),
+            serde_json::json!(kernel_revision),
+        );
+        fields.insert("text_bytes".to_string(), serde_json::json!(text_bytes));
+        fields.insert(
+            "authoritative_text_sha256".to_string(),
+            serde_json::json!(self.authoritative_text_sha256),
+        );
+        fields.insert(
+            "mirror_resync_count".to_string(),
+            serde_json::json!(self.mirror_resync_count),
+        );
+        writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            sequence: 0,
+            session_id: String::new(),
+            level: writer_diagnostics::DiagnosticLevel::Warn,
+            origin: writer_diagnostics::DiagnosticOrigin::App,
+            event: "editor.mirror.resync".to_string(),
+            target: "editor.mirror".to_string(),
+            message: None,
+            fields,
+        });
+    }
+
+    /// Issue #1052：记录一笔已提交 Core 事务的权威 revision/摘要。
+    ///
+    /// 只在 mirror 增量应用成功且 revision 与 kernel 一致后调用。保存路径读取的
+    /// `committed_text()` 与这里是同一版本。
+    fn record_authoritative_result(&mut self, result: &EditorEditResult) {
+        let new_revision = result.new_revision.value();
+        if !result.after_text_sha256.is_empty() {
+            self.authoritative_text_sha256 = result.after_text_sha256.clone();
+        } else if new_revision != self.authoritative_revision {
+            // 纯 selection/cursor 操作不带文本摘要（revision 也不前进）；
+            // 若 revision 真前进了却没有摘要，不能沿用旧版本的摘要。
+            self.authoritative_text_sha256.clear();
+        }
+        self.authoritative_revision = new_revision;
+    }
+
+    /// Issue #1052：把 Core outcome 同步到 mirror，并明确"kernel 权威"。
+    ///
+    /// 增量应用成功且 revision 与 kernel 一致时，mirror 就是权威已提交文本；
+    /// 任何失败/revision 不一致都整体从 kernel 重载，并记录 `editor.mirror.resync`。
+    fn sync_mirror_after_outcome(&mut self, result: &EditorEditResult, reason: &str) {
+        let applied_ok = self.mirror.apply_edit_result(result).is_ok();
+        if applied_ok && self.mirror.revision() == self.kernel.revision() {
+            self.record_authoritative_result(result);
+            return;
+        }
+        // 只有 Core 结果确实对应 kernel 当前 revision 时，摘要才可信。
+        let digest_matches_kernel = result.new_revision.value() == self.kernel.revision();
+        let digest = digest_matches_kernel.then_some(result.after_text_sha256.as_str());
+        self.reload_mirror_from_kernel(reason, digest);
     }
 
     /// 统一处理 `EditorEditOutcome`，把 Applied / AppliedWithAdjustedSelection /
@@ -687,17 +801,13 @@ impl LinuxEditorPipeline {
         match outcome {
             EditorEditOutcome::Applied(result)
             | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
-                if self.mirror.apply_edit_result(&result).is_err() {
-                    self.reload_mirror_from_kernel();
-                }
+                self.sync_mirror_after_outcome(&result, "applied_patch_mismatch");
                 Some(result)
             }
             EditorEditOutcome::NoChange(result) => {
                 // Issue #683：NoChange 也走 mirror 更新（此时 new==old，幂等）。
                 // 不再出现 NoChange 直接返回 Some 而不更新 mirror 的路径。
-                if self.mirror.apply_edit_result(&result).is_err() {
-                    self.reload_mirror_from_kernel();
-                }
+                self.sync_mirror_after_outcome(&result, "nochange_patch_mismatch");
                 if none_on_noop {
                     None
                 } else {
@@ -705,7 +815,9 @@ impl LinuxEditorPipeline {
                 }
             }
             EditorEditOutcome::StaleRevision(result) => {
-                self.reload_mirror_from_kernel();
+                // Core 拒绝了一笔基于过期 mirror revision 的命令：kernel 已提交
+                // 状态仍是权威，整体重载并记录诊断（含 kernel 当前 revision）。
+                self.reload_mirror_from_kernel("stale_revision", None);
                 Some(result)
             }
             EditorEditOutcome::InvalidOffset(result) | EditorEditOutcome::InvalidRange(result) => {
@@ -727,22 +839,18 @@ impl LinuxEditorPipeline {
         match outcome {
             EditorEditOutcome::Applied(result)
             | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
-                if self.mirror.apply_edit_result(&result).is_err() {
-                    self.reload_mirror_from_kernel();
-                }
+                self.sync_mirror_after_outcome(&result, "applied_patch_mismatch");
                 PipelineEditOutcome::Applied(result)
             }
             EditorEditOutcome::NoChange(result) => {
-                if self.mirror.apply_edit_result(&result).is_err() {
-                    self.reload_mirror_from_kernel();
-                }
+                self.sync_mirror_after_outcome(&result, "nochange_patch_mismatch");
                 PipelineEditOutcome::NotApplied {
                     kind: PipelineEditOutcomeKind::NoChange,
                     result,
                 }
             }
             EditorEditOutcome::StaleRevision(result) => {
-                self.reload_mirror_from_kernel();
+                self.reload_mirror_from_kernel("stale_revision", None);
                 PipelineEditOutcome::NotApplied {
                     kind: PipelineEditOutcomeKind::StaleRevision,
                     result,
@@ -772,6 +880,10 @@ impl LinuxEditorPipeline {
                     self.kernel.selection_anchor(),
                 );
                 self.composition.clear();
+                // Issue #1052: 新 kernel 的 revision 就是权威已提交版本；没有
+                // Core 事务摘要，留空而不是沿用上一份正文的摘要。
+                self.authoritative_revision = self.kernel.revision();
+                self.authoritative_text_sha256.clear();
                 // Issue #904：正文动画由唯一的 `text_motion` 计划管理，无第二套状态机。
                 true
             }
@@ -929,6 +1041,12 @@ impl LinuxEditorPipeline {
             self.kernel.revision(),
             self.kernel.selection_anchor(),
         );
+        // Issue #1052: 重建 kernel 后权威版本跟着新 kernel，摘要未知。
+        self.authoritative_revision = self.kernel.revision();
+        self.authoritative_text_sha256.clear();
+        // text_revision 必须与重建后的 kernel/mirror 是同一版本，否则保存快照
+        // 的 revision 会被误判成过期版本（QML 用 text_revision 配对保存）。
+        self.text_revision = self.kernel.revision();
     }
 
     pub fn prepare_composition_commit(

@@ -57,22 +57,36 @@ impl Default for LinuxQtClipboardFocusAdapter {
     }
 }
 
+impl LinuxQtClipboardFocusAdapter {
+    /// Issue #1052: 用选区 UTF-8 字节直接构造唯一一份 Qt 文本，避免
+    /// `String -> Vec<u16> -> QString` 的多份长字符串分配；并如实返回
+    /// 剪贴板是否可用，供 Cut 决定是否允许删除原文。
+    fn write_clipboard_text(text: &str) -> bool {
+        let ptr = text.as_ptr();
+        let Ok(len) = i32::try_from(text.len()) else {
+            return false;
+        };
+        // SAFETY: ptr/len 来自仍在作用域内的 &str，只读；GUI 线程内同步复制进 QString。
+        cpp!(unsafe [ptr as "const char*", len as "int"] -> bool as "bool" {
+            QClipboard* cb = QGuiApplication::clipboard();
+            if (!cb) {
+                return false;
+            }
+            cb->setText(QString::fromUtf8(ptr, len));
+            return true;
+        })
+    }
+}
+
 impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
     fn execute_clipboard(&mut self, request: ClipboardRequest) -> ClipboardResult {
         match request {
             ClipboardRequest::Copy { text } => {
-                let text_utf16: Vec<u16> = text.encode_utf16().collect();
-                let ptr = text_utf16.as_ptr();
-                let len = text_utf16.len() as i32;
-                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-                cpp!(unsafe [ptr as "const ushort*", len as "int"] {
-                    QClipboard* cb = QGuiApplication::clipboard();
-                    if (cb) {
-                        QString qs = QString::fromUtf16(ptr, len);
-                        cb->setText(qs);
-                    }
-                });
-                ClipboardResult::Copied
+                if Self::write_clipboard_text(&text) {
+                    ClipboardResult::Copied
+                } else {
+                    ClipboardResult::Unavailable
+                }
             }
             ClipboardRequest::Paste => {
                 let qtext: QString = cpp!(unsafe [] -> QString as "QString" {
@@ -86,18 +100,11 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
                 ClipboardResult::Pasted { text }
             }
             ClipboardRequest::Cut { text } => {
-                let text_utf16: Vec<u16> = text.encode_utf16().collect();
-                let ptr = text_utf16.as_ptr();
-                let len = text_utf16.len() as i32;
-                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-                cpp!(unsafe [ptr as "const ushort*", len as "int"] {
-                    QClipboard* cb = QGuiApplication::clipboard();
-                    if (cb) {
-                        QString qs = QString::fromUtf16(ptr, len);
-                        cb->setText(qs);
-                    }
-                });
-                ClipboardResult::Cut
+                if Self::write_clipboard_text(&text) {
+                    ClipboardResult::Cut
+                } else {
+                    ClipboardResult::Unavailable
+                }
             }
             ClipboardRequest::HasText => {
                 let has = cpp!(unsafe [] -> bool as "bool" {

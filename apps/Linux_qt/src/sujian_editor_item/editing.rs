@@ -414,7 +414,9 @@ impl SujianEditorItem {
         text: QString,
         explicit_cause: Option<EditorTransactionCause>,
     ) {
-        if !self.current_editor_enabled {
+        // Issue #1052: 剪贴板只读窗口内拒绝任何正文写入（Qt 剪贴板调用可能
+        // 同步派发事件）。粘贴本身在窗口结束后才走这个入口。
+        if !self.current_editor_enabled || clipboard_read_window_active() {
             return;
         }
         let inserted = normalize_plain_text(&text.to_string());
@@ -530,7 +532,7 @@ impl SujianEditorItem {
     /// 只在 `record_edit_transaction` 末尾做一次 pipeline 只读投影读取
     /// + 一次 snapshot + 一次视觉事务。
     pub(crate) fn ime_replace_and_insert(&mut self, event: ImeReplaceEvent) {
-        if !self.current_editor_enabled {
+        if !self.current_editor_enabled || clipboard_read_window_active() {
             return;
         }
         // Issue #701 评论 5702675971: 不再因 inserted_text.is_empty() 直接 return。
@@ -623,7 +625,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn delete_backward(&mut self) {
-        if !self.current_editor_enabled {
+        if !self.current_editor_enabled || clipboard_read_window_active() {
             return;
         }
         let cursor = self.pipeline.cursor();
@@ -656,7 +658,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn delete_forward(&mut self) {
-        if !self.current_editor_enabled {
+        if !self.current_editor_enabled || clipboard_read_window_active() {
             return;
         }
         let cursor = self.pipeline.cursor();
@@ -685,7 +687,10 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn delete_selection(&mut self) {
-        if !self.current_editor_enabled || !self.pipeline.has_selection() {
+        if !self.current_editor_enabled
+            || clipboard_read_window_active()
+            || !self.pipeline.has_selection()
+        {
             return;
         }
         let (start, end) = self.pipeline.selection_range();
@@ -714,7 +719,10 @@ impl SujianEditorItem {
         replacement: QString,
         expected_revision: u64,
     ) -> bool {
-        if !self.current_editor_enabled || self.pipeline.text_revision() != expected_revision {
+        if !self.current_editor_enabled
+            || clipboard_read_window_active()
+            || self.pipeline.text_revision() != expected_revision
+        {
             return false;
         }
 
@@ -755,7 +763,10 @@ impl SujianEditorItem {
         original: QString,
         expected_revision: u64,
     ) -> bool {
-        if !self.current_editor_enabled || self.pipeline.text_revision() != expected_revision {
+        if !self.current_editor_enabled
+            || clipboard_read_window_active()
+            || self.pipeline.text_revision() != expected_revision
+        {
             return false;
         }
         let start = start_byte as usize;
@@ -783,6 +794,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn select_all(&mut self) {
+        if !self.current_editor_enabled || clipboard_read_window_active() {
+            return;
+        }
         // Issue #705 评论 5717380886: 全选是非正文事务导致的逻辑 cursor 移动。
         let text_len = self.pipeline.committed_text().len();
         let _ = self.pipeline.set_selection(0, text_len);
@@ -798,6 +812,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn undo(&mut self) {
+        if !self.current_editor_enabled || clipboard_read_window_active() {
+            return;
+        }
         // Issue #810 评论 5934658350: Undo 会修改 committed text 并可能生成文字动画，
         // 必须在 Core 修改前固定 old canonical（与 Insert/Delete/Replace 同一不变量）。
         self.ensure_current_canonical_before_edit();
@@ -817,6 +834,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn redo(&mut self) {
+        if !self.current_editor_enabled || clipboard_read_window_active() {
+            return;
+        }
         // Issue #810 评论 5934658350: Redo 同 Undo，在 Core 修改前固定 old canonical。
         self.ensure_current_canonical_before_edit();
         if let Some(result) = self.pipeline.perform_redo() {
@@ -849,6 +869,10 @@ impl SujianEditorItem {
     /// 旧路线的 caret handover / detach / epoch ownership 全部删除：光标与文字
     /// 动画完全解耦，点击不需要"抢"正文动画的 caret 所有权。
     pub(crate) fn click_at(&mut self, x: f32, y: f32, extend: bool) {
+        // Issue #1052: 剪贴板命令期间禁止改选区（复制范围与删除范围必须一致）。
+        if clipboard_read_window_active() {
+            return;
+        }
         // Apply completed Qt frame receipts before deciding whether the previous click
         // was superseded before its first submitted frame.
         self.drain_pointer_frame_submissions();
@@ -986,6 +1010,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn drag_select_at(&mut self, x: f32, y: f32) {
+        if clipboard_read_window_active() {
+            return;
+        }
         // Issue #705 评论 5718299909: 先 hit_test，确认 head/affinity 真的改变
         // 再 bump epoch。拖到当前 cursor 同一位置不应 bump。
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
@@ -1027,6 +1054,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn long_press_at(&mut self, x: f32, y: f32) {
+        if clipboard_read_window_active() {
+            return;
+        }
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
         // Issue #712: 长按设置 CursorMoveSource::DragSelection，跨行走 Snap。
@@ -1047,6 +1077,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn select_word_at(&mut self, x: f32, y: f32) {
+        if clipboard_read_window_active() {
+            return;
+        }
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
         // Issue #712: 选词设置 CursorMoveSource::DragSelection，跨行走 Snap。
@@ -1076,39 +1109,153 @@ impl SujianEditorItem {
         let _ = self.pipeline.set_selection(byte_start, byte_end);
     }
 
+    /// Issue #1052: 复制 = 对 Core 当前选区做**一次**只读切片提取后写剪贴板。
+    ///
+    /// 记录操作前后的 Core revision、正文长度、选区端点与选区内容摘要
+    /// （只记长度/revision/hash，不记原文）。复制本身绝不修改正文、选区或
+    /// composition；Qt 剪贴板写入期间进入只读窗口，窗口内同步派发的输入/IME
+    /// 命令一律拒绝，避免"复制顺带改正文"或 Cut 复制到的范围与随后删除的范围
+    /// 不一致。
+    ///
+    /// 返回值只表示"这次复制可以安全地作为 Cut 的前半段"：选区/正文状态在
+    /// 复制期间发生任何变化时返回 false，上层据此不提交删除。
     pub(crate) fn clipboard_copy(&mut self) -> bool {
-        if !self.pipeline.has_selection() {
+        let before = ClipboardSnapshot::capture(&self.pipeline);
+        // 唯一一次选区切片读取：只复制选区，不复制整章正文。
+        let text = if before.has_selection {
+            self.pipeline.selected_text()
+        } else {
+            String::new()
+        };
+        let selected_bytes = text.len();
+        let selected_digest = clipboard_text_digest(&text);
+        if selected_bytes == 0 {
+            record_clipboard_copy(&before, &before, 0, selected_digest, "no_selection");
             return false;
         }
-        let text = self.pipeline.selected_text();
-        if text.is_empty() {
-            return false;
-        }
+
         use writer_core::platform_interaction::clipboard_focus::{
             ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult,
         };
-        let result = ClipboardAndFocusAdapter::execute_clipboard(
-            self.pipeline.clipboard_adapter_mut(),
-            ClipboardRequest::Copy { text },
-        );
-        matches!(result, ClipboardResult::Copied)
+        // Issue #1052: 进入只读窗口后再碰 QClipboard。Qt/Wayland 的 setText 可能
+        // 同步派发事件；窗口内所有正文/选区写入入口都会被 input_host 与
+        // editing.rs 的写入口拒绝，防止 selection 在复制中途被改写。
+        let copied = match ClipboardReadWindow::acquire() {
+            Some(_window) => {
+                let result = ClipboardAndFocusAdapter::execute_clipboard(
+                    self.pipeline.clipboard_adapter_mut(),
+                    ClipboardRequest::Copy { text },
+                );
+                matches!(result, ClipboardResult::Copied)
+            }
+            None => {
+                record_clipboard_copy(
+                    &before,
+                    &before,
+                    selected_bytes,
+                    selected_digest,
+                    "reentrant_ignored",
+                );
+                return false;
+            }
+        };
+
+        let after = ClipboardSnapshot::capture(&self.pipeline);
+        let stable = before.is_text_state_stable(&after);
+        let outcome = if !copied {
+            "clipboard_unavailable"
+        } else if !stable {
+            // 复制已经发生，但正文/选区被同步回调改写：不能再把这段复制
+            // 当作 Cut 的前半段（复制的范围和可删除的范围已不一致）。
+            "copied_but_text_state_changed"
+        } else {
+            "copied"
+        };
+        record_clipboard_copy(&before, &after, selected_bytes, selected_digest, outcome);
+        copied && stable
     }
 
+    /// Issue #1052: 粘贴记录真实 Replace/Insert 的被删字节数与插入字节数。
+    ///
+    /// 先记录粘贴前已提交状态（revision/正文长度/选区/是否 composition
+    /// replace），再让 `insert_text_with_cause` 提交**唯一一笔** Core 事务，
+    /// 最后用同一 pipeline 的已提交 mirror 反推真实删除字节数，使 Paste 的
+    /// 用户操作和 Core 事务一一对应。
     pub(crate) fn clipboard_paste(&mut self) {
-        if !self.current_editor_enabled {
+        if !self.current_editor_enabled || clipboard_read_window_active() {
             return;
         }
         use writer_core::platform_interaction::clipboard_focus::{
             ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult,
         };
-        let result = ClipboardAndFocusAdapter::execute_clipboard(
-            self.pipeline.clipboard_adapter_mut(),
-            ClipboardRequest::Paste,
-        );
-        if let ClipboardResult::Pasted { text } = result {
-            let normalized = normalize_plain_text(&text);
-            self.insert_text_with_cause(normalized.into(), Some(EditorTransactionCause::Paste));
+        let before = ClipboardSnapshot::capture(&self.pipeline);
+        let cursor_before = before.cursor;
+        let (session_start, session_end) = before.session_replace_range;
+        // 剪贴板读取同样放进只读窗口：读取期间 Qt 可能同步派发事件，
+        // 否则读到的文本和随后提交事务时的 selection 可能不是同一份状态。
+        let (inserted_text, read_outcome) = match ClipboardReadWindow::acquire() {
+            Some(_window) => match ClipboardAndFocusAdapter::execute_clipboard(
+                self.pipeline.clipboard_adapter_mut(),
+                ClipboardRequest::Paste,
+            ) {
+                ClipboardResult::Pasted { text } => {
+                    let normalized = normalize_plain_text(&text);
+                    if normalized.is_empty() {
+                        (normalized, "clipboard_unavailable")
+                    } else {
+                        (normalized, "pasted")
+                    }
+                }
+                _ => (String::new(), "clipboard_unavailable"),
+            },
+            None => (String::new(), "reentrant_ignored"),
+        };
+        if inserted_text.is_empty() {
+            record_clipboard_paste(
+                &before,
+                &before,
+                0,
+                0,
+                cursor_before,
+                cursor_before,
+                "Insert",
+                false,
+                read_outcome,
+            );
+            return;
         }
+
+        // 与 `insert_text_with_cause` 内部的分支顺序保持一致：composition
+        // replace range 优先，其次是普通 selection，最后是零长度 Insert。
+        let (operation_kind, replace_start, replace_end) = if session_start != session_end {
+            ("Replace", session_start, session_end)
+        } else if before.has_selection {
+            ("Replace", before.selection_start, before.selection_end)
+        } else {
+            ("Insert", cursor_before, cursor_before)
+        };
+        let inserted_bytes = inserted_text.len();
+        self.insert_text_with_cause(inserted_text.into(), Some(EditorTransactionCause::Paste));
+        let after = ClipboardSnapshot::capture(&self.pipeline);
+        let applied = after.mirror_revision != before.mirror_revision;
+        // 真实删除字节数 = 粘贴前正文 + 实际插入 - 粘贴后正文。只有 Core
+        // 事务真正应用（mirror revision 前进）时才有意义。
+        let deleted_bytes = if applied && after.body_bytes + inserted_bytes >= before.body_bytes {
+            before.body_bytes + inserted_bytes - after.body_bytes
+        } else {
+            0
+        };
+        record_clipboard_paste(
+            &before,
+            &after,
+            inserted_bytes,
+            deleted_bytes,
+            replace_start,
+            replace_end,
+            operation_kind,
+            applied,
+            if applied { "pasted" } else { "not_applied" },
+        );
     }
 
     pub(crate) fn insert_preedit(&mut self, text: QString) {
@@ -1126,6 +1273,10 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn move_cursor_horizontal(&mut self, forward: bool, extend: bool) {
+        // Issue #1052: 剪贴板命令期间禁止改选区，避免 Cut 复制范围与删除范围不一致。
+        if clipboard_read_window_active() {
+            return;
+        }
         // Issue #705 评论 5718299909: 先算 next，确认逻辑 caret/selection 真的会变
         // 再 bump epoch。no-op（已在行首/文末且 !extend）不 bump，避免切断活动
         // 正文事务 caret 所有权。epoch 的定义是"用户手动改变了当前 caret 所有权/
@@ -1167,6 +1318,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn move_cursor_vertical(&mut self, down: bool, extend: bool) {
+        if clipboard_read_window_active() {
+            return;
+        }
         // Issue #705 评论 5718299909: 先算 line_idx/target_idx，确认目标行不同
         // 再 bump epoch。no-op（已在第一/最后一行或 cursor_line_and_x() 返回
         // None）不 bump，避免切断活动正文事务 caret 所有权。
@@ -1213,6 +1367,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn move_to_line_edge(&mut self, end: bool, extend: bool) {
+        if clipboard_read_window_active() {
+            return;
+        }
         // Issue #705 评论 5718299909: 先算目标 index + affinity，确认与当前 caret
         // 不同再 bump epoch。no-op（cursor_line_and_x() 返回 None，或目标与当前
         // caret 完全相同）不 bump，避免切断活动正文事务 caret 所有权。
@@ -1249,6 +1406,308 @@ impl SujianEditorItem {
         let _ = self.update_cursor_visual_position();
         self.request_static_repaint();
     }
+}
+
+// ── Issue #1052: 剪贴板命令的只读窗口与状态快照 ──────────────────────────
+//
+// 复制/粘贴本身只读写剪贴板，不应改正文。但 Qt/Wayland 的
+// `QClipboard::setText()` / `text()` 可能同步派发事件（fcitx 状态同步、
+// QML 槽函数等）。窗口内所有正文/选区写入入口都必须拒绝，否则：
+// - 复制可能顺带触发一笔删除事务（用户看到"复制后正文变少"）；
+// - Cut 先复制 A 范围，重入把选区改成 B 范围，随后删除的就是 B。
+
+thread_local! {
+    /// 当前线程上正在执行的剪贴板命令深度（GUI 线程单线程使用）。
+    /// 0 表示没有剪贴板命令在读剪贴板。
+    static CLIPBOARD_READ_WINDOW_DEPTH: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// 剪贴板只读窗口是否处于激活状态。供 input_host 的输入入口与 editing.rs
+/// 的正文写入口统一检查。
+pub(crate) fn clipboard_read_window_active() -> bool {
+    CLIPBOARD_READ_WINDOW_DEPTH.with(|depth| depth.get() > 0)
+}
+
+/// 只读窗口的 RAII 守卫：Drop 一定复位，即使调用栈中途 unwind 也不会
+/// 把编辑器永久锁死。
+struct ClipboardReadWindow;
+
+impl ClipboardReadWindow {
+    /// 获取只读窗口。已经在窗口内（重入）时返回 `None`，调用方必须放弃
+    /// 这次剪贴板操作，而不是继续写入。
+    fn acquire() -> Option<Self> {
+        CLIPBOARD_READ_WINDOW_DEPTH.with(|depth| {
+            if depth.get() > 0 {
+                None
+            } else {
+                depth.set(1);
+                Some(Self)
+            }
+        })
+    }
+}
+
+impl Drop for ClipboardReadWindow {
+    fn drop(&mut self) {
+        CLIPBOARD_READ_WINDOW_DEPTH.with(|depth| depth.set(0));
+    }
+}
+
+/// 剪贴板命令前后的已提交状态快照（只记 revision/长度/端点，不记原文）。
+struct ClipboardSnapshot {
+    /// pipeline 的排版版本（QML/布局侧看到的 revision）。
+    text_revision: u64,
+    /// Core kernel 的已提交 revision（权威）。
+    authoritative_revision: u64,
+    /// 与 authoritative_revision 配对的 Core 文本摘要（可能为空 = 未知）。
+    authoritative_text_sha256: String,
+    mirror_revision: u64,
+    body_bytes: usize,
+    cursor: usize,
+    selection_start: usize,
+    selection_end: usize,
+    has_selection: bool,
+    composing: bool,
+    session_replace_range: (usize, usize),
+}
+
+impl ClipboardSnapshot {
+    fn capture(pipeline: &super::pipeline::LinuxEditorPipeline) -> Self {
+        let (selection_start, selection_end) = pipeline.selection_range();
+        let cursor = pipeline.cursor();
+        Self {
+            text_revision: pipeline.text_revision(),
+            authoritative_revision: pipeline.authoritative_revision(),
+            authoritative_text_sha256: pipeline.authoritative_text_sha256().to_string(),
+            mirror_revision: pipeline.mirror().revision(),
+            body_bytes: pipeline.committed_text().len(),
+            cursor,
+            selection_start,
+            selection_end,
+            has_selection: pipeline.has_selection(),
+            composing: pipeline.composition().is_composing(),
+            session_replace_range: pipeline.composition().session_replace_range(cursor),
+        }
+    }
+
+    /// 复制只允许是只读命令：正文 revision/长度/选区端点任何一项变化都
+    /// 说明有同步回调重入并改写了状态，这段复制不能再作为 Cut 的依据。
+    ///
+    /// composition 是否结束单独记录在诊断里，但不否定复制结果——fcitx 在
+    /// 剪贴板所有权变化时可能取消 preedit，这不影响已复制的选区文本。
+    fn is_text_state_stable(&self, other: &Self) -> bool {
+        self.text_revision == other.text_revision
+            && self.mirror_revision == other.mirror_revision
+            && self.body_bytes == other.body_bytes
+            && self.selection_start == other.selection_start
+            && self.selection_end == other.selection_end
+            && self.has_selection == other.has_selection
+    }
+}
+
+/// 选区内容摘要：只用于诊断比对，不记录原文。
+fn clipboard_text_digest(text: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.as_bytes().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn record_clipboard_copy(
+    before: &ClipboardSnapshot,
+    after: &ClipboardSnapshot,
+    selected_bytes: usize,
+    selected_digest: String,
+    outcome: &str,
+) {
+    // 无选区/空剪贴板是正常用户操作，不按异常告警；状态不稳定或剪贴板
+    // 不可用才是需要诊断包关注的异常。
+    let level = match outcome {
+        "copied" | "no_selection" => writer_diagnostics::DiagnosticLevel::Info,
+        _ => writer_diagnostics::DiagnosticLevel::Warn,
+    };
+    let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
+    fields.insert("outcome".to_string(), serde_json::json!(outcome));
+    fields.insert(
+        "before_text_revision".to_string(),
+        serde_json::json!(before.text_revision),
+    );
+    fields.insert(
+        "after_text_revision".to_string(),
+        serde_json::json!(after.text_revision),
+    );
+    fields.insert(
+        "before_authoritative_revision".to_string(),
+        serde_json::json!(before.authoritative_revision),
+    );
+    fields.insert(
+        "after_authoritative_revision".to_string(),
+        serde_json::json!(after.authoritative_revision),
+    );
+    fields.insert(
+        "before_authoritative_text_sha256".to_string(),
+        serde_json::json!(before.authoritative_text_sha256),
+    );
+    fields.insert(
+        "before_mirror_revision".to_string(),
+        serde_json::json!(before.mirror_revision),
+    );
+    fields.insert(
+        "after_mirror_revision".to_string(),
+        serde_json::json!(after.mirror_revision),
+    );
+    fields.insert(
+        "before_body_bytes".to_string(),
+        serde_json::json!(before.body_bytes),
+    );
+    fields.insert(
+        "after_body_bytes".to_string(),
+        serde_json::json!(after.body_bytes),
+    );
+    fields.insert(
+        "selection_start_byte".to_string(),
+        serde_json::json!(before.selection_start),
+    );
+    fields.insert(
+        "selection_end_byte".to_string(),
+        serde_json::json!(before.selection_end),
+    );
+    fields.insert(
+        "selection_changed".to_string(),
+        serde_json::json!(
+            before.selection_start != after.selection_start
+                || before.selection_end != after.selection_end
+                || before.has_selection != after.has_selection
+        ),
+    );
+    fields.insert(
+        "body_changed".to_string(),
+        serde_json::json!(
+            before.text_revision != after.text_revision || before.body_bytes != after.body_bytes
+        ),
+    );
+    fields.insert(
+        "composition_before".to_string(),
+        serde_json::json!(before.composing),
+    );
+    fields.insert(
+        "composition_after".to_string(),
+        serde_json::json!(after.composing),
+    );
+    fields.insert(
+        "selected_bytes".to_string(),
+        serde_json::json!(selected_bytes),
+    );
+    fields.insert(
+        "selected_digest".to_string(),
+        serde_json::json!(selected_digest),
+    );
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: "editor.clipboard.copy".to_string(),
+        target: "editor.clipboard".to_string(),
+        message: None,
+        fields,
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_clipboard_paste(
+    before: &ClipboardSnapshot,
+    after: &ClipboardSnapshot,
+    inserted_bytes: usize,
+    deleted_bytes: usize,
+    replace_start: usize,
+    replace_end: usize,
+    operation_kind: &str,
+    applied: bool,
+    outcome: &str,
+) {
+    let level = match outcome {
+        "pasted" | "clipboard_unavailable" => writer_diagnostics::DiagnosticLevel::Info,
+        _ => writer_diagnostics::DiagnosticLevel::Warn,
+    };
+    let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
+    fields.insert("outcome".to_string(), serde_json::json!(outcome));
+    fields.insert("cause".to_string(), serde_json::json!("Paste"));
+    fields.insert(
+        "operation_kind".to_string(),
+        serde_json::json!(operation_kind),
+    );
+    fields.insert("applied".to_string(), serde_json::json!(applied));
+    fields.insert(
+        "before_text_revision".to_string(),
+        serde_json::json!(before.text_revision),
+    );
+    fields.insert(
+        "after_text_revision".to_string(),
+        serde_json::json!(after.text_revision),
+    );
+    fields.insert(
+        "before_authoritative_revision".to_string(),
+        serde_json::json!(before.authoritative_revision),
+    );
+    fields.insert(
+        "after_authoritative_revision".to_string(),
+        serde_json::json!(after.authoritative_revision),
+    );
+    fields.insert(
+        "after_authoritative_text_sha256".to_string(),
+        serde_json::json!(after.authoritative_text_sha256),
+    );
+    fields.insert(
+        "before_body_bytes".to_string(),
+        serde_json::json!(before.body_bytes),
+    );
+    fields.insert(
+        "after_body_bytes".to_string(),
+        serde_json::json!(after.body_bytes),
+    );
+    // 用户操作的语义范围与 Core 事务的净增删分开记录：
+    // - replace_start/end 是粘贴前选择的 Replace 范围（Insert 时两端等于光标）；
+    // - inserted_bytes/deleted_bytes 是 Core 事务实际提交的字节数。
+    fields.insert(
+        "replace_start_byte".to_string(),
+        serde_json::json!(replace_start),
+    );
+    fields.insert(
+        "replace_end_byte".to_string(),
+        serde_json::json!(replace_end),
+    );
+    fields.insert(
+        "had_selection".to_string(),
+        serde_json::json!(before.has_selection),
+    );
+    fields.insert(
+        "was_composing".to_string(),
+        serde_json::json!(before.composing),
+    );
+    fields.insert(
+        "inserted_bytes".to_string(),
+        serde_json::json!(inserted_bytes),
+    );
+    fields.insert(
+        "deleted_bytes".to_string(),
+        serde_json::json!(deleted_bytes),
+    );
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: "editor.clipboard.paste".to_string(),
+        target: "editor.clipboard".to_string(),
+        message: None,
+        fields,
+    });
 }
 
 /// Issue #705 评论 5718299909: 纯计算 word bounds，供 `select_word_at_impl` 和

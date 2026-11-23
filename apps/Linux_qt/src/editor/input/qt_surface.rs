@@ -32,6 +32,7 @@ cpp! {{
     #include <QGuiApplication>
     #include <QMetaMethod>
     #include <QMetaObject>
+    #include <QDateTime>
     #include <new>
 
     extern "C" bool sujian_handle_key_and_text(void* rust_item, int key, int modifiers, const ushort* text, int text_len);
@@ -40,6 +41,11 @@ cpp! {{
     extern "C" void sujian_ime_preedit(void* rust_item, const ushort* text, int text_len, int cursor);
     extern "C" void sujian_ime_preedit_attrs(void* rust_item, const ushort* text, int text_len, int cursor, const int* attr_types, const int* attr_starts, const int* attr_lengths, int attr_count, const int* attr_formats);
     extern "C" void sujian_ime_cancel(void* rust_item);
+    // Issue #1052: 由 Rust 侧判断是否真的存在 IME composition session。
+    extern "C" bool sujian_ime_has_active_composition(void* rust_item);
+    // Issue #1052: 记录被拒绝的非 composition 纯删除 IME 事件（不记录正文）。
+    extern "C" void sujian_record_ignored_ime_replacement(
+        void* rust_item, int replace_start, int replace_length);
     extern "C" void sujian_request_repaint(void* rust_item);
     extern "C" void sujian_flush_pointer_moves(void* rust_item);
     extern "C" void sujian_finish_pointer_sequence(void* rust_item);
@@ -110,6 +116,10 @@ cpp! {{
         QPointer<QQuickWindow> watched_window;
         QTimer move_idle_timer;
         QTimer release_close_timer;
+        // Issue #1052：最近一次处理剪贴板快捷键（Copy/Cut/Paste）的时间。
+        // 只用来识别"快捷键完成后 IME 补发的脱离 composition 的空 commit
+        // replacement 事件"，不影响真实 IME 的 delete-surrounding-text。
+        qint64 clipboard_shortcut_guard_until_ms = 0;
 
         SujianEventFilter(QObject* parent, QQuickItem* item, void* rust_item_ptr)
             : QObject(parent), rust_item(rust_item_ptr), editor_item(item) {
@@ -244,6 +254,16 @@ cpp! {{
             // before they become a second text edit transaction.
             if (ime_adapter.should_ignore_key_event(ke)) return true;
 
+            // Issue #1052: 剪贴板快捷键（Ctrl+C/X/V、Ctrl/Shift+Insert、
+            // Shift+Delete）处理后，IME 可能补发一个 commitString 为空、
+            // replacementLength>0 的 InputMethodEvent。记录事件来源时间窗，
+            // 供 handle_input_method 区分"快捷键后的意外替换"和 IME 自己的
+            // delete-surrounding-text。不依赖 QKeySequence 是否在当前平台
+            // 主题里匹配成功，保证普通 handle_key_and_text 路径也被覆盖。
+            if (is_clipboard_shortcut_key(ke)) {
+                clipboard_shortcut_guard_until_ms = QDateTime::currentMSecsSinceEpoch() + 500;
+            }
+
             // ── Standard shortcut matching via QKeySequence ──
             if (try_shortcut(ke)) return true;
 
@@ -273,6 +293,29 @@ cpp! {{
             return accepted;
         }
 
+        /// Issue #1052: 判断 key 是否是剪贴板快捷键（Copy/Cut/Paste 的完整集合）。
+        ///
+        /// 与 controller.rs 的 is_copy_shortcut / is_cut_shortcut /
+        /// is_paste_shortcut 保持同一集合：Ctrl+C/Insert、Ctrl+X、Ctrl+V、
+        /// Shift+Insert、Shift+Delete（Qt/X11 把 Shift+Delete 绑定到 Cut）。
+        bool is_clipboard_shortcut_key(QKeyEvent* ke) const {
+            const int key = static_cast<int>(ke->key());
+            const Qt::KeyboardModifiers mods = ke->modifiers();
+            const bool ctrl = mods.testFlag(Qt::ControlModifier);
+            const bool shift = mods.testFlag(Qt::ShiftModifier);
+            const bool alt = mods.testFlag(Qt::AltModifier);
+            const bool meta = mods.testFlag(Qt::MetaModifier);
+            if (alt || meta) return false;
+            if (ctrl && (key == Qt::Key_C || key == Qt::Key_X
+                    || key == Qt::Key_V || key == Qt::Key_Insert)) {
+                return true;
+            }
+            if (shift && !ctrl && (key == Qt::Key_Insert || key == Qt::Key_Delete)) {
+                return true;
+            }
+            return false;
+        }
+
         bool is_plain_text_key(QKeyEvent* ke) const {
             return !ime_adapter.ime_composing
                 && !(ke->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))
@@ -295,36 +338,40 @@ cpp! {{
         }
 
         bool try_shortcut(QKeyEvent* ke) {
-            auto tryMatch = [&](QKeySequence::StandardKey matchExpr) -> bool {
-                if (ke->matches(matchExpr)) {
-                    bool accepted = sujian_handle_key_and_text(
-                        rust_item, static_cast<int>(ke->key()),
-                        static_cast<int>(ke->modifiers()), nullptr, 0);
-                    return accepted;
+            // Issue #1052: 一旦 key event 命中标准快捷键，本函数就是该事件的
+            // 唯一处理人。即使 Core 侧因为 input disabled 返回 false，也必须
+            // 消费事件，不能再落到 is_plain_text_key / 通用 handle_key_and_text
+            // 或 InputMethod 通路重复处理同一按键。
+            auto handleMatched = [&](QKeySequence::StandardKey matchExpr) -> bool {
+                if (!ke->matches(matchExpr)) {
+                    return false;
                 }
-                return false;
+                sujian_handle_key_and_text(
+                    rust_item, static_cast<int>(ke->key()),
+                    static_cast<int>(ke->modifiers()), nullptr, 0);
+                return true;
             };
 
-            if (tryMatch(QKeySequence::SelectAll)) return true;
-            if (tryMatch(QKeySequence::Copy)) return true;
-            if (tryMatch(QKeySequence::Cut)) return true;
-            if (tryMatch(QKeySequence::Paste)) return true;
-            if (tryMatch(QKeySequence::Undo)) return true;
-            if (tryMatch(QKeySequence::Redo)) return true;
-            if (tryMatch(QKeySequence::Delete)) return true;
-            if (tryMatch(QKeySequence::Backspace)) return true;
-            if (tryMatch(QKeySequence::MoveToPreviousChar)) return true;
-            if (tryMatch(QKeySequence::MoveToNextChar)) return true;
-            if (tryMatch(QKeySequence::MoveToStartOfLine)) return true;
-            if (tryMatch(QKeySequence::MoveToEndOfLine)) return true;
-            if (tryMatch(QKeySequence::MoveToPreviousLine)) return true;
-            if (tryMatch(QKeySequence::MoveToNextLine)) return true;
-            if (tryMatch(QKeySequence::SelectPreviousChar)) return true;
-            if (tryMatch(QKeySequence::SelectNextChar)) return true;
-            if (tryMatch(QKeySequence::SelectStartOfLine)) return true;
-            if (tryMatch(QKeySequence::SelectEndOfLine)) return true;
-            if (tryMatch(QKeySequence::SelectPreviousLine)) return true;
-            if (tryMatch(QKeySequence::SelectNextLine)) return true;
+            if (handleMatched(QKeySequence::SelectAll)) return true;
+            if (handleMatched(QKeySequence::Copy)) return true;
+            if (handleMatched(QKeySequence::Cut)) return true;
+            if (handleMatched(QKeySequence::Paste)) return true;
+            if (handleMatched(QKeySequence::Undo)) return true;
+            if (handleMatched(QKeySequence::Redo)) return true;
+            if (handleMatched(QKeySequence::Delete)) return true;
+            if (handleMatched(QKeySequence::Backspace)) return true;
+            if (handleMatched(QKeySequence::MoveToPreviousChar)) return true;
+            if (handleMatched(QKeySequence::MoveToNextChar)) return true;
+            if (handleMatched(QKeySequence::MoveToStartOfLine)) return true;
+            if (handleMatched(QKeySequence::MoveToEndOfLine)) return true;
+            if (handleMatched(QKeySequence::MoveToPreviousLine)) return true;
+            if (handleMatched(QKeySequence::MoveToNextLine)) return true;
+            if (handleMatched(QKeySequence::SelectPreviousChar)) return true;
+            if (handleMatched(QKeySequence::SelectNextChar)) return true;
+            if (handleMatched(QKeySequence::SelectStartOfLine)) return true;
+            if (handleMatched(QKeySequence::SelectEndOfLine)) return true;
+            if (handleMatched(QKeySequence::SelectPreviousLine)) return true;
+            if (handleMatched(QKeySequence::SelectNextLine)) return true;
 
             return false;
         }
@@ -354,6 +401,38 @@ cpp! {{
             bool has_commit = !commit.isEmpty();
             bool has_replacement = ime->replacementLength() > 0;
             bool has_ime_action = has_commit || has_replacement;
+            if (!has_commit && has_replacement) {
+                // Issue #1052: Qt 的 replacementStart/replacementLength 是
+                // **相对 preedit 起点**的替换范围（QInputMethodEvent 官方语义）。
+                // 空 commit 的 replacement 在两个来源下含义完全不同：
+                // 1. IME 自己的 delete-surrounding-text（合法，可能是没有
+                //    composition 的日文/中文改写），必须继续走 Core 两步协议；
+                // 2. 刚处理完 Ctrl+C/X/V 后 fcitx/Qt 补发的脱离 composition 的
+                //    同形事件。此时没有 preedit 锚点，Core 会在当前 anchor 处
+                //    向前删掉 replacementLength 个字符——正文被吞且诊断里只有
+                //    一笔 ImeCommit。这里只拒绝第 2 种来源：真实 composition
+                //    会话存在，或不在剪贴板快捷键时间窗内，都按合法 IME 事件
+                //    处理，不在 Qt 分支模拟删除。
+                if (!sujian_ime_has_active_composition(rust_item)) {
+                    const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
+                    if (now_ms <= clipboard_shortcut_guard_until_ms) {
+                        sujian_record_ignored_ime_replacement(
+                            rust_item, ime->replacementStart(), ime->replacementLength());
+                        if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
+                            qDebug("[sujian] Ignored post-shortcut empty-commit replacement: replacementStart=%d replacementLength=%d",
+                                   ime->replacementStart(), ime->replacementLength());
+                        }
+                        has_ime_action = false;
+                        // 只抑制紧跟在快捷键后的这一次意外替换；后续真实 IME
+                        // delete-surrounding-text 必须恢复处理。
+                        clipboard_shortcut_guard_until_ms = 0;
+                    }
+                }
+            }
+            if (has_commit || !preedit.isEmpty()) {
+                // 出现真实 commit / preedit 活动，说明快捷键事件窗已结束。
+                clipboard_shortcut_guard_until_ms = 0;
+            }
             if (has_ime_action) {
                 int replace_start = ime->replacementStart();
                 int replace_length = ime->replacementLength();
@@ -692,6 +771,41 @@ extern "C" fn sujian_flush_pointer_moves(rust_item: *mut c_void) {
         let item = unsafe { &mut *(rust_item as *mut SujianEditorItem) };
         item.flush_pointer_move_activity();
     });
+}
+
+/// Issue #1052: Qt 事件层查询"是否真的存在 IME composition 会话"。
+///
+/// 必须在 GUI 线程、item 存活期间调用（由 SujianEventFilter 保证）。
+#[no_mangle]
+extern "C" fn sujian_ime_has_active_composition(rust_item: *mut c_void) -> bool {
+    if rust_item.is_null() {
+        return false;
+    }
+    // SAFETY: rust_item is null-checked above; the event filter calls this only on
+    // the GUI thread while the item is alive. 与其他 FFI 入口一致，不在这里
+    // 用 catch_unwind/AssertUnwindSafe 掩盖边界：panic 会按 extern "C" 约定 abort，
+    // 不会展开穿过 C++ 栈。
+    unsafe { (*(rust_item as *const SujianEditorItem)).has_active_composition() }
+}
+
+/// Issue #1052: 记录被拒绝的非 composition 纯删除 IME 事件。
+///
+/// 只记录事件参数与 revision/长度，不记录正文内容。
+#[no_mangle]
+extern "C" fn sujian_record_ignored_ime_replacement(
+    rust_item: *mut c_void,
+    replace_start: i32,
+    replace_length: i32,
+) {
+    if rust_item.is_null() {
+        return;
+    }
+    // SAFETY: rust_item is null-checked above; the event filter calls this only on
+    // the GUI thread while the item is alive. 同 sujian_ime_has_active_composition。
+    unsafe {
+        (*(rust_item as *const SujianEditorItem))
+            .record_ignored_ime_replacement(replace_start, replace_length);
+    }
 }
 
 #[no_mangle]

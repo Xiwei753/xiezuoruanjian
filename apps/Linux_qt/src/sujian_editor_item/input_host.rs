@@ -83,6 +83,75 @@ impl SujianEditorItem {
         };
         (rs, re, self.pipeline.committed_text().to_string())
     }
+
+    /// Issue #1052: 当前是否真的存在 IME composition 会话。
+    ///
+    /// Qt 的 `replacementStart`/`replacementLength` 是**相对 preedit 起点**的
+    /// 文档替换范围（Qt 官方 `QInputMethodEvent` 语义）。没有 preedit /
+    /// composition 时，这个范围没有任何合法锚点：快捷键（Ctrl+C/X/V）完成后
+    /// fcitx/Qt 补发的 `commitString` 为空、`replacementLength>0` 事件若照旧
+    /// 进入 Core 两步 replace 协议，会在当前 anchor 处向前删掉正文。Qt 事件
+    /// 层用它区分"composition 内的合法 IME 删除"和"脱离 composition 的意外替换"。
+    pub(crate) fn has_active_composition(&self) -> bool {
+        self.pipeline.composition().is_composing()
+    }
+
+    /// Issue #1052: 记录被 Qt 事件层拒绝的非 composition 纯删除 IME 事件。
+    ///
+    /// 只记录事件参数、当前 revision 与正文长度，不记录正文内容；用于确认
+    /// 诊断包中"没有删除事务但正文变少"是否来自这条路径。
+    pub(crate) fn record_ignored_ime_replacement(
+        &self,
+        replace_start_utf16: i32,
+        replace_length_utf16: i32,
+    ) {
+        let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+            std::collections::BTreeMap::new();
+        fields.insert(
+            "replace_start_utf16".to_string(),
+            serde_json::json!(replace_start_utf16),
+        );
+        fields.insert(
+            "replace_length_utf16".to_string(),
+            serde_json::json!(replace_length_utf16),
+        );
+        fields.insert(
+            "composition_active".to_string(),
+            serde_json::json!(self.has_active_composition()),
+        );
+        fields.insert(
+            "text_revision".to_string(),
+            serde_json::json!(self.pipeline.text_revision()),
+        );
+        fields.insert(
+            "body_bytes".to_string(),
+            serde_json::json!(self.pipeline.committed_text().len()),
+        );
+        fields.insert(
+            "has_selection".to_string(),
+            serde_json::json!(self.pipeline.has_selection()),
+        );
+        writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            sequence: 0,
+            session_id: String::new(),
+            level: writer_diagnostics::DiagnosticLevel::Warn,
+            origin: writer_diagnostics::DiagnosticOrigin::App,
+            event: "editor.ime.pure_delete_ignored".to_string(),
+            target: "editor.ime".to_string(),
+            message: None,
+            fields,
+        });
+    }
+
+    /// Issue #1052: 输入入口是否允许改写正文/选区。
+    ///
+    /// 剪贴板命令（复制/粘贴读取剪贴板）期间 Qt 可能同步派发事件；这些
+    /// 重入命令必须被拒绝，否则复制会顺带改正文，Cut 也会删到与复制不同的
+    /// 范围。剪贴板读取本身不经过这些入口。
+    fn body_write_allowed(&self) -> bool {
+        self.current_editor_enabled && !super::editing::clipboard_read_window_active()
+    }
 }
 
 impl EditorInputHost for SujianEditorItem {
@@ -99,34 +168,58 @@ impl EditorInputHost for SujianEditorItem {
     }
 
     fn input_clipboard_paste(&mut self) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.clipboard_paste();
     }
 
     fn input_undo(&mut self) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.undo();
     }
 
     fn input_redo(&mut self) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.redo();
     }
 
     fn input_select_all(&mut self) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.select_all();
     }
 
     fn input_delete_selection(&mut self) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.delete_selection();
     }
 
     fn input_delete_backward(&mut self) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.delete_backward();
     }
 
     fn input_delete_forward(&mut self) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.delete_forward();
     }
 
     fn input_insert_text(&mut self, text: String) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.insert_text(text.into());
     }
 
@@ -136,23 +229,40 @@ impl EditorInputHost for SujianEditorItem {
     /// `replacementStart`/`replacementLength`（UTF-16 QChar 偏移）解析后构造。
     /// 进入此方法后不再携带任何 Qt 坐标，直接委托给 `ime_replace_and_insert`。
     fn input_ime_replace_and_commit(&mut self, event: ImeReplaceEvent) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.ime_replace_and_insert(event);
     }
 
     fn input_move_cursor_horizontal(&mut self, forward: bool, extend: bool) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.move_cursor_horizontal(forward, extend);
     }
 
     fn input_move_cursor_vertical(&mut self, down: bool, extend: bool) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.move_cursor_vertical(down, extend);
     }
 
     fn input_move_to_line_edge(&mut self, end: bool, extend: bool) {
+        if !self.body_write_allowed() {
+            return;
+        }
         self.move_to_line_edge(end, extend);
     }
 
     /// 清除预输入临时层，不改变正文过渡。
     fn input_clear_preedit(&mut self) {
+        // Issue #1052: 剪贴板只读窗口内不允许同步回调结束 composition，
+        // 否则复制过程中 IME 会话被意外改写。
+        if super::editing::clipboard_read_window_active() {
+            return;
+        }
         // 取消 preedit 只撤掉临时显示层；正文没有 Core edit，当前过渡继续独立运行。
         self.pipeline.composition_mut().clear();
         self.update_preedit_visual_state();
@@ -171,6 +281,10 @@ impl EditorInputHost for SujianEditorItem {
     /// 并武装一次 `suppress_next_ime_commit`（用于忽略该
     /// composition 可能迟到的一次 commit）。
     fn input_cancel_preedit_for_escape(&mut self) {
+        // Issue #1052: 剪贴板只读窗口内不结束 composition（见 input_clear_preedit）。
+        if super::editing::clipboard_read_window_active() {
+            return;
+        }
         // Issue #704 评论 5711047799: 没有 composition 时直接 return，
         // 不调用 input_clear_preedit()，也不碰已有 guard。
         if !self.pipeline.composition().is_composing() {

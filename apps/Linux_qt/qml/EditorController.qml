@@ -11,7 +11,8 @@
 //
 // 关键流程：
 //   openChapter() → read_chapter → SujianEditorItem setText
-//   saveCurrentChapter() → get_plain_text → sanitize → save_chapter
+//   saveCurrentChapter() → readCommittedEditorSnapshot（章节身份 + 已提交
+//   revision 配对）→ sanitize → save_chapter；切章前先保存当前章节。
 //
 // 防死循环机制：
 //   isLoadingChapter 标记防止 chapter_path_changed 信号重入
@@ -63,6 +64,18 @@ QtObject {
     property double lastPotentialExplicitClearAtMs: 0
     property string previousEditorText: ""
     property string lastSavedEditorText: ""
+    // Issue #1052：保存必须与"编辑器实际载入的章节 + 同一 Core 已提交 revision"
+    // 配对。旧实现只用 controller 的章节 ID 读即时正文；章节切换窗口里的旧
+    // snapshot 可能被写进另一个章节，或把过期正文覆盖回当前章节。
+    property string editorDocumentProjectId: ""
+    property string editorDocumentVolumeId: ""
+    property string editorDocumentChapterId: ""
+    // 最近一笔编辑事务 signal 报告的 Core revision，以及自最近一次成功落盘
+    // 以来 Core 已提交的删除字符数（用于区分"用户主动删除"与"正文无故缺失"）。
+    property double committedEditorRevision: -1
+    property int committedDeletedCharsSinceSave: 0
+    // 最近一次成功落盘时对应的编辑器快照 revision。
+    property double lastSavedEditorRevision: -1
 
     // Issue #943：proofreading results are revision-scoped annotations only.
     // The editor item remains the sole owner of editable text and transactions.
@@ -234,6 +247,16 @@ QtObject {
                                          changesJson, oldSelectionAnchor, oldSelectionHead,
                                          newSelectionAnchor, newSelectionHead,
                                          beforeTextSha256, afterTextSha256) {
+            // Issue #1052：记录已提交 Core revision 与真实删除字符数。保存边界
+            // 用它们证明"正文变短"确实来自用户删除事务，而不是无事务的缺失。
+            var appliedRevision = Number(newRevision)
+            if (isFinite(appliedRevision)) {
+                controller.committedEditorRevision = appliedRevision
+            }
+            var appliedDeleted = Number(deletedChars)
+            if (isFinite(appliedDeleted) && appliedDeleted > 0) {
+                controller.committedDeletedCharsSinceSave += Math.round(appliedDeleted)
+            }
             controller.submitAnnotationEditFact({
                 projectId: controller.projectId,
                 chapterId: controller.chapterId,
@@ -1422,6 +1445,133 @@ QtObject {
         return isLoadingChapter || isApplyingFormat || settingsSaveGuardActive;
     }
 
+    // ── Issue #1052：保存与已提交事务 revision/章节身份配对 ──────────────────
+
+    function editorDocumentIdentity() {
+        return projectId + "|" + volumeId + "|" + chapterId;
+    }
+
+    function loadedEditorDocumentIdentity() {
+        return editorDocumentProjectId + "|" + editorDocumentVolumeId + "|" + editorDocumentChapterId;
+    }
+
+    // 编辑器每次真正载入正文（load_document_text / reload_plain_text / 清空）后
+    // 调用：把文档身份和 Core revision 基线绑定到同一份已提交正文。
+    function markEditorDocumentLoaded(pId, vId, cId) {
+        editorDocumentProjectId = pId || "";
+        editorDocumentVolumeId = vId || "";
+        editorDocumentChapterId = cId || "";
+        var revision = targetEditorItem ? Number(targetEditorItem.text_revision) : -1;
+        committedEditorRevision = revision;
+        lastSavedEditorRevision = revision;
+        committedDeletedCharsSinceSave = 0;
+    }
+
+    // Issue #1051：跨卷移动了当前正在编辑的章节时，只迁移文档身份（卷 ID），
+    // 不重载正文、不重置 revision/删除计数。否则保存快照的身份校验会拒绝落盘，
+    // 且用旧卷 ID 保存会写到已不存在的路径。
+    function rebindEditorVolume(pId, newVolumeId, cId) {
+        editorDocumentProjectId = pId || "";
+        editorDocumentVolumeId = newVolumeId || "";
+        editorDocumentChapterId = cId || "";
+    }
+
+    function clearEditorDocumentIdentity() {
+        editorDocumentProjectId = "";
+        editorDocumentVolumeId = "";
+        editorDocumentChapterId = "";
+        committedEditorRevision = -1;
+        lastSavedEditorRevision = -1;
+        committedDeletedCharsSinceSave = 0;
+    }
+
+    // 保存边界唯一允许的正文来源：编辑器实际载入的章节身份 + 读取前后一致的
+    // Core revision。get_plain_text 是只读投影；若读取期间 revision 变化，
+    // 说明有同步 Qt 回调重入提交了事务，必须重读而不能保存旧快照。
+    // 返回 { ok, text, revision, suspiciousEmpty, reason }；ok=true 才可落盘。
+    function readCommittedEditorSnapshot(reason) {
+        var snapshot = {
+            "ok": false,
+            "text": "",
+            "revision": -1,
+            "suspiciousEmpty": false,
+            "reason": String(reason || "")
+        };
+        if (!targetEditorItem) return snapshot;
+        if (loadedEditorDocumentIdentity() !== editorDocumentIdentity()) {
+            logWriterWarning("editor_snapshot_identity_mismatch",
+                "reason=" + snapshot.reason
+                + ", loaded=" + loadedEditorDocumentIdentity()
+                + ", expected=" + editorDocumentIdentity());
+            return snapshot;
+        }
+        var revisionBefore = Number(targetEditorItem.text_revision);
+        var text = readEditorItemPlainText();
+        var revisionAfter = Number(targetEditorItem.text_revision);
+        if (revisionBefore !== revisionAfter) {
+            logWriterWarning("editor_snapshot_unstable",
+                "reason=" + snapshot.reason
+                + ", before=" + revisionBefore + ", after=" + revisionAfter);
+            revisionBefore = revisionAfter;
+            text = readEditorItemPlainText();
+            revisionAfter = Number(targetEditorItem.text_revision);
+            if (revisionBefore !== revisionAfter) return snapshot;
+        }
+        if (committedEditorRevision >= 0 && revisionAfter < committedEditorRevision) {
+            logWriterWarning("editor_snapshot_stale",
+                "reason=" + snapshot.reason
+                + ", snapshotRevision=" + revisionAfter
+                + ", committedRevision=" + committedEditorRevision);
+            return snapshot;
+        }
+        snapshot.text = text;
+        snapshot.revision = revisionAfter;
+        snapshot.ok = true;
+        var hadKnownEditorItemContent = lastSavedEditorText.length > 0;
+        if (text.length === 0 && hadKnownEditorItemContent && hasRecentExplicitClearCandidate()) {
+            explicitEmptySavePending = true;
+        }
+        snapshot.suspiciousEmpty = text.length === 0 && hadKnownEditorItemContent
+                && !explicitEmptySavePending;
+        return snapshot;
+    }
+
+    // 返回无法被已提交删除事务解释的缺失字符数；0 表示可保存。
+    // Core 的 deletedChars 按 Unicode 字符计，QML length 按 UTF-16 code unit 计，
+    // 代理对约差 2x，因此留 2x + 64 的余量，只拦截非空的大段缺失。
+    function unexplainedBodyShrink(candidateText) {
+        if (lastSavedEditorText.length === 0) return 0;
+        var missing = lastSavedEditorText.length - candidateText.length;
+        if (missing <= 64) return 0;
+        if (committedDeletedCharsSinceSave * 2 + 64 >= missing) return 0;
+        return missing;
+    }
+
+    function blockUnexplainedShrink(reason, snapshot) {
+        var missing = unexplainedBodyShrink(snapshot.text);
+        logWriterWarning("unexplained_body_shrink_blocked",
+            "reason=" + reason
+            + ", lastSavedLen=" + lastSavedEditorText.length
+            + ", candidateLen=" + snapshot.text.length
+            + ", missing=" + missing
+            + ", committedDeleted=" + committedDeletedCharsSinceSave
+            + ", snapshotRevision=" + snapshot.revision
+            + ", lastSavedRevision=" + lastSavedEditorRevision);
+        if (editorBackendRef) {
+            editorBackendRef.save_status = qsTr("已阻止疑似正文缺失的保存");
+        }
+        autoSaveTimer.stop();
+        pendingAutoSaveAfterGuard = false;
+        return false;
+    }
+
+    function logWriterInfo(event, message) {
+        var msg = message || "";
+        if (editorBackendRef && editorBackendRef.log_qml) {
+            editorBackendRef.log_qml("info", "editor", event, msg);
+        }
+    }
+
     function hasRecentExplicitClearCandidate() {
         if (!targetEditorItem) return false;
         return readEditorItemPlainText().length === 0 && (Date.now() - lastPotentialExplicitClearAtMs) < 2000;
@@ -1429,9 +1579,22 @@ QtObject {
 
     function markPotentialExplicitClear() {
         if (!targetEditorItem || saveGuardActive()) return;
-        var editorTextLen = readEditorItemPlainText().length;
+        // Issue #1052：该函数在每个破坏性按键（Backspace/Delete/Ctrl+X）上调用。
+        // 旧实现用 get_plain_text() 复制整章正文只为判断"是否接近空"，大章节
+        // 连续删除会造成明显卡顿。改用 O(1) 的 plain_text_length / content_empty。
+        var editorTextBytes = -1;
+        if (targetEditorItem.plain_text_length !== undefined) {
+            editorTextBytes = Number(targetEditorItem.plain_text_length);
+        } else if (targetEditorItem.content_empty !== undefined) {
+            editorTextBytes = targetEditorItem.content_empty === true ? 0 : 1;
+        } else {
+            editorTextBytes = readEditorItemPlainText().length;
+        }
+        // <=4 bytes 覆盖最多一个非 ASCII 字符（CJK 3 bytes / emoji 4 bytes），
+        // 保持旧语义"只剩 <=1 个字符时视为显式清空候选"。
+        var nearEmpty = editorTextBytes >= 0 && editorTextBytes <= 4;
         var hasSelection = targetEditorItem.has_selection === true;
-        if (editorTextLen <= 1 || hasSelection) {
+        if (nearEmpty || hasSelection) {
             lastPotentialExplicitClearAtMs = Date.now();
         }
     }
@@ -1489,19 +1652,39 @@ QtObject {
             pendingAutoSaveAfterGuard = false;
             return true;
         }
-        var read = readEditorPlainText();
-        if (read.suspiciousEmpty) {
+        // Issue #1052：同步前的落盘同样只能使用与已提交事务版本配对的快照。
+        var snapshot = readCommittedEditorSnapshot("flush_before_sync");
+        if (!snapshot.ok) {
+            syncFlushFailureReason = qsTr("编辑器正文快照与已提交版本不一致，已阻止保存")
+            logWriterWarning("flush_before_sync_snapshot_rejected", "snapshot not paired with committed revision")
+            return false;
+        }
+        if (snapshot.suspiciousEmpty) {
             syncFlushFailureReason = qsTr("检测到可疑空正文，已阻止保存")
             logWriterWarning("flush_before_sync_blocked_empty", "blocked suspicious empty save before sync");
             return false;
         }
-        var plainText = read.text;
-        if (plainText === lastSavedEditorText) return true;
+        if (unexplainedBodyShrink(snapshot.text) > 0) {
+            blockUnexplainedShrink("flush_before_sync", snapshot);
+            syncFlushFailureReason = qsTr("检测到无法解释的正文缺失，已阻止保存")
+            return false;
+        }
+        var plainText = snapshot.text;
+        if (plainText === lastSavedEditorText) {
+            lastSavedEditorRevision = snapshot.revision;
+            committedDeletedCharsSinceSave = 0;
+            return true;
+        }
         var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
         var result = editorBackendRef.save_chapter(projectId, volumeId, chapterId, plainText, allowEmptyOverwrite);
         if (result && result.success) {
             lastSavedEditorText = plainText;
             previousEditorText = plainText;
+            lastSavedEditorRevision = snapshot.revision;
+            committedDeletedCharsSinceSave = 0;
+            logWriterInfo("editor_save_committed",
+                "reason=flush_before_sync, revision=" + snapshot.revision
+                + ", len=" + plainText.length + ", identity=" + editorDocumentIdentity());
             if (plainText.length === 0) {
                 explicitEmptySavePending = false;
                 lastPotentialExplicitClearAtMs = 0;
@@ -1516,6 +1699,11 @@ QtObject {
     }
 
     // Unified save entry — always writes normalized plain text via backend.
+    //
+    // Issue #1052：保存正文必须来自"同一已提交事务版本"：
+    // 1. 快照的文档身份必须等于编辑器实际载入的章节；
+    // 2. 读取前后 text_revision 必须一致，且不早于最近一笔编辑事务 revision；
+    // 3. 非空的大段缺失必须能被 Core 已提交的删除事务解释，否则阻止落盘。
     function saveCurrentChapter() {
         if (!editorBackendRef || !chapterId || !projectId || !volumeId) return;
         if (saveGuardActive()) {
@@ -1523,19 +1711,34 @@ QtObject {
             return false;
         }
 
-        var read = readEditorPlainText();
-        if (read.suspiciousEmpty) {
-            return blockUnsafeEmptySave("save_current_chapter", read);
+        var snapshot = readCommittedEditorSnapshot("save_current_chapter");
+        if (!snapshot.ok) return false;
+        if (snapshot.suspiciousEmpty) {
+            return blockUnsafeEmptySave("save_current_chapter", {
+                "editorItemLength": snapshot.text.length
+            });
+        }
+        if (unexplainedBodyShrink(snapshot.text) > 0) {
+            return blockUnexplainedShrink("save_current_chapter", snapshot);
         }
 
-        var plainText = read.text;
-        if (plainText === lastSavedEditorText) return true;
+        var plainText = snapshot.text;
+        if (plainText === lastSavedEditorText) {
+            lastSavedEditorRevision = snapshot.revision;
+            committedDeletedCharsSinceSave = 0;
+            return true;
+        }
         var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
 
         var result = editorBackendRef.save_chapter(projectId, volumeId, chapterId, plainText, allowEmptyOverwrite);
         if (result && result.success) {
             lastSavedEditorText = plainText;
             previousEditorText = plainText;
+            lastSavedEditorRevision = snapshot.revision;
+            committedDeletedCharsSinceSave = 0;
+            logWriterInfo("editor_save_committed",
+                "reason=save_current_chapter, revision=" + snapshot.revision
+                + ", len=" + plainText.length + ", identity=" + editorDocumentIdentity());
             if (plainText.length === 0) {
                 explicitEmptySavePending = false;
                 lastPotentialExplicitClearAtMs = 0;
@@ -1556,6 +1759,26 @@ QtObject {
         if (!cId || !pId || !vId || !editorBackendRef) return null;
         if (!targetEditorItem) return null;
         if (isLoadingChapter) return null;
+
+        // Issue #1052：切到另一章节前必须先落盘当前章节的已提交正文。
+        // 旧实现直接 open_chapter + load_document_text，自动保存防抖窗口内的
+        // 未保存编辑会被新章节正文覆盖，而且不产生任何删除事务——正是诊断包里
+        // "没有删除事务但正文变少"的形状。保存失败时阻止切章，不冒险丢正文。
+        var switchingChapter = chapterId.length > 0
+                && (pId !== projectId || vId !== volumeId || cId !== chapterId);
+        if (switchingChapter) {
+            var saved = saveCurrentChapter();
+            if (!saved) {
+                logWriterWarning("chapter_switch_save_blocked",
+                    "from=" + editorDocumentIdentity()
+                    + ", to=" + pId + "|" + vId + "|" + cId
+                    + ", saveResult=" + saved);
+                if (editorBackendRef) {
+                    editorBackendRef.save_status = qsTr("当前章节尚未成功保存，已阻止切换");
+                }
+                return null;
+            }
+        }
 
         isLoadingChapter = true;
 
@@ -1581,6 +1804,17 @@ QtObject {
             targetEditorItem.load_document_text(content);
             targetEditorItem.clear_undo_stack();
         }
+        // Issue #1052：正文载入后立刻把"编辑器实际载入的章节身份 + Core
+        // revision"绑定成同一份已提交快照；外层 WritingWorkspace 稍后才更新
+        // controller 的章节 ID，这段窗口内绝不允许旧快照落盘。
+        // 身份取 Core 返回的权威 data.projectId/volumeId/chapterId（与
+        // WritingWorkspace 提交给 controller 的值同源），避免请求参数与
+        // authoritative 身份不一致导致所有保存被误判为过期快照。
+        var loadedData = result.data || {};
+        markEditorDocumentLoaded(
+            String(loadedData.projectId || pId),
+            String(loadedData.volumeId || vId),
+            String(loadedData.chapterId || cId));
         // 即使同一章节文本相同，新页面 / 新 EditorKernel 也是新的 Core
         // 标注会话；必须领取进程级唯一 ID，不能沿用旧页面的数字 epoch。
         beginAnnotationDocumentSession();
@@ -1627,6 +1861,7 @@ QtObject {
             lastSavedEditorText = "";
             explicitEmptySavePending = false;
             lastPotentialExplicitClearAtMs = 0;
+            clearEditorDocumentIdentity();
             correctionEntityNames = [];
             invalidateCorrectionResults();
             syncCorrectionTracking("", targetEditorItem ? Number(targetEditorItem.text_revision) : -1, "", "");
@@ -1649,17 +1884,24 @@ QtObject {
 
     function formatText() {
         if (!targetEditorItem) return;
-        var read = readEditorPlainText();
-        if (read.suspiciousEmpty) {
-            blockUnsafeEmptySave("format_text_read", read);
+        // Issue #1052：格式化读入的正文同样必须与已提交事务版本配对。
+        var snapshot = readCommittedEditorSnapshot("format_text_read");
+        if (!snapshot.ok) return;
+        if (snapshot.suspiciousEmpty) {
+            blockUnsafeEmptySave("format_text_read", {
+                "editorItemLength": snapshot.text.length
+            });
             return;
         }
 
-        var raw = read.text;
+        var raw = snapshot.text;
         if (!raw) return;
         if (!editorBackendRef || !editorBackendRef.format_plain_text) return;
         // 正文格式化规则归 Core：这里只触发后端业务操作、刷新编辑器快照并保存。
         var plain = editorBackendRef.format_plain_text(raw);
+        // 格式化是 Core 主动改写正文（可能缩短），属于已被解释的变更；否则
+        // 随后的保存会被"无法解释的正文缺失"守卫误拦。
+        var formattedRemovedChars = Math.max(0, raw.length - plain.length);
 
         isApplyingFormat = true;
         autoSaveTimer.stop();
@@ -1667,6 +1909,10 @@ QtObject {
             targetEditorItem.reload_plain_text(plain);
             beginAnnotationDocumentSession();
             targetEditorItem.clear_undo_stack();
+            // reload 建立新 EditorKernel，revision 从新文档起点重新开始；重新
+            // 绑定文档身份与已提交基线，避免旧 revision 被当成过期快照。
+            markEditorDocumentLoaded(projectId, volumeId, chapterId);
+            committedDeletedCharsSinceSave = formattedRemovedChars;
         } finally {
             isApplyingFormat = false;
         }

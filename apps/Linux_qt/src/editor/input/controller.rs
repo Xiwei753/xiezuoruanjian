@@ -10,6 +10,17 @@
 use super::events::*;
 use crate::sujian_editor_item::PreeditAttribute;
 
+/// Issue #1052: Cut 的完整快捷键集合（Ctrl+X，以及 Qt 在 X11/Wayland 上
+/// 把 Shift+Delete 也绑到 `QKeySequence::Cut`）。Cut 必须"先确认复制成功，
+/// 再提交删除"，不能落到通用 Delete 分支直接删原文。
+fn is_cut_shortcut(key: i32, modifiers: i32) -> bool {
+    let only_ctrl =
+        has_ctrl(modifiers) && !has_shift(modifiers) && !has_alt(modifiers) && !has_meta(modifiers);
+    let only_shift =
+        has_shift(modifiers) && !has_ctrl(modifiers) && !has_alt(modifiers) && !has_meta(modifiers);
+    (only_ctrl && key == KEY_X) || (only_shift && key == KEY_DELETE)
+}
+
 /// 编辑器输入宿主 trait — 平台端必须实现。
 ///
 /// 线程安全：所有方法在 GUI 线程上调用，实现方不得跨线程访问。
@@ -83,7 +94,16 @@ pub(crate) fn handle_key<H: EditorInputHost + ?Sized>(
     }
     let ctrl = has_ctrl(modifiers);
     let shift = has_shift(modifiers);
+    if is_cut_shortcut(key, modifiers) {
+        // Issue #1052: Cut = 复制 + 删除，删除只能发生在复制真正成功之后。
+        // 复制失败（没选区、剪贴板不可用）时保留原文，绝不"复制失败也删"。
+        if host.input_clipboard_copy() {
+            host.input_delete_selection();
+        }
+        return true;
+    }
     if is_copy_shortcut(key, modifiers) {
+        // Issue #1052: 复制是纯只读命令：正常结束不删除、不插入、不改选区。
         host.input_clipboard_copy();
         return true;
     }
@@ -99,11 +119,6 @@ pub(crate) fn handle_key<H: EditorInputHost + ?Sized>(
         match key {
             KEY_A => {
                 host.input_select_all();
-                return true;
-            }
-            KEY_X => {
-                host.input_clipboard_copy();
-                host.input_delete_selection();
                 return true;
             }
             KEY_Z => {
