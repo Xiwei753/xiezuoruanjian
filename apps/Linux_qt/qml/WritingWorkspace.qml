@@ -452,11 +452,12 @@ Rectangle {
             proofReplayDialog.openForChapter(editorController.chapterId, "")
         }
         // Issue #1047：光标移动/滚动停止后的节流快照，写入本机阅读书签。
-        function onViewStateChanged(state) {
-            if (!editorController.projectId || !editorController.chapterId)
+        // 身份来自信号（计时器启动时的章节），不能回读当前 chapterId：计时器
+        // 可能属于上一章并在切章后才触发。
+        function onViewStateChanged(state, projectId, chapterId) {
+            if (!projectId || !chapterId)
                 return
-            root.saveChapterViewState(editorController.projectId,
-                                      editorController.chapterId, state)
+            root.saveChapterViewState(projectId, chapterId, state)
         }
     }
 
@@ -609,6 +610,9 @@ Rectangle {
         // Issue #1047：载入新章节前先保存旧章节的位置，避免切章吞掉书签；
         // 同时取消上一章尚未完成的延迟恢复，一个章节身份只允许一个待完成恢复。
         root.saveActiveViewState()
+        // Issue #1047 复审：旧章的节流计时器不能跨章保存；先停掉，再取消
+        // 尚未完成的恢复。即时保存已用有效快照完成，不会丢 A 的书签。
+        editorViewport.flushOrCancelViewStateNotify()
         editorViewport.cancelViewStateRestore()
         editorViewport.snapNextCursorUpdate();
         // loadChapterContentWithIds returns null on failure, result object on success.
@@ -621,9 +625,10 @@ Rectangle {
             editorController.chapterId = d.chapterId || cId;
             editorController.chapterTitle = d.title || cTitle || "";
             editorViewport.snapNextCursorUpdate();
-            // Issue #1047 复审：书签恢复绑定到当前章节身份，定时器执行前复核。
-            editorViewport.viewIdentityProjectId = editorController.projectId;
-            editorViewport.viewIdentityChapterId = editorController.chapterId;
+            // Issue #1047 复审：书签恢复绑定到当前章节身份，定时器执行前复核；
+            // 同时清掉旧章可能残留的节流通知计时器。
+            editorViewport.beginViewIdentity(editorController.projectId,
+                                             editorController.chapterId)
             // Issue #1047：恢复该章节上次的阅读位置；没有记录才回顶部。
             // 旧行为是切章后无条件 resetScroll()，会丢掉每章独立书签。
             var savedView = root.workspaceBackendRef

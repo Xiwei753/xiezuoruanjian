@@ -44,13 +44,18 @@ Item {
     property string viewIdentityChapterId: ""
     property string pendingRestoreProjectId: ""
     property string pendingRestoreChapterId: ""
+    // Issue #1047 复审：节流保存计时器启动时记录的章节身份。计时器可能跨章
+    // 触发，触发前必须核对；通知随附身份，工作区不再用“当前 chapterId”猜来源。
+    property string notifyViewProjectId: ""
+    property string notifyViewChapterId: ""
     // 程序自身写 contentY 时置位，用于区分“恢复写入”和用户主动滚动。
     property bool applyingRestoreScroll: false
 
     signal explicitClearRequested()
     signal proofReplayRequested()
     // 节流后的视口变化通知：光标移动或用户滚动停止后发出，工作区据此落盘。
-    signal viewStateChanged(var state)
+    // 身份随信号携带，接收方不得回读“当前章节”——计时器可能属于上一章。
+    signal viewStateChanged(var state, string projectId, string chapterId)
 
     function requestEditorFocus() {
         if (sujianEditor && sujianEditor.visible && sujianEditor.editor_enabled) {
@@ -165,7 +170,25 @@ Item {
     function noteViewStateChanged() {
         if (restoringViewState)
             return;
+        notifyViewProjectId = viewIdentityProjectId;
+        notifyViewChapterId = viewIdentityChapterId;
         viewStateNotifyTimer.restart();
+    }
+
+    // Issue #1047 复审：切章/离开前停止旧章节尚未触发的节流计时器。它保存的
+    // 是旧章身份，不能在新章打开后按“当前 chapter”落盘。切章前调用方已用
+    // captureEffectiveViewState() 即时保存旧章，因此这里直接丢弃计时器即可。
+    function flushOrCancelViewStateNotify() {
+        viewStateNotifyTimer.stop();
+        notifyViewProjectId = "";
+        notifyViewChapterId = "";
+    }
+
+    // Issue #1047 复审：新章节正文载入成功后设置视口身份，并清掉旧计时器。
+    function beginViewIdentity(projectId, chapterId) {
+        flushOrCancelViewStateNotify();
+        viewIdentityProjectId = String(projectId || "");
+        viewIdentityChapterId = String(chapterId || "");
     }
 
     Timer {
@@ -200,7 +223,22 @@ Item {
         id: viewStateNotifyTimer
         interval: 700
         repeat: false
-        onTriggered: root.viewStateChanged(root.captureViewState())
+        onTriggered: {
+            // 计时器启动后可能已经切章；旧章身份的通知一律丢弃，避免把上一章
+            // 的延迟快照写到新章书签。
+            if (!root.notifyViewProjectId || !root.notifyViewChapterId)
+                return
+            if (root.notifyViewProjectId !== root.viewIdentityProjectId
+                    || root.notifyViewChapterId !== root.viewIdentityChapterId)
+                return
+            var projectId = root.notifyViewProjectId
+            var chapterId = root.notifyViewChapterId
+            root.notifyViewProjectId = ""
+            root.notifyViewChapterId = ""
+            // 恢复尚未完成时发出待恢复目标书签，而不是临时视口。
+            root.viewStateChanged(root.captureEffectiveViewState(),
+                                  projectId, chapterId)
+        }
     }
 
     Connections {
