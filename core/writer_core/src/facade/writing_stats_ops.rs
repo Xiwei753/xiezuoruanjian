@@ -231,12 +231,19 @@ impl super::WriterCore {
     ) {
         if let Ok(mut pending) = self.pending_editor_proof.lock() {
             let events = pending.entry(key).or_default();
-            if !events
+            if events
                 .iter()
                 .any(|existing| existing.event_id() == projection.event_id())
             {
-                events.push(projection);
+                return;
             }
+            let mut projection = projection;
+            // 基线正文只对本章第一条待提交事件保留，避免每条编辑都把整章正文
+            // 复制进内存/journal。
+            if !events.is_empty() {
+                projection.baseline_text = None;
+            }
+            events.push(projection);
         }
     }
 
