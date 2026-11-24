@@ -50,11 +50,27 @@ const EDITOR_PUNCTUATION_OVERFLOW_MIN_API = 26
 const EDITOR_SMOOTH_CARET_JUMP_DISTANCE_VP = 120
 // getCaretRect 自 API 18 起支持；低版本设备不启用自绘光标，保持原生 caretColor。
 const EDITOR_SMOOTH_CARET_MIN_API = 18
+// 滚动期逐帧追踪：几何连续稳定这么多帧视为惯性滚动结束。
+const SCROLL_CARET_STABLE_FRAMES = 4
+// 原生几何不可读（未闪烁等）时无法判定惯性结束，超过该时长即停止追踪。
+const SCROLL_CARET_TRACKING_MAX_MS = 2500
+const SCROLL_CARET_EPSILON_VP = 0.01
 
 // 原生选区（UTF-16；不可读时为 -1）。
 interface NativeSelectionOffsets {
   start: number
   end: number
+}
+
+// 原生光标几何采样。hasRect=false 表示接口暂时不可读；
+// inViewport=false 时浮层隐藏，但滚动追踪仍继续，以便重新进入视口时按真实位置显示。
+interface CaretGeometrySample {
+  hasRect: boolean
+  inViewport: boolean
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
 interface EditorSelectionSnapshot {
@@ -118,6 +134,24 @@ class EditorCaretFrameCallback extends FrameCallback {
   }
 }
 
+// Issue #1056：滚动期逐帧追踪。
+// onIdle 距 VSync 不足 1ms 时会被官方顺延，惯性滚动期间必须用 onFrame 在每帧开始跟随
+// 原生内部滚动偏移；追踪方每帧只挂一份回调，几何稳定后自行停止。
+class EditorScrollCaretFrameCallback extends FrameCallback {
+  private action: (() => void) | null = null
+
+  setAction(action: (() => void) | null): void {
+    this.action = action
+  }
+
+  onFrame(_frameTimeInNano: number): void {
+    const action = this.action
+    if (action !== null) {
+      action()
+    }
+  }
+}
+
 @Component
 export struct SujianEditor {
   editorCoordinator: EditorSessionCoordinator | null = null
@@ -147,6 +181,17 @@ export struct SujianEditor {
   private caretFrameCallback: EditorCaretFrameCallback = new EditorCaretFrameCallback()
   private caretRefreshPosted: boolean = false
   private caretRefreshJump: boolean = false
+  // 滚动期追踪状态（只覆盖原生 RichEditor 自己的滚动，不另包 Scroll）。
+  private scrollCaretFrameCallback: EditorScrollCaretFrameCallback = new EditorScrollCaretFrameCallback()
+  private scrollCaretTracking: boolean = false
+  private scrollCaretFramePosted: boolean = false
+  private scrollCaretStableFrames: number = 0
+  private scrollCaretLastActivityMs: number = 0
+  private scrollCaretLastHasRect: boolean = false
+  private scrollCaretLastX: number = 0
+  private scrollCaretLastY: number = 0
+  private scrollCaretLastWidth: number = 0
+  private scrollCaretLastHeight: number = 0
   private richEditorController: RichEditorStyledStringController = new RichEditorStyledStringController()
   // 原生组件 onReady 后才允许改属性字符串，避免对未绑定的 controller 操作。
   private editorReady: boolean = false
@@ -184,6 +229,9 @@ export struct SujianEditor {
     this.caretFrameCallback.setAction((): void => {
       this.onCaretFrame()
     })
+    this.scrollCaretFrameCallback.setAction((): void => {
+      this.onScrollCaretFrame()
+    })
   }
 
   aboutToDisappear(): void {
@@ -191,6 +239,8 @@ export struct SujianEditor {
     this.caretFrameCallback.setAction(null)
     this.caretRefreshPosted = false
     this.caretRefreshJump = false
+    this.stopScrollCaretTracking()
+    this.scrollCaretFrameCallback.setAction(null)
     this.cancelSnapshotTimer()
     if (this.paragraphVerifyTimer !== -1) {
       clearTimeout(this.paragraphVerifyTimer)
@@ -842,6 +892,7 @@ export struct SujianEditor {
 
   private onSmoothCursorSettingChanged(): void {
     if (!this.smoothCursorEnabled) {
+      this.stopScrollCaretTracking()
       this.hideSmoothCaret()
       return
     }
@@ -880,6 +931,101 @@ export struct SujianEditor {
     }
   }
 
+  // ── 滚动期逐帧追踪 ──────────────────────────────────────────
+
+  // 触摸按下/移动开始追踪；抬起/取消后继续按帧读取，直到惯性滚动结束。
+  private onEditorTouch(event: TouchEvent): void {
+    if (event.type === TouchType.Down || event.type === TouchType.Move ||
+      event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      this.startScrollCaretTracking()
+    }
+  }
+
+  private startScrollCaretTracking(): void {
+    if (!this.canShowSmoothCaret()) {
+      return
+    }
+    this.scrollCaretTracking = true
+    this.scrollCaretStableFrames = 0
+    this.scrollCaretLastActivityMs = Date.now()
+    this.postScrollCaretFrame()
+  }
+
+  private stopScrollCaretTracking(): void {
+    this.scrollCaretTracking = false
+    this.scrollCaretStableFrames = 0
+    this.scrollCaretLastHasRect = false
+  }
+
+  // 每帧只挂一份 onFrame 回调；追踪停止后已挂的回调自行退出。
+  private postScrollCaretFrame(): void {
+    if (!this.scrollCaretTracking || this.scrollCaretFramePosted) {
+      return
+    }
+    this.scrollCaretFramePosted = true
+    try {
+      this.getUIContext().postFrameCallback(this.scrollCaretFrameCallback)
+    } catch (e) {
+      this.scrollCaretFramePosted = false
+      this.stopScrollCaretTracking()
+    }
+  }
+
+  private onScrollCaretFrame(): void {
+    this.scrollCaretFramePosted = false
+    if (!this.scrollCaretTracking) {
+      return
+    }
+    if (!this.canShowSmoothCaret()) {
+      // 失焦 / 选区非折叠 / 关闭动画：停止追踪并恢复原生光标。
+      this.stopScrollCaretTracking()
+      this.hideSmoothCaret()
+      return
+    }
+    const sample: CaretGeometrySample = this.readCaretGeometrySample()
+    if (sample.hasRect) {
+      const changed: boolean = !this.scrollCaretLastHasRect ||
+        Math.abs(sample.x - this.scrollCaretLastX) > SCROLL_CARET_EPSILON_VP ||
+        Math.abs(sample.y - this.scrollCaretLastY) > SCROLL_CARET_EPSILON_VP ||
+        Math.abs(sample.width - this.scrollCaretLastWidth) > SCROLL_CARET_EPSILON_VP ||
+        Math.abs(sample.height - this.scrollCaretLastHeight) > SCROLL_CARET_EPSILON_VP
+      if (changed) {
+        this.scrollCaretStableFrames = 0
+        this.scrollCaretLastHasRect = true
+        this.scrollCaretLastX = sample.x
+        this.scrollCaretLastY = sample.y
+        this.scrollCaretLastWidth = sample.width
+        this.scrollCaretLastHeight = sample.height
+      } else {
+        this.scrollCaretStableFrames++
+      }
+    } else {
+      // 读不到几何时不能判定已停（可能只是暂时不可读），交给超时兜底。
+      this.scrollCaretLastHasRect = false
+      this.scrollCaretStableFrames = 0
+    }
+    // 滚动期目标坐标直接随动，不走平滑插值；编辑导致的普通迁移仍由 onIdle 平滑处理。
+    this.applyCaretGeometrySample(sample, true)
+    const timedOut: boolean = Date.now() - this.scrollCaretLastActivityMs >= SCROLL_CARET_TRACKING_MAX_MS
+    if (this.scrollCaretStableFrames >= SCROLL_CARET_STABLE_FRAMES || timedOut) {
+      this.stopScrollCaretTracking()
+      return
+    }
+    this.postScrollCaretFrame()
+  }
+
+  // ── 光标几何 ────────────────────────────────────────────────
+
+  // 自绘光标的统一显示条件：设置开启、已就绪、有焦点、折叠选区、API 支持。
+  private canShowSmoothCaret(): boolean {
+    if (!this.smoothCursorEnabled || !this.editorReady || !this.editorFocused ||
+      !PlatformApiResolver.getInstance().isApiAtLeast(EDITOR_SMOOTH_CARET_MIN_API)) {
+      return false
+    }
+    const selection: NativeSelectionOffsets = this.readNativeSelection()
+    return selection.start >= 0 && selection.end >= 0 && selection.start === selection.end
+  }
+
   private hideSmoothCaret(): void {
     if (!this.caretVisual.visible) {
       return
@@ -895,20 +1041,8 @@ export struct SujianEditor {
     }
   }
 
-  // 只读原生几何：只有焦点、折叠选区且 getCaretRect 有值时才显示自绘光标；
-  // 失焦、选区非折叠、位置不可获取、关闭动画时隐藏浮层并恢复原生 caretColor。
-  // 这里不调用 setSelection / setStyledString，也不产生任何 Core 编辑事务。
-  private refreshCaretVisual(forceJump: boolean): void {
-    if (!this.smoothCursorEnabled || !this.editorReady || !this.editorFocused ||
-      !PlatformApiResolver.getInstance().isApiAtLeast(EDITOR_SMOOTH_CARET_MIN_API)) {
-      this.hideSmoothCaret()
-      return
-    }
-    const selection: NativeSelectionOffsets = this.readNativeSelection()
-    if (selection.start < 0 || selection.end < 0 || selection.start !== selection.end) {
-      this.hideSmoothCaret()
-      return
-    }
+  // 只读原生几何，不调用 setSelection / setStyledString，也不产生任何 Core 编辑事务。
+  private readCaretGeometrySample(): CaretGeometrySample {
     let rect: RectResult | undefined = undefined
     try {
       rect = this.richEditorController.getCaretRect()
@@ -917,8 +1051,7 @@ export struct SujianEditor {
     }
     if (rect === undefined || rect === null) {
       // 官方接口在未绑定/未闪烁时可能返回 undefined：不硬造 (0,0) 光标。
-      this.hideSmoothCaret()
-      return
+      return { hasRect: false, inViewport: false, x: 0, y: 0, width: 0, height: 0 }
     }
     const x: number = rect.x
     const y: number = rect.y
@@ -926,34 +1059,44 @@ export struct SujianEditor {
     const height: number = rect.height
     if (!Number.isFinite(x) || !Number.isFinite(y) ||
       !Number.isFinite(width) || !Number.isFinite(height) || height <= 0) {
-      this.hideSmoothCaret()
-      return
+      return { hasRect: false, inViewport: false, x: 0, y: 0, width: 0, height: 0 }
     }
     // 完整滚出可视区域：与原生光标一致，不把浮层留在旧屏幕位置。
-    if (this.editorHeightVp > 0 && (y + height <= 0 || y >= this.editorHeightVp)) {
+    const inViewport: boolean =
+      (this.editorHeightVp <= 0 || (y + height > 0 && y < this.editorHeightVp)) &&
+        (this.editorWidthVp <= 0 || (x + width > 0 && x < this.editorWidthVp))
+    return { hasRect: true, inViewport: inViewport, x: x, y: y, width: width, height: height }
+  }
+
+  private refreshCaretVisual(forceJump: boolean): void {
+    if (!this.canShowSmoothCaret()) {
       this.hideSmoothCaret()
       return
     }
-    if (this.editorWidthVp > 0 && (x + width <= 0 || x >= this.editorWidthVp)) {
+    this.applyCaretGeometrySample(this.readCaretGeometrySample(), forceJump)
+  }
+
+  private applyCaretGeometrySample(sample: CaretGeometrySample, forceJump: boolean): void {
+    if (!sample.hasRect || !sample.inViewport) {
       this.hideSmoothCaret()
       return
     }
     const previous: SmoothCaretVisual = this.caretVisual
     const distanceJump: boolean = previous.visible &&
-      (Math.abs(x - previous.x) > EDITOR_SMOOTH_CARET_JUMP_DISTANCE_VP ||
-        Math.abs(y - previous.y) > EDITOR_SMOOTH_CARET_JUMP_DISTANCE_VP)
+      (Math.abs(sample.x - previous.x) > EDITOR_SMOOTH_CARET_JUMP_DISTANCE_VP ||
+        Math.abs(sample.y - previous.y) > EDITOR_SMOOTH_CARET_JUMP_DISTANCE_VP)
     const jump: boolean = forceJump || !previous.visible || distanceJump
     // 几何没有变化时不重复写状态：连续触摸/滚动事件不能堆积无意义的浮层重渲染。
-    if (previous.visible && previous.x === x && previous.y === y &&
-      previous.width === width && previous.height === height) {
+    if (previous.visible && previous.x === sample.x && previous.y === sample.y &&
+      previous.width === sample.width && previous.height === sample.height) {
       return
     }
     this.caretVisual = {
       visible: true,
-      x: x,
-      y: y,
-      width: width,
-      height: height,
+      x: sample.x,
+      y: sample.y,
+      width: sample.width,
+      height: sample.height,
       jumpToken: jump ? previous.jumpToken + 1 : previous.jumpToken
     }
   }
@@ -1021,9 +1164,10 @@ export struct SujianEditor {
           this.scheduleCaretGeometryRefresh(true)
           this.scheduleRuntimeSnapshot()
         })
-        // 滚动/拖选会移动原生视口但不会改变选区：触摸期间直接跟随，避免浮层停在旧位置。
-        .onTouch((_event: TouchEvent): void => {
-          this.scheduleCaretGeometryRefresh(true)
+        // 滚动/拖选会移动原生视口但不会改变选区：触摸期开始逐帧追踪，
+        // 抬起后由同一追踪继续覆盖原生惯性滚动，避免浮层停在松手前的坐标。
+        .onTouch((event: TouchEvent): void => {
+          this.onEditorTouch(event)
         })
         .onClick((event: ClickEvent) => {
           this.handleContentClick(event)
@@ -1038,6 +1182,7 @@ export struct SujianEditor {
           hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'RichEditor focus lost')
           this.editorFocused = false
           this.caretRefreshJump = false
+          this.stopScrollCaretTracking()
           this.hideSmoothCaret()
           if (this.richEditorBridge) {
             this.richEditorBridge.captureDiagnosticsFacts()

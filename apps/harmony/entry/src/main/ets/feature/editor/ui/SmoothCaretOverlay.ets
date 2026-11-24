@@ -62,6 +62,15 @@ export struct SmoothCaretOverlay {
       this.applyVisual()
       return
     }
+    if (this.visual.jumpToken !== this.appliedJumpToken) {
+      // 滚动/远距离跳转：当帧直接随动，不排到定时器之后。
+      if (this.applyTimerId !== -1) {
+        clearTimeout(this.applyTimerId)
+        this.applyTimerId = -1
+      }
+      this.applyVisual()
+      return
+    }
     // 父组件可能在同一帧内连续写入多个目标；合并成一次动画，避免堆积定时任务。
     if (this.applyTimerId !== -1) {
       return
