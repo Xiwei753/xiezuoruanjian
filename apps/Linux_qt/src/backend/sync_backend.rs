@@ -18,6 +18,7 @@
 
 mod sync_operations;
 
+use self::sync_operations::AutoSyncTrigger;
 use super::*;
 use crate::backend::AppRef;
 use crate::backend::DomainSnapshot;
@@ -156,10 +157,13 @@ pub struct SyncBackend {
     perform_sync: qt_method!(fn(&mut self, source: QString, request_id: QString) -> QString),
     // Issue #983：自动同步的 QML 边界。QML 只负责定时唤醒；到期判定、工作区身份
     // 校验和真正启动都在 AppBackend 内完成，不把自动触发冒充成手动请求。
+    // Issue #1058：QML 传入触发原因（timer / startup / handoff），due 与 start
+    // 使用同一个原因字符串，由 AppBackend 统一解析；startup / handoff 只绕过
+    // 间隔条件，配置、工作区与 single-flight 判断保持不变。
     #[allow(dead_code)]
-    auto_sync_due: qt_method!(fn(&mut self) -> bool),
+    auto_sync_due: qt_method!(fn(&mut self, trigger: QString) -> bool),
     #[allow(dead_code)]
-    start_auto_sync: qt_method!(fn(&mut self) -> QString),
+    start_auto_sync: qt_method!(fn(&mut self, trigger: QString) -> QString),
     #[allow(dead_code)]
     perform_sync_diagnostics: qt_method!(fn(&mut self) -> QString),
     #[allow(dead_code)]
@@ -672,23 +676,28 @@ impl SyncBackend {
             }
         }
     }
-    fn auto_sync_due(&mut self) -> bool {
-        match self.with_app_mut(|app| app.auto_sync_due()) {
+    fn auto_sync_due(&mut self, trigger: QString) -> bool {
+        let trigger = AutoSyncTrigger::parse(&trigger.to_string());
+        match self.with_app_mut(|app| app.auto_sync_due(trigger)) {
             Ok(due) => due,
             Err(_) => {
                 crate::backend::app_backend::debug_error_static(
                     "sync_backend",
                     "auto_sync_due_failed",
-                    "auto sync due check skipped due to AppBackend borrow conflict",
+                    &format!(
+                        "auto sync due check skipped due to AppBackend borrow conflict, trigger={}",
+                        trigger.as_str()
+                    ),
                 );
                 false
             }
         }
     }
 
-    fn start_auto_sync(&mut self) -> QString {
+    fn start_auto_sync(&mut self, trigger: QString) -> QString {
+        let trigger = AutoSyncTrigger::parse(&trigger.to_string());
         let qptr = QPointer::from(&*self);
-        match self.with_app_mut(|app| app.start_auto_sync(Some(qptr))) {
+        match self.with_app_mut(|app| app.start_auto_sync(trigger, Some(qptr))) {
             Ok((operation_id, started)) => {
                 if started {
                     self.sync_status_changed();
@@ -703,7 +712,10 @@ impl SyncBackend {
                 crate::backend::app_backend::debug_error_static(
                     "sync_backend",
                     "auto_sync_dispatch_failed",
-                    "auto sync dispatch skipped due to AppBackend borrow conflict",
+                    &format!(
+                        "auto sync dispatch skipped due to AppBackend borrow conflict, trigger={}",
+                        trigger.as_str()
+                    ),
                 );
                 QString::from("")
             }

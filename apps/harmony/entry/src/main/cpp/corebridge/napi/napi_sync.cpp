@@ -85,15 +85,20 @@ static void SyncCompleteCb(napi_env env, napi_status status, void* data) {
 // 全量同步三个入口统一走专用原生工作线程（Issue #1011）。
 // 这些函数只执行 Rust C ABI，由工作线程调用；结果字符串的释放统一在
 // sync_native_worker.h 的 ArkTS 线程回调中完成。
-static char* PerformSyncExecute() {
-    return writer_core_perform_full_sync();
+// Issue #1058：perform 入口接收触发原因与防抖旁路标志；diagnostics/dry-run 无参。
+static char* PerformSyncExecute(const char* trigger, bool force_sync) {
+    return writer_core_perform_full_sync_with_options(trigger, force_sync);
 }
 
-static char* SyncDiagnosticsExecute() {
+static char* SyncDiagnosticsExecute(const char* arg, bool flag) {
+    (void)arg;
+    (void)flag;
     return writer_core_full_sync_diagnostics();
 }
 
-static char* SyncDryRunExecute() {
+static char* SyncDryRunExecute(const char* arg, bool flag) {
+    (void)arg;
+    (void)flag;
     return writer_core_full_sync_dry_run();
 }
 
@@ -134,9 +139,37 @@ static napi_value NativeSyncDiagnostics(napi_env env, napi_callback_info info) {
     return SyncNativeWorkerSubmit(env, "NativeSyncDiagnostics", SyncDiagnosticsExecute);
 }
 
+// Issue #1058：performSync(trigger, forceSync) 把设备切换的触发原因与"跳过周期
+// 防抖"标志显式传给 Core；缺失/类型不符时回退为空 trigger + 不强制。
 static napi_value NativePerformSync(napi_env env, napi_callback_info info) {
-    (void)info;
-    return SyncNativeWorkerSubmit(env, "NativePerformSync", PerformSyncExecute);
+    std::string trigger;
+    bool force_sync = false;
+    size_t argc = 2;
+    napi_value argv[2] = {nullptr, nullptr};
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) == napi_ok) {
+        if (argc > 0) {
+            napi_valuetype trigger_type = napi_undefined;
+            if (napi_typeof(env, argv[0], &trigger_type) == napi_ok && trigger_type == napi_string) {
+                size_t length = 0;
+                if (napi_get_value_string_utf8(env, argv[0], nullptr, 0, &length) == napi_ok) {
+                    trigger.resize(length + 1);
+                    size_t copied = 0;
+                    if (napi_get_value_string_utf8(env, argv[0], &trigger[0], trigger.size(), &copied) == napi_ok) {
+                        trigger.resize(copied);
+                    } else {
+                        trigger.clear();
+                    }
+                }
+            }
+        }
+        if (argc > 1) {
+            napi_valuetype force_type = napi_undefined;
+            if (napi_typeof(env, argv[1], &force_type) == napi_ok && force_type == napi_boolean) {
+                napi_get_value_bool(env, argv[1], &force_sync);
+            }
+        }
+    }
+    return SyncNativeWorkerSubmit(env, "NativePerformSync", PerformSyncExecute, trigger, force_sync);
 }
 
 // ── 轻量级本地操作（异步，不阻塞主线程） ──

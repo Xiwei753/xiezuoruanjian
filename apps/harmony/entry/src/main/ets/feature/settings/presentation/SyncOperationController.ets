@@ -12,7 +12,7 @@ import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { NativeWriterCoreBridge } from '../../../corebridge/NativeWriterCoreBridge'
 import { NetworkStatusService, NetworkSnapshot } from '../../../platform/network/NetworkStatusService'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../../../platform/diagnostics/HarmonyDiagnosticEvents'
-import { SyncOutcome } from './SyncRunTypes'
+import { SyncOutcome, SyncTriggerReason, isHandoffTrigger } from './SyncRunTypes'
 import { SyncEntrySource, SyncRunPresentationState } from './SyncRunPresentationState'
 import {
   ActiveWritingSessionRegistry,
@@ -27,10 +27,25 @@ export const SYNC_CONTENT_CHANGED_EVENT_ID: number = 1001
 const TAG = 'SyncOperationController'
 const DOMAIN = 0x0000
 
+// 运行中任务期间排队的一个后续同步（Issue #1058）。字段用函数类型属性而不是方法签名，
+// 与 ActiveWritingSessionRegistry 的 SyncBarrierScope 同样的 ArkTS 字面量限制。
+interface SyncFollowUpRequest {
+  readonly trigger: SyncTriggerReason
+  readonly promise: Promise<SyncOutcome>
+  readonly resolve: (outcome: SyncOutcome) => void
+}
+
 export class SyncOperationController {
   private static instance: SyncOperationController
   private syncBridge: NativeSyncBridge
   private currentOperation: Promise<SyncOutcome> | null = null
+  /**
+   * 运行中任务期间至多一个后续同步请求（Issue #1058）。
+   * 退后台保存发生在运行中任务已越过保存/快照边界之后时，新正文不会被旧运行任务带上远端；
+   * 这里不把调用方简单挂到旧 Promise 上，而是在旧任务结束后再走一次完整 performSync
+   * （重新经过 ActiveWritingSessionRegistry.withSyncBarrier 保存屏障）。多个交接请求合并为一个。
+   */
+  private pendingFollowUp: SyncFollowUpRequest | null = null
 
   private constructor() {
     this.syncBridge = new NativeSyncBridge(new NativeCoreModule())
@@ -57,11 +72,23 @@ export class SyncOperationController {
     return SyncRunPresentationState.getInstance().snapshot().source
   }
 
-  /** 执行同步 — 一次只运行一个事务；开始快照先于保存屏障和 NAPI。 */
-  performSync(source: SyncEntrySource = 'manual'): Promise<SyncOutcome> {
+  /**
+   * 执行同步 — 一次只运行一个事务；开始快照先于保存屏障和 NAPI。
+   *
+   * 触发原因（Issue #1058）：manual/auto_timer 维持原有「运行中则合并到当前任务」语义；
+   * 交接类触发（startup / foreground_handoff / background_handoff / handoff_retry）在运行中时
+   * 不并入旧任务——旧任务可能已越过保存/快照边界，退后台的新保存不会被它上传——
+   * 而是合并为至多一个后续同步，等旧任务结束后重新经过保存屏障再执行。
+   */
+  performSync(source: SyncEntrySource = 'manual',
+    trigger: SyncTriggerReason = 'manual'): Promise<SyncOutcome> {
     if (this.currentOperation !== null) {
-      hilog.warn(DOMAIN, TAG, 'sync already in progress, waiting for existing operation')
-      return this.currentOperation
+      if (!isHandoffTrigger(trigger)) {
+        hilog.warn(DOMAIN, TAG,
+          'sync already in progress, waiting for existing operation: trigger=%{public}s', trigger)
+        return this.currentOperation
+      }
+      return this.queueHandoffFollowUp(trigger)
     }
     const startedAtMs: number = Date.now()
     const state: SyncRunPresentationState = SyncRunPresentationState.getInstance()
@@ -71,9 +98,10 @@ export class SyncOperationController {
     })
     this.currentOperation = trackedOperation
     state.begin(source)
-    this.recordSyncStarted(source)
+    hilog.info(DOMAIN, TAG, 'performSync: starting source=%{public}s trigger=%{public}s', source, trigger)
+    this.recordSyncStarted(source, trigger)
 
-    const execution: Promise<SyncOutcome> = this.executeSync(startedAtMs).catch((e: Error): SyncOutcome => {
+    const execution: Promise<SyncOutcome> = this.executeSync(startedAtMs, trigger).catch((e: Error): SyncOutcome => {
       // executeSync 已覆盖预检和 NAPI 路径；这里兜住完成通知等外围意外，仍产出唯一终态。
       const errorType: string = e instanceof Error ? e.name : 'Unknown'
       hilog.error(DOMAIN, TAG,
@@ -96,7 +124,7 @@ export class SyncOperationController {
           hilog.error(DOMAIN, TAG, 'performSync: failed to publish terminal snapshot')
         }
         try {
-          this.recordSyncFinished(source, startedAtMs, outcome)
+          this.recordSyncFinished(source, trigger, startedAtMs, outcome)
         } catch (_) {
           hilog.error(DOMAIN, TAG, 'performSync: failed to record terminal event')
         }
@@ -107,14 +135,80 @@ export class SyncOperationController {
         if (resolveTrackedOperation !== null) {
           resolveTrackedOperation(outcome)
         }
+        this.startPendingFollowUp()
       }
     })
     return trackedOperation
   }
 
-  private recordSyncStarted(source: SyncEntrySource): void {
+  /**
+   * 运行中任务期间收到交接请求：合并成至多一个后续同步并返回它的 Promise。
+   * 后续同步会重新进入 performSync → withSyncBarrier，绝不沿用旧任务的保存/快照边界。
+   */
+  private queueHandoffFollowUp(trigger: SyncTriggerReason): Promise<SyncOutcome> {
+    const pending: SyncFollowUpRequest | null = this.pendingFollowUp
+    if (pending !== null) {
+      hilog.info(DOMAIN, TAG,
+        'follow-up sync already queued, merging trigger=%{public}s into trigger=%{public}s',
+        trigger, pending.trigger)
+      return pending.promise
+    }
+    let resolveFollowUp: ((outcome: SyncOutcome) => void) | null = null
+    const promise: Promise<SyncOutcome> = new Promise<SyncOutcome>((resolve: (outcome: SyncOutcome) => void): void => {
+      resolveFollowUp = resolve
+    })
+    const request: SyncFollowUpRequest = {
+      trigger: trigger,
+      promise: promise,
+      resolve: (outcome: SyncOutcome): void => {
+        if (resolveFollowUp !== null) {
+          resolveFollowUp(outcome)
+        }
+      }
+    }
+    this.pendingFollowUp = request
+    hilog.info(DOMAIN, TAG,
+      'running sync may have passed its save boundary; queued one follow-up sync trigger=%{public}s', trigger)
+    return promise
+  }
+
+  /** 当前任务结束后启动排队的唯一后续同步；没有排队请求时什么也不做。 */
+  private startPendingFollowUp(): void {
+    const pending: SyncFollowUpRequest | null = this.pendingFollowUp
+    if (pending === null) {
+      return
+    }
+    this.pendingFollowUp = null
+    hilog.info(DOMAIN, TAG, 'starting queued follow-up sync trigger=%{public}s', pending.trigger)
+    try {
+      const followUp: Promise<SyncOutcome> = this.performSync('auto', pending.trigger)
+      followUp.then((outcome: SyncOutcome): void => {
+        pending.resolve(outcome)
+      })
+    } catch (e) {
+      // performSync 正常不抛；这里兜住启动期意外，仍给排队调用方一个唯一终态，
+      // 避免后台交接事务一直等一个永远不会 resolve 的 Promise。
+      const errorType: string = e instanceof Error ? e.name : 'Unknown'
+      hilog.error(DOMAIN, TAG, 'follow-up sync failed to start: errorType=%{public}s', errorType)
+      pending.resolve(SyncOperationController.startFailureOutcome())
+    }
+  }
+
+  /** 后续同步未能启动时的唯一失败终态（与 performSync 的外围异常终态一致）。 */
+  private static startFailureOutcome(): SyncOutcome {
+    return {
+      phase: 'failed',
+      message: '同步异常',
+      errorCode: 'NATIVE_ERROR',
+      failureStage: 'arkts_bridge',
+      errorCategory: 'native_bridge_exception'
+    }
+  }
+
+  private recordSyncStarted(source: SyncEntrySource, trigger: SyncTriggerReason): void {
     const fields: DiagnosticField[] = [
       { key: 'source', value: source },
+      { key: 'trigger', value: trigger },
       { key: 'phase', value: 'in_progress' },
       { key: 'overallStatus', value: '' },
       { key: 'errorCode', value: '' },
@@ -129,9 +223,11 @@ export class SyncOperationController {
       'sync.started', 'SyncOperationController', fields)
   }
 
-  private recordSyncFinished(source: SyncEntrySource, startedAtMs: number, outcome: SyncOutcome): void {
+  private recordSyncFinished(source: SyncEntrySource, trigger: SyncTriggerReason, startedAtMs: number,
+    outcome: SyncOutcome): void {
     const fields: DiagnosticField[] = [
       { key: 'source', value: source },
+      { key: 'trigger', value: trigger },
       { key: 'phase', value: outcome.phase },
       { key: 'overallStatus', value: outcome.overallStatus ?? '' },
       { key: 'errorCode', value: outcome.errorCode ?? '' },
@@ -150,8 +246,8 @@ export class SyncOperationController {
   // Issue #923：同步是一个统一事务——活跃章节保存屏障 → 网络状态刷新 → Core 全量同步
   // → 按终态回填活跃会话（下载内容替换 live 正文时重开同一编辑会话）→ 事务结束 → 内容变化通知。
   // 所有手动（顶栏/设置页）与自动同步都必须经过这里（performSync 是唯一对外入口）。
-  private async executeSync(startedAtMs: number): Promise<SyncOutcome> {
-    hilog.info(DOMAIN, TAG, 'performSync: starting')
+  private async executeSync(startedAtMs: number, trigger: SyncTriggerReason): Promise<SyncOutcome> {
+    hilog.info(DOMAIN, TAG, 'performSync: starting trigger=%{public}s', trigger)
     let contentChanged: boolean = false
     let outcome: SyncOutcome
     try {
@@ -159,7 +255,10 @@ export class SyncOperationController {
         async (scope: SyncBarrierScope): Promise<SyncOutcome> => {
           // 同步前刷新网络状态，让 Core 使用当前而非启动时的网络快照。
           await this.refreshNetworkState()
-          const result = await this.syncBridge.performSync()
+          // Issue #1058：交接类触发把触发原因传给 Core 诊断，并只跳过 Core 的周期防抖；
+          // 不改变对象级 LWW 与正文三路比较（force_sync 语义仅"跳过间隔"）。
+          const forceSync: boolean = isHandoffTrigger(trigger)
+          const result = await this.syncBridge.performSync(trigger, forceSync)
           if (!result.success) {
             // Issue #1017：失败必须带稳定阶段/分类/operationId/耗时，HiLog 不记 rawError。
             const failureStage: string = result.failureStage ?? 'core_sync'

@@ -10,12 +10,14 @@
 // 边界（Issue #927 复核）：
 // - 短时任务只是延长后台执行机会，不是正文保存的许可证：申请不到短时任务时
 //   只记录真实原因，保存 action 照常执行，结果以 action 的真实返回值为准。
-// - Lifecycle 在短时任务保护下依次等待全部后台 observer 保存和最终化回调；
-//   申请到 requestId 就在整个事务结束后释放。
+// - Lifecycle 在短时任务保护下依次等待全部后台 observer 保存、保存后的交接同步
+//   （Issue #1058）和最终化回调；申请到 requestId 就在整个事务结束后释放。
 // - 申请失败时不做任何伪装成功/失败，后台事务照常执行。
 // - UI 页面不直接使用平台后台任务接口，Lifecycle 统一通过
 //   runBackgroundTransaction() 托管一次后台过渡。
-// - 短时任务只用于完成正在进行的落盘和归档，不用于常驻同步或持续运行。
+// - 短时任务只用于完成正在进行的落盘、一次性的保存后交接同步和归档收尾，
+//   不用于常驻同步或持续运行；系统超时被挂起时由同步调度器保留待同步事实，
+//   恢复后（网络恢复/回到前台）再同步，不在这里假报完成。
 
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit'
 import { BusinessError } from '@kit.BasicServicesKit'
@@ -30,7 +32,8 @@ const TAG: string = 'HarmonyBgSaveTask'
 const TRANSIENT_TASK_SYSCAP: string = 'SystemCapability.ResourceSchedule.BackgroundTaskManager.TransientTask'
 
 // 申请理由（系统侧可见；只描述用途，不含正文/书名等敏感信息）。
-const TRANSIENT_TASK_REASON: string = 'save writing content and finalize diagnostics'
+// Issue #1058：同一短时任务现在也覆盖「保存完成后的交接同步」，理由必须同时包含保存与同步。
+const TRANSIENT_TASK_REASON: string = 'save writing content, sync after background save, finalize diagnostics'
 
 export class HarmonyBackgroundSaveTask {
   private static instance: HarmonyBackgroundSaveTask
@@ -50,7 +53,8 @@ export class HarmonyBackgroundSaveTask {
   }
 
   // 在一个短时任务保护下执行完整后台事务：Lifecycle 等待全部正文保存，
-  // 随后等待诊断 flush、压缩和 ZIP 发布，最后才释放 requestId。
+  // 随后等待保存后的交接同步（Issue #1058），再等待诊断 flush、压缩和 ZIP 发布，
+  // 最后才释放 requestId。
   async runBackgroundTransaction(action: () => Promise<void>): Promise<void> {
     let requestId: number = -1
     if (!this.isSupported()) {

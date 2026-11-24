@@ -12,6 +12,10 @@ export interface LifecycleObserver {
   onDestroy?(): void
   onForeground?(): void
   onBackground?(): void | Promise<void>
+  // 后台保存完成之后、诊断压缩/归档收尾之前的独立阶段（Issue #1058）。
+  // 所有 observer 的 onBackground（保存）都 await 完之后才进入这里，
+  // 因此它可以安全地发起「保存后同步」，不会抢跑仍在进行的本地保存。
+  onBackgroundPostSave?(): void | Promise<void>
   onBackgroundFinalize?(): void | Promise<void>
   onFocus?(): void
   onBlur?(): void
@@ -100,6 +104,11 @@ export class HarmonyLifecycle {
     this.emit('foreground')
   }
 
+  // Issue #927 / #1058：一次后台过渡是同一个短时任务事务，阶段顺序固定：
+  // 1) 全部 observer.onBackground()（保存正文）；
+  // 2) 全部 observer.onBackgroundPostSave()（保存后的交接同步等）；
+  // 3) 全部 observer.onBackgroundFinalize()（诊断 flush/压缩/ZIP 收尾）。
+  // 三个阶段都 await 完才释放短时任务，交接同步不会抢跑保存，也不会被诊断收尾截断。
   notifyBackground(): void {
     if (!this.state.isForeground) {
       return
@@ -120,6 +129,21 @@ export class HarmonyLifecycle {
         }
       })
       await Promise.all(pendingSaves)
+
+      // Issue #1058：保存完成后的独立阶段（退后台交接同步），在诊断压缩收尾之前执行，
+      // 并和保存一起放在同一个短时任务里；同步失败只保留上层待同步事实，不在这里重试。
+      const pendingPostSave: Array<Promise<void>> = []
+      observers.forEach(obs => {
+        try {
+          const result = obs.onBackgroundPostSave?.()
+          if (result !== undefined) {
+            pendingPostSave.push(Promise.resolve(result).catch(() => {}))
+          }
+        } catch (_) {
+          // One post-save action must not prevent other background cleanup.
+        }
+      })
+      await Promise.all(pendingPostSave)
 
       const pendingFinalizers: Array<Promise<void>> = []
       observers.forEach(obs => {
@@ -282,14 +306,19 @@ export class AutoSaveLifecycleObserver implements LifecycleObserver {
 
 // Issue #925：同步调度器的生命周期适配器。此前只有定义、生产代码无人注册；
 // 现在由 HarmonyAutoSyncScheduler 在 Ability 级装配时真实注册，把前台/后台事件
-// 转发给调度器（前台立即做一次到期判断，后台停止前台唤醒）。
+// 转发给调度器（前台做交接/到期判断，后台停止前台唤醒）。
+// Issue #1058：退后台保存完成后的交接同步走独立 post-save phase——回调返回 Promise，
+// 由 HarmonyLifecycle 纳入同一个短时任务事务，不在并行 onBackground observer 中抢跑保存。
 export class SyncLifecycleObserver implements LifecycleObserver {
   private foregroundCallback: () => void
   private backgroundCallback: () => void
+  private postSaveCallback: (() => Promise<void>) | null
 
-  constructor(foregroundCallback: () => void, backgroundCallback: () => void) {
+  constructor(foregroundCallback: () => void, backgroundCallback: () => void,
+    postSaveCallback?: () => Promise<void>) {
     this.foregroundCallback = foregroundCallback
     this.backgroundCallback = backgroundCallback
+    this.postSaveCallback = postSaveCallback !== undefined ? postSaveCallback : null
   }
 
   onForeground(): void {
@@ -298,6 +327,14 @@ export class SyncLifecycleObserver implements LifecycleObserver {
 
   onBackground(): void {
     this.backgroundCallback()
+  }
+
+  onBackgroundPostSave(): void | Promise<void> {
+    const callback = this.postSaveCallback
+    if (callback === null) {
+      return
+    }
+    return callback()
   }
 }
 

@@ -49,12 +49,17 @@
 #include "writer_core_bridge.h"
 
 // 工作线程执行的 Rust C ABI；返回 Core 分配的 JSON 字符串（允许 nullptr）。
-using SyncNativeExecuteFn = char* (*)();
+// `arg`/`flag` 是提交任务时从 ArkTS 线程复制出的可选参数（Issue #1058 的
+// 同步触发原因与防抖旁路）；无参入口忽略它们。
+using SyncNativeExecuteFn = char* (*)(const char* arg, bool flag);
 
 struct SyncNativeTask {
     napi_deferred deferred = nullptr;
     SyncNativeExecuteFn execute = nullptr;
     const char* work_name = nullptr;
+    // 提交时复制到任务对象，生命周期与任务一致；工作线程只读。
+    std::string arg;
+    bool flag = false;
     char* result_json = nullptr;
     std::uint64_t task_id = 0;
     std::chrono::steady_clock::time_point queued_at;
@@ -370,7 +375,7 @@ static void SyncNativeWorkerLoop(std::shared_ptr<SyncNativeWorkerState> state,
                         static_cast<unsigned long long>(task->task_id),
                         SyncNativeTaskWorkName(task), wait_ms,
                         SyncNativeTaskOperationId(task));
-            task->result_json = task->execute();
+            task->result_json = task->execute(task->arg.c_str(), task->flag);
             task->diagnostic_operation_id = SyncNativeExtractOperationId(task->result_json);
             OH_LOG_INFO(LOG_APP,
                         "SyncNative: rust_return task=%{public}llu work=%{public}s elapsedMs=%{public}lld op=%{public}s",
@@ -681,7 +686,9 @@ static bool SyncNativeWorkerEnqueue(const std::shared_ptr<SyncNativeWorkerState>
 
 // 创建 Promise 并把长任务交给唯一的工作线程；返回的 Promise 语义与旧的
 // napi_create_async_work 入口一致（成功/业务失败都 resolve ResultEnvelope）。
-static napi_value SyncNativeWorkerSubmit(napi_env env, const char* work_name, SyncNativeExecuteFn execute) {
+// `arg`/`flag` 由 ArkTS 线程在提交时复制进任务，避免工作线程触碰 JS 值。
+static napi_value SyncNativeWorkerSubmit(napi_env env, const char* work_name, SyncNativeExecuteFn execute,
+                                         const std::string& arg = std::string(), bool flag = false) {
     napi_deferred deferred = nullptr;
     napi_value promise = nullptr;
     if (napi_create_promise(env, &deferred, &promise) != napi_ok) {
@@ -699,6 +706,14 @@ static napi_value SyncNativeWorkerSubmit(napi_env env, const char* work_name, Sy
         SyncNativeResolveEnvelope(env, deferred, kSyncNativeCreateFailedEnvelope);
         return promise;
     }
+    try {
+        task->arg = arg;
+    } catch (...) {
+        delete task;
+        SyncNativeResolveEnvelope(env, deferred, kSyncNativeCreateFailedEnvelope);
+        return promise;
+    }
+    task->flag = flag;
     task->deferred = deferred;
     task->execute = execute;
     task->work_name = work_name;

@@ -10,8 +10,9 @@ impl AppBackend {
         trigger: &str,
         silent_success: bool,
         sync_qptr: Option<QPointer<SyncBackend>>,
+        force_sync: bool,
     ) -> QString {
-        self.perform_sync_internal_with_id(trigger, silent_success, sync_qptr, None)
+        self.perform_sync_internal_with_id(trigger, silent_success, sync_qptr, None, force_sync)
     }
 
     pub(super) fn perform_sync_internal_with_id(
@@ -20,6 +21,7 @@ impl AppBackend {
         silent_success: bool,
         sync_qptr: Option<QPointer<SyncBackend>>,
         operation_id: Option<String>,
+        force_sync: bool,
     ) -> QString {
         let op_id = operation_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         if trigger == "manual" && !self.manual_sync_request_seen_this_startup {
@@ -231,8 +233,8 @@ impl AppBackend {
                 "sync",
                 "auto_sync_dispatch",
                 &format!(
-                    "source=auto, started=true, operation_id={}, interval_source=persisted_config",
-                    op_id
+                    "source=auto, trigger={}, started=true, operation_id={}, interval_source=persisted_config",
+                    self.last_auto_sync_trigger, op_id
                 ),
             );
         }
@@ -355,7 +357,6 @@ impl AppBackend {
         let callback = make_outcome_callback(app_qptr, sync_qptr);
 
         let op_id_capture = op_id.clone();
-        let trigger = trigger.to_string();
         thread::spawn(move || {
             // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure captures
             // owned String data (data_root, projects_root, op_id_capture), a GitRepoLayout
@@ -410,9 +411,11 @@ impl AppBackend {
                 );
 
                 core_attempt_callback(());
+                // Issue #1058：force_sync 只跳过 Core 的周期防抖；手动同步与
+                // 交接/启动触发显式传 true，普通 timer 仍由 Core 防抖兜底。
                 match api.perform_full_sync(
                     config,
-                    trigger == "manual",
+                    force_sync,
                     cancel_token.clone(),
                     Some(progress_sink.clone()),
                     progress_callback.as_ref(),

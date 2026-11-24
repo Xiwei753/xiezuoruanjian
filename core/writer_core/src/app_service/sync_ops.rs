@@ -1,8 +1,8 @@
 use crate::api::{
     AllSyncConflictEntryDto, FullSyncDiagnosticsResultDto, FullSyncDryRunResultDto,
     FullSyncReportDto, FullSyncResultDto, FullSyncStateDto, LegacyMigrationOutcomeDto,
-    LegacyProfileMetadataDto, SyncConfigDto, SyncConflictDto,
-    SyncConflictPreviewDto, SyncSecretsDto, SyncStateDto, WriterError,
+    LegacyProfileMetadataDto, SyncConfigDto, SyncConflictDto, SyncConflictPreviewDto,
+    SyncSecretsDto, SyncStateDto, WriterError,
 };
 use crate::sync::{SyncConfig, SyncSecrets};
 
@@ -121,14 +121,19 @@ impl super::WriterAppService {
 
     /// Full-sync entry for the Harmony FFI after it has recorded config/secrets preflight.
     /// Core phases reuse the same operation id for cross-log correlation.
+    ///
+    /// `force_sync` only bypasses Core's periodic-interval debounce; it does not change
+    /// LWW conflict resolution. `trigger` is the caller-reported reason (e.g. `manual`,
+    /// `auto_timer`, `foreground_handoff`) and is carried into diagnostics only.
     pub(crate) fn perform_full_sync_after_preflight(
         &self,
         config: SyncConfigDto,
         force_sync: bool,
         operation_id: String,
+        trigger: String,
     ) -> Result<FullSyncResultDto, WriterError> {
         self.api
-            .perform_full_sync_for_operation_id(config, force_sync, operation_id, "manual")
+            .perform_full_sync_for_operation_id(config, force_sync, operation_id, &trigger)
     }
 
     pub fn resolve_conflict_keep_local(

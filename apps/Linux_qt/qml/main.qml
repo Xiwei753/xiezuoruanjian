@@ -173,7 +173,10 @@ Kirigami.ApplicationWindow {
     }
 
     onActiveChanged: syncWritingSessionLifecycle()
-    onVisibilityChanged: syncWritingSessionLifecycle()
+    onVisibilityChanged: {
+        syncWritingSessionLifecycle()
+        window.noteWindowForegroundState()
+    }
     onWritingSessionForegroundChanged: syncWritingSessionLifecycle()
 
     Connections {
@@ -231,12 +234,16 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    // Issue #1058：自动同步的触发原因统一从这里传进后端：timer 只检查间隔；
+    // startup（工作区首次打开）与 handoff（窗口从后台恢复）只绕过间隔条件，
+    // 配置、工作区、single-flight 判断仍由 SyncBackend/AppBackend 完成。
+    // 同步启动后的新变更进入下一轮同步，不把本轮开始时的快照当成最新。
     function maybeStartAutoSync(trigger) {
         if (autoSyncShutdown || !syncBackend || typeof syncBackend.auto_sync_due !== "function")
             return false
         var due = false
         try {
-            due = syncBackend.auto_sync_due() === true
+            due = syncBackend.auto_sync_due(trigger) === true
         } catch (e) {
             window.logAutoSyncEvent("warn", "auto_sync_due_failed",
                                     "trigger=" + trigger + ", error=" + e)
@@ -265,7 +272,7 @@ Kirigami.ApplicationWindow {
 
         var operationId = ""
         try {
-            operationId = String(syncBackend.start_auto_sync() || "").trim()
+            operationId = String(syncBackend.start_auto_sync(trigger) || "").trim()
         } catch (e) {
             window.logAutoSyncEvent("warn", "auto_sync_dispatch_failed",
                                     "trigger=" + trigger + ", error=" + e)
@@ -279,6 +286,26 @@ Kirigami.ApplicationWindow {
         window.logAutoSyncEvent("info", "auto_sync_not_started",
                                 "trigger=" + trigger + ", reason=backend_recheck")
         return false
+    }
+
+    // Issue #1058：窗口真正从后台恢复时的交接检查（handoff）。
+    // 只有「最小化 / 隐藏」之后重新可见才算一次恢复：普通焦点切换（点到别的窗口再点回来）
+    // 不是设备切换，交回给 30 秒 timer 按间隔判断，不在这里强行绕过间隔。
+    // 启动后的第一次可见同样不是交接（首次远端检查由 workspace_opened 的
+    // startup 触发负责）；同一次恢复里的多个可见信号由后端冷却窗口合并。
+    property bool windowInBackground: false
+
+    function noteWindowForegroundState() {
+        if (window.visibility === Window.Minimized || window.visibility === Window.Hidden) {
+            window.windowInBackground = true
+            return
+        }
+        if (!window.windowInBackground) return
+        window.windowInBackground = false
+        if (!rootHasWorkspace) return
+        Qt.callLater(function() {
+            window.maybeStartAutoSync("handoff")
+        })
     }
 
     // Issue #963：三个工作区顶栏共用这一条手动同步入口。先留下一条正常级别
@@ -1317,6 +1344,7 @@ Kirigami.ApplicationWindow {
         }
         // Issue #983：保存配置/重新加载配置后立即重新检查一次到期条件。
         // 用 callLater 等本轮配置通知结束再启动，避免与设置页保存流程重入。
+        // Issue #1058：配置变化不是启动/交接，仍按 timer 语义只检查间隔。
         function onSync_config_changed() {
             Qt.callLater(function() {
                 window.maybeStartAutoSync("config_changed")
@@ -1494,8 +1522,10 @@ Kirigami.ApplicationWindow {
                 themeController.reload();
             }
             // Issue #983：工作区已成功打开且同步配置已加载，立即检查一次是否到期。
+            // Issue #1058：首次打开用 startup 触发，只绕过间隔条件主动拉一次远端，
+            // 避免切设备后继续显示旧内容；配置/工作区/single-flight 判断不变。
             Qt.callLater(function() {
-                window.maybeStartAutoSync("workspace_opened")
+                window.maybeStartAutoSync("startup")
             })
         }
         function onWorkspace_content_changed() {

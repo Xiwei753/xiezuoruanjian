@@ -74,6 +74,47 @@ mod dry_run;
 mod gc;
 mod perform;
 
+/// Issue #1058：自动同步的触发原因。QML 只传原因字符串，`auto_sync_due` 与
+/// `start_auto_sync` 用同一个解析结果，保证“检查”和“真正启动”对同一次触发
+/// 做出一致的判断。
+///
+/// - `Timer`：既有 30 秒唤醒，仍按持久化间隔判断是否到期。
+/// - `Startup`：工作区首次打开后主动拉一次远端，只绕过间隔条件。
+/// - `Handoff`：窗口真正从后台恢复时的交接检查，同样只绕过间隔条件。
+///
+/// 三种触发都必须通过 `auto_sync_gate`（配置、autoSync、workspace 身份、
+/// single-flight、token 等），绕过间隔不等于绕过门禁。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AutoSyncTrigger {
+    Timer,
+    Startup,
+    Handoff,
+}
+
+impl AutoSyncTrigger {
+    /// 解析 QML 传来的原因字符串。未知值（含既有 `config_changed`）按 `Timer`
+    /// 处理，保持“只检查间隔”的旧语义。
+    pub(crate) fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "startup" => Self::Startup,
+            "handoff" => Self::Handoff,
+            _ => Self::Timer,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Timer => "timer",
+            Self::Startup => "startup",
+            Self::Handoff => "handoff",
+        }
+    }
+}
+
+/// Issue #1058：同一次窗口恢复里 QML 可能连续收到 active / visibility 多个
+/// 信号；交接检查在这个冷却窗口内只做一次，避免普通焦点变化被当成多次启动。
+const AUTO_SYNC_HANDOFF_COALESCE_SECONDS: i64 = 60;
+
 impl AppBackend {
     pub(crate) fn sync_source_for_operation_id(&self, operation_id: &str) -> Option<String> {
         (self.current_sync_operation_id == operation_id).then(|| self.current_sync_source.clone())
@@ -227,7 +268,13 @@ impl AppBackend {
                     queued_operation_id.as_deref().unwrap_or("")
                 ),
             );
-            self.perform_sync_internal_with_id("manual", false, sync_qptr, queued_operation_id);
+            self.perform_sync_internal_with_id(
+                "manual",
+                false,
+                sync_qptr,
+                queued_operation_id,
+                true,
+            );
         }
         effect
     }
@@ -246,7 +293,7 @@ impl AppBackend {
         self.debug_log("sync", "sync_refresh_applied", "tree_reloaded=true");
     }
     pub(crate) fn perform_sync(&mut self, sync_qptr: Option<QPointer<SyncBackend>>) -> QString {
-        self.perform_sync_internal("manual", false, sync_qptr)
+        self.perform_sync_internal("manual", false, sync_qptr, true)
     }
 
     /// Issue #983：读取 Core 持久化的真实同步配置。自动调度必须按用户已保存的配置
@@ -323,9 +370,35 @@ impl AppBackend {
             .max(self.last_auto_sync_failure_at)
     }
 
+    /// Issue #1058：本轮触发是否绕过间隔判断，返回 `Some(原因)` 表示绕过。
+    /// 绕过只影响时间条件：配置、autoSync、workspace 身份与 single-flight 仍由
+    /// `auto_sync_gate` 判断，因此启动/交接检查不会在同步进行中再起一轮。
+    fn auto_sync_interval_bypass(&self, trigger: AutoSyncTrigger) -> Option<&'static str> {
+        match trigger {
+            AutoSyncTrigger::Timer => None,
+            // 工作区重置会清零 last_actual_sync_started_at；本工作区还没有任何同步
+            // 真正开始，说明这是打开后的首次远端检查：即使 Core 里留着上一次会话的
+            // last_attempt_time，也要主动拉一次最新版本，不能因为间隔未到而沿用旧内容。
+            AutoSyncTrigger::Startup => {
+                (self.last_actual_sync_started_at == 0).then_some("startup_first_open")
+            }
+            // 交接检查只在最近没有同步活动时成立：一次恢复里的多个信号合并成一次，
+            // 刚同步完不重复拉取。同步启动后的新变更留给下一轮，不把旧快照当成最新。
+            AutoSyncTrigger::Handoff => {
+                let last_activity = self
+                    .last_actual_sync_started_at
+                    .max(self.last_auto_sync_dispatch_at)
+                    .max(self.last_auto_sync_handoff_at);
+                (Self::now_epoch_seconds().saturating_sub(last_activity)
+                    >= AUTO_SYNC_HANDOFF_COALESCE_SECONDS)
+                    .then_some("handoff_after_resume")
+            }
+        }
+    }
+
     /// 记录自动调度跳过原因。同一原因只在变化时写一条日志，避免设置关闭/未打开
     /// 工作区时每 30 秒刷屏；`not_due` 的 elapsed 每次都会变，不单独记录。
-    fn record_auto_sync_skip(&mut self, reason: String) {
+    fn record_auto_sync_skip(&mut self, trigger: AutoSyncTrigger, reason: String) {
         let changed = self.last_auto_sync_skip_reason != reason;
         let should_log = changed && !reason.starts_with("not_due");
         self.last_auto_sync_skip_reason = reason.clone();
@@ -333,29 +406,38 @@ impl AppBackend {
             self.debug_log(
                 "sync",
                 "auto_sync_skipped",
-                &format!("source=auto, started=false, reason={reason}"),
+                &format!(
+                    "source=auto, trigger={}, started=false, reason={reason}",
+                    trigger.as_str()
+                ),
             );
         }
     }
 
     /// Issue #983：QML 定时器只负责唤醒，到期判定与去重全部在这里完成。
-    pub(crate) fn auto_sync_due(&mut self) -> bool {
+    /// Issue #1058：`trigger` 决定是否绕过间隔；启动/交接检查仍走同一套门禁。
+    pub(crate) fn auto_sync_due(&mut self, trigger: AutoSyncTrigger) -> bool {
         let now = Self::now_epoch_seconds();
         self.last_auto_sync_decision_at = now;
         let config = match self.auto_sync_gate() {
             Ok(config) => config,
             Err(reason) => {
                 self.last_auto_sync_due = false;
-                self.record_auto_sync_skip(reason);
+                self.record_auto_sync_skip(trigger, reason);
                 return false;
             }
         };
-        let interval = Self::auto_sync_interval_seconds(&config);
-        let elapsed = now.saturating_sub(self.auto_sync_earliest_start());
-        if elapsed < interval {
-            self.last_auto_sync_due = false;
-            self.record_auto_sync_skip(format!("not_due:elapsed={elapsed},interval={interval}"));
-            return false;
+        if self.auto_sync_interval_bypass(trigger).is_none() {
+            let interval = Self::auto_sync_interval_seconds(&config);
+            let elapsed = now.saturating_sub(self.auto_sync_earliest_start());
+            if elapsed < interval {
+                self.last_auto_sync_due = false;
+                self.record_auto_sync_skip(
+                    trigger,
+                    format!("not_due:elapsed={elapsed},interval={interval}"),
+                );
+                return false;
+            }
         }
         self.last_auto_sync_due = true;
         self.last_auto_sync_skip_reason.clear();
@@ -364,8 +446,11 @@ impl AppBackend {
 
     /// Issue #983：真正启动一轮自动同步。复用已有 `perform_sync_internal` 执行器，
     /// 自动触发 `trigger=auto`（非强制、非手动），并返回实际启动的 operation ID。
+    /// Issue #1058：与 `auto_sync_due` 接受同一个触发原因并重新判断一次间隔绕过，
+    /// 挡住 QML 检查到真正启动之间的状态变化。
     pub(crate) fn start_auto_sync(
         &mut self,
+        trigger: AutoSyncTrigger,
         sync_qptr: Option<QPointer<SyncBackend>>,
     ) -> (String, bool) {
         let now = Self::now_epoch_seconds();
@@ -378,28 +463,44 @@ impl AppBackend {
                 self.debug_log(
                     "sync",
                     "auto_sync_dispatch",
-                    &format!("source=auto, started=false, reason={reason}"),
+                    &format!(
+                        "source=auto, trigger={}, started=false, reason={reason}",
+                        trigger.as_str()
+                    ),
                 );
                 return (String::new(), false);
             }
         };
-        let interval = Self::auto_sync_interval_seconds(&config);
-        let elapsed = now.saturating_sub(self.auto_sync_earliest_start());
-        if elapsed < interval {
-            let reason = format!("not_due:elapsed={elapsed},interval={interval}");
-            self.last_auto_sync_due = false;
-            self.last_auto_sync_skip_reason = reason.clone();
-            self.debug_log(
-                "sync",
-                "auto_sync_dispatch",
-                &format!("source=auto, started=false, reason={reason}"),
-            );
-            return (String::new(), false);
+        let bypass = self.auto_sync_interval_bypass(trigger);
+        if bypass.is_none() {
+            let interval = Self::auto_sync_interval_seconds(&config);
+            let elapsed = now.saturating_sub(self.auto_sync_earliest_start());
+            if elapsed < interval {
+                let reason = format!("not_due:elapsed={elapsed},interval={interval}");
+                self.last_auto_sync_due = false;
+                self.last_auto_sync_skip_reason = reason.clone();
+                self.debug_log(
+                    "sync",
+                    "auto_sync_dispatch",
+                    &format!(
+                        "source=auto, trigger={}, started=false, reason={reason}",
+                        trigger.as_str()
+                    ),
+                );
+                return (String::new(), false);
+            }
         }
+        // 交接检查已经用掉：记录时间，让同一次恢复里的后续激活落在冷却窗口内。
+        if trigger == AutoSyncTrigger::Handoff {
+            self.last_auto_sync_handoff_at = now;
+        }
+        self.last_auto_sync_trigger = trigger.as_str().to_string();
         self.last_auto_sync_due = true;
         self.last_auto_sync_skip_reason.clear();
+        // Issue #1058：启动/交接触发已按间隔绕过判定；对应地把 force_sync 传给
+        // Core，否则 Core 自己的周期防抖会静默跳过这次主动检查（返回空成功）。
         let operation_id = self
-            .perform_sync_internal("auto", true, sync_qptr)
+            .perform_sync_internal("auto", true, sync_qptr, bypass.is_some())
             .to_string();
         let started = !operation_id.is_empty()
             && self.current_sync_in_progress
@@ -411,7 +512,11 @@ impl AppBackend {
             self.debug_log(
                 "sync",
                 "auto_sync_dispatch",
-                &format!("source=auto, started=true, operation_id={operation_id}"),
+                &format!(
+                    "source=auto, trigger={}, bypass={}, started=true, operation_id={operation_id}",
+                    trigger.as_str(),
+                    bypass.unwrap_or("none")
+                ),
             );
         } else {
             self.last_auto_sync_failure_at = now;
@@ -429,7 +534,9 @@ impl AppBackend {
                 "sync",
                 "auto_sync_dispatch",
                 &format!(
-                    "source=auto, started=false, reason={failure_reason}, operation_id={operation_id}"
+                    "source=auto, trigger={}, bypass={}, started=false, reason={failure_reason}, operation_id={operation_id}",
+                    trigger.as_str(),
+                    bypass.unwrap_or("none")
                 ),
             );
             self.last_auto_sync_failure_reason = failure_reason;
@@ -454,7 +561,7 @@ impl AppBackend {
         } else {
             self.current_sync_source = source.to_string();
         }
-        let operation_id = self.perform_sync_internal("manual", false, sync_qptr);
+        let operation_id = self.perform_sync_internal("manual", false, sync_qptr, true);
         let operation_id = operation_id.to_string();
         let state = serde_json::from_str::<serde_json::Value>(&self.current_sync_operation_state)
             .unwrap_or(serde_json::Value::Null);

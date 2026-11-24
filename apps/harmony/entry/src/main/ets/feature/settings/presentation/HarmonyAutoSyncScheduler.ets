@@ -1,8 +1,14 @@
-// HarmonyAutoSyncScheduler — 进程唯一自动同步调度器（Issue #925）。
+// HarmonyAutoSyncScheduler — 进程唯一自动同步调度器（Issue #925 / #1058）。
 //
 // 职责：按 Core 已提交的 SyncConfig 判断"是否到点"，到点才经
 // SyncOperationController.performSync()（#923 的唯一同步事务入口，内含保存屏障/会话协调/去重）
 // 触发全量同步。调度器不自己发同步请求、不复制同步状态机，也不写第二套链路。
+//
+// 两类同步原因（Issue #1058）：
+// - 周期 timer：前台周期唤醒，只有距最近成功同步 >= 用户设置的间隔才同步（runIfDue）；
+// - 交接（handoff）：首次 Core 就绪、退后台保存完成、真实后台→前台切换、网络恢复重试。
+//   交接请求绕过周期 timer 的间隔到期判断，但同样受 enabled && autoSync、单一运行任务
+//   与 SyncOperationController 的唯一事务约束。
 //
 // 关键约束：
 // - 最近一次成功同步时刻的唯一真源是 Core 持久化状态（app-meta/sync/full_state.local.json，
@@ -10,7 +16,15 @@
 // - 非成功终态绝不更新 lastSuccess（Core 失败时保留旧 last_success_time），不制造假成功时间。
 // - reconfigure 只记录配置、启停前台唤醒 timer，不触发同步；是否 due 一律由 runIfDue 决定，
 //   打开设置页不会额外产生一笔同步。
+// - 退后台的交接同步只在全部本地保存完成后的 post-save 阶段发起（HarmonyLifecycle），
+//   不在 onBackground 里与保存抢跑；失败/被系统挂起时保留 handoffPending，恢复后重试。
 // - 前台 setInterval 只是前台唤醒，不代表能在后台可靠周期执行；后台续跑需系统调度，另行接入。
+//
+// 注意（Issue #1058 核对）：Core 全量同步的 per-target LWW 入口自带 min_interval
+// debounce（core/writer_core/src/sync/lww/engine.rs）。鸿蒙 C ABI 新增
+// `writer_core_perform_full_sync_with_options(trigger, force_sync)`：交接类触发把
+// 真实原因传给 Core 诊断并以 force_sync=true 只跳过周期防抖；周期 timer 仍以
+// force_sync=false 进入 Core debounce。force 不改变对象级 LWW 与正文三路比较。
 //
 // 桥接依赖（Issue #925 的 Rust FFI / NAPI / decode 工作流并行提供）：
 // - corebridge/dto/SyncDtos.ets 的 FullSyncState（snake_case 字段：
@@ -26,7 +40,7 @@ import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { HarmonyLifecycle, SyncLifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { NetworkStatusService } from '../../../platform/network/NetworkStatusService'
 import { SyncOperationController } from './SyncOperationController'
-import { SyncOutcome } from './SyncRunTypes'
+import { SyncOutcome, SyncTriggerReason } from './SyncRunTypes'
 import { NearbyDeviceSyncCoordinator } from '../../../platform/peer/NearbyDeviceSyncCoordinator'
 
 const TAG = 'SyncScheduler'
@@ -65,6 +79,12 @@ export class HarmonyAutoSyncScheduler {
    * 记忆成"自动同步关闭"（Issue #925 复核）。
    */
   private configLoaded: boolean = false
+  /**
+   * 待同步事实（Issue #1058）：一次交接同步请求还没成功完成（网络失败、系统挂起、
+   * 保存屏障失败或 Core 非成功终态）时保持为 true，由网络恢复或下次真实前台切换重试；
+   * 只有成功终态才清除，不假报完成。
+   */
+  private handoffPending: boolean = false
 
   private constructor() {
   }
@@ -93,7 +113,8 @@ export class HarmonyAutoSyncScheduler {
       },
       (): void => {
         this.onBackground()
-      })
+      },
+      (): Promise<void> => this.onBackgroundSaved())
     lifecycle.addObserver(this.observer)
     this.unsubscribeNetwork = NetworkStatusService.getInstance().onNetworkRestored((): void => {
       this.onNetworkRestored()
@@ -104,13 +125,17 @@ export class HarmonyAutoSyncScheduler {
 
   /**
    * Native Core 初始化成功后的唯一通知入口（首页初始化路径在 initialize 成功后调用）。
-   * 此时才从 Core 读已提交配置，并按真实前台状态挂前台唤醒、做一次到期判断。
+   * 此时才从 Core 读已提交配置，并按真实前台状态挂前台唤醒。
+   * Issue #1058：首次就绪额外发起一次交接同步（绕过周期 timer 的间隔判断），
+   * 让刚启动的设备主动检查远端，而不是等用户设置的间隔到期。
    * 读取失败不当作"自动同步关闭"：configLoaded 保持 false，由后续前台/网络恢复重试。
    */
   async onCoreReady(): Promise<void> {
+    const firstReady: boolean = !this.coreReady
     this.coreReady = true
     await this.reloadConfigFromCore()
-    this.continueForegroundAfterConfig()
+    const startupTrigger: SyncTriggerReason | null = firstReady ? 'startup' : null
+    this.continueForegroundAfterConfig(startupTrigger)
   }
 
   /** Ability 级解绑（EntryAbility.onDestroy）：移除监听并停止前台唤醒。 */
@@ -157,6 +182,8 @@ export class HarmonyAutoSyncScheduler {
     this.configLoaded = true
     if (config === null || !config.enabled || !config.autoSync) {
       this.stopForegroundTimer()
+      // 自动同步被关闭：不再保留待同步事实（用户已明确不做自动同步）。
+      this.handoffPending = false
       hilog.info(DOMAIN, TAG, 'reconfigure: auto sync inactive, foreground timer stopped')
       return
     }
@@ -167,12 +194,18 @@ export class HarmonyAutoSyncScheduler {
     }
   }
 
-  /** 进入前台：必要时重试读取配置，然后挂前台唤醒 timer 并立即做一次到期判断。 */
+  /**
+   * 进入前台：必要时重试读取配置，然后挂前台唤醒 timer。
+   * Issue #1058：只有真实的后台→前台切换才发起一次交接同步；重复的 foreground 通知
+   * （onWindowStageCreate + onForeground）不重复请求同步。上次未完成的退后台交接也在这里重试。
+   */
   onForeground(): void {
+    const wasForeground: boolean = this.isForeground
     this.isForeground = true
     // Issue #988：附近设备会话的唤醒与云备份到期判断互不依赖；即使本机没有
     // GitHub 配置，已连接的可信设备仍可主动同步。Core 内部继续使用同一事务锁。
     NearbyDeviceSyncCoordinator.getInstance().requestAllSessionsSync()
+    const trigger: SyncTriggerReason | null = wasForeground ? null : 'foreground_handoff'
     if (!this.configLoaded) {
       // 配置尚未成功读过（Core 未就绪或上次读取失败）：本次前台重试一次真实读取，
       // 不把读取失败记忆成"自动同步关闭"；Core 未就绪时等 onCoreReady()。
@@ -181,15 +214,19 @@ export class HarmonyAutoSyncScheduler {
         return
       }
       this.reloadConfigFromCore().then((): void => {
-        this.continueForegroundAfterConfig()
+        this.continueForegroundAfterConfig(trigger)
       })
       return
     }
-    this.continueForegroundAfterConfig()
+    this.continueForegroundAfterConfig(trigger)
   }
 
-  /** 配置已确定时的前台编排：挂前台唤醒 timer 并立即做一次到期判断。 */
-  private continueForegroundAfterConfig(): void {
+  /**
+   * 配置已确定时的前台编排：挂前台唤醒 timer。
+   * 交接类触发（首次 Core 就绪 / 真实前台切换 / 待同步重试）立即发起一次交接同步，
+   * 不经过 runIfDue 的间隔判断；周期 timer 仍按用户设置间隔到期才同步。
+   */
+  private continueForegroundAfterConfig(trigger: SyncTriggerReason | null): void {
     if (!this.isForeground) {
       return
     }
@@ -198,18 +235,51 @@ export class HarmonyAutoSyncScheduler {
       return
     }
     this.startForegroundTimer()
-    hilog.info(DOMAIN, TAG, 'foreground: immediate due check')
-    this.runIfDue()
+    if (trigger !== null) {
+      this.requestHandoffSync(trigger)
+      return
+    }
+    if (this.handoffPending) {
+      hilog.info(DOMAIN, TAG, 'foreground: retrying pending handoff sync')
+      this.requestHandoffSync('handoff_retry')
+    }
   }
 
-  /** 进入后台：只停止前台唤醒 timer；后台周期执行不由本调度器承诺。 */
+  /**
+   * 进入后台：只停止前台唤醒 timer。
+   * 交接同步由 HarmonyLifecycle 在全部 observer 保存完成后的 post-save 阶段调用
+   * onBackgroundSaved() 发起，这里不与仍在进行的本地保存抢跑。
+   */
   onBackground(): void {
     this.isForeground = false
     this.stopForegroundTimer()
-    hilog.info(DOMAIN, TAG, 'onBackground: foreground timer stopped')
+    hilog.info(DOMAIN, TAG, 'onBackground: foreground timer stopped, awaiting post-save handoff')
   }
 
-  /** 网络恢复：必要时重试读取配置，然后立即做一次到期判断（不等待 timer）。 */
+  /**
+   * 退后台保存完成后的交接同步（HarmonyLifecycle post-save 阶段调用）。
+   * 返回 Promise 以便纳入同一个短时任务事务：保存之后、诊断压缩收尾之前完成同步。
+   * 仍使用 Core 已提交的 enabled && autoSync；配置未知时先真实读取一次，
+   * 读不到就不把"不知道"当成"已开启自动同步"。
+   * 失败/被系统挂起时保留 handoffPending，由网络恢复或下次真实前台切换重试。
+   */
+  async onBackgroundSaved(): Promise<void> {
+    if (!this.coreReady) {
+      hilog.info(DOMAIN, TAG, 'onBackgroundSaved: core not ready, skip handoff sync')
+      return
+    }
+    if (!this.configLoaded) {
+      await this.reloadConfigFromCore()
+    }
+    if (!this.isAutoSyncActive()) {
+      hilog.info(DOMAIN, TAG, 'onBackgroundSaved: auto sync inactive, skip handoff sync')
+      return
+    }
+    hilog.info(DOMAIN, TAG, 'onBackgroundSaved: background save finished, starting handoff sync')
+    await this.performHandoffSync('background_handoff')
+  }
+
+  /** 网络恢复：必要时重试读取配置；优先重试未完成的交接，否则仍立即做一次到期判断。 */
   onNetworkRestored(): void {
     // Issue #988：网络恢复先唤醒附近设备会话，再走 GitHub 的到期判断。
     NearbyDeviceSyncCoordinator.getInstance().requestAllSessionsSync()
@@ -219,9 +289,18 @@ export class HarmonyAutoSyncScheduler {
         return
       }
       this.reloadConfigFromCore().then((): void => {
-        hilog.info(DOMAIN, TAG, 'onNetworkRestored: immediate due check after config reload')
-        this.runIfDue()
+        this.continueAfterNetworkRestored()
       })
+      return
+    }
+    this.continueAfterNetworkRestored()
+  }
+
+  /** 网络恢复后的编排：有未完成交接就先重试交接（绕过间隔），否则按原有到期判断。 */
+  private continueAfterNetworkRestored(): void {
+    if (this.handoffPending && this.isAutoSyncActive()) {
+      hilog.info(DOMAIN, TAG, 'onNetworkRestored: retrying pending handoff sync')
+      this.requestHandoffSync('handoff_retry')
       return
     }
     hilog.info(DOMAIN, TAG, 'onNetworkRestored: immediate due check')
@@ -251,6 +330,44 @@ export class HarmonyAutoSyncScheduler {
     }
   }
 
+  // ── 交接同步（Issue #1058）──
+
+  /** 发起一次交接同步（不等待结果）；失败保留待同步事实，由前台/网络恢复重试。 */
+  private requestHandoffSync(trigger: SyncTriggerReason): void {
+    this.performHandoffSync(trigger).catch(() => {})
+  }
+
+  /**
+   * 交接同步实体：绕过周期 timer 的间隔到期判断，但保留 enabled && autoSync、
+   * 单一同步事务与保存屏障——仍然只经 SyncOperationController.performSync 进入。
+   * 只有成功终态才清除待同步事实；网络失败 / 系统挂起 / 保存屏障或 Core 非成功终态
+   * 都保留 handoffPending，等恢复后再同步，不假报完成。
+   */
+  private async performHandoffSync(trigger: SyncTriggerReason): Promise<void> {
+    this.handoffPending = true
+    hilog.info(DOMAIN, TAG, 'handoff sync: started trigger=%{public}s', trigger)
+    try {
+      const outcome: SyncOutcome = await SyncOperationController.getInstance().performSync('auto', trigger)
+      if (outcome.phase === 'success') {
+        this.handoffPending = false
+        hilog.info(DOMAIN, TAG, 'handoff sync: finished trigger=%{public}s overallStatus=%{public}s',
+          trigger, outcome.overallStatus ?? 'unknown')
+      } else {
+        hilog.warn(DOMAIN, TAG,
+          'handoff sync: not completed, keeping pending trigger=%{public}s errorCode=%{public}s ' +
+          'failureStage=%{public}s',
+          trigger, outcome.errorCode ?? 'UNKNOWN', outcome.failureStage ?? 'unknown')
+      }
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG,
+        'handoff sync: threw, keeping pending trigger=%{public}s errorType=%{public}s',
+        trigger, e instanceof Error ? e.name : 'Unknown')
+    }
+    // 同步结束（无论终态）后重读 Core：成功类由 Core 写入新的 last_success_time，
+    // 失败类 Core 保留旧值；这里绝不自行把当前时间当成成功时间。
+    await this.refreshLastSuccessFromCore()
+  }
+
   // ── 内部实现 ──
 
   private async evaluateAndSync(): Promise<void> {
@@ -265,7 +382,7 @@ export class HarmonyAutoSyncScheduler {
       return
     }
     hilog.info(DOMAIN, TAG, 'runIfDue: due, entering performSync')
-    const outcome: SyncOutcome = await SyncOperationController.getInstance().performSync('auto')
+    const outcome: SyncOutcome = await SyncOperationController.getInstance().performSync('auto', 'auto_timer')
     hilog.info(DOMAIN, TAG, 'runIfDue: sync finished, phase=%{public}s overallStatus=%{public}s',
       outcome.phase, outcome.overallStatus ?? 'unknown')
     // 同步结束（无论终态）后重读 Core：成功类由 Core 写入新的 last_success_time，

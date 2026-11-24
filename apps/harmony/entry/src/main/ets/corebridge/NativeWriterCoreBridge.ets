@@ -423,8 +423,8 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.syncBridge.syncDryRun()
   }
 
-  async performSync(): Promise<ResultEnvelope<FullSyncResult>> {
-    return this.syncBridge.performSync()
+  async performSync(trigger: string = 'manual', forceSync: boolean = false): Promise<ResultEnvelope<FullSyncResult>> {
+    return this.syncBridge.performSync(trigger, forceSync)
   }
 
   async syncDiagnostics(): Promise<ResultEnvelope<FullSyncDiagnosticsResult>> {

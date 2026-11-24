@@ -79,9 +79,12 @@ export class NativeSyncBridge {
     } catch (e) { return nativeError<FullSyncDryRunResult>(e) }
   }
 
-  async performSync(): Promise<ResultEnvelope<FullSyncResult>> {
+  // Issue #1058：trigger 是同步触发原因（manual / auto_timer / startup /
+  // foreground_handoff / background_handoff / handoff_retry），forceSync 只跳过
+  // Core 的周期防抖，不改变 LWW 冲突裁决。两者都原样交给 Core 诊断。
+  async performSync(trigger: string, forceSync: boolean): Promise<ResultEnvelope<FullSyncResult>> {
     try {
-      const jsonStr: string = await (this.core.getNativeModule().nativePerformSync() as Promise<string>)
+      const jsonStr: string = await (this.core.getNativeModule().nativePerformSync(trigger, forceSync) as Promise<string>)
       // nativePerformSync() 现在 resolve 标准错误信封（包括 success:false），
       // decodeEnvelope 会正确解析并透传 errorCode/userMessage（如 ASYNC_QUEUE_FAILED）。
       // catch 只处理真正的 JS 异常（如 native 模块不存在）。

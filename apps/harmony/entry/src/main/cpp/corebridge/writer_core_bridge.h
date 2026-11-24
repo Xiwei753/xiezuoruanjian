@@ -165,6 +165,9 @@ char*  writer_core_save_sync_secrets(const char* secrets_json);
 char*  writer_core_full_sync_dry_run(void);
 char*  writer_core_full_sync_diagnostics(void);
 char*  writer_core_perform_full_sync(void);
+// 全量同步（带触发原因与周期防抖旁路）：trigger 只进入同步诊断字段（NULL/空回退 manual），
+// force_sync=true 只跳过 Core 周期防抖，不改变 LWW 冲突裁决。Issue #1058。
+char*  writer_core_perform_full_sync_with_options(const char* trigger, bool force_sync);
 char*  writer_core_load_app_sync_state(void);
 char*  writer_core_save_app_sync_state(const char* state_json);
 // writer_core_load_full_sync_state: 读取 full_state.local.json（最近一次全量同步的总体结果）。

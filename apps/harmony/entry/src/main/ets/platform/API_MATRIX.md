@@ -60,7 +60,7 @@
 | setWindowSystemBarEnable | @kit.ArkUI (window) | 12 | 无独立 SystemCapability | 无 | 否 | window/TabletWindowPolicy.ets |
 | getWindowStatus / windowStatusChange | @kit.ArkUI (window) | 12（getWindowStatus）/ 11（windowStatusChange） | SystemCapability.Window.SessionManager | 无 | 否 | window/TabletWindowPolicy.ets, ui/adaptive/AdaptiveContext.ets |
 | 网络状态（hasDefaultNet / isDefaultNetMetered） | @kit.NetworkKit (connection) | 12 | SystemCapability.Communication.NetManager.Core | ohos.permission.GET_NETWORK_INFO | 否 | corebridge/NativeWriterCoreBridge.ets |
-| 短时任务（退后台保存） | @kit.BackgroundTasksKit (backgroundTaskManager) | 9 | SystemCapability.ResourceSchedule.BackgroundTaskManager.TransientTask | 无 | 否 | lifecycle/HarmonyBackgroundSaveTask.ets |
+| 短时任务（退后台保存与保存后同步） | @kit.BackgroundTasksKit (backgroundTaskManager) | 9 | SystemCapability.ResourceSchedule.BackgroundTaskManager.TransientTask | 无 | 否 | lifecycle/HarmonyBackgroundSaveTask.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -766,18 +766,18 @@ shareFiles profile 的路径配置分两层：`scopes` 控制共享文件范围�
   - 无默认网络时 `isDefaultNetMetered` 不调用，`is_metered` 保持默认 `false`
 - 说明：网络状态用于 Core 侧 `PlatformServices` 的 `NetworkState`，影响同步传输工厂是否允许后台同步（计费网络下可能限制大流量同步）。官方文档：https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/capi-net-connection-h
 
-## 短时任务（退后台保存）
+## 短时任务（退后台保存与保存后同步）
 
 - Kit：`@kit.BackgroundTasksKit`（`backgroundTaskManager` 模块）
 - 接口：
   - `backgroundTaskManager.requestSuspendDelay(reason: string, callback: Callback<void>): DelaySuspendInfo` — 申请短时任务；`callback` 一般在实际超时前约 6 秒被调用（用于收尾）
-  - `backgroundTaskManager.cancelSuspendDelay(requestId: number): void` — 保存事务结束后释放
+  - `backgroundTaskManager.cancelSuspendDelay(requestId: number): void` — 整个后台事务（保存 + 保存后同步 + 诊断收尾）结束后释放
   - `DelaySuspendInfo { requestId: number; actualDelayTime: number }` — 实际时长由系统决定（正常最长 3 分钟，低电量 1 分钟）
 - 最低 API：9（`requestSuspendDelay` / `cancelSuspendDelay` 均 `@since 9`，经本机 SDK d.ts 确认；compatibleSdkVersion=12 始终满足）
 - SystemCapability：`SystemCapability.ResourceSchedule.BackgroundTaskManager.TransientTask`
 - 权限：无（d.ts 未声明 `@permission`；短时任务不需要权限，也不进 `module.json5` 的 `requestPermissions`）
 - ACL：否
-- fallback：平台不支持（`canIUse` 为 false）或申请短时任务抛错时，`runSave` 不调用保存 action、返回 false 并记录 `background_save_unavailable` 诊断，不伪造成功；保存 action 返回 false 时由 `WritingWorkflowCoordinator` 保留 dirty / `lastSaveFailed`。超时回调记录 `background_save_timeout`。诊断走 `diagnostics/HarmonyDiagnosticEvents.ets` 通道。
+- fallback：平台不支持（`canIUse` 为 false）或申请短时任务抛错时，只记录 `background_save_unavailable` 诊断，后台事务照常执行，不伪造成功/失败；保存结果以 `performBackgroundSave` 的真实返回值为准（失败由 `WritingWorkflowCoordinator` 保留 dirty / `lastSaveFailed`）。超时回调记录 `background_save_timeout`；保存后的交接同步失败或被挂起时由 `HarmonyAutoSyncScheduler` 保留待同步事实，网络恢复或回到前台后再同步，不假报完成。诊断走 `diagnostics/HarmonyDiagnosticEvents.ets` 通道。
 - 实现文件：`lifecycle/HarmonyBackgroundSaveTask.ets`（平台短时任务包装，UI 页面不直接调用后台任务接口）
-- 调用方：`lifecycle/HarmonyLifecycle.ets` 的 `AutoSaveLifecycleObserver.onBackground()` —— 申请到 requestId 后才开始异步落盘，`try/finally` 释放；单一 in-flight 标志保证 `onWindowStageDestroy` + `onBackground` 连续触发只产生一次后台保存事务。前台 `setInterval` 定时保存不使用短时任务。
+- 调用方：`lifecycle/HarmonyLifecycle.ets` 的 `notifyBackground()` —— 在一个短时任务内依次等待 1) 全部 observer 的 `onBackground()` 保存，2) `onBackgroundPostSave()`（`SyncLifecycleObserver` 的退后台交接同步，Issue #1058），3) `onBackgroundFinalize()` 诊断收尾；`try/finally` 释放 requestId。单一 in-flight 标志保证 `onWindowStageDestroy` + `onBackground` 连续触发只产生一次后台事务。前台 `setInterval` 定时保存与前台交接同步不使用短时任务。
 - 官方文档：https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V14/js-apis-resourceschedule-backgroundtaskmanager-V14

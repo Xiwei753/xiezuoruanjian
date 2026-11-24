@@ -18,8 +18,8 @@ use std::os::raw::c_char;
 use super::{c_str_to_rust, err_json, ok_json, patch_dto, with_app_service};
 use crate::api::envelope::ResultEnvelope;
 use crate::api::error::WriterError;
-use crate::app_service::WriterAppService;
 use crate::api::SyncConfigDto;
+use crate::app_service::WriterAppService;
 
 struct SyncFailureContext {
     operation_id: String,
@@ -180,6 +180,8 @@ fn persist_sync_preflight_failure(svc: &WriterAppService, stage: &str, category:
 fn perform_full_sync_with_preflight_diagnostics(
     svc: &WriterAppService,
     operation_id: &str,
+    force_sync: bool,
+    trigger: &str,
 ) -> Result<crate::api::FullSyncResultDto, SyncOperationFailure> {
     record_sync_preflight_event(operation_id, "config_load", "started", None, None);
     let config = match svc.load_sync_config() {
@@ -231,7 +233,12 @@ fn perform_full_sync_with_preflight_diagnostics(
     record_sync_preflight_event(operation_id, "secrets_load", "success", None, None);
 
     record_sync_preflight_event(operation_id, "core_enter", "started", None, None);
-    let result = svc.perform_full_sync_after_preflight(config.clone(), false, operation_id.to_string());
+    let result = svc.perform_full_sync_after_preflight(
+        config.clone(),
+        force_sync,
+        operation_id.to_string(),
+        trigger.to_string(),
+    );
     match result {
         Ok(result) => {
             record_sync_preflight_event(operation_id, "core_enter", "success", None, None);
@@ -266,10 +273,7 @@ fn perform_full_sync_with_preflight_diagnostics(
     }
 }
 
-fn sync_error_envelope_json(
-    error: WriterError,
-    context: SyncFailureContext,
-) -> String {
+fn sync_error_envelope_json(error: WriterError, context: SyncFailureContext) -> String {
     let mut envelope = ResultEnvelope::<()>::error(error);
     envelope.diagnostic_operation_id = Some(context.operation_id);
     envelope.failure_stage = Some(context.stage.to_string());
@@ -465,19 +469,54 @@ pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
+    perform_full_sync_entry(false, "manual")
+}
+
+/// 全量同步 C ABI（带触发原因与周期防抖旁路）。
+///
+/// `trigger` 是调用方报告的触发原因（`manual` / `auto_timer` / `startup` /
+/// `foreground_handoff` / `background_handoff` 等），只进入同步诊断字段，
+/// 不改变冲突裁决；为空、非法 UTF-8 或空白时回退为 `manual`。
+/// `force_sync` 只跳过 Core 的周期防抖（`max(60, sync_interval_seconds)`），
+/// 不改变对象级 LWW 与正文三路比较。
+///
+/// # Safety
+/// `trigger` must be null or a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_perform_full_sync_with_options(
+    trigger: *const c_char,
+    force_sync: bool,
+) -> *mut c_char {
+    // `c_str_to_rust` 自行处理 null/非法 UTF-8，这里只做诊断字段的长度与空值约束。
+    let trigger = c_str_to_rust(trigger)
+        .ok()
+        .map(|value| value.trim().chars().take(32).collect::<String>())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "manual".to_string());
+    perform_full_sync_entry(force_sync, &trigger)
+}
+
+fn perform_full_sync_entry(force_sync: bool, trigger: &str) -> *mut c_char {
     let operation_id = uuid::Uuid::new_v4().to_string();
     record_sync_preflight_event(&operation_id, "operation", "started", None, None);
     let mut failure_context: Option<SyncFailureContext> = None;
     let inner_result: Result<Result<_, WriterError>, String> = with_app_service(|svc| {
-        Ok(run_sync_op(svc, |svc| {
-            match perform_full_sync_with_preflight_diagnostics(svc, &operation_id) {
+        Ok(run_sync_op(
+            svc,
+            |svc| match perform_full_sync_with_preflight_diagnostics(
+                svc,
+                &operation_id,
+                force_sync,
+                trigger,
+            ) {
                 Ok(result) => Ok(result),
                 Err(failure) => {
                     failure_context = Some(failure.context);
                     Err(failure.error)
                 }
-            }
-        }))
+            },
+        ))
     });
     match inner_result {
         Ok(Ok(data)) => {

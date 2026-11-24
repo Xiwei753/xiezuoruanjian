@@ -26,8 +26,8 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use writer_core::api::WriterCoreApi;
 use crate::platform::linux_qt::desktop_settings;
+use writer_core::api::WriterCoreApi;
 // Issue #729：同步取消令牌 + workspace generation 用于切工作区后旧同步回调身份隔离。
 use std::sync::Arc;
 use writer_core::sync::SyncCancellationToken;
@@ -386,8 +386,9 @@ pub struct AppBackend {
     stats_writer: Option<crate::backend::stats_writer::StatsWriterHandle>,
     /// Issue #981：前台写作计时状态机。时长用 `Instant` 单调时钟测量；
     /// 只有窗口前台且正文页可交互时才会产生切片。
-    writing_session:
-        std::sync::Mutex<crate::backend::app_backend::editor_backend::writing_stats::LinuxWritingSession>,
+    writing_session: std::sync::Mutex<
+        crate::backend::app_backend::editor_backend::writing_stats::LinuxWritingSession,
+    >,
     /// Issue #982：全局搜索 worker。搜索索引只存在于该 worker 持有的 Core 实例中，
     /// 普通 core_api() getter 每次新建 API（索引为空），不能用于搜索。
     search_bridge: Arc<crate::backend::search_backend::SearchBridge>,
@@ -479,6 +480,13 @@ pub struct AppBackend {
     /// Issue #983：自动启动在通过到期检查后仍失败的时间/原因，用于推迟下一轮。
     last_auto_sync_failure_at: i64,
     last_auto_sync_failure_reason: String,
+    /// Issue #1058：最近一次窗口交接（handoff）检查的时间。同一次从后台恢复里
+    /// QML 可能连续发出 active / visibility 信号，冷却窗口内只做一次交接检查，
+    /// 不把普通焦点变化当成多次启动。工作区重置时清零。
+    last_auto_sync_handoff_at: i64,
+    /// Issue #1058：最近一次自动调度使用的触发原因（timer / startup / handoff）。
+    /// 只用于启动日志，不参与到期判断。
+    last_auto_sync_trigger: String,
 
     current_system_color_scheme: String,
     pub current_ai_enabled: bool,
