@@ -347,7 +347,6 @@ Rectangle {
 
             delegate: StarMapTreeRow {
                 width: treeList.width
-                rowData: modelData
                 selected: root.currentObjectKey !== ""
                     ? String(modelData.objectKey || "") === root.currentObjectKey
                     : (root.currentRouteKey !== ""

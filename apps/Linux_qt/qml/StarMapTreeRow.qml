@@ -15,7 +15,10 @@ import org.kde.kirigami as Kirigami
 Rectangle {
     id: row
 
-    required property var rowData
+    // ListView 委托通过必需属性 modelData 注入行快照；行内绘制与点击逻辑
+    // 统一读取 rowData，避免各处直接依赖委托注入名。
+    required property var modelData
+    readonly property var rowData: modelData
     property bool selected: false
 
     signal activated()

@@ -11,9 +11,13 @@
 //
 // Issue #1035：快照节点 / 入口 / 连线的局部几何只在 snapshot 变化时生成一次，
 //   全部保存在同一份 child world 坐标里；父图缩放只更新一个预览根变换和
-//   原生对象层的相机矩阵，不重建 PathSvg、Repeater 模型，也不重新排版文字。
-//   卡片、圆壳及描边由 StarMapObjectLayer 的 SDF 批量几何绘制；连线使用
-//   cosmeticStroke，屏幕线宽不随 fitScale 变化。
+//   原生对象层的相机矩阵，不重建 PathSvg，也不重新排版文字。
+//
+// Issue #1057：父画布的子星图圆形入口内部只表示"里面大概有什么"，不画完整
+//   节点卡片和文字。节点 / 更深层入口统一由 StarMapObjectLayer 以固定屏幕
+//   3px 半径圆点呈现（reveal: 0，顶点着色器 mix 到圆点半径），子图内部连线
+//   用 1px cosmeticStroke，屏幕线宽不随 fitScale 变化。圆内不再实例化任何
+//   文字卡片。
 // =============================================================================
 
 import QtQuick
@@ -71,6 +75,7 @@ Item {
         return s
     }
 
+    // 圆内只画圆点与连线，这里只保留定位 / 尺寸字段，不再为文字构造内容。
     readonly property var localNodes: {
         var out = []
         for (var i = 0; i < nodes.length; i++) {
@@ -78,9 +83,7 @@ Item {
             out.push({
                 id: n.id,
                 x: localX(n.x), y: localY(n.y),
-                width: n.width, height: n.height,
-                title: n.title !== undefined ? n.title : "",
-                body: n.body !== undefined && n.body !== null ? String(n.body) : ""
+                width: n.width, height: n.height
             })
         }
         return out
@@ -93,8 +96,7 @@ Item {
             out.push({
                 id: e.instanceId,
                 x: localX(e.x), y: localY(e.y),
-                diameter: e.diameter,
-                label: e.label !== undefined && e.label !== null ? e.label : ""
+                diameter: e.diameter
             })
         }
         return out
@@ -144,8 +146,8 @@ Item {
 
         ShapePath {
             strokeColor: overview.dt.border
-            // 屏幕固定 1.5px；路径与描边参数都不再依赖 fitScale。
-            strokeWidth: 1.5
+            // 屏幕固定 1px 纤细连线；路径与描边参数都不依赖 fitScale。
+            strokeWidth: 1
             cosmeticStroke: true
             fillColor: "transparent"
             capStyle: ShapePath.RoundCap
@@ -165,8 +167,11 @@ Item {
         panY: overview._contentY
         anchorX: 0
         anchorY: 0
-        reveal: 1
-        revealDotRadiusPx: 0
+        // Issue #1057：圆内只画 3px 半径（约 6px 直径）圆点，顶点着色器用
+        // mix(dotRadius, originalHalfSize, reveal) 把完整卡片轮廓收成圆点，
+        // 节点再多也不实例化文本卡片。
+        reveal: 0
+        revealDotRadiusPx: 3
         cornerRadius: 6
         nodeFillHex: String(overview.dt.surfaceContainer)
         nodeBorderHex: String(overview.dt.border)
@@ -178,85 +183,5 @@ Item {
         embedBorderPx: 1
         embedSelectedBorderPx: 1
         z: 1
-    }
-
-    Item {
-        id: labelsRoot
-        x: overview._contentX
-        y: overview._contentY
-        width: overview._childWorldWidth
-        height: overview._childWorldHeight
-        visible: overview.hasContent
-        z: 2
-
-        transform: Scale {
-            origin.x: 0
-            origin.y: 0
-            xScale: overview.fitScale
-            yScale: overview.fitScale
-        }
-
-        Repeater {
-            model: overview.localNodes
-            delegate: Item {
-                x: modelData.x
-                y: modelData.y
-                width: modelData.width
-                height: modelData.height
-                clip: true
-                visible: width > 0.3 && height > 0.3
-
-                Column {
-                    anchors.fill: parent
-                    anchors.margins: 6
-                    spacing: 2
-
-                    Text {
-                        width: parent.width
-                        text: modelData.title
-                        color: overview.dt.textPrimary
-                        font.pixelSize: 14
-                        font.bold: true
-                        elide: Text.ElideRight
-                        maximumLineCount: 1
-                    }
-
-                    Text {
-                        width: parent.width
-                        text: modelData.body
-                        color: overview.dt.textSecondary
-                        font.pixelSize: 12
-                        elide: Text.ElideRight
-                        maximumLineCount: 2
-                        wrapMode: Text.Wrap
-                        visible: text.length > 0
-                    }
-                }
-            }
-        }
-
-        Repeater {
-            model: overview.localEmbeds
-            delegate: Item {
-                x: modelData.x
-                y: modelData.y
-                width: modelData.diameter
-                height: modelData.diameter
-                visible: width > 0.3 && height > 0.3
-
-                Text {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.topMargin: 8
-                    text: modelData.label
-                    color: overview.dt.textPrimary
-                    font.pixelSize: 14
-                    horizontalAlignment: Text.AlignHCenter
-                    elide: Text.ElideRight
-                    maximumLineCount: 1
-                }
-            }
-        }
     }
 }
