@@ -14,6 +14,8 @@ use uuid::Uuid;
 use super::*;
 use crate::chapter::calculate_word_count;
 
+use super::publish::publish_decided;
+
 /// journal 阶段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,41 +35,46 @@ pub enum ChapterCommitPhase {
 /// journal 中的一个附加文件投影。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AdditionalFilePlan {
-    target_relative: String,
-    staging_filename: String,
-    sha256: String,
+pub(super) struct AdditionalFilePlan {
+    pub(super) target_relative: String,
+    pub(super) staging_filename: String,
+    /// 提交决议时的目标文件摘要；`None` 表示目标原本不存在。
+    #[serde(default)]
+    pub(super) before_sha256: Option<String>,
+    pub(super) sha256: String,
 }
 
 /// durable commit decision。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ChapterCommitManifest {
-    schema_version: u32,
-    transaction_id: String,
+pub(super) struct ChapterCommitManifest {
+    pub(super) schema_version: u32,
+    pub(super) transaction_id: String,
     /// project root 的绝对路径；journal 本身在 project root 内，恢复时以它
     /// 为准校验，防止 journal 被移动到另一个项目后误写。
-    project_root: String,
-    key: ChapterKey,
-    mutation: ChapterMutationKind,
-    source: ChapterCommitSource,
-    created_at_ms: i64,
-    occurred_at_ms: i64,
-    event_ids: Vec<String>,
-    expected: Option<ChapterVersion>,
-    before: ChapterVersion,
-    after: ChapterVersion,
-    body_changed: bool,
-    content_len: usize,
-    content_md5: String,
-    word_count: u32,
-    updated_at: String,
-    additional_files: Vec<AdditionalFilePlan>,
-    phase: ChapterCommitPhase,
-    pending_projections: Vec<String>,
+    pub(super) project_root: String,
+    pub(super) key: ChapterKey,
+    pub(super) mutation: ChapterMutationKind,
+    pub(super) source: ChapterCommitSource,
+    pub(super) created_at_ms: i64,
+    pub(super) occurred_at_ms: i64,
+    pub(super) event_ids: Vec<String>,
+    #[serde(default)]
+    pub(super) proof_events: Vec<super::ChapterProofProjection>,
+    pub(super) expected: Option<ChapterVersion>,
+    pub(super) before: ChapterVersion,
+    pub(super) after: ChapterVersion,
+    pub(super) body_changed: bool,
+    pub(super) content_len: usize,
+    pub(super) content_md5: String,
+    pub(super) word_count: u32,
+    pub(super) updated_at: String,
+    pub(super) additional_files: Vec<AdditionalFilePlan>,
+    pub(super) phase: ChapterCommitPhase,
+    pub(super) pending_projections: Vec<String>,
     /// 恢复时发现当前正文既不是 before 也不是 after，记录原因。
     #[serde(default)]
-    superseded_reason: Option<String>,
+    pub(super) superseded_reason: Option<String>,
 }
 
 /// 一次待恢复 journal 的可读结果。
@@ -81,15 +88,15 @@ pub struct ChapterCommitRecovery {
     pub conflict_dir: Option<String>,
 }
 
-fn sha256_hex(text: &str) -> String {
+pub(super) fn sha256_hex(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
-fn md5_hex(text: &str) -> String {
+pub(super) fn md5_hex(text: &str) -> String {
     format!("{:x}", md5::compute(text.as_bytes()))
 }
 
-fn journal_root(project_root: &Path) -> PathBuf {
+pub(super) fn journal_root(project_root: &Path) -> PathBuf {
     project_root.join(JOURNAL_DIR)
 }
 
@@ -119,7 +126,7 @@ fn ensure_journal_dir(project_root: &Path) -> Result<()> {
 }
 
 /// 写入 pending 探针。只在第一次写 journal 时调用，内容为空。
-fn mark_pending(project_root: &Path) -> Result<()> {
+pub(super) fn mark_pending(project_root: &Path) -> Result<()> {
     ensure_journal_dir(project_root)?;
     let marker = pending_marker(project_root);
     if !marker.exists() {
@@ -190,7 +197,8 @@ pub(super) fn read_current(
     Ok((meta, content, version))
 }
 
-/// 读取当前章节版本。若存在未完成 journal，先按决议恢复投影，避免读到半提交。
+/// 读取当前章节版本。普通读取不承担 journal 恢复；恢复入口必须持有
+/// workspace guard 并调用 [`read_chapter_state_recovering`]。
 pub fn read_chapter_version(
     project_root: &Path,
     volume_id: &str,
@@ -199,39 +207,92 @@ pub fn read_chapter_version(
     read_chapter_state(project_root, volume_id, chapter_id).map(|(_, _, version)| version)
 }
 
-/// 读取正文、元数据和同一时刻的持久化版本（恢复半提交后）。
+/// 读取正文、元数据和同一时刻的持久化版本。不会修改磁盘。
 pub fn read_chapter_state(
     project_root: &Path,
     volume_id: &str,
     chapter_id: &str,
 ) -> Result<(Chapter, String, ChapterVersion)> {
-    recover_pending_for_read(project_root)?;
     let key = ChapterKey::new(project_id(project_root), volume_id, chapter_id);
     read_current(project_root, &key)
 }
 
-/// 读取路径的恢复入口：只有 pending 探针存在时才扫描 journal。
-pub(crate) fn recover_pending_for_read(project_root: &Path) -> Result<()> {
+/// 持有 workspace guard 的读取入口：先按 journal 决议恢复半提交，再读取。
+pub fn read_chapter_state_recovering(
+    project_root: &Path,
+    guard: &crate::storage::WorkspaceWriteLock,
+    volume_id: &str,
+    chapter_id: &str,
+) -> Result<(Chapter, String, ChapterVersion)> {
+    recover_pending_for_read(guard, project_root)?;
+    read_chapter_state(project_root, volume_id, chapter_id)
+}
+
+/// 持有 workspace guard 的版本读取。
+pub fn read_chapter_version_recovering(
+    project_root: &Path,
+    guard: &crate::storage::WorkspaceWriteLock,
+    volume_id: &str,
+    chapter_id: &str,
+) -> Result<ChapterVersion> {
+    read_chapter_state_recovering(project_root, guard, volume_id, chapter_id)
+        .map(|(_, _, version)| version)
+}
+
+/// 读取路径的恢复入口：调用方必须持有覆盖该项目的 workspace guard。
+fn recover_pending_for_read(
+    guard: &crate::storage::WorkspaceWriteLock,
+    project_root: &Path,
+) -> Result<()> {
     if pending_marker(project_root).exists() {
         let _ = recover_pending_chapter_commits(project_root)?;
     }
     Ok(())
 }
 
+/// 完整版本 CAS：generation、revision、正文摘要三项必须同时匹配。
+///
+/// 任一字段为空都视为旧客户端的不完整 base，直接拒绝；旧数据必须先经过
+/// [`read_current_migrated`] 在锁内补全稳定 generation/digest。
 fn expected_matches(expected: &ChapterVersion, current: &ChapterVersion) -> bool {
-    // 旧客户端可能只有 revision，或者没有摘要。有摘要时以摘要为准：
-    // 同一正文在不同 revision 上被重新保存仍视为合法 no-op。
-    if expected.has_digest() {
-        return expected.content_sha256 == current.content_sha256;
+    !expected.object_generation.is_empty()
+        && !expected.content_sha256.is_empty()
+        && expected.object_generation == current.object_generation
+        && expected.revision == current.revision
+        && expected.content_sha256 == current.content_sha256
+}
+
+/// 在锁内一次性补齐旧 meta 的稳定 generation/revision/digest。
+fn read_current_migrated(
+    project_root: &Path,
+    key: &ChapterKey,
+) -> Result<(Chapter, String, ChapterVersion)> {
+    let (mut meta, content, mut version) = read_current(project_root, key)?;
+    let mut changed = false;
+    if meta.object_generation.is_empty() {
+        meta.object_generation = Uuid::new_v4().to_string();
+        changed = true;
     }
-    if expected.revision > 0 {
-        return expected.revision == current.revision;
+    if meta.content_sha256.is_empty() {
+        meta.content_sha256 = sha256_hex(&content);
+        changed = true;
     }
-    if !expected.object_generation.is_empty() {
-        return expected.object_generation == current.object_generation;
+    // 旧章节没有 revision 字段；非空正文从 1 开始，空正文保持 0。
+    if meta.revision == 0 && !content.is_empty() {
+        meta.revision = 1;
+        changed = true;
     }
-    // 全空的 expected 等价于旧客户端没有传 base。
-    true
+    if changed {
+        version = ChapterVersion {
+            object_generation: meta.object_generation.clone(),
+            revision: meta.revision,
+            content_sha256: meta.content_sha256.clone(),
+        };
+        let json = serde_json::to_string_pretty(&meta)?;
+        crate::storage::atomic_write_bytes(&key.meta_path(project_root), json.as_bytes())?;
+        crate::storage::sync_dir(&key.meta_path(project_root))?;
+    }
+    Ok((meta, content, version))
 }
 
 fn write_conflict_material(
@@ -307,7 +368,7 @@ fn additional_file_changed(project_root: &Path, relative_path: &str, content: &s
     }
 }
 
-fn write_manifest(tx_dir: &Path, manifest: &ChapterCommitManifest) -> Result<()> {
+pub(super) fn write_manifest(tx_dir: &Path, manifest: &ChapterCommitManifest) -> Result<()> {
     let json = serde_json::to_string_pretty(manifest)?;
     crate::storage::atomic_write_bytes(&tx_dir.join("manifest.json"), json.as_bytes())?;
     crate::storage::sync_dir(tx_dir)?;
@@ -336,104 +397,20 @@ fn remove_transaction_dir(tx_dir: &Path) -> Result<()> {
 ///
 /// 当前正文既不是 before 也不是 after 时拒绝写入（返回 `false`），由调用方
 /// 标记 Superseded 并保留冲突材料；绝不用旧 staging 覆盖新正文。
-fn publish_decided(
-    project_root: &Path,
-    tx_dir: &Path,
-    manifest: &mut ChapterCommitManifest,
-) -> Result<bool> {
-    let key = &manifest.key;
-    let body_path = key.body_path(project_root);
-    let meta_path = key.meta_path(project_root);
-    let current = fs::read_to_string(&body_path).unwrap_or_default();
-    let current_sha = sha256_hex(&current);
-    if current_sha != manifest.before.content_sha256 && current_sha != manifest.after.content_sha256
-    {
-        manifest.phase = ChapterCommitPhase::Superseded;
-        manifest.superseded_reason = Some(format!(
-            "current chapter changed after decision: current={current_sha}, before={}, after={}",
-            manifest.before.content_sha256, manifest.after.content_sha256
-        ));
-        write_manifest(tx_dir, manifest)?;
-        return Ok(false);
-    }
-
-    // 当前已是 after：只补元数据事实，不重写正文。
-    let already_after = current_sha == manifest.after.content_sha256;
-    if !already_after {
-        let after_bytes = fs::read(tx_dir.join(BODY_FILE))?;
-        if sha256_hex(&String::from_utf8_lossy(&after_bytes)) != manifest.after.content_sha256 {
-            return Err(Error::Other(format!(
-                "chapter commit staging digest mismatch: tx={}",
-                manifest.transaction_id
-            )));
-        }
-        crate::storage::atomic_write_bytes(&body_path, &after_bytes)?;
-        crate::storage::sync_dir(&body_path)?;
-    }
-
-    // 附加文件是可幂等重放的投影；无论正文是否已 after 都补齐。
-    for plan in &manifest.additional_files {
-        let staged = fs::read(tx_dir.join(&plan.staging_filename))?;
-        if sha256_hex(&String::from_utf8_lossy(&staged)) != plan.sha256 {
-            return Err(Error::Other(format!(
-                "chapter commit additional staging digest mismatch: {}",
-                plan.target_relative
-            )));
-        }
-        let target = project_root.join(&plan.target_relative);
-        if let Ok(existing) = fs::read(&target) {
-            if existing == staged {
-                continue;
-            }
-        }
-        crate::storage::atomic_write_bytes(&target, &staged)?;
-        crate::storage::sync_parent(&target)?;
-    }
-
-    // 元数据只合并版本/正文事实；保留当前 title/note/order，恢复期间不覆盖
-    // 用户后来改过的字段。只有正文尚未 after 时才推进 updated_at。
-    let meta_str = fs::read_to_string(&meta_path)?;
-    let mut meta: Chapter = serde_json::from_str(&meta_str)?;
-    if !already_after || meta.content_sha256 != manifest.after.content_sha256 {
-        if !already_after {
-            meta.updated_at = manifest.updated_at.clone();
-        }
-        meta.word_count = manifest.word_count;
-        meta.hash = manifest.content_md5.clone();
-        meta.content_sha256 = manifest.after.content_sha256.clone();
-        meta.revision = manifest.after.revision;
-        if meta.object_generation.is_empty() {
-            meta.object_generation = manifest.after.object_generation.clone();
-        }
-        let updated = serde_json::to_string_pretty(&meta)?;
-        crate::storage::atomic_write_bytes(&meta_path, updated.as_bytes())?;
-        crate::storage::sync_dir(&meta_path)?;
-    }
-
-    manifest.phase = ChapterCommitPhase::Applied;
-    write_manifest(tx_dir, manifest)?;
-    Ok(true)
-}
-
-/// 章节提交唯一入口。调用方不需要预先持有工作区锁；传入 `app_data_root`
-/// 时本函数会获取同一把跨进程写锁（同线程嵌套安全）。
+/// 章节提交唯一实现。调用方必须传入已持有的 workspace guard；`None` 仅用于
+/// 测试/纯局部导入等没有跨进程锁的场景。
 #[allow(clippy::too_many_lines)]
-pub fn commit_chapter(
+pub(crate) fn commit_chapter_with_guard(
     project_root: &Path,
-    app_data_root: Option<&Path>,
+    guard: Option<&crate::storage::WorkspaceWriteLock>,
     request: ChapterCommitRequest,
 ) -> Result<ChapterCommitOutcome> {
-    // 同一把锁覆盖读版本、写 journal 和发布投影。journal 在 project root，
-    // 锁在 app data root；局部调用（测试/导入）没有 app data root 时不额外加锁。
-    let _lock = match app_data_root {
-        Some(root) => Some(crate::storage::WorkspaceWriteLock::acquire(root)?),
-        None => None,
-    };
-
-    recover_pending_for_read(project_root)?;
+    if let Some(guard) = guard {
+        recover_pending_for_read(guard, project_root)?;
+    }
 
     let key = request.key.clone();
-    let (mut meta, current, before) = read_current(project_root, &key)?;
+    let (mut meta, current, before) = read_current_migrated(project_root, &key)?;
     ensure_empty_overwrite_allowed(
         &key.chapter_id,
         &current,
@@ -536,9 +513,16 @@ pub fn commit_chapter(
     for (index, (target_relative, content)) in changed_additional.iter().enumerate() {
         let staging_filename = format!("additional_{index}");
         crate::storage::atomic_write_bytes(&tx_dir.join(&staging_filename), content.as_bytes())?;
+        let target = project_root.join(target_relative);
+        let before_sha256 = match fs::read(&target) {
+            Ok(existing) => Some(sha256_hex(&String::from_utf8_lossy(&existing))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
         additional_plans.push(AdditionalFilePlan {
             target_relative: target_relative.clone(),
             staging_filename,
+            before_sha256,
             sha256: sha256_hex(content),
         });
     }
@@ -554,6 +538,7 @@ pub fn commit_chapter(
         created_at_ms: Utc::now().timestamp_millis(),
         occurred_at_ms: Utc::now().timestamp_millis(),
         event_ids: request.event_ids.clone(),
+        proof_events: request.proof_events.clone(),
         expected: request.expected.clone(),
         before: before.clone(),
         after: after.clone(),
@@ -677,6 +662,65 @@ pub fn mark_chapter_commit_projection(
     Ok(false)
 }
 
+/// 保留 Superseded 事务的真实材料、pending 事件和冲突记录。
+fn preserve_superseded_conflict(
+    project_root: &Path,
+    tx_dir: &Path,
+    manifest: &ChapterCommitManifest,
+) -> Result<String> {
+    let conflict_dir = journal_root(project_root)
+        .join(CONFLICT_DIR)
+        .join(&manifest.transaction_id);
+    fs::create_dir_all(&conflict_dir)?;
+    let _ = fs::copy(
+        tx_dir.join("manifest.json"),
+        conflict_dir.join("manifest.json"),
+    );
+    if tx_dir.join(BODY_FILE).exists() {
+        let _ = fs::copy(tx_dir.join(BODY_FILE), conflict_dir.join(BODY_FILE));
+    }
+    for plan in &manifest.additional_files {
+        let staged = tx_dir.join(&plan.staging_filename);
+        if staged.exists() {
+            let _ = fs::copy(&staged, conflict_dir.join(&plan.staging_filename));
+        }
+    }
+    let actual = read_current(project_root, &manifest.key)
+        .ok()
+        .map(|(_, _, version)| version);
+    let record = serde_json::json!({
+        "transactionId": manifest.transaction_id,
+        "key": manifest.key,
+        "before": manifest.before,
+        "after": manifest.after,
+        "actual": actual,
+        "reason": manifest.superseded_reason,
+        "pendingProjections": manifest.pending_projections,
+    });
+    crate::storage::atomic_write_bytes(
+        &conflict_dir.join("conflict.json"),
+        serde_json::to_string_pretty(&record)?.as_bytes(),
+    )?;
+    crate::storage::sync_dir(&conflict_dir)?;
+    Ok(conflict_dir.to_string_lossy().to_string())
+}
+
+/// 读取 journal 中尚未确认的证明事件（供投影 worker 使用）。
+pub fn pending_chapter_proof_events(
+    project_root: &Path,
+    transaction_id: &str,
+) -> Result<Vec<super::ChapterProofProjection>> {
+    let manifest_path = journal_root(project_root)
+        .join(transaction_id)
+        .join("manifest.json");
+    if !manifest_path.exists() {
+        return Ok(Vec::new());
+    }
+    let manifest: ChapterCommitManifest =
+        serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    Ok(manifest.proof_events)
+}
+
 /// 扫描并恢复未完成 journal。按 `created_at_ms` 顺序处理；只处理未完成事务，
 /// 不遍历作品正文。调用方应持有工作区写锁（或传入 app_data_root）。
 pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<ChapterCommitRecovery>> {
@@ -717,23 +761,22 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
     for (tx_dir, mut manifest) in entries {
         match manifest.phase {
             ChapterCommitPhase::Prepared => {
-                // 未决议：live 从未被触碰，撤销自己的材料。
-                let _ = remove_transaction_dir(&tx_dir);
+                // 未决议：live 从未被触碰。保留目录供人工诊断，不能删除后
+                // 继续写 Finished manifest；pending 探针会由空闲清理移除。
+                continue;
             }
             ChapterCommitPhase::Decided => {
                 let published = publish_decided(project_root, &tx_dir, &mut manifest)?;
                 if !published {
-                    let conflict_dir = journal_root(project_root)
-                        .join(CONFLICT_DIR)
-                        .join(&manifest.transaction_id);
-                    let _ = fs::create_dir_all(&conflict_dir);
+                    let conflict_dir =
+                        preserve_superseded_conflict(project_root, &tx_dir, &manifest)?;
                     recovered.push(ChapterCommitRecovery {
                         transaction_id: manifest.transaction_id.clone(),
                         key: manifest.key.clone(),
                         after: manifest.after.clone(),
-                        pending_projections: Vec::new(),
+                        pending_projections: manifest.pending_projections.clone(),
                         superseded: true,
-                        conflict_dir: Some(conflict_dir.to_string_lossy().to_string()),
+                        conflict_dir: Some(conflict_dir),
                     });
                     continue;
                 }

@@ -119,6 +119,45 @@ impl super::WriterCore {
         })
     }
 
+    /// 持有 workspace guard 的打开入口：先恢复未完成 journal，再读取一致版本。
+    pub fn open_chapter_recovering(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        workspace_lock: &crate::storage::WorkspaceWriteLock,
+    ) -> Result<super::ChapterOpenResult> {
+        let project_root = self.project_root(project_id);
+        let (meta, content, version) = crate::chapter::commit::read_chapter_state_recovering(
+            &project_root,
+            workspace_lock,
+            volume_id,
+            chapter_id,
+        )?;
+        Ok(super::ChapterOpenResult {
+            meta,
+            content,
+            version,
+        })
+    }
+
+    /// 持有 workspace guard 的版本读取。
+    pub fn read_chapter_version_recovering(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        workspace_lock: &crate::storage::WorkspaceWriteLock,
+    ) -> Result<crate::chapter::ChapterVersion> {
+        let project_root = self.project_root(project_id);
+        crate::chapter::commit::read_chapter_version_recovering(
+            &project_root,
+            workspace_lock,
+            volume_id,
+            chapter_id,
+        )
+    }
+
     /// 只读当前章节版本（不复制整章正文，但仍需读取正文计算摘要）。
     pub fn read_chapter_version(
         &self,
@@ -366,9 +405,18 @@ impl super::WriterCore {
         expected_version: Option<crate::chapter::ChapterVersion>,
         base_content: Option<&str>,
         projection_ids: &[String],
+        workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
         let project_root = self.project_root(project_id);
-        chapter::save_chapter_verified_with_changes_and_files_versioned(
+        let proof_events = self.pending_editor_proof_for(project_id, volume_id, chapter_id);
+        let mut projection_ids = projection_ids.to_vec();
+        for event in &proof_events {
+            let event_id = event.event_id().to_string();
+            if !event_id.is_empty() && !projection_ids.contains(&event_id) {
+                projection_ids.push(event_id);
+            }
+        }
+        let result = chapter::save_chapter_verified_with_changes_and_files_versioned_with_proof(
             &project_root,
             volume_id,
             chapter_id,
@@ -377,9 +425,20 @@ impl super::WriterCore {
             additional_files,
             expected_version,
             base_content,
-            projection_ids,
+            &projection_ids,
             &self.app_data_root,
-        )
+            workspace_lock,
+            &proof_events,
+        )?;
+        if !proof_events.is_empty() {
+            let completed: std::collections::HashSet<String> = proof_events
+                .iter()
+                .map(|event| event.event_id().to_string())
+                .collect();
+            self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed);
+            self.apply_pending_chapter_proof(&project_root, &result.0.transaction_id);
+        }
+        Ok(result)
     }
 
     /// 清空章节正文并核对 base 版本。
@@ -390,11 +449,12 @@ impl super::WriterCore {
         chapter_id: &str,
         expected_version: Option<crate::chapter::ChapterVersion>,
         base_content: Option<&str>,
+        workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     ) -> Result<ChapterSaveReceipt> {
         let project_root = self.project_root(project_id);
         chapter::clear_chapter_content_verified_with_version(
             &project_root,
-            Some(&self.app_data_root),
+            workspace_lock,
             volume_id,
             chapter_id,
             expected_version,

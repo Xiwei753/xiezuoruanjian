@@ -307,6 +307,10 @@
         <source>磁盘上的章节已被更新，当前编辑未覆盖新版本。</source>
         <translation>磁盘上的章节已被更新，当前编辑未覆盖新版本。</translation>
     </message>
+    <message>
+        <source>当前章节已被删除，未保存的编辑已保留。</source>
+        <translation>当前章节已被删除，未保存的编辑已保留。</translation>
+    </message>
 </context>
 <context>
     <name>EditorPage</name>

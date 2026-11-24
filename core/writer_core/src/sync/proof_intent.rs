@@ -162,7 +162,7 @@ impl<'a> ProofIntentSink<'a> {
                 })?;
                 let before_text = match before_snapshot {
                     CommittedBefore::Missing => None,
-                    CommittedBefore::Text(bytes) => Some(
+                    CommittedBefore::Text { bytes, .. } => Some(
                         std::str::from_utf8(bytes)
                             .map_err(|error| {
                                 crate::Error::Io(std::io::Error::other(format!(

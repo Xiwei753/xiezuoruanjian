@@ -25,8 +25,11 @@ pub(crate) enum CommittedBefore {
     NotTracked,
     /// 章节正文在 commit 前不存在（首次导入/删除已不存在）。
     Missing,
-    /// commit 前的原始字节（空文件也是空 Vec）。
-    Text(Vec<u8>),
+    /// commit 前的原始字节与版本快照（空文件也是空 Vec）。
+    Text {
+        bytes: Vec<u8>,
+        version: Option<crate::chapter::ChapterVersion>,
+    },
     /// 读取失败，证明事件必须明确报错而不是伪造 before。
     Error(String),
 }
@@ -55,7 +58,10 @@ fn capture_action_before(
                 return CommittedBefore::NotTracked;
             }
             match std::fs::read(live_root.join(rel)) {
-                Ok(bytes) => CommittedBefore::Text(bytes),
+                Ok(bytes) => {
+                    let version = chapter_version_at(live_root, rel, &bytes);
+                    CommittedBefore::Text { bytes, version }
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => CommittedBefore::Missing,
                 Err(e) => CommittedBefore::Error(format!(
                     "读取同步章节前置正文 {} 失败: {}",
@@ -118,7 +124,9 @@ pub(crate) fn build_chapter_change_receipts(
             continue;
         };
         let before = match &committed.before {
-            CommittedBefore::Text(bytes) => Some(content_version(&String::from_utf8_lossy(bytes))),
+            CommittedBefore::Text { version, bytes } => version
+                .clone()
+                .or_else(|| Some(content_version(&String::from_utf8_lossy(bytes)))),
             CommittedBefore::Missing | CommittedBefore::NotTracked | CommittedBefore::Error(_) => {
                 None
             }
@@ -127,7 +135,7 @@ pub(crate) fn build_chapter_change_receipts(
             None
         } else {
             match std::fs::read(live_root.join(&committed.path)) {
-                Ok(bytes) => Some(content_version(&String::from_utf8_lossy(&bytes))),
+                Ok(bytes) => chapter_version_at(live_root, &committed.path, &bytes),
                 Err(error) => {
                     log::warn!(
                         "chapter change receipt read after commit failed: {}: {}",
@@ -151,6 +159,26 @@ pub(crate) fn build_chapter_change_receipts(
         });
     }
     receipts
+}
+
+/// 读取章节正文同一时刻的 meta 版本；缺失/损坏时返回 None，调用方保留
+/// 只有正文摘要的旧行为，不伪造 generation/revision。
+fn chapter_version_at(
+    live_root: &Path,
+    body_rel: &Path,
+    body: &[u8],
+) -> Option<crate::chapter::ChapterVersion> {
+    let meta_path = body_rel.with_file_name("chapter.meta.json");
+    let meta: crate::chapter::Chapter =
+        serde_json::from_str(&std::fs::read_to_string(live_root.join(meta_path)).ok()?).ok()?;
+    Some(crate::chapter::ChapterVersion {
+        object_generation: meta.object_generation,
+        revision: meta.revision,
+        content_sha256: {
+            use sha2::Digest;
+            format!("{:x}", sha2::Sha256::digest(body))
+        },
+    })
 }
 
 fn is_chapter_content_path(path: &Path) -> bool {
@@ -433,7 +461,7 @@ pub(crate) fn apply_commit_plan_to_live(
             }
             crate::sync::staging::CommitAction::Delete { rel_path } => {
                 let rel_str = rel_path.to_string_lossy();
-                tx.add_delete(&rel_str);
+                tx.add_delete(&rel_str)?;
             }
         }
     }
@@ -446,7 +474,7 @@ pub(crate) fn apply_commit_plan_to_live(
             }
             crate::sync::staging::CommitAction::Delete { rel_path } => {
                 let rel_str = rel_path.to_string_lossy();
-                tx.add_delete(&rel_str);
+                tx.add_delete(&rel_str)?;
             }
         }
     }
@@ -519,7 +547,7 @@ fn apply_commit_plan_with_sync_state_merge_for_group(
             }
             crate::sync::staging::CommitAction::Delete { rel_path } => {
                 let rel_str = rel_path.to_string_lossy();
-                tx.add_delete(&rel_str);
+                tx.add_delete(&rel_str)?;
             }
         }
     }
@@ -547,7 +575,7 @@ fn apply_commit_plan_with_sync_state_merge_for_group(
             }
             crate::sync::staging::CommitAction::Delete { rel_path } => {
                 let rel_str = rel_path.to_string_lossy();
-                tx.add_delete(&rel_str);
+                tx.add_delete(&rel_str)?;
             }
         }
     }

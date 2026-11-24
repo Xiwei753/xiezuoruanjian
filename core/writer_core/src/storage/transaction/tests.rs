@@ -134,7 +134,7 @@ fn test_transaction_commit_with_delete() {
 
     let mut tx = SaveTransaction::new(ws);
     tx.add_file("sub/new_file.txt", "new content").unwrap();
-    tx.add_delete("sub/to_delete.txt");
+    tx.add_delete("sub/to_delete.txt").unwrap();
     tx.commit().unwrap();
 
     // new_file.txt 应该存在

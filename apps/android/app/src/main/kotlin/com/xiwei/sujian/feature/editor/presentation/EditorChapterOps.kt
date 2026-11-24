@@ -543,14 +543,16 @@ private sealed interface SwitchPrepareOutcome {
  */
 private suspend fun EditorViewModel.loadChapterForSwitch(session: EditorSession): LoadedChapterForSwitch? {
     return try {
-        val (content, meta) =
+        val snapshot =
             withContext(Dispatchers.IO) {
-                chapterRepository.getChapterContentWithMeta(
+                chapterRepository.getChapterContentSnapshot(
                     session.projectId,
                     session.volumeId,
                     session.chapterId,
                 )
             }
+        val content = snapshot.content
+        val meta = snapshot.meta
         com.xiwei.sujian.core.interop.diagnostics.AppDiagnosticsEvents.chapterLoad(
             session.projectId,
             session.chapterId,
@@ -563,7 +565,12 @@ private suspend fun EditorViewModel.loadChapterForSwitch(session: EditorSession)
             TargetDocumentFact(
                 targetId = targetId,
                 text = content,
-                sourceVersion = DocumentVersion(contentHash = meta.hash),
+                sourceVersion =
+                    DocumentVersion(
+                        contentHash = snapshot.version.contentSha256,
+                        repositoryRevision = snapshot.version.revision,
+                        objectGeneration = snapshot.version.objectGeneration,
+                    ),
                 baseVersion = DocumentVersion(),
                 origin = DocumentFactOrigin.REPOSITORY_LOAD,
             )

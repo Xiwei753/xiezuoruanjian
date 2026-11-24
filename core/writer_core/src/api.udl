@@ -1146,6 +1146,8 @@ interface WriterAppService {
 
     [Throws=WriterError]
     ChapterSaveReceiptDto save_chapter_content_versioned(string project_id, string volume_id, string chapter_id, string content, ChapterVersionDto? expected_version, string? base_content);
+    [Throws=WriterError]
+    ChapterSaveReceiptDto save_chapter_content_versioned_allow_empty(string project_id, string volume_id, string chapter_id, string content, ChapterVersionDto? expected_version, string? base_content);
 
     [Throws=WriterError]
     ChapterSaveReceiptDto clear_chapter_content(string project_id, string volume_id, string chapter_id);

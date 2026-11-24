@@ -1748,7 +1748,7 @@ impl crate::sync::SyncService {
         // SaveTransaction 原子提交：删除对象文件 + 更新 graph.json
         let mut txn = crate::storage::transaction::SaveTransaction::new(sync_root);
         for del_rel in &delete_rels {
-            txn.add_delete(del_rel);
+            txn.add_delete(del_rel)?;
         }
         txn.add_bytes(&graph_rel, &new_graph_bytes).map_err(|e| {
             crate::Error::Other(format!(
@@ -1905,12 +1905,12 @@ impl crate::sync::SyncService {
 
         // SaveTransaction 原子提交：删除 graph.json + 删除所有子对象文件 + 更新 index.json
         let mut txn = crate::storage::transaction::SaveTransaction::new(sync_root);
-        txn.add_delete(&graph_rel);
+        txn.add_delete(&graph_rel)?;
         // issue #902 第十六轮复核：删除 meta.json 作为整图生命周期的一部分
         let meta_rel = format!("starmaps/{}.meta.json", starmap_id);
-        txn.add_delete(&meta_rel);
+        txn.add_delete(&meta_rel)?;
         for obj_rel in &member_rels {
-            txn.add_delete(obj_rel);
+            txn.add_delete(obj_rel)?;
         }
         txn.add_bytes("starmaps/index.json", &index_bytes)
             .map_err(|e| {
@@ -2094,7 +2094,7 @@ impl crate::sync::SyncService {
         let index_bytes = Self::load_index_and_remove_starmap(sync_root, &starmap_id)?;
 
         let mut txn = crate::storage::transaction::SaveTransaction::new(sync_root);
-        txn.add_delete(&meta_rel);
+        txn.add_delete(&meta_rel)?;
         txn.add_bytes("starmaps/index.json", &index_bytes)
             .map_err(|e| {
                 crate::Error::Other(format!(

@@ -34,6 +34,8 @@ import androidx.compose.runtime.Immutable
 data class DocumentVersion(
     val contentHash: String = "",
     val repositoryRevision: Long = 0L,
+    /** Core 章节对象 generation；删除重建后改变。 */
+    val objectGeneration: String = "",
     val syncCommitId: String? = null,
     val parentVersion: DocumentVersion? = null,
 ) {

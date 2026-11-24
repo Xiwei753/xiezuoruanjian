@@ -64,6 +64,11 @@ pub struct TransactionEntry {
     /// 字段时为 `None`，保持旧恢复语义。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_after_hash: Option<String>,
+    /// 事务准备时目标文件的 MD5。commit 前目标已变化则拒绝覆盖。
+    /// 旧 manifest 无此字段时为 `None`，表示“当时目标不存在”；若目标在
+    /// commit 前出现，同样视为冲突。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_before_hash: Option<String>,
 }
 
 /// 事务生命周期阶段。

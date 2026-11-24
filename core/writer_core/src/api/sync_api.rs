@@ -2149,13 +2149,14 @@ impl WriterCoreApi {
                     Some(target_digest.clone()),
                     provider,
                 );
-                let (target_with_conflicts, target_committed_paths) = self
+                let (target_with_conflicts, target_committed_paths, target_chapter_changes) = self
                     .commit_transferred_target(
                         target_index,
                         prepared_failure,
                         &staging_runs,
                         &target_sync_result,
                         &mut proof_recovery_state,
+                        diagnostic_operation_id,
                     );
                 let commit_outcome =
                     crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
@@ -2291,11 +2292,7 @@ impl WriterCoreApi {
                     serde_json::Value::Bool(!target_committed_paths.is_empty()),
                 );
                 record_sync_diagnostic("sync.target.end", "sync.target", target_end_fields);
-                chapter_changes.extend(crate::sync::commit_helpers::build_chapter_change_receipts(
-                    &self.app_data_root,
-                    &target_committed_paths,
-                    diagnostic_operation_id,
-                ));
+                chapter_changes.extend(target_chapter_changes);
                 all_targets.push(target_with_conflicts);
                 all_committed_paths
                     .extend(target_committed_paths.into_iter().map(|path| path.path));
@@ -2415,19 +2412,24 @@ impl WriterCoreApi {
         staging_runs: &[crate::sync::staging::StagingRun],
         target_sync_result: &crate::sync::types::TargetSyncResult,
         proof_recovery_state: &mut crate::sync::proof_intent::ProofRecoveryState,
+        operation_id: &str,
     ) -> (
         crate::sync::types::TargetSyncResult,
         Vec<crate::sync::commit_helpers::CommittedPath>,
+        Vec<crate::chapter::ChapterChangeReceipt>,
     ) {
         if prepared_failure {
             // 迁移失败时 staging 未 seed，本组本次不上传也不 Commit。
-            return (target_sync_result.clone(), Vec::new());
+            return (target_sync_result.clone(), Vec::new(), Vec::new());
         }
         match staging_runs.get(target_index) {
-            Some(run) => {
-                self.commit_target_after_transfer(run, target_sync_result, proof_recovery_state)
-            }
-            None => (target_sync_result.clone(), Vec::new()),
+            Some(run) => self.commit_target_after_transfer(
+                run,
+                target_sync_result,
+                proof_recovery_state,
+                operation_id,
+            ),
+            None => (target_sync_result.clone(), Vec::new(), Vec::new()),
         }
     }
 
@@ -2436,9 +2438,11 @@ impl WriterCoreApi {
         run: &crate::sync::staging::StagingRun,
         target_sync_result: &crate::sync::types::TargetSyncResult,
         proof_recovery_state: &mut crate::sync::proof_intent::ProofRecoveryState,
+        operation_id: &str,
     ) -> (
         crate::sync::types::TargetSyncResult,
         Vec<crate::sync::commit_helpers::CommittedPath>,
+        Vec<crate::chapter::ChapterChangeReceipt>,
     ) {
         // Issue #1039 复核：同步 Commit 与独立 MCP 写事务必须共享应用数据根上的
         // 跨进程工作区锁。锁必须先于 state_lock 获取，并覆盖 live 读取、Store
@@ -2455,7 +2459,7 @@ impl WriterCoreApi {
                 target_with_error.result.error = Some(format!(
                     "cannot acquire workspace write lock before sync commit: {error}"
                 ));
-                return (target_with_error, Vec::new());
+                return (target_with_error, Vec::new(), Vec::new());
             }
         };
 
@@ -2478,7 +2482,7 @@ impl WriterCoreApi {
                     "flush_all_starmap_stores before commit failed: {}",
                     e
                 ));
-                return (target_with_conflicts, Vec::new());
+                return (target_with_conflicts, Vec::new(), Vec::new());
             }
 
             let sync_sources =
@@ -2491,7 +2495,7 @@ impl WriterCoreApi {
                     "sync_proof_recovery_failed".to_string(),
                 );
                 target_with_error.result.error = Some(error);
-                return (target_with_error, Vec::new());
+                return (target_with_error, Vec::new(), Vec::new());
             }
             let intent_root = core.sync_proof_intent_root();
             let intent_sink =
@@ -2514,7 +2518,7 @@ impl WriterCoreApi {
                     target_with_conflicts.result.error = Some(format!(
                         "上次同步正文已落盘但证明事件尚未恢复；先完成证明恢复再同步该作品: {detail}"
                     ));
-                    return (target_with_conflicts, Vec::new());
+                    return (target_with_conflicts, Vec::new(), Vec::new());
                 }
             }
             let (commit_result, conflicts, committed_paths) =
@@ -2561,7 +2565,7 @@ impl WriterCoreApi {
                     };
                     let before_text = match &committed.before {
                         crate::sync::commit_helpers::CommittedBefore::Missing => None,
-                        crate::sync::commit_helpers::CommittedBefore::Text(bytes) => {
+                        crate::sync::commit_helpers::CommittedBefore::Text { bytes, .. } => {
                             match std::str::from_utf8(bytes) {
                                 Ok(text) => Some(text.to_string()),
                                 Err(e) => {
@@ -2716,7 +2720,14 @@ impl WriterCoreApi {
                     Some(format!("store coordination after commit failed: {}", e));
             }
 
-            (target_with_conflicts, committed_paths)
+            // receipt 在持有 workspace 锁时按真实 meta/正文生成；释放锁后不再
+            // 回读磁盘，避免晚到的外部写入污染本次同步结果。
+            let chapter_receipts = crate::sync::commit_helpers::build_chapter_change_receipts(
+                &self.app_data_root,
+                &committed_paths,
+                operation_id,
+            );
+            (target_with_conflicts, committed_paths, chapter_receipts)
         })
     }
 

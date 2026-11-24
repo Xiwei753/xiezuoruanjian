@@ -94,9 +94,20 @@ pub struct ChapterVersion {
     pub content_sha256: String,
 }
 
-impl ChapterVersion {
-    fn has_digest(&self) -> bool {
-        !self.content_sha256.is_empty()
+/// 与正文同一 durable journal 的证明事件投影。
+///
+/// 事件由编辑热路径产生，但只有正文提交决议 durable 后才允许写入统计/证明；
+/// 崩溃后由投影 worker 从 journal 幂等重放。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterProofProjection {
+    pub event: crate::writing_stats::WritingInputEvent,
+    pub baseline_text: Option<String>,
+}
+
+impl ChapterProofProjection {
+    pub fn event_id(&self) -> &str {
+        &self.event.event_id
     }
 }
 
@@ -138,6 +149,8 @@ pub struct ChapterCommitRequest {
     pub source: ChapterCommitSource,
     /// 同一次编辑批次固定的事件 ID。journal durable 后由调用方补投影。
     pub event_ids: Vec<String>,
+    /// 原始证明事件；与正文、meta 同一决议 durable，提交后由 worker 写入。
+    pub proof_events: Vec<ChapterProofProjection>,
     /// 与正文同一提交的附加文件（annotation 等），project-relative 路径。
     pub additional_files: Vec<(String, String)>,
     pub allow_empty_overwrite: bool,
@@ -156,6 +169,7 @@ impl ChapterCommitRequest {
             mutation: ChapterMutationKind::Replace,
             source: ChapterCommitSource::Api,
             event_ids: Vec::new(),
+            proof_events: Vec::new(),
             additional_files: Vec::new(),
             allow_empty_overwrite: false,
             transaction_id: None,
@@ -236,10 +250,12 @@ pub enum ChapterCommitOutcome {
 }
 
 mod journal;
+mod publish;
+pub(crate) use journal::commit_chapter_with_guard;
 pub(super) use journal::read_chapter_state;
 pub use journal::{
-    commit_chapter, mark_chapter_commit_projection, read_chapter_version,
-    recover_pending_chapter_commits,
+    mark_chapter_commit_projection, pending_chapter_proof_events, read_chapter_state_recovering,
+    read_chapter_version, read_chapter_version_recovering, recover_pending_chapter_commits,
 };
 #[cfg(test)]
 mod tests;

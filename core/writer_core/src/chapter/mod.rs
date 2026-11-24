@@ -40,7 +40,8 @@ pub use changes::*;
 pub(crate) mod commit;
 pub use commit::{
     ChapterChangeReceipt, ChapterCommitOutcome, ChapterCommitReceipt, ChapterCommitRequest,
-    ChapterCommitSource, ChapterConflict, ChapterKey, ChapterMutationKind, ChapterVersion,
+    ChapterCommitSource, ChapterConflict, ChapterKey, ChapterMutationKind, ChapterProofProjection,
+    ChapterVersion,
 };
 
 mod save;
@@ -379,7 +380,7 @@ pub fn clear_chapter_content_verified(
 #[allow(clippy::too_many_arguments)]
 pub fn save_chapter_verified_with_version(
     project_root: &Path,
-    app_data_root: Option<&Path>,
+    workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     volume_id: &str,
     chapter_id: &str,
     content: &str,
@@ -389,7 +390,7 @@ pub fn save_chapter_verified_with_version(
 ) -> Result<ChapterSaveReceipt> {
     save_chapter_verified_with_options_and_files(
         project_root,
-        app_data_root,
+        workspace_lock,
         volume_id,
         chapter_id,
         content,
@@ -398,6 +399,7 @@ pub fn save_chapter_verified_with_version(
         expected_version,
         base_content,
         &[],
+        &[],
     )
     .map(|outcome| outcome.receipt)
 }
@@ -405,7 +407,7 @@ pub fn save_chapter_verified_with_version(
 /// 清空章节正文并核对 base 版本。
 pub fn clear_chapter_content_verified_with_version(
     project_root: &Path,
-    app_data_root: Option<&Path>,
+    workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     volume_id: &str,
     chapter_id: &str,
     expected_version: Option<ChapterVersion>,
@@ -413,7 +415,7 @@ pub fn clear_chapter_content_verified_with_version(
 ) -> Result<ChapterSaveReceipt> {
     save_chapter_verified_with_version(
         project_root,
-        app_data_root,
+        workspace_lock,
         volume_id,
         chapter_id,
         "",
@@ -440,6 +442,7 @@ pub(super) fn save_chapter_verified_with_options(
         &[],
         None,
         None,
+        &[],
         &[],
     )
     .map(|outcome| outcome.receipt)

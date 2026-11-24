@@ -9,8 +9,8 @@ use crate::facade::WriterCore;
 
 pub type ApiResult<T> = Result<T, WriterError>;
 
-mod ai_usage_ops;
 mod agent_ops;
+mod ai_usage_ops;
 mod annotation_ops;
 mod contribution_ops;
 mod correction_ops;
@@ -125,6 +125,8 @@ impl WriterCoreApi {
         device_id: &str,
         platform: writer_platform_api::PlatformKind,
     ) {
+        // 启动恢复需要发布 journal 投影，必须与写事务保持同一锁顺序。
+        let _workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root).ok();
         let core = self.core_write();
         if let Err(error) = core.set_platform_identity(device_id, platform) {
             log::error!("[writing_stats] 纠正设备平台身份失败: {error}");
@@ -135,6 +137,9 @@ impl WriterCoreApi {
             if let Err(error) = core.recover_pending_sync_proof_intents() {
                 eprintln!("[writing_stats] 启动恢复同步证明意图失败: {error}");
             }
+        }
+        if let Err(error) = core.recover_pending_chapter_proof_projections() {
+            eprintln!("[writing_stats] 启动恢复正文证明投影失败: {error}");
         }
     }
 

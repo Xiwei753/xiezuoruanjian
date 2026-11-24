@@ -720,6 +720,14 @@ Rectangle {
     // 避免同步删除当前章节/分卷/作品后编辑器仍残留已删除正文。
     function reconcileActiveChapter(selected, chapterChanges) {
         if (!selected || !selected.chapterId) {
+            var removedRead = editorController.readEditorPlainText();
+            var removedText = removedRead ? String(removedRead.text || "") : "";
+            if (editorController.chapterId
+                    && removedText !== editorController.lastSavedEditorText) {
+                editorController.chapterSaveConflict(
+                    qsTr("当前章节已被删除，未保存的编辑已保留。"));
+                return;
+            }
             editorController.clearActiveChapter();
             return;
         }

@@ -288,7 +288,12 @@ impl AppBackend {
             || !expected.content_sha256.is_empty();
         let expected = has_expected.then_some(expected);
         let base = (!base_content.is_empty()).then(|| base_content.to_string());
-        match api.save_chapter_content_versioned(&p, &v, &c, &text_str, expected, base) {
+        let save_result = if allow_empty_overwrite {
+            api.save_chapter_content_versioned_allow_empty(&p, &v, &c, &text_str, expected, base)
+        } else {
+            api.save_chapter_content_versioned(&p, &v, &c, &text_str, expected, base)
+        };
+        match save_result {
             Ok(receipt) => {
                 self.debug_log(
                     "chapter",

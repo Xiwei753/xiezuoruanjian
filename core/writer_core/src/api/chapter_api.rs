@@ -450,8 +450,10 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<ChapterContentDto> {
+        let workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
+            .map_err(WriterError::from)?;
         self.core_write()
-            .open_chapter(project_id, volume_id, chapter_id)
+            .open_chapter_recovering(project_id, volume_id, chapter_id, &workspace_lock)
             .map(Into::into)
             .map_err(Into::into)
     }
@@ -463,8 +465,10 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<ChapterVersionDto> {
+        let workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
+            .map_err(WriterError::from)?;
         self.core_write()
-            .read_chapter_version(project_id, volume_id, chapter_id)
+            .read_chapter_version_recovering(project_id, volume_id, chapter_id, &workspace_lock)
             .map(Into::into)
             .map_err(Into::into)
     }
@@ -505,15 +509,36 @@ impl WriterCoreApi {
         expected_version: Option<ChapterVersionDto>,
         base_content: Option<String>,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        // 带 expected_version 的保存已由版本 CAS 保护，空正文是合法内容；
-        // 仅无版本的旧入口继续拦截空字符串覆盖，避免误清空。
-        let allow_empty_overwrite = expected_version.is_some();
         self.save_chapter_content_internal(
             project_id,
             volume_id,
             chapter_id,
             content,
-            allow_empty_overwrite,
+            false,
+            false,
+            expected_version,
+            base_content.as_deref(),
+            &[],
+        )
+        .map(|(dto, _)| dto)
+    }
+
+    /// 保存正文并允许显式清空（编辑器删除全部文字）。版本 CAS 仍必须完整。
+    pub fn save_chapter_content_versioned_allow_empty(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<String>,
+    ) -> ApiResult<ChapterSaveReceiptDto> {
+        self.save_chapter_content_internal(
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+            true,
             false,
             expected_version,
             base_content.as_deref(),
@@ -627,6 +652,10 @@ impl WriterCoreApi {
         base_content: Option<&str>,
         projection_ids: &[String],
     ) -> ApiResult<(ChapterSaveReceiptDto, crate::chapter::ChapterSaveReceipt)> {
+        // 锁顺序固定为 workspace → Core → store；不能在持有 Core 写锁后再申请
+        // workspace，否则与同步提交线程形成 ABBA。
+        let workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
+            .map_err(WriterError::from)?;
         let pending_annotations =
             self.prepare_annotation_edit_save(project_id, chapter_id, content)?;
         let additional_files = pending_annotations
@@ -646,6 +675,7 @@ impl WriterCoreApi {
                 expected_version,
                 base_content,
                 projection_ids,
+                Some(&workspace_lock),
             )
             .map_err(WriterError::from)?;
 

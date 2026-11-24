@@ -206,6 +206,25 @@ impl super::WriterAppService {
         )
     }
 
+    pub fn save_chapter_content_versioned_allow_empty(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        content: String,
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<String>,
+    ) -> Result<ChapterSaveReceiptDto, WriterError> {
+        self.api.save_chapter_content_versioned_allow_empty(
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            &content,
+            expected_version,
+            base_content,
+        )
+    }
+
     pub fn clear_chapter_content(
         &self,
         project_id: String,

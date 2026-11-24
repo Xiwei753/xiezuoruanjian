@@ -54,6 +54,28 @@ class ChapterRepository(
         }
     }
 
+    fun getChapterContentSnapshot(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ): ChapterContentSnapshot {
+        return when (val result = writingBridge.openChapter(projectId, volumeId, chapterId)) {
+            is BridgeResult.Success ->
+                ChapterContentSnapshot(
+                    content = result.data.content,
+                    meta = result.data.meta,
+                    version = result.data.version,
+                )
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_get_chapter_content_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
+        }
+    }
+
     fun updateChapterNote(
         projectId: String,
         volumeId: String,
@@ -94,7 +116,7 @@ class ChapterRepository(
         volumeId: String,
         chapterId: String,
         content: String,
-        expectedVersion: ChapterVersion? = null,
+        expectedVersion: ChapterVersion?,
     ): BridgeResult<ChapterSaveReceipt> =
         withContext(ioDispatcher) {
             writingBridge.saveChapterContent(projectId, volumeId, chapterId, content, expectedVersion)
@@ -104,11 +126,11 @@ class ChapterRepository(
      * #624 评论12 第3项：清空同样经注入的 IO dispatcher — Repository 自己保证
      * main-safe，调用层不要各自再猜线程。
      */
-    suspend fun clearChapterContent(
+    override suspend fun clearChapterContent(
         projectId: String,
         volumeId: String,
         chapterId: String,
-        expectedVersion: ChapterVersion? = null,
+        expectedVersion: ChapterVersion?,
     ): BridgeResult<ChapterSaveReceipt> =
         withContext(ioDispatcher) {
             writingBridge.clearChapterContent(projectId, volumeId, chapterId, expectedVersion)
@@ -124,3 +146,9 @@ class ChapterRepository(
             writingBridge.calculateWordCount(text)
         }
 }
+
+data class ChapterContentSnapshot(
+    val content: String,
+    val meta: ChapterMeta,
+    val version: ChapterVersion,
+)

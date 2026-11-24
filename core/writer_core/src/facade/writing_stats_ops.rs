@@ -208,9 +208,135 @@ impl super::WriterCore {
             parent_event_id: input.parent_event_id.clone(),
         });
 
-        self.get_stats_api()
-            .record_proof_event(event, input.baseline_text.as_deref())?;
+        // 证明事件先留在 Core，随下一次正文提交写入同一 durable journal。
+        // 只有 journal 决议成功后才允许写统计/证明，链头不能超越已提交正文。
+        let key = format!(
+            "{}/{}/{}",
+            input.project_id, input.volume_id, input.chapter_id
+        );
+        self.enqueue_pending_editor_proof(
+            key,
+            crate::chapter::ChapterProofProjection {
+                event,
+                baseline_text: input.baseline_text.clone(),
+            },
+        );
         Ok(())
+    }
+
+    fn enqueue_pending_editor_proof(
+        &self,
+        key: String,
+        projection: crate::chapter::ChapterProofProjection,
+    ) {
+        if let Ok(mut pending) = self.pending_editor_proof.lock() {
+            let events = pending.entry(key).or_default();
+            if !events
+                .iter()
+                .any(|existing| existing.event_id() == projection.event_id())
+            {
+                events.push(projection);
+            }
+        }
+    }
+
+    pub(crate) fn pending_editor_proof_for(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> Vec<crate::chapter::ChapterProofProjection> {
+        let key = format!("{project_id}/{volume_id}/{chapter_id}");
+        self.pending_editor_proof
+            .lock()
+            .ok()
+            .and_then(|pending| pending.get(&key).cloned())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn clear_pending_editor_proof(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        event_ids: &std::collections::HashSet<String>,
+    ) {
+        let key = format!("{project_id}/{volume_id}/{chapter_id}");
+        if let Ok(mut pending) = self.pending_editor_proof.lock() {
+            if let Some(events) = pending.get_mut(&key) {
+                events.retain(|event| !event_ids.contains(event.event_id()));
+                if events.is_empty() {
+                    pending.remove(&key);
+                }
+            }
+        }
+    }
+
+    /// 启动/工作区打开时补写 journal 中滞留的正文证明投影。
+    /// 只扫描确实存在 journal 的作品；普通打开章节不触发。
+    pub fn recover_pending_chapter_proof_projections(&self) -> Result<()> {
+        let Ok(entries) = std::fs::read_dir(&self.projects_root) else {
+            return Ok(());
+        };
+        for entry in entries.flatten() {
+            let project_root = entry.path();
+            if !project_root.is_dir() {
+                continue;
+            }
+            let recovered =
+                match crate::chapter::commit::recover_pending_chapter_commits(&project_root) {
+                    Ok(recovered) => recovered,
+                    Err(error) => {
+                        log::warn!(
+                            "chapter commit recovery failed for {}: {error}",
+                            project_root.display()
+                        );
+                        continue;
+                    }
+                };
+            for item in recovered {
+                if !item.pending_projections.is_empty() {
+                    self.apply_pending_chapter_proof(&project_root, &item.transaction_id);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 把 journal 中 durable 的证明事件幂等写入统计，并逐条确认投影。
+    /// 失败时保留 journal/pending，不把正文判为保存失败。
+    pub(crate) fn apply_pending_chapter_proof(
+        &self,
+        project_root: &std::path::Path,
+        transaction_id: &str,
+    ) {
+        let Ok(events) =
+            crate::chapter::commit::pending_chapter_proof_events(project_root, transaction_id)
+        else {
+            return;
+        };
+        let stats = self.get_stats_api();
+        for projection in events {
+            let event_id = projection.event_id().to_string();
+            match stats.record_proof_event(projection.event, projection.baseline_text.as_deref()) {
+                Ok(_) => {
+                    let _ = crate::chapter::commit::mark_chapter_commit_projection(
+                        project_root,
+                        transaction_id,
+                        &event_id,
+                    );
+                }
+                Err(error) => {
+                    log::warn!(
+                        "chapter proof projection failed, journal retained: tx={} event={} error={}",
+                        transaction_id,
+                        event_id,
+                        error
+                    );
+                    break;
+                }
+            }
+        }
     }
 
     /// 记录一次“同步把正文改成 after_text”的明确事实。

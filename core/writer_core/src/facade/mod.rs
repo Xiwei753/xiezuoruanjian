@@ -96,6 +96,10 @@ pub struct WriterCore {
     /// 是否存在未完成的同步证明意图。编辑/同步热路径只在为 true 时才扫描
     /// 意图目录，避免每次按键都做文件系统枚举。
     pub(crate) proof_intents_pending: std::sync::atomic::AtomicBool,
+    /// 尚未随正文提交的编辑证明事件。保存成功后写入同一 journal；提交失败
+    /// 或冲突时保留，下一次保存继续携带，避免证明链超越已提交正文。
+    pub(crate) pending_editor_proof:
+        std::sync::Mutex<HashMap<String, Vec<crate::chapter::ChapterProofProjection>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -160,6 +164,7 @@ impl WriterCore {
             preferred_device_id: std::sync::Mutex::new(None),
             preferred_platform: std::sync::Mutex::new(None),
             proof_intents_pending: std::sync::atomic::AtomicBool::new(proof_intents_pending),
+            pending_editor_proof: std::sync::Mutex::new(HashMap::new()),
         }
     }
 

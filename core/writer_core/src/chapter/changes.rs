@@ -142,6 +142,8 @@ fn save_chapter_verified_with_changes_inner(
         None,
         None,
         &[],
+        None,
+        &[],
     )
 }
 
@@ -157,6 +159,7 @@ pub fn save_chapter_verified_with_changes_versioned(
     base_content: Option<&str>,
     projection_ids: &[String],
     workspace_root: &Path,
+    workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
 ) -> Result<(
     ChapterSaveReceipt,
     crate::storage::workspace_git::WorkspaceChangeSet,
@@ -172,6 +175,8 @@ pub fn save_chapter_verified_with_changes_versioned(
         expected_version,
         base_content,
         projection_ids,
+        workspace_lock,
+        &[],
     )
 }
 
@@ -188,6 +193,7 @@ pub fn save_chapter_verified_with_changes_and_files_versioned(
     base_content: Option<&str>,
     projection_ids: &[String],
     workspace_root: &Path,
+    workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
 ) -> Result<(
     ChapterSaveReceipt,
     crate::storage::workspace_git::WorkspaceChangeSet,
@@ -203,6 +209,43 @@ pub fn save_chapter_verified_with_changes_and_files_versioned(
         expected_version,
         base_content,
         projection_ids,
+        workspace_lock,
+        &[],
+    )
+}
+
+/// 保存正文/附加文件，并把原始证明事件写入同一 commit journal。
+#[allow(clippy::too_many_arguments)]
+pub fn save_chapter_verified_with_changes_and_files_versioned_with_proof(
+    project_root: &Path,
+    volume_id: &str,
+    chapter_id: &str,
+    content: &str,
+    allow_empty_overwrite: bool,
+    additional_files: &[(String, String)],
+    expected_version: Option<ChapterVersion>,
+    base_content: Option<&str>,
+    projection_ids: &[String],
+    workspace_root: &Path,
+    workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
+    proof_events: &[crate::chapter::commit::ChapterProofProjection],
+) -> Result<(
+    ChapterSaveReceipt,
+    crate::storage::workspace_git::WorkspaceChangeSet,
+)> {
+    save_chapter_verified_with_changes_inner_versioned(
+        project_root,
+        volume_id,
+        chapter_id,
+        content,
+        allow_empty_overwrite,
+        additional_files,
+        workspace_root,
+        expected_version,
+        base_content,
+        projection_ids,
+        workspace_lock,
+        proof_events,
     )
 }
 
@@ -218,13 +261,15 @@ fn save_chapter_verified_with_changes_inner_versioned(
     expected_version: Option<ChapterVersion>,
     base_content: Option<&str>,
     projection_ids: &[String],
+    workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
+    proof_events: &[crate::chapter::commit::ChapterProofProjection],
 ) -> Result<(
     ChapterSaveReceipt,
     crate::storage::workspace_git::WorkspaceChangeSet,
 )> {
     let outcome = save_chapter_verified_with_options_and_files(
         project_root,
-        Some(workspace_root),
+        workspace_lock,
         volume_id,
         chapter_id,
         content,
@@ -233,6 +278,7 @@ fn save_chapter_verified_with_changes_inner_versioned(
         expected_version,
         base_content,
         projection_ids,
+        proof_events,
     )?;
 
     // 变更集只包含保存事务真实写过的文件（project-relative），
@@ -811,7 +857,7 @@ fn move_chapter_transaction(
         tx.add_file(rel, content)?;
     }
     for rel in &plan.source_delete_rels {
-        tx.add_delete(rel);
+        tx.add_delete(rel)?;
     }
     Ok(tx)
 }

@@ -29,12 +29,12 @@ fn project_id_for(project_root: &Path) -> String {
 /// Save the chapter and additional project-local records through the single
 /// versioned commit protocol.
 ///
-/// `app_data_root` 用于获取跨进程工作区写锁；直接调用（测试/导入）可传
-/// `None`，但生产写入入口必须传入。
+/// `workspace_lock` 必须是调用方已持有的跨进程工作区写锁；直接调用
+/// （测试/导入）可传 `None`，但生产写入入口必须传入。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn save_chapter_verified_with_options_and_files(
     project_root: &Path,
-    app_data_root: Option<&Path>,
+    workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     volume_id: &str,
     chapter_id: &str,
     content: &str,
@@ -43,6 +43,7 @@ pub(crate) fn save_chapter_verified_with_options_and_files(
     expected_version: Option<ChapterVersion>,
     base_content: Option<&str>,
     projection_ids: &[String],
+    proof_events: &[super::commit::ChapterProofProjection],
 ) -> Result<ChapterSaveOutcome> {
     let key = ChapterKey::new(
         project_id_for(project_root),
@@ -55,6 +56,7 @@ pub(crate) fn save_chapter_verified_with_options_and_files(
     request.expected = expected_version;
     request.base_content = base_content.map(str::to_string);
     request.projection_ids = projection_ids.to_vec();
+    request.proof_events = proof_events.to_vec();
     request.source = ChapterCommitSource::Api;
     request.mutation = if content.is_empty() {
         ChapterMutationKind::Clear
@@ -62,7 +64,7 @@ pub(crate) fn save_chapter_verified_with_options_and_files(
         ChapterMutationKind::Replace
     };
 
-    match super::commit::commit_chapter(project_root, app_data_root, request)? {
+    match super::commit::commit_chapter_with_guard(project_root, workspace_lock, request)? {
         ChapterCommitOutcome::Committed(receipt) => {
             let path = receipt.key.body_relative_path().to_string();
             Ok(ChapterSaveOutcome {

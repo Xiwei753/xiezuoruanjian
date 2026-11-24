@@ -87,11 +87,18 @@ impl SaveTransaction {
         let staging_filename = format!("file_{}", idx);
         let staging_path = self.tx_dir.join(&staging_filename);
         crate::storage::atomic_write_bytes(&staging_path, content)?;
+        let target_path = self.target_root.join(target_relative);
+        let expected_before_hash = match fs::read(&target_path) {
+            Ok(existing) => Some(format!("{:x}", md5::compute(existing))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
         self.entries.push(TransactionEntry {
             staging_filename,
             target_relative: target_relative.to_string(),
             is_delete: false,
             expected_after_hash: Some(format!("{:x}", md5::compute(content))),
+            expected_before_hash,
         });
         Ok(())
     }
@@ -102,13 +109,21 @@ impl SaveTransaction {
 
     /// 记录一条删除操作。
     /// commit 时会删除 `target_relative` 对应的文件；崩溃恢复时也会重放删除。
-    pub fn add_delete(&mut self, target_relative: &str) {
+    pub fn add_delete(&mut self, target_relative: &str) -> Result<()> {
+        let target_path = self.target_root.join(target_relative);
+        let expected_before_hash = match fs::read(&target_path) {
+            Ok(existing) => Some(format!("{:x}", md5::compute(existing))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
         self.entries.push(TransactionEntry {
             staging_filename: String::new(),
             target_relative: target_relative.to_string(),
             is_delete: true,
             expected_after_hash: None,
+            expected_before_hash,
         });
+        Ok(())
     }
 
     /// 启用备份模式。
@@ -236,11 +251,32 @@ impl SaveTransaction {
         clippy::too_many_arguments,
         clippy::type_complexity
     )]
+    /// 在写任何 live 投影前核对每个目标仍与准备事务时一致。
+    fn verify_targets_unchanged(&self) -> Result<()> {
+        for entry in &self.entries {
+            let target_path = self.target_root.join(&entry.target_relative);
+            let current = match fs::read(&target_path) {
+                Ok(bytes) => Some(format!("{:x}", md5::compute(bytes))),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            if current != entry.expected_before_hash {
+                return Err(crate::error::Error::Other(format!(
+                    "transaction target changed before commit, refusing to overwrite: {}",
+                    entry.target_relative
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub fn commit(&mut self) -> Result<()> {
         if self.entries.is_empty() {
             self.cleanup();
             return Ok(());
         }
+
+        self.verify_targets_unchanged()?;
 
         // 证明恢复材料必须先于 manifest 和正文落盘：意图文件可能被单独清理，
         // 但事务目录里的这份材料要与正文提交同生命周期。

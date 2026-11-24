@@ -1786,8 +1786,9 @@ QtObject {
 
     function committedChapterVersionMatches(version) {
         if (!version) return false;
-        return String(version.contentSha256 || "") === committedChapterSha256
-                && Number(version.revision || 0) === committedChapterRevision;
+        return String(version.objectGeneration || "") === committedChapterGeneration
+                && Number(version.revision || 0) === committedChapterRevision
+                && String(version.contentSha256 || "") === committedChapterSha256;
     }
 
     // 保存成功后只清除 receipt 已确认的这批编辑，不清除随后输入的内容。
@@ -1844,6 +1845,14 @@ QtObject {
         }
         if (!receipt.contentChanged && !receipt.deleted) return false;
         if (receipt.deleted) {
+            var deletedRead = readEditorPlainText();
+            var deletedText = deletedRead ? String(deletedRead.text || "") : "";
+            if (deletedText !== lastSavedEditorText) {
+                logWriterWarning("chapter_deleted_while_dirty",
+                    "chapter=" + chapterId + ", kept_buffer=true");
+                chapterSaveConflict(qsTr("当前章节已被删除，未保存的编辑已保留。"));
+                return false;
+            }
             clearActiveChapter();
             return true;
         }
