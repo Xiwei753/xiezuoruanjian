@@ -505,12 +505,15 @@ impl WriterCoreApi {
         expected_version: Option<ChapterVersionDto>,
         base_content: Option<String>,
     ) -> ApiResult<ChapterSaveReceiptDto> {
+        // 带 expected_version 的保存已由版本 CAS 保护，空正文是合法内容；
+        // 仅无版本的旧入口继续拦截空字符串覆盖，避免误清空。
+        let allow_empty_overwrite = expected_version.is_some();
         self.save_chapter_content_internal(
             project_id,
             volume_id,
             chapter_id,
             content,
-            false,
+            allow_empty_overwrite,
             false,
             expected_version,
             base_content.as_deref(),
