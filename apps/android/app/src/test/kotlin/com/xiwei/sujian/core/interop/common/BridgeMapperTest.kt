@@ -7,6 +7,7 @@ import org.junit.Test
 import uniffi.writer_core.ChapterContentDto
 import uniffi.writer_core.ChapterMetaDto
 import uniffi.writer_core.ChapterSaveReceiptDto
+import uniffi.writer_core.ChapterVersionDto
 import uniffi.writer_core.ProjectDto
 import uniffi.writer_core.ProjectStatsDto
 import uniffi.writer_core.RecentEditDto
@@ -115,7 +116,12 @@ class BridgeMapperTest {
                 "h1",
                 "a note",
             )
-        val dto = ChapterContentDto(metaDto, "Hello world")
+        val dto =
+            ChapterContentDto(
+                metaDto,
+                "Hello world",
+                ChapterVersionDto("gen-1", 3U, "sha256"),
+            )
         val model = dto.toModel()
         assertEquals("ch1", model.meta.id)
         assertEquals("Ch", model.meta.title)
@@ -138,6 +144,7 @@ class BridgeMapperTest {
                 "def456",
                 "2023-01-02T00:00:00Z",
                 7U,
+                ChapterVersionDto("gen-1", 4U, "sha256"),
             )
         val model = dto.toModel()
         assertEquals("projects/p1/volumes/v1/chapters/ch1.md", model.chapterRelativePath)

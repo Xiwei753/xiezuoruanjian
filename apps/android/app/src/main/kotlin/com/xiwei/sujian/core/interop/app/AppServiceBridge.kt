@@ -183,21 +183,25 @@ open class AppServiceBridge(
         volumeId: String,
         chapterId: String,
         content: String,
+        expectedVersion: com.xiwei.sujian.feature.project.data.model.ChapterVersion? = null,
     ) = chapterBridge.saveChapterContent(
         projectId,
         volumeId,
         chapterId,
         content,
+        expectedVersion,
     )
 
     fun clearChapterContent(
         projectId: String,
         volumeId: String,
         chapterId: String,
+        expectedVersion: com.xiwei.sujian.feature.project.data.model.ChapterVersion? = null,
     ) = chapterBridge.clearChapterContent(
         projectId,
         volumeId,
         chapterId,
+        expectedVersion,
     )
 
     fun updateChapterNote(

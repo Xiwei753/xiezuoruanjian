@@ -1,6 +1,6 @@
 use crate::api::{
-    ChapterContentDto, ChapterMetaDto, ChapterSaveReceiptDto, ProjectWorkspaceSnapshotDto,
-    VolumeDto, WriterError,
+    ChapterContentDto, ChapterMetaDto, ChapterSaveReceiptDto, ChapterVersionDto,
+    ProjectWorkspaceSnapshotDto, VolumeDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -187,6 +187,25 @@ impl super::WriterAppService {
         )
     }
 
+    pub fn save_chapter_content_versioned(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        content: String,
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<String>,
+    ) -> Result<ChapterSaveReceiptDto, WriterError> {
+        self.api.save_chapter_content_versioned(
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            &content,
+            expected_version,
+            base_content,
+        )
+    }
+
     pub fn clear_chapter_content(
         &self,
         project_id: String,
@@ -195,6 +214,23 @@ impl super::WriterAppService {
     ) -> Result<ChapterSaveReceiptDto, WriterError> {
         self.api
             .clear_chapter_content(&project_id, &volume_id, &chapter_id)
+    }
+
+    pub fn clear_chapter_content_versioned(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<String>,
+    ) -> Result<ChapterSaveReceiptDto, WriterError> {
+        self.api.clear_chapter_content_versioned(
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            expected_version,
+            base_content,
+        )
     }
 
     pub fn update_chapter_note(

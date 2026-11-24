@@ -49,9 +49,16 @@ data class ChapterMeta(
     val note: String? = null,
 )
 
+data class ChapterVersion(
+    val objectGeneration: String = "",
+    val revision: Long = 0L,
+    val contentSha256: String = "",
+)
+
 data class ChapterOpenResult(
     val meta: ChapterMeta,
     val content: String,
+    val version: ChapterVersion = ChapterVersion(),
 )
 
 typealias ChapterContent = ChapterOpenResult
@@ -63,6 +70,7 @@ data class ChapterSaveReceipt(
     val metaHash: String,
     val updatedAt: String,
     val wordCount: Int,
+    val version: ChapterVersion = ChapterVersion(),
 )
 
 data class RecentEdit(

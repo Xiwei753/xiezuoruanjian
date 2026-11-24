@@ -3,6 +3,7 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.project.data.model.ChapterContent
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
+import com.xiwei.sujian.feature.project.data.model.ChapterVersion
 
 class WritingBridge(private val appService: AppServiceBridge) {
     fun openChapter(
@@ -18,16 +19,18 @@ class WritingBridge(private val appService: AppServiceBridge) {
         volumeId: String,
         chapterId: String,
         content: String,
+        expectedVersion: ChapterVersion? = null,
     ): BridgeResult<ChapterSaveReceipt> {
-        return appService.saveChapterContent(projectId, volumeId, chapterId, content)
+        return appService.saveChapterContent(projectId, volumeId, chapterId, content, expectedVersion)
     }
 
     fun clearChapterContent(
         projectId: String,
         volumeId: String,
         chapterId: String,
+        expectedVersion: ChapterVersion? = null,
     ): BridgeResult<ChapterSaveReceipt> {
-        return appService.clearChapterContent(projectId, volumeId, chapterId)
+        return appService.clearChapterContent(projectId, volumeId, chapterId, expectedVersion)
     }
 
     fun updateChapterNote(

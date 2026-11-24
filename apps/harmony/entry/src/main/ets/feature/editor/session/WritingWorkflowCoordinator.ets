@@ -415,8 +415,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         this.content = result.data.content
         this.lastSavedContent = result.data.content
         this.proofBaselineSent = false
-        // Issue #629 评论 5 第 8 节：跨设备内容身份来自 ChapterContent.meta.hash。
-        this.lastSavedContentHash = result.data.meta.hash
+        // Issue #1059：内容身份来自 open 返回的实际正文版本摘要，而不是可能
+        // 滞后的 meta.hash；清空/删除等场景也不会把旧 hash 当成已保存。
+        this.lastSavedContentHash = result.data.version.contentSha256
         this.wordCount = result.data.meta.wordCount
         this.hasUnsavedChanges = false
         // 打开编辑会话，用 Core 管理正文。open 成功后 listener 自动回流显示状态。
@@ -533,8 +534,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       if (result.success && result.data) {
         // Issue #829 评论 #5995146525：这里不再上报写作统计（改由编辑事务同源上报）。
         this.lastSavedContent = request.text
-        // Issue #629 评论 5 第 8 节：保存成功后跨设备内容身份来自 ChapterSaveReceipt.contentHash。
-        this.lastSavedContentHash = result.data.contentHash
+        // Issue #1059：保存成功后以 receipt.version.contentSha256 作为内容身份。
+        this.lastSavedContentHash = result.data.version.contentSha256
         this.hasUnsavedChanges = false
         this.lastSaveFailed = false
         // 重新取 latestSnapshot 结算：保存期间若又产生新输入，hasUnsavedChanges 保持 true。
@@ -669,7 +670,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       return false
     }
     const diskContent: string = result.data.content
-    const diskHash: string = result.data.meta.hash
+    const diskHash: string = result.data.version.contentSha256
     if (this.lastSavedContentHash !== null && diskHash === this.lastSavedContentHash) {
       // Core 落盘身份与屏障放行时一致：本次同步未改动本章。
       return true

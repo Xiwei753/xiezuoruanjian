@@ -204,7 +204,8 @@ impl WriterCoreApi {
         chapter_id: &str,
         text: &str,
     ) -> ApiResult<bool> {
-        let core = self.core_read();
+        // read_chapter 会在 pending journal 存在时恢复半提交投影，必须用写锁。
+        let core = self.core_write();
         for volume in core.list_volumes(project_id).map_err(WriterError::from)? {
             let chapter_exists = core
                 .list_chapters(project_id, &volume.id)

@@ -91,6 +91,7 @@ impl SaveTransaction {
             staging_filename,
             target_relative: target_relative.to_string(),
             is_delete: false,
+            expected_after_hash: Some(format!("{:x}", md5::compute(content))),
         });
         Ok(())
     }
@@ -106,6 +107,7 @@ impl SaveTransaction {
             staging_filename: String::new(),
             target_relative: target_relative.to_string(),
             is_delete: true,
+            expected_after_hash: None,
         });
     }
 

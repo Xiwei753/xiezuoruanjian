@@ -199,6 +199,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: "error".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            chapter_changes_json: String::new(),
                             workspace_generation,
                             data_root: data_root_capture.clone(),
                         };
@@ -240,6 +241,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: "dry_run_success".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            chapter_changes_json: String::new(),
                             workspace_generation,
                             data_root: data_root_capture.clone(),
                         }
@@ -267,6 +269,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: cat,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            chapter_changes_json: String::new(),
                             workspace_generation,
                             data_root: data_root_capture.clone(),
                         }
@@ -302,6 +305,7 @@ impl AppBackend {
                         operation_id: op_id_capture,
                         sync_status: "fatal_error".to_string(),
                         action_result: serde_json::to_string(&state).unwrap_or_default(),
+                        chapter_changes_json: String::new(),
                         workspace_generation,
                         data_root: data_root_capture,
                     });

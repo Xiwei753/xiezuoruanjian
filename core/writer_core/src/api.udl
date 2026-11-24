@@ -116,9 +116,16 @@ dictionary ProjectWorkspaceSnapshotDto {
     sequence<VolumeWithChaptersDto> volumes;
 };
 
+dictionary ChapterVersionDto {
+    string object_generation;
+    u64 revision;
+    string content_sha256;
+};
+
 dictionary ChapterContentDto {
     ChapterMetaDto meta;
     string content;
+    ChapterVersionDto version;
 };
 
 dictionary ChapterSaveReceiptDto {
@@ -128,6 +135,7 @@ dictionary ChapterSaveReceiptDto {
     string meta_hash;
     string updated_at;
     u32 word_count;
+    ChapterVersionDto version;
 };
 
 // 恢复作品树输入 DTO — 一次跨 FFI 传入完整作品树，
@@ -417,6 +425,17 @@ dictionary TargetSyncPlanDto {
     SyncPlanDto plan;
 };
 
+dictionary ChapterChangeReceiptDto {
+    string project_id;
+    string volume_id;
+    string chapter_id;
+    ChapterVersionDto? before;
+    ChapterVersionDto? after;
+    boolean content_changed;
+    boolean deleted;
+    string operation_id;
+};
+
 dictionary FullSyncResultDto {
     string overall_status;
     sequence<TargetSyncResultDto> targets;
@@ -428,6 +447,7 @@ dictionary FullSyncResultDto {
     u32 total_ignored;
     u32 total_conflicts;
     boolean local_content_changed;
+    sequence<ChapterChangeReceiptDto> chapter_changes;
     string? error;
     string? error_category;
     string? message_key;
@@ -503,6 +523,7 @@ enum WriterError {
     "VolumeNotFound",
     "ChapterNotFound",
     "EmptyOverwriteBlocked",
+    "ChapterVersionConflict",
     "NotImplemented",
     "RefuseToDeleteRoot",
     "InvalidDeleteTarget",
@@ -1124,7 +1145,13 @@ interface WriterAppService {
     ChapterSaveReceiptDto save_chapter_content(string project_id, string volume_id, string chapter_id, string content);
 
     [Throws=WriterError]
+    ChapterSaveReceiptDto save_chapter_content_versioned(string project_id, string volume_id, string chapter_id, string content, ChapterVersionDto? expected_version, string? base_content);
+
+    [Throws=WriterError]
     ChapterSaveReceiptDto clear_chapter_content(string project_id, string volume_id, string chapter_id);
+
+    [Throws=WriterError]
+    ChapterSaveReceiptDto clear_chapter_content_versioned(string project_id, string volume_id, string chapter_id, ChapterVersionDto? expected_version, string? base_content);
 
     [Throws=WriterError]
     boolean update_chapter_note(string project_id, string volume_id, string chapter_id, string note);

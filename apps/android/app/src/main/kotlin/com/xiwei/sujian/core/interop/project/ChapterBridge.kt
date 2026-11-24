@@ -98,9 +98,25 @@ class ChapterBridge internal constructor(
         volumeId: String,
         chapterId: String,
         content: String,
+        expectedVersion: com.xiwei.sujian.feature.project.data.model.ChapterVersion? = null,
     ): BridgeResult<ChapterSaveReceipt> =
         holder.wrapResult {
-            holder.service.saveChapterContent(projectId, volumeId, chapterId, content).toModel()
+            if (expectedVersion == null) {
+                holder.service.saveChapterContent(projectId, volumeId, chapterId, content).toModel()
+            } else {
+                holder.service.saveChapterContentVersioned(
+                    projectId,
+                    volumeId,
+                    chapterId,
+                    content,
+                    uniffi.writer_core.ChapterVersionDto(
+                        expectedVersion.objectGeneration,
+                        expectedVersion.revision.toULong(),
+                        expectedVersion.contentSha256,
+                    ),
+                    null,
+                ).toModel()
+            }
         }.also { result ->
             if (result is BridgeResult.Success) {
                 mirrorChangeSink?.chapterChanged(projectId, volumeId, chapterId)
@@ -111,9 +127,24 @@ class ChapterBridge internal constructor(
         projectId: String,
         volumeId: String,
         chapterId: String,
+        expectedVersion: com.xiwei.sujian.feature.project.data.model.ChapterVersion? = null,
     ): BridgeResult<ChapterSaveReceipt> =
         holder.wrapResult {
-            holder.service.clearChapterContent(projectId, volumeId, chapterId).toModel()
+            if (expectedVersion == null) {
+                holder.service.clearChapterContent(projectId, volumeId, chapterId).toModel()
+            } else {
+                holder.service.clearChapterContentVersioned(
+                    projectId,
+                    volumeId,
+                    chapterId,
+                    uniffi.writer_core.ChapterVersionDto(
+                        expectedVersion.objectGeneration,
+                        expectedVersion.revision.toULong(),
+                        expectedVersion.contentSha256,
+                    ),
+                    null,
+                ).toModel()
+            }
         }.also { result ->
             if (result is BridgeResult.Success) {
                 mirrorChangeSink?.chapterChanged(projectId, volumeId, chapterId)

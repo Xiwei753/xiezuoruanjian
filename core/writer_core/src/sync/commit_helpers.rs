@@ -38,12 +38,6 @@ pub(crate) struct CommittedPath {
     pub before: CommittedBefore,
 }
 
-/// 本次 commit 真正落盘的一个 workspace-relative 路径，以及它是写入还是删除。
-///
-/// 证明事件不能只看路径是否存在来判断 Apply/Delete：删除要记录真实同步删除
-/// 事实，写入则要读取落盘后的正文。动作类型由 commit plan 的 `CommitAction`
-/// 原样带出。
-
 /// commit 前为每个章节正文动作保存真实快照。快照发生在事务写入之前，
 /// 且只读取章节正文，避免为图片等无关文件增加 I/O。
 fn capture_action_before(
@@ -71,6 +65,92 @@ fn capture_action_before(
             }
         })
         .collect()
+}
+
+/// 从 workspace-relative 路径解析章节身份。
+fn chapter_key_from_workspace_path(path: &Path) -> Option<crate::chapter::ChapterKey> {
+    let components: Vec<&str> = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect();
+    let volumes = components.iter().position(|part| *part == "volumes")?;
+    if components.get(volumes + 2) != Some(&"chapters") {
+        return None;
+    }
+    let volume_id = *components.get(volumes + 1)?;
+    let chapter_id = *components.get(volumes + 3)?;
+    let project_id = if volumes >= 2 && components[volumes - 2] == "projects" {
+        components[volumes - 1]
+    } else {
+        components.first().copied().unwrap_or_default()
+    };
+    Some(crate::chapter::ChapterKey::new(
+        project_id, volume_id, chapter_id,
+    ))
+}
+
+fn content_version(text: &str) -> crate::chapter::ChapterVersion {
+    crate::chapter::ChapterVersion {
+        object_generation: String::new(),
+        revision: 0,
+        content_sha256: {
+            use sha2::Digest;
+            format!("{:x}", sha2::Sha256::digest(text.as_bytes()))
+        },
+    }
+}
+
+/// 把本次 commit 的章节正文路径转成按章节的 change receipt。
+///
+/// before 来自 commit 前快照，after 读提交后的 live 正文；删除只记录
+/// before + `deleted=true`。平台端据此只重载真正变化的章节。
+pub(crate) fn build_chapter_change_receipts(
+    live_root: &Path,
+    paths: &[CommittedPath],
+    operation_id: &str,
+) -> Vec<crate::chapter::ChapterChangeReceipt> {
+    let mut receipts = Vec::new();
+    for committed in paths {
+        if !is_chapter_content_path(&committed.path) {
+            continue;
+        }
+        let Some(key) = chapter_key_from_workspace_path(&committed.path) else {
+            continue;
+        };
+        let before = match &committed.before {
+            CommittedBefore::Text(bytes) => Some(content_version(&String::from_utf8_lossy(bytes))),
+            CommittedBefore::Missing | CommittedBefore::NotTracked | CommittedBefore::Error(_) => {
+                None
+            }
+        };
+        let after = if committed.deleted {
+            None
+        } else {
+            match std::fs::read(live_root.join(&committed.path)) {
+                Ok(bytes) => Some(content_version(&String::from_utf8_lossy(&bytes))),
+                Err(error) => {
+                    log::warn!(
+                        "chapter change receipt read after commit failed: {}: {}",
+                        committed.path.display(),
+                        error
+                    );
+                    None
+                }
+            }
+        };
+        let content_changed = committed.deleted
+            || before.as_ref().map(|version| &version.content_sha256)
+                != after.as_ref().map(|version| &version.content_sha256);
+        receipts.push(crate::chapter::ChapterChangeReceipt {
+            key,
+            before,
+            after,
+            content_changed,
+            deleted: committed.deleted,
+            operation_id: operation_id.to_string(),
+        });
+    }
+    receipts
 }
 
 fn is_chapter_content_path(path: &Path) -> bool {
@@ -612,7 +692,10 @@ fn refresh_stats_event_actions(
         },
         None => match std::fs::read(live_root.join(&manifest_rel)) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
-                crate::Error::Other(format!("parse live app group manifest {}: {error}", manifest_rel))
+                crate::Error::Other(format!(
+                    "parse live app group manifest {}: {error}",
+                    manifest_rel
+                ))
             })?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 crate::sync::types::SyncManifest { files: Vec::new() }
@@ -626,7 +709,11 @@ fn refresh_stats_event_actions(
         },
     };
     for (rel_path, content_hash, updated_at_ms) in changed {
-        if let Some(record) = manifest.files.iter_mut().find(|record| record.path == rel_path) {
+        if let Some(record) = manifest
+            .files
+            .iter_mut()
+            .find(|record| record.path == rel_path)
+        {
             record.content_hash = content_hash;
             record.updated_at_ms = updated_at_ms;
             record.deleted_at_ms = None;
@@ -1579,9 +1666,7 @@ pub(crate) fn commit_single_target_staging(
             Ok(lock) => Some(lock),
             Err(error) => {
                 return (
-                    TargetCommitResult::Failed(format!(
-                        "workspace_write_lock_failed: {error}"
-                    )),
+                    TargetCommitResult::Failed(format!("workspace_write_lock_failed: {error}")),
                     Vec::new(),
                     Vec::new(),
                 );

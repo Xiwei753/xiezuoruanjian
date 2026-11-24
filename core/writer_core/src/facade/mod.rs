@@ -96,15 +96,13 @@ pub struct WriterCore {
     /// 是否存在未完成的同步证明意图。编辑/同步热路径只在为 true 时才扫描
     /// 意图目录，避免每次按键都做文件系统枚举。
     pub(crate) proof_intents_pending: std::sync::atomic::AtomicBool,
-    /// 最近一次证明意图恢复时间（毫秒）。编辑热路径据此节流，避免损坏/未完成
-    /// 意图让每个按键都重新枚举整个目录。
-    pub(crate) proof_intents_last_recovery_ms: std::sync::atomic::AtomicI64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChapterOpenResult {
     pub meta: Chapter,
     pub content: String,
+    pub version: crate::chapter::ChapterVersion,
 }
 
 /// 单作品写作档案（#934）：作品元数据 + 历史累计人工码字 + 当前正文字数。
@@ -162,7 +160,6 @@ impl WriterCore {
             preferred_device_id: std::sync::Mutex::new(None),
             preferred_platform: std::sync::Mutex::new(None),
             proof_intents_pending: std::sync::atomic::AtomicBool::new(proof_intents_pending),
-            proof_intents_last_recovery_ms: std::sync::atomic::AtomicI64::new(0),
         }
     }
 

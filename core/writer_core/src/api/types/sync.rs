@@ -640,6 +640,38 @@ pub struct TargetSyncPlanDto {
     pub plan: SyncPlanDto,
 }
 
+/// 一次同步中真正应用到某章节正文的按章回执。
+///
+/// 平台端用它决定是否需要重载编辑器：`contentChanged=false` 的章节不重载；
+/// 同一章节仍有未保存编辑时进入冲突/协调流程，而不是用旧快照覆盖。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterChangeReceiptDto {
+    pub project_id: String,
+    pub volume_id: String,
+    pub chapter_id: String,
+    pub before: Option<super::volume::ChapterVersionDto>,
+    pub after: Option<super::volume::ChapterVersionDto>,
+    pub content_changed: bool,
+    pub deleted: bool,
+    pub operation_id: String,
+}
+
+impl From<crate::chapter::ChapterChangeReceipt> for ChapterChangeReceiptDto {
+    fn from(receipt: crate::chapter::ChapterChangeReceipt) -> Self {
+        Self {
+            project_id: receipt.key.project_id,
+            volume_id: receipt.key.volume_id,
+            chapter_id: receipt.key.chapter_id,
+            before: receipt.before.map(Into::into),
+            after: receipt.after.map(Into::into),
+            content_changed: receipt.content_changed,
+            deleted: receipt.deleted,
+            operation_id: receipt.operation_id,
+        }
+    }
+}
+
 /// 全量同步聚合结果 DTO。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -656,6 +688,10 @@ pub struct FullSyncResultDto {
     /// Whether the completed Commit phase changed live local content.
     #[serde(default)]
     pub local_content_changed: bool,
+    /// 本次同步真正变化的章节正文。`local_content_changed` 保留为摘要；
+    /// 平台端应按这里的 `contentChanged`/`deleted` 逐章协调编辑器。
+    #[serde(default)]
+    pub chapter_changes: Vec<ChapterChangeReceiptDto>,
     pub error: Option<String>,
     pub error_category: Option<String>,
     pub message_key: Option<String>,
@@ -717,6 +753,7 @@ impl From<crate::sync::types::FullSyncResult> for FullSyncResultDto {
             total_ignored: r.total_ignored,
             total_conflicts: r.total_conflicts,
             local_content_changed: false,
+            chapter_changes: Vec::new(),
             error: r.error,
             error_category: r.error_category,
             message_key: r.message_key,

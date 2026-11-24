@@ -406,6 +406,10 @@ Rectangle {
             emptySaveDialogText.text = msg;
             emptySaveDialog.open();
         }
+        onChapterSaveConflict: function(msg) {
+            if (root.editorBackendRef)
+                root.editorBackendRef.save_status = msg;
+        }
     }
 
     Dialog {
@@ -714,7 +718,7 @@ Rectangle {
     // Issue #754 评论 5815901258: 外部内容变更（如同步）后的编辑器收口。
     // 以权威 appState.selected 为准：选中章节存在则 reload/打开，不存在则清空编辑器，
     // 避免同步删除当前章节/分卷/作品后编辑器仍残留已删除正文。
-    function reconcileActiveChapter(selected) {
+    function reconcileActiveChapter(selected, chapterChanges) {
         if (!selected || !selected.chapterId) {
             editorController.clearActiveChapter();
             return;
@@ -732,7 +736,20 @@ Rectangle {
             return;
         }
 
-        reloadActiveChapter();
+        // Issue #1059：同章只在 Core 给出该章的 change receipt 且本地没有未保存
+        // 编辑时重载；没有 receipt（旧同步结果）才退化为版本探针。
+        var changes = chapterChanges || [];
+        for (var i = 0; i < changes.length; ++i) {
+            var receipt = changes[i];
+            if (receipt && receipt.projectId === selected.projectId
+                    && receipt.volumeId === selected.volumeId
+                    && receipt.chapterId === selected.chapterId) {
+                editorController.reconcileChapterVersion(receipt);
+                return;
+            }
+        }
+        if (changes.length === 0)
+            editorController.reconcileActiveChapterVersion();
     }
 
     color: Kirigami.Theme.backgroundColor
@@ -760,13 +777,13 @@ Rectangle {
                 // DragHandler（Qt 文档指出会与原生分割器输入冲突）。
                 handle: Rectangle {
                     id: handleDelegate
-                    implicitWidth: root.splitHandleWidth   // 视觉仍 6vp
+                    implicitWidth: root.splitHandleWidth   // visual width remains 6vp
                     // Issue #922 复核：原生分隔线命中区只有 6vp，高 DPI 上易点空。
                     // 用 containmentMask 把命中范围扩到 14vp（左右各多 4vp），
                     // 不重叠加鼠标拦截，也不动视觉宽度。
                     containmentMask: Item {
                         x: (handleDelegate.width - width) / 2
-                        width: 14                          // 左右各多 4vp 命中
+                        width: 14                          // 4vp extra hit area on each side
                         height: paneSplitView.height
                     }
                     color: SplitHandle.pressed

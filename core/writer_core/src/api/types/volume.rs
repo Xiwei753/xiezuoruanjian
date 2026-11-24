@@ -50,11 +50,42 @@ impl From<crate::chapter::Chapter> for ChapterMetaDto {
     }
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterVersionDto {
+    pub object_generation: String,
+    pub revision: u64,
+    pub content_sha256: String,
+}
+
+impl From<crate::chapter::ChapterVersion> for ChapterVersionDto {
+    fn from(version: crate::chapter::ChapterVersion) -> Self {
+        Self {
+            object_generation: version.object_generation,
+            revision: version.revision,
+            content_sha256: version.content_sha256,
+        }
+    }
+}
+
+impl ChapterVersionDto {
+    pub fn into_core(self) -> crate::chapter::ChapterVersion {
+        crate::chapter::ChapterVersion {
+            object_generation: self.object_generation,
+            revision: self.revision,
+            content_sha256: self.content_sha256,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterContentDto {
     pub meta: ChapterMetaDto,
     pub content: String,
+    /// 打开时正文的持久化版本；与 `meta.hash`（可能是旧值）不同，它总是
+    /// 按实际读到的正文重算。
+    pub version: ChapterVersionDto,
 }
 
 impl From<crate::chapter::ChapterContent> for ChapterContentDto {
@@ -62,6 +93,7 @@ impl From<crate::chapter::ChapterContent> for ChapterContentDto {
         Self {
             meta: c.meta.into(),
             content: c.content,
+            version: c.version.into(),
         }
     }
 }
@@ -71,6 +103,7 @@ impl From<ChapterOpenResult> for ChapterContentDto {
         Self {
             meta: c.meta.into(),
             content: c.content,
+            version: c.version.into(),
         }
     }
 }
@@ -84,6 +117,8 @@ pub struct ChapterSaveReceiptDto {
     pub meta_hash: String,
     pub updated_at: String,
     pub word_count: u32,
+    /// 本次提交后的准确持久化版本。
+    pub version: ChapterVersionDto,
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -96,6 +131,7 @@ impl From<crate::chapter::ChapterSaveReceipt> for ChapterSaveReceiptDto {
             meta_hash: r.meta_hash,
             updated_at: r.updated_at,
             word_count: r.word_count,
+            version: r.version.into(),
         }
     }
 }

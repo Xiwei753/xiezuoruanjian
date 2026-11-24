@@ -439,6 +439,8 @@ pub struct AppBackend {
     current_sync_username: String,
     current_sync_token: String,
     current_sync_operation_state: String,
+    /// 本轮同步真正变化的章节正文回执（JSON 数组），供 QML 逐章协调编辑器。
+    current_sync_chapter_changes_json: String,
     /// 当前同步操作的唯一 ID（由 Core 分配），用于跟踪操作生命周期
     current_sync_operation_id: String,
     /// 最近一次真正进入 Core 同步执行的 operation ID；用于区分 Qt 前置失败与 Core 报告。

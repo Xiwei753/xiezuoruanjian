@@ -424,6 +424,19 @@ export function decodeChapterMeta(data: Object): DecodeResult<ChapterMeta> {
   return ok<ChapterMeta>(value)
 }
 
+export function decodeChapterVersion(data: Object): DecodeResult<ChapterVersion> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<ChapterVersion>('ChapterVersion: expected object')
+  }
+  const objectGeneration: string | null = reqStr(data, 'objectGeneration')
+  if (objectGeneration === null) { return err<ChapterVersion>('ChapterVersion.objectGeneration missing or not string') }
+  const revision: number | null = reqNum(data, 'revision')
+  if (revision === null) { return err<ChapterVersion>('ChapterVersion.revision missing or not number') }
+  const contentSha256: string | null = reqStr(data, 'contentSha256')
+  if (contentSha256 === null) { return err<ChapterVersion>('ChapterVersion.contentSha256 missing or not string') }
+  return ok<ChapterVersion>({ objectGeneration, revision, contentSha256 })
+}
+
 export function decodeChapterContent(data: Object): DecodeResult<ChapterContent> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return err<ChapterContent>('ChapterContent: expected object')
@@ -434,7 +447,11 @@ export function decodeChapterContent(data: Object): DecodeResult<ChapterContent>
   if (!metaR.ok || metaR.value === undefined) { return err<ChapterContent>(`meta: ${metaR.error}`) }
   const content: string | null = reqStr(data, 'content')
   if (content === null) { return err<ChapterContent>('ChapterContent.content missing or not string') }
-  return ok<ChapterContent>({ meta: metaR.value, content: content })
+  const versionObj: Object | null = reqObj(data, 'version')
+  if (versionObj === null) { return err<ChapterContent>('ChapterContent.version missing or not object') }
+  const versionR: DecodeResult<ChapterVersion> = decodeChapterVersion(versionObj)
+  if (!versionR.ok || versionR.value === undefined) { return err<ChapterContent>(`version: ${versionR.error}`) }
+  return ok<ChapterContent>({ meta: metaR.value, content: content, version: versionR.value })
 }
 
 export function decodeChapterSaveReceipt(data: Object): DecodeResult<ChapterSaveReceipt> {
@@ -453,13 +470,18 @@ export function decodeChapterSaveReceipt(data: Object): DecodeResult<ChapterSave
   if (updatedAt === null) { return err<ChapterSaveReceipt>('updatedAt missing or not string') }
   const wordCount: number | null = reqNum(data, 'wordCount')
   if (wordCount === null) { return err<ChapterSaveReceipt>('wordCount missing or not number') }
+  const versionObj: Object | null = reqObj(data, 'version')
+  if (versionObj === null) { return err<ChapterSaveReceipt>('version missing or not object') }
+  const versionR: DecodeResult<ChapterVersion> = decodeChapterVersion(versionObj)
+  if (!versionR.ok || versionR.value === undefined) { return err<ChapterSaveReceipt>(`version: ${versionR.error}`) }
   const value: ChapterSaveReceipt = {
     chapterRelativePath: chapterRelativePath,
     contentLen: contentLen,
     contentHash: contentHash,
     metaHash: metaHash,
     updatedAt: updatedAt,
-    wordCount: wordCount
+    wordCount: wordCount,
+    version: versionR.value
   }
   return ok<ChapterSaveReceipt>(value)
 }

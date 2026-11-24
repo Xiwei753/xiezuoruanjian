@@ -115,7 +115,19 @@ impl super::WriterCore {
         Ok(super::ChapterOpenResult {
             meta: content.meta,
             content: content.content,
+            version: content.version,
         })
+    }
+
+    /// 只读当前章节版本（不复制整章正文，但仍需读取正文计算摘要）。
+    pub fn read_chapter_version(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> Result<crate::chapter::ChapterVersion> {
+        let project_root = self.project_root(project_id);
+        chapter::commit::read_chapter_version(&project_root, volume_id, chapter_id)
     }
 
     pub fn write_chapter(
@@ -338,6 +350,55 @@ impl super::WriterCore {
             allow_empty_overwrite,
             additional_files,
             &self.app_data_root,
+        )
+    }
+
+    /// 保存章节正文并返回变更集（带 base 版本校验与附加文件）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_chapter_verified_with_changes_versioned(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        allow_empty_overwrite: bool,
+        additional_files: &[(String, String)],
+        expected_version: Option<crate::chapter::ChapterVersion>,
+        base_content: Option<&str>,
+        projection_ids: &[String],
+    ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
+        let project_root = self.project_root(project_id);
+        chapter::save_chapter_verified_with_changes_and_files_versioned(
+            &project_root,
+            volume_id,
+            chapter_id,
+            content,
+            allow_empty_overwrite,
+            additional_files,
+            expected_version,
+            base_content,
+            projection_ids,
+            &self.app_data_root,
+        )
+    }
+
+    /// 清空章节正文并核对 base 版本。
+    pub fn clear_chapter_content_verified_with_version(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        expected_version: Option<crate::chapter::ChapterVersion>,
+        base_content: Option<&str>,
+    ) -> Result<ChapterSaveReceipt> {
+        let project_root = self.project_root(project_id);
+        chapter::clear_chapter_content_verified_with_version(
+            &project_root,
+            Some(&self.app_data_root),
+            volume_id,
+            chapter_id,
+            expected_version,
+            base_content,
         )
     }
 

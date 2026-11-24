@@ -750,6 +750,24 @@ pub(crate) fn recover_pending(app_data_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 章节正文是否在备份之后又前进过。
+///
+/// 旧贡献事务的整树回滚会先删除 source 再从 backup 复制，崩溃窗口里用户
+/// 新写入的正文会被抹掉。命中新 revision 时跳过该根，保留新正文并记日志；
+/// 其他对象仍按原语义回滚。
+fn chapter_body_advanced(source: &Path, backup: &Path) -> bool {
+    let read_revision = |root: &Path| -> Option<u64> {
+        let meta = root.join("chapter.meta.json");
+        let raw = fs::read_to_string(meta).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        value.get("revision").and_then(serde_json::Value::as_u64)
+    };
+    match (read_revision(source), read_revision(backup)) {
+        (Some(source_revision), Some(backup_revision)) => source_revision > backup_revision,
+        _ => false,
+    }
+}
+
 fn restore_manifest(manifest: &ContributionTransactionManifest) -> Result<()> {
     // 先确认所有需要恢复的备份都存在，再删除任何原始路径；避免备份缺失时
     // 把原始对象删掉却无法恢复。
@@ -762,9 +780,18 @@ fn restore_manifest(manifest: &ContributionTransactionManifest) -> Result<()> {
         }
     }
     for root in &manifest.roots {
-        remove_path(Path::new(&root.source))?;
+        let source = Path::new(&root.source);
+        let backup = Path::new(&root.backup);
+        if root.existed && chapter_body_advanced(source, backup) {
+            log::warn!(
+                "contribution recovery: chapter advanced after backup, preserving newer body: {}",
+                source.display()
+            );
+            continue;
+        }
+        remove_path(source)?;
         if root.existed {
-            copy_path(Path::new(&root.backup), Path::new(&root.source))?;
+            copy_path(backup, source)?;
         }
     }
     Ok(())

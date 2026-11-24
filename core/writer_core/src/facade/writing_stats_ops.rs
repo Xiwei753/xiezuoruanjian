@@ -36,10 +36,6 @@ impl super::WriterCore {
     pub(crate) fn recover_pending_sync_proof_state(
         &self,
     ) -> Result<crate::sync::proof_intent::ProofRecoveryState> {
-        self.proof_intents_last_recovery_ms.store(
-            chrono::Utc::now().timestamp_millis(),
-            std::sync::atomic::Ordering::Release,
-        );
         let state = crate::sync::proof_intent::recover_pending_state(self)?;
         self.refresh_sync_proof_intents_pending();
         Ok(state)
@@ -49,32 +45,6 @@ impl super::WriterCore {
     /// 的意图数量。单个意图失败只记录错误，不阻断后续意图。
     pub(crate) fn recover_pending_sync_proof_intents(&self) -> Result<usize> {
         Ok(self.recover_pending_sync_proof_state()?.recovered())
-    }
-
-    /// 编辑热路径的节流恢复：只读原子状态，最多每 60 秒扫描一次意图目录。
-    ///
-    /// 损坏/暂不可恢复的意图会让 pending 保持 true；没有节流时每次按键都会
-    /// 重新解析整个目录，输入会随崩溃遗留文件数量变慢。
-    pub(crate) fn try_recover_pending_sync_proof_intents(&self) {
-        /// 编辑热路径恢复间隔。
-        const RECOVERY_INTERVAL_MS: i64 = 60_000;
-        if !self.sync_proof_intents_pending() {
-            return;
-        }
-        let now = chrono::Utc::now().timestamp_millis();
-        let last = self
-            .proof_intents_last_recovery_ms
-            .load(std::sync::atomic::Ordering::Acquire);
-        if now.saturating_sub(last) < RECOVERY_INTERVAL_MS {
-            return;
-        }
-        // 先占位，避免同一进程内多个编辑线程同时扫描目录。
-        self.proof_intents_last_recovery_ms
-            .store(now, std::sync::atomic::Ordering::Release);
-        if let Err(error) = crate::sync::proof_intent::recover_pending(self) {
-            eprintln!("[writing_stats] 恢复同步证明意图失败: {error}");
-        }
-        self.refresh_sync_proof_intents_pending();
     }
 
     /// 按章节回放证明事件，返回目标时刻的正文/选区与校验结果。
@@ -124,7 +94,8 @@ impl super::WriterCore {
         use crate::editor::EditorTransactionCause;
         use crate::writing_stats::proof::{ProofEditPayload, PROOF_FORMAT_VERSION};
 
-        self.try_recover_pending_sync_proof_intents();
+        // 编辑热路径不再扫描整个工作区的同步证明意图：恢复只在工作区打开、
+        // 启动和同步开始时各做一次，避免每次按键都枚举目录。
 
         if input.changes.is_empty() {
             return self.record_editor_change_stats(
@@ -306,7 +277,8 @@ impl super::WriterCore {
         {
             return Ok(false);
         }
-        if before_text.unwrap_or("") == after_text.unwrap_or("") {
+        let after_text = after_text.unwrap_or("");
+        if before_text.unwrap_or("") == after_text {
             return Ok(false);
         }
         let origin = stats.store().resolve_origin_device_id()?;
@@ -326,23 +298,53 @@ impl super::WriterCore {
             };
             let frame = stats.replay_chapter_proof(&request)?;
             if !frame.valid {
-                return Err(crate::Error::Other(format!(
-                    "章节 {chapter_id} 的证明链校验失败，拒绝写入 SyncRemote 事件: {}",
-                    frame.errors.join("; ")
-                )));
+                // 证明链自身校验失败时不能伪造连续历史；以已提交正文建立
+                // 明确 continuity gap，让恢复事务完成而不是永久卡在 mismatch。
+                stats.seal_proof_continuity_gap(
+                    project_id,
+                    volume_id,
+                    chapter_id,
+                    sync_event_id,
+                    sync_event_id,
+                    &["proof_chain_invalid".to_string()],
+                    "sync_commit",
+                    after_text,
+                )?;
+                return Ok(true);
             }
             match before_text {
                 Some(expected) if expected != frame.text => {
-                    return Err(crate::Error::Other(format!(
-                        "章节 {chapter_id} 的同步前置正文与证明链头不一致：提交快照 {} bytes，链头 {} bytes",
-                        expected.len(),
-                        frame.text.len()
-                    )));
+                    stats.seal_proof_continuity_gap(
+                        project_id,
+                        volume_id,
+                        chapter_id,
+                        sync_event_id,
+                        sync_event_id,
+                        &[
+                            "sync_before_text_mismatch".to_string(),
+                            format!(
+                                "committed_before_len={} proof_head_len={}",
+                                expected.len(),
+                                frame.text.len()
+                            ),
+                        ],
+                        "sync_commit",
+                        after_text,
+                    )?;
+                    return Ok(true);
                 }
                 None if !frame.text.is_empty() => {
-                    return Err(crate::Error::Other(format!(
-                        "章节 {chapter_id} 已有证明链，但同步提交缺少前置正文快照"
-                    )));
+                    stats.seal_proof_continuity_gap(
+                        project_id,
+                        volume_id,
+                        chapter_id,
+                        sync_event_id,
+                        sync_event_id,
+                        &["sync_before_snapshot_missing".to_string()],
+                        "sync_commit",
+                        after_text,
+                    )?;
+                    return Ok(true);
                 }
                 None => {}
                 Some(_) => {}
@@ -359,9 +361,24 @@ impl super::WriterCore {
             (baseline.to_string(), String::new())
         };
 
-        let after_text = after_text.unwrap_or("");
         if before_text == after_text {
             return Ok(false);
+        }
+        if !parent_event_id.is_empty()
+            && !chain_parent_event_id.is_empty()
+            && parent_event_id != chain_parent_event_id
+        {
+            stats.seal_proof_continuity_gap(
+                project_id,
+                volume_id,
+                chapter_id,
+                sync_event_id,
+                sync_event_id,
+                &["sync_parent_event_mismatch".to_string()],
+                "sync_commit",
+                after_text,
+            )?;
+            return Ok(true);
         }
         let parent_event_id = if parent_event_id.is_empty() {
             chain_parent_event_id
@@ -512,7 +529,7 @@ impl super::WriterCore {
     ) -> Result<()> {
         use crate::editor::EditorTransactionCause;
 
-        self.try_recover_pending_sync_proof_intents();
+        // 同上：统计事件写入不触发全工作区证明恢复，证明链不会越写越慢。
 
         // 设备身份由 Core 读/建，不让平台端传；平台初始化注入的稳定 ID 优先。
         let platform = self.effective_platform(platform_str);

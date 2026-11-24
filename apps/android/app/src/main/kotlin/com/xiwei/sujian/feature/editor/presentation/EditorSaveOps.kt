@@ -27,6 +27,7 @@ import com.xiwei.sujian.feature.editor.session.DocumentVersion
 import com.xiwei.sujian.feature.editor.session.commitSavedLease
 import com.xiwei.sujian.feature.editor.session.documentCommittedVersionFor
 import com.xiwei.sujian.feature.editor.session.toSaveToken
+import com.xiwei.sujian.feature.project.data.model.ChapterVersion
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -43,16 +44,30 @@ import kotlinx.coroutines.sync.withLock
  *    （保存期间继续输入导致 revision 前进时不得把新输入误标为已落盘）；
  * 3. 返回是否完成提交 — 调用方据此设置 UI saveStatus（Saved / Unsaved）。
  */
+private fun DocumentVersion.toChapterVersion(): ChapterVersion? {
+    if (contentHash.isEmpty() && repositoryRevision == 0L) return null
+    return ChapterVersion(
+        objectGeneration = "",
+        revision = repositoryRevision,
+        contentSha256 = contentHash,
+    )
+}
+
 private fun EditorViewModel.commitSaveSuccess(
     lease: DocumentOperationLease,
     hash: String,
+    repositoryRevision: Long,
     session: EditorSession,
 ): Boolean {
     saveReceipts.record(lease.toSaveToken(hash))
     val coordinator = _sessionCoordinator ?: return false
     // #624 评论16 问题2：原子提交 — commitSavedLease 一次完成校验 + markSaved，
     // 不再先 isDocumentOperationLeaseCurrent() 再 markSaved()（两步操作有竞态窗口）。
-    val committed = coordinator.commitSavedLease(lease, DocumentVersion(contentHash = hash))
+    val committed =
+        coordinator.commitSavedLease(
+            lease,
+            DocumentVersion(contentHash = hash, repositoryRevision = repositoryRevision),
+        )
     if (committed) {
         // #625 项6：正文真正落盘后通知 app 层刷新作品摘要（含字数）。
         // 纯事件信号，不携带字数/摘要 — 不构成第二数据源。app 层全量 refreshProjectSummaries()。
@@ -253,12 +268,19 @@ suspend fun EditorViewModel.clearChapterContentInternal(
 ): Boolean {
     return saveMutex.withLock {
         try {
-            val result = chapterRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
+            val result =
+                chapterRepository.clearChapterContent(
+                    session.projectId,
+                    session.volumeId,
+                    session.chapterId,
+                    lease.committedVersion.toChapterVersion(),
+                )
             when (result) {
                 is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> {
                     val savedHash = result.data?.contentHash ?: ""
+                    val savedRevision = result.data?.version?.revision ?: 0L
                     // #624 评论12 第2项：回执 + markSaved 统一提交（revision 匹配才清 dirty）。
-                    val committed = commitSaveSuccess(lease, savedHash, session)
+                    val committed = commitSaveSuccess(lease, savedHash, savedRevision, session)
                     _uiState.value =
                         _uiState.value.copy(
                             content = "",
@@ -353,6 +375,7 @@ private fun EditorViewModel.handleSaveSuccess(
     saveStartedAt: Long,
 ): SaveAttemptResult {
     val savedHash = result.data?.contentHash ?: ""
+    val savedRevision = result.data?.version?.revision ?: 0L
     com.xiwei.sujian.core.interop.diagnostics.AppDiagnosticsEvents.chapterSave(
         session.projectId,
         session.chapterId,
@@ -362,7 +385,7 @@ private fun EditorViewModel.handleSaveSuccess(
     )
     // #624 评论12 第2项：保存完成统一提交 — 回执总是记录（该 revision 确实已
     // 落盘）；只有活动文档仍是同一 lease/revision 才 markSaved + UI Saved。
-    val committed = commitSaveSuccess(lease, savedHash, session)
+    val committed = commitSaveSuccess(lease, savedHash, savedRevision, session)
     if (committed) {
         _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved, chapterHash = savedHash)
         // #624 评论17 问题5：commitSavedLease 真正提交后，如果 target 有

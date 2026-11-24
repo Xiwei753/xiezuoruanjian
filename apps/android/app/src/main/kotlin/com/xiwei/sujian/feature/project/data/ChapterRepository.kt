@@ -9,6 +9,7 @@ import com.xiwei.sujian.core.interop.project.WritingBridge
 import com.xiwei.sujian.feature.editor.session.ChapterContentSavePort
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
+import com.xiwei.sujian.feature.project.data.model.ChapterVersion
 import com.xiwei.sujian.feature.sync.data.SyncFailureKind
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -93,9 +94,10 @@ class ChapterRepository(
         volumeId: String,
         chapterId: String,
         content: String,
+        expectedVersion: ChapterVersion? = null,
     ): BridgeResult<ChapterSaveReceipt> =
         withContext(ioDispatcher) {
-            writingBridge.saveChapterContent(projectId, volumeId, chapterId, content)
+            writingBridge.saveChapterContent(projectId, volumeId, chapterId, content, expectedVersion)
         }
 
     /**
@@ -106,9 +108,10 @@ class ChapterRepository(
         projectId: String,
         volumeId: String,
         chapterId: String,
+        expectedVersion: ChapterVersion? = null,
     ): BridgeResult<ChapterSaveReceipt> =
         withContext(ioDispatcher) {
-            writingBridge.clearChapterContent(projectId, volumeId, chapterId)
+            writingBridge.clearChapterContent(projectId, volumeId, chapterId, expectedVersion)
         }
 
     /**

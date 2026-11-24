@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.session
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
+import com.xiwei.sujian.feature.project.data.model.ChapterVersion
 
 /**
  * 章节正文保存端口 — EditorViewModel 的保存流程只依赖此端口，
@@ -13,5 +14,13 @@ interface ChapterContentSavePort {
         volumeId: String,
         chapterId: String,
         content: String,
+        expectedVersion: ChapterVersion? = null,
+    ): BridgeResult<ChapterSaveReceipt>
+
+    suspend fun clearChapterContent(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        expectedVersion: ChapterVersion? = null,
     ): BridgeResult<ChapterSaveReceipt>
 }

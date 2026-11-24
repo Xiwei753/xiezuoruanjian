@@ -31,6 +31,9 @@ fn test_chapter_meta_dto_from_chapter() {
         word_count: 500,
         hash: "abc123hash".to_string(),
         note: Some("Test note".to_string()),
+        object_generation: "gen-1".to_string(),
+        revision: 2,
+        content_sha256: "sha".to_string(),
     };
     let dto = ChapterMetaDto::from(chapter);
     assert_eq!(dto.id, "ch-1");
@@ -111,6 +114,11 @@ fn test_chapter_content_dto_json_contract() {
             note: Some("a note".to_string()),
         },
         content: "Hello world".to_string(),
+        version: ChapterVersionDto {
+            object_generation: "gen-1".to_string(),
+            revision: 3,
+            content_sha256: "sha256".to_string(),
+        },
     };
     let json = serde_json::to_value(&dto).unwrap();
     assert_eq!(
@@ -126,7 +134,12 @@ fn test_chapter_content_dto_json_contract() {
                 "hash": "hash123",
                 "note": "a note"
             },
-            "content": "Hello world"
+            "content": "Hello world",
+            "version": {
+                "objectGeneration": "gen-1",
+                "revision": 3,
+                "contentSha256": "sha256"
+            }
         })
     );
     let deserialized: ChapterContentDto = serde_json::from_value(json).unwrap();
@@ -142,6 +155,11 @@ fn test_chapter_save_receipt_dto_json_contract() {
         meta_hash: "def456".to_string(),
         updated_at: "2023-01-02T00:00:00Z".to_string(),
         word_count: 7,
+        version: ChapterVersionDto {
+            object_generation: "gen-1".to_string(),
+            revision: 4,
+            content_sha256: "sha256".to_string(),
+        },
     };
     let json = serde_json::to_value(&dto).unwrap();
     assert_eq!(
@@ -152,7 +170,12 @@ fn test_chapter_save_receipt_dto_json_contract() {
             "contentHash": "abc123",
             "metaHash": "def456",
             "updatedAt": "2023-01-02T00:00:00Z",
-            "wordCount": 7
+            "wordCount": 7,
+            "version": {
+                "objectGeneration": "gen-1",
+                "revision": 4,
+                "contentSha256": "sha256"
+            }
         })
     );
     let deserialized: ChapterSaveReceiptDto = serde_json::from_value(json).unwrap();

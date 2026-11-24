@@ -68,9 +68,16 @@ export interface ChapterMeta {
   note: string | null
 }
 
+export interface ChapterVersion {
+  objectGeneration: string
+  revision: number
+  contentSha256: string
+}
+
 export interface ChapterContent {
   meta: ChapterMeta
   content: string
+  version: ChapterVersion
 }
 
 export interface ChapterSaveReceipt {
@@ -80,6 +87,7 @@ export interface ChapterSaveReceipt {
   metaHash: string
   updatedAt: string
   wordCount: number
+  version: ChapterVersion
 }
 
 // ─── 作品树（Core ProjectWorkspaceSnapshotDto / VolumeWithChaptersDto） ───

@@ -25,6 +25,7 @@ QtObject {
     id: controller
 
     signal emptySaveBlocked(string message)
+    signal chapterSaveConflict(string message)
     signal chapterLoaded(string projectId, string volumeId, string chapterId)
     signal chapterLoadFailed(string projectId, string volumeId, string chapterId, string reason)
     signal annotationTargetActivated(var target)
@@ -127,6 +128,12 @@ QtObject {
     property string lastAppliedDecorationJson: ""
     property double lastAppliedDecorationRevision: -1
     property var editorViewportRef: null
+    // Issue #1059：当前编辑器已提交的章节持久化版本。保存时把它作为 base
+    // 交给 Core；Core 发现磁盘版本已前进时返回 CHAPTER_VERSION_CONFLICT，
+    // 不再用旧 buffer 无条件覆盖新正文。
+    property string committedChapterGeneration: ""
+    property double committedChapterRevision: 0
+    property string committedChapterSha256: ""
 
     property var annotationRefreshTimer: Timer {
         interval: 120
@@ -940,7 +947,7 @@ QtObject {
         for (var index = 0; index < byteOffsets.length; index += 1) {
             var byte = Number(byteOffsets[index]);
             if (!isFinite(byte) || Math.floor(byte) !== byte || byte < 0) {
-                throw new Error("校对 byte range 无效");
+                throw new Error("invalid proofreading byte range");
             }
             endpoints.push({ byte: byte, index: index });
         }
@@ -953,18 +960,18 @@ QtObject {
         for (var endpointIndex = 0; endpointIndex < endpoints.length; endpointIndex += 1) {
             var endpoint = endpoints[endpointIndex];
             while (byteOffset < endpoint.byte) {
-                if (textIndex >= text.length) throw new Error("校对 byte range 超出正文");
+                if (textIndex >= text.length) throw new Error("proofreading byte range exceeds text");
                 var first = text.charCodeAt(textIndex);
                 var codePoint = first;
                 var units = 1;
                 if (first >= 0xD800 && first <= 0xDBFF) {
-                    if (textIndex + 1 >= text.length) throw new Error("正文包含无效 UTF-16 代理项");
+                    if (textIndex + 1 >= text.length) throw new Error("text contains invalid UTF-16 surrogate");
                     var second = text.charCodeAt(textIndex + 1);
-                    if (second < 0xDC00 || second > 0xDFFF) throw new Error("正文包含无效 UTF-16 代理项");
+                    if (second < 0xDC00 || second > 0xDFFF) throw new Error("text contains invalid UTF-16 surrogate");
                     codePoint = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00);
                     units = 2;
                 } else if (first >= 0xDC00 && first <= 0xDFFF) {
-                    throw new Error("正文包含无效 UTF-16 代理项");
+                    throw new Error("text contains invalid UTF-16 surrogate");
                 }
                 var utf8Bytes = codePoint <= 0x7F ? 1
                               : codePoint <= 0x7FF ? 2
@@ -974,7 +981,7 @@ QtObject {
                 charOffset += 1;
                 textIndex += units;
             }
-            if (byteOffset !== endpoint.byte) throw new Error("校对位置不在 UTF-8 字符边界");
+            if (byteOffset !== endpoint.byte) throw new Error("proofreading position not on UTF-8 boundary");
             positions[endpoint.index] = { utf16: utf16Offset, char: charOffset };
         }
         return positions;
@@ -989,7 +996,7 @@ QtObject {
                     || Math.floor(startByte) !== startByte
                     || Math.floor(endByte) !== endByte
                     || startByte < 0 || endByte <= startByte) {
-                throw new Error("校对 byte range 无效");
+                throw new Error("invalid proofreading byte range");
             }
             endpoints.push(startByte, endByte);
         }
@@ -1001,7 +1008,7 @@ QtObject {
             item.endUtf16 = positions[suggestionIndex * 2 + 1].utf16;
             item.endChar = positions[suggestionIndex * 2 + 1].char;
             if (text.slice(item.startUtf16, item.endUtf16) !== item.original) {
-                throw new Error("校对原文与 byte range 不匹配");
+                throw new Error("proofreading source does not match byte range");
             }
         }
         return suggestions;
@@ -1133,11 +1140,11 @@ QtObject {
             if (!parsed || typeof parsed !== "object"
                     || !Array.isArray(parsed.suggestions)
                     || Number(parsed.textRevision) !== textRevision) {
-                throw new Error("校对结果格式无效");
+                throw new Error("invalid proofreading result format");
             }
             var suggestions = parsed.suggestions;
             for (var i = 0; i < suggestions.length; i += 1) {
-                if (Number(suggestions[i].textRevision) !== textRevision) throw new Error("校对正文版本无效");
+                if (Number(suggestions[i].textRevision) !== textRevision) throw new Error("invalid proofreading text revision");
             }
             suggestions.sort(function(a, b) { return a.startByte - b.startByte; });
             annotateCorrectionPositions(currentText, suggestions);
@@ -1758,19 +1765,9 @@ QtObject {
             return true;
         }
         var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
-        var result = editorBackendRef.save_chapter(projectId, volumeId, chapterId, plainText, allowEmptyOverwrite);
+        var result = saveEditorSnapshotVersioned(plainText, allowEmptyOverwrite,
+            "flush_before_sync", snapshot.revision, snapshot.contentSha256);
         if (result && result.success) {
-            lastSavedEditorText = plainText;
-            previousEditorText = plainText;
-            lastSavedEditorRevision = snapshot.revision;
-            logWriterInfo("editor_save_committed",
-                "reason=flush_before_sync, revision=" + snapshot.revision
-                + ", contentSha256=" + snapshot.contentSha256
-                + ", len=" + plainText.length + ", identity=" + editorDocumentIdentity());
-            if (plainText.length === 0) {
-                explicitEmptySavePending = false;
-                lastPotentialExplicitClearAtMs = 0;
-            }
             return true;
         }
         syncFlushFailureReason = result
@@ -1778,6 +1775,105 @@ QtObject {
             : qsTr("保存当前章节失败")
         logWriterWarning("flush_before_sync_failed", "save failed before sync, blocking sync");
         return false;
+    }
+
+    function applyCommittedChapterVersion(version) {
+        if (!version) return;
+        committedChapterGeneration = String(version.objectGeneration || "");
+        committedChapterRevision = Number(version.revision || 0);
+        committedChapterSha256 = String(version.contentSha256 || "");
+    }
+
+    function committedChapterVersionMatches(version) {
+        if (!version) return false;
+        return String(version.contentSha256 || "") === committedChapterSha256
+                && Number(version.revision || 0) === committedChapterRevision;
+    }
+
+    // 保存成功后只清除 receipt 已确认的这批编辑，不清除随后输入的内容。
+    function finishEditorSave(plainText, snapshotRevision, reason, snapshotSha) {
+        lastSavedEditorText = plainText;
+        previousEditorText = plainText;
+        lastSavedEditorRevision = snapshotRevision;
+        logWriterInfo("editor_save_committed",
+            "reason=" + reason + ", revision=" + snapshotRevision
+            + ", contentSha256=" + snapshotSha
+            + ", len=" + plainText.length + ", identity=" + editorDocumentIdentity());
+        if (plainText.length === 0) {
+            explicitEmptySavePending = false;
+            lastPotentialExplicitClearAtMs = 0;
+        }
+    }
+
+    // 把 Core 的版本回执写回编辑器；保存/打开都必须走这里，避免两处
+    // 各存一份 base。
+    function saveEditorSnapshotVersioned(plainText, allowEmptyOverwrite, reason, snapshotRevision, snapshotSha) {
+        var result = editorBackendRef.save_chapter_versioned(
+            projectId, volumeId, chapterId, plainText, allowEmptyOverwrite,
+            committedChapterGeneration, committedChapterRevision, committedChapterSha256,
+            lastSavedEditorText);
+        if (result && result.success) {
+            if (result.data && result.data.version) {
+                applyCommittedChapterVersion(result.data.version);
+            }
+            finishEditorSave(plainText, snapshotRevision, reason, snapshotSha);
+            return result;
+        }
+        if (result && result.errorCode === "CHAPTER_VERSION_CONFLICT") {
+            logWriterWarning("editor_save_conflict",
+                "reason=" + reason + ", expectedRevision=" + committedChapterRevision
+                + ", expectedSha256=" + committedChapterSha256
+                + ", identity=" + editorDocumentIdentity());
+            controller.chapterSaveConflict(qsTr("磁盘上的章节已被更新，当前编辑未覆盖新版本。"));
+        } else if (result && result.errorCode === "EMPTY_OVERWRITE_BLOCKED") {
+            logWriterWarning("empty_save_blocked", "blocked by core: " + (result.errorCode || ""));
+            controller.emptySaveBlocked(qsTr("检测到异常空内容覆盖，已阻止保存。"));
+        }
+        return result;
+    }
+
+    // Issue #1059：同步/外部写入后的按章版本协调。只有同一章节、本地没有
+    // 未保存编辑且远端版本确实前进时才重载；dirty 时保留 buffer，交给用户
+    // 或下一次保存按版本冲突处理。
+    function reconcileChapterVersion(receipt) {
+        if (!receipt || !receipt.chapterId) return false;
+        if (receipt.projectId !== projectId
+                || receipt.volumeId !== volumeId
+                || receipt.chapterId !== chapterId) {
+            return false;
+        }
+        if (!receipt.contentChanged && !receipt.deleted) return false;
+        if (receipt.deleted) {
+            clearActiveChapter();
+            return true;
+        }
+        if (receipt.after && committedChapterVersionMatches(receipt.after)) {
+            return false;
+        }
+        if (isLoadingChapter || saveGuardActive()) return false;
+        var read = readEditorPlainText();
+        var currentText = read ? String(read.text || "") : "";
+        if (currentText !== lastSavedEditorText) {
+            logWriterWarning("chapter_external_change_deferred",
+                "reason=dirty_buffer, chapter=" + chapterId
+                + ", committedSha256=" + committedChapterSha256
+                + ", incomingSha256=" + (receipt.after ? receipt.after.contentSha256 : ""));
+            return false;
+        }
+        return loadChapterContentWithIds(projectId, volumeId, chapterId) !== null;
+    }
+
+    // 没有逐章 receipt 的旧同步结果：先探版本，只有 clean 且版本前进才重载。
+    function reconcileActiveChapterVersion() {
+        if (!editorBackendRef || !projectId || !volumeId || !chapterId) return false;
+        if (isLoadingChapter || saveGuardActive()) return false;
+        var read = readEditorPlainText();
+        var currentText = read ? String(read.text || "") : "";
+        if (currentText !== lastSavedEditorText) return false;
+        var result = editorBackendRef.read_chapter_version(projectId, volumeId, chapterId);
+        if (!result || !result.success || !result.data || !result.data.version) return false;
+        if (committedChapterVersionMatches(result.data.version)) return false;
+        return loadChapterContentWithIds(projectId, volumeId, chapterId) !== null;
     }
 
     // Unified save entry — always writes the validated Core snapshot content.
@@ -1813,28 +1909,9 @@ QtObject {
             return true;
         }
         var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
-
-        var result = editorBackendRef.save_chapter(projectId, volumeId, chapterId, plainText, allowEmptyOverwrite);
-        if (result && result.success) {
-            lastSavedEditorText = plainText;
-            previousEditorText = plainText;
-            lastSavedEditorRevision = snapshot.revision;
-            logWriterInfo("editor_save_committed",
-                "reason=save_current_chapter, revision=" + snapshot.revision
-                + ", contentSha256=" + snapshot.contentSha256
-                + ", len=" + plainText.length + ", identity=" + editorDocumentIdentity());
-            if (plainText.length === 0) {
-                explicitEmptySavePending = false;
-                lastPotentialExplicitClearAtMs = 0;
-            }
-            return true;
-        } else {
-            if (result && result.errorCode === "EMPTY_OVERWRITE_BLOCKED") {
-                logWriterWarning("empty_save_blocked", "blocked by core: " + (result.errorCode || ""));
-                controller.emptySaveBlocked(qsTr("检测到异常空内容覆盖，已阻止保存。"));
-            }
-            return false;
-        }
+        var result = saveEditorSnapshotVersioned(plainText, allowEmptyOverwrite,
+            "save_current_chapter", snapshot.revision, snapshot.contentSha256);
+        return !!(result && result.success);
     }
 
     // Load chapter: content comes from Rust core as plain text.
@@ -1895,6 +1972,7 @@ QtObject {
         // WritingWorkspace 提交给 controller 的值同源），避免请求参数与
         // authoritative 身份不一致导致所有保存被误判为过期快照。
         var loadedData = result.data || {};
+        applyCommittedChapterVersion(loadedData.version);
         var loadedProjectId = String(loadedData.projectId || pId);
         var loadedVolumeId = String(loadedData.volumeId || vId);
         var loadedChapterId = String(loadedData.chapterId || cId);
@@ -1957,6 +2035,9 @@ QtObject {
             chapterTitle = "";
             previousEditorText = "";
             lastSavedEditorText = "";
+            committedChapterGeneration = "";
+            committedChapterRevision = 0;
+            committedChapterSha256 = "";
             explicitEmptySavePending = false;
             lastPotentialExplicitClearAtMs = 0;
             clearEditorDocumentIdentity();

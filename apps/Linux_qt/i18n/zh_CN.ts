@@ -303,6 +303,10 @@
         <source>检测到异常空内容覆盖，已阻止保存。</source>
         <translation>检测到异常空内容覆盖，已阻止保存。</translation>
     </message>
+    <message>
+        <source>磁盘上的章节已被更新，当前编辑未覆盖新版本。</source>
+        <translation>磁盘上的章节已被更新，当前编辑未覆盖新版本。</translation>
+    </message>
 </context>
 <context>
     <name>EditorPage</name>

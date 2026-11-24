@@ -3,6 +3,7 @@ package com.xiwei.sujian.core.interop.project
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ChapterOpenResult
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
+import com.xiwei.sujian.feature.project.data.model.ChapterVersion
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
 import com.xiwei.sujian.feature.project.data.model.ProjectSummary
@@ -82,7 +83,14 @@ internal fun ProjectWorkspaceSnapshotDto.toModel() =
         volumes = volumes.map { it.toModel() },
     )
 
-internal fun ChapterContentDto.toModel() = ChapterOpenResult(meta.toModel(), content)
+internal fun uniffi.writer_core.ChapterVersionDto.toModel() =
+    ChapterVersion(
+        objectGeneration = objectGeneration,
+        revision = revision.toLong(),
+        contentSha256 = contentSha256,
+    )
+
+internal fun ChapterContentDto.toModel() = ChapterOpenResult(meta.toModel(), content, version.toModel())
 
 internal fun ChapterSaveReceiptDto.toModel() =
     ChapterSaveReceipt(
@@ -92,4 +100,5 @@ internal fun ChapterSaveReceiptDto.toModel() =
         metaHash = metaHash,
         updatedAt = updatedAt,
         wordCount = wordCount.toInt(),
+        version = version.toModel(),
     )

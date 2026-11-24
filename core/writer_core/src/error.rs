@@ -52,6 +52,17 @@ pub enum Error {
         new_len: usize,
         reason: String,
     },
+    /// 章节正文 base 版本已过期。提交没有发布任何投影，三方材料保存在
+    /// `conflict_dir` 供调用方展示或合并。
+    #[error(
+        "chapter version conflict: chapter_id={chapter_id}, expected_hash={expected_hash}, actual_hash={actual_hash}, conflict_dir={conflict_dir}"
+    )]
+    ChapterVersionConflict {
+        chapter_id: String,
+        expected_hash: String,
+        actual_hash: String,
+        conflict_dir: String,
+    },
     /// 功能未实现。
     #[error("Not implemented")]
     NotImplemented,
@@ -152,6 +163,7 @@ impl Error {
             Error::VolumeNotFound => "VOLUME_NOT_FOUND",
             Error::ChapterNotFound => "CHAPTER_NOT_FOUND",
             Error::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
+            Error::ChapterVersionConflict { .. } => "CHAPTER_VERSION_CONFLICT",
             Error::NotImplemented => "NOT_IMPLEMENTED",
             Error::RefuseToDeleteRoot => "REFUSE_DELETE_ROOT",
             Error::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
@@ -185,6 +197,7 @@ impl Error {
             Error::VolumeNotFound => false,
             Error::ChapterNotFound => false,
             Error::EmptyOverwriteBlocked { .. } => false,
+            Error::ChapterVersionConflict { .. } => false,
             Error::NotImplemented => false,
             Error::RefuseToDeleteRoot => false,
             Error::InvalidDeleteTarget(_) => false,
@@ -237,6 +250,17 @@ impl Error {
                 m.insert("old_len".into(), old_len.to_string());
                 m.insert("new_len".into(), new_len.to_string());
                 m.insert("reason".into(), reason.clone());
+            }
+            Error::ChapterVersionConflict {
+                chapter_id,
+                expected_hash,
+                actual_hash,
+                conflict_dir,
+            } => {
+                m.insert("chapter_id".into(), chapter_id.clone());
+                m.insert("expected_hash".into(), expected_hash.clone());
+                m.insert("actual_hash".into(), actual_hash.clone());
+                m.insert("conflict_dir".into(), conflict_dir.clone());
             }
             Error::SyncAuthFailed { reason } => {
                 m.insert("reason".into(), reason.clone());

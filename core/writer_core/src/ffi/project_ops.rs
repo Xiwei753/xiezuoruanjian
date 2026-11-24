@@ -336,7 +336,9 @@ unsafe fn save_chapter_json(
     }) {
         Ok(data) => ok_json(data),
         Err(e) => {
-            if e.contains("empty") || e.contains("Empty") {
+            if e.contains("version conflict") || e.contains("ChapterVersionConflict") {
+                err_json("CHAPTER_VERSION_CONFLICT", &e)
+            } else if e.contains("empty") || e.contains("Empty") {
                 err_json("EMPTY_OVERWRITE_BLOCKED", &e)
             } else {
                 err_json("IO_WRITE_ERROR", &e)

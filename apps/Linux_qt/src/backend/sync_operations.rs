@@ -200,6 +200,7 @@ impl AppBackend {
         self.current_sync_progress = None;
         self.current_last_sync_time = Self::now_epoch_seconds();
         self.current_sync_operation_state = outcome.action_result.clone();
+        self.current_sync_chapter_changes_json = outcome.chapter_changes_json;
         let status_str = outcome.sync_status.as_str();
 
         // Issue #754 评论 5814866116 改动2: handle_sync_outcome 返回 SyncOutcomeEffect，

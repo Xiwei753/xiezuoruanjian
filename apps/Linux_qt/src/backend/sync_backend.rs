@@ -129,6 +129,10 @@ pub struct SyncBackend {
     sync_config_changed: qt_signal!(),
     #[allow(dead_code)]
     sync_action_completed: qt_signal!(),
+    /// 本轮同步真正变化的章节正文回执（JSON 数组）。QML 用 receipt 逐章
+    /// 协调编辑器，不再靠 global bool 无条件重载。
+    #[allow(dead_code)]
+    sync_chapter_changes_json: qt_property!(QString; READ sync_chapter_changes_json NOTIFY sync_action_completed),
     #[allow(dead_code)]
     sync_status_changed: qt_signal!(),
     // Issue #754 评论 5814866116 改动2: 同步真正应用到当前工作区内容时发出，
@@ -510,6 +514,10 @@ impl SyncBackend {
     fn sync_operation_state(&self) -> QString {
         self.with_app(|app| app.sync_operation_state())
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    fn sync_chapter_changes_json(&self) -> QString {
+        self.with_app(|app| app.sync_chapter_changes_json())
+            .unwrap_or_else(|_| "[]".into())
     }
     fn last_sync_report(&self) -> QString {
         self.with_app(|app| app.last_sync_report_json())
@@ -1138,6 +1146,11 @@ impl AppBackend {
         self.current_sync_token = val.to_string();
     }
 
+    // AppBackend::sync_chapter_changes_json
+    pub(crate) fn sync_chapter_changes_json(&self) -> QString {
+        self.current_sync_chapter_changes_json.clone().into()
+    }
+
     // AppBackend::sync_action_result
     pub(crate) fn sync_operation_state(&self) -> QString {
         let Ok(mut state) =
@@ -1340,6 +1353,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: "error".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            chapter_changes_json: String::new(),
                             workspace_generation,
                             data_root: data_root_capture.clone(),
                         };
@@ -1376,6 +1390,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: status.to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            chapter_changes_json: String::new(),
                             workspace_generation,
                             data_root: data_root_capture.clone(),
                         }
@@ -1400,6 +1415,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: status,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            chapter_changes_json: String::new(),
                             workspace_generation,
                             data_root: data_root_capture.clone(),
                         }
@@ -1437,6 +1453,7 @@ impl AppBackend {
                         operation_id: op_id_capture,
                         sync_status: "fatal_error".to_string(),
                         action_result: serde_json::to_string(&state).unwrap_or_default(),
+                        chapter_changes_json: String::new(),
                         workspace_generation,
                         data_root: data_root_capture,
                     });

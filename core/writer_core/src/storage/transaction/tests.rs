@@ -95,6 +95,7 @@ fn test_transaction_recovery_staging_lost() {
             staging_filename: "file_0".to_string(),
             target_relative: "projects/p1/volumes/v1/chapters/c1/chapter.md".to_string(),
             is_delete: false,
+            expected_after_hash: None,
         }],
         phase: TransactionPhase::Prepared,
         backup_entries: Vec::new(),

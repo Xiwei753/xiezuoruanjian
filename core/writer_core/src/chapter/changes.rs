@@ -44,8 +44,8 @@ pub fn create_chapter_with_changes(
 
 /// 保存章节正文并返回变更集。
 ///
-/// 返回 `(ChapterSaveReceipt, WorkspaceChangeSet)`，变更集包含
-/// `Upsert(chapter.meta.json) + Upsert(chapter.md)`。
+/// 返回 `(ChapterSaveReceipt, WorkspaceChangeSet)`；变更集只包含保存事务
+/// 真实写入的文件（正文、元数据、实际变化的附加文件），no-op 时为空。
 pub fn save_chapter_verified_with_changes(
     project_root: &Path,
     volume_id: &str,
@@ -69,8 +69,8 @@ pub fn save_chapter_verified_with_changes(
 
 /// 保存章节正文并返回变更集（带空覆盖控制）。
 ///
-/// 返回 `(ChapterSaveReceipt, WorkspaceChangeSet)`，变更集包含
-/// `Upsert(chapter.meta.json) + Upsert(chapter.md)`。
+/// 返回 `(ChapterSaveReceipt, WorkspaceChangeSet)`；变更集只包含保存事务
+/// 真实写入的文件（正文、元数据、实际变化的附加文件），no-op 时为空。
 pub fn save_chapter_verified_with_changes_with_options(
     project_root: &Path,
     volume_id: &str,
@@ -131,46 +131,124 @@ fn save_chapter_verified_with_changes_inner(
     ChapterSaveReceipt,
     crate::storage::workspace_git::WorkspaceChangeSet,
 )> {
-    let receipt = save_chapter_verified_with_options_and_files(
+    save_chapter_verified_with_changes_inner_versioned(
         project_root,
         volume_id,
         chapter_id,
         content,
         allow_empty_overwrite,
         additional_files,
+        workspace_root,
+        None,
+        None,
+        &[],
+    )
+}
+
+/// 保存章节正文并核对调用方 base 版本，返回真实写入的 change set。
+#[allow(clippy::too_many_arguments)]
+pub fn save_chapter_verified_with_changes_versioned(
+    project_root: &Path,
+    volume_id: &str,
+    chapter_id: &str,
+    content: &str,
+    allow_empty_overwrite: bool,
+    expected_version: Option<ChapterVersion>,
+    base_content: Option<&str>,
+    projection_ids: &[String],
+    workspace_root: &Path,
+) -> Result<(
+    ChapterSaveReceipt,
+    crate::storage::workspace_git::WorkspaceChangeSet,
+)> {
+    save_chapter_verified_with_changes_inner_versioned(
+        project_root,
+        volume_id,
+        chapter_id,
+        content,
+        allow_empty_overwrite,
+        &[],
+        workspace_root,
+        expected_version,
+        base_content,
+        projection_ids,
+    )
+}
+
+/// 保存章节正文与附加文件并核对 base 版本。
+#[allow(clippy::too_many_arguments)]
+pub fn save_chapter_verified_with_changes_and_files_versioned(
+    project_root: &Path,
+    volume_id: &str,
+    chapter_id: &str,
+    content: &str,
+    allow_empty_overwrite: bool,
+    additional_files: &[(String, String)],
+    expected_version: Option<ChapterVersion>,
+    base_content: Option<&str>,
+    projection_ids: &[String],
+    workspace_root: &Path,
+) -> Result<(
+    ChapterSaveReceipt,
+    crate::storage::workspace_git::WorkspaceChangeSet,
+)> {
+    save_chapter_verified_with_changes_inner_versioned(
+        project_root,
+        volume_id,
+        chapter_id,
+        content,
+        allow_empty_overwrite,
+        additional_files,
+        workspace_root,
+        expected_version,
+        base_content,
+        projection_ids,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save_chapter_verified_with_changes_inner_versioned(
+    project_root: &Path,
+    volume_id: &str,
+    chapter_id: &str,
+    content: &str,
+    allow_empty_overwrite: bool,
+    additional_files: &[(String, String)],
+    workspace_root: &Path,
+    expected_version: Option<ChapterVersion>,
+    base_content: Option<&str>,
+    projection_ids: &[String],
+) -> Result<(
+    ChapterSaveReceipt,
+    crate::storage::workspace_git::WorkspaceChangeSet,
+)> {
+    let outcome = save_chapter_verified_with_options_and_files(
+        project_root,
+        Some(workspace_root),
+        volume_id,
+        chapter_id,
+        content,
+        allow_empty_overwrite,
+        additional_files,
+        expected_version,
+        base_content,
+        projection_ids,
     )?;
 
-    let chapter_dir = project_root
-        .join("volumes")
-        .join(volume_id)
-        .join("chapters")
-        .join(chapter_id);
-
-    let meta_path = chapter_dir.join("chapter.meta.json");
-    let md_path = chapter_dir.join("chapter.md");
-
-    let meta_rel_path = meta_path
-        .strip_prefix(workspace_root)
-        .unwrap_or(&meta_path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    let md_rel_path = md_path
-        .strip_prefix(workspace_root)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .replace('\\', "/");
-
-    let project_relative = project_root
-        .strip_prefix(workspace_root)
-        .unwrap_or(project_root);
-    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
-        .add_upsert(std::path::PathBuf::from(meta_rel_path))
-        .add_upsert(std::path::PathBuf::from(md_rel_path));
-    for (relative_path, _) in additional_files {
-        change_set = change_set.add_upsert(project_relative.join(relative_path));
+    // 变更集只包含保存事务真实写过的文件（project-relative），
+    // no-op 时为空；不再用读写后比较猜路径。
+    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
+    for written_file in &outcome.written_files {
+        let absolute_path = project_root.join(written_file);
+        let workspace_relative = absolute_path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&absolute_path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        change_set = change_set.add_upsert(std::path::PathBuf::from(workspace_relative));
     }
 
-    Ok((receipt, change_set))
+    Ok((outcome.receipt, change_set))
 }
 
 /// 重命名章节并返回变更集。

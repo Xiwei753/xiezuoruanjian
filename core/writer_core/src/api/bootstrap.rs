@@ -81,6 +81,10 @@ fn recover_storage_transactions(
     // 恢复统一 workspace 变更事务（workspace_change journal）。
     recover_workspace_change_transactions(app_data_root, layout)?;
 
+    // 恢复章节提交 journal。只扫描默认 projects 根；自定义 projects_root
+    // （Android 外置目录）由章节读取路径的 pending 探针按需恢复。
+    recover_chapter_commit_journals(app_data_root);
+
     // 恢复方星图子嵌入事务（child_embed journal）。
     let recovered_child_embeds =
         crate::storage::journal::starmap_child_embed::recover_pending_child_embed_transactions(
@@ -511,6 +515,45 @@ fn recover_workspace_change_transactions(
         recover_local_applied_phase(app_data_root, layout, rec, message);
     }
     Ok(())
+}
+
+/// 按 journal 顺序恢复每个作品的章节提交事务。单个作品失败只记日志，
+/// 不阻断工作区启动；读取该章节时 pending 探针仍会重试。
+fn recover_chapter_commit_journals(app_data_root: &Path) {
+    let projects_root = app_data_root.join("projects");
+    let Ok(entries) = std::fs::read_dir(&projects_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let project_root = entry.path();
+        if !project_root.is_dir() {
+            continue;
+        }
+        match crate::chapter::commit::recover_pending_chapter_commits(&project_root) {
+            Ok(recovered) => {
+                for item in recovered {
+                    log::info!(
+                        "chapter commit recovery: tx={} chapter={}/{}/{}, after_revision={}, superseded={}, pending_projections={}, conflict_dir={}",
+                        item.transaction_id,
+                        item.key.project_id,
+                        item.key.volume_id,
+                        item.key.chapter_id,
+                        item.after.revision,
+                        item.superseded,
+                        item.pending_projections.len(),
+                        item.conflict_dir.as_deref().unwrap_or("")
+                    );
+                }
+            }
+            Err(error) => {
+                log::warn!(
+                    "chapter commit recovery failed for {}: {} — journal retained",
+                    project_root.display(),
+                    error
+                );
+            }
+        }
+    }
 }
 
 /// 根据 op_type 返回 recover 用的 commit message。
@@ -1472,10 +1515,10 @@ fn ensure_workspace_git(
 pub fn bootstrap_workspace(
     app_data_root: &Path,
 ) -> std::result::Result<crate::storage::git_repo_layout::GitRepoLayout, WriterError> {
-    // 先取得工作区写锁；acquire 内部统一恢复 contribution transaction。
-    // 必须在 workspace/child journal 恢复之前完成：来源事务 Prepared 时回滚
-    // 对象并删除对应 journal，避免恢复流程把已回滚的删除/子图重新补写。
-    let _workspace_write_lock = crate::storage::WorkspaceWriteLock::acquire(app_data_root)?;
+    // 先取得工作区写锁并统一恢复 contribution transaction。恢复只在启动/
+    // 工作区打开执行一次，编辑热路径取锁不再扫描目录。
+    let _workspace_write_lock =
+        crate::storage::WorkspaceWriteLock::acquire_and_recover(app_data_root)?;
     let layout = ensure_workspace_git(app_data_root)?;
     recover_storage_transactions(app_data_root, &layout)?;
     Ok(layout)

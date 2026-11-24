@@ -28,6 +28,10 @@ pub struct WorkspaceWriteLock {
 }
 
 impl WorkspaceWriteLock {
+    /// 获取工作区写锁，不做任何目录扫描或事务恢复。
+    ///
+    /// 恢复只在工作区启动/打开时显式执行一次（[`Self::acquire_and_recover`]），
+    /// 避免每次编辑取锁都遍历 contribution/journal 目录。
     pub fn acquire(app_data_root: &Path) -> Result<Self> {
         let nested = DEPTH.with(|depth| {
             let value = depth.get();
@@ -61,17 +65,17 @@ impl WorkspaceWriteLock {
             DEPTH.with(|depth| depth.set(0));
             return Err(error.into());
         }
-        if let Err(error) =
-            crate::writing_stats::contribution_transaction::recover_pending(app_data_root)
-        {
-            let _ = file.unlock();
-            DEPTH.with(|depth| depth.set(0));
-            return Err(error);
-        }
         Ok(Self {
             _process_guard: Some(process_guard),
             file: Some(file),
         })
+    }
+
+    /// 获取写锁并完成一次启动期恢复。仅供 bootstrap/工作区打开使用。
+    pub fn acquire_and_recover(app_data_root: &Path) -> Result<Self> {
+        let lock = Self::acquire(app_data_root)?;
+        crate::writing_stats::contribution_transaction::recover_pending(app_data_root)?;
+        Ok(lock)
     }
 }
 
@@ -82,6 +86,7 @@ fn open_lock_file(app_data_root: &Path) -> Result<File> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .open(path)?)
 }
 

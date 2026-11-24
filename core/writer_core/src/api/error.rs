@@ -32,6 +32,9 @@ pub enum WriterError {
         new_len: u32,
         reason: String,
     },
+    /// 章节正文 base 版本已过期；提交未发布，冲突材料保留在 Core。
+    #[error("Chapter version conflict")]
+    ChapterVersionConflict,
     #[error("Not implemented")]
     NotImplemented,
     #[error("Refuse to delete root")]
@@ -92,6 +95,7 @@ impl WriterError {
             WriterError::VolumeNotFound => "VOLUME_NOT_FOUND",
             WriterError::ChapterNotFound => "CHAPTER_NOT_FOUND",
             WriterError::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
+            WriterError::ChapterVersionConflict => "CHAPTER_VERSION_CONFLICT",
             WriterError::NotImplemented => "NOT_IMPLEMENTED",
             WriterError::RefuseToDeleteRoot => "REFUSE_DELETE_ROOT",
             WriterError::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
@@ -121,6 +125,7 @@ impl WriterError {
             WriterError::VolumeNotFound => "error.volume_not_found",
             WriterError::ChapterNotFound => "error.chapter_not_found",
             WriterError::EmptyOverwriteBlocked { .. } => "error.empty_overwrite_blocked",
+            WriterError::ChapterVersionConflict => "error.chapter_version_conflict",
             WriterError::NotImplemented => "error.not_implemented",
             WriterError::RefuseToDeleteRoot => "error.refuse_delete_root",
             WriterError::InvalidDeleteTarget(_) => "error.invalid_delete_target",
@@ -237,6 +242,7 @@ impl From<crate::error::Error> for WriterError {
                 new_len: new_len as u32,
                 reason,
             },
+            Error::ChapterVersionConflict { .. } => WriterError::ChapterVersionConflict,
             Error::NotImplemented => WriterError::NotImplemented,
             Error::RefuseToDeleteRoot => WriterError::RefuseToDeleteRoot,
             Error::InvalidDeleteTarget(s) => WriterError::InvalidDeleteTarget(s),

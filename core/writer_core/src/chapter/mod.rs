@@ -29,12 +29,22 @@ use crate::error::Result;
 use chrono::Utc;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
 pub(crate) mod changes;
 pub use changes::*;
+
+pub(crate) mod commit;
+pub use commit::{
+    ChapterChangeReceipt, ChapterCommitOutcome, ChapterCommitReceipt, ChapterCommitRequest,
+    ChapterCommitSource, ChapterConflict, ChapterKey, ChapterMutationKind, ChapterVersion,
+};
+
+mod save;
+pub(crate) use save::save_chapter_verified_with_options_and_files;
 
 /// 章节元数据结构体。
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -49,6 +59,15 @@ pub struct Chapter {
     pub hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// 章节对象 generation：创建时分配，删除重建后改变。旧 meta 无此字段。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub object_generation: String,
+    /// 跨进程持久化 revision；只在正文真实变化时推进。旧 meta 默认 0。
+    #[serde(default)]
+    pub revision: u64,
+    /// 正文 SHA-256，由提交协议写入。旧 meta 为空，读取时按正文补算。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content_sha256: String,
 }
 
 /// 章节内容（元数据 + 正文）。
@@ -56,6 +75,8 @@ pub struct Chapter {
 pub struct ChapterContent {
     pub meta: Chapter,
     pub content: String,
+    /// 与 `content` 同一时刻的持久化版本。
+    pub version: ChapterVersion,
 }
 
 /// 章节保存回执（用于客户端确认保存成功）。
@@ -70,6 +91,12 @@ pub struct ChapterSaveReceipt {
     pub meta_hash: String,
     pub updated_at: String,
     pub word_count: u32,
+    /// 本次提交后的准确持久化版本；no-op 时与打开时一致。
+    pub version: ChapterVersion,
+    /// 本次提交的 durable journal ID；无真实写入时为空。
+    pub transaction_id: String,
+    /// journal 中尚未确认的投影 ID（例如编辑事件）。
+    pub pending_projections: Vec<String>,
 }
 
 /// 列出项目下所有有效的章节 ID（跨卷扫描）。
@@ -241,6 +268,9 @@ fn create_chapter_with_id_and_order(
         word_count: 0,
         hash: String::new(),
         note: None,
+        object_generation: Uuid::new_v4().to_string(),
+        revision: 0,
+        content_sha256: format!("{:x}", sha2::Sha256::digest(b"")),
     };
 
     let chapter_dir = project_root
@@ -266,23 +296,12 @@ pub fn read_chapter(
     volume_id: &str,
     chapter_id: &str,
 ) -> Result<ChapterContent> {
-    let chapter_dir = project_root
-        .join("volumes")
-        .join(volume_id)
-        .join("chapters")
-        .join(chapter_id);
-    let meta_path = chapter_dir.join("chapter.meta.json");
-    let md_path = chapter_dir.join("chapter.md");
-
-    if !meta_path.exists() || !md_path.exists() {
-        return Err(crate::error::Error::ChapterNotFound);
-    }
-
-    let meta_str = fs::read_to_string(&meta_path)?;
-    let meta: Chapter = serde_json::from_str(&meta_str)?;
-    let content = fs::read_to_string(&md_path)?;
-
-    Ok(ChapterContent { meta, content })
+    let (meta, content, version) = commit::read_chapter_state(project_root, volume_id, chapter_id)?;
+    Ok(ChapterContent {
+        meta,
+        content,
+        version,
+    })
 }
 
 /// 保存章节正文（带空内容覆盖保护）。成功时丢弃回执。
@@ -352,6 +371,58 @@ pub fn clear_chapter_content_verified(
 /// 1. 通过 `SaveTransaction` 原子写入 `chapter.md` 和 `chapter.meta.json`
 /// 2. 写入后重新读取文件并计算 hash，与预期 hash 比对
 /// 3. 验证失败返回错误，但文件已被事务提交（无法自动回滚）
+/// 保存章节正文并核对调用方 base 版本。
+///
+/// `expected_version` 与磁盘当前版本不一致时返回
+/// `ChapterVersionConflict`，不发布任何正文投影；三方材料保存在
+/// project 的 `app-meta/chapter-commits/conflicts/` 下。
+#[allow(clippy::too_many_arguments)]
+pub fn save_chapter_verified_with_version(
+    project_root: &Path,
+    app_data_root: Option<&Path>,
+    volume_id: &str,
+    chapter_id: &str,
+    content: &str,
+    allow_empty_overwrite: bool,
+    expected_version: Option<ChapterVersion>,
+    base_content: Option<&str>,
+) -> Result<ChapterSaveReceipt> {
+    save_chapter_verified_with_options_and_files(
+        project_root,
+        app_data_root,
+        volume_id,
+        chapter_id,
+        content,
+        allow_empty_overwrite,
+        &[],
+        expected_version,
+        base_content,
+        &[],
+    )
+    .map(|outcome| outcome.receipt)
+}
+
+/// 清空章节正文并核对 base 版本。
+pub fn clear_chapter_content_verified_with_version(
+    project_root: &Path,
+    app_data_root: Option<&Path>,
+    volume_id: &str,
+    chapter_id: &str,
+    expected_version: Option<ChapterVersion>,
+    base_content: Option<&str>,
+) -> Result<ChapterSaveReceipt> {
+    save_chapter_verified_with_version(
+        project_root,
+        app_data_root,
+        volume_id,
+        chapter_id,
+        "",
+        true,
+        expected_version,
+        base_content,
+    )
+}
+
 pub(super) fn save_chapter_verified_with_options(
     project_root: &Path,
     volume_id: &str,
@@ -361,117 +432,17 @@ pub(super) fn save_chapter_verified_with_options(
 ) -> Result<ChapterSaveReceipt> {
     save_chapter_verified_with_options_and_files(
         project_root,
+        None,
         volume_id,
         chapter_id,
         content,
         allow_empty_overwrite,
         &[],
+        None,
+        None,
+        &[],
     )
-}
-
-/// Save the chapter and additional project-local records in the same
-/// recoverable file transaction.
-pub(super) fn save_chapter_verified_with_options_and_files(
-    project_root: &Path,
-    volume_id: &str,
-    chapter_id: &str,
-    content: &str,
-    allow_empty_overwrite: bool,
-    additional_files: &[(String, String)],
-) -> Result<ChapterSaveReceipt> {
-    let chapter_dir = project_root
-        .join("volumes")
-        .join(volume_id)
-        .join("chapters")
-        .join(chapter_id);
-    let meta_path = chapter_dir.join("chapter.meta.json");
-    let md_path = chapter_dir.join("chapter.md");
-
-    if !meta_path.exists() {
-        return Err(crate::error::Error::ChapterNotFound);
-    }
-
-    let old_content = if md_path.exists() {
-        fs::read_to_string(&md_path)?
-    } else {
-        String::new()
-    };
-
-    // 空覆盖保护只看真正的空字符串 — 纯空白正文（"\n"、空格、制表符）
-    // 是用户正文，原样保存，不 trim、不拦截。
-    if !allow_empty_overwrite && !old_content.is_empty() && content.is_empty() {
-        let reason = "new_content_empty_without_allow_empty_overwrite".to_string();
-        log::warn!(
-            "blocked_empty_overwrite chapter_id={} old_len={} new_len={} reason={}",
-            chapter_id,
-            old_content.len(),
-            content.len(),
-            reason
-        );
-        return Err(crate::error::Error::EmptyOverwriteBlocked {
-            chapter_id: chapter_id.to_string(),
-            old_len: old_content.len(),
-            new_len: content.len(),
-            reason,
-        });
-    }
-
-    let meta_str = fs::read_to_string(&meta_path)?;
-    let mut meta: Chapter = serde_json::from_str(&meta_str)?;
-
-    meta.updated_at = Utc::now().to_rfc3339();
-    meta.word_count = calculate_word_count(content);
-
-    // Simple hash for demonstration
-    meta.hash = format!("{:x}", md5::compute(content.as_bytes()));
-
-    let updated_meta_str = serde_json::to_string_pretty(&meta)?;
-
-    // Transactional write: all files staged first, then atomic rename
-    let mut tx = crate::storage::transaction::SaveTransaction::new(project_root);
-
-    let md_relative = md_path
-        .strip_prefix(project_root)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    let meta_relative = meta_path
-        .strip_prefix(project_root)
-        .unwrap_or(&meta_path)
-        .to_string_lossy()
-        .replace('\\', "/");
-
-    tx.add_file(&md_relative, content)?;
-    tx.add_file(&meta_relative, &updated_meta_str)?;
-    for (relative_path, file_content) in additional_files {
-        tx.add_file(relative_path, file_content)?;
-    }
-
-    tx.commit()?;
-
-    let read_back = fs::read_to_string(&md_path)?;
-    let read_back_hash = format!("{:x}", md5::compute(read_back.as_bytes()));
-    if read_back_hash != meta.hash {
-        return Err(crate::error::Error::Other(format!(
-            "chapter save verification failed: expected_hash={}, actual_hash={}",
-            meta.hash, read_back_hash
-        )));
-    }
-
-    let chapter_relative_path = md_path
-        .strip_prefix(project_root)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .replace('\\', "/");
-
-    Ok(ChapterSaveReceipt {
-        chapter_relative_path,
-        content_len: content.len(),
-        content_hash: meta.hash.clone(),
-        meta_hash: format!("{:x}", md5::compute(updated_meta_str.as_bytes())),
-        updated_at: meta.updated_at,
-        word_count: meta.word_count,
-    })
+    .map(|outcome| outcome.receipt)
 }
 
 pub fn update_chapter_note(

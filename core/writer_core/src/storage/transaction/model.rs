@@ -59,6 +59,11 @@ pub struct TransactionEntry {
     /// 旧 manifest 中无此字段时反序列化为 `false`（向后兼容）。
     #[serde(default)]
     pub is_delete: bool,
+    /// 本事务期望写入的目标内容 MD5。恢复时目标已存在且摘要不同，说明
+    /// 之后已有更新版本写入，绝不能再用旧 staging 覆盖。旧 manifest 无此
+    /// 字段时为 `None`，保持旧恢复语义。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_after_hash: Option<String>,
 }
 
 /// 事务生命周期阶段。

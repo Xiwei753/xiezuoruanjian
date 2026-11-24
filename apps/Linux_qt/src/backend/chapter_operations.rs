@@ -173,9 +173,7 @@ impl AppBackend {
                     self.debug_log("chapter", "save_chapter_success", &format!("len={}", len));
                     self.current_save_status = "已保存".to_string();
                     // Issue #982：只更新本章正文条目，不重建整个工作区索引。
-                    let title = self
-                        .chapter_title_from_tree(&p, &v, &c)
-                        .unwrap_or_default();
+                    let title = self.chapter_title_from_tree(&p, &v, &c).unwrap_or_default();
                     let entry = writer_core::search::extractor::extract_chapter_body_entry(
                         &p, &v, &c, &title, &text_str,
                     );
@@ -237,6 +235,132 @@ impl AppBackend {
         };
 
         result_obj
+    }
+
+    /// 保存章节正文并携带调用方 base 版本。
+    ///
+    /// QML 把上次打开/保存得到的 generation/revision/sha256 一并传回；
+    /// Core 发现磁盘版本已前进时返回 `CHAPTER_VERSION_CONFLICT`，不发布正文，
+    /// 编辑器保留当前 buffer，避免旧文本覆盖新版本。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn save_chapter_versioned(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        content: QString,
+        allow_empty_overwrite: bool,
+        expected_generation: QString,
+        expected_revision: i64,
+        expected_content_sha256: QString,
+        base_content: QString,
+    ) -> QJsonObject {
+        let p = project_id.to_string();
+        let v = volume_id.to_string();
+        let c = chapter_id.to_string();
+        let text_str = content.to_string();
+        let len = text_str.len();
+        let expected = writer_core::api::ChapterVersionDto {
+            object_generation: expected_generation.to_string(),
+            revision: u64::try_from(expected_revision).unwrap_or(0),
+            content_sha256: expected_content_sha256.to_string(),
+        };
+        self.debug_log(
+            "chapter",
+            "save_chapter_versioned_start",
+            &format!(
+                "len={} expected_revision={} expected_sha256={}",
+                len, expected.revision, expected.content_sha256
+            ),
+        );
+        let Some(api) = self.core_api() else {
+            self.debug_error(
+                "chapter",
+                "save_chapter_versioned_failed",
+                "core_not_initialized",
+            );
+            self.current_save_status = "保存失败".to_string();
+            return bridge_error_object("error.core_error", "CORE_ERROR", "Core not initialized");
+        };
+
+        let has_expected = !expected.object_generation.is_empty()
+            || expected.revision > 0
+            || !expected.content_sha256.is_empty();
+        let expected = has_expected.then_some(expected);
+        let base = (!base_content.is_empty()).then(|| base_content.to_string());
+        match api.save_chapter_content_versioned(&p, &v, &c, &text_str, expected, base) {
+            Ok(receipt) => {
+                self.debug_log(
+                    "chapter",
+                    "save_chapter_versioned_success",
+                    &format!("len={} revision={}", len, receipt.version.revision),
+                );
+                self.current_save_status = "已保存".to_string();
+                let title = self.chapter_title_from_tree(&p, &v, &c).unwrap_or_default();
+                let entry = writer_core::search::extractor::extract_chapter_body_entry(
+                    &p, &v, &c, &title, &text_str,
+                );
+                self.search_bridge()
+                    .apply_updates(vec![writer_core::search::SearchIndexUpdate {
+                        action: writer_core::search::SearchIndexAction::Upsert,
+                        object_id: entry.object_id.clone(),
+                        scope: entry.scope,
+                        title: entry.title.clone(),
+                        body: entry.body.clone(),
+                        target: Some(entry.target.clone()),
+                    }]);
+                serde_to_qjson_object(serde_json::json!({
+                    "success": true,
+                    "data": serde_json::to_value(receipt).unwrap_or_default(),
+                    "changedEntities": ["ChapterContent"]
+                }))
+            }
+            Err(error) => {
+                let code = error.code();
+                self.debug_error(
+                    "chapter",
+                    "save_chapter_versioned_failed",
+                    &format!("code={} error={}", code, error),
+                );
+                self.current_save_status = "保存冲突".to_string();
+                let message_key = error.message_key();
+                self.set_error(message_key);
+                serde_to_qjson_object(serde_json::json!({
+                    "success": false,
+                    "errorCode": code,
+                    "messageKey": message_key,
+                    "messageArgs": error.params(),
+                    "rawError": error.to_string(),
+                    "changedEntities": []
+                }))
+            }
+        }
+    }
+
+    /// 只读章节版本探针，供同步后先比较再决定是否重载正文。
+    pub(crate) fn read_chapter_version(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+    ) -> QJsonObject {
+        let p = project_id.to_string();
+        let v = volume_id.to_string();
+        let c = chapter_id.to_string();
+        match self.core_api() {
+            Some(api) => match api.read_chapter_version(&p, &v, &c) {
+                Ok(version) => bridge_success_object(serde_json::json!({
+                    "projectId": p,
+                    "volumeId": v,
+                    "chapterId": c,
+                    "version": serde_json::to_value(version).unwrap_or_default()
+                })),
+                Err(error) => {
+                    bridge_error_object(error.message_key(), error.code(), &error.to_string())
+                }
+            },
+            None => bridge_error_object("error.core_error", "CORE_ERROR", "Core not initialized"),
+        }
     }
 
     pub(crate) fn clear_chapter_content(

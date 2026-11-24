@@ -81,10 +81,31 @@ impl WriterCoreApi {
         content: &str,
         events: Vec<crate::api::EditorChangeStatsInputDto>,
     ) -> ApiResult<crate::api::types::ChapterSaveReceiptDto> {
-        let receipt = self
-            .save_chapter_content_with_options(project_id, volume_id, chapter_id, content, false)?;
+        // 先把本批事件 ID 固定到正文 commit journal，正文 durable 后逐条补投影；
+        // 崩溃或磁盘错误时 journal 保留 pending ID，重发同一批事件即可补齐。
+        let projection_ids: Vec<String> = events
+            .iter()
+            .map(|event| event.event_id.clone())
+            .filter(|event_id| !event_id.is_empty())
+            .collect();
+        let (receipt, core_receipt) = self.save_chapter_with_projection_ids(
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+            projection_ids.clone(),
+        )?;
+        let project_root = self.projects_root.join(project_id);
         for event in events {
+            let event_id = event.event_id.clone();
             self.record_editor_change_stats(event)?;
+            if !event_id.is_empty() && !core_receipt.transaction_id.is_empty() {
+                crate::chapter::commit::mark_chapter_commit_projection(
+                    &project_root,
+                    &core_receipt.transaction_id,
+                    &event_id,
+                )?;
+            }
         }
         // 正文保存事务完成后再写检查点：checkpoint 是事件流的加速索引，
         // 失败不影响正文与已确认事件，但会明确返回错误供上层重试。

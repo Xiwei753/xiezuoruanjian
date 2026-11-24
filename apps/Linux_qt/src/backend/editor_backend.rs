@@ -126,6 +126,25 @@ pub struct EditorBackend {
         ) -> QJsonObject
     ),
     #[allow(dead_code)]
+    save_chapter_versioned: qt_method!(
+        fn(
+            &mut self,
+            project_id: QString,
+            volume_id: QString,
+            chapter_id: QString,
+            content: QString,
+            allow_empty_overwrite: bool,
+            expected_generation: QString,
+            expected_revision: i64,
+            expected_content_sha256: QString,
+            base_content: QString,
+        ) -> QJsonObject
+    ),
+    #[allow(dead_code)]
+    read_chapter_version: qt_method!(
+        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
+    ),
+    #[allow(dead_code)]
     clear_chapter_content: qt_method!(
         fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
     ),
@@ -496,6 +515,50 @@ impl EditorBackend {
             qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
         })
     }
+    #[allow(clippy::too_many_arguments)]
+    fn save_chapter_versioned(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        content: QString,
+        allow_empty_overwrite: bool,
+        expected_generation: QString,
+        expected_revision: i64,
+        expected_content_sha256: QString,
+        base_content: QString,
+    ) -> QJsonObject {
+        let result = self.with_app_mut(|app| {
+            app.save_chapter_versioned(
+                project_id,
+                volume_id,
+                chapter_id,
+                content,
+                allow_empty_overwrite,
+                expected_generation,
+                expected_revision,
+                expected_content_sha256,
+                base_content,
+            )
+        });
+        if result.is_ok() {
+            self.save_status_changed();
+        }
+        result.unwrap_or_else(|_| {
+            qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
+        })
+    }
+    fn read_chapter_version(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+    ) -> QJsonObject {
+        self.with_app_mut(|app| app.read_chapter_version(project_id, volume_id, chapter_id))
+            .unwrap_or_else(|_| {
+                qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
+            })
+    }
     fn clear_chapter_content(
         &mut self,
         project_id: QString,
@@ -810,9 +873,7 @@ impl EditorBackend {
                 || !path.join("vocab.txt").is_file()
                 || !path.join("tokenizer.json").is_file()
             {
-                return Err(
-                    "模型目录必须包含 model.onnx、vocab.txt 与 tokenizer.json".to_string()
-                );
+                return Err("模型目录必须包含 model.onnx、vocab.txt 与 tokenizer.json".to_string());
             }
             Ok(path.to_string_lossy().into_owned())
         })();
@@ -1411,11 +1472,7 @@ impl EditorBackend {
             })
     }
 
-    fn export_chapter_proof_object(
-        &self,
-        chapter_id: QString,
-        device_id: QString,
-    ) -> QJsonObject {
+    fn export_chapter_proof_object(&self, chapter_id: QString, device_id: QString) -> QJsonObject {
         self.with_app(|app| app.export_chapter_proof_object(chapter_id, device_id))
             .unwrap_or_else(|_| {
                 qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
@@ -1526,10 +1583,7 @@ impl EditorBackend {
         }
     }
     fn resume_writing_session(&self) {
-        if self
-            .with_app(|app| app.resume_writing_session())
-            .is_err()
-        {
+        if self.with_app(|app| app.resume_writing_session()).is_err() {
             crate::backend::app_backend::debug_error_static(
                 "editor_backend",
                 "BORROW_CONFLICT",

@@ -508,7 +508,7 @@ Kirigami.ApplicationWindow {
                 || (editorBackend && editorBackend.save_status
                     ? String(editorBackend.save_status) : "")
             if (!manualSyncBarrierFailureReason
-                    && !/失败|error|failed|阻止|拒绝|未保存/i.test(saveReason))
+                    && !/\u5931\u8d25|error|failed|\u963b\u6b62|\u62d2\u7edd|\u672a\u4fdd\u5b58/i.test(saveReason))
                 saveReason = qsTr("编辑器未能保存当前章节")
             return showManualSyncNotStarted(
                 qsTr("当前编辑内容尚未保存。原因：%1").arg(saveReason),
@@ -1147,7 +1147,7 @@ Kirigami.ApplicationWindow {
     function openConflictInProject(targetKind, projectId, path) {
         // Issue #902 第二十轮：App 冲突在 SyncPage 内部处理，不走 openWriting。
         if (targetKind === "app") return
-        if (!projectId) return  // project target 必须有 projectId
+        if (!projectId) return  // project target requires projectId
         // Issue #984：从星图打开冲突前必须先提交节点编辑；失败时不要关设置，
         // 也不要写 pendingConflict，避免污染下一次打开状态。
         if (!window.flushStarmapBeforeRouteChange()) return
@@ -1342,10 +1342,15 @@ Kirigami.ApplicationWindow {
             appController.refreshStateImmediate(qsTr("刷新工作区内容失败"));
 
             if (appController.inWriting && writingWorkspaceLoader.item) {
+                var rawChanges = ""
+                try { rawChanges = syncBackend.sync_chapter_changes_json || "" } catch (e) { rawChanges = "" }
+                var chapterChanges = []
+                try { chapterChanges = rawChanges ? JSON.parse(rawChanges) : [] } catch (e) { chapterChanges = [] }
                 writingWorkspaceLoader.item.reconcileActiveChapter(
                     appController.appState && appController.appState.selected
                         ? appController.appState.selected
-                        : null
+                        : null,
+                    chapterChanges
                 );
             }
         }
@@ -1947,7 +1952,7 @@ Kirigami.ApplicationWindow {
         anchors.bottomMargin: 16
         width: Math.min(parent.width - 32, 620)
         height: feedbackColumn.implicitHeight + 24
-        radius: 8
+        radius: designTokens.radiusSm
         color: Kirigami.Theme.backgroundColor
         border.width: 1
         border.color: window.manualSyncFeedbackIsError

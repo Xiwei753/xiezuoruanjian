@@ -1859,6 +1859,7 @@ impl WriterCoreApi {
 
         let mut all_targets: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut all_committed_paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut chapter_changes: Vec<crate::chapter::ChapterChangeReceipt> = Vec::new();
         let mut pending_commits: Vec<PendingTargetCommit> = Vec::new();
         let mut completed_transfer_results: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut catalog_snapshot = plan.remote_catalog_snapshot.clone();
@@ -2114,13 +2115,13 @@ impl WriterCoreApi {
             // failed push cannot advance known_files for unpushed content.
             // Issue #1021 复核：恢复只在一轮同步内做一次，所有 target 复用同一
             // 已落盘事件集合/未完成问题，避免每组 target 重解压全部历史事件。
-            let mut proof_recovery_state = match self.core_write().recover_pending_sync_proof_state()
-            {
-                Ok(state) => state,
-                Err(error) => crate::sync::proof_intent::ProofRecoveryState::failed(format!(
-                    "recover pending sync proof intents before commit failed: {error}"
-                )),
-            };
+            let mut proof_recovery_state =
+                match self.core_write().recover_pending_sync_proof_state() {
+                    Ok(state) => state,
+                    Err(error) => crate::sync::proof_intent::ProofRecoveryState::failed(format!(
+                        "recover pending sync proof intents before commit failed: {error}"
+                    )),
+                };
             for pending in pending_commits {
                 let PendingTargetCommit {
                     target_index,
@@ -2290,6 +2291,11 @@ impl WriterCoreApi {
                     serde_json::Value::Bool(!target_committed_paths.is_empty()),
                 );
                 record_sync_diagnostic("sync.target.end", "sync.target", target_end_fields);
+                chapter_changes.extend(crate::sync::commit_helpers::build_chapter_change_receipts(
+                    &self.app_data_root,
+                    &target_committed_paths,
+                    diagnostic_operation_id,
+                ));
                 all_targets.push(target_with_conflicts);
                 all_committed_paths
                     .extend(target_committed_paths.into_iter().map(|path| path.path));
@@ -2351,6 +2357,7 @@ impl WriterCoreApi {
 
         let mut result: FullSyncResultDto = result.into();
         result.local_content_changed = local_content_changed;
+        result.chapter_changes = chapter_changes.into_iter().map(Into::into).collect();
         Ok(result)
     }
 
@@ -2487,20 +2494,17 @@ impl WriterCoreApi {
                 return (target_with_error, Vec::new());
             }
             let intent_root = core.sync_proof_intent_root();
-            let intent_sink = crate::sync::proof_intent::ProofIntentSink::new(
-                &intent_root,
-                &sync_sources,
-            );
+            let intent_sink =
+                crate::sync::proof_intent::ProofIntentSink::new(&intent_root, &sync_sources);
             let mut target_with_conflicts = target_sync_result.clone();
             // 积压证明未完成时不能继续改同一项目正文：后续 Commit 会让新的
             // before/after 越过旧事件，证明链将无法按发生顺序接续。
             if let Some(project_id) = target_sync_result.project_id.as_deref() {
                 let issues = proof_recovery_state.unresolved_for_project(Some(project_id));
                 if !issues.is_empty() {
-                    target_with_conflicts.result.status =
-                        crate::sync::SyncStatus::RecoverableError(
-                            "sync_proof_recovery_pending".to_string(),
-                        );
+                    target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
+                        "sync_proof_recovery_pending".to_string(),
+                    );
                     let detail = issues
                         .iter()
                         .take(3)
@@ -2540,10 +2544,14 @@ impl WriterCoreApi {
             // 下次保存时被统归为 Unknown 外部变更。事件以 Core 当前证明链头为
             // before，Apply 读取刚写入 projects_root 的实际正文；Delete 记录真实
             // 删除事实。证明落盘失败必须反映到该 target，不能只打 warn 后假装成功。
+            // 文件已经落盘但事务 finish/冲突快照失败时，committed_paths 仍
+            // 非空；证明事实必须补记，否则下一轮会因缺少 SyncRemote 事件而
+            // 把真实同步变更误判为旧快照。
             if matches!(
                 commit_result,
                 crate::sync::commit_helpers::TargetCommitResult::Ok
-            ) {
+            ) || !committed_paths.is_empty()
+            {
                 let mut proof_errors: Vec<String> = Vec::new();
                 let mut proof_completed_ids = std::collections::HashSet::new();
                 for (action_index, committed) in committed_paths.iter().enumerate() {
@@ -3153,9 +3161,7 @@ enum StarmapCommittedPath {
 /// 从 workspace-relative 路径分类星图变更。
 ///
 /// `starmaps/index.json` 不对应任何画布或共享定义，返回 `None`。
-fn classify_starmap_committed_path(
-    path: &std::path::Path,
-) -> Option<StarmapCommittedPath> {
+fn classify_starmap_committed_path(path: &std::path::Path) -> Option<StarmapCommittedPath> {
     let rel = path.to_str()?;
     let rest = rel.strip_prefix("starmaps/")?;
     if rest.is_empty() || rest == "index.json" {
@@ -3215,10 +3221,9 @@ fn starmap_ids_for_committed_paths<'a>(
         }
     }
     for asset_id in shared_assets {
-        for instance in crate::starmap::library::instances_for_asset(
-            &core.app_data_root,
-            &asset_id,
-        )? {
+        for instance in
+            crate::starmap::library::instances_for_asset(&core.app_data_root, &asset_id)?
+        {
             starmap_ids.insert(instance.starmap_id);
         }
     }
@@ -3288,12 +3293,10 @@ mod tests {
     /// `classify_starmap_committed_path` 区分真实画布、共享定义和库索引。
     #[test]
     fn classify_starmap_committed_paths_keeps_library_out_of_canvases() {
-        use super::{StarmapCommittedPath, classify_starmap_committed_path};
+        use super::{classify_starmap_committed_path, StarmapCommittedPath};
         use std::path::PathBuf;
 
-        let canvas = |path: &str| {
-            classify_starmap_committed_path(&PathBuf::from(path))
-        };
+        let canvas = |path: &str| classify_starmap_committed_path(&PathBuf::from(path));
         assert_eq!(
             canvas("starmaps/sm_1.meta.json"),
             Some(StarmapCommittedPath::Canvas("sm_1".to_string()))
@@ -3420,7 +3423,9 @@ fn chapter_key_from_path_str(path: &str, default_project_id: Option<&str>) -> Op
 
 #[cfg(test)]
 mod shared_definition_path_tests {
-    use super::{StarmapCommittedPath, classify_starmap_committed_path, starmap_ids_for_committed_paths};
+    use super::{
+        classify_starmap_committed_path, starmap_ids_for_committed_paths, StarmapCommittedPath,
+    };
     use crate::facade::WriterCore;
     use crate::starmap::semantic::{StarMapNodeContent, StarMapProvenance};
     use crate::starmap::types::{StarMapNode, StarMapNodeKind, StarMapNodeStyle, StarMapPoint};
@@ -3456,14 +3461,8 @@ mod shared_definition_path_tests {
         let second = core.create_starmap("画布 B", "", None).unwrap().starmap_id;
         let source = node("n_shared");
         core.add_starmap_node(&first, source, 0.0, 0.0).unwrap();
-        core.add_starmap_node_reference(
-            &second,
-            "n_shared",
-            StarMapPoint::default(),
-            None,
-            None,
-        )
-        .unwrap();
+        core.add_starmap_node_reference(&second, "n_shared", StarMapPoint::default(), None, None)
+            .unwrap();
 
         let definition_path = crate::starmap::library::node_definition_rel_path("n_shared");
         assert_eq!(

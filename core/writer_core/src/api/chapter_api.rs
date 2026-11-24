@@ -450,8 +450,21 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<ChapterContentDto> {
-        self.core_read()
+        self.core_write()
             .open_chapter(project_id, volume_id, chapter_id)
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
+    /// 只读章节当前持久化版本，供编辑器在同步后先探版本再决定是否重载。
+    pub fn read_chapter_version(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> ApiResult<ChapterVersionDto> {
+        self.core_write()
+            .read_chapter_version(project_id, volume_id, chapter_id)
             .map(Into::into)
             .map_err(Into::into)
     }
@@ -464,7 +477,46 @@ impl WriterCoreApi {
         chapter_id: &str,
         content: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        self.save_chapter_content_internal(project_id, volume_id, chapter_id, content, false, false)
+        self.save_chapter_content_internal(
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+            false,
+            false,
+            None,
+            None,
+            &[],
+        )
+        .map(|(dto, _)| dto)
+    }
+
+    /// 保存章节正文并核对调用方 base 版本。
+    ///
+    /// `expected_version` 与磁盘当前版本不一致时返回
+    /// `CHAPTER_VERSION_CONFLICT`；`base_content` 只用于冲突材料，正文比较
+    /// 始终以磁盘当前内容为准。旧客户端可继续使用无版本入口。
+    pub fn save_chapter_content_versioned(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<String>,
+    ) -> ApiResult<ChapterSaveReceiptDto> {
+        self.save_chapter_content_internal(
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+            false,
+            false,
+            expected_version,
+            base_content.as_deref(),
+            &[],
+        )
+        .map(|(dto, _)| dto)
     }
 
     /// 保存章节正文（带空覆盖控制）。`allow_empty_overwrite=true` 绕过安全拦截。
@@ -483,7 +535,11 @@ impl WriterCoreApi {
             content,
             allow_empty_overwrite,
             false,
+            None,
+            None,
+            &[],
         )
+        .map(|(dto, _)| dto)
     }
 
     /// 清空章节正文（等价于 `save_chapter_content_with_options(..., true)`）。
@@ -493,9 +549,69 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        self.save_chapter_content_internal(project_id, volume_id, chapter_id, "", true, true)
+        self.save_chapter_content_internal(
+            project_id,
+            volume_id,
+            chapter_id,
+            "",
+            true,
+            true,
+            None,
+            None,
+            &[],
+        )
+        .map(|(dto, _)| dto)
     }
 
+    /// 清空章节正文并核对 base 版本。
+    pub fn clear_chapter_content_versioned(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<String>,
+    ) -> ApiResult<ChapterSaveReceiptDto> {
+        self.save_chapter_content_internal(
+            project_id,
+            volume_id,
+            chapter_id,
+            "",
+            true,
+            true,
+            expected_version,
+            base_content.as_deref(),
+            &[],
+        )
+        .map(|(dto, _)| dto)
+    }
+
+    /// 保存正文并在同一 journal 决议中登记编辑事件投影。
+    ///
+    /// 返回的 receipt 带 `transaction_id` / `pending_projections`；调用方逐条
+    /// 记录事件后调用 [`crate::chapter::commit::mark_chapter_commit_projection`]。
+    pub fn save_chapter_with_projection_ids(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        projection_ids: Vec<String>,
+    ) -> ApiResult<(ChapterSaveReceiptDto, crate::chapter::ChapterSaveReceipt)> {
+        self.save_chapter_content_internal(
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+            false,
+            false,
+            None,
+            None,
+            &projection_ids,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn save_chapter_content_internal(
         &self,
         project_id: &str,
@@ -504,34 +620,31 @@ impl WriterCoreApi {
         content: &str,
         allow_empty_overwrite: bool,
         clear_content: bool,
-    ) -> ApiResult<ChapterSaveReceiptDto> {
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<&str>,
+        projection_ids: &[String],
+    ) -> ApiResult<(ChapterSaveReceiptDto, crate::chapter::ChapterSaveReceipt)> {
         let pending_annotations =
             self.prepare_annotation_edit_save(project_id, chapter_id, content)?;
         let additional_files = pending_annotations
             .as_ref()
             .map(|pending| pending.prepared.files.clone())
             .unwrap_or_default();
-        let (receipt, change_set) = if additional_files.is_empty() {
-            self.core_write()
-                .save_chapter_verified_with_changes_with_options(
-                    project_id,
-                    volume_id,
-                    chapter_id,
-                    content,
-                    allow_empty_overwrite,
-                )
-        } else {
-            self.core_write()
-                .save_chapter_verified_with_changes_and_files_with_options(
-                    project_id,
-                    volume_id,
-                    chapter_id,
-                    content,
-                    allow_empty_overwrite,
-                    &additional_files,
-                )
-        }
-        .map_err(WriterError::from)?;
+        let expected_version = expected_version.map(ChapterVersionDto::into_core);
+        let (receipt, change_set) = self
+            .core_write()
+            .save_chapter_verified_with_changes_versioned(
+                project_id,
+                volume_id,
+                chapter_id,
+                content,
+                allow_empty_overwrite,
+                &additional_files,
+                expected_version,
+                base_content,
+                projection_ids,
+            )
+            .map_err(WriterError::from)?;
 
         if clear_content {
             self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -562,15 +675,19 @@ impl WriterCoreApi {
             }
             self.refresh_annotation_search_index(project_id, "save_chapter_content");
         }
-        let _ = self.record_workspace_change_set_history(
-            &change_set,
-            if clear_content {
-                "clear_chapter_content"
-            } else {
-                "save_chapter_content"
-            },
-        );
-        Ok(receipt.into())
+        // 空 change set 表示正文、元数据和附加文件都没有实质变化：
+        // 不写新的 workspace history / 对象 mutation，也不刷新版本事实。
+        if !change_set.is_empty() {
+            let _ = self.record_workspace_change_set_history(
+                &change_set,
+                if clear_content {
+                    "clear_chapter_content"
+                } else {
+                    "save_chapter_content"
+                },
+            );
+        }
+        Ok((receipt.clone().into(), receipt))
     }
 
     /// 更新章节备注（note 字段，独立于正文）。

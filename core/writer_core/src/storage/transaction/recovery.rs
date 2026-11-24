@@ -148,6 +148,20 @@ fn recover_transaction_dir(
         return;
     }
 
+    fn file_md5(path: &Path) -> Option<String> {
+        fs::read(path)
+            .ok()
+            .map(|bytes| format!("{:x}", md5::compute(&bytes)))
+    }
+
+    /// 目标当前内容是否仍是本事务期望写下的内容。
+    ///
+    /// `None` 表示旧 manifest 没有摘要，只能沿用旧恢复语义；`Some(true)`
+    /// 表示已提交；`Some(false)` 表示之后已有更新版本，绝不能覆盖。
+    fn target_matches_expected(target: &Path, expected: &str) -> Option<bool> {
+        file_md5(target).map(|actual| actual == expected)
+    }
+
     // Prepared 阶段恢复：重放 rename。
     let manifest: TransactionManifest = match fs::read_to_string(&manifest_path) {
         Ok(s) => match serde_json::from_str(&s) {
@@ -212,6 +226,21 @@ fn recover_transaction_dir(
         } else {
             let staging_path = tx_dir.join(&tx_entry.staging_filename);
             let target_path = target_root.join(&tx_entry.target_relative);
+            // 目标已被后续版本更新时，旧 staging 的重放必须停下。旧 manifest
+            // 没有 expected_after_hash，保持原语义；新 manifest 一律 CAS。
+            if let Some(expected) = tx_entry.expected_after_hash.as_deref() {
+                if target_path.exists()
+                    && target_matches_expected(&target_path, expected) == Some(false)
+                {
+                    log::warn!(
+                        "[transaction] recovery target advanced, refusing stale overwrite: {} -> {}",
+                        staging_path.display(),
+                        target_path.display()
+                    );
+                    missing_files.push(tx_entry.target_relative.clone());
+                    continue;
+                }
+            }
             if staging_path.exists() {
                 if let Some(parent) = target_path.parent() {
                     if !created_dirs.contains(parent) && fs::create_dir_all(parent).is_ok() {
@@ -245,6 +274,18 @@ fn recover_transaction_dir(
             } else if target_path.exists() {
                 // 崩溃可能发生在 rename 完成、manifest 尚未写成 FilesCommitted
                 // 的窗口内：staging 已消失但目标正文已就位，说明该条已提交。
+                // 有 expected_after_hash 时必须确认目标仍是该内容，不能用
+                // “存在即提交”把更新的正文误判为本次事务产物。
+                if let Some(expected) = tx_entry.expected_after_hash.as_deref() {
+                    if target_matches_expected(&target_path, expected) == Some(false) {
+                        log::warn!(
+                            "[transaction] recovery target content differs from expected, preserving: {}",
+                            target_path.display()
+                        );
+                        missing_files.push(tx_entry.target_relative.clone());
+                        continue;
+                    }
+                }
                 if let Err(e) = crate::storage::sync_parent(&target_path) {
                     log::warn!(
                         "[transaction] recovery existing target sync_parent failed: {}: {}",
