@@ -102,10 +102,38 @@ Item {
     readonly property int rightPaneMaxWidth: 520
     readonly property int canvasMinWidth: 240
 
-    // 素材库归属独立于星图根/嵌入关系；当前作品库 scope 只来自当前活动作品的业务 ID。
+    // 素材库归属独立于星图根/嵌入关系；当前作品库 scope 由根图真实归属决定。
     readonly property string globalLibraryScopeJson: "{\"kind\":\"global\"}"
-    readonly property string projectLibraryScopeJson: root.annotationProjectId !== ""
-        ? JSON.stringify({ "kind": "project", "projectId": root.annotationProjectId })
+
+    // Issue #1057：作品库范围跟随"当前工作区根图"的真实归属，而不是活动
+    // 子图自己的 projectId；根图是独立星图时留空，不把上次选中的作品或
+    // AI 会话的 "starmap:" 前缀 ID 当作作品归属。
+    function projectIdForRootStarmap(id) {
+        var targetId = String(id || "")
+        if (targetId === "")
+            return ""
+        if (starmapBackendRef && starmapBackendRef.get_starmap_json) {
+            try {
+                var envelope = JSON.parse(String(
+                            starmapBackendRef.get_starmap_json(targetId) || "{}"))
+                var meta = envelope && envelope.success === true ? envelope.data : null
+                if (meta)
+                    return String(meta.projectId || "")
+            } catch (e) {
+            }
+        }
+        // Core 查询不可用时只接受明确的写作作品上下文。
+        var context = String(root.workspaceProjectId || "")
+        if (context !== "" && context.indexOf("starmap:") !== 0)
+            return context
+        return ""
+    }
+
+    readonly property string libraryProjectId: projectIdForRootStarmap(
+        String(canvas.currentRoute.rootStarmapId || root.starmapId || ""))
+
+    readonly property string projectLibraryScopeJson: root.libraryProjectId !== ""
+        ? JSON.stringify({ "kind": "project", "projectId": root.libraryProjectId })
         : ""
 
     // Issue #977：顶栏需要知道当前是根画布还是子画布，以决定返回文案与动作。
@@ -121,8 +149,8 @@ Item {
 
     property var pendingTreeRow: null
 
-    // 根星图切换由 navigationTree.workspaceRootStarmapId 绑定统一处理：
-    // 清空旧根选中/展开状态并重建树，避免这里和绑定各刷新一次。
+    // Issue #1057：目录根 = Canvas 当前 route 根，换根由树自己重建，
+    // Workspace 不再单独绑定初始 root.starmapId。
 
     // Issue #1016：把本次 SplitView 的真实宽度/可见状态上报给顶栏。
     function insertLibraryAsset(kind, assetId, title, scopeJson, targetJson) {
@@ -319,10 +347,12 @@ Item {
     function syncTreeRoute(rootStarmapId, segmentsJson, routeKey) {
         if (!navigationTree)
             return
+        var treeRoot = String(rootStarmapId || canvas.currentRoute.rootStarmapId
+                              || root.starmapId || "")
         // 画布真正换路由时，旧的普通节点高亮已经不属于当前画布。
         if (String(routeKey || "") !== String(navigationTree.currentRouteKey || ""))
             navigationTree.currentObjectKey = ""
-        navigationTree.syncRoute(rootStarmapId, segmentsJson, routeKey)
+        navigationTree.syncRoute(treeRoot, segmentsJson, routeKey)
     }
 
     function activateTreeRoute(rootStarmapId, segmentsJson, routeKey) {
@@ -555,7 +585,7 @@ Item {
                         dt: root.dt
                         starmapBackendRef: root.starmapBackendRef
                         header: qsTr("当前作品素材库")
-                        emptyText: root.annotationProjectId !== ""
+                        emptyText: root.libraryProjectId !== ""
                                    ? qsTr("作品库暂无素材")
                                    : qsTr("请先选择作品")
                         scopeJson: root.projectLibraryScopeJson
@@ -598,7 +628,7 @@ Item {
                         Layout.fillHeight: true
                         dt: root.dt
                         starmapBackendRef: root.starmapBackendRef
-                        workspaceRootStarmapId: root.starmapId
+                        workspaceRootStarmapId: canvas.currentRoute.rootStarmapId || root.starmapId
                         onRouteActivated: function(rootStarmapId, segmentsJson, routeKey) {
                             root.activateTreeRoute(rootStarmapId, segmentsJson, routeKey)
                         }

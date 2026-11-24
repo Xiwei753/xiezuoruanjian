@@ -414,7 +414,9 @@ Item {
 
     // Issue #1014：树导航入口。先让 Core 解析 root + 完整 segments，解析失败
     // 不切换画布；成功时先提交当前节点编辑，再复用 applyRoute / cameraStack。
-    function navigateToTreeRoute(rootStarmapId, segmentsJson, routeKey) {
+    // 形参 expectedRouteKey 只用于校验调用方传入的目标 key；当前真实路由一律读
+    // canvasArea.routeKey，避免形参再次遮蔽同名属性。
+    function navigateToTreeRoute(rootStarmapId, segmentsJson, expectedRouteKey) {
         if (!rootStarmapId)
             return false
         var parsedSegments = []
@@ -432,7 +434,7 @@ Item {
         if (!route)
             return false
         var targetKey = routeKeyOf(route)
-        if (routeKey && String(routeKey) !== targetKey)
+        if (expectedRouteKey && String(expectedRouteKey) !== targetKey)
             return false
         if (starmapBackendRef) {
             var resolved = starmapBackendRef.resolve_starmap_navigation(
@@ -444,15 +446,16 @@ Item {
                 return false
             }
         }
-        if (targetKey === routeKey && currentStarmapId !== "")
+        var oldRouteKey = String(canvasArea.routeKey || "")
+        if (targetKey === oldRouteKey && currentStarmapId !== "")
             return true
         if (!commitPendingNodeEditBeforeNavigation())
             return false
         settleViewportMotion()
         // Issue #1035：离开当前 route 前只记录一次真实镜头，替代原先相机属性
         // 每帧写回 cameraStack 的监听器。
-        if (routeKey)
-            storeCamera(routeKey, cameraSnapshot())
+        if (oldRouteKey)
+            storeCamera(oldRouteKey, cameraSnapshot())
         prepareCanvasSwitch()
         applyRoute(route)
         var cachedCamera = cameraStack[targetKey]

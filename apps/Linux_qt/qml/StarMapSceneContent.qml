@@ -65,12 +65,13 @@ Item {
     function localY(wy) { return wy - _minWorldY }
 
     // ── snapshot 局部几何：只依赖快照，不依赖父图相机 / 入口直径 ──
+    // Issue #1057：圆点概览用 fromCx/fromCy → toCx/toCy 中心连线，点层 z=1 遮住线端。
     readonly property string edgesPath: {
         var s = ""
         for (var i = 0; i < edgeRenders.length; i++) {
             var r = edgeRenders[i]
-            s += "M " + localX(r.startX) + " " + localY(r.startY)
-                    + " L " + localX(r.endX) + " " + localY(r.endY) + " "
+            s += "M " + localX(r.fromCx) + " " + localY(r.fromCy)
+                    + " L " + localX(r.toCx) + " " + localY(r.toCy) + " "
         }
         return s
     }
@@ -173,10 +174,10 @@ Item {
         reveal: 0
         revealDotRadiusPx: 3
         cornerRadius: 6
-        nodeFillHex: String(overview.dt.surfaceContainer)
-        nodeBorderHex: String(overview.dt.border)
+        nodeFillHex: String(overview.dt.textSecondary)
+        nodeBorderHex: String(overview.dt.textSecondary)
         selectedBorderHex: String(overview.dt.border)
-        embedFillHex: String(overview.dt.accentSoft)
+        embedFillHex: String(overview.dt.border)
         embedBorderHex: String(overview.dt.border)
         nodeBorderPx: 1
         nodeSelectedBorderPx: 1

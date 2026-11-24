@@ -12,6 +12,13 @@
 //   可导航行用 routeKey；普通节点没有可进入画布，用 objectKey 区分并定位。
 //   同一个子星图通过不同 Embed / Portal 到达时拥有不同 routeKey，必须分别选中。
 //
+// 根与选中（Issue #1057）：
+//   - 目录根跟随 Canvas 当前 route 根；换根时 syncRoute 先收起旧展开键、
+//     重建新根目录，再展开新根下的活动路径，避免先展开后被二次清空；
+//   - 普通节点行只有 objectKey 精确匹配才高亮，绝不靠与所在画布共享的
+//     routeKey 命中；路由定位也只认非普通节点行；
+//   - Workspace 的根绑定与 routeChanged 谁先到达都不会重复清空活动路径。
+//
 // 交互：
 //   - 单击可导航行：Workspace 让 Canvas 按该行的完整路由切换活动画布；
 //   - 单击普通节点：Workspace 让 Canvas 在当前画布命中、选中并居中该对象；
@@ -33,7 +40,8 @@ Rectangle {
     required property var dt
     property var starmapBackendRef: null
 
-    // 当前工作区唯一的根星图；切换根时整棵树重载，不继承旧根的展开/选中。
+    // Workspace 根绑定：只负责触发首次加载与换根提示；目录实际根以 Canvas
+    // 当前 route 根（currentRootStarmapId）为准，见 Issue #1057。
     property string workspaceRootStarmapId: ""
 
     // Canvas 当前路由；由 Workspace 在进入 / 退出子星图时同步。
@@ -109,9 +117,11 @@ Rectangle {
         }
     }
 
+    // Issue #1057：普通节点行与所在画布共享 routeKey，不能作为路由定位目标。
     function rowIndexForKey(routeKey) {
         for (var i = 0; i < rows.length; ++i)
-            if (String(rows[i].routeKey || "") === String(routeKey))
+            if (String(rows[i].rowKind || "") !== "node"
+                    && String(rows[i].routeKey || "") === String(routeKey))
                 return i
         return -1
     }
@@ -163,6 +173,34 @@ Rectangle {
         }
     }
 
+    // 按给定根重建目录：设置模型根 + 加载根行 + 恢复展开键。顺序固定：
+    // Issue #1057 换根时先由 syncRoute 重建新根，再展开当前活动路径。
+    function loadTree(rootStarmapId, expandedKeys, forceRootExpanded) {
+        if (!treeModel)
+            return
+        var rootId = String(rootStarmapId || "")
+        var keys = Array.isArray(expandedKeys) ? expandedKeys : []
+        treeModel.set_backend_ref(root.starmapBackendRef)
+        treeModel.set_root_starmap_id(rootId)
+        treeModel.refresh()
+
+        var rootKey = rootId + "|"
+        if (rootId !== "")
+            treeModel.ensure_children_loaded(rootKey)
+        root.loadedRootStarmapId = rootId
+        if (rootId !== ""
+                && (forceRootExpanded || keys.indexOf(rootKey) >= 0))
+            treeModel.set_expanded(rootKey, true)
+
+        for (var i = 0; i < keys.length; ++i) {
+            var key = keys[i]
+            if (key === rootKey)
+                continue
+            treeModel.ensure_children_loaded(key)
+            treeModel.set_expanded(key, true)
+        }
+    }
+
     function reload(forceRootExpanded) {
         if (!treeModel)
             return
@@ -174,25 +212,7 @@ Rectangle {
         // 刷新后只恢复当前根下仍存在的路径，不把旧根的展开/选中带过来。
         var expandedKeys = forceRootExpanded ? [] : expandedRouteKeys()
         var selectedObjectKey = root.currentObjectKey
-        treeModel.set_backend_ref(root.starmapBackendRef)
-        treeModel.set_root_starmap_id(root.workspaceRootStarmapId)
-        treeModel.refresh()
-
-        var rootKey = String(root.workspaceRootStarmapId || "") + "|"
-        if (root.workspaceRootStarmapId !== "") {
-            treeModel.ensure_children_loaded(rootKey)
-            root.loadedRootStarmapId = String(root.workspaceRootStarmapId || "")
-            if (forceRootExpanded || expandedKeys.indexOf(rootKey) >= 0)
-                treeModel.set_expanded(rootKey, true)
-        }
-
-        for (var i = 0; i < expandedKeys.length; ++i) {
-            var key = expandedKeys[i]
-            if (key === rootKey)
-                continue
-            treeModel.ensure_children_loaded(key)
-            treeModel.set_expanded(key, true)
-        }
+        loadTree(root.workspaceRootStarmapId, expandedKeys, forceRootExpanded)
         reloadRows()
 
         if (root.currentRouteKey !== "")
@@ -200,22 +220,47 @@ Rectangle {
                       root.currentRouteKey, false)
         if (selectedObjectKey !== "") {
             var objectIndex = rowIndexForObjectKey(selectedObjectKey)
-            if (objectIndex >= 0)
+            if (objectIndex >= 0) {
                 treeList.positionViewAtIndex(objectIndex, ListView.Center)
+            } else if (root.currentObjectKey === selectedObjectKey) {
+                // Issue #1057：普通节点已不在当前树中，清掉失效 objectKey，
+                // 否则高亮会一直按它过滤而不回落到 routeKey。
+                root.currentObjectKey = ""
+            }
         }
     }
 
     function syncRoute(rootStarmapId, segmentsJson, routeKey, expandPath) {
-        root.currentRootStarmapId = String(rootStarmapId || "")
+        var nextRoot = String(rootStarmapId || "")
+        root.currentRootStarmapId = nextRoot
         root.currentSegmentsJson = String(segmentsJson || "[]")
         root.currentRouteKey = String(routeKey || "")
-        if (!treeModel || root.currentRouteKey === "" || root.currentRootStarmapId === "")
+        if (!treeModel)
             return
+        // Issue #1057：换根必须先重建新根目录，再展开新根下的活动路径；
+        // 这里不能调用 reload()，否则 reload → syncRoute 递归。
+        if (nextRoot !== "" && nextRoot !== String(root.loadedRootStarmapId || "")) {
+            var oldKeys = expandedRouteKeys()
+            for (var i = 0; i < oldKeys.length; ++i)
+                treeModel.set_expanded(oldKeys[i], false)
+            root.currentObjectKey = ""
+            loadTree(nextRoot, [], true)
+        }
         if (expandPath === undefined)
             expandPath = true
-        if (expandPath)
-            expandModelPath(root.currentRootStarmapId, root.currentSegmentsJson)
+        if (expandPath !== false)
+            expandModelPath(nextRoot, root.currentSegmentsJson)
         reloadRows()
+        if (root.currentObjectKey !== "") {
+            var objectRow = rowIndexForObjectKey(root.currentObjectKey)
+            if (objectRow >= 0) {
+                treeList.positionViewAtIndex(objectRow, ListView.Center)
+                return
+            }
+            root.currentObjectKey = ""
+        }
+        if (root.currentRouteKey === "" || nextRoot === "")
+            return
         var row = rowIndexForKey(root.currentRouteKey)
         if (row >= 0)
             treeList.positionViewAtIndex(row, ListView.Center)
@@ -280,13 +325,19 @@ Rectangle {
     onStarmapBackendRefChanged: reload()
 
     onWorkspaceRootStarmapIdChanged: {
-        if (String(root.workspaceRootStarmapId) !== String(root.currentRootStarmapId)) {
-            root.currentRootStarmapId = String(root.workspaceRootStarmapId)
-            root.currentSegmentsJson = "[]"
-            root.currentRouteKey = ""
-            root.currentObjectKey = ""
+        var nextRoot = String(root.workspaceRootStarmapId || "")
+        // Issue #1057：Canvas 路由根已与绑定一致时，换根/路径展开已由
+        // syncRoute 处理，这里不再清空活动路径；只在根行尚未建出时补加载。
+        if (nextRoot === String(root.currentRootStarmapId || "")) {
+            if (String(root.loadedRootStarmapId || "") !== nextRoot)
+                root.reload(true)
+            return
         }
-        reload(true)
+        root.currentRootStarmapId = nextRoot
+        root.currentSegmentsJson = "[]"
+        root.currentRouteKey = ""
+        root.currentObjectKey = ""
+        root.reload(true)
     }
 
     Component.onCompleted: reload(true)
@@ -349,7 +400,8 @@ Rectangle {
                 width: treeList.width
                 selected: root.currentObjectKey !== ""
                     ? String(modelData.objectKey || "") === root.currentObjectKey
-                    : (root.currentRouteKey !== ""
+                    : (String(modelData.rowKind || "") !== "node"
+                       && root.currentRouteKey !== ""
                        && String(modelData.routeKey || "") === root.currentRouteKey)
                 onActivated: root.activateRow(rowData)
                 onMenuRequested: root.openRowMenu(rowData)
