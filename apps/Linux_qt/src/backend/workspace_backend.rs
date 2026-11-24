@@ -645,8 +645,8 @@ impl AppBackend {
         self.last_auto_sync_failure_at = 0;
         self.last_auto_sync_failure_reason.clear();
         // Issue #1058：启动/交接触发属于工作区身份，新工作区要重新做一次首次
-        // 远端检查和一次交接检查，不沿用旧工作区的标记。
-        self.last_auto_sync_handoff_at = 0;
+        // 远端检查，也不沿用旧工作区遗留的待处理交接请求。
+        self.pending_handoff = false;
         self.last_auto_sync_trigger.clear();
 
         self.flush_recent_edits();

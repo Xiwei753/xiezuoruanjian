@@ -480,10 +480,10 @@ pub struct AppBackend {
     /// Issue #983：自动启动在通过到期检查后仍失败的时间/原因，用于推迟下一轮。
     last_auto_sync_failure_at: i64,
     last_auto_sync_failure_reason: String,
-    /// Issue #1058：最近一次窗口交接（handoff）检查的时间。同一次从后台恢复里
-    /// QML 可能连续发出 active / visibility 信号，冷却窗口内只做一次交接检查，
-    /// 不把普通焦点变化当成多次启动。工作区重置时清零。
-    last_auto_sync_handoff_at: i64,
+    /// Issue #1058：当前工作区是否有待处理的交接请求（同步运行中收到了 startup/handoff）。
+    /// 旧任务结束后由 QML 在 sync_action_completed 里取出，重新走保存屏障再发起；
+    /// 工作区重置时清除。
+    pending_handoff: bool,
     /// Issue #1058：最近一次自动调度使用的触发原因（timer / startup / handoff）。
     /// 只用于启动日志，不参与到期判断。
     last_auto_sync_trigger: String,

@@ -164,6 +164,10 @@ pub struct SyncBackend {
     auto_sync_due: qt_method!(fn(&mut self, trigger: QString) -> bool),
     #[allow(dead_code)]
     start_auto_sync: qt_method!(fn(&mut self, trigger: QString) -> QString),
+    // Issue #1058 复审：QML 在 sync_action_completed 里取一次待处理交接请求；
+    // 返回 true 表示同步运行期间收到过 startup/handoff，需要重新走保存屏障再发起。
+    #[allow(dead_code)]
+    take_pending_handoff: qt_method!(fn(&mut self) -> bool),
     #[allow(dead_code)]
     perform_sync_diagnostics: qt_method!(fn(&mut self) -> QString),
     #[allow(dead_code)]
@@ -676,6 +680,11 @@ impl SyncBackend {
             }
         }
     }
+    fn take_pending_handoff(&mut self) -> bool {
+        self.with_app_mut(|app| app.take_pending_handoff())
+            .unwrap_or(false)
+    }
+
     fn auto_sync_due(&mut self, trigger: QString) -> bool {
         let trigger = AutoSyncTrigger::parse(&trigger.to_string());
         match self.with_app_mut(|app| app.auto_sync_due(trigger)) {

@@ -111,10 +111,6 @@ impl AutoSyncTrigger {
     }
 }
 
-/// Issue #1058：同一次窗口恢复里 QML 可能连续收到 active / visibility 多个
-/// 信号；交接检查在这个冷却窗口内只做一次，避免普通焦点变化被当成多次启动。
-const AUTO_SYNC_HANDOFF_COALESCE_SECONDS: i64 = 60;
-
 impl AppBackend {
     pub(crate) fn sync_source_for_operation_id(&self, operation_id: &str) -> Option<String> {
         (self.current_sync_operation_id == operation_id).then(|| self.current_sync_source.clone())
@@ -370,6 +366,39 @@ impl AppBackend {
             .max(self.last_auto_sync_failure_at)
     }
 
+    /// Issue #1058 复审：运行中收到 startup/handoff 请求时不直接丢弃，而是在当前
+    /// 工作区保留一个待处理交接请求；旧任务结束（tail 回调发 sync_action_completed）
+    /// 后由 QML 重新执行 preSyncBarrier 再发起，避免 auto_sync_gate 的 already_running
+    /// 把交接吞掉，也不在 Rust 完成回调里绕过 QML 保存屏障直接启动。
+    fn note_pending_handoff(&mut self, trigger: AutoSyncTrigger, reason: &str) {
+        if !matches!(trigger, AutoSyncTrigger::Startup | AutoSyncTrigger::Handoff) {
+            return;
+        }
+        if reason != "already_running" && reason != "manual_pending" {
+            return;
+        }
+        if self.pending_handoff {
+            return;
+        }
+        self.pending_handoff = true;
+        self.debug_log(
+            "sync",
+            "handoff_pending_set",
+            &format!(
+                "trigger={}, reason={reason}, workspace_generation={}",
+                trigger.as_str(),
+                self.current_workspace_generation
+            ),
+        );
+    }
+
+    /// 取出（并清除）待处理交接请求；QML 在同步完成信号后据此重建一次交接。
+    pub(crate) fn take_pending_handoff(&mut self) -> bool {
+        let pending = self.pending_handoff;
+        self.pending_handoff = false;
+        pending
+    }
+
     /// Issue #1058：本轮触发是否绕过间隔判断，返回 `Some(原因)` 表示绕过。
     /// 绕过只影响时间条件：配置、autoSync、workspace 身份与 single-flight 仍由
     /// `auto_sync_gate` 判断，因此启动/交接检查不会在同步进行中再起一轮。
@@ -382,17 +411,10 @@ impl AppBackend {
             AutoSyncTrigger::Startup => {
                 (self.last_actual_sync_started_at == 0).then_some("startup_first_open")
             }
-            // 交接检查只在最近没有同步活动时成立：一次恢复里的多个信号合并成一次，
-            // 刚同步完不重复拉取。同步启动后的新变更留给下一轮，不把旧快照当成最新。
-            AutoSyncTrigger::Handoff => {
-                let last_activity = self
-                    .last_actual_sync_started_at
-                    .max(self.last_auto_sync_dispatch_at)
-                    .max(self.last_auto_sync_handoff_at);
-                (Self::now_epoch_seconds().saturating_sub(last_activity)
-                    >= AUTO_SYNC_HANDOFF_COALESCE_SECONDS)
-                    .then_some("handoff_after_resume")
-            }
+            // 交接检查按真实窗口恢复事件去重（QML 只在最小化/隐藏→可见的边沿请求）。
+            // 不再用"距最近同步活动的固定冷却"吞掉设备切换：电脑刚同步过也可能很快
+            // 最小化，手机随后上传新内容，电脑恢复时仍须主动拉一次远端。
+            AutoSyncTrigger::Handoff => Some("handoff_after_resume"),
         }
     }
 
@@ -423,6 +445,7 @@ impl AppBackend {
             Ok(config) => config,
             Err(reason) => {
                 self.last_auto_sync_due = false;
+                self.note_pending_handoff(trigger, &reason);
                 self.record_auto_sync_skip(trigger, reason);
                 return false;
             }
@@ -460,6 +483,7 @@ impl AppBackend {
             Err(reason) => {
                 self.last_auto_sync_due = false;
                 self.last_auto_sync_skip_reason = reason.clone();
+                self.note_pending_handoff(trigger, &reason);
                 self.debug_log(
                     "sync",
                     "auto_sync_dispatch",
@@ -490,10 +514,6 @@ impl AppBackend {
                 return (String::new(), false);
             }
         }
-        // 交接检查已经用掉：记录时间，让同一次恢复里的后续激活落在冷却窗口内。
-        if trigger == AutoSyncTrigger::Handoff {
-            self.last_auto_sync_handoff_at = now;
-        }
         self.last_auto_sync_trigger = trigger.as_str().to_string();
         self.last_auto_sync_due = true;
         self.last_auto_sync_skip_reason.clear();
@@ -509,6 +529,10 @@ impl AppBackend {
             self.last_auto_sync_operation_id = operation_id.clone();
         }
         if started {
+            // 本轮同步已覆盖这次启动/交接请求：消费待处理标记，避免完成后重复补一轮。
+            if matches!(trigger, AutoSyncTrigger::Startup | AutoSyncTrigger::Handoff) {
+                self.pending_handoff = false;
+            }
             self.debug_log(
                 "sync",
                 "auto_sync_dispatch",

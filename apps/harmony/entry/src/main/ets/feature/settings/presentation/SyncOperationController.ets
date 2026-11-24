@@ -6,7 +6,7 @@
 import hilog from '@ohos.hilog'
 import emitter from '@ohos.events.emitter'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
-import { FullSyncResult, FullSyncDiagnosticsResult, FullSyncDryRunResult } from '../../../corebridge/dto/SyncDtos'
+import { FullSyncResult, FullSyncDiagnosticsResult, FullSyncDryRunResult, SyncConfig } from '../../../corebridge/dto/SyncDtos'
 import { NativeSyncBridge } from '../../../corebridge/native/NativeSyncBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { NativeWriterCoreBridge } from '../../../corebridge/NativeWriterCoreBridge'
@@ -135,7 +135,9 @@ export class SyncOperationController {
         if (resolveTrackedOperation !== null) {
           resolveTrackedOperation(outcome)
         }
-        this.startPendingFollowUp()
+        this.startPendingFollowUp().catch((e: Error): void => {
+          hilog.error(DOMAIN, TAG, 'follow-up sync start failed: errorType=%{public}s', e.name)
+        })
       }
     })
     return trackedOperation
@@ -173,12 +175,23 @@ export class SyncOperationController {
   }
 
   /** 当前任务结束后启动排队的唯一后续同步；没有排队请求时什么也不做。 */
-  private startPendingFollowUp(): void {
+  private async startPendingFollowUp(): Promise<void> {
     const pending: SyncFollowUpRequest | null = this.pendingFollowUp
     if (pending === null) {
       return
     }
     this.pendingFollowUp = null
+    // Issue #1058 复审：真正启动排队的自动后续任务前，重新读取 Core 已提交配置；
+    // 用户在运行期间关闭自动同步后，不再发起已排队的自动任务。
+    // 读取失败按"未知"处理并继续，不能把"读不到配置"当成"已关闭"。
+    const autoSyncActive: boolean | null = await this.committedAutoSyncActive()
+    if (autoSyncActive === false) {
+      hilog.info(DOMAIN, TAG,
+        'queued follow-up skipped: auto sync disabled in committed config trigger=%{public}s',
+        pending.trigger)
+      pending.resolve(SyncOperationController.followUpSkippedOutcome())
+      return
+    }
     hilog.info(DOMAIN, TAG, 'starting queued follow-up sync trigger=%{public}s', pending.trigger)
     try {
       const followUp: Promise<SyncOutcome> = this.performSync('auto', pending.trigger)
@@ -191,6 +204,38 @@ export class SyncOperationController {
       const errorType: string = e instanceof Error ? e.name : 'Unknown'
       hilog.error(DOMAIN, TAG, 'follow-up sync failed to start: errorType=%{public}s', errorType)
       pending.resolve(SyncOperationController.startFailureOutcome())
+    }
+  }
+
+  /**
+   * 读取 Core 已提交的自动同步开关。
+   * `false` = 已确认关闭；`true` = 已确认开启；`null` = 读取失败/未知（不能当成关闭）。
+   */
+  private async committedAutoSyncActive(): Promise<boolean | null> {
+    try {
+      const result: ResultEnvelope<SyncConfig> = await this.syncBridge.loadSyncConfig()
+      if (!result.success) {
+        hilog.warn(DOMAIN, TAG, 'loadSyncConfig failed before follow-up: errorCode=%{public}s',
+          result.errorCode ?? 'UNKNOWN')
+        return null
+      }
+      const config: SyncConfig | null = result.data ?? null
+      return config !== null && config.enabled && config.autoSync
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'loadSyncConfig threw before follow-up: errorType=%{public}s',
+        e instanceof Error ? e.name : 'Unknown')
+      return null
+    }
+  }
+
+  /** 排队的后续同步因自动同步已关闭而未启动时的唯一终态（不假报成功）。 */
+  private static followUpSkippedOutcome(): SyncOutcome {
+    return {
+      phase: 'failed',
+      message: '自动同步已关闭，跳过排队的后续同步',
+      errorCode: 'AUTO_SYNC_DISABLED',
+      failureStage: 'config_gate',
+      errorCategory: 'auto_sync_disabled'
     }
   }
 

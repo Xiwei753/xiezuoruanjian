@@ -17,7 +17,7 @@
 // - reconfigure 只记录配置、启停前台唤醒 timer，不触发同步；是否 due 一律由 runIfDue 决定，
 //   打开设置页不会额外产生一笔同步。
 // - 退后台的交接同步只在全部本地保存完成后的 post-save 阶段发起（HarmonyLifecycle），
-//   不在 onBackground 里与保存抢跑；失败/被系统挂起时保留 handoffPending，恢复后重试。
+//   不在 onBackground 里与保存抢跑；失败/被系统挂起时保留待同步代次，恢复后重试。
 // - 前台 setInterval 只是前台唤醒，不代表能在后台可靠周期执行；后台续跑需系统调度，另行接入。
 //
 // 注意（Issue #1058 核对）：Core 全量同步的 per-target LWW 入口自带 min_interval
@@ -80,11 +80,15 @@ export class HarmonyAutoSyncScheduler {
    */
   private configLoaded: boolean = false
   /**
-   * 待同步事实（Issue #1058）：一次交接同步请求还没成功完成（网络失败、系统挂起、
-   * 保存屏障失败或 Core 非成功终态）时保持为 true，由网络恢复或下次真实前台切换重试；
-   * 只有成功终态才清除，不假报完成。
+   * 待同步事实（Issue #1058 复审）：最近一次交接请求的代次，0 表示没有待同步请求。
+   * 每次请求分配一个递增代次；运行中排队的后续请求会拿到更大的代次。
+   * 只有"覆盖最新代次"的成功终态才清除待同步事实，旧代次的成功/失败都不动它——
+   * 这样 A 正在同步、B 被排成后续任务时，A 先成功不会把 B 的待同步事实清掉，
+   * B 失败也仍然保持待同步，由网络恢复/下次真实前台切换重试。
    */
-  private handoffPending: boolean = false
+  private handoffPendingGeneration: number = 0
+  /** 最近一次分配的交接请求代次（单调递增，不因完成而回退）。 */
+  private handoffRequestGeneration: number = 0
 
   private constructor() {
   }
@@ -183,7 +187,7 @@ export class HarmonyAutoSyncScheduler {
     if (config === null || !config.enabled || !config.autoSync) {
       this.stopForegroundTimer()
       // 自动同步被关闭：不再保留待同步事实（用户已明确不做自动同步）。
-      this.handoffPending = false
+      this.handoffPendingGeneration = 0
       hilog.info(DOMAIN, TAG, 'reconfigure: auto sync inactive, foreground timer stopped')
       return
     }
@@ -239,7 +243,7 @@ export class HarmonyAutoSyncScheduler {
       this.requestHandoffSync(trigger)
       return
     }
-    if (this.handoffPending) {
+    if (this.handoffPendingGeneration !== 0) {
       hilog.info(DOMAIN, TAG, 'foreground: retrying pending handoff sync')
       this.requestHandoffSync('handoff_retry')
     }
@@ -261,7 +265,7 @@ export class HarmonyAutoSyncScheduler {
    * 返回 Promise 以便纳入同一个短时任务事务：保存之后、诊断压缩收尾之前完成同步。
    * 仍使用 Core 已提交的 enabled && autoSync；配置未知时先真实读取一次，
    * 读不到就不把"不知道"当成"已开启自动同步"。
-   * 失败/被系统挂起时保留 handoffPending，由网络恢复或下次真实前台切换重试。
+   * 失败/被系统挂起时保留待同步代次，由网络恢复或下次真实前台切换重试。
    */
   async onBackgroundSaved(): Promise<void> {
     if (!this.coreReady) {
@@ -276,7 +280,8 @@ export class HarmonyAutoSyncScheduler {
       return
     }
     hilog.info(DOMAIN, TAG, 'onBackgroundSaved: background save finished, starting handoff sync')
-    await this.performHandoffSync('background_handoff')
+    const generation: number = this.nextHandoffGeneration()
+    await this.performHandoffSync('background_handoff', generation)
   }
 
   /** 网络恢复：必要时重试读取配置；优先重试未完成的交接，否则仍立即做一次到期判断。 */
@@ -298,7 +303,7 @@ export class HarmonyAutoSyncScheduler {
 
   /** 网络恢复后的编排：有未完成交接就先重试交接（绕过间隔），否则按原有到期判断。 */
   private continueAfterNetworkRestored(): void {
-    if (this.handoffPending && this.isAutoSyncActive()) {
+    if (this.handoffPendingGeneration !== 0 && this.isAutoSyncActive()) {
       hilog.info(DOMAIN, TAG, 'onNetworkRestored: retrying pending handoff sync')
       this.requestHandoffSync('handoff_retry')
       return
@@ -334,34 +339,56 @@ export class HarmonyAutoSyncScheduler {
 
   /** 发起一次交接同步（不等待结果）；失败保留待同步事实，由前台/网络恢复重试。 */
   private requestHandoffSync(trigger: SyncTriggerReason): void {
-    this.performHandoffSync(trigger).catch(() => {})
+    const generation: number = this.nextHandoffGeneration()
+    this.performHandoffSync(trigger, generation).catch(() => {})
+  }
+
+  /**
+   * 分配新的交接代次，并把待同步事实推进到该代次。
+   * 运行中排队的后续请求会拿到更大的代次，从而覆盖旧请求的待同步事实。
+   */
+  private nextHandoffGeneration(): number {
+    this.handoffRequestGeneration += 1
+    const generation: number = this.handoffRequestGeneration
+    if (generation > this.handoffPendingGeneration) {
+      this.handoffPendingGeneration = generation
+    }
+    return generation
   }
 
   /**
    * 交接同步实体：绕过周期 timer 的间隔到期判断，但保留 enabled && autoSync、
    * 单一同步事务与保存屏障——仍然只经 SyncOperationController.performSync 进入。
-   * 只有成功终态才清除待同步事实；网络失败 / 系统挂起 / 保存屏障或 Core 非成功终态
-   * 都保留 handoffPending，等恢复后再同步，不假报完成。
+   *
+   * 待同步事实按代次裁决：只有覆盖最新代次（handoffRequestGeneration）的成功终态
+   * 才清除；旧代次的成功/失败都不动它。这样 A 正在同步、B 被排成后续任务时，
+   * A 先成功不会清掉 B 的待同步事实，B 失败也仍保持待同步，不假报完成。
    */
-  private async performHandoffSync(trigger: SyncTriggerReason): Promise<void> {
-    this.handoffPending = true
-    hilog.info(DOMAIN, TAG, 'handoff sync: started trigger=%{public}s', trigger)
+  private async performHandoffSync(trigger: SyncTriggerReason, generation: number): Promise<void> {
+    hilog.info(DOMAIN, TAG, 'handoff sync: started trigger=%{public}s generation=%{public}s',
+      trigger, generation.toString())
     try {
       const outcome: SyncOutcome = await SyncOperationController.getInstance().performSync('auto', trigger)
+      const isLatest: boolean = generation === this.handoffRequestGeneration
       if (outcome.phase === 'success') {
-        this.handoffPending = false
-        hilog.info(DOMAIN, TAG, 'handoff sync: finished trigger=%{public}s overallStatus=%{public}s',
-          trigger, outcome.overallStatus ?? 'unknown')
+        if (isLatest) {
+          this.handoffPendingGeneration = 0
+        }
+        hilog.info(DOMAIN, TAG,
+          'handoff sync: finished trigger=%{public}s generation=%{public}s latest=%{public}s ' +
+          'overallStatus=%{public}s',
+          trigger, generation.toString(), isLatest.toString(), outcome.overallStatus ?? 'unknown')
       } else {
         hilog.warn(DOMAIN, TAG,
-          'handoff sync: not completed, keeping pending trigger=%{public}s errorCode=%{public}s ' +
-          'failureStage=%{public}s',
-          trigger, outcome.errorCode ?? 'UNKNOWN', outcome.failureStage ?? 'unknown')
+          'handoff sync: not completed, keeping pending trigger=%{public}s generation=%{public}s ' +
+          'latest=%{public}s errorCode=%{public}s failureStage=%{public}s',
+          trigger, generation.toString(), isLatest.toString(),
+          outcome.errorCode ?? 'UNKNOWN', outcome.failureStage ?? 'unknown')
       }
     } catch (e) {
       hilog.warn(DOMAIN, TAG,
-        'handoff sync: threw, keeping pending trigger=%{public}s errorType=%{public}s',
-        trigger, e instanceof Error ? e.name : 'Unknown')
+        'handoff sync: threw, keeping pending trigger=%{public}s generation=%{public}s errorType=%{public}s',
+        trigger, generation.toString(), e instanceof Error ? e.name : 'Unknown')
     }
     // 同步结束（无论终态）后重读 Core：成功类由 Core 写入新的 last_success_time，
     // 失败类 Core 保留旧值；这里绝不自行把当前时间当成成功时间。

@@ -292,7 +292,7 @@ Kirigami.ApplicationWindow {
     // 只有「最小化 / 隐藏」之后重新可见才算一次恢复：普通焦点切换（点到别的窗口再点回来）
     // 不是设备切换，交回给 30 秒 timer 按间隔判断，不在这里强行绕过间隔。
     // 启动后的第一次可见同样不是交接（首次远端检查由 workspace_opened 的
-    // startup 触发负责）；同一次恢复里的多个可见信号由后端冷却窗口合并。
+    // startup 触发负责）；同一次恢复里的多个可见信号由这里的边沿判断去重。
     property bool windowInBackground: false
 
     function noteWindowForegroundState() {
@@ -1321,6 +1321,16 @@ Kirigami.ApplicationWindow {
             // Issue #724 评论 5750911834 问题 3: 改用 reload_from_backend_if_changed()
             // 避免重复 resolve。同步完成后主题输入可能未变，跳过 resolve。
             if (themeController) themeController.reload_from_backend_if_changed()
+            // Issue #1058 复审：同步运行期间收到的 startup/handoff 请求不直接丢弃。
+            // 旧任务结束后在这里重新走 QML 保存屏障（maybeStartAutoSync → preSyncBarrier）
+            // 再发起——不在 Rust 完成回调里直接启动而跳过保存屏障。
+            if (syncBackend && syncBackend.take_pending_handoff()) {
+                window.logAutoSyncEvent("info", "auto_sync_handoff_followup",
+                                        "reason=after_running_sync")
+                Qt.callLater(function() {
+                    window.maybeStartAutoSync("handoff")
+                })
+            }
         }
         // Issue #754 评论 5814866116 改动1: 同步真正修改/重新加载了当前工作区内容时，
         // 由 SyncBackend::sync_content_applied 触发正文/树刷新。
