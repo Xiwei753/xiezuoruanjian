@@ -150,6 +150,18 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "Qt 同步后端：密钥存取/网络同步配置/手动同步/诊断共享同一 SyncBackend QObject 与 operation_id 锁，"
         "拆分会破坏异步流输出竞态守卫；已按操作类型拆分内部函数；"
         "TODO(#597) 后续按操作族提取子后端",
+    (Path("core/writer_core/src/api/sync_api.rs"), "god-file"):
+        "同步 API 编排聚合：Prepare/Transfer/Commit、冲突、证明恢复共享同一 "
+        "workspace 锁与 operation 上下文；#1059 在此接入章节 journal 证明结算；"
+        "TODO(#1059) 后续按 prepare/commit/proof 拆分",
+    (Path("core/writer_core/src/facade/writing_stats_ops.rs"), "god-file"):
+        "写作统计门面：编辑事件、同步证明事实、journal 投影共享同一统计 API "
+        "与 pending 队列；#1059 新增同步事实投影后跨过 800 行；"
+        "TODO(#1059) 后续按 editor/sync projection 拆分",
+    (Path("core/writer_core/src/ffi/project_ops.rs"), "god-file"):
+        "FFI 作品/章节聚合：C ABI 与 JSON envelope 共享同一错误映射和 app service "
+        "初始化上下文；#1059 新增版本化保存 JSON 入口后跨过 800 行；"
+        "TODO(#1059) 后续按 chapter/project/versioned 拆分",
     (Path("apps/Linux_qt/src/backend/editor_backend.rs"), "god-file"):
         "Qt 编辑器 QObject 聚合根：章节保存/加载/冲突/搜索状态共享同一编辑器会话，"
         "#1059 已把后台队列拆到 chapter_save_queue.rs；"
