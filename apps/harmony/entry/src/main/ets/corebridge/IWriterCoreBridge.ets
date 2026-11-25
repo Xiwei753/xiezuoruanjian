@@ -1,5 +1,5 @@
 import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos'
-import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
+import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ChapterVersion, ProjectTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch, StarMapLibraryView, StarMapLibraryFolder, StarMapLibraryEntry, StarMapAssetReference } from './dto/StarMapDtos'
@@ -34,6 +34,11 @@ export interface IWriterCoreBridge {
   // Issue #1054：显式空覆盖意图。只有编辑器确认“用户删除事务把非空正文变空”且匹配
   // 精确 sessionId/revision 时才传 true；普通 saveChapter 仍拒绝意外空覆盖。
   saveChapterWithOptions(chapterId: string, text: string, allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>>
+  // Issue #1059：完整版本 CAS；expected 来自最近一次 open/save receipt。
+  saveChapterVersioned(chapterId: string, text: string, expected: ChapterVersion,
+    baseContent: string, allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>>
+  clearChapterVersioned(chapterId: string, expected: ChapterVersion,
+    baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
   clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
   createChapter(volumeId: string, name: string): Promise<ResultEnvelope<ChapterMeta>>
   renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>>

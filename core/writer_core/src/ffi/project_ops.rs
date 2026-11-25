@@ -347,6 +347,163 @@ unsafe fn save_chapter_json(
     }
 }
 
+/// 完整版本 CAS 的章节保存（Harmony/Windows 共用）。
+///
+/// `expected_generation`、`expected_revision`、`expected_sha256` 必须来自
+/// 最近一次 open/save receipt；任一为空/负数都会被 Core 拒绝。
+///
+/// # Safety
+/// All string arguments must be valid null-terminated UTF-8 C strings.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_save_chapter_versioned(
+    project_id: *const c_char,
+    volume_id: *const c_char,
+    chapter_id: *const c_char,
+    content: *const c_char,
+    expected_generation: *const c_char,
+    expected_revision: i64,
+    expected_sha256: *const c_char,
+    base_content: *const c_char,
+    allow_empty_overwrite: bool,
+) -> *mut c_char {
+    save_chapter_versioned_json(
+        project_id,
+        volume_id,
+        chapter_id,
+        content,
+        expected_generation,
+        expected_revision,
+        expected_sha256,
+        base_content,
+        allow_empty_overwrite,
+        false,
+    )
+}
+
+/// 完整版本 CAS 的章节清空。
+///
+/// # Safety
+/// All string arguments must be valid null-terminated UTF-8 C strings.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_clear_chapter_versioned(
+    project_id: *const c_char,
+    volume_id: *const c_char,
+    chapter_id: *const c_char,
+    expected_generation: *const c_char,
+    expected_revision: i64,
+    expected_sha256: *const c_char,
+    base_content: *const c_char,
+) -> *mut c_char {
+    save_chapter_versioned_json(
+        project_id,
+        volume_id,
+        chapter_id,
+        std::ptr::null(),
+        expected_generation,
+        expected_revision,
+        expected_sha256,
+        base_content,
+        true,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn save_chapter_versioned_json(
+    project_id: *const c_char,
+    volume_id: *const c_char,
+    chapter_id: *const c_char,
+    content: *const c_char,
+    expected_generation: *const c_char,
+    expected_revision: i64,
+    expected_sha256: *const c_char,
+    base_content: *const c_char,
+    allow_empty_overwrite: bool,
+    clear_content: bool,
+) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid project_id: error {}", e),
+            )
+        }
+    };
+    let vid = match c_str_to_rust(volume_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid volume_id: {e}")),
+    };
+    let cid = match c_str_to_rust(chapter_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid chapter_id: {e}")),
+    };
+    let text = if clear_content {
+        String::new()
+    } else {
+        match c_str_to_rust(content) {
+            Ok(s) => s,
+            Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid content: {e}")),
+        }
+    };
+    let generation = match c_str_to_rust(expected_generation) {
+        Ok(s) if !s.is_empty() => s,
+        Ok(_) => return err_json("INVALID_ARGUMENT", "expected_generation is empty"),
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid generation: {e}")),
+    };
+    let sha256 = match c_str_to_rust(expected_sha256) {
+        Ok(s) if !s.is_empty() => s,
+        Ok(_) => return err_json("INVALID_ARGUMENT", "expected_sha256 is empty"),
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid sha256: {e}")),
+    };
+    let revision = match u64::try_from(expected_revision) {
+        Ok(value) => value,
+        Err(_) => return err_json("INVALID_ARGUMENT", "expected_revision is negative"),
+    };
+    let base = if base_content.is_null() {
+        None
+    } else {
+        match c_str_to_rust(base_content) {
+            Ok(value) => Some(value),
+            Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid base_content: {e}")),
+        }
+    };
+    let expected = crate::api::ChapterVersionDto {
+        object_generation: generation,
+        revision,
+        content_sha256: sha256,
+    };
+    match with_app_service(|svc| {
+        let receipt = if clear_content {
+            svc.clear_chapter_content_versioned(pid, vid, cid, Some(expected), base)
+        } else if allow_empty_overwrite {
+            svc.save_chapter_content_versioned_allow_empty(
+                pid,
+                vid,
+                cid,
+                text,
+                Some(expected),
+                base,
+            )
+        } else {
+            svc.save_chapter_content_versioned(pid, vid, cid, text, Some(expected), base)
+        }
+        .map_err(|e| format!("{}", e))?;
+        Ok(receipt)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => {
+            if e.contains("version conflict") || e.contains("ChapterVersionConflict") {
+                err_json("CHAPTER_VERSION_CONFLICT", &e)
+            } else if e.contains("empty") || e.contains("Empty") {
+                err_json("EMPTY_OVERWRITE_BLOCKED", &e)
+            } else {
+                err_json("IO_WRITE_ERROR", &e)
+            }
+        }
+    }
+}
+
 /// # Safety
 /// `project_id` and `new_name` must be valid null-terminated UTF-8 C strings.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.

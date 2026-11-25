@@ -20,6 +20,7 @@ import { util } from '@kit.ArkTS'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { EditorSessionSnapshot, EditorEditResult, EditorTransactionCause, EditorOperationKind } from '../../../corebridge/dto/EditorDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
+import { ChapterVersion } from '../../../corebridge/dto/ProjectDtos'
 import { EditorSessionCoordinator, EditorStateUpdate } from './EditorSessionCoordinator'
 import { EditorStatsQueue } from '../stats/EditorStatsQueue'
 import { WritingSessionTracker } from '../stats/WritingSessionTracker'
@@ -91,6 +92,9 @@ interface SaveRequest {
   text: string
   allowEmptyOverwrite: boolean
   isAutoSave: boolean
+  // 本次批次固定的持久化基线；等待前一笔保存后刷新为最新 durable version。
+  baseVersion: ChapterVersion | null
+  baseContent: string
 }
 
 // 调用方已结算的快照身份。缺省时只用于非空保存；空保存必须带精确来源。
@@ -142,6 +146,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // 证明链起点只上报一次：本次打开章节时的完整正文；之后由 Core 链式 hash 承接。
   private proofBaselineSent: boolean = false
   private lastSavedContentHash: string | null = null
+  private lastSavedVersion: ChapterVersion | null = null
   private isLoading: boolean = false
   private errorMessage: string = ''
   private isSaving: boolean = false
@@ -239,7 +244,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   private sameSaveRequest(a: SaveRequest, b: SaveRequest): boolean {
     return a.chapterId === b.chapterId && a.sessionId === b.sessionId &&
       a.revision === b.revision && a.text === b.text &&
-      a.allowEmptyOverwrite === b.allowEmptyOverwrite
+      a.allowEmptyOverwrite === b.allowEmptyOverwrite &&
+      a.baseContent === b.baseContent
   }
 
   // 从调用方已结算的 Core 快照冻结保存身份；session 必须仍属于同一编辑会话。
@@ -418,6 +424,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         // Issue #1059：内容身份来自 open 返回的实际正文版本摘要，而不是可能
         // 滞后的 meta.hash；清空/删除等场景也不会把旧 hash 当成已保存。
         this.lastSavedContentHash = result.data.version.contentSha256
+        this.lastSavedVersion = result.data.version
         this.wordCount = result.data.meta.wordCount
         this.hasUnsavedChanges = false
         // 打开编辑会话，用 Core 管理正文。open 成功后 listener 自动回流显示状态。
@@ -474,7 +481,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       text: targetText,
       allowEmptyOverwrite: this.resolveEmptyOverwriteAuthorization(
         targetText, allowEmptyOverwrite, sessionId, revision),
-      isAutoSave: isAutoSave
+      isAutoSave: isAutoSave,
+      baseVersion: this.lastSavedVersion,
+      baseContent: this.lastSavedContent
     }
     // 若有进行中保存任务，先等它结束
     if (this.activeSave !== null) {
@@ -494,6 +503,10 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         this.activeSave = null
       }
     }
+    // 前一笔保存已结束：本批基线刷新为最新 durable version，避免用自己的
+    // 上一笔提交制造假冲突。
+    request.baseVersion = this.lastSavedVersion
+    request.baseContent = this.lastSavedContent
     // 启动一次精确保存新事务
     const task: Promise<boolean> = this.doSaveChapter(request)
     const saveEntry: ActiveSaveTask = { request: request, task: task }
@@ -525,17 +538,37 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     this.emit(null, null)
 
     try {
-      // 只保存这份 request.text（不重新抓当前正文）。
-      // 空正文只有在入队时已确认的授权下才走显式 allow_empty_overwrite 入口；
-      // 其它空字符串仍走默认安全接口，由 Core 拒绝意外空覆盖。
+      // 先让本批编辑证明进入 Core 内存队列，再提交正文；正文 journal 才会
+      // 携带这批事件，不会出现“保存成功但最后一批证明等下一次保存”。
+      const statsFlushed: boolean = await this.flushEditorStatsQueue(statsBarrier)
+      if (!statsFlushed) {
+        this.lastSaveFailed = true
+        this.saveMessage = this.textProvider(WritingTextKey.SaveError)
+        this.isSaving = false
+        this.isAutoSaving = false
+        this.emit(null, null)
+        return false
+      }
+      if (request.baseVersion === null) {
+        this.lastSaveFailed = true
+        this.saveMessage = this.textProvider(WritingTextKey.SaveError)
+        this.isSaving = false
+        this.isAutoSaving = false
+        this.emit(null, null)
+        return false
+      }
+      // 空正文只有在入队时已确认的授权下才走显式 clear 入口。
       const result = request.allowEmptyOverwrite
-        ? await this.bridge.saveChapterWithOptions(request.chapterId, request.text, true)
-        : await this.bridge.saveChapter(request.chapterId, request.text)
+        ? await this.bridge.clearChapterVersioned(
+            request.chapterId, request.baseVersion, request.baseContent)
+        : await this.bridge.saveChapterVersioned(
+            request.chapterId, request.text, request.baseVersion, request.baseContent, false)
       if (result.success && result.data) {
         // Issue #829 评论 #5995146525：这里不再上报写作统计（改由编辑事务同源上报）。
         this.lastSavedContent = request.text
         // Issue #1059：保存成功后以 receipt.version.contentSha256 作为内容身份。
         this.lastSavedContentHash = result.data.version.contentSha256
+        this.lastSavedVersion = result.data.version
         this.hasUnsavedChanges = false
         this.lastSaveFailed = false
         // 重新取 latestSnapshot 结算：保存期间若又产生新输入，hasUnsavedChanges 保持 true。
@@ -554,11 +587,6 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
           ? this.textProvider(WritingTextKey.AutoSaved)
           : this.textProvider(WritingTextKey.Saved)
         this.scheduleSaveMessageClear()
-        // Issue #829 评论 #5996028848：正文已经落盘，等这份正文对应的统计事件也写完再离开。
-        const statsFlushed: boolean = await this.flushEditorStatsQueue(statsBarrier)
-        if (!statsFlushed) {
-          console.warn(`[WritingWorkflowCoordinator] 本次保存对应的写作统计未全部落盘（丢弃 ${this.statsQueue.dropped()} 条）`)
-        }
         // 保存成功后回流（contentHash 前进，此时 hasUnsavedChanges=false，页面据此更新接续状态）。
         this.emit(null, null)
         return true
@@ -671,8 +699,11 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     }
     const diskContent: string = result.data.content
     const diskHash: string = result.data.version.contentSha256
-    if (this.lastSavedContentHash !== null && diskHash === this.lastSavedContentHash) {
-      // Core 落盘身份与屏障放行时一致：本次同步未改动本章。
+    if (this.lastSavedVersion !== null
+        && diskHash === this.lastSavedVersion.contentSha256
+        && result.data.version.revision === this.lastSavedVersion.revision
+        && result.data.version.objectGeneration === this.lastSavedVersion.objectGeneration) {
+      // Core 落盘完整版本与屏障放行时一致：本次同步未改动本章。
       return true
     }
     // 磁盘已变化：确认没有仍在排队的编辑命令，再决定能否回填。
@@ -687,6 +718,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       this.content = diskContent
       this.lastSavedContent = diskContent
       this.lastSavedContentHash = diskHash
+      this.lastSavedVersion = result.data.version
       this.hasUnsavedChanges = false
       this.wordCount = result.data.meta.wordCount
       this.emit(null, null)
@@ -708,6 +740,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     this.content = diskContent
     this.lastSavedContent = diskContent
     this.lastSavedContentHash = diskHash
+    this.lastSavedVersion = result.data.version
     this.hasUnsavedChanges = false
     this.wordCount = result.data.meta.wordCount
     // 页面恢复接续选区 / viewport（与 loadChapter 同一 hook），再统一回流重绘。
@@ -843,14 +876,13 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       if (!statsFlushed) {
         console.warn(`[WritingWorkflowCoordinator] 写作统计未全部落盘（丢弃 ${this.statsQueue.dropped()} 条）`)
       }
-      // 5. 保存稳定 snapshot（此时不再读可能已变化的 this.content）
+      // 5. 保存稳定 snapshot。即使全文与上次相同也要调用：输入后还原会留下
+      // 尚未 durable 的证明批次，Core 需要建仅事件 journal。
       const savedText: string = afterFinish.text
-      if (savedText !== this.lastSavedContent) {
-        const settled: boolean = await this.ensureSnapshotSaved(
-          savedText, false, false, this.snapshotSaveSource(afterFinish))
-        if (!settled) {
-          return false
-        }
+      const settled: boolean = await this.ensureSnapshotSaved(
+        savedText, false, false, this.snapshotSaveSource(afterFinish))
+      if (!settled) {
+        return false
       }
       // 6. 关闭编辑会话。Issue #629 评论9 第2项：先 closeAsync。
       // Issue #629 评论11 第3项：close 必须 success===true && data===true 才算成功。

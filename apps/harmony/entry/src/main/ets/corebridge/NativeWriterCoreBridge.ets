@@ -1,6 +1,6 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
 import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos'
-import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
+import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ChapterVersion, ProjectTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch, StarMapLibraryView, StarMapLibraryFolder, StarMapLibraryEntry, StarMapAssetReference } from './dto/StarMapDtos'
@@ -241,6 +241,17 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   async saveChapterWithOptions(chapterId: string, text: string,
     allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     return this.chapterBridge.saveChapterWithOptions(chapterId, text, allowEmptyOverwrite)
+  }
+
+  async saveChapterVersioned(chapterId: string, text: string, expected: ChapterVersion,
+    baseContent: string, allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    return this.chapterBridge.saveChapterVersioned(
+      chapterId, text, expected, baseContent, allowEmptyOverwrite)
+  }
+
+  async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
+    baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    return this.chapterBridge.clearChapterVersioned(chapterId, expected, baseContent)
   }
 
   async clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {

@@ -1,4 +1,4 @@
-import { ChapterMeta, ChapterContent, ChapterSaveReceipt } from '../dto/ProjectDtos'
+import { ChapterMeta, ChapterContent, ChapterSaveReceipt, ChapterVersion } from '../dto/ProjectDtos'
 import { ResultEnvelope } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeChapterMeta, decodeChapterContent, decodeChapterSaveReceipt, decodeArray } from '../codec/CoreWireDecoders'
@@ -58,6 +58,36 @@ export class NativeChapterBridge {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeSaveChapterWithOptions(
         loc.projectId, loc.volumeId, chapterId, text, allowEmptyOverwrite)
+      return this.core.decodeEnvelope<ChapterSaveReceipt>(jsonStr, decodeChapterSaveReceipt)
+    } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
+  }
+
+  // Issue #1059：完整版本 CAS 的保存/清空。expected 必须来自最近一次 open/save。
+  async saveChapterVersioned(chapterId: string, text: string, expected: ChapterVersion,
+    baseContent: string, allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    const loc = await this.core.resolveChapterLocation(chapterId)
+    if (!loc) {
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
+    }
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeSaveChapterVersioned(
+        loc.projectId, loc.volumeId, chapterId, text,
+        expected.objectGeneration, expected.revision, expected.contentSha256,
+        baseContent, allowEmptyOverwrite)
+      return this.core.decodeEnvelope<ChapterSaveReceipt>(jsonStr, decodeChapterSaveReceipt)
+    } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
+  }
+
+  async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
+    baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    const loc = await this.core.resolveChapterLocation(chapterId)
+    if (!loc) {
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
+    }
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeClearChapterVersioned(
+        loc.projectId, loc.volumeId, chapterId,
+        expected.objectGeneration, expected.revision, expected.contentSha256, baseContent)
       return this.core.decodeEnvelope<ChapterSaveReceipt>(jsonStr, decodeChapterSaveReceipt)
     } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
   }

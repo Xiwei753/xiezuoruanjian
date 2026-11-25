@@ -78,6 +78,10 @@ char*  writer_core_save_chapter(const char* project_id, const char* volume_id, c
 // Issue #1054：显式空覆盖意图的章节保存。只有编辑器确认“用户删除事务把非空正文变空”
 // 并匹配精确 sessionId/revision 时才传 true；普通 saveChapter 仍拒绝意外空覆盖。
 char*  writer_core_save_chapter_with_options(const char* project_id, const char* volume_id, const char* chapter_id, const char* content, bool allow_empty_overwrite);
+// Issue #1059：完整版本 CAS。expected_generation/revision/sha256 来自最近一次
+// open/save receipt；base_content 用于冲突材料，可为 NULL。
+char*  writer_core_save_chapter_versioned(const char* project_id, const char* volume_id, const char* chapter_id, const char* content, const char* expected_generation, int64_t expected_revision, const char* expected_sha256, const char* base_content, bool allow_empty_overwrite);
+char*  writer_core_clear_chapter_versioned(const char* project_id, const char* volume_id, const char* chapter_id, const char* expected_generation, int64_t expected_revision, const char* expected_sha256, const char* base_content);
 
 // ── Recent edits ──
 char*  writer_core_get_recent_edits(void);

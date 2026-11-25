@@ -141,6 +141,72 @@ static napi_value NativeSaveChapterWithOptions(napi_env env, napi_callback_info 
     return result;
 }
 
+static char* ReadDynamicString(napi_env env, napi_value value) {
+    size_t len = 0;
+    napi_get_value_string_utf8(env, value, nullptr, 0, &len);
+    char* out = new char[len + 1];
+    napi_get_value_string_utf8(env, value, out, len + 1, &len);
+    return out;
+}
+
+static napi_value NativeSaveChapterVersioned(napi_env env, napi_callback_info info) {
+    size_t argc = 9;
+    napi_value args[9];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char project_id[256] = {0};
+    char volume_id[256] = {0};
+    char chapter_id[256] = {0};
+    char expected_generation[128] = {0};
+    char expected_sha256[128] = {0};
+    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
+    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
+    if (argc >= 3) napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
+    if (argc >= 5) napi_get_value_string_utf8(env, args[4], expected_generation, sizeof(expected_generation), nullptr);
+    if (argc >= 7) napi_get_value_string_utf8(env, args[6], expected_sha256, sizeof(expected_sha256), nullptr);
+    int64_t expected_revision = 0;
+    if (argc >= 6) napi_get_value_int64(env, args[5], &expected_revision);
+    bool allow_empty_overwrite = false;
+    if (argc >= 9) napi_get_value_bool(env, args[8], &allow_empty_overwrite);
+
+    char* content = (argc >= 4) ? ReadDynamicString(env, args[3]) : new char[1]{'\0'};
+    char* base_content = (argc >= 8) ? ReadDynamicString(env, args[7]) : new char[1]{'\0'};
+
+    napi_value result = ReturnJsonString(env,
+        writer_core_save_chapter_versioned(project_id, volume_id, chapter_id, content,
+            expected_generation, expected_revision, expected_sha256, base_content,
+            allow_empty_overwrite));
+    delete[] content;
+    delete[] base_content;
+    return result;
+}
+
+static napi_value NativeClearChapterVersioned(napi_env env, napi_callback_info info) {
+    size_t argc = 7;
+    napi_value args[7];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char project_id[256] = {0};
+    char volume_id[256] = {0};
+    char chapter_id[256] = {0};
+    char expected_generation[128] = {0};
+    char expected_sha256[128] = {0};
+    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
+    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
+    if (argc >= 3) napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
+    if (argc >= 4) napi_get_value_string_utf8(env, args[3], expected_generation, sizeof(expected_generation), nullptr);
+    if (argc >= 6) napi_get_value_string_utf8(env, args[5], expected_sha256, sizeof(expected_sha256), nullptr);
+    int64_t expected_revision = 0;
+    if (argc >= 5) napi_get_value_int64(env, args[4], &expected_revision);
+    char* base_content = (argc >= 7) ? ReadDynamicString(env, args[6]) : new char[1]{'\0'};
+
+    napi_value result = ReturnJsonString(env,
+        writer_core_clear_chapter_versioned(project_id, volume_id, chapter_id,
+            expected_generation, expected_revision, expected_sha256, base_content));
+    delete[] base_content;
+    return result;
+}
+
 static napi_value NativeRenameChapter(napi_env env, napi_callback_info info) {
     size_t argc = 4;
     napi_value args[4];
@@ -229,6 +295,8 @@ napi_property_descriptor* getChapterDescriptors(size_t* count) {
         {"nativeOpenChapter", nullptr, NativeOpenChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeSaveChapter", nullptr, NativeSaveChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeSaveChapterWithOptions", nullptr, NativeSaveChapterWithOptions, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeSaveChapterVersioned", nullptr, NativeSaveChapterVersioned, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeClearChapterVersioned", nullptr, NativeClearChapterVersioned, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeRenameChapter", nullptr, NativeRenameChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeDeleteChapter", nullptr, NativeDeleteChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeReorderChapters", nullptr, NativeReorderChapters, nullptr, nullptr, nullptr, napi_default, nullptr},
