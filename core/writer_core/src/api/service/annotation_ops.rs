@@ -13,6 +13,7 @@ use crate::annotations::{
 use crate::api::service::{ApiResult, WriterCoreApi};
 use crate::api::types::*;
 use crate::api::WriterError;
+use crate::object_ref::ObjectScope;
 
 fn invalid_annotation(message: impl Into<String>) -> WriterError {
     WriterError::Other(message.into())
@@ -32,99 +33,19 @@ fn safe_project_id(project_id: &str) -> ApiResult<()> {
 }
 
 fn object_ref_from_dto(value: AnnotationObjectRefDto) -> ApiResult<ObjectRef> {
-    safe_project_id(&value.project_id)?;
-    if value.object_id.is_empty() {
-        return Err(invalid_annotation("object id must be non-empty"));
-    }
-    let project_id = value.project_id;
-    let object_id = value.object_id;
-    Ok(match value.kind {
-        AnnotationObjectKindDto::Project => ObjectRef::Project {
-            project_id,
-            object_id,
-        },
-        AnnotationObjectKindDto::Volume => ObjectRef::Volume {
-            project_id,
-            object_id,
-        },
-        AnnotationObjectKindDto::Chapter => ObjectRef::Chapter {
-            project_id,
-            object_id,
-        },
-        AnnotationObjectKindDto::TextAnchor => ObjectRef::TextAnchor {
-            project_id,
-            object_id,
-        },
-        AnnotationObjectKindDto::StarMap => ObjectRef::StarMap {
-            project_id,
-            object_id,
-        },
-        AnnotationObjectKindDto::StarMapNode => ObjectRef::StarMapNode {
-            project_id,
-            object_id,
-        },
-        AnnotationObjectKindDto::StarMapEmbed => ObjectRef::StarMapEmbed {
-            project_id,
-            object_id,
-        },
-        AnnotationObjectKindDto::NamedEntry => ObjectRef::NamedEntry {
-            project_id,
-            object_id,
-        },
-    })
+    ObjectRef::try_from(value).map_err(|error| invalid_annotation(error.to_string()))
 }
 
 fn object_ref_to_dto(value: ObjectRef) -> AnnotationObjectRefDto {
-    let (kind, project_id, object_id) = match value {
-        ObjectRef::Project {
-            project_id,
-            object_id,
-        } => (AnnotationObjectKindDto::Project, project_id, object_id),
-        ObjectRef::Volume {
-            project_id,
-            object_id,
-        } => (AnnotationObjectKindDto::Volume, project_id, object_id),
-        ObjectRef::Chapter {
-            project_id,
-            object_id,
-        } => (AnnotationObjectKindDto::Chapter, project_id, object_id),
-        ObjectRef::TextAnchor {
-            project_id,
-            object_id,
-        } => (AnnotationObjectKindDto::TextAnchor, project_id, object_id),
-        ObjectRef::StarMap {
-            project_id,
-            object_id,
-        } => (AnnotationObjectKindDto::StarMap, project_id, object_id),
-        ObjectRef::StarMapNode {
-            project_id,
-            object_id,
-        } => (AnnotationObjectKindDto::StarMapNode, project_id, object_id),
-        ObjectRef::StarMapEmbed {
-            project_id,
-            object_id,
-        } => (AnnotationObjectKindDto::StarMapEmbed, project_id, object_id),
-        ObjectRef::NamedEntry {
-            project_id,
-            object_id,
-        } => (AnnotationObjectKindDto::NamedEntry, project_id, object_id),
-    };
-    AnnotationObjectRefDto {
-        kind,
-        project_id,
-        object_id,
-    }
+    value.into()
 }
 
 fn link_target_from_dto(value: AnnotationTargetDto) -> ApiResult<LinkTarget> {
-    Ok(LinkTarget::Object(object_ref_from_dto(value.object_ref)?))
+    LinkTarget::try_from(value).map_err(|error| invalid_annotation(error.to_string()))
 }
 
 fn link_target_to_dto(value: LinkTarget) -> AnnotationTargetDto {
-    let LinkTarget::Object(object_ref) = value;
-    AnnotationTargetDto {
-        object_ref: object_ref_to_dto(object_ref),
-    }
+    value.into()
 }
 
 fn tag_to_dto(value: Tag) -> AnnotationTagDto {
@@ -184,6 +105,8 @@ fn link_to_dto(value: ObjectLink) -> AnnotationObjectLinkDto {
         origin: match value.origin {
             LinkOrigin::Manual => AnnotationLinkOriginDto::Manual,
         },
+        label: value.label,
+        created_at_ms: value.created_at_ms,
         updated_at_ms: value.updated_at_ms,
         deleted_at_ms: value.deleted_at_ms,
     }
@@ -196,6 +119,213 @@ impl WriterCoreApi {
             &self.projects_root.join(project_id),
             project_id,
         ))
+    }
+
+    /// Global shared-asset annotation store (`<app_data_root>/annotations/...`).
+    pub(crate) fn global_annotation_store(&self) -> AnnotationStore {
+        AnnotationStore::global(&self.app_data_root)
+    }
+
+    /// Namespace store for tag records: empty namespace means the global domain.
+    fn tag_namespace_store(&self, project_id: &str) -> ApiResult<AnnotationStore> {
+        if project_id.is_empty() {
+            Ok(self.global_annotation_store())
+        } else {
+            self.annotation_store(project_id)
+        }
+    }
+
+    /// Record changed paths for a namespace store.
+    ///
+    /// Project stores return project-relative paths and also refresh the project
+    /// search index; the global store returns workspace-relative paths and has no
+    /// project index to refresh.
+    fn finish_annotation_store_write(
+        &self,
+        project_id: &str,
+        changed_paths: Vec<String>,
+        operation: &str,
+    ) {
+        if project_id.is_empty() {
+            if changed_paths.is_empty() {
+                return;
+            }
+            let workspace_paths = changed_paths
+                .into_iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>();
+            self.record_workspace_paths_history(&workspace_paths, operation);
+            return;
+        }
+        self.finish_annotation_write(project_id, changed_paths, operation);
+    }
+
+    /// 项目标签只能绑定本项目作用域内的对象，或该项目有权访问的共享素材。
+    ///
+    /// 共享素材/画布实例的 `ObjectRef::scope()` 是全局作用域，但它们的归属
+    /// 由库索引或星图 meta 决定：本项目的画布、归属本项目或全局库的素材可以
+    /// 绑定；归属其他项目或无法判定时拒绝，不猜测。
+    fn authorize_tag_binding_target(&self, project_id: &str, target: &ObjectRef) -> ApiResult<()> {
+        if project_id.is_empty() {
+            return match target.scope() {
+                ObjectScope::Global => {
+                    self.reject_project_owned_shared_asset(target)?;
+                    Ok(())
+                }
+                ObjectScope::Project { .. } => Err(invalid_annotation(
+                    "global tags can only be bound to global shared assets or canvases",
+                )),
+            };
+        }
+        match target.scope() {
+            ObjectScope::Project {
+                project_id: target_project,
+            } => {
+                if &target_project != project_id {
+                    return Err(invalid_annotation(
+                        "project tag can only be bound to objects of its own project",
+                    ));
+                }
+                Ok(())
+            }
+            ObjectScope::Global => self.authorize_global_target_for_project(project_id, target),
+        }
+    }
+
+    fn authorize_global_target_for_project(
+        &self,
+        project_id: &str,
+        target: &ObjectRef,
+    ) -> ApiResult<()> {
+        match target {
+            ObjectRef::NodeAsset { object_id, .. } => {
+                self.authorize_shared_node_asset(project_id, object_id)
+            }
+            ObjectRef::StarMap { object_id, .. } => {
+                let meta = self.get_starmap(object_id)?;
+                match meta.project_id.as_deref() {
+                    Some(owner) if owner == project_id => Ok(()),
+                    Some(_) => Err(invalid_annotation("starmap belongs to another project")),
+                    // 独立星图可被任意作品引用。
+                    None => Ok(()),
+                }
+            }
+            ObjectRef::NodeInstance { starmap_id, .. }
+            | ObjectRef::EmbedInstance { starmap_id, .. }
+            | ObjectRef::CanvasAnchor { starmap_id, .. } => {
+                let meta = self.get_starmap(starmap_id)?;
+                if meta.project_id.as_deref() == Some(project_id) {
+                    Ok(())
+                } else {
+                    Err(invalid_annotation(
+                        "canvas instance does not belong to this project",
+                    ))
+                }
+            }
+            _ => Err(invalid_annotation("unsupported tag binding target")),
+        }
+    }
+
+    /// A shared node asset is accessible when its library entry belongs to this
+    /// project or to the global library. Without an entry ownership is unknown,
+    /// so the binding is rejected instead of guessed.
+    fn authorize_shared_node_asset(&self, project_id: &str, asset_id: &str) -> ApiResult<()> {
+        let index = crate::starmap::library::load_library_index(&self.app_data_root)?;
+        let mut has_global_entry = false;
+        let mut has_own_entry = false;
+        let mut has_foreign_entry = false;
+        for entry in &index.entries {
+            if entry.target.kind != crate::starmap::types::StarMapAssetKind::Node
+                || entry.target.asset_id != asset_id
+            {
+                continue;
+            }
+            match entry.scope.project_id() {
+                None => has_global_entry = true,
+                Some(owner) if owner == project_id => has_own_entry = true,
+                Some(_) => has_foreign_entry = true,
+            }
+        }
+        if has_own_entry || has_global_entry {
+            return Ok(());
+        }
+        if has_foreign_entry {
+            return Err(invalid_annotation(
+                "shared node asset belongs to another project",
+            ));
+        }
+        Err(invalid_annotation(
+            "shared node asset ownership cannot be determined",
+        ))
+    }
+
+    fn reject_project_owned_shared_asset(&self, target: &ObjectRef) -> ApiResult<()> {
+        match target {
+            ObjectRef::NodeAsset { object_id, .. } => {
+                let index = crate::starmap::library::load_library_index(&self.app_data_root)?;
+                if index.entries.iter().any(|entry| {
+                    entry.target.kind == crate::starmap::types::StarMapAssetKind::Node
+                        && entry.target.asset_id == *object_id
+                        && entry.scope.project_id().is_some()
+                }) {
+                    return Err(invalid_annotation(
+                        "global tags cannot be bound to a project-owned asset",
+                    ));
+                }
+                Ok(())
+            }
+            ObjectRef::StarMap { object_id, .. } => {
+                let meta = self.get_starmap(object_id)?;
+                if meta.project_id.is_some() {
+                    return Err(invalid_annotation(
+                        "global tags cannot be bound to a project-owned starmap",
+                    ));
+                }
+                Ok(())
+            }
+            ObjectRef::NodeInstance { starmap_id, .. }
+            | ObjectRef::EmbedInstance { starmap_id, .. }
+            | ObjectRef::CanvasAnchor { starmap_id, .. } => {
+                let meta = self.get_starmap(starmap_id)?;
+                if meta.project_id.is_some() {
+                    return Err(invalid_annotation(
+                        "global tags cannot be bound to a project canvas instance",
+                    ));
+                }
+                Ok(())
+            }
+            _ => Err(invalid_annotation(
+                "global tags can only be bound to shared assets or canvases",
+            )),
+        }
+    }
+
+    /// Store that owns a link: the source's namespace.
+    ///
+    /// Project objects and project-owned assets live in their project store.
+    /// Canvas instances live in the store of the canvas that owns them; a canvas
+    /// without a project uses the global store.
+    fn link_store_for_source(&self, source: &ObjectRef) -> ApiResult<AnnotationStore> {
+        if let Some(project_id) = source.project_id() {
+            return self.annotation_store(project_id);
+        }
+        // 全局作用域的共享素材：项目归属在 `scope` 里，直接按它选仓库。
+        if let ObjectRef::StarMap { scope, .. } | ObjectRef::NodeAsset { scope, .. } = source {
+            return match scope {
+                ObjectScope::Global => Ok(self.global_annotation_store()),
+                ObjectScope::Project { project_id } => self.annotation_store(project_id),
+            };
+        }
+        // 画布实例/嵌入/锚点继承其画布的归属：画布属于作品时写作品域，
+        // 独立画布写全局域。
+        if let Some(starmap_id) = source.starmap_id() {
+            let meta = self.get_starmap(starmap_id)?;
+            return match meta.project_id.as_deref() {
+                Some(project_id) => self.annotation_store(project_id),
+                None => Ok(self.global_annotation_store()),
+            };
+        }
+        Ok(self.global_annotation_store())
     }
 
     fn saved_chapter_text_matches(
@@ -407,6 +537,7 @@ impl WriterCoreApi {
         let project_root = self.projects_root.join(project_id);
         let existing_ids = self.annotation_search_object_ids_for_project(project_id);
         match crate::search::extractor::annotation_search_updates_for_project(
+            &self.app_data_root,
             &project_root,
             project_id,
             &existing_ids,
@@ -420,8 +551,17 @@ impl WriterCoreApi {
         }
     }
 
+    /// Project tag catalogue only; global asset tags never leak into it.
     pub fn list_tags(&self, project_id: String) -> ApiResult<Vec<AnnotationTagDto>> {
         self.annotation_store(&project_id)?
+            .list_tags()
+            .map(|values| values.into_iter().map(tag_to_dto).collect())
+            .map_err(Into::into)
+    }
+
+    /// Global shared-asset tag catalogue.
+    pub fn list_global_tags(&self) -> ApiResult<Vec<AnnotationTagDto>> {
+        self.global_annotation_store()
             .list_tags()
             .map(|values| values.into_iter().map(tag_to_dto).collect())
             .map_err(Into::into)
@@ -533,7 +673,9 @@ impl WriterCoreApi {
         let paths = store
             .apply_mutation(AnnotationMutation::Delete {
                 kind: AnnotationKind::Tag,
-                project_id: project_id.clone(),
+                scope: ObjectScope::Project {
+                    project_id: project_id.clone(),
+                },
                 object_id: tag_id.clone(),
                 deleted_at_ms: chrono::Utc::now().timestamp_millis(),
             })
@@ -617,6 +759,16 @@ impl WriterCoreApi {
         Ok(changed)
     }
 
+    /// Replace the tag set of one typed object by difference.
+    ///
+    /// Bindings are unique per (tag namespace, tag, typed target): existing rows
+    /// are kept, removed rows become tombstones, and new rows use the store's
+    /// deterministic binding ID. No full old set is written back, so a concurrent
+    /// add on another device is not overwritten by a stale snapshot.
+    ///
+    /// An empty `project_id` means the global shared-asset catalogue; project
+    /// tags can point at shared assets the project may access (its own or the
+    /// global library), never at another project's objects.
     pub fn set_tag_bindings(
         &self,
         project_id: String,
@@ -625,15 +777,18 @@ impl WriterCoreApi {
     ) -> ApiResult<Vec<AnnotationTagBindingDto>> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_annotation_contribution_transaction(&project_id)?;
-        let mut contribution_batch = self.begin_contribution_batch();
-        let target = object_ref_from_dto(target)?;
-        if target.project_id() != project_id {
-            return Err(invalid_annotation(
-                "tag bindings must target objects in their project",
-            ));
+        if !project_id.is_empty() {
+            safe_project_id(&project_id)?;
         }
-        let store = self.annotation_store(&project_id)?;
+        let target = object_ref_from_dto(target)?;
+        self.authorize_tag_binding_target(&project_id, &target)?;
+        let mut contribution_txn = if project_id.is_empty() {
+            None
+        } else {
+            Some(self.begin_annotation_contribution_transaction(&project_id)?)
+        };
+        let mut contribution_batch = self.begin_contribution_batch();
+        let store = self.tag_namespace_store(&project_id)?;
         let tags = store.list_tags().map_err(WriterError::from)?;
         let tags_by_id = tags
             .into_iter()
@@ -646,47 +801,55 @@ impl WriterCoreApi {
             }
             desired.insert(tag_id);
         }
-        if let Some(anchor_id) = text_anchor_id(&target) {
-            let mut baselines = self
-                .annotation_edit_baselines
-                .lock()
-                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
-            if let Some(baseline) =
-                find_session_created_anchor_baseline_mut(&mut baselines, &project_id, anchor_id)
-            {
-                let existing = baseline
-                    .pending_bindings
-                    .values()
-                    .filter(|binding| binding.target == target)
-                    .cloned()
-                    .map(|binding| (binding.tag_id.clone(), binding))
-                    .collect::<HashMap<_, _>>();
-                baseline
-                    .pending_bindings
-                    .retain(|_, binding| binding.target != target);
-                let now = chrono::Utc::now().timestamp_millis();
-                let mut desired_ids = desired.into_iter().collect::<Vec<_>>();
-                desired_ids.sort();
-                let mut result = Vec::with_capacity(desired_ids.len());
-                for tag_id in desired_ids {
-                    let binding = existing
-                        .get(&tag_id)
+        if !project_id.is_empty() {
+            if let Some(anchor_id) = text_anchor_id(&target) {
+                let mut baselines = self
+                    .annotation_edit_baselines
+                    .lock()
+                    .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+                if let Some(baseline) =
+                    find_session_created_anchor_baseline_mut(&mut baselines, &project_id, anchor_id)
+                {
+                    let existing = baseline
+                        .pending_bindings
+                        .values()
+                        .filter(|binding| binding.target == target)
                         .cloned()
-                        .unwrap_or_else(|| TagBinding {
-                            binding_id: uuid::Uuid::new_v4().to_string(),
-                            project_id: project_id.clone(),
-                            tag_id,
-                            target: target.clone(),
-                            updated_at_ms: now,
-                            deleted_at_ms: None,
-                        });
+                        .map(|binding| (binding.tag_id.clone(), binding))
+                        .collect::<HashMap<_, _>>();
                     baseline
                         .pending_bindings
-                        .insert(binding.binding_id.clone(), binding.clone());
-                    result.push(binding_to_dto(binding));
+                        .retain(|_, binding| binding.target != target);
+                    let now = chrono::Utc::now().timestamp_millis();
+                    let mut desired_ids = desired.into_iter().collect::<Vec<_>>();
+                    desired_ids.sort();
+                    let mut result = Vec::with_capacity(desired_ids.len());
+                    for tag_id in desired_ids {
+                        let Some(tag) = tags_by_id.get(&tag_id) else {
+                            return Err(invalid_annotation("tag binding refers to a missing tag"));
+                        };
+                        let binding =
+                            existing
+                                .get(&tag_id)
+                                .cloned()
+                                .unwrap_or_else(|| TagBinding {
+                                    binding_id: AnnotationStore::binding_id_for_relation(
+                                        tag, &target,
+                                    ),
+                                    project_id: project_id.clone(),
+                                    tag_id,
+                                    target: target.clone(),
+                                    updated_at_ms: now,
+                                    deleted_at_ms: None,
+                                });
+                        baseline
+                            .pending_bindings
+                            .insert(binding.binding_id.clone(), binding.clone());
+                        result.push(binding_to_dto(binding));
+                    }
+                    baseline.updated_at_ms = now;
+                    return Ok(result);
                 }
-                baseline.updated_at_ms = now;
-                return Ok(result);
             }
         }
         let existing = store
@@ -701,37 +864,19 @@ impl WriterCoreApi {
         let mut removed_bindings = Vec::new();
         let mut added_bindings = Vec::new();
         for binding in existing {
-            if !desired.contains(&binding.tag_id) {
-                let binding_id = binding.binding_id.clone();
-                let snapshot = Self::annotation_snapshot(
-                    binding.updated_at_ms.to_string(),
-                    binding.tag_id.clone(),
-                );
-                changed_paths.extend(
-                    store
-                        .apply_mutation(AnnotationMutation::Delete {
-                            kind: AnnotationKind::Binding,
-                            project_id: project_id.clone(),
-                            object_id: binding.binding_id,
-                            deleted_at_ms: now,
-                        })
-                        .map_err(WriterError::from)?,
-                );
-                removed_bindings.push((binding_id, snapshot));
-            }
-        }
-        for tag_id in desired {
-            if existing_ids.contains(&tag_id) {
+            if desired.contains(&binding.tag_id) {
                 continue;
             }
-            let binding = TagBinding {
-                binding_id: uuid::Uuid::new_v4().to_string(),
-                project_id: project_id.clone(),
-                tag_id,
-                target: target.clone(),
-                updated_at_ms: now,
+            // A deleted tag's relation still has a stable key; tombstone the
+            // binding even when the tag definition is already gone.
+            let tag = tags_by_id.get(&binding.tag_id).cloned().unwrap_or(Tag {
+                tag_id: binding.tag_id.clone(),
+                project_id: binding.project_id.clone(),
+                name: String::new(),
+                color: None,
+                updated_at_ms: binding.updated_at_ms,
                 deleted_at_ms: None,
-            };
+            });
             let binding_id = binding.binding_id.clone();
             let snapshot = Self::annotation_snapshot(
                 binding.updated_at_ms.to_string(),
@@ -739,41 +884,224 @@ impl WriterCoreApi {
             );
             changed_paths.extend(
                 store
-                    .apply_mutation(AnnotationMutation::UpsertBinding(binding))
+                    .detach_tag(&tag, &target, now)
                     .map_err(WriterError::from)?,
             );
-            added_bindings.push((binding_id, snapshot));
+            removed_bindings.push((binding_id, snapshot));
         }
-        self.finish_annotation_write(&project_id, changed_paths, "set_annotation_tag_bindings");
-        let context = crate::writing_stats::current_mutation_context();
-        for (binding_id, snapshot) in removed_bindings {
-            self.record_annotation_object_with_context(
-                &context,
-                &project_id,
-                crate::writing_stats::ContributionObjectType::TagBinding,
-                &binding_id,
-                crate::writing_stats::ContributionOperation::Unlink,
-                Some(snapshot),
-                None,
-            )?;
+        for tag_id in desired {
+            if existing_ids.contains(&tag_id) {
+                continue;
+            }
+            let Some(tag) = tags_by_id.get(&tag_id) else {
+                return Err(invalid_annotation("tag binding refers to a missing tag"));
+            };
+            let (binding, changed) = store
+                .attach_tag(tag, &target, now)
+                .map_err(WriterError::from)?;
+            changed_paths.extend(changed);
+            added_bindings.push((
+                binding.binding_id.clone(),
+                Self::annotation_snapshot(
+                    binding.updated_at_ms.to_string(),
+                    binding.tag_id.clone(),
+                ),
+            ));
         }
-        for (binding_id, snapshot) in added_bindings {
-            self.record_annotation_object_with_context(
-                &context,
-                &project_id,
-                crate::writing_stats::ContributionObjectType::TagBinding,
-                &binding_id,
-                crate::writing_stats::ContributionOperation::Link,
-                None,
-                Some(snapshot),
-            )?;
+        self.finish_annotation_store_write(
+            &project_id,
+            changed_paths,
+            "set_annotation_tag_bindings",
+        );
+        if !project_id.is_empty() {
+            let context = crate::writing_stats::current_mutation_context();
+            for (binding_id, snapshot) in removed_bindings {
+                self.record_annotation_object_with_context(
+                    &context,
+                    &project_id,
+                    crate::writing_stats::ContributionObjectType::TagBinding,
+                    &binding_id,
+                    crate::writing_stats::ContributionOperation::Unlink,
+                    Some(snapshot),
+                    None,
+                )?;
+            }
+            for (binding_id, snapshot) in added_bindings {
+                self.record_annotation_object_with_context(
+                    &context,
+                    &project_id,
+                    crate::writing_stats::ContributionObjectType::TagBinding,
+                    &binding_id,
+                    crate::writing_stats::ContributionOperation::Link,
+                    None,
+                    Some(snapshot),
+                )?;
+            }
+            self.commit_contribution_batch(&mut contribution_batch)?;
         }
-        self.commit_contribution_batch(&mut contribution_batch)?;
-        contribution_txn.commit()?;
+        if let Some(mut contribution_txn) = contribution_txn.take() {
+            contribution_txn.commit()?;
+        }
         store
             .list_bindings_for_target(&target)
             .map(|values| values.into_iter().map(binding_to_dto).collect())
             .map_err(Into::into)
+    }
+
+    /// Idempotently attach one tag to one typed object.
+    ///
+    /// An empty `project_id` addresses the global shared-asset catalogue.
+    pub fn attach_tag(
+        &self,
+        project_id: String,
+        tag_id: String,
+        target: AnnotationObjectRefDto,
+    ) -> ApiResult<AnnotationTagBindingDto> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        if !project_id.is_empty() {
+            safe_project_id(&project_id)?;
+        }
+        let target = object_ref_from_dto(target)?;
+        self.authorize_tag_binding_target(&project_id, &target)?;
+        let mut contribution_txn = if project_id.is_empty() {
+            None
+        } else {
+            Some(self.begin_annotation_contribution_transaction(&project_id)?)
+        };
+        let mut contribution_batch = self.begin_contribution_batch();
+        let store = self.tag_namespace_store(&project_id)?;
+        let tag = store
+            .get_tag(&tag_id)
+            .map_err(WriterError::from)?
+            .filter(|tag| tag.deleted_at_ms.is_none())
+            .ok_or_else(|| invalid_annotation("tag does not exist"))?;
+        let (binding, changed) = store
+            .attach_tag(&tag, &target, chrono::Utc::now().timestamp_millis())
+            .map_err(WriterError::from)?;
+        let created = !changed.is_empty();
+        self.finish_annotation_store_write(&project_id, changed, "attach_annotation_tag");
+        if created && !project_id.is_empty() {
+            let context = crate::writing_stats::current_mutation_context();
+            self.record_annotation_object_with_context(
+                &context,
+                &project_id,
+                crate::writing_stats::ContributionObjectType::TagBinding,
+                &binding.binding_id,
+                crate::writing_stats::ContributionOperation::Link,
+                None,
+                Some(Self::annotation_snapshot(
+                    binding.updated_at_ms.to_string(),
+                    binding.tag_id.clone(),
+                )),
+            )?;
+            self.commit_contribution_batch(&mut contribution_batch)?;
+        }
+        if let Some(mut contribution_txn) = contribution_txn.take() {
+            contribution_txn.commit()?;
+        }
+        Ok(binding_to_dto(binding))
+    }
+
+    /// Idempotently remove one tag/target relation, keeping the tombstone.
+    pub fn detach_tag(
+        &self,
+        project_id: String,
+        tag_id: String,
+        target: AnnotationObjectRefDto,
+    ) -> ApiResult<bool> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        if !project_id.is_empty() {
+            safe_project_id(&project_id)?;
+        }
+        let target = object_ref_from_dto(target)?;
+        self.authorize_tag_binding_target(&project_id, &target)?;
+        let mut contribution_txn = if project_id.is_empty() {
+            None
+        } else {
+            Some(self.begin_annotation_contribution_transaction(&project_id)?)
+        };
+        let mut contribution_batch = self.begin_contribution_batch();
+        let store = self.tag_namespace_store(&project_id)?;
+        let tag = store
+            .get_tag(&tag_id)
+            .map_err(WriterError::from)?
+            .filter(|tag| tag.deleted_at_ms.is_none())
+            .ok_or_else(|| invalid_annotation("tag does not exist"))?;
+        let binding = store
+            .find_binding_by_relation(&tag, &target)
+            .map_err(WriterError::from)?;
+        let changed = store
+            .detach_tag(&tag, &target, chrono::Utc::now().timestamp_millis())
+            .map_err(WriterError::from)?;
+        let removed = !changed.is_empty();
+        self.finish_annotation_store_write(&project_id, changed, "detach_annotation_tag");
+        if removed && !project_id.is_empty() {
+            let context = crate::writing_stats::current_mutation_context();
+            if let Some(binding) = binding {
+                self.record_annotation_object_with_context(
+                    &context,
+                    &project_id,
+                    crate::writing_stats::ContributionObjectType::TagBinding,
+                    &binding.binding_id,
+                    crate::writing_stats::ContributionOperation::Unlink,
+                    Some(Self::annotation_snapshot(
+                        binding.updated_at_ms.to_string(),
+                        binding.tag_id,
+                    )),
+                    None,
+                )?;
+            }
+            self.commit_contribution_batch(&mut contribution_batch)?;
+        }
+        if let Some(mut contribution_txn) = contribution_txn.take() {
+            contribution_txn.commit()?;
+        }
+        Ok(removed)
+    }
+
+    /// Read-only tag projection for one typed object.
+    ///
+    /// The catalogue is resolved from the object's own namespace: project
+    /// objects and project-owned shared assets use the project catalogue; canvas
+    /// instances use their canvas's project catalogue; global assets and global
+    /// canvases use the global catalogue.
+    pub fn list_tags_for_object(
+        &self,
+        target: AnnotationObjectRefDto,
+    ) -> ApiResult<Vec<AnnotationTagDto>> {
+        let target = object_ref_from_dto(target)?;
+        let store = self.tag_catalogue_store_for_object(&target)?;
+        let bindings = store
+            .list_bindings_for_scope(&target)
+            .map_err(WriterError::from)?;
+        let tags = store
+            .list_tags()
+            .map_err(WriterError::from)?
+            .into_iter()
+            .map(|tag| (tag.tag_id.clone(), tag))
+            .collect::<HashMap<_, _>>();
+        let mut result = bindings
+            .into_iter()
+            .filter_map(|binding| tags.get(&binding.tag_id).cloned())
+            .map(tag_to_dto)
+            .collect::<Vec<_>>();
+        result.sort_by(|left, right| left.tag_id.cmp(&right.tag_id));
+        Ok(result)
+    }
+
+    fn tag_catalogue_store_for_object(&self, target: &ObjectRef) -> ApiResult<AnnotationStore> {
+        if let Some(project_id) = target.project_id() {
+            return self.annotation_store(project_id);
+        }
+        if let Some(starmap_id) = target.starmap_id() {
+            let meta = self.get_starmap(starmap_id)?;
+            if let Some(project_id) = meta.project_id.as_deref() {
+                return self.annotation_store(project_id);
+            }
+        }
+        Ok(self.global_annotation_store())
     }
 
     pub fn list_bindings_for_target(
@@ -1033,7 +1361,9 @@ impl WriterCoreApi {
         let paths = store
             .apply_mutation(AnnotationMutation::Delete {
                 kind: AnnotationKind::NamedEntry,
-                project_id: project_id.clone(),
+                scope: ObjectScope::Project {
+                    project_id: project_id.clone(),
+                },
                 object_id: entry_id.clone(),
                 deleted_at_ms: chrono::Utc::now().timestamp_millis(),
             })
@@ -1054,6 +1384,12 @@ impl WriterCoreApi {
         Ok(changed)
     }
 
+    /// Create (or idempotently re-use) one navigation link.
+    ///
+    /// The link is stored once in the store that owns its source: project
+    /// objects in their project, canvas instances in the project that owns the
+    /// canvas (global store for an independent canvas), shared assets in their
+    /// own namespace. It is never copied into the destination.
     pub fn create_link(
         &self,
         source: AnnotationObjectRefDto,
@@ -1066,17 +1402,20 @@ impl WriterCoreApi {
         if !self.object_ref_exists(&source)? {
             return Err(invalid_annotation("link source does not exist"));
         }
-        let project_id = source.project_id().to_string();
-        let store = self.annotation_store(&project_id)?;
+        self.authorize_link_target(&target)?;
+        let store = self.link_store_for_source(&source)?;
+        let project_id = store.project_id().to_string();
+        let now = chrono::Utc::now().timestamp_millis();
         let link = ObjectLink {
             link_id: uuid::Uuid::new_v4().to_string(),
             source,
             target,
             origin: LinkOrigin::Manual,
-            updated_at_ms: chrono::Utc::now().timestamp_millis(),
+            label: None,
+            created_at_ms: now,
+            updated_at_ms: now,
             deleted_at_ms: None,
         };
-        let result = link_to_dto(link.clone());
         if let Some(anchor_id) = text_anchor_id(&link.source) {
             let mut baselines = self
                 .annotation_edit_baselines
@@ -1085,27 +1424,39 @@ impl WriterCoreApi {
             if let Some(baseline) =
                 find_session_created_anchor_baseline_mut(&mut baselines, &project_id, anchor_id)
             {
+                let result = link_to_dto(link.clone());
                 baseline.pending_links.insert(link.link_id.clone(), link);
                 baseline.updated_at_ms = chrono::Utc::now().timestamp_millis();
                 return Ok(result);
             }
         }
-        let paths = store
-            .apply_mutation(AnnotationMutation::UpsertLink(link))
-            .map_err(WriterError::from)?;
-        self.finish_annotation_write(&project_id, paths, "create_object_link");
-        self.record_annotation_object(
-            &project_id,
-            crate::writing_stats::ContributionObjectType::ObjectLink,
-            &result.link_id,
-            crate::writing_stats::ContributionOperation::Create,
-            None,
-            Some(Self::annotation_snapshot(
-                result.updated_at_ms.to_string(),
-                format!("{:?}", result.target),
-            )),
-        )?;
-        Ok(result)
+        let (link, paths) = store.attach_link(link).map_err(WriterError::from)?;
+        let created = !paths.is_empty();
+        self.finish_annotation_store_write(&project_id, paths, "create_object_link");
+        if created && !project_id.is_empty() {
+            self.record_annotation_object(
+                &project_id,
+                crate::writing_stats::ContributionObjectType::ObjectLink,
+                &link.link_id,
+                crate::writing_stats::ContributionOperation::Create,
+                None,
+                Some(Self::annotation_snapshot(
+                    link.updated_at_ms.to_string(),
+                    format!("{:?}", link.target),
+                )),
+            )?;
+        }
+        Ok(link_to_dto(link))
+    }
+
+    fn authorize_link_target(&self, target: &LinkTarget) -> ApiResult<()> {
+        if let LinkTarget::CanvasNavigation(route) = target {
+            if route.starmap_id.is_empty() {
+                return Err(invalid_annotation("canvas route needs a starmapId"));
+            }
+            self.get_starmap(&route.starmap_id)?;
+        }
+        Ok(())
     }
 
     pub fn update_link(
@@ -1119,7 +1470,9 @@ impl WriterCoreApi {
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         safe_project_id(&project_id)?;
         let source = object_ref_from_dto(source)?;
-        if source.project_id() != project_id {
+        let store = self.link_store_for_source(&source)?;
+        let store_project_id = store.project_id().to_string();
+        if source.project_id().is_some() && store_project_id != project_id {
             return Err(invalid_annotation(
                 "link source must belong to its storage project",
             ));
@@ -1128,6 +1481,7 @@ impl WriterCoreApi {
             return Err(invalid_annotation("link source does not exist"));
         }
         let target = link_target_from_dto(target)?;
+        self.authorize_link_target(&target)?;
         let now = chrono::Utc::now().timestamp_millis();
         let pending_update = {
             let mut baselines = self
@@ -1211,11 +1565,10 @@ impl WriterCoreApi {
             return Ok(link_to_dto(link.clone()));
         }
         if let Some((None, link)) = pending_update {
-            let store = self.annotation_store(&project_id)?;
             let paths = store
                 .apply_mutation(AnnotationMutation::UpsertLink(link.clone()))
                 .map_err(WriterError::from)?;
-            self.finish_annotation_write(&project_id, paths, "update_object_link");
+            self.finish_annotation_store_write(&project_id, paths, "update_object_link");
             self.record_annotation_object(
                 &project_id,
                 crate::writing_stats::ContributionObjectType::ObjectLink,
@@ -1243,7 +1596,6 @@ impl WriterCoreApi {
             }
             return Ok(link_to_dto(link));
         }
-        let store = self.annotation_store(&project_id)?;
         let mut link = store
             .get_link(&link_id)
             .map_err(WriterError::from)?
@@ -1260,21 +1612,24 @@ impl WriterCoreApi {
         let paths = store
             .apply_mutation(AnnotationMutation::UpsertLink(link))
             .map_err(WriterError::from)?;
-        self.finish_annotation_write(&project_id, paths, "update_object_link");
-        self.record_annotation_object(
-            &project_id,
-            crate::writing_stats::ContributionObjectType::ObjectLink,
-            &result.link_id,
-            crate::writing_stats::ContributionOperation::Update,
-            Some(before),
-            Some(after),
-        )?;
+        self.finish_annotation_store_write(&store_project_id, paths, "update_object_link");
+        if !store_project_id.is_empty() {
+            self.record_annotation_object(
+                &store_project_id,
+                crate::writing_stats::ContributionObjectType::ObjectLink,
+                &result.link_id,
+                crate::writing_stats::ContributionOperation::Update,
+                Some(before),
+                Some(after),
+            )?;
+        }
         Ok(result)
     }
 
     pub fn delete_link(&self, project_id: String, link_id: String) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        safe_project_id(&project_id)?;
         {
             let mut baselines = self
                 .annotation_edit_baselines
@@ -1290,7 +1645,28 @@ impl WriterCoreApi {
                 }
             }
         }
-        let store = self.annotation_store(&project_id)?;
+        // Canvas-instance links are owned by their canvas's store, which may be
+        // the global store even when the UI is working inside a project.
+        let project_store = self.annotation_store(&project_id)?;
+        let store = if project_store
+            .get_link(&link_id)
+            .map_err(WriterError::from)?
+            .is_some()
+        {
+            project_store
+        } else {
+            let global_store = self.global_annotation_store();
+            if global_store
+                .get_link(&link_id)
+                .map_err(WriterError::from)?
+                .is_some()
+            {
+                global_store
+            } else {
+                project_store
+            }
+        };
+        let store_project_id = store.project_id().to_string();
         let before = store
             .get_link(&link_id)
             .ok()
@@ -1305,16 +1681,16 @@ impl WriterCoreApi {
         let paths = store
             .apply_mutation(AnnotationMutation::Delete {
                 kind: AnnotationKind::Link,
-                project_id: project_id.clone(),
+                scope: store.scope(),
                 object_id: link_id.clone(),
                 deleted_at_ms: chrono::Utc::now().timestamp_millis(),
             })
             .map_err(WriterError::from)?;
         let changed = !paths.is_empty();
-        self.finish_annotation_write(&project_id, paths, "delete_object_link");
-        if changed {
+        self.finish_annotation_store_write(&store_project_id, paths, "delete_object_link");
+        if changed && !store_project_id.is_empty() {
             self.record_annotation_object(
-                &project_id,
+                &store_project_id,
                 crate::writing_stats::ContributionObjectType::ObjectLink,
                 &link_id,
                 crate::writing_stats::ContributionOperation::Delete,
@@ -1331,7 +1707,7 @@ impl WriterCoreApi {
     ) -> ApiResult<Vec<AnnotationObjectLinkDto>> {
         let source = object_ref_from_dto(source)?;
         let mut links = self
-            .annotation_store(source.project_id())?
+            .link_store_for_source(&source)?
             .list_links_for_source(&source)
             .map_err(WriterError::from)?;
         if matches!(source, ObjectRef::TextAnchor { .. }) {
@@ -1341,7 +1717,7 @@ impl WriterCoreApi {
                 .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
             for baseline in baselines
                 .values()
-                .filter(|baseline| baseline.project_id == source.project_id())
+                .filter(|baseline| Some(baseline.project_id.as_str()) == source.project_id())
             {
                 links.extend(
                     baseline
@@ -1360,12 +1736,13 @@ impl WriterCoreApi {
         &self,
         target: AnnotationTargetDto,
     ) -> ApiResult<Vec<AnnotationObjectLinkDto>> {
-        let LinkTarget::Object(target) = link_target_from_dto(target)?;
-        let mut links_by_id = find_annotation_backlinks(&self.projects_root, &target)
-            .map_err(WriterError::from)?
-            .into_iter()
-            .map(|link| (link.link_id.clone(), link))
-            .collect::<HashMap<_, _>>();
+        let target = link_target_from_dto(target)?;
+        let mut links_by_id =
+            find_annotation_backlinks(&self.app_data_root, &self.projects_root, &target)
+                .map_err(WriterError::from)?
+                .into_iter()
+                .map(|link| (link.link_id.clone(), link))
+                .collect::<HashMap<_, _>>();
         let baselines = self
             .annotation_edit_baselines
             .lock()
@@ -1378,7 +1755,7 @@ impl WriterCoreApi {
             // when it has moved away from this target. Active draft links
             // appear immediately in backlinks before their chapter is saved.
             links_by_id.remove(&link.link_id);
-            if link.deleted_at_ms.is_none() && link.target == LinkTarget::Object(target.clone()) {
+            if link.deleted_at_ms.is_none() && link.target == target {
                 links_by_id.insert(link.link_id.clone(), link.clone());
             }
         }
@@ -1450,14 +1827,34 @@ impl WriterCoreApi {
         target: AnnotationTargetDto,
     ) -> ApiResult<AnnotationLinkResolutionDto> {
         let target = link_target_from_dto(target)?;
-        let LinkTarget::Object(object_ref) = &target;
-        let project_root = self.projects_root.join(object_ref.project_id());
-        let state = if !project_root.join("project.json").exists() {
-            AnnotationLinkResolutionStateDto::ProjectNotDownloaded
-        } else if self.object_ref_exists(object_ref)? {
-            AnnotationLinkResolutionStateDto::Exists
-        } else {
-            AnnotationLinkResolutionStateDto::Missing
+        let state = match &target {
+            LinkTarget::Object(object_ref) => {
+                if let Some(project_id) = object_ref.project_id() {
+                    let project_root = self.projects_root.join(project_id);
+                    if !project_root.join("project.json").exists() {
+                        AnnotationLinkResolutionStateDto::ProjectNotDownloaded
+                    } else if self.object_ref_exists(object_ref)? {
+                        AnnotationLinkResolutionStateDto::Exists
+                    } else {
+                        AnnotationLinkResolutionStateDto::Missing
+                    }
+                } else if self.object_ref_exists(object_ref)? {
+                    AnnotationLinkResolutionStateDto::Exists
+                } else {
+                    AnnotationLinkResolutionStateDto::Missing
+                }
+            }
+            LinkTarget::CanvasNavigation(route) => {
+                let meta_path = self
+                    .app_data_root
+                    .join("starmaps")
+                    .join(format!("{}.meta.json", route.starmap_id));
+                if !route.starmap_id.is_empty() && meta_path.is_file() {
+                    AnnotationLinkResolutionStateDto::Exists
+                } else {
+                    AnnotationLinkResolutionStateDto::Missing
+                }
+            }
         };
         Ok(AnnotationLinkResolutionDto {
             state,
@@ -1466,8 +1863,11 @@ impl WriterCoreApi {
     }
 
     fn object_ref_exists(&self, target: &ObjectRef) -> ApiResult<bool> {
-        let project_id = target.project_id();
-        if let ObjectRef::TextAnchor { object_id, .. } = target {
+        if let ObjectRef::TextAnchor {
+            project_id,
+            object_id,
+        } = target
+        {
             let baselines = self
                 .annotation_edit_baselines
                 .lock()
@@ -1479,23 +1879,44 @@ impl WriterCoreApi {
                 return Ok(true);
             }
         }
-        let project_root = self.projects_root.join(project_id);
-        if !project_root.join("project.json").is_file() {
-            return Ok(false);
-        }
         match target {
-            ObjectRef::Project { object_id, .. } => {
+            ObjectRef::Project {
+                project_id,
+                object_id,
+            } => {
+                if !self
+                    .projects_root
+                    .join(project_id)
+                    .join("project.json")
+                    .is_file()
+                {
+                    return Ok(false);
+                }
                 let project = crate::project::get_project(&self.projects_root, project_id)
                     .map_err(WriterError::from)?;
                 Ok(project.id == *object_id)
             }
-            ObjectRef::Volume { object_id, .. } => Ok(self
-                .core_read()
-                .list_volumes(project_id)
-                .map_err(WriterError::from)?
-                .iter()
-                .any(|volume| volume.id == *object_id)),
-            ObjectRef::Chapter { object_id, .. } => {
+            ObjectRef::Volume {
+                project_id,
+                object_id,
+            } => {
+                if !self.project_is_downloaded(project_id) {
+                    return Ok(false);
+                }
+                Ok(self
+                    .core_read()
+                    .list_volumes(project_id)
+                    .map_err(WriterError::from)?
+                    .iter()
+                    .any(|volume| volume.id == *object_id))
+            }
+            ObjectRef::Chapter {
+                project_id,
+                object_id,
+            } => {
+                if !self.project_is_downloaded(project_id) {
+                    return Ok(false);
+                }
                 let core = self.core_read();
                 let volumes = core.list_volumes(project_id).map_err(WriterError::from)?;
                 for volume in volumes {
@@ -1510,17 +1931,33 @@ impl WriterCoreApi {
                 }
                 Ok(false)
             }
-            ObjectRef::TextAnchor { object_id, .. } => Ok(self
-                .annotation_store(project_id)?
-                .get_text_anchor(object_id)
-                .map_err(WriterError::from)?
-                .is_some_and(|anchor| anchor.deleted_at_ms.is_none())),
-            ObjectRef::NamedEntry { object_id, .. } => Ok(self
-                .annotation_store(project_id)?
-                .get_named_entry(object_id)
-                .map_err(WriterError::from)?
-                .is_some_and(|entry| entry.deleted_at_ms.is_none())),
-            ObjectRef::StarMap { object_id, .. } => {
+            ObjectRef::TextAnchor {
+                project_id,
+                object_id,
+            } => {
+                if !self.project_is_downloaded(project_id) {
+                    return Ok(false);
+                }
+                Ok(self
+                    .annotation_store(project_id)?
+                    .get_text_anchor(object_id)
+                    .map_err(WriterError::from)?
+                    .is_some_and(|anchor| anchor.deleted_at_ms.is_none()))
+            }
+            ObjectRef::NamedEntry {
+                project_id,
+                object_id,
+            } => {
+                if !self.project_is_downloaded(project_id) {
+                    return Ok(false);
+                }
+                Ok(self
+                    .annotation_store(project_id)?
+                    .get_named_entry(object_id)
+                    .map_err(WriterError::from)?
+                    .is_some_and(|entry| entry.deleted_at_ms.is_none()))
+            }
+            ObjectRef::StarMap { scope, object_id } => {
                 let meta_path = self
                     .app_data_root
                     .join("starmaps")
@@ -1529,35 +1966,72 @@ impl WriterCoreApi {
                     return Ok(false);
                 }
                 self.get_starmap(object_id)
-                    .map(|meta| meta.project_id.as_deref() == Some(project_id))
+                    .map(|meta| meta.project_id.as_deref() == scope.project_id())
             }
-            ObjectRef::StarMapNode { object_id, .. } => {
-                for meta in self.list_starmaps_for_project(project_id)? {
-                    if self
-                        .get_starmap_graph(&meta.starmap_id)?
-                        .nodes
-                        .iter()
-                        .any(|node| node.id == *object_id)
-                    {
-                        return Ok(true);
-                    }
+            ObjectRef::NodeAsset { object_id, .. } => Ok(
+                crate::starmap::library::load_node_definition(&self.app_data_root, object_id)?
+                    .is_some(),
+            ),
+            ObjectRef::NodeInstance {
+                starmap_id,
+                object_id,
+            } => {
+                if !self.starmap_meta_exists(starmap_id) {
+                    return Ok(false);
                 }
-                Ok(false)
+                Ok(self
+                    .get_starmap_graph(starmap_id)?
+                    .nodes
+                    .iter()
+                    .any(|node| node.id == *object_id))
             }
-            ObjectRef::StarMapEmbed { object_id, .. } => {
-                for meta in self.list_starmaps_for_project(project_id)? {
-                    if self
-                        .get_starmap_graph(&meta.starmap_id)?
-                        .embeds
-                        .iter()
-                        .any(|embed| embed.instance_id == *object_id)
-                    {
-                        return Ok(true);
-                    }
+            ObjectRef::EmbedInstance {
+                starmap_id,
+                object_id,
+            } => {
+                if !self.starmap_meta_exists(starmap_id) {
+                    return Ok(false);
                 }
-                Ok(false)
+                Ok(self
+                    .get_starmap_graph(starmap_id)?
+                    .embeds
+                    .iter()
+                    .any(|embed| embed.instance_id == *object_id))
+            }
+            ObjectRef::CanvasAnchor {
+                starmap_id,
+                object_id,
+                anchor_id,
+            } => {
+                if !self.starmap_meta_exists(starmap_id) {
+                    return Ok(false);
+                }
+                // 锚点属于共享素材内容，多个画布实例共享同一端口定义。
+                Ok(
+                    crate::starmap::library::load_node_definition(&self.app_data_root, object_id)?
+                        .is_some_and(|definition| {
+                            definition
+                                .anchors
+                                .iter()
+                                .any(|anchor| anchor.anchor_id == *anchor_id)
+                        }),
+                )
             }
         }
+    }
+
+    fn project_is_downloaded(&self, project_id: &str) -> bool {
+        self.projects_root
+            .join(project_id)
+            .join("project.json")
+            .is_file()
+    }
+
+    fn starmap_meta_exists(&self, starmap_id: &str) -> bool {
+        self.app_data_root
+            .join("starmaps")
+            .join(format!("{starmap_id}.meta.json"))
+            .is_file()
     }
 
     pub fn get_chapter_annotations(
@@ -1864,8 +2338,10 @@ impl WriterCoreApi {
                     .into_iter()
                     .map(|entry_id| AnnotationObjectRefDto {
                         kind: AnnotationObjectKindDto::NamedEntry,
-                        project_id: project_id.to_string(),
+                        project_id: Some(project_id.to_string()),
+                        starmap_id: None,
                         object_id: entry_id,
+                        anchor_id: None,
                     })
                     .collect(),
             })

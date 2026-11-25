@@ -690,7 +690,6 @@ mod tests {
                 "title": "MyNode",
                 "kind": "note",
                 "content": {"type": "inline", "summary": "节点摘要", "body": "节点正文"},
-                "tags": ["标签A", "标签B"],
                 "position": {"x": 0.0, "y": 0.0},
                 "createdAt": 0,
                 "updatedAt": 0
@@ -708,8 +707,8 @@ mod tests {
         assert_eq!(node_entries[0].title, "MyNode");
         assert!(node_entries[0].body.contains("节点摘要"));
         assert!(node_entries[0].body.contains("节点正文"));
-        assert!(node_entries[0].body.contains("标签A"));
-        assert!(node_entries[0].body.contains("标签B"));
+        // Issue #1060: 标签改由 annotations 关系查询；本用例不构造 AnnotationStore，
+        // 不再断言节点正文包含标签。
     }
 
     #[test]
@@ -902,10 +901,10 @@ mod tests {
 
         let node = crate::api::types::StarMapNodeDto {
             id: String::new(),
+            asset_id: String::new(),
             title: "BoundNode".to_string(),
             kind: crate::api::types::StarMapNodeKindDto::Note,
             payload: None,
-            tags: vec![],
             content: crate::api::types::StarMapNodeContentDto {
                 kind: "inline".to_string(),
                 summary: Some("node summary".to_string()),
@@ -919,6 +918,7 @@ mod tests {
             provenance: Default::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         };
         let _ = api.add_starmap_node(&meta.starmap_id, node, 0.0, 0.0);
 
@@ -1106,10 +1106,10 @@ mod tests {
 
         let node = crate::api::types::StarMapNodeDto {
             id: String::new(),
+            asset_id: String::new(),
             title: "RebuildNode".to_string(),
             kind: crate::api::types::StarMapNodeKindDto::Note,
             payload: None,
-            tags: vec![],
             content: crate::api::types::StarMapNodeContentDto {
                 kind: "inline".to_string(),
                 summary: Some("rebuild node summary".to_string()),
@@ -1123,6 +1123,7 @@ mod tests {
             provenance: Default::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         };
         let _ = api.add_starmap_node(&meta.starmap_id, node, 0.0, 0.0);
 
@@ -1193,10 +1194,10 @@ mod tests {
 
         let node = crate::api::types::StarMapNodeDto {
             id: String::new(),
+            asset_id: String::new(),
             title: "MapNode".to_string(),
             kind: crate::api::types::StarMapNodeKindDto::Note,
             payload: None,
-            tags: vec![],
             content: crate::api::types::StarMapNodeContentDto {
                 kind: "inline".to_string(),
                 summary: Some("node text".to_string()),
@@ -1210,6 +1211,7 @@ mod tests {
             provenance: Default::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         };
         let _ = api.add_starmap_node(&meta.starmap_id, node, 0.0, 0.0);
 
@@ -1240,10 +1242,10 @@ mod tests {
 
         let node = crate::api::types::StarMapNodeDto {
             id: String::new(),
+            asset_id: String::new(),
             title: "BoundNode".to_string(),
             kind: crate::api::types::StarMapNodeKindDto::Note,
             payload: None,
-            tags: vec![],
             content: crate::api::types::StarMapNodeContentDto {
                 kind: "inline".to_string(),
                 summary: Some("node text".to_string()),
@@ -1257,6 +1259,7 @@ mod tests {
             provenance: Default::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         };
         let _ = api.add_starmap_node(&meta.starmap_id, node, 0.0, 0.0);
 
@@ -1354,10 +1357,10 @@ mod tests {
 
         let node = crate::starmap::types::StarMapNode {
             id: "n1".to_string(),
+            asset_id: "n1".to_string(),
             title: "NodeTitle".to_string(),
             kind: crate::starmap::types::StarMapNodeKind::Character,
             payload: None,
-            tags: vec![],
             content: Default::default(),
             anchors: vec![],
             portal: None,
@@ -1366,6 +1369,7 @@ mod tests {
             provenance: Default::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         };
         api.add_starmap_node(&meta.starmap_id, node.into(), 0.0, 0.0)
             .unwrap();

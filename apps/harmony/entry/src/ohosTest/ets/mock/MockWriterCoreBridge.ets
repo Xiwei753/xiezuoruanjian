@@ -3,7 +3,7 @@ import { EditorTransactionCause } from '../../../main/ets/corebridge/dto/EditorD
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ChapterVersion, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind, NodeType, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch } from '../../../main/ets/corebridge/dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapPoint, StarMapTargetPath, EdgeKind, NodeType, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch } from '../../../main/ets/corebridge/dto/StarMapDtos'
 import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult } from '../../../main/ets/corebridge/dto/SyncDtos'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
@@ -326,7 +326,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
     baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
-    return this.saveChapterVersioned(chapterId, '', expected, baseContent, true)
+    return this.saveChapterVersioned(chapterId, '', expected, baseContent, true, 0, [])
   }
 
   async saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
@@ -511,23 +511,40 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(true)
   }
 
-  async updateStarMapNode(starmapId: string, nodeId: string,
+  // #1060：内容编辑只动共享素材本体，校验 expectedDefinitionRevision。
+  async updateStarMapNodeDefinition(starmapId: string, nodeId: string,
     patch: StarMapNodeUpdatePatch): Promise<ResultEnvelope<StarMapNode>> {
     await this.delay(100)
     const node = this.mockStarMapGraph.nodes.find(n => n.id === nodeId)
     if (!node) {
       return this.error('STARMAP_NOT_FOUND', '节点不存在')
     }
-    // #984：按 patch 语义只覆盖实际传入的字段。
+    if (patch.expectedDefinitionRevision !== undefined &&
+      patch.expectedDefinitionRevision !== node.definitionRevision) {
+      return this.error('STARMAP_ERROR', '节点内容已被修改，请重新读取')
+    }
     if (patch.title !== undefined) {
       node.title = patch.title
     }
     if (patch.content !== undefined) {
       node.content = patch.content
     }
-    if (patch.position !== undefined) {
-      node.position = { x: patch.position.x, y: patch.position.y }
+    node.definitionRevision = Date.now()
+    return this.success(node)
+  }
+
+  // #1060：只移动画布实例，校验 expectedInstanceRevision（node.updatedAt）。
+  async moveStarMapNode(starmapId: string, nodeId: string, position: StarMapPoint,
+    expectedInstanceRevision: number): Promise<ResultEnvelope<StarMapNode>> {
+    await this.delay(100)
+    const node = this.mockStarMapGraph.nodes.find(n => n.id === nodeId)
+    if (!node) {
+      return this.error('STARMAP_NOT_FOUND', '节点不存在')
     }
+    if (expectedInstanceRevision !== node.updatedAt) {
+      return this.error('STARMAP_ERROR', '节点位置已被修改，请重新读取')
+    }
+    node.position = { x: position.x, y: position.y }
     node.updatedAt = Date.now()
     return this.success(node)
   }
@@ -568,10 +585,10 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     const now = Date.now()
     const node: StarMapNode = {
       id: `n_${now}`,
+      assetId: `n_${now}`,
       title: title,
       kind: kind as NodeType,
       payload: null,
-      tags: [],
       content: { type: 'empty', summary: null, body: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null },
       anchors: [],
       portal: null,
@@ -579,7 +596,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       style: { fillColor: null },
       provenance: { source: 'Human', sourceId: null, generatedBy: null, promptId: null, reviewStatus: 'Accepted', createdFromAnchor: null },
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      definitionRevision: now
     }
     this.mockStarMapGraph.nodes.push(node)
     return this.success(node)

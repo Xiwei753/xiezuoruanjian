@@ -45,6 +45,7 @@ fn annotation_call(operation: &str, args: Value) -> Result<Value, String> {
         }
         let result = match operation {
             "listTags" => call!(service.list_tags(string_arg(&args, "projectId")?)),
+            "listGlobalTags" => call!(service.list_global_tags()),
             "createTag" => call!(service.create_tag(
                 string_arg(&args, "projectId")?,
                 string_arg(&args, "name")?,
@@ -75,6 +76,20 @@ fn annotation_call(operation: &str, args: Value) -> Result<Value, String> {
                 string_arg(&args, "projectId")?,
                 decode_arg::<AnnotationObjectRefDto>(&args, "target")?,
             )),
+            "attachTag" => call!(service.attach_tag(
+                string_arg(&args, "projectId")?,
+                string_arg(&args, "tagId")?,
+                decode_arg::<AnnotationObjectRefDto>(&args, "target")?,
+            )),
+            "detachTag" => call!(service.detach_tag(
+                string_arg(&args, "projectId")?,
+                string_arg(&args, "tagId")?,
+                decode_arg::<AnnotationObjectRefDto>(&args, "target")?,
+            )),
+            "listTagsForObject" => {
+                call!(service
+                    .list_tags_for_object(decode_arg::<AnnotationObjectRefDto>(&args, "target")?,))
+            }
             "createTextAnchor" => call!(service.create_text_anchor(
                 string_arg(&args, "projectId")?,
                 string_arg(&args, "chapterId")?,

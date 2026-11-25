@@ -45,6 +45,16 @@ interface TargetBindingsArgs {
   target: AnnotationObjectRefDto
 }
 
+interface TagRelationArgs {
+  projectId: string
+  tagId: string
+  target: AnnotationObjectRefDto
+}
+
+interface ObjectTagsArgs {
+  target: AnnotationObjectRefDto
+}
+
 interface CreateTextAnchorArgs {
   projectId: string
   chapterId: string
@@ -179,6 +189,34 @@ export class NativeAnnotationBridge {
     const args: TargetBindingsArgs = { projectId: projectId, target: target }
     return this.call('listBindingsForTarget', args,
       (data: Object) => decodeArray(data, decodeAnnotationTagBinding, 'AnnotationTagBindingDto[]'))
+  }
+
+  /**
+   * 给一个 typed 对象挂一个标签（#1060）。
+   *
+   * `target` 是 Core annotations 的对象引用：星图节点标签必须用
+   * `{ kind: 'nodeAsset', projectId, objectId: node.assetId }`（共享素材），
+   * 不用画布实例 id；画布实例用 `nodeInstance` + starmapId。
+   */
+  attachTag(projectId: string, tagId: string, target: AnnotationObjectRefDto): Promise<ResultEnvelope<AnnotationTagBindingDto>> {
+    const args: TagRelationArgs = { projectId: projectId, tagId: tagId, target: target }
+    return this.call('attachTag', args, decodeAnnotationTagBinding)
+  }
+
+  /** 移除一个 typed 对象上的标签关系（幂等，保留 tombstone）。 */
+  detachTag(projectId: string, tagId: string, target: AnnotationObjectRefDto): Promise<ResultEnvelope<boolean>> {
+    const args: TagRelationArgs = { projectId: projectId, tagId: tagId, target: target }
+    return this.call('detachTag', args, decodeBoolean)
+  }
+
+  /**
+   * 按 typed 对象查询标签；作用域由对象自身决定（项目素材用项目目录，
+   * 全局素材用全局目录）。节点标签查询按 assetId。
+   */
+  listTagsForObject(target: AnnotationObjectRefDto): Promise<ResultEnvelope<AnnotationTagDto[]>> {
+    const args: ObjectTagsArgs = { target: target }
+    return this.call('listTagsForObject', args,
+      (data: Object) => decodeArray(data, decodeAnnotationTag, 'AnnotationTagDto[]'))
   }
 
   createTextAnchor(projectId: string, chapterId: string, startByte: number, endByte: number,

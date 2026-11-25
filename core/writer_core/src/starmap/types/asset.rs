@@ -7,9 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{
-    StarMapNodeKind, StarMapNodeStyle, StarMapPoint,
-};
+use super::{StarMapNodeKind, StarMapNodeStyle, StarMapPoint};
 use crate::starmap::semantic::{
     StarMapAnchor, StarMapNodeContent, StarMapPortal, StarMapProvenance,
 };
@@ -74,13 +72,18 @@ impl StarMapAssetRef {
 /// 画布中的一个节点引用实例。
 ///
 /// `instance_id` 是画布内身份，边与 portal 路径都指向它；
-/// `target_node_id` 是共享素材本体 ID。`starmap_id` 记录实例所属画布，
+/// `asset_id` 是共享素材本体 ID。`starmap_id` 记录实例所属画布，
 /// 让库索引可以在不加载全部星图的情况下定位引用。
+///
+/// 实例只保存画布事实（位置、实例 revision、创建时间）。共享内容一律读
+/// [`StarMapNodeDefinition`]；`updated_at` 是实例 revision，不与本体 revision
+/// 合并。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapNodeInstance {
     pub instance_id: String,
-    pub target_node_id: String,
+    /// 共享素材本体 ID；旧数据中可能等于 `instance_id`。
+    pub asset_id: String,
     #[serde(default)]
     pub position: StarMapPoint,
     #[serde(default)]
@@ -149,7 +152,8 @@ impl Default for StarMapLibraryIndex {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapNodeReference {
-    pub target_node_id: String,
+    /// 共享素材本体 ID。
+    pub asset_id: String,
     pub starmap_id: String,
     pub instance_id: String,
     #[serde(default)]
@@ -200,8 +204,6 @@ pub struct StarMapNodeDefinition {
     #[serde(default)]
     pub payload: Option<serde_json::Value>,
     #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
     pub content: StarMapNodeContent,
     #[serde(default)]
     pub anchors: Vec<StarMapAnchor>,
@@ -216,20 +218,24 @@ pub struct StarMapNodeDefinition {
 }
 
 impl StarMapNodeDefinition {
+    /// 本体 revision。旧数据缺省时回退到 `updated_at`。
+    pub fn revision(&self) -> u64 {
+        self.updated_at
+    }
+
     pub fn from_node(asset_id: impl Into<String>, node: &super::StarMapNode) -> Self {
         Self {
             asset_id: asset_id.into(),
             title: node.title.clone(),
             kind: node.kind.clone(),
             payload: node.payload.clone(),
-            tags: node.tags.clone(),
             content: node.content.clone(),
             anchors: node.anchors.clone(),
             portal: node.portal.clone(),
             style: node.style.clone(),
             provenance: node.provenance.clone(),
             created_at: node.created_at,
-            updated_at: node.updated_at,
+            updated_at: node.definition_revision.max(node.updated_at),
         }
     }
 
@@ -237,10 +243,10 @@ impl StarMapNodeDefinition {
     pub fn instantiate(&self, instance_id: &str, position: StarMapPoint) -> super::StarMapNode {
         super::StarMapNode {
             id: instance_id.to_string(),
+            asset_id: self.asset_id.clone(),
             title: self.title.clone(),
             kind: self.kind.clone(),
             payload: self.payload.clone(),
-            tags: self.tags.clone(),
             content: self.content.clone(),
             anchors: self.anchors.clone(),
             portal: self.portal.clone(),
@@ -249,38 +255,47 @@ impl StarMapNodeDefinition {
             provenance: self.provenance.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
+            definition_revision: self.updated_at,
         }
     }
 
-    /// 用共享本体组装画布实例，并保留实例自身的创建时间与位置版本。
+    /// 用共享本体组装画布实例，并保留实例自身的创建时间与实例 revision。
     ///
-    /// `updated_at` 取实例与本体修订的较大值，既让位置移动后的乐观并发
-    /// 检查看到新版本，也保证本体内容更新后旧版本会冲突。
+    /// Issue #1060：实例 revision 与本体 revision 分开，不再取较大值。
+    /// `updated_at` 只表示位置/实例元数据版本；共享内容版本在
+    /// `definition_revision`。
     pub fn instantiate_instance(&self, instance: &StarMapNodeInstance) -> super::StarMapNode {
         let mut node = self.instantiate(&instance.instance_id, instance.position.clone());
         node.created_at = instance.created_at;
-        node.updated_at = instance.updated_at.max(self.updated_at);
+        node.updated_at = instance.updated_at;
+        node.definition_revision = self.updated_at;
         node
     }
 
-    /// 把共享内容写回画布实例，保留实例 ID、位置和实例自身的创建时间。
+    /// 把共享内容写回画布实例，保留实例 ID、位置和实例自身的版本。
     ///
     /// 本体 `created_at` 只属于共享定义；同一实例的创建时间在画布引用时
-    /// 已经固定，不能被共享内容传播覆盖。`updated_at` 与
-    /// `instantiate_instance` 使用同一合并规则，取实例修订和本体修订的较大值。
+    /// 已经固定，不能被共享内容传播覆盖。实例 revision 不变，本体 revision
+    /// 单独写进 `definition_revision`。
     pub fn apply_to_node(&self, node: &mut super::StarMapNode) {
+        node.asset_id = self.asset_id.clone();
         node.title = self.title.clone();
         node.kind = self.kind.clone();
         node.payload = self.payload.clone();
-        node.tags = self.tags.clone();
         node.content = self.content.clone();
         node.anchors = self.anchors.clone();
         node.portal = self.portal.clone();
         node.style = self.style.clone();
         node.provenance = self.provenance.clone();
-        node.updated_at = node.updated_at.max(self.updated_at);
+        node.definition_revision = self.updated_at;
     }
 }
+
+/// 只读节点视图：把共享素材本体与画布实例投影成同一个读模型。
+///
+/// `instance_revision` 来自实例记录，`definition_revision` 来自素材本体，
+/// 两者独立递增，不再合成单一写入版本。
+pub type NodeView = super::StarMapNode;
 
 #[cfg(test)]
 mod tests {
@@ -318,16 +333,14 @@ mod tests {
     #[test]
     fn applying_shared_definition_preserves_instance_creation_time() {
         use crate::starmap::semantic::{StarMapNodeContent, StarMapProvenance};
-        use crate::starmap::types::{
-            StarMapNode, StarMapNodeKind, StarMapNodeStyle, StarMapPoint,
-        };
+        use crate::starmap::types::{StarMapNode, StarMapNodeKind, StarMapNodeStyle, StarMapPoint};
 
         let source = StarMapNode {
             id: "n1".to_string(),
+            asset_id: String::new(),
             title: "旧标题".to_string(),
             kind: StarMapNodeKind::Note,
             payload: None,
-            tags: vec![],
             content: StarMapNodeContent::Empty,
             anchors: vec![],
             portal: None,
@@ -336,6 +349,7 @@ mod tests {
             provenance: StarMapProvenance::default(),
             created_at: 1,
             updated_at: 10,
+            definition_revision: 0,
         };
         let definition = StarMapNodeDefinition::from_node("asset_1", &source);
         let mut instance = definition.instantiate("n_instance", StarMapPoint { x: 3.0, y: 4.0 });
@@ -345,8 +359,16 @@ mod tests {
         definition.apply_to_node(&mut instance);
 
         assert_eq!(instance.id, "n_instance");
+        assert_eq!(instance.asset_id, "asset_1");
         assert_eq!(instance.position, StarMapPoint { x: 3.0, y: 4.0 });
         assert_eq!(instance.created_at, 8, "共享传播不得改写实例创建时间");
-        assert_eq!(instance.updated_at, 10, "实例修订与本体修订取较大值");
+        assert_eq!(
+            instance.updated_at, 5,
+            "实例 revision 不被本体 revision 覆盖"
+        );
+        assert_eq!(
+            instance.definition_revision, 10,
+            "本体 revision 单独记录，不与实例合并"
+        );
     }
 }

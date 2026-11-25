@@ -35,6 +35,18 @@ Rectangle {
             JSON.stringify({ currentProjectId: projectId }), false)
     }
 
+    function objectRefKindLabel(kind) {
+        var labels = ({
+            project: qsTr("作品"), volume: qsTr("分卷"), chapter: qsTr("章节"),
+            textAnchor: qsTr("正文位置"), namedEntry: qsTr("登记名称"),
+            starMap: qsTr("星图"), nodeAsset: qsTr("星图节点"),
+            nodeInstance: qsTr("星图节点实例"), embedInstance: qsTr("子星图"),
+            starMapNode: qsTr("星图节点"),
+            starMapEmbed: qsTr("子星图")
+        })
+        return labels[kind] || String(kind || "")
+    }
+
     function targetForResult(result) {
         var objectId = String(result && result.objectId ? result.objectId : "")
         var t = result && result.target ? result.target : ({})
@@ -44,8 +56,13 @@ Rectangle {
             var entryId = objectId.substring(entryPrefix.length)
             return { objectRef: { kind: "namedEntry", projectId: p, objectId: entryId } }
         }
-        if (t.nodeId && t.starmapId)
+        if (t.nodeId && t.starmapId) {
+            // 搜索结果带素材 ID 时按共享素材标注；旧结果只有实例 ID，保留旧结构。
+            var assetId = String(t.assetId || "")
+            if (assetId)
+                return { objectRef: { kind: "nodeAsset", projectId: p, objectId: assetId } }
             return { objectRef: { kind: "starMapNode", projectId: p, objectId: String(t.nodeId) } }
+        }
         if (t.embedId && t.starmapId)
             return { objectRef: { kind: "starMapEmbed", projectId: p, objectId: String(t.embedId) } }
         if (t.starmapId)
@@ -130,24 +147,25 @@ Rectangle {
                 model: root.results
                 spacing: 1
                 delegate: CheckDelegate {
+                    id: resultDelegate
                     required property var modelData
                     readonly property string displayTitle: String(modelData.title || modelData.path || qsTr("对象"))
+                    readonly property var resultTarget: root.targetForResult(modelData)
+                    readonly property string kindLabel: resultTarget && resultTarget.objectRef
+                        ? root.objectRefKindLabel(resultTarget.objectRef.kind) : ""
                     width: resultsList.width
                     text: displayTitle
-                    checked: {
-                        var target = root.targetForResult(modelData)
-                        return target ? root.isSelected(target) : false
-                    }
-                    enabled: root.targetForResult(modelData) !== null
+                    checked: resultTarget ? root.isSelected(resultTarget) : false
+                    enabled: resultTarget !== null
                     onToggled: {
-                        var target = root.targetForResult(modelData)
-                        if (target) root.toggleTarget(target, checked)
+                        if (resultTarget) root.toggleTarget(resultTarget, checked)
                     }
                     contentItem: ColumnLayout {
                         spacing: 0
-                        Label { text: parent.parent.displayTitle; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Label { text: resultDelegate.displayTitle; elide: Text.ElideRight; Layout.fillWidth: true }
                         Label {
-                            text: modelData.path || modelData.summary || ""
+                            text: (resultDelegate.kindLabel ? resultDelegate.kindLabel + " · " : "")
+                                  + (modelData.path || modelData.summary || "")
                             color: Kirigami.Theme.disabledTextColor
                             elide: Text.ElideRight
                             font.pointSize: Kirigami.Theme.smallFont.pointSize

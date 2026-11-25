@@ -8,10 +8,12 @@ use rmcp::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use writer_core::api::WriterError;
+use writer_core::api::service::WriterCoreApi;
 use writer_core::api::types::{
-    AnnotationObjectRefDto, AnnotationTargetDto, StarMapAnchorDto, StarMapEdgeDto,
-    StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto, StarMapLinkDto,
-    StarMapLinkPatchDto, StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto,
+    AnnotationObjectKindDto, AnnotationObjectRefDto, AnnotationTargetDto, StarMapAnchorDto,
+    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto,
+    StarMapLinkDto, StarMapLinkPatchDto, StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto,
     StarMapNodePatchDto, StarMapNodeStyleDto, StarMapPointDto, StarMapProvenanceDto,
     StarMapReviewStatusDto, StarMapSourceKindDto, StarMapTargetPathDto,
 };
@@ -94,6 +96,83 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+/// Issue #1060：共享节点素材是标签关系的目标，画布实例 ID 不再直接承载标签。
+fn node_asset_target(project_id: &str, asset_id: &str) -> AnnotationObjectRefDto {
+    AnnotationObjectRefDto {
+        kind: AnnotationObjectKindDto::NodeAsset,
+        project_id: Some(project_id.to_string()),
+        starmap_id: None,
+        object_id: asset_id.to_string(),
+        anchor_id: None,
+    }
+}
+
+/// 标签名在作品内解析；不存在时先建标签，再返回其 ID。
+fn resolve_or_create_tag(
+    api: &WriterCoreApi,
+    project_id: &str,
+    name: &str,
+) -> Result<String, WriterError> {
+    let name = name.trim();
+    let tags = api.list_tags(project_id.to_string())?;
+    if let Some(tag) = tags.into_iter().find(|tag| tag.name == name) {
+        return Ok(tag.tag_id);
+    }
+    api.create_tag(project_id.to_string(), name.to_string(), None)
+        .map(|tag| tag.tag_id)
+}
+
+/// 差量标签命令：只 attach 新增名称、detach 移除名称，不回写整份旧集合。
+///
+/// Issue #1060：节点内容 patch 不再携带 tags；标签关系按 `NodeAsset` 目标
+/// 逐条提交。移除不存在的标签保持幂等。
+fn apply_node_tag_delta(
+    api: &WriterCoreApi,
+    project_id: &str,
+    asset_id: &str,
+    add_tags: &[String],
+    remove_tags: &[String],
+) -> Result<(), WriterError> {
+    let target = node_asset_target(project_id, asset_id);
+    for name in add_tags {
+        let tag_id = resolve_or_create_tag(api, project_id, name)?;
+        api.attach_tag(project_id.to_string(), tag_id, target.clone())?;
+    }
+    if remove_tags.is_empty() {
+        return Ok(());
+    }
+    let tags = api.list_tags(project_id.to_string())?;
+    for name in remove_tags {
+        let name = name.trim();
+        let Some(tag) = tags.iter().find(|tag| tag.name == name) else {
+            continue;
+        };
+        api.detach_tag(project_id.to_string(), tag.tag_id.clone(), target.clone())?;
+    }
+    Ok(())
+}
+
+/// 节点 patch 不再接受 tags 字段；标签必须走 addTags/removeTags 差量命令。
+fn parse_node_patch(
+    value: Value,
+    field: &str,
+    forbid_position: bool,
+) -> Result<StarMapNodePatchDto, ErrorData> {
+    reject_external_bindings(&value, field)?;
+    if value.get("tags").is_some() {
+        return Err(invalid_params(format!(
+            "invalid {field}: `tags` moved to explicit tag relations; use `addTags`/`removeTags` instead"
+        )));
+    }
+    let patch: StarMapNodePatchDto = parse_input(value, field)?;
+    if forbid_position && patch.position.is_some() {
+        return Err(invalid_params(format!(
+            "invalid {field}: `position` belongs to the canvas instance; use `move_starmap_node` instead"
+        )));
+    }
+    Ok(patch)
 }
 
 macro_rules! empty_params {
@@ -205,6 +284,8 @@ struct CreateNodeParams {
     /// PascalCase node kind: Character/Event/Location/Item/Concept/Theme/Note/
     /// Organization/Timeline/Plot/Foreshadowing/Chapter/Custom. Default Note.
     kind: Option<String>,
+    /// Tag names to attach to the node's shared asset (created when absent).
+    /// Issue #1060: tags are explicit `NodeAsset` relations, not node fields.
     #[serde(default)]
     tags: Vec<String>,
     payload: Option<String>,
@@ -231,10 +312,45 @@ struct CreateNodeParams {
 struct UpdateNodeParams {
     starmap_id: String,
     node_id: String,
-    /// Revision from the last read. Required to prevent overwriting newer changes.
+    /// Instance revision from the last read (`StarMapNodeDto.updatedAt`).
+    /// Required to prevent overwriting newer changes.
     expected_revision: u64,
     /// StarMapNodePatchDto JSON. Use null for an inner field to clear it.
     patch: Value,
+    /// Tag names added to the node's shared asset (delta; created when absent).
+    #[serde(default)]
+    add_tags: Vec<String>,
+    /// Tag names removed from the node's shared asset (delta).
+    #[serde(default)]
+    remove_tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct UpdateNodeDefinitionParams {
+    starmap_id: String,
+    node_id: String,
+    /// Shared asset revision from the last read (`StarMapNodeDto.definitionRevision`).
+    expected_definition_revision: u64,
+    /// StarMapNodePatchDto JSON for shared content only; `position` is rejected.
+    patch: Value,
+    /// Tag names added to the node's shared asset (delta; created when absent).
+    #[serde(default)]
+    add_tags: Vec<String>,
+    /// Tag names removed from the node's shared asset (delta).
+    #[serde(default)]
+    remove_tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct MoveNodeParams {
+    starmap_id: String,
+    node_id: String,
+    /// Instance revision from the last read (`StarMapNodeDto.updatedAt`).
+    expected_instance_revision: u64,
+    x: f64,
+    y: f64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -793,10 +909,11 @@ impl SujianMcpServer {
             .unwrap_or_else(generated_by_mcp);
         let node = StarMapNodeDto {
             id: node_id,
+            // Core assigns the shared asset id when the node is created.
+            asset_id: String::new(),
             title: params.title,
             kind,
             payload: params.payload,
-            tags: params.tags,
             content,
             anchors,
             portal,
@@ -808,29 +925,137 @@ impl SujianMcpServer {
             provenance,
             created_at: now_ms(),
             updated_at: now_ms(),
+            definition_revision: 0,
+        };
+        let tag_names = params.tags;
+        // Issue #1060: tags live on the shared NodeAsset, so they need the
+        // authorized project namespace; empty tag lists keep global sessions usable.
+        let tag_project_id = if tag_names.is_empty() {
+            None
+        } else {
+            Some(self.ctx().require_project_scope(None)?)
         };
         let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
         self.ctx().write_audited(
             "create_starmap_node",
             &params.starmap_id,
             &starmap_id,
-            |api| api.add_starmap_node(&starmap_id, node, params.x, params.y),
+            |api| {
+                let node = api.add_starmap_node(&starmap_id, node, params.x, params.y)?;
+                if let Some(project_id) = tag_project_id.as_deref() {
+                    apply_node_tag_delta(api, project_id, &node.asset_id, &tag_names, &[])?;
+                }
+                Ok(node)
+            },
         )
     }
 
     #[tool(
         name = "update_starmap_node",
-        description = "Update a starmap node with a StarMapNodePatchDto JSON patch inside the authorized scope."
+        description = "Update a starmap node with a StarMapNodePatchDto JSON patch inside the authorized scope. Tags use the explicit addTags/removeTags delta relations."
     )]
     fn update_starmap_node(
         &self,
         Parameters(params): Parameters<UpdateNodeParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        reject_external_bindings(&params.patch, "patch")?;
-        let patch: StarMapNodePatchDto = parse_input(params.patch, "patch")?;
+        let patch = parse_node_patch(params.patch, "patch", false)?;
         let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        let tag_project_id = if params.add_tags.is_empty() && params.remove_tags.is_empty() {
+            None
+        } else {
+            Some(self.ctx().require_project_scope(None)?)
+        };
         self.ctx().write_audited(
             "update_starmap_node",
+            &params.starmap_id,
+            &starmap_id,
+            |api| {
+                let node = api.update_starmap_node_expected(
+                    &starmap_id,
+                    &params.node_id,
+                    patch,
+                    Some(params.expected_revision),
+                )?;
+                if let Some(project_id) = tag_project_id.as_deref() {
+                    apply_node_tag_delta(
+                        api,
+                        project_id,
+                        &node.asset_id,
+                        &params.add_tags,
+                        &params.remove_tags,
+                    )?;
+                }
+                Ok(node)
+            },
+        )
+    }
+
+    #[tool(
+        name = "update_starmap_node_definition",
+        description = "Edit only a starmap node's shared content (title/kind/payload/content/anchors/portal/style/provenance) with the shared asset revision; position edits must use move_starmap_node."
+    )]
+    fn update_starmap_node_definition(
+        &self,
+        Parameters(params): Parameters<UpdateNodeDefinitionParams>,
+    ) -> Result<Json<Value>, ErrorData> {
+        let mut patch = parse_node_patch(params.patch, "patch", true)?;
+        patch.expected_definition_revision = Some(params.expected_definition_revision);
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        let tag_project_id = if params.add_tags.is_empty() && params.remove_tags.is_empty() {
+            None
+        } else {
+            Some(self.ctx().require_project_scope(None)?)
+        };
+        self.ctx().write_audited(
+            "update_starmap_node_definition",
+            &params.starmap_id,
+            &starmap_id,
+            |api| {
+                // Issue #1060: definition edits validate the shared asset
+                // revision and never advance the canvas instance revision.
+                let node =
+                    api.update_starmap_node_expected(&starmap_id, &params.node_id, patch, None)?;
+                if let Some(project_id) = tag_project_id.as_deref() {
+                    apply_node_tag_delta(
+                        api,
+                        project_id,
+                        &node.asset_id,
+                        &params.add_tags,
+                        &params.remove_tags,
+                    )?;
+                }
+                Ok(node)
+            },
+        )
+    }
+
+    #[tool(
+        name = "move_starmap_node",
+        description = "Move only a starmap node's canvas instance position, validated against the instance revision (StarMapNodeDto.updatedAt)."
+    )]
+    fn move_starmap_node(
+        &self,
+        Parameters(params): Parameters<MoveNodeParams>,
+    ) -> Result<Json<Value>, ErrorData> {
+        let patch = StarMapNodePatchDto {
+            title: None,
+            kind: None,
+            payload: None,
+            content: None,
+            anchors: None,
+            portal: None,
+            position: Some(StarMapPointDto {
+                x: params.x,
+                y: params.y,
+            }),
+            style: None,
+            provenance: None,
+            expected_definition_revision: None,
+            trajectory: Vec::new(),
+        };
+        let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
+        self.ctx().write_audited(
+            "move_starmap_node",
             &params.starmap_id,
             &starmap_id,
             |api| {
@@ -838,7 +1063,7 @@ impl SujianMcpServer {
                     &starmap_id,
                     &params.node_id,
                     patch,
-                    Some(params.expected_revision),
+                    Some(params.expected_instance_revision),
                 )
             },
         )
@@ -1082,6 +1307,7 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<CreateLinkParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        // Issue #1060: 统一链接仓库接管后，本工具改走 annotations 关系命令
         let source: StarMapTargetPathDto = parse_input(params.source, "source")?;
         let target: StarMapTargetPathDto = parse_input(params.target, "target")?;
         let link = StarMapLinkDto {
@@ -1111,6 +1337,7 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<UpdateLinkParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        // Issue #1060: 统一链接仓库接管后，本工具改走 annotations 关系命令
         let patch: StarMapLinkPatchDto = parse_input(params.patch, "patch")?;
         let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
         self.ctx().write_audited(
@@ -1136,6 +1363,7 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<LinkIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        // Issue #1060: 统一链接仓库接管后，本工具改走 annotations 关系命令
         let starmap_id = self.ctx().require_starmap_scope(&params.starmap_id)?;
         self.ctx().write_audited(
             "delete_starmap_link",
@@ -1267,6 +1495,7 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<CreateObjectLinkParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        // Issue #1060: 统一链接仓库接管后，本工具改走 annotations 关系命令
         let source: AnnotationObjectRefDto = parse_input(params.source, "source")?;
         let target = parse_internal_target(params.target, "target")?;
         self.ctx().require_object_ref(&source)?;
@@ -1285,6 +1514,7 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<UpdateObjectLinkParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        // Issue #1060: 统一链接仓库接管后，本工具改走 annotations 关系命令
         let source: AnnotationObjectRefDto = parse_input(params.source, "source")?;
         let target = parse_internal_target(params.target, "target")?;
         self.ctx().require_object_ref(&source)?;
@@ -1304,6 +1534,7 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<ObjectLinkIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        // Issue #1060: 统一链接仓库接管后，本工具改走 annotations 关系命令
         let project_id = self.ctx().require_project_scope(Some(&params.project_id))?;
         self.ctx()
             .write_audited("delete_object_link", "", "", |api| {

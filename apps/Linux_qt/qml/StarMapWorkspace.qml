@@ -293,6 +293,16 @@ Item {
     }
 
     readonly property string annotationProjectId: projectIdForStarmap(canvas.currentStarmapId || root.starmapId)
+    // Issue #1060：标注里的节点是共享素材（assetId），画布实例 ID 只用于定位。
+    function annotationTargetKindLabel(kind) {
+        if (kind === "nodeAsset" || kind === "starMapNode")
+            return qsTr("星图节点")
+        if (kind === "nodeInstance")
+            return qsTr("星图节点实例")
+        if (kind === "starMapEmbed" || kind === "embedInstance")
+            return qsTr("子星图")
+        return ""
+    }
     // Issue #1028：AI 面板的 MCP 作用域使用真实画布身份。进入子图后
     // currentStarmapId 是子图 ID，根图和路径段单独提供，不用展示标题替代。
     readonly property string aiStarmapRootId: String(
@@ -312,8 +322,12 @@ Item {
         if (!projectId || !sceneId) return null
         if (sharedSelectionController.scenePathKey === canvas.routeKey) {
             var selectedKind = sharedSelectionController.kind
-            if (selectedKind === "node" && sharedSelectionController.itemId)
-                return { kind: "starMapNode", projectId: projectId, objectId: sharedSelectionController.itemId }
+            if (selectedKind === "node" && sharedSelectionController.itemId) {
+                // 节点身份统一由 Canvas 解析：实例 ID → 共享素材 assetId。
+                var nodeTarget = canvas.annotationRef("starMapNode",
+                                                      sharedSelectionController.itemId)
+                if (nodeTarget) return nodeTarget
+            }
             if (selectedKind === "embed" && sharedSelectionController.itemId)
                 return { kind: "starMapEmbed", projectId: projectId, objectId: sharedSelectionController.itemId }
         }
@@ -770,8 +784,8 @@ Item {
                         projectId: root.annotationProjectId
                         targetRef: root.annotationTargetRef
                         targetLabel: root.annotationTargetRef
-                            ? (root.annotationTargetRef.kind === "starMapNode" ? qsTr("星图节点")
-                               : root.annotationTargetRef.kind === "starMapEmbed" ? qsTr("子星图") : root.starmapTitle)
+                            ? (root.annotationTargetKindLabel(root.annotationTargetRef.kind)
+                               || root.starmapTitle)
                             : qsTr("星图对象")
                         onCloseRequested: root.closeRightPane()
                         onTargetActivated: function(target) { root.annotationTargetRequested(target) }

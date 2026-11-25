@@ -46,6 +46,11 @@ pub(crate) fn embed_rel_path(starmap_id: &str, instance_id: &str) -> PathBuf {
         .join(format!("{instance_id}.json"))
 }
 
+/// 旧 `starmaps/<id>/links/<bucket>/<link_id>.json` 的包内相对路径。
+///
+/// 链接的唯一持久化所有者已改为 annotations 仓库（Issue #1060 第 3 节）；
+/// 此路径只用于识别与清理旧 `links/` 文件（迁移/兼容读取），生产写入路径
+/// 不再产生它。
 pub(crate) fn link_rel_path(starmap_id: &str, link_id: &str) -> PathBuf {
     starmap_pkg_rel_dir(starmap_id)
         .join("links")
@@ -150,7 +155,7 @@ pub fn save_node_instance(
 pub fn save_node(app_data_root: &Path, starmap_id: &str, node: &StarMapNode) -> Result<PathBuf> {
     let instance = StarMapNodeInstance {
         instance_id: node.id.clone(),
-        target_node_id: node.id.clone(),
+        asset_id: node.id.clone(),
         position: node.position.clone(),
         starmap_id: starmap_id.to_string(),
         project_id: None,
@@ -315,6 +320,11 @@ pub fn delete_embed_file_to_trash(
     delete_object_file_to_trash(&abs, &rel, trash_root, trash_rel_prefix)
 }
 
+/// 旧 `links/` 文件写入：**只用于测试构造历史数据与迁移兼容**。
+///
+/// 生产路径一律写 annotations 仓库（`AnnotationStore::attach_link`），
+/// 不再调用本函数。
+#[cfg(test)]
 pub fn save_link(app_data_root: &Path, starmap_id: &str, link: &StarMapLink) -> Result<PathBuf> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(dir.join("links").join(bucket_for_id(&link.link_id)))?;
@@ -386,10 +396,10 @@ mod tests {
         let now = crate::starmap::now_epoch();
         let node = StarMapNode {
             id: "n1".to_string(),
+            asset_id: "n1".to_string(),
             title: "Node 1".to_string(),
             kind: StarMapNodeKind::Concept,
             payload: None,
-            tags: vec![],
             content: Default::default(),
             anchors: vec![],
             portal: None,
@@ -398,6 +408,7 @@ mod tests {
             provenance: Default::default(),
             created_at: now,
             updated_at: now,
+            definition_revision: 0,
         };
         save_node(dir.path(), &meta.starmap_id, &node).unwrap();
         let node_file = node_path(&starmap_pkg_dir(dir.path(), &meta.starmap_id), "n1");
@@ -415,10 +426,10 @@ mod tests {
         let now = crate::starmap::now_epoch();
         let node = StarMapNode {
             id: "n1".to_string(),
+            asset_id: "n1".to_string(),
             title: "Node 1".to_string(),
             kind: StarMapNodeKind::Concept,
             payload: None,
-            tags: vec![],
             content: Default::default(),
             anchors: vec![],
             portal: None,
@@ -427,6 +438,7 @@ mod tests {
             provenance: Default::default(),
             created_at: now,
             updated_at: now,
+            definition_revision: 0,
         };
         save_node(dir.path(), &meta.starmap_id, &node).unwrap();
 

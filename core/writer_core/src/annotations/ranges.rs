@@ -168,7 +168,9 @@ pub fn map_anchors_after_editor_result(
             }
             TextAnchorEdit::Deleted(anchor) => mutations.push(AnnotationMutation::Delete {
                 kind: AnnotationKind::TextAnchor,
-                project_id: anchor.project_id,
+                scope: crate::object_ref::ObjectScope::Project {
+                    project_id: anchor.project_id,
+                },
                 object_id: anchor.anchor_id,
                 deleted_at_ms: updated_at_ms,
             }),

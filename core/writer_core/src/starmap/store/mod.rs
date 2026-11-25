@@ -19,13 +19,16 @@
 //! ├── nodes/<bucket>/<node_id>.json       -- 单个节点（bucket = hex 高 4 bit）
 //! ├── edges/<bucket>/<edge_id>.json       -- 单条边
 //! ├── embeds/<bucket>/<instance_id>.json -- 嵌入实例（含宿主图内 position）
-//! ├── links/<bucket>/<link_id>.json      -- 链接
 //! └── metadata/
 //!     └── recovery.json                  -- 解析失败对象的恢复记录
 //! ```
 //!
 //! 布局/视口/运动策略已退出 Core，由平台端自行管理。
 //! 节点位置在 `node.position`，嵌入位置在 `embed.position`。
+//!
+//! 导航链接不在包内：唯一持久化所有者是 annotations 仓库（作品域
+//! `projects/<id>/annotations/links/*.json`，全局域 `annotations/links/*.json`），
+//! `StarMapStore.links` 只是按画布过滤的读投影，见 [`link_repository`]。
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -33,6 +36,7 @@ use std::path::{Path, PathBuf};
 use crate::starmap::types::*;
 
 pub mod crud;
+pub(crate) mod link_repository;
 pub mod load;
 pub mod meta;
 pub mod recovery;
@@ -60,12 +64,13 @@ pub struct StarMapStore {
     pub(super) node_assets_loaded: bool,
     pub(super) edges: HashMap<String, StarMapEdge>,
     pub(super) embeds: HashMap<String, StarMapEmbed>,
+    /// 链接读投影：唯一持久化所有者是 annotations 仓库，见
+    /// [`link_repository`]。
     pub(super) links: HashMap<String, StarMapLink>,
     pub(super) graph_meta: Option<GraphMeta>,
     pub(super) dirty_nodes: HashSet<String>,
     pub(super) dirty_edges: HashSet<String>,
     pub(super) dirty_embeds: HashSet<String>,
-    pub(super) dirty_links: HashSet<String>,
     pub(super) dirty_graph_meta: bool,
     pub(super) deleted_node_ids: HashSet<String>,
     pub(super) deleted_edge_ids: HashSet<String>,
@@ -92,7 +97,6 @@ impl StarMapStore {
             dirty_nodes: HashSet::new(),
             dirty_edges: HashSet::new(),
             dirty_embeds: HashSet::new(),
-            dirty_links: HashSet::new(),
             dirty_graph_meta: false,
             deleted_node_ids: HashSet::new(),
             deleted_edge_ids: HashSet::new(),
@@ -158,8 +162,7 @@ impl StarMapStore {
         };
         for record in index.nodes {
             if record.starmap_id == self.starmap_id {
-                self.node_assets
-                    .insert(record.instance_id, record.target_node_id);
+                self.node_assets.insert(record.instance_id, record.asset_id);
             }
         }
     }
@@ -239,12 +242,6 @@ impl StarMapStore {
                 id,
             ));
         }
-        for id in &self.dirty_links {
-            paths.push(crate::starmap::package_storage::link_rel_path(
-                &self.starmap_id,
-                id,
-            ));
-        }
         for id in &self.deleted_node_ids {
             paths.push(crate::starmap::package_storage::node_rel_path(
                 &self.starmap_id,
@@ -263,12 +260,8 @@ impl StarMapStore {
                 id,
             ));
         }
-        for id in &self.deleted_link_ids {
-            paths.push(crate::starmap::package_storage::link_rel_path(
-                &self.starmap_id,
-                id,
-            ));
-        }
+        // 链接没有包内文件：删除 tombstone 落在 annotations 仓库，由
+        // [`link_repository`] 的 CRUD 直接写入，不参与 flush 的文件级回滚。
         if self.dirty_graph_meta {
             paths.push(crate::starmap::package_storage::graph_meta_rel_path(
                 &self.starmap_id,
@@ -281,7 +274,6 @@ impl StarMapStore {
         !self.dirty_nodes.is_empty()
             || !self.dirty_edges.is_empty()
             || !self.dirty_embeds.is_empty()
-            || !self.dirty_links.is_empty()
             || self.dirty_graph_meta
     }
 
@@ -294,7 +286,7 @@ impl StarMapStore {
             nodes: self.dirty_nodes.clone(),
             edges: self.dirty_edges.clone(),
             embeds: self.dirty_embeds.clone(),
-            links: self.dirty_links.clone(),
+            links: HashSet::new(),
             deleted_nodes: self.deleted_node_ids.clone(),
             deleted_edges: self.deleted_edge_ids.clone(),
             deleted_embeds: self.deleted_embed_ids.clone(),

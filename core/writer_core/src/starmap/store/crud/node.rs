@@ -32,53 +32,121 @@ impl StarMapStore {
         result
     }
 
-    pub fn update_node(&mut self, node_id: &str, patch: &StarMapNodePatch) -> Result<StarMapNode> {
-        if !self.nodes.contains_key(node_id) {
-            self.ensure_object_loaded(node_id)?;
+    /// 修改共享素材本体（标题/内容/样式/portal/anchors…）。
+    ///
+    /// Issue #1060：本体 revision 独立递增，实例 revision 不动；画布文件
+    /// 不因内容修改而重写。返回更新后的读模型。
+    pub fn update_node_definition(
+        &mut self,
+        instance_id: &str,
+        patch: &NodeDefinitionPatch,
+        expected_definition_revision: Option<u64>,
+    ) -> Result<StarMapNode> {
+        if patch.is_empty() {
+            return self.current_node_view(instance_id);
         }
-        let node = self.nodes.get_mut(node_id).ok_or_else(|| {
-            crate::error::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Node not found",
-            ))
-        })?;
-        if let Some(ref t) = patch.title {
-            node.title = t.clone();
+        if !self.nodes.contains_key(instance_id) {
+            self.ensure_object_loaded(instance_id)?;
         }
-        if let Some(ref k) = patch.kind {
-            node.kind = k.clone();
+        let asset_id = self.asset_id_for_node(instance_id);
+        let mut definition =
+            match crate::starmap::library::load_node_definition(&self.app_data_root, &asset_id)? {
+                Some(definition) => definition,
+                None => {
+                    let node = self.nodes.get(instance_id).ok_or_else(node_not_found)?;
+                    crate::starmap::types::StarMapNodeDefinition::from_node(asset_id.clone(), node)
+                }
+            };
+        if let Some(expected) = expected_definition_revision {
+            if definition.revision() != expected {
+                return Err(revision_conflict(
+                    "definition",
+                    &asset_id,
+                    expected,
+                    definition.revision(),
+                ));
+            }
         }
-        if let Some(ref p) = patch.payload {
-            node.payload = p.clone();
+        if let Some(ref title) = patch.title {
+            definition.title = title.clone();
         }
-        if let Some(ref t) = patch.tags {
-            node.tags = t.clone();
+        if let Some(ref kind) = patch.kind {
+            definition.kind = kind.clone();
         }
-        if let Some(ref c) = patch.content {
-            node.content = c.clone();
+        if let Some(ref payload) = patch.payload {
+            definition.payload = payload.clone();
         }
-        if let Some(ref a) = patch.anchors {
-            node.anchors = a.clone();
+        if let Some(ref content) = patch.content {
+            definition.content = content.clone();
         }
-        if let Some(ref p) = patch.portal {
-            node.portal = p.clone();
+        if let Some(ref anchors) = patch.anchors {
+            definition.anchors = anchors.clone();
         }
-        if let Some(ref p) = patch.position {
-            node.position = p.clone();
+        if let Some(ref portal) = patch.portal {
+            definition.portal = portal.clone();
         }
-        if let Some(ref s) = patch.style {
-            node.style = s.clone();
+        if let Some(ref style) = patch.style {
+            definition.style = style.clone();
         }
-        if let Some(ref p) = patch.provenance {
-            node.provenance = p.clone();
+        if let Some(ref provenance) = patch.provenance {
+            definition.provenance = provenance.clone();
+        }
+        definition.updated_at = crate::starmap::now_epoch()
+            .max(definition.updated_at.saturating_add(1))
+            .max(1);
+        crate::starmap::library::save_node_definition(&self.app_data_root, &definition)?;
+        if let Some(node) = self.nodes.get_mut(instance_id) {
+            definition.apply_to_node(node);
+        }
+        self.current_node_view(instance_id)
+    }
+
+    /// 应用实例补丁：只改实例事实，并单调推进实例 revision。
+    pub fn update_node_instance(
+        &mut self,
+        instance_id: &str,
+        patch: &NodeInstancePatch,
+        expected_instance_revision: Option<u64>,
+    ) -> Result<StarMapNode> {
+        if patch.is_empty() {
+            return self.current_node_view(instance_id);
+        }
+        if !self.nodes.contains_key(instance_id) {
+            self.ensure_object_loaded(instance_id)?;
+        }
+        let node = self.nodes.get_mut(instance_id).ok_or_else(node_not_found)?;
+        if let Some(expected) = expected_instance_revision {
+            if node.updated_at != expected {
+                return Err(revision_conflict(
+                    "instance",
+                    instance_id,
+                    expected,
+                    node.updated_at,
+                ));
+            }
+        }
+        let mut changed = false;
+        if let Some(ref position) = patch.position {
+            if node.position != *position {
+                node.position = position.clone();
+                changed = true;
+            }
+        }
+        if !changed {
+            return self.current_node_view(instance_id);
         }
         node.updated_at = crate::starmap::now_epoch().max(node.updated_at.saturating_add(1));
-        let updated = node.clone();
-        if patch.position.is_some() {
-            self.dirty_nodes.insert(node_id.to_string());
-            self.dirty_graph_meta = true;
-        }
-        Ok(updated)
+        self.dirty_nodes.insert(instance_id.to_string());
+        self.dirty_graph_meta = true;
+        self.current_node_view(instance_id)
+    }
+
+    /// 当前节点的只读投影（共享本体 + 实例）。
+    pub fn current_node_view(&self, instance_id: &str) -> Result<StarMapNode> {
+        self.nodes
+            .get(instance_id)
+            .cloned()
+            .ok_or_else(node_not_found)
     }
 
     /// 计算删除本地 node 时需要级联删除的 edge/embed/link ID 集合。
@@ -144,10 +212,32 @@ impl StarMapStore {
             self.remove_embed(iid);
         }
 
-        for lid in &cascade.link_ids {
-            self.remove_link(lid);
+        // 级联删除的链接必须写 annotations 仓库 tombstone（唯一持久化所有者），
+        // 不能只从投影移除，否则仓库里的活动链接会在下次加载时复活。
+        let link_ids: Vec<String> = cascade.link_ids.clone();
+        for lid in &link_ids {
+            self.delete_link(lid)?;
         }
 
         Ok(())
     }
+}
+
+fn node_not_found() -> crate::error::Error {
+    crate::error::Error::Io(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "Node not found",
+    ))
+}
+
+/// 版本冲突：`target` 是 "definition" 或 "instance"。
+pub(super) fn revision_conflict(
+    target: &str,
+    object_id: &str,
+    expected: u64,
+    actual: u64,
+) -> crate::error::Error {
+    crate::error::Error::Other(format!(
+        "{target} revision conflict for '{object_id}': expected {expected}, actual {actual}"
+    ))
 }

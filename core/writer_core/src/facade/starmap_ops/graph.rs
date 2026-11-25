@@ -45,16 +45,38 @@ fn first_free_embed_position(
     crate::starmap::types::StarMapPoint::default()
 }
 
-fn patch_has_shared_node_fields(patch: &crate::starmap::types::StarMapNodePatch) -> bool {
-    patch.title.is_some()
-        || patch.kind.is_some()
-        || patch.payload.is_some()
-        || patch.tags.is_some()
-        || patch.content.is_some()
-        || patch.anchors.is_some()
-        || patch.portal.is_some()
-        || patch.style.is_some()
-        || patch.provenance.is_some()
+/// Portal 目的地或 anchor ID 集合是否变化。
+///
+/// 只有改变路径解析结果的身份变更才需要结构校验与索引失效；
+/// 标题/正文/样式/位置等普通编辑不扫描完整图。
+fn node_patch_changes_structure(
+    node: &crate::starmap::types::StarMapNode,
+    patch: &crate::starmap::types::StarMapNodePatch,
+) -> bool {
+    let portal_changed = match &patch.portal {
+        None => false,
+        Some(None) => node.portal.is_some(),
+        Some(Some(next)) => match &node.portal {
+            None => true,
+            Some(current) => {
+                current.destination_starmap_id != next.destination_starmap_id
+                    || current.destination_target != next.destination_target
+            }
+        },
+    };
+    let anchors_changed = patch.anchors.as_ref().is_some_and(|anchors| {
+        let old_ids: std::collections::HashSet<&str> = node
+            .anchors
+            .iter()
+            .map(|anchor| anchor.anchor_id.as_str())
+            .collect();
+        let new_ids: std::collections::HashSet<&str> = anchors
+            .iter()
+            .map(|anchor| anchor.anchor_id.as_str())
+            .collect();
+        old_ids != new_ids
+    });
+    portal_changed || anchors_changed
 }
 
 impl super::super::WriterCore {
@@ -102,29 +124,28 @@ impl super::super::WriterCore {
         title: Option<String>,
         instance_id: Option<String>,
     ) -> Result<crate::starmap::types::StarMapNode> {
-        let definition = crate::starmap::library::load_node_definition(
-            &self.app_data_root,
-            asset_id,
-        )?
-        .ok_or_else(|| {
-            crate::error::Error::Other(format!("node asset not found: {asset_id}"))
-        })?;
+        let definition =
+            crate::starmap::library::load_node_definition(&self.app_data_root, asset_id)?
+                .ok_or_else(|| {
+                    crate::error::Error::Other(format!("node asset not found: {asset_id}"))
+                })?;
         let now = crate::starmap::now_epoch();
         let instance_id = instance_id.unwrap_or_else(|| format!("n_{}", uuid::Uuid::new_v4()));
         let mut node = crate::starmap::types::StarMapNode {
             id: instance_id,
-            title: title.unwrap_or(definition.title),
-            kind: definition.kind,
-            payload: definition.payload,
-            tags: definition.tags,
-            content: definition.content,
-            anchors: definition.anchors,
-            portal: definition.portal,
+            asset_id: asset_id.to_string(),
+            title: title.unwrap_or_else(|| definition.title.clone()),
+            kind: definition.kind.clone(),
+            payload: definition.payload.clone(),
+            content: definition.content.clone(),
+            anchors: definition.anchors.clone(),
+            portal: definition.portal.clone(),
             position: position.clone(),
-            style: definition.style,
-            provenance: definition.provenance,
+            style: definition.style.clone(),
+            provenance: definition.provenance.clone(),
             created_at: now,
             updated_at: now,
+            definition_revision: definition.revision(),
         };
         if node.title.is_empty() {
             node.title = "未命名节点".to_string();
@@ -180,22 +201,34 @@ impl super::super::WriterCore {
         )?;
 
         let asset_id = shared_asset_id.unwrap_or_else(|| node.id.clone());
+        node.asset_id = asset_id.clone();
         let project_id = crate::starmap::get_starmap(&self.app_data_root, starmap_id)
             .ok()
             .and_then(|meta| meta.project_id);
+        // 新节点：首次创建素材本体与库归属；已有素材（放入引用）不再写索引。
+        let definition =
+            crate::starmap::library::load_node_definition(&self.app_data_root, &asset_id)?
+                .unwrap_or_else(|| {
+                    crate::starmap::types::StarMapNodeDefinition::from_node(asset_id.clone(), &node)
+                });
+        crate::starmap::library::create_node_asset(
+            &self.app_data_root,
+            project_id.as_deref(),
+            &asset_id,
+            &definition,
+        )?;
+        node.definition_revision = definition.revision();
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
         store.set_node_asset(&node.id, &asset_id);
         let result = store.add_node(node.clone());
         store.enqueue_save(SaveQueueEntry::Node);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        crate::starmap::library::ensure_node_asset(
+        crate::starmap::library::place_node_instance(
             &self.app_data_root,
             starmap_id,
             project_id.as_deref(),
-            &asset_id,
             &result.id,
-            &result,
-            &result.position,
+            &asset_id,
         )?;
         Ok(result)
     }
@@ -206,6 +239,26 @@ impl super::super::WriterCore {
         node_id: &str,
         patch: crate::starmap::types::StarMapNodePatch,
     ) -> Result<crate::starmap::types::StarMapNode> {
+        self.update_starmap_node_with_revisions(starmap_id, node_id, patch, None, None)
+    }
+
+    /// 节点编辑：把共享内容修改与实例移动路由到各自的权威记录。
+    ///
+    /// Issue #1060：
+    /// - 只移动 → `move_node_instance(expected_instance_revision)`，不加载整图、
+    ///   不跑 `validate_graph`、不写库索引；
+    /// - 改标题/内容/样式/portal/anchors → `update_node_definition(expected_definition_revision)`，
+    ///   只写素材本体，实例 revision 不动；
+    /// - 混合编辑 → 两边分别校验各自的 expected revision，同一事务内提交；
+    /// - 只有 portal 目的地或 anchor ID 集合变化才做结构校验与索引失效。
+    pub fn update_starmap_node_with_revisions(
+        &self,
+        starmap_id: &str,
+        node_id: &str,
+        patch: crate::starmap::types::StarMapNodePatch,
+        expected_definition_revision: Option<u64>,
+        expected_instance_revision: Option<u64>,
+    ) -> Result<crate::starmap::types::StarMapNode> {
         let mut stores = self
             .starmap_stores
             .lock()
@@ -214,116 +267,137 @@ impl super::super::WriterCore {
             let store = stores
                 .entry(starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-            store.ensure_fully_loaded()?;
+            // 只加载当前对象；普通内容/位置编辑不扫描整图。
             store.ensure_object_loaded(node_id)?;
         }
 
-        // 先在 candidate graph 上模拟 update，跑 validate_graph，再真正改 Store。
-        let candidate = {
+        let definition_patch = crate::starmap::types::NodeDefinitionPatch::from_command(&patch);
+        let instance_patch = crate::starmap::types::NodeInstancePatch::from_command(&patch);
+        if definition_patch.is_empty() && instance_patch.is_empty() {
             let store = Self::get_store_or_err(&stores, starmap_id)?;
-            let mut g = store.to_starmap_graph();
-            apply_node_patch_to_graph(&mut g, node_id, &patch)?;
-            g
+            return store.get_node(node_id).cloned().ok_or_else(|| {
+                crate::error::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Node not found",
+                ))
+            });
+        }
+
+        let needs_structural_check = {
+            let store = Self::get_store_or_err(&stores, starmap_id)?;
+            let node = store.get_node(node_id).ok_or_else(|| {
+                crate::error::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Node not found",
+                ))
+            })?;
+            node_patch_changes_structure(node, &patch)
         };
 
-        // 修改1：Portal/Anchor 身份变更前检查外部图持有的路径依赖。
-        // 只在 Portal destination 改变或 Anchor 被删除时检查；title/position/style
-        // 等不影响目标身份的变更不触发。存在外部依赖则拒绝，不允许先改再让外部路径悬空。
-        let needs_index_invalidation = {
-            let store = Self::get_store_or_err(&stores, starmap_id)?;
-            let old_node = store
-                .get_node(node_id)
-                .ok_or_else(|| {
-                    crate::error::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "Node not found",
-                    ))
-                })?
-                .clone();
-            let new_node = candidate
-                .nodes
-                .iter()
-                .find(|n| n.id == node_id)
-                .ok_or_else(|| {
+        // Portal/Anchor 身份变更才加载完整图、检查外部路径依赖并跑结构校验。
+        let needs_index_invalidation = if needs_structural_check {
+            {
+                let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
+                store.ensure_fully_loaded()?;
+            }
+            let candidate = {
+                let store = Self::get_store_or_err(&stores, starmap_id)?;
+                let mut g = store.to_starmap_graph();
+                apply_node_patch_to_graph(&mut g, node_id, &patch)?;
+                g
+            };
+            let (old_node, new_node) = {
+                let store = Self::get_store_or_err(&stores, starmap_id)?;
+                let old_node = store.get_node(node_id).cloned().ok_or_else(|| {
                     crate::error::Error::Io(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
                         "Node not found",
                     ))
                 })?;
-            self.check_external_dependencies_for_node_update(
-                &stores, starmap_id, node_id, &old_node, new_node,
-            )?;
-
-            // Portal destination 变更或 Anchor 集合变更会影响路径解析结果，
-            // 需要失效持久化索引。title/position/style 等不影响路径解析的变更不触发。
-            let portal_changed = match (&old_node.portal, &new_node.portal) {
-                (None, None) | (None, Some(_)) => false,
-                (Some(_), None) => true,
-                (Some(o), Some(n)) => {
-                    o.destination_starmap_id != n.destination_starmap_id
-                        || o.destination_target != n.destination_target
-                }
+                let new_node = candidate
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == node_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        crate::error::Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "Node not found",
+                        ))
+                    })?;
+                (old_node, new_node)
             };
-            // Anchor 身份变更 = anchor_id 集合不同。anchor 的 position 等非身份字段
-            // 变更不影响路径依赖，只有 anchor_id 新增/删除才改变路径解析结果。
-            let old_anchor_ids: std::collections::HashSet<&str> = old_node
-                .anchors
-                .iter()
-                .map(|a| a.anchor_id.as_str())
-                .collect();
-            let new_anchor_ids: std::collections::HashSet<&str> = new_node
-                .anchors
-                .iter()
-                .map(|a| a.anchor_id.as_str())
-                .collect();
-            let anchors_changed = old_anchor_ids != new_anchor_ids;
-            portal_changed || anchors_changed
+            self.check_external_dependencies_for_node_update(
+                &stores, starmap_id, node_id, &old_node, &new_node,
+            )?;
+            validation::validate_graph(
+                &self.build_resolver_context_from_stores(&stores, &candidate),
+                &candidate,
+            )?;
+            true
+        } else {
+            false
         };
 
-        validation::validate_graph(
-            &self.build_resolver_context_from_stores(&stores, &candidate),
-            &candidate,
-        )?;
+        // 混合编辑：先按各自权威记录的 current revision 校验，再落盘，避免半提交。
+        if definition_patch.is_empty() {
+            if let Some(expected) = expected_definition_revision {
+                let current = {
+                    let store = Self::get_store_or_err(&stores, starmap_id)?;
+                    store.get_node(node_id).map(|n| n.definition_revision)
+                };
+                if let Some(current) = current {
+                    if current != expected {
+                        return Err(crate::error::Error::Other(format!(
+                            "definition revision conflict for '{node_id}': expected {expected}, actual {current}"
+                        )));
+                    }
+                }
+            }
+        }
 
-        let project_id = crate::starmap::get_starmap(&self.app_data_root, starmap_id)
-            .ok()
-            .and_then(|meta| meta.project_id);
-        let (asset_id, result) = {
+        let mut result = {
             let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
-            let asset_id = store.asset_id_for_node(node_id);
-            let result = store.update_node(node_id, &patch)?;
-            if patch.position.is_some() {
+            if definition_patch.is_empty() {
+                store.current_node_view(node_id)?
+            } else {
+                store.update_node_definition(
+                    node_id,
+                    &definition_patch,
+                    expected_definition_revision,
+                )?
+            }
+        };
+
+        if !instance_patch.is_empty() {
+            {
+                let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
+                result = store.update_node_instance(
+                    node_id,
+                    &instance_patch,
+                    expected_instance_revision,
+                )?;
                 store.enqueue_save(SaveQueueEntry::Node);
                 store.enqueue_save(SaveQueueEntry::GraphMeta);
             }
-            (asset_id, result)
-        };
-
-        crate::starmap::library::ensure_node_asset(
-            &self.app_data_root,
-            starmap_id,
-            project_id.as_deref(),
-            &asset_id,
-            &result.id,
-            &result,
-            &result.position,
-        )?;
+        }
 
         // 共享内容只写素材本体；已加载画布更新内存视图，画布文件只保存实例。
-        if patch_has_shared_node_fields(&patch) {
-            let definition = crate::starmap::types::StarMapNodeDefinition::from_node(
-                asset_id.clone(),
-                &result,
-            );
-            crate::starmap::library::save_node_definition(&self.app_data_root, &definition)?;
-
+        if !definition_patch.is_empty() {
+            let asset_id = result.asset_id.clone();
+            let definition =
+                crate::starmap::library::load_node_definition(&self.app_data_root, &asset_id)?
+                    .ok_or_else(|| {
+                        crate::error::Error::Other(format!(
+                            "shared node definition missing after update: {asset_id}"
+                        ))
+                    })?;
             for loaded_store in stores.values_mut() {
                 loaded_store.apply_shared_node_definition(&definition);
             }
         }
 
         // Portal/Anchor 变更会改变路径解析结果，失效持久化索引。
-        // 下次查询时从真实数据惰性重建。
         if needs_index_invalidation {
             self.invalidate_path_dependency_index();
         }
@@ -774,7 +848,8 @@ impl super::super::WriterCore {
         }
         store.enqueue_save(SaveQueueEntry::DeleteEmbed);
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
-        store.enqueue_save(SaveQueueEntry::DeleteLink);
+        // 级联删除的链接已在 store.delete_node/delete_embed 内直接写
+        // annotations tombstone；没有包内链接文件需要进入删除队列。
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
         // 删除画布引用只移除实例归属，素材本体与其他画布的引用保持不变。
@@ -866,8 +941,9 @@ impl super::super::WriterCore {
         let target_facts = extract_path_dependency_facts(&context, &link.target)?;
 
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
+        // 链接直接写入 annotations 仓库（唯一持久化所有者），只把派生的
+        // GraphMeta 缓存标记为待写。
         let result = store.add_link(link)?;
-        store.enqueue_save(SaveQueueEntry::Link);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
         // replace（不可失败）：用预计算的事实更新索引。
@@ -939,8 +1015,8 @@ impl super::super::WriterCore {
         let target_facts = extract_path_dependency_facts(&context, &updated_link.target)?;
 
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
+        // 链接直接写入 annotations 仓库，只把派生的 GraphMeta 缓存标记为待写。
         let result = store.update_link(link_id, &patch)?;
-        store.enqueue_save(SaveQueueEntry::Link);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
         // replace（不可失败）：用预计算的事实更新索引。
@@ -974,8 +1050,8 @@ impl super::super::WriterCore {
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_fully_loaded()?;
         store.ensure_link_loaded(link_id)?;
+        // delete_link 已写 annotations tombstone；没有包内链接文件需要删除。
         store.delete_link(link_id)?;
-        store.enqueue_save(SaveQueueEntry::DeleteLink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
         // 增量更新持久化路径依赖索引：移除被删 Link 的 source/target 两端依赖事实。

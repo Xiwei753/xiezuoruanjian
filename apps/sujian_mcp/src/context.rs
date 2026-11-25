@@ -216,9 +216,8 @@ impl McpContext {
                 root,
             )
         })?;
-        let active = read(|| {
-            api.mcp_resolve_active_starmap(self.project_id_opt(), &active, segments)
-        })?;
+        let active =
+            read(|| api.mcp_resolve_active_starmap(self.project_id_opt(), &active, segments))?;
         if !self.scope.active_starmap_id.is_empty() && self.scope.active_starmap_id != active {
             eprintln!(
                 "sujian_mcp: 上报的活动星图 {} 与 Core 解析结果 {} 不一致，以 Core 为准",
@@ -286,13 +285,19 @@ impl McpContext {
     }
 
     /// 校验来源对象和链接目标都属于授权作品。
+    ///
+    /// Issue #1060：typed 引用允许全局素材域（`project_id == None`）；
+    /// 项目域引用仍必须落在授权作品内。
     pub fn require_object_ref(&self, target: &AnnotationObjectRefDto) -> Result<(), ErrorData> {
-        self.require_project_scope(Some(&target.project_id))?;
+        self.require_project_scope(target.project_id.as_deref())?;
         Ok(())
     }
 
     pub fn require_internal_target(&self, target: &AnnotationTargetDto) -> Result<(), ErrorData> {
-        self.require_object_ref(&target.object_ref)
+        if let Some(object_ref) = target.object_ref.as_ref() {
+            self.require_object_ref(object_ref)?;
+        }
+        Ok(())
     }
 
     /// 创建星图：写作面板（无画布根图）在授权作品下创建一级图；星图面板

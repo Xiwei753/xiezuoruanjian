@@ -174,10 +174,10 @@ fn migrate_index_schema_2_to_4_excludes_legacy_portal_children() {
     let mut store = crate::starmap::store::StarMapStore::new(dir.path(), "sm_host");
     store.add_node(crate::starmap::types::StarMapNode {
         id: "n_portal".to_string(),
+        asset_id: "n_portal".to_string(),
         title: "入口节点".to_string(),
         kind: crate::starmap::types::StarMapNodeKind::Note,
         payload: None,
-        tags: vec![],
         content: Default::default(),
         anchors: vec![],
         portal: Some(crate::starmap::semantic::StarMapPortal {
@@ -189,6 +189,7 @@ fn migrate_index_schema_2_to_4_excludes_legacy_portal_children() {
         provenance: Default::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     });
     store.flush().unwrap();
 
@@ -238,10 +239,10 @@ fn migrate_index_schema_3_to_4_only_removes_legacy_portal_roots() {
     let mut host_store = crate::starmap::store::StarMapStore::new(dir.path(), "sm_host");
     host_store.add_node(crate::starmap::types::StarMapNode {
         id: "n_portal".to_string(),
+        asset_id: "n_portal".to_string(),
         title: "入口节点".to_string(),
         kind: crate::starmap::types::StarMapNodeKind::Note,
         payload: None,
-        tags: vec![],
         content: Default::default(),
         anchors: vec![],
         portal: Some(crate::starmap::semantic::StarMapPortal {
@@ -253,6 +254,7 @@ fn migrate_index_schema_3_to_4_only_removes_legacy_portal_roots() {
         provenance: Default::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     });
     // sm_host 同时 Embed 了 sm_embedded_child（合法一级星图被嵌入别处不应丢失 root 身份）
     host_store
@@ -827,10 +829,10 @@ fn validate_nodes_rejects_nan_position() {
         starmap_id: meta.starmap_id.clone(),
         nodes: vec![StarMapNode {
             id: "n1".to_string(),
+            asset_id: "n1".to_string(),
             title: "N1".to_string(),
             kind: StarMapNodeKind::Concept,
             payload: None,
-            tags: vec![],
             content: StarMapNodeContent::Empty,
             anchors: vec![],
             portal: None,
@@ -842,6 +844,7 @@ fn validate_nodes_rejects_nan_position() {
             provenance: StarMapProvenance::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         }],
         edges: vec![],
         embeds: vec![],
@@ -870,10 +873,10 @@ fn validate_nodes_rejects_infinity_position() {
         starmap_id: meta.starmap_id.clone(),
         nodes: vec![StarMapNode {
             id: "n1".to_string(),
+            asset_id: "n1".to_string(),
             title: "N1".to_string(),
             kind: StarMapNodeKind::Concept,
             payload: None,
-            tags: vec![],
             content: StarMapNodeContent::Empty,
             anchors: vec![],
             portal: None,
@@ -885,6 +888,7 @@ fn validate_nodes_rejects_infinity_position() {
             provenance: StarMapProvenance::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         }],
         edges: vec![],
         embeds: vec![],
@@ -1284,10 +1288,10 @@ fn add_starmap_node_with_nan_x_rejected() {
 
     let node = StarMapNode {
         id: "n1".to_string(),
+        asset_id: "n1".to_string(),
         title: "N1".to_string(),
         kind: StarMapNodeKind::Concept,
         payload: None,
-        tags: vec![],
         content: StarMapNodeContent::Empty,
         anchors: vec![],
         portal: None,
@@ -1296,6 +1300,7 @@ fn add_starmap_node_with_nan_x_rejected() {
         provenance: StarMapProvenance::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     };
 
     // default_x = NaN 现在会被合进 node.position 再校验，应被拒绝。

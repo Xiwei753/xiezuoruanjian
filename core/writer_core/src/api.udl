@@ -714,10 +714,10 @@ dictionary StarMapGraphDto {
 
 dictionary StarMapNodeDto {
     string id;
+    string asset_id;
     string title;
     StarMapNodeKindDto kind;
     string? payload;
-    sequence<string> tags;
     StarMapNodeContentDto content;
     sequence<StarMapAnchorDto> anchors;
     StarMapPortalDto? portal;
@@ -726,6 +726,7 @@ dictionary StarMapNodeDto {
     StarMapProvenanceDto provenance;
     u64 created_at;
     u64 updated_at;
+    u64 definition_revision;
 };
 
 dictionary StarMapNodeContentDto {
@@ -903,7 +904,6 @@ dictionary StarMapNodePatchInputDto {
     StarMapNodeKindDto? kind;
     string? payload;
     boolean clear_payload;
-    sequence<string>? tags;
     StarMapNodeContentDto? content;
     sequence<StarMapAnchorDto>? anchors;
     StarMapPortalDto? portal;
@@ -911,6 +911,7 @@ dictionary StarMapNodePatchInputDto {
     StarMapPointDto? position;
     StarMapNodeStyleDto? style;
     StarMapProvenanceDto? provenance;
+    u64? expected_definition_revision;
 };
 
 dictionary StarMapEdgePatchInputDto {
@@ -1380,6 +1381,12 @@ interface WriterAppService {
     StarMapNodeDto update_starmap_node(string starmap_id, string node_id, StarMapNodePatchInputDto patch);
 
     [Throws=WriterError]
+    StarMapNodeDto update_starmap_node_definition(string starmap_id, string node_id, StarMapNodePatchInputDto patch);
+
+    [Throws=WriterError]
+    StarMapNodeDto move_starmap_node(string starmap_id, string node_id, StarMapPointDto position, u64? expected_instance_revision);
+
+    [Throws=WriterError]
     boolean delete_starmap_node(string starmap_id, string node_id);
 
     // ── 全局 / 作品素材库 ──
@@ -1584,6 +1591,8 @@ interface WriterAppService {
     [Throws=WriterError]
     sequence<AnnotationTagDto> list_tags(string project_id);
     [Throws=WriterError]
+    sequence<AnnotationTagDto> list_global_tags();
+    [Throws=WriterError]
     AnnotationTagDto create_tag(string project_id, string name, string? color);
     [Throws=WriterError]
     AnnotationTagDto rename_tag(string project_id, string tag_id, string name);
@@ -1595,6 +1604,12 @@ interface WriterAppService {
     sequence<AnnotationTagBindingDto> set_tag_bindings(string project_id, AnnotationObjectRefDto target, sequence<string> tag_ids);
     [Throws=WriterError]
     sequence<AnnotationTagBindingDto> list_bindings_for_target(string project_id, AnnotationObjectRefDto target);
+    [Throws=WriterError]
+    AnnotationTagBindingDto attach_tag(string project_id, string tag_id, AnnotationObjectRefDto target);
+    [Throws=WriterError]
+    boolean detach_tag(string project_id, string tag_id, AnnotationObjectRefDto target);
+    [Throws=WriterError]
+    sequence<AnnotationTagDto> list_tags_for_object(AnnotationObjectRefDto target);
     [Throws=WriterError]
     AnnotationTextAnchorDto create_text_anchor(string project_id, string chapter_id, u32 start_byte, u32 end_byte, u64 text_revision, string text);
     [Throws=WriterError]
@@ -1695,10 +1710,12 @@ enum AnnotationObjectKindDto {
     "Volume",
     "Chapter",
     "TextAnchor",
-    "StarMap",
-    "StarMapNode",
-    "StarMapEmbed",
     "NamedEntry",
+    "StarMap",
+    "NodeAsset",
+    "NodeInstance",
+    "EmbedInstance",
+    "CanvasAnchor",
 };
 
 enum AnnotationLinkOriginDto {
@@ -1932,12 +1949,15 @@ dictionary CorrectionEntityNameDto {
 
 dictionary AnnotationObjectRefDto {
     AnnotationObjectKindDto kind;
-    string project_id;
+    string? project_id;
+    string? starmap_id;
     string object_id;
+    string? anchor_id;
 };
 
 dictionary AnnotationTargetDto {
-    AnnotationObjectRefDto object_ref;
+    AnnotationObjectRefDto? object_ref;
+    StarMapTargetPathDto? canvas_route;
 };
 
 dictionary AnnotationTagDto {
@@ -1984,6 +2004,8 @@ dictionary AnnotationObjectLinkDto {
     AnnotationObjectRefDto source;
     AnnotationTargetDto target;
     AnnotationLinkOriginDto origin;
+    string? label;
+    i64 created_at_ms;
     i64 updated_at_ms;
     i64? deleted_at_ms;
 };

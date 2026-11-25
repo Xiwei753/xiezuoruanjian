@@ -40,10 +40,10 @@ use writer_core::sync::{SyncScope, SyncService, SyncState};
 fn make_node(id: &str, title: &str) -> StarMapNode {
     StarMapNode {
         id: id.to_string(),
+        asset_id: id.to_string(),
         title: title.to_string(),
         kind: StarMapNodeKind::Concept,
         payload: None,
-        tags: vec![],
         content: StarMapNodeContent::Empty,
         anchors: vec![],
         portal: None,
@@ -52,6 +52,7 @@ fn make_node(id: &str, title: &str) -> StarMapNode {
         provenance: StarMapProvenance::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     }
 }
 

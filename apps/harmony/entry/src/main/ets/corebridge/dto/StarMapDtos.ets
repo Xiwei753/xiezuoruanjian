@@ -122,13 +122,18 @@ export interface StarMapProvenance {
   createdFromAnchor: string | null
 }
 
-// StarMapNodeDto
+// StarMapNodeDto（#1060）
+// 节点是"共享素材本体 + 画布实例投影"两段身份：
+// - assetId 是共享素材 ID，标签/链接按它绑定；
+// - updatedAt 只是画布实例 revision（位置等实例事实）；
+// - definitionRevision 是共享内容 revision（标题/正文/样式等）。
+// 旧数据没有 assetId/definitionRevision，解码器按空串/0 兼容。
 export interface StarMapNode {
   id: string
+  assetId: string
   title: string
   kind: NodeType
   payload: string | null  // JSON 字符串，非对象
-  tags: string[]
   content: StarMapNodeContent
   anchors: StarMapAnchor[]
   portal: StarMapPortal | null
@@ -137,16 +142,33 @@ export interface StarMapNode {
   provenance: StarMapProvenance
   createdAt: number
   updatedAt: number
+  definitionRevision: number
 }
 
-// StarMapNodeUpdatePatch（#984）
+// 拖动轨迹关键点（StarMapProofTrajectorySample）：只作回放显示辅助。
+export interface StarMapNodeTrajectorySample {
+  x: number
+  y: number
+}
+
+// StarMapNodeUpdatePatch（#1060）
 // 平台端更新节点时只带要改的字段：JSON.stringify 会省略 undefined，
 // Core 的 StarMapNodePatchInputDto 语义是"省略 = 不改"。
+// - 内容编辑：带 title/content/... 且 expectedDefinitionRevision = node.definitionRevision，不带 position；
+// - 只移动：走 moveStarMapNode(position, expectedInstanceRevision = node.updatedAt)，不走本 patch。
 // content 是完整 StarMapNodeContent（字段名是 type，与 Core 线格式一致）。
 export interface StarMapNodeUpdatePatch {
   title?: string
+  kind?: NodeType
+  payload?: string | null
   content?: StarMapNodeContent
+  anchors?: StarMapAnchor[]
+  portal?: StarMapPortal | null
   position?: StarMapPoint
+  style?: StarMapNodeStyle
+  provenance?: StarMapProvenance
+  expectedDefinitionRevision?: number
+  trajectory?: StarMapNodeTrajectorySample[]
 }
 
 // ─── 边 ───

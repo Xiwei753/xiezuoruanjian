@@ -328,6 +328,131 @@ pub unsafe extern "C" fn writer_core_update_starmap_node(
 #[no_mangle]
 /// # Safety
 ///
+/// The caller must ensure `starmap_id`, `node_id`, and `patch_json` all point to
+/// valid, null-terminated C strings. Passing null pointers or invalid pointers is
+/// undefined behavior.
+pub unsafe extern "C" fn writer_core_update_starmap_node_definition(
+    starmap_id: *const c_char,
+    node_id: *const c_char,
+    patch_json: *const c_char,
+) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid starmap_id: error {}", e),
+            )
+        }
+    };
+    let nid = match c_str_to_rust(node_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid node_id: error {}", e)),
+    };
+    let patch_str = match c_str_to_rust(patch_json) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid patch_json: error {}", e),
+            )
+        }
+    };
+    let patch = match serde_json::from_str::<StarMapNodePatchInputDto>(&patch_str) {
+        Ok(p) => p,
+        Err(e) => return err_json("PARSE_ERROR", &format!("Failed to parse patch_json: {}", e)),
+    };
+    match with_app_service(|svc| {
+        let node = svc
+            .update_starmap_node_definition(sid, nid, patch)
+            .map_err(|e| format!("{}", e))?;
+        Ok(node)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `starmap_id`, `node_id`, `position_json`, and
+/// `expected_instance_revision` all point to valid, null-terminated C strings
+/// (or `expected_instance_revision` may be null to skip the revision check).
+/// Passing invalid pointers is undefined behavior.
+pub unsafe extern "C" fn writer_core_move_starmap_node(
+    starmap_id: *const c_char,
+    node_id: *const c_char,
+    position_json: *const c_char,
+    expected_instance_revision: *const c_char,
+) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid starmap_id: error {}", e),
+            )
+        }
+    };
+    let nid = match c_str_to_rust(node_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid node_id: error {}", e)),
+    };
+    let position_str = match c_str_to_rust(position_json) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid position_json: error {}", e),
+            )
+        }
+    };
+    let position = match serde_json::from_str::<StarMapPointDto>(&position_str) {
+        Ok(p) => p,
+        Err(e) => {
+            return err_json(
+                "PARSE_ERROR",
+                &format!("Failed to parse position_json: {}", e),
+            )
+        }
+    };
+    let expected_instance_revision = if expected_instance_revision.is_null() {
+        None
+    } else {
+        match c_str_to_rust(expected_instance_revision) {
+            Ok(value) if value.trim().is_empty() => None,
+            Ok(value) => match value.trim().parse::<u64>() {
+                Ok(revision) => Some(revision),
+                Err(e) => {
+                    return err_json(
+                        "INVALID_ARGUMENT",
+                        &format!("Invalid expected_instance_revision: {}", e),
+                    )
+                }
+            },
+            Err(e) => {
+                return err_json(
+                    "INVALID_ARGUMENT",
+                    &format!("Invalid expected_instance_revision: error {}", e),
+                )
+            }
+        }
+    };
+    match with_app_service(|svc| {
+        let node = svc
+            .move_starmap_node(sid, nid, position, expected_instance_revision)
+            .map_err(|e| format!("{}", e))?;
+        Ok(node)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
 /// The caller must ensure `starmap_id` and `edge_json` both point to valid,
 /// null-terminated C strings. Passing null pointers or invalid pointers is
 /// undefined behavior.
@@ -814,7 +939,12 @@ pub unsafe extern "C" fn writer_core_list_starmap_library_json(
 ) -> *mut c_char {
     let scope = match c_str_to_rust(scope_json) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid scope_json: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid scope_json: error {}", e),
+            )
+        }
     };
     match with_app_service(|svc| {
         svc.list_starmap_library_json(scope)
@@ -839,7 +969,12 @@ pub unsafe extern "C" fn writer_core_create_starmap_library_folder_json(
 ) -> *mut c_char {
     let scope = match c_str_to_rust(scope_json) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid scope_json: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid scope_json: error {}", e),
+            )
+        }
     };
     let parent = if parent_folder_id.is_null() {
         None
@@ -882,11 +1017,21 @@ pub unsafe extern "C" fn writer_core_move_starmap_library_entry_json(
 ) -> *mut c_char {
     let entry_id = match c_str_to_rust(entry_id) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid entry_id: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid entry_id: error {}", e),
+            )
+        }
     };
     let scope = match c_str_to_rust(scope_json) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid scope_json: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid scope_json: error {}", e),
+            )
+        }
     };
     let parent = if parent_folder_id.is_null() {
         None
@@ -926,11 +1071,21 @@ pub unsafe extern "C" fn writer_core_add_starmap_node_reference(
 ) -> *mut c_char {
     let sid = match c_str_to_rust(starmap_id) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid starmap_id: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid starmap_id: error {}", e),
+            )
+        }
     };
     let asset_id = match c_str_to_rust(asset_id) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid asset_id: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid asset_id: error {}", e),
+            )
+        }
     };
     match with_app_service(|svc| {
         svc.add_starmap_node_reference(sid, asset_id, x, y)
@@ -979,11 +1134,21 @@ pub unsafe extern "C" fn writer_core_copy_starmap_library_asset_json(
 ) -> *mut c_char {
     let target = match c_str_to_rust(target_json) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid target_json: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid target_json: error {}", e),
+            )
+        }
     };
     let scope = match c_str_to_rust(scope_json) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid scope_json: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid scope_json: error {}", e),
+            )
+        }
     };
     let title = if title.is_null() {
         None
@@ -1011,7 +1176,12 @@ pub unsafe extern "C" fn writer_core_list_starmap_asset_references_json(
 ) -> *mut c_char {
     let target = match c_str_to_rust(target_json) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid target_json: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid target_json: error {}", e),
+            )
+        }
     };
     match with_app_service(|svc| {
         svc.list_starmap_asset_references_json(target)
@@ -1034,7 +1204,12 @@ pub unsafe extern "C" fn writer_core_delete_starmap_library_asset_json(
 ) -> *mut c_char {
     let target = match c_str_to_rust(target_json) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid target_json: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid target_json: error {}", e),
+            )
+        }
     };
     match with_app_service(|svc| {
         svc.delete_starmap_library_asset_json(target)
@@ -1056,11 +1231,21 @@ pub unsafe extern "C" fn writer_core_remove_starmap_instance(
 ) -> *mut c_char {
     let sid = match c_str_to_rust(starmap_id) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid starmap_id: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid starmap_id: error {}", e),
+            )
+        }
     };
     let instance_id = match c_str_to_rust(instance_id) {
         Ok(s) => s,
-        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid instance_id: error {}", e)),
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid instance_id: error {}", e),
+            )
+        }
     };
     match with_app_service(|svc| {
         svc.remove_starmap_instance(sid, instance_id, is_embed)

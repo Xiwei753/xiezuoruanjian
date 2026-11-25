@@ -10,50 +10,20 @@ use super::super::types::*;
 use super::super::StarMapStore;
 
 impl StarMapStore {
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
+    /// 当前画布的链接列表。
+    ///
+    /// 链接集合以 annotations 仓库为准（`load_canvas_links`），不再逐个读
+    /// `starmaps/<id>/links/*.json`；`GraphMeta.link_ids` 只是派生缓存。
     pub fn list_links_with_diagnostics(&mut self) -> Result<ListWithDiagnostics<StarMapLink>> {
         self.reload_graph_meta_if_stale()?;
-        let link_ids = self.graph_meta_link_ids();
-        let mut items = Vec::new();
-        let mut diagnostics = Vec::new();
-        for link_id in &link_ids {
-            if !self.links.contains_key(link_id) {
-                match self.try_load_link(link_id) {
-                    Ok(link) => {
-                        self.links.insert(link_id.clone(), link);
-                    }
-                    Err(e) => {
-                        // 保持 ListWithDiagnostics 语义：单个坏对象不让整个列表失败。
-                        let recovery_len = self.recovery_log.len();
-                        if recovery_len > 0 {
-                            if let Some(last) = self.recovery_log.last().cloned() {
-                                if last.object_id == *link_id {
-                                    diagnostics.push(last);
-                                    continue;
-                                }
-                            }
-                        }
-                        diagnostics.push(LoadDiagnostic {
-                            kind: LoadDiagnosticKind::Corrupt,
-                            object_type: "link".to_string(),
-                            object_id: link_id.clone(),
-                            detail: format!("{}", e),
-                        });
-                        continue;
-                    }
-                }
-            }
-            if let Some(link) = self.links.get(link_id).cloned() {
-                items.push(link);
-            }
-        }
-        Ok(ListWithDiagnostics { items, diagnostics })
+        self.load_canvas_links()?;
+        self.reconcile_graph_meta_link_indexes();
+        let mut items: Vec<StarMapLink> = self.links.values().cloned().collect();
+        items.sort_by(|left, right| left.link_id.cmp(&right.link_id));
+        Ok(ListWithDiagnostics {
+            items,
+            diagnostics: Vec::new(),
+        })
     }
 
     pub fn graph_meta_link_ids(&self) -> Vec<String> {
@@ -89,11 +59,6 @@ impl StarMapStore {
             .as_ref()
             .map(|m| m.embed_instance_ids.clone())
             .unwrap_or_default();
-        let link_ids = self
-            .graph_meta
-            .as_ref()
-            .map(|m| m.link_ids.clone())
-            .unwrap_or_default();
 
         let mut edge_relation_index = Vec::new();
         for edge_id in &edge_ids {
@@ -124,20 +89,18 @@ impl StarMapStore {
             }
         }
 
-        let mut link_relation_index = Vec::new();
-        for link_id in &link_ids {
-            if !self.links.contains_key(link_id) {
-                let link = self.try_load_link(link_id)?;
-                self.links.insert(link_id.clone(), link);
-            }
-            if let Some(link) = self.links.get(link_id) {
-                link_relation_index.push(LinkRelationIndex {
-                    link_id: link.link_id.clone(),
-                    source: link.source.clone(),
-                    target: link.target.clone(),
-                });
-            }
-        }
+        // 链接索引从注解仓库投影构建，不读包内链接文件。
+        self.load_canvas_links()?;
+        let mut projected_links: Vec<&StarMapLink> = self.links.values().collect();
+        projected_links.sort_by(|left, right| left.link_id.cmp(&right.link_id));
+        let link_relation_index: Vec<LinkRelationIndex> = projected_links
+            .into_iter()
+            .map(|link| LinkRelationIndex {
+                link_id: link.link_id.clone(),
+                source: link.source.clone(),
+                target: link.target.clone(),
+            })
+            .collect();
 
         let mut node_kind_counts = HashMap::new();
         for node in self.nodes.values() {
@@ -310,11 +273,6 @@ impl StarMapStore {
             .as_ref()
             .map(|m| m.embed_instance_ids.clone())
             .unwrap_or_default();
-        let all_link_ids = self
-            .graph_meta
-            .as_ref()
-            .map(|m| m.link_ids.clone())
-            .unwrap_or_default();
 
         for node_id in &all_node_ids {
             if !self.nodes.contains_key(node_id) {
@@ -334,12 +292,9 @@ impl StarMapStore {
                 self.embeds.insert(instance_id.clone(), embed);
             }
         }
-        for link_id in &all_link_ids {
-            if !self.links.contains_key(link_id) {
-                let link = self.try_load_link(link_id)?;
-                self.links.insert(link_id.clone(), link);
-            }
-        }
+        // 链接已由注解仓库投影承担；这里只确认投影与仓库一致。
+        self.load_canvas_links()?;
+        self.reconcile_graph_meta_link_indexes();
         Ok(())
     }
 
@@ -552,16 +507,11 @@ impl StarMapStore {
             .as_ref()
             .map(|m| m.embed_instance_ids.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default();
-        let declared_link_ids: HashSet<&str> = self
-            .graph_meta
-            .as_ref()
-            .map(|m| m.link_ids.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default();
 
         self.check_orphan_dir("nodes", &declared_node_ids, "node", diagnostics);
         self.check_orphan_dir("edges", &declared_edge_ids, "edge", diagnostics);
         self.check_orphan_dir("embeds", &declared_embed_ids, "embed", diagnostics);
-        self.check_orphan_dir("links", &declared_link_ids, "link", diagnostics);
+        // 导航链接不在包内，没有可扫描的 links 对象目录。
     }
 
     #[allow(

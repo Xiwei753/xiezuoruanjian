@@ -28,7 +28,7 @@ use crate::starmap::package_storage::bucket_for_id;
 use crate::starmap::semantic::{StarMapTargetDetail, StarMapTargetResolveStatus};
 use crate::starmap::store::load::phased::load_current_graph_meta;
 use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
-use crate::starmap::types::{StarMapEdge, StarMapEdgeKind, StarMapEmbed, StarMapLink};
+use crate::starmap::types::{StarMapEdge, StarMapEdgeKind, StarMapEmbed};
 
 // ---------------------------------------------------------------------------
 // 公开类型
@@ -236,19 +236,6 @@ pub fn load_graph_edges(
     load_graph_edges_from_disk(&context.app_data_root, starmap_id)
 }
 
-/// 加载星图的链接列表（可靠对象读取）。
-///
-/// 先从 `context.overlays` 查找，找不到再从磁盘读取。
-pub fn load_graph_links(
-    context: &GraphResolverContext,
-    starmap_id: &str,
-) -> crate::error::Result<Vec<StarMapLink>> {
-    if let Some(graph) = context.overlays.get(starmap_id) {
-        return Ok(graph.links.clone());
-    }
-    load_graph_links_from_disk(&context.app_data_root, starmap_id)
-}
-
 /// 加载星图的嵌入列表（可靠对象读取）。
 pub fn load_graph_embeds(
     context: &GraphResolverContext,
@@ -291,35 +278,6 @@ fn load_graph_edges_from_disk(
         edges.push(edge);
     }
     Ok(edges)
-}
-
-/// 从磁盘加载星图的链接列表（可靠对象读取）。
-fn load_graph_links_from_disk(
-    app_data_root: &Path,
-    starmap_id: &str,
-) -> crate::error::Result<Vec<StarMapLink>> {
-    let graph_json_path = app_data_root
-        .join("starmaps")
-        .join(starmap_id)
-        .join("graph.json");
-    let meta = match load_current_graph_meta(&graph_json_path, starmap_id)? {
-        Some(m) => m,
-        None => return Ok(Vec::new()),
-    };
-
-    let mut links = Vec::new();
-    for link_id in &meta.link_ids {
-        let bucket_dir = app_data_root
-            .join("starmaps")
-            .join(starmap_id)
-            .join("links")
-            .join(bucket_for_id(link_id));
-        let path = bucket_dir.join(format!("{}.json", link_id));
-        let content = std::fs::read_to_string(&path)?;
-        let link: StarMapLink = serde_json::from_str(&content)?;
-        links.push(link);
-    }
-    Ok(links)
 }
 
 /// 从磁盘加载星图的嵌入列表（可靠对象读取）。
@@ -399,10 +357,10 @@ mod tests {
     fn make_node(node_id: &str) -> StarMapNode {
         StarMapNode {
             id: node_id.to_string(),
+            asset_id: node_id.to_string(),
             title: node_id.to_string(),
             kind: StarMapNodeKind::Note,
             payload: None,
-            tags: vec![],
             content: StarMapNodeContent::Empty,
             anchors: vec![],
             portal: None,
@@ -411,6 +369,7 @@ mod tests {
             provenance: StarMapProvenance::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         }
     }
 

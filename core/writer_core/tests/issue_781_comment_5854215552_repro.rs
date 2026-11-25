@@ -45,10 +45,10 @@ fn setup() -> (TempDir, String) {
 fn make_node(id: &str, title: &str) -> StarMapNode {
     StarMapNode {
         id: id.to_string(),
+        asset_id: id.to_string(),
         title: title.to_string(),
         kind: StarMapNodeKind::Concept,
         payload: None,
-        tags: vec![],
         content: StarMapNodeContent::Empty,
         anchors: vec![],
         portal: None,
@@ -57,6 +57,7 @@ fn make_node(id: &str, title: &str) -> StarMapNode {
         provenance: Default::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     }
 }
 
@@ -64,6 +65,15 @@ fn make_node(id: &str, title: &str) -> StarMapNode {
 fn node_at(mut node: StarMapNode, x: f64, y: f64) -> StarMapNode {
     node.position = StarMapPoint { x, y };
     node
+}
+
+/// Issue #1060：直接走 store 的节点还需要登记共享素材本体，
+/// 否则重载时只有实例文件、没有定义文件。
+fn persist_node_definition(dir: &TempDir, node: &StarMapNode) {
+    let asset_id = node.resolved_asset_id().to_string();
+    let definition = StarMapNodeDefinition::from_node(asset_id.clone(), node);
+    writer_core::starmap::library::create_node_asset(dir.path(), None, &asset_id, &definition)
+        .unwrap();
 }
 
 fn local_path(host: &str, node_id: &str) -> StarMapTargetPath {
@@ -82,7 +92,6 @@ fn move_and_style_patch(x: f64, y: f64, fill: &str) -> StarMapNodePatch {
         title: None,
         kind: None,
         payload: None,
-        tags: None,
         content: None,
         anchors: None,
         portal: None,
@@ -130,8 +139,13 @@ fn seed_full_graph(dir: &TempDir, host_sid: &str, child_sid: &str) -> StarMapSto
         destination_target: Some(StarMapTargetDetail::Starmap),
     });
     store.add_node(node_at(node, 30.0, 40.0));
+    // Issue #1060：移动/换样式分别路由到实例与共享本体。
+    let patch = move_and_style_patch(30.0, 40.0, "#aabbcc");
     store
-        .update_node("n1", &move_and_style_patch(30.0, 40.0, "#aabbcc"))
+        .update_node_definition("n1", &NodeDefinitionPatch::from_command(&patch), None)
+        .unwrap();
+    store
+        .update_node_instance("n1", &NodeInstancePatch::from_command(&patch), None)
         .unwrap();
     store
         .add_embed(make_embed("emb1", child_sid, host_sid, "n1"))
@@ -189,8 +203,12 @@ fn node_position_is_authored_data_and_survives_object_file_roundtrip() {
         "add_node 必须把 x/y 写进 node.position"
     );
 
+    let patch = move_and_style_patch(120.0, -8.5, "#112233");
     store
-        .update_node("n1", &move_and_style_patch(120.0, -8.5, "#112233"))
+        .update_node_definition("n1", &NodeDefinitionPatch::from_command(&patch), None)
+        .unwrap();
+    store
+        .update_node_instance("n1", &NodeInstancePatch::from_command(&patch), None)
         .unwrap();
     assert_eq!(
         store.get_node("n1").unwrap().position,
@@ -222,7 +240,9 @@ fn embed_position_is_authored_data_and_survives_object_file_roundtrip() {
     let child = writer_core::starmap::create_starmap(dir.path(), "子图", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &host_sid);
-    store.add_node(node_at(make_node("n1", "宿主节点"), 10.0, 10.0));
+    let host_node = node_at(make_node("n1", "宿主节点"), 10.0, 10.0);
+    persist_node_definition(&dir, &host_node);
+    store.add_node(host_node);
     store
         .add_embed(make_embed("emb1", &child.starmap_id, &host_sid, "n1"))
         .unwrap();
@@ -336,8 +356,12 @@ fn moving_objects_writes_no_layout_or_viewport_state() {
     let (dir, sid) = setup();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.add_node(node_at(make_node("n1", "甲"), 1.0, 2.0));
+    let patch = move_and_style_patch(11.0, 12.0, "#334455");
     store
-        .update_node("n1", &move_and_style_patch(11.0, 12.0, "#334455"))
+        .update_node_definition("n1", &NodeDefinitionPatch::from_command(&patch), None)
+        .unwrap();
+    store
+        .update_node_instance("n1", &NodeInstancePatch::from_command(&patch), None)
         .unwrap();
     store.flush().unwrap();
 
@@ -379,8 +403,12 @@ fn moving_objects_writes_no_layout_or_viewport_state() {
 fn meta_and_index_keep_one_truth_without_persisted_stats() {
     let (dir, sid) = setup();
     let mut store = StarMapStore::new(dir.path(), &sid);
-    store.add_node(node_at(make_node("n1", "甲"), 0.0, 0.0));
-    store.add_node(node_at(make_node("n2", "乙"), 0.0, 0.0));
+    let n1 = node_at(make_node("n1", "甲"), 0.0, 0.0);
+    let n2 = node_at(make_node("n2", "乙"), 0.0, 0.0);
+    persist_node_definition(&dir, &n1);
+    persist_node_definition(&dir, &n2);
+    store.add_node(n1);
+    store.add_node(n2);
     store
         .add_edge(StarMapEdge {
             id: "e1".to_string(),
@@ -544,10 +572,10 @@ fn dto_decode_is_fail_closed() {
     // payload 不是合法 JSON 时返回 Err（不接受被吞成空值）。
     assert!(StarMapNode::try_from(StarMapNodeDto {
         id: "n1".to_string(),
+        asset_id: "n1".to_string(),
         title: "甲".to_string(),
         kind: StarMapNodeKindDto::Concept,
         payload: Some("{not json".to_string()),
-        tags: vec![],
         content: StarMapNodeContentDto::default(),
         anchors: vec![],
         portal: None,
@@ -556,16 +584,17 @@ fn dto_decode_is_fail_closed() {
         provenance: Default::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     })
     .is_err());
 
     // 合法输入仍然正常解码（fail-closed 不等于全都失败）。
     let ok = StarMapNode::try_from(StarMapNodeDto {
         id: "n1".to_string(),
+        asset_id: "n1".to_string(),
         title: "甲".to_string(),
         kind: StarMapNodeKindDto::Concept,
         payload: Some(r#"{"k":1}"#.to_string()),
-        tags: vec![],
         content: StarMapNodeContentDto {
             kind: "inline".to_string(),
             summary: Some("摘要".to_string()),
@@ -580,6 +609,7 @@ fn dto_decode_is_fail_closed() {
         provenance: Default::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     })
     .unwrap();
     assert_eq!(ok.position, StarMapPoint { x: 3.0, y: 4.0 });

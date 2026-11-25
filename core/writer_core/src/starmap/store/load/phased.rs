@@ -202,14 +202,13 @@ impl StarMapStore {
                 let embed = self.try_load_embed(embed_id)?;
                 self.embeds.insert(embed_id.clone(), embed);
             }
-            for link_id in &meta.link_ids {
-                if self.links.contains_key(link_id) {
-                    continue;
-                }
-                let link = self.try_load_link(link_id)?;
-                self.links.insert(link_id.clone(), link);
-            }
         }
+        // 链接唯一持久化在 annotations 仓库：集合以仓库为准全量重建投影，
+        // 不再逐个读 `links/` 文件；`GraphMeta.link_ids` 只作派生缓存，
+        // 与仓库不一致时以仓库重建并标脏。新画布没有 graph.json 也要加载
+        // 仓库里已存在的链接（例如从另一设备同步来的注解记录）。
+        self.load_canvas_links()?;
+        self.reconcile_graph_meta_link_indexes();
         Ok(())
     }
 }

@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{de::DeserializeOwned, Serialize};
 
+use crate::object_ref::{ObjectRef, ObjectScope};
+
 use super::model::{
-    AnnotationKind, AnnotationMutation, LinkTarget, NamedEntry, ObjectLink, ObjectRef, Tag,
-    TagBinding, TextAnchor, DEFAULT_TAG_NAMES,
+    AnnotationKind, AnnotationMutation, LinkTarget, NamedEntry, ObjectLink, Tag, TagBinding,
+    TextAnchor, DEFAULT_TAG_NAMES,
 };
 
 const COLLECTIONS: [&str; 5] = ["tags", "bindings", "entries", "anchors", "links"];
@@ -19,14 +21,22 @@ pub struct PreparedTextAnchorChanges {
     pub committed_anchors: Vec<TextAnchor>,
 }
 
-/// Project-local annotation persistence.
+/// Annotation persistence for one namespace.
 ///
 /// Each record has its own JSON file and is written through the shared atomic
 /// writer. The directory scan is the rebuildable index; no second persistent
 /// index can overwrite records created on another device.
+///
+/// A store belongs to exactly one namespace: a project store lives at
+/// `<project_root>/annotations/<collection>` and holds project tags and project
+/// links; the global store lives at `<app_data_root>/annotations/<collection>`
+/// and holds shared-asset tags and links owned by canvases without a project.
+/// The two directories are never mixed.
 #[derive(Debug, Clone)]
 pub struct AnnotationStore {
+    /// Project root for project stores, app data root for the global store.
     project_root: PathBuf,
+    /// Tag/link namespace; an empty string means the global asset domain.
     project_id: String,
 }
 
@@ -38,8 +48,25 @@ impl AnnotationStore {
         }
     }
 
+    /// Store for the global asset domain: `<app_data_root>/annotations/<collection>`.
+    pub fn global(app_data_root: &Path) -> Self {
+        Self {
+            project_root: app_data_root.to_path_buf(),
+            project_id: String::new(),
+        }
+    }
+
     pub fn project_id(&self) -> &str {
         &self.project_id
+    }
+
+    /// Namespace this store owns. Project records and global records never mix.
+    pub fn scope(&self) -> ObjectScope {
+        ObjectScope::from_project_id(Some(self.project_id.as_str()))
+    }
+
+    pub fn is_global(&self) -> bool {
+        self.project_id.is_empty()
     }
 
     pub fn list_tags(&self) -> crate::Result<Vec<Tag>> {
@@ -86,6 +113,126 @@ impl AnnotationStore {
             .into_iter()
             .filter(|binding| binding.tag_id == tag_id)
             .collect())
+    }
+
+    /// Active bindings recorded in this store's namespace for one typed target.
+    ///
+    /// The namespace filter is what keeps the project catalogue and the global
+    /// asset catalogue separate even when both describe the same shared asset.
+    pub fn list_bindings_for_scope(&self, target: &ObjectRef) -> crate::Result<Vec<TagBinding>> {
+        Ok(self
+            .list_bindings()?
+            .into_iter()
+            .filter(|binding| binding.project_id == self.project_id && &binding.target == target)
+            .collect())
+    }
+
+    /// Find the binding for one tag/target relation, including tombstones.
+    ///
+    /// The relation key is namespace + tag + typed target, so the same tag name
+    /// in another namespace or the same object ID of another kind never collide.
+    pub fn find_binding_by_relation(
+        &self,
+        tag: &Tag,
+        target: &ObjectRef,
+    ) -> crate::Result<Option<TagBinding>> {
+        let relation_key = relation_key(&tag.project_id, &tag.tag_id, target);
+        let mut tombstone = None;
+        for binding in self.list_binding_records()? {
+            if binding.relation_key() != relation_key {
+                continue;
+            }
+            if binding.is_active() {
+                return Ok(Some(binding));
+            }
+            tombstone.get_or_insert(binding);
+        }
+        Ok(tombstone)
+    }
+
+    /// Deterministic binding ID for one tag/target relation.
+    ///
+    /// Used for both durable attaches and bindings staged with an unsaved
+    /// chapter, so the same relation converges on one ID everywhere.
+    pub fn binding_id_for_relation(tag: &Tag, target: &ObjectRef) -> String {
+        format!(
+            "b{:016x}",
+            fnv1a64(&relation_key(&tag.project_id, &tag.tag_id, target))
+        )
+    }
+
+    /// Idempotently attach one tag to one typed object.
+    ///
+    /// A new relation gets a deterministic binding ID derived from its relation
+    /// key, so two devices that attach the same relation concurrently converge on
+    /// the same file instead of producing duplicate bindings. An existing active
+    /// relation returns unchanged; a tombstoned relation is revived in place with
+    /// its original binding ID so the delete/restore history stays traceable.
+    pub fn attach_tag(
+        &self,
+        tag: &Tag,
+        target: &ObjectRef,
+        now_ms: i64,
+    ) -> crate::Result<(TagBinding, Vec<String>)> {
+        self.validate_project(&tag.project_id)?;
+        let stored_tag = self
+            .get_tag(&tag.tag_id)?
+            .filter(|record| record.deleted_at_ms.is_none());
+        if stored_tag.is_none() {
+            return Err(invalid_annotation("tag does not exist in this namespace"));
+        }
+        let relation_key = relation_key(&tag.project_id, &tag.tag_id, target);
+        if let Some(binding) = self.find_binding_by_relation(tag, target)? {
+            if binding.is_active() {
+                return Ok((binding, Vec::new()));
+            }
+            let mut revived = binding;
+            revived.deleted_at_ms = None;
+            revived.updated_at_ms = now_ms.max(revived.updated_at_ms.saturating_add(1));
+            let changed =
+                self.apply_mutation(AnnotationMutation::UpsertBinding(revived.clone()))?;
+            return Ok((revived, changed));
+        }
+        let binding = TagBinding {
+            binding_id: Self::binding_id_for_relation(tag, target),
+            project_id: tag.project_id.clone(),
+            tag_id: tag.tag_id.clone(),
+            target: target.clone(),
+            updated_at_ms: now_ms,
+            deleted_at_ms: None,
+        };
+        // The deterministic ID is derived from the relation key; a record with a
+        // different relation under the same ID cannot be overwritten.
+        if let Some(existing) = self.get_record::<TagBinding>("bindings", &binding.binding_id)? {
+            if existing.relation_key() == relation_key {
+                return Ok((existing, Vec::new()));
+            }
+            return Err(invalid_annotation(
+                "binding ID conflicts with another tag relation",
+            ));
+        }
+        let changed = self.apply_mutation(AnnotationMutation::UpsertBinding(binding.clone()))?;
+        Ok((binding, changed))
+    }
+
+    /// Idempotently remove one tag/target relation, keeping the binding as a
+    /// tombstone so a later attach can revive the same stable ID.
+    pub fn detach_tag(
+        &self,
+        tag: &Tag,
+        target: &ObjectRef,
+        now_ms: i64,
+    ) -> crate::Result<Vec<String>> {
+        self.validate_project(&tag.project_id)?;
+        let Some(mut binding) = self.find_binding_by_relation(tag, target)? else {
+            return Ok(Vec::new());
+        };
+        if !binding.is_active() {
+            return Ok(Vec::new());
+        }
+        binding.updated_at_ms = now_ms.max(binding.updated_at_ms.saturating_add(1));
+        binding.deleted_at_ms = Some(now_ms);
+        self.apply_mutation(AnnotationMutation::UpsertBinding(binding))
     }
 
     pub fn list_named_entries(&self) -> crate::Result<Vec<NamedEntry>> {
@@ -432,56 +579,160 @@ impl AnnotationStore {
         self.read_record("links", link_id)
     }
 
+    /// Active links whose source belongs to one canvas or whose canvas-navigation
+    /// target starts from that canvas. This is the starmap graph view's read-only
+    /// projection; the links themselves stay owned by the annotation store.
+    pub fn list_links_for_starmap(&self, starmap_id: &str) -> crate::Result<Vec<ObjectLink>> {
+        Ok(self
+            .list_links()?
+            .into_iter()
+            .filter(|link| {
+                link.source.starmap_id() == Some(starmap_id)
+                    || matches!(
+                        &link.target,
+                        LinkTarget::CanvasNavigation(path) if path.starmap_id == starmap_id
+                    )
+            })
+            .collect())
+    }
+
+    /// Find the link for one source/target pair, including tombstones.
+    ///
+    /// `(source, target)` is the idempotency key: only the source's owning store
+    /// keeps the link, never the destination's.
+    pub fn find_link_by_idempotency_key(
+        &self,
+        source: &ObjectRef,
+        target: &LinkTarget,
+    ) -> crate::Result<Option<ObjectLink>> {
+        let mut tombstone = None;
+        for link in self.list_link_records()? {
+            if &link.source != source || &link.target != target {
+                continue;
+            }
+            if link.deleted_at_ms.is_none() {
+                return Ok(Some(link));
+            }
+            tombstone.get_or_insert(link);
+        }
+        Ok(tombstone)
+    }
+
+    /// Idempotently add one navigation link.
+    ///
+    /// An existing active `(source, target)` relation is returned unchanged. A
+    /// tombstoned relation is revived with its original `link_id`. An unrelated
+    /// record that already uses the requested ID is never overwritten.
+    pub fn attach_link(&self, link: ObjectLink) -> crate::Result<(ObjectLink, Vec<String>)> {
+        self.validate_link_record(&link)?;
+        if let Some(existing) = self.find_link_by_idempotency_key(&link.source, &link.target)? {
+            if existing.deleted_at_ms.is_none() {
+                return Ok((existing, Vec::new()));
+            }
+            let mut revived = link;
+            revived.link_id = existing.link_id;
+            revived.deleted_at_ms = None;
+            revived.updated_at_ms = revived
+                .updated_at_ms
+                .max(existing.updated_at_ms.saturating_add(1));
+            let changed = self.apply_mutation(AnnotationMutation::UpsertLink(revived.clone()))?;
+            return Ok((revived, changed));
+        }
+        if let Some(existing) = self.get_link(&link.link_id)? {
+            if existing.source != link.source || existing.target != link.target {
+                return Err(invalid_annotation(
+                    "link ID is already used by another link",
+                ));
+            }
+            if existing.deleted_at_ms.is_none() {
+                return Ok((existing, Vec::new()));
+            }
+            let mut revived = link;
+            revived.deleted_at_ms = None;
+            revived.updated_at_ms = revived
+                .updated_at_ms
+                .max(existing.updated_at_ms.saturating_add(1));
+            let changed = self.apply_mutation(AnnotationMutation::UpsertLink(revived.clone()))?;
+            return Ok((revived, changed));
+        }
+        let changed = self.apply_mutation(AnnotationMutation::UpsertLink(link.clone()))?;
+        Ok((link, changed))
+    }
+
+    /// Idempotently remove one navigation link by its idempotency key.
+    pub fn detach_link(
+        &self,
+        source: &ObjectRef,
+        target: &LinkTarget,
+        now_ms: i64,
+    ) -> crate::Result<Vec<String>> {
+        let Some(mut link) = self.find_link_by_idempotency_key(source, target)? else {
+            return Ok(Vec::new());
+        };
+        if link.deleted_at_ms.is_some() {
+            return Ok(Vec::new());
+        }
+        link.updated_at_ms = now_ms.max(link.updated_at_ms.saturating_add(1));
+        link.deleted_at_ms = Some(now_ms);
+        self.apply_mutation(AnnotationMutation::UpsertLink(link))
+    }
+
     /// Apply one record mutation and return every changed project-relative path.
     /// Cascaded tombstones for deleted tags and deleted text anchors are included.
+    ///
+    /// Upserts compare against the record already on disk and skip the write when
+    /// nothing changed, so repeated idempotent requests do not rewrite files.
     pub fn apply_mutation(&self, mutation: AnnotationMutation) -> crate::Result<Vec<String>> {
         match mutation {
             AnnotationMutation::UpsertTag(record) => {
                 self.validate_project(&record.project_id)?;
-                Ok(vec![self.write_record("tags", &record.tag_id, &record)?])
+                Ok(self
+                    .write_record_if_changed("tags", &record.tag_id, &record)?
+                    .into_iter()
+                    .collect())
             }
             AnnotationMutation::UpsertBinding(record) => {
                 self.validate_project(&record.project_id)?;
-                Ok(vec![self.write_record(
-                    "bindings",
-                    &record.binding_id,
-                    &record,
-                )?])
+                Ok(self
+                    .write_record_if_changed("bindings", &record.binding_id, &record)?
+                    .into_iter()
+                    .collect())
             }
             AnnotationMutation::UpsertNamedEntry(record) => {
                 self.validate_project(&record.project_id)?;
-                Ok(vec![self.write_record(
-                    "entries",
-                    &record.entry_id,
-                    &record,
-                )?])
+                Ok(self
+                    .write_record_if_changed("entries", &record.entry_id, &record)?
+                    .into_iter()
+                    .collect())
             }
             AnnotationMutation::UpsertTextAnchor(record) => {
                 self.validate_project(&record.project_id)?;
                 if record.start_byte > record.end_byte {
                     return Err(invalid_annotation("text anchor start exceeds end"));
                 }
-                Ok(vec![self.write_record(
-                    "anchors",
-                    &record.anchor_id,
-                    &record,
-                )?])
+                Ok(self
+                    .write_record_if_changed("anchors", &record.anchor_id, &record)?
+                    .into_iter()
+                    .collect())
             }
             AnnotationMutation::UpsertLink(record) => {
-                self.validate_project(record.source.project_id())?;
-                Ok(vec![self.write_record(
-                    "links",
-                    &record.link_id,
-                    &record,
-                )?])
+                self.validate_link_record(&record)?;
+                Ok(self
+                    .write_record_if_changed("links", &record.link_id, &record)?
+                    .into_iter()
+                    .collect())
             }
             AnnotationMutation::Delete {
                 kind,
-                project_id,
+                scope,
                 object_id,
                 deleted_at_ms,
             } => {
-                self.validate_project(&project_id)?;
+                if scope != self.scope() {
+                    return Err(invalid_annotation(
+                        "annotation delete targets another namespace",
+                    ));
+                }
                 self.delete_record(kind, &object_id, deleted_at_ms)
             }
         }
@@ -535,7 +786,7 @@ impl AnnotationStore {
             {
                 changed.extend(self.apply_mutation(AnnotationMutation::Delete {
                     kind: AnnotationKind::Binding,
-                    project_id: self.project_id.clone(),
+                    scope: self.scope(),
                     object_id: binding.binding_id,
                     deleted_at_ms: updated_at_ms,
                 })?);
@@ -547,7 +798,7 @@ impl AnnotationStore {
         }
         changed.extend(self.apply_mutation(AnnotationMutation::Delete {
             kind: AnnotationKind::Tag,
-            project_id: self.project_id.clone(),
+            scope: self.scope(),
             object_id: source.tag_id,
             deleted_at_ms: updated_at_ms,
         })?);
@@ -659,8 +910,10 @@ impl AnnotationStore {
             | AnnotationKind::Volume
             | AnnotationKind::Chapter
             | AnnotationKind::StarMap
-            | AnnotationKind::StarMapNode
-            | AnnotationKind::StarMapEmbed => {
+            | AnnotationKind::NodeAsset
+            | AnnotationKind::NodeInstance
+            | AnnotationKind::EmbedInstance
+            | AnnotationKind::CanvasAnchor => {
                 return Err(invalid_annotation(
                     "cannot delete an object reference as an annotation record",
                 ));
@@ -669,14 +922,61 @@ impl AnnotationStore {
         Ok(changed)
     }
 
+    /// A project store only accepts records of its own project; the global store
+    /// only accepts global records. Project records must never be written into
+    /// the global directory.
     fn validate_project(&self, project_id: &str) -> crate::Result<()> {
-        if project_id == self.project_id {
+        if self.project_id.is_empty() {
+            if project_id.is_empty() {
+                Ok(())
+            } else {
+                Err(invalid_annotation(
+                    "project annotation record cannot be stored in the global domain",
+                ))
+            }
+        } else if project_id == self.project_id {
             Ok(())
         } else {
             Err(invalid_annotation(
                 "annotation record belongs to another project",
             ))
         }
+    }
+
+    /// A link is stored once, under its source's ownership.
+    ///
+    /// Project-scoped sources must be written into their own project store.
+    /// Canvas instances and global shared assets carry no project in their ID;
+    /// whether their canvas belongs to a project is decided by the caller, which
+    /// also chooses the matching store, so the store only rejects foreign
+    /// project-owned sources here.
+    fn validate_link_record(&self, link: &ObjectLink) -> crate::Result<()> {
+        if let Some(source_project) = link.source.project_id() {
+            if source_project != self.project_id {
+                return Err(invalid_annotation(
+                    "link source belongs to another namespace",
+                ));
+            }
+        }
+        if !self.is_global() {
+            // 全局素材本身没有作品归属，链接必须留在全局域，否则换一个作品
+            // 打开同一素材就看不到这条链接。
+            if matches!(
+                &link.source,
+                ObjectRef::NodeAsset {
+                    scope: ObjectScope::Global,
+                    ..
+                } | ObjectRef::StarMap {
+                    scope: ObjectScope::Global,
+                    ..
+                }
+            ) {
+                return Err(invalid_annotation(
+                    "global shared-asset links must be stored in the global domain",
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn get_record<T: DeserializeOwned>(
@@ -773,6 +1073,24 @@ impl AnnotationStore {
             .replace('\\', "/"))
     }
 
+    /// Write an upsert only when it changes the record already on disk.
+    fn write_record_if_changed<T>(
+        &self,
+        collection: &str,
+        id: &str,
+        record: &T,
+    ) -> crate::Result<Option<String>>
+    where
+        T: Serialize + DeserializeOwned + PartialEq,
+    {
+        if let Some(existing) = self.get_record::<T>(collection, id)? {
+            if &existing == record {
+                return Ok(None);
+            }
+        }
+        Ok(Some(self.write_record(collection, id, record)?))
+    }
+
     fn collection_path(&self, collection: &str) -> crate::Result<PathBuf> {
         if !COLLECTIONS.contains(&collection) {
             return Err(invalid_annotation("unknown annotation collection"));
@@ -806,9 +1124,16 @@ impl AnnotationStore {
 }
 
 /// Find local backlinks in projects that have a readable, valid `project.json`.
-/// Projects that are not downloaded have no directory to scan and therefore do
-/// not produce name-based or guessed backlinks.
-pub fn find_backlinks(projects_root: &Path, target: &ObjectRef) -> crate::Result<Vec<ObjectLink>> {
+///
+/// The global annotation store is scanned as well: links owned by a canvas
+/// without a project (or by a global shared asset) live there, while their
+/// target may still be a project object. Projects that are not downloaded have
+/// no directory to scan and therefore do not produce guessed backlinks.
+pub fn find_backlinks(
+    app_data_root: &Path,
+    projects_root: &Path,
+    target: &LinkTarget,
+) -> crate::Result<Vec<ObjectLink>> {
     let entries = match fs::read_dir(projects_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -839,12 +1164,35 @@ pub fn find_backlinks(projects_root: &Path, target: &ObjectRef) -> crate::Result
     for (project_root, project_id) in projects {
         let store = AnnotationStore::new(&project_root, &project_id);
         for link in store.list_links()? {
-            if matches!(&link.target, LinkTarget::Object(link_target) if link_target == target) {
+            if &link.target == target {
                 backlinks.push(link);
             }
         }
     }
+    for link in AnnotationStore::global(app_data_root).list_links()? {
+        if &link.target == target {
+            backlinks.push(link);
+        }
+    }
     Ok(backlinks)
+}
+
+/// The exact unique relation key shared with [`TagBinding::relation_key`].
+fn relation_key(project_id: &str, tag_id: &str, target: &ObjectRef) -> String {
+    format!("{project_id}|{tag_id}|{}", target.stable_key())
+}
+
+/// FNV-1a 64-bit hash used for deterministic binding IDs.
+///
+/// Implemented locally to avoid a new dependency; the only requirement is that
+/// every device computes the same value for the same relation key.
+fn fnv1a64(value: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn invalid_annotation(message: &str) -> crate::error::Error {

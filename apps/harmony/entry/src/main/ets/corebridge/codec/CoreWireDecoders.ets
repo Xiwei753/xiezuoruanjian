@@ -13,7 +13,7 @@
 // 4. 嵌套对象递归 decode；数组逐元素 decode。
 
 import { LocalSettings, SyncableSettings, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
-import { DateRange, Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
+import { DateRange, Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ChapterVersion, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
 import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, WritingStatsSelectedPeriod, WritingStatsRecord, WritingStatsRecords, WritingStatsTrend, WritingStatsTrendPoint, WritingStatsHeatmap, WritingStatsHeatmapDay, ContributionCounts, ContributionActorStats, ContributionObjectTypeStats, ContributionDayStats, ContributionDeviceStats, ContributionStats, StarMapStatsSummary, StarMapStatsRecord } from '../dto/StatsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, FullSyncReport, FullSyncReportFailure, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
@@ -1437,8 +1437,11 @@ export function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
   if (provenanceObj === null) { return err<StarMapNode>('provenance missing or not object') }
   const provenanceR = decodeStarMapProvenance(provenanceObj)
   if (!provenanceR.ok || provenanceR.value === undefined) { return err<StarMapNode>(`provenance: ${provenanceR.error}`) }
-  const tags: string[] | null = reqStrArray(data, 'tags')
-  if (tags === null) { return err<StarMapNode>('tags missing or not string[]') }
+  // #1060：节点不再有 tags（标签改 annotations 关系命令，按 assetId 绑定）。
+  // assetId / definitionRevision 都带 `#[serde(default)]`：旧数据没有这两个键，
+  // 分别按空串 / 0 解码；标签与内容版本由 Core 的共享素材本体负责。
+  const assetId: string = reqStr(data, 'assetId') ?? ''
+  const definitionRevision: number = reqNum(data, 'definitionRevision') ?? 0
   const portalObjR: DecodeResult<Object | null> = nullObj(data, 'portal')
   if (!portalObjR.ok || portalObjR.value === undefined) { return err<StarMapNode>(`StarMapNode.${portalObjR.error ?? 'decode failed'}`) }
   let portal: import('../dto/StarMapDtos').StarMapPortal | null = null
@@ -1451,10 +1454,10 @@ export function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
   if (!payloadR.ok || payloadR.value === undefined) { return err<StarMapNode>(`StarMapNode.${payloadR.error ?? 'decode failed'}`) }
   const value: StarMapNode = {
     id: id,
+    assetId: assetId,
     title: title,
     kind: kind as NodeType,
     payload: payloadR.value,
-    tags: tags,
     content: contentR.value,
     anchors: anchors,
     portal: portal,
@@ -1462,7 +1465,8 @@ export function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
     style: style,
     provenance: provenanceR.value,
     createdAt: createdAt,
-    updatedAt: updatedAt
+    updatedAt: updatedAt,
+    definitionRevision: definitionRevision
   }
   return ok<StarMapNode>(value)
 }
@@ -1601,7 +1605,7 @@ function decodeStarMapTargetDetail(data: Object): DecodeResult<import('../dto/St
   }; return ok(value)
 }
 
-function decodeStarMapTargetPath(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapTargetPath> {
+export function decodeStarMapTargetPath(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapTargetPath> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return err('StarMapTargetPath: expected object')
   }

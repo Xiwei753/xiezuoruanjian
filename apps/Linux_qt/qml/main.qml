@@ -901,6 +901,25 @@ Kirigami.ApplicationWindow {
             window.applyPendingAnnotationChapter()
             return true
         }
+        if (ref.kind === "nodeAsset") {
+            if (!projectId || !ref.objectId) return false
+            // 共享素材在本项目任意星图里的一个实例；标注本身只保存 assetId。
+            var assetOwner = window.findAnnotationStarmapOwner(
+                projectId, "nodeAsset", String(ref.objectId))
+            if (!assetOwner || !assetOwner.nodeId) {
+                // 素材还没有画布实例，没有可定位的画布。
+                console.warn("[annotation] nodeAsset has no canvas instance: "
+                             + String(ref.objectId))
+                return false
+            }
+            window.pendingAnnotationMapTarget = {
+                starmapId: assetOwner.starmapId,
+                target: { starmapId: assetOwner.starmapId, nodeId: String(assetOwner.nodeId) }
+            }
+            appController.openRootStarmap(assetOwner.starmapId, assetOwner.title)
+            window.applyPendingAnnotationMapTarget()
+            return true
+        }
         if (ref.kind === "starMap") {
             appController.openRootStarmap(String(ref.objectId), String(ref.objectId))
             return true
@@ -951,6 +970,8 @@ Kirigami.ApplicationWindow {
 
     // Annotation refs keep stable node/embed ids. Resolve the containing map
     // from the current project graph before opening the existing StarMap route.
+    // nodeAsset 的 objectId 是共享素材 ID，必须先在 graph.nodes 里找到一个实例；
+    // 旧数据（Core 归一成 nodeAsset、objectId 仍是实例 ID）按 node.id 兜底。
     function findAnnotationStarmapOwner(projectId, kind, objectId) {
         if (!starmapBackend || !projectId || !objectId) return null
         var mapsEnvelope = appController.parseJson(
@@ -968,6 +989,18 @@ Kirigami.ApplicationWindow {
                 ? graphEnvelope.data : null
             var graph = graphData && graphData.graph ? graphData.graph : null
             if (!graph) continue
+            if (kind === "nodeAsset") {
+                var nodeInstance = window.findAnnotationNodeAssetInstance(
+                    graph.nodes || [], objectId)
+                if (nodeInstance) {
+                    return {
+                        starmapId: String(meta.starmapId),
+                        title: String(meta.title || qsTr("星图")),
+                        nodeId: String(nodeInstance.id)
+                    }
+                }
+                continue
+            }
             var objects = kind === "starMapNode" ? (graph.nodes || []) : (graph.embeds || [])
             for (var j = 0; j < objects.length; ++j) {
                 var candidateId = kind === "starMapNode"
@@ -979,6 +1012,19 @@ Kirigami.ApplicationWindow {
                     }
                 }
             }
+        }
+        return null
+    }
+
+    // 先按共享素材 identity 找实例，再兼容旧数据把 objectId 当实例 ID 的写法。
+    function findAnnotationNodeAssetInstance(nodes, objectId) {
+        for (var i = 0; i < nodes.length; ++i) {
+            if (String(nodes[i].assetId || "") === String(objectId))
+                return nodes[i]
+        }
+        for (var j = 0; j < nodes.length; ++j) {
+            if (String(nodes[j].id || "") === String(objectId))
+                return nodes[j]
         }
         return null
     }

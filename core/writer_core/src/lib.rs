@@ -68,6 +68,8 @@ pub mod correction;
 pub mod editor;
 pub mod error;
 pub mod history;
+/// Issue #1060：跨业务稳定对象引用（身份、作用域、画布实例与路由）。
+pub mod object_ref;
 pub mod platform_interaction;
 
 #[cfg(feature = "harmony-ffi")]

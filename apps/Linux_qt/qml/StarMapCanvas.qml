@@ -216,8 +216,27 @@ Item {
         return activeSceneLoader.item
     }
 
+    // Issue #1060：节点标签的身份是共享素材（assetId），不是画布实例 ID。
+    // 菜单/选择仍然按当前画布实例命中，写入标注前必须经这里换成素材 ID。
+    function resolveNodeAssetId(instanceId) {
+        var scene = activeScene()
+        if (!scene || !instanceId || typeof scene.hitNode !== "function")
+            return ""
+        var node = scene.hitNode(String(instanceId))
+        return node && node.assetId ? String(node.assetId) : ""
+    }
+
     function annotationRef(kind, objectId) {
         if (!annotationProjectId || !objectId) return null
+        if (kind === "starMapNode") {
+            var assetId = resolveNodeAssetId(objectId)
+            if (assetId)
+                return { kind: "nodeAsset", projectId: annotationProjectId, objectId: assetId }
+            // 数据缺少 assetId 时保留实例身份定位并显式告警，不静默冒用素材身份。
+            console.warn("[starmap-annotation] node instance " + String(objectId)
+                         + " has no assetId; falling back to instance id")
+            return { kind: "nodeAsset", projectId: annotationProjectId, objectId: String(objectId) }
+        }
         return { kind: kind, projectId: annotationProjectId, objectId: String(objectId) }
     }
 
@@ -2932,9 +2951,11 @@ Item {
 
         property string sourceKind: ""    // "node" / "embed"
         property string sourceId: ""
-        property var sourceOwner: null    // 命中层 StarMapActiveScene
+        // 命中层 StarMapActiveScene
+        property var sourceOwner: null
         property var sourcePath: null     // StarMapTargetPathDto
-        property var linkItems: []        // 已有内部链接列表
+        // 已有内部链接列表
+        property var linkItems: []
 
         function refreshItems() {
             if (sourceOwner && sourcePath)

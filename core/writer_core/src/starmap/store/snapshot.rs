@@ -93,7 +93,6 @@ impl StarMapStore {
         let node_revs = self.graph_meta.as_ref().map(|m| &m.node_revisions);
         let edge_revs = self.graph_meta.as_ref().map(|m| &m.edge_revisions);
         let embed_revs = self.graph_meta.as_ref().map(|m| &m.embed_revisions);
-        let link_revs = self.graph_meta.as_ref().map(|m| &m.link_revisions);
 
         let nodes: Vec<StarMapNode> = if incremental {
             self.nodes
@@ -128,21 +127,11 @@ impl StarMapStore {
         } else {
             self.embeds.values().cloned().collect()
         };
-        let links: Vec<StarMapLink> = if incremental {
-            self.links
-                .values()
-                .filter(|l| {
-                    link_revs
-                        .and_then(|r| r.get(&l.link_id))
-                        .copied()
-                        .unwrap_or(0)
-                        > since_rev
-                })
-                .cloned()
-                .collect()
-        } else {
-            self.links.values().cloned().collect()
-        };
+        // 链接投影始终全量包含：`since_rev` 只过滤 node/edge/embed。
+        // 链接增量同步由 annotations 记录自身的 `updatedAtMs`（Metadata 同步）
+        // 承担，`GraphMeta.link_revisions` 不再是链接增量依据。
+        let mut links: Vec<StarMapLink> = self.links.values().cloned().collect();
+        links.sort_by(|left, right| left.link_id.cmp(&right.link_id));
 
         let persistent_entries = self
             .graph_meta
@@ -188,7 +177,9 @@ impl StarMapStore {
             )
             .cloned()
             .collect();
-        let deleted_link_ids: Vec<String> = self
+        // 链接 tombstone 的唯一持久事实在 annotations 仓库（deletedAtMs）。
+        // 快照合并三方：本次未 flush 的本地删除、graph.json 传播日志、仓库记录。
+        let mut deleted_link_set: std::collections::BTreeSet<String> = self
             .deleted_link_ids
             .iter()
             .chain(
@@ -199,6 +190,15 @@ impl StarMapStore {
             )
             .cloned()
             .collect();
+        let link_store = self.annotation_store_for_canvas()?;
+        for record in link_store.list_link_records()? {
+            if record.deleted_at_ms.is_some()
+                && super::link_repository::link_source_is_owned_by(&record, &self.starmap_id)
+            {
+                deleted_link_set.insert(record.link_id);
+            }
+        }
+        let deleted_link_ids: Vec<String> = deleted_link_set.into_iter().collect();
 
         Ok(StarMapPhasedSnapshot {
             starmap_id: self.starmap_id.clone(),
@@ -268,11 +268,6 @@ impl StarMapStore {
                 .embed_revisions
                 .insert(instance_id.clone(), next_revision);
         }
-        for link_id in &dirty.links {
-            candidate_meta
-                .link_revisions
-                .insert(link_id.clone(), next_revision);
-        }
         for node_id in &dirty.deleted_nodes {
             candidate_meta.node_revisions.remove(node_id);
         }
@@ -282,9 +277,10 @@ impl StarMapStore {
         for instance_id in &dirty.deleted_embeds {
             candidate_meta.embed_revisions.remove(instance_id);
         }
-        for link_id in &dirty.deleted_links {
-            candidate_meta.link_revisions.remove(link_id);
-        }
+
+        // 链接增量由 annotations 记录自身的 `updatedAtMs` 承担，graph.json 不再
+        // 参与链接增量判断，`link_revisions` 保持为空。
+        candidate_meta.link_revisions.clear();
 
         // 构造要写入磁盘的 GraphMeta（更新 package_revision 和 updated_at）。
         let meta_to_write = GraphMeta {
@@ -419,32 +415,10 @@ impl StarMapStore {
             .retain(|ehi| !self.deleted_embed_ids.contains(&ehi.instance_id));
 
         // --- link_ids + link_relation_index ---
-        for link in self.links.values() {
-            if self.deleted_link_ids.contains(&link.link_id) {
-                continue;
-            }
-            if !meta.link_ids.contains(&link.link_id) {
-                meta.link_ids.push(link.link_id.clone());
-            }
-            if let Some(lri) = meta
-                .link_relation_index
-                .iter_mut()
-                .find(|lri| lri.link_id == link.link_id)
-            {
-                lri.source = link.source.clone();
-                lri.target = link.target.clone();
-            } else {
-                meta.link_relation_index.push(LinkRelationIndex {
-                    link_id: link.link_id.clone(),
-                    source: link.source.clone(),
-                    target: link.target.clone(),
-                });
-            }
-        }
-        meta.link_ids
-            .retain(|id| !self.deleted_link_ids.contains(id));
-        meta.link_relation_index
-            .retain(|lri| !self.deleted_link_ids.contains(&lri.link_id));
+        // 链接唯一持久化在 annotations 仓库：graph.json 的链接成员表和关系索引
+        // 都只是派生缓存，直接按当前投影重算（加载路径已与仓库对齐）。
+        let projected_links: Vec<StarMapLink> = self.links.values().cloned().collect();
+        super::link_repository::derive_link_indexes(meta, projected_links.into_iter());
 
         // Update deleted_since_last_sync: add entries for newly deleted objects
         let next_rev = self.package_revision.saturating_add(1);

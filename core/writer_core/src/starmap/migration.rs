@@ -40,6 +40,16 @@
 //! - 旧 node `content.type == "externalRef"` 降级为 `Empty`，外部锚点移除
 //! - 内部 `StarMapLink`、Edge、Embed、Node、Anchor 和其他对象全部保留
 //! - schema "4" 数据也执行同一套幂等清理（只清理外链残留，不重写其他对象）
+//!
+//! ### 导航链接迁移到 annotations 仓库（Issue #1060 第 3 节）
+//! - 链接唯一持久化所有者改为 annotations 仓库；`starmaps/<id>/links/**`
+//!   只作为旧格式读取一次
+//! - 每条旧链接经 `annotations::migration::migrate_legacy_links` 幂等写入
+//!   仓库，再经 `finish_link_migration` 校验后才把旧文件移到
+//!   `sync/trash/**`（已不存在则视为已完成）
+//! - 迁移成功后把 graph.json 的 `linkIds` / `linkRelationIndex` 派生缓存
+//!   按仓库重建；重复执行不产生新写入
+//! - 无法确定归属或无法迁移的旧记录保留原文件并记录冲突，不猜测、不删除
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -47,6 +57,9 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+
+mod links;
+mod tags;
 
 /// 旧 index schema 版本（`starmaps: Vec<StarMapMeta>` 数组）。
 const OLD_INDEX_SCHEMA_VERSION: u64 = 1;
@@ -382,6 +395,10 @@ pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Resu
         // hyperlink 元信息和对象目录（幂等）。未知格式保持原样跳过。
         if schema_version == NEW_GRAPH_META_SCHEMA_VERSION {
             cleanup_schema4_legacy_external_data(&graph_dir, &graph_json_path, &mut value)?;
+            links::migrate_legacy_link_files(app_data_root, starmap_id, &graph_dir)?;
+            // Issue #1060：旧节点/素材标签迁到 annotations 关系仓库，
+            // 成功后从素材本体删除旧 `tags` 字段（冲突时保留源数据）。
+            tags::migrate_legacy_node_tags(app_data_root, starmap_id, &graph_dir)?;
         }
         return Ok(());
     }
@@ -471,6 +488,11 @@ pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Resu
     }
     let new_content = serde_json::to_string_pretty(&new_value)?;
     crate::storage::atomic_write_string(&graph_json_path, &new_content)?;
+
+    // schema 迁移完成后再迁移旧链接，保证读取的是当前格式的 graph.json。
+    links::migrate_legacy_link_files(app_data_root, starmap_id, &graph_dir)?;
+    // Issue #1060：旧节点/素材标签迁到 annotations 关系仓库。
+    tags::migrate_legacy_node_tags(app_data_root, starmap_id, &graph_dir)?;
 
     Ok(())
 }

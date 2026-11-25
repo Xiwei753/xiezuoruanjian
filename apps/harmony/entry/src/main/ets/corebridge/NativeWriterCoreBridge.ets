@@ -315,8 +315,12 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   // StarMap Node/Edge/Embed mutations
-  async updateStarMapNode(starmapId: string, nodeId: string, patch: StarMapNodeUpdatePatch): Promise<ResultEnvelope<StarMapNode>> {
-    return this.starMapBridge.updateStarMapNode(starmapId, nodeId, patch)
+  async updateStarMapNodeDefinition(starmapId: string, nodeId: string, patch: StarMapNodeUpdatePatch): Promise<ResultEnvelope<StarMapNode>> {
+    return this.starMapBridge.updateStarMapNodeDefinition(starmapId, nodeId, patch)
+  }
+
+  async moveStarMapNode(starmapId: string, nodeId: string, position: StarMapPoint, expectedInstanceRevision: number): Promise<ResultEnvelope<StarMapNode>> {
+    return this.starMapBridge.moveStarMapNode(starmapId, nodeId, position, expectedInstanceRevision)
   }
 
   async addStarMapEdge(starmapId: string, from: StarMapTargetPath, to: StarMapTargetPath, kind: string, label: string | null): Promise<ResultEnvelope<StarMapEdge>> {

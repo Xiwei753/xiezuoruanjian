@@ -1201,14 +1201,15 @@ fn save_graph_conflict_snapshot(
     let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let snapshot_dir_rel = format!(".conflict-snapshot/starmaps/{}/{}", starmap_id, timestamp);
 
-    // 收集所有成员 (type_dir, id)
+    // 收集所有成员 (type_dir, id)。
+    // Issue #1060：链接不再是星图包内对象（唯一所有者在 annotations 仓库），
+    // 不再要求 staging 中存在 links/*.json。
     let members: Vec<(&str, &String)> = graph
         .node_ids
         .iter()
         .map(|id| ("nodes", id))
         .chain(graph.edge_ids.iter().map(|id| ("edges", id)))
         .chain(graph.embed_instance_ids.iter().map(|id| ("embeds", id)))
-        .chain(graph.link_ids.iter().map(|id| ("links", id)))
         .collect();
 
     for (type_dir, id) in members {

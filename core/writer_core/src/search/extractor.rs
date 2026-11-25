@@ -39,7 +39,14 @@ pub fn extract_chapter_entries(
                 .and_then(|s| serde_json::from_str(&s).ok());
         let proj_title = proj.as_ref().map(|p| p.title.as_str()).unwrap_or("");
         entries.push(extract_project_title_entry(&pid, proj_title));
-        entries.extend(extract_annotation_entries(&project_path, &pid)?);
+        // Annotation extraction needs the app data root for shared node
+        // definitions and canvas graphs. `projects_root` is normally
+        // `<app_data_root>/projects`, so its parent is the workspace root.
+        entries.extend(extract_annotation_entries_with_root(
+            &project_path,
+            &pid,
+            projects_root.parent(),
+        )?);
 
         let volumes_dir = project_path.join("volumes");
         if !volumes_dir.exists() {
@@ -96,6 +103,21 @@ pub fn extract_annotation_entries(
     project_root: &Path,
     project_id: &str,
 ) -> Result<Vec<IndexEntry>> {
+    extract_annotation_entries_with_root(
+        project_root,
+        project_id,
+        project_root.parent().and_then(Path::parent),
+    )
+}
+
+/// Same as [`extract_annotation_entries`] with an explicit app data root so
+/// shared node definitions and canvas graphs can be resolved from outside the
+/// conventional `projects/<id>` layout.
+pub fn extract_annotation_entries_with_root(
+    project_root: &Path,
+    project_id: &str,
+    app_data_root: Option<&Path>,
+) -> Result<Vec<IndexEntry>> {
     let store = AnnotationStore::new(project_root, project_id);
     let tags = store.list_tags()?;
     let tags_by_id: std::collections::HashMap<_, _> =
@@ -107,14 +129,19 @@ pub fn extract_annotation_entries(
     }
     for binding in store.list_bindings()? {
         if let Some(tag) = tags_by_id.get(binding.tag_id.as_str()) {
-            entries.push(extract_annotation_binding_entry(&store, tag, &binding)?);
+            entries.push(extract_annotation_binding_entry(
+                &store,
+                tag,
+                &binding,
+                app_data_root,
+            )?);
         }
     }
     for named_entry in store.list_named_entries()? {
         entries.push(extract_annotation_named_entry(&named_entry));
     }
     for link in store.list_links()? {
-        entries.push(extract_annotation_link_entry(&store, &link)?);
+        entries.push(extract_annotation_link_entry(&store, &link, app_data_root)?);
     }
 
     Ok(entries)
@@ -123,6 +150,7 @@ pub fn extract_annotation_entries(
 /// Produce incremental search updates for the active projection and remove
 /// tombstoned or no-longer-derived objects from the existing project index.
 pub fn annotation_search_updates_for_project(
+    app_data_root: &Path,
     project_root: &Path,
     project_id: &str,
     existing_ids: &[String],
@@ -131,7 +159,9 @@ pub fn annotation_search_updates_for_project(
     let mut updates = Vec::new();
     let mut active_ids = std::collections::HashSet::new();
 
-    for entry in extract_annotation_entries(project_root, project_id)? {
+    for entry in
+        extract_annotation_entries_with_root(project_root, project_id, Some(app_data_root))?
+    {
         active_ids.insert(entry.object_id.clone());
         updates.push(SearchIndexUpdate {
             action: SearchIndexAction::Upsert,
@@ -185,7 +215,7 @@ pub fn annotation_search_updates_for_project(
             .list_link_records()?
             .into_iter()
             .filter(|record| {
-                record.source.project_id() == project_id && record.deleted_at_ms.is_some()
+                record.source.project_id() == Some(project_id) && record.deleted_at_ms.is_some()
             })
             .map(|record| {
                 (
@@ -260,13 +290,14 @@ fn extract_annotation_binding_entry(
     store: &AnnotationStore,
     tag: &Tag,
     binding: &TagBinding,
+    app_data_root: Option<&Path>,
 ) -> Result<IndexEntry> {
     let target = search_target_for_object_ref(store, &binding.target)?;
-    let body = format!(
-        "{} {}",
-        object_ref_kind_label(&binding.target),
-        binding.target.object_id()
-    );
+    let mut body = vec![object_ref_kind_label(&binding.target).to_string()];
+    let detail = object_ref_search_text(store, &binding.target, app_data_root)?;
+    if !detail.is_empty() {
+        body.push(detail);
+    }
     Ok(IndexEntry {
         object_id: format!(
             "annotation:{}:binding:{}",
@@ -274,7 +305,7 @@ fn extract_annotation_binding_entry(
         ),
         scope: SearchScope::AnnotationTag,
         title: tag.name.clone(),
-        body,
+        body: body.join(" "),
         target,
     })
 }
@@ -292,24 +323,34 @@ fn extract_annotation_named_entry(entry: &NamedEntry) -> IndexEntry {
     }
 }
 
-fn extract_annotation_link_entry(store: &AnnotationStore, link: &ObjectLink) -> Result<IndexEntry> {
-    let source = object_ref_search_text(store, &link.source)?;
-    let LinkTarget::Object(target) = &link.target;
-    let target_text = object_ref_search_text(store, target)?;
+fn extract_annotation_link_entry(
+    store: &AnnotationStore,
+    link: &ObjectLink,
+    app_data_root: Option<&Path>,
+) -> Result<IndexEntry> {
+    let source = object_ref_search_text(store, &link.source, app_data_root)?;
+    let target_text = match &link.target {
+        LinkTarget::Object(target) => object_ref_search_text(store, target, app_data_root)?,
+        LinkTarget::CanvasNavigation(route) => canvas_route_search_text(route),
+    };
     let title = if target_text.is_empty() {
         format!("链接 {}", link.link_id)
     } else {
         target_text.clone()
     };
+    let mut body = format!("{source} {target_text}");
+    if let Some(label) = link.label.as_deref().filter(|label| !label.is_empty()) {
+        body = format!("{label} {body}");
+    }
     Ok(IndexEntry {
         object_id: format!(
             "annotation:{}:link:{}",
-            link.source.project_id(),
+            link.source.project_id().unwrap_or_default(),
             link.link_id
         ),
         scope: SearchScope::AnnotationLink,
         title,
-        body: format!("{} {}", source, target_text).trim().to_string(),
+        body: body.trim().to_string(),
         target: search_target_for_object_ref(store, &link.source)?,
     })
 }
@@ -325,9 +366,12 @@ fn search_target_for_object_ref(
     store: &AnnotationStore,
     object_ref: &ObjectRef,
 ) -> Result<SearchTarget> {
-    let mut target = annotation_project_target(object_ref.project_id());
+    let mut target = match object_ref.project_id() {
+        Some(project_id) => annotation_project_target(project_id),
+        None => SearchTarget::default(),
+    };
     match object_ref {
-        ObjectRef::Project { .. } => {}
+        ObjectRef::Project { .. } | ObjectRef::NamedEntry { .. } => {}
         ObjectRef::Volume { object_id, .. } => target.volume_id = Some(object_id.clone()),
         ObjectRef::Chapter { object_id, .. } => target.chapter_id = Some(object_id.clone()),
         ObjectRef::TextAnchor { object_id, .. } => {
@@ -336,15 +380,40 @@ fn search_target_for_object_ref(
             }
         }
         ObjectRef::StarMap { object_id, .. } => target.starmap_id = Some(object_id.clone()),
-        ObjectRef::StarMapNode { object_id, .. } => target.node_id = Some(object_id.clone()),
-        ObjectRef::StarMapEmbed { object_id, .. } => target.embed_id = Some(object_id.clone()),
-        ObjectRef::NamedEntry { .. } => {}
+        ObjectRef::NodeAsset { object_id, .. } => target.node_id = Some(object_id.clone()),
+        ObjectRef::NodeInstance {
+            starmap_id,
+            object_id,
+        } => {
+            target.starmap_id = Some(starmap_id.clone());
+            target.node_id = Some(object_id.clone());
+        }
+        ObjectRef::EmbedInstance {
+            starmap_id,
+            object_id,
+        } => {
+            target.starmap_id = Some(starmap_id.clone());
+            target.embed_id = Some(object_id.clone());
+        }
+        ObjectRef::CanvasAnchor {
+            starmap_id,
+            object_id,
+            ..
+        } => {
+            target.starmap_id = Some(starmap_id.clone());
+            target.node_id = Some(object_id.clone());
+        }
     }
     Ok(target)
 }
 
-fn object_ref_search_text(store: &AnnotationStore, object_ref: &ObjectRef) -> Result<String> {
+fn object_ref_search_text(
+    store: &AnnotationStore,
+    object_ref: &ObjectRef,
+    app_data_root: Option<&Path>,
+) -> Result<String> {
     let kind = object_ref_kind_label(object_ref);
+    let fallback = || format!("{} {}", kind, object_ref.object_id());
     match object_ref {
         ObjectRef::NamedEntry { object_id, .. } => Ok(store
             .get_named_entry(object_id)?
@@ -354,7 +423,7 @@ fn object_ref_search_text(store: &AnnotationStore, object_ref: &ObjectRef) -> Re
                 names.extend(entry.aliases);
                 format!("{} {}", kind, names.join(" "))
             })
-            .unwrap_or_else(|| format!("{} {}", kind, object_ref.object_id()))),
+            .unwrap_or_else(fallback)),
         ObjectRef::TextAnchor { object_id, .. } => Ok(store
             .get_text_anchor(object_id)?
             .map(|anchor| {
@@ -363,9 +432,135 @@ fn object_ref_search_text(store: &AnnotationStore, object_ref: &ObjectRef) -> Re
                     kind, anchor.chapter_id, anchor.start_byte, anchor.end_byte
                 )
             })
-            .unwrap_or_else(|| format!("{} {}", kind, object_ref.object_id()))),
-        _ => Ok(format!("{} {}", kind, object_ref.object_id())),
+            .unwrap_or_else(fallback)),
+        ObjectRef::NodeAsset { object_id, .. } => {
+            Ok(node_asset_search_text(app_data_root, object_id).unwrap_or_else(fallback))
+        }
+        ObjectRef::NodeInstance {
+            starmap_id,
+            object_id,
+        } => Ok(
+            canvas_node_search_text(app_data_root, starmap_id, object_id).unwrap_or_else(fallback),
+        ),
+        ObjectRef::EmbedInstance {
+            starmap_id,
+            object_id,
+        } => Ok(
+            canvas_embed_search_text(app_data_root, starmap_id, object_id).unwrap_or_else(fallback),
+        ),
+        ObjectRef::CanvasAnchor {
+            object_id,
+            anchor_id,
+            ..
+        } => Ok(
+            canvas_anchor_search_text(app_data_root, object_id, anchor_id).unwrap_or_else(fallback),
+        ),
+        _ => Ok(fallback()),
     }
+}
+
+fn canvas_route_search_text(route: &crate::object_ref::CanvasRoute) -> String {
+    match &route.target {
+        crate::starmap::types::StarMapTargetDetail::Starmap => "星图".to_string(),
+        crate::starmap::types::StarMapTargetDetail::Node { node_id } => {
+            format!("星图节点 {node_id}")
+        }
+        crate::starmap::types::StarMapTargetDetail::Anchor { node_id, anchor_id } => {
+            format!("星图锚点 {node_id}/{anchor_id}")
+        }
+        crate::starmap::types::StarMapTargetDetail::ChapterRange {
+            chapter_id,
+            range_start,
+            range_end,
+            ..
+        } => match (range_start, range_end) {
+            (Some(start), Some(end)) => format!("章节 {chapter_id} {start}-{end}"),
+            _ => format!("章节 {chapter_id}"),
+        },
+        crate::starmap::types::StarMapTargetDetail::Entity {
+            entity_type,
+            entity_id,
+        } => format!("{entity_type} {entity_id}"),
+    }
+}
+
+/// Shared node asset text. The definition is the single content owner; every
+/// canvas instance projects the same text.
+fn node_asset_search_text(app_data_root: Option<&Path>, asset_id: &str) -> Option<String> {
+    let app_data_root = app_data_root?;
+    let definition =
+        crate::starmap::library::load_node_definition(app_data_root, asset_id).ok()??;
+    Some(node_definition_text(&definition.title, &definition.content))
+}
+
+fn canvas_node_search_text(
+    app_data_root: Option<&Path>,
+    starmap_id: &str,
+    instance_id: &str,
+) -> Option<String> {
+    let store = load_canvas_store(app_data_root, starmap_id)?;
+    let node = store.get_node(instance_id)?;
+    Some(node_definition_text(&node.title, &node.content))
+}
+
+fn canvas_embed_search_text(
+    app_data_root: Option<&Path>,
+    starmap_id: &str,
+    instance_id: &str,
+) -> Option<String> {
+    let store = load_canvas_store(app_data_root, starmap_id)?;
+    let embed = store.get_embed(instance_id)?;
+    Some(
+        embed
+            .label
+            .clone()
+            .unwrap_or_else(|| embed.target_starmap_id.clone()),
+    )
+}
+
+fn canvas_anchor_search_text(
+    app_data_root: Option<&Path>,
+    asset_id: &str,
+    anchor_id: &str,
+) -> Option<String> {
+    let app_data_root = app_data_root?;
+    let definition =
+        crate::starmap::library::load_node_definition(app_data_root, asset_id).ok()??;
+    let anchor = definition
+        .anchors
+        .iter()
+        .find(|anchor| anchor.anchor_id == anchor_id)?;
+    Some(
+        anchor
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("锚点 {}", anchor.anchor_id)),
+    )
+}
+
+fn load_canvas_store(
+    app_data_root: Option<&Path>,
+    starmap_id: &str,
+) -> Option<crate::starmap::store::StarMapStore> {
+    let app_data_root = app_data_root?;
+    let mut store = crate::starmap::store::StarMapStore::new(app_data_root, starmap_id);
+    store.load_full().ok()?;
+    Some(store)
+}
+
+fn node_definition_text(
+    title: &str,
+    content: &crate::starmap::semantic::StarMapNodeContent,
+) -> String {
+    let mut parts = Vec::new();
+    if !title.is_empty() {
+        parts.push(title.to_string());
+    }
+    let text = content.search_text();
+    if !text.is_empty() {
+        parts.push(text);
+    }
+    parts.join(" ")
 }
 
 fn object_ref_kind_label(object_ref: &ObjectRef) -> &'static str {
@@ -375,8 +570,10 @@ fn object_ref_kind_label(object_ref: &ObjectRef) -> &'static str {
         ObjectRef::Chapter { .. } => "章节",
         ObjectRef::TextAnchor { .. } => "正文选区",
         ObjectRef::StarMap { .. } => "星图",
-        ObjectRef::StarMapNode { .. } => "星图节点",
-        ObjectRef::StarMapEmbed { .. } => "星图嵌入",
+        ObjectRef::NodeAsset { .. } => "节点素材",
+        ObjectRef::NodeInstance { .. } => "画布节点",
+        ObjectRef::EmbedInstance { .. } => "画布嵌入",
+        ObjectRef::CanvasAnchor { .. } => "画布锚点",
         ObjectRef::NamedEntry { .. } => "专有名词",
     }
 }
@@ -426,7 +623,9 @@ pub fn extract_starmap_entries(
                             .ok()
                             .and_then(|s| serde_json::from_str(&s).ok());
                     if let Some(n) = node {
-                        let content = extract_node_search_text(&n.content, &n.tags);
+                        // Issue #1060：节点上的旧 `tags` 字段已迁到 annotations
+                        // 仓库，星图实体条目不再携带第二份标签文本。
+                        let content = extract_node_search_text(&n.content);
                         if !n.title.is_empty() || !content.is_empty() {
                             entries.push(extract_starmap_node_entry(
                                 &sid,
@@ -1080,19 +1279,6 @@ fn load_chapter_title(chapter_path: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn extract_node_search_text(
-    content: &crate::starmap::semantic::StarMapNodeContent,
-    tags: &[String],
-) -> String {
-    let mut parts = Vec::new();
-    let text = content.search_text();
-    if !text.is_empty() {
-        parts.push(text);
-    }
-    for tag in tags {
-        if !tag.is_empty() {
-            parts.push(tag.clone());
-        }
-    }
-    parts.join(" ")
+fn extract_node_search_text(content: &crate::starmap::semantic::StarMapNodeContent) -> String {
+    content.search_text()
 }

@@ -120,6 +120,28 @@ impl<'a> ResolverGraphProvider<'a> {
             return Ok(None);
         }
         let content = std::fs::read_to_string(&path).map_err(|_| ResolverReadError::ReadFailed)?;
+
+        // schema 3+ 的画布节点文件是 StarMapNodeInstance（只存实例信息），
+        // 共享内容在 starmaps/library 中。旧格式则直接在节点文件里存完整
+        // StarMapNode。这里先按新格式解析，失败再按旧格式兼容。
+        if let Ok(instance) =
+            serde_json::from_str::<crate::starmap::types::StarMapNodeInstance>(&content)
+        {
+            if instance.instance_id != node_id {
+                return Err(ResolverReadError::CorruptStarmap);
+            }
+            let definition = crate::starmap::library::load_node_definition(
+                self.app_data_root,
+                &instance.asset_id,
+            )
+            .map_err(|_| ResolverReadError::CorruptStarmap)?
+            .ok_or(ResolverReadError::CorruptStarmap)?;
+            if definition.asset_id != instance.asset_id {
+                return Err(ResolverReadError::CorruptStarmap);
+            }
+            return Ok(Some(definition.instantiate_instance(&instance)));
+        }
+
         let node = serde_json::from_str::<crate::starmap::types::StarMapNode>(&content)
             .map_err(|_| ResolverReadError::CorruptStarmap)?;
         if node.id != node_id {

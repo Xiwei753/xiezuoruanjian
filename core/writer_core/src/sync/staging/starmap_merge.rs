@@ -97,14 +97,17 @@ fn is_valid_bucket(bucket: &str) -> bool {
 }
 
 /// 判断 rel_path 是否是星图对象文件
-/// `starmaps/<id>/{nodes,edges,embeds,links}/<bucket>/<obj_id>.json`。
+/// `starmaps/<id>/{nodes,edges,embeds}/<bucket>/<obj_id>.json`。
+///
+/// 导航链接不在星图包内（唯一持久化所有者是 annotations 仓库），因此
+/// `starmaps/<id>/links/**` 不再参与星图对象三方合并。
 pub(crate) fn is_starmap_object_file_path(rel_path: &str) -> bool {
     let normalized = normalize_path(rel_path);
     let parts: Vec<&str> = normalized.split('/').collect();
     parts.len() == 5
         && parts[0] == "starmaps"
         && !parts[1].is_empty()
-        && matches!(parts[2], "nodes" | "edges" | "embeds" | "links")
+        && matches!(parts[2], "nodes" | "edges" | "embeds")
         && is_valid_bucket(parts[3])
         && parts[4].ends_with(".json")
         && parts[4].len() > ".json".len()
@@ -185,7 +188,7 @@ pub(crate) enum ObjectMergeDecision {
 /// | Some | Some  | Some     | l==b, i!=b | ApplyIncoming |
 /// | Some | Some  | Some     | l!=b, i==b | KeepLocal |
 /// | Some | Some  | Some     | l!=b, i!=b, l!=i | Conflict(BothChanged) |
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn merge_starmap_object(
     base: Option<&[u8]>,
     local: Option<&[u8]>,
@@ -527,6 +530,9 @@ pub(crate) struct MemberIdSets {
     node_ids: HashSet<String>,
     edge_ids: HashSet<String>,
     embed_ids: HashSet<String>,
+    /// 链接成员集合不再参与合并：链接唯一持久化在 annotations 仓库，
+    /// `GraphMeta.link_ids` 只是派生缓存。保留空集合供 tombstone 判定
+    /// （未知/不在成员表的 link tombstone 保守保留）。
     link_ids: HashSet<String>,
 }
 
@@ -535,7 +541,6 @@ pub(crate) struct MergedMemberIds {
     node_ids: Vec<String>,
     edge_ids: Vec<String>,
     embed_ids: Vec<String>,
-    link_ids: Vec<String>,
     sets: MemberIdSets,
 }
 
@@ -1062,14 +1067,7 @@ fn merge_member_ids(
         base_meta.map(|m| &m.embed_revisions),
         incoming_meta.map(|m| &m.embed_revisions),
     );
-    let link_local_mod = extract_modified_ids(
-        base_meta.map(|m| &m.link_revisions),
-        local_meta.map(|m| &m.link_revisions),
-    );
-    let link_incoming_mod = extract_modified_ids(
-        base_meta.map(|m| &m.link_revisions),
-        incoming_meta.map(|m| &m.link_revisions),
-    );
+    // 链接成员集合不参与三方合并（annotations 仓库是唯一持久化所有者）。
 
     let node_ids = three_way_merge_id_set(
         base_meta.map(|m| &m.node_ids),
@@ -1092,13 +1090,7 @@ fn merge_member_ids(
         &embed_local_mod,
         &embed_incoming_mod,
     );
-    let link_ids = three_way_merge_id_set(
-        base_meta.map(|m| &m.link_ids),
-        local_meta.map(|m| &m.link_ids),
-        incoming_meta.map(|m| &m.link_ids),
-        &link_local_mod,
-        &link_incoming_mod,
-    );
+    let link_ids: Vec<String> = Vec::new();
 
     let sets = MemberIdSets {
         node_ids: node_ids.iter().cloned().collect(),
@@ -1111,7 +1103,6 @@ fn merge_member_ids(
         node_ids,
         edge_ids,
         embed_ids,
-        link_ids,
         sets,
     }
 }
@@ -1149,12 +1140,9 @@ fn merge_all_revisions(
         meta_revisions(incoming_meta, |m| &m.embed_revisions),
         &sets.embed_ids,
     );
-    let link = merge_revisions(
-        meta_revisions(base_meta, |m| &m.link_revisions),
-        meta_revisions(local_meta, |m| &m.link_revisions),
-        meta_revisions(incoming_meta, |m| &m.link_revisions),
-        &sets.link_ids,
-    );
+    // 链接增量由 annotations 记录自身的 `updatedAtMs` 承担，不再合并
+    // graph.json 的链接 revision 缓存。
+    let link = HashMap::new();
     MergedRevisions {
         node,
         edge,
@@ -1198,13 +1186,10 @@ pub(crate) fn rebuild_derived_indexes(
     object_contents: &HashMap<(String, String), Vec<u8>>,
 ) -> Result<DerivedIndexes> {
     use crate::starmap::package_storage::bucket_for_id;
-    use crate::starmap::types::{
-        StarMapEdge, StarMapEmbed, StarMapLink, StarMapNodeInstance,
-    };
+    use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapNodeInstance};
 
     let mut edge_relation_index: Vec<EdgeRelationIndex> = Vec::new();
     let mut embed_host_index: Vec<EmbedHostIndex> = Vec::new();
-    let mut link_relation_index: Vec<LinkRelationIndex> = Vec::new();
 
     // 重建 edge_relation_index
     for edge_id in &member_ids.edge_ids {
@@ -1231,18 +1216,9 @@ pub(crate) fn rebuild_derived_indexes(
         }
     }
 
-    // 重建 link_relation_index
-    for link_id in &member_ids.link_ids {
-        let key = ("link".to_string(), link_id.clone());
-        if let Some(bytes) = object_contents.get(&key) {
-            let link: StarMapLink = serde_json::from_slice(bytes)?;
-            link_relation_index.push(LinkRelationIndex {
-                link_id: link.link_id.clone(),
-                source: link.source.clone(),
-                target: link.target.clone(),
-            });
-        }
-    }
+    // 链接索引由 StarMapStore 的 annotations 投影实时构建，不再从星图包内
+    // 链接对象文件重建；合并输出保持空 vec。
+    let link_relation_index: Vec<LinkRelationIndex> = Vec::new();
 
     // 校验节点实例身份。画布节点文件只保存实例引用，不含 kind/title 等
     // 素材定义字段；按旧 StarMapNode 解析会把整个星图组打成 missing field id。
@@ -1253,13 +1229,12 @@ pub(crate) fn rebuild_derived_indexes(
                 "starmaps/{starmap_id}/nodes/{}/{node_id}.json",
                 bucket_for_id(node_id)
             );
-            let instance: StarMapNodeInstance =
-                serde_json::from_slice(bytes).map_err(|error| {
-                    crate::Error::Other(format!(
-                        "parse starmap node instance failed: path={rel_path} \
+            let instance: StarMapNodeInstance = serde_json::from_slice(bytes).map_err(|error| {
+                crate::Error::Other(format!(
+                    "parse starmap node instance failed: path={rel_path} \
                          object_type=node object_id={node_id} starmap_id={starmap_id}: {error}"
-                    ))
-                })?;
+                ))
+            })?;
             if instance.instance_id != *node_id {
                 return Err(crate::Error::Other(format!(
                     "starmap node instance identity mismatch: path={rel_path} \
@@ -1297,7 +1272,7 @@ fn dir_to_object_type(dir: &str) -> Option<&'static str> {
         "nodes" => Some("node"),
         "edges" => Some("edge"),
         "embeds" => Some("embed"),
-        "links" => Some("link"),
+        // 链接不在星图包内：`starmaps/<id>/links/**` 不再参与对象级合并。
         _ => None,
     }
 }
@@ -1579,12 +1554,12 @@ pub(crate) fn resolve_graph_lifecycle_with_change_facts(
 /// - `objects`：每个对象文件的 `(rel_path, object_type, object_id, base, local, incoming)`
 ///
 /// 纯计算，不读磁盘。调用方（`run.rs`）负责读取文件并组装输入。
+#[cfg(test)]
 #[allow(
     clippy::type_complexity,
     clippy::too_many_lines,
     clippy::too_many_arguments
 )]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn merge_starmap_graph_with_objects(
     starmap_id: &str,
     graph_base: Option<&[u8]>,
@@ -1704,7 +1679,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
     let mut node_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
     let mut edge_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
     let mut embed_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
-    let mut link_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
 
     for (rel_path, object_type, object_id, base, local, incoming) in objects {
         let version_key = rel_path.to_string_lossy().to_string();
@@ -1750,9 +1724,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
             "embed" => {
                 embed_decisions.insert(object_id.clone(), decision.clone());
             }
-            "link" => {
-                link_decisions.insert(object_id.clone(), decision.clone());
-            }
             _ => {}
         }
 
@@ -1780,7 +1751,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
     let mut final_node: HashSet<String> = HashSet::new();
     let mut final_edge: HashSet<String> = HashSet::new();
     let mut final_embed: HashSet<String> = HashSet::new();
-    let mut final_link: HashSet<String> = HashSet::new();
     for (obj_type, obj_id) in final_objects.keys() {
         match obj_type.as_str() {
             "node" => {
@@ -1792,9 +1762,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
             "embed" => {
                 final_embed.insert(obj_id.clone());
             }
-            "link" => {
-                final_link.insert(obj_id.clone());
-            }
             _ => {}
         }
     }
@@ -1803,13 +1770,14 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
     let node_ids = reconcile_member_list(&initial_members.node_ids, &final_node);
     let edge_ids = reconcile_member_list(&initial_members.edge_ids, &final_edge);
     let embed_ids = reconcile_member_list(&initial_members.embed_ids, &final_embed);
-    let link_ids = reconcile_member_list(&initial_members.link_ids, &final_link);
+    // 链接成员集合不再由 graph.json 合并产生：链接由 annotations 仓库承担，
+    // 这里的派生缓存保持为空，统一 Store 加载时按仓库重建。
+    let link_ids: Vec<String> = Vec::new();
 
     // --- 6. 检查一致性：成员表中的每个 ID 必须有对应胜出对象 bytes ---
     check_member_object_consistency("node", &node_ids, &final_objects)?;
     check_member_object_consistency("edge", &edge_ids, &final_objects)?;
     check_member_object_consistency("embed", &embed_ids, &final_objects)?;
-    check_member_object_consistency("link", &link_ids, &final_objects)?;
 
     let sets = MemberIdSets {
         node_ids: node_ids.iter().cloned().collect(),
@@ -1821,7 +1789,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
         node_ids: node_ids.clone(),
         edge_ids: edge_ids.clone(),
         embed_ids: embed_ids.clone(),
-        link_ids: link_ids.clone(),
         sets,
     };
 
@@ -1882,8 +1849,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
             .iter()
             .map(|(k, v)| (k.clone(), v))
             .collect();
-        let link_refs: HashMap<String, &ObjectMergeDecision> =
-            link_decisions.iter().map(|(k, v)| (k.clone(), v)).collect();
         apply_revision_by_decisions(
             &mut revisions.node,
             &node_refs,
@@ -1900,12 +1865,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
             &mut revisions.embed,
             &embed_refs,
             &member_ids.sets.embed_ids,
-            package_revision,
-        );
-        apply_revision_by_decisions(
-            &mut revisions.link,
-            &link_refs,
-            &member_ids.sets.link_ids,
             package_revision,
         );
     }
@@ -2143,7 +2102,8 @@ mod tests {
         assert!(is_starmap_object_file_path(
             "starmaps/sm_1/embeds/05/inst_c.json"
         ));
-        assert!(is_starmap_object_file_path(
+        // 链接不在星图包内，不参与对象级合并。
+        assert!(!is_starmap_object_file_path(
             "starmaps/sm_1/links/0a/link_d.json"
         ));
         assert!(is_starmap_object_file_path(

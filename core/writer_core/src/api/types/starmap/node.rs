@@ -4,11 +4,12 @@ use super::*;
 #[serde(rename_all = "camelCase")]
 pub struct StarMapNodeDto {
     pub id: String,
+    /// 共享素材 ID；标签、链接按它绑定，多个画布实例投影同一内容。
+    #[serde(default)]
+    pub asset_id: String,
     pub title: String,
     pub kind: StarMapNodeKindDto,
     pub payload: Option<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
     #[serde(default)]
     pub content: StarMapNodeContentDto,
     #[serde(default)]
@@ -22,20 +23,23 @@ pub struct StarMapNodeDto {
     pub provenance: StarMapProvenanceDto,
     /// 画布实例创建时间，不使用共享本体的创建时间。
     pub created_at: u64,
-    /// 实例位置修订与共享本体修订的较大值；用于乐观并发检查。
+    /// 画布实例 revision；只随位置等实例事实变化。
     pub updated_at: u64,
+    /// 共享素材本体 revision；只随标题/正文/样式等内容变化。
+    #[serde(default)]
+    pub definition_revision: u64,
 }
 
 impl From<crate::starmap::types::StarMapNode> for StarMapNodeDto {
     fn from(n: crate::starmap::types::StarMapNode) -> Self {
         Self {
+            asset_id: n.resolved_asset_id().to_string(),
             id: n.id,
             title: n.title,
             kind: n.kind.into(),
             payload: n
                 .payload
                 .map(|v| serde_json::to_string(&v).unwrap_or_default()),
-            tags: n.tags,
             content: n.content.into(),
             anchors: n.anchors.into_iter().map(Into::into).collect(),
             portal: n.portal.map(Into::into),
@@ -44,6 +48,7 @@ impl From<crate::starmap::types::StarMapNode> for StarMapNodeDto {
             provenance: n.provenance.into(),
             created_at: n.created_at,
             updated_at: n.updated_at,
+            definition_revision: n.definition_revision,
         }
     }
 }
@@ -58,10 +63,10 @@ impl TryFrom<StarMapNodeDto> for crate::starmap::types::StarMapNode {
             .transpose()?;
         Ok(Self {
             id: d.id,
+            asset_id: d.asset_id,
             title: d.title,
             kind: d.kind.into(),
             payload,
-            tags: d.tags,
             content: d.content.try_into()?,
             anchors: d
                 .anchors
@@ -74,6 +79,7 @@ impl TryFrom<StarMapNodeDto> for crate::starmap::types::StarMapNode {
             provenance: d.provenance.into(),
             created_at: d.created_at,
             updated_at: d.updated_at,
+            definition_revision: d.definition_revision,
         })
     }
 }
@@ -213,13 +219,15 @@ pub struct StarMapNodePatchDto {
     pub title: Option<String>,
     pub kind: Option<StarMapNodeKindDto>,
     pub payload: Option<Option<String>>,
-    pub tags: Option<Vec<String>>,
     pub content: Option<StarMapNodeContentDto>,
     pub anchors: Option<Vec<StarMapAnchorDto>>,
     pub portal: Option<Option<StarMapPortalDto>>,
     pub position: Option<StarMapPointDto>,
     pub style: Option<StarMapNodeStyleDto>,
     pub provenance: Option<StarMapProvenanceDto>,
+    /// 共享素材本体的 expected revision（`StarMapNodeDto.definitionRevision`）。
+    #[serde(default)]
+    pub expected_definition_revision: Option<u64>,
     /// 拖动轨迹关键点（仅平台端拖动提交时携带）；Core 只作为回放显示辅助。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trajectory: Vec<crate::writing_stats::starmap_proof::StarMapProofTrajectorySample>,
@@ -240,7 +248,6 @@ impl TryFrom<StarMapNodePatchDto> for crate::starmap::types::StarMapNodePatch {
             title: d.title,
             kind: d.kind.map(Into::into),
             payload,
-            tags: d.tags,
             content: d.content.map(|c| c.try_into()).transpose()?,
             anchors: d
                 .anchors
@@ -328,7 +335,6 @@ pub struct StarMapNodePatchInputDto {
     /// JSON C-ABI（Harmony）只发要改的字段，省略 `clearPayload` 即"不清空"。
     #[serde(default)]
     pub clear_payload: bool,
-    pub tags: Option<Vec<String>>,
     pub content: Option<StarMapNodeContentDto>,
     pub anchors: Option<Vec<StarMapAnchorDto>>,
     pub portal: Option<StarMapPortalDto>,
@@ -338,6 +344,8 @@ pub struct StarMapNodePatchInputDto {
     pub position: Option<StarMapPointDto>,
     pub style: Option<StarMapNodeStyleDto>,
     pub provenance: Option<StarMapProvenanceDto>,
+    #[serde(default)]
+    pub expected_definition_revision: Option<u64>,
 }
 
 impl From<StarMapNodePatchInputDto> for StarMapNodePatchDto {
@@ -350,7 +358,6 @@ impl From<StarMapNodePatchInputDto> for StarMapNodePatchDto {
             } else {
                 d.payload.map(Some)
             },
-            tags: d.tags,
             content: d.content,
             anchors: d.anchors,
             portal: if d.clear_portal {
@@ -361,6 +368,7 @@ impl From<StarMapNodePatchInputDto> for StarMapNodePatchDto {
             position: d.position,
             style: d.style,
             provenance: d.provenance,
+            expected_definition_revision: d.expected_definition_revision,
             trajectory: Vec::new(),
         }
     }

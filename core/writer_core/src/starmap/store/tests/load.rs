@@ -685,12 +685,14 @@ fn embed_host_index_preserves_host_endpoint() {
     );
 }
 #[test]
-fn list_links_with_diagnostics_returns_corrupt_for_bad_file() {
+fn list_links_with_diagnostics_reads_the_unified_repository() {
     use crate::starmap::types::StarMapLink;
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
+    // Issue #1060：链接唯一所有者在 annotations 仓库；add_link 写仓库，
+    // 星图包不再生成 links/*.json。
     let link = StarMapLink {
         link_id: "l1".to_string(),
         source: StarMapTargetPath {
@@ -711,47 +713,27 @@ fn list_links_with_diagnostics_returns_corrupt_for_bad_file() {
         created_at: 0,
         updated_at: 0,
     };
-    package_storage::save_link(dir.path(), &meta.starmap_id, &link).unwrap();
-
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    store.upsert_link(link.clone());
+    store.add_link(link.clone()).unwrap();
     store.enqueue_save(SaveQueueEntry::GraphMeta);
     store.flush().unwrap();
 
     let starmap_dir = dir.path().join("starmaps").join(&meta.starmap_id);
     let bucket = package_storage::bucket_for_id("l1");
-    let link_bucket = starmap_dir.join("links").join(bucket).join("l1.json");
-    let link_flat = starmap_dir.join("links").join("l1.json");
-    let link_path = if link_bucket.exists() {
-        link_bucket
-    } else {
-        link_flat
-    };
     assert!(
-        link_path.exists(),
-        "link file should exist at {:?}",
-        link_path
+        !starmap_dir
+            .join("links")
+            .join(bucket)
+            .join("l1.json")
+            .exists(),
+        "旧 links/*.json 不得再被写出"
     );
-    std::fs::write(&link_path, "THIS_IS_NOT_JSON_AT_ALL").unwrap();
 
     let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
-    let graph_json_path = starmap_dir.join("graph.json");
-    let content = std::fs::read_to_string(&graph_json_path).unwrap();
-    let gm: GraphMeta = serde_json::from_str(&content).unwrap();
-    store2.graph_meta = Some(gm);
-    store2.current_load_phase = Some(LoadPhase::GraphMeta);
-
     let result = store2.list_links_with_diagnostics().unwrap();
-    assert!(
-        !result.diagnostics.is_empty(),
-        "should have diagnostics for corrupt link, got {} diagnostics",
-        result.diagnostics.len()
-    );
-    assert_eq!(
-        result.diagnostics[0].kind,
-        LoadDiagnosticKind::Corrupt,
-        "should report Corrupt not Missing"
-    );
+    assert_eq!(result.items.len(), 1);
+    assert_eq!(result.items[0].link_id, "l1");
+    assert!(result.diagnostics.is_empty(), "仓库读取不应产生链接诊断");
 }
 
 #[test]

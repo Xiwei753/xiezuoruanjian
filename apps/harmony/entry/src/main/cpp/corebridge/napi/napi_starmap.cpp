@@ -116,6 +116,70 @@ static napi_value NativeUpdateStarMapNode(napi_env env, napi_callback_info info)
     return result;
 }
 
+// Issue #1060：只改共享素材本体（标题/正文/样式/portal/anchors），
+// expectedDefinitionRevision 在 patch_json 内；不带 position。
+static napi_value NativeUpdateStarMapNodeDefinition(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char starmap_id[256] = {0};
+    char node_id[256] = {0};
+    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
+    if (argc >= 2) napi_get_value_string_utf8(env, args[1], node_id, sizeof(node_id), nullptr);
+
+    size_t json_len = 0;
+    char* json = nullptr;
+    if (argc >= 3) {
+        napi_get_value_string_utf8(env, args[2], nullptr, 0, &json_len);
+        json = new char[json_len + 1];
+        napi_get_value_string_utf8(env, args[2], json, json_len + 1, &json_len);
+    } else {
+        json = new char[1];
+        json[0] = '\0';
+    }
+
+    napi_value result = ReturnJsonString(env,
+        writer_core_update_starmap_node_definition(starmap_id, node_id, json));
+    delete[] json;
+    return result;
+}
+
+// Issue #1060：只移动画布实例；expectedInstanceRevision 来自 node.updatedAt，
+// 以十进制字符串下发（空串 = 不校验，由 Core 语义决定）。
+static napi_value NativeMoveStarMapNode(napi_env env, napi_callback_info info) {
+    size_t argc = 4;
+    napi_value args[4];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char starmap_id[256] = {0};
+    char node_id[256] = {0};
+    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
+    if (argc >= 2) napi_get_value_string_utf8(env, args[1], node_id, sizeof(node_id), nullptr);
+
+    size_t json_len = 0;
+    char* json = nullptr;
+    if (argc >= 3) {
+        napi_get_value_string_utf8(env, args[2], nullptr, 0, &json_len);
+        json = new char[json_len + 1];
+        napi_get_value_string_utf8(env, args[2], json, json_len + 1, &json_len);
+    } else {
+        json = new char[1];
+        json[0] = '\0';
+    }
+
+    char expected_revision[32] = {0};
+    if (argc >= 4) {
+        napi_get_value_string_utf8(env, args[3], expected_revision, sizeof(expected_revision), nullptr);
+    }
+
+    napi_value result = ReturnJsonString(env,
+        writer_core_move_starmap_node(starmap_id, node_id, json,
+            expected_revision[0] == '\0' ? nullptr : expected_revision));
+    delete[] json;
+    return result;
+}
+
 static napi_value NativeAddStarMapEdge(napi_env env, napi_callback_info info) {
     size_t argc = 2;
     napi_value args[2];
@@ -428,6 +492,8 @@ napi_property_descriptor* getStarMapDescriptors(size_t* count) {
         {"nativeGetStarMapGraph", nullptr, NativeGetStarMapGraph, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCloseStarMapStore", nullptr, NativeCloseStarMapStore, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeUpdateStarMapNode", nullptr, NativeUpdateStarMapNode, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeUpdateStarMapNodeDefinition", nullptr, NativeUpdateStarMapNodeDefinition, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeMoveStarMapNode", nullptr, NativeMoveStarMapNode, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeAddStarMapEdge", nullptr, NativeAddStarMapEdge, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeAddStarMapNode", nullptr, NativeAddStarMapNode, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeAddStarMapEmbed", nullptr, NativeAddStarMapEmbed, nullptr, nullptr, nullptr, napi_default, nullptr},

@@ -139,6 +139,13 @@ char*  writer_core_create_starmap(const char* title, const char* description);
 char*  writer_core_delete_starmap(const char* starmap_id);
 char*  writer_core_rename_starmap(const char* starmap_id, const char* new_title);
 char*  writer_core_update_starmap_node(const char* starmap_id, const char* node_id, const char* patch_json);
+// Issue #1060：节点命令拆成"共享内容编辑"与"画布实例移动"。
+// - update_starmap_node_definition：patch_json 是 StarMapNodePatchInputDto，
+//   expectedDefinitionRevision 在 JSON 内；不能带 position。
+// - move_starmap_node：position_json 是 {"x":..,"y":..}；expected_instance_revision
+//   是十进制字符串（NULL 或空串表示不校验）。
+char*  writer_core_update_starmap_node_definition(const char* starmap_id, const char* node_id, const char* patch_json);
+char*  writer_core_move_starmap_node(const char* starmap_id, const char* node_id, const char* position_json, const char* expected_instance_revision);
 char*  writer_core_add_starmap_edge(const char* starmap_id, const char* edge_json);
 char*  writer_core_add_starmap_node(const char* starmap_id, const char* node_json, float x, float y);
 char*  writer_core_add_starmap_embed(const char* starmap_id, const char* embed_json);

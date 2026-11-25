@@ -255,10 +255,24 @@ Rectangle {
         if (result !== null) refresh()
     }
 
+    function objectRefKindLabel(kind) {
+        var labels = ({
+            project: qsTr("作品"), volume: qsTr("分卷"), chapter: qsTr("章节"),
+            textAnchor: qsTr("正文位置"), namedEntry: qsTr("登记名称"),
+            starMap: qsTr("星图"), nodeAsset: qsTr("星图节点"),
+            nodeInstance: qsTr("星图节点实例"), embedInstance: qsTr("子星图"),
+            starMapNode: qsTr("星图节点"),
+            starMapEmbed: qsTr("子星图")
+        })
+        return labels[kind] || String(kind || qsTr("引用"))
+    }
+
     function linkTargetLabel(link) {
         if (!link || !link.target) return qsTr("引用")
         var ref = link.target.objectRef || ({})
-        return ref.objectId || ref.kind || qsTr("引用")
+        var kindLabel = objectRefKindLabel(ref.kind)
+        var targetName = String(link.label || ref.objectId || "")
+        return targetName ? kindLabel + " · " + targetName : kindLabel
     }
 
     function openLink(link) {
@@ -475,7 +489,10 @@ Rectangle {
                     delegate: ItemDelegate {
                         required property var modelData
                         width: backlinkColumn.width
-                        text: modelData.source ? modelData.source.objectId : qsTr("来源")
+                        text: modelData.source
+                              ? root.objectRefKindLabel(modelData.source.kind) + " · "
+                                + String(modelData.source.objectId || "")
+                              : qsTr("来源")
                         icon.name: "go-jump"
                         onClicked: root.targetActivated({ objectRef: modelData.source })
                     }

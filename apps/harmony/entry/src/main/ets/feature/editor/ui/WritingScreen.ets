@@ -1891,8 +1891,15 @@ export struct WritingScreen {
     const output: AnnotationTargetDto[] = []
     const keys: Set<string> = new Set<string>()
     for (const target of targets) {
+      // #1060：目标要么是对象引用，要么是画布导航路径，两种身份分开去重。
       const ref = target.objectRef
-      const key: string = `${ref.kind}:${ref.projectId}:${ref.objectId}`
+      const route = target.canvasRoute
+      let key: string = 'unknown'
+      if (ref !== undefined) {
+        key = `${ref.kind}:${ref.projectId}:${ref.objectId}`
+      } else if (route !== undefined) {
+        key = `canvas:${route.starmapId}:${route.segments.length}:${route.target.nodeId ?? ''}:${route.target.anchorId ?? ''}`
+      }
       if (keys.has(key)) continue
       keys.add(key)
       output.push(target)
@@ -1987,8 +1994,26 @@ export struct WritingScreen {
     await this.openHyperlinkTarget(choices[0].target)
   }
 
+  /** 画布导航目标的标题：解析完整路径后，用终点节点标题作为链接文字。 */
+  private async canvasRouteLabel(target: AnnotationTargetDto): Promise<string> {
+    const route = target.canvasRoute
+    if (route === undefined) return '链接目标'
+    const nodeId: string | null = route.target.nodeId
+    if (nodeId === null) return '星图内的跳转'
+    const resolved = await this.bridge.resolveStarMapPath(route.starmapId, route.segments)
+    if (resolved.success && resolved.data !== undefined) {
+      const graph = await this.bridge.getStarMapGraph(resolved.data.finalStarmapId)
+      if (graph.success && graph.data !== undefined) {
+        const node = graph.data.nodes.find((item) => item.id === nodeId)
+        if (node !== undefined) return node.title
+      }
+    }
+    return '星图内的跳转'
+  }
+
   private async hyperlinkTargetLabel(target: AnnotationTargetDto): Promise<string> {
     const ref = target.objectRef
+    if (ref === undefined) return await this.canvasRouteLabel(target)
     if (ref.kind === 'namedEntry') {
       const result = await this.annotationBridge.listNamedEntries(ref.projectId)
       const entry = result.data?.find((item) => item.entryId === ref.objectId && item.deletedAtMs === null)
@@ -2010,31 +2035,106 @@ export struct WritingScreen {
         }
       }
     }
-    if (ref.kind === 'starMap' || ref.kind === 'starMapNode' || ref.kind === 'starMapEmbed') {
+    if (ref.kind === 'starMap') {
       const maps = await this.bridge.listStarMapsForProject(ref.projectId)
       if (maps.success && maps.data !== undefined) {
-        for (const map of maps.data) {
-          if (ref.kind === 'starMap' && map.starmapId === ref.objectId) return map.title
-          if (ref.kind === 'starMapNode' || ref.kind === 'starMapEmbed') {
-            const graph = await this.bridge.getStarMapGraph(map.starmapId)
-            if (!graph.success || graph.data === undefined) continue
-            if (ref.kind === 'starMapNode') {
-              const node = graph.data.nodes.find((item) => item.id === ref.objectId)
-              if (node !== undefined) return node.title
-            } else {
-              const embed = graph.data.embeds.find((item) => item.instanceId === ref.objectId)
-              if (embed !== undefined) return embed.label ?? map.title
-            }
+        const map = maps.data.find((item) => item.starmapId === ref.objectId)
+        if (map !== undefined) return map.title
+      }
+    }
+    if (ref.kind === 'nodeInstance' || ref.kind === 'embedInstance') {
+      const starmapId: string | undefined = ref.starmapId
+      if (starmapId !== undefined) {
+        const graph = await this.bridge.getStarMapGraph(starmapId)
+        if (graph.success && graph.data !== undefined) {
+          if (ref.kind === 'nodeInstance') {
+            const node = graph.data.nodes.find((item) => item.id === ref.objectId)
+            if (node !== undefined) return node.title
+          } else {
+            const embed = graph.data.embeds.find((item) => item.instanceId === ref.objectId)
+            if (embed !== undefined) return embed.label ?? starmapId
           }
         }
       }
     }
+    // #1060：nodeAsset 是共享素材，链接按 assetId 绑定；标题从任一投影实例读取。
+    if (ref.kind === 'nodeAsset') {
+      const targetJson: string = JSON.stringify({ kind: 'node', assetId: ref.objectId })
+      const references = await this.bridge.listStarMapAssetReferences(targetJson)
+      if (references.success && references.data !== undefined) {
+        for (const reference of references.data) {
+          const graph = await this.bridge.getStarMapGraph(reference.starmapId)
+          if (!graph.success || graph.data === undefined) continue
+          const node = graph.data.nodes.find((item) => item.id === reference.instanceId)
+          if (node !== undefined) return node.title
+        }
+      }
+      return '星图节点素材'
+    }
+    if (ref.kind === 'canvasAnchor') return '星图节点端口'
     if (ref.kind === 'textAnchor') return '正文选区'
     return `${ref.kind} · ${ref.objectId}`
   }
 
+  /** 按画布实例打开星图：先确认实例还在，再带上焦点对象进星图页。 */
+  private async openStarMapAtObject(starmapId: string, focusKind: 'node' | 'embed',
+    focusId: string): Promise<void> {
+    const graph = await this.bridge.getStarMapGraph(starmapId)
+    if (!graph.success || graph.data === undefined) {
+      this.showHyperlinkToast('星图目标无法打开')
+      return
+    }
+    const found: boolean = focusKind === 'node'
+      ? graph.data.nodes.some((item) => item.id === focusId)
+      : graph.data.embeds.some((item) => item.instanceId === focusId)
+    if (!found) {
+      this.showHyperlinkToast('星图目标已删除或不存在')
+      return
+    }
+    const meta = await this.bridge.getStarMap(starmapId)
+    const starmapTitle: string = meta.success && meta.data !== undefined ? meta.data.title : ''
+    const param: StarMapRouteParams = {
+      starmapId: starmapId,
+      starmapTitle: starmapTitle,
+      focusKind: focusKind,
+      focusId: focusId
+    }
+    this.navPathStack.pushPath({ name: Routes.StarMap, param: param })
+  }
+
+  /** 打开画布导航目标：Core 负责逐段穿越，最终落到哪张画布由 Core 决定。 */
+  private async openCanvasRouteTarget(target: AnnotationTargetDto): Promise<void> {
+    const route = target.canvasRoute
+    if (route === undefined) {
+      this.showHyperlinkToast('链接目标不可用')
+      return
+    }
+    const resolved = await this.bridge.resolveStarMapPath(route.starmapId, route.segments)
+    if (!resolved.success || resolved.data === undefined) {
+      this.showHyperlinkToast(resolved.userMessage ?? '星图路径无法解析')
+      return
+    }
+    const finalStarmapId: string = resolved.data.finalStarmapId
+    const nodeId: string | null = route.target.nodeId
+    if (nodeId !== null) {
+      await this.openStarMapAtObject(finalStarmapId, 'node', nodeId)
+      return
+    }
+    const meta = await this.bridge.getStarMap(finalStarmapId)
+    if (!meta.success || meta.data === undefined) {
+      this.showHyperlinkToast('星图目标无法打开')
+      return
+    }
+    const param: StarMapRouteParams = { starmapId: finalStarmapId, starmapTitle: meta.data.title }
+    this.navPathStack.pushPath({ name: Routes.StarMap, param: param })
+  }
+
   private async openHyperlinkTarget(target: AnnotationTargetDto): Promise<void> {
     const ref = target.objectRef
+    if (ref === undefined) {
+      await this.openCanvasRouteTarget(target)
+      return
+    }
     if (ref.kind === 'namedEntry') {
       this.annotationTarget = ref
       this.annotationPanelOpen = true
@@ -2111,38 +2211,49 @@ export struct WritingScreen {
       this.navPathStack.pushPath({ name: Routes.Workspace, param: param })
       return
     }
-    if (ref.kind === 'starMap' || ref.kind === 'starMapNode' || ref.kind === 'starMapEmbed') {
+    if (ref.kind === 'starMap') {
       const maps = await this.bridge.listStarMapsForProject(ref.projectId)
       if (!maps.success || maps.data === undefined) {
         this.showHyperlinkToast(maps.userMessage ?? '星图目标无法打开')
         return
       }
       for (const map of maps.data) {
-        if (ref.kind === 'starMap' && map.starmapId === ref.objectId) {
+        if (map.starmapId === ref.objectId) {
           this.navPathStack.pushPath({ name: Routes.StarMap, param: {
             starmapId: map.starmapId, starmapTitle: map.title
           } as StarMapRouteParams })
           return
         }
-        if (ref.kind === 'starMapNode' || ref.kind === 'starMapEmbed') {
-          const graph = await this.bridge.getStarMapGraph(map.starmapId)
-          if (!graph.success || graph.data === undefined) continue
-          const found: boolean = ref.kind === 'starMapNode'
-            ? graph.data.nodes.some((item) => item.id === ref.objectId)
-            : graph.data.embeds.some((item) => item.instanceId === ref.objectId)
-          if (found) {
-            const param: StarMapRouteParams = {
-              starmapId: map.starmapId,
-              starmapTitle: map.title,
-              focusKind: ref.kind === 'starMapNode' ? 'node' : 'embed',
-              focusId: ref.objectId
-            }
-            this.navPathStack.pushPath({ name: Routes.StarMap, param: param })
-            return
-          }
-        }
       }
       this.showHyperlinkToast('星图目标已删除或不存在')
+      return
+    }
+    // #1060：画布实例自带 starmapId，直接按所在画布打开，不再遍历作品全部星图。
+    if (ref.kind === 'nodeInstance' || ref.kind === 'embedInstance') {
+      const starmapId: string | undefined = ref.starmapId
+      if (starmapId === undefined) {
+        this.showHyperlinkToast('星图目标缺少画布信息')
+        return
+      }
+      const focusKind: 'node' | 'embed' = ref.kind === 'nodeInstance' ? 'node' : 'embed'
+      await this.openStarMapAtObject(starmapId, focusKind, ref.objectId)
+      return
+    }
+    // #1060：共享节点素材按 assetId 找引用实例，优先停在当前作品引用的画布。
+    if (ref.kind === 'nodeAsset') {
+      const targetJson: string = JSON.stringify({ kind: 'node', assetId: ref.objectId })
+      const references = await this.bridge.listStarMapAssetReferences(targetJson)
+      if (!references.success || references.data === undefined || references.data.length === 0) {
+        this.showHyperlinkToast('星图节点素材已删除或不存在')
+        return
+      }
+      const reference = references.data.find((item) => item.projectId === this.projectId)
+        ?? references.data[0]
+      await this.openStarMapAtObject(reference.starmapId, 'node', reference.instanceId)
+      return
+    }
+    if (ref.kind === 'canvasAnchor') {
+      this.showHyperlinkToast('星图节点端口暂不支持直接打开')
       return
     }
     this.showHyperlinkToast('暂不支持打开此链接目标')

@@ -9,15 +9,25 @@ function nativeError<T>(e: Object): ResultEnvelope<T> {
 }
 
 /**
- * StarMapNodePatchInputDto 请求体（#984）：platform 只发要改的字段。
+ * StarMapNodePatchInputDto 请求体（#1060）：platform 只发要改的字段。
  *
  * 字段都是可选的，不传的字段用 undefined 表示；JSON.stringify 会省略 undefined，
- * Core 的 patch 语义是"省略 = 不改"，所以不能拿 null 占位（null 表示要清空）。
+ * Core 的 patch 语义是"省略 = 不改"。
+ * - 内容编辑带 `expectedDefinitionRevision`，不带 `position`；
+ * - `payload` / `portal` 的清空在 C ABI 里用 `clearPayload` / `clearPortal` 表达。
  */
 interface StarMapNodePatchBody {
   title?: string
+  kind?: string
+  payload?: string
+  clearPayload?: boolean
   content?: StarMapNodeContent
-  position?: StarMapPoint
+  anchors?: StarMapAnchor[]
+  portal?: StarMapPortal
+  clearPortal?: boolean
+  style?: StarMapNodeStyle
+  provenance?: StarMapProvenance
+  expectedDefinitionRevision?: number
 }
 
 /** StarMapEmbedPatchInputDto 请求体：platform 只发要改的字段（position）。 */
@@ -37,13 +47,13 @@ interface StarMapEdgeAddBody {
   updatedAt: number
 }
 
-/** StarMapNodeDto 请求体：完整节点 JSON，由平台端构造。 */
+/** StarMapNodeDto 请求体：完整节点 JSON，由平台端构造（#1060：无 tags）。 */
 interface StarMapNodeAddBody {
   id: string
+  assetId: string
   title: string
   kind: string
   payload: string | null
-  tags: string[]
   content: StarMapNodeContent
   anchors: StarMapAnchor[]
   portal: StarMapPortal | null
@@ -52,6 +62,7 @@ interface StarMapNodeAddBody {
   provenance: StarMapProvenance
   createdAt: number
   updatedAt: number
+  definitionRevision: number
 }
 
 /** StarMapEmbedDto 请求体：完整 Embed JSON。 */
@@ -140,23 +151,78 @@ export class NativeStarMapBridge {
   }
 
   /**
-   * 更新节点（#984）：按 patch 只发 title / content / position 里实际要改的字段。
-   * 仍然统一走 nativeUpdateStarMapNode(starmapId, nodeId, JSON.stringify(body))，
-   * 不另建第二套 Core 调用。
+   * 内容编辑（#1060）：只发共享素材本体字段 + expectedDefinitionRevision = node.definitionRevision。
+   *
+   * 位置属于画布实例，必须走 moveStarMapNode；带 position 的 patch 在这里直接拒绝，
+   * 不把实例事实塞进素材命令。
+   *
+   * TODO(#1060)：C ABI 的 StarMapNodePatchInputDto 目前没有 trajectory 字段，
+   * 拖动轨迹还不能从 Harmony 下发；等 Core 扩展该 DTO 后再接线。
    */
-  async updateStarMapNode(starmapId: string, nodeId: string, patch: StarMapNodeUpdatePatch): Promise<ResultEnvelope<StarMapNode>> {
+  async updateStarMapNodeDefinition(starmapId: string, nodeId: string, patch: StarMapNodeUpdatePatch): Promise<ResultEnvelope<StarMapNode>> {
+    if (patch.position !== undefined) {
+      const rejected: ResultEnvelope<StarMapNode> = {
+        success: false,
+        errorCode: 'INVALID_ARGUMENT',
+        userMessage: 'updateStarMapNodeDefinition cannot change position; use moveStarMapNode'
+      }
+      return rejected
+    }
     try {
       const body: StarMapNodePatchBody = {}
       if (patch.title !== undefined) {
         body.title = patch.title
       }
+      if (patch.kind !== undefined) {
+        body.kind = patch.kind
+      }
+      if (patch.payload !== undefined) {
+        if (patch.payload === null) {
+          body.clearPayload = true
+        } else {
+          body.payload = patch.payload
+        }
+      }
       if (patch.content !== undefined) {
         body.content = patch.content
       }
-      if (patch.position !== undefined) {
-        body.position = patch.position
+      if (patch.anchors !== undefined) {
+        body.anchors = patch.anchors
       }
-      const jsonStr: string = this.core.getNativeModule().nativeUpdateStarMapNode(starmapId, nodeId, JSON.stringify(body))
+      if (patch.portal !== undefined) {
+        if (patch.portal === null) {
+          body.clearPortal = true
+        } else {
+          body.portal = patch.portal
+        }
+      }
+      if (patch.style !== undefined) {
+        body.style = patch.style
+      }
+      if (patch.provenance !== undefined) {
+        body.provenance = patch.provenance
+      }
+      if (patch.expectedDefinitionRevision !== undefined) {
+        body.expectedDefinitionRevision = patch.expectedDefinitionRevision
+      }
+      const jsonStr: string = this.core.getNativeModule().nativeUpdateStarMapNodeDefinition(
+        starmapId, nodeId, JSON.stringify(body))
+      return this.core.decodeEnvelope<StarMapNode>(jsonStr, decodeStarMapNode)
+    } catch (e) { return nativeError<StarMapNode>(e) }
+  }
+
+  /**
+   * 只移动（#1060）：position + expectedInstanceRevision = node.updatedAt。
+   *
+   * 共享内容 revision 不由本命令校验，也不会被本命令修改；版本不一致时 Core
+   * 返回 Conflict，调用方必须重新读取节点后再提交。
+   */
+  async moveStarMapNode(starmapId: string, nodeId: string, position: StarMapPoint,
+    expectedInstanceRevision: number): Promise<ResultEnvelope<StarMapNode>> {
+    try {
+      const positionJson: string = JSON.stringify({ x: position.x, y: position.y })
+      const jsonStr: string = this.core.getNativeModule().nativeMoveStarMapNode(
+        starmapId, nodeId, positionJson, String(expectedInstanceRevision))
       return this.core.decodeEnvelope<StarMapNode>(jsonStr, decodeStarMapNode)
     } catch (e) { return nativeError<StarMapNode>(e) }
   }
@@ -194,10 +260,12 @@ export class NativeStarMapBridge {
       const nodeId = `n_${util.generateRandomUUID(false)}`
       const body: StarMapNodeAddBody = {
         id: nodeId,
+        // 新节点的共享素材由 Core 创建：assetId 留空由 Core 回落到实例 id，
+        // definitionRevision 从 0 起，由 Core 建库时写入。
+        assetId: '',
         title: title,
         kind: kind,
         payload: null,
-        tags: [],
         content: { type: 'empty', summary: null, body: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null },
         anchors: [],
         portal: null,
@@ -205,7 +273,8 @@ export class NativeStarMapBridge {
         style: { fillColor: null },
         provenance: { source: 'Human', sourceId: null, generatedBy: null, promptId: null, reviewStatus: 'Accepted', createdFromAnchor: null },
         createdAt: now,
-        updatedAt: now
+        updatedAt: now,
+        definitionRevision: 0
       }
       const jsonStr: string = this.core.getNativeModule().nativeAddStarMapNode(starmapId, JSON.stringify(body), position.x, position.y)
       return this.core.decodeEnvelope<StarMapNode>(jsonStr, decodeStarMapNode)

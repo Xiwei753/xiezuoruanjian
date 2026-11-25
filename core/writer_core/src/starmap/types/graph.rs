@@ -114,15 +114,29 @@ pub struct StarMapNodeStyle {
     pub fill_color: Option<String>,
 }
 
+/// 画布上的节点读模型（NodeView）。
+///
+/// Issue #1060：本类型不再拥有任何持久化数据。共享内容（标题、正文、锚点、
+/// portal、样式、来源）的唯一所有者是 [`super::StarMapNodeDefinition`]，
+/// 画布侧的唯一所有者是 [`super::StarMapNodeInstance`]。运行时把两者投影成
+/// 本结构供解析器、边、校验和 DTO 使用。
+///
+/// - `id`：画布实例 ID（不是素材 ID）
+/// - `asset_id`：共享素材 ID
+/// - `updated_at`：**实例 revision**，只随位置/实例元数据变化递增
+/// - `definition_revision`：素材本体的 revision，只随共享内容变化
+///
+/// 两者互不覆盖，也不再取 `max` 合成单一写入版本。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapNode {
     pub id: String,
+    /// 共享素材 ID。空字符串表示旧数据中"素材 ID 等于实例 ID"的兼容视图。
+    #[serde(default)]
+    pub asset_id: String,
     pub title: String,
     pub kind: StarMapNodeKind,
     pub payload: Option<serde_json::Value>,
-    #[serde(default)]
-    pub tags: Vec<String>,
     #[serde(default)]
     pub content: StarMapNodeContent,
     #[serde(default)]
@@ -138,8 +152,32 @@ pub struct StarMapNode {
     #[serde(default)]
     pub provenance: StarMapProvenance,
 
+    /// 画布实例创建时间。
     pub created_at: u64,
+    /// 画布实例 revision（位置与实例元数据），不合并素材本体 revision。
     pub updated_at: u64,
+    /// 共享素材本体 revision；旧数据缺省为 0。
+    #[serde(default)]
+    pub definition_revision: u64,
+}
+
+impl StarMapNode {
+    pub fn instance_revision(&self) -> u64 {
+        self.updated_at
+    }
+
+    pub fn definition_revision(&self) -> u64 {
+        self.definition_revision
+    }
+
+    /// 当前节点引用的共享素材 ID；旧数据回退到实例 ID。
+    pub fn resolved_asset_id(&self) -> &str {
+        if self.asset_id.is_empty() {
+            &self.id
+        } else {
+            &self.asset_id
+        }
+    }
 }
 
 /// 星图边。
@@ -159,7 +197,11 @@ pub struct StarMapEdge {
     pub updated_at: u64,
 }
 
-/// 节点局部更新补丁。
+/// 节点编辑命令：把共享内容修改与实例移动分开表达。
+///
+/// Issue #1060：`position` 属于画布实例，其余字段属于共享素材本体。
+/// Core 会把本命令拆成 [`NodeDefinitionPatch`] 与 [`NodeInstancePatch`]，
+/// 分别用各自的 expected revision 提交；只移动时不会触发整图校验。
 ///
 /// `None` 表示"不修改"，`Some(None)` 表示"清空可选字段"（如 payload、portal）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,13 +210,72 @@ pub struct StarMapNodePatch {
     pub title: Option<String>,
     pub kind: Option<StarMapNodeKind>,
     pub payload: Option<Option<serde_json::Value>>,
-    pub tags: Option<Vec<String>>,
     pub content: Option<StarMapNodeContent>,
     pub anchors: Option<Vec<StarMapAnchor>>,
     pub portal: Option<Option<StarMapPortal>>,
     pub position: Option<StarMapPoint>,
     pub style: Option<StarMapNodeStyle>,
     pub provenance: Option<StarMapProvenance>,
+}
+
+/// 共享素材本体补丁：写 `StarMapNodeDefinition`，不触碰实例位置与实例 revision。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeDefinitionPatch {
+    pub title: Option<String>,
+    pub kind: Option<StarMapNodeKind>,
+    pub payload: Option<Option<serde_json::Value>>,
+    pub content: Option<StarMapNodeContent>,
+    pub anchors: Option<Vec<StarMapAnchor>>,
+    pub portal: Option<Option<StarMapPortal>>,
+    pub style: Option<StarMapNodeStyle>,
+    pub provenance: Option<StarMapProvenance>,
+}
+
+impl NodeDefinitionPatch {
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.kind.is_none()
+            && self.payload.is_none()
+            && self.content.is_none()
+            && self.anchors.is_none()
+            && self.portal.is_none()
+            && self.style.is_none()
+            && self.provenance.is_none()
+    }
+
+    /// 只把共享内容字段从编辑命令里取出来；`position` 留在实例补丁。
+    pub fn from_command(patch: &StarMapNodePatch) -> Self {
+        Self {
+            title: patch.title.clone(),
+            kind: patch.kind.clone(),
+            payload: patch.payload.clone(),
+            content: patch.content.clone(),
+            anchors: patch.anchors.clone(),
+            portal: patch.portal.clone(),
+            style: patch.style.clone(),
+            provenance: patch.provenance.clone(),
+        }
+    }
+}
+
+/// 画布实例补丁：只写 `StarMapNodeInstance`，不触碰共享素材本体。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeInstancePatch {
+    pub position: Option<StarMapPoint>,
+}
+
+impl NodeInstancePatch {
+    pub fn is_empty(&self) -> bool {
+        self.position.is_none()
+    }
+
+    pub fn from_command(patch: &StarMapNodePatch) -> Self {
+        Self {
+            position: patch.position.clone(),
+        }
+    }
 }
 
 /// 边局部更新补丁。

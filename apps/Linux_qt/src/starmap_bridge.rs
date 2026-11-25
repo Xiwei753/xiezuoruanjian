@@ -184,10 +184,10 @@ pub fn create_starmap_node(
     let now = now_ms();
     let node = StarMapNodeDto {
         id: format!("n_{}", uuid::Uuid::new_v4()),
+        asset_id: String::new(),
         title: title.to_string(),
         kind: parse_node_kind(kind),
         payload: None,
-        tags: vec![],
         content: StarMapNodeContentDto::default(),
         anchors: vec![],
         portal: None,
@@ -197,6 +197,7 @@ pub fn create_starmap_node(
         provenance: Default::default(),
         created_at: now,
         updated_at: now,
+        definition_revision: 0,
     };
 
     envelope(api.add_starmap_node(starmap_id, node, x, y))

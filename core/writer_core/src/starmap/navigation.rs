@@ -408,10 +408,10 @@ mod tests {
     fn make_portal_node(node_id: &str, destination_starmap_id: &str) -> StarMapNode {
         StarMapNode {
             id: node_id.to_string(),
+            asset_id: node_id.to_string(),
             title: node_id.to_string(),
             kind: StarMapNodeKind::Note,
             payload: None,
-            tags: vec![],
             content: StarMapNodeContent::Empty,
             anchors: vec![],
             portal: Some(StarMapPortal {
@@ -423,6 +423,7 @@ mod tests {
             provenance: StarMapProvenance::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         }
     }
 
@@ -515,10 +516,7 @@ mod tests {
 
         let location = resolve_navigation_route(&context, &route).unwrap();
         assert_eq!(location.current_starmap_id, "sm_a");
-        assert_eq!(
-            location.traversed_starmap_ids,
-            vec!["sm_a", "sm_b", "sm_a"]
-        );
+        assert_eq!(location.traversed_starmap_ids, vec!["sm_a", "sm_b", "sm_a"]);
     }
 
     #[test]
@@ -554,7 +552,10 @@ mod tests {
                 .push(make_embed(&format!("emb_{}", i), &format!("sm_{}", i + 1)));
             overlays.insert(format!("sm_{}", i), graph);
         }
-        overlays.insert(format!("sm_{}", depth), make_empty_graph(&format!("sm_{}", depth)));
+        overlays.insert(
+            format!("sm_{}", depth),
+            make_empty_graph(&format!("sm_{}", depth)),
+        );
 
         let mut segments = Vec::new();
         for i in 0..depth {

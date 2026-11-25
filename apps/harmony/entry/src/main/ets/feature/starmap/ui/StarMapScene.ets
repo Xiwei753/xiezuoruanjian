@@ -1962,24 +1962,46 @@ private refitAfterContentAdded(): void {
   }
 
   /**
-   * 保存节点位置：通过 bridge 的星图节点更新 API 写回。
+   * 保存节点位置：只移动画布实例，走独立命令。
    * 使用 this.starmapId。
    *
-   * #984：updateStarMapNode 接收完整 patch，位置写入也要显式包成 `{ position }`；
-   * title / content 字段不传（undefined），Core 不会把它们当成清空。
+   * #1060：位置属于画布实例，命令只带 position + expectedInstanceRevision
+   * （node.updatedAt）；共享内容 revision 由内容编辑命令负责，这里不碰。
    */
   async saveNodePosition(nodeId: string) {
     const ln = this.getPlatformLayoutNode(nodeId)
     const bridge: IWriterCoreBridge | null = this.bridge
     if (!ln || !bridge) return
+    const graph: StarMapGraph | null = this.graph
+    const node: StarMapNode | undefined = graph !== null
+      ? graph.nodes.find((item: StarMapNode) => item.id === nodeId)
+      : undefined
+    if (node === undefined) {
+      hilog.error(0x0000, 'StarMapScene', `saveNodePosition: node not in graph: ${nodeId}`)
+      return
+    }
     hilog.info(0x0000, 'StarMapScene', `saveNodePosition: ${nodeId} → (${ln.x}, ${ln.y})`)
     const result = await this.withPeerWriteBarrier(
-      async () => bridge.updateStarMapNode(this.starmapId, nodeId,
-        { position: { x: ln.x, y: ln.y } }))
+      async () => bridge.moveStarMapNode(this.starmapId, nodeId,
+        { x: ln.x, y: ln.y }, node.updatedAt))
     if (!result.success) {
       hilog.error(0x0000, 'StarMapScene', `saveNodePosition failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
     } else {
       this.noteStarMapActivity()
+      // 用 Core 写回的节点刷新本地实例 revision（updatedAt）和 position，
+      // 否则下一次拖动还拿旧 revision，会被 Core 当成并发冲突拒绝。
+      const updated: StarMapNode | undefined = result.data
+      const graphAfter: StarMapGraph | null = this.graph
+      if (updated !== undefined && graphAfter !== null) {
+        this.graph = {
+          schemaVersion: graphAfter.schemaVersion,
+          starmapId: graphAfter.starmapId,
+          nodes: graphAfter.nodes.map((item: StarMapNode) => item.id === nodeId ? updated : item),
+          edges: graphAfter.edges,
+          embeds: graphAfter.embeds,
+          links: graphAfter.links
+        }
+      }
     }
     this.onMoveNode(this.scenePath, this.starmapId, nodeId, { x: ln.x, y: ln.y })
   }
@@ -2198,7 +2220,11 @@ private refitAfterContentAdded(): void {
     if (!titleChanged && !bodyChanged) {
       return { success: true, message: '' }
     }
-    const patch: StarMapNodeUpdatePatch = {}
+    // #1060：内容编辑走共享素材本体命令，expectedDefinitionRevision 取当前节点
+    // 读到的 definitionRevision；不带 position，位置只由 saveNodePosition 负责。
+    const patch: StarMapNodeUpdatePatch = {
+      expectedDefinitionRevision: node.definitionRevision
+    }
     if (titleChanged) {
       patch.title = trimmedTitle
     }
@@ -2208,7 +2234,7 @@ private refitAfterContentAdded(): void {
       patch.content = nextContent
     }
     const result = await this.withPeerWriteBarrier(
-      async () => bridge.updateStarMapNode(this.starmapId, nodeId, patch))
+      async () => bridge.updateStarMapNodeDefinition(this.starmapId, nodeId, patch))
     if (!result.success) {
       hilog.error(0x0000, 'StarMapScene',
         `saveNodeEdits failed: ${nodeId}, ${result.errorCode ?? ''}, ${result.userMessage}`)
@@ -2227,10 +2253,10 @@ private refitAfterContentAdded(): void {
       ? result.data
       : {
         id: node.id,
+        assetId: node.assetId,
         title: trimmedTitle,
         kind: node.kind,
         payload: node.payload,
-        tags: node.tags,
         content: nextContent,
         anchors: node.anchors,
         portal: node.portal,
@@ -2238,7 +2264,8 @@ private refitAfterContentAdded(): void {
         style: node.style,
         provenance: node.provenance,
         createdAt: node.createdAt,
-        updatedAt: node.updatedAt
+        updatedAt: node.updatedAt,
+        definitionRevision: node.definitionRevision
       }
     const nextNodes: StarMapNode[] = currentGraph.nodes.map((item: StarMapNode) => {
       return item.id === nodeId ? updated : item

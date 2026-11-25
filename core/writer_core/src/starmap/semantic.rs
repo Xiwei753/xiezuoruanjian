@@ -227,7 +227,7 @@ pub enum StarMapReviewStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StarMapTargetDetail {
     Starmap,

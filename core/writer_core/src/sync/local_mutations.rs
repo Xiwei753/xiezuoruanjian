@@ -142,9 +142,9 @@ pub(crate) fn compact_confirmed(
         }
         match serde_json::from_str::<LocalMutationRecord>(line) {
             Ok(record) => {
-                let same_group =
-                    crate::sync::config_store::app_data_group_for_path(&record.path).as_ref()
-                        == Some(group);
+                let same_group = crate::sync::config_store::app_data_group_for_path(&record.path)
+                    .as_ref()
+                    == Some(group);
                 let confirmed = same_group
                     && if record.is_upsert() {
                         known_files.get(&record.path) == Some(&record.content_hash)
@@ -195,11 +195,12 @@ pub(crate) fn object_identity(rel_path: &str) -> (Option<String>, Option<String>
             }
         }
         if parts.len() >= 5 {
+            // Issue #1060：链接唯一所有者在 annotations 仓库，
+            // `starmaps/<id>/links/*.json` 不再产生，只保留 node/edge/embed。
             let object_type = match parts[2] {
                 "nodes" => Some("starmapNode"),
                 "edges" => Some("starmapEdge"),
                 "embeds" => Some("starmapEmbed"),
-                "links" => Some("starmapLink"),
                 _ => None,
             };
             if let Some(object_type) = object_type {

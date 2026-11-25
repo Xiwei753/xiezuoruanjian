@@ -242,6 +242,62 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "Qt 应用入口既有 crate 级 allow(dead_code/unused/deprecated)，"
         "因 qmetaobject 宏生成大量未直接引用成员；"
         "TODO(#597) 待精确收窄到宏生成成员",
+
+    # --- Issue #1060：对象身份/标签/链接/素材实例统一的既有聚合根 ---
+    # 这些文件在 #1060 基线上已超过行数上限，本 Issue 只做局部语义改动
+    # （typed 引用、去 tags、链接改道、素材/实例 revision 拆分）。
+    (Path("core/writer_core/src/annotations/store.rs"), "god-file"):
+        "注解持久化聚合根：标签/绑定/文本锚点/命名条目/导航链接共用同一目录布局、"
+        "作用域校验与原子写入；#1060 新增全局素材域、唯一关系键与链接仓库后跨过上限；"
+        "TODO(#1060) 后续把绑定关系与链接仓库拆成 store 子模块",
+    (Path("core/writer_core/src/api/service/annotation_ops.rs"), "god-file"):
+        "注解 API 聚合：标签/锚点/链接/自动匹配共享同一 annotation store 会话与 pending 基线；"
+        "#1060 新增 typed ref、attach/detach 与作用域授权；"
+        "TODO(#1060) 后续按 tag/link/anchor 拆分服务",
+    (Path("core/writer_core/src/facade/starmap_ops/graph.rs"), "god-file"):
+        "星图图操作门面：节点/边/嵌入/链接共享同一 store 锁与路径依赖索引失效流程；"
+        "#1060 拆分 definition/instance 写路径；"
+        "TODO(#1060) 后续按 node/edge/embed/link 拆分",
+    (Path("core/writer_core/src/facade/starmap_ops/library.rs"), "god-file"):
+        "星图素材库门面：素材复制/放置/库归属共享同一 asset 映射与事务；"
+        "#1060 拆分 create/place/read 投影；"
+        "TODO(#1060) 后续把复制算法拆到独立模块",
+    (Path("core/writer_core/src/ffi/starmap_ops.rs"), "god-file"):
+        "星图 FFI 聚合：C ABI 与 JSON envelope 共享同一错误映射；"
+        "#1060 新增 definition/move 两个入口；"
+        "TODO(#1060) 后续按 node/link/library 拆分",
+    (Path("core/writer_core/src/search/extractor.rs"), "god-file"):
+        "搜索投影聚合：星图/注解/正文条目共享同一索引条目与 scope 映射；"
+        "#1060 让注解条目按 typed ref 读取素材定义；"
+        "TODO(#1060) 后续按 projection 来源拆分",
+    (Path("core/writer_core/src/starmap/store/relation_index.rs"), "god-file"):
+        "星图关系索引：边/嵌入/路径依赖共享同一重建入口；#1060 移除链接索引所有权；"
+        "TODO(#1060) 后续按 index 种类拆分",
+    (Path("core/writer_core/src/sync/staging/starmap_merge.rs"), "god-file"):
+        "星图三方合并：对象/成员/身份事实共享同一合并决策表；"
+        "#1060 移除链接成员合并（链接由 annotations Metadata 同步承担）；"
+        "TODO(#1060) 后续按 graph/object/identity 拆分",
+    (Path("apps/sujian_mcp/src/tools.rs"), "god-file"):
+        "MCP 工具聚合：工具 schema、授权与 Core 调用共享同一会话上下文；"
+        "#1060 节点标签改为显式关系命令、节点编辑拆 definition/move；"
+        "TODO(#1060) 后续按领域拆工具模块",
+    (Path("apps/Linux_qt/src/backend/annotation_backend.rs"), "god-file"):
+        "Qt 注解后端 QObject：标签/锚点/链接状态共享同一 worker 队列与回调协议；"
+        "#1060 新增 typed ref 与 attach/detach 透传；"
+        "TODO(#1060) 后续按 tag/link 拆分",
+    (Path("apps/Linux_qt/src/backend/starmap_backend.rs"), "god-file"):
+        "Qt 星图后端 QObject：图/素材库/链接 JSON 入口共享同一 backend 会话；"
+        "#1060 适配 assetId/definitionRevision；"
+        "TODO(#1060) 后续按 graph/library 拆分",
+    (Path("core/writer_core/src/starmap/connections.rs"), "production-test-bloat"):
+        "既有连接/路径解析测试，验证跨画布引用；#1060 删除旧链接磁盘读取后测试原样保留；"
+        "TODO(#1060) 拆到独立 _tests.rs",
+    (Path("core/writer_core/src/starmap/store/relation_index.rs"), "production-test-bloat"):
+        "既有关系索引测试，验证级联与路径依赖；待拆分到独立 _tests.rs",
+    (Path("core/writer_core/src/sync/staging/starmap_merge.rs"), "production-test-bloat"):
+        "既有星图合并决策表测试，验证对象/成员三方合并；待拆分到独立 _tests.rs",
+    (Path("core/writer_core/src/starmap/navigation.rs"), "production-test-bloat"):
+        "既有画布导航测试，验证 portal/embed 路由；待拆分到独立 _tests.rs",
 }
 
 

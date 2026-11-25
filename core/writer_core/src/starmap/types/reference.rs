@@ -24,7 +24,7 @@ pub use crate::starmap::semantic::StarMapTargetDetail;
 /// resolver 以此为起点逐段穿越 segments 到达 target。
 ///
 /// 替代旧的 `StarMapDeepTarget`、`StarMapEdgeEndpoint`、`StarMapEndpoint`、`StarMapEndpointPath`。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapTargetPath {
     pub starmap_id: String,
@@ -47,7 +47,7 @@ impl Default for StarMapTargetPath {
 ///
 /// - `EnterEmbed`：通过嵌入实例进入子星图空间
 /// - `EnterPortal`：通过 portal 节点进入子星图空间
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StarMapPathSegment {
     EnterEmbed { instance_id: String },

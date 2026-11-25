@@ -272,8 +272,17 @@ export struct AnnotationPanel {
       return { kind: 'namedEntry', projectId: projectId,
         objectId: result.objectId.substring(entryPrefix.length) }
     }
-    if (target.nodeId !== null) return { kind: 'starMapNode', projectId: projectId, objectId: target.nodeId }
-    if (target.embedId !== null) return { kind: 'starMapEmbed', projectId: projectId, objectId: target.embedId }
+    // #1060：搜索结果指向画布实例，实例必须带 starmapId 才能定位所在画布。
+    if (target.nodeId !== null) {
+      if (target.starmapId === null) return null
+      return { kind: 'nodeInstance', projectId: projectId, starmapId: target.starmapId,
+        objectId: target.nodeId }
+    }
+    if (target.embedId !== null) {
+      if (target.starmapId === null) return null
+      return { kind: 'embedInstance', projectId: projectId, starmapId: target.starmapId,
+        objectId: target.embedId }
+    }
     if (target.starmapId !== null) return { kind: 'starMap', projectId: projectId, objectId: target.starmapId }
     if (target.chapterId !== null) return { kind: 'chapter', projectId: projectId, objectId: target.chapterId }
     if (target.volumeId !== null) return { kind: 'volume', projectId: projectId, objectId: target.volumeId }
@@ -307,6 +316,18 @@ export struct AnnotationPanel {
     }
     await this.refresh()
     this.onChanged()
+  }
+
+  /** #1060：链接目标是对象引用或画布导航路径，展示时两者都要能表达。 */
+  private linkTargetText(target: AnnotationTargetDto): string {
+    const ref = target.objectRef
+    if (ref !== undefined) return `${ref.kind} · ${ref.objectId}`
+    const route = target.canvasRoute
+    if (route !== undefined) {
+      const focusId: string = route.target.nodeId ?? route.target.anchorId ?? route.starmapId
+      return `星图跳转 · ${focusId}`
+    }
+    return '链接目标'
   }
 
   private linkStateLabel(linkId: string): string {
@@ -462,7 +483,7 @@ export struct AnnotationPanel {
             ForEach(this.links, (link: AnnotationObjectLinkDto) => {
               Row() {
                 Column() {
-                  Text(`${link.target.objectRef.kind} · ${link.target.objectRef.objectId}`)
+                  Text(this.linkTargetText(link.target))
                     .fontSize(13)
                     .maxLines(2)
                   Text(this.linkStateLabel(link.linkId))

@@ -211,10 +211,10 @@ fn phased_snapshot_preserves_node_anchor_semantics() {
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(StarMapNode {
         id: "n1".to_string(),
+        asset_id: "n1".to_string(),
         title: "Char".to_string(),
         kind: StarMapNodeKind::Character,
         payload: None,
-        tags: vec!["protagonist".to_string()],
         content: StarMapNodeContent::Empty,
         anchors: vec![StarMapAnchor {
             anchor_id: "a1".to_string(),
@@ -232,12 +232,13 @@ fn phased_snapshot_preserves_node_anchor_semantics() {
         provenance: StarMapProvenance::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     });
     flush_store(&mut store);
     let snapshot = load_full_snapshot(dir.path(), &sid);
     let n = &snapshot.nodes[0];
     assert_eq!(n.kind, StarMapNodeKind::Character);
-    assert_eq!(n.tags, vec!["protagonist".to_string()]);
+    // Issue #1060: 标签改由 annotations 关系查询，节点本体不再携带 tags。
     assert_eq!(n.anchors.len(), 1);
     assert_eq!(n.anchors[0].anchor_id, "a1");
     assert_eq!(n.anchors[0].role, StarMapAnchorRole::Source);

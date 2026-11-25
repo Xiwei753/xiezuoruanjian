@@ -68,7 +68,7 @@ data class StarMapGraphNode(
     val title: String,
     val kind: StarMapNodeKind,
     val payload: Map<String, Any>? = null,
-    val tags: List<String> = emptyList(),
+    val assetId: String = "",
     val contentKind: String? = null,
     val contentBody: String? = null,
     val contentSummary: String? = null,
@@ -86,6 +86,7 @@ data class StarMapGraphNode(
     val provenance: StarMapProvenanceData? = null,
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
+    val definitionRevision: Long = 0,
 )
 
 data class StarMapPortalData(
@@ -199,7 +200,7 @@ data class StarMapNodePatch(
     val title: String? = null,
     val kind: StarMapNodeKind? = null,
     val payload: Map<String, Any>? = null,
-    val tags: List<String>? = null,
+    val expectedDefinitionRevision: Long? = null,
     /** Issue #984：省略表示不修改 Core 中的正文/引用内容。 */
     val content: StarMapNodeContentData? = null,
 )

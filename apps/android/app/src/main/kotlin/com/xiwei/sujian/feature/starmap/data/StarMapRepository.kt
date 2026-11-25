@@ -40,22 +40,19 @@ class StarMapRepository internal constructor(
         }
     }
 
-    fun listStarmapLibraryJson(scopeJson: String): BridgeResult<String> =
-        bridge.listStarmapLibraryJson(scopeJson)
+    fun listStarmapLibraryJson(scopeJson: String): BridgeResult<String> = bridge.listStarmapLibraryJson(scopeJson)
 
     fun createStarmapLibraryFolder(
         scopeJson: String,
         parentFolderId: String?,
         name: String,
-    ): BridgeResult<String> =
-        bridge.createStarmapLibraryFolderJson(scopeJson, parentFolderId, name)
+    ): BridgeResult<String> = bridge.createStarmapLibraryFolderJson(scopeJson, parentFolderId, name)
 
     fun moveStarmapLibraryEntry(
         entryId: String,
         scopeJson: String,
         parentFolderId: String?,
-    ): BridgeResult<String> =
-        bridge.moveStarmapLibraryEntryJson(entryId, scopeJson, parentFolderId)
+    ): BridgeResult<String> = bridge.moveStarmapLibraryEntryJson(entryId, scopeJson, parentFolderId)
 
     fun addStarmapNodeReference(
         starmapId: String,
@@ -96,8 +93,7 @@ class StarMapRepository internal constructor(
         targetJson: String,
         scopeJson: String,
         title: String?,
-    ): BridgeResult<String> =
-        bridge.copyStarmapLibraryAssetJson(targetJson, scopeJson, title)
+    ): BridgeResult<String> = bridge.copyStarmapLibraryAssetJson(targetJson, scopeJson, title)
 
     fun listStarmapAssetReferencesJson(targetJson: String): BridgeResult<String> =
         bridge.listStarmapAssetReferencesJson(targetJson)
@@ -197,12 +193,13 @@ class StarMapRepository internal constructor(
         }
     }
 
+    @Suppress("LongParameterList")
     fun updateStarmapNode(
         starmapId: String,
         nodeId: String,
         title: String? = null,
         kind: StarMapNodeKind? = null,
-        tags: List<String>? = null,
+        expectedDefinitionRevision: Long? = null,
         position: StarMapPointData? = null,
         // Issue #984：null 表示省略，不修改 Core 中已有的正文/引用类型。
         content: StarMapNodeContentData? = null,
@@ -213,7 +210,7 @@ class StarMapRepository internal constructor(
                 kind = kind?.toDto(),
                 payload = null,
                 clearPayload = false,
-                tags = tags,
+                expectedDefinitionRevision = expectedDefinitionRevision?.toULong(),
                 content = content?.toContentDto(),
                 anchors = null,
                 portal = null,

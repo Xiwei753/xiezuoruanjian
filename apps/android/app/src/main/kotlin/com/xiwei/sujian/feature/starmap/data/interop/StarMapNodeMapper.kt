@@ -31,7 +31,7 @@ internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode =
         title = title,
         kind = kind.toModel(),
         payload = payload.toPayloadMap(),
-        tags = tags,
+        assetId = assetId,
         contentKind = content?.kind,
         contentBody = content?.body,
         contentSummary = content?.summary,
@@ -49,6 +49,7 @@ internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode =
         provenance = provenance.toProvenanceModel(),
         createdAt = createdAt.toLong(),
         updatedAt = updatedAt.toLong(),
+        definitionRevision = definitionRevision.toLong(),
     )
 
 internal fun StarMapPointDto.toModel(): StarMapPointData =
@@ -106,6 +107,7 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
     val dtoKind = kind.toDto()
     val dtoCreatedAt = createdAt.toULong()
     val dtoUpdatedAt = updatedAt.toULong()
+    val dtoDefinitionRevision = definitionRevision.toULong()
     val dtoContent = contentToDto(base?.content)
     val dtoAnchors = anchors.map { it.anchorToDto() }
     val dtoPortal = portal?.portalToDto()
@@ -127,7 +129,7 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
             title = title,
             kind = dtoKind,
             payload = resolvedPayload,
-            tags = tags,
+            assetId = assetId,
             content = dtoContent,
             anchors = dtoAnchors,
             portal = dtoPortal,
@@ -136,6 +138,7 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
             provenance = dtoProvenance,
             createdAt = dtoCreatedAt,
             updatedAt = dtoUpdatedAt,
+            definitionRevision = dtoDefinitionRevision,
         )
     } else {
         StarMapNodeDto(
@@ -143,7 +146,7 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
             title = title,
             kind = dtoKind,
             payload = resolvedPayload,
-            tags = tags,
+            assetId = assetId,
             content = dtoContent,
             anchors = dtoAnchors,
             portal = dtoPortal,
@@ -152,6 +155,7 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
             provenance = dtoProvenance,
             createdAt = dtoCreatedAt,
             updatedAt = dtoUpdatedAt,
+            definitionRevision = dtoDefinitionRevision,
         )
     }
 }

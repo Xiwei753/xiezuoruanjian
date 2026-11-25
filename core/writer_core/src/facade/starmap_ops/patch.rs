@@ -37,9 +37,6 @@ pub(super) fn apply_node_patch_to_graph(
     if let Some(ref p) = patch.payload {
         node.payload = p.clone();
     }
-    if let Some(ref t) = patch.tags {
-        node.tags = t.clone();
-    }
     if let Some(ref c) = patch.content {
         node.content = c.clone();
     }

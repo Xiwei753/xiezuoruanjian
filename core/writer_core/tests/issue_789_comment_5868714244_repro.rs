@@ -88,10 +88,10 @@ fn assert_success(env: &Value, endpoint: &str) {
 fn node_at(id: &str, title: &str, x: f64, y: f64) -> StarMapNode {
     StarMapNode {
         id: id.to_string(),
+        asset_id: id.to_string(),
         title: title.to_string(),
         kind: StarMapNodeKind::Concept,
         payload: None,
-        tags: vec![],
         content: StarMapNodeContent::Empty,
         anchors: vec![],
         portal: None,
@@ -100,7 +100,17 @@ fn node_at(id: &str, title: &str, x: f64, y: f64) -> StarMapNode {
         provenance: Default::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     }
+}
+
+/// Issue #1060：直接走 store 落盘的节点还要登记共享素材本体，
+/// 否则 FFI 重新加载星图时只有实例文件、没有定义文件。
+fn persist_node_definition(dir: &TempDir, node: &StarMapNode) {
+    let asset_id = node.resolved_asset_id().to_string();
+    let definition = StarMapNodeDefinition::from_node(asset_id.clone(), node);
+    writer_core::starmap::library::create_node_asset(dir.path(), None, &asset_id, &definition)
+        .unwrap();
 }
 
 fn local_path(host: &str, node_id: &str) -> StarMapTargetPath {
@@ -176,8 +186,12 @@ fn seed_and_init() -> (TempDir, String) {
         .starmap_id;
 
     let mut store = StarMapStore::new(dir.path(), &sid);
-    store.add_node(node_at("n1", "甲", 10.0, 20.0));
-    store.add_node(node_at("n2", "乙", 30.0, 40.0));
+    let n1 = node_at("n1", "甲", 10.0, 20.0);
+    let n2 = node_at("n2", "乙", 30.0, 40.0);
+    persist_node_definition(&dir, &n1);
+    persist_node_definition(&dir, &n2);
+    store.add_node(n1);
+    store.add_node(n2);
     store
         .add_embed(embed_at("emb1", &sid, "n1", &child, 200.0, 100.0))
         .expect("加嵌入");

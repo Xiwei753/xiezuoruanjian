@@ -2,7 +2,7 @@ import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import { WideLayoutMode, WideLayoutState } from '../../../app/navigation/wide/WideLayoutMode'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapPathSegment, StarMapPoint, StarMapTargetPath, StarMapAssetRef, StarMapAssetReference } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapNode, StarMapPathSegment, StarMapPoint, StarMapTargetPath, StarMapAssetRef, StarMapAssetReference } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
@@ -38,7 +38,7 @@ import { StarMapScene } from './StarMapScene'
 import { StarMapLibraryPanel } from './StarMapLibraryPanel'
 import { StarMapProofReplayPanel } from './StarMapProofReplayPanel'
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
-import { AnnotationObjectRefDto } from '../../../corebridge/dto/AnnotationDtos'
+import { AnnotationObjectRefDto, nodeAssetRef } from '../../../corebridge/dto/AnnotationDtos'
 import { AnnotationPanel } from '../../editor/annotation/AnnotationPanel'
 import { WideStarMapToolRail } from './wide/WideStarMapHome'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
@@ -628,12 +628,34 @@ export struct StarMapScreen {
 
   private selectedStarMapAnnotationTarget(): AnnotationObjectRefDto {
     const selection = this.selectionState.getSelection()
-    if (selection.itemId.length > 0 && (selection.kind === 'node' || selection.kind === 'embed')) {
-      return {
-        kind: selection.kind === 'node' ? 'starMapNode' : 'starMapEmbed',
+    if (selection.itemId.length > 0 && selection.kind === 'node') {
+      // #1060：节点标签按共享素材 assetId 绑定，不按画布实例 id；同一素材在
+      // 多个画布上的实例共享标签。当前活动画布图就是选中项所在的图。
+      const graph: StarMapGraph | null = this.graph
+      const node: StarMapNode | undefined = graph !== null
+        ? graph.nodes.find((item: StarMapNode) => item.id === selection.itemId)
+        : undefined
+      if (node !== undefined) {
+        return nodeAssetRef(this.annotationProjectId,
+          node.assetId.length > 0 ? node.assetId : node.id)
+      }
+      // 图还没加载完时退到画布实例身份，仍能定位到当前画布。
+      const instanceRef: AnnotationObjectRefDto = {
+        kind: 'nodeInstance',
         projectId: this.annotationProjectId,
+        starmapId: this.starmapId,
         objectId: selection.itemId
       }
+      return instanceRef
+    }
+    if (selection.itemId.length > 0 && selection.kind === 'embed') {
+      const embedRef: AnnotationObjectRefDto = {
+        kind: 'embedInstance',
+        projectId: this.annotationProjectId,
+        starmapId: this.starmapId,
+        objectId: selection.itemId
+      }
+      return embedRef
     }
     return {
       kind: 'project',

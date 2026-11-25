@@ -161,10 +161,10 @@ use crate::starmap::types::StarMapEdgeKind;
 fn add_node(core: &WriterCore, starmap_id: &str, node_id: &str) {
     let node = crate::starmap::types::StarMapNode {
         id: node_id.to_string(),
+        asset_id: node_id.to_string(),
         title: node_id.to_string(),
         kind: crate::starmap::types::StarMapNodeKind::Character,
         payload: None,
-        tags: vec![],
         content: crate::starmap::semantic::StarMapNodeContent::Empty,
         anchors: vec![],
         portal: None,
@@ -173,6 +173,7 @@ fn add_node(core: &WriterCore, starmap_id: &str, node_id: &str) {
         provenance: StarMapProvenance::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     };
     core.add_starmap_node(starmap_id, node, 0.0, 0.0).unwrap();
 }
@@ -434,10 +435,10 @@ fn copy_starmap_remaps_full_paths_through_portals() {
     let node = |id: &str, anchors: Vec<crate::starmap::semantic::StarMapAnchor>| {
         crate::starmap::types::StarMapNode {
             id: id.to_string(),
+            asset_id: id.to_string(),
             title: id.to_string(),
             kind: crate::starmap::types::StarMapNodeKind::Note,
             payload: None,
-            tags: vec![],
             content: crate::starmap::semantic::StarMapNodeContent::Empty,
             anchors,
             portal: None,
@@ -446,6 +447,7 @@ fn copy_starmap_remaps_full_paths_through_portals() {
             provenance: StarMapProvenance::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         }
     };
 
@@ -470,8 +472,7 @@ fn copy_starmap_remaps_full_paths_through_portals() {
         destination_starmap_id: b.clone(),
         destination_target: None,
     });
-    core.add_starmap_node(&a, portal_node, 0.0, 0.0)
-        .unwrap();
+    core.add_starmap_node(&a, portal_node, 0.0, 0.0).unwrap();
 
     let endpoint = |target: StarMapTargetDetail| StarMapTargetPath {
         starmap_id: a.clone(),

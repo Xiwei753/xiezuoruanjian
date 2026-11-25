@@ -10,6 +10,10 @@ impl super::WriterAppService {
         self.api.list_tags(project_id)
     }
 
+    pub fn list_global_tags(&self) -> Result<Vec<AnnotationTagDto>, WriterError> {
+        self.api.list_global_tags()
+    }
+
     pub fn create_tag(
         &self,
         project_id: String,
@@ -57,6 +61,31 @@ impl super::WriterAppService {
         target: AnnotationObjectRefDto,
     ) -> Result<Vec<AnnotationTagBindingDto>, WriterError> {
         self.api.list_bindings_for_target(project_id, target)
+    }
+
+    pub fn attach_tag(
+        &self,
+        project_id: String,
+        tag_id: String,
+        target: AnnotationObjectRefDto,
+    ) -> Result<AnnotationTagBindingDto, WriterError> {
+        self.api.attach_tag(project_id, tag_id, target)
+    }
+
+    pub fn detach_tag(
+        &self,
+        project_id: String,
+        tag_id: String,
+        target: AnnotationObjectRefDto,
+    ) -> Result<bool, WriterError> {
+        self.api.detach_tag(project_id, tag_id, target)
+    }
+
+    pub fn list_tags_for_object(
+        &self,
+        target: AnnotationObjectRefDto,
+    ) -> Result<Vec<AnnotationTagDto>, WriterError> {
+        self.api.list_tags_for_object(target)
     }
 
     pub fn create_text_anchor(

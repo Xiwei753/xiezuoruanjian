@@ -70,7 +70,7 @@ impl StarMapStore {
                 if let Some(node) = self.nodes.get(node_id) {
                     let instance = crate::starmap::types::StarMapNodeInstance {
                         instance_id: node.id.clone(),
-                        target_node_id: self.asset_id_for_node(&node.id),
+                        asset_id: self.asset_id_for_node(&node.id),
                         position: node.position.clone(),
                         starmap_id: self.starmap_id.clone(),
                         project_id: None,
@@ -150,29 +150,8 @@ impl StarMapStore {
             }
         }
 
-        if !self.dirty_links.is_empty() {
-            let ids: Vec<String> = self.dirty_links.iter().cloned().collect();
-            let mut succeeded = true;
-            for link_id in &ids {
-                if let Some(link) = self.links.get(link_id) {
-                    match package_storage::save_link(&self.app_data_root, &self.starmap_id, link) {
-                        Ok(rel_path) => {
-                            changed_paths.push(rel_path);
-                            successful_writes.links.insert(link_id.clone());
-                        }
-                        Err(_) => {
-                            succeeded = false;
-                            break;
-                        }
-                    }
-                } else {
-                    successful_writes.links.insert(link_id.clone());
-                }
-            }
-            if !succeeded {
-                failed_types.push("Link".to_string());
-            }
-        }
+        // 导航链接没有包内对象文件：add/update/delete 已直接写 annotations 仓库，
+        // 这里不再有 Link 写盘分支。`GraphMeta.link_ids` 只是派生缓存。
 
         // ── 对象级删除 durable transaction（Issue #805 评论 5912394108）──
         // 在执行任何 rename 前：
@@ -186,8 +165,7 @@ impl StarMapStore {
         // 8. 更新 journal phase=Tombstoned
         let has_object_deletes = !self.deleted_node_ids.is_empty()
             || !self.deleted_edge_ids.is_empty()
-            || !self.deleted_embed_ids.is_empty()
-            || !self.deleted_link_ids.is_empty();
+            || !self.deleted_embed_ids.is_empty();
 
         // 标记对象删除 journal 是否已 durable 写入并活跃。
         // 供 Phase 2 GraphMeta 成功后更新 phase=GraphMetaWritten、
@@ -268,17 +246,8 @@ impl StarMapStore {
                         original_path: rel,
                     });
                 }
-                for link_id in &self.deleted_link_ids {
-                    let rel = format!(
-                        "starmaps/{starmap_id}/links/{}/{link_id}.json",
-                        package_storage::bucket_for_id(link_id)
-                    );
-                    targets.push(StarMapObjectDeleteTarget {
-                        kind: StarMapObjectKind::Link,
-                        id: link_id.clone(),
-                        original_path: rel,
-                    });
-                }
+                // 链接对象文件已退出星图包：删除由 annotations 仓库 tombstone
+                // 承担，这里不再为 `deleted_link_ids` 登记删除事务目标。
 
                 // 2. 一次加载 SyncState，用 known_files 填真实 original_hash，
                 //    用真实 device_id 填 deleted_by。生成固定 trash path。
@@ -458,6 +427,9 @@ impl StarMapStore {
                             }
                         }
                         StarMapObjectKind::Link => {
+                            // 链接对象文件不再属于星图包。旧版本 journal 里可能
+                            // 残留 link 目标，保留兼容清理，避免旧事务卡住；
+                            // 新事务不再产生 Link 目标。
                             match package_storage::delete_link_file_to_trash(
                                 &self.app_data_root,
                                 &self.starmap_id,
@@ -612,9 +584,6 @@ impl StarMapStore {
             for instance_id in &successful_writes.embeds {
                 self.dirty_embeds.remove(instance_id);
             }
-            for link_id in &successful_writes.links {
-                self.dirty_links.remove(link_id);
-            }
             for node_id in &successful_deletes.deleted_nodes {
                 self.deleted_node_ids.remove(node_id);
             }
@@ -624,9 +593,9 @@ impl StarMapStore {
             for instance_id in &successful_deletes.deleted_embeds {
                 self.deleted_embed_ids.remove(instance_id);
             }
-            for link_id in &successful_deletes.deleted_links {
-                self.deleted_link_ids.remove(link_id);
-            }
+            // 链接没有包内文件可删：GraphMeta 已把 `deleted_link_ids` 的
+            // tombstone 写进 `deletedSinceLastSync`，这里统一清空待传播集合。
+            self.deleted_link_ids.clear();
             self.dirty_graph_meta = false;
 
             // 对象删除事务完成：清完 deleted_*_ids 后删除 journal。
@@ -680,7 +649,6 @@ impl StarMapStore {
         !self.deleted_node_ids.is_empty()
             || !self.deleted_edge_ids.is_empty()
             || !self.deleted_embed_ids.is_empty()
-            || !self.deleted_link_ids.is_empty()
     }
 
     pub(in crate::starmap::store) fn has_pending_writes(&self) -> bool {
@@ -698,14 +666,11 @@ impl StarMapStore {
         if !self.dirty_embeds.is_empty() {
             self.enqueue_save(SaveQueueEntry::Embed);
         }
-        if !self.dirty_links.is_empty() {
-            self.enqueue_save(SaveQueueEntry::Link);
-        }
+        // 链接不进入写队列：add/update/delete 直接写 annotations 仓库。
         if self.has_pending_deletes() {
             self.enqueue_save(SaveQueueEntry::DeleteNode);
             self.enqueue_save(SaveQueueEntry::DeleteEdge);
             self.enqueue_save(SaveQueueEntry::DeleteEmbed);
-            self.enqueue_save(SaveQueueEntry::DeleteLink);
         }
         if self.dirty_graph_meta {
             self.enqueue_save(SaveQueueEntry::GraphMeta);

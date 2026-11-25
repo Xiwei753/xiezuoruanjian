@@ -10,6 +10,8 @@ use super::super::StarMapStore;
 
 impl StarMapStore {
     /// 新增一个画布实例，复用共享本体并登记反向引用。
+    ///
+    /// 实例创建时间与实例 revision 属于画布，不继承素材本体的时间戳。
     pub fn create_node_instance(
         &mut self,
         instance_id: &str,
@@ -17,7 +19,17 @@ impl StarMapStore {
         position: StarMapPoint,
         project_id: Option<&str>,
     ) -> Result<StarMapNode> {
-        let node = definition.instantiate(instance_id, position);
+        let now = crate::starmap::now_epoch().max(1);
+        let instance = StarMapNodeInstance {
+            instance_id: instance_id.to_string(),
+            asset_id: definition.asset_id.clone(),
+            position,
+            starmap_id: self.starmap_id.clone(),
+            project_id: project_id.map(str::to_string),
+            created_at: now,
+            updated_at: now,
+        };
+        let node = definition.instantiate_instance(&instance);
         self.set_node_asset(instance_id, &definition.asset_id);
         crate::starmap::library::record_node_reference(
             &self.app_data_root,
@@ -34,20 +46,15 @@ impl StarMapStore {
         &mut self,
         instance_id: &str,
         position: StarMapPoint,
+        expected_instance_revision: Option<u64>,
     ) -> Result<StarMapNode> {
-        let patch = StarMapNodePatch {
-            title: None,
-            kind: None,
-            payload: None,
-            tags: None,
-            content: None,
-            anchors: None,
-            portal: None,
-            position: Some(position),
-            style: None,
-            provenance: None,
-        };
-        self.update_node(instance_id, &patch)
+        self.update_node_instance(
+            instance_id,
+            &NodeInstancePatch {
+                position: Some(position),
+            },
+            expected_instance_revision,
+        )
     }
 
     /// 从当前画布移除实例引用；共享本体和库归属保持不变。

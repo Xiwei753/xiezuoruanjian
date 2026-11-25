@@ -3,9 +3,9 @@ use crate::api::{
     StarMapEdgePatchInputDto, StarMapEmbedDto, StarMapEmbedPatchInputDto,
     StarMapEndpointSelectionDto, StarMapGraphDto, StarMapLinkDto, StarMapLinkPatchInputDto,
     StarMapMetaDto, StarMapNavigationLocationDto, StarMapNavigationRouteDto, StarMapNodeDto,
-    StarMapNodePatchInputDto, StarMapPathSegmentDto, StarMapPhasedSnapshotDto, StarMapPointDto,
-    StarMapReferenceDto, StarMapResolvedPathDto, StarMapTargetDetailDto, StarMapTargetPathDto,
-    WriterError,
+    StarMapNodePatchDto, StarMapNodePatchInputDto, StarMapPathSegmentDto, StarMapPhasedSnapshotDto,
+    StarMapPointDto, StarMapReferenceDto, StarMapResolvedPathDto, StarMapTargetDetailDto,
+    StarMapTargetPathDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -61,6 +61,60 @@ impl super::WriterAppService {
             .update_starmap_node(&starmap_id, &node_id, patch.into())
     }
 
+    /// 只提交共享素材内容（标题/正文/样式/portal/anchors），不移动画布实例。
+    ///
+    /// Issue #1060：显式命令按 DTO 中携带的 `expected_definition_revision`
+    /// 校验素材版本；带位置字段的补丁必须改走 [`Self::move_starmap_node`]。
+    pub fn update_starmap_node_definition(
+        &self,
+        starmap_id: String,
+        node_id: String,
+        patch: StarMapNodePatchInputDto,
+    ) -> Result<StarMapNodeDto, WriterError> {
+        let patch: StarMapNodePatchDto = patch.into();
+        // 显式命令只改共享内容；位置属于画布实例，必须走 move_starmap_node。
+        if patch.position.is_some() {
+            return Err(WriterError::Other(
+                "update_starmap_node_definition cannot change position; use move_starmap_node"
+                    .to_string(),
+            ));
+        }
+        self.api
+            .update_starmap_node_expected(&starmap_id, &node_id, patch, None)
+    }
+
+    /// 只移动画布实例，校验调用方读到的实例 revision。
+    ///
+    /// Issue #1060：`expected_instance_revision` 来自 `StarMapNodeDto.updated_at`；
+    /// 共享素材版本不由本命令校验，也不会被本命令修改。
+    pub fn move_starmap_node(
+        &self,
+        starmap_id: String,
+        node_id: String,
+        position: StarMapPointDto,
+        expected_instance_revision: Option<u64>,
+    ) -> Result<StarMapNodeDto, WriterError> {
+        let patch = StarMapNodePatchDto {
+            title: None,
+            kind: None,
+            payload: None,
+            content: None,
+            anchors: None,
+            portal: None,
+            position: Some(position),
+            style: None,
+            provenance: None,
+            expected_definition_revision: None,
+            trajectory: Vec::new(),
+        };
+        self.api.update_starmap_node_expected(
+            &starmap_id,
+            &node_id,
+            patch,
+            expected_instance_revision,
+        )
+    }
+
     pub fn delete_starmap_node(
         &self,
         starmap_id: String,
@@ -69,10 +123,7 @@ impl super::WriterAppService {
         self.api.delete_starmap_node(&starmap_id, &node_id)
     }
 
-    pub fn list_starmap_library_json(
-        &self,
-        scope_json: String,
-    ) -> Result<String, WriterError> {
+    pub fn list_starmap_library_json(&self, scope_json: String) -> Result<String, WriterError> {
         self.api.list_starmap_library_json(&scope_json)
     }
 

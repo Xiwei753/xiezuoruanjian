@@ -17,6 +17,8 @@ pub struct GraphMeta {
     pub node_ids: Vec<String>,
     pub edge_ids: Vec<String>,
     pub embed_instance_ids: Vec<String>,
+    /// 链接成员缓存（派生）。链接唯一持久化在 annotations 仓库，加载时按仓库
+    /// 重建；这里只用于兼容读取与在 graph.json 里保留可审查的成员快照。
     pub link_ids: Vec<String>,
     /// 边关系索引（派生缓存，可从边对象文件重建）。
     #[serde(default)]
@@ -24,7 +26,8 @@ pub struct GraphMeta {
     /// 嵌入宿主路径索引（派生缓存，可从嵌入对象文件重建）。
     #[serde(default)]
     pub embed_host_index: Vec<EmbedHostIndex>,
-    /// 链接关系索引（派生缓存，可从链接对象文件重建）。
+    /// 链接关系索引（派生缓存，从 annotations 链接投影重建；不再读星图包内
+    /// 链接对象文件）。
     #[serde(default)]
     pub link_relation_index: Vec<LinkRelationIndex>,
     /// 节点种类计数（派生缓存，可从节点对象文件重建）。
@@ -41,7 +44,8 @@ pub struct GraphMeta {
     /// 每个嵌入实例最近一次被写入的事务 revision。
     #[serde(default)]
     pub embed_revisions: HashMap<String, u64>,
-    /// 每条链接最近一次被写入的事务 revision。
+    /// 旧链接对象 revision 缓存。链接增量已由 annotations 记录自身的
+    /// `updatedAtMs` 承担，新写出的 graph.json 保持该字段为空。
     #[serde(default)]
     pub link_revisions: HashMap<String, u64>,
     pub package_revision: u64,

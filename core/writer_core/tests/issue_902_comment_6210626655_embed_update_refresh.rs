@@ -42,10 +42,10 @@ fn point(x: f64, y: f64) -> StarMapPointDto {
 fn node(id: &str) -> StarMapNodeDto {
     StarMapNodeDto {
         id: id.to_string(),
+        asset_id: id.to_string(),
         title: id.to_string(),
         kind: StarMapNodeKindDto::Note,
         payload: None,
-        tags: vec![],
         content: Default::default(),
         anchors: vec![],
         portal: None,
@@ -54,6 +54,7 @@ fn node(id: &str) -> StarMapNodeDto {
         provenance: Default::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     }
 }
 
@@ -183,6 +184,7 @@ fn repointing_embed_host_path_moves_reverse_index_and_delete_guard() {
                 label: None,
                 position: None,
                 host_path: Some(path(&f.r, vec![enter_embed(&f.e_c)], node_target("c1"))),
+                trajectory: Vec::new(),
             },
         )
         .unwrap();

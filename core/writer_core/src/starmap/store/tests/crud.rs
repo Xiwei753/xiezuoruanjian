@@ -266,7 +266,8 @@ fn add_link_updates_graph_meta_link_ids() {
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
     let link = make_test_link("l1", "Test");
     store.add_link(link).unwrap();
-    assert!(store.dirty_links.contains("l1"));
+    // Issue #1060：链接由 annotations 仓库直接持久化，不再进入 store 的 dirty 写队列。
+    assert_eq!(store.get_link("l1").map(|l| l.link_id.as_str()), Some("l1"));
     assert!(
         store.dirty_graph_meta,
         "add_link must mark dirty_graph_meta"

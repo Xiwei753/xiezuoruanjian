@@ -1287,14 +1287,8 @@ impl crate::sync::SyncService {
             &graph.embed_instance_ids,
             &mut map,
         )?;
-        Self::read_member_files(
-            sync_root,
-            starmap_id,
-            "link",
-            "links",
-            &graph.link_ids,
-            &mut map,
-        )?;
+        // 导航链接不在星图包内：唯一持久化所有者是 annotations 仓库，
+        // 冲突解决不再读取/恢复 `starmaps/<id>/links/*.json`。
 
         Ok(map)
     }
@@ -1333,14 +1327,8 @@ impl crate::sync::SyncService {
             &graph.embed_instance_ids,
             &mut map,
         )?;
-        Self::read_member_files(
-            sync_root,
-            starmap_id,
-            "link",
-            "links",
-            &graph.link_ids,
-            &mut map,
-        )?;
+        // 导航链接不在星图包内：唯一持久化所有者是 annotations 仓库，
+        // 冲突解决不再读取/恢复 `starmaps/<id>/links/*.json`。
         Ok(map)
     }
 
@@ -1419,10 +1407,8 @@ impl crate::sync::SyncService {
         graph: &crate::starmap::store::meta::GraphMeta,
         object_contents: &ObjectContentMap,
     ) -> crate::Result<crate::sync::staging::starmap_merge::DerivedIndexes> {
-        use crate::starmap::store::relation_index::{
-            EdgeRelationIndex, EmbedHostIndex, LinkRelationIndex,
-        };
-        use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapLink};
+        use crate::starmap::store::relation_index::{EdgeRelationIndex, EmbedHostIndex};
+        use crate::starmap::types::{StarMapEdge, StarMapEmbed};
 
         let mut edge_relation_index: Vec<EdgeRelationIndex> = Vec::new();
         for edge_id in &graph.edge_ids {
@@ -1451,19 +1437,9 @@ impl crate::sync::SyncService {
             });
         }
 
-        let mut link_relation_index: Vec<LinkRelationIndex> = Vec::new();
-        for link_id in &graph.link_ids {
-            let Some(link) =
-                Self::parse_member_object::<StarMapLink>(object_contents, "link", link_id)?
-            else {
-                continue;
-            };
-            link_relation_index.push(LinkRelationIndex {
-                link_id: link.link_id,
-                source: link.source,
-                target: link.target,
-            });
-        }
+        // 链接索引由 StarMapStore 的 annotations 投影实时构建，不再写入
+        // graph.json 的派生索引；这里保持空 vec 兼容冲突解决输出。
+        let link_relation_index = Vec::new();
 
         Ok(crate::sync::staging::starmap_merge::DerivedIndexes {
             edge_relation_index,
@@ -1504,13 +1480,8 @@ impl crate::sync::SyncService {
                 graph.embed_revisions.insert(object_id.to_string(), new_pr);
                 true
             }
-            "link" => {
-                if !graph.link_ids.iter().any(|x| x == object_id) {
-                    graph.link_ids.push(object_id.to_string());
-                }
-                graph.link_revisions.insert(object_id.to_string(), new_pr);
-                true
-            }
+            // "link" 不在星图包内：链接由 annotations 仓库同步，成员表只是
+            // 派生缓存，冲突解决不再增删链接成员。
             _ => false,
         };
         if added {
@@ -1553,12 +1524,7 @@ impl crate::sync::SyncService {
                 graph.embed_revisions.remove(object_id);
                 graph.embed_instance_ids.len() < before
             }
-            "link" => {
-                let before = graph.link_ids.len();
-                graph.link_ids.retain(|x| x != object_id);
-                graph.link_revisions.remove(object_id);
-                graph.link_ids.len() < before
-            }
+            // "link" 不在星图包内，删除事实由 annotations tombstone 承担。
             _ => false,
         };
         if removed {
@@ -1921,7 +1887,7 @@ impl crate::sync::SyncService {
         starmap_id: &str,
         delete_rels: &mut Vec<String>,
     ) -> crate::Result<()> {
-        use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapLink};
+        use crate::starmap::types::{StarMapEdge, StarMapEmbed};
 
         // edge：from/to 引用 node
         // issue #902 第十五轮复核：用显式 for 循环 + `?` 传播 parse_member_object
@@ -1944,24 +1910,8 @@ impl crate::sync::SyncService {
             delete_rels.push(Self::starmap_object_rel(starmap_id, "edges", eid));
         }
 
-        // link：source/target 引用 node
-        let mut links_to_remove: Vec<String> = Vec::new();
-        for lid in &graph.link_ids {
-            let Some(link) =
-                Self::parse_member_object::<StarMapLink>(object_contents, "link", lid)?
-            else {
-                continue;
-            };
-            if Self::target_path_references_node(&link.source, node_id)
-                || Self::target_path_references_node(&link.target, node_id)
-            {
-                links_to_remove.push(lid.clone());
-            }
-        }
-        for lid in &links_to_remove {
-            Self::remove_object_from_graph_members(graph, "link", lid);
-            delete_rels.push(Self::starmap_object_rel(starmap_id, "links", lid));
-        }
+        // 链接不在星图包内：node 删除后的链接 tombstone 由作者侧
+        // StarMapStore::delete_link 写入 annotations 仓库，冲突解决不处理链接文件。
 
         // embed：host_path 引用 node
         let mut embeds_to_remove: Vec<String> = Vec::new();

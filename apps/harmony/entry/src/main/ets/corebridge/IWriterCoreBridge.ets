@@ -58,8 +58,10 @@ export interface IWriterCoreBridge {
   renameStarMap(starmapId: string, newTitle: string): Promise<ResultEnvelope<boolean>>
 
   // StarMap Node/Edge/Embed mutations（领域数据写入，不属于显示层回流）
-  // #984：节点更新接收完整 patch（title / content / position），只带要改的字段。
-  updateStarMapNode(starmapId: string, nodeId: string, patch: StarMapNodeUpdatePatch): Promise<ResultEnvelope<StarMapNode>>
+  // #1060：内容编辑与只移动是两个命令 —— 共享素材本体带 expectedDefinitionRevision，
+  // 画布实例移动带 expectedRevision，不共用一份 patch。
+  updateStarMapNodeDefinition(starmapId: string, nodeId: string, patch: StarMapNodeUpdatePatch): Promise<ResultEnvelope<StarMapNode>>
+  moveStarMapNode(starmapId: string, nodeId: string, position: StarMapPoint, expectedInstanceRevision: number): Promise<ResultEnvelope<StarMapNode>>
   addStarMapEdge(starmapId: string, from: StarMapTargetPath, to: StarMapTargetPath, kind: string, label: string | null): Promise<ResultEnvelope<StarMapEdge>>
   updateStarMapEmbed(starmapId: string, instanceId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapEmbed>>
   addStarMapNode(starmapId: string, title: string, kind: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>>

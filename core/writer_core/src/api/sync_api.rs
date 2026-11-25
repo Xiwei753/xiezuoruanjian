@@ -3473,10 +3473,10 @@ mod shared_definition_path_tests {
     fn node(id: &str) -> StarMapNode {
         StarMapNode {
             id: id.to_string(),
+            asset_id: id.to_string(),
             title: id.to_string(),
             kind: StarMapNodeKind::Note,
             payload: None,
-            tags: vec![],
             content: StarMapNodeContent::Empty,
             anchors: vec![],
             portal: None,
@@ -3485,6 +3485,7 @@ mod shared_definition_path_tests {
             provenance: StarMapProvenance::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         }
     }
 

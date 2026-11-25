@@ -76,24 +76,17 @@ impl StarMapStore {
             }
         }
 
-        let link_ids = self
-            .graph_meta
-            .as_ref()
-            .map(|m| m.link_ids.clone())
-            .unwrap_or_default();
-
-        for link_id in &link_ids {
-            if !self.links.contains_key(link_id) {
-                let link_path = self.try_load_link(link_id)?;
-                self.links.insert(link_id.clone(), link_path);
-            }
-        }
+        // 链接唯一持久化在 annotations 仓库：集合以仓库为准全量重建投影，
+        // 不再逐个读 `links/` 文件。`GraphMeta.link_ids` 只是派生缓存。
+        self.load_canvas_links()?;
+        self.reconcile_graph_meta_link_indexes();
 
         // 收死最终成员集合：非 dirty 的内存对象如果不在 GraphMeta 成员列表里，
         // 视为 orphan（partial cache 残留或磁盘 revision 切换留下的旧对象），移除。
         // dirty 对象保留：刚被 CRUD 修改、还没 flush 的合法对象（如刚 add 的 node
         // 还没进 GraphMeta.node_ids，但它在 dirty_nodes 里）。
         // 这样 to_starmap_graph() 只返回 GraphMeta 声明的完整集合 + dirty 对象，不含 orphan。
+        // 链接投影来自注解仓库，本身就是完整集合，不参与 orphan 收死。
         {
             let declared_node_ids: std::collections::HashSet<String> = self
                 .graph_meta
@@ -110,11 +103,6 @@ impl StarMapStore {
                 .as_ref()
                 .map(|m| m.embed_instance_ids.iter().cloned().collect())
                 .unwrap_or_default();
-            let declared_link_ids: std::collections::HashSet<String> = self
-                .graph_meta
-                .as_ref()
-                .map(|m| m.link_ids.iter().cloned().collect())
-                .unwrap_or_default();
 
             self.nodes
                 .retain(|id, _| self.dirty_nodes.contains(id) || declared_node_ids.contains(id));
@@ -122,8 +110,6 @@ impl StarMapStore {
                 .retain(|id, _| self.dirty_edges.contains(id) || declared_edge_ids.contains(id));
             self.embeds
                 .retain(|id, _| self.dirty_embeds.contains(id) || declared_embed_ids.contains(id));
-            self.links
-                .retain(|id, _| self.dirty_links.contains(id) || declared_link_ids.contains(id));
         }
 
         self.detect_dangling_references(&mut diagnostics);

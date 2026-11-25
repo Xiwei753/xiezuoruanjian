@@ -11,7 +11,7 @@ use super::super::StarMapStore;
 
 /// 严格加载单个对象的通用 helper：文件存在 -> 读取 -> 解析 -> ID 校验。
 ///
-/// 统一 node / edge / embed / link 四种对象的 fail-closed 错误处理，
+/// 统一 node / edge / embed 三种包内对象的 fail-closed 错误处理，
 /// 避免四处复制同一套「文件存在 → 读取 → 解析 → ID 校验」代码。
 ///
 /// - 文件不存在 → push `Missing` diagnostic 后 `Err`；
@@ -19,10 +19,12 @@ use super::super::StarMapStore;
 /// - JSON 解析失败 → push `Corrupt` diagnostic 后 `Err`；
 /// - `extract_id(obj)` 与文件名不一致 → push `Corrupt` diagnostic 后 `Err`。
 ///
-/// `id_label` 仅用于 ID 不一致错误消息中描述内部字段名（node/edge/link
-/// 用 `"id"`，embed 用 `"instance_id"`），以保持与原逐字实现完全一致的消息文本。
+/// `id_label` 仅用于 ID 不一致错误消息中描述内部字段名（node/edge 用
+/// `"id"`，embed 用 `"instance_id"`），以保持与原逐字实现完全一致的消息文本。
 ///
 /// diagnostic 只负责说明「哪里坏了」，不承担「错误已处理、可继续返回成功」的作用。
+///
+/// 导航链接不在包内对象文件里，不走此 helper，见 [`StarMapStore::try_load_link`]。
 fn load_object_strict<T, F>(
     recovery_log: &mut Vec<LoadDiagnostic>,
     starmap_dir: &Path,
@@ -111,23 +113,21 @@ impl StarMapStore {
                 node_id, instance.starmap_id, self.starmap_id
             )));
         }
-        let target_node_id = instance.target_node_id.clone();
+        let asset_id = instance.asset_id.clone();
         self.node_assets
-            .insert(node_id.to_string(), target_node_id.clone());
-        let definition = crate::starmap::library::load_node_definition(
-            &self.app_data_root,
-            &target_node_id,
-        )?
-        .ok_or_else(|| {
-            Error::Other(format!(
-                "shared node definition missing for instance {} -> {}",
-                node_id, target_node_id
-            ))
-        })?;
-        if definition.asset_id != target_node_id {
+            .insert(node_id.to_string(), asset_id.clone());
+        let definition =
+            crate::starmap::library::load_node_definition(&self.app_data_root, &asset_id)?
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "shared node definition missing for instance {} -> {}",
+                        node_id, asset_id
+                    ))
+                })?;
+        if definition.asset_id != asset_id {
             return Err(Error::Other(format!(
                 "shared node definition id mismatch for {}: {}",
-                target_node_id, definition.asset_id
+                asset_id, definition.asset_id
             )));
         }
         Ok(definition.instantiate_instance(&instance))
@@ -167,20 +167,21 @@ impl StarMapStore {
         )
     }
 
-    /// 严格加载单个 link：同 `try_load_node` 的 fail-closed 语义。
+    /// 从 annotations 仓库按 `link_id` 读链接并转成当前画布投影。
+    ///
+    /// 与包内对象不同，链接的持久事实在注解仓库，`GraphMeta.link_ids` 只是
+    /// 派生缓存，因此这里**不 fail-closed**：
+    /// - 仓库没有该记录（尚未迁移 / 已被清理）→ `Ok(None)`；
+    /// - 记录已 tombstone，或记录源属于其它画布 → `Ok(None)`；
+    /// - 仓库读取/解析失败才返回 `Err`。
     pub(in crate::starmap::store) fn try_load_link(
         &mut self,
         link_id: &str,
-    ) -> Result<StarMapLink> {
-        let dir = self.starmap_dir();
-        load_object_strict(
-            &mut self.recovery_log,
-            &dir,
-            "links",
-            "link",
-            link_id,
-            "id",
-            |l: &StarMapLink| l.link_id.as_str(),
-        )
+    ) -> Result<Option<StarMapLink>> {
+        let store = self.annotation_store_for_canvas()?;
+        let Some(link) = store.get_link(link_id)? else {
+            return Ok(None);
+        };
+        Ok(self.object_link_to_star_map_link(&link))
     }
 }

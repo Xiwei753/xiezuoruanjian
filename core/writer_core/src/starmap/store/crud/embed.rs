@@ -107,8 +107,11 @@ impl StarMapStore {
             self.remove_embed(iid);
         }
 
-        for lid in &cascade.link_ids {
-            self.remove_link(lid);
+        // 级联删除的链接必须写 annotations 仓库 tombstone（唯一持久化所有者），
+        // 不能只从投影移除，否则仓库里的活动链接会在下次加载时复活。
+        let link_ids: Vec<String> = cascade.link_ids.clone();
+        for lid in &link_ids {
+            self.delete_link(lid)?;
         }
 
         Ok(())

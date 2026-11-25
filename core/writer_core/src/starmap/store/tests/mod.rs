@@ -19,10 +19,10 @@ fn write_to_bucket(dir: &std::path::Path, subdir: &str, id: &str, json: &str) {
 fn make_test_node(id: &str, title: &str) -> StarMapNode {
     StarMapNode {
         id: id.to_string(),
+        asset_id: id.to_string(),
         title: title.to_string(),
         kind: StarMapNodeKind::Concept,
         payload: None,
-        tags: vec![],
         content: StarMapNodeContent::Empty,
         anchors: vec![],
         portal: None,
@@ -31,6 +31,7 @@ fn make_test_node(id: &str, title: &str) -> StarMapNode {
         provenance: StarMapProvenance::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     }
 }
 fn make_test_link(link_id: &str, label: &str) -> StarMapLink {

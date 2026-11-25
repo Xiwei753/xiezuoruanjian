@@ -39,10 +39,10 @@ fn embed(instance_id: &str, target_starmap_id: &str) -> StarMapEmbed {
 fn node(node_id: &str) -> StarMapNode {
     StarMapNode {
         id: node_id.to_string(),
+        asset_id: node_id.to_string(),
         title: node_id.to_string(),
         kind: StarMapNodeKind::Note,
         payload: None,
-        tags: vec![],
         content: StarMapNodeContent::Empty,
         anchors: vec![],
         portal: None,
@@ -51,6 +51,7 @@ fn node(node_id: &str) -> StarMapNode {
         provenance: StarMapProvenance::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     }
 }
 

@@ -460,8 +460,9 @@ QtObject {
                     y: pos.y,
                     width: size.width,
                     height: size.height,
-
-                    tags: gn.tags
+                    // Issue #1060：节点不再携带 tags；标签由 annotations 关系查询投影。
+                    assetId: gn.assetId || "",
+                    definitionRevision: gn.definitionRevision || 0
                 });
             }
         }
@@ -527,8 +528,9 @@ QtObject {
                 && rowNode.width === desired.width
                 && rowNode.height === desired.height
                 && JSON.stringify(rowNode.content) === JSON.stringify(desired.content)
-
-                && JSON.stringify(rowNode.tags) === JSON.stringify(desired.tags);
+                // Issue #1060：素材本体内容变化只失效对应 asset 的实例视图。
+                && rowNode.assetId === desired.assetId
+                && rowNode.definitionRevision === desired.definitionRevision;
     }
 
     // 稳定行身份同步：已有节点只更新 row 的字段，只有新增/删除才增删行。

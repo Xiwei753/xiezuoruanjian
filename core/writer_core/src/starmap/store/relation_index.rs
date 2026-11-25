@@ -3,8 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::starmap::connections::{
-    load_graph_edges, load_graph_embeds, load_graph_links, route_aware_endpoint_matches,
-    StarMapConnectionInfo,
+    load_graph_edges, load_graph_embeds, route_aware_endpoint_matches, StarMapConnectionInfo,
 };
 use crate::starmap::graph::resolve::{resolve_status_to_error, GraphResolverContext};
 use crate::starmap::navigation::{resolve_navigation_route, StarMapNavigationRoute};
@@ -457,6 +456,33 @@ fn is_same_source(
         && s.source_id == source_id
 }
 
+/// 读取一张画布的活动导航链接，用于构建跨画布引用索引。
+///
+/// 链接唯一持久化在 annotations 仓库：已全量加载的 Store 通过 overlay 提供
+/// 内存投影，其余画布按归属作品/全局域直接读注解链接记录。这里不再读
+/// `starmaps/<id>/links/*.json`（该目录已退出星图包）。
+fn load_index_canvas_links(
+    context: &GraphResolverContext,
+    starmap_id: &str,
+) -> crate::error::Result<Vec<StarMapLink>> {
+    if let Some(graph) = context.overlays.get(starmap_id) {
+        return Ok(graph.links.clone());
+    }
+    let store = crate::starmap::store::link_repository::annotation_store_for_canvas_at(
+        &context.app_data_root,
+        starmap_id,
+    )?;
+    let mut links = Vec::new();
+    for link in store.list_links_for_starmap(starmap_id)? {
+        if let Some(projected) =
+            crate::starmap::store::link_repository::project_object_link(starmap_id, &link)
+        {
+            links.push(projected);
+        }
+    }
+    Ok(links)
+}
+
 /// 反向依赖索引：按 `(host_starmap_id, kind, object_id)` 查询依赖该对象的路径来源。
 ///
 /// 这是从星图真实数据派生的可重建查询结构，图对象仍是唯一事实来源。
@@ -511,8 +537,8 @@ impl PathDependencyIndex {
                 )?;
             }
 
-            // Link 两端
-            for link in load_graph_links(context, starmap_id)? {
+            // Link 两端（来自 annotations 链接投影，不读星图包内链接文件）
+            for link in load_index_canvas_links(context, starmap_id)? {
                 index.add_path(
                     starmap_id,
                     CrossCanvasRefSourceKind::LinkSource,
@@ -1389,10 +1415,10 @@ mod tests {
         // 图 B：含节点 X（让 NodeTarget 事实产出）
         let node_x = crate::starmap::types::StarMapNode {
             id: "X".to_string(),
+            asset_id: "X".to_string(),
             title: "X".to_string(),
             kind: crate::starmap::types::StarMapNodeKind::Concept,
             payload: None,
-            tags: vec![],
             content: crate::starmap::semantic::StarMapNodeContent::Empty,
             anchors: vec![],
             portal: None,
@@ -1401,6 +1427,7 @@ mod tests {
             provenance: StarMapProvenance::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         };
         let graph_b = StarMapGraph {
             starmap_id: "B".to_string(),
@@ -1519,10 +1546,10 @@ mod tests {
     fn test_node(node_id: &str) -> crate::starmap::types::StarMapNode {
         crate::starmap::types::StarMapNode {
             id: node_id.to_string(),
+            asset_id: node_id.to_string(),
             title: node_id.to_string(),
             kind: crate::starmap::types::StarMapNodeKind::Note,
             payload: None,
-            tags: vec![],
             content: crate::starmap::semantic::StarMapNodeContent::Empty,
             anchors: vec![],
             portal: None,
@@ -1531,6 +1558,7 @@ mod tests {
             provenance: StarMapProvenance::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         }
     }
 

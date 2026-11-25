@@ -74,6 +74,9 @@ pub(crate) fn classify_content_path(raw_path: &str) -> ContentClass {
 
     // Each annotation record is an independent JSON file and uses ordinary
     // metadata LWW; there is no project-wide annotations snapshot to overwrite.
+    // This includes the global annotation domain (`app_data_root/annotations/...`):
+    // navigation links live here now, so project and global link records both
+    // classify as Metadata instead of StarMap object files.
     if path.starts_with("annotations/")
         && path.ends_with(".json")
         && path.split('/').nth(1).is_some_and(|collection| {

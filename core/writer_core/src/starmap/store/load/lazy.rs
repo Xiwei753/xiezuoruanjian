@@ -47,12 +47,17 @@ impl StarMapStore {
         Ok(())
     }
 
+    /// 按需把一条 annotations 仓库链接装入画布投影。
+    ///
+    /// 仓库没有该链接（未迁移 / 已删除 / 属于其它画布）时保持投影不变，
+    /// 由调用方按「链接不存在」处理，不 fail-closed。
     pub fn ensure_link_loaded(&mut self, link_id: &str) -> Result<()> {
         if self.links.contains_key(link_id) {
             return Ok(());
         }
-        let link = self.try_load_link(link_id)?;
-        self.links.insert(link_id.to_string(), link);
+        if let Some(link) = self.try_load_link(link_id)? {
+            self.links.insert(link.link_id.clone(), link);
+        }
         Ok(())
     }
 }

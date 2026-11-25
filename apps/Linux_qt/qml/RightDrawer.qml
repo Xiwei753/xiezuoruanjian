@@ -253,10 +253,17 @@ Rectangle {
                         : (projectId && chapterId
                             ? { kind: "chapter", projectId: projectId, objectId: chapterId } : null)
                     targetLabel: root.embeddedStarmapId !== ""
-                        ? (writingTagsPanel.targetRef && writingTagsPanel.targetRef.kind === "starMapNode"
+                        ? (writingTagsPanel.targetRef
+                           && (writingTagsPanel.targetRef.kind === "nodeAsset"
+                               || writingTagsPanel.targetRef.kind === "starMapNode")
                             ? qsTr("星图节点")
-                            : writingTagsPanel.targetRef && writingTagsPanel.targetRef.kind === "starMapEmbed"
-                                ? qsTr("子星图") : root.embeddedStarmapTitle)
+                            : writingTagsPanel.targetRef
+                              && writingTagsPanel.targetRef.kind === "nodeInstance"
+                                ? qsTr("星图节点实例")
+                                : writingTagsPanel.targetRef
+                                  && (writingTagsPanel.targetRef.kind === "starMapEmbed"
+                                      || writingTagsPanel.targetRef.kind === "embedInstance")
+                                    ? qsTr("子星图") : root.embeddedStarmapTitle)
                         : (root.editorControllerRef ? root.editorControllerRef.chapterTitle : "")
                     allowSelectionAnchor: root.embeddedStarmapId === ""
                     textRevision: root.editorControllerRef && root.editorControllerRef.targetEditorItem

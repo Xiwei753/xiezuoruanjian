@@ -1,3 +1,4 @@
+use super::starmap_merge::merge_starmap_graph_with_objects;
 use super::*;
 use std::fs;
 use std::path::PathBuf;
@@ -418,7 +419,7 @@ fn make_graph_meta_json(starmap_id: &str, node_ids: &[&str], updated_at: u64) ->
 fn make_node_json(node_id: &str) -> Vec<u8> {
     let record = serde_json::json!({
         "instanceId": node_id,
-        "targetNodeId": format!("def-{node_id}"),
+        "assetId": format!("def-{node_id}"),
         "position": { "x": 0.0, "y": 0.0 },
         "starmapId": "sm_x",
         "createdAt": 0,
@@ -730,7 +731,7 @@ fn starmap_node_instance_identity_mismatch_reports_path() {
     let graph = make_graph_meta_json("sm_x", &["n1"], 0);
     let bad_instance = serde_json::to_vec_pretty(&serde_json::json!({
         "instanceId": "other",
-        "targetNodeId": "def-n1",
+        "assetId": "def-n1",
         "position": { "x": 0.0, "y": 0.0 },
         "starmapId": "sm_x",
         "createdAt": 0,

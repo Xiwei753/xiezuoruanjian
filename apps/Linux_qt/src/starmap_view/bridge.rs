@@ -208,10 +208,10 @@ mod prospective_edge_render_tests {
     fn node(id: &str, x: f64) -> StarMapNode {
         StarMapNode {
             id: id.to_string(),
+            asset_id: String::new(),
             title: id.to_string(),
             kind: StarMapNodeKind::Note,
             payload: None,
-            tags: vec![],
             content: Default::default(),
             anchors: vec![],
             portal: None,
@@ -220,6 +220,7 @@ mod prospective_edge_render_tests {
             provenance: Default::default(),
             created_at: 0,
             updated_at: 0,
+            definition_revision: 0,
         }
     }
 

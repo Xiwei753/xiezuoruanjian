@@ -48,10 +48,10 @@ fn point(x: f64, y: f64) -> StarMapPointDto {
 fn node(id: &str) -> StarMapNodeDto {
     StarMapNodeDto {
         id: id.to_string(),
+        asset_id: id.to_string(),
         title: id.to_string(),
         kind: StarMapNodeKindDto::Note,
         payload: None,
-        tags: vec![],
         content: Default::default(),
         anchors: vec![],
         portal: None,
@@ -60,6 +60,7 @@ fn node(id: &str) -> StarMapNodeDto {
         provenance: Default::default(),
         created_at: 0,
         updated_at: 0,
+        definition_revision: 0,
     }
 }
 

@@ -1,4 +1,4 @@
-import { DecodeResult } from './CoreWireDecoders'
+import { DecodeResult, decodeStarMapTargetPath } from './CoreWireDecoders'
 import {
   AnnotationAutoMatchDto, AnnotationLinkResolutionDto, AnnotationNamedEntryDto, AnnotationObjectKind,
   AnnotationObjectLinkDto, AnnotationObjectRefDto, AnnotationTagBindingDto,
@@ -37,6 +37,15 @@ function nullableString(rec: Record<string, Object>, key: string): string | null
   return typeof value === 'string' ? value : undefined
 }
 
+// 对象引用里的可选身份字段（starmapId / anchorId）与可空 projectId：
+// 键缺失或 null 都按"没有"处理，值类型错误返回 undefined 报契约不一致。
+function refString(rec: Record<string, Object>, key: string): string | null | undefined {
+  const value: Object | undefined = rec[key]
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'string') return undefined
+  return value.length > 0 ? value : null
+}
+
 function strings(rec: Record<string, Object>, key: string): string[] | null {
   const value: Object | undefined = rec[key]
   if (!Array.isArray(value)) return null
@@ -68,31 +77,65 @@ function nullableNumber(rec: Record<string, Object>, key: string): number | null
   return typeof value === 'number' ? value : undefined
 }
 
+// #1060：Core 把共享素材与画布实例拆成不同种类，旧记录名（starMapNode /
+// starMapEmbed）在 Core 反序列化时已归一化，这里同样归一化，避免 UI 两套判断。
+function normalizeObjectKind(raw: string): AnnotationObjectKind | null {
+  if (raw === 'starMapNode') return 'nodeAsset'
+  if (raw === 'starMapEmbed') return 'embedInstance'
+  if (['project', 'volume', 'chapter', 'textAnchor', 'namedEntry', 'starMap',
+    'nodeAsset', 'nodeInstance', 'embedInstance', 'canvasAnchor'].includes(raw)) {
+    return raw as AnnotationObjectKind
+  }
+  return null
+}
+
 export function decodeAnnotationObjectRef(value: Object): DecodeResult<AnnotationObjectRefDto> {
   const rec = record(value, 'AnnotationObjectRefDto')
   if (rec === null) return failure('expected object')
-  const kind = text(rec, 'kind')
-  const projectId = text(rec, 'projectId')
+  const rawKind = text(rec, 'kind')
   const objectId = text(rec, 'objectId')
-  if (kind === null || projectId === null || objectId === null) return failure('missing object ref fields')
-  if (!['project', 'volume', 'chapter', 'textAnchor', 'starMap', 'starMapNode', 'starMapEmbed', 'namedEntry'].includes(kind)) {
-    return failure('unknown object kind')
-  }
+  if (rawKind === null || objectId === null) return failure('missing object ref fields')
+  const kind = normalizeObjectKind(rawKind)
+  if (kind === null) return failure('unknown object kind')
+  // projectId 是 Option：全局素材域在线格式里是 null，UI 用空串表示。
+  const projectIdRaw = refString(rec, 'projectId')
+  if (projectIdRaw === undefined) return failure('projectId: expected string or null')
+  const starmapIdRaw = refString(rec, 'starmapId')
+  if (starmapIdRaw === undefined) return failure('starmapId: expected string or null')
+  const anchorIdRaw = refString(rec, 'anchorId')
+  if (anchorIdRaw === undefined) return failure('anchorId: expected string or null')
   const decoded: AnnotationObjectRefDto = {
-    kind: kind as AnnotationObjectKind, projectId: projectId, objectId: objectId
+    kind: kind,
+    projectId: projectIdRaw === null ? '' : projectIdRaw,
+    objectId: objectId
   }
+  if (starmapIdRaw !== null) decoded.starmapId = starmapIdRaw
+  if (anchorIdRaw !== null) decoded.anchorId = anchorIdRaw
   return success(decoded)
 }
 
+// #1060：链接目标是 objectRef 与 canvasRoute 二选一。
 export function decodeAnnotationTarget(value: Object): DecodeResult<AnnotationTargetDto> {
   const rec = record(value, 'AnnotationTargetDto')
   if (rec === null) return failure('expected object')
   const rawRef: Object | undefined = rec['objectRef']
-  if (rawRef === undefined) return failure('missing objectRef')
-  const decoded = decodeAnnotationObjectRef(rawRef)
-  if (!decoded.ok || decoded.value === undefined) return failure(`objectRef: ${decoded.error}`)
-  const target: AnnotationTargetDto = { objectRef: decoded.value }
-  return success(target)
+  const rawRoute: Object | undefined = rec['canvasRoute']
+  const hasRef: boolean = rawRef !== undefined && rawRef !== null
+  const hasRoute: boolean = rawRoute !== undefined && rawRoute !== null
+  if (hasRef && hasRoute) return failure('target has both objectRef and canvasRoute')
+  if (hasRef) {
+    const decoded = decodeAnnotationObjectRef(rawRef as Object)
+    if (!decoded.ok || decoded.value === undefined) return failure(`objectRef: ${decoded.error}`)
+    const refTarget: AnnotationTargetDto = { objectRef: decoded.value }
+    return success(refTarget)
+  }
+  if (hasRoute) {
+    const decoded = decodeStarMapTargetPath(rawRoute as Object)
+    if (!decoded.ok || decoded.value === undefined) return failure(`canvasRoute: ${decoded.error}`)
+    const routeTarget: AnnotationTargetDto = { canvasRoute: decoded.value }
+    return success(routeTarget)
+  }
+  return failure('target has neither objectRef nor canvasRoute')
 }
 
 export function decodeAnnotationTag(value: Object): DecodeResult<AnnotationTagDto> {
