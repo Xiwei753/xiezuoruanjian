@@ -29,11 +29,6 @@ fn node_search_content(node: &StarMapNodeDto) -> String {
     if !text.is_empty() {
         parts.push(text);
     }
-    for tag in &node.tags {
-        if !tag.is_empty() {
-            parts.push(tag.clone());
-        }
-    }
     parts.join(" ")
 }
 
