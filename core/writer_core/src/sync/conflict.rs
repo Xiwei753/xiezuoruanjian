@@ -758,6 +758,7 @@ impl crate::sync::SyncService {
         sync_root: &Path,
         path: &str,
         snapshot_rel: &str,
+        guard: Option<&crate::storage::WorkspaceWriteLock>,
     ) -> crate::Result<()> {
         let snapshot_path = sync_root.join(snapshot_rel);
         let remote_content = std::fs::read(&snapshot_path).map_err(|e| {
@@ -771,44 +772,56 @@ impl crate::sync::SyncService {
         // 正文、meta、提交序号和后续证明批次共享同一决议；不能用普通
         // atomic_write 绕开章节版本，否则旧的后台保存仍可能覆盖这里。
         if let Some((volume_id, chapter_id)) = Self::chapter_sync_path_parts(path) {
-            if sync_root.join("volumes").is_dir() {
+            {
                 let project_id = sync_root
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or_default()
                     .to_string();
-                if !project_id.is_empty() {
-                    let expected = crate::chapter::commit::read_chapter_version(
+                if project_id.is_empty() {
+                    return Err(crate::Error::Other(
+                        "resolve_conflict_take_remote: cannot derive project id".to_string(),
+                    ));
+                }
+                let remote_text = String::from_utf8(remote_content.clone()).map_err(|e| {
+                    crate::Error::Other(format!(
+                        "resolve_conflict_take_remote: remote chapter is not UTF-8 {}: {}",
+                        path, e
+                    ))
+                })?;
+                let Some(guard) = guard else {
+                    return Err(crate::Error::Other(
+                        "resolve_conflict_take_remote: chapter restore requires workspace guard"
+                            .to_string(),
+                    ));
+                };
+                let (_, local_content, expected) =
+                    crate::chapter::commit::read_chapter_state_recovering(
                         sync_root,
+                        guard,
                         &volume_id,
                         &chapter_id,
                     )?;
-                    let local_content =
-                        std::fs::read_to_string(&local_full_path).unwrap_or_default();
-                    let remote_text = String::from_utf8(remote_content.clone()).map_err(|e| {
-                        crate::Error::Other(format!(
-                            "resolve_conflict_take_remote: remote chapter is not UTF-8 {}: {}",
-                            path, e
-                        ))
-                    })?;
-                    let mut request = crate::chapter::ChapterCommitRequest::new(
-                        crate::chapter::ChapterKey::new(project_id, volume_id, chapter_id),
-                        remote_text,
-                    );
-                    request.expected = Some(expected);
-                    request.base_content = Some(local_content);
-                    request.mutation = crate::chapter::ChapterMutationKind::Restore;
-                    request.source = crate::chapter::ChapterCommitSource::Restore;
-                    match crate::chapter::commit::commit_chapter_with_guard(
-                        sync_root, None, request,
-                    )? {
-                        crate::chapter::ChapterCommitOutcome::Committed(_) => return Ok(()),
-                        crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
-                            return Err(crate::Error::Other(format!(
-                                "resolve_conflict_take_remote: chapter version advanced during restore: {}",
-                                conflict.key.chapter_id
-                            )));
-                        }
+                let mut request = crate::chapter::ChapterCommitRequest::new(
+                    crate::chapter::ChapterKey::new(project_id, volume_id, chapter_id),
+                    remote_text,
+                );
+                request.expected = Some(expected);
+                request.base_content = Some(local_content);
+                request.mutation = crate::chapter::ChapterMutationKind::Restore;
+                request.source = crate::chapter::ChapterCommitSource::Restore;
+                request.allow_empty_overwrite = request.content.is_empty();
+                match crate::chapter::commit::commit_chapter_with_guard(
+                    sync_root,
+                    Some(guard),
+                    request,
+                )? {
+                    crate::chapter::ChapterCommitOutcome::Committed(_) => return Ok(()),
+                    crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
+                        return Err(crate::Error::Other(format!(
+                            "resolve_conflict_take_remote: chapter version advanced during restore: {}",
+                            conflict.key.chapter_id
+                        )));
                     }
                 }
             }
@@ -862,7 +875,21 @@ impl crate::sync::SyncService {
     /// - `Ok(false)`：仅排队 `pending_take_remote`（老数据兼容，live 正文未变），
     ///   平台层不应触发编辑器重载。
     pub fn resolve_conflict_take_remote(sync_root: &Path, path: &str) -> crate::Result<bool> {
-        Self::resolve_conflict_take_remote_at_target(sync_root, path, None)
+        // 兼容入口（测试/旧调用方）：以 sync_root 为锁根获取 guard。生产路径
+        // 必须走 *_with_guard，复用 API 已持有的 workspace guard。
+        let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root).ok();
+        Self::resolve_conflict_take_remote_at_target(sync_root, path, None, guard.as_ref())
+    }
+
+    /// 与 [`Self::resolve_conflict_take_remote`] 相同，但复用调用方已持有的
+    /// workspace guard；章节正文恢复必须在该 guard 下恢复 pending journal 并
+    /// 做 generation/revision/digest CAS。
+    pub fn resolve_conflict_take_remote_with_guard(
+        sync_root: &Path,
+        guard: &crate::storage::WorkspaceWriteLock,
+        path: &str,
+    ) -> crate::Result<bool> {
+        Self::resolve_conflict_take_remote_at_target(sync_root, path, None, Some(guard))
     }
 
     pub fn resolve_conflict_take_remote_for_group(
@@ -870,13 +897,24 @@ impl crate::sync::SyncService {
         path: &str,
         group: &crate::sync::types::AppDataGroup,
     ) -> crate::Result<bool> {
-        Self::resolve_conflict_take_remote_at_target(sync_root, path, Some(group))
+        let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root).ok();
+        Self::resolve_conflict_take_remote_at_target(sync_root, path, Some(group), guard.as_ref())
+    }
+
+    pub fn resolve_conflict_take_remote_for_group_with_guard(
+        sync_root: &Path,
+        guard: &crate::storage::WorkspaceWriteLock,
+        path: &str,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> crate::Result<bool> {
+        Self::resolve_conflict_take_remote_at_target(sync_root, path, Some(group), Some(guard))
     }
 
     fn resolve_conflict_take_remote_at_target(
         sync_root: &Path,
         path: &str,
         group: Option<&crate::sync::types::AppDataGroup>,
+        guard: Option<&crate::storage::WorkspaceWriteLock>,
     ) -> crate::Result<bool> {
         validate_group_conflict_path(group, path, "resolve_conflict_take_remote")?;
         let mut state = load_conflict_state(sync_root, group)?;
@@ -903,7 +941,7 @@ impl crate::sync::SyncService {
         // decide_take_remote 的 None 分支（返回 Ok(true) 即 pending fallback）现在不应再被触发
         // （因为 conflict 必为 Some），但保留它作为防御性代码不删（签名不变，仍接受 Option）。
         let use_pending_fallback =
-            Self::decide_take_remote(sync_root, path, &mut state, Some(conflict))?;
+            Self::decide_take_remote(sync_root, path, &mut state, Some(conflict), guard)?;
 
         if use_pending_fallback {
             // 兼容路径：标记为 pending_take_remote，下次 perform_sync 强制下载远端内容。
@@ -941,6 +979,7 @@ impl crate::sync::SyncService {
         path: &str,
         state: &mut crate::sync::types::SyncState,
         conflict_opt: Option<SyncConflict>,
+        guard: Option<&crate::storage::WorkspaceWriteLock>,
     ) -> crate::Result<bool> {
         let Some(conflict) = conflict_opt else {
             // 无冲突记录：回退 pending_take_remote 行为。
@@ -996,7 +1035,7 @@ impl crate::sync::SyncService {
                         Self::apply_starmap_remote_snapshot(sync_root, path, snapshot_rel)?;
                     } else {
                         // 非星图路径：原子替换本地正文。
-                        Self::apply_remote_snapshot(sync_root, path, snapshot_rel)?;
+                        Self::apply_remote_snapshot(sync_root, path, snapshot_rel, guard)?;
                     }
                     // issue #902 第十六轮复核：清理已恢复文件的旧 tombstone。
                     // 文件已恢复（远端副本写入本地），旧 tombstone 不再适用。

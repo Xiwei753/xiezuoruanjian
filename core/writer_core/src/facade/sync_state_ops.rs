@@ -143,11 +143,17 @@ impl super::WriterCore {
         path: &str,
     ) -> crate::error::Result<bool> {
         let root = self.conflict_target_root(target_kind, project_id)?;
+        // 章节正文恢复必须和保存/同步共用同一把 workspace guard：先恢复
+        // pending journal，再读完整版本做 CAS。API 层若已持锁，这里按同一
+        // root 嵌套获取。
+        let guard = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         if target_kind == "app" {
             let group = self.app_conflict_group_for_path(path)?;
-            crate::sync::SyncService::resolve_conflict_take_remote_for_group(&root, path, &group)
+            crate::sync::SyncService::resolve_conflict_take_remote_for_group_with_guard(
+                &root, &guard, path, &group,
+            )
         } else {
-            crate::sync::SyncService::resolve_conflict_take_remote(&root, path)
+            crate::sync::SyncService::resolve_conflict_take_remote_with_guard(&root, &guard, path)
         }
     }
 
