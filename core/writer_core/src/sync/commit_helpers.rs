@@ -771,6 +771,125 @@ fn refresh_stats_event_actions(
     Ok(())
 }
 
+/// 识别 target-relative 的章节正文路径 `volumes/<v>/chapters/<c>/chapter.md`。
+fn chapter_body_parts(rel_path: &Path) -> Option<(String, String)> {
+    let parts: Vec<String> = rel_path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect();
+    if parts.len() == 5
+        && parts[0] == "volumes"
+        && parts[2] == "chapters"
+        && parts[4] == "chapter.md"
+    {
+        Some((parts[1].clone(), parts[3].clone()))
+    } else {
+        None
+    }
+}
+
+fn chapter_meta_rel_path(volume_id: &str, chapter_id: &str) -> PathBuf {
+    PathBuf::from("volumes")
+        .join(volume_id)
+        .join("chapters")
+        .join(chapter_id)
+        .join("chapter.meta.json")
+}
+
+/// 先通过章节协调器提交现有章节正文，返回已处理的 target-relative 路径。
+///
+/// 章节正文与 `chapter.meta.json` 不能继续由通用 SaveTransaction 直接写：
+/// 否则同步会绕过 generation/revision/digest CAS，把旧快照盖回新正文。这里
+/// 在已持有的 workspace guard 下重新读取当前版本，以调用方刚读到的版本作
+/// expected（防止读后到提交前又被编辑），正文和 meta 一起由 journal 决议。
+/// 新章节（live 尚不存在）仍留给通用事务，直到协调器支持 Create。
+fn commit_synced_chapter_bodies(
+    live_root: &Path,
+    guard: &crate::storage::WorkspaceWriteLock,
+    content_actions: &[crate::sync::staging::CommitAction],
+) -> crate::error::Result<std::collections::HashSet<PathBuf>> {
+    let mut handled = std::collections::HashSet::new();
+    for action in content_actions {
+        let crate::sync::staging::CommitAction::Apply { rel_path, content } = action else {
+            continue;
+        };
+        let Some((volume_id, chapter_id)) = chapter_body_parts(rel_path) else {
+            continue;
+        };
+        let current = match crate::chapter::commit::read_chapter_state_recovering(
+            live_root,
+            guard,
+            &volume_id,
+            &chapter_id,
+        ) {
+            Ok((meta, text, version)) => (meta, text, version),
+            Err(crate::error::Error::ChapterNotFound) => {
+                // 新章节：协调器还不支持 Create，交给通用事务。
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let content = std::str::from_utf8(content).map_err(|error| {
+            crate::error::Error::Other(format!(
+                "sync chapter body is not UTF-8 {}: {error}",
+                rel_path.display()
+            ))
+        })?;
+        let project_id = live_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if project_id.is_empty() {
+            return Err(crate::error::Error::Other(
+                "sync chapter commit cannot derive project id from live root".to_string(),
+            ));
+        }
+        let mut request = crate::chapter::ChapterCommitRequest::new(
+            crate::chapter::ChapterKey::new(project_id, volume_id.clone(), chapter_id.clone()),
+            content,
+        );
+        let incoming_meta = content_actions.iter().find_map(|candidate| {
+            let crate::sync::staging::CommitAction::Apply { rel_path, content } = candidate else {
+                return None;
+            };
+            if *rel_path == chapter_meta_rel_path(&volume_id, &chapter_id) {
+                serde_json::from_slice::<crate::chapter::Chapter>(content).ok()
+            } else {
+                None
+            }
+        });
+        if let Some(incoming_meta) = incoming_meta.as_ref() {
+            // 标题/顺序不是正文版本的一部分；协调器当前不改这两个字段。
+            // 若远端同时改了它们，整章仍交给通用事务，避免丢标题。
+            if incoming_meta.title != current.0.title || incoming_meta.order != current.0.order {
+                continue;
+            }
+        }
+        request.expected = Some(current.2);
+        request.base_content = Some(current.1);
+        request.mutation = crate::chapter::ChapterMutationKind::SyncMerge;
+        request.source = crate::chapter::ChapterCommitSource::Sync;
+        request.allow_empty_overwrite = content.is_empty();
+        match crate::chapter::commit::commit_chapter_with_guard(live_root, Some(guard), request)? {
+            crate::chapter::ChapterCommitOutcome::Committed(_) => {
+                handled.insert(rel_path.clone());
+                handled.insert(chapter_meta_rel_path(&volume_id, &chapter_id));
+            }
+            crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
+                return Err(crate::error::Error::Other(format!(
+                    "sync chapter commit conflicted for {}/{}: actual={:?}",
+                    volume_id, chapter_id, conflict.actual
+                )));
+            }
+        }
+    }
+    Ok(handled)
+}
+
 fn apply_commit_plan_with_optional_merge(
     run: &crate::sync::staging::StagingRun,
     live_root: &Path,
@@ -784,17 +903,21 @@ fn apply_commit_plan_with_optional_merge(
         _ => None,
     };
     // plan 到 apply 之间必须持有与 MCP 相同的跨进程工作区锁。统计事件还需要
-    // 在锁内重新读取 live/staging 求并集；其它 App 组至少保证 live 写回与
-    // mutation ledger 压缩不与 MCP 写事务交错。作品 target 的外层提交入口
-    // 已持有应用数据根锁，这里无需重复获取。
-    let _workspace_lock = if run.app_group().is_some() {
-        Some(crate::storage::WorkspaceWriteLock::acquire(
-            run.app_data_root(),
-        )?)
-    } else {
-        None
-    };
+    // 在锁内重新读取 live/staging 求并集；章节正文协调器也必须用同一把锁
+    // 做恢复读取和版本 CAS。外层若已持锁，这里按同一 root 嵌套获取。
+    let workspace_lock = crate::storage::WorkspaceWriteLock::acquire(run.app_data_root())?;
     let mut content_actions = content_actions.to_vec();
+    let handled_chapters =
+        commit_synced_chapter_bodies(live_root, &workspace_lock, &content_actions)?;
+    if !handled_chapters.is_empty() {
+        content_actions.retain(|action| {
+            let rel = match action {
+                crate::sync::staging::CommitAction::Apply { rel_path, .. }
+                | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
+            };
+            !handled_chapters.contains(rel)
+        });
+    }
     let mut engine_state_actions = plan.engine_state_actions.clone();
     let mut committed_state: Option<crate::sync::types::SyncState> = None;
 
