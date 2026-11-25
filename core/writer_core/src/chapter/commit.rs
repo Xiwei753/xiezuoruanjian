@@ -132,6 +132,8 @@ pub enum ChapterMutationKind {
     Clear,
     SyncMerge,
     Restore,
+    Create,
+    Delete,
 }
 
 /// 章节提交请求。
@@ -145,6 +147,9 @@ pub struct ChapterCommitRequest {
     pub expected: Option<ChapterVersion>,
     /// 调用方的 base 正文，仅用于冲突材料；正文比对永远以磁盘当前内容为准。
     pub base_content: Option<String>,
+    /// Create 提交的初始元数据模板（标题/顺序来自远端或导入来源）。
+    /// 其他 mutation 忽略。
+    pub meta_template: Option<Chapter>,
     pub mutation: ChapterMutationKind,
     pub source: ChapterCommitSource,
     /// 同一次编辑批次固定的事件 ID。journal durable 后由调用方补投影。
@@ -166,6 +171,7 @@ impl ChapterCommitRequest {
             content: content.into(),
             expected: None,
             base_content: None,
+            meta_template: None,
             mutation: ChapterMutationKind::Replace,
             source: ChapterCommitSource::Api,
             event_ids: Vec::new(),

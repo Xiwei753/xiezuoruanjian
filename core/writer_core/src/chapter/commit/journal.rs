@@ -81,6 +81,12 @@ pub(super) struct ChapterCommitManifest {
     pub(super) additional_files: Vec<AdditionalFilePlan>,
     pub(super) phase: ChapterCommitPhase,
     pub(super) pending_projections: Vec<String>,
+    /// Create 提交的初始 meta；发布时正文/meta 都不存在才允许写入。
+    #[serde(default)]
+    pub(super) created_meta: Option<Chapter>,
+    /// 恢复时判断是否为创建提交；旧 journal 无此字段默认 false。
+    #[serde(default)]
+    pub(super) created: bool,
     /// 恢复时发现当前正文既不是 before 也不是 after，记录原因。
     #[serde(default)]
     pub(super) superseded_reason: Option<String>,
@@ -489,7 +495,35 @@ pub(crate) fn commit_chapter_with_guard(
     }
 
     let key = request.key.clone();
-    let (mut meta, current, before) = read_current_migrated(project_root, &key)?;
+    let (mut meta, current, before) = match read_current_migrated(project_root, &key) {
+        Ok(state) => state,
+        Err(Error::ChapterNotFound) if request.mutation == ChapterMutationKind::Create => {
+            let mut meta = request.meta_template.clone().ok_or_else(|| {
+                Error::Other(format!(
+                    "chapter create requires meta template: {}/{}",
+                    key.volume_id, key.chapter_id
+                ))
+            })?;
+            meta.id = key.chapter_id.clone();
+            let now = Utc::now().to_rfc3339();
+            if meta.created_at.is_empty() {
+                meta.created_at = now.clone();
+            }
+            meta.updated_at = now;
+            meta.object_generation = Uuid::new_v4().to_string();
+            meta.revision = 0;
+            meta.word_count = 0;
+            meta.hash = md5_hex("");
+            meta.content_sha256 = sha256_hex("");
+            let before = ChapterVersion {
+                object_generation: meta.object_generation.clone(),
+                revision: 0,
+                content_sha256: sha256_hex(""),
+            };
+            (meta, String::new(), before)
+        }
+        Err(error) => return Err(error),
+    };
     ensure_empty_overwrite_allowed(
         &key.chapter_id,
         &current,
@@ -530,7 +564,11 @@ pub(crate) fn commit_chapter_with_guard(
         .cloned()
         .collect::<Vec<_>>();
 
-    if !content_changed && changed_additional.is_empty() && request.proof_events.is_empty() {
+    if request.mutation != ChapterMutationKind::Create
+        && !content_changed
+        && changed_additional.is_empty()
+        && request.proof_events.is_empty()
+    {
         // 纯 no-op：不创建 journal、不推进 revision/updated_at，返回磁盘真实现状。
         // 有证明事件时仍要建仅事件 journal，否则输入后还原的编辑会丢失。
         let meta_hash = md5_hex(&serde_json::to_string_pretty(&meta)?);
@@ -632,6 +670,8 @@ pub(crate) fn commit_chapter_with_guard(
         additional_files: additional_plans,
         phase: ChapterCommitPhase::Prepared,
         pending_projections: request.projection_ids.clone(),
+        created_meta: (request.mutation == ChapterMutationKind::Create).then(|| meta.clone()),
+        created: request.mutation == ChapterMutationKind::Create,
         superseded_reason: None,
     };
     write_manifest(&tx_dir, &manifest)?;

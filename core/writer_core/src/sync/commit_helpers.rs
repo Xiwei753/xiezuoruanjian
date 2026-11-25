@@ -819,19 +819,6 @@ fn commit_synced_chapter_bodies(
         let Some((volume_id, chapter_id)) = chapter_body_parts(rel_path) else {
             continue;
         };
-        let current = match crate::chapter::commit::read_chapter_state_recovering(
-            live_root,
-            guard,
-            &volume_id,
-            &chapter_id,
-        ) {
-            Ok((meta, text, version)) => (meta, text, version),
-            Err(crate::error::Error::ChapterNotFound) => {
-                // 新章节：协调器还不支持 Create，交给通用事务。
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
         let content = std::str::from_utf8(content).map_err(|error| {
             crate::error::Error::Other(format!(
                 "sync chapter body is not UTF-8 {}: {error}",
@@ -848,20 +835,67 @@ fn commit_synced_chapter_bodies(
                 "sync chapter commit cannot derive project id from live root".to_string(),
             ));
         }
-        let mut request = crate::chapter::ChapterCommitRequest::new(
-            crate::chapter::ChapterKey::new(project_id, volume_id.clone(), chapter_id.clone()),
-            content,
-        );
         let incoming_meta = content_actions.iter().find_map(|candidate| {
-            let crate::sync::staging::CommitAction::Apply { rel_path, content } = candidate else {
+            let crate::sync::staging::CommitAction::Apply {
+                rel_path: candidate_path,
+                content: candidate_content,
+            } = candidate
+            else {
                 return None;
             };
-            if *rel_path == chapter_meta_rel_path(&volume_id, &chapter_id) {
-                serde_json::from_slice::<crate::chapter::Chapter>(content).ok()
+            if *candidate_path == chapter_meta_rel_path(&volume_id, &chapter_id) {
+                serde_json::from_slice::<crate::chapter::Chapter>(candidate_content).ok()
             } else {
                 None
             }
         });
+        let current = match crate::chapter::commit::read_chapter_state_recovering(
+            live_root,
+            guard,
+            &volume_id,
+            &chapter_id,
+        ) {
+            Ok((meta, text, version)) => (meta, text, version),
+            Err(crate::error::Error::ChapterNotFound) => {
+                let Some(meta_template) = incoming_meta.clone() else {
+                    continue;
+                };
+                let mut request = crate::chapter::ChapterCommitRequest::new(
+                    crate::chapter::ChapterKey::new(
+                        project_id,
+                        volume_id.clone(),
+                        chapter_id.clone(),
+                    ),
+                    content,
+                );
+                request.meta_template = Some(meta_template);
+                request.mutation = crate::chapter::ChapterMutationKind::Create;
+                request.source = crate::chapter::ChapterCommitSource::Sync;
+                request.allow_empty_overwrite = content.is_empty();
+                match crate::chapter::commit::commit_chapter_with_guard(
+                    live_root,
+                    Some(guard),
+                    request,
+                )? {
+                    crate::chapter::ChapterCommitOutcome::Committed(_) => {
+                        handled.insert(rel_path.clone());
+                        handled.insert(chapter_meta_rel_path(&volume_id, &chapter_id));
+                    }
+                    crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
+                        return Err(crate::error::Error::Other(format!(
+                            "sync chapter create conflicted for {}/{}: actual={:?}",
+                            volume_id, chapter_id, conflict.actual
+                        )));
+                    }
+                }
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let mut request = crate::chapter::ChapterCommitRequest::new(
+            crate::chapter::ChapterKey::new(project_id, volume_id.clone(), chapter_id.clone()),
+            content,
+        );
         if let Some(incoming_meta) = incoming_meta.as_ref() {
             // 标题/顺序不是正文版本的一部分；协调器当前不改这两个字段。
             // 若远端同时改了它们，整章仍交给通用事务，避免丢标题。

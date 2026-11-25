@@ -40,6 +40,37 @@ pub(super) fn publish_decided(
     let key = &manifest.key;
     let body_path = key.body_path(project_root);
     let meta_path = key.meta_path(project_root);
+    if manifest.created {
+        // Create 决议只允许在正文/meta 都不存在时发布。若其他提交已先创建，
+        // 当前 journal 保留为 Superseded，不能用旧模板覆盖。
+        if body_path.exists() || meta_path.exists() {
+            return mark_superseded(
+                tx_dir,
+                manifest,
+                "chapter appeared before create publish".to_string(),
+            );
+        }
+        let bytes = fs::read(tx_dir.join(BODY_FILE))?;
+        if sha256_bytes(&bytes) != manifest.after.content_sha256 {
+            return Err(Error::Other(format!(
+                "chapter create staging digest mismatch: tx={}",
+                manifest.transaction_id
+            )));
+        }
+        let created_meta = manifest.created_meta.as_ref().ok_or_else(|| {
+            Error::Other(format!(
+                "chapter create journal missing meta: tx={}",
+                manifest.transaction_id
+            ))
+        })?;
+        crate::storage::atomic_write_bytes(&body_path, &bytes)?;
+        let meta_json = serde_json::to_string_pretty(created_meta)?;
+        crate::storage::atomic_write_bytes(&meta_path, meta_json.as_bytes())?;
+        crate::storage::sync_dir(&meta_path)?;
+        manifest.phase = ChapterCommitPhase::Applied;
+        write_manifest(tx_dir, manifest)?;
+        return Ok(true);
+    }
     let current = match fs::read_to_string(&body_path) {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

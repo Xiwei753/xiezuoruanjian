@@ -137,6 +137,8 @@ fn recovery_applies_decided_body_but_never_overwrites_newer_content() {
         additional_files: Vec::new(),
         phase: ChapterCommitPhase::Decided,
         pending_projections: Vec::new(),
+        created_meta: None,
+        created: false,
         superseded_reason: None,
     };
     write_manifest(&tx_dir, &manifest).unwrap();
