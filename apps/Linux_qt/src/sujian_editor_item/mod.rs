@@ -130,17 +130,17 @@ pub(crate) fn editor_animation_debug_log(msg: &str) {
     }
 }
 
-/// Issue #690 评论 5675007226 步骤 5: 把每笔动画的紧凑事件写入正式诊断包
-/// （`writer_diagnostics`），不再只走 env 控制的 `editor_animation_debug_log` eprintln。
-///
-/// 只在四点各触发一次：事务创建（create）、被新编辑 retarget（rebase）、
-/// 未被本次编辑覆盖而继续自播（keep）、播放完成（complete）。
-/// 不逐帧刷日志。diagnostics 在桌面端默认开启，普通实测包（不带 debug 环境变量）即可在
-/// zip 中看到 transaction key / operation kind / old-new caret / visual unit kinds /
-/// 首帧时间 / 完成或 retarget 原因，便于排查"文字领先光标"是不是同一个 frame sample、
-/// 哪个 unit 被重启。
-///
-/// `record_event` 经由 `writer_diagnostics` 后台 writer 落盘；未初始化/禁用时直接丢弃，
+// Issue #690 评论 5675007226 步骤 5: 把每笔动画的紧凑事件写入正式诊断包
+// （`writer_diagnostics`），不再只走 env 控制的 `editor_animation_debug_log` eprintln。
+//
+// 只在四点各触发一次：事务创建（create）、被新编辑 retarget（rebase）、
+// 未被本次编辑覆盖而继续自播（keep）、播放完成（complete）。
+// 不逐帧刷日志。diagnostics 在桌面端默认开启，普通实测包（不带 debug 环境变量）即可在
+// zip 中看到 transaction key / operation kind / old-new caret / visual unit kinds /
+// 首帧时间 / 完成或 retarget 原因，便于排查"文字领先光标"是不是同一个 frame sample、
+// 哪个 unit 被重启。
+//
+// `record_event` 经由 `writer_diagnostics` 后台 writer 落盘；未初始化/禁用时直接丢弃。
 
 /// Issue #815 评论 6042062633 修改 7/8: "编辑发生了但没有动画" 的正式跳过事件字段。
 ///
@@ -651,6 +651,11 @@ pub struct SujianEditorItem {
     /// 资源没就绪不是正常成功路径：记一次具体缺失的 LineSnapshotId，
     /// 避免把"已建立 TextMotion 结构"误报成"已经有动画"。
     last_missing_log_key: Option<(u64, u64)>,
+    /// Issue #1061 第 6 项：上一版动画快照的渲染参数指纹（0 = 尚未建立）。
+    ///
+    /// 与本次指纹一致、且目标行不与本次受影响范围相交时，才允许复用上一版
+    /// 已栅格化的行图；否则回退到原栅格化路径。
+    animation_image_style_key: u64,
 }
 
 impl Default for SujianEditorItem {
@@ -817,6 +822,8 @@ impl Default for SujianEditorItem {
             last_drawn_local_frame: None,
             last_commit_log_key: None,
             last_missing_log_key: None,
+            // Issue #1061 第 6 项：尚未建立动画快照，渲染参数指纹为 0。
+            animation_image_style_key: 0,
         }
     }
 }

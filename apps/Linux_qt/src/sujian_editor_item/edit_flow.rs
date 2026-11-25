@@ -94,8 +94,6 @@ pub(crate) enum EditVisualSkipReason {
     LoadingSuppressed,
     /// 套用格式期间抑制动画（`animations_requested && is_applying_format`）。
     FormatApplyingSuppressed,
-    /// `record_transaction` 内部检测到 stale canonical / canonical invariant。
-    StaleCanonical,
     /// builder 跳过了事务创建（空事务 / 无可视单元）。
     BuilderEmptyTransaction,
     /// composition commit 路径的 old/new snapshot 构造失败或不可用。
@@ -156,7 +154,9 @@ impl SujianEditorItem {
                 QString::from(
                     serde_json::to_string(&patch_ranges).unwrap_or_else(|_| "[]".to_string()),
                 ),
-                QString::from(serde_json::to_string(&result.changes).unwrap_or_else(|_| "[]".to_string())),
+                QString::from(
+                    serde_json::to_string(&result.changes).unwrap_or_else(|_| "[]".to_string()),
+                ),
                 result.old_selection.anchor.index.value() as u64,
                 result.old_selection.head.index.value() as u64,
                 result.new_selection.anchor.index.value() as u64,
@@ -515,6 +515,12 @@ impl SujianEditorItem {
         }
         let signal_elapsed = signal_started.elapsed();
 
+        // Issue #1061 第 1 项：把本笔 canonical 布局的增量指标和纹理缓存规模
+        // 带进已有的 segments 事件，不新增每键其它日志。
+        let layout_stats = self.editor_layout.last_build_stats();
+        let texture_bytes = self.pipeline.texture_cache().byte_len();
+        let texture_lines = self.pipeline.texture_cache().line_count();
+
         writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
             timestamp_ms: chrono::Utc::now().timestamp_millis(),
             sequence: 0,
@@ -545,6 +551,32 @@ impl SujianEditorItem {
                 f.insert(
                     "total_ms".to_string(),
                     serde_json::json!(edit_started.elapsed().as_secs_f64() * 1000.0),
+                );
+                // Issue #1061 第 1 项：正文增量布局指标（与 editor.layout.edit
+                // 同源，便于把布局耗时和正文首帧提交分段对齐）。
+                f.insert(
+                    "layout_full_relayout".to_string(),
+                    serde_json::json!(layout_stats.full_relayout),
+                );
+                f.insert(
+                    "layout_paragraphs_reflowed".to_string(),
+                    serde_json::json!(layout_stats.paragraphs_reflowed),
+                );
+                f.insert(
+                    "layout_total_paragraphs".to_string(),
+                    serde_json::json!(layout_stats.total_paragraphs),
+                );
+                f.insert(
+                    "layout_build_ms".to_string(),
+                    serde_json::json!(layout_stats.duration_ms),
+                );
+                f.insert(
+                    "texture_bytes".to_string(),
+                    serde_json::json!(texture_bytes),
+                );
+                f.insert(
+                    "texture_lines".to_string(),
+                    serde_json::json!(texture_lines),
                 );
                 f
             },

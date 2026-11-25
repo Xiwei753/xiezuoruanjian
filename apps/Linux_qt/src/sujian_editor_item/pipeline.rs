@@ -7,7 +7,6 @@ use super::text_motion::TextMotion;
 use super::text_utils::{clamp_to_char_boundary, normalize_plain_text};
 use super::texture_cache::{LineSnapshotId, TextureCache};
 use super::PreeditAttribute;
-use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 use qmetaobject::QObject;
 use writer_core::editor::{
@@ -15,6 +14,11 @@ use writer_core::editor::{
     EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
 };
 use writer_core::writing_stats::proof::content_digest_of_text;
+
+/// Issue #1061 第 2 项：正文行纹理缓存的明确字节上限。
+/// 超限时按插入顺序淘汰最老的快照纹理；被淘汰的图仍保留在
+/// `EditorLayoutSnapshot.line_snapshots[].image`，下一次准备纹理时可重新插入。
+const TEXTURE_CACHE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
 
 /// Qt 侧已确认正文镜像 — 持有与 Rust EditorKernel revision 对应的纯文本快照。
 ///
@@ -89,6 +93,10 @@ impl CommittedTextMirror {
     ///
     /// 供动画/事务记录 old/new 状态使用。正文真相仍在 EditorKernel，
     /// 此快照仅用于动画对比，不维护 undo/redo 栈。
+    ///
+    /// 普通编辑路径已直接使用 Core 编辑结果（Issue #978/#1061），此处只保留
+    /// 投影一致性测试入口，避免每次按键克隆整章正文。
+    #[cfg(test)]
     pub fn snapshot(&self) -> EditorSnapshot {
         EditorSnapshot {
             text: self.text.clone(),
@@ -564,6 +572,7 @@ impl LinuxEditorPipeline {
         self.mirror.selected_text()
     }
 
+    #[cfg(test)]
     pub fn snapshot(&self) -> EditorSnapshot {
         self.mirror.snapshot()
     }
@@ -600,22 +609,8 @@ impl LinuxEditorPipeline {
         &mut self.text_motion
     }
 
-    /// 取出本帧动画，若已完成或不存在则返回 `None`。
-    pub fn take_finished_text_motion(&mut self, now_ms: f64) -> Option<TextMotion> {
-        if let Some(motion) = self.text_motion.as_ref() {
-            if motion.sample(now_ms).finished {
-                return self.text_motion.take();
-            }
-        }
-        None
-    }
-
     pub fn texture_cache(&self) -> &TextureCache {
         &self.texture_cache
-    }
-
-    pub fn texture_cache_mut(&mut self) -> &mut TextureCache {
-        &mut self.texture_cache
     }
 
     pub fn clipboard_adapter_mut(&mut self) -> &mut LinuxQtClipboardFocusAdapter {
@@ -641,16 +636,8 @@ impl LinuxEditorPipeline {
     }
 
     /// 视觉帧序号（诊断/订阅用）；正文动画由唯一的 `text_motion` 计划管理。
-    pub fn visual_revision(&self) -> u64 {
-        self.visual_revision
-    }
-
     pub fn bump_visual_revision(&mut self) {
         self.visual_revision = self.visual_revision.wrapping_add(1);
-    }
-
-    pub fn bump_text_revision(&mut self) {
-        self.text_revision = self.text_revision.wrapping_add(1);
     }
 
     /// Issue #901 第五轮阻塞4：用 Core `EditorEditResult.new_revision` 直接设置
@@ -680,8 +667,47 @@ impl LinuxEditorPipeline {
     }
 
     /// 保留最后成功显示帧和当前视觉过渡引用的行纹理。
+    ///
+    /// Issue #1061 第 2 项：retain 之后执行字节预算，保证缓存有明确上限；
+    /// 淘汰只影响缓存条目，`get_line` 的查询语义不变。
     pub fn retain_active_snapshot_ids(&mut self, active_ids: &[LineSnapshotId]) {
         self.texture_cache.retain_active_snapshot_ids(active_ids);
+        let evicted = self
+            .texture_cache
+            .enforce_byte_budget(TEXTURE_CACHE_BUDGET_BYTES);
+        if evicted > 0 {
+            self.record_texture_sweep(evicted);
+        }
+    }
+
+    /// Issue #1061 第 2 项：记录一次纹理预算淘汰事件。
+    fn record_texture_sweep(&self, evicted: usize) {
+        let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+            std::collections::BTreeMap::new();
+        fields.insert("evicted".to_string(), serde_json::json!(evicted));
+        fields.insert(
+            "texture_bytes".to_string(),
+            serde_json::json!(self.texture_cache.byte_len()),
+        );
+        fields.insert(
+            "texture_lines".to_string(),
+            serde_json::json!(self.texture_cache.line_count()),
+        );
+        fields.insert(
+            "budget_bytes".to_string(),
+            serde_json::json!(TEXTURE_CACHE_BUDGET_BYTES),
+        );
+        writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            sequence: 0,
+            session_id: String::new(),
+            level: writer_diagnostics::DiagnosticLevel::Info,
+            origin: writer_diagnostics::DiagnosticOrigin::App,
+            event: "editor.texture.sweep".to_string(),
+            target: "editor.texture".to_string(),
+            message: None,
+            fields,
+        });
     }
 
     /// Issue #904：typing 动画时长是正文局部吞吐动画的唯一响应时长。
@@ -695,14 +721,6 @@ impl LinuxEditorPipeline {
     /// 不再错误地用 `ms > 0` 覆写正文光标开关。
     pub fn set_cursor_animation_duration_ms(&mut self, ms: u32) {
         self.cursor_animation_duration_ms = ms;
-    }
-
-    pub fn typing_animation_duration_ms(&self) -> u32 {
-        self.typing_animation_duration_ms
-    }
-
-    pub fn cursor_animation_duration_ms(&self) -> u32 {
-        self.cursor_animation_duration_ms
     }
 
     /// 从 kernel snapshot 完整重建 mirror。

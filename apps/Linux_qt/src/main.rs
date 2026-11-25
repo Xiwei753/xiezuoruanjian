@@ -693,6 +693,9 @@ fn main() {
         true,
         true,
     );
+    // Issue #1061 第 6 项：诊断后端就绪后启动进程资源采样线程（每 30 秒一条
+    // process.resource 事件）；线程内部幂等，spawn 失败只 warn，不影响启动。
+    diagnostics::start_process_resource_monitor();
     begin_app_lifecycle(&platform_init.log_dir, &session_id);
     startup_mark("shared_diagnostics_ready", "writer_diagnostics initialized");
 

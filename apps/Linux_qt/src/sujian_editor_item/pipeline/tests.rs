@@ -50,3 +50,13 @@ fn set_selection_updates_mirror_cursor_then_delete_removes_correct_char() {
         pipeline.mirror().text()
     );
 }
+
+#[test]
+fn snapshot_projects_committed_text_and_cursor() {
+    let mut pipeline = LinuxEditorPipeline::new();
+    assert!(pipeline.load_text("abc".to_string(), 3));
+    pipeline.set_selection(1, 1);
+    let snapshot = pipeline.snapshot();
+    assert_eq!(snapshot.text, "abc");
+    assert_eq!(snapshot.cursor, 1);
+}

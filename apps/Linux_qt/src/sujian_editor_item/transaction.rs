@@ -70,9 +70,38 @@ impl SujianEditorItem {
         // 供新一侧只在同一版布局上补图。
         let animation_snapshot_started = std::time::Instant::now();
         let new_layout = if prepare_animation {
-            match self.build_incremental_animation_snapshot(width, affected_range) {
+            match self.build_incremental_animation_snapshot(
+                width,
+                affected_range,
+                old_layout.as_ref(),
+            ) {
                 Ok(pair) => Some(pair),
-                Err(_err) => self.build_editor_layout_snapshot(width, false, None).ok(),
+                Err(err) => {
+                    // Issue #1061 第 1 项：增量动画视觉不可用时不再回退
+                    // `build_editor_layout_snapshot(width, false, None)` 做全篇排版。
+                    // canonical 静态布局已在前面安装，正文仍然跟手；这一笔动画跳过，
+                    // 只留一条明确诊断，不把"没动画"伪装成成功。
+                    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+                        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                        sequence: 0,
+                        session_id: String::new(),
+                        level: writer_diagnostics::DiagnosticLevel::Warn,
+                        origin: writer_diagnostics::DiagnosticOrigin::App,
+                        event: "editor.anim.incremental_unavailable".to_string(),
+                        target: "editor.anim".to_string(),
+                        message: None,
+                        fields: {
+                            let mut f = std::collections::BTreeMap::new();
+                            f.insert("cause".to_string(), serde_json::json!(err));
+                            f.insert(
+                                "text_revision".to_string(),
+                                serde_json::json!(self.pipeline.text_revision()),
+                            );
+                            f
+                        },
+                    });
+                    None
+                }
             }
         } else {
             None
@@ -89,7 +118,7 @@ impl SujianEditorItem {
             let retargeting = self
                 .last_drawn_local_frame
                 .as_ref()
-                .map_or(false, |frame| frame.session == session);
+                .is_some_and(|frame| frame.session == session);
 
             if prepare_animation {
                 let now_ms = Self::frame_now_ms(&self.last_frame_now);

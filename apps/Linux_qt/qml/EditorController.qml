@@ -105,6 +105,12 @@ QtObject {
     property double correctionTrackedRevision: -1
     property string correctionTrackedProjectId: ""
     property string correctionTrackedChapterId: ""
+    // Issue #1061：最近一次已接受校对结果的 (document, revision)。同一
+    // revision 的重复 pending 请求没有新脏区，不必再复制整章正文并等待
+    // 一次 Core 队列任务。
+    property double correctionScannedRevision: -1
+    property string correctionScannedProjectId: ""
+    property string correctionScannedChapterId: ""
     // Identifies one opened editor document inside Core's per-chapter cache.
     // It is a backend identity only; request IDs above remain UI-only.
     property int correctionDocumentEpoch: 1
@@ -813,6 +819,9 @@ QtObject {
         clearAnnotationDisplayRequests();
         correctionApplyRequests = ({});
         correctionRequestEpochs = ({});
+        correctionScannedRevision = -1;
+        correctionScannedProjectId = "";
+        correctionScannedChapterId = "";
         pendingCorrectionRevision = -1;
         pendingCorrectionProjectId = "";
         pendingCorrectionChapterId = "";
@@ -836,6 +845,9 @@ QtObject {
         correctionDocumentEpoch += 1;
         if (correctionDocumentEpoch > 2147483000) correctionDocumentEpoch = 1;
         correctionRequestEpochs = ({});
+        correctionScannedRevision = -1;
+        correctionScannedProjectId = "";
+        correctionScannedChapterId = "";
         pendingCorrectionRevision = -1;
         pendingCorrectionProjectId = "";
         pendingCorrectionChapterId = "";
@@ -1129,6 +1141,11 @@ QtObject {
         var snapshotText = getEditorPlainText();
         var revision = Number(targetEditorItem.text_revision);
         if (!isFinite(revision) || revision < 0) return;
+        // Issue #1061：这个 revision 的结果已经接受，继续排队只会复制整章
+        // 正文再跑一趟无脏区的 Core 任务。
+        if (revision === correctionScannedRevision
+                && projectId === correctionScannedProjectId
+                && chapterId === correctionScannedChapterId) return;
         syncCorrectionTracking(snapshotText, revision);
 
         correctionRequestSerial += 1;
@@ -1182,6 +1199,9 @@ QtObject {
             annotateCorrectionPositions(currentText, suggestions);
             updateCorrectionSuggestions(suggestions);
             syncCorrectionTracking(currentText, textRevision);
+            correctionScannedRevision = Number(textRevision);
+            correctionScannedProjectId = projectId;
+            correctionScannedChapterId = chapterId;
             if (isPending) {
                 correctionStatus = suggestions.length > 0
                         ? qsTr("发现 %1 条建议").arg(suggestions.length)

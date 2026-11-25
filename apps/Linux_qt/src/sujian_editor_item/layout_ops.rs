@@ -4,6 +4,20 @@ use super::*;
 // Issue #901 第九轮阻塞5: Arc 共享视觉行数据。
 use std::sync::Arc;
 
+// Issue #1061 第 6 项：动画行图渲染参数指纹用的 FNV-1a 64 位常数。
+// 不用随机 seed 的 `DefaultHasher`，保证进程内稳定、同一参数永远同一指纹。
+const ANIMATION_STYLE_FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const ANIMATION_STYLE_FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// Issue #1061 第 6 项：FNV-1a 64 位混合（进程内稳定）。
+fn mix_animation_style_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(ANIMATION_STYLE_FNV_PRIME);
+    }
+    hash
+}
+
 impl SujianEditorItem {
     pub(crate) fn recalculate_content_height_and_emit(&mut self) {
         let next = self.compute_content_height();
@@ -62,6 +76,26 @@ impl SujianEditorItem {
         }
     }
 
+    /// Issue #1061 第 6 项：动画行图的渲染参数指纹。
+    ///
+    /// 用进程内稳定的 FNV-1a 组合所有会影响栅格化结果的参数：DPR、当前文本颜色、
+    /// 字体像素大小、字体族、行距、缩进、padding、布局宽度。
+    /// 两次动画快照指纹相同才允许复用上一版行图；换色/换字号/换字体/改 DPR/改宽度
+    /// 等任一变化都会得到不同指纹，从而回退到原栅格化路径。
+    fn animation_image_style_key(&self, dpr: f64, width: f64) -> u64 {
+        let mut hash = ANIMATION_STYLE_FNV_OFFSET;
+        hash = mix_animation_style_bytes(hash, &dpr.to_bits().to_le_bytes());
+        hash = mix_animation_style_bytes(hash, self.current_text_color.to_string().as_bytes());
+        hash =
+            mix_animation_style_bytes(hash, &self.current_font_pixel_size.to_bits().to_le_bytes());
+        hash = mix_animation_style_bytes(hash, self.current_font_family.to_string().as_bytes());
+        hash = mix_animation_style_bytes(hash, &self.current_line_spacing.to_bits().to_le_bytes());
+        hash = mix_animation_style_bytes(hash, &self.current_text_indent.to_bits().to_le_bytes());
+        hash = mix_animation_style_bytes(hash, &self.current_padding.to_bits().to_le_bytes());
+        hash = mix_animation_style_bytes(hash, &width.to_bits().to_le_bytes());
+        hash
+    }
+
     pub(crate) fn layout_snapshot(&mut self, width: f64) -> LayoutSnapshot {
         let params = self.layout_params(width);
         self.editor_layout
@@ -90,11 +124,76 @@ impl SujianEditorItem {
             self.editor_layout.set_last_edit_affected_range(start, end);
         }
         let params = self.layout_params(width);
-        let _ = self.editor_layout.snapshot(
-            self.pipeline.committed_text(),
-            params,
-            self.pipeline.text_revision(),
-        );
+        // Issue #1061 第 1 项：本笔 canonical 布局的代数与行数要在释放
+        // `editor_layout` 借用前取出，供下方结构化诊断事件使用。
+        let (layout_generation, visible_line_count) = {
+            let snapshot = self.editor_layout.snapshot(
+                self.pipeline.committed_text(),
+                params,
+                self.pipeline.text_revision(),
+            );
+            (snapshot.layout_generation, snapshot.lines.len())
+        };
+        // Issue #1061 第 1 项/第 6 项：普通增量编辑的布局指标已并入
+        // `editor.edit.segments`；这里只记全量回退或明显偏慢的构建，避免
+        // 每键再写一条重复诊断。cache 命中不记。
+        let build_stats = self.editor_layout.last_build_stats();
+        let layout_outlier = build_stats.full_relayout || build_stats.duration_ms >= 4.0;
+        if !self.editor_layout.last_snapshot_was_cache_hit() && layout_outlier {
+            let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+                std::collections::BTreeMap::new();
+            fields.insert(
+                "build_ms".to_string(),
+                serde_json::json!(build_stats.duration_ms),
+            );
+            fields.insert(
+                "full_relayout".to_string(),
+                serde_json::json!(build_stats.full_relayout),
+            );
+            fields.insert(
+                "paragraphs_reflowed".to_string(),
+                serde_json::json!(build_stats.paragraphs_reflowed),
+            );
+            fields.insert(
+                "total_paragraphs".to_string(),
+                serde_json::json!(build_stats.total_paragraphs),
+            );
+            fields.insert(
+                "text_bytes".to_string(),
+                serde_json::json!(build_stats.text_bytes),
+            );
+            fields.insert(
+                "layout_generation".to_string(),
+                serde_json::json!(layout_generation),
+            );
+            fields.insert(
+                "text_revision".to_string(),
+                serde_json::json!(self.pipeline.text_revision()),
+            );
+            fields.insert(
+                "texture_bytes".to_string(),
+                serde_json::json!(self.pipeline.texture_cache().byte_len()),
+            );
+            fields.insert(
+                "texture_lines".to_string(),
+                serde_json::json!(self.pipeline.texture_cache().line_count()),
+            );
+            fields.insert(
+                "visible_line_count".to_string(),
+                serde_json::json!(visible_line_count),
+            );
+            writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                sequence: 0,
+                session_id: String::new(),
+                level: writer_diagnostics::DiagnosticLevel::Info,
+                origin: writer_diagnostics::DiagnosticOrigin::App,
+                event: "editor.layout.edit".to_string(),
+                target: "editor.layout".to_string(),
+                message: None,
+                fields,
+            });
+        }
 
         let cursor_byte = self.pipeline.cursor();
         let affinity = self.cursor_ctrl.affinity;
@@ -141,7 +240,7 @@ impl SujianEditorItem {
             .pipeline
             .current_layout_snapshot()
             .as_ref()
-            .map_or(false, |snapshot| {
+            .is_some_and(|snapshot| {
                 snapshot
                     .line_snapshots
                     .iter()
@@ -159,16 +258,20 @@ impl SujianEditorItem {
     /// 不在每键路径上。
     pub(crate) fn initialize_current_animation_source(&mut self) {
         let width = self.bounding_width();
+        // canonical 更新会用轻量静态快照覆盖 pipeline 的当前动画源；先留住
+        // 上一版真正带行图的快照，作为本次行图复用来源。
+        let previous = self.pipeline.current_layout_snapshot().clone();
         self.update_canonical_layout_after_edit(width, None);
-        let source_snapshot = match self.build_incremental_animation_snapshot(width, None) {
-            Ok((snapshot, _source)) => Some(snapshot),
-            // 增量动画视觉失败时退回完整布局，至少保证第一笔开启后的编辑
-            // 有可用的旧布局图像源，而不是空壳。
-            Err(_) => self
-                .build_editor_layout_snapshot(width, false, None)
-                .ok()
-                .map(|(snapshot, _source)| snapshot),
-        };
+        let source_snapshot =
+            match self.build_incremental_animation_snapshot(width, None, previous.as_ref()) {
+                Ok((snapshot, _source)) => Some(snapshot),
+                // 增量动画视觉失败时退回完整布局，至少保证第一笔开启后的编辑
+                // 有可用的旧布局图像源，而不是空壳。
+                Err(_) => self
+                    .build_editor_layout_snapshot(width, false, None)
+                    .ok()
+                    .map(|(snapshot, _source)| snapshot),
+            };
         if let Some(snapshot) = source_snapshot {
             self.pipeline.set_current_layout_snapshot(Some(snapshot));
         }
@@ -201,6 +304,7 @@ impl SujianEditorItem {
         &mut self,
         width: f64,
         affected_range: Option<(usize, usize)>,
+        previous: Option<&EditorLayoutSnapshot>,
     ) -> Result<
         (
             EditorLayoutSnapshot,
@@ -208,20 +312,30 @@ impl SujianEditorItem {
         ),
         String,
     > {
-        // 1. 走增量排版。EditorLayout::snapshot() 内部判断：
-        //    - 排版参数变化 → 全局失效 + 全篇重排
-        //    - 仅 text_revision 变化 → 增量排版（只重排受影响段落）
-        //    - 都没变 → cache hit，直接返回
-        // 用 block 限定 &mut borrow，释放后才能调 last_canonical_snapshot()。
-        let generation = {
-            let params = self.layout_params(width);
-            let layout_snap = self.editor_layout.snapshot(
-                self.pipeline.committed_text(),
-                params,
-                self.pipeline.text_revision(),
-            );
-            layout_snap.layout_generation
+        // Issue #1061 第 6 项：canonical 静态布局已由
+        // `update_canonical_layout_after_edit` 在同一 revision 上安装好，
+        // 这里直接从 live cache 读 generation，不再对同一 revision 调第二次
+        // `snapshot()` 重复物化。只有 cache 为空（首帧/invalidate 后）时
+        // 才回退一次真实排版。
+        let cached_generation = self.editor_layout.cache().map(|s| s.layout_generation);
+        let generation = match cached_generation {
+            Some(generation) => generation,
+            None => {
+                let params = self.layout_params(width);
+                self.editor_layout
+                    .snapshot(
+                        self.pipeline.committed_text(),
+                        params,
+                        self.pipeline.text_revision(),
+                    )
+                    .layout_generation
+            }
         };
+
+        // Issue #1061 第 6 项：`previous` 由调用方在本笔 canonical 更新前取走，
+        // 那是上一版真正带行图的动画快照；本函数不再从 pipeline 读，因为
+        // `update_canonical_layout_after_edit` 已把它替换成轻量静态快照。
+        // 只有渲染参数指纹一致、且目标行不与本次受影响范围相交时才复用。
 
         // 3. 从 last_snapshot 获取增量排版产生的 CanonicalDocumentVisualSnapshot。
         let doc_snapshot = match self.editor_layout.last_canonical_snapshot() {
@@ -388,6 +502,84 @@ impl SujianEditorItem {
         let mut affected_line_indices: Vec<usize> = line_indices_set.into_iter().collect();
         affected_line_indices.sort_unstable();
 
+        // Issue #1061 第 6 项：渲染参数指纹一致时，复用上一版快照里已栅格化的行图，
+        // 只对剩余行重新栅格化，避免每笔编辑无条件重画整屏行图。
+        //
+        // 安全条件（任一不满足即回退到原栅格化路径）：
+        // - 本次与上一版动画快照的渲染参数指纹相同（DPR/文本颜色/字体/行距/缩进/
+        //   padding/宽度都没变），不同就可能是旧颜色/旧字形，绝不复用。
+        // - 该行 byte range 不与本次受影响范围相交（受影响行字形已变）。
+        // - 上一版快照里存在 (段落序号, 段内视觉行号, byte_start, byte_end) 完全相同的
+        //   行且确实带图；按稳定行身份精确匹配，不做 byte range 模糊匹配。
+        let style_key = self.animation_image_style_key(dpr, width);
+        let reuse_allowed = self.animation_image_style_key == style_key;
+        if reuse_allowed {
+            if let Some(previous) = previous {
+                let mut previous_images: std::collections::HashMap<
+                    (u64, u32, usize, usize),
+                    qmetaobject::QImage,
+                > = std::collections::HashMap::with_capacity(previous.line_snapshots.len());
+                for line in &previous.line_snapshots {
+                    if let Some(image) = line.image.as_ref() {
+                        previous_images.insert(
+                            (
+                                line.id.paragraph_id,
+                                line.id.visual_line_ordinal,
+                                line.byte_start,
+                                line.byte_end,
+                            ),
+                            image.clone(),
+                        );
+                    }
+                }
+                if !previous_images.is_empty() {
+                    // 本版快照的行按 byte 范围定位（行不重叠，范围唯一）。
+                    let mut snapshot_index_by_range: std::collections::HashMap<
+                        (usize, usize),
+                        usize,
+                    > = std::collections::HashMap::with_capacity(snapshot.line_snapshots.len());
+                    for (index, line) in snapshot.line_snapshots.iter().enumerate() {
+                        snapshot_index_by_range.insert((line.byte_start, line.byte_end), index);
+                    }
+
+                    let mut reused_indices: Vec<usize> = Vec::new();
+                    for &line_index in &affected_line_indices {
+                        let Some(line) = resolved_lines.get(line_index) else {
+                            continue;
+                        };
+                        if line.byte_start < affected_end && line.byte_end > affected_start {
+                            continue;
+                        }
+                        let Some(&snapshot_index) =
+                            snapshot_index_by_range.get(&(line.byte_start, line.byte_end))
+                        else {
+                            continue;
+                        };
+                        let target = &snapshot.line_snapshots[snapshot_index];
+                        let key = (
+                            target.id.paragraph_id,
+                            target.id.visual_line_ordinal,
+                            target.byte_start,
+                            target.byte_end,
+                        );
+                        let Some(image) = previous_images.get(&key) else {
+                            continue;
+                        };
+                        if snapshot.line_snapshots[snapshot_index].image.is_some() {
+                            continue;
+                        }
+                        snapshot.line_snapshots[snapshot_index].image = Some(image.clone());
+                        reused_indices.push(line_index);
+                    }
+
+                    if !reused_indices.is_empty() {
+                        let reused: HashSet<usize> = reused_indices.into_iter().collect();
+                        affected_line_indices.retain(|index| !reused.contains(index));
+                    }
+                }
+            }
+        }
+
         // Issue #904 评论 5: 本版布局事实源 —— generation + 物化视觉行。
         //
         // 冻结缺图行与后续纹理补图都只允许用这一份。**不再**让后续准备阶段
@@ -463,6 +655,10 @@ impl SujianEditorItem {
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
+
+        // Issue #1061 第 6 项：记下本版动画快照的渲染参数指纹，下一笔编辑据此决定
+        // 能否复用本版行图。
+        self.animation_image_style_key = style_key;
 
         Ok((snapshot, Some(source)))
     }
@@ -785,25 +981,6 @@ impl SujianEditorItem {
         // Issue #904 清理: canonical document snapshot 只在本函数内部交给
         // LineSnapshotBuilder，不再作为第二份 canonical 上交 Pipeline。
         Ok((snapshot, layout_source))
-    }
-
-    pub(crate) fn ensure_layout_cached(
-        &mut self,
-        width: f64,
-    ) -> Arc<crate::editor::layout::chunked_vec::PersistentChunkedVec<VisualLine>> {
-        let params = self.layout_params(width);
-        // Issue #901 第三十六轮问题3: Arc::clone 共享 LayoutSnapshot.lines，
-        // 不 to_vec() 整章复制 VisualLine（其中有 para_text: String）。
-        Arc::clone(
-            &self
-                .editor_layout
-                .snapshot(
-                    self.pipeline.committed_text(),
-                    params,
-                    self.pipeline.text_revision(),
-                )
-                .lines,
-        )
     }
 
     pub(crate) fn adjust_affinity_at_wrap_boundary(&mut self) {

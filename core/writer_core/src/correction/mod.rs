@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
-use std::time::SystemTime;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+use std::time::{Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use sujian_proof::{CorrectionEngine, Lexicon, LexiconPaths, ProofreadingModel};
@@ -23,6 +23,7 @@ use crate::api::{
 
 mod engine;
 mod result_cache;
+mod scan_metrics;
 
 pub(crate) use engine::CorrectionScanner;
 pub(crate) use result_cache::EditRange;
@@ -82,6 +83,11 @@ struct PersistedCorrectionPreferences {
 }
 
 type ChapterResultCacheRegistry = HashMap<(String, String), Arc<ChapterCorrectionSlot>>;
+
+/// Bound for in-memory chapter correction caches. Idle slots are cheap to
+/// reload from disk when a chapter is reopened; keeping every visited chapter
+/// for the process lifetime is not (Issue #1061).
+const CHAPTER_RESULT_CACHE_LIMIT: usize = 16;
 
 /// One project's published annotation entries plus the source directory
 /// version they were read from. External sync/MCP writers touch the same
@@ -153,10 +159,31 @@ struct ModelIdentity {
     calibrator_version: String,
 }
 
-struct CachedModel {
-    stamp: ModelBundleStamp,
-    identity: ModelIdentity,
-    model: Weak<ProofreadingModel>,
+/// One model bundle's single-flight load state. Waiting callers park on the
+/// condvar instead of hashing/opening the same 474 MB session twice.
+struct ModelLoadSlot {
+    state: Mutex<ModelLoadState>,
+    wake: Condvar,
+}
+
+enum ModelLoadState {
+    Empty,
+    Loading,
+    Ready {
+        stamp: ModelBundleStamp,
+        identity: ModelIdentity,
+        model: Arc<ProofreadingModel>,
+    },
+}
+
+/// The model bundle captured for one scanner, plus the facts diagnostics need
+/// to tell a cache hit apart from a real ONNX Runtime session initialization.
+pub(super) struct ConfiguredModelSnapshot {
+    pub key: Option<ModelCacheKey>,
+    pub model: Option<Arc<ProofreadingModel>>,
+    pub cache_hit: bool,
+    pub session_initialized: bool,
+    pub load_ms: u128,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -178,17 +205,97 @@ pub struct CorrectionStore {
     inner: Arc<CorrectionStoreInner>,
 }
 
-static STORE_REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<CorrectionStoreInner>>>> =
-    OnceLock::new();
-static MODEL_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedModel>>> = OnceLock::new();
-static MODEL_IDENTITY_CACHE: OnceLock<Mutex<HashMap<(PathBuf, ModelBundleStamp), ModelIdentity>>> =
-    OnceLock::new();
+type StoreRegistry = HashMap<PathBuf, Arc<CorrectionStoreInner>>;
+static STORE_REGISTRY: OnceLock<Mutex<StoreRegistry>> = OnceLock::new();
+type ModelSlotRegistry = HashMap<PathBuf, Arc<ModelLoadSlot>>;
+static MODEL_CACHE: OnceLock<Mutex<ModelSlotRegistry>> = OnceLock::new();
+type ModelIdentityCache = HashMap<(PathBuf, ModelBundleStamp), ModelIdentity>;
+static MODEL_IDENTITY_CACHE: OnceLock<Mutex<ModelIdentityCache>> = OnceLock::new();
+/// Bumped whenever the configured model resource is replaced or released.
+/// A load that started before the bump must not publish its session.
+static MODEL_CONFIG_GENERATION: AtomicU64 = AtomicU64::new(1);
 
-fn model_cache() -> &'static Mutex<HashMap<PathBuf, CachedModel>> {
+fn model_cache() -> &'static Mutex<ModelSlotRegistry> {
     MODEL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn model_identity_cache() -> &'static Mutex<HashMap<(PathBuf, ModelBundleStamp), ModelIdentity>> {
+fn model_slot(path: &Path) -> Result<Arc<ModelLoadSlot>, WriterError> {
+    let mut slots = model_cache()
+        .lock()
+        .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
+    Ok(Arc::clone(slots.entry(path.to_path_buf()).or_insert_with(
+        || {
+            Arc::new(ModelLoadSlot {
+                state: Mutex::new(ModelLoadState::Empty),
+                wake: Condvar::new(),
+            })
+        },
+    )))
+}
+
+/// Drop engine-cache entries that point at a model resource the user no
+/// longer has configured, unless a scan still owns the engine.
+fn release_unconfigured_engines(inner: &CorrectionStoreInner, key: &Path) {
+    let Ok(mut engines) = inner.engines.lock() else {
+        return;
+    };
+    engines.retain(|_, cached| {
+        cached.model_key.as_ref().map(|model| &model.path) != Some(&key.to_path_buf())
+            || Arc::strong_count(&cached.engine) > 1
+    });
+}
+
+/// Release one idle model slot and wake any waiter so it reloads from config.
+fn clear_model_slot(slot: &ModelLoadSlot) {
+    if let Ok(mut state) = slot.state.lock() {
+        *state = ModelLoadState::Empty;
+    }
+    slot.wake.notify_all();
+}
+
+/// Wait for a single-flight model load without holding any other lock.
+fn wait_model_slot<'a>(
+    slot: &'a ModelLoadSlot,
+    guard: MutexGuard<'a, ModelLoadState>,
+) -> Result<MutexGuard<'a, ModelLoadState>, WriterError> {
+    slot.wake
+        .wait(guard)
+        .map_err(|_| WriterError::Other("correction model slot lock poisoned".into()))
+}
+
+/// True when a live engine for this store still references the model bundle.
+/// Used only to decide whether an unconfigured model may be released.
+fn engine_references_model(inner: &CorrectionStoreInner, key: &Path) -> bool {
+    let Ok(engines) = inner.engines.lock() else {
+        return false;
+    };
+    engines.values().any(|cached| {
+        cached.model_key.as_ref().map(|model| &model.path) == Some(&key.to_path_buf())
+            && Arc::strong_count(&cached.engine) > 1
+    })
+}
+
+/// Number of live ONNX sessions held by this process. Diagnostics only.
+pub(super) fn model_instance_count() -> usize {
+    let Ok(slots) = model_cache().lock() else {
+        return 0;
+    };
+    let mut count = 0;
+    for slot in slots.values() {
+        let Ok(state) = slot.state.lock() else {
+            continue;
+        };
+        if matches!(*state, ModelLoadState::Ready { .. }) {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Release every idle model session and invalidate loads that are still in
+/// flight. Called only when the configured model is really replaced or the
+/// resource is no longer in use.
+fn model_identity_cache() -> &'static Mutex<ModelIdentityCache> {
     MODEL_IDENTITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -402,7 +509,7 @@ impl CorrectionStore {
 
     pub fn set_model_path(&self, path: &Path) -> Result<(), WriterError> {
         let key = validate_model_candidate(path)?;
-        let mut models = model_cache()
+        let slots = model_cache()
             .lock()
             .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
         let mut preferences = self
@@ -423,14 +530,20 @@ impl CorrectionStore {
         crate::storage::atomic_write_string(&self.inner.path, &json)
             .map_err(|error| WriterError::Io(error.to_string()))?;
 
-        // Resource identity is cached for status/fingerprint checks, but no
-        // ONNX session is created here. The first engine opens the single
-        // process-shared model; idle weak mappings disappear with that engine.
-        models.retain(|_, model| model.model.strong_count() > 0);
-        models.retain(|cached_path, _| cached_path != &key.path);
+        // A real replacement (even the same path with different resources)
+        // releases the old session and invalidates loads still in flight. The
+        // next scanner opens exactly one new session.
+        MODEL_CONFIG_GENERATION.fetch_add(1, Ordering::SeqCst);
+        for slot in slots.values() {
+            let Ok(mut state) = slot.state.lock() else {
+                continue;
+            };
+            if !matches!(*state, ModelLoadState::Loading) {
+                *state = ModelLoadState::Empty;
+            }
+            slot.wake.notify_all();
+        }
         *preferences = next;
-        // Selecting a model always starts a fresh engine, even when the path is
-        // unchanged but the file behind it was replaced.
         engines.clear();
         Ok(())
     }
@@ -523,21 +636,27 @@ impl CorrectionStore {
 
         if !configured {
             for inner in stores.values() {
-                let mut engines = inner.engines.lock().map_err(|_| {
-                    WriterError::Other("correction engine cache lock poisoned".into())
-                })?;
-                engines.retain(|_, cached| {
-                    cached.model_key.as_ref().map(|model| &model.path) != Some(&key)
-                        || Arc::strong_count(&cached.engine) > 1
-                });
+                release_unconfigured_engines(inner, &key);
             }
         }
 
-        let in_use = models
-            .get(&key)
-            .is_some_and(|cached| cached.model.strong_count() > 0);
+        // The process-shared session is a strong cache: it only counts as
+        // "in use" while a scan still owns its engine or a load is running.
+        // Otherwise an unconfigured model can be released for deletion.
+        let engine_in_use = stores
+            .values()
+            .any(|inner| engine_references_model(inner, &key));
+        let loading = models.get(&key).is_some_and(|slot| {
+            slot.state
+                .lock()
+                .is_ok_and(|state| matches!(*state, ModelLoadState::Loading))
+        });
+        let in_use = engine_in_use || loading;
         if !configured && !in_use {
-            models.remove(&key);
+            MODEL_CONFIG_GENERATION.fetch_add(1, Ordering::SeqCst);
+            if let Some(slot) = models.remove(&key) {
+                clear_model_slot(&slot);
+            }
         }
 
         Ok(CorrectionModelPathStatusDto {
@@ -895,8 +1014,67 @@ impl CorrectionStore {
         let state = Arc::new(ChapterCorrectionSlot::new(
             ChapterCorrectionCacheState::load(path),
         ));
-        caches.insert(key, Arc::clone(&state));
+        caches.insert(key.clone(), Arc::clone(&state));
+        // Evict idle chapter slots beyond the limit. A slot still owned by a
+        // scanner/request has strong_count > 1 and is left untouched; evicted
+        // slots reload from their disk cache on the next open.
+        if caches.len() > CHAPTER_RESULT_CACHE_LIMIT {
+            let mut idle: Vec<(String, String)> = caches
+                .iter()
+                .filter(|(cached_key, slot)| **cached_key != key && Arc::strong_count(slot) == 1)
+                .map(|(cached_key, _)| cached_key.clone())
+                .collect();
+            idle.sort();
+            let excess = caches.len().saturating_sub(CHAPTER_RESULT_CACHE_LIMIT);
+            let evicted = idle.len().min(excess);
+            for cached_key in idle.into_iter().take(evicted) {
+                caches.remove(&cached_key);
+            }
+            if evicted > 0 {
+                let mut fields = BTreeMap::new();
+                fields.insert("evicted".to_string(), serde_json::json!(evicted));
+                fields.insert("remaining".to_string(), serde_json::json!(caches.len()));
+                fields.insert(
+                    "limit".to_string(),
+                    serde_json::json!(CHAPTER_RESULT_CACHE_LIMIT),
+                );
+                writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+                    timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    sequence: 0,
+                    session_id: String::new(),
+                    level: writer_diagnostics::DiagnosticLevel::Info,
+                    origin: writer_diagnostics::DiagnosticOrigin::App,
+                    event: "correction.cache.evicted".to_string(),
+                    target: "correction.cache".to_string(),
+                    message: None,
+                    fields,
+                });
+            }
+        }
         Ok(state)
+    }
+
+    /// Latest `(session, revision)` already visible to a chapter's correction
+    /// slot, without creating or loading a cache. A long model scan uses this
+    /// between windows to stop early when a newer edit arrived; the dirty
+    /// windows the edit recorded stay untouched for the next pending scan.
+    pub(super) fn chapter_revision_progress(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+    ) -> Result<Option<(u64, u64)>, WriterError> {
+        let key = (project_id.to_string(), chapter_id.to_string());
+        let caches = self.inner.result_caches.lock().map_err(|_| {
+            WriterError::Other("correction result cache registry lock poisoned".into())
+        })?;
+        let Some(slot) = caches.get(&key) else {
+            return Ok(None);
+        };
+        let guard = slot
+            .state
+            .lock()
+            .map_err(|_| WriterError::Other("correction result cache lock poisoned".into()))?;
+        Ok(Some((guard.last_session_id, guard.last_revision)))
     }
 
     /// Lightweight edit phase: apply the transaction's byte mappings to the
@@ -1249,62 +1427,141 @@ impl CorrectionStore {
             .map_err(|_| WriterError::Other("correction lexicon version exhausted".into()))
     }
 
-    pub(super) fn configured_model_snapshot(
-        &self,
-    ) -> Result<(Option<ModelCacheKey>, Option<Arc<ProofreadingModel>>), WriterError> {
-        let mut models = model_cache()
-            .lock()
-            .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
-        let preferences = self
-            .inner
-            .preferences
-            .lock()
-            .map_err(|_| WriterError::Other("correction preferences lock poisoned".into()))?;
-        let Some(path) = preferences.model_path.clone() else {
-            return Ok((None, None));
+    /// Resolve the configured model into a single process-shared session.
+    ///
+    /// The expensive build (file hashing, ONNX session creation) runs outside
+    /// every global lock. Concurrent scanners that want the same bundle wait
+    /// on one single-flight slot; a real replacement/unconfiguration bumps
+    /// `MODEL_CONFIG_GENERATION` so a load that started earlier never
+    /// publishes its stale session.
+    pub(super) fn configured_model_snapshot(&self) -> Result<ConfiguredModelSnapshot, WriterError> {
+        let started = Instant::now();
+        let configured_path = self.configured_model_path()?;
+        let Some(configured_path) = configured_path else {
+            return Ok(ConfiguredModelSnapshot {
+                key: None,
+                model: None,
+                cache_hit: false,
+                session_initialized: false,
+                load_ms: 0,
+            });
         };
-        let path = canonical_model_path(&path)?;
-        let stamp = model_bundle_stamp(&path)?;
-        if let Some(cached) = models.get(&path) {
-            if cached.stamp == stamp {
-                if let Some(model) = cached.model.upgrade() {
-                    return Ok((
-                        Some(ModelCacheKey {
-                            path,
-                            stamp,
-                            identity: cached.identity.clone(),
+        let path = canonical_model_path(&configured_path)?;
+        let stamp_before = model_bundle_stamp(&path)?;
+        let identity = model_identity(&path, &stamp_before)?;
+        let slot = model_slot(&path)?;
+
+        // Fast path, or wait for a concurrent load of the same bundle. A load
+        // of a different stamp is also awaited so the process never holds two
+        // sessions for one path beyond in-flight scan Arcs.
+        let mut state = slot
+            .state
+            .lock()
+            .map_err(|_| WriterError::Other("correction model slot lock poisoned".into()))?;
+        loop {
+            match &*state {
+                ModelLoadState::Ready {
+                    stamp,
+                    identity: ready_identity,
+                    model,
+                } if *stamp == stamp_before => {
+                    let snapshot = ConfiguredModelSnapshot {
+                        key: Some(ModelCacheKey {
+                            path: path.clone(),
+                            stamp: stamp.clone(),
+                            identity: ready_identity.clone(),
                         }),
-                        Some(model),
-                    ));
+                        model: Some(Arc::clone(model)),
+                        cache_hit: true,
+                        session_initialized: false,
+                        load_ms: started.elapsed().as_millis(),
+                    };
+                    return Ok(snapshot);
                 }
+                ModelLoadState::Loading => {
+                    state = wait_model_slot(&slot, state)?;
+                }
+                _ => break,
             }
         }
-        let identity = model_identity(&path, &stamp)?;
-        let model = ProofreadingModel::open(&path)
-            .map_err(|error| WriterError::Other(format!("invalid correction model: {error}")))?;
-        let stamp_after = model_bundle_stamp(&path)?;
-        if stamp_after != stamp {
-            return Err(WriterError::Other(
-                "correction model changed while it was being opened; retry the request".into(),
-            ));
+        *state = ModelLoadState::Loading;
+        drop(state);
+        self.initialize_model_session(path, stamp_before, identity, slot, started)
+    }
+
+    /// Open one ONNX session outside every global lock, then publish it only
+    /// if the model configuration and the bundle stamp are still current.
+    fn initialize_model_session(
+        &self,
+        path: PathBuf,
+        stamp_before: ModelBundleStamp,
+        identity: ModelIdentity,
+        slot: Arc<ModelLoadSlot>,
+        started: Instant,
+    ) -> Result<ConfiguredModelSnapshot, WriterError> {
+        let generation = MODEL_CONFIG_GENERATION.load(Ordering::SeqCst);
+        let opened = ProofreadingModel::open(&path)
+            .map_err(|error| WriterError::Other(format!("invalid correction model: {error}")));
+        let publishable = opened.is_ok();
+        let stamp_after = if publishable {
+            model_bundle_stamp(&path)
+        } else {
+            Ok(stamp_before.clone())
+        };
+        // Read preferences without the slot lock: `set_model_path` takes that
+        // order and waiting on it from inside the slot state would deadlock.
+        let configured_unchanged_before_lock = self
+            .configured_model_path()?
+            .as_deref()
+            .is_some_and(|current| {
+                canonical_model_path(current).is_ok_and(|current| current == path)
+            });
+
+        let mut state = slot
+            .state
+            .lock()
+            .map_err(|_| WriterError::Other("correction model slot lock poisoned".into()))?;
+        let configured_unchanged = configured_unchanged_before_lock
+            && generation == MODEL_CONFIG_GENERATION.load(Ordering::SeqCst)
+            && stamp_after
+                .as_ref()
+                .is_ok_and(|stamp| *stamp == stamp_before);
+        let opened = match opened {
+            Ok(model) => model,
+            Err(error) => {
+                *state = ModelLoadState::Empty;
+                slot.wake.notify_all();
+                return Err(error);
+            }
+        };
+        if !configured_unchanged {
+            *state = ModelLoadState::Empty;
+            slot.wake.notify_all();
+            return match stamp_after {
+                Ok(_) => Err(WriterError::Other(
+                    "correction model configuration changed while it was being opened; retry the request".into(),
+                )),
+                Err(error) => Err(error),
+            };
         }
-        let model = Arc::new(model);
-        models.insert(
-            path.clone(),
-            CachedModel {
-                stamp: stamp.clone(),
-                identity: identity.clone(),
-                model: Arc::downgrade(&model),
-            },
-        );
-        Ok((
-            Some(ModelCacheKey {
+        let model = Arc::new(opened);
+        *state = ModelLoadState::Ready {
+            stamp: stamp_before.clone(),
+            identity: identity.clone(),
+            model: Arc::clone(&model),
+        };
+        slot.wake.notify_all();
+        Ok(ConfiguredModelSnapshot {
+            key: Some(ModelCacheKey {
                 path,
-                stamp,
+                stamp: stamp_before,
                 identity,
             }),
-            Some(model),
-        ))
+            model: Some(model),
+            cache_hit: false,
+            session_initialized: true,
+            load_ms: started.elapsed().as_millis(),
+        })
     }
 
     pub(super) fn cached_engine(

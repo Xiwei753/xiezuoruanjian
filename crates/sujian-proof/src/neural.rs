@@ -71,9 +71,24 @@ impl ProofreadingModel {
         } else {
             Calibrator::from_json(include_str!("../assets/correction-data/calibrator.json"))?
         };
+        // Issue #1061：校对推理只允许占用有限的 CPU，不能和正文输入/绘制抢核。
+        // intra-op 默认 1–2 线程（视可用 CPU，另一个核留给 GUI 线程），inter-op
+        // 固定 1，节点顺序执行，并关闭两处 allow_spinning —— 交互进程的后台
+        // session 不该用忙等自旋换吞吐。接口依据锁定版本 ort =2.0.0-rc.10。
+        let intra_threads = background_intra_threads();
         let session = Session::builder()
             .map_err(|error| CorrectionError::Model(error.to_string()))?
             .with_optimization_level(GraphOptimizationLevel::Level1)
+            .map_err(|error| CorrectionError::Model(error.to_string()))?
+            .with_intra_threads(intra_threads)
+            .map_err(|error| CorrectionError::Model(error.to_string()))?
+            .with_inter_threads(1)
+            .map_err(|error| CorrectionError::Model(error.to_string()))?
+            .with_parallel_execution(false)
+            .map_err(|error| CorrectionError::Model(error.to_string()))?
+            .with_intra_op_spinning(false)
+            .map_err(|error| CorrectionError::Model(error.to_string()))?
+            .with_inter_op_spinning(false)
             .map_err(|error| CorrectionError::Model(error.to_string()))?
             .commit_from_file(&model_path)
             .map_err(|error| {
@@ -140,9 +155,14 @@ impl ProofreadingModel {
             .try_extract_tensor::<f32>()
             .map_err(|error| CorrectionError::Model(error.to_string()))?;
         let dims = shape.as_ref();
+        let dimension = |value: i64| {
+            usize::try_from(value).map_err(|error| {
+                CorrectionError::Model(format!("invalid model output dimension: {error}"))
+            })
+        };
         let (sequence, vocabulary) = match dims {
-            [1, sequence, vocabulary] => (*sequence as usize, *vocabulary as usize),
-            [sequence, vocabulary] => (*sequence as usize, *vocabulary as usize),
+            [1, sequence, vocabulary] => (dimension(*sequence)?, dimension(*vocabulary)?),
+            [sequence, vocabulary] => (dimension(*sequence)?, dimension(*vocabulary)?),
             _ => {
                 return Err(CorrectionError::Model(format!(
                     "unexpected model output shape {dims:?}"
@@ -188,8 +208,8 @@ impl ProofreadingModel {
                     end_byte: token.end_byte,
                     original,
                     candidate,
-                    original_log_probability: (original_logit - log_sum_exp) as f32,
-                    candidate_log_probability: (candidate_logit - log_sum_exp) as f32,
+                    original_log_probability: original_logit - log_sum_exp,
+                    candidate_log_probability: candidate_logit - log_sum_exp,
                 },
             ));
         }
@@ -218,15 +238,7 @@ impl NeuralPredictor for ProofreadingModel {
             for (edge, prediction) in
                 self.predict_encoded_window(&mut session, &encoded, &window)?
             {
-                positions
-                    .entry(prediction.start_byte)
-                    .and_modify(|(current_edge, current)| {
-                        if edge > *current_edge {
-                            *current_edge = edge;
-                            *current = prediction.clone();
-                        }
-                    })
-                    .or_insert((edge, prediction));
+                merge_position_prediction(&mut positions, edge, prediction);
             }
         }
         Ok(positions
@@ -238,6 +250,35 @@ impl NeuralPredictor for ProofreadingModel {
     fn calibrator(&self) -> &Calibrator {
         &self.calibrator
     }
+}
+
+/// Background inference CPU budget for one ONNX session.
+///
+/// The writer is a latency-sensitive GUI process: typing, layout and painting
+/// share the same machine, so the model must never claim every core. Reserve
+/// one core for the UI, and keep the model at one or two intra-op threads.
+fn background_intra_threads() -> usize {
+    let available = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    available.saturating_sub(1).clamp(1, 2)
+}
+
+/// Keep the prediction whose window is farthest from an edge. Extracted from
+/// the scan loop so the loop body stays flat and readable.
+fn merge_position_prediction(
+    positions: &mut BTreeMap<usize, (usize, PositionPrediction)>,
+    edge: usize,
+    prediction: PositionPrediction,
+) {
+    if let Some(current) = positions.get_mut(&prediction.start_byte) {
+        if edge > current.0 {
+            current.0 = edge;
+            current.1 = prediction;
+        }
+        return;
+    }
+    positions.insert(prediction.start_byte, (edge, prediction));
 }
 
 fn ensure_runtime(bundle_dir: &Path) -> Result<(), CorrectionError> {

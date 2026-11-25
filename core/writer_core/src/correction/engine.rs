@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::{Arc, MutexGuard};
 use std::time::Instant;
 
@@ -15,114 +14,8 @@ use super::result_cache::{
     mark_unseen_segments_in_edit_windows, reconcile_edits, reconcile_full, CachedSuggestion,
     ChapterCorrectionCacheState, ChapterCorrectionSlot, EditRange,
 };
+use super::scan_metrics::{record_correction_scan_event, CorrectionScanMetrics};
 use super::CorrectionStore;
-
-struct CorrectionScanMetrics {
-    started_at: Instant,
-    session_id: u64,
-    text_revision: u64,
-    chapter_digest: String,
-    request_kind: &'static str,
-    result: &'static str,
-    total_segments: usize,
-    cache_valid_segments: usize,
-    rescanned_segments: usize,
-    model_calls: usize,
-    input_char_total: usize,
-    candidates_produced: usize,
-    candidates_attributed: usize,
-    candidates_filtered_by_segment: usize,
-    final_suggestions: usize,
-    cache_hit: bool,
-    model_available: bool,
-    engine_attached: bool,
-    resource_fingerprint: String,
-}
-
-impl CorrectionScanMetrics {
-    fn new(scanner: &CorrectionScanner, request_kind: &'static str) -> Self {
-        Self {
-            started_at: Instant::now(),
-            session_id: scanner.session_id,
-            text_revision: scanner.text_revision,
-            chapter_digest: content_fingerprint(&scanner.chapter_id),
-            request_kind,
-            result: "error",
-            total_segments: 0,
-            cache_valid_segments: 0,
-            rescanned_segments: 0,
-            model_calls: 0,
-            input_char_total: 0,
-            candidates_produced: 0,
-            candidates_attributed: 0,
-            candidates_filtered_by_segment: 0,
-            final_suggestions: 0,
-            cache_hit: false,
-            model_available: scanner.model_available,
-            engine_attached: scanner.engine.is_some(),
-            resource_fingerprint: scanner.scanner_fingerprint.clone(),
-        }
-    }
-
-    fn observe_cache(&mut self, state: &ChapterCorrectionCacheState) {
-        self.total_segments = state.segments.len();
-        self.cache_valid_segments = state
-            .segments
-            .iter()
-            .filter(|segment| segment.checked.is_some() && !segment.dirty)
-            .count();
-    }
-
-    fn fields(&self) -> Vec<(&'static str, String)> {
-        vec![
-            ("session_id", self.session_id.to_string()),
-            ("text_revision", self.text_revision.to_string()),
-            ("chapter_digest", self.chapter_digest.clone()),
-            ("request_kind", self.request_kind.to_string()),
-            ("result", self.result.to_string()),
-            (
-                "duration_ms",
-                self.started_at.elapsed().as_millis().to_string(),
-            ),
-            ("total_segments", self.total_segments.to_string()),
-            (
-                "cache_valid_segments",
-                self.cache_valid_segments.to_string(),
-            ),
-            ("rescanned_segments", self.rescanned_segments.to_string()),
-            ("model_calls", self.model_calls.to_string()),
-            ("input_char_total", self.input_char_total.to_string()),
-            ("candidates_produced", self.candidates_produced.to_string()),
-            (
-                "candidates_filtered_by_segment",
-                self.candidates_filtered_by_segment.to_string(),
-            ),
-            ("final_suggestions", self.final_suggestions.to_string()),
-            ("cache_hit", self.cache_hit.to_string()),
-            ("model_available", self.model_available.to_string()),
-            ("engine_attached", self.engine_attached.to_string()),
-            ("resource_fingerprint", self.resource_fingerprint.clone()),
-        ]
-    }
-}
-
-fn record_correction_scan_event(event: &str, fields: Vec<(&'static str, String)>) {
-    let field_map = fields
-        .into_iter()
-        .map(|(key, value)| (key.to_string(), serde_json::Value::String(value)))
-        .collect::<BTreeMap<_, _>>();
-    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
-        timestamp_ms: chrono::Utc::now().timestamp_millis(),
-        sequence: 0,
-        session_id: String::new(),
-        level: writer_diagnostics::DiagnosticLevel::Info,
-        origin: writer_diagnostics::DiagnosticOrigin::App,
-        event: event.to_string(),
-        target: "correction.scan".to_string(),
-        message: None,
-        fields: field_map,
-    });
-}
 
 /// Merge dirty segments whose expanded context windows touch or overlap. A
 /// segment's context is deterministic, so this does not change which text the
@@ -245,7 +138,7 @@ impl CorrectionScanner {
         let scanner_fingerprint_before = store.scanner_fingerprint(&project_id)?;
         let (lexicon_version, lexicon) = store.lexicon_snapshot_for_project(&project_id)?;
         let model_load_started_at = Instant::now();
-        let (model_key, model) = match store.configured_model_snapshot() {
+        let model_snapshot = match store.configured_model_snapshot() {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 record_correction_scan_event(
@@ -266,7 +159,11 @@ impl CorrectionScanner {
                 return Err(error);
             }
         };
-        let model_available = model.is_some();
+        let model_available = model_snapshot.model.is_some();
+        // Issue #1061: a cache hit must not look like a 500 ms session
+        // initialization. Log the single-flight outcome, whether a real ONNX
+        // session was created, and how many sessions this process holds.
+        let model_instances = super::model_instance_count().to_string();
         record_correction_scan_event(
             "correction.model.load",
             vec![
@@ -275,21 +172,30 @@ impl CorrectionScanner {
                 ("chapter_digest", content_fingerprint(&chapter_id)),
                 ("result", "success".to_string()),
                 ("model_available", model_available.to_string()),
+                ("model_cache_hit", model_snapshot.cache_hit.to_string()),
+                (
+                    "session_initialized",
+                    model_snapshot.session_initialized.to_string(),
+                ),
                 (
                     "model_load_ms",
-                    model_load_started_at.elapsed().as_millis().to_string(),
+                    model_snapshot
+                        .load_ms
+                        .max(model_load_started_at.elapsed().as_millis())
+                        .to_string(),
                 ),
+                ("model_instances", model_instances),
                 ("resource_fingerprint", scanner_fingerprint_before.clone()),
             ],
         );
         let engine = if let Some(engine) =
-            store.cached_engine(&project_id, lexicon_version, model_key.as_ref())?
+            store.cached_engine(&project_id, lexicon_version, model_snapshot.key.as_ref())?
         {
             engine
         } else {
             let rules = RuleSet::with_common_rules();
             let config = CorrectionConfig::default();
-            let engine = if let Some(model) = model {
+            let engine = if let Some(model) = model_snapshot.model {
                 let predictor: Arc<dyn NeuralPredictor> = model;
                 CorrectionEngine::new_shared(predictor, lexicon, rules, config)
             } else {
@@ -299,7 +205,7 @@ impl CorrectionScanner {
             store.cache_engine_if_model_current(
                 &project_id,
                 lexicon_version,
-                model_key,
+                model_snapshot.key,
                 Arc::new(engine),
             )?
         };
@@ -429,7 +335,15 @@ impl CorrectionScanner {
             CorrectionCheckRequest::Range(_, _) => "range",
             CorrectionCheckRequest::All => "all",
         };
-        let mut metrics = CorrectionScanMetrics::new(self, request_kind);
+        let mut metrics = CorrectionScanMetrics::new(
+            self.session_id,
+            self.text_revision,
+            &self.chapter_id,
+            request_kind,
+            self.model_available,
+            self.engine.is_some(),
+            self.scanner_fingerprint.clone(),
+        );
         metrics.result = "running";
         record_correction_scan_event("correction.scan.start", metrics.fields());
 
@@ -538,24 +452,52 @@ impl CorrectionScanner {
                 .input_char_total
                 .saturating_add(text[context_start..context_end].chars().count());
         }
-        let scanned = groups
-            .iter()
-            .map(|group| {
-                let start = group.first().map(|job| job.1).unwrap_or(0);
-                let end = group.last().map(|job| job.2).unwrap_or(start);
-                let result = self.scan_range(text, start, end);
-                if let Ok(candidates) = &result {
+        // Issue #1061: run one model window at a time and stop at a window
+        // boundary when the chapter's visible revision already moved. The
+        // partial results belong to the old text, so they are discarded; the
+        // unscanned dirty segments keep their `dirty` flag for the next
+        // pending request instead of being cleared or rescanned as "clean".
+        let mut scanned = Vec::with_capacity(groups.len());
+        let mut aborted_at_window: Option<usize> = None;
+        let mut scan_error: Option<WriterError> = None;
+        for group in &groups {
+            if self.revision_advanced_since_start()? {
+                aborted_at_window = Some(scanned.len());
+                break;
+            }
+            let start = group.first().map(|job| job.1).unwrap_or(0);
+            let end = group.last().map(|job| job.2).unwrap_or(start);
+            let window_started = Instant::now();
+            let window_result = self.scan_range(text, start, end);
+            metrics.model_duration_ms = metrics
+                .model_duration_ms
+                .saturating_add(window_started.elapsed().as_millis());
+            match window_result {
+                Ok(candidates) => {
                     metrics.candidates_produced =
                         metrics.candidates_produced.saturating_add(candidates.len());
+                    scanned.push(candidates);
                 }
-                result
-            })
-            .collect::<Result<Vec<_>, _>>();
+                Err(error) => {
+                    scan_error = Some(error);
+                    break;
+                }
+            }
+        }
 
         let mut guard = lock_slot(&slot)?;
         guard.scanning = false;
         slot.condvar.notify_all();
-        let scanned = scanned?;
+        if let Some(window_index) = aborted_at_window {
+            metrics.result = "stale";
+            metrics.dirty_preserved_segments = dirty.len();
+            metrics.aborted_at_window = window_index;
+            return self.empty_snapshot();
+        }
+        if let Some(error) = scan_error {
+            metrics.dirty_preserved_segments = dirty.len();
+            return Err(error);
+        }
         // A lightweight edit transaction may have advanced the revision while
         // the model ran outside the lock. Those results belong to the old text
         // and must not be committed over the newer index.
@@ -594,6 +536,19 @@ impl CorrectionScanner {
         guard.semantic_dirty |= changed;
         guard.save()?;
         self.assemble_snapshot(&guard)
+    }
+
+    /// True when another edit/session already moved this chapter past the
+    /// scanner's text. Checked between model windows, never inside one.
+    fn revision_advanced_since_start(&self) -> Result<bool, WriterError> {
+        let Some((session_id, text_revision)) = self
+            .store
+            .chapter_revision_progress(&self.project_id, &self.chapter_id)?
+        else {
+            return Ok(false);
+        };
+        Ok(session_id > self.session_id
+            || (session_id == self.session_id && text_revision > self.text_revision))
     }
 
     fn ensure_scanner_current(&self) -> Result<(), WriterError> {

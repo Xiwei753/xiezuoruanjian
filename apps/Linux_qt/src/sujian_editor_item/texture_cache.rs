@@ -30,6 +30,23 @@ impl TextureCache {
     pub fn retain_active_snapshot_ids(&mut self, active_snapshot_ids: &[LineSnapshotId]) {
         self.line_store.retain(active_snapshot_ids);
     }
+
+    /// Issue #1061 第 2 项：当前缓存的行纹理估算总字节数。
+    pub fn byte_len(&self) -> usize {
+        self.line_store.byte_len()
+    }
+
+    /// Issue #1061 第 2 项：当前缓存的行纹理条数。
+    pub fn line_count(&self) -> usize {
+        self.line_store.line_count()
+    }
+
+    /// Issue #1061 第 2 项：超过字节预算时按插入顺序淘汰最老的行纹理。
+    ///
+    /// 返回淘汰条数；被淘汰的图仍可从布局快照重新插入。
+    pub fn enforce_byte_budget(&mut self, max_bytes: usize) -> usize {
+        self.line_store.enforce_byte_budget(max_bytes)
+    }
 }
 
 impl Default for TextureCache {

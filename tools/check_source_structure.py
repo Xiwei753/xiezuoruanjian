@@ -109,6 +109,11 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     (Path("core/writer_core/src/search/api.rs"), "god-file"):
         "搜索 API 聚合层：查询/替换/高亮共享同一查询解析与命中流，"
         "已按子模块拆分内部函数",
+    (Path("core/writer_core/src/correction/mod.rs"), "god-file"):
+        "校对聚合根：模型强引用缓存、single-flight、专名/词库版本、引擎缓存与"
+        "偏好持久化共享同一进程级 CorrectionStore；模型装载已拆到单文件，"
+        "但其余状态仍按同一把锁顺序串行，拆分会破坏缓存发布的一致性；"
+        "TODO(#1061) 后续按 model/lexicon/preferences 拆分",
     (Path("core/writer_core/src/settings/mod.rs"), "god-file"):
         "设置模块根：Schema 定义、迁移、序列化共享强类型树，"
         "拆分会破坏 schema 一致性校验",

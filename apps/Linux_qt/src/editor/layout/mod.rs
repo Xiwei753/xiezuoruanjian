@@ -72,6 +72,26 @@ pub use types::{
     PreparedLayoutHandle, PromotedLayout, QtLayoutId, QtLayoutLease, VisualLine,
 };
 
+/// Issue #1061 第 1 项：一次 [`EditorLayout::snapshot`] 的正文增量布局指标。
+///
+/// 纯诊断数据，不参与排版语义，也不物化任何视觉行。
+/// `built == false` 表示本次是 cache 命中（没有发生排版），其余字段保留上一次构建值。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LayoutBuildStats {
+    /// 本次是否真的发生了排版（cache 命中为 false）。
+    pub built: bool,
+    /// 本次是否全篇重排（参数变化 / 段落缓存为空）。
+    pub full_relayout: bool,
+    /// 本次实际重排的段落数（`full_relayout` 时为全章段落数）。
+    pub paragraphs_reflowed: usize,
+    /// 排版后的段落总数。
+    pub total_paragraphs: usize,
+    /// 正文 UTF-8 字节数。
+    pub text_bytes: usize,
+    /// 本次排版耗时（毫秒）。
+    pub duration_ms: f64,
+}
+
 /// 编辑器布局引擎 — 管理 QTextLayout 排版缓存。
 ///
 /// 线程约束：QTextLayout 只能在 GUI 线程使用，EditorLayout 不可跨线程。
@@ -103,6 +123,10 @@ pub struct EditorLayout {
     /// `snapshot()` 消费后清空。优先于按段落下标比较 hash 推测编辑范围，
     /// 避免 Enter 拆段/Backspace 合段后段落索引整体偏移导致的误判。
     last_edit_affected_range: Option<(usize, usize)>,
+    /// Issue #1061 第 1 项：上一次 `snapshot()` 的正文增量布局指标。
+    last_build_stats: LayoutBuildStats,
+    /// 上一次 `snapshot()` 是否直接命中缓存（没有发生排版）。
+    last_snapshot_cache_hit: bool,
 }
 
 impl EditorLayout {
@@ -183,6 +207,19 @@ impl EditorLayout {
 
     pub fn cache(&self) -> Option<&LayoutSnapshot> {
         self.cache.as_ref()
+    }
+
+    /// Issue #1061 第 1 项：获取上一次 `snapshot()` 的正文增量布局指标。
+    ///
+    /// cache 命中时 `built == false`，其余字段保留上一次真实构建的值。
+    pub fn last_build_stats(&self) -> LayoutBuildStats {
+        self.last_build_stats
+    }
+
+    /// 上一次 `snapshot()` 是否命中缓存。与 [`Self::last_build_stats`] 分开，
+    /// 因为 cache 命中不覆盖上一次真实构建的指标。
+    pub fn last_snapshot_was_cache_hit(&self) -> bool {
+        self.last_snapshot_cache_hit
     }
 
     /// Issue #901 第三轮复核: 设置本次编辑的受影响字节范围。
@@ -548,12 +585,9 @@ impl EditorLayout {
         self.last_snapshot = Some(promoted.canonical_snapshot);
         // Issue #901 第九轮阻塞5: Arc::clone 共享 visual_lines，不 clone Vec<VisualLine>。
         // cache 和 last_snapshot 通过 Arc 共享同一份视觉行数据。
-        let cache_lines = Arc::clone(
-            &self
-                .last_snapshot
-                .as_ref()
-                .map(|s| &s.visual_lines)
-                .unwrap_or(&Arc::new(PersistentChunkedVec::new())),
+        let cache_lines = self.last_snapshot.as_ref().map_or_else(
+            || Arc::new(PersistentChunkedVec::new()),
+            |snapshot| Arc::clone(&snapshot.visual_lines),
         );
 
         self.cache = Some(LayoutSnapshot {
@@ -590,6 +624,7 @@ impl EditorLayout {
         });
     }
 
+    #[allow(clippy::unnecessary_unwrap)] // 先记账 cache 命中，再复用同一借用返回。
     pub fn snapshot(
         &mut self,
         text: &str,
@@ -598,6 +633,8 @@ impl EditorLayout {
     ) -> &LayoutSnapshot {
         let text_ptr = text.as_ptr() as usize;
         let text_len = text.len();
+        // Issue #1061 第 1 项：本次 snapshot 的实际耗时（cache 命中不计）。
+        let build_started = std::time::Instant::now();
 
         // Issue #901: 区分"排版参数变化"和"仅 text_revision 变化"。
         // - 排版参数变化（宽度/字体/字号/行距/缩进/内边距）→ 全局失效，全篇重排。
@@ -656,8 +693,10 @@ impl EditorLayout {
 
         // Issue #901: 不用 get_or_insert_with（闭包不能同时借用 self 的多个字段），
         // 改为先检查 cache 是否存在，不存在时在闭包外计算。
+        // Issue #1061 第 1 项：命中缓存没有发生排版；本次命中单独记账，
+        // 不覆盖上一次真实构建的统计。
         if self.cache.is_some() {
-            // cache 已存在，直接返回
+            self.last_snapshot_cache_hit = true;
             return self.cache.as_ref().unwrap();
         }
 
@@ -669,6 +708,13 @@ impl EditorLayout {
         // 走全篇重排（prepare_document_visual_snapshot）。
         let store_has_cache = !self.paragraph_store.is_empty();
         let current_gen = self.current_generation;
+
+        // Issue #1061 第 1 项：本次构建的重排段落统计。
+        // 全篇重排分支只在这里置 full_relayout；增量分支在排版前用
+        // `compute_affected_paragraphs_via_index`（O(log n)）把实际受影响段数填进来，
+        // 不新增全文扫描，也不 materialize 任何视觉行。
+        let mut full_relayout = !store_has_cache || params_changed;
+        let mut paragraphs_reflowed = 0usize;
 
         let new_snapshot = if store_has_cache {
             // Issue #901: 增量排版路径
@@ -692,6 +738,30 @@ impl EditorLayout {
                     let (s, e) = self.compute_affected_byte_range(text, &new_paras, old_para_count);
                     (s, e, None)
                 };
+
+            // Issue #1061 第 1 项：在切片/排版前统计受影响段落范围。
+            // - 有 last_snapshot：走 `compute_affected_paragraphs_via_index` 的
+            //   O(log n) 二分，不新增全文扫描，也不改变下面的切分/排版分支。
+            // - 无 last_snapshot：增量入口收到 `previous_snapshot=None` 会内部全篇重排，
+            //   统计如实记为 full_relayout。
+            // - 空受影响范围：没有可定位的重排段，段数保持 0；真实重排只可能来自
+            //   入口内部按段落文本比较补找的范围，这里不为统计再扫一遍全文。
+            if affected_start < affected_end {
+                match self.last_snapshot.as_ref() {
+                    Some(prev) => {
+                        let affected = self.paragraph_store.compute_affected_paragraphs_via_index(
+                            affected_start,
+                            affected_end,
+                            &prev.paragraph_offset_index,
+                        );
+                        full_relayout = affected.full_relayout;
+                        paragraphs_reflowed = affected
+                            .relayout_end
+                            .saturating_sub(affected.relayout_start);
+                    }
+                    None => full_relayout = true,
+                }
+            }
 
             // Issue #901 第三轮复核问题 1: 用 mem::take 取走 last_snapshot 的所有权，
             // 避免 clone 整篇 CanonicalDocumentVisualSnapshot（含 paragraphs/images）。
@@ -823,6 +893,22 @@ impl EditorLayout {
                 paragraph_id_to_slot,
                 paragraph_line_count_index,
             }
+        };
+
+        // Issue #1061 第 1 项：记录本次真实构建的增量布局指标。
+        let total_paragraphs = self.paragraph_store.paragraph_count();
+        self.last_snapshot_cache_hit = false;
+        self.last_build_stats = LayoutBuildStats {
+            built: true,
+            full_relayout,
+            paragraphs_reflowed: if full_relayout {
+                total_paragraphs
+            } else {
+                paragraphs_reflowed
+            },
+            total_paragraphs,
+            text_bytes: text_len,
+            duration_ms: build_started.elapsed().as_secs_f64() * 1000.0,
         };
 
         self.cache = Some(new_snapshot);
@@ -977,7 +1063,9 @@ impl EditorLayout {
         if entry.cache_slot < 0 {
             return false;
         }
-        let para_start = snapshot.paragraph_offset_index.paragraph_byte_start(para_index);
+        let para_start = snapshot
+            .paragraph_offset_index
+            .paragraph_byte_start(para_index);
         let Some(relative_byte) = cursor.checked_sub(para_start) else {
             return false;
         };

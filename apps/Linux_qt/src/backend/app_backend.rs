@@ -866,6 +866,7 @@ impl AppBackend {
 }
 
 pub(crate) mod correction_operations;
+pub(crate) mod correction_queue;
 #[path = "editor_backend.rs"]
 pub mod editor_backend;
 #[path = "project_backend.rs"]
