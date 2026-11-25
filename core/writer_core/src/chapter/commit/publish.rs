@@ -248,9 +248,7 @@ pub(super) fn publish_decided(
             .meta_title
             .as_ref()
             .is_some_and(|title| title != &meta.title)
-        || manifest
-            .meta_order
-            .is_some_and(|order| order != meta.order)
+        || manifest.meta_order.is_some_and(|order| order != meta.order)
     {
         // 半提交恢复：即使正文已是 after，也要按决议补齐 meta 的
         // updated_at/revision/digest，不能留下正文新、meta 旧。
