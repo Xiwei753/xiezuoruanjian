@@ -214,7 +214,7 @@ pub struct EditorBackend {
             baseline_text: QString,
             before_text_sha256: QString,
             after_text_sha256: QString,
-        )
+        ) -> QString
     ),
     #[allow(dead_code)]
     get_writing_stats_summary:
@@ -649,6 +649,7 @@ impl EditorBackend {
             allow_empty_overwrite: meta.allow_empty_overwrite,
             expected,
             base_content,
+            proof_event_ids: meta.proof_event_ids.clone(),
             context: chapter_save_queue::ChapterSaveContext::new(
                 &data_root,
                 &projects_root,
@@ -897,7 +898,7 @@ impl EditorBackend {
         baseline_text: QString,
         before_text_sha256: QString,
         after_text_sha256: QString,
-    ) {
+    ) -> QString {
         let parsed_cause = match cause.to_string().as_str() {
             "Typing" => writer_core::editor::EditorTransactionCause::Typing,
             "Delete" => writer_core::editor::EditorTransactionCause::Delete,
@@ -920,7 +921,7 @@ impl EditorBackend {
                         unknown
                     ),
                 );
-                return;
+                return QString::from("");
             }
         };
         if matches!(
@@ -939,36 +940,37 @@ impl EditorBackend {
                 )
             });
         }
-        if self
-            .with_app(|app| {
-                let session_id = app.current_writing_session_id();
-                app.record_editor_change_stats(
-                    project_id,
-                    volume_id,
-                    chapter_id,
-                    parsed_cause,
-                    inserted_chars,
-                    deleted_chars,
-                    changes_json,
-                    session_id.into(),
-                    base_revision,
-                    new_revision,
-                    old_selection_anchor,
-                    old_selection_head,
-                    new_selection_anchor,
-                    new_selection_head,
-                    baseline_text,
-                    before_text_sha256,
-                    after_text_sha256,
-                )
-            })
-            .is_err()
-        {
-            crate::backend::app_backend::debug_error_static(
-                "editor_backend",
-                "BORROW_CONFLICT",
-                "record_editor_change_stats skipped due to borrow conflict",
-            );
+        match self.with_app(|app| {
+            let session_id = app.current_writing_session_id();
+            app.record_editor_change_stats(
+                project_id,
+                volume_id,
+                chapter_id,
+                parsed_cause,
+                inserted_chars,
+                deleted_chars,
+                changes_json,
+                session_id.into(),
+                base_revision,
+                new_revision,
+                old_selection_anchor,
+                old_selection_head,
+                new_selection_anchor,
+                new_selection_head,
+                baseline_text,
+                before_text_sha256,
+                after_text_sha256,
+            )
+        }) {
+            Ok(event_id) => event_id,
+            Err(_) => {
+                crate::backend::app_backend::debug_error_static(
+                    "editor_backend",
+                    "BORROW_CONFLICT",
+                    "record_editor_change_stats skipped due to borrow conflict",
+                );
+                QString::from("")
+            }
         }
     }
 

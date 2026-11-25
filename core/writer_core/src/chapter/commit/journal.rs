@@ -546,6 +546,11 @@ pub(crate) fn commit_chapter_with_guard(
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     let content_changed = current != request.content;
+    let meta_changed = request
+        .meta_title
+        .as_ref()
+        .is_some_and(|title| title != &meta.title)
+        || request.meta_order.is_some_and(|order| order != meta.order);
 
     if let Some(expected) = request.expected.as_ref() {
         if !expected_matches(expected, &before) {
@@ -576,6 +581,7 @@ pub(crate) fn commit_chapter_with_guard(
 
     if request.mutation != ChapterMutationKind::Create
         && !content_changed
+        && !meta_changed
         && changed_additional.is_empty()
         && request.proof_events.is_empty()
         && request.sync_proof_facts.is_empty()
@@ -606,7 +612,7 @@ pub(crate) fn commit_chapter_with_guard(
     };
     let after = ChapterVersion {
         object_generation: generation,
-        revision: if content_changed {
+        revision: if content_changed || meta_changed {
             before.revision.saturating_add(1)
         } else {
             before.revision
@@ -614,7 +620,7 @@ pub(crate) fn commit_chapter_with_guard(
         content_sha256: sha256_hex(&request.content),
     };
     let word_count = calculate_word_count(&request.content);
-    let updated_at = if content_changed {
+    let updated_at = if content_changed || meta_changed {
         Utc::now().to_rfc3339()
     } else {
         meta.updated_at.clone()
@@ -626,7 +632,7 @@ pub(crate) fn commit_chapter_with_guard(
     if meta.object_generation.is_empty() {
         meta.object_generation = after.object_generation.clone();
     }
-    if content_changed {
+    if content_changed || meta_changed {
         meta.updated_at = updated_at.clone();
     }
     if let Some(title) = request.meta_title.as_ref() {
@@ -737,8 +743,10 @@ pub(crate) fn commit_chapter_with_guard(
 
     let written_files = {
         let mut files = Vec::new();
-        if content_changed {
+        if content_changed || request.mutation == ChapterMutationKind::Create {
             files.push(chapter_relative_path(&key));
+        }
+        if content_changed || meta_changed || request.mutation == ChapterMutationKind::Create {
             files.push(format!(
                 "volumes/{}/chapters/{}/{}",
                 key.volume_id, key.chapter_id, META_FILE

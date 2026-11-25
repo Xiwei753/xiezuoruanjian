@@ -44,6 +44,7 @@ pub(crate) fn save_chapter_verified_with_options_and_files(
     base_content: Option<&str>,
     projection_ids: &[String],
     proof_events: &[super::commit::ChapterProofProjection],
+    proof_snapshot_revision: Option<u64>,
 ) -> Result<ChapterSaveOutcome> {
     let key = ChapterKey::new(
         project_id_for(project_root),
@@ -57,6 +58,7 @@ pub(crate) fn save_chapter_verified_with_options_and_files(
     request.base_content = base_content.map(str::to_string);
     request.projection_ids = projection_ids.to_vec();
     request.proof_events = proof_events.to_vec();
+    request.proof_snapshot_revision = proof_snapshot_revision;
     request.event_ids = proof_events
         .iter()
         .map(|event| event.event_id().to_string())

@@ -54,8 +54,8 @@ pub(super) fn publish_decided(
                 manifest.transaction_id
             ))
         })?;
-        // 半创建恢复：正文已写而 meta 未写，或 meta 已写而正文未写，都按
-        // 决议摘要补齐；两者都已存在时必须证明是同一决议，否则 Superseded。
+        // 先把 body/meta/additional 全部预检完，再统一发布。任何一处已被
+        // 不同决议占用都只标 Superseded，不留下创建到一半的章节。
         if body_path.exists() {
             let existing = fs::read(&body_path)?;
             if sha256_bytes(&existing) != manifest.after.content_sha256 {
@@ -65,9 +65,6 @@ pub(super) fn publish_decided(
                     "chapter body appeared with different content during create".to_string(),
                 );
             }
-        } else {
-            crate::storage::atomic_write_bytes(&body_path, &bytes)?;
-            crate::storage::sync_dir(&body_path)?;
         }
         if meta_path.exists() {
             let existing: Chapter = serde_json::from_str(&fs::read_to_string(&meta_path)?)?;
@@ -81,11 +78,8 @@ pub(super) fn publish_decided(
                     "chapter meta appeared with different version during create".to_string(),
                 );
             }
-        } else {
-            let meta_json = serde_json::to_string_pretty(created_meta)?;
-            crate::storage::atomic_write_bytes(&meta_path, meta_json.as_bytes())?;
-            crate::storage::sync_dir(&meta_path)?;
         }
+        let mut staged_additional: Vec<(&AdditionalFilePlan, Vec<u8>)> = Vec::new();
         for plan in &manifest.additional_files {
             let staged = fs::read(tx_dir.join(&plan.staging_filename))?;
             if sha256_bytes(&staged) != plan.sha256 {
@@ -95,16 +89,38 @@ pub(super) fn publish_decided(
                 )));
             }
             let target = project_root.join(&plan.target_relative);
-            if target.exists() {
-                return mark_superseded(
-                    tx_dir,
-                    manifest,
-                    format!(
-                        "additional file appeared during create: {}",
-                        plan.target_relative
-                    ),
-                );
+            match fs::read(&target) {
+                Ok(existing) if sha256_bytes(&existing) == plan.sha256 => {
+                    // 半创建恢复：已经是 after 的附加文件只确认，不重写。
+                }
+                Ok(_) => {
+                    return mark_superseded(
+                        tx_dir,
+                        manifest,
+                        format!(
+                            "additional file appeared during create: {}",
+                            plan.target_relative
+                        ),
+                    );
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    staged_additional.push((plan, staged));
+                }
+                Err(error) => return Err(error.into()),
             }
+        }
+
+        if !body_path.exists() {
+            crate::storage::atomic_write_bytes(&body_path, &bytes)?;
+            crate::storage::sync_dir(&body_path)?;
+        }
+        if !meta_path.exists() {
+            let meta_json = serde_json::to_string_pretty(created_meta)?;
+            crate::storage::atomic_write_bytes(&meta_path, meta_json.as_bytes())?;
+            crate::storage::sync_dir(&meta_path)?;
+        }
+        for (plan, staged) in staged_additional {
+            let target = project_root.join(&plan.target_relative);
             crate::storage::atomic_write_bytes(&target, &staged)?;
             crate::storage::sync_parent(&target)?;
         }
@@ -151,13 +167,27 @@ pub(super) fn publish_decided(
             ),
         );
     }
-    if meta.revision > manifest.after.revision {
+    if meta.revision > manifest.after.revision
+        || (meta.revision != manifest.before.revision && meta.revision != manifest.after.revision)
+    {
         return mark_superseded(
             tx_dir,
             manifest,
             format!(
-                "chapter revision advanced past decision: current={}, after={}",
-                meta.revision, manifest.after.revision
+                "chapter revision changed after decision: current={}, before={}, after={}",
+                meta.revision, manifest.before.revision, manifest.after.revision
+            ),
+        );
+    }
+    if current_sha == manifest.before.content_sha256
+        && meta.content_sha256 != manifest.before.content_sha256
+    {
+        return mark_superseded(
+            tx_dir,
+            manifest,
+            format!(
+                "chapter meta digest changed after decision: current={}, before={}",
+                meta.content_sha256, manifest.before.content_sha256
             ),
         );
     }

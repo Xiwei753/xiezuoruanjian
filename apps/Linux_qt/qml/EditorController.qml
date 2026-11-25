@@ -144,6 +144,9 @@ QtObject {
     property double chapterSaveSession: 0
     property var pendingChapterSaves: ({})
     property var pendingChapterSaveIds: []
+    // Issue #1059：本编辑会话已上报、尚未随正文 durable 的证明事件。
+    // 每项 { id, revision }，保存快照冻结时只把当前列表交给 Core。
+    property var pendingProofEvents: []
     property bool chapterSaveConflictNotified: false
 
     property var annotationRefreshTimer: Timer {
@@ -297,13 +300,19 @@ QtObject {
                 editRangesJson: String(editRangesJson || "[]")
             });
             if (controller.chapterId && controller.editorBackendRef) {
-                controller.editorBackendRef.record_editor_change_stats(
+                var proofEventId = controller.editorBackendRef.record_editor_change_stats(
                     controller.projectId, controller.volumeId, controller.chapterId,
                     cause, insertedChars, deletedChars, changesJson,
                     baseRevision, newRevision, oldSelectionAnchor, oldSelectionHead,
                     newSelectionAnchor, newSelectionHead,
                     controller.proofBaselineSent ? "" : controller.proofBaselineText,
                     beforeTextSha256, afterTextSha256);
+                if (proofEventId) {
+                    controller.pendingProofEvents.push({
+                        "id": String(proofEventId),
+                        "revision": Number(newRevision)
+                    });
+                }
             if (changesJson && changesJson !== "[]") {
                 controller.proofBaselineSent = true;
             }
@@ -661,7 +670,9 @@ QtObject {
         }
         var labels = ({ project: qsTr("作品"), volume: qsTr("分卷"), chapter: qsTr("章节"),
             textAnchor: qsTr("正文位置"), starMap: qsTr("星图"),
-            starMapNode: qsTr("星图节点"), starMapEmbed: qsTr("星图嵌入") })
+            starMapNode: qsTr("星图节点"), starMapEmbed: qsTr("星图嵌入"),
+            nodeAsset: qsTr("星图节点"), nodeInstance: qsTr("星图节点实例"),
+            embedInstance: qsTr("子星图") })
         return (labels[ref.kind] || String(ref.kind)) + " · " + String(ref.objectId || "")
     }
 
@@ -1563,6 +1574,7 @@ QtObject {
         chapterSaveConflictNotified = false;
         pendingChapterSaves = ({});
         pendingChapterSaveIds = [];
+        pendingProofEvents = [];
         chapterSavePollTimer.stop();
     }
 
@@ -1831,6 +1843,20 @@ QtObject {
                 && String(version.contentSha256 || "") === committedChapterSha256;
     }
 
+    // 只移除回执已确认的 event ID；保存期间新增的事件继续留在批次中。
+    function acknowledgeProofEvents(ids) {
+        if (!ids || ids.length === 0) return;
+        var acknowledged = {};
+        for (var i = 0; i < ids.length; i++) acknowledged[String(ids[i])] = true;
+        var remaining = [];
+        for (var j = 0; j < pendingProofEvents.length; j++) {
+            if (!acknowledged[String(pendingProofEvents[j].id)]) {
+                remaining.push(pendingProofEvents[j]);
+            }
+        }
+        pendingProofEvents = remaining;
+    }
+
     // 保存成功后只清除 receipt 已确认的这批编辑，不清除随后输入的内容。
     function finishEditorSave(plainText, snapshotRevision, reason, snapshotSha) {
         lastSavedEditorText = plainText;
@@ -1856,6 +1882,12 @@ QtObject {
             return {"success": false, "queued": false, "errorCode": "SAVE_QUEUE_UNAVAILABLE"};
         }
         // 不可变快照元数据（正文 / base 正文单独传，避免整章 JSON 转义）。
+        var proofEventIds = [];
+        for (var i = 0; i < pendingProofEvents.length; i++) {
+            if (Number(pendingProofEvents[i].revision) <= Number(snapshotRevision)) {
+                proofEventIds.push(String(pendingProofEvents[i].id));
+            }
+        }
         var meta = {
             "sessionId": Number(chapterSaveSession),
             "projectId": String(projectId),
@@ -1866,7 +1898,8 @@ QtObject {
             "expectedRevision": Number(committedChapterRevision),
             "expectedContentSha256": committedChapterSha256,
             "snapshotRevision": Number(snapshotRevision),
-            "snapshotSha256": String(snapshotSha)
+            "snapshotSha256": String(snapshotSha),
+            "proofEventIds": proofEventIds
         };
         var requestId = Number(editorBackendRef.enqueue_chapter_save_versioned(
             JSON.stringify(meta), plainText, lastSavedEditorText));
@@ -1884,6 +1917,7 @@ QtObject {
             "session": Number(chapterSaveSession),
             "snapshotRevision": Number(snapshotRevision),
             "snapshotSha256": String(snapshotSha),
+            "proofEventIds": proofEventIds.slice(0),
             "text": plainText,
             "reason": String(reason || ""),
             "baseGeneration": committedChapterGeneration,
@@ -1962,6 +1996,7 @@ QtObject {
                 finishEditorSave(expected.text, expected.snapshotRevision,
                     expected.reason, expected.snapshotSha256);
             }
+            acknowledgeProofEvents(expected.proofEventIds);
             logWriterInfo("editor_save_committed_async",
                 "requestId=" + requestId + ", reason=" + expected.reason
                 + ", chained=" + (result.chained === true)
@@ -2293,6 +2328,7 @@ QtObject {
             chapterSaveConflictNotified = false;
             pendingChapterSaves = ({});
             pendingChapterSaveIds = [];
+            pendingProofEvents = [];
             chapterSavePollTimer.stop();
             clearEditorDocumentIdentity();
             correctionEntityNames = [];

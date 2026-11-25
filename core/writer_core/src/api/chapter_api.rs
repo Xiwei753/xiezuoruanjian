@@ -491,6 +491,8 @@ impl WriterCoreApi {
             None,
             None,
             &[],
+            None,
+            &[],
         )
         .map(|(dto, _)| dto)
     }
@@ -519,6 +521,38 @@ impl WriterCoreApi {
             expected_version,
             base_content.as_deref(),
             &[],
+            None,
+            &[],
+        )
+        .map(|(dto, _)| dto)
+    }
+
+    /// 保存正文并携带编辑器冻结的快照 revision。Core 只取该 revision 之前的
+    /// 证明事件批次，校验批次终点与正文一致后才提交。
+    pub fn save_chapter_content_versioned_with_snapshot(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<String>,
+        proof_snapshot_revision: u64,
+        proof_event_ids: &[String],
+        allow_empty_overwrite: bool,
+    ) -> ApiResult<ChapterSaveReceiptDto> {
+        self.save_chapter_content_internal(
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+            allow_empty_overwrite,
+            false,
+            expected_version,
+            base_content.as_deref(),
+            &[],
+            Some(proof_snapshot_revision),
+            proof_event_ids,
         )
         .map(|(dto, _)| dto)
     }
@@ -543,6 +577,8 @@ impl WriterCoreApi {
             expected_version,
             base_content.as_deref(),
             &[],
+            None,
+            &[],
         )
         .map(|(dto, _)| dto)
     }
@@ -566,6 +602,8 @@ impl WriterCoreApi {
             None,
             None,
             &[],
+            None,
+            &[],
         )
         .map(|(dto, _)| dto)
     }
@@ -585,6 +623,8 @@ impl WriterCoreApi {
             true,
             true,
             None,
+            None,
+            &[],
             None,
             &[],
         )
@@ -609,6 +649,8 @@ impl WriterCoreApi {
             true,
             expected_version,
             base_content.as_deref(),
+            &[],
+            None,
             &[],
         )
         .map(|(dto, _)| dto)
@@ -636,6 +678,8 @@ impl WriterCoreApi {
             None,
             None,
             &projection_ids,
+            None,
+            &[],
         )
     }
 
@@ -651,6 +695,8 @@ impl WriterCoreApi {
         expected_version: Option<ChapterVersionDto>,
         base_content: Option<&str>,
         projection_ids: &[String],
+        proof_snapshot_revision: Option<u64>,
+        proof_event_ids: &[String],
     ) -> ApiResult<(ChapterSaveReceiptDto, crate::chapter::ChapterSaveReceipt)> {
         // 锁顺序固定为 workspace → Core → store；不能在持有 Core 写锁后再申请
         // workspace，否则与同步提交线程形成 ABBA。
@@ -676,6 +722,8 @@ impl WriterCoreApi {
                 base_content,
                 projection_ids,
                 Some(&workspace_lock),
+                proof_snapshot_revision,
+                proof_event_ids,
             )
             .map_err(WriterError::from)?;
 

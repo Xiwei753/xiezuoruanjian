@@ -63,6 +63,13 @@ pub enum Error {
         actual_hash: String,
         conflict_dir: String,
     },
+    /// 显式证明批次不完整：请求声明的 event ID 尚未全部进入 Core，
+    /// 或批次顺序/正文终点不一致。保存不发布正文，调用方可重试同一批。
+    #[error("proof batch incomplete: chapter_id={chapter_id}, missing={missing:?}")]
+    ProofBatchIncomplete {
+        chapter_id: String,
+        missing: Vec<String>,
+    },
     /// 功能未实现。
     #[error("Not implemented")]
     NotImplemented,
@@ -164,6 +171,7 @@ impl Error {
             Error::ChapterNotFound => "CHAPTER_NOT_FOUND",
             Error::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
             Error::ChapterVersionConflict { .. } => "CHAPTER_VERSION_CONFLICT",
+            Error::ProofBatchIncomplete { .. } => "PROOF_BATCH_INCOMPLETE",
             Error::NotImplemented => "NOT_IMPLEMENTED",
             Error::RefuseToDeleteRoot => "REFUSE_DELETE_ROOT",
             Error::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
@@ -198,6 +206,7 @@ impl Error {
             Error::ChapterNotFound => false,
             Error::EmptyOverwriteBlocked { .. } => false,
             Error::ChapterVersionConflict { .. } => false,
+            Error::ProofBatchIncomplete { .. } => true,
             Error::NotImplemented => false,
             Error::RefuseToDeleteRoot => false,
             Error::InvalidDeleteTarget(_) => false,

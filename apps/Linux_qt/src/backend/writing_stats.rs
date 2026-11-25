@@ -72,10 +72,14 @@ impl AppBackend {
                 end_at_ms: segment.end_at_ms,
                 pause_reason: segment.pause_reason,
             };
-            if let Err(e) = writer.enqueue(
-                crate::backend::stats_writer::StatsWriteCommand::ActivitySegment(input),
-            ) {
-                self.debug_error("stats", "record_writing_activity_segment_enqueue_failed", &e);
+            if let Err(e) = writer
+                .enqueue(crate::backend::stats_writer::StatsWriteCommand::ActivitySegment(input))
+            {
+                self.debug_error(
+                    "stats",
+                    "record_writing_activity_segment_enqueue_failed",
+                    &e,
+                );
                 return Err(e);
             }
         }
@@ -153,7 +157,10 @@ impl AppBackend {
 
     /// 当前真实写作会话 ID；未开始计时时为空。
     pub(crate) fn current_writing_session_id(&self) -> String {
-        let session = self.writing_session.lock().unwrap_or_else(|e| e.into_inner());
+        let session = self
+            .writing_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         session.clock.session_id().to_string()
     }
 
@@ -214,14 +221,12 @@ impl AppBackend {
                 .unwrap_or_else(|e| e.into_inner());
             session.foreground = false;
             let mono_ms = session.now_mono_ms();
-            session
-                .clock
-                .on_close(
-                    mono_ms,
-                    "",
-                    writer_core::writing_stats::Platform::Desktop,
-                    "",
-                )
+            session.clock.on_close(
+                mono_ms,
+                "",
+                writer_core::writing_stats::Platform::Desktop,
+                "",
+            )
         };
         self.enqueue_writing_activity_segments(segments);
     }
@@ -301,40 +306,48 @@ impl AppBackend {
         baseline_text: QString,
         before_text_sha256: QString,
         after_text_sha256: QString,
-    ) {
+    ) -> QString {
+        let mut event_id = String::new();
         if let Some(ref writer) = self.stats_writer {
             // Issue #935 复核：编辑事实首次入队就固定稳定身份与发生时间，
             // 写盘失败重发时由 worker 原样带回，Core 按 event_id 判重。
-            let event_id = uuid::Uuid::new_v4().to_string();
+            event_id = uuid::Uuid::new_v4().to_string();
             let occurred_at_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
                 .unwrap_or(0);
-            if let Err(e) = writer.enqueue(crate::backend::stats_writer::StatsWriteCommand::Editor {
-                project_id: project_id.to_string(),
-                volume_id: volume_id.to_string(),
-                chapter_id: chapter_id.to_string(),
-                cause,
-                inserted_chars,
-                deleted_chars,
-                changes_json: changes_json.to_string(),
-                session_id: session_id.to_string(),
-                base_revision,
-                new_revision,
-                old_selection_anchor,
-                old_selection_head,
-                new_selection_anchor,
-                new_selection_head,
-                baseline_text: if baseline_text.is_empty() { None } else { Some(baseline_text.to_string()) },
-                before_text_sha256: before_text_sha256.to_string(),
-                after_text_sha256: after_text_sha256.to_string(),
-                event_id,
-                occurred_at_ms,
-            }) {
+            if let Err(e) =
+                writer.enqueue(crate::backend::stats_writer::StatsWriteCommand::Editor {
+                    project_id: project_id.to_string(),
+                    volume_id: volume_id.to_string(),
+                    chapter_id: chapter_id.to_string(),
+                    cause,
+                    inserted_chars,
+                    deleted_chars,
+                    changes_json: changes_json.to_string(),
+                    session_id: session_id.to_string(),
+                    base_revision,
+                    new_revision,
+                    old_selection_anchor,
+                    old_selection_head,
+                    new_selection_anchor,
+                    new_selection_head,
+                    baseline_text: if baseline_text.is_empty() {
+                        None
+                    } else {
+                        Some(baseline_text.to_string())
+                    },
+                    before_text_sha256: before_text_sha256.to_string(),
+                    after_text_sha256: after_text_sha256.to_string(),
+                    event_id: event_id.clone(),
+                    occurred_at_ms,
+                })
+            {
                 // Issue #935：发送失败不再静默丢弃，明确记诊断（统计事实已丢）。
                 self.debug_error("stats", "record_editor_change_stats_enqueue_failed", &e);
             }
         }
+        event_id.into()
     }
 
     /// Issue #843 复核评论 6045207375：查询统计前先等 writer 把队列中的 Record
@@ -465,11 +478,7 @@ impl AppBackend {
         match core.replay_starmap_proof_json(&request_json.to_string()) {
             Ok(value) => qjson_object_from_json(&value),
             Err(error) => {
-                self.debug_error(
-                    "stats",
-                    "replay_starmap_proof_failed",
-                    &error.to_string(),
-                );
+                self.debug_error("stats", "replay_starmap_proof_failed", &error.to_string());
                 qjson_object_from_json(&format!(
                     "{{\"valid\":false,\"errors\":[\"{}\"]}}",
                     error.to_string().replace('\\', "\\\\").replace('"', "\\\"")

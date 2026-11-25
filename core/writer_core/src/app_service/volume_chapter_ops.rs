@@ -225,6 +225,31 @@ impl super::WriterAppService {
         )
     }
 
+    pub fn save_chapter_content_versioned_with_batch(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        content: String,
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<String>,
+        proof_snapshot_revision: u64,
+        proof_event_ids: Vec<String>,
+        allow_empty_overwrite: bool,
+    ) -> Result<ChapterSaveReceiptDto, WriterError> {
+        self.api.save_chapter_content_versioned_with_snapshot(
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            &content,
+            expected_version,
+            base_content,
+            proof_snapshot_revision,
+            &proof_event_ids,
+            allow_empty_overwrite,
+        )
+    }
+
     pub fn clear_chapter_content(
         &self,
         project_id: String,

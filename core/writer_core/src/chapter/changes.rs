@@ -144,6 +144,7 @@ fn save_chapter_verified_with_changes_inner(
         &[],
         None,
         &[],
+        None,
     )
 }
 
@@ -177,6 +178,7 @@ pub fn save_chapter_verified_with_changes_versioned(
         projection_ids,
         workspace_lock,
         &[],
+        None,
     )
 }
 
@@ -211,6 +213,7 @@ pub fn save_chapter_verified_with_changes_and_files_versioned(
         projection_ids,
         workspace_lock,
         &[],
+        None,
     )
 }
 
@@ -229,6 +232,7 @@ pub fn save_chapter_verified_with_changes_and_files_versioned_with_proof(
     workspace_root: &Path,
     workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     proof_events: &[crate::chapter::commit::ChapterProofProjection],
+    proof_snapshot_revision: Option<u64>,
 ) -> Result<(
     ChapterSaveReceipt,
     crate::storage::workspace_git::WorkspaceChangeSet,
@@ -246,6 +250,7 @@ pub fn save_chapter_verified_with_changes_and_files_versioned_with_proof(
         projection_ids,
         workspace_lock,
         proof_events,
+        proof_snapshot_revision,
     )
 }
 
@@ -263,6 +268,7 @@ fn save_chapter_verified_with_changes_inner_versioned(
     projection_ids: &[String],
     workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     proof_events: &[crate::chapter::commit::ChapterProofProjection],
+    proof_snapshot_revision: Option<u64>,
 ) -> Result<(
     ChapterSaveReceipt,
     crate::storage::workspace_git::WorkspaceChangeSet,
@@ -279,6 +285,7 @@ fn save_chapter_verified_with_changes_inner_versioned(
         base_content,
         projection_ids,
         proof_events,
+        proof_snapshot_revision,
     )?;
 
     // 变更集只包含保存事务真实写过的文件（project-relative），

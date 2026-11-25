@@ -406,14 +406,24 @@ impl super::WriterCore {
         base_content: Option<&str>,
         projection_ids: &[String],
         workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
+        proof_snapshot_revision: Option<u64>,
+        proof_event_ids: &[String],
     ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
         let project_root = self.project_root(project_id);
         self.retry_pending_chapter_proof_projections(&project_root);
         let proof_events = select_pending_editor_proof(
             self.pending_editor_proof_for(project_id, volume_id, chapter_id),
             content,
+            proof_snapshot_revision,
+            proof_event_ids,
         );
         let mut projection_ids = projection_ids.to_vec();
+        if !proof_event_ids.is_empty() && proof_events.is_empty() {
+            return Err(crate::error::Error::ProofBatchIncomplete {
+                chapter_id: chapter_id.to_string(),
+                missing: proof_event_ids.to_vec(),
+            });
+        }
         for event in &proof_events {
             let event_id = event.event_id().to_string();
             if !event_id.is_empty() && !projection_ids.contains(&event_id) {
@@ -433,6 +443,7 @@ impl super::WriterCore {
             &self.app_data_root,
             workspace_lock,
             &proof_events,
+            proof_snapshot_revision,
         )?;
         if !proof_events.is_empty() && !result.0.transaction_id.is_empty() {
             let completed: std::collections::HashSet<String> = proof_events
@@ -460,6 +471,8 @@ impl super::WriterCore {
         let proof_events = select_pending_editor_proof(
             self.pending_editor_proof_for(project_id, volume_id, chapter_id),
             "",
+            None,
+            &[],
         );
         let projection_ids: Vec<String> = proof_events
             .iter()
@@ -480,6 +493,7 @@ impl super::WriterCore {
                 &self.app_data_root,
                 workspace_lock,
                 &proof_events,
+                None,
             )?;
         if !proof_events.is_empty() && !receipt.transaction_id.is_empty() {
             let completed: std::collections::HashSet<String> = proof_events
@@ -826,12 +840,36 @@ impl super::WriterCore {
 fn select_pending_editor_proof(
     events: Vec<crate::chapter::ChapterProofProjection>,
     content: &str,
+    snapshot_revision: Option<u64>,
+    event_ids: &[String],
 ) -> Vec<crate::chapter::ChapterProofProjection> {
     use crate::writing_stats::proof::{content_digest_of_text, text_sha256};
 
     if events.is_empty() {
         return events;
     }
+    let events = if event_ids.is_empty() {
+        events
+    } else {
+        // 平台显式给出本批 event ID 时，只取这些事件，不再按摘要猜批次。
+        // ID 必须全部存在且顺序与请求一致；少一条就整批拒绝，避免正文
+        // durable 后留下无法归属的证明事件。
+        let mut selected = Vec::with_capacity(event_ids.len());
+        let mut seen = std::collections::HashSet::new();
+        for event_id in event_ids {
+            if event_id.is_empty() || !seen.insert(event_id.as_str()) {
+                return Vec::new();
+            }
+            let Some(position) = events
+                .iter()
+                .position(|projection| projection.event_id() == event_id)
+            else {
+                return Vec::new();
+            };
+            selected.push(events[position].clone());
+        }
+        selected
+    };
     let all_legacy = events.iter().all(|projection| {
         projection
             .event
@@ -848,6 +886,7 @@ fn select_pending_editor_proof(
     // 再向前拼。队首之前的编辑如果已经被更晚的保存覆盖，它们必须已经在
     // 那次保存中 durable；若仍在队列里，说明本批快照不包含它们，不能跳过。
     let mut end = None;
+    let mut last_included = None;
     for (index, projection) in events.iter().enumerate() {
         let Some(proof) = projection.event.proof.as_ref() else {
             return Vec::new();
@@ -855,6 +894,12 @@ fn select_pending_editor_proof(
         if proof.after_text_sha256.is_empty() {
             return Vec::new();
         }
+        if let Some(limit) = snapshot_revision {
+            if proof.new_revision > limit {
+                break;
+            }
+        }
+        last_included = Some(index);
         if index > 0 {
             let Some(previous) = events[index - 1].event.proof.as_ref() else {
                 return Vec::new();
@@ -877,6 +922,11 @@ fn select_pending_editor_proof(
             // 否则会把快照内的后半段编辑留成 pending。
             end = Some(index);
         }
+    }
+    if snapshot_revision.is_some() && last_included != end {
+        // 快照 revision 内的最后一条事件必须正好等于保存正文；否则说明
+        // 快照与事件批次不一致，不能提交正文。
+        return Vec::new();
     }
     match end {
         Some(end) => events[..=end].to_vec(),

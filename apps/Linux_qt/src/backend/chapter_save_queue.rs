@@ -89,6 +89,9 @@ pub(crate) struct ChapterSaveRequest {
     pub expected: Option<ChapterVersionDto>,
     /// 冲突材料里的 base 正文，只用于三方材料，不参与正文比较。
     pub base_content: Option<String>,
+    /// 本批编辑事件的稳定 ID；由 QML 在冻结快照时一并冻结，Core 只提交这些
+    /// 事件，不再按正文摘要猜批次。
+    pub proof_event_ids: Vec<String>,
     pub context: ChapterSaveContext,
 }
 
@@ -113,6 +116,9 @@ pub(crate) struct ChapterSaveSnapshotMeta {
     pub snapshot_revision: u64,
     #[serde(default)]
     pub snapshot_sha256: String,
+    /// 冻结快照时已记录的编辑事件 ID；与 snapshot_revision 一起构成显式批次。
+    #[serde(default)]
+    pub proof_event_ids: Vec<String>,
 }
 
 impl ChapterSaveSnapshotMeta {
@@ -407,12 +413,19 @@ pub(crate) fn enqueue(request: ChapterSaveRequest) -> Result<(), String> {
 // ── worker ────────────────────────────────────────────────────────────────
 
 struct ChapterSaveChain {
+    /// 本链第一条请求的 base 版本；队列里多份从同一版本入队的快照
+    /// 都以它为锚点，不能因为前一请求推进了 expected 就把后续请求判成冲突。
+    anchor: Option<ChapterVersionDto>,
     /// 最近一次请求实际使用的 base 版本（成功/失败都记录）。
     expected: Option<ChapterVersionDto>,
     /// 最近一次成功写入后的版本，用来推进后续请求的 base。
     receipt: Option<ChapterVersionDto>,
     /// 与 receipt 对应的正文，作为冲突材料的 base。
     text: Arc<str>,
+    /// 已排队/完成请求中最大的编辑器快照 revision。旧快照不得借用新版本。
+    snapshot_revision: u64,
+    /// 链上出现失败/外部更新后失效，后续请求只能重新对齐磁盘版本。
+    invalid: bool,
     last_used: Instant,
 }
 
@@ -476,21 +489,32 @@ fn resolve_chain_base(
     chain: Option<&ChapterSaveChain>,
     expected: &Option<ChapterVersionDto>,
     base_content: &Option<String>,
+    snapshot_revision: u64,
 ) -> (Option<ChapterVersionDto>, Option<String>, bool) {
     let mut effective = expected.clone();
     let mut effective_base = base_content.clone();
     let mut chained = false;
     if let Some(chain) = chain {
+        if chain.invalid {
+            return (effective, effective_base, false);
+        }
         if let (Some(request_base), Some(receipt)) = (expected.as_ref(), chain.receipt.as_ref()) {
-            // 只在前一请求回执严格更新时才推进 base。版本相同但 sha 不同
-            //（外部改写）或 generation 不同（章节重建）都保留调用方 base，
-            // 让 Core 的 CAS 如实返回冲突。
-            if request_base.object_generation == receipt.object_generation
-                && chain.expected.as_ref().is_some_and(|chain_base| {
-                    chain_base.object_generation == request_base.object_generation
-                        && chain_base.revision == request_base.revision
-                        && chain_base.content_sha256 == request_base.content_sha256
-                })
+            // 请求 base 要么是链当前 expected（QML 已用上一回执推进），
+            // 要么仍是链锚点（多份快照在队列积压时都从 V0 入队）。两种
+            // 情况都允许接到直接前序回执；但快照必须严格晚于链上已见快照。
+            let matches_expected = chain.expected.as_ref().is_some_and(|chain_base| {
+                chain_base.object_generation == request_base.object_generation
+                    && chain_base.revision == request_base.revision
+                    && chain_base.content_sha256 == request_base.content_sha256
+            });
+            let matches_anchor = chain.anchor.as_ref().is_some_and(|anchor| {
+                anchor.object_generation == request_base.object_generation
+                    && anchor.revision == request_base.revision
+                    && anchor.content_sha256 == request_base.content_sha256
+            });
+            if (matches_expected || matches_anchor)
+                && snapshot_revision > chain.snapshot_revision
+                && request_base.object_generation == receipt.object_generation
                 && receipt.revision > request_base.revision
             {
                 effective = Some(receipt.clone());
@@ -519,7 +543,12 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request: ChapterSaveR
     let chain_key = chapter_chain_key(&request);
     let (effective_expected, effective_base, chained) = {
         let chain = state.chains.get(&chain_key);
-        resolve_chain_base(chain, &request.expected, &request.base_content)
+        resolve_chain_base(
+            chain,
+            &request.expected,
+            &request.base_content,
+            request.identity.snapshot_revision,
+        )
     };
     if let Some(chain) = state.chains.get_mut(&chain_key) {
         chain.expected = effective_expected.clone();
@@ -528,9 +557,12 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request: ChapterSaveR
         state.chains.insert(
             chain_key.clone(),
             ChapterSaveChain {
+                anchor: effective_expected.clone(),
                 expected: effective_expected.clone(),
                 receipt: None,
                 text: Arc::from(""),
+                snapshot_revision: request.identity.snapshot_revision,
+                invalid: false,
                 last_used: Instant::now(),
             },
         );
@@ -538,36 +570,38 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request: ChapterSaveR
     state.prune_chains(&chain_key);
 
     let api = state.api_for(&request.context);
-    let save_result = if request.allow_empty_overwrite {
-        api.save_chapter_content_versioned_allow_empty(
-            &request.identity.project_id,
-            &request.identity.volume_id,
-            &request.identity.chapter_id,
-            &request.content,
-            effective_expected,
-            effective_base,
-        )
-    } else {
-        api.save_chapter_content_versioned(
-            &request.identity.project_id,
-            &request.identity.volume_id,
-            &request.identity.chapter_id,
-            &request.content,
-            effective_expected,
-            effective_base,
-        )
-    };
+    let save_result = api.save_chapter_content_versioned_with_snapshot(
+        &request.identity.project_id,
+        &request.identity.volume_id,
+        &request.identity.chapter_id,
+        &request.content,
+        effective_expected,
+        effective_base,
+        request.identity.snapshot_revision,
+        &request.proof_event_ids,
+        request.allow_empty_overwrite,
+    );
 
     match save_result {
         Ok(receipt) => {
             if let Some(chain) = state.chains.get_mut(&chain_key) {
                 chain.receipt = Some(receipt.version.clone());
                 chain.text = Arc::clone(&request.content);
+                chain.snapshot_revision = chain
+                    .snapshot_revision
+                    .max(request.identity.snapshot_revision);
+                chain.invalid = false;
                 chain.last_used = Instant::now();
             }
             complete_ok(request_id, receipt, chained);
         }
         Err(error) => {
+            if let Some(chain) = state.chains.get_mut(&chain_key) {
+                // 失败后链不能再把后续快照接到旧回执上；下一请求必须
+                // 重新读取磁盘版本或显式冲突。
+                chain.invalid = true;
+                chain.last_used = Instant::now();
+            }
             let code = error.code().to_string();
             let conflict = code == "CHAPTER_VERSION_CONFLICT";
             let conflict_draft_path = if conflict {

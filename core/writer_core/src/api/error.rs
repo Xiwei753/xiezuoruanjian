@@ -35,6 +35,9 @@ pub enum WriterError {
     /// 章节正文 base 版本已过期；提交未发布，冲突材料保留在 Core。
     #[error("Chapter version conflict")]
     ChapterVersionConflict,
+    /// 显式证明批次不完整；保存未发布正文，调用方可重试同一批。
+    #[error("Proof batch incomplete")]
+    ProofBatchIncomplete,
     #[error("Not implemented")]
     NotImplemented,
     #[error("Refuse to delete root")]
@@ -96,6 +99,7 @@ impl WriterError {
             WriterError::ChapterNotFound => "CHAPTER_NOT_FOUND",
             WriterError::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
             WriterError::ChapterVersionConflict => "CHAPTER_VERSION_CONFLICT",
+            WriterError::ProofBatchIncomplete => "PROOF_BATCH_INCOMPLETE",
             WriterError::NotImplemented => "NOT_IMPLEMENTED",
             WriterError::RefuseToDeleteRoot => "REFUSE_DELETE_ROOT",
             WriterError::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
@@ -126,6 +130,7 @@ impl WriterError {
             WriterError::ChapterNotFound => "error.chapter_not_found",
             WriterError::EmptyOverwriteBlocked { .. } => "error.empty_overwrite_blocked",
             WriterError::ChapterVersionConflict => "error.chapter_version_conflict",
+            WriterError::ProofBatchIncomplete => "error.proof_batch_incomplete",
             WriterError::NotImplemented => "error.not_implemented",
             WriterError::RefuseToDeleteRoot => "error.refuse_delete_root",
             WriterError::InvalidDeleteTarget(_) => "error.invalid_delete_target",
@@ -243,6 +248,7 @@ impl From<crate::error::Error> for WriterError {
                 reason,
             },
             Error::ChapterVersionConflict { .. } => WriterError::ChapterVersionConflict,
+            Error::ProofBatchIncomplete { .. } => WriterError::ProofBatchIncomplete,
             Error::NotImplemented => WriterError::NotImplemented,
             Error::RefuseToDeleteRoot => WriterError::RefuseToDeleteRoot,
             Error::InvalidDeleteTarget(s) => WriterError::InvalidDeleteTarget(s),

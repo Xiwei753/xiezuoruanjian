@@ -400,6 +400,7 @@ pub fn save_chapter_verified_with_version(
         base_content,
         &[],
         &[],
+        None,
     )
     .map(|outcome| outcome.receipt)
 }
@@ -444,6 +445,7 @@ pub(super) fn save_chapter_verified_with_options(
         None,
         &[],
         &[],
+        None,
     )
     .map(|outcome| outcome.receipt)
 }

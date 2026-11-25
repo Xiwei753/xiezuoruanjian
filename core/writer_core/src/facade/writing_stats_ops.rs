@@ -210,10 +210,7 @@ impl super::WriterCore {
 
         // 证明事件先留在 Core，随下一次正文提交写入同一 durable journal。
         // 只有 journal 决议成功后才允许写统计/证明，链头不能超越已提交正文。
-        let key = format!(
-            "{}/{}/{}",
-            input.project_id, input.volume_id, input.chapter_id
-        );
+        let key = self.pending_proof_key(&input.project_id, &input.volume_id, &input.chapter_id);
         self.enqueue_pending_editor_proof(
             key,
             crate::chapter::ChapterProofProjection {
@@ -247,13 +244,21 @@ impl super::WriterCore {
         }
     }
 
+    fn pending_proof_key(&self, project_id: &str, volume_id: &str, chapter_id: &str) -> String {
+        // 工作区根必须进入键：不同工作区可以存在相同 project id。
+        format!(
+            "{}\u{1f}{project_id}/{volume_id}/{chapter_id}",
+            self.app_data_root.display()
+        )
+    }
+
     pub(crate) fn pending_editor_proof_for(
         &self,
         project_id: &str,
         volume_id: &str,
         chapter_id: &str,
     ) -> Vec<crate::chapter::ChapterProofProjection> {
-        let key = format!("{project_id}/{volume_id}/{chapter_id}");
+        let key = self.pending_proof_key(project_id, volume_id, chapter_id);
         self.pending_editor_proof
             .lock()
             .ok()
@@ -268,7 +273,7 @@ impl super::WriterCore {
         chapter_id: &str,
         event_ids: &std::collections::HashSet<String>,
     ) {
-        let key = format!("{project_id}/{volume_id}/{chapter_id}");
+        let key = self.pending_proof_key(project_id, volume_id, chapter_id);
         if let Ok(mut pending) = self.pending_editor_proof.lock() {
             if let Some(events) = pending.get_mut(&key) {
                 events.retain(|event| !event_ids.contains(event.event_id()));
