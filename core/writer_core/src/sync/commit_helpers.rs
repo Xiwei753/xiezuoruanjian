@@ -791,12 +791,36 @@ fn chapter_body_parts(rel_path: &Path) -> Option<(String, String)> {
     }
 }
 
+fn chapter_body_rel_path(volume_id: &str, chapter_id: &str) -> PathBuf {
+    PathBuf::from("volumes")
+        .join(volume_id)
+        .join("chapters")
+        .join(chapter_id)
+        .join("chapter.md")
+}
+
 fn chapter_meta_rel_path(volume_id: &str, chapter_id: &str) -> PathBuf {
     PathBuf::from("volumes")
         .join(volume_id)
         .join("chapters")
         .join(chapter_id)
         .join("chapter.meta.json")
+}
+
+fn chapter_meta_parts(path: &Path) -> Option<(String, String)> {
+    let parts: Vec<String> = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if parts.len() == 5
+        && parts[0] == "volumes"
+        && parts[2] == "chapters"
+        && parts[4] == "chapter.meta.json"
+    {
+        Some((parts[1].clone(), parts[3].clone()))
+    } else {
+        None
+    }
 }
 
 /// 先通过章节协调器提交现有章节正文，返回已处理的 target-relative 路径。
@@ -811,8 +835,30 @@ fn commit_synced_chapter_bodies(
     guard: &crate::storage::WorkspaceWriteLock,
     content_actions: &[crate::sync::staging::CommitAction],
     run_id: &str,
+    app_data_root: &Path,
 ) -> crate::error::Result<std::collections::HashSet<PathBuf>> {
     let mut handled = std::collections::HashSet::new();
+    let project_id = live_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string();
+    if project_id.is_empty() {
+        return Err(crate::error::Error::Other(
+            "sync chapter commit cannot derive project id from live root".to_string(),
+        ));
+    }
+    for action in content_actions {
+        let crate::sync::staging::CommitAction::Delete { rel_path } = action else {
+            continue;
+        };
+        let Some((volume_id, chapter_id)) = chapter_body_parts(rel_path) else {
+            continue;
+        };
+        crate::chapter::delete_chapter(live_root, &volume_id, &chapter_id, app_data_root)?;
+        handled.insert(rel_path.clone());
+        handled.insert(chapter_meta_rel_path(&volume_id, &chapter_id));
+    }
     for (action_index, action) in content_actions.iter().enumerate() {
         let crate::sync::staging::CommitAction::Apply { rel_path, content } = action else {
             continue;
@@ -826,16 +872,6 @@ fn commit_synced_chapter_bodies(
                 rel_path.display()
             ))
         })?;
-        let project_id = live_root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .to_string();
-        if project_id.is_empty() {
-            return Err(crate::error::Error::Other(
-                "sync chapter commit cannot derive project id from live root".to_string(),
-            ));
-        }
         let incoming_meta = content_actions.iter().find_map(|candidate| {
             let crate::sync::staging::CommitAction::Apply {
                 rel_path: candidate_path,
@@ -955,6 +991,62 @@ fn commit_synced_chapter_bodies(
             }
         }
     }
+    // 只有 chapter.meta.json 的同步动作也必须经过章节协调器：否则标题/
+    // 顺序会绕过 generation/revision CAS 直接写盘，和正文版本脱节。
+    for action in content_actions {
+        let crate::sync::staging::CommitAction::Apply { rel_path, content } = action else {
+            continue;
+        };
+        let Some((volume_id, chapter_id)) = chapter_meta_parts(rel_path) else {
+            continue;
+        };
+        if handled.contains(rel_path)
+            || handled.contains(&chapter_body_rel_path(&volume_id, &chapter_id))
+        {
+            continue;
+        }
+        let incoming_meta: crate::chapter::Chapter = match serde_json::from_slice(content) {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        let (_, current_text, current_version) =
+            match crate::chapter::commit::read_chapter_state_recovering(
+                live_root,
+                guard,
+                &volume_id,
+                &chapter_id,
+            ) {
+                Ok(state) => state,
+                Err(crate::error::Error::ChapterNotFound) => continue,
+                Err(error) => return Err(error),
+            };
+        let mut request = crate::chapter::ChapterCommitRequest::new(
+            crate::chapter::ChapterKey::new(
+                project_id.clone(),
+                volume_id.clone(),
+                chapter_id.clone(),
+            ),
+            current_text.clone(),
+        );
+        request.meta_title = Some(incoming_meta.title);
+        request.meta_order = Some(incoming_meta.order);
+        request.expected = Some(current_version);
+        request.base_content = Some(current_text);
+        request.mutation = crate::chapter::ChapterMutationKind::SyncMerge;
+        request.source = crate::chapter::ChapterCommitSource::Sync;
+        request.allow_empty_overwrite = true;
+        match crate::chapter::commit::commit_chapter_with_guard(live_root, Some(guard), request)? {
+            crate::chapter::ChapterCommitOutcome::Committed(_) => {
+                handled.insert(rel_path.clone());
+            }
+            crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
+                return Err(crate::error::Error::Other(format!(
+                    "sync chapter meta commit conflicted for {}/{}: actual={:?}",
+                    volume_id, chapter_id, conflict.actual
+                )));
+            }
+        }
+    }
     Ok(handled)
 }
 
@@ -975,8 +1067,13 @@ fn apply_commit_plan_with_optional_merge(
     // 做恢复读取和版本 CAS。外层若已持锁，这里按同一 root 嵌套获取。
     let workspace_lock = crate::storage::WorkspaceWriteLock::acquire(run.app_data_root())?;
     let mut content_actions = content_actions.to_vec();
-    let handled_chapters =
-        commit_synced_chapter_bodies(live_root, &workspace_lock, &content_actions, run.run_id())?;
+    let handled_chapters = commit_synced_chapter_bodies(
+        live_root,
+        &workspace_lock,
+        &content_actions,
+        run.run_id(),
+        run.app_data_root(),
+    )?;
     if !handled_chapters.is_empty() {
         content_actions.retain(|action| {
             let rel = match action {
