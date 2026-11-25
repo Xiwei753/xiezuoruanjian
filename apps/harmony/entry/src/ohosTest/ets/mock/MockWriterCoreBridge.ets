@@ -1,6 +1,6 @@
 import { IWriterCoreBridge } from '../../../main/ets/corebridge/IWriterCoreBridge'
 import { EditorTransactionCause } from '../../../main/ets/corebridge/dto/EditorDtos'
-import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
+import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ChapterVersion, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind, NodeType, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch } from '../../../main/ets/corebridge/dto/StarMapDtos'
@@ -14,6 +14,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   private mockChapters: Map<string, ChapterMeta[]> = new Map<string, ChapterMeta[]>()
 
   private mockChapterContents: Map<string, string> = new Map<string, string>()
+
+  private mockChapterVersions: Map<string, ChapterVersion> = new Map<string, ChapterVersion>()
 
   private mockStarMaps: StarMapMeta[] = []
 
@@ -249,7 +251,12 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       }
       const data: ChapterContent = {
         meta,
-        content
+        content,
+        version: this.mockChapterVersions.get(chapterId) || {
+          objectGeneration: `mock-generation-${chapterId}`,
+          revision: 0,
+          contentSha256: `mock-sha-${content.length}`
+        }
       }
       return this.success(data)
     }
@@ -263,13 +270,60 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
         const sampleContent = `这是《${chapter.title}》的示例内容。\n\n在此处开始写作...\n\n鸿蒙端当前使用 mock 数据，后续将对接真实 Rust Core。`
         const data: ChapterContent = {
           meta: chapter,
-          content: sampleContent
+          content: sampleContent,
+          version: this.mockChapterVersions.get(chapterId) || {
+            objectGeneration: `mock-generation-${chapterId}`,
+            revision: 0,
+            contentSha256: `mock-sha-${sampleContent.length}`
+          }
         }
         return this.success(data)
       }
     }
 
     return this.error('CHAPTER_NOT_FOUND', '章节不存在')
+  }
+
+  private nextChapterVersion(chapterId: string, text: string): ChapterVersion {
+    const previous = this.mockChapterVersions.get(chapterId)
+    return {
+      objectGeneration: previous?.objectGeneration || `mock-generation-${chapterId}`,
+      revision: (previous?.revision || 0) + 1,
+      contentSha256: `mock-sha-${text.length}-${Date.now()}`
+    }
+  }
+
+  async saveChapterVersioned(chapterId: string, text: string, expected: ChapterVersion,
+    baseContent: string, allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    await this.delay(300)
+    if ((!text || text.trim().length === 0) && !allowEmptyOverwrite) {
+      return this.error('EMPTY_OVERWRITE_BLOCKED', 'Cannot save empty content')
+    }
+    const current = this.mockChapterVersions.get(chapterId)
+    if (current !== undefined &&
+      (current.objectGeneration !== expected.objectGeneration ||
+        current.revision !== expected.revision ||
+        current.contentSha256 !== expected.contentSha256)) {
+      return this.error('CHAPTER_VERSION_CONFLICT', '章节已在其他窗口更新')
+    }
+    const version = this.nextChapterVersion(chapterId, text)
+    this.mockChapterContents.set(chapterId, text)
+    this.mockChapterVersions.set(chapterId, version)
+    const receipt: ChapterSaveReceipt = {
+      chapterRelativePath: `chapters/${chapterId}.md`,
+      contentLen: text.length,
+      contentHash: version.contentSha256,
+      metaHash: 'mock-hash-meta-' + Date.now(),
+      updatedAt: new Date().toISOString(),
+      wordCount: text.replace(/\s/g, '').length,
+      version
+    }
+    return this.success(receipt)
+  }
+
+  async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
+    baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    return this.saveChapterVersioned(chapterId, '', expected, baseContent, true)
   }
 
   async saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
@@ -283,13 +337,16 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     }
 
     this.mockChapterContents.set(chapterId, text)
+    const version = this.nextChapterVersion(chapterId, text)
+    this.mockChapterVersions.set(chapterId, version)
     const receipt: ChapterSaveReceipt = {
       chapterRelativePath: `chapters/${chapterId}.md`,
       contentLen: text.length,
-      contentHash: 'mock-hash-content-' + Date.now(),
+      contentHash: version.contentSha256,
       metaHash: 'mock-hash-meta-' + Date.now(),
       updatedAt: new Date().toISOString(),
-      wordCount: text.replace(/\s/g, '').length
+      wordCount: text.replace(/\s/g, '').length,
+      version
     }
     return this.success(receipt)
   }
@@ -297,13 +354,20 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   async clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     await this.delay(200)
     this.mockChapterContents.set(chapterId, '')
+    const version: ChapterVersion = {
+      objectGeneration: `mock-generation-${chapterId}`,
+      revision: 0,
+      contentSha256: 'mock-hash-empty'
+    }
+    this.mockChapterVersions.set(chapterId, version)
     const receipt: ChapterSaveReceipt = {
       chapterRelativePath: `chapters/${chapterId}.md`,
       contentLen: 0,
       contentHash: 'mock-hash-empty',
       metaHash: 'mock-hash-meta-' + Date.now(),
       updatedAt: new Date().toISOString(),
-      wordCount: 0
+      wordCount: 0,
+      version
     }
     return this.success(receipt)
   }

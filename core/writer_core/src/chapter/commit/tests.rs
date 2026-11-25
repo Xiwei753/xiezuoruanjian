@@ -119,6 +119,7 @@ fn recovery_applies_decided_body_but_never_overwrites_newer_content() {
         source: ChapterCommitSource::Editor,
         created_at_ms: Utc::now().timestamp_millis(),
         occurred_at_ms: Utc::now().timestamp_millis(),
+        commit_sequence: 1,
         event_ids: Vec::new(),
         proof_events: Vec::new(),
         expected: None,

@@ -58,6 +58,9 @@ pub(super) struct ChapterCommitManifest {
     pub(super) source: ChapterCommitSource,
     pub(super) created_at_ms: i64,
     pub(super) occurred_at_ms: i64,
+    /// 项目内单调提交序号，用于证明投影按因果顺序重放。
+    #[serde(default)]
+    pub(super) commit_sequence: u64,
     pub(super) event_ids: Vec<String>,
     #[serde(default)]
     pub(super) proof_events: Vec<super::ChapterProofProjection>,
@@ -117,6 +120,20 @@ pub(super) fn chapter_relative_path(key: &ChapterKey) -> String {
         "volumes/{}/chapters/{}/{}",
         key.volume_id, key.chapter_id, BODY_FILE
     )
+}
+
+/// 分配项目内单调提交序号。调用方必须持有章节写锁；序号只用于排序，
+/// 不参与正文版本比较，因此即使回滚留下空洞也不影响正确性。
+fn next_commit_sequence(project_root: &Path) -> Result<u64> {
+    let path = journal_root(project_root).join("sequence");
+    let current = match fs::read_to_string(&path) {
+        Ok(raw) => raw.trim().parse::<u64>().unwrap_or(0),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(error.into()),
+    };
+    let next = current.saturating_add(1);
+    crate::storage::atomic_write_bytes(&path, next.to_string().as_bytes())?;
+    Ok(next)
 }
 
 fn ensure_journal_dir(project_root: &Path) -> Result<()> {
@@ -520,6 +537,7 @@ pub(crate) fn commit_chapter_with_guard(
 
     ensure_journal_dir(project_root)?;
     mark_pending(project_root)?;
+    let commit_sequence = next_commit_sequence(project_root)?;
     let tx_dir = journal_root(project_root).join(&transaction_id);
     fs::create_dir_all(&tx_dir)?;
 
@@ -554,6 +572,7 @@ pub(crate) fn commit_chapter_with_guard(
         source: request.source,
         created_at_ms: Utc::now().timestamp_millis(),
         occurred_at_ms: Utc::now().timestamp_millis(),
+        commit_sequence,
         event_ids: request.event_ids.clone(),
         proof_events: request.proof_events.clone(),
         expected: request.expected.clone(),
@@ -743,10 +762,20 @@ pub fn pending_chapter_proof_transactions(project_root: &Path) -> Result<Vec<Str
         };
         if manifest.phase == ChapterCommitPhase::Applied && !manifest.pending_projections.is_empty()
         {
-            transactions.push(manifest.transaction_id);
+            transactions.push((
+                manifest.commit_sequence,
+                manifest.created_at_ms,
+                manifest.transaction_id,
+            ));
         }
     }
-    Ok(transactions)
+    // read_dir 顺序不稳定；证明投影必须按发生顺序推进，否则同章后一笔会越过
+    // 尚未完成的证明事件。时间戳相同的极端情况再用事务 ID 稳定排序。
+    transactions.sort();
+    Ok(transactions
+        .into_iter()
+        .map(|(_, _, transaction_id)| transaction_id)
+        .collect())
 }
 
 /// 读取 journal 中尚未确认的证明事件（供投影 worker 使用）。
@@ -765,7 +794,18 @@ pub fn pending_chapter_proof_events(
     if manifest.phase != ChapterCommitPhase::Applied {
         return Ok(Vec::new());
     }
-    Ok(manifest.proof_events)
+    // 只返回仍未确认的事件。journal 保留了完整批次供恢复诊断，但 worker
+    // 重放时只能投影 pending_projections，不能把已 ack 的事件重复写入。
+    let pending: std::collections::HashSet<&str> = manifest
+        .pending_projections
+        .iter()
+        .map(String::as_str)
+        .collect();
+    Ok(manifest
+        .proof_events
+        .into_iter()
+        .filter(|projection| pending.contains(projection.event_id()))
+        .collect())
 }
 
 /// 扫描并恢复未完成 journal。按 `created_at_ms` 顺序处理；只处理未完成事务，
@@ -802,7 +842,7 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
             }
         }
     }
-    entries.sort_by_key(|(_, manifest)| manifest.created_at_ms);
+    entries.sort_by_key(|(_, manifest)| (manifest.commit_sequence, manifest.created_at_ms));
 
     let mut recovered = Vec::new();
     for (tx_dir, mut manifest) in entries {
