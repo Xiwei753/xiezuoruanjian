@@ -411,8 +411,22 @@ impl super::WriterCore {
     ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
         let project_root = self.project_root(project_id);
         self.retry_pending_chapter_proof_projections(&project_root);
+        let pending_proof = self.pending_editor_proof_for(project_id, volume_id, chapter_id);
+        if proof_snapshot_revision.is_some() && proof_event_ids.is_empty() {
+            // 带快照的保存必须显式给出本批 event IDs。不能再按正文摘要从
+            // pending 队列猜批次；宁可拒绝，也不把事件留成无主状态。
+            if !pending_proof.is_empty() {
+                return Err(crate::error::Error::ProofBatchIncomplete {
+                    chapter_id: chapter_id.to_string(),
+                    missing: pending_proof
+                        .iter()
+                        .map(|event| event.event_id().to_string())
+                        .collect(),
+                });
+            }
+        }
         let proof_events = select_pending_editor_proof(
-            self.pending_editor_proof_for(project_id, volume_id, chapter_id),
+            pending_proof,
             content,
             proof_snapshot_revision,
             proof_event_ids,
