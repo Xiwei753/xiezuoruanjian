@@ -66,6 +66,23 @@ class WritingStatsRepository(
         data class Barrier(val barrierSeq: Long, val ack: CompletableDeferred<Boolean>) : StatsWriteCommand
     }
 
+    /** 保存时冻结的证明批次：只包含本次正文 revision 之前的编辑事件。 */
+    data class ProofBatchSnapshot(
+        val snapshotRevision: Long,
+        val eventIds: List<String>,
+    )
+
+    private data class ProofBatchRef(
+        val seq: Long,
+        val eventId: String,
+        val projectId: String,
+        val volumeId: String,
+        val chapterId: String,
+        val newRevision: Long,
+    )
+
+    private val recentProofRefs = ArrayList<ProofBatchRef>()
+
     /** #843：待写事件负载（typed editor-change）。 */
     data class PendingWritingEvent(
         val projectId: String,
@@ -256,6 +273,27 @@ class WritingStatsRepository(
      * Core 的 record_editor_change_stats 内部做 cause → EventSource 映射，
      * 事件直接追加写入 JSONL，无缓冲，不需要 flush。
      */
+    fun snapshotProofBatch(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        snapshotRevision: Long,
+    ): ProofBatchSnapshot {
+        synchronized(enqueueLock) {
+            val ids = ArrayList<String>()
+            var highest = 0L
+            for (ref in recentProofRefs) {
+                if (ref.projectId == projectId && ref.volumeId == volumeId &&
+                    ref.chapterId == chapterId && ref.newRevision <= snapshotRevision
+                ) {
+                    ids.add(ref.eventId)
+                    highest = maxOf(highest, ref.newRevision)
+                }
+            }
+            return ProofBatchSnapshot(highest, ids)
+        }
+    }
+
     fun recordEditorChangeStats(
         projectId: String,
         volumeId: String,
@@ -305,6 +343,19 @@ class WritingStatsRepository(
                     ),
                 ),
             )
+            recentProofRefs.add(
+                ProofBatchRef(
+                    seq = seq,
+                    eventId = eventId,
+                    projectId = projectId,
+                    volumeId = volumeId,
+                    chapterId = chapterId,
+                    newRevision = newRevision,
+                ),
+            )
+            if (recentProofRefs.size > 2048) {
+                recentProofRefs.removeAt(0)
+            }
         }
     }
 

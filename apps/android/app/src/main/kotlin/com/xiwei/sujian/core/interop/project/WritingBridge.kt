@@ -24,6 +24,26 @@ class WritingBridge(private val appService: AppServiceBridge) {
         return appService.saveChapterContent(projectId, volumeId, chapterId, content, expectedVersion)
     }
 
+    fun saveChapterContentWithProofBatch(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        content: String,
+        expectedVersion: ChapterVersion?,
+        proofSnapshotRevision: Long,
+        proofEventIds: List<String>,
+    ): BridgeResult<ChapterSaveReceipt> {
+        return appService.saveChapterContentWithProofBatch(
+            projectId,
+            volumeId,
+            chapterId,
+            content,
+            expectedVersion,
+            proofSnapshotRevision,
+            proofEventIds,
+        )
+    }
+
     fun clearChapterContent(
         projectId: String,
         volumeId: String,

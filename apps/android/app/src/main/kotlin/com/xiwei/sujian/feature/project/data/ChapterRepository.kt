@@ -7,6 +7,7 @@ import com.xiwei.sujian.core.interop.common.MessageKeyMapper
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.core.interop.project.WritingBridge
 import com.xiwei.sujian.feature.editor.session.ChapterContentSavePort
+import com.xiwei.sujian.feature.editor.session.ChapterProofBatchSavePort
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
 import com.xiwei.sujian.feature.project.data.model.ChapterVersion
@@ -20,7 +21,8 @@ import kotlinx.coroutines.withContext
  *
  * 从 [com.xiwei.sujian.feature.project.data.ProjectRepository] 拆出，
  * 专门负责章节正文的读取、保存、清空、备注更新与字数计算。
- * 实现 [ChapterContentSavePort] — EditorViewModel 的保存流程只依赖此端口。
+ * 实现 [ChapterContentSavePort] 与可选 [ChapterProofBatchSavePort] — EditorViewModel
+ * 的保存流程只依赖这些端口。
  *
  * #624 评论12 第3项：Repository 自己负责 main-safe — 保存/清空经注入的
  * [ioDispatcher] 派发（默认 [Dispatchers.IO]），调用方（Compose/Main 协程）
@@ -30,7 +32,8 @@ class ChapterRepository(
     private val context: Context,
     private val appBridge: AppServiceBridge,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-) : ChapterContentSavePort {
+)
+    : ChapterContentSavePort, ChapterProofBatchSavePort {
     private val writingBridge = WritingBridge(appBridge)
 
     private fun BridgeResult.Error.localizedMessage(): String {
@@ -120,6 +123,27 @@ class ChapterRepository(
     ): BridgeResult<ChapterSaveReceipt> =
         withContext(ioDispatcher) {
             writingBridge.saveChapterContent(projectId, volumeId, chapterId, content, expectedVersion)
+        }
+
+    override suspend fun saveChapterContentWithProofBatch(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        content: String,
+        expectedVersion: ChapterVersion?,
+        proofSnapshotRevision: Long,
+        proofEventIds: List<String>,
+    ): BridgeResult<ChapterSaveReceipt> =
+        withContext(ioDispatcher) {
+            writingBridge.saveChapterContentWithProofBatch(
+                projectId,
+                volumeId,
+                chapterId,
+                content,
+                expectedVersion,
+                proofSnapshotRevision,
+                proofEventIds,
+            )
         }
 
     /**

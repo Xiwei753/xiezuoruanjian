@@ -192,6 +192,24 @@ open class AppServiceBridge(
         expectedVersion,
     )
 
+    fun saveChapterContentWithProofBatch(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        content: String,
+        expectedVersion: com.xiwei.sujian.feature.project.data.model.ChapterVersion?,
+        proofSnapshotRevision: Long,
+        proofEventIds: List<String>,
+    ) = chapterBridge.saveChapterContentWithProofBatch(
+        projectId,
+        volumeId,
+        chapterId,
+        content,
+        expectedVersion,
+        proofSnapshotRevision,
+        proofEventIds,
+    )
+
     fun clearChapterContent(
         projectId: String,
         volumeId: String,

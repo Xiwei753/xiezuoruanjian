@@ -21,6 +21,7 @@ package com.xiwei.sujian.feature.editor.presentation
 
 import android.app.Application
 import com.xiwei.sujian.R
+import com.xiwei.sujian.feature.editor.session.ChapterProofBatchSavePort
 import com.xiwei.sujian.feature.editor.session.ChapterSavedSignal
 import com.xiwei.sujian.feature.editor.session.DocumentOperationLease
 import com.xiwei.sujian.feature.editor.session.DocumentVersion
@@ -353,6 +354,21 @@ private suspend fun EditorViewModel.saveChapterAttempt(
     _uiState.value = currentState.copy(saveStatus = SaveStatus.Saving)
     return try {
         val expectedVersion = lease.committedVersion.toChapterVersion()
+        val batchPort = effectiveChapterSavePort as? ChapterProofBatchSavePort
+        val proofBatch = statsRepository.snapshotProofBatch(
+            session.projectId,
+            session.volumeId,
+            session.chapterId,
+            lease.rustRevision,
+        )
+        if (batchPort != null && proofBatch.snapshotRevision > 0 &&
+            !statsRepository.awaitPendingWrites()
+        ) {
+            // 本批证明事件没有全部进入 Core：不提交正文，避免正文前进后
+            // 无法再把事件归属到正确批次。下次自动保存会重试。
+            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+            return SaveAttemptResult.Finished(false)
+        }
         val result =
             if (contentToSave.isEmpty()) {
                 effectiveChapterSavePort.clearChapterContent(
@@ -360,6 +376,16 @@ private suspend fun EditorViewModel.saveChapterAttempt(
                     session.volumeId,
                     session.chapterId,
                     expectedVersion,
+                )
+            } else if (batchPort != null && proofBatch.snapshotRevision > 0) {
+                batchPort.saveChapterContentWithProofBatch(
+                    session.projectId,
+                    session.volumeId,
+                    session.chapterId,
+                    contentToSave,
+                    expectedVersion,
+                    proofBatch.snapshotRevision,
+                    proofBatch.eventIds,
                 )
             } else {
                 effectiveChapterSavePort.saveChapterContent(

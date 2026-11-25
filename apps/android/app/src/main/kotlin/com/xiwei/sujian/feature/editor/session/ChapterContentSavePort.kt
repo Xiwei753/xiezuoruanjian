@@ -24,3 +24,19 @@ interface ChapterContentSavePort {
         expectedVersion: ChapterVersion? = null,
     ): BridgeResult<ChapterSaveReceipt>
 }
+
+/**
+ * 可选的显式证明批次保存能力。保存流程在端口支持时携带冻结的 event IDs，
+ * 不支持时仍走旧版本 CAS 入口（Core 只做正文摘要校验）。
+ */
+interface ChapterProofBatchSavePort {
+    suspend fun saveChapterContentWithProofBatch(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        content: String,
+        expectedVersion: ChapterVersion?,
+        proofSnapshotRevision: Long,
+        proofEventIds: List<String>,
+    ): BridgeResult<ChapterSaveReceipt>
+}
