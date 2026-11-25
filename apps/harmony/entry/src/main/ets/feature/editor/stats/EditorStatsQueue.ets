@@ -59,10 +59,22 @@ interface QueuedStatsWrite {
   segment: WritingActivitySegmentInput | null
 }
 
+interface ProofBatchRef {
+  seq: number
+  eventId: string
+  projectId: string
+  volumeId: string
+  chapterId: string
+}
+
 export class EditorStatsQueue {
   private readonly platform: string
   private readonly drain: SerialStatsDrain<QueuedStatsWrite>
   private readonly barrierFlusher: () => Promise<boolean>
+  // 最近入队的编辑事件 ID，供保存快照冻结显式证明批次。
+  // 只保留有界窗口；缺失时保存会返回 PROOF_BATCH_INCOMPLETE 并要求重试，
+  // 不会静默按正文摘要猜归属。
+  private recentProofRefs: ProofBatchRef[] = []
 
   constructor(bridge: IWriterCoreBridge, platform: string) {
     this.platform = platform
@@ -131,7 +143,7 @@ export class EditorStatsQueue {
       return
     }
 
-    this.drain.enqueue({
+    const item: QueuedStatsWrite = {
       seq: 0, // 占位：入队时由调度层从账本分配并覆盖
       kind: QueuedStatsKind.EditorChange,
       projectId: projectId,
@@ -154,7 +166,18 @@ export class EditorStatsQueue {
       beforeTextSha256: beforeTextSha256,
       afterTextSha256: afterTextSha256,
       segment: null
+    }
+    this.drain.enqueue(item)
+    this.recentProofRefs.push({
+      seq: item.seq,
+      eventId: eventId,
+      projectId: projectId,
+      volumeId: volumeId,
+      chapterId: chapterId
     })
+    if (this.recentProofRefs.length > 2048) {
+      this.recentProofRefs = this.recentProofRefs.slice(this.recentProofRefs.length - 2048)
+    }
   }
 
   /** Issue #981：实测写作片段与编辑字数事件进入同一串行队列，稳定 eventId 由平台预先固定。 */
@@ -197,6 +220,23 @@ export class EditorStatsQueue {
    */
   currentSeq(): number {
     return this.drain.currentSeq()
+  }
+
+  /**
+   * 冻结到 barrier 为止的编辑事件 ID。保存请求把这份列表随正文一起提交，
+   * Core 只认这些 ID，不再按正文摘要猜批次。
+   */
+  proofEventIdsThrough(barrier: number, projectId: string, volumeId: string,
+    chapterId: string): string[] {
+    const ids: string[] = []
+    for (let i = 0; i < this.recentProofRefs.length; i++) {
+      const ref = this.recentProofRefs[i]
+      if (ref.seq <= barrier && ref.projectId === projectId
+        && ref.volumeId === volumeId && ref.chapterId === chapterId) {
+        ids.push(ref.eventId)
+      }
+    }
+    return ids
   }
 
   /**

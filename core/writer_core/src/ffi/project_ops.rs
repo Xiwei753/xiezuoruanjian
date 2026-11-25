@@ -397,6 +397,54 @@ pub unsafe extern "C" fn writer_core_save_chapter_versioned_json(
         .get("allowEmptyOverwrite")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let proof_snapshot_revision = value
+        .get("proofSnapshotRevision")
+        .and_then(serde_json::Value::as_u64);
+    let proof_event_ids = value
+        .get("proofEventIds")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !clear {
+        if let Some(snapshot_revision) = proof_snapshot_revision {
+            let expected = crate::api::ChapterVersionDto {
+                object_generation: generation.clone(),
+                revision: u64::try_from(revision).unwrap_or(0),
+                content_sha256: sha256.clone(),
+            };
+            let base = (!base_content.is_empty()).then_some(base_content.clone());
+            let project = project_id.clone();
+            let volume = volume_id.clone();
+            let chapter = chapter_id.clone();
+            let content_value = content.clone();
+            let event_ids = proof_event_ids;
+            return match with_app_service(move |svc| {
+                let receipt = svc
+                    .save_chapter_content_versioned_with_batch(
+                        project,
+                        volume,
+                        chapter,
+                        content_value,
+                        Some(expected),
+                        base,
+                        snapshot_revision,
+                        event_ids,
+                        allow_empty,
+                    )
+                    .map_err(|error| format!("{}", error))?;
+                Ok(receipt)
+            }) {
+                Ok(receipt) => ok_json(&receipt),
+                Err(error) => err_json("CHAPTER_SAVE_FAILED", &error),
+            };
+        }
+    }
     let c_project = match std::ffi::CString::new(project_id) {
         Ok(value) => value,
         Err(_) => return err_json("INVALID_ARGUMENT", "projectId contains NUL"),

@@ -107,6 +107,8 @@ interface SaveRequest {
   baseContent: string
   // 与快照同一次结算冻结的统计批次上界：这份正文定型前入队的最后一条统计 seq。
   statsBarrier: number
+  // 冻结到 statsBarrier 为止的编辑事件 ID；随正文一起提交，Core 只认这些事件。
+  proofEventIds: string[]
   // 直接前序本地保存请求 ID；-1 表示这条请求没有可继承的回执。
   predecessorId: number
 }
@@ -285,7 +287,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       a.sessionEpoch === b.sessionEpoch && a.revision === b.revision &&
       a.text === b.text && a.allowEmptyOverwrite === b.allowEmptyOverwrite &&
       a.isAutoSave === b.isAutoSave && this.sameVersion(a.baseVersion, b.baseVersion) &&
-      a.baseContent === b.baseContent && a.statsBarrier === b.statsBarrier
+      a.baseContent === b.baseContent && a.statsBarrier === b.statsBarrier &&
+      a.proofEventIds.length === b.proofEventIds.length &&
+      a.proofEventIds.every((id: string, index: number): boolean => id === b.proofEventIds[index])
   }
 
   // 从调用方已结算的 Core 快照冻结保存身份；session 必须仍属于同一编辑会话。
@@ -609,6 +613,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       baseVersion: this.lastSavedVersion,
       baseContent: this.lastSavedContent,
       statsBarrier: statsBarrier,
+      proofEventIds: this.statsQueue.proofEventIdsThrough(
+        statsBarrier, this.projectId, this.volumeId, this.chapterId),
       predecessorId: predecessorId
     }
     this.nextSaveRequestId += 1
@@ -742,7 +748,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         ? await this.bridge.clearChapterVersioned(
             request.chapterId, request.baseVersion, request.baseContent)
         : await this.bridge.saveChapterVersioned(
-            request.chapterId, request.text, request.baseVersion, request.baseContent, false)
+            request.chapterId, request.text, request.baseVersion, request.baseContent, false,
+            request.revision, request.proofEventIds)
       if (!result.success || !result.data) {
         if (this.isRequestCurrent(request)) {
           this.lastSaveFailed = true

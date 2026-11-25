@@ -244,9 +244,11 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async saveChapterVersioned(chapterId: string, text: string, expected: ChapterVersion,
-    baseContent: string, allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    baseContent: string, allowEmptyOverwrite: boolean,
+    proofSnapshotRevision: number, proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     return this.chapterBridge.saveChapterVersioned(
-      chapterId, text, expected, baseContent, allowEmptyOverwrite)
+      chapterId, text, expected, baseContent, allowEmptyOverwrite,
+      proofSnapshotRevision, proofEventIds)
   }
 
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,

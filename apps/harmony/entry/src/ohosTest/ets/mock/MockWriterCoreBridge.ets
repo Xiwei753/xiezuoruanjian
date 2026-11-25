@@ -294,7 +294,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async saveChapterVersioned(chapterId: string, text: string, expected: ChapterVersion,
-    baseContent: string, allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    baseContent: string, allowEmptyOverwrite: boolean,
+    proofSnapshotRevision: number, proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     await this.delay(300)
     if ((!text || text.trim().length === 0) && !allowEmptyOverwrite) {
       return this.error('EMPTY_OVERWRITE_BLOCKED', 'Cannot save empty content')

@@ -36,7 +36,8 @@ export interface IWriterCoreBridge {
   saveChapterWithOptions(chapterId: string, text: string, allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>>
   // Issue #1059：完整版本 CAS；expected 来自最近一次 open/save receipt。
   saveChapterVersioned(chapterId: string, text: string, expected: ChapterVersion,
-    baseContent: string, allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>>
+    baseContent: string, allowEmptyOverwrite: boolean,
+    proofSnapshotRevision: number, proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>>
   clearChapterVersioned(chapterId: string, expected: ChapterVersion,
     baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
   clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
