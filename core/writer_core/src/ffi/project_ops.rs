@@ -413,9 +413,12 @@ pub unsafe extern "C" fn writer_core_save_chapter_versioned_json(
         .unwrap_or_default();
     if !clear {
         if let Some(snapshot_revision) = proof_snapshot_revision {
+            let Ok(expected_revision) = u64::try_from(revision) else {
+                return err_json("INVALID_ARGUMENT", "expected_revision is negative");
+            };
             let expected = crate::api::ChapterVersionDto {
                 object_generation: generation.clone(),
-                revision: u64::try_from(revision).unwrap_or(0),
+                revision: expected_revision,
                 content_sha256: sha256.clone(),
             };
             let base = (!base_content.is_empty()).then_some(base_content.clone());
