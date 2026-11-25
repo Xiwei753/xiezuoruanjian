@@ -824,58 +824,6 @@ fn refresh_stats_event_actions(
     Ok(())
 }
 
-/// 识别 target-relative 的章节正文路径 `volumes/<v>/chapters/<c>/chapter.md`。
-fn chapter_body_parts(rel_path: &Path) -> Option<(String, String)> {
-    let parts: Vec<String> = rel_path
-        .components()
-        .filter_map(|component| match component {
-            std::path::Component::Normal(value) => Some(value.to_string_lossy().to_string()),
-            _ => None,
-        })
-        .collect();
-    if parts.len() == 5
-        && parts[0] == "volumes"
-        && parts[2] == "chapters"
-        && parts[4] == "chapter.md"
-    {
-        Some((parts[1].clone(), parts[3].clone()))
-    } else {
-        None
-    }
-}
-
-fn chapter_body_rel_path(volume_id: &str, chapter_id: &str) -> PathBuf {
-    PathBuf::from("volumes")
-        .join(volume_id)
-        .join("chapters")
-        .join(chapter_id)
-        .join("chapter.md")
-}
-
-fn chapter_meta_rel_path(volume_id: &str, chapter_id: &str) -> PathBuf {
-    PathBuf::from("volumes")
-        .join(volume_id)
-        .join("chapters")
-        .join(chapter_id)
-        .join("chapter.meta.json")
-}
-
-fn chapter_meta_parts(path: &Path) -> Option<(String, String)> {
-    let parts: Vec<String> = path
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy().into_owned())
-        .collect();
-    if parts.len() == 5
-        && parts[0] == "volumes"
-        && parts[2] == "chapters"
-        && parts[4] == "chapter.meta.json"
-    {
-        Some((parts[1].clone(), parts[3].clone()))
-    } else {
-        None
-    }
-}
-
 /// 先通过章节协调器提交现有章节正文，返回已处理的 target-relative 路径。
 ///
 /// 章节正文与 `chapter.meta.json` 不能继续由通用 SaveTransaction 直接写：
@@ -890,6 +838,11 @@ fn commit_synced_chapter_bodies(
     run_id: &str,
     app_data_root: &Path,
 ) -> crate::error::Result<std::collections::HashSet<PathBuf>> {
+    use super::chapter_mutation_plan::{
+        chapter_body_rel_path, chapter_meta_rel_path, plan_synced_chapter_mutations,
+        SyncedChapterMutation,
+    };
+
     let mut handled = std::collections::HashSet::new();
     let project_id = live_root
         .file_name()
@@ -901,201 +854,115 @@ fn commit_synced_chapter_bodies(
             "sync chapter commit cannot derive project id from live root".to_string(),
         ));
     }
-    for action in content_actions {
-        let crate::sync::staging::CommitAction::Delete { rel_path } = action else {
+
+    for change in plan_synced_chapter_mutations(&project_id, content_actions) {
+        let body_rel = chapter_body_rel_path(&change.key);
+        let meta_rel = chapter_meta_rel_path(&change.key);
+        if change.mutation == SyncedChapterMutation::Delete {
+            crate::chapter::delete_chapter(
+                live_root,
+                &change.key.volume_id,
+                &change.key.chapter_id,
+                app_data_root,
+            )?;
+            handled.insert(body_rel);
+            handled.insert(meta_rel);
             continue;
-        };
-        let Some((volume_id, chapter_id)) = chapter_body_parts(rel_path) else {
-            continue;
-        };
-        crate::chapter::delete_chapter(live_root, &volume_id, &chapter_id, app_data_root)?;
-        handled.insert(rel_path.clone());
-        handled.insert(chapter_meta_rel_path(&volume_id, &chapter_id));
-    }
-    for (action_index, action) in content_actions.iter().enumerate() {
-        let crate::sync::staging::CommitAction::Apply { rel_path, content } = action else {
-            continue;
-        };
-        let Some((volume_id, chapter_id)) = chapter_body_parts(rel_path) else {
-            continue;
-        };
-        let content = std::str::from_utf8(content).map_err(|error| {
-            crate::error::Error::Other(format!(
-                "sync chapter body is not UTF-8 {}: {error}",
-                rel_path.display()
-            ))
-        })?;
-        let incoming_meta = content_actions.iter().find_map(|candidate| {
-            let crate::sync::staging::CommitAction::Apply {
-                rel_path: candidate_path,
-                content: candidate_content,
-            } = candidate
-            else {
-                return None;
-            };
-            if *candidate_path == chapter_meta_rel_path(&volume_id, &chapter_id) {
-                serde_json::from_slice::<crate::chapter::Chapter>(candidate_content).ok()
-            } else {
-                None
-            }
-        });
-        let current = match crate::chapter::commit::read_chapter_state_recovering(
+        }
+
+        let current = crate::chapter::commit::read_chapter_state_recovering(
             live_root,
             guard,
-            &volume_id,
-            &chapter_id,
-        ) {
-            Ok((meta, text, version)) => (meta, text, version),
+            &change.key.volume_id,
+            &change.key.chapter_id,
+        );
+        let (current_text, current_version) = match current {
+            Ok((_, text, version)) => (text, Some(version)),
             Err(crate::error::Error::ChapterNotFound) => {
-                let Some(meta_template) = incoming_meta.clone() else {
+                if change.mutation == SyncedChapterMutation::Meta {
+                    // 只有 meta 的新章节无法证明正文来源，留给通用事务或下一次
+                    // 带正文的同步，不能凭空创建空章节。
+                    continue;
+                }
+                (String::new(), None)
+            }
+            Err(error) => return Err(error),
+        };
+
+        let mut request = crate::chapter::ChapterCommitRequest::new(
+            change.key.clone(),
+            change
+                .body
+                .as_deref()
+                .filter(|_| change.mutation != SyncedChapterMutation::Meta)
+                .unwrap_or(&current_text),
+        );
+        if let Some(meta) = change.meta.as_ref() {
+            request.meta_title = Some(meta.title.clone());
+            request.meta_order = Some(meta.order);
+        }
+        request.source = crate::chapter::ChapterCommitSource::Sync;
+        request.allow_empty_overwrite = request.content.is_empty();
+        match current_version {
+            None => {
+                let Some(meta_template) = change.meta.clone() else {
                     continue;
                 };
-                let mut request = crate::chapter::ChapterCommitRequest::new(
-                    crate::chapter::ChapterKey::new(
-                        project_id.clone(),
-                        volume_id.clone(),
-                        chapter_id.clone(),
-                    ),
-                    content,
-                );
-                request.meta_template = Some(meta_template);
                 request.mutation = crate::chapter::ChapterMutationKind::Create;
-                request.source = crate::chapter::ChapterCommitSource::Sync;
-                request.allow_empty_overwrite = content.is_empty();
+                request.meta_template = Some(meta_template);
                 request
                     .sync_proof_facts
                     .push(crate::chapter::ChapterSyncProofFact {
                         event_id: format!(
-                            "sync:{run_id}:{}:{action_index}",
+                            "sync:{run_id}:{}:{}",
                             PathBuf::from("projects")
                                 .join(&project_id)
-                                .join(rel_path)
-                                .display()
+                                .join(&body_rel)
+                                .display(),
+                            change.action_index
                         ),
                         key: request.key.clone(),
                         before_text: None,
-                        after_text: Some(content.to_string()),
+                        after_text: Some(request.content.clone()),
                         source_device_id: String::new(),
                         occurred_at_ms: chrono::Utc::now().timestamp_millis(),
                     });
-                match crate::chapter::commit::commit_chapter_with_guard(
-                    live_root,
-                    Some(guard),
-                    request,
-                )? {
-                    crate::chapter::ChapterCommitOutcome::Committed(_) => {
-                        handled.insert(rel_path.clone());
-                        handled.insert(chapter_meta_rel_path(&volume_id, &chapter_id));
-                    }
-                    crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
-                        return Err(crate::error::Error::Other(format!(
-                            "sync chapter create conflicted for {}/{}: actual={:?}",
-                            volume_id, chapter_id, conflict.actual
-                        )));
-                    }
-                }
-                continue;
             }
-            Err(error) => return Err(error),
-        };
-        let mut request = crate::chapter::ChapterCommitRequest::new(
-            crate::chapter::ChapterKey::new(
-                project_id.clone(),
-                volume_id.clone(),
-                chapter_id.clone(),
-            ),
-            content,
-        );
-        if let Some(incoming_meta) = incoming_meta.as_ref() {
-            request.meta_title = Some(incoming_meta.title.clone());
-            request.meta_order = Some(incoming_meta.order);
+            Some(version) => {
+                request.expected = Some(version);
+                request.base_content = Some(current_text.clone());
+                request.mutation = crate::chapter::ChapterMutationKind::SyncMerge;
+                if change.mutation != SyncedChapterMutation::Meta {
+                    request
+                        .sync_proof_facts
+                        .push(crate::chapter::ChapterSyncProofFact {
+                            event_id: format!(
+                                "sync:{run_id}:{}:{}",
+                                PathBuf::from("projects")
+                                    .join(&project_id)
+                                    .join(&body_rel)
+                                    .display(),
+                                change.action_index
+                            ),
+                            key: request.key.clone(),
+                            before_text: Some(current_text.clone()),
+                            after_text: Some(request.content.clone()),
+                            source_device_id: String::new(),
+                            occurred_at_ms: chrono::Utc::now().timestamp_millis(),
+                        });
+                }
+            }
         }
-        request.expected = Some(current.2);
-        request.base_content = Some(current.1.clone());
-        request.mutation = crate::chapter::ChapterMutationKind::SyncMerge;
-        request.source = crate::chapter::ChapterCommitSource::Sync;
-        request.allow_empty_overwrite = content.is_empty();
-        request
-            .sync_proof_facts
-            .push(crate::chapter::ChapterSyncProofFact {
-                event_id: format!(
-                    "sync:{run_id}:{}:{action_index}",
-                    PathBuf::from("projects")
-                        .join(&project_id)
-                        .join(rel_path)
-                        .display()
-                ),
-                key: request.key.clone(),
-                before_text: Some(current.1.clone()),
-                after_text: Some(content.to_string()),
-                source_device_id: String::new(),
-                occurred_at_ms: chrono::Utc::now().timestamp_millis(),
-            });
+
         match crate::chapter::commit::commit_chapter_with_guard(live_root, Some(guard), request)? {
             crate::chapter::ChapterCommitOutcome::Committed(_) => {
-                handled.insert(rel_path.clone());
-                handled.insert(chapter_meta_rel_path(&volume_id, &chapter_id));
+                handled.insert(body_rel);
+                handled.insert(meta_rel);
             }
             crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
                 return Err(crate::error::Error::Other(format!(
                     "sync chapter commit conflicted for {}/{}: actual={:?}",
-                    volume_id, chapter_id, conflict.actual
-                )));
-            }
-        }
-    }
-    // 只有 chapter.meta.json 的同步动作也必须经过章节协调器：否则标题/
-    // 顺序会绕过 generation/revision CAS 直接写盘，和正文版本脱节。
-    for action in content_actions {
-        let crate::sync::staging::CommitAction::Apply { rel_path, content } = action else {
-            continue;
-        };
-        let Some((volume_id, chapter_id)) = chapter_meta_parts(rel_path) else {
-            continue;
-        };
-        if handled.contains(rel_path)
-            || handled.contains(&chapter_body_rel_path(&volume_id, &chapter_id))
-        {
-            continue;
-        }
-        let incoming_meta: crate::chapter::Chapter = match serde_json::from_slice(content) {
-            Ok(meta) => meta,
-            Err(_) => continue,
-        };
-        let (_, current_text, current_version) =
-            match crate::chapter::commit::read_chapter_state_recovering(
-                live_root,
-                guard,
-                &volume_id,
-                &chapter_id,
-            ) {
-                Ok(state) => state,
-                Err(crate::error::Error::ChapterNotFound) => continue,
-                Err(error) => return Err(error),
-            };
-        let mut request = crate::chapter::ChapterCommitRequest::new(
-            crate::chapter::ChapterKey::new(
-                project_id.clone(),
-                volume_id.clone(),
-                chapter_id.clone(),
-            ),
-            current_text.clone(),
-        );
-        request.meta_title = Some(incoming_meta.title);
-        request.meta_order = Some(incoming_meta.order);
-        request.expected = Some(current_version);
-        request.base_content = Some(current_text);
-        request.mutation = crate::chapter::ChapterMutationKind::SyncMerge;
-        request.source = crate::chapter::ChapterCommitSource::Sync;
-        request.allow_empty_overwrite = true;
-        match crate::chapter::commit::commit_chapter_with_guard(live_root, Some(guard), request)? {
-            crate::chapter::ChapterCommitOutcome::Committed(_) => {
-                handled.insert(rel_path.clone());
-            }
-            crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
-                return Err(crate::error::Error::Other(format!(
-                    "sync chapter meta commit conflicted for {}/{}: actual={:?}",
-                    volume_id, chapter_id, conflict.actual
+                    change.key.volume_id, change.key.chapter_id, conflict.actual
                 )));
             }
         }

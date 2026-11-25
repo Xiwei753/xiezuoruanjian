@@ -32,6 +32,7 @@
 pub mod app_data_group_catalog;
 /// 同步取消令牌 — 平台无关的同步生命周期标记（Issue #729）。
 pub mod cancellation_token;
+pub(crate) mod chapter_mutation_plan;
 pub(crate) mod commit_helpers;
 pub mod config_store;
 pub mod conflict;
@@ -45,9 +46,9 @@ pub(crate) mod full_sync_utils;
 pub mod generation_gc;
 /// 同步哈希语义集中模块（MD5 内容哈希 / Git blob OID / 旧基线归一化）。
 pub(crate) mod hash;
-pub mod lww;
 /// 成功 Core 事务留下的本地对象变更事实（同步版本投影的提交时间/设备来源）。
 pub(crate) mod local_mutations;
+pub mod lww;
 ///   待删除同步 target 的持久化（provider-neutral）。
 pub mod path;
 pub mod pending_deleted;

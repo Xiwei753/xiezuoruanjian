@@ -1,0 +1,148 @@
+//! 同步正文变更的类型化计划。
+//!
+//! 同步 staging 产出的是一组通用 `CommitAction`。章节协调器不能直接从
+//! 文件路径猜“这次是新建、替换、只改 meta 还是删除”，否则正文、meta、
+//! 删除事实和证明事件会在不同分支里各自落盘。这里先把 action 按
+//! `ChapterKey` 聚合成明确的 mutation，再交给统一提交入口执行。
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use crate::chapter::{Chapter, ChapterKey};
+use crate::sync::staging::CommitAction;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SyncedChapterMutation {
+    Replace,
+    Meta,
+    Delete,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SyncedChapterChange {
+    pub(crate) key: ChapterKey,
+    pub(crate) mutation: SyncedChapterMutation,
+    pub(crate) body: Option<String>,
+    pub(crate) meta: Option<Chapter>,
+    pub(crate) action_index: usize,
+}
+
+fn chapter_body_parts(path: &Path) -> Option<(String, String)> {
+    let parts: Vec<String> = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if parts.len() == 5
+        && parts[0] == "volumes"
+        && parts[2] == "chapters"
+        && parts[4] == "chapter.md"
+    {
+        Some((parts[1].clone(), parts[3].clone()))
+    } else {
+        None
+    }
+}
+
+fn chapter_meta_parts(path: &Path) -> Option<(String, String)> {
+    let parts: Vec<String> = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if parts.len() == 5
+        && parts[0] == "volumes"
+        && parts[2] == "chapters"
+        && parts[4] == "chapter.meta.json"
+    {
+        Some((parts[1].clone(), parts[3].clone()))
+    } else {
+        None
+    }
+}
+
+/// 把通用 action 聚合成每章一个 mutation。
+///
+/// 同一章同时有正文和 meta action 时合并为一条 Replace；只有 meta 的章节
+/// 标为 Meta；正文删除标为 Delete。真实是 Create 还是 Replace 由执行阶段
+/// 读取 live 状态决定，计划本身不猜测磁盘现状。
+pub(crate) fn plan_synced_chapter_mutations(
+    project_id: &str,
+    actions: &[CommitAction],
+) -> Vec<SyncedChapterChange> {
+    let mut grouped: BTreeMap<(String, String), SyncedChapterChange> = BTreeMap::new();
+    for (action_index, action) in actions.iter().enumerate() {
+        match action {
+            CommitAction::Apply { rel_path, content } => {
+                if let Some((volume_id, chapter_id)) = chapter_body_parts(rel_path) {
+                    let content = String::from_utf8_lossy(content).into_owned();
+                    let entry = grouped
+                        .entry((volume_id.clone(), chapter_id.clone()))
+                        .or_insert_with(|| SyncedChapterChange {
+                            key: ChapterKey::new(
+                                project_id.to_string(),
+                                volume_id.clone(),
+                                chapter_id.clone(),
+                            ),
+                            mutation: SyncedChapterMutation::Replace,
+                            body: None,
+                            meta: None,
+                            action_index,
+                        });
+                    entry.body = Some(content);
+                    entry.mutation = SyncedChapterMutation::Replace;
+                } else if let Some((volume_id, chapter_id)) = chapter_meta_parts(rel_path) {
+                    let meta = serde_json::from_slice::<Chapter>(content).ok();
+                    let entry = grouped
+                        .entry((volume_id.clone(), chapter_id.clone()))
+                        .or_insert_with(|| SyncedChapterChange {
+                            key: ChapterKey::new(
+                                project_id.to_string(),
+                                volume_id.clone(),
+                                chapter_id.clone(),
+                            ),
+                            mutation: SyncedChapterMutation::Meta,
+                            body: None,
+                            meta: None,
+                            action_index,
+                        });
+                    entry.meta = meta;
+                }
+            }
+            CommitAction::Delete { rel_path } => {
+                if let Some((volume_id, chapter_id)) = chapter_body_parts(rel_path) {
+                    let entry = grouped
+                        .entry((volume_id.clone(), chapter_id.clone()))
+                        .or_insert_with(|| SyncedChapterChange {
+                            key: ChapterKey::new(
+                                project_id.to_string(),
+                                volume_id.clone(),
+                                chapter_id.clone(),
+                            ),
+                            mutation: SyncedChapterMutation::Delete,
+                            body: None,
+                            meta: None,
+                            action_index,
+                        });
+                    entry.mutation = SyncedChapterMutation::Delete;
+                }
+            }
+        }
+    }
+    grouped.into_values().collect()
+}
+
+/// 章节在 project 内的正文相对路径。
+pub(crate) fn chapter_body_rel_path(key: &ChapterKey) -> PathBuf {
+    PathBuf::from("volumes")
+        .join(&key.volume_id)
+        .join("chapters")
+        .join(&key.chapter_id)
+        .join("chapter.md")
+}
+
+pub(crate) fn chapter_meta_rel_path(key: &ChapterKey) -> PathBuf {
+    PathBuf::from("volumes")
+        .join(&key.volume_id)
+        .join("chapters")
+        .join(&key.chapter_id)
+        .join("chapter.meta.json")
+}
