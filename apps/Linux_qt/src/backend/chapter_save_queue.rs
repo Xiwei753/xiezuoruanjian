@@ -464,10 +464,11 @@ fn chapter_chain_key(request: &ChapterSaveRequest) -> String {
     // 卷 ID 不进入链身份：Issue #1051 允许当前章节跨卷移动，而 object_generation
     // / revision 随章节留在原地；用项目 + 章节才能在移动后继续用前一回执推进 base。
     format!(
-        "{}\u{1f}{}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
         request.context.key(),
         request.identity.project_id,
-        request.identity.chapter_id
+        request.identity.chapter_id,
+        request.identity.session_id
     )
 }
 
@@ -485,6 +486,11 @@ fn resolve_chain_base(
             //（外部改写）或 generation 不同（章节重建）都保留调用方 base，
             // 让 Core 的 CAS 如实返回冲突。
             if request_base.object_generation == receipt.object_generation
+                && chain.expected.as_ref().is_some_and(|chain_base| {
+                    chain_base.object_generation == request_base.object_generation
+                        && chain_base.revision == request_base.revision
+                        && chain_base.content_sha256 == request_base.content_sha256
+                })
                 && receipt.revision > request_base.revision
             {
                 effective = Some(receipt.clone());

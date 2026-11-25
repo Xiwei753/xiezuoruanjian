@@ -918,11 +918,8 @@ fn commit_synced_chapter_bodies(
             content,
         );
         if let Some(incoming_meta) = incoming_meta.as_ref() {
-            // 标题/顺序不是正文版本的一部分；协调器当前不改这两个字段。
-            // 若远端同时改了它们，整章仍交给通用事务，避免丢标题。
-            if incoming_meta.title != current.0.title || incoming_meta.order != current.0.order {
-                continue;
-            }
+            request.meta_title = Some(incoming_meta.title.clone());
+            request.meta_order = Some(incoming_meta.order);
         }
         request.expected = Some(current.2);
         request.base_content = Some(current.1.clone());

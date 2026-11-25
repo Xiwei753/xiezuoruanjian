@@ -873,8 +873,9 @@ fn select_pending_editor_proof(
             }
         }
         if proof.after_text_sha256 == digest || proof.after_text_sha256 == legacy_digest {
+            // A→B→A→B：同一最终摘要会再次出现，必须取最靠后的连续前缀，
+            // 否则会把快照内的后半段编辑留成 pending。
             end = Some(index);
-            break;
         }
     }
     match end {

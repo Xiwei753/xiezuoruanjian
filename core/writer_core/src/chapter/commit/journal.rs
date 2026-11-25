@@ -87,6 +87,11 @@ pub(super) struct ChapterCommitManifest {
     /// Create 提交的初始 meta；发布时正文/meta 都不存在才允许写入。
     #[serde(default)]
     pub(super) created_meta: Option<Chapter>,
+    /// 与正文同一决议的标题/顺序；None 表示不修改。
+    #[serde(default)]
+    pub(super) meta_title: Option<String>,
+    #[serde(default)]
+    pub(super) meta_order: Option<i32>,
     /// 恢复时判断是否为创建提交；旧 journal 无此字段默认 false。
     #[serde(default)]
     pub(super) created: bool,
@@ -513,7 +518,9 @@ pub(crate) fn commit_chapter_with_guard(
                 meta.created_at = now.clone();
             }
             meta.updated_at = now;
-            meta.object_generation = Uuid::new_v4().to_string();
+            if meta.object_generation.is_empty() {
+                meta.object_generation = Uuid::new_v4().to_string();
+            }
             meta.revision = 0;
             meta.word_count = 0;
             meta.hash = md5_hex("");
@@ -622,6 +629,12 @@ pub(crate) fn commit_chapter_with_guard(
     if content_changed {
         meta.updated_at = updated_at.clone();
     }
+    if let Some(title) = request.meta_title.as_ref() {
+        meta.title = title.clone();
+    }
+    if let Some(order) = request.meta_order {
+        meta.order = order;
+    }
 
     ensure_journal_dir(project_root)?;
     mark_pending(project_root)?;
@@ -682,6 +695,8 @@ pub(crate) fn commit_chapter_with_guard(
         phase: ChapterCommitPhase::Prepared,
         pending_projections,
         created_meta: (request.mutation == ChapterMutationKind::Create).then(|| meta.clone()),
+        meta_title: request.meta_title.clone(),
+        meta_order: request.meta_order,
         created: request.mutation == ChapterMutationKind::Create,
         superseded_reason: None,
     };

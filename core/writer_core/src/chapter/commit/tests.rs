@@ -139,6 +139,8 @@ fn recovery_applies_decided_body_but_never_overwrites_newer_content() {
         phase: ChapterCommitPhase::Decided,
         pending_projections: Vec::new(),
         created_meta: None,
+        meta_title: None,
+        meta_order: None,
         created: false,
         superseded_reason: None,
     };

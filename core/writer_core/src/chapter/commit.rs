@@ -164,12 +164,17 @@ pub struct ChapterCommitRequest {
     /// Create 提交的初始元数据模板（标题/顺序来自远端或导入来源）。
     /// 其他 mutation 忽略。
     pub meta_template: Option<Chapter>,
+    /// 与正文同一决议提交的标题/顺序（同步远端章对象变更）。
+    pub meta_title: Option<String>,
+    pub meta_order: Option<i32>,
     pub mutation: ChapterMutationKind,
     pub source: ChapterCommitSource,
     /// 同一次编辑批次固定的事件 ID。journal durable 后由调用方补投影。
     pub event_ids: Vec<String>,
     /// 原始证明事件；与正文、meta 同一决议 durable，提交后由 worker 写入。
     pub proof_events: Vec<ChapterProofProjection>,
+    /// 平台冻结的编辑器快照 revision；用于精确截取证明批次，避免按摘要猜范围。
+    pub proof_snapshot_revision: Option<u64>,
     /// 同步正文变化事实；投影时才构造正式事件，避免正文后独立写证明。
     pub sync_proof_facts: Vec<ChapterSyncProofFact>,
     /// 与正文同一提交的附加文件（annotation 等），project-relative 路径。
@@ -188,10 +193,13 @@ impl ChapterCommitRequest {
             expected: None,
             base_content: None,
             meta_template: None,
+            meta_title: None,
+            meta_order: None,
             mutation: ChapterMutationKind::Replace,
             source: ChapterCommitSource::Api,
             event_ids: Vec::new(),
             proof_events: Vec::new(),
+            proof_snapshot_revision: None,
             sync_proof_facts: Vec::new(),
             additional_files: Vec::new(),
             allow_empty_overwrite: false,

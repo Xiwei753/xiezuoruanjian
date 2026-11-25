@@ -98,9 +98,19 @@ pub struct WriterCore {
     pub(crate) proof_intents_pending: std::sync::atomic::AtomicBool,
     /// 尚未随正文提交的编辑证明事件。保存成功后写入同一 journal；提交失败
     /// 或冲突时保留，下一次保存继续携带，避免证明链超越已提交正文。
-    pub(crate) pending_editor_proof:
+    ///
+    /// 进程内共享：Qt 统计 worker 与保存 worker、Android/Harmony 的独立
+    /// `WriterCoreApi` 实例必须看到同一队列；否则证明进入一个实例、保存从
+    /// 另一个实例取，永远取不到。键包含 project/volume/chapter，多个工作区
+    /// 不会冲突。
+    pub(crate) pending_editor_proof: std::sync::Arc<
         std::sync::Mutex<HashMap<String, Vec<crate::chapter::ChapterProofProjection>>>,
+    >,
 }
+
+static SHARED_PENDING_EDITOR_PROOF: std::sync::OnceLock<
+    std::sync::Arc<std::sync::Mutex<HashMap<String, Vec<crate::chapter::ChapterProofProjection>>>>,
+> = std::sync::OnceLock::new();
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChapterOpenResult {
@@ -164,7 +174,9 @@ impl WriterCore {
             preferred_device_id: std::sync::Mutex::new(None),
             preferred_platform: std::sync::Mutex::new(None),
             proof_intents_pending: std::sync::atomic::AtomicBool::new(proof_intents_pending),
-            pending_editor_proof: std::sync::Mutex::new(HashMap::new()),
+            pending_editor_proof: SHARED_PENDING_EDITOR_PROOF
+                .get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())))
+                .clone(),
         }
     }
 

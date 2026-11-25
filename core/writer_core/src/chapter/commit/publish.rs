@@ -41,15 +41,6 @@ pub(super) fn publish_decided(
     let body_path = key.body_path(project_root);
     let meta_path = key.meta_path(project_root);
     if manifest.created {
-        // Create 决议只允许在正文/meta 都不存在时发布。若其他提交已先创建，
-        // 当前 journal 保留为 Superseded，不能用旧模板覆盖。
-        if body_path.exists() || meta_path.exists() {
-            return mark_superseded(
-                tx_dir,
-                manifest,
-                "chapter appeared before create publish".to_string(),
-            );
-        }
         let bytes = fs::read(tx_dir.join(BODY_FILE))?;
         if sha256_bytes(&bytes) != manifest.after.content_sha256 {
             return Err(Error::Other(format!(
@@ -63,10 +54,60 @@ pub(super) fn publish_decided(
                 manifest.transaction_id
             ))
         })?;
-        crate::storage::atomic_write_bytes(&body_path, &bytes)?;
-        let meta_json = serde_json::to_string_pretty(created_meta)?;
-        crate::storage::atomic_write_bytes(&meta_path, meta_json.as_bytes())?;
-        crate::storage::sync_dir(&meta_path)?;
+        // 半创建恢复：正文已写而 meta 未写，或 meta 已写而正文未写，都按
+        // 决议摘要补齐；两者都已存在时必须证明是同一决议，否则 Superseded。
+        if body_path.exists() {
+            let existing = fs::read(&body_path)?;
+            if sha256_bytes(&existing) != manifest.after.content_sha256 {
+                return mark_superseded(
+                    tx_dir,
+                    manifest,
+                    "chapter body appeared with different content during create".to_string(),
+                );
+            }
+        } else {
+            crate::storage::atomic_write_bytes(&body_path, &bytes)?;
+            crate::storage::sync_dir(&body_path)?;
+        }
+        if meta_path.exists() {
+            let existing: Chapter = serde_json::from_str(&fs::read_to_string(&meta_path)?)?;
+            if existing.object_generation != manifest.after.object_generation
+                || existing.revision != manifest.after.revision
+                || existing.content_sha256 != manifest.after.content_sha256
+            {
+                return mark_superseded(
+                    tx_dir,
+                    manifest,
+                    "chapter meta appeared with different version during create".to_string(),
+                );
+            }
+        } else {
+            let meta_json = serde_json::to_string_pretty(created_meta)?;
+            crate::storage::atomic_write_bytes(&meta_path, meta_json.as_bytes())?;
+            crate::storage::sync_dir(&meta_path)?;
+        }
+        for plan in &manifest.additional_files {
+            let staged = fs::read(tx_dir.join(&plan.staging_filename))?;
+            if sha256_bytes(&staged) != plan.sha256 {
+                return Err(Error::Other(format!(
+                    "chapter create additional staging digest mismatch: {}",
+                    plan.target_relative
+                )));
+            }
+            let target = project_root.join(&plan.target_relative);
+            if target.exists() {
+                return mark_superseded(
+                    tx_dir,
+                    manifest,
+                    format!(
+                        "additional file appeared during create: {}",
+                        plan.target_relative
+                    ),
+                );
+            }
+            crate::storage::atomic_write_bytes(&target, &staged)?;
+            crate::storage::sync_parent(&target)?;
+        }
         manifest.phase = ChapterCommitPhase::Applied;
         write_manifest(tx_dir, manifest)?;
         return Ok(true);
@@ -203,6 +244,13 @@ pub(super) fn publish_decided(
         || meta.content_sha256 != manifest.after.content_sha256
         || meta.revision != manifest.after.revision
         || meta.updated_at != manifest.updated_at
+        || manifest
+            .meta_title
+            .as_ref()
+            .is_some_and(|title| title != &meta.title)
+        || manifest
+            .meta_order
+            .is_some_and(|order| order != meta.order)
     {
         // 半提交恢复：即使正文已是 after，也要按决议补齐 meta 的
         // updated_at/revision/digest，不能留下正文新、meta 旧。
@@ -211,6 +259,12 @@ pub(super) fn publish_decided(
         meta.hash = manifest.content_md5.clone();
         meta.content_sha256 = manifest.after.content_sha256.clone();
         meta.revision = manifest.after.revision;
+        if let Some(title) = manifest.meta_title.as_ref() {
+            meta.title = title.clone();
+        }
+        if let Some(order) = manifest.meta_order {
+            meta.order = order;
+        }
         if meta.object_generation.is_empty() {
             meta.object_generation = manifest.after.object_generation.clone();
         }
