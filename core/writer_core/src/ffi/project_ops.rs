@@ -347,6 +347,109 @@ unsafe fn save_chapter_json(
     }
 }
 
+/// JSON 入口：把多个字符串参数打包成一次异步 NAPI 调用，避免 ArkTS 主线程
+/// 直接执行 Rust I/O。字段：projectId/volumeId/chapterId/content/generation/
+/// revision/sha256/baseContent/allowEmptyOverwrite/clear。
+///
+/// # Safety
+/// `payload` must be a valid null-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_save_chapter_versioned_json(
+    payload: *const c_char,
+) -> *mut c_char {
+    let raw = match c_str_to_rust(payload) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid payload: {error}")),
+    };
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid JSON: {error}")),
+    };
+    let string_field = |name: &str| -> Option<String> {
+        value
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let (Some(project_id), Some(volume_id), Some(chapter_id)) = (
+        string_field("projectId"),
+        string_field("volumeId"),
+        string_field("chapterId"),
+    ) else {
+        return err_json("INVALID_ARGUMENT", "Missing chapter identity");
+    };
+    let clear = value
+        .get("clear")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let content = string_field("content").unwrap_or_default();
+    let Some(generation) = string_field("generation") else {
+        return err_json("INVALID_ARGUMENT", "Missing generation");
+    };
+    let Some(sha256) = string_field("sha256") else {
+        return err_json("INVALID_ARGUMENT", "Missing sha256");
+    };
+    let Some(revision) = value.get("revision").and_then(serde_json::Value::as_i64) else {
+        return err_json("INVALID_ARGUMENT", "Missing revision");
+    };
+    let base_content = string_field("baseContent").unwrap_or_default();
+    let allow_empty = value
+        .get("allowEmptyOverwrite")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let c_project = match std::ffi::CString::new(project_id) {
+        Ok(value) => value,
+        Err(_) => return err_json("INVALID_ARGUMENT", "projectId contains NUL"),
+    };
+    let c_volume = match std::ffi::CString::new(volume_id) {
+        Ok(value) => value,
+        Err(_) => return err_json("INVALID_ARGUMENT", "volumeId contains NUL"),
+    };
+    let c_chapter = match std::ffi::CString::new(chapter_id) {
+        Ok(value) => value,
+        Err(_) => return err_json("INVALID_ARGUMENT", "chapterId contains NUL"),
+    };
+    let c_content = match std::ffi::CString::new(content) {
+        Ok(value) => value,
+        Err(_) => return err_json("INVALID_ARGUMENT", "content contains NUL"),
+    };
+    let c_generation = match std::ffi::CString::new(generation) {
+        Ok(value) => value,
+        Err(_) => return err_json("INVALID_ARGUMENT", "generation contains NUL"),
+    };
+    let c_sha = match std::ffi::CString::new(sha256) {
+        Ok(value) => value,
+        Err(_) => return err_json("INVALID_ARGUMENT", "sha256 contains NUL"),
+    };
+    let c_base = match std::ffi::CString::new(base_content) {
+        Ok(value) => value,
+        Err(_) => return err_json("INVALID_ARGUMENT", "baseContent contains NUL"),
+    };
+    if clear {
+        writer_core_clear_chapter_versioned(
+            c_project.as_ptr(),
+            c_volume.as_ptr(),
+            c_chapter.as_ptr(),
+            c_generation.as_ptr(),
+            revision,
+            c_sha.as_ptr(),
+            c_base.as_ptr(),
+        )
+    } else {
+        writer_core_save_chapter_versioned(
+            c_project.as_ptr(),
+            c_volume.as_ptr(),
+            c_chapter.as_ptr(),
+            c_content.as_ptr(),
+            c_generation.as_ptr(),
+            revision,
+            c_sha.as_ptr(),
+            c_base.as_ptr(),
+            allow_empty,
+        )
+    }
+}
+
 /// 完整版本 CAS 的章节保存（Harmony/Windows 共用）。
 ///
 /// `expected_generation`、`expected_revision`、`expected_sha256` 必须来自

@@ -149,93 +149,22 @@ static char* ReadDynamicString(napi_env env, napi_value value) {
     return out;
 }
 
+static char* SaveChapterVersionedJsonWorker(const char* input) {
+    return writer_core_save_chapter_versioned_json(input);
+}
+
 static napi_value NativeSaveChapterVersioned(napi_env env, napi_callback_info info) {
-    size_t argc = 9;
-    napi_value args[9];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    if (argc != 9) {
-        napi_throw_type_error(env, nullptr,
-            "saveChapterVersioned expects 9 arguments (pid, vid, cid, text, generation, revision, sha256, base, allowEmpty)");
-        return nullptr;
-    }
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    char expected_generation[128] = {0};
-    char expected_sha256[128] = {0};
-    napi_valuetype type = napi_undefined;
-    for (size_t index = 0; index < 9; ++index) {
-        napi_typeof(env, args[index], &type);
-        bool expected_string = index <= 4 || index == 6 || index == 7;
-        if ((expected_string && type != napi_string)
-            || (index == 5 && type != napi_number)
-            || (index == 8 && type != napi_boolean)) {
-            napi_throw_type_error(env, nullptr, "saveChapterVersioned argument type mismatch");
-            return nullptr;
-        }
-    }
-    napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
-    napi_get_value_string_utf8(env, args[4], expected_generation, sizeof(expected_generation), nullptr);
-    napi_get_value_string_utf8(env, args[6], expected_sha256, sizeof(expected_sha256), nullptr);
-    int64_t expected_revision = 0;
-    napi_get_value_int64(env, args[5], &expected_revision);
-    bool allow_empty_overwrite = false;
-    napi_get_value_bool(env, args[8], &allow_empty_overwrite);
-
-    char* content = ReadDynamicString(env, args[3]);
-    char* base_content = ReadDynamicString(env, args[7]);
-
-    napi_value result = ReturnJsonString(env,
-        writer_core_save_chapter_versioned(project_id, volume_id, chapter_id, content,
-            expected_generation, expected_revision, expected_sha256, base_content,
-            allow_empty_overwrite));
-    delete[] content;
-    delete[] base_content;
-    return result;
+    std::string input;
+    NapiJsonAsyncReadArg(env, info, &input);
+    return NapiJsonAsyncSubmit(env, "saveChapterVersioned", input.c_str(),
+                               SaveChapterVersionedJsonWorker);
 }
 
 static napi_value NativeClearChapterVersioned(napi_env env, napi_callback_info info) {
-    size_t argc = 7;
-    napi_value args[7];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    if (argc != 7) {
-        napi_throw_type_error(env, nullptr,
-            "clearChapterVersioned expects 7 arguments (pid, vid, cid, generation, revision, sha256, base)");
-        return nullptr;
-    }
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    char expected_generation[128] = {0};
-    char expected_sha256[128] = {0};
-    napi_valuetype type = napi_undefined;
-    for (size_t index = 0; index < 7; ++index) {
-        napi_typeof(env, args[index], &type);
-        bool expected_string = index <= 3 || index == 5 || index == 6;
-        if ((expected_string && type != napi_string)
-            || (index == 4 && type != napi_number)) {
-            napi_throw_type_error(env, nullptr, "clearChapterVersioned argument type mismatch");
-            return nullptr;
-        }
-    }
-    napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
-    napi_get_value_string_utf8(env, args[3], expected_generation, sizeof(expected_generation), nullptr);
-    napi_get_value_string_utf8(env, args[5], expected_sha256, sizeof(expected_sha256), nullptr);
-    int64_t expected_revision = 0;
-    napi_get_value_int64(env, args[4], &expected_revision);
-    char* base_content = ReadDynamicString(env, args[6]);
-
-    napi_value result = ReturnJsonString(env,
-        writer_core_clear_chapter_versioned(project_id, volume_id, chapter_id,
-            expected_generation, expected_revision, expected_sha256, base_content));
-    delete[] base_content;
-    return result;
+    std::string input;
+    NapiJsonAsyncReadArg(env, info, &input);
+    return NapiJsonAsyncSubmit(env, "clearChapterVersioned", input.c_str(),
+                               SaveChapterVersionedJsonWorker);
 }
 
 static napi_value NativeRenameChapter(napi_env env, napi_callback_info info) {

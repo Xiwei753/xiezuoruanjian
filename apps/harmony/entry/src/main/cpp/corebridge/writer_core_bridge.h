@@ -82,6 +82,8 @@ char*  writer_core_save_chapter_with_options(const char* project_id, const char*
 // open/save receipt；base_content 用于冲突材料，可为 NULL。
 char*  writer_core_save_chapter_versioned(const char* project_id, const char* volume_id, const char* chapter_id, const char* content, const char* expected_generation, int64_t expected_revision, const char* expected_sha256, const char* base_content, bool allow_empty_overwrite);
 char*  writer_core_clear_chapter_versioned(const char* project_id, const char* volume_id, const char* chapter_id, const char* expected_generation, int64_t expected_revision, const char* expected_sha256, const char* base_content);
+// JSON 版：一次传递全部参数，供 NAPI async work 在后台线程调用。
+char*  writer_core_save_chapter_versioned_json(const char* payload);
 
 // ── Recent edits ──
 char*  writer_core_get_recent_edits(void);

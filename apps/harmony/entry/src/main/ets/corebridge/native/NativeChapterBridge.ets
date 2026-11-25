@@ -70,10 +70,19 @@ export class NativeChapterBridge {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
     }
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSaveChapterVersioned(
-        loc.projectId, loc.volumeId, chapterId, text,
-        expected.objectGeneration, expected.revision, expected.contentSha256,
-        baseContent, allowEmptyOverwrite)
+      const payload: string = JSON.stringify({
+        projectId: loc.projectId,
+        volumeId: loc.volumeId,
+        chapterId: chapterId,
+        content: text,
+        generation: expected.objectGeneration,
+        revision: expected.revision,
+        sha256: expected.contentSha256,
+        baseContent: baseContent,
+        allowEmptyOverwrite: allowEmptyOverwrite,
+        clear: false
+      })
+      const jsonStr: string = await this.core.getNativeModule().nativeSaveChapterVersioned(payload)
       return this.core.decodeEnvelope<ChapterSaveReceipt>(jsonStr, decodeChapterSaveReceipt)
     } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
   }
@@ -85,9 +94,18 @@ export class NativeChapterBridge {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
     }
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeClearChapterVersioned(
-        loc.projectId, loc.volumeId, chapterId,
-        expected.objectGeneration, expected.revision, expected.contentSha256, baseContent)
+      const payload: string = JSON.stringify({
+        projectId: loc.projectId,
+        volumeId: loc.volumeId,
+        chapterId: chapterId,
+        generation: expected.objectGeneration,
+        revision: expected.revision,
+        sha256: expected.contentSha256,
+        baseContent: baseContent,
+        allowEmptyOverwrite: true,
+        clear: true
+      })
+      const jsonStr: string = await this.core.getNativeModule().nativeClearChapterVersioned(payload)
       return this.core.decodeEnvelope<ChapterSaveReceipt>(jsonStr, decodeChapterSaveReceipt)
     } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
   }

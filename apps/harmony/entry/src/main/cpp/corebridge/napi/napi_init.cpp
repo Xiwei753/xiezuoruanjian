@@ -216,6 +216,7 @@ static napi_value ReturnJsonString(napi_env env, char* json) {
 
 #include "napi/napi_app_state.cpp"
 #include "napi/napi_project.cpp"
+#include "napi_json_async.h"
 #include "napi/napi_chapter.cpp"
 #include "napi/napi_settings.cpp"
 #include "napi/napi_sync.cpp"
