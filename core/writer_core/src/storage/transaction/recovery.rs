@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -67,14 +68,46 @@ pub(crate) fn scan_pending_transaction(
     scan
 }
 
-/// 重放单个事务目录：读取 manifest、按阶段收敛文件，并在完成后清理目录。
-#[derive(Debug)]
-enum RecoveryTargetState {
+/// 预检后的单条目状态：`After` 表示文件已经落盘，只需 ack；
+/// `Before` 表示仍是事务准备时的内容，需要安全重放 staging/delete。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryState {
     Before,
     After,
-    Conflict(String),
 }
 
+/// 一个文件条目的预检结果。只有全部条目都通过预检（当前内容等于
+/// before/after、staging 可读且摘要匹配、整章 body/meta 相互一致）后才允许
+/// 写任何一个文件；不能一边冲突一边把已通过的条目先回写。
+struct PreparedEntry<'a> {
+    entry: &'a TransactionEntry,
+    state: EntryState,
+    current: Option<TransactionFileSnapshot>,
+    staged: Option<TransactionFileSnapshot>,
+}
+
+#[derive(Debug)]
+struct RecoveryConflict {
+    message: String,
+    affected_paths: Vec<String>,
+}
+
+impl RecoveryConflict {
+    fn new(message: impl Into<String>, affected_paths: Vec<String>) -> Self {
+        Self {
+            message: message.into(),
+            affected_paths,
+        }
+    }
+}
+
+#[derive(Default)]
+struct PreparedFilesOutcome {
+    recovered_files: Vec<String>,
+    missing_files: Vec<String>,
+}
+
+#[allow(clippy::too_many_lines)]
 fn recover_transaction_dir(
     target_root: &Path,
     tx_dir: std::path::PathBuf,
@@ -142,12 +175,13 @@ fn recover_transaction_dir(
                 return;
             }
             TransactionPhase::Prepared => {
-                // Prepared 阶段：尝试重放 rename。
+                // Prepared 阶段：先完整预检，再重放 rename/delete。
             }
         }
     } else {
-        let commit_marker = tx_dir.join(COMMIT_MARKER);
-        if commit_marker.exists() {
+        // 没有 manifest 时没有可重放的 rename 材料；commit marker 只说明
+        // 文件事务曾经提交过，保留目录没有额外恢复价值。
+        if tx_dir.join(COMMIT_MARKER).exists() {
             let _ = fs::remove_dir_all(&tx_dir);
             return;
         }
@@ -155,15 +189,7 @@ fn recover_transaction_dir(
         return;
     }
 
-    fn file_md5(path: &Path) -> std::io::Result<Option<String>> {
-        match fs::read(path) {
-            Ok(bytes) => Ok(Some(format!("{:x}", md5::compute(&bytes)))),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
-
-    // Prepared 阶段恢复：重放 rename。
+    // Prepared 阶段恢复：重新读取 manifest，避免使用上面只读了一部分的状态。
     let manifest: TransactionManifest = match fs::read_to_string(&manifest_path) {
         Ok(s) => match serde_json::from_str(&s) {
             Ok(m) => m,
@@ -192,141 +218,42 @@ fn recover_transaction_dir(
         }
     };
 
-    let mut recovered_files = Vec::new();
-    let mut missing_files = Vec::new();
-    let mut created_dirs = std::collections::HashSet::new();
-
-    for tx_entry in &manifest.entries {
-        let target_path = target_root.join(&tx_entry.target_relative);
-        let current = match file_md5(&target_path) {
-            Ok(value) => value,
-            Err(error) => {
-                log::warn!(
-                    "[transaction] recovery read target failed, preserving tx: {}: {}",
-                    tx_entry.target_relative,
-                    error
-                );
-                missing_files.push(tx_entry.target_relative.clone());
-                continue;
-            }
-        };
-        let before = tx_entry.expected_before_hash.as_deref();
-        let after = tx_entry.expected_after_hash.as_deref();
-        let state = match (current.as_deref(), before, after) {
-            (Some(current), _, Some(after)) if current == after => RecoveryTargetState::After,
-            (Some(current), Some(before), _) if current == before => RecoveryTargetState::Before,
-            (None, None, Some(_)) if !tx_entry.is_delete => RecoveryTargetState::Before,
-            (None, None, None) if tx_entry.is_delete => RecoveryTargetState::After,
-            (None, Some(_), None) if tx_entry.is_delete => RecoveryTargetState::After,
-            (Some(current), None, None) => RecoveryTargetState::Conflict(format!(
-                "legacy manifest without before/after hash, target={current}"
-            )),
-            (None, None, _) => RecoveryTargetState::Conflict(
-                "legacy manifest without before/after hash, target missing".to_string(),
-            ),
-            (Some(current), before, after) => RecoveryTargetState::Conflict(format!(
-                "target changed: current={current}, before={before:?}, after={after:?}"
-            )),
-            (None, before, after) => RecoveryTargetState::Conflict(format!(
-                "target missing: before={before:?}, after={after:?}"
-            )),
-        };
-
-        match state {
-            RecoveryTargetState::Conflict(reason) => {
-                log::warn!(
-                    "[transaction] recovery conflict, preserving materials: {}: {}",
-                    tx_entry.target_relative,
-                    reason
-                );
-                missing_files.push(tx_entry.target_relative.clone());
-            }
-            RecoveryTargetState::After => {
-                if let Err(e) = crate::storage::sync_parent(&target_path) {
-                    log::warn!(
-                        "[transaction] recovery ack sync_parent failed: {}: {}",
-                        tx_entry.target_relative,
-                        e
-                    );
-                    missing_files.push(tx_entry.target_relative.clone());
-                } else {
-                    recovered_files.push(tx_entry.target_relative.clone());
-                }
-            }
-            RecoveryTargetState::Before => {
-                if tx_entry.is_delete {
-                    match fs::remove_file(&target_path) {
-                        Ok(()) => {
-                            if let Err(e) = crate::storage::sync_parent(&target_path) {
-                                log::warn!(
-                                    "[transaction] recovery delete sync_parent failed: {}: {}",
-                                    tx_entry.target_relative,
-                                    e
-                                );
-                                missing_files.push(tx_entry.target_relative.clone());
-                            } else {
-                                recovered_files.push(tx_entry.target_relative.clone());
-                            }
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                            recovered_files.push(tx_entry.target_relative.clone());
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "[transaction] recovery delete failed: {}: {}",
-                                tx_entry.target_relative,
-                                e
-                            );
-                            missing_files.push(tx_entry.target_relative.clone());
-                        }
-                    }
-                    continue;
-                }
-                let staging_path = tx_dir.join(&tx_entry.staging_filename);
-                if !staging_path.exists() {
-                    log::warn!(
-                        "[transaction] recovery staging missing, preserving: {}",
-                        tx_entry.target_relative
-                    );
-                    missing_files.push(tx_entry.target_relative.clone());
-                    continue;
-                }
-                if let Some(parent) = target_path.parent() {
-                    if !created_dirs.contains(parent) && fs::create_dir_all(parent).is_ok() {
-                        created_dirs.insert(parent.to_path_buf());
-                    }
-                }
-                match fs::rename(&staging_path, &target_path) {
-                    Ok(()) => {
-                        if let Err(e) = crate::storage::sync_parent(&target_path) {
-                            log::warn!(
-                                "[transaction] recovery rename sync_parent failed: {} -> {}: {}",
-                                tx_entry.staging_filename,
-                                tx_entry.target_relative,
-                                e
-                            );
-                            missing_files.push(tx_entry.target_relative.clone());
-                        } else {
-                            recovered_files.push(tx_entry.target_relative.clone());
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[transaction] recovery rename failed: {} -> {}: {}",
-                            tx_entry.staging_filename,
-                            tx_entry.target_relative,
-                            e
-                        );
-                        missing_files.push(tx_entry.target_relative.clone());
-                    }
-                }
-            }
+    let outcome = match recover_prepared_files(target_root, &tx_dir, &manifest) {
+        Ok(outcome) => outcome,
+        Err(conflict) => {
+            // 预检失败：不改任何 live 文件，保留 manifest/staging/backup，
+            // 把具体冲突绑定到事务并报告给调用方。
+            log::warn!(
+                "[transaction] recover: tx={} refused partial replay, preserving materials: {}",
+                manifest.transaction_id,
+                conflict.message
+            );
+            record_scan_error(
+                scan,
+                Some(manifest.transaction_id.clone()),
+                format!(
+                    "[transaction] recover: tx={} conflict, no files replayed: {}",
+                    manifest.transaction_id, conflict.message
+                ),
+            );
+            scan.transactions.push(TransactionRecovery {
+                transaction_id: manifest.transaction_id,
+                recovered_files: Vec::new(),
+                missing_files: conflict.affected_paths,
+                phase: TransactionPhase::Prepared,
+                proof_intent_ids: manifest.proof_intent_ids,
+                tx_dir,
+                target_root: target_root.to_path_buf(),
+            });
+            return;
         }
-    }
+    };
 
+    let recovered_files = outcome.recovered_files;
+    let missing_files = outcome.missing_files;
     if recovered_files.is_empty() && !missing_files.is_empty() {
         log::warn!(
-            "[transaction] all staging files lost for tx={}, dropping",
+            "[transaction] all staging files lost for tx={}, preserving materials",
             manifest.transaction_id
         );
     }
@@ -336,9 +263,9 @@ fn recover_transaction_dir(
             // 全部条目重放成功，事务可判定完成，manifest/staging 不再需要。
             let _ = fs::remove_dir_all(&tx_dir);
         } else {
-            // Issue #1051 复审：无 proof intent 不等于恢复完成。只要有
-            // 条目重放失败，staged 文件与 manifest 就是唯一的恢复依据，
-            // 必须保留 Prepared 目录供下次启动继续幂等重放。
+            // 无 proof intent 不等于恢复完成。只要有条目重放失败，staged 文件
+            // 与 manifest 就是唯一的恢复依据，必须保留 Prepared 目录供下次
+            // 启动继续幂等重放。
             log::warn!(
                 "[transaction] recover: tx={} has {} unreplayed file(s), \
                  preserving Prepared manifest and staging for retry",
@@ -392,6 +319,542 @@ fn recover_transaction_dir(
         tx_dir,
         target_root: target_root.to_path_buf(),
     });
+}
+
+fn conflict(reason: impl Into<String>, path: &str) -> RecoveryConflict {
+    RecoveryConflict::new(reason, vec![path.to_string()])
+}
+
+fn entry_state(
+    entry: &TransactionEntry,
+    current: Option<&TransactionFileSnapshot>,
+) -> Result<EntryState, RecoveryConflict> {
+    let current_md5 = current.map(|snapshot| snapshot.md5.as_str());
+    let before = entry.expected_before_hash.as_deref();
+    let after = entry.expected_after_hash.as_deref();
+    match (current_md5, before, after) {
+        (Some(current), _, Some(after)) if current == after => Ok(EntryState::After),
+        (Some(current), Some(before), _) if current == before => Ok(EntryState::Before),
+        (None, None, Some(_)) if !entry.is_delete => Ok(EntryState::Before),
+        (None, None, None) if entry.is_delete => Ok(EntryState::After),
+        (None, Some(_), None) if entry.is_delete => Ok(EntryState::After),
+        (Some(current), None, None) => Err(conflict(
+            format!(
+                "legacy manifest without before/after hash, target={} current_md5={current}",
+                entry.target_relative
+            ),
+            &entry.target_relative,
+        )),
+        (None, None, _) => Err(conflict(
+            format!(
+                "legacy manifest without before/after hash, target={} missing",
+                entry.target_relative
+            ),
+            &entry.target_relative,
+        )),
+        (Some(current), before, after) => Err(conflict(
+            format!(
+                "target changed since transaction prepared, target={} current_md5={current} \
+                 before={before:?} after={after:?}",
+                entry.target_relative
+            ),
+            &entry.target_relative,
+        )),
+        (None, before, after) => Err(conflict(
+            format!(
+                "target missing, target={} before={before:?} after={after:?}",
+                entry.target_relative
+            ),
+            &entry.target_relative,
+        )),
+    }
+}
+
+fn plan_prepared_entry<'a>(
+    target_root: &Path,
+    tx_dir: &Path,
+    entry: &'a TransactionEntry,
+    tombstones: &TransactionTombstoneFacts,
+) -> Result<PreparedEntry<'a>, RecoveryConflict> {
+    let target_path = target_root.join(&entry.target_relative);
+    let parse_metadata_json =
+        normalized_transaction_relative(&entry.target_relative).ends_with("chapter.meta.json");
+    let current =
+        read_transaction_file_snapshot(&target_path, parse_metadata_json).map_err(|error| {
+            conflict(
+                format!("read target failed for {}: {error}", entry.target_relative),
+                &entry.target_relative,
+            )
+        })?;
+    let state = entry_state(entry, current.as_ref())?;
+
+    let staged = if state == EntryState::Before && !entry.is_delete {
+        if entry.staging_filename.is_empty() {
+            return Err(conflict(
+                format!(
+                    "staging filename empty for target={}",
+                    entry.target_relative
+                ),
+                &entry.target_relative,
+            ));
+        }
+        let staging_path = tx_dir.join(&entry.staging_filename);
+        let staged = read_transaction_file_snapshot(&staging_path, parse_metadata_json).map_err(
+            |error| {
+                conflict(
+                    format!(
+                        "read staging failed for target={} staging={}: {error}",
+                        entry.target_relative,
+                        staging_path.display()
+                    ),
+                    &entry.target_relative,
+                )
+            },
+        )?;
+        let Some(staged) = staged else {
+            return Err(conflict(
+                format!(
+                    "staging missing for target={} staging={}",
+                    entry.target_relative,
+                    staging_path.display()
+                ),
+                &entry.target_relative,
+            ));
+        };
+        if let Some(expected_after) = entry.expected_after_hash.as_deref() {
+            if staged.md5 != expected_after {
+                return Err(conflict(
+                    format!(
+                        "staging content changed, target={} staging_md5={} expected_after={expected_after}",
+                        entry.target_relative, staged.md5
+                    ),
+                    &entry.target_relative,
+                ));
+            }
+        }
+        Some(staged)
+    } else {
+        None
+    };
+
+    // tombstone/删除事实只用于“准备重新创建”：目标已不存在时，staging 可能
+    // 把已删除对象复活。删除仍存在的对象由 before/after 哈希与整章
+    // generation 校验证明它仍是事务准备时的同一对象，不需要 tombstone。
+    if state == EntryState::Before && !entry.is_delete && current.is_none() {
+        if let Some(reason) = tombstones.blocks(&entry.target_relative) {
+            return Err(conflict(
+                format!(
+                    "refusing to recreate target={} from stale staging: {reason}",
+                    entry.target_relative
+                ),
+                &entry.target_relative,
+            ));
+        }
+    }
+
+    Ok(PreparedEntry {
+        entry,
+        state,
+        current,
+        staged,
+    })
+}
+
+fn recover_prepared_files(
+    target_root: &Path,
+    tx_dir: &Path,
+    manifest: &TransactionManifest,
+) -> Result<PreparedFilesOutcome, RecoveryConflict> {
+    let tombstones = TransactionTombstoneFacts::load(target_root, manifest.created_at_ms);
+    let mut plans = Vec::with_capacity(manifest.entries.len());
+    for entry in &manifest.entries {
+        plans.push(plan_prepared_entry(
+            target_root,
+            tx_dir,
+            entry,
+            &tombstones,
+        )?);
+    }
+
+    // 整章一致性校验必须先于任何写盘：正文和 meta 只能一起判定，不能先
+    // 把正文 rename 成功后再发现 meta 冲突。
+    validate_chapter_entries(target_root, tx_dir, manifest, &plans)?;
+
+    let mut outcome = PreparedFilesOutcome::default();
+    for plan in &plans {
+        let target_path = target_root.join(&plan.entry.target_relative);
+        match plan.state {
+            EntryState::After => acknowledge_published(&target_path, plan.entry, &mut outcome),
+            EntryState::Before if plan.entry.is_delete => {
+                apply_prepared_delete(&target_path, plan.entry, &mut outcome);
+            }
+            EntryState::Before => {
+                apply_prepared_rename(tx_dir, &target_path, plan.entry, &mut outcome);
+            }
+        }
+    }
+    Ok(outcome)
+}
+
+fn mark_recovered(outcome: &mut PreparedFilesOutcome, relative: &str) {
+    outcome.recovered_files.push(relative.to_string());
+}
+
+fn mark_missing(outcome: &mut PreparedFilesOutcome, relative: &str) {
+    outcome.missing_files.push(relative.to_string());
+}
+
+fn finish_durable_write(
+    target_path: &Path,
+    relative: &str,
+    action: &str,
+    outcome: &mut PreparedFilesOutcome,
+) {
+    match crate::storage::sync_parent(target_path) {
+        Ok(()) => mark_recovered(outcome, relative),
+        Err(error) => {
+            log::warn!(
+                "[transaction] recovery {action} sync_parent failed for {relative}: {error}"
+            );
+            mark_missing(outcome, relative);
+        }
+    }
+}
+
+fn acknowledge_published(
+    target_path: &Path,
+    entry: &TransactionEntry,
+    outcome: &mut PreparedFilesOutcome,
+) {
+    finish_durable_write(target_path, &entry.target_relative, "ack", outcome);
+}
+
+fn apply_prepared_delete(
+    target_path: &Path,
+    entry: &TransactionEntry,
+    outcome: &mut PreparedFilesOutcome,
+) {
+    match fs::remove_file(target_path) {
+        Ok(()) => finish_durable_write(target_path, &entry.target_relative, "delete", outcome),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            mark_recovered(outcome, &entry.target_relative);
+        }
+        Err(error) => {
+            log::warn!(
+                "[transaction] recovery delete failed: {}: {error}",
+                entry.target_relative
+            );
+            mark_missing(outcome, &entry.target_relative);
+        }
+    }
+}
+
+fn apply_prepared_rename(
+    tx_dir: &Path,
+    target_path: &Path,
+    entry: &TransactionEntry,
+    outcome: &mut PreparedFilesOutcome,
+) {
+    if let Some(parent) = target_path.parent() {
+        if let Err(error) = fs::create_dir_all(parent) {
+            log::warn!(
+                "[transaction] recovery create dir failed: {}: {error}",
+                parent.display()
+            );
+            mark_missing(outcome, &entry.target_relative);
+            return;
+        }
+    }
+    let staging_path = tx_dir.join(&entry.staging_filename);
+    match fs::rename(&staging_path, target_path) {
+        Ok(()) => finish_durable_write(target_path, &entry.target_relative, "rename", outcome),
+        Err(error) => {
+            log::warn!(
+                "[transaction] recovery rename failed: {} -> {}: {error}",
+                entry.staging_filename,
+                entry.target_relative
+            );
+            mark_missing(outcome, &entry.target_relative);
+        }
+    }
+}
+
+#[derive(Default)]
+struct ChapterPlanGroup {
+    meta: Option<usize>,
+    body: Option<usize>,
+}
+
+fn chapter_member(directory: &str, name: &str) -> String {
+    if directory.is_empty() {
+        name.to_string()
+    } else {
+        format!("{directory}/{name}")
+    }
+}
+
+fn validate_chapter_entries(
+    target_root: &Path,
+    tx_dir: &Path,
+    manifest: &TransactionManifest,
+    plans: &[PreparedEntry<'_>],
+) -> Result<(), RecoveryConflict> {
+    let mut groups: HashMap<String, ChapterPlanGroup> = HashMap::new();
+    for (index, plan) in plans.iter().enumerate() {
+        let target = normalized_transaction_relative(&plan.entry.target_relative);
+        if let Some(directory) = target.strip_suffix("chapter.meta.json") {
+            groups
+                .entry(directory.trim_end_matches('/').to_string())
+                .or_default()
+                .meta = Some(index);
+        } else if let Some(directory) = target.strip_suffix("chapter.md") {
+            groups
+                .entry(directory.trim_end_matches('/').to_string())
+                .or_default()
+                .body = Some(index);
+        }
+    }
+    for (directory, group) in groups {
+        validate_chapter_group(target_root, tx_dir, manifest, plans, &directory, &group)?;
+    }
+    Ok(())
+}
+
+fn read_group_snapshot(
+    path: &Path,
+    relative: &str,
+) -> Result<Option<TransactionFileSnapshot>, RecoveryConflict> {
+    let parse_metadata_json =
+        normalized_transaction_relative(relative).ends_with("chapter.meta.json");
+    read_transaction_file_snapshot(path, parse_metadata_json).map_err(|error| {
+        conflict(
+            format!("read chapter member {relative} failed: {error}"),
+            relative,
+        )
+    })
+}
+
+fn backup_snapshot(
+    tx_dir: &Path,
+    manifest: &TransactionManifest,
+    relative: &str,
+) -> Result<Option<TransactionFileSnapshot>, RecoveryConflict> {
+    for backup in &manifest.backup_entries {
+        let target = match backup {
+            BackupEntry::RestoreFile {
+                target_relative, ..
+            }
+            | BackupEntry::RemoveCreated { target_relative } => {
+                normalized_transaction_relative(target_relative)
+            }
+        };
+        if target != normalized_transaction_relative(relative) {
+            continue;
+        }
+        return match backup {
+            BackupEntry::RestoreFile {
+                backup_filename, ..
+            } => {
+                let path = tx_dir.join("backup").join(backup_filename);
+                let parse_metadata_json =
+                    normalized_transaction_relative(relative).ends_with("chapter.meta.json");
+                match read_transaction_file_snapshot(&path, parse_metadata_json) {
+                    Ok(Some(snapshot)) => Ok(Some(snapshot)),
+                    Ok(None) => Err(conflict(
+                        format!("backup material missing for {relative}: {}", path.display()),
+                        relative,
+                    )),
+                    Err(error) => Err(conflict(
+                        format!(
+                            "read backup material failed for {relative} at {}: {error}",
+                            path.display()
+                        ),
+                        relative,
+                    )),
+                }
+            }
+            BackupEntry::RemoveCreated { .. } => Ok(None),
+        };
+    }
+    Ok(None)
+}
+
+fn after_snapshot(plan: Option<&PreparedEntry<'_>>) -> Option<TransactionFileSnapshot> {
+    let plan = plan?;
+    if plan.entry.is_delete {
+        return None;
+    }
+    match plan.state {
+        EntryState::After => plan.current.clone(),
+        EntryState::Before => plan.staged.clone(),
+    }
+}
+
+fn validate_chapter_group(
+    target_root: &Path,
+    tx_dir: &Path,
+    manifest: &TransactionManifest,
+    plans: &[PreparedEntry<'_>],
+    directory: &str,
+    group: &ChapterPlanGroup,
+) -> Result<(), RecoveryConflict> {
+    let meta_relative = chapter_member(directory, "chapter.meta.json");
+    let body_relative = chapter_member(directory, "chapter.md");
+    let meta_plan = group.meta.map(|index| &plans[index]);
+    let body_plan = group.body.map(|index| &plans[index]);
+
+    // 当前 meta：事务 meta 条目优先，否则读取同目录 live meta（正文单独
+    // 提交的旧事务也要按章节身份校验）。
+    let live_meta = match meta_plan {
+        Some(plan) => plan.current.clone(),
+        None => read_group_snapshot(&target_root.join(&meta_relative), &meta_relative)?,
+    };
+    let live_body = match body_plan {
+        Some(plan) => plan.current.clone(),
+        None => read_group_snapshot(&target_root.join(&body_relative), &body_relative)?,
+    };
+    let before_meta = backup_snapshot(tx_dir, manifest, &meta_relative)?;
+    // 同时确认正文备份材料存在/可读；正文的 before 内容由 entry 哈希覆盖，
+    // 这里不再单独比较。
+    let _before_body = backup_snapshot(tx_dir, manifest, &body_relative)?;
+
+    let after_meta = match meta_plan {
+        Some(plan) => after_snapshot(Some(plan)),
+        None => live_meta.clone(),
+    };
+    let after_body = match body_plan {
+        Some(plan) => after_snapshot(Some(plan)),
+        None => live_body.clone(),
+    };
+
+    let live_meta_facts = transaction_metadata_facts(
+        live_meta
+            .as_ref()
+            .and_then(|snapshot| snapshot.json.as_ref()),
+    );
+    let before_meta_facts = transaction_metadata_facts(
+        before_meta
+            .as_ref()
+            .and_then(|snapshot| snapshot.json.as_ref()),
+    );
+    let after_meta_facts = transaction_metadata_facts(
+        after_meta
+            .as_ref()
+            .and_then(|snapshot| snapshot.json.as_ref()),
+    );
+    validate_chapter_identity(
+        directory,
+        &meta_relative,
+        &body_relative,
+        &live_meta_facts,
+        &before_meta_facts,
+        &after_meta_facts,
+        meta_plan.is_some_and(|plan| plan.state == EntryState::After),
+    )?;
+    validate_chapter_result(
+        directory,
+        &meta_relative,
+        &body_relative,
+        after_meta.as_ref(),
+        after_body.as_ref(),
+        &after_meta_facts,
+        meta_plan,
+        body_plan,
+    )
+}
+
+fn validate_chapter_identity(
+    directory: &str,
+    meta_relative: &str,
+    body_relative: &str,
+    live: &TransactionMetadataFacts,
+    before: &TransactionMetadataFacts,
+    after: &TransactionMetadataFacts,
+    meta_already_after: bool,
+) -> Result<(), RecoveryConflict> {
+    // generation：live 已不是备份基线的对象身份时，只有 meta 已经应用且
+    // stage 目标就是 live generation，才允许继续补写关联正文；否则说明对象
+    // 被删除重建，旧事务材料不能回写。
+    if let (Some(live_generation), Some(before_generation)) =
+        (live.generation.as_deref(), before.generation.as_deref())
+    {
+        let same_object = live_generation == before_generation;
+        let staged_object = after.generation.as_deref() == Some(live_generation);
+        if !same_object && !(meta_already_after && staged_object) {
+            return Err(RecoveryConflict::new(
+                format!(
+                    "chapter {directory} generation changed after staging                      (live={live_generation}, before={before_generation}, after={:?});                      refusing to publish old body/meta",
+                    after.generation
+                ),
+                vec![meta_relative.to_string(), body_relative.to_string()],
+            ));
+        }
+    }
+
+    // revision：live 已经前进到 stage 之后，不能再用旧 staging 覆盖。
+    if let (Some(live_revision), Some(before_revision)) = (live.revision, before.revision) {
+        let staged_revision = after.revision == Some(live_revision);
+        if live_revision > before_revision && !(meta_already_after && staged_revision) {
+            return Err(RecoveryConflict::new(
+                format!(
+                    "chapter {directory} live revision {live_revision} advanced past                      transaction base {before_revision} (after={:?})",
+                    after.revision
+                ),
+                vec![meta_relative.to_string(), body_relative.to_string()],
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_chapter_result(
+    directory: &str,
+    meta_relative: &str,
+    body_relative: &str,
+    after_meta: Option<&TransactionFileSnapshot>,
+    after_body: Option<&TransactionFileSnapshot>,
+    after_meta_facts: &TransactionMetadataFacts,
+    meta_plan: Option<&PreparedEntry<'_>>,
+    body_plan: Option<&PreparedEntry<'_>>,
+) -> Result<(), RecoveryConflict> {
+    // 整章结果一致性：stage 的 meta 声明的正文摘要必须等于将要落盘的正文。
+    if let Some(content_sha256) = after_meta_facts.content_sha256.as_deref() {
+        match after_body {
+            Some(body) if body.sha256 == content_sha256 => {}
+            Some(body) => {
+                return Err(RecoveryConflict::new(
+                    format!(
+                        "chapter {directory} staged meta content_sha256={content_sha256}                          does not match body sha256={} (body={body_relative}, meta={meta_relative})",
+                        body.sha256
+                    ),
+                    vec![meta_relative.to_string(), body_relative.to_string()],
+                ));
+            }
+            None if after_meta.is_some() => {
+                return Err(RecoveryConflict::new(
+                    format!(
+                        "chapter {directory} staged meta claims content_sha256={content_sha256}                          but body {body_relative} is missing"
+                    ),
+                    vec![meta_relative.to_string(), body_relative.to_string()],
+                ));
+            }
+            None => {}
+        }
+    }
+
+    // 删除必须整章一致：只有 meta 删除或只有正文删除都会留下半个对象。
+    let meta_delete = meta_plan.is_some_and(|plan| plan.entry.is_delete);
+    let body_delete = body_plan.is_some_and(|plan| plan.entry.is_delete);
+    if meta_plan.is_some() && body_plan.is_some() && meta_delete != body_delete {
+        return Err(RecoveryConflict::new(
+            format!(
+                "chapter {directory} meta_delete={meta_delete} body_delete={body_delete};                  refusing inconsistent delete/upsert"
+            ),
+            vec![meta_relative.to_string(), body_relative.to_string()],
+        ));
+    }
+    Ok(())
 }
 
 /// 记录一条绑定到具体事务的扫描错误。

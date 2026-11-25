@@ -23,6 +23,8 @@ use crate::writing_stats::contribution_store::ContributionStore;
 const TRANSACTIONS_ROOT: &str = "app-meta/transactions/contributions";
 const MANIFEST_FILE: &str = "manifest.json";
 
+mod restore;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum TransactionPhase {
@@ -42,6 +44,10 @@ struct BackupRoot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ContributionTransactionManifest {
     transaction_id: String,
+    /// 事务开始时间（毫秒）。恢复时用于区分“事务之前就存在的 tombstone”
+    /// 与“事务之后的外部删除事实”；旧清单缺字段时为 0（按未知时间处理）。
+    #[serde(default)]
+    created_at_ms: i64,
     phase: TransactionPhase,
     roots: Vec<BackupRoot>,
     events: Vec<ContributionEvent>,
@@ -63,6 +69,7 @@ thread_local! {
 pub(crate) struct ContributionTransaction {
     app_data_root: PathBuf,
     transaction_id: String,
+    created_at_ms: i64,
     dir: PathBuf,
     roots: Vec<BackupRoot>,
     phase: TransactionPhase,
@@ -136,6 +143,7 @@ impl ContributionTransaction {
         let mut transaction = Self {
             app_data_root: app_data_root.to_path_buf(),
             transaction_id,
+            created_at_ms: chrono::Utc::now().timestamp_millis(),
             dir,
             roots,
             phase: TransactionPhase::BackingUp,
@@ -157,6 +165,7 @@ impl ContributionTransaction {
         Self {
             app_data_root: app_data_root.to_path_buf(),
             transaction_id: String::new(),
+            created_at_ms: 0,
             dir: PathBuf::new(),
             roots: Vec::new(),
             phase: TransactionPhase::Committed,
@@ -202,6 +211,7 @@ impl ContributionTransaction {
     ) -> Result<()> {
         let manifest = ContributionTransactionManifest {
             transaction_id: self.transaction_id.clone(),
+            created_at_ms: self.created_at_ms,
             phase,
             roots: self.roots.clone(),
             events,
@@ -273,6 +283,10 @@ impl ContributionTransaction {
         Ok(())
     }
 
+    /// 进程内 Prepared 回滚。事务仍持有对象所有权（调用方在工作区写锁内），
+    /// 这里的差异只可能由本事务写入，因此按根恢复是确定的；崩溃恢复不在锁内，
+    /// 用户可能已继续编辑，必须走 [`restore::restore_manifest`] 的对象级版本
+    /// 协调，绝不能复用这个整树覆盖。
     fn restore(&self) -> Result<()> {
         for root in &self.roots {
             if root.existed && (root.backup.is_empty() || !Path::new(&root.backup).exists()) {
@@ -726,7 +740,30 @@ pub(crate) fn recover_pending(app_data_root: &Path) -> Result<()> {
                 let _ = fs::remove_dir_all(&dir);
             }
             TransactionPhase::Prepared => {
-                restore_manifest(&manifest)?;
+                let report = restore::restore_manifest(app_data_root, &dir, &manifest)?;
+                if report.has_conflicts() {
+                    // 不能证明如何协调的对象保留 source 与事务目录；恢复材料
+                    // 是唯一能解释“备份时对象是什么”的凭据，冲突时绝不清理。
+                    log::warn!(
+                        "contribution transaction {} recovery kept {} conflict(s) and \
+                         preserved transaction materials at {} (details in {}): {}",
+                        manifest.transaction_id,
+                        report.conflicts.len(),
+                        dir.display(),
+                        dir.join("recovery-conflicts.json").display(),
+                        report.conflict_message()
+                    );
+                    continue;
+                }
+                if !report.preserved.is_empty() {
+                    log::warn!(
+                        "contribution transaction {} recovery restored {} object(s) and \
+                         preserved {} newer/created object(s) instead of overwriting them",
+                        manifest.transaction_id,
+                        report.restored.len(),
+                        report.preserved.len()
+                    );
+                }
                 let _ = fs::remove_dir_all(&dir);
             }
             TransactionPhase::ObjectApplied => {
@@ -745,53 +782,6 @@ pub(crate) fn recover_pending(app_data_root: &Path) -> Result<()> {
             TransactionPhase::Committed => {
                 let _ = fs::remove_dir_all(&dir);
             }
-        }
-    }
-    Ok(())
-}
-
-/// 章节正文是否在备份之后又前进过。
-///
-/// 旧贡献事务的整树回滚会先删除 source 再从 backup 复制，崩溃窗口里用户
-/// 新写入的正文会被抹掉。命中新 revision 时跳过该根，保留新正文并记日志；
-/// 其他对象仍按原语义回滚。
-fn chapter_body_advanced(source: &Path, backup: &Path) -> bool {
-    let read_revision = |root: &Path| -> Option<u64> {
-        let meta = root.join("chapter.meta.json");
-        let raw = fs::read_to_string(meta).ok()?;
-        let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-        value.get("revision").and_then(serde_json::Value::as_u64)
-    };
-    match (read_revision(source), read_revision(backup)) {
-        (Some(source_revision), Some(backup_revision)) => source_revision > backup_revision,
-        _ => false,
-    }
-}
-
-fn restore_manifest(manifest: &ContributionTransactionManifest) -> Result<()> {
-    // 先确认所有需要恢复的备份都存在，再删除任何原始路径；避免备份缺失时
-    // 把原始对象删掉却无法恢复。
-    for root in &manifest.roots {
-        if root.existed && !Path::new(&root.backup).exists() {
-            return Err(Error::Other(format!(
-                "contribution backup missing during recovery: {}",
-                root.backup
-            )));
-        }
-    }
-    for root in &manifest.roots {
-        let source = Path::new(&root.source);
-        let backup = Path::new(&root.backup);
-        if root.existed && chapter_body_advanced(source, backup) {
-            log::warn!(
-                "contribution recovery: chapter advanced after backup, preserving newer body: {}",
-                source.display()
-            );
-            continue;
-        }
-        remove_path(source)?;
-        if root.existed {
-            copy_path(backup, source)?;
         }
     }
     Ok(())

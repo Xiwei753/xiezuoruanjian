@@ -1,4 +1,8 @@
+use std::fs;
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub(crate) const TRANSACTIONS_DIR: &str = "app-meta/transactions";
 pub(crate) const MANIFEST_FILENAME: &str = "manifest.json";
@@ -175,6 +179,156 @@ pub(crate) struct TransactionRecoveryError {
 pub(crate) struct TransactionRecoveryScan {
     pub transactions: Vec<TransactionRecovery>,
     pub errors: Vec<TransactionRecoveryError>,
+}
+
+/// 事务目标文件的完整内容事实。
+///
+/// 恢复不能只看 MD5：章节还要比较 generation、revision、content_sha256，
+/// 并区分“staging 里准备写的新版本”和“live 已经被更高版本覆盖”。这里
+/// 一次性读取目标文件并保存三种事实，供预检与整章校验共用。
+#[derive(Debug, Clone)]
+pub(crate) struct TransactionFileSnapshot {
+    pub md5: String,
+    pub sha256: String,
+    pub json: Option<serde_json::Value>,
+}
+
+/// 读取事务目标/暂存文件的快照；`NotFound` 返回 `None`，其他 IO 错误保留。
+///
+/// `parse_json` 由调用方按**目标相对路径**决定：staging/backup 文件名是
+/// `file_N`/`backup_N`，不能靠文件名判断它是不是 `chapter.meta.json`。
+pub(crate) fn read_transaction_file_snapshot(
+    path: &Path,
+    parse_json: bool,
+) -> std::io::Result<Option<TransactionFileSnapshot>> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let md5 = format!("{:x}", md5::compute(&bytes));
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let json = if parse_json {
+        serde_json::from_slice(&bytes).ok()
+    } else {
+        None
+    };
+    Ok(Some(TransactionFileSnapshot { md5, sha256, json }))
+}
+
+/// 对象 meta 的跨版本身份事实。
+#[derive(Debug, Default)]
+pub(crate) struct TransactionMetadataFacts {
+    pub revision: Option<u64>,
+    pub generation: Option<String>,
+    pub content_sha256: Option<String>,
+}
+
+pub(crate) fn transaction_metadata_facts(
+    value: Option<&serde_json::Value>,
+) -> TransactionMetadataFacts {
+    let Some(value) = value else {
+        return TransactionMetadataFacts::default();
+    };
+    let generation = value
+        .get("object_generation")
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.is_empty())
+        .or_else(|| {
+            value
+                .get("generation")
+                .and_then(serde_json::Value::as_str)
+                .filter(|text| !text.is_empty())
+        })
+        .map(str::to_string);
+    let content_sha256 = value
+        .get("content_sha256")
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+    TransactionMetadataFacts {
+        revision: value.get("revision").and_then(serde_json::Value::as_u64),
+        generation,
+        content_sha256,
+    }
+}
+
+/// 目标根下的持久删除事实（同步 tombstone / 远端删除集合）。
+///
+/// Prepared 恢复准备重新创建不存在目标时，必须先排除“对象已被删除”的
+/// 事实；删除仍存在的对象由 before/after 哈希与 generation 校验证明是同一
+/// 对象，不再用 tombstone 阻断。事务创建之前的 tombstone 只说明历史，不算
+/// “事务之后的删除事实”。
+pub(crate) struct TransactionTombstoneFacts {
+    paths: std::collections::HashSet<String>,
+    unavailable: Option<String>,
+}
+
+impl TransactionTombstoneFacts {
+    pub(crate) fn load(target_root: &Path, created_at_ms: i64) -> Self {
+        let state_path = target_root.join("app-meta/sync/state.local.json");
+        let legacy_path = target_root.join("app-meta/sync/sync_state.json");
+        if !state_path.exists() && !legacy_path.exists() {
+            return Self {
+                paths: std::collections::HashSet::new(),
+                unavailable: None,
+            };
+        }
+        match crate::sync::SyncService::load_sync_state_read_only(target_root, None) {
+            Ok(state) => {
+                let mut paths = std::collections::HashSet::new();
+                for tombstone in &state.tombstones {
+                    add_recent_tombstone_path(&mut paths, tombstone, created_at_ms);
+                }
+                for path in state.deleted_files {
+                    paths.insert(normalized_transaction_relative(&path));
+                }
+                Self {
+                    paths,
+                    unavailable: None,
+                }
+            }
+            Err(error) => Self {
+                paths: std::collections::HashSet::new(),
+                unavailable: Some(format!(
+                    "sync state {} unreadable: {error}",
+                    state_path.display()
+                )),
+            },
+        }
+    }
+
+    pub(crate) fn blocks(&self, relative: &str) -> Option<String> {
+        let relative = normalized_transaction_relative(relative);
+        if self.paths.contains(&relative) {
+            return Some("durable tombstone/delete fact exists for target".to_string());
+        }
+        self.unavailable.clone()
+    }
+}
+
+/// 事务路径统一使用 `/`，并去掉 manifest 里可能出现的绝对前导 `/`。
+pub(crate) fn normalized_transaction_relative(relative: &str) -> String {
+    relative
+        .replace('\\', "/")
+        .trim_start_matches('/')
+        .to_string()
+}
+
+fn add_recent_tombstone_path(
+    paths: &mut std::collections::HashSet<String>,
+    tombstone: &crate::sync::types::Tombstone,
+    created_at_ms: i64,
+) {
+    // tombstone 只精确到秒；同一秒内的事务开始与删除无法区分时按“事务之后
+    // 的删除事实”保守处理，避免复活刚被删除的对象。
+    let deleted_at_ms = tombstone
+        .deleted_at
+        .saturating_mul(1000)
+        .saturating_add(1000);
+    if created_at_ms <= 0 || deleted_at_ms >= created_at_ms {
+        paths.insert(normalized_transaction_relative(&tombstone.original_path));
+    }
 }
 
 #[cfg(test)]
