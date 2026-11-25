@@ -736,6 +736,20 @@ impl crate::sync::SyncService {
         Ok(())
     }
 
+    /// 解析 `volumes/<volume>/chapters/<chapter>/chapter.md` 路径。
+    fn chapter_sync_path_parts(path: &str) -> Option<(String, String)> {
+        let components: Vec<&str> = path.split('/').collect();
+        if components.len() == 5
+            && components[0] == "volumes"
+            && components[2] == "chapters"
+            && components[4] == "chapter.md"
+        {
+            Some((components[1].to_string(), components[3].to_string()))
+        } else {
+            None
+        }
+    }
+
     /// 用保存的远端 snapshot 原子替换本地正文。
     ///
     /// 读取 `sync_root/snapshot_rel` 的内容，atomic_write 到 `sync_root/path`。
@@ -753,6 +767,52 @@ impl crate::sync::SyncService {
             )))
         })?;
         let local_full_path = sync_root.join(path);
+        // 章节正文必须走版本化提交协调器：冲突解决选择远端正文时，
+        // 正文、meta、提交序号和后续证明批次共享同一决议；不能用普通
+        // atomic_write 绕开章节版本，否则旧的后台保存仍可能覆盖这里。
+        if let Some((volume_id, chapter_id)) = Self::chapter_sync_path_parts(path) {
+            if sync_root.join("volumes").is_dir() {
+                let project_id = sync_root
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if !project_id.is_empty() {
+                    let expected = crate::chapter::commit::read_chapter_version(
+                        sync_root,
+                        &volume_id,
+                        &chapter_id,
+                    )?;
+                    let local_content =
+                        std::fs::read_to_string(&local_full_path).unwrap_or_default();
+                    let remote_text = String::from_utf8(remote_content.clone()).map_err(|e| {
+                        crate::Error::Other(format!(
+                            "resolve_conflict_take_remote: remote chapter is not UTF-8 {}: {}",
+                            path, e
+                        ))
+                    })?;
+                    let mut request = crate::chapter::ChapterCommitRequest::new(
+                        crate::chapter::ChapterKey::new(project_id, volume_id, chapter_id),
+                        remote_text,
+                    );
+                    request.expected = Some(expected);
+                    request.base_content = Some(local_content);
+                    request.mutation = crate::chapter::ChapterMutationKind::Restore;
+                    request.source = crate::chapter::ChapterCommitSource::Restore;
+                    match crate::chapter::commit::commit_chapter_with_guard(
+                        sync_root, None, request,
+                    )? {
+                        crate::chapter::ChapterCommitOutcome::Committed(_) => return Ok(()),
+                        crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
+                            return Err(crate::Error::Other(format!(
+                                "resolve_conflict_take_remote: chapter version advanced during restore: {}",
+                                conflict.key.chapter_id
+                            )));
+                        }
+                    }
+                }
+            }
+        }
         crate::storage::transaction::atomic_write_bytes(&local_full_path, &remote_content)
             .map_err(|e| {
                 crate::Error::Io(std::io::Error::other(format!(
