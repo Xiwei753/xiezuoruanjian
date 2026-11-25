@@ -943,7 +943,40 @@ fn select_pending_editor_proof(
         return Vec::new();
     }
     match end {
-        Some(end) => events[..=end].to_vec(),
+        Some(end) => {
+            let selected = events[..=end].to_vec();
+            if let Some(baseline) = selected
+                .first()
+                .and_then(|projection| projection.baseline_text.clone())
+            {
+                // 能拿到本批起点正文时，按事件顺序逐步 replay，并核对每条
+                // before/after 摘要。只比最终摘要无法发现批次中间被替换。
+                let mut replayed = baseline;
+                for projection in &selected {
+                    let Some(proof) = projection.event.proof.as_ref() else {
+                        return Vec::new();
+                    };
+                    if !proof.before_text_sha256.is_empty()
+                        && proof.before_text_sha256 != text_sha256(&replayed)
+                    {
+                        return Vec::new();
+                    }
+                    if !proof.changes.is_empty()
+                        && crate::writing_stats::proof::apply_changes(&mut replayed, &proof.changes)
+                            .is_err()
+                    {
+                        return Vec::new();
+                    }
+                    if proof.after_text_sha256 != text_sha256(&replayed) {
+                        return Vec::new();
+                    }
+                }
+                if replayed != content {
+                    return Vec::new();
+                }
+            }
+            selected
+        }
         None => Vec::new(),
     }
 }
