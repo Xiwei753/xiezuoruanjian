@@ -158,6 +158,10 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "写作统计门面：编辑事件、同步证明事实、journal 投影共享同一统计 API "
         "与 pending 队列；#1059 新增同步事实投影后跨过 800 行；"
         "TODO(#1059) 后续按 editor/sync projection 拆分",
+    (Path("core/writer_core/src/facade/project_ops.rs"), "god-file"):
+        "作品/章节门面：项目、卷、章节的保存/删除/排序共享同一版本化提交入口；"
+        "证明批次选择已拆到 chapter_proof_batch.rs；"
+        "TODO(#1059) 后续按 project/chapter/history 拆分",
     (Path("core/writer_core/src/ffi/project_ops.rs"), "god-file"):
         "FFI 作品/章节聚合：C ABI 与 JSON envelope 共享同一错误映射和 app service "
         "初始化上下文；#1059 新增版本化保存 JSON 入口后跨过 800 行；"

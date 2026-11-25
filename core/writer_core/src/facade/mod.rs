@@ -25,6 +25,7 @@
 //! - Facade 不允许吞掉错误（必须返回 Result）
 
 mod action_ops;
+mod chapter_proof_batch;
 mod project_ops;
 mod recent_edits_ops;
 mod search_ops;
