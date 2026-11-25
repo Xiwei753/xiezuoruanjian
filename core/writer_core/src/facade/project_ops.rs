@@ -408,6 +408,7 @@ impl super::WriterCore {
         workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
         let project_root = self.project_root(project_id);
+        self.retry_pending_chapter_proof_projections(&project_root);
         let proof_events = select_pending_editor_proof(
             self.pending_editor_proof_for(project_id, volume_id, chapter_id),
             content,
@@ -455,14 +456,40 @@ impl super::WriterCore {
         workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     ) -> Result<ChapterSaveReceipt> {
         let project_root = self.project_root(project_id);
-        chapter::clear_chapter_content_verified_with_version(
-            &project_root,
-            workspace_lock,
-            volume_id,
-            chapter_id,
-            expected_version,
-            base_content,
-        )
+        self.retry_pending_chapter_proof_projections(&project_root);
+        let proof_events = select_pending_editor_proof(
+            self.pending_editor_proof_for(project_id, volume_id, chapter_id),
+            "",
+        );
+        let projection_ids: Vec<String> = proof_events
+            .iter()
+            .map(|event| event.event_id().to_string())
+            .filter(|event_id| !event_id.is_empty())
+            .collect();
+        let (receipt, _) =
+            chapter::save_chapter_verified_with_changes_and_files_versioned_with_proof(
+                &project_root,
+                volume_id,
+                chapter_id,
+                "",
+                true,
+                &[],
+                expected_version,
+                base_content,
+                &projection_ids,
+                &self.app_data_root,
+                workspace_lock,
+                &proof_events,
+            )?;
+        if !proof_events.is_empty() && !receipt.transaction_id.is_empty() {
+            let completed: std::collections::HashSet<String> = proof_events
+                .iter()
+                .map(|event| event.event_id().to_string())
+                .collect();
+            self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed);
+            self.apply_pending_chapter_proof(&project_root, &receipt.transaction_id);
+        }
+        Ok(receipt)
     }
 
     /// 重命名章节并返回变更集。

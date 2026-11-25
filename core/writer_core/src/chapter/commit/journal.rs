@@ -722,6 +722,33 @@ fn preserve_superseded_conflict(
     Ok(conflict_dir.to_string_lossy().to_string())
 }
 
+/// 列出当前项目内已发布正文、但仍有证明投影未确认的 journal。
+pub fn pending_chapter_proof_transactions(project_root: &Path) -> Result<Vec<String>> {
+    let root = journal_root(project_root);
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut transactions = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let manifest_path = entry.path().join("manifest.json");
+        let Ok(raw) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<ChapterCommitManifest>(&raw) else {
+            continue;
+        };
+        if manifest.phase == ChapterCommitPhase::Applied && !manifest.pending_projections.is_empty()
+        {
+            transactions.push(manifest.transaction_id);
+        }
+    }
+    Ok(transactions)
+}
+
 /// 读取 journal 中尚未确认的证明事件（供投影 worker 使用）。
 pub fn pending_chapter_proof_events(
     project_root: &Path,

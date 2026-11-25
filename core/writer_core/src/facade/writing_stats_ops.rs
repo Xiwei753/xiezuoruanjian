@@ -311,6 +311,19 @@ impl super::WriterCore {
         Ok(())
     }
 
+    /// 重试当前项目内所有已发布但未确认的证明投影。保存/清空前调用，
+    /// 避免一次投影失败要等下次启动才恢复。
+    pub(crate) fn retry_pending_chapter_proof_projections(&self, project_root: &std::path::Path) {
+        let Ok(transactions) =
+            crate::chapter::commit::pending_chapter_proof_transactions(project_root)
+        else {
+            return;
+        };
+        for transaction_id in transactions {
+            self.apply_pending_chapter_proof(project_root, &transaction_id);
+        }
+    }
+
     /// 把 journal 中 durable 的证明事件幂等写入统计，并逐条确认投影。
     /// 失败时保留 journal/pending，不把正文判为保存失败。
     pub(crate) fn apply_pending_chapter_proof(

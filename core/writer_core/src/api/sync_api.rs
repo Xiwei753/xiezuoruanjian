@@ -911,6 +911,11 @@ impl WriterCoreApi {
         let started_at = Instant::now();
         // Issue #1008：进入同步前先补记上次进程留下的“正文已提交、证明未落盘”
         // 意图，保证本次 Prepare 使用的前置事实已包含原同步编辑。
+        // 恢复会检查/修改 live 事实，必须与正文写事务共用 workspace 锁；
+        // 只在恢复窗口持锁，不覆盖后续网络传输。
+        let _recovery_workspace_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
+                .map_err(|error| crate::api::error::WriterError::from(error))?;
         let core = self.core_read();
         let recovery = core
             .sync_proof_intents_pending()
@@ -919,6 +924,7 @@ impl WriterCoreApi {
             log::warn!("recover pending sync proof intents before sync failed: {error}");
         }
         drop(core);
+        drop(_recovery_workspace_lock);
         record_sync_diagnostic("sync.run.start", "sync.run", {
             let mut fields = sync_diagnostic_fields(&operation_id, "prepare", None);
             fields.insert(
@@ -2115,6 +2121,12 @@ impl WriterCoreApi {
             // failed push cannot advance known_files for unpushed content.
             // Issue #1021 复核：恢复只在一轮同步内做一次，所有 target 复用同一
             // 已落盘事件集合/未完成问题，避免每组 target 重解压全部历史事件。
+            // 证明恢复会读 live 并写统计/意图，必须持有 workspace 锁，
+            // 且锁序为 workspace → Core。
+            let _proof_recovery_workspace_lock =
+                crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root).map_err(
+                    |error| crate::api::error::WriterError::from(crate::error::Error::from(error)),
+                )?;
             let mut proof_recovery_state =
                 match self.core_write().recover_pending_sync_proof_state() {
                     Ok(state) => state,
@@ -2122,6 +2134,7 @@ impl WriterCoreApi {
                         "recover pending sync proof intents before commit failed: {error}"
                     )),
                 };
+            drop(_proof_recovery_workspace_lock);
             for pending in pending_commits {
                 let PendingTargetCommit {
                     target_index,
