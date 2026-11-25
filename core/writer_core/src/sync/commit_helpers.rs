@@ -158,6 +158,46 @@ pub(crate) fn build_chapter_change_receipts(
             operation_id: operation_id.to_string(),
         });
     }
+    for committed in paths {
+        if is_chapter_content_path(&committed.path) {
+            continue;
+        }
+        if !is_chapter_meta_path(&committed.path) {
+            continue;
+        }
+        let Some(key) = chapter_key_from_workspace_path(&committed.path) else {
+            continue;
+        };
+        if receipts.iter().any(|receipt| receipt.key == key) {
+            continue;
+        }
+        let before = match &committed.before {
+            CommittedBefore::Text { version, bytes } => version
+                .clone()
+                .or_else(|| Some(content_version(&String::from_utf8_lossy(bytes)))),
+            CommittedBefore::Missing | CommittedBefore::NotTracked | CommittedBefore::Error(_) => {
+                None
+            }
+        };
+        let after = if committed.deleted {
+            None
+        } else {
+            let body_path = committed.path.with_file_name("chapter.md");
+            match std::fs::read(live_root.join(&body_path)) {
+                Ok(bytes) => chapter_version_at(live_root, &body_path, &bytes),
+                Err(_) => None,
+            }
+        };
+        receipts.push(crate::chapter::ChapterChangeReceipt {
+            key,
+            before,
+            after,
+            // 只有 meta 变化时不改正文；still 需要回执让编辑器协调标题/顺序。
+            content_changed: false,
+            deleted: false,
+            operation_id: operation_id.to_string(),
+        });
+    }
     receipts
 }
 
@@ -192,6 +232,19 @@ fn is_chapter_content_path(path: &Path) -> bool {
         last = Some(part);
     }
     has_chapters && last.is_some_and(|name| name == "chapter.md")
+}
+
+fn is_chapter_meta_path(path: &Path) -> bool {
+    let mut has_chapters = false;
+    let mut last = None;
+    for component in path.components() {
+        let part = component.as_os_str();
+        if part == "chapters" {
+            has_chapters = true;
+        }
+        last = Some(part);
+    }
+    has_chapters && last.is_some_and(|name| name == "chapter.meta.json")
 }
 
 /// 收集一批 `CommitAction` 的 rel_path，转成 workspace-relative 后追加到 `out`。
