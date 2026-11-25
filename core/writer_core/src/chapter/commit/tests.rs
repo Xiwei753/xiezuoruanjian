@@ -120,6 +120,7 @@ fn recovery_applies_decided_body_but_never_overwrites_newer_content() {
         created_at_ms: Utc::now().timestamp_millis(),
         occurred_at_ms: Utc::now().timestamp_millis(),
         event_ids: Vec::new(),
+        proof_events: Vec::new(),
         expected: None,
         before: first.after.clone(),
         after: ChapterVersion {

@@ -126,10 +126,23 @@ impl WriterCoreApi {
         platform: writer_platform_api::PlatformKind,
     ) {
         // 启动恢复需要发布 journal 投影，必须与写事务保持同一锁顺序。
-        let _workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root).ok();
+        // 锁失败时不能继续恢复写盘，否则绕过跨进程互斥。
+        let workspace_lock = match crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
+        {
+            Ok(lock) => lock,
+            Err(error) => {
+                log::error!("[writing_stats] 启动恢复获取 workspace 锁失败: {error}");
+                return;
+            }
+        };
         let core = self.core_write();
         if let Err(error) = core.set_platform_identity(device_id, platform) {
             log::error!("[writing_stats] 纠正设备平台身份失败: {error}");
+        }
+        // 先完成正文 journal 决议与证明投影，再处理旧同步证明意图；后者
+        // 可能依赖已提交正文版本，顺序不能反过来。
+        if let Err(error) = core.recover_pending_chapter_proof_projections() {
+            eprintln!("[writing_stats] 启动恢复正文证明投影失败: {error}");
         }
         // 应用启动、平台注入稳定设备身份后，立即补记上次进程留下的同步证明
         // 意图；此时解析出的来源分区与本次编辑事件一致。
@@ -137,9 +150,6 @@ impl WriterCoreApi {
             if let Err(error) = core.recover_pending_sync_proof_intents() {
                 eprintln!("[writing_stats] 启动恢复同步证明意图失败: {error}");
             }
-        }
-        if let Err(error) = core.recover_pending_chapter_proof_projections() {
-            eprintln!("[writing_stats] 启动恢复正文证明投影失败: {error}");
         }
     }
 

@@ -302,9 +302,10 @@ impl super::WriterCore {
                     }
                 };
             for item in recovered {
-                if !item.pending_projections.is_empty() {
-                    self.apply_pending_chapter_proof(&project_root, &item.transaction_id);
+                if item.superseded || item.pending_projections.is_empty() {
+                    continue;
                 }
+                self.apply_pending_chapter_proof(&project_root, &item.transaction_id);
             }
         }
         Ok(())
@@ -327,11 +328,19 @@ impl super::WriterCore {
             let event_id = projection.event_id().to_string();
             match stats.record_proof_event(projection.event, projection.baseline_text.as_deref()) {
                 Ok(_) => {
-                    let _ = crate::chapter::commit::mark_chapter_commit_projection(
+                    if let Err(error) = crate::chapter::commit::mark_chapter_commit_projection(
                         project_root,
                         transaction_id,
                         &event_id,
-                    );
+                    ) {
+                        log::warn!(
+                            "chapter proof projection ack failed, journal retained: tx={} event={} error={}",
+                            transaction_id,
+                            event_id,
+                            error
+                        );
+                        break;
+                    }
                 }
                 Err(error) => {
                     log::warn!(

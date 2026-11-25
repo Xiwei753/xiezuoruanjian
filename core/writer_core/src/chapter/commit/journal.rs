@@ -225,7 +225,8 @@ pub fn read_chapter_state_recovering(
     chapter_id: &str,
 ) -> Result<(Chapter, String, ChapterVersion)> {
     recover_pending_for_read(guard, project_root)?;
-    read_chapter_state(project_root, volume_id, chapter_id)
+    let key = ChapterKey::new(project_id(project_root), volume_id, chapter_id);
+    read_current_migrated(project_root, &key)
 }
 
 /// 持有 workspace guard 的版本读取。
@@ -262,6 +263,23 @@ fn expected_matches(expected: &ChapterVersion, current: &ChapterVersion) -> bool
         && expected.content_sha256 == current.content_sha256
 }
 
+/// 旧章节的稳定 generation：由 project/volume/chapter 身份派生。
+fn legacy_generation(key: &ChapterKey) -> String {
+    let digest = Sha256::digest(
+        format!(
+            "sujian-chapter:{}/{}/{}",
+            key.project_id, key.volume_id, key.chapter_id
+        )
+        .as_bytes(),
+    );
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // 标记为 RFC 4122 version 5 / variant 10xx，便于诊断时识别派生身份。
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes).to_string()
+}
+
 /// 在锁内一次性补齐旧 meta 的稳定 generation/revision/digest。
 fn read_current_migrated(
     project_root: &Path,
@@ -270,18 +288,16 @@ fn read_current_migrated(
     let (mut meta, content, mut version) = read_current(project_root, key)?;
     let mut changed = false;
     if meta.object_generation.is_empty() {
-        meta.object_generation = Uuid::new_v4().to_string();
+        // 旧对象没有 generation。用稳定对象身份派生（而非随机 UUID），
+        // 保证同一旧章节在不同设备迁移后得到同一个 generation。
+        meta.object_generation = legacy_generation(key);
         changed = true;
     }
     if meta.content_sha256.is_empty() {
         meta.content_sha256 = sha256_hex(&content);
         changed = true;
     }
-    // 旧章节没有 revision 字段；非空正文从 1 开始，空正文保持 0。
-    if meta.revision == 0 && !content.is_empty() {
-        meta.revision = 1;
-        changed = true;
-    }
+    // 迁移只补齐 generation/digest，不推进 revision 或 updated_at。
     if changed {
         version = ChapterVersion {
             object_generation: meta.object_generation.clone(),
@@ -451,8 +467,9 @@ pub(crate) fn commit_chapter_with_guard(
         .cloned()
         .collect::<Vec<_>>();
 
-    if !content_changed && changed_additional.is_empty() {
-        // no-op：不创建 journal、不推进 revision/updated_at，返回磁盘真实现状。
+    if !content_changed && changed_additional.is_empty() && request.proof_events.is_empty() {
+        // 纯 no-op：不创建 journal、不推进 revision/updated_at，返回磁盘真实现状。
+        // 有证明事件时仍要建仅事件 journal，否则输入后还原的编辑会丢失。
         let meta_hash = md5_hex(&serde_json::to_string_pretty(&meta)?);
         return Ok(ChapterCommitOutcome::Committed(ChapterCommitReceipt {
             transaction_id,
@@ -718,6 +735,9 @@ pub fn pending_chapter_proof_events(
     }
     let manifest: ChapterCommitManifest =
         serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    if manifest.phase != ChapterCommitPhase::Applied {
+        return Ok(Vec::new());
+    }
     Ok(manifest.proof_events)
 }
 

@@ -408,7 +408,10 @@ impl super::WriterCore {
         workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
         let project_root = self.project_root(project_id);
-        let proof_events = self.pending_editor_proof_for(project_id, volume_id, chapter_id);
+        let proof_events = select_pending_editor_proof(
+            self.pending_editor_proof_for(project_id, volume_id, chapter_id),
+            content,
+        );
         let mut projection_ids = projection_ids.to_vec();
         for event in &proof_events {
             let event_id = event.event_id().to_string();
@@ -430,7 +433,7 @@ impl super::WriterCore {
             workspace_lock,
             &proof_events,
         )?;
-        if !proof_events.is_empty() {
+        if !proof_events.is_empty() && !result.0.transaction_id.is_empty() {
             let completed: std::collections::HashSet<String> = proof_events
                 .iter()
                 .map(|event| event.event_id().to_string())
@@ -786,4 +789,54 @@ impl super::WriterCore {
         let project_root = self.project_root(project_id);
         crate::project::get_project_updated_at_aggregated(&project_root)
     }
+}
+
+/// 只选择以本次保存正文为终点、且前后摘要连续的证明批次。
+///
+/// 旧客户端没有正文摘要时无法逐步验证，保留原行为（整批提交）；新事件
+/// 必须从最后一条向前连续衔接，避免把保存快照之后的新编辑混进同一 journal。
+fn select_pending_editor_proof(
+    events: Vec<crate::chapter::ChapterProofProjection>,
+    content: &str,
+) -> Vec<crate::chapter::ChapterProofProjection> {
+    use crate::writing_stats::proof::{content_digest_of_text, text_sha256};
+
+    if events.is_empty() {
+        return events;
+    }
+    let all_legacy = events.iter().all(|projection| {
+        projection
+            .event
+            .proof
+            .as_ref()
+            .is_some_and(|proof| proof.after_text_sha256.is_empty())
+    });
+    if all_legacy {
+        return events;
+    }
+    let digest = content_digest_of_text(content);
+    let legacy_digest = text_sha256(content);
+    let Some(end) = events.iter().rposition(|projection| {
+        projection.event.proof.as_ref().is_some_and(|proof| {
+            !proof.after_text_sha256.is_empty()
+                && (proof.after_text_sha256 == digest || proof.after_text_sha256 == legacy_digest)
+        })
+    }) else {
+        return Vec::new();
+    };
+    let mut start = end;
+    while start > 0 {
+        let current = events[start].event.proof.as_ref();
+        let previous = events[start - 1].event.proof.as_ref();
+        let (Some(current), Some(previous)) = (current, previous) else {
+            break;
+        };
+        if previous.after_text_sha256.is_empty()
+            || previous.after_text_sha256 != current.before_text_sha256
+        {
+            break;
+        }
+        start -= 1;
+    }
+    events[start..=end].to_vec()
 }

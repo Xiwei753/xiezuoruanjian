@@ -68,6 +68,13 @@ pub(crate) fn scan_pending_transaction(
 }
 
 /// 重放单个事务目录：读取 manifest、按阶段收敛文件，并在完成后清理目录。
+#[derive(Debug)]
+enum RecoveryTargetState {
+    Before,
+    After,
+    Conflict(String),
+}
+
 fn recover_transaction_dir(
     target_root: &Path,
     tx_dir: std::path::PathBuf,
@@ -196,52 +203,89 @@ fn recover_transaction_dir(
     let mut created_dirs = std::collections::HashSet::new();
 
     for tx_entry in &manifest.entries {
-        if tx_entry.is_delete {
-            let target_path = target_root.join(&tx_entry.target_relative);
-            match fs::remove_file(&target_path) {
-                Ok(()) => {
-                    if let Err(e) = crate::storage::sync_parent(&target_path) {
-                        log::warn!(
-                            "[transaction] recovery delete sync_parent failed: {}: {}",
-                            tx_entry.target_relative,
-                            e
-                        );
-                        missing_files.push(tx_entry.target_relative.clone());
-                        continue;
-                    }
-                    recovered_files.push(tx_entry.target_relative.clone());
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    recovered_files.push(tx_entry.target_relative.clone());
-                }
-                Err(e) => {
+        let target_path = target_root.join(&tx_entry.target_relative);
+        let current = file_md5(&target_path);
+        let before = tx_entry.expected_before_hash.as_deref();
+        let after = tx_entry.expected_after_hash.as_deref();
+        let state = match (current.as_deref(), before, after) {
+            (Some(current), _, Some(after)) if current == after => RecoveryTargetState::After,
+            (Some(current), Some(before), _) if current == before => RecoveryTargetState::Before,
+            (None, None, Some(_)) if !tx_entry.is_delete => RecoveryTargetState::Before,
+            (None, None, None) if tx_entry.is_delete => RecoveryTargetState::After,
+            (None, Some(_), None) if tx_entry.is_delete => RecoveryTargetState::After,
+            (Some(current), None, None) => RecoveryTargetState::Conflict(format!(
+                "legacy manifest without before/after hash, target={current}"
+            )),
+            (None, None, _) => RecoveryTargetState::Conflict(
+                "legacy manifest without before/after hash, target missing".to_string(),
+            ),
+            (Some(current), before, after) => RecoveryTargetState::Conflict(format!(
+                "target changed: current={current}, before={before:?}, after={after:?}"
+            )),
+            (None, before, after) => RecoveryTargetState::Conflict(format!(
+                "target missing: before={before:?}, after={after:?}"
+            )),
+        };
+
+        match state {
+            RecoveryTargetState::Conflict(reason) => {
+                log::warn!(
+                    "[transaction] recovery conflict, preserving materials: {}: {}",
+                    tx_entry.target_relative,
+                    reason
+                );
+                missing_files.push(tx_entry.target_relative.clone());
+            }
+            RecoveryTargetState::After => {
+                if let Err(e) = crate::storage::sync_parent(&target_path) {
                     log::warn!(
-                        "[transaction] recovery delete failed: {}: {}",
+                        "[transaction] recovery ack sync_parent failed: {}: {}",
                         tx_entry.target_relative,
                         e
                     );
                     missing_files.push(tx_entry.target_relative.clone());
+                } else {
+                    recovered_files.push(tx_entry.target_relative.clone());
                 }
             }
-        } else {
-            let staging_path = tx_dir.join(&tx_entry.staging_filename);
-            let target_path = target_root.join(&tx_entry.target_relative);
-            // 目标已被后续版本更新时，旧 staging 的重放必须停下。旧 manifest
-            // 没有 expected_after_hash，保持原语义；新 manifest 一律 CAS。
-            if let Some(expected) = tx_entry.expected_after_hash.as_deref() {
-                if target_path.exists()
-                    && target_matches_expected(&target_path, expected) == Some(false)
-                {
+            RecoveryTargetState::Before => {
+                if tx_entry.is_delete {
+                    match fs::remove_file(&target_path) {
+                        Ok(()) => {
+                            if let Err(e) = crate::storage::sync_parent(&target_path) {
+                                log::warn!(
+                                    "[transaction] recovery delete sync_parent failed: {}: {}",
+                                    tx_entry.target_relative,
+                                    e
+                                );
+                                missing_files.push(tx_entry.target_relative.clone());
+                            } else {
+                                recovered_files.push(tx_entry.target_relative.clone());
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            recovered_files.push(tx_entry.target_relative.clone());
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[transaction] recovery delete failed: {}: {}",
+                                tx_entry.target_relative,
+                                e
+                            );
+                            missing_files.push(tx_entry.target_relative.clone());
+                        }
+                    }
+                    continue;
+                }
+                let staging_path = tx_dir.join(&tx_entry.staging_filename);
+                if !staging_path.exists() {
                     log::warn!(
-                        "[transaction] recovery target advanced, refusing stale overwrite: {} -> {}",
-                        staging_path.display(),
-                        target_path.display()
+                        "[transaction] recovery staging missing, preserving: {}",
+                        tx_entry.target_relative
                     );
                     missing_files.push(tx_entry.target_relative.clone());
                     continue;
                 }
-            }
-            if staging_path.exists() {
                 if let Some(parent) = target_path.parent() {
                     if !created_dirs.contains(parent) && fs::create_dir_all(parent).is_ok() {
                         created_dirs.insert(parent.to_path_buf());
@@ -257,9 +301,9 @@ fn recover_transaction_dir(
                                 e
                             );
                             missing_files.push(tx_entry.target_relative.clone());
-                            continue;
+                        } else {
+                            recovered_files.push(tx_entry.target_relative.clone());
                         }
-                        recovered_files.push(tx_entry.target_relative.clone());
                     }
                     Err(e) => {
                         log::warn!(
@@ -271,33 +315,6 @@ fn recover_transaction_dir(
                         missing_files.push(tx_entry.target_relative.clone());
                     }
                 }
-            } else if target_path.exists() {
-                // 崩溃可能发生在 rename 完成、manifest 尚未写成 FilesCommitted
-                // 的窗口内：staging 已消失但目标正文已就位，说明该条已提交。
-                // 有 expected_after_hash 时必须确认目标仍是该内容，不能用
-                // “存在即提交”把更新的正文误判为本次事务产物。
-                if let Some(expected) = tx_entry.expected_after_hash.as_deref() {
-                    if target_matches_expected(&target_path, expected) == Some(false) {
-                        log::warn!(
-                            "[transaction] recovery target content differs from expected, preserving: {}",
-                            target_path.display()
-                        );
-                        missing_files.push(tx_entry.target_relative.clone());
-                        continue;
-                    }
-                }
-                if let Err(e) = crate::storage::sync_parent(&target_path) {
-                    log::warn!(
-                        "[transaction] recovery existing target sync_parent failed: {}: {}",
-                        tx_entry.target_relative,
-                        e
-                    );
-                    missing_files.push(tx_entry.target_relative.clone());
-                    continue;
-                }
-                recovered_files.push(tx_entry.target_relative.clone());
-            } else {
-                missing_files.push(tx_entry.target_relative.clone());
             }
         }
     }

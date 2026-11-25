@@ -1760,10 +1760,8 @@ QtObject {
             return false;
         }
         var plainText = snapshot.text;
-        if (plainText === lastSavedEditorText) {
-            lastSavedEditorRevision = snapshot.revision;
-            return true;
-        }
+        // 不能仅凭全文相等跳过：输入后还原会留下待提交证明批次，正文相同
+        // 仍需让 Core 建仅事件 journal 并确认事件 durable。
         var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
         var result = saveEditorSnapshotVersioned(plainText, allowEmptyOverwrite,
             "flush_before_sync", snapshot.revision, snapshot.contentSha256);
@@ -1913,10 +1911,8 @@ QtObject {
         }
 
         var plainText = snapshot.text;
-        if (plainText === lastSavedEditorText) {
-            lastSavedEditorRevision = snapshot.revision;
-            return true;
-        }
+        // 不能仅凭全文相等跳过：输入后还原会留下待提交证明批次，正文相同
+        // 仍需让 Core 建仅事件 journal 并确认事件 durable。
         var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
         var result = saveEditorSnapshotVersioned(plainText, allowEmptyOverwrite,
             "save_current_chapter", snapshot.revision, snapshot.contentSha256);

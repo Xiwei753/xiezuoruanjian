@@ -168,10 +168,14 @@ pub(super) fn publish_decided(
         crate::storage::sync_parent(&target)?;
     }
 
-    if !already_after || meta.content_sha256 != manifest.after.content_sha256 {
-        if !already_after {
-            meta.updated_at = manifest.updated_at.clone();
-        }
+    if !already_after
+        || meta.content_sha256 != manifest.after.content_sha256
+        || meta.revision != manifest.after.revision
+        || meta.updated_at != manifest.updated_at
+    {
+        // 半提交恢复：即使正文已是 after，也要按决议补齐 meta 的
+        // updated_at/revision/digest，不能留下正文新、meta 旧。
+        meta.updated_at = manifest.updated_at.clone();
         meta.word_count = manifest.word_count;
         meta.hash = manifest.content_md5.clone();
         meta.content_sha256 = manifest.after.content_sha256.clone();
