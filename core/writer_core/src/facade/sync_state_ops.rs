@@ -150,10 +150,19 @@ impl super::WriterCore {
         if target_kind == "app" {
             let group = self.app_conflict_group_for_path(path)?;
             crate::sync::SyncService::resolve_conflict_take_remote_for_group_with_guard(
-                &root, &guard, path, &group,
+                &root,
+                &guard,
+                Some(&self.app_data_root),
+                path,
+                &group,
             )
         } else {
-            crate::sync::SyncService::resolve_conflict_take_remote_with_guard(&root, &guard, path)
+            crate::sync::SyncService::resolve_conflict_take_remote_with_guard(
+                &root,
+                &guard,
+                Some(&self.app_data_root),
+                path,
+            )
         }
     }
 

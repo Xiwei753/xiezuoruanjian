@@ -878,7 +878,7 @@ impl crate::sync::SyncService {
         // 兼容入口（测试/旧调用方）：以 sync_root 为锁根获取 guard。生产路径
         // 必须走 *_with_guard，复用 API 已持有的 workspace guard。
         let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root).ok();
-        Self::resolve_conflict_take_remote_at_target(sync_root, path, None, guard.as_ref())
+        Self::resolve_conflict_take_remote_at_target(sync_root, path, None, guard.as_ref(), None)
     }
 
     /// 与 [`Self::resolve_conflict_take_remote`] 相同，但复用调用方已持有的
@@ -887,9 +887,16 @@ impl crate::sync::SyncService {
     pub fn resolve_conflict_take_remote_with_guard(
         sync_root: &Path,
         guard: &crate::storage::WorkspaceWriteLock,
+        app_data_root: Option<&Path>,
         path: &str,
     ) -> crate::Result<bool> {
-        Self::resolve_conflict_take_remote_at_target(sync_root, path, None, Some(guard))
+        Self::resolve_conflict_take_remote_at_target(
+            sync_root,
+            path,
+            None,
+            Some(guard),
+            app_data_root,
+        )
     }
 
     pub fn resolve_conflict_take_remote_for_group(
@@ -898,16 +905,29 @@ impl crate::sync::SyncService {
         group: &crate::sync::types::AppDataGroup,
     ) -> crate::Result<bool> {
         let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root).ok();
-        Self::resolve_conflict_take_remote_at_target(sync_root, path, Some(group), guard.as_ref())
+        Self::resolve_conflict_take_remote_at_target(
+            sync_root,
+            path,
+            Some(group),
+            guard.as_ref(),
+            None,
+        )
     }
 
     pub fn resolve_conflict_take_remote_for_group_with_guard(
         sync_root: &Path,
         guard: &crate::storage::WorkspaceWriteLock,
+        app_data_root: Option<&Path>,
         path: &str,
         group: &crate::sync::types::AppDataGroup,
     ) -> crate::Result<bool> {
-        Self::resolve_conflict_take_remote_at_target(sync_root, path, Some(group), Some(guard))
+        Self::resolve_conflict_take_remote_at_target(
+            sync_root,
+            path,
+            Some(group),
+            Some(guard),
+            app_data_root,
+        )
     }
 
     fn resolve_conflict_take_remote_at_target(
@@ -915,6 +935,7 @@ impl crate::sync::SyncService {
         path: &str,
         group: Option<&crate::sync::types::AppDataGroup>,
         guard: Option<&crate::storage::WorkspaceWriteLock>,
+        app_data_root: Option<&Path>,
     ) -> crate::Result<bool> {
         validate_group_conflict_path(group, path, "resolve_conflict_take_remote")?;
         let mut state = load_conflict_state(sync_root, group)?;
@@ -940,8 +961,14 @@ impl crate::sync::SyncService {
         // 用 canonical conflict 传给 decide_take_remote。
         // decide_take_remote 的 None 分支（返回 Ok(true) 即 pending fallback）现在不应再被触发
         // （因为 conflict 必为 Some），但保留它作为防御性代码不删（签名不变，仍接受 Option）。
-        let use_pending_fallback =
-            Self::decide_take_remote(sync_root, path, &mut state, Some(conflict), guard)?;
+        let use_pending_fallback = Self::decide_take_remote(
+            sync_root,
+            path,
+            &mut state,
+            Some(conflict),
+            guard,
+            app_data_root,
+        )?;
 
         if use_pending_fallback {
             // 兼容路径：标记为 pending_take_remote，下次 perform_sync 强制下载远端内容。
@@ -980,6 +1007,7 @@ impl crate::sync::SyncService {
         state: &mut crate::sync::types::SyncState,
         conflict_opt: Option<SyncConflict>,
         guard: Option<&crate::storage::WorkspaceWriteLock>,
+        app_data_root: Option<&Path>,
     ) -> crate::Result<bool> {
         let Some(conflict) = conflict_opt else {
             // 无冲突记录：回退 pending_take_remote 行为。
@@ -1008,6 +1036,21 @@ impl crate::sync::SyncService {
                     // "known file missing without tombstone"。
                     let deleted_paths = Self::apply_starmap_object_remote_delete(sync_root, path)?;
                     Self::cleanup_deleted_paths_and_record_tombstones(state, &deleted_paths);
+                    return Ok(false);
+                }
+                if let (Some((volume_id, chapter_id)), Some(app_data_root)) =
+                    (Self::chapter_sync_path_parts(path), app_data_root)
+                {
+                    // 章节 RemoteDeleted 走章节删除协议：delete_guard + trash +
+                    // tombstone 一次完成，不能再像普通文件一样只 move_to_trash。
+                    crate::chapter::delete_chapter(
+                        sync_root,
+                        &volume_id,
+                        &chapter_id,
+                        app_data_root,
+                    )?;
+                    state.known_files.remove(path);
+                    state.known_files_updated_at.remove(path);
                     return Ok(false);
                 }
                 // 非星图路径：RemoteDeleted 把本地文件移入 trash，并从 known_files 移除。
