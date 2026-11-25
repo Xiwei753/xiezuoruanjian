@@ -136,6 +136,8 @@ dictionary ChapterSaveReceiptDto {
     string updated_at;
     u32 word_count;
     ChapterVersionDto version;
+    string transaction_id;
+    sequence<string> pending_projections;
 };
 
 // 恢复作品树输入 DTO — 一次跨 FFI 传入完整作品树，

@@ -101,4 +101,6 @@ internal fun ChapterSaveReceiptDto.toModel() =
         updatedAt = updatedAt,
         wordCount = wordCount.toInt(),
         version = version.toModel(),
+        transactionId = transactionId,
+        pendingProjections = pendingProjections,
     )

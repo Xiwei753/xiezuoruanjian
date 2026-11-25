@@ -119,6 +119,10 @@ pub struct ChapterSaveReceiptDto {
     pub word_count: u32,
     /// 本次提交后的准确持久化版本。
     pub version: ChapterVersionDto,
+    /// durable journal ID；no-op 时为空。
+    pub transaction_id: String,
+    /// 尚未确认的投影 ID（本批证明事件）。
+    pub pending_projections: Vec<String>,
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -132,6 +136,8 @@ impl From<crate::chapter::ChapterSaveReceipt> for ChapterSaveReceiptDto {
             updated_at: r.updated_at,
             word_count: r.word_count,
             version: r.version.into(),
+            transaction_id: r.transaction_id,
+            pending_projections: r.pending_projections,
         }
     }
 }

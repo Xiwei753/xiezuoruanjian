@@ -474,6 +474,10 @@ export function decodeChapterSaveReceipt(data: Object): DecodeResult<ChapterSave
   if (versionObj === null) { return err<ChapterSaveReceipt>('version missing or not object') }
   const versionR: DecodeResult<ChapterVersion> = decodeChapterVersion(versionObj)
   if (!versionR.ok || versionR.value === undefined) { return err<ChapterSaveReceipt>(`version: ${versionR.error}`) }
+  const transactionId: string | null = reqStr(data, 'transactionId')
+  if (transactionId === null) { return err<ChapterSaveReceipt>('transactionId missing or not string') }
+  const pendingProjections: string[] | null = reqStrArray(data, 'pendingProjections')
+  if (pendingProjections === null) { return err<ChapterSaveReceipt>('pendingProjections missing or not array') }
   const value: ChapterSaveReceipt = {
     chapterRelativePath: chapterRelativePath,
     contentLen: contentLen,
@@ -481,7 +485,9 @@ export function decodeChapterSaveReceipt(data: Object): DecodeResult<ChapterSave
     metaHash: metaHash,
     updatedAt: updatedAt,
     wordCount: wordCount,
-    version: versionR.value
+    version: versionR.value,
+    transactionId: transactionId,
+    pendingProjections: pendingProjections
   }
   return ok<ChapterSaveReceipt>(value)
 }

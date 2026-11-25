@@ -316,7 +316,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       metaHash: 'mock-hash-meta-' + Date.now(),
       updatedAt: new Date().toISOString(),
       wordCount: text.replace(/\s/g, '').length,
-      version
+      version,
+      transactionId: 'mock-tx-' + Date.now(),
+      pendingProjections: [] as string[]
     }
     return this.success(receipt)
   }
@@ -346,7 +348,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       metaHash: 'mock-hash-meta-' + Date.now(),
       updatedAt: new Date().toISOString(),
       wordCount: text.replace(/\s/g, '').length,
-      version
+      version,
+      transactionId: 'mock-tx-' + Date.now(),
+      pendingProjections: [] as string[]
     }
     return this.success(receipt)
   }
@@ -367,7 +371,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       metaHash: 'mock-hash-meta-' + Date.now(),
       updatedAt: new Date().toISOString(),
       wordCount: 0,
-      version
+      version,
+      transactionId: 'mock-tx-' + Date.now(),
+      pendingProjections: [] as string[]
     }
     return this.success(receipt)
   }

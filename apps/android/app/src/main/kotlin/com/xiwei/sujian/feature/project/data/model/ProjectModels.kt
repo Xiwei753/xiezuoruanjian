@@ -71,6 +71,8 @@ data class ChapterSaveReceipt(
     val updatedAt: String,
     val wordCount: Int,
     val version: ChapterVersion = ChapterVersion(),
+    val transactionId: String = "",
+    val pendingProjections: List<String> = emptyList(),
 )
 
 data class RecentEdit(

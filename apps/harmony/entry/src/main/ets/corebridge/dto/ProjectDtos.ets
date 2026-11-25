@@ -88,6 +88,8 @@ export interface ChapterSaveReceipt {
   updatedAt: string
   wordCount: number
   version: ChapterVersion
+  transactionId: string
+  pendingProjections: string[]
 }
 
 // ─── 作品树（Core ProjectWorkspaceSnapshotDto / VolumeWithChaptersDto） ───
