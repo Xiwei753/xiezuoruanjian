@@ -345,6 +345,9 @@ impl AppBackend {
             {
                 // Issue #935：发送失败不再静默丢弃，明确记诊断（统计事实已丢）。
                 self.debug_error("stats", "record_editor_change_stats_enqueue_failed", &e);
+                // 没有进入统计队列的事件不能出现在保存批次里，否则该章节会
+                // 永久返回 PROOF_BATCH_INCOMPLETE。
+                event_id.clear();
             }
         }
         event_id.into()
