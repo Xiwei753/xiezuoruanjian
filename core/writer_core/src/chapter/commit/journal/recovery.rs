@@ -154,7 +154,45 @@ pub fn pending_chapter_sync_proof_facts(
         .collect())
 }
 
-/// 扫描并恢复未完成 journal。按 `created_at_ms` 顺序处理；只处理未完成事务，
+/// 收集项目内所有 journal 尚未确认的同步正文事实 ID。
+///
+/// 同步层在正文落盘后原本会立即独立写证明；若该事实已随正文 journal
+/// durable，就必须交给投影 worker 按 commit sequence 结算，不能重复写。
+pub fn pending_chapter_sync_proof_fact_ids(
+    project_root: &Path,
+) -> Result<std::collections::HashSet<String>> {
+    let root = journal_root(project_root);
+    let mut ids = std::collections::HashSet::new();
+    if !root.exists() {
+        return Ok(ids);
+    }
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let Ok(raw) = fs::read_to_string(entry.path().join("manifest.json")) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<ChapterCommitManifest>(&raw) else {
+            continue;
+        };
+        if manifest.phase != ChapterCommitPhase::Applied {
+            continue;
+        }
+        for fact in &manifest.sync_proof_facts {
+            if manifest
+                .pending_projections
+                .iter()
+                .any(|id| id == &fact.event_id)
+            {
+                ids.insert(fact.event_id.clone());
+            }
+        }
+    }
+    Ok(ids)
+}
+/// 扫描并恢复未完成 journal。按 commit sequence 顺序处理；只处理未完成事务，
 /// 不遍历作品正文。调用方应持有工作区写锁（或传入 app_data_root）。
 pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<ChapterCommitRecovery>> {
     let root = journal_root(project_root);

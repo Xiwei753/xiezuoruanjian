@@ -2571,6 +2571,12 @@ impl WriterCoreApi {
             {
                 let mut proof_errors: Vec<String> = Vec::new();
                 let mut proof_completed_ids = std::collections::HashSet::new();
+                // 普通同步的章节正文/证明事实已写入同一 chapter journal；
+                // 这些事实由投影 worker 按 commit sequence 结算，不能在这里
+                // 再写一次独立证明事件。
+                let journal_fact_ids = core
+                    .pending_chapter_sync_proof_fact_ids(run.target_live_root())
+                    .unwrap_or_default();
                 for (action_index, committed) in committed_paths.iter().enumerate() {
                     let path = &committed.path;
                     let Some((project_id, volume_id, chapter_id)) = chapter_path_parts(path) else {
@@ -2629,6 +2635,10 @@ impl WriterCoreApi {
                     // 章节 A→B→A→B 不会被内容 hash 误去重。事件 ID 固定后重发复用。
                     let sync_event_id =
                         format!("sync:{}:{}:{}", run.run_id(), path.display(), action_index);
+                    if journal_fact_ids.contains(&sync_event_id) {
+                        proof_completed_ids.insert(sync_event_id);
+                        continue;
+                    }
                     let intent = match intent_sink.load(&sync_event_id) {
                         Ok(Some(intent)) => intent,
                         Ok(None) => {
@@ -2701,6 +2711,11 @@ impl WriterCoreApi {
                     }
                 }
                 core.refresh_sync_proof_intents_pending();
+                if !journal_fact_ids.is_empty() {
+                    // 正文已落盘；立即尝试按 journal 顺序结算证明事实。失败只
+                    // 保留 pending，不影响正文提交。
+                    core.retry_pending_chapter_proof_projections(run.target_live_root());
+                }
                 if !proof_errors.is_empty() {
                     let detail = proof_errors.join("; ");
                     // 本轮后续 target 复用同一状态：本组证明未写完时，同项目

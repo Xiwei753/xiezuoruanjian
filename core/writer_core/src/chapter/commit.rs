@@ -286,9 +286,9 @@ pub(crate) use journal::commit_chapter_with_guard;
 pub(super) use journal::read_chapter_state;
 pub use journal::{
     mark_chapter_commit_projection, pending_chapter_proof_events,
-    pending_chapter_proof_transactions, pending_chapter_sync_proof_facts,
-    read_chapter_state_recovering, read_chapter_version, read_chapter_version_recovering,
-    recover_pending_chapter_commits,
+    pending_chapter_proof_transactions, pending_chapter_sync_proof_fact_ids,
+    pending_chapter_sync_proof_facts, read_chapter_state_recovering, read_chapter_version,
+    read_chapter_version_recovering, recover_pending_chapter_commits,
 };
 #[cfg(test)]
 mod tests;

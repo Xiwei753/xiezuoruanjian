@@ -19,7 +19,8 @@ use super::publish::publish_decided;
 mod recovery;
 pub use recovery::{
     pending_chapter_proof_events, pending_chapter_proof_transactions,
-    pending_chapter_sync_proof_facts, recover_pending_chapter_commits,
+    pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
+    recover_pending_chapter_commits,
 };
 
 /// journal 阶段。

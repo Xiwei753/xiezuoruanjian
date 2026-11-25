@@ -332,6 +332,14 @@ impl super::WriterCore {
         }
     }
 
+    /// 收集项目内已随正文 journal durable、但尚未投影的同步事实 ID。
+    pub(crate) fn pending_chapter_sync_proof_fact_ids(
+        &self,
+        project_root: &std::path::Path,
+    ) -> Result<std::collections::HashSet<String>> {
+        crate::chapter::commit::pending_chapter_sync_proof_fact_ids(project_root)
+    }
+
     /// 把 journal 中 durable 的证明事件幂等写入统计，并逐条确认投影。
     /// 失败时保留 journal/pending，不把正文判为保存失败。
     pub(crate) fn apply_pending_chapter_proof(
