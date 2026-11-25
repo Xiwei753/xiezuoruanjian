@@ -122,6 +122,7 @@ fn recovery_applies_decided_body_but_never_overwrites_newer_content() {
         commit_sequence: 1,
         event_ids: Vec::new(),
         proof_events: Vec::new(),
+        sync_proof_facts: Vec::new(),
         expected: None,
         before: first.after.clone(),
         after: ChapterVersion {

@@ -363,7 +363,12 @@ impl super::WriterCore {
         {
             return false;
         }
-        if events.is_empty() {
+        let Ok(facts) =
+            crate::chapter::commit::pending_chapter_sync_proof_facts(project_root, transaction_id)
+        else {
+            return false;
+        };
+        if events.is_empty() && facts.is_empty() {
             return false;
         }
         let stats = self.get_stats_api();
@@ -390,6 +395,45 @@ impl super::WriterCore {
                 Err(error) => {
                     log::warn!(
                         "chapter proof projection failed, journal retained: tx={} event={} error={}",
+                        transaction_id,
+                        event_id,
+                        error
+                    );
+                    completed = false;
+                    break;
+                }
+            }
+        }
+        if completed {
+            for fact in facts {
+                let event_id = fact.event_id.clone();
+                if let Err(error) = self.record_sync_content_change_at(
+                    &fact.key.project_id,
+                    &fact.key.volume_id,
+                    &fact.key.chapter_id,
+                    fact.before_text.as_deref(),
+                    fact.after_text.as_deref(),
+                    &event_id,
+                    &fact.source_device_id,
+                    "",
+                    fact.occurred_at_ms,
+                ) {
+                    log::warn!(
+                        "chapter sync proof projection failed, journal retained: tx={} event={} error={}",
+                        transaction_id,
+                        event_id,
+                        error
+                    );
+                    completed = false;
+                    break;
+                }
+                if let Err(error) = crate::chapter::commit::mark_chapter_commit_projection(
+                    project_root,
+                    transaction_id,
+                    &event_id,
+                ) {
+                    log::warn!(
+                        "chapter sync proof ack failed, journal retained: tx={} event={} error={}",
                         transaction_id,
                         event_id,
                         error

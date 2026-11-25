@@ -111,6 +111,20 @@ impl ChapterProofProjection {
     }
 }
 
+/// 同步正文变化事实。与正文/meta 同一 journal durable，投影时再由
+/// WriterCore 按当前证明链头生成正式 `WritingInputEvent`；这样同步提交
+/// 不需要在正文落盘后另写一条独立证明。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterSyncProofFact {
+    pub event_id: String,
+    pub key: ChapterKey,
+    pub before_text: Option<String>,
+    pub after_text: Option<String>,
+    pub source_device_id: String,
+    pub occurred_at_ms: i64,
+}
+
 /// 提交来源。只用于 journal/诊断，不改变版本语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -156,6 +170,8 @@ pub struct ChapterCommitRequest {
     pub event_ids: Vec<String>,
     /// 原始证明事件；与正文、meta 同一决议 durable，提交后由 worker 写入。
     pub proof_events: Vec<ChapterProofProjection>,
+    /// 同步正文变化事实；投影时才构造正式事件，避免正文后独立写证明。
+    pub sync_proof_facts: Vec<ChapterSyncProofFact>,
     /// 与正文同一提交的附加文件（annotation 等），project-relative 路径。
     pub additional_files: Vec<(String, String)>,
     pub allow_empty_overwrite: bool,
@@ -176,6 +192,7 @@ impl ChapterCommitRequest {
             source: ChapterCommitSource::Api,
             event_ids: Vec::new(),
             proof_events: Vec::new(),
+            sync_proof_facts: Vec::new(),
             additional_files: Vec::new(),
             allow_empty_overwrite: false,
             transaction_id: None,
@@ -269,8 +286,9 @@ pub(crate) use journal::commit_chapter_with_guard;
 pub(super) use journal::read_chapter_state;
 pub use journal::{
     mark_chapter_commit_projection, pending_chapter_proof_events,
-    pending_chapter_proof_transactions, read_chapter_state_recovering, read_chapter_version,
-    read_chapter_version_recovering, recover_pending_chapter_commits,
+    pending_chapter_proof_transactions, pending_chapter_sync_proof_facts,
+    read_chapter_state_recovering, read_chapter_version, read_chapter_version_recovering,
+    recover_pending_chapter_commits,
 };
 #[cfg(test)]
 mod tests;

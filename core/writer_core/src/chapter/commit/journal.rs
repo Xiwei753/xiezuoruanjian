@@ -19,7 +19,7 @@ use super::publish::publish_decided;
 mod recovery;
 pub use recovery::{
     pending_chapter_proof_events, pending_chapter_proof_transactions,
-    recover_pending_chapter_commits,
+    pending_chapter_sync_proof_facts, recover_pending_chapter_commits,
 };
 
 /// journal 阶段。
@@ -70,6 +70,8 @@ pub(super) struct ChapterCommitManifest {
     pub(super) event_ids: Vec<String>,
     #[serde(default)]
     pub(super) proof_events: Vec<super::ChapterProofProjection>,
+    #[serde(default)]
+    pub(super) sync_proof_facts: Vec<super::ChapterSyncProofFact>,
     pub(super) expected: Option<ChapterVersion>,
     pub(super) before: ChapterVersion,
     pub(super) after: ChapterVersion,
@@ -568,6 +570,7 @@ pub(crate) fn commit_chapter_with_guard(
         && !content_changed
         && changed_additional.is_empty()
         && request.proof_events.is_empty()
+        && request.sync_proof_facts.is_empty()
     {
         // 纯 no-op：不创建 journal、不推进 revision/updated_at，返回磁盘真实现状。
         // 有证明事件时仍要建仅事件 journal，否则输入后还原的编辑会丢失。
@@ -647,6 +650,12 @@ pub(crate) fn commit_chapter_with_guard(
     }
     crate::storage::sync_dir(&tx_dir)?;
 
+    let mut pending_projections = request.projection_ids.clone();
+    for fact in &request.sync_proof_facts {
+        if !pending_projections.contains(&fact.event_id) {
+            pending_projections.push(fact.event_id.clone());
+        }
+    }
     let mut manifest = ChapterCommitManifest {
         schema_version: 1,
         transaction_id: transaction_id.clone(),
@@ -659,6 +668,7 @@ pub(crate) fn commit_chapter_with_guard(
         commit_sequence,
         event_ids: request.event_ids.clone(),
         proof_events: request.proof_events.clone(),
+        sync_proof_facts: request.sync_proof_facts.clone(),
         expected: request.expected.clone(),
         before: before.clone(),
         after: after.clone(),
@@ -669,7 +679,7 @@ pub(crate) fn commit_chapter_with_guard(
         updated_at: updated_at.clone(),
         additional_files: additional_plans,
         phase: ChapterCommitPhase::Prepared,
-        pending_projections: request.projection_ids.clone(),
+        pending_projections,
         created_meta: (request.mutation == ChapterMutationKind::Create).then(|| meta.clone()),
         created: request.mutation == ChapterMutationKind::Create,
         superseded_reason: None,

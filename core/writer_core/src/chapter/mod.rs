@@ -41,7 +41,7 @@ pub(crate) mod commit;
 pub use commit::{
     ChapterChangeReceipt, ChapterCommitOutcome, ChapterCommitReceipt, ChapterCommitRequest,
     ChapterCommitSource, ChapterConflict, ChapterKey, ChapterMutationKind, ChapterProofProjection,
-    ChapterVersion,
+    ChapterSyncProofFact, ChapterVersion,
 };
 
 mod save;

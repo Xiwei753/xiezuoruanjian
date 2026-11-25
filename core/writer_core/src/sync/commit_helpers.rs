@@ -810,9 +810,10 @@ fn commit_synced_chapter_bodies(
     live_root: &Path,
     guard: &crate::storage::WorkspaceWriteLock,
     content_actions: &[crate::sync::staging::CommitAction],
+    run_id: &str,
 ) -> crate::error::Result<std::collections::HashSet<PathBuf>> {
     let mut handled = std::collections::HashSet::new();
-    for action in content_actions {
+    for (action_index, action) in content_actions.iter().enumerate() {
         let crate::sync::staging::CommitAction::Apply { rel_path, content } = action else {
             continue;
         };
@@ -862,7 +863,7 @@ fn commit_synced_chapter_bodies(
                 };
                 let mut request = crate::chapter::ChapterCommitRequest::new(
                     crate::chapter::ChapterKey::new(
-                        project_id,
+                        project_id.clone(),
                         volume_id.clone(),
                         chapter_id.clone(),
                     ),
@@ -872,6 +873,22 @@ fn commit_synced_chapter_bodies(
                 request.mutation = crate::chapter::ChapterMutationKind::Create;
                 request.source = crate::chapter::ChapterCommitSource::Sync;
                 request.allow_empty_overwrite = content.is_empty();
+                request
+                    .sync_proof_facts
+                    .push(crate::chapter::ChapterSyncProofFact {
+                        event_id: format!(
+                            "sync:{run_id}:{}:{action_index}",
+                            PathBuf::from("projects")
+                                .join(&project_id)
+                                .join(rel_path)
+                                .display()
+                        ),
+                        key: request.key.clone(),
+                        before_text: None,
+                        after_text: Some(content.to_string()),
+                        source_device_id: String::new(),
+                        occurred_at_ms: chrono::Utc::now().timestamp_millis(),
+                    });
                 match crate::chapter::commit::commit_chapter_with_guard(
                     live_root,
                     Some(guard),
@@ -893,7 +910,11 @@ fn commit_synced_chapter_bodies(
             Err(error) => return Err(error),
         };
         let mut request = crate::chapter::ChapterCommitRequest::new(
-            crate::chapter::ChapterKey::new(project_id, volume_id.clone(), chapter_id.clone()),
+            crate::chapter::ChapterKey::new(
+                project_id.clone(),
+                volume_id.clone(),
+                chapter_id.clone(),
+            ),
             content,
         );
         if let Some(incoming_meta) = incoming_meta.as_ref() {
@@ -904,10 +925,26 @@ fn commit_synced_chapter_bodies(
             }
         }
         request.expected = Some(current.2);
-        request.base_content = Some(current.1);
+        request.base_content = Some(current.1.clone());
         request.mutation = crate::chapter::ChapterMutationKind::SyncMerge;
         request.source = crate::chapter::ChapterCommitSource::Sync;
         request.allow_empty_overwrite = content.is_empty();
+        request
+            .sync_proof_facts
+            .push(crate::chapter::ChapterSyncProofFact {
+                event_id: format!(
+                    "sync:{run_id}:{}:{action_index}",
+                    PathBuf::from("projects")
+                        .join(&project_id)
+                        .join(rel_path)
+                        .display()
+                ),
+                key: request.key.clone(),
+                before_text: Some(current.1.clone()),
+                after_text: Some(content.to_string()),
+                source_device_id: String::new(),
+                occurred_at_ms: chrono::Utc::now().timestamp_millis(),
+            });
         match crate::chapter::commit::commit_chapter_with_guard(live_root, Some(guard), request)? {
             crate::chapter::ChapterCommitOutcome::Committed(_) => {
                 handled.insert(rel_path.clone());
@@ -942,7 +979,7 @@ fn apply_commit_plan_with_optional_merge(
     let workspace_lock = crate::storage::WorkspaceWriteLock::acquire(run.app_data_root())?;
     let mut content_actions = content_actions.to_vec();
     let handled_chapters =
-        commit_synced_chapter_bodies(live_root, &workspace_lock, &content_actions)?;
+        commit_synced_chapter_bodies(live_root, &workspace_lock, &content_actions, run.run_id())?;
     if !handled_chapters.is_empty() {
         content_actions.retain(|action| {
             let rel = match action {

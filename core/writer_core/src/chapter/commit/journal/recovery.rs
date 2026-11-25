@@ -126,6 +126,34 @@ pub fn pending_chapter_proof_events(
         .collect())
 }
 
+/// 读取 journal 中尚未确认的同步正文事实证明。
+pub fn pending_chapter_sync_proof_facts(
+    project_root: &Path,
+    transaction_id: &str,
+) -> Result<Vec<super::ChapterSyncProofFact>> {
+    let manifest_path = journal_root(project_root)
+        .join(transaction_id)
+        .join("manifest.json");
+    if !manifest_path.exists() {
+        return Ok(Vec::new());
+    }
+    let manifest: ChapterCommitManifest =
+        serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    if manifest.phase != ChapterCommitPhase::Applied {
+        return Ok(Vec::new());
+    }
+    let pending: std::collections::HashSet<&str> = manifest
+        .pending_projections
+        .iter()
+        .map(String::as_str)
+        .collect();
+    Ok(manifest
+        .sync_proof_facts
+        .into_iter()
+        .filter(|fact| pending.contains(fact.event_id.as_str()))
+        .collect())
+}
+
 /// 扫描并恢复未完成 journal。按 `created_at_ms` 顺序处理；只处理未完成事务，
 /// 不遍历作品正文。调用方应持有工作区写锁（或传入 app_data_root）。
 pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<ChapterCommitRecovery>> {
