@@ -155,18 +155,12 @@ fn recover_transaction_dir(
         return;
     }
 
-    fn file_md5(path: &Path) -> Option<String> {
-        fs::read(path)
-            .ok()
-            .map(|bytes| format!("{:x}", md5::compute(&bytes)))
-    }
-
-    /// 目标当前内容是否仍是本事务期望写下的内容。
-    ///
-    /// `None` 表示旧 manifest 没有摘要，只能沿用旧恢复语义；`Some(true)`
-    /// 表示已提交；`Some(false)` 表示之后已有更新版本，绝不能覆盖。
-    fn target_matches_expected(target: &Path, expected: &str) -> Option<bool> {
-        file_md5(target).map(|actual| actual == expected)
+    fn file_md5(path: &Path) -> std::io::Result<Option<String>> {
+        match fs::read(path) {
+            Ok(bytes) => Ok(Some(format!("{:x}", md5::compute(&bytes)))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     // Prepared 阶段恢复：重放 rename。
@@ -204,7 +198,18 @@ fn recover_transaction_dir(
 
     for tx_entry in &manifest.entries {
         let target_path = target_root.join(&tx_entry.target_relative);
-        let current = file_md5(&target_path);
+        let current = match file_md5(&target_path) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!(
+                    "[transaction] recovery read target failed, preserving tx: {}: {}",
+                    tx_entry.target_relative,
+                    error
+                );
+                missing_files.push(tx_entry.target_relative.clone());
+                continue;
+            }
+        };
         let before = tx_entry.expected_before_hash.as_deref();
         let after = tx_entry.expected_after_hash.as_deref();
         let state = match (current.as_deref(), before, after) {
