@@ -1991,7 +1991,25 @@ pub(crate) fn commit_single_target_staging(
                 Err(e) => {
                     let msg = format!("tx.finish() failed: {}", e);
                     log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                    (TargetCommitResult::Failed(msg), Vec::new(), Vec::new())
+                    // finish 失败不代表所有 action 都没落盘。把本次 plan 涉及
+                    // 的路径带回，调用方按 live 实际状态生成 receipt/证明事实，
+                    // 避免已写入正文却丢失同步回执。
+                    let mut partial_paths = Vec::new();
+                    collect_action_paths(
+                        target.target_kind.as_str(),
+                        target.project_id.as_deref(),
+                        &plan.content_actions,
+                        &before,
+                        &mut partial_paths,
+                    );
+                    collect_rebased_anchor_paths(
+                        &tx,
+                        target.target_kind.as_str(),
+                        target.project_id.as_deref(),
+                        &plan.content_actions,
+                        &mut partial_paths,
+                    );
+                    (TargetCommitResult::Failed(msg), Vec::new(), partial_paths)
                 }
             }
         }
@@ -2208,7 +2226,25 @@ pub(crate) fn commit_single_target_staging(
                 Err(e) => {
                     let msg = format!("tx.finish() failed: {}", e);
                     log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                    (TargetCommitResult::Failed(msg), Vec::new(), Vec::new())
+                    // finish 失败不代表所有 action 都没落盘。把本次 plan 涉及
+                    // 的路径带回，调用方按 live 实际状态生成 receipt/证明事实，
+                    // 避免已写入正文却丢失同步回执。
+                    let mut partial_paths = Vec::new();
+                    collect_action_paths(
+                        target.target_kind.as_str(),
+                        target.project_id.as_deref(),
+                        &plan.content_actions,
+                        &before,
+                        &mut partial_paths,
+                    );
+                    collect_rebased_anchor_paths(
+                        &tx,
+                        target.target_kind.as_str(),
+                        target.project_id.as_deref(),
+                        &plan.content_actions,
+                        &mut partial_paths,
+                    );
+                    (TargetCommitResult::Failed(msg), Vec::new(), partial_paths)
                 }
             }
         }
