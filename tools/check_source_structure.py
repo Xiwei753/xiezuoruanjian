@@ -122,6 +122,11 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "同步服务编排层：Git/LWW 双策略/诊断/路径过滤共享同一 SyncService 入口与配置上下文，"
         "拆分会破坏同步原子性；已按策略拆分内部函数；"
         "TODO(#597) 后续按策略提取子服务",
+    (Path("core/writer_core/src/sync/commit_helpers.rs"), "god-file"):
+        "同步 staging 提交聚合：commit plan/保存事务/证明意图/统计事件共享同一 "
+        "workspace 锁与 committed_paths 结果；#1059 正把章节正文迁入协调器，"
+        "剩余通用对象仍由 SaveTransaction 处理；"
+        "TODO(#1059) 后续按 apply/collect/proof 拆分",
     (Path("core/writer_core/src/sync/conflict.rs"), "god-file"):
         "同步冲突解决聚合：take-remote/keep-local/星图对象删除共享同一冲突状态与 "
         "known_files 基线，拆分需先抽出冲突状态类型；#1059 正在把正文恢复迁入章节提交协调器；"
