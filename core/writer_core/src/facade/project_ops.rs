@@ -818,10 +818,11 @@ impl super::WriterCore {
     }
 }
 
-/// 只选择以本次保存正文为终点、且前后摘要连续的证明批次。
+/// 只选择 pending 队列队首开始、以本次保存正文为终点的连续证明前缀。
 ///
 /// 旧客户端没有正文摘要时无法逐步验证，保留原行为（整批提交）；新事件
-/// 必须从最后一条向前连续衔接，避免把保存快照之后的新编辑混进同一 journal。
+/// 必须从队首连续衔接，禁止跳过队首去匹配更晚的摘要，否则会把快照之前
+/// 尚未 durable 的编辑漏掉，或把快照之后的新编辑混进同一 journal。
 fn select_pending_editor_proof(
     events: Vec<crate::chapter::ChapterProofProjection>,
     content: &str,
@@ -843,27 +844,41 @@ fn select_pending_editor_proof(
     }
     let digest = content_digest_of_text(content);
     let legacy_digest = text_sha256(content);
-    let Some(end) = events.iter().rposition(|projection| {
-        projection.event.proof.as_ref().is_some_and(|proof| {
-            !proof.after_text_sha256.is_empty()
-                && (proof.after_text_sha256 == digest || proof.after_text_sha256 == legacy_digest)
-        })
-    }) else {
-        return Vec::new();
-    };
-    let mut start = end;
-    while start > 0 {
-        let current = events[start].event.proof.as_ref();
-        let previous = events[start - 1].event.proof.as_ref();
-        let (Some(current), Some(previous)) = (current, previous) else {
-            break;
+    // 只从 pending 队列的队首开始取连续前缀，不再从末尾找摘要相同的事件
+    // 再向前拼。队首之前的编辑如果已经被更晚的保存覆盖，它们必须已经在
+    // 那次保存中 durable；若仍在队列里，说明本批快照不包含它们，不能跳过。
+    let mut end = None;
+    for (index, projection) in events.iter().enumerate() {
+        let Some(proof) = projection.event.proof.as_ref() else {
+            return Vec::new();
         };
-        if previous.after_text_sha256.is_empty()
-            || previous.after_text_sha256 != current.before_text_sha256
-        {
+        if proof.after_text_sha256.is_empty() {
+            return Vec::new();
+        }
+        if index > 0 {
+            let Some(previous) = events[index - 1].event.proof.as_ref() else {
+                return Vec::new();
+            };
+            if previous.after_text_sha256 != proof.before_text_sha256 {
+                return Vec::new();
+            }
+            if !previous.session_id.is_empty()
+                && !proof.session_id.is_empty()
+                && previous.session_id != proof.session_id
+            {
+                return Vec::new();
+            }
+            if previous.seq > 0 && proof.seq > 0 && proof.seq != previous.seq.saturating_add(1) {
+                return Vec::new();
+            }
+        }
+        if proof.after_text_sha256 == digest || proof.after_text_sha256 == legacy_digest {
+            end = Some(index);
             break;
         }
-        start -= 1;
     }
-    events[start..=end].to_vec()
+    match end {
+        Some(end) => events[..=end].to_vec(),
+        None => Vec::new(),
+    }
 }
