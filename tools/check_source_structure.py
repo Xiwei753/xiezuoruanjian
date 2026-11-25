@@ -150,6 +150,10 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "Qt 同步后端：密钥存取/网络同步配置/手动同步/诊断共享同一 SyncBackend QObject 与 operation_id 锁，"
         "拆分会破坏异步流输出竞态守卫；已按操作类型拆分内部函数；"
         "TODO(#597) 后续按操作族提取子后端",
+    (Path("apps/Linux_qt/src/backend/editor_backend.rs"), "god-file"):
+        "Qt 编辑器 QObject 聚合根：章节保存/加载/冲突/搜索状态共享同一编辑器会话，"
+        "#1059 已把后台队列拆到 chapter_save_queue.rs；"
+        "TODO(#1059) 后续按保存/加载/状态回调拆分",
     (Path("apps/Linux_qt/src/backend/app_backend.rs"), "god-file"):
         "Qt 应用后端：全局状态/桥接注册/日志收集共享同一 AppBackend QObject 上下文，"
         "拆分会破坏 QML 元对象注册一致性；已按子域拆分内部函数；"

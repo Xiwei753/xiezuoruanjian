@@ -300,45 +300,127 @@ impl AppBackend {
                     "save_chapter_versioned_success",
                     &format!("len={} revision={}", len, receipt.version.revision),
                 );
-                self.current_save_status = "已保存".to_string();
-                let title = self.chapter_title_from_tree(&p, &v, &c).unwrap_or_default();
-                let entry = writer_core::search::extractor::extract_chapter_body_entry(
-                    &p, &v, &c, &title, &text_str,
-                );
-                self.search_bridge()
-                    .apply_updates(vec![writer_core::search::SearchIndexUpdate {
-                        action: writer_core::search::SearchIndexAction::Upsert,
-                        object_id: entry.object_id.clone(),
-                        scope: entry.scope,
-                        title: entry.title.clone(),
-                        body: entry.body.clone(),
-                        target: Some(entry.target.clone()),
-                    }]);
-                serde_to_qjson_object(serde_json::json!({
-                    "success": true,
-                    "data": serde_json::to_value(receipt).unwrap_or_default(),
-                    "changedEntities": ["ChapterContent"]
-                }))
+                let value = Self::chapter_save_success_value(&receipt);
+                self.apply_chapter_save_success(&p, &v, &c, &text_str);
+                serde_to_qjson_object(value)
             }
             Err(error) => {
-                let code = error.code();
-                self.debug_error(
-                    "chapter",
-                    "save_chapter_versioned_failed",
-                    &format!("code={} error={}", code, error),
+                let value = self.record_chapter_save_failure(
+                    &c,
+                    len,
+                    error.code(),
+                    error.message_key(),
+                    serde_json::to_value(error.params()).unwrap_or_else(|_| serde_json::json!({})),
+                    &error.to_string(),
                 );
-                self.current_save_status = "保存冲突".to_string();
-                let message_key = error.message_key();
-                self.set_error(message_key);
-                serde_to_qjson_object(serde_json::json!({
-                    "success": false,
-                    "errorCode": code,
-                    "messageKey": message_key,
-                    "messageArgs": error.params(),
-                    "rawError": error.to_string(),
-                    "changedEntities": []
-                }))
+                serde_to_qjson_object(value)
             }
+        }
+    }
+
+    /// 保存成功后的统一副作用：状态栏文案 + 仅本章正文的增量搜索索引。
+    ///
+    /// 同步保存（旧入口）与 Issue #1059 的后台队列回执都走这里，保证两条路径
+    /// 的 current_save_status / changedEntities 语义一致。
+    pub(crate) fn apply_chapter_save_success(
+        &mut self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        text: &str,
+    ) {
+        self.current_save_status = "已保存".to_string();
+        // Issue #982：只更新本章正文条目，不重建整个工作区索引。
+        let title = self
+            .chapter_title_from_tree(project_id, volume_id, chapter_id)
+            .unwrap_or_default();
+        let entry = writer_core::search::extractor::extract_chapter_body_entry(
+            project_id, volume_id, chapter_id, &title, text,
+        );
+        self.search_bridge()
+            .apply_updates(vec![writer_core::search::SearchIndexUpdate {
+                action: writer_core::search::SearchIndexAction::Upsert,
+                object_id: entry.object_id.clone(),
+                scope: entry.scope,
+                title: entry.title.clone(),
+                body: entry.body.clone(),
+                target: Some(entry.target.clone()),
+            }]);
+    }
+
+    /// 保存成功回执的 QML JSON 形状（纯数据，不产生副作用）。
+    pub(crate) fn chapter_save_success_value(
+        receipt: &writer_core::api::types::ChapterSaveReceiptDto,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "success": true,
+            "data": serde_json::to_value(receipt).unwrap_or_default(),
+            "changedEntities": ["ChapterContent"]
+        })
+    }
+
+    /// 保存失败的统一副作用：current_save_status / error_message。
+    ///
+    /// 冲突与失败都不覆盖编辑器 buffer，也不推进调用方 base；空正文拦截保持
+    /// 旧提示。返回的 JSON 与同步保存路径完全同形。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_chapter_save_failure(
+        &mut self,
+        chapter_id: &str,
+        len: usize,
+        code: &str,
+        message_key: &str,
+        message_args: serde_json::Value,
+        raw_error: &str,
+    ) -> serde_json::Value {
+        self.debug_error(
+            "chapter",
+            "save_chapter_failed",
+            &format!("code={} error={}", code, raw_error),
+        );
+        if code == blocked_empty_overwrite_error_code() {
+            self.debug_error(
+                "chapter",
+                "blocked_empty_overwrite",
+                &format!("chapter_id={} len={}", chapter_id, len),
+            );
+            self.current_save_status = blocked_empty_overwrite_user_message().to_string();
+            self.set_error("error.empty_overwrite_blocked");
+        } else if code == "CHAPTER_VERSION_CONFLICT" {
+            self.current_save_status = "保存冲突".to_string();
+            self.set_error(message_key);
+        } else {
+            self.current_save_status = "保存失败".to_string();
+            self.set_error(message_key);
+        }
+        Self::chapter_save_error_value(code, message_key, message_args, raw_error)
+    }
+
+    /// 保存失败回执的 QML JSON 形状（纯数据，不产生副作用）。
+    pub(crate) fn chapter_save_error_value(
+        code: &str,
+        message_key: &str,
+        message_args: serde_json::Value,
+        raw_error: &str,
+    ) -> serde_json::Value {
+        if code == blocked_empty_overwrite_error_code() {
+            serde_json::json!({
+                "success": false,
+                "errorCode": code,
+                "messageKey": "error.empty_overwrite_blocked",
+                "messageArgs": {},
+                "rawError": raw_error,
+                "changedEntities": []
+            })
+        } else {
+            serde_json::json!({
+                "success": false,
+                "errorCode": code,
+                "messageKey": message_key,
+                "messageArgs": message_args,
+                "rawError": raw_error,
+                "changedEntities": []
+            })
         }
     }
 

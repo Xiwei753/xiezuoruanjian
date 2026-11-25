@@ -18,9 +18,21 @@
 // =============================================================================
 
 use super::*;
+use crate::backend::chapter_save_queue;
 use crate::backend::AppRef;
 use crate::backend::DomainSnapshot;
 use rfd::FileDialog;
+
+/// Issue #1059：QML 轮询/等待后台保存回执时携带的“当前编辑器文档”身份。
+///
+/// 只有请求身份 + 保存会话仍匹配当前文档时才允许应用 current_save_status
+/// 等副作用；旧会话的回执只返回数据，不改写新文档状态。
+struct ChapterSaveCurrentDocument {
+    project_id: String,
+    volume_id: String,
+    chapter_id: String,
+    session_id: u64,
+}
 
 fn correction_dictionary_resources_value(resources: Vec<(String, bool)>) -> serde_json::Value {
     serde_json::Value::Array(
@@ -138,6 +150,40 @@ pub struct EditorBackend {
             expected_revision: i64,
             expected_content_sha256: QString,
             base_content: QString,
+        ) -> QJsonObject
+    ),
+    /// Issue #1059：把不可变保存快照交给后台有序提交队列，立即返回 request id。
+    ///
+    /// `snapshot_meta_json` 只含章节身份 / base 版本 / allow_empty / 快照
+    /// revision+sha256；正文与 base 正文单独传。QML 不再同步调用 Core 写盘。
+    /// 返回 0 表示快照元数据不可解析（调用方按明确的入队失败处理）。
+    #[allow(dead_code)]
+    enqueue_chapter_save_versioned: qt_method!(
+        fn(&mut self, snapshot_meta_json: QString, content: QString, base_content: QString) -> u32
+    ),
+    /// Issue #1059：轮询后台保存回执（pending / ok / error）。
+    #[allow(dead_code)]
+    poll_chapter_save_result: qt_method!(
+        fn(
+            &mut self,
+            request_id: u32,
+            current_project_id: QString,
+            current_volume_id: QString,
+            current_chapter_id: QString,
+            current_session_id: u64,
+        ) -> QJsonObject
+    ),
+    /// Issue #1059：切章 / 同步前等待指定保存请求落盘（仅边界使用）。
+    #[allow(dead_code)]
+    wait_chapter_save_result: qt_method!(
+        fn(
+            &mut self,
+            request_id: u32,
+            timeout_ms: u32,
+            current_project_id: QString,
+            current_volume_id: QString,
+            current_chapter_id: QString,
+            current_session_id: u64,
         ) -> QJsonObject
     ),
     #[allow(dead_code)]
@@ -547,6 +593,269 @@ impl EditorBackend {
         result.unwrap_or_else(|_| {
             qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
         })
+    }
+    /// Issue #1059：把一份不可变保存快照交给后台有序提交队列，立刻返回 request id。
+    ///
+    /// QML 只构造快照（章节身份、正文、base 版本/base 正文、allow_empty、
+    /// 编辑器快照 revision/sha256）；写盘、base 链推进、冲突材料落盘都在
+    /// 单一 worker 上串行完成。这里不读取也不改写 QML 的 committedChapter*。
+    fn enqueue_chapter_save_versioned(
+        &mut self,
+        snapshot_meta_json: QString,
+        content: QString,
+        base_content: QString,
+    ) -> u32 {
+        let request_id = chapter_save_queue::next_request_id();
+        let meta = match chapter_save_queue::ChapterSaveSnapshotMeta::parse(
+            &snapshot_meta_json.to_string(),
+        ) {
+            Ok(meta) => meta,
+            Err(error) => {
+                crate::backend::app_backend::debug_error_static(
+                    "chapter_save_queue",
+                    "enqueue_snapshot_invalid",
+                    &error,
+                );
+                return 0;
+            }
+        };
+        let identity = meta.identity(request_id);
+        let content: std::sync::Arc<str> = std::sync::Arc::from(content.to_string());
+        let expected = meta.expected_version();
+        let base_content = base_content.to_string();
+        let base_content = (!base_content.is_empty()).then_some(base_content);
+
+        let Some((data_root, projects_root, layout)) = self
+            .with_app(|app| app.annotation_task_context())
+            .ok()
+            .flatten()
+        else {
+            chapter_save_queue::fail_before_enqueue(
+                identity,
+                content,
+                chapter_save_queue::ChapterSaveError {
+                    code: "CORE_ERROR".to_string(),
+                    message_key: "error.core_error".to_string(),
+                    message_args: serde_json::json!({}),
+                    raw_error: "Core not initialized".to_string(),
+                    conflict: false,
+                },
+            );
+            return request_id;
+        };
+        let request = chapter_save_queue::ChapterSaveRequest {
+            identity,
+            content,
+            allow_empty_overwrite: meta.allow_empty_overwrite,
+            expected,
+            base_content,
+            context: chapter_save_queue::ChapterSaveContext::new(
+                &data_root,
+                &projects_root,
+                &layout,
+            ),
+        };
+        if let Err(error) = chapter_save_queue::enqueue(request) {
+            chapter_save_queue::complete_error(
+                request_id,
+                chapter_save_queue::ChapterSaveError {
+                    code: "SAVE_QUEUE_UNAVAILABLE".to_string(),
+                    message_key: "error.core_error".to_string(),
+                    message_args: serde_json::json!({}),
+                    raw_error: error,
+                    conflict: false,
+                },
+                false,
+                String::new(),
+            );
+        }
+        request_id
+    }
+
+    /// Issue #1059：轮询后台保存回执。终态只应用一次 current_save_status /
+    /// 搜索索引；重复轮询只返回同一份 JSON，不重复产生副作用。
+    fn poll_chapter_save_result(
+        &mut self,
+        request_id: u32,
+        current_project_id: QString,
+        current_volume_id: QString,
+        current_chapter_id: QString,
+        current_session_id: u64,
+    ) -> QJsonObject {
+        let current = ChapterSaveCurrentDocument {
+            project_id: current_project_id.to_string(),
+            volume_id: current_volume_id.to_string(),
+            chapter_id: current_chapter_id.to_string(),
+            session_id: current_session_id,
+        };
+        match chapter_save_queue::poll(request_id) {
+            Some(snapshot) => self.chapter_save_result_object(snapshot, &current, false),
+            None => serde_to_qjson_object(serde_json::json!({
+                "status": "unknown",
+                "success": false,
+                "terminal": true,
+                "requestId": request_id,
+                "timedOut": false,
+                "changedEntities": []
+            })),
+        }
+    }
+
+    /// Issue #1059：切章 / 同步 / 跨卷移动等需要落盘保证的边界使用。
+    ///
+    /// 只等待 worker 写盘（I/O 不在 GUI 线程执行），超时返回 pending + timedOut，
+    /// 调用方必须阻止切章/同步，不能把“还没写完”当成完成。
+    fn wait_chapter_save_result(
+        &mut self,
+        request_id: u32,
+        timeout_ms: u32,
+        current_project_id: QString,
+        current_volume_id: QString,
+        current_chapter_id: QString,
+        current_session_id: u64,
+    ) -> QJsonObject {
+        let current = ChapterSaveCurrentDocument {
+            project_id: current_project_id.to_string(),
+            volume_id: current_volume_id.to_string(),
+            chapter_id: current_chapter_id.to_string(),
+            session_id: current_session_id,
+        };
+        let timeout = std::time::Duration::from_millis(u64::from(timeout_ms.clamp(50, 10_000)));
+        match chapter_save_queue::wait(request_id, timeout) {
+            chapter_save_queue::ChapterSaveWait::Found(snapshot) => {
+                self.chapter_save_result_object(snapshot, &current, false)
+            }
+            chapter_save_queue::ChapterSaveWait::Timeout => {
+                serde_to_qjson_object(serde_json::json!({
+                    "status": "pending",
+                    "success": false,
+                    "terminal": false,
+                    "requestId": request_id,
+                    "timedOut": true,
+                    "changedEntities": []
+                }))
+            }
+            chapter_save_queue::ChapterSaveWait::Unknown => {
+                serde_to_qjson_object(serde_json::json!({
+                    "status": "unknown",
+                    "success": false,
+                    "terminal": true,
+                    "requestId": request_id,
+                    "timedOut": false,
+                    "changedEntities": []
+                }))
+            }
+        }
+    }
+
+    /// 把队列回执转成 QML JSON，并在第一次读到终态时应用保存副作用。
+    fn chapter_save_result_object(
+        &mut self,
+        snapshot: chapter_save_queue::ChapterSaveSnapshot,
+        current: &ChapterSaveCurrentDocument,
+        timed_out: bool,
+    ) -> QJsonObject {
+        let identity = &snapshot.identity;
+        let document_matches = identity.project_id == current.project_id
+            && identity.volume_id == current.volume_id
+            && identity.chapter_id == current.chapter_id
+            && identity.session_id == current.session_id;
+        let apply_side_effects = snapshot.delivered_now && document_matches;
+        let mut value = match &snapshot.outcome {
+            chapter_save_queue::ChapterSaveOutcome::Pending => serde_json::json!({
+                "success": false,
+                "status": "pending",
+                "changedEntities": []
+            }),
+            chapter_save_queue::ChapterSaveOutcome::Ok(receipt) => {
+                if apply_side_effects {
+                    let _ = self.with_app_mut(|app| {
+                        app.apply_chapter_save_success(
+                            &identity.project_id,
+                            &identity.volume_id,
+                            &identity.chapter_id,
+                            &snapshot.content,
+                        );
+                    });
+                    self.save_status_changed();
+                }
+                let mut value = AppBackend::chapter_save_success_value(receipt);
+                if let serde_json::Value::Object(ref mut map) = value {
+                    map.insert("status".to_string(), serde_json::json!("ok"));
+                }
+                value
+            }
+            chapter_save_queue::ChapterSaveOutcome::Error(error) => {
+                if apply_side_effects {
+                    let _ = self.with_app_mut(|app| {
+                        app.record_chapter_save_failure(
+                            &identity.chapter_id,
+                            snapshot.content.len(),
+                            &error.code,
+                            &error.message_key,
+                            error.message_args.clone(),
+                            &error.raw_error,
+                        );
+                    });
+                    self.save_status_changed();
+                }
+                let mut value = AppBackend::chapter_save_error_value(
+                    &error.code,
+                    &error.message_key,
+                    error.message_args.clone(),
+                    &error.raw_error,
+                );
+                if let serde_json::Value::Object(ref mut map) = value {
+                    map.insert("status".to_string(), serde_json::json!("error"));
+                }
+                value
+            }
+        };
+        if let serde_json::Value::Object(map) = &mut value {
+            map.insert(
+                "requestId".to_string(),
+                serde_json::json!(identity.request_id),
+            );
+            map.insert(
+                "sessionId".to_string(),
+                serde_json::json!(identity.session_id),
+            );
+            map.insert(
+                "projectId".to_string(),
+                serde_json::json!(identity.project_id),
+            );
+            map.insert(
+                "volumeId".to_string(),
+                serde_json::json!(identity.volume_id),
+            );
+            map.insert(
+                "chapterId".to_string(),
+                serde_json::json!(identity.chapter_id),
+            );
+            map.insert(
+                "snapshotRevision".to_string(),
+                serde_json::json!(identity.snapshot_revision),
+            );
+            map.insert(
+                "snapshotSha256".to_string(),
+                serde_json::json!(identity.snapshot_sha256),
+            );
+            map.insert("chained".to_string(), serde_json::json!(snapshot.chained));
+            map.insert(
+                "conflictPersisted".to_string(),
+                serde_json::json!(matches!(
+                    &snapshot.outcome,
+                    chapter_save_queue::ChapterSaveOutcome::Error(error) if error.conflict
+                )),
+            );
+            map.insert(
+                "conflictDraftPath".to_string(),
+                serde_json::json!(snapshot.conflict_draft_path),
+            );
+            map.insert("terminal".to_string(), serde_json::json!(snapshot.terminal));
+            map.insert("timedOut".to_string(), serde_json::json!(timed_out));
+        }
+        serde_to_qjson_object(value)
     }
     fn read_chapter_version(
         &mut self,
@@ -1554,6 +1863,15 @@ impl EditorBackend {
                 "editor_backend",
                 "BORROW_CONFLICT",
                 "flush_recent_edits skipped due to borrow conflict",
+            );
+        }
+        // Issue #1059：关窗 / 同步屏障时等后台正文保存队列消费完此前全部请求，
+        // 避免“只入队未落盘”的最后一笔在该路径上被进程退出吞掉。
+        if !chapter_save_queue::drain(std::time::Duration::from_secs(5)) {
+            crate::backend::app_backend::debug_error_static(
+                "chapter_save_queue",
+                "drain_timeout",
+                "chapter save queue did not drain before exit",
             );
         }
     }

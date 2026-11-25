@@ -10,6 +10,7 @@ pub mod agent_cli_backend;
 /// Issue #1016：统一 Agent 会话运行时 QObject 后端。
 pub mod agent_runtime_backend;
 pub mod annotation_backend;
+pub(crate) mod chapter_save_queue;
 pub mod diagnostics;
 pub mod json_utils;
 pub mod linux_theme_controller;
