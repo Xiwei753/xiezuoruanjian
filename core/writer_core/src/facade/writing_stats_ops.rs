@@ -319,8 +319,16 @@ impl super::WriterCore {
         else {
             return;
         };
-        for transaction_id in transactions {
-            self.apply_pending_chapter_proof(project_root, &transaction_id);
+        // 同一章前序 journal 投影失败时，后续 journal 不能越过它；其他章
+        // 仍继续结算。进程内失败集只用于本轮，durable journal 仍是事实来源。
+        let mut blocked_chapters = std::collections::HashSet::new();
+        for transaction in transactions {
+            if blocked_chapters.contains(&transaction.key) {
+                continue;
+            }
+            if !self.apply_pending_chapter_proof(project_root, &transaction.transaction_id) {
+                blocked_chapters.insert(transaction.key.clone());
+            }
         }
     }
 
@@ -330,13 +338,36 @@ impl super::WriterCore {
         &self,
         project_root: &std::path::Path,
         transaction_id: &str,
-    ) {
+    ) -> bool {
         let Ok(events) =
             crate::chapter::commit::pending_chapter_proof_events(project_root, transaction_id)
         else {
-            return;
+            return false;
         };
+        let Ok(transactions) =
+            crate::chapter::commit::pending_chapter_proof_transactions(project_root)
+        else {
+            return false;
+        };
+        let Some(current) = transactions
+            .iter()
+            .find(|item| item.transaction_id == transaction_id)
+        else {
+            return false;
+        };
+        // 同章仍有更早的未确认 journal 时，当前批次的 proof event 不能先写，
+        // 否则证明链会按错误的因果顺序接续。
+        if transactions
+            .iter()
+            .any(|item| item.key == current.key && item.commit_sequence < current.commit_sequence)
+        {
+            return false;
+        }
+        if events.is_empty() {
+            return false;
+        }
         let stats = self.get_stats_api();
+        let mut completed = true;
         for projection in events {
             let event_id = projection.event_id().to_string();
             match stats.record_proof_event(projection.event, projection.baseline_text.as_deref()) {
@@ -352,6 +383,7 @@ impl super::WriterCore {
                             event_id,
                             error
                         );
+                        completed = false;
                         break;
                     }
                 }
@@ -362,10 +394,12 @@ impl super::WriterCore {
                         event_id,
                         error
                     );
+                    completed = false;
                     break;
                 }
             }
         }
+        completed
     }
 
     /// 记录一次“同步把正文改成 after_text”的明确事实。

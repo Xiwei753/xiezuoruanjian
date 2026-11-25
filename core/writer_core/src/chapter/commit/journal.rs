@@ -124,16 +124,56 @@ pub(super) fn chapter_relative_path(key: &ChapterKey) -> String {
 
 /// 分配项目内单调提交序号。调用方必须持有章节写锁；序号只用于排序，
 /// 不参与正文版本比较，因此即使回滚留下空洞也不影响正确性。
+///
+/// 计数器损坏或丢失时不能 `unwrap_or(0)` 重新从 1 开始，否则新 journal 会
+/// 排到旧 journal 前面，证明投影顺序倒退。这里扫描已有 journal 的持久
+/// 序号取最大值修复，再原子写回；扫描也只读取 manifest，不触碰正文。
 fn next_commit_sequence(project_root: &Path) -> Result<u64> {
     let path = journal_root(project_root).join("sequence");
-    let current = match fs::read_to_string(&path) {
-        Ok(raw) => raw.trim().parse::<u64>().unwrap_or(0),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+    let counter = match fs::read_to_string(&path) {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(value) => Some(value),
+            Err(error) => {
+                log::warn!(
+                    "chapter commit sequence counter corrupt, rebuilding from journal: {}: {error}",
+                    path.display()
+                );
+                None
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
+    let max_persisted = max_journal_commit_sequence(project_root)?;
+    let current = counter.map_or(max_persisted, |value| value.max(max_persisted));
     let next = current.saturating_add(1);
     crate::storage::atomic_write_bytes(&path, next.to_string().as_bytes())?;
     Ok(next)
+}
+
+fn max_journal_commit_sequence(project_root: &Path) -> Result<u64> {
+    let root = journal_root(project_root);
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut max_sequence = 0;
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let manifest_path = entry.path().join("manifest.json");
+        if !manifest_path.exists() {
+            continue;
+        }
+        let Ok(manifest) =
+            serde_json::from_str::<ChapterCommitManifest>(&fs::read_to_string(&manifest_path)?)
+        else {
+            continue;
+        };
+        max_sequence = max_sequence.max(manifest.commit_sequence);
+    }
+    Ok(max_sequence)
 }
 
 fn ensure_journal_dir(project_root: &Path) -> Result<()> {
@@ -742,7 +782,9 @@ fn preserve_superseded_conflict(
 }
 
 /// 列出当前项目内已发布正文、但仍有证明投影未确认的 journal。
-pub fn pending_chapter_proof_transactions(project_root: &Path) -> Result<Vec<String>> {
+pub fn pending_chapter_proof_transactions(
+    project_root: &Path,
+) -> Result<Vec<super::PendingChapterProofTransaction>> {
     let root = journal_root(project_root);
     if !root.exists() {
         return Ok(Vec::new());
@@ -765,17 +807,31 @@ pub fn pending_chapter_proof_transactions(project_root: &Path) -> Result<Vec<Str
             transactions.push((
                 manifest.commit_sequence,
                 manifest.created_at_ms,
-                manifest.transaction_id,
+                super::PendingChapterProofTransaction {
+                    transaction_id: manifest.transaction_id,
+                    key: manifest.key,
+                    commit_sequence: manifest.commit_sequence,
+                },
             ));
         }
     }
     // read_dir 顺序不稳定；证明投影必须按发生顺序推进，否则同章后一笔会越过
     // 尚未完成的证明事件。时间戳相同的极端情况再用事务 ID 稳定排序。
-    transactions.sort();
-    Ok(transactions
-        .into_iter()
-        .map(|(_, _, transaction_id)| transaction_id)
-        .collect())
+    transactions.sort_by(|left, right| {
+        (
+            left.0,
+            left.1,
+            &left.2.key.chapter_id,
+            &left.2.transaction_id,
+        )
+            .cmp(&(
+                right.0,
+                right.1,
+                &right.2.key.chapter_id,
+                &right.2.transaction_id,
+            ))
+    });
+    Ok(transactions.into_iter().map(|(_, _, item)| item).collect())
 }
 
 /// 读取 journal 中尚未确认的证明事件（供投影 worker 使用）。

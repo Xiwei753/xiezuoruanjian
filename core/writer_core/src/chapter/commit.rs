@@ -35,7 +35,7 @@ const BODY_FILE: &str = "chapter.md";
 const META_FILE: &str = "chapter.meta.json";
 
 /// 章节身份。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterKey {
     pub project_id: String,
@@ -224,6 +224,14 @@ pub struct ChapterConflict {
     pub expected: Option<ChapterVersion>,
     pub actual: ChapterVersion,
     pub conflict_dir: String,
+}
+
+/// 一个仍有未确认证明投影的 journal，用于按章节/提交序号串行结算。
+#[derive(Debug, Clone)]
+pub struct PendingChapterProofTransaction {
+    pub transaction_id: String,
+    pub key: ChapterKey,
+    pub commit_sequence: u64,
 }
 
 /// 一次同步实际应用到某章节的结果。平台端按它决定是否需要重载正文，
