@@ -430,6 +430,7 @@ impl super::WriterCore {
             content,
             proof_snapshot_revision,
             proof_event_ids,
+            base_content,
         );
         let mut projection_ids = projection_ids.to_vec();
         if !proof_event_ids.is_empty() && proof_events.is_empty() {
@@ -487,6 +488,7 @@ impl super::WriterCore {
             "",
             None,
             &[],
+            None,
         );
         let projection_ids: Vec<String> = proof_events
             .iter()
@@ -856,6 +858,7 @@ fn select_pending_editor_proof(
     content: &str,
     snapshot_revision: Option<u64>,
     event_ids: &[String],
+    provided_baseline: Option<&str>,
 ) -> Vec<crate::chapter::ChapterProofProjection> {
     use crate::writing_stats::proof::{content_digest_of_text, text_sha256};
 
@@ -945,10 +948,20 @@ fn select_pending_editor_proof(
     match end {
         Some(end) => {
             let selected = events[..=end].to_vec();
-            if let Some(baseline) = selected
-                .first()
+            let first = selected.first();
+            let baseline = first
                 .and_then(|projection| projection.baseline_text.clone())
-            {
+                .or_else(|| {
+                    let before_hash = first
+                        .and_then(|projection| projection.event.proof.as_ref())
+                        .map(|proof| proof.before_text_sha256.as_str())?;
+                    provided_baseline
+                        .filter(|baseline| {
+                            before_hash.is_empty() || before_hash == text_sha256(baseline)
+                        })
+                        .map(str::to_string)
+                });
+            if let Some(baseline) = baseline {
                 // 能拿到本批起点正文时，按事件顺序逐步 replay，并核对每条
                 // before/after 摘要。只比最终摘要无法发现批次中间被替换。
                 let mut replayed = baseline;
