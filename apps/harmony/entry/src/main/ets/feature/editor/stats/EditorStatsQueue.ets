@@ -244,7 +244,10 @@ export class EditorStatsQueue {
     if (eventIds.length === 0) {
       return
     }
-    const acknowledged: Set<string> = new Set<string>(eventIds)
+    const acknowledged: Set<string> = new Set<string>()
+    for (let i = 0; i < eventIds.length; i++) {
+      acknowledged.add(eventIds[i])
+    }
     const remaining: ProofBatchRef[] = []
     for (let i = 0; i < this.recentProofRefs.length; i++) {
       const ref = this.recentProofRefs[i]
