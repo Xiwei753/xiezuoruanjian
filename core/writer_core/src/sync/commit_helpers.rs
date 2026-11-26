@@ -271,6 +271,38 @@ fn collect_action_paths(
     }
 }
 
+/// 章节协调器已提交但后续事务失败的路径，转成同步 receipt 输入。
+fn partial_committed_paths(
+    target: &crate::sync::types::TargetSyncResult,
+    actions: &[crate::sync::staging::CommitAction],
+    partial: &std::collections::HashSet<PathBuf>,
+    before: &[CommittedBefore],
+) -> Vec<CommittedPath> {
+    let mut out = Vec::new();
+    for (index, action) in actions.iter().enumerate() {
+        let rel = match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, .. }
+            | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
+        };
+        if !partial.contains(rel) {
+            continue;
+        }
+        out.push(CommittedPath {
+            path: to_workspace_rel_path(
+                target.target_kind.as_str(),
+                target.project_id.as_deref(),
+                rel,
+            ),
+            deleted: matches!(action, crate::sync::staging::CommitAction::Delete { .. }),
+            before: before
+                .get(index)
+                .cloned()
+                .unwrap_or(CommittedBefore::NotTracked),
+        });
+    }
+    out
+}
+
 /// Rebase locally stored text anchors when an incoming chapter body is applied
 /// without an incoming record for that anchor. The rebased anchor files join
 /// the same SaveTransaction as the body so a crash cannot leave new text with
@@ -837,7 +869,8 @@ fn commit_synced_chapter_bodies(
     content_actions: &[crate::sync::staging::CommitAction],
     run_id: &str,
     app_data_root: &Path,
-) -> crate::error::Result<std::collections::HashSet<PathBuf>> {
+    base_root: &Path,
+) -> (std::collections::HashSet<PathBuf>, crate::error::Result<()>) {
     use super::chapter_mutation_plan::{
         chapter_body_rel_path, chapter_meta_rel_path, plan_synced_chapter_mutations,
         SyncedChapterMutation,
@@ -850,89 +883,76 @@ fn commit_synced_chapter_bodies(
         .unwrap_or_default()
         .to_string();
     if project_id.is_empty() {
-        return Err(crate::error::Error::Other(
-            "sync chapter commit cannot derive project id from live root".to_string(),
-        ));
+        return (
+            handled,
+            Err(crate::error::Error::Other(
+                "sync chapter commit cannot derive project id from live root".to_string(),
+            )),
+        );
     }
 
-    for change in plan_synced_chapter_mutations(&project_id, content_actions) {
-        let body_rel = chapter_body_rel_path(&change.key);
-        let meta_rel = chapter_meta_rel_path(&change.key);
-        if change.mutation == SyncedChapterMutation::Delete {
-            crate::chapter::delete_chapter(
+    let result: crate::error::Result<()> = (|| {
+        for change in plan_synced_chapter_mutations(&project_id, content_actions)? {
+            let body_rel = chapter_body_rel_path(&change.key);
+            let meta_rel = chapter_meta_rel_path(&change.key);
+            if change.mutation == SyncedChapterMutation::Delete {
+                crate::chapter::delete_chapter(
+                    live_root,
+                    &change.key.volume_id,
+                    &change.key.chapter_id,
+                    app_data_root,
+                )?;
+                handled.insert(body_rel);
+                handled.insert(meta_rel);
+                continue;
+            }
+
+            let current = crate::chapter::commit::read_chapter_state_recovering(
                 live_root,
+                guard,
                 &change.key.volume_id,
                 &change.key.chapter_id,
-                app_data_root,
-            )?;
-            handled.insert(body_rel);
-            handled.insert(meta_rel);
-            continue;
-        }
-
-        let current = crate::chapter::commit::read_chapter_state_recovering(
-            live_root,
-            guard,
-            &change.key.volume_id,
-            &change.key.chapter_id,
-        );
-        let (current_text, current_version) = match current {
-            Ok((_, text, version)) => (text, Some(version)),
-            Err(crate::error::Error::ChapterNotFound) => {
-                if change.mutation == SyncedChapterMutation::Meta {
-                    // 只有 meta 的新章节无法证明正文来源，留给通用事务或下一次
-                    // 带正文的同步，不能凭空创建空章节。
-                    continue;
+            );
+            let (current_text, current_version) = match current {
+                Ok((_, text, version)) => (text, Some(version)),
+                Err(crate::error::Error::ChapterNotFound) => {
+                    if change.mutation == SyncedChapterMutation::Meta {
+                        // 只有 meta 的新章节无法证明正文来源；不能退回通用
+                        // SaveTransaction 留下无正文的章节。
+                        return Err(crate::error::Error::Other(format!(
+                            "sync chapter meta without body: volumes/{}/chapters/{}",
+                            change.key.volume_id, change.key.chapter_id
+                        )));
+                    }
+                    (String::new(), None)
                 }
-                (String::new(), None)
-            }
-            Err(error) => return Err(error),
-        };
+                Err(error) => return Err(error),
+            };
 
-        let mut request = crate::chapter::ChapterCommitRequest::new(
-            change.key.clone(),
-            change
-                .body
-                .as_deref()
-                .filter(|_| change.mutation != SyncedChapterMutation::Meta)
-                .unwrap_or(&current_text),
-        );
-        if let Some(meta) = change.meta.as_ref() {
-            request.meta_title = Some(meta.title.clone());
-            request.meta_order = Some(meta.order);
-        }
-        request.source = crate::chapter::ChapterCommitSource::Sync;
-        request.allow_empty_overwrite = request.content.is_empty();
-        match current_version {
-            None => {
-                let Some(meta_template) = change.meta.clone() else {
-                    continue;
-                };
-                request.mutation = crate::chapter::ChapterMutationKind::Create;
-                request.meta_template = Some(meta_template);
-                request
-                    .sync_proof_facts
-                    .push(crate::chapter::ChapterSyncProofFact {
-                        event_id: format!(
-                            "sync:{run_id}:{}:{}",
-                            PathBuf::from("projects")
-                                .join(&project_id)
-                                .join(&body_rel)
-                                .display(),
-                            change.action_index
-                        ),
-                        key: request.key.clone(),
-                        before_text: None,
-                        after_text: Some(request.content.clone()),
-                        source_device_id: String::new(),
-                        occurred_at_ms: chrono::Utc::now().timestamp_millis(),
-                    });
+            let mut request = crate::chapter::ChapterCommitRequest::new(
+                change.key.clone(),
+                change
+                    .body
+                    .as_deref()
+                    .filter(|_| change.mutation != SyncedChapterMutation::Meta)
+                    .unwrap_or(&current_text),
+            );
+            if let Some(meta) = change.meta.as_ref() {
+                request.meta_title = Some(meta.title.clone());
+                request.meta_order = Some(meta.order);
             }
-            Some(version) => {
-                request.expected = Some(version);
-                request.base_content = Some(current_text.clone());
-                request.mutation = crate::chapter::ChapterMutationKind::SyncMerge;
-                if change.mutation != SyncedChapterMutation::Meta {
+            request.source = crate::chapter::ChapterCommitSource::Sync;
+            request.allow_empty_overwrite = request.content.is_empty();
+            match current_version {
+                None => {
+                    let Some(meta_template) = change.meta.clone() else {
+                        return Err(crate::error::Error::Other(format!(
+                            "sync chapter create without meta: volumes/{}/chapters/{}",
+                            change.key.volume_id, change.key.chapter_id
+                        )));
+                    };
+                    request.mutation = crate::chapter::ChapterMutationKind::Create;
+                    request.meta_template = Some(meta_template);
                     request
                         .sync_proof_facts
                         .push(crate::chapter::ChapterSyncProofFact {
@@ -945,29 +965,58 @@ fn commit_synced_chapter_bodies(
                                 change.action_index
                             ),
                             key: request.key.clone(),
-                            before_text: Some(current_text.clone()),
+                            before_text: None,
                             after_text: Some(request.content.clone()),
                             source_device_id: String::new(),
                             occurred_at_ms: chrono::Utc::now().timestamp_millis(),
                         });
                 }
+                Some(version) => {
+                    request.expected = Some(version);
+                    request.base_content = Some(current_text.clone());
+                    request.mutation = crate::chapter::ChapterMutationKind::SyncMerge;
+                    if change.mutation != SyncedChapterMutation::Meta {
+                        request
+                            .sync_proof_facts
+                            .push(crate::chapter::ChapterSyncProofFact {
+                                event_id: format!(
+                                    "sync:{run_id}:{}:{}",
+                                    PathBuf::from("projects")
+                                        .join(&project_id)
+                                        .join(&body_rel)
+                                        .display(),
+                                    change.action_index
+                                ),
+                                key: request.key.clone(),
+                                before_text: Some(current_text.clone()),
+                                after_text: Some(request.content.clone()),
+                                source_device_id: String::new(),
+                                occurred_at_ms: chrono::Utc::now().timestamp_millis(),
+                            });
+                    }
+                }
             }
-        }
 
-        match crate::chapter::commit::commit_chapter_with_guard(live_root, Some(guard), request)? {
-            crate::chapter::ChapterCommitOutcome::Committed(_) => {
-                handled.insert(body_rel);
-                handled.insert(meta_rel);
-            }
-            crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
-                return Err(crate::error::Error::Other(format!(
-                    "sync chapter commit conflicted for {}/{}: actual={:?}",
-                    change.key.volume_id, change.key.chapter_id, conflict.actual
-                )));
+            match crate::chapter::commit::commit_chapter_with_guard(
+                live_root,
+                Some(guard),
+                request,
+            )? {
+                crate::chapter::ChapterCommitOutcome::Committed(_) => {
+                    handled.insert(body_rel);
+                    handled.insert(meta_rel);
+                }
+                crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
+                    return Err(crate::error::Error::Other(format!(
+                        "sync chapter commit conflicted for {}/{}: actual={:?}",
+                        change.key.volume_id, change.key.chapter_id, conflict.actual
+                    )));
+                }
             }
         }
-    }
-    Ok(handled)
+        Ok(())
+    })();
+    (handled, result)
 }
 
 fn apply_commit_plan_with_optional_merge(
@@ -977,7 +1026,13 @@ fn apply_commit_plan_with_optional_merge(
     content_actions: &[crate::sync::staging::CommitAction],
     backup_mode: bool,
     proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
-) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
+) -> std::result::Result<
+    (
+        crate::storage::transaction::SaveTransaction,
+        std::collections::HashSet<PathBuf>,
+    ),
+    (crate::error::Error, std::collections::HashSet<PathBuf>),
+> {
     let stats_group = match run.app_group() {
         Some(group @ crate::sync::types::AppDataGroup::StatsDevice(_)) => Some(group.clone()),
         _ => None,
@@ -985,110 +1040,123 @@ fn apply_commit_plan_with_optional_merge(
     // plan 到 apply 之间必须持有与 MCP 相同的跨进程工作区锁。统计事件还需要
     // 在锁内重新读取 live/staging 求并集；章节正文协调器也必须用同一把锁
     // 做恢复读取和版本 CAS。外层若已持锁，这里按同一 root 嵌套获取。
-    let workspace_lock = crate::storage::WorkspaceWriteLock::acquire(run.app_data_root())?;
+    let workspace_lock = match crate::storage::WorkspaceWriteLock::acquire(run.app_data_root()) {
+        Ok(lock) => lock,
+        Err(error) => return Err((error, std::collections::HashSet::new())),
+    };
     let mut content_actions = content_actions.to_vec();
-    let handled_chapters = commit_synced_chapter_bodies(
+    let (handled_chapters, chapter_result) = commit_synced_chapter_bodies(
         live_root,
         &workspace_lock,
         &content_actions,
         run.run_id(),
         run.app_data_root(),
-    )?;
-    if !handled_chapters.is_empty() {
-        content_actions.retain(|action| {
-            let rel = match action {
-                crate::sync::staging::CommitAction::Apply { rel_path, .. }
-                | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
-            };
-            !handled_chapters.contains(rel)
-        });
+        &run.base_root(),
+    );
+    if let Err(error) = chapter_result {
+        return Err((error, handled_chapters));
     }
-    let mut engine_state_actions = plan.engine_state_actions.clone();
-    let mut committed_state: Option<crate::sync::types::SyncState> = None;
-
-    let result = if plan.needs_sync_state_merge {
-        let base_root = run.base_root();
-        let staging_root = run.staging_root();
-        let app_group = run.app_group();
-        let (mut merged_state, mut merged_conflicts) =
-            crate::sync::staging::sync_state_merge::merge_sync_state_three_way_for_target(
-                &base_root,
-                live_root,
-                &staging_root,
-                app_group,
-            )?;
-        for path in &plan.starmap_pruned_object_paths {
-            merged_state.known_files.remove(path);
-            merged_state.known_files_updated_at.remove(path);
-            merged_state.pending_take_remote.remove(path);
-            merged_state.conflicted_files.remove(path);
-            merged_state
-                .conflicts
-                .retain(|conflict| conflict.local_path != *path);
-            merged_conflicts.retain(|conflict| conflict.local_path != *path);
+    let apply_result: crate::error::Result<crate::storage::transaction::SaveTransaction> = (|| {
+        if !handled_chapters.is_empty() {
+            content_actions.retain(|action| {
+                let rel = match action {
+                    crate::sync::staging::CommitAction::Apply { rel_path, .. }
+                    | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
+                };
+                !handled_chapters.contains(rel)
+            });
         }
-        if let Some(group) = &stats_group {
-            refresh_stats_event_actions(
-                live_root,
-                &staging_root,
-                group,
-                &mut content_actions,
-                &mut engine_state_actions,
-                &mut merged_state,
-            )?;
-        }
-        committed_state = Some(merged_state.clone());
-        apply_commit_plan_with_sync_state_merge_for_group(
-            live_root,
-            &content_actions,
-            &engine_state_actions,
-            &merged_state,
-            &merged_conflicts,
-            app_group,
-            backup_mode,
-            proof_recovery_records,
-        )
-    } else {
-        apply_commit_plan_to_live(
-            live_root,
-            &content_actions,
-            &engine_state_actions,
-            backup_mode,
-            proof_recovery_records,
-        )
-    };
+        let mut engine_state_actions = plan.engine_state_actions.clone();
+        let mut committed_state: Option<crate::sync::types::SyncState> = None;
 
-    if result.is_ok() {
-        if let Some(group) = run.app_group() {
-            let state = match &committed_state {
-                Some(state) => Some(state.clone()),
-                None => crate::sync::SyncService::load_sync_state_read_only_for_group(
-                    live_root, group, None,
-                )
-                .ok(),
-            };
-            if let Some(state) = state {
-                if let Err(error) = crate::sync::local_mutations::compact_confirmed(
+        let result = if plan.needs_sync_state_merge {
+            let base_root = run.base_root();
+            let staging_root = run.staging_root();
+            let app_group = run.app_group();
+            let (mut merged_state, mut merged_conflicts) =
+                crate::sync::staging::sync_state_merge::merge_sync_state_three_way_for_target(
+                    &base_root,
                     live_root,
+                    &staging_root,
+                    app_group,
+                )?;
+            for path in &plan.starmap_pruned_object_paths {
+                merged_state.known_files.remove(path);
+                merged_state.known_files_updated_at.remove(path);
+                merged_state.pending_take_remote.remove(path);
+                merged_state.conflicted_files.remove(path);
+                merged_state
+                    .conflicts
+                    .retain(|conflict| conflict.local_path != *path);
+                merged_conflicts.retain(|conflict| conflict.local_path != *path);
+            }
+            if let Some(group) = &stats_group {
+                refresh_stats_event_actions(
+                    live_root,
+                    &staging_root,
                     group,
-                    &state.known_files,
-                ) {
-                    log::warn!("local mutation ledger compaction failed: {error}");
+                    &mut content_actions,
+                    &mut engine_state_actions,
+                    &mut merged_state,
+                )?;
+            }
+            committed_state = Some(merged_state.clone());
+            apply_commit_plan_with_sync_state_merge_for_group(
+                live_root,
+                &content_actions,
+                &engine_state_actions,
+                &merged_state,
+                &merged_conflicts,
+                app_group,
+                backup_mode,
+                proof_recovery_records,
+            )
+        } else {
+            apply_commit_plan_to_live(
+                live_root,
+                &content_actions,
+                &engine_state_actions,
+                backup_mode,
+                proof_recovery_records,
+            )
+        };
+
+        if result.is_ok() {
+            if let Some(group) = run.app_group() {
+                let state = match &committed_state {
+                    Some(state) => Some(state.clone()),
+                    None => crate::sync::SyncService::load_sync_state_read_only_for_group(
+                        live_root, group, None,
+                    )
+                    .ok(),
+                };
+                if let Some(state) = state {
+                    if let Err(error) = crate::sync::local_mutations::compact_confirmed(
+                        live_root,
+                        group,
+                        &state.known_files,
+                    ) {
+                        log::warn!("local mutation ledger compaction failed: {error}");
+                    }
                 }
             }
         }
+        if result.is_ok()
+            && matches!(
+                run.app_group(),
+                Some(crate::sync::types::AppDataGroup::StatsDevice(_))
+            )
+        {
+            // 同步直接搬运 JSONL 不会经过 ContributionStore 写入路径；提交成功后
+            // 显式递增事件库代数，避免回放缓存/事件 ID 缓存继续信任旧目录指纹。
+            crate::writing_stats::contribution_store::invalidate_stats_event_store(live_root);
+        }
+        result
+    })();
+    match apply_result {
+        Ok(tx) => Ok((tx, handled_chapters)),
+        Err(error) => Err((error, handled_chapters)),
     }
-    if result.is_ok()
-        && matches!(
-            run.app_group(),
-            Some(crate::sync::types::AppDataGroup::StatsDevice(_))
-        )
-    {
-        // 同步直接搬运 JSONL 不会经过 ContributionStore 写入路径；提交成功后
-        // 显式递增事件库代数，避免回放缓存/事件 ID 缓存继续信任旧目录指纹。
-        crate::writing_stats::contribution_store::invalidate_stats_event_store(live_root);
-    }
-    result
 }
 
 /// 在 staging cleanup 前，对 plan.conflict 的每个 StagingConflict 读取 incoming
@@ -1544,8 +1612,8 @@ pub(crate) fn apply_staging_commits_for_targets(
                     false,
                     &[],
                 ) {
-                    Ok(tx) => tx,
-                    Err(e) => {
+                    Ok((tx, _)) => tx,
+                    Err((e, _)) => {
                         let msg = format!("apply_commit_plan failed: {}", e);
                         log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                         target_results.push(TargetCommitResult::Failed(msg));
@@ -1654,8 +1722,8 @@ pub(crate) fn apply_staging_commits_for_targets(
                     false,
                     &[],
                 ) {
-                    Ok(tx) => tx,
-                    Err(e) => {
+                    Ok((tx, _)) => tx,
+                    Err((e, _)) => {
                         let msg = format!("apply_commit_plan failed: {}", e);
                         log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                         target_results.push(TargetCommitResult::Failed(msg));
@@ -1954,11 +2022,13 @@ pub(crate) fn commit_single_target_staging(
                 false,
                 &proof_recovery_records,
             ) {
-                Ok(tx) => tx,
-                Err(e) => {
+                Ok((tx, _)) => tx,
+                Err((e, partial)) => {
                     let msg = format!("apply_commit_plan failed: {}", e);
                     log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                    let committed_paths =
+                        partial_committed_paths(target, &plan.content_actions, &partial, &before);
+                    return (TargetCommitResult::Failed(msg), Vec::new(), committed_paths);
                 }
             };
 
@@ -2072,11 +2142,13 @@ pub(crate) fn commit_single_target_staging(
                 false,
                 &proof_recovery_records,
             ) {
-                Ok(tx) => tx,
-                Err(e) => {
+                Ok((tx, _)) => tx,
+                Err((e, partial)) => {
                     let msg = format!("apply_commit_plan failed: {}", e);
                     log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                    let committed_paths =
+                        partial_committed_paths(target, &safe_content_actions, &partial, &before);
+                    return (TargetCommitResult::Failed(msg), Vec::new(), committed_paths);
                 }
             };
             let mut committed_paths = Vec::new();

@@ -67,13 +67,20 @@ fn chapter_meta_parts(path: &Path) -> Option<(String, String)> {
 pub(crate) fn plan_synced_chapter_mutations(
     project_id: &str,
     actions: &[CommitAction],
-) -> Vec<SyncedChapterChange> {
+) -> crate::error::Result<Vec<SyncedChapterChange>> {
     let mut grouped: BTreeMap<(String, String), SyncedChapterChange> = BTreeMap::new();
     for (action_index, action) in actions.iter().enumerate() {
         match action {
             CommitAction::Apply { rel_path, content } => {
                 if let Some((volume_id, chapter_id)) = chapter_body_parts(rel_path) {
-                    let content = String::from_utf8_lossy(content).into_owned();
+                    let content = std::str::from_utf8(content)
+                        .map_err(|error| {
+                            crate::error::Error::Other(format!(
+                                "sync chapter body is not UTF-8 {}: {error}",
+                                rel_path.display()
+                            ))
+                        })?
+                        .to_string();
                     let entry = grouped
                         .entry((volume_id.clone(), chapter_id.clone()))
                         .or_insert_with(|| SyncedChapterChange {
@@ -90,7 +97,12 @@ pub(crate) fn plan_synced_chapter_mutations(
                     entry.body = Some(content);
                     entry.mutation = SyncedChapterMutation::Replace;
                 } else if let Some((volume_id, chapter_id)) = chapter_meta_parts(rel_path) {
-                    let meta = serde_json::from_slice::<Chapter>(content).ok();
+                    let meta = serde_json::from_slice::<Chapter>(content).map_err(|error| {
+                        crate::error::Error::Other(format!(
+                            "sync chapter meta is invalid {}: {error}",
+                            rel_path.display()
+                        ))
+                    })?;
                     let entry = grouped
                         .entry((volume_id.clone(), chapter_id.clone()))
                         .or_insert_with(|| SyncedChapterChange {
@@ -104,7 +116,7 @@ pub(crate) fn plan_synced_chapter_mutations(
                             meta: None,
                             action_index,
                         });
-                    entry.meta = meta;
+                    entry.meta = Some(meta);
                 }
             }
             CommitAction::Delete { rel_path } => {
@@ -127,7 +139,7 @@ pub(crate) fn plan_synced_chapter_mutations(
             }
         }
     }
-    grouped.into_values().collect()
+    Ok(grouped.into_values().collect())
 }
 
 /// 章节在 project 内的正文相对路径。
