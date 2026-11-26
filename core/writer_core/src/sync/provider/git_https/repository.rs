@@ -14,8 +14,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use git2::{
-    AutotagOption, Commit, Direction, ErrorClass, ErrorCode, FetchOptions, Index, IndexTime,
-    ObjectType, Oid, PushOptions, Repository, Signature, Tree,
+    AutotagOption, Commit, DiffOptions, Direction, ErrorClass, ErrorCode, FetchOptions, Index,
+    IndexTime, ObjectType, Oid, PushOptions, Repository, Signature, Tree,
 };
 
 use super::config::GitHttpsRuntimeConfig;
@@ -153,6 +153,78 @@ pub(crate) fn probe(
         .list()
         .map_err(|err| map_git_error(err, "list"))?;
     Ok(())
+}
+
+/// 轻量 HEAD 探测：只 connect + list refs，不 fetch、不 flatten tree。
+///
+/// 空闲轮询只需要把远端分支 HEAD 与上次消费的提交比较；这条路径不下载任何
+/// 对象，也不在本地构造 blob map。分支不存在返回 `None`（允许首次 push）。
+pub(crate) fn probe_head(
+    cache_dir: &Path,
+    config: &GitHttpsRuntimeConfig,
+    accounting: &Arc<ProviderNetworkAccounting>,
+) -> Result<Option<Oid>, ProviderError> {
+    let repo = open_or_init(cache_dir)?;
+    let mut remote = remote(&repo, config)?;
+    let branch_ref = format!("refs/heads/{}", config.branch);
+    let callbacks = credentials::callbacks(&config.username, config.secret.as_deref());
+    accounting.record_request(0);
+    let connection = remote
+        .connect_auth(
+            Direction::Fetch,
+            Some(callbacks),
+            Some(credentials::proxy_options()),
+        )
+        .map_err(|err| map_git_error(err, "connect_auth"))?;
+    let heads = connection
+        .list()
+        .map_err(|err| map_git_error(err, "list"))?;
+    Ok(heads
+        .iter()
+        .find(|head| head.name() == branch_ref)
+        .map(|head| head.oid()))
+}
+
+/// 用固定 commit 的 tree diff 计算相对 `base` 发生变化的路径。
+///
+/// `diff_tree_to_tree` 对相同子树直接跳过，代价只跟实际差异相关。`base` 不在
+/// 本地缓存（浅克隆/被 GC/首次同步）时返回 `None`，调用方回到完整扫描。
+pub(crate) fn changed_paths_between(
+    repo: &Repository,
+    base: &str,
+    head: Oid,
+) -> Result<Option<Vec<String>>, ProviderError> {
+    let Ok(base_oid) = Oid::from_str(base) else {
+        return Ok(None);
+    };
+    let (Ok(base_commit), Ok(head_commit)) =
+        (repo.find_commit(base_oid), repo.find_commit(head))
+    else {
+        return Ok(None);
+    };
+    let (Ok(base_tree), Ok(head_tree)) = (base_commit.tree(), head_commit.tree()) else {
+        return Ok(None);
+    };
+    let mut options = DiffOptions::new();
+    let diff = repo
+        .diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut options))
+        .map_err(|err| map_git_error(err, "diff_tree_to_tree"))?;
+    let mut paths: Vec<String> = Vec::new();
+    diff.foreach(
+        &mut |delta, _| {
+            if let Some(path) = delta.new_file().path().or_else(|| delta.old_file().path()) {
+                paths.push(path.to_string_lossy().replace('\\', "/"));
+            }
+            true
+        },
+        None,
+        None,
+        None,
+    )
+    .map_err(|err| map_git_error(err, "diff_foreach"))?;
+    paths.sort();
+    paths.dedup();
+    Ok(Some(paths))
 }
 
 /// fetch 指定分支并构建快照。分支不存在视为空仓库（允许首次 push）。

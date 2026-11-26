@@ -8,7 +8,7 @@
 //! 账本按 `path` 取最后一条记录：同一对象连续编辑在同步版本上聚合为最终
 //! 内容，但每次事务的贡献事件仍由统计事件流独立保存。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -100,16 +100,99 @@ pub(crate) fn append_batch(
     if records.is_empty() {
         return Ok(());
     }
+    // 同一对象重复写入同一内容不产生新的待同步事实。账本在成功发布后才压缩，
+    // 因此这里只需和当前最后一条事实比较：op/内容哈希/对象版本都没变就不是
+    // 业务变更，不追加记录，也不产生新的待同步代次。
+    let latest = load_latest(sync_root)?;
+    let fresh: Vec<&LocalMutationRecord> = records
+        .iter()
+        .filter(|record| match latest.get(&record.path) {
+            Some(previous) => {
+                previous.op != record.op
+                    || previous.content_hash != record.content_hash
+                    || previous.object_revision != record.object_revision
+            }
+            None => true,
+        })
+        .collect();
+    if fresh.is_empty() {
+        return Ok(());
+    }
     let path = ledger_path(sync_root);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    for record in records {
+    for record in fresh {
         writeln!(file, "{}", serde_json::to_string(record)?)?;
     }
     file.sync_data()?;
     Ok(())
+}
+
+/// 当前同步根下尚未被确认的本地业务变更事实（按 path 取最后一条）。
+///
+/// 这是同步调度的持久化脏对象索引：调度只读这份索引，不再为"有没有本地修改"
+/// 重新扫描磁盘。外部工具绕过 Core 事务直接改文件不会出现在这里，由显式校验/
+/// 导入事务建立真实基线（见 `version_snapshot`）。
+pub(crate) fn pending_records(
+    sync_root: &Path,
+    scope: SyncScope,
+    app_group: Option<&AppDataGroup>,
+) -> crate::error::Result<BTreeMap<String, LocalMutationRecord>> {
+    // 已被共同基线确认的事实不算"待同步"：账本按组压缩，未压缩的旧事实
+    // 不能把 target 永久标脏（否则每次空闲调度都会重跑该 target 的合并）。
+    let known_files = match app_group {
+        Some(group) => {
+            crate::sync::SyncService::load_sync_state_read_only_for_group(sync_root, group, None)
+                .map(|state| state.known_files)
+                .unwrap_or_default()
+        }
+        None => crate::sync::SyncService::load_sync_state_read_only(sync_root, None)
+            .map(|state| state.known_files)
+            .unwrap_or_default(),
+    };
+    let mut pending = BTreeMap::new();
+    for (path, record) in load_latest(sync_root)? {
+        if !is_sync_business_path(&path, scope) {
+            continue;
+        }
+        if let Some(group) = app_group {
+            if !group.owns_path(&path) {
+                continue;
+            }
+        }
+        let confirmed = if record.is_upsert() {
+            known_files.get(&path) == Some(&record.content_hash)
+        } else if record.is_delete() {
+            !known_files.contains_key(&path)
+        } else {
+            false
+        };
+        if confirmed {
+            continue;
+        }
+        pending.insert(path, record);
+    }
+    Ok(pending)
+}
+
+/// 待同步对象的稳定代次：路径 + op + 内容哈希的 SHA-256。
+///
+/// 平台把它当作"还有没有未确认修改"的轻量判据，不需要理解对象内容；
+/// 同一批待同步事实在任意一轮调度里得到同一个代次。
+pub(crate) fn pending_digest(records: &BTreeMap<String, LocalMutationRecord>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for (path, record) in records {
+        hasher.update(path.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(record.op.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(record.content_hash.as_bytes());
+        hasher.update(b"\0");
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 /// 文件路径是否属于账本自身；扫描/事务捕获都必须忽略它。

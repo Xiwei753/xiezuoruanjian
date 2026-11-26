@@ -421,14 +421,33 @@ impl<'a> RoundProvider<'a> {
             });
         }
 
+        // 消除同内容/同版本/不存在的空 mutation：固定基线里已经成立的
+        // ReuseVersion、基线里本来就没有的 Delete 都不应进入 batch（GitHub API
+        // 会因此上传/删除多余对象，Git 也要多算一次 tree）。真正的内容变化
+        // 仍然保留 Precondition 校验。
+        let baseline: std::collections::HashMap<String, RemoteVersion> = self
+            .all_remote_entries()?
+            .into_iter()
+            .map(|entry| (entry.path, entry.version))
+            .collect();
         let mut mutations: Vec<BatchMutation> = entries
             .into_iter()
             .filter_map(|(path, entry)| match entry {
                 Some(BufferedValue::Content(content)) => Some(BatchMutation::Put { path, content }),
                 Some(BufferedValue::Version(version)) => {
-                    Some(BatchMutation::ReuseVersion { path, version })
+                    if baseline.get(&path) == Some(&version) {
+                        None
+                    } else {
+                        Some(BatchMutation::ReuseVersion { path, version })
+                    }
                 }
-                None => Some(BatchMutation::Delete { path }),
+                None => {
+                    if baseline.contains_key(&path) {
+                        Some(BatchMutation::Delete { path })
+                    } else {
+                        None
+                    }
+                }
             })
             .collect();
         let mut checked_objects: BTreeSet<String> = BTreeSet::new();

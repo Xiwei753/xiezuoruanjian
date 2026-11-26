@@ -219,7 +219,12 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
             return mark_app_group_failure(content_result, "tree_publish");
         }
 
-        catalog_snapshot.catalog.upsert_tree(group);
+        // 稳定布局已迁移且内容没有真实变化时，不重写 catalog：无业务变化的
+        // 轮次不应产生任何远端发布（Issue #1065）。
+        let catalog_changed = catalog_snapshot.catalog.upsert_tree(group);
+        if !catalog_changed && catalog_snapshot.transitional_layout_version.is_none() {
+            return content_result;
+        }
         match crate::sync::app_data_group_catalog::write_remote_app_data_group_catalog_once(
             provider,
             &catalog_snapshot,

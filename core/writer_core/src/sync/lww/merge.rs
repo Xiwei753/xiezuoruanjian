@@ -179,6 +179,9 @@ pub(crate) struct LwwMergeOutcome {
     /// `remote_upload_paths`（delta 动作）。`remote_upload_paths` 只给普通
     /// "原地 LWW"写远端用，不要拿它发布 generation。
     pub merged_manifest: SyncManifest,
+    /// 远端已有 manifest 是否与新快照语义相同。为 `true` 时不需要再写
+    /// manifest.sync.json：写入只会因为序列化格式不同制造一次伪提交。
+    pub manifest_unchanged: bool,
 }
 
 /// 唯一的只读 merge 核心。
@@ -301,6 +304,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     let remote_manifest_path = format!("{}/{}", source_remote_prefix, SYNC_MANIFEST_PATH);
     let remote_manifest =
         fetch_remote_manifest(provider, source_remote_prefix, &remote_tree_files)?;
+    let remote_manifest_baseline = remote_manifest.clone();
 
     let now_ms = chrono::Utc::now().timestamp_millis();
 
@@ -982,7 +986,11 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         files: manifest_files_vec,
     };
 
-    let manifest_json = serde_json::to_string_pretty(&sync_manifest).unwrap_or_default();
+    let manifest_json = sync_manifest.canonical_json()?;
+    let manifest_unchanged = match remote_manifest_baseline.as_ref() {
+        Some(remote) => remote.semantically_equals(&sync_manifest),
+        None => false,
+    };
 
     // 在内存中收集冲突到 state.conflicts 和 conflicts_json，
     // 不再逐条调用 record_sync_conflict（每次内部写盘）。
@@ -1188,6 +1196,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         // 携带完整强类型 manifest 快照，
         // 供 generation publisher 上传完整快照（不只是 delta 动作）。
         merged_manifest: sync_manifest,
+        manifest_unchanged,
     })
 }
 
@@ -1272,8 +1281,7 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
     let sync_manifest = SyncManifest {
         files: manifest_files_vec,
     };
-    let manifest_json = serde_json::to_string_pretty(&sync_manifest)
-        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+    let manifest_json = sync_manifest.canonical_json()?;
 
     // 3. 重建 SyncState：known_files / known_files_updated_at / last_sync_time。
     //    与 merge_remote_into_local_snapshot 的 known_files 重建逻辑对齐：
@@ -1419,6 +1427,8 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
         remote_manifest_path,
         manifest_json,
         merged_manifest: sync_manifest,
+        // 远端没有 visible source，不存在"远端 manifest 已等价"的情形。
+        manifest_unchanged: false,
     })
 }
 

@@ -158,16 +158,23 @@ impl AppDataGroupCatalog {
     }
 
     /// Select the stable grouped tree as the group's remote snapshot.
-    pub fn upsert_tree(&mut self, group: &AppDataGroup) {
+    /// 标记该组已迁移到稳定树布局，返回 catalog 是否真的发生变化。
+    ///
+    /// 已经是稳定树的记录不再改写：无变化的 catalog 不应该再发布一次，
+    /// 否则每个空闲轮次都会制造一次 catalog 提交。
+    pub fn upsert_tree(&mut self, group: &AppDataGroup) -> bool {
         let group_id = group.id();
+        let schema_changed = self.schema_version != APP_DATA_GROUP_CATALOG_SCHEMA_VERSION;
         self.schema_version = APP_DATA_GROUP_CATALOG_SCHEMA_VERSION;
         if let Some(record) = self
             .groups
             .iter_mut()
             .find(|record| record.group_id == group_id)
         {
+            let changed = record.active_generation.is_some() || !record.tree_snapshot;
             record.active_generation = None;
             record.tree_snapshot = true;
+            changed || schema_changed
         } else {
             self.groups.push(AppDataGroupRecord {
                 group_id,
@@ -175,6 +182,7 @@ impl AppDataGroupCatalog {
                 tree_snapshot: true,
             });
             self.groups.sort_by(|a, b| a.group_id.cmp(&b.group_id));
+            true
         }
     }
 }

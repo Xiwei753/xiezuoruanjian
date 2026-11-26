@@ -1276,6 +1276,7 @@ fn commit_synced_chapter_bodies(
     (handled, result)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_commit_plan_with_optional_merge(
     run: &crate::sync::staging::StagingRun,
     live_root: &Path,
@@ -1283,6 +1284,7 @@ fn apply_commit_plan_with_optional_merge(
     content_actions: &[crate::sync::staging::CommitAction],
     backup_mode: bool,
     proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
+    deferred_upload_paths: &[String],
     mut chapter_receipts: Option<&mut Vec<crate::chapter::ChapterSyncCommitReceipt>>,
 ) -> std::result::Result<
     (
@@ -1374,6 +1376,41 @@ fn apply_commit_plan_with_optional_merge(
                     &mut engine_state_actions,
                     &mut merged_state,
                 )?;
+            }
+            // 本轮要上传、但尚未确认远端发布的本地对象版本，不能推进
+            // known_files。known_files 是"远端已确认基线"，不是"本地磁盘内容"：
+            // 提前推进会让下一轮把未发布的本地内容当成已同步，要么永不重推，
+            // 要么被远端旧内容覆盖。账本事实保持未确认，下一轮继续作为 outbox。
+            // 基线取本轮 base_root 的 state（同步开始前已确认的远端版本）。
+            if !deferred_upload_paths.is_empty() {
+                let base_state = match app_group {
+                    Some(group) => {
+                        crate::sync::SyncService::load_sync_state_read_only_for_group(
+                            &base_root, group, None,
+                        )
+                    }
+                    None => crate::sync::SyncService::load_sync_state_read_only(&base_root, None),
+                };
+                match base_state {
+                    Ok(base_state) => {
+                        for path in deferred_upload_paths {
+                            match base_state.known_files.get(path) {
+                                Some(hash) => {
+                                    merged_state.known_files.insert(path.clone(), hash.clone());
+                                }
+                                None => {
+                                    merged_state.known_files.remove(path);
+                                    merged_state.known_files_updated_at.remove(path);
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "[sync] cannot load base state for deferred uploads;                              keeping merged known_files: {error}"
+                        );
+                    }
+                }
             }
             committed_state = Some(merged_state.clone());
             apply_commit_plan_with_sync_state_merge_for_group(
@@ -1886,6 +1923,7 @@ pub(crate) fn apply_staging_commits_for_targets(
                     &plan.content_actions,
                     false,
                     &[],
+                    &[],
                     None,
                 ) {
                     Ok((tx, _)) => tx,
@@ -1996,6 +2034,7 @@ pub(crate) fn apply_staging_commits_for_targets(
                     &plan,
                     &safe_content_actions,
                     false,
+                    &[],
                     &[],
                     None,
                 ) {
@@ -2325,6 +2364,7 @@ pub(crate) fn commit_single_target_staging(
                 &plan.content_actions,
                 false,
                 &proof_recovery_records,
+                &target.result.uploaded_files,
                 Some(&mut *chapter_receipts),
             ) {
                 Ok((tx, _)) => tx,
@@ -2449,6 +2489,7 @@ pub(crate) fn commit_single_target_staging(
                 &safe_content_actions,
                 false,
                 &proof_recovery_records,
+                &target.result.uploaded_files,
                 None,
             ) {
                 Ok((tx, _)) => tx,

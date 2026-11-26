@@ -19,6 +19,32 @@
 use super::types::{FullSyncResult, SyncStatus};
 use serde::{Deserialize, Serialize};
 
+/// 单个 target 的对象级版本 checkpoint。
+///
+/// 只保存业务对象版本与未确认变更代次；不保存 `state.local.json` 原始字节、
+/// `last_sync_time`、`last_error` 等运行状态，否则每次 `NoChanges` 落盘都会让
+/// checkpoint 失效（Issue #1065）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TargetVersionCheckpoint {
+    #[serde(default)]
+    pub object_fingerprint: String,
+    #[serde(default)]
+    pub pending_fingerprint: String,
+    #[serde(default)]
+    pub pending_objects: u32,
+    #[serde(default)]
+    pub eligible: bool,
+}
+
+impl TargetVersionCheckpoint {
+    pub fn matches(&self, other: &Self) -> bool {
+        self.eligible
+            && other.eligible
+            && self.object_fingerprint == other.object_fingerprint
+            && self.pending_fingerprint == other.pending_fingerprint
+    }
+}
+
 /// Version checkpoint for the last successful, fully converged sync.
 ///
 /// Repository identity is stored as a digest so private remote URLs are not copied
@@ -28,15 +54,37 @@ use serde::{Deserialize, Serialize};
 pub struct FullSyncCheckpoint {
     pub repository_identity: String,
     pub remote_revision: String,
+    #[serde(default)]
     pub local_object_fingerprint: String,
     /// Independent versions let a stable remote branch process only locally changed
-    /// App groups or projects on the next run.
+    /// App groups or projects on the next run. v1 aggregate fingerprints are kept
+    /// as read-only migration input.
     #[serde(default)]
     pub target_fingerprints: std::collections::BTreeMap<String, String>,
+    /// Object-level per-target versions (Issue #1065).
+    #[serde(default)]
+    pub target_versions: std::collections::BTreeMap<String, TargetVersionCheckpoint>,
+    /// 上一次真正进入 Core 同步的尝试时间（Unix 秒）。与 `remote_revision` 的
+    /// 成功确认分开记录：失败退避读它，最近成功时间由 `FullSyncState` 维护。
+    #[serde(default)]
+    pub last_attempt_at: i64,
+    /// 自动调度下一次允许尝试的最早时间（Unix 秒）。失败按指数退避推进；
+    /// 手动/前台/交接触发不受它限制。
+    #[serde(default)]
+    pub next_retry_at: i64,
+    #[serde(default)]
+    pub consecutive_failures: u32,
 }
 
 impl FullSyncCheckpoint {
     const FILE_NAME: &'static str = "checkpoint.local.json";
+
+    /// 自动调度失败退避上限（秒）。10 分钟足够让网络/认证问题恢复，
+    /// 又不会让用户长时间停留在旧数据上。
+    pub const MAX_RETRY_BACKOFF_SECONDS: i64 = 600;
+
+    /// 自动调度失败退避：60s 起步，连续失败指数增长，封顶 10 分钟。
+    pub const BASE_RETRY_BACKOFF_SECONDS: i64 = 60;
 
     pub fn load(app_data_root: &std::path::Path) -> crate::error::Result<Option<Self>> {
         let path = app_data_root.join("app-meta/sync").join(Self::FILE_NAME);
@@ -62,6 +110,34 @@ impl FullSyncCheckpoint {
         let content = serde_json::to_string_pretty(self)
             .map_err(|error| crate::Error::Io(std::io::Error::other(error.to_string())))?;
         crate::storage::atomic_write_string(&path, &content)
+    }
+
+    /// 自动触发是否已过退避窗口。`now` 与 checkpoint 字段同为 Unix 秒。
+    pub fn auto_retry_allowed(&self, now: i64) -> bool {
+        self.next_retry_at == 0 || now >= self.next_retry_at
+    }
+
+    /// 记录一次实际进入 Core 的尝试。失败退避窗口不清空——退避只由成功清除，
+    /// 避免失败后每次前台唤醒都重试。
+    pub fn record_attempt(&mut self, now: i64) {
+        self.last_attempt_at = now;
+    }
+
+    /// 记录失败并推进退避。
+    pub fn record_failure(&mut self, now: i64) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        let exponent = self.consecutive_failures.min(5) - 1;
+        let backoff = Self::BASE_RETRY_BACKOFF_SECONDS
+            .saturating_mul(1_i64 << exponent)
+            .min(Self::MAX_RETRY_BACKOFF_SECONDS);
+        self.next_retry_at = now.saturating_add(backoff);
+    }
+
+    /// 记录成功：清除退避。
+    pub fn record_success(&mut self, now: i64) {
+        self.last_attempt_at = now;
+        self.next_retry_at = 0;
+        self.consecutive_failures = 0;
     }
 }
 

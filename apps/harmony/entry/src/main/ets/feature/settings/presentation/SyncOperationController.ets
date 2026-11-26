@@ -12,7 +12,7 @@ import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { NativeWriterCoreBridge } from '../../../corebridge/NativeWriterCoreBridge'
 import { NetworkStatusService, NetworkSnapshot } from '../../../platform/network/NetworkStatusService'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../../../platform/diagnostics/HarmonyDiagnosticEvents'
-import { SyncOutcome, SyncTriggerReason, isHandoffTrigger } from './SyncRunTypes'
+import { SyncOutcome, SyncTriggerReason, bypassSyncDebounce, isHandoffTrigger } from './SyncRunTypes'
 import { SyncEntrySource, SyncRunPresentationState } from './SyncRunPresentationState'
 import {
   ActiveWritingSessionRegistry,
@@ -300,9 +300,11 @@ export class SyncOperationController {
         async (scope: SyncBarrierScope): Promise<SyncOutcome> => {
           // 同步前刷新网络状态，让 Core 使用当前而非启动时的网络快照。
           await this.refreshNetworkState()
-          // Issue #1058：交接类触发把触发原因传给 Core 诊断，并只跳过 Core 的周期防抖；
-          // 不改变对象级 LWW 与正文三路比较（force_sync 语义仅"跳过间隔"）。
-          const forceSync: boolean = isHandoffTrigger(trigger)
+          // Issue #1058 / #1065：把触发原因传给 Core 诊断，并按触发类型决定是否
+          // 只跳过 Core 的调度防抖；不改变对象级 LWW 与正文三路比较（force_sync
+          // 语义仅"跳过防抖窗口"）。用户手动入口与交接类触发跳过防抖，周期 timer
+          // 与 durable_commit 唤醒由调度器/间隔合并决定，仍走 Core 防抖。
+          const forceSync: boolean = bypassSyncDebounce(trigger)
           const result = await this.syncBridge.performSync(trigger, forceSync)
           if (!result.success) {
             // Issue #1017：失败必须带稳定阶段/分类/operationId/耗时，HiLog 不记 rawError。

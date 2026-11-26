@@ -155,6 +155,52 @@ impl SyncProvider for GitHttpsProvider {
         Ok(self.snapshot()?.head.map(|head| head.to_string()))
     }
 
+    /// 只读远端 refs 的轻量探测。空闲轮询用它把远端 HEAD 与上次消费的提交
+    /// 比较，不 fetch、不 flatten tree；HEAD 没变就直接结束本轮。
+    fn probe_remote_revision(&self) -> Result<Option<String>, ProviderError> {
+        repository::probe_head(&self.cache_dir, &self.config, &self.network_accounting)
+            .map(|head| head.map(|oid| oid.to_string()))
+    }
+
+    /// 以固定快照为 head、用本地缓存的 commit 做 tree diff。
+    ///
+    /// 只有当 `base_revision` 对应提交仍在本地缓存时才能给出差异；否则返回
+    /// `None`，由调用方回到完整扫描（迁移/浅克隆/缓存被清理）。
+    fn changed_paths_since(
+        &self,
+        base_revision: &str,
+    ) -> Result<Option<Vec<String>>, ProviderError> {
+        let snapshot = self.snapshot()?;
+        let Some(head) = snapshot.head else {
+            return Ok(None);
+        };
+        let repo = repository::open_or_init(&self.cache_dir)?;
+        repository::changed_paths_between(&repo, base_revision, head)
+    }
+
+    /// HEAD 已确认未变时，用本地缓存提交构造快照，省掉一次 fetch。
+    fn warm_snapshot_from_cache(&self, revision: &str) -> bool {
+        let Ok(mut guard) = self.snapshot.lock() else {
+            return false;
+        };
+        if guard.is_some() {
+            return true;
+        }
+        let Ok(oid) = git2::Oid::from_str(revision) else {
+            return false;
+        };
+        let Ok(repo) = repository::open_or_init(&self.cache_dir) else {
+            return false;
+        };
+        match repository::snapshot_from_commit(&repo, oid) {
+            Ok(snapshot) => {
+                *guard = Some(snapshot);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
         let snapshot = self.snapshot()?;
         let needle = if prefix.is_empty() {

@@ -184,13 +184,17 @@ pub(crate) fn execute_lww_sync_attempt(
         }
     }
 
-    upload_manifest(
-        provider,
-        &outcome.remote_manifest_path,
-        &outcome.manifest_json,
-        &outcome.remote_tree_files,
-        cancellation_token,
-    )?;
+    // 远端 manifest 已经与新快照语义相同时不再写：同一份业务状态不应该因为
+    // 序列化格式（compact/pretty、字段顺序）或记录顺序差异制造一次远端提交。
+    if !outcome.manifest_unchanged {
+        upload_manifest(
+            provider,
+            &outcome.remote_manifest_path,
+            &outcome.manifest_json,
+            &outcome.remote_tree_files,
+            cancellation_token,
+        )?;
+    }
 
     apply_outcome_status(result, &outcome, remote_prefix);
 

@@ -67,6 +67,8 @@ pub mod target_lifecycle;
 pub mod tests;
 pub mod types;
 pub mod url;
+/// 对象级本地版本快照（空闲同步不变化判定 / 增量 target 选择，Issue #1065）。
+pub(crate) mod version_snapshot;
 
 pub use provider::*;
 pub use service::*;

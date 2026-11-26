@@ -241,6 +241,21 @@ impl AppDataGroup {
         }
     }
 
+    /// 该 group 可能拥有文件的本地目录前缀（相对 App 根）。
+    ///
+    /// 扫描器用它剪枝：一个 group 只下探自己拥有的目录，不再为每个 App 数据组
+    /// 重复遍历整个 app 根（星图图组与统计分区数量随数据增长，全根遍历是
+    /// 空闲同步的主要空转源）。单文件所在目录（如 `settings.sync.json`）不出现在
+    /// 这里，由 WalkDir 的顶层文件条目直接匹配。
+    pub fn local_walk_roots(&self) -> Vec<String> {
+        match self {
+            Self::Global => vec!["agent/conversations".to_string()],
+            Self::StarmapIndex => vec!["starmaps/library".to_string()],
+            Self::Starmap(id) => vec![format!("starmaps/{id}")],
+            Self::StatsDevice(id) => vec![format!("stats/events/{id}")],
+        }
+    }
+
     /// 从远端 catalog 中的稳定 id 解析 group。
     pub fn from_id(id: &str) -> crate::Result<Self> {
         if id == "global" {
@@ -1045,7 +1060,7 @@ impl SyncPlan {
 /// `deleted_at_ms` 仅在 `op == "delete"` 时有值，记录精确的删除时间戳，
 /// 优先于 `updated_at_ms` 作为 LWW 比较时间（见 `lww_record_time`）。
 /// `device_id` 用于 LWW 平局决胜：时间戳相同时字典序大的 device_id 获胜。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestFileRecord {
     pub path: String,
     pub content_hash: String,
@@ -1068,9 +1083,37 @@ fn default_schema_version() -> u32 {
 /// `files` 中的 `content_hash` 用于三路比较和变更检测。
 /// manifest 是 LWW 同步的唯一事实来源：所有文件的存在/删除/修改状态
 /// 均以 manifest 记录为准，而非文件系统快照。
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SyncManifest {
     pub files: Vec<ManifestFileRecord>,
+}
+
+impl SyncManifest {
+    /// 语义相等：按 path 排序后的记录逐字段比较，与 JSON 排布/缩进无关。
+    ///
+    /// 远端 manifest 的字节形式（compact/pretty、字段顺序）不是业务语义；
+    /// 发布判定只认这份强类型快照。比较前两边都按 `path` 稳定排序，
+    /// 同一组记录不会因遍历顺序不同制造假差异。
+    pub fn semantically_equals(&self, other: &Self) -> bool {
+        if self.files.len() != other.files.len() {
+            return false;
+        }
+        let mut left: Vec<&ManifestFileRecord> = self.files.iter().collect();
+        let mut right: Vec<&ManifestFileRecord> = other.files.iter().collect();
+        left.sort_by(|a, b| a.path.cmp(&b.path));
+        right.sort_by(|a, b| a.path.cmp(&b.path));
+        left == right
+    }
+
+    /// 稳定序列化：先按 `path` 排序，再输出 compact JSON。
+    ///
+    /// 语义不变的 manifest 必须得到逐字节一致的结果，否则每次同步都会因为
+    /// 记录顺序或缩进差异制造一次伪提交。
+    pub fn canonical_json(&self) -> crate::Result<String> {
+        let mut sorted = self.clone();
+        sorted.files.sort_by(|a, b| a.path.cmp(&b.path));
+        serde_json::to_string(&sorted).map_err(crate::Error::Json)
+    }
 }
 
 /// 删除墓碑 — 记录已删除文件的信息，用于同步时通知远端。

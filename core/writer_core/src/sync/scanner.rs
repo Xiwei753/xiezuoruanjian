@@ -59,7 +59,34 @@ pub(crate) fn scan_for_sync_group(
 ) -> crate::Result<Vec<SyncFileEntry>> {
     let mut entries = Vec::new();
 
-    for item in walkdir::WalkDir::new(sync_root).into_iter() {
+    // 一个 App 数据组只下探自己拥有的目录。此前每组都从 app 根 WalkDir 一遍，
+    // 组数量随星图/统计分区增长，空闲轮询的代价是 O(组数 × 全根文件数)。
+    let walk_roots = app_group
+        .map(AppDataGroup::local_walk_roots)
+        .unwrap_or_default();
+    let keep_dir = move |rel: &str| -> bool {
+        if walk_roots.is_empty() {
+            return true;
+        }
+        walk_roots
+            .iter()
+            .any(|root| root == rel || root.starts_with(&format!("{rel}/")))
+    };
+
+    let walker = walkdir::WalkDir::new(sync_root)
+        .into_iter()
+        .filter_entry(|item| {
+            if item.depth() == 0 || !item.file_type().is_dir() {
+                return true;
+            }
+            let Ok(rel) = item.path().strip_prefix(sync_root) else {
+                return true;
+            };
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            keep_dir(&rel)
+        });
+
+    for item in walker {
         let entry = item.map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "scan_for_sync: walkdir error under {}: {e}",
@@ -131,9 +158,10 @@ pub(crate) fn scan_for_sync_group(
                 sync_kind,
             });
         } else {
-            // 非 白名单（ignored）文件：metadata / hash 失败不 Err
-            // （下游只用 ignored 文件的路径，不用其 hash/mtime）。
-            // 仍尝试取 mtime/hash 以便诊断，失败则用 fallback 值。
+            // 非白名单（ignored）文件：下游只用路径，不参与 hash/三路比较。
+            // 不再为每个 ignored 文件读内容算 MD5——trash/log/缓存目录的文件数
+            // 远多于业务对象，读全文是空闲扫描的主要空转成本。mtime 取自
+            // WalkDir 已缓存的 metadata，I/O 失败不 Err。
             let modified_time = entry
                 .metadata()
                 .ok()
@@ -141,12 +169,11 @@ pub(crate) fn scan_for_sync_group(
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            let file_hash = crate::sync::hash::content_md5_file(&absolute_path).unwrap_or_default();
 
             entries.push(SyncFileEntry {
                 relative_path: rel_path,
                 absolute_path: absolute_path.to_string_lossy().into_owned(),
-                file_hash,
+                file_hash: String::new(),
                 modified_time,
                 sync_kind,
             });

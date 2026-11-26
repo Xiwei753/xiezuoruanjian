@@ -16,8 +16,10 @@
 // Issue #629 评论6/7/8/9/11/14 的各项 close / save / leave 语义原样迁移到这里。
 
 import hilog from '@ohos.hilog'
+import emitter from '@ohos.events.emitter'
 import { util } from '@kit.ArkTS'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
+import { SYNC_DURABLE_COMMIT_EVENT_ID } from '../../settings/presentation/SyncRunTypes'
 import { EditorSessionSnapshot, EditorEditResult, EditorTransactionCause, EditorOperationKind } from '../../../corebridge/dto/EditorDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { ChapterVersion, ChapterSaveReceipt } from '../../../corebridge/dto/ProjectDtos'
@@ -899,6 +901,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         return false
       }
       this.applySaveReceipt(request, receipt)
+      // Issue #1065：正文已 durable，通知调度器"有新的已落盘事实待上传"。
+      // 调度器按用户间隔把多次提交合并成一次同步，这里不直接发起同步。
+      emitter.emit({ eventId: SYNC_DURABLE_COMMIT_EVENT_ID })
       // 正文已 durable，精确 ack 本次请求携带的证明事件；不能按累计
       // revision 清空，否则并发新编辑会丢失。
       this.statsQueue.acknowledgeProofEvents(request.proofEventIds)

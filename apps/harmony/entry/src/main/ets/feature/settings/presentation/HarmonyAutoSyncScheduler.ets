@@ -33,6 +33,7 @@
 // 尚未落库时按该契约编码，待桥接落地后统一验证。
 
 import hilog from '@ohos.hilog'
+import emitter from '@ohos.events.emitter'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { FullSyncState, SyncConfig } from '../../../corebridge/dto/SyncDtos'
 import { NativeSyncBridge } from '../../../corebridge/native/NativeSyncBridge'
@@ -40,7 +41,7 @@ import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { HarmonyLifecycle, SyncLifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { NetworkStatusService } from '../../../platform/network/NetworkStatusService'
 import { SyncOperationController } from './SyncOperationController'
-import { SyncOutcome, SyncTriggerReason } from './SyncRunTypes'
+import { SYNC_DURABLE_COMMIT_EVENT_ID, SyncOutcome, SyncTriggerReason } from './SyncRunTypes'
 import { NearbyDeviceSyncCoordinator } from '../../../platform/peer/NearbyDeviceSyncCoordinator'
 
 const TAG = 'SyncScheduler'
@@ -89,6 +90,15 @@ export class HarmonyAutoSyncScheduler {
   private handoffPendingGeneration: number = 0
   /** 最近一次分配的交接请求代次（单调递增，不因完成而回退）。 */
   private handoffRequestGeneration: number = 0
+  /**
+   * 待上传的 durable 提交事实（Issue #1065）：多次业务事务提交只合并成一次上传
+   * 唤醒；实际发起仍按用户设置的同步间隔，不按保存次数同步。
+   */
+  private uploadWakePending: boolean = false
+  /** 合并上传唤醒的一次性 timer（-1 表示未挂）。 */
+  private uploadWakeTimerId: number = -1
+  /** durable 提交事件订阅的注销函数（null 表示未订阅）。 */
+  private unsubscribeDurableCommit: (() => void) | null = null
 
   private constructor() {
   }
@@ -123,6 +133,13 @@ export class HarmonyAutoSyncScheduler {
     this.unsubscribeNetwork = NetworkStatusService.getInstance().onNetworkRestored((): void => {
       this.onNetworkRestored()
     })
+    const durableCommitHandler: ((data: emitter.EventData) => void) = (_data: emitter.EventData): void => {
+      this.onDurableCommit()
+    }
+    emitter.on({ eventId: SYNC_DURABLE_COMMIT_EVENT_ID }, durableCommitHandler)
+    this.unsubscribeDurableCommit = (): void => {
+      emitter.off(SYNC_DURABLE_COMMIT_EVENT_ID, durableCommitHandler)
+    }
     this.isForeground = lifecycle.isForeground()
     hilog.info(DOMAIN, TAG, 'attach: lifecycle and network listeners registered, awaiting core ready')
   }
@@ -155,6 +172,12 @@ export class HarmonyAutoSyncScheduler {
       unsubscribe()
       this.unsubscribeNetwork = null
     }
+    const unsubscribeDurable: (() => void) | null = this.unsubscribeDurableCommit
+    if (unsubscribeDurable !== null) {
+      unsubscribeDurable()
+      this.unsubscribeDurableCommit = null
+    }
+    this.clearUploadWake()
     this.stopForegroundTimer()
     this.isForeground = false
   }
@@ -188,6 +211,7 @@ export class HarmonyAutoSyncScheduler {
       this.stopForegroundTimer()
       // 自动同步被关闭：不再保留待同步事实（用户已明确不做自动同步）。
       this.handoffPendingGeneration = 0
+      this.clearUploadWake()
       hilog.info(DOMAIN, TAG, 'reconfigure: auto sync inactive, foreground timer stopped')
       return
     }
@@ -239,6 +263,10 @@ export class HarmonyAutoSyncScheduler {
       return
     }
     this.startForegroundTimer()
+    if (this.uploadWakePending) {
+      // 回前台后重新按间隔安排合并上传（后台期间到达的 durable 提交）。
+      this.scheduleUploadWake()
+    }
     if (trigger !== null) {
       this.requestHandoffSync(trigger)
       return
@@ -256,6 +284,8 @@ export class HarmonyAutoSyncScheduler {
    */
   onBackground(): void {
     this.isForeground = false
+    // 待上传事实保留；只取消后台无法执行的一次性唤醒，回前台后重新安排。
+    this.cancelUploadWakeTimer()
     this.stopForegroundTimer()
     hilog.info(DOMAIN, TAG, 'onBackground: foreground timer stopped, awaiting post-save handoff')
   }
@@ -335,6 +365,73 @@ export class HarmonyAutoSyncScheduler {
     }
   }
 
+  // ── durable 提交上传唤醒（Issue #1065）──
+
+  /**
+   * 业务事务已 durable 落盘（正文/设置/统计数据提交成功）后的上传唤醒。
+   *
+   * 这里只声明"有新的已落盘事实待上传"，不直接同步：多次提交合并成一个待上传
+   * 标记，并只在距最近成功同步满足用户设置的间隔时发起；同步仍经
+   * SyncOperationController 的唯一事务入口，不绕过保存屏障与单一运行任务。
+   */
+  onDurableCommit(): void {
+    if (!this.coreReady || !this.isAutoSyncActive()) {
+      return
+    }
+    this.uploadWakePending = true
+    this.scheduleUploadWake()
+  }
+
+  /** 按用户间隔安排一次合并后的上传唤醒（已挂 timer 时不再重复挂）。 */
+  private scheduleUploadWake(): void {
+    if (this.uploadWakeTimerId !== -1) {
+      return
+    }
+    const intervalMs: number = this.effectiveIntervalMs()
+    const lastSuccessMs: number | null = this.lastSuccessMs
+    const elapsedMs: number = lastSuccessMs === null
+      ? intervalMs
+      : Math.max(0, Date.now() - lastSuccessMs)
+    const delayMs: number = Math.max(0, intervalMs - elapsedMs)
+    if (delayMs === 0) {
+      this.fireUploadWake()
+      return
+    }
+    hilog.info(DOMAIN, TAG, 'upload wake armed: delayMs=%{public}s', delayMs.toString())
+    this.uploadWakeTimerId = setTimeout((): void => {
+      this.uploadWakeTimerId = -1
+      this.fireUploadWake()
+    }, delayMs)
+  }
+
+  /** 到点后发起一次合并上传；后台或自动同步已关闭时保留待上传事实。 */
+  private fireUploadWake(): void {
+    this.uploadWakeTimerId = -1
+    if (!this.uploadWakePending) {
+      return
+    }
+    if (!this.isForeground || !this.isAutoSyncActive()) {
+      hilog.info(DOMAIN, TAG, 'upload wake deferred: foreground=%{public}s autoSync=%{public}s',
+        this.isForeground.toString(), this.isAutoSyncActive().toString())
+      return
+    }
+    this.uploadWakePending = false
+    this.requestHandoffSync('durable_commit')
+  }
+
+  /** 丢弃待上传事实并取消合并 timer（自动同步被关闭或解绑时）。 */
+  private clearUploadWake(): void {
+    this.uploadWakePending = false
+    this.cancelUploadWakeTimer()
+  }
+
+  private cancelUploadWakeTimer(): void {
+    if (this.uploadWakeTimerId !== -1) {
+      clearTimeout(this.uploadWakeTimerId)
+      this.uploadWakeTimerId = -1
+    }
+  }
+
   // ── 交接同步（Issue #1058）──
 
   /** 发起一次交接同步（不等待结果）；失败保留待同步事实，由前台/网络恢复重试。 */
@@ -393,6 +490,10 @@ export class HarmonyAutoSyncScheduler {
     // 同步结束（无论终态）后重读 Core：成功类由 Core 写入新的 last_success_time，
     // 失败类 Core 保留旧值；这里绝不自行把当前时间当成成功时间。
     await this.refreshLastSuccessFromCore()
+    if (this.uploadWakePending) {
+      // 本轮同步期间又有新的 durable 提交：留待下一轮，不把旧快照当最新。
+      this.scheduleUploadWake()
+    }
   }
 
   // ── 内部实现 ──
@@ -415,6 +516,9 @@ export class HarmonyAutoSyncScheduler {
     // 同步结束（无论终态）后重读 Core：成功类由 Core 写入新的 last_success_time，
     // 失败类 Core 保留旧值；这里绝不自行把当前时间当成成功时间。
     await this.refreshLastSuccessFromCore()
+    if (this.uploadWakePending) {
+      this.scheduleUploadWake()
+    }
   }
 
   /** 从 Core 当前持久化状态刷新最近成功时刻；读失败时保留上次读到的缓存值。 */

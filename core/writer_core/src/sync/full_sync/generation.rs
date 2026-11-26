@@ -174,6 +174,16 @@ fn publish_snapshot_batch(
         })
         .unwrap_or_default();
 
+    // 固定基线的远端 tree：用来消除同内容 Put / 同 OID ReuseVersion /
+    // 不存在的 Delete。只有实际差异才进入 batch；全无差异时根本不发布。
+    let existing = match provider.list(generation_prefix) {
+        Ok(entries) => entries
+            .into_iter()
+            .map(|entry| (format!("{generation_prefix}/{}", entry.path), entry.version))
+            .collect::<std::collections::HashMap<_, _>>(),
+        Err(error) => return super::transfer_helpers::sync_result_from_provider_error(error),
+    };
+
     let mut mutations: Vec<BatchMutation> = Vec::new();
     let mut uploaded_files: Vec<String> = Vec::new();
 
@@ -214,6 +224,12 @@ fn publish_snapshot_batch(
             if let Some(blob_sha) = reusable_blob {
                 // 无本地修改，复用旧 visible generation 的 blob → ReuseVersion。
                 // 冲突路径也走这里：用远端 blob SHA，不读本地冲突正文。
+                // 远端该路径已经是同一 blob 时不再重复写入 batch。
+                if existing.get(&remote_path).map(RemoteVersion::as_str)
+                    == Some(blob_sha.as_str())
+                {
+                    continue;
+                }
                 mutations.push(BatchMutation::ReuseVersion {
                     path: remote_path,
                     version: RemoteVersion(blob_sha.clone()),
@@ -255,37 +271,51 @@ fn publish_snapshot_batch(
         }
     }
 
-    // manifest.sync.json 作为 Put 放进同一 batch。
+    // manifest.sync.json 作为 Put 放进同一 batch。序列化固定为"按 path 排序 +
+    // compact"，语义不变的 manifest 得到逐字节一致的结果；远端字节已经能解析成
+    // 同一份语义快照时保留远端字节，不再因为格式/顺序差异制造一次提交。
     let manifest_remote_path = format!(
         "{generation_prefix}/{}",
         crate::sync::lww::SYNC_MANIFEST_PATH
     );
-    let manifest_json = match serde_json::to_string(&manifest) {
+    let manifest_json = match manifest.canonical_json() {
         Ok(s) => s,
         Err(e) => {
-            return super::transfer_helpers::sync_result_from_error(crate::Error::Json(e));
+            return super::transfer_helpers::sync_result_from_error(e);
         }
     };
-    mutations.push(BatchMutation::Put {
-        path: manifest_remote_path,
-        content: manifest_json.into_bytes(),
-    });
+    let remote_manifest_unchanged = match provider.read(&manifest_remote_path) {
+        Ok(Some(object)) => match serde_json::from_slice::<crate::sync::types::SyncManifest>(
+            &object.content,
+        ) {
+            Ok(remote_manifest) => remote_manifest.semantically_equals(&manifest),
+            Err(_) => false,
+        },
+        Ok(None) => false,
+        Err(error) => return super::transfer_helpers::sync_result_from_provider_error(error),
+    };
+    if !remote_manifest_unchanged {
+        mutations.push(BatchMutation::Put {
+            path: manifest_remote_path.clone(),
+            content: manifest_json.into_bytes(),
+        });
+    }
 
     // Remove paths that existed in the previous stable tree but are absent
     // from the merged snapshot, including old generation directories left by
     // the migration.
-    let desired: std::collections::HashSet<String> = mutations
+    // 期望树来自"合并后的 manifest"，不是"本轮 mutation 列表"：没有进入
+    // batch 的路径同样属于期望树（它们已在基线 tree 里，只是不需要重写）。
+    let mut desired: std::collections::HashSet<String> = manifest
+        .files
         .iter()
-        .map(|mutation| mutation.path().to_string())
+        .filter(|record| record.op != "delete")
+        .map(|record| format!("{generation_prefix}/{}", record.path))
         .collect();
-    let existing = match provider.list(generation_prefix) {
-        Ok(entries) => entries,
-        Err(error) => return super::transfer_helpers::sync_result_from_provider_error(error),
-    };
-    for entry in existing {
-        let path = format!("{generation_prefix}/{}", entry.path);
-        if !desired.contains(&path) {
-            mutations.push(BatchMutation::Delete { path });
+    desired.insert(manifest_remote_path.clone());
+    for path in existing.keys() {
+        if !desired.contains(path) {
+            mutations.push(BatchMutation::Delete { path: path.clone() });
         }
     }
 
@@ -301,9 +331,13 @@ fn publish_snapshot_batch(
     // PreconditionFailed 表示远端在本轮规划后又发生了变化。不能在这里重放
     // 同一批 mutations：provider 可能已重新 fetch 到新 HEAD，重放会绕过 LWW。
     // 将错误交给完整同步入口，由它重新 Prepare → 读取 catalog → LWW → 生成新 batch。
-    let commit_message = format!("sujian: publish tree {generation_prefix}");
-    if let Err(error) = provider.commit_batch(&mutations, &commit_message) {
-        return super::transfer_helpers::sync_result_from_provider_error(error);
+    // 整批都被判定为 no-op 时连只读前置条件都不再需要：固定基线的 tree 已经
+    // 就是目标 tree，直接返回，不创建提交。
+    if !mutations.is_empty() {
+        let commit_message = format!("sujian: publish tree {generation_prefix}");
+        if let Err(error) = provider.commit_batch(&mutations, &commit_message) {
+            return super::transfer_helpers::sync_result_from_provider_error(error);
+        }
     }
     let mut r = crate::sync::types::SyncResult::success();
     r.uploaded_files = uploaded_files;

@@ -215,6 +215,35 @@ pub trait SyncProvider: Send + Sync {
         Ok(None)
     }
 
+    /// 轻量远端版本探测：只读远端 refs，不下载对象、不构建完整 blob map。
+    ///
+    /// `remote_revision` 读取的是本轮使用的固定快照；空闲轮询只需要知道
+    /// "远端 HEAD 还是不是上次消费的那个提交"，用本方法避免为一次无变化检查
+    /// fetch + flatten 整棵树。默认实现回退到 `remote_revision`（对没有廉价
+    /// refs 探测的 Provider 保持原语义）。
+    fn probe_remote_revision(&self) -> Result<Option<String>, error::ProviderError> {
+        self.remote_revision()
+    }
+
+    /// 相对 `base_revision` 发生变化的远端路径（新增/修改/删除），`None` 表示
+    /// 该 Provider 无法可靠给出差异，调用方必须回到完整扫描。
+    ///
+    /// Git 实现用固定 commit 的 tree diff（相同子树直接跳过），因此代价只跟
+    /// 实际变化的路径数相关，不跟仓库体积相关。
+    fn changed_paths_since(
+        &self,
+        _base_revision: &str,
+    ) -> Result<Option<Vec<String>>, error::ProviderError> {
+        Ok(None)
+    }
+
+    /// 远端 HEAD 已被轻量探测确认未变时，用本地缓存的 commit/tree 构造本轮
+    /// 固定快照，避免再走一次 fetch。返回 `false` 表示本地没有该提交，
+    /// 调用方继续走正常 fetch。
+    fn warm_snapshot_from_cache(&self, _revision: &str) -> bool {
+        false
+    }
+
     /// 枚举远端以 `prefix + "/"` 开头的对象，剥掉前缀返回。
     fn list(&self, prefix: &str) -> Result<Vec<model::RemoteEntry>, error::ProviderError>;
 

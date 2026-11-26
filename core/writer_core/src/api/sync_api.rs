@@ -260,10 +260,26 @@ impl Drop for SyncDiagnosticPhase {
     }
 }
 
-struct LocalSyncVersionSnapshot {
-    fingerprint: String,
-    target_fingerprints: std::collections::BTreeMap<String, String>,
-    no_change_targets: Vec<crate::sync::types::TargetSyncResult>,
+/// 一次同步的显式运行模式。
+///
+/// `force_sync` 只表示"绕过周期间隔/防抖"（手动、启动、交接、前台、网络恢复），
+/// 不再表示"绕过本地/远端版本比对"。真正需要重建索引或重新核对全树的场景
+/// （迁移、基线缺失、用户显式要求修复）走 [`SyncRunMode::RebuildIndex`]。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncRunMode {
+    Incremental,
+    RebuildIndex,
+}
+
+impl SyncRunMode {
+    /// 平台触发名 `rebuild` / `full_scan` 表示显式重建；其余一律增量。
+    fn from_trigger(trigger: &str) -> Self {
+        if trigger.eq_ignore_ascii_case("rebuild") || trigger.eq_ignore_ascii_case("full_scan") {
+            Self::RebuildIndex
+        } else {
+            Self::Incremental
+        }
+    }
 }
 
 fn add_fingerprint_field(hasher: &mut Sha256, key: &str, value: &[u8]) {
@@ -273,180 +289,28 @@ fn add_fingerprint_field(hasher: &mut Sha256, key: &str, value: &[u8]) {
     hasher.update(value);
 }
 
-fn add_local_objects_to_fingerprint(
-    hasher: &mut Sha256,
-    root_key: &str,
-    entries: Vec<crate::sync::types::SyncFileEntry>,
-) {
-    let mut objects: Vec<_> = entries
-        .into_iter()
-        .filter(|entry| matches!(&entry.sync_kind, crate::sync::types::SyncKind::Upload))
-        .collect();
-    objects.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    for entry in objects {
-        add_fingerprint_field(
-            hasher,
-            &format!("{root_key}:{}", entry.relative_path),
-            entry.file_hash.as_bytes(),
-        );
-    }
-}
-
-fn add_optional_file_to_fingerprint(
-    hasher: &mut Sha256,
-    key: &str,
-    path: &std::path::Path,
-) -> crate::Result<()> {
-    match std::fs::read(path) {
-        Ok(bytes) => add_fingerprint_field(hasher, key, &bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            add_fingerprint_field(hasher, key, b"<absent>");
-        }
-        Err(error) => return Err(crate::Error::Io(error)),
-    }
-    Ok(())
-}
-
-/// Snapshot the current syncable objects and group state. `None` means a known
-/// pending operation or migration makes the fast no-change path ineligible.
+/// 对象级本地版本快照。
+///
+/// 只由已确认的 manifest 对象版本与持久化 mutation 账本组成；不读取
+/// `state.local.json` 的运行状态字段，也不扫描磁盘。`NoChanges` 落盘的
+/// `last_sync_time` 因此不会让下一轮 checkpoint 失效（Issue #1065）。
 fn local_sync_version_snapshot(
     app_data_root: &std::path::Path,
     projects_root: &std::path::Path,
-) -> crate::Result<Option<LocalSyncVersionSnapshot>> {
-    if crate::writing_stats::migration::legacy_events_present(app_data_root)
-        || app_data_root
-            .join("app-meta/sync/manifest.sync.json")
-            .exists()
-        || app_data_root.join("app-meta/sync/sync_state.json").exists()
-    {
-        return Ok(None);
-    }
+) -> crate::Result<crate::sync::version_snapshot::LocalVersionSnapshot> {
+    crate::sync::version_snapshot::collect(app_data_root, projects_root)
+}
 
-    match crate::sync::pending_deleted::load_pending_deleted_targets(app_data_root) {
-        Ok(pending) if pending.is_empty() => {}
-        Ok(_) | Err(_) => return Ok(None),
+/// 把运行时快照转换成 checkpoint 里的持久化版本。
+fn to_checkpoint_version(
+    version: &crate::sync::version_snapshot::LocalTargetVersion,
+) -> crate::sync::full_sync_state::TargetVersionCheckpoint {
+    crate::sync::full_sync_state::TargetVersionCheckpoint {
+        object_fingerprint: version.object_fingerprint.clone(),
+        pending_fingerprint: version.pending_fingerprint.clone(),
+        pending_objects: u32::try_from(version.pending_objects).unwrap_or(u32::MAX),
+        eligible: version.eligible,
     }
-    match crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root) {
-        Ok(pending) if pending.is_empty() => {}
-        Ok(_) | Err(_) => return Ok(None),
-    }
-
-    let mut target_fingerprints = std::collections::BTreeMap::new();
-    let app_groups =
-        crate::sync::app_data_group_catalog::discover_local_app_data_groups(app_data_root)?;
-    let mut no_change_targets = Vec::new();
-    for group in app_groups {
-        let state = crate::sync::SyncService::load_sync_state_read_only_for_group(
-            app_data_root,
-            &group,
-            None,
-        )?;
-        if state.last_error.is_some()
-            || !state.tombstones.is_empty()
-            || !state.conflicted_files.is_empty()
-            || !state.pending_take_remote.is_empty()
-        {
-            return Ok(None);
-        }
-        let mut target_hasher = Sha256::new();
-        let app_entries = crate::sync::scanner::scan_for_sync_group(
-            app_data_root,
-            crate::sync::types::SyncScope::App,
-            Some(&group),
-        )?;
-        add_local_objects_to_fingerprint(&mut target_hasher, "objects", app_entries);
-        add_optional_file_to_fingerprint(
-            &mut target_hasher,
-            "state",
-            &app_data_root.join(group.local_state_path()),
-        )?;
-        add_optional_file_to_fingerprint(
-            &mut target_hasher,
-            "manifest",
-            &app_data_root.join(group.local_manifest_path()),
-        )?;
-        add_optional_file_to_fingerprint(
-            &mut target_hasher,
-            "conflicts",
-            &app_data_root.join(group.local_conflicts_path()),
-        )?;
-        let group_id = group.id();
-        target_fingerprints.insert(
-            format!("app:{group_id}"),
-            format!("{:x}", target_hasher.finalize()),
-        );
-        let target = crate::sync::types::SyncTarget::app_data_group(group);
-        no_change_targets.push(crate::sync::types::TargetSyncResult {
-            target_kind: "app".to_string(),
-            project_id: None,
-            remote_prefix: target.remote_prefix,
-            group_id: target.app_group.as_ref().map(|group| group.id()),
-            failure_path: None,
-            failure_phase: None,
-            result: crate::sync::types::SyncResult::no_changes(),
-            deleted_resolution: None,
-            local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
-        });
-    }
-
-    let projects = crate::project::list_projects(projects_root)?;
-    for project in projects {
-        let project_root = projects_root.join(&project.id);
-        if project_root.join("app-meta/sync/sync_state.json").exists() {
-            return Ok(None);
-        }
-        let entries = crate::sync::scanner::scan_for_sync_group(
-            &project_root,
-            crate::sync::types::SyncScope::Project,
-            None,
-        )?;
-        let mut target_hasher = Sha256::new();
-        add_local_objects_to_fingerprint(&mut target_hasher, "objects", entries);
-        let state = crate::sync::SyncService::load_sync_state_read_only(&project_root, None)?;
-        if state.last_error.is_some()
-            || !state.tombstones.is_empty()
-            || !state.conflicted_files.is_empty()
-            || !state.pending_take_remote.is_empty()
-        {
-            return Ok(None);
-        }
-        for (name, relative_path) in [
-            ("state", "app-meta/sync/state.local.json"),
-            ("manifest", "app-meta/sync/manifest.sync.json"),
-            ("conflicts", "app-meta/sync/conflicts.json"),
-        ] {
-            add_optional_file_to_fingerprint(
-                &mut target_hasher,
-                name,
-                &project_root.join(relative_path),
-            )?;
-        }
-        target_fingerprints.insert(
-            format!("project:{}", project.id),
-            format!("{:x}", target_hasher.finalize()),
-        );
-        no_change_targets.push(crate::sync::types::TargetSyncResult {
-            target_kind: "project".to_string(),
-            project_id: Some(project.id.clone()),
-            remote_prefix: format!("projects/{}", project.id),
-            group_id: None,
-            failure_path: None,
-            failure_phase: None,
-            result: crate::sync::types::SyncResult::no_changes(),
-            deleted_resolution: None,
-            local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
-        });
-    }
-
-    let mut hasher = Sha256::new();
-    for (target, fingerprint) in &target_fingerprints {
-        add_fingerprint_field(&mut hasher, target, fingerprint.as_bytes());
-    }
-    Ok(Some(LocalSyncVersionSnapshot {
-        fingerprint: format!("{:x}", hasher.finalize()),
-        target_fingerprints,
-        no_change_targets,
-    }))
 }
 
 fn sync_target_checkpoint_key(target: &crate::sync::full_sync::PlannedTarget) -> Option<String> {
@@ -925,17 +789,29 @@ impl WriterCoreApi {
         }
         drop(core);
         drop(_recovery_workspace_lock);
+        // 平台触发原因只决定"是否绕过周期间隔"（force_sync），以及是否走显式
+        // 重建；它不再影响本地/远端版本比对，也不影响冲突裁决。
+        let trigger_label = progress_sink
+            .as_ref()
+            .and_then(SyncProgressSink::trigger)
+            .or(trigger_override.as_deref())
+            .unwrap_or(if force_sync { "manual" } else { "auto" })
+            .to_string();
+        let run_mode = SyncRunMode::from_trigger(&trigger_label);
         record_sync_diagnostic("sync.run.start", "sync.run", {
             let mut fields = sync_diagnostic_fields(&operation_id, "prepare", None);
             fields.insert(
                 "trigger".to_string(),
+                serde_json::Value::String(trigger_label.clone()),
+            );
+            fields.insert(
+                "run_mode".to_string(),
                 serde_json::Value::String(
-                    progress_sink
-                        .as_ref()
-                        .and_then(SyncProgressSink::trigger)
-                        .or(trigger_override.as_deref())
-                        .unwrap_or(if force_sync { "manual" } else { "auto" })
-                        .to_string(),
+                    match run_mode {
+                        SyncRunMode::Incremental => "incremental",
+                        SyncRunMode::RebuildIndex => "rebuild",
+                    }
+                    .to_string(),
                 ),
             );
             fields
@@ -943,6 +819,7 @@ impl WriterCoreApi {
         let mut result = self.perform_full_sync_once(
             config.clone(),
             force_sync,
+            run_mode,
             cancellation_token.clone(),
             progress_sink.clone(),
             target_progress,
@@ -968,6 +845,7 @@ impl WriterCoreApi {
                 result = self.perform_full_sync_once(
                     config.clone(),
                     force_sync,
+                    run_mode,
                     cancellation_token.clone(),
                     progress_sink.clone(),
                     target_progress,
@@ -997,6 +875,7 @@ impl WriterCoreApi {
                 result = self.perform_full_sync_once(
                     config.clone(),
                     force_sync,
+                    run_mode,
                     cancellation_token.clone(),
                     progress_sink.clone(),
                     target_progress,
@@ -1074,11 +953,90 @@ impl WriterCoreApi {
         result
     }
 
+    /// 持久化 checkpoint。
+    ///
+    /// - `succeeded == None`：这一轮的目标全部确认（无变化快速路径 / 无 target 需要处理）；
+    /// - `succeeded == Some(set)`：只确认集合内的 target，其余 target 保留上一轮条目，
+    ///   下一轮自然重试，不会因为一个 target 失败而让整份 checkpoint 失效。
+    /// - `published_revision`：本轮实际 push 成功的提交。自己推送产生的 HEAD 就是
+    ///   已被消费的远端状态，不再要求"前后 HEAD 相等"。
+    #[allow(clippy::too_many_arguments)]
+    fn persist_checkpoint(
+        &self,
+        app_data_root: &std::path::Path,
+        repository_identity: Option<&str>,
+        previous: Option<&crate::sync::full_sync_state::FullSyncCheckpoint>,
+        snapshot: Option<&crate::sync::version_snapshot::LocalVersionSnapshot>,
+        succeeded: Option<&std::collections::BTreeSet<String>>,
+        consumed_remote_revision: Option<&str>,
+        published_revision: Option<&str>,
+        success: bool,
+        operation_id: &str,
+    ) {
+        let Some(repository_identity) = repository_identity else {
+            return;
+        };
+        let now = chrono::Utc::now().timestamp();
+        let mut next =
+            previous.cloned().unwrap_or(crate::sync::full_sync_state::FullSyncCheckpoint {
+                repository_identity: repository_identity.to_string(),
+                remote_revision: String::new(),
+                local_object_fingerprint: String::new(),
+                target_fingerprints: std::collections::BTreeMap::new(),
+                target_versions: std::collections::BTreeMap::new(),
+                last_attempt_at: 0,
+                next_retry_at: 0,
+                consecutive_failures: 0,
+            });
+        next.repository_identity = repository_identity.to_string();
+        next.record_attempt(now);
+        if success {
+            next.record_success(now);
+            if let Some(snapshot) = snapshot {
+                if let Some(succeeded) = succeeded {
+                    let mut versions = std::collections::BTreeMap::new();
+                    for (key, version) in &snapshot.targets {
+                        if succeeded.contains(key) {
+                            versions.insert(key.clone(), to_checkpoint_version(version));
+                        } else if let Some(existing) = next.target_versions.get(key) {
+                            versions.insert(key.clone(), existing.clone());
+                        }
+                    }
+                    next.target_versions = versions;
+                } else {
+                    next.target_versions = snapshot
+                        .targets
+                        .iter()
+                        .map(|(key, version)| (key.clone(), to_checkpoint_version(version)))
+                        .collect();
+                }
+            }
+            // 远端已消费版本：优先本轮自己的推送，其次本轮固定快照的 HEAD。
+            if let Some(revision) = published_revision {
+                next.remote_revision = revision.to_string();
+            } else if let Some(revision) = consumed_remote_revision {
+                next.remote_revision = revision.to_string();
+            }
+        } else {
+            next.record_failure(now);
+            log::info!(
+                "[sync] operation {} failed; next auto retry at {} (consecutive={})",
+                operation_id,
+                next.next_retry_at,
+                next.consecutive_failures
+            );
+        }
+        if let Err(error) = next.save(app_data_root) {
+            log::warn!("[sync] failed to persist full-sync checkpoint: {error}");
+        }
+    }
+
     #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
     fn perform_full_sync_once(
         &self,
         config: SyncConfigDto,
         force_sync: bool,
+        run_mode: SyncRunMode,
         cancellation_token: Option<SyncCancellationToken>,
         progress_sink: Option<SyncProgressSink>,
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
@@ -1214,6 +1172,164 @@ impl WriterCoreApi {
             )
         };
         let repo_identity = repository_identity(&sync_config);
+        let checkpoint = crate::sync::full_sync_state::FullSyncCheckpoint::load(&app_data_root)
+            .ok()
+            .flatten();
+        let previous_was_converged = previous_full_sync_state.as_ref().is_some_and(|state| {
+            crate::sync::full_sync_state::FullSyncState::is_overall_success(&state.overall_status)
+                && state.failed_targets.is_empty()
+        });
+        let checkpoint_applicable =
+            checkpoint.as_ref().is_some_and(|checkpoint| {
+                previous_was_converged
+                    && repo_identity
+                        .as_ref()
+                        .is_some_and(|identity| checkpoint.repository_identity == *identity)
+            });
+
+        // 失败退避只约束自动触发。手动/启动/交接/前台/网络恢复（force_sync）
+        // 不受退避窗口限制，否则用户手动重试会被上一次失败挡住。
+        if !force_sync {
+            if let Some(checkpoint) = checkpoint.as_ref() {
+                let now = chrono::Utc::now().timestamp();
+                if !checkpoint.auto_retry_allowed(now) {
+                    log::info!(
+                        "[sync] auto sync skipped: retry backoff active until {} (failures={})",
+                        checkpoint.next_retry_at,
+                        checkpoint.consecutive_failures
+                    );
+                    return make_noop_result();
+                }
+            }
+        }
+
+        // A. 轻量远端探测：只读远端 refs。HEAD 与上次消费的提交一致且本地对象版本
+        // 也一致时，本轮不 fetch、不建 plan、不 staging、不发布，直接结束。
+        let revision_phase = SyncDiagnosticPhase::start_with_provider(
+            diagnostic_operation_id,
+            "remote_probe",
+            None,
+            provider.as_ref(),
+        );
+        let probed_revision = match provider.probe_remote_revision() {
+            Ok(revision) => revision,
+            Err(error) => {
+                revision_phase.finish_with_provider("error", provider.as_ref());
+                let core_error = crate::error::Error::from(error);
+                let status = crate::sync::full_sync::error_to_persist_status(&core_error);
+                let error_category = core_sync_category(&core_error);
+                let writer_error = crate::api::error::WriterError::from(core_error);
+                record_sync_phase_failure(
+                    diagnostic_operation_id,
+                    "remote_probe",
+                    &writer_error,
+                );
+                log::warn!(
+                    "[sync] remote_probe failed: error_code={}",
+                    writer_error.code()
+                );
+                let _ = self.record_full_sync_preflight_failure_typed(
+                    sync_status_to_wire(&status),
+                    "remote_probe".to_string(),
+                    error_category,
+                    "remote_probe".to_string(),
+                    writer_error.to_string(),
+                );
+                return Err(writer_error);
+            }
+        };
+        revision_phase.finish_with_provider("success", provider.as_ref());
+
+        let local_snapshot_phase = SyncDiagnosticPhase::start_with_provider(
+            diagnostic_operation_id,
+            "local_snapshot",
+            None,
+            provider.as_ref(),
+        );
+        let preflight_snapshot = match local_sync_version_snapshot(&app_data_root, &projects_root) {
+            Ok(snapshot) => {
+                local_snapshot_phase.finish_with_provider("success", provider.as_ref());
+                Some(snapshot)
+            }
+            Err(error) => {
+                local_snapshot_phase.finish_with_provider("error", provider.as_ref());
+                log::warn!("[sync] local object version snapshot failed; continuing with LWW: {error}");
+                None
+            }
+        };
+
+        // 待完成的删除/远端清理事务不在任何 target 的对象版本里，必须让它们
+        // 进入完整计划，不能被"无变化"快速路径或 target 过滤挡掉。
+        let lifecycle_pending = preflight_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.lifecycle_pending);
+        let remote_probed_unchanged = checkpoint_applicable
+            && !lifecycle_pending
+            && checkpoint.as_ref().is_some_and(|checkpoint| {
+                probed_revision.as_deref() == Some(checkpoint.remote_revision.as_str())
+            });
+
+        // 无变化快速路径：远端 HEAD 未变 + 每个 target 的业务对象版本与
+        // mutation 代次都等于 checkpoint 记录的那一轮。任何 target 不 eligible
+        // （冲突/错误/缺基线）都回落到完整 LWW，但只影响该 target 的判定。
+        if run_mode == SyncRunMode::Incremental && remote_probed_unchanged {
+            if let (Some(checkpoint), Some(snapshot)) =
+                (checkpoint.as_ref(), preflight_snapshot.as_ref())
+            {
+                // 还有未确认 mutation 的 target 必须再走一轮合并来确认
+                // （发布成功只代表远端已有内容，本地"已确认基线"要由下一次
+                // 合并把 known_files 推进到远端实际内容后才能清账）。
+                let all_match = checkpoint.target_versions.len() == snapshot.targets.len()
+                    && snapshot.targets.iter().all(|(key, version)| {
+                        version.pending_objects == 0
+                            && checkpoint
+                                .target_versions
+                                .get(key)
+                                .is_some_and(|stored| stored.matches(&to_checkpoint_version(version)))
+                    });
+                if all_match {
+                    log::info!(
+                        "[sync] full-sync checkpoint matched; returning no_changes without fetch or transfers"
+                    );
+                    let mut fields =
+                        sync_diagnostic_fields(diagnostic_operation_id, "checkpoint_match", None);
+                    fields.insert(
+                        "skipped_targets".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(
+                            u64::try_from(snapshot.targets.len()).unwrap_or(u64::MAX),
+                        )),
+                    );
+                    record_sync_diagnostic("sync.checkpoint.skip", "sync.run", fields);
+                    self.persist_checkpoint(
+                        &app_data_root,
+                        repo_identity.as_deref(),
+                        Some(checkpoint),
+                        Some(snapshot),
+                        None,
+                        probed_revision.as_deref(),
+                        None,
+                        true,
+                        diagnostic_operation_id,
+                    );
+                    let (mut result, _, _) = self
+                        .core_write()
+                        .finalize_full_sync(snapshot.no_change_targets.clone(), None);
+                    // The target results were persisted by finalize_full_sync. Returning
+                    // an empty list lets the platform distinguish this checkpoint no-op
+                    // and avoid launching generation GC on every polling interval.
+                    result.targets.clear();
+                    return Ok(result.into());
+                }
+            }
+        }
+
+        // 远端 HEAD 未变（只是本地有修改）时，用本地缓存的 commit 直接构造固定
+        // 快照，不再 fetch；ls-remote 已确认远端仍是那个提交。
+        if remote_probed_unchanged {
+            if let Some(checkpoint) = checkpoint.as_ref() {
+                provider.warm_snapshot_from_cache(&checkpoint.remote_revision);
+            }
+        }
         let revision_phase = SyncDiagnosticPhase::start_with_provider(
             diagnostic_operation_id,
             "remote_revision",
@@ -1248,83 +1364,87 @@ impl WriterCoreApi {
             }
         };
         revision_phase.finish_with_provider("success", provider.as_ref());
-        let checkpoint = crate::sync::full_sync_state::FullSyncCheckpoint::load(&app_data_root)
-            .ok()
-            .flatten();
-        let previous_was_converged = previous_full_sync_state.as_ref().is_some_and(|state| {
-            crate::sync::full_sync_state::FullSyncState::is_overall_success(&state.overall_status)
-                && state.failed_targets.is_empty()
-        });
-        let mut checkpoint_remote_unchanged = !force_sync
-            && previous_was_converged
-            && checkpoint.as_ref().is_some_and(|checkpoint| {
-                repo_identity
-                    .as_ref()
-                    .is_some_and(|identity| checkpoint.repository_identity == *identity)
-                    && remote_revision_before.as_deref()
-                        == Some(checkpoint.remote_revision.as_str())
-            });
-        let preflight_snapshot = if checkpoint_remote_unchanged {
-            let local_snapshot_phase = SyncDiagnosticPhase::start_with_provider(
-                diagnostic_operation_id,
-                "local_snapshot",
-                None,
-                provider.as_ref(),
-            );
-            let snapshot = local_sync_version_snapshot(&app_data_root, &projects_root);
-            match snapshot {
-                Ok(snapshot) => {
-                    local_snapshot_phase.finish_with_provider(
-                        if snapshot.is_some() {
-                            "success"
-                        } else {
-                            "ineligible"
-                        },
-                        provider.as_ref(),
-                    );
-                    snapshot
-                }
-                Err(error) => {
-                    local_snapshot_phase.finish_with_provider("error", provider.as_ref());
-                    log::warn!(
-                        "[sync] local checkpoint snapshot failed; continuing with LWW: {error}"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
 
-        // Fast path is allowed only after a successful, fully converged run and
-        // only when both the local object versions and remote branch revision
-        // match that run's checkpoint. Any uncertainty falls through to LWW.
-        if let (Some(checkpoint), Some(snapshot)) =
-            (checkpoint.as_ref(), preflight_snapshot.as_ref())
-        {
-            if checkpoint.local_object_fingerprint == snapshot.fingerprint {
-                log::info!(
-                    "[sync] full-sync checkpoint matched; returning no_changes without target transfers"
-                );
-                let mut fields =
-                    sync_diagnostic_fields(diagnostic_operation_id, "checkpoint_match", None);
-                fields.insert(
-                    "skipped_targets".to_string(),
-                    serde_json::Value::Number(serde_json::Number::from(
-                        u64::try_from(snapshot.target_fingerprints.len()).unwrap_or(u64::MAX),
-                    )),
-                );
-                record_sync_diagnostic("sync.checkpoint.skip", "sync.run", fields);
-                let (mut result, _, _) = self
-                    .core_write()
-                    .finalize_full_sync(snapshot.no_change_targets.clone(), None);
-                // The target results were persisted by finalize_full_sync. Returning
-                // an empty list lets the platform distinguish this checkpoint no-op
-                // and avoid launching generation GC on every polling interval.
-                result.targets.clear();
-                return Ok(result.into());
-            }
-        }
+        // 远端差异 → 受影响 target。只有 checkpoint 可比较且 Provider 能给出
+        // tree diff 时才做增量选择；基线缺失/迁移/无法给出差异一律完整核对。
+        let affected_targets: Option<std::collections::BTreeSet<String>> =
+            match (run_mode, checkpoint_applicable, preflight_snapshot.as_ref(), checkpoint.as_ref())
+            {
+                (SyncRunMode::Incremental, true, Some(snapshot), Some(checkpoint))
+                    if !snapshot.lifecycle_pending =>
+                {
+                    let app_groups =
+                        crate::sync::app_data_group_catalog::discover_local_app_data_groups(
+                            &app_data_root,
+                        )
+                        .unwrap_or_default();
+                    let project_ids: Vec<String> =
+                        match crate::project::list_projects(&projects_root) {
+                            Ok(projects) => projects
+                                .into_iter()
+                                .map(|project| project.id)
+                                .collect(),
+                            Err(_) => Vec::new(),
+                        };
+                    let mut remote_keys = std::collections::BTreeSet::new();
+                    let mut remote_paths_known = remote_probed_unchanged;
+                    if !remote_probed_unchanged {
+                        match provider.changed_paths_since(&checkpoint.remote_revision) {
+                            Ok(Some(paths)) => {
+                                remote_paths_known = true;
+                                for path in paths {
+                                    match crate::sync::version_snapshot::target_key_for_remote_path(
+                                        &path,
+                                        &app_groups,
+                                        &project_ids,
+                                    ) {
+                                        Some(key) => {
+                                            remote_keys.insert(key);
+                                        }
+                                        None => {
+                                            // 无法归因的远端路径（catalog 顶层、未知目录）
+                                            // 必须影响全部 target，不能静默漏掉。
+                                            remote_paths_known = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(None) | Err(_) => {
+                                remote_paths_known = false;
+                            }
+                        }
+                    }
+                    if remote_paths_known {
+                        for (key, version) in &snapshot.targets {
+                            let locally_changed = !checkpoint
+                                .target_versions
+                                .get(key)
+                                .is_some_and(|stored| stored.matches(&to_checkpoint_version(version)));
+                            if locally_changed {
+                                remote_keys.insert(key.clone());
+                            }
+                        }
+                        // 已消失的 target（例如本地删除了作品）仍需交给正常流程收口。
+                        for key in checkpoint.target_versions.keys() {
+                            if !snapshot.targets.contains_key(key) {
+                                remote_keys.insert(key.clone());
+                            }
+                        }
+                        Some(remote_keys)
+                    } else {
+                        log::info!(
+                            "[sync] remote tree diff unavailable; keeping every target in the LWW plan"
+                        );
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+        // 本轮实际发布的远端提交（仅当 flush 真正创建了 commit）。checkpoint 用它
+        // 记录"自己成功推送后的 HEAD"，不再要求前后 HEAD 相等。
+        let mut published_revision: Option<String> = None;
 
         // Issue #1012: create the one-round buffer before bootstrap so the
         // first catalog write is part of the same final commit.
@@ -1506,33 +1626,6 @@ impl WriterCoreApi {
         };
         plan_phase.finish_with_provider("success", provider.as_ref());
 
-        if checkpoint_remote_unchanged {
-            let revision_phase = SyncDiagnosticPhase::start_with_provider(
-                diagnostic_operation_id,
-                "remote_revision_before_group_filter",
-                None,
-                provider.as_ref(),
-            );
-            match provider.remote_revision() {
-                Ok(revision) if revision == remote_revision_before => {
-                    revision_phase.finish_with_provider("success", provider.as_ref());
-                }
-                Ok(_) => {
-                    revision_phase.finish_with_provider("changed", provider.as_ref());
-                    checkpoint_remote_unchanged = false;
-                    log::info!(
-                        "[sync] remote branch changed during prepare; keeping every target in the LWW plan"
-                    );
-                }
-                Err(error) => {
-                    revision_phase.finish_with_provider("error", provider.as_ref());
-                    return Err(crate::api::error::WriterError::from(
-                        crate::error::Error::from(error),
-                    ));
-                }
-            }
-        }
-
         // Issue #729：build_full_sync_plan_unlocked 返回后检查取消令牌。
         if let Some(ref token) = cancellation_token {
             if token.is_cancelled() {
@@ -1546,48 +1639,57 @@ impl WriterCoreApi {
             }
         }
 
-        // If the remote branch is unchanged, only locally changed groups need a
-        // plan, staging seed, and transfer. New or lifecycle targets have no prior
-        // fingerprint and remain in the plan so the normal LWW path handles them.
-        if checkpoint_remote_unchanged {
-            if let (Some(checkpoint), Some(snapshot)) =
-                (checkpoint.as_ref(), preflight_snapshot.as_ref())
-            {
-                let previous_target_count = plan.targets.len();
-                plan.targets.retain(|planned| {
-                    let Some(key) = sync_target_checkpoint_key(planned) else {
-                        return true;
-                    };
-                    match (
-                        checkpoint.target_fingerprints.get(&key),
-                        snapshot.target_fingerprints.get(&key),
-                    ) {
-                        (Some(previous), Some(current)) => previous != current,
-                        _ => true,
-                    }
-                });
-                let skipped_target_count = previous_target_count.saturating_sub(plan.targets.len());
-                if skipped_target_count > 0 {
-                    log::info!(
-                        "[sync] unchanged local targets skipped from transfer plan: count={skipped_target_count}"
+        // 只对受影响的 target 建 staging、做 LWW 和发布：远端 tree diff 映射出的
+        // target ∪ 本地对象版本变化的 target。远端与本地都没变的 target 不进入
+        // 计划，也不产生任何远端写。
+        if let Some(affected) = affected_targets.as_ref() {
+            let previous_target_count = plan.targets.len();
+            plan.targets.retain(|planned| match sync_target_checkpoint_key(planned) {
+                Some(key) => affected.contains(&key),
+                // 没有稳定 key 的 target（生命周期/删除收口）总是保留。
+                None => true,
+            });
+            let skipped_target_count = previous_target_count.saturating_sub(plan.targets.len());
+            if skipped_target_count > 0 {
+                log::info!(
+                    "[sync] unchanged targets skipped from transfer plan: count={skipped_target_count}"
+                );
+            }
+            if plan.targets.is_empty() {
+                let mut fields =
+                    sync_diagnostic_fields(diagnostic_operation_id, "unchanged_targets", None);
+                fields.insert(
+                    "skipped_targets".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(
+                        u64::try_from(skipped_target_count).unwrap_or(u64::MAX),
+                    )),
+                );
+                record_sync_diagnostic("sync.checkpoint.skip", "sync.run", fields);
+                if let (Some(checkpoint), Some(snapshot)) =
+                    (checkpoint.as_ref(), preflight_snapshot.as_ref())
+                {
+                    self.persist_checkpoint(
+                        &app_data_root,
+                        repo_identity.as_deref(),
+                        Some(checkpoint),
+                        Some(snapshot),
+                        None,
+                        remote_revision_before.as_deref(),
+                        None,
+                        true,
+                        diagnostic_operation_id,
                     );
-                }
-                if plan.targets.is_empty() {
-                    let mut fields =
-                        sync_diagnostic_fields(diagnostic_operation_id, "unchanged_targets", None);
-                    fields.insert(
-                        "skipped_targets".to_string(),
-                        serde_json::Value::Number(serde_json::Number::from(
-                            u64::try_from(skipped_target_count).unwrap_or(u64::MAX),
-                        )),
-                    );
-                    record_sync_diagnostic("sync.checkpoint.skip", "sync.run", fields);
                     let (mut result, _, _) = self
                         .core_write()
                         .finalize_full_sync(snapshot.no_change_targets.clone(), None);
                     result.targets.clear();
                     return Ok(result.into());
                 }
+                let (mut result, _, _) = self
+                    .core_write()
+                    .finalize_full_sync(Vec::new(), None);
+                result.targets.clear();
+                return Ok(result.into());
             }
         }
 
@@ -1683,32 +1785,6 @@ impl WriterCoreApi {
         };
         staging_phase.finish_with_provider("success", provider.as_ref());
 
-        if checkpoint_remote_unchanged {
-            let revision_phase = SyncDiagnosticPhase::start_with_provider(
-                diagnostic_operation_id,
-                "remote_revision_before_transfer",
-                None,
-                provider.as_ref(),
-            );
-            match provider.remote_revision() {
-                Ok(revision) if revision == remote_revision_before => {
-                    revision_phase.finish_with_provider("success", provider.as_ref());
-                }
-                Ok(_) => {
-                    revision_phase.finish_with_provider("changed", provider.as_ref());
-                    return Err(crate::api::error::WriterError::PreconditionFailed(
-                        "remote branch changed before a filtered target sync".to_string(),
-                    ));
-                }
-                Err(error) => {
-                    revision_phase.finish_with_provider("error", provider.as_ref());
-                    return Err(crate::api::error::WriterError::from(
-                        crate::error::Error::from(error),
-                    ));
-                }
-            }
-        }
-
         // Issue #729：prepare_staging_runs 返回后检查取消令牌。
         if let Some(ref token) = cancellation_token {
             if token.is_cancelled() {
@@ -1749,34 +1825,39 @@ impl WriterCoreApi {
                 "success" | "no_changes" | "latest_wins_applied"
             )
         });
-        if fully_converged {
-            if let (
-                Some(repository_identity),
-                Some(revision_before),
-                Ok(Some(revision_after)),
-                Ok(Some(snapshot)),
-            ) = (
-                repo_identity.as_ref(),
+        // checkpoint 只确认"这一轮 preflight 快照对应的版本"：本轮期间新到的
+        // mutation 不在快照里，下一轮 pending 代次不同，自然重新处理。
+        // 失败 target 不推进（保留旧条目 → 下一轮重试该 target）；成功 target
+        // 的远端版本用本轮实际发布的提交，而不是"前后 HEAD 相等"。
+        if let Some(snapshot) =
+            local_sync_version_snapshot(&app_data_root, &projects_root).ok()
+        {
+            let succeeded: std::collections::BTreeSet<String> = result
+                .targets
+                .iter()
+                .filter(|target| {
+                    matches!(
+                        target.result.status.as_str(),
+                        "success" | "no_changes" | "latest_wins_applied"
+                    )
+                })
+                .filter_map(|target| match (&target.group_id, &target.project_id) {
+                    (Some(group_id), _) => Some(format!("app:{group_id}")),
+                    (None, Some(project_id)) => Some(format!("project:{project_id}")),
+                    _ => None,
+                })
+                .collect();
+            self.persist_checkpoint(
+                &app_data_root,
+                repo_identity.as_deref(),
+                checkpoint.as_ref(),
+                Some(&snapshot),
+                if fully_converged { Some(&succeeded) } else { None },
                 remote_revision_before.as_deref(),
-                provider.remote_revision(),
-                local_sync_version_snapshot(&app_data_root, &projects_root),
-            ) {
-                // A changed branch revision means another commit (or our own
-                // upload) occurred during this pass. Let a later stable pass
-                // establish the checkpoint instead of claiming that unseen
-                // remote state was already consumed.
-                if revision_before == revision_after {
-                    let checkpoint = crate::sync::full_sync_state::FullSyncCheckpoint {
-                        repository_identity: repository_identity.clone(),
-                        remote_revision: revision_after,
-                        local_object_fingerprint: snapshot.fingerprint,
-                        target_fingerprints: snapshot.target_fingerprints,
-                    };
-                    if let Err(error) = checkpoint.save(&app_data_root) {
-                        log::warn!("[sync] failed to persist full-sync checkpoint: {error}");
-                    }
-                }
-            }
+                published_revision.as_deref(),
+                fully_converged,
+                diagnostic_operation_id,
+            );
         }
 
         // 同步可能修改磁盘上的星图数据（staging → commit），失效路径依赖索引
@@ -2058,67 +2139,21 @@ impl WriterCoreApi {
             self.core_write().persist_full_sync_cancelled();
             return Ok(Self::full_sync_noop_result());
         }
+        // 有 target 失败时仍然先提交已下载/已合并的内容到 live：单侧下载和
+        // 合并结果不要求远端写成功才能落盘。只是不发布不完整的 tree。
         let publish_blocked = pending_commits
             .iter()
-            .find(|pending| target_blocks_round_publish(&pending.result));
-        if let Some(blocked) = publish_blocked {
+            .any(|pending| target_blocks_round_publish(&pending.result));
+        if publish_blocked {
             round.discard();
             log::warn!(
-                "[sync] full-sync remote publish discarded because target {} failed in phase {:?}",
-                blocked.result.remote_prefix,
-                blocked.result.failure_phase
+                "[sync] full-sync remote publish discarded because a target failed before publish"
             );
-            for run in &staging_runs {
-                run.cleanup();
-            }
-            all_targets.extend(pending_commits.into_iter().map(|pending| pending.result));
-        } else {
-            // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
-            // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
-            // 该 phase 单独记录耗时与网络请求数，日志可区分“传输慢”和“真实失败”。
-            let publish_phase = SyncDiagnosticPhase::start_with_provider(
-                diagnostic_operation_id,
-                "remote_publish",
-                None,
-                provider,
-            );
-            let pending_paths = round.pending_len();
-            let publish_started_at = Instant::now();
-            match round.flush() {
-                Ok(outcome) => {
-                    let outcome = if outcome.committed {
-                        "committed"
-                    } else {
-                        "no_changes"
-                    };
-                    log::info!(
-                        "[sync] full-sync remote publish: outcome={} buffered_paths={} duration_ms={}",
-                        outcome,
-                        pending_paths,
-                        publish_started_at.elapsed().as_millis()
-                    );
-                    publish_phase.finish_with_provider(outcome, provider);
-                }
-                Err(error) => {
-                    log::warn!(
-                        "[sync] full-sync remote publish failed: buffered_paths={} duration_ms={} error={}",
-                        pending_paths,
-                        publish_started_at.elapsed().as_millis(),
-                        error
-                    );
-                    publish_phase.finish_with_provider("error", provider);
-                    for run in &staging_runs {
-                        run.cleanup();
-                    }
-                    return Err(crate::api::error::WriterError::from(
-                        crate::error::Error::from(error),
-                    ));
-                }
-            }
+        }
 
-            // Remote publish succeeded (or was a confirmed no-op).  Only now
-            // write the merged content and consensus state back to live, so a
-            // failed push cannot advance known_files for unpushed content.
+            // C 阶段：把下载、合并与冲突记录持久提交到 live。发布失败不回滚这些
+            // 已落盘结果；本地未发布对象版本通过 mutation 账本保持未确认，
+            // 下一轮继续推进（见 commit_helpers 的 deferred upload 处理）。
             // Issue #1021 复核：恢复只在一轮同步内做一次，所有 target 复用同一
             // 已落盘事件集合/未完成问题，避免每组 target 重解压全部历史事件。
             // 证明恢复会读 live 并写统计/意图，必须持有 workspace 锁，
@@ -2310,6 +2345,54 @@ impl WriterCoreApi {
                 all_committed_paths
                     .extend(target_committed_paths.into_iter().map(|path| path.path));
             }
+
+        if !publish_blocked {
+            // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
+            // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
+            // 该 phase 单独记录耗时与网络请求数，日志可区分“传输慢”和“真实失败”。
+            let publish_phase = SyncDiagnosticPhase::start_with_provider(
+                diagnostic_operation_id,
+                "remote_publish",
+                None,
+                provider,
+            );
+            let pending_paths = round.pending_len();
+            let publish_started_at = Instant::now();
+            match round.flush() {
+                Ok(outcome) => {
+                    if outcome.committed {
+                        published_revision = Some(outcome.result.revision.0.clone());
+                    }
+                    let outcome = if outcome.committed {
+                        "committed"
+                    } else {
+                        "no_changes"
+                    };
+                    log::info!(
+                        "[sync] full-sync remote publish: outcome={} buffered_paths={} duration_ms={}",
+                        outcome,
+                        pending_paths,
+                        publish_started_at.elapsed().as_millis()
+                    );
+                    publish_phase.finish_with_provider(outcome, provider);
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[sync] full-sync remote publish failed: buffered_paths={} duration_ms={} error={}",
+                        pending_paths,
+                        publish_started_at.elapsed().as_millis(),
+                        error
+                    );
+                    publish_phase.finish_with_provider("error", provider);
+                    for run in &staging_runs {
+                        run.cleanup();
+                    }
+                    return Err(crate::api::error::WriterError::from(
+                        crate::error::Error::from(error),
+                    ));
+                }
+            }
+
         }
 
         // 每个 target 的 commit 已在同一写锁内完成 Store 协调与索引失效（问题2）。
