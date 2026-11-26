@@ -2033,6 +2033,29 @@ pub(crate) fn apply_staging_commits_for_targets(
     }
 }
 
+/// 证明 intent 只应覆盖仍由普通 SaveTransaction 落盘的 action。
+/// 章节正文改由 chapter journal 的 sync_proof_facts 一次性决议，不能再创建
+/// 第二份 SyncProofIntent，否则同一正文会生成两个证明事件。
+fn proof_actions_without_chapter_bodies(
+    live_root: &Path,
+    actions: &[crate::sync::staging::CommitAction],
+) -> Vec<crate::sync::staging::CommitAction> {
+    use crate::sync::staging::CommitAction;
+    actions
+        .iter()
+        .filter(|action| {
+            let rel_path = match action {
+                CommitAction::Apply { rel_path, .. } | CommitAction::Delete { rel_path } => {
+                    rel_path
+                }
+            };
+            !project_relative_sync_path(live_root, rel_path)
+                .is_some_and(|(_, relative, _)| chapter_id_for_body_path(&relative).is_some())
+        })
+        .cloned()
+        .collect()
+}
+
 /// 单 target staging commit — 新编排入口。
 ///
 /// 与 `apply_staging_commits_for_targets` 中对单个 target 的处理逻辑一致，
@@ -2106,14 +2129,17 @@ pub(crate) fn commit_single_target_staging(
                 }
             };
             let before = capture_action_before(live_root, &plan.content_actions);
+            let proof_actions =
+                proof_actions_without_chapter_bodies(live_root, &plan.content_actions);
+            let proof_before = capture_action_before(live_root, &proof_actions);
 
             let proof_recovery_records = match intent_sink {
                 Some(sink) => match sink.prepare(
                     run.run_id(),
                     target.target_kind.as_str(),
                     target.project_id.as_deref(),
-                    &plan.content_actions,
-                    &before,
+                    &proof_actions,
+                    &proof_before,
                 ) {
                     Ok(records) => records,
                     Err(error) => {
@@ -2228,13 +2254,16 @@ pub(crate) fn commit_single_target_staging(
                 .cloned()
                 .collect();
             let before = capture_action_before(live_root, &safe_content_actions);
+            let proof_actions =
+                proof_actions_without_chapter_bodies(live_root, &safe_content_actions);
+            let proof_before = capture_action_before(live_root, &proof_actions);
             let proof_recovery_records = match intent_sink {
                 Some(sink) => match sink.prepare(
                     run.run_id(),
                     target.target_kind.as_str(),
                     target.project_id.as_deref(),
-                    &safe_content_actions,
-                    &before,
+                    &proof_actions,
+                    &proof_before,
                 ) {
                     Ok(records) => records,
                     Err(error) => {
@@ -2349,13 +2378,16 @@ pub(crate) fn commit_single_target_staging(
             };
 
             let before = capture_action_before(live_root, &plan.content_actions);
+            let proof_actions =
+                proof_actions_without_chapter_bodies(live_root, &plan.content_actions);
+            let proof_before = capture_action_before(live_root, &proof_actions);
             let proof_recovery_records = match intent_sink {
                 Some(sink) => match sink.prepare(
                     run.run_id(),
                     target.target_kind.as_str(),
                     target.project_id.as_deref(),
-                    &plan.content_actions,
-                    &before,
+                    &proof_actions,
+                    &proof_before,
                 ) {
                     Ok(records) => records,
                     Err(error) => {
