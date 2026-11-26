@@ -146,6 +146,17 @@ export interface EmptyDocumentIntent {
   revision: number
 }
 
+// 已应用事务需要同步推进的 in-flight 重基回执；与清空意图、队列确认共用结算。
+interface AppliedTransactionReceipt {
+  localToken: number
+  coreSessionId: number
+  includedNativeBase: string
+  committedText: string
+  committedRevision: number
+  includedThroughSequence: number
+  freezeChangeSequence: number
+}
+
 interface TextDiff {
   start: number
   end: number
@@ -1104,16 +1115,23 @@ export class NativeRichEditorBridge {
       // 提交成功：立刻推进 receipt（已包含序号 + 原生侧基线），不能等整批结束才记录，
       // 否则后续分支进入 conflict 时这批已应用事件会丢，重试可能重复提交。
       // Issue #1063 复审 #7195630106：重基与正常输入共用同一已应用事务结算，
-      // 用映射到真实 Core 基线的范围与 before/after 正文判断合法清空。
+      // 用 mapped 范围与真实 before/after 正文判断合法清空，并同时推进 in-flight
+      // 回执；后续分支不会重复更新同一笔事务。
       this.settleAppliedTransaction(coreSessionId, mapped.queueSequence,
         expectedText, after.text, mapped.startUtf16, mapped.endUtf16,
-        mapped.insertedText, after.revision, cause)
+        mapped.insertedText, after.revision, cause, {
+          localToken: localToken,
+          coreSessionId: coreSessionId,
+          includedNativeBase: nextIncludedBase,
+          committedText: expectedAfter,
+          committedRevision: after.revision,
+          includedThroughSequence: mapped.queueSequence,
+          freezeChangeSequence: freezeChangeSequence
+        })
       expectedText = expectedAfter
       expectedRevision = after.revision
       lastIncluded = mapped.queueSequence
       includedNativeBase = nextIncludedBase
-      this.saveInFlightMerge(localToken, coreSessionId, includedNativeBase,
-        expectedText, expectedRevision, lastIncluded, freezeChangeSequence)
     }
 
     if (expectedText !== plan.resultText) {
@@ -2413,7 +2431,13 @@ export class NativeRichEditorBridge {
   // - 非空提交清除旧意图；程序性初始空视图/恢复占位不调用这里。
   private settleAppliedTransaction(coreSessionId: number, queueSequence: number,
     beforeText: string, afterText: string, startUtf16: number, endUtf16: number,
-    insertedText: string, revision: number, cause: EditorTransactionCause): void {
+    insertedText: string, revision: number, cause: EditorTransactionCause,
+    receipt?: AppliedTransactionReceipt): void {
+    if (receipt !== undefined) {
+      this.saveInFlightMerge(receipt.localToken, receipt.coreSessionId,
+        receipt.includedNativeBase, receipt.committedText, receipt.committedRevision,
+        receipt.includedThroughSequence, receipt.freezeChangeSequence)
+    }
     if (queueSequence > this.appliedEditSequence) {
       this.appliedEditSequence = queueSequence
     }
