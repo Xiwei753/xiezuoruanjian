@@ -41,7 +41,7 @@ pub(crate) mod commit;
 pub use commit::{
     ChapterChangeReceipt, ChapterCommitOutcome, ChapterCommitReceipt, ChapterCommitRequest,
     ChapterCommitSource, ChapterConflict, ChapterKey, ChapterMutationKind, ChapterProofProjection,
-    ChapterSyncProofFact, ChapterVersion,
+    ChapterSyncCommitReceipt, ChapterSyncProofFact, ChapterVersion,
 };
 
 mod save;
@@ -543,6 +543,13 @@ pub fn delete_chapter(
     request.mutation = commit::ChapterMutationKind::Delete;
     request.source = commit::ChapterCommitSource::Api;
     request.allow_empty_overwrite = true;
+    request.app_data_root = Some(app_data_root.to_path_buf());
+    request.trash_path = Some(app_data_root.join("sync/trash").join(format!(
+        "{}_{}_{}",
+        Utc::now().timestamp_millis(),
+        uuid::Uuid::new_v4(),
+        chapter_id
+    )));
 
     let guard = crate::storage::WorkspaceWriteLock::acquire(app_data_root)?;
     match commit::commit_chapter_with_guard(project_root, Some(&guard), request)? {

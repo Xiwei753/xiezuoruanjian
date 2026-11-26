@@ -2534,12 +2534,25 @@ impl WriterCoreApi {
                     return (target_with_conflicts, Vec::new(), Vec::new());
                 }
             }
+            let mut chapter_commit_receipts = Vec::new();
             let (commit_result, conflicts, committed_paths) =
                 crate::sync::commit_helpers::commit_single_target_staging(
                     run,
                     target_sync_result,
                     Some(&intent_sink),
+                    &mut chapter_commit_receipts,
                 );
+            let journal_chapter_keys: std::collections::HashSet<(String, String, String)> =
+                chapter_commit_receipts
+                    .iter()
+                    .map(|receipt| {
+                        (
+                            receipt.key.project_id.clone(),
+                            receipt.key.volume_id.clone(),
+                            receipt.key.chapter_id.clone(),
+                        )
+                    })
+                    .collect();
             core.refresh_sync_proof_intents_pending();
 
             Self::apply_staging_conflicts_to_target(
@@ -2568,20 +2581,25 @@ impl WriterCoreApi {
                 commit_result,
                 crate::sync::commit_helpers::TargetCommitResult::Ok
             ) || !committed_paths.is_empty()
+                || !chapter_commit_receipts.is_empty()
             {
                 let mut proof_errors: Vec<String> = Vec::new();
                 let mut proof_completed_ids = std::collections::HashSet::new();
                 // 普通同步的章节正文/证明事实已写入同一 chapter journal；
-                // 这些事实由投影 worker 按 commit sequence 结算，不能在这里
-                // 再写一次独立证明事件。
-                let journal_fact_ids = core
-                    .pending_chapter_sync_proof_fact_ids(run.target_live_root())
-                    .unwrap_or_default();
+                // 这些事实由 receipt 的 transaction_id/event_id 驱动投影 worker，
+                // 不能再用 committed_paths 的枚举序号反查旧 intent。
                 for (action_index, committed) in committed_paths.iter().enumerate() {
                     let path = &committed.path;
                     let Some((project_id, volume_id, chapter_id)) = chapter_path_parts(path) else {
                         continue;
                     };
+                    if journal_chapter_keys.contains(&(
+                        project_id.clone(),
+                        volume_id.clone(),
+                        chapter_id.clone(),
+                    )) {
+                        continue;
+                    }
                     let before_text = match &committed.before {
                         crate::sync::commit_helpers::CommittedBefore::Missing => None,
                         crate::sync::commit_helpers::CommittedBefore::Text { bytes, .. } => {
@@ -2635,10 +2653,6 @@ impl WriterCoreApi {
                     // 章节 A→B→A→B 不会被内容 hash 误去重。事件 ID 固定后重发复用。
                     let sync_event_id =
                         format!("sync:{}:{}:{}", run.run_id(), path.display(), action_index);
-                    if journal_fact_ids.contains(&sync_event_id) {
-                        proof_completed_ids.insert(sync_event_id);
-                        continue;
-                    }
                     let intent = match intent_sink.load(&sync_event_id) {
                         Ok(Some(intent)) => intent,
                         Ok(None) => {
@@ -2711,9 +2725,9 @@ impl WriterCoreApi {
                     }
                 }
                 core.refresh_sync_proof_intents_pending();
-                if !journal_fact_ids.is_empty() {
-                    // 正文已落盘；立即尝试按 journal 顺序结算证明事实。失败只
-                    // 保留 pending，不影响正文提交。
+                if !chapter_commit_receipts.is_empty() {
+                    // 正文已落盘；立即尝试按 journal 顺序结算证明事实。投影失败
+                    // 只保留 journal pending，不影响正文提交，也不反馈成证明缺失。
                     core.retry_pending_chapter_proof_projections(run.target_live_root());
                 }
                 if !proof_errors.is_empty() {

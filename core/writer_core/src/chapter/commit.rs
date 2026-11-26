@@ -125,6 +125,20 @@ pub struct ChapterSyncProofFact {
     pub occurred_at_ms: i64,
 }
 
+/// 同步正文提交的 durable 回执。调用方必须用它驱动证明投影/同步结果，
+/// 不能再用 committed_paths 的枚举序号反推章节事实。
+#[derive(Debug, Clone)]
+pub struct ChapterSyncCommitReceipt {
+    pub transaction_id: String,
+    pub key: ChapterKey,
+    pub event_id: Option<String>,
+    pub source_device_id: String,
+    pub occurred_at_ms: i64,
+    pub before_text: Option<String>,
+    pub after_text: Option<String>,
+    pub deleted: bool,
+}
+
 /// 提交来源。只用于 journal/诊断，不改变版本语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -181,6 +195,10 @@ pub struct ChapterCommitRequest {
     pub additional_files: Vec<(String, String)>,
     pub allow_empty_overwrite: bool,
     pub transaction_id: Option<String>,
+    /// 删除提交的真实 app data root 与固定 trash 路径；由上层传入，避免
+    /// journal 用 `ancestors().nth(2)` 猜错独立的 projects_root。
+    pub app_data_root: Option<std::path::PathBuf>,
+    pub trash_path: Option<std::path::PathBuf>,
     /// 需要调用方在正文/元数据发布后补写的投影 ID；为空表示无滞后投影。
     pub projection_ids: Vec<String>,
 }
@@ -204,6 +222,8 @@ impl ChapterCommitRequest {
             additional_files: Vec::new(),
             allow_empty_overwrite: false,
             transaction_id: None,
+            app_data_root: None,
+            trash_path: None,
             projection_ids: Vec::new(),
         }
     }

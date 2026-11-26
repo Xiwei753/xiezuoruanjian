@@ -98,6 +98,9 @@ pub(super) struct ChapterCommitManifest {
     /// 删除提交：after 是 tombstone 版本，live 章节目录应移动到 trash。
     #[serde(default)]
     pub(super) deleted: bool,
+    /// 删除提交的真实 app data root（用于计算相对 trash 路径）。
+    #[serde(default)]
+    pub(super) app_data_root: Option<String>,
     /// 删除提交预先确定的 trash 绝对路径；恢复时按它幂等补全移动。
     #[serde(default)]
     pub(super) trash_path: Option<String>,
@@ -678,19 +681,32 @@ pub(crate) fn commit_chapter_with_guard(
     }
     crate::storage::sync_dir(&tx_dir)?;
 
-    let trash_path = if deleting {
-        let app_data_root = project_root.ancestors().nth(2).ok_or_else(|| {
-            Error::Other("chapter delete cannot derive app data root".to_string())
-        })?;
+    let deletion_app_data_root = if deleting {
         Some(
-            app_data_root
-                .join("sync/trash")
-                .join(format!(
-                    "{}_{}_{}",
-                    Utc::now().timestamp_millis(),
-                    Uuid::new_v4(),
-                    key.chapter_id
-                ))
+            request
+                .app_data_root
+                .clone()
+                .or_else(|| project_root.ancestors().nth(2).map(Path::to_path_buf))
+                .ok_or_else(|| {
+                    Error::Other("chapter delete cannot derive app data root".to_string())
+                })?,
+        )
+    } else {
+        None
+    };
+    let trash_path = if let Some(app_data_root) = deletion_app_data_root.as_ref() {
+        Some(
+            request
+                .trash_path
+                .clone()
+                .unwrap_or_else(|| {
+                    app_data_root.join("sync/trash").join(format!(
+                        "{}_{}_{}",
+                        Utc::now().timestamp_millis(),
+                        Uuid::new_v4(),
+                        key.chapter_id
+                    ))
+                })
                 .to_string_lossy()
                 .to_string(),
         )
@@ -732,6 +748,9 @@ pub(crate) fn commit_chapter_with_guard(
         meta_order: request.meta_order,
         created: request.mutation == ChapterMutationKind::Create,
         deleted: deleting,
+        app_data_root: deletion_app_data_root
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
         trash_path,
         superseded_reason: None,
     };

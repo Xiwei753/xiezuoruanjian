@@ -78,15 +78,22 @@ pub(super) fn publish_deleted(
             crate::storage::sync_dir(parent)?;
         }
     } else if !trash_path.exists() {
-        // 章节目录和 trash 都不在：删除已经完成过，不再伪造 tombstone。
-        manifest.phase = ChapterCommitPhase::Applied;
-        write_manifest(tx_dir, manifest)?;
-        return Ok(true);
+        // live 与预先决定的 trash 同时不存在：这不是“删除已完成”的证据。
+        // 保留 Decided journal 交给恢复/人工诊断，绝不能无 tombstone 直接确认。
+        return Err(Error::Other(format!(
+            "chapter delete lost both live directory and trash: tx={}, key={}/{}/{}",
+            manifest.transaction_id,
+            manifest.key.project_id,
+            manifest.key.volume_id,
+            manifest.key.chapter_id
+        )));
     }
 
-    let app_data_root = project_root
-        .ancestors()
-        .nth(2)
+    let app_data_root = manifest
+        .app_data_root
+        .as_deref()
+        .map(PathBuf::from)
+        .or_else(|| project_root.ancestors().nth(2).map(Path::to_path_buf))
         .ok_or_else(|| Error::Other("chapter delete cannot derive app data root".to_string()))?;
     let rel_chapter_dir = chapter_dir
         .strip_prefix(project_root)
@@ -94,7 +101,7 @@ pub(super) fn publish_deleted(
         .to_string_lossy()
         .replace('\\', "/");
     let rel_trash_path = trash_path
-        .strip_prefix(app_data_root)
+        .strip_prefix(&app_data_root)
         .unwrap_or(&trash_path)
         .to_string_lossy()
         .replace('\\', "/");
