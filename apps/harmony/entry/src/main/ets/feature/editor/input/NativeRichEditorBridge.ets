@@ -46,7 +46,8 @@ import {
   attemptFrozenRebase,
   mapEditRangeToBaseline,
   FrozenRebaseAttempt,
-  EditRangeMap
+  EditRangeMap,
+  ConflictRecoveryResult
 } from '../session/editor_reconcile_logic'
 import {
   ImeSettlementBarrier,
@@ -54,14 +55,16 @@ import {
   ImeBarrierWaiter,
   ImeAlignmentFacts,
   ImeStateFacts,
+  NativeEditorState,
   PreviewTextState,
   isBarrierWaiterSatisfied,
   IME_SETTLEMENT_SESSION_CHANGED,
   IME_SETTLEMENT_CANCELLED,
-  IME_SETTLEMENT_CONFLICT
+  IME_SETTLEMENT_CONFLICT,
+  CORE_SNAPSHOT_UNAVAILABLE
 } from './ime_settlement_barrier'
 import { TextOffsetMapper } from './TextOffsetMapper'
-import { insertedParagraphStarts as computeInsertedParagraphStarts } from './text_document_rules'
+import { describeLocalParagraphChange, LocalParagraphChange } from './text_document_rules'
 import { EditorViewportState } from '../render/EditorViewportState'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { EditorTransactionCause, EditorEditResult, EditorSessionSnapshot, EditorEditOutcome } from '../../../corebridge/dto/EditorDtos'
@@ -83,6 +86,9 @@ const BRIDGE_RECONCILE_MAX_ATTEMPTS = 3
 // Issue #1063 复审评论第 2 条：超时 reject IME_SETTLEMENT_TIMEOUT，不把退出 waiter 当成功，
 // 也不按已提交 revision 冒充结算；每个 waiter 各自计时。
 const BRIDGE_IME_SETTLEMENT_TIMEOUT_MS = 1200
+// 普通保存屏障（committed-revision）的独立上限：Core snapshot/队列不推进时明确失败，
+// 不把一次读取失败或未加载当成「已空闲」；会话/正文/pendingEdits 原样保留，可下次重试。
+const BRIDGE_SAVE_BARRIER_TIMEOUT_MS = 3000
 // 接续恢复滚动：scrollToVisible 自 API 26 起可用；低版本按注释降级，不做假回写。
 const BRIDGE_VIEWPORT_SCROLL_TO_VISIBLE_MIN_API = 26
 // 章节布局完成（lineCount>0）前恢复视口会滚错位置，按帧重试到上限即放弃（约 2s）。
@@ -131,16 +137,6 @@ export interface NativeCoreAlignmentResult {
 export interface EmptyDocumentIntent {
   sessionId: number
   revision: number
-}
-
-// Issue #1063 复审评论第 2 条：会话内冲突重试结果。
-// recovered=false 时会话仍保持 conflict（或保持 reconciling 等真实结算），
-// errorCode 给出 NOT_IN_CONFLICT / RECONCILE_DEFERRED / IME_SETTLEMENT_CONFLICT /
-// IME_SETTLEMENT_SESSION_CHANGED 等明确原因。
-export interface ConflictRecoveryResult {
-  readonly recovered: boolean
-  readonly errorCode: string
-  readonly detail: string
 }
 
 interface TextDiff {
@@ -255,7 +251,9 @@ export class NativeRichEditorBridge {
   private sessionState: ReconcileSessionState = new ReconcileSessionState()
   private reconcileScheduled: boolean = false
   // 屏障 waiter（timer/结算/会话终止）全部在该账本里；每个 waiter 独立 deadline。
-  private imeBarrier: ImeSettlementBarrier = new ImeSettlementBarrier(BRIDGE_IME_SETTLEMENT_TIMEOUT_MS)
+  // 普通保存 3s 超时 SAVE_BARRIER_TIMEOUT，退出/同步 1.2s 超时 IME_SETTLEMENT_TIMEOUT。
+  private imeBarrier: ImeSettlementBarrier =
+    new ImeSettlementBarrier(BRIDGE_IME_SETTLEMENT_TIMEOUT_MS, BRIDGE_SAVE_BARRIER_TIMEOUT_MS)
   // 接续恢复滚动的重试句柄（beginSession/切章时取消）。
   private viewportRestoreTimerId: number = -1
   private viewportRestoreAttempts: number = 0
@@ -278,6 +276,11 @@ export class NativeRichEditorBridge {
   // 原生编辑器是否已加载过 Core 正文。未加载时 currentText 只是空占位，
   // 不能把它当成「原生正文与 Core 不一致」去收敛，否则会把 Core 正文清空。
   private nativeTextReady: boolean = false
+  // 最近一次原生全文读取是否失败（nativeTextReady 之后仍读不到 → read-failed）。
+  // 屏障用它区分「原生正文可读」与「读取失败」，后者绝不能当成三方一致。
+  private lastNativeTextReadFailed: boolean = false
+  // 组件 onEditingChange 的最新状态（失焦/取消这类无正文变化事件也会驱动 checkIdle）。
+  private nativeEditing: boolean = false
   private nativeCoreRefreshRunning: boolean = false
   // 换行数按编辑增量维护，快照不再每 150ms 遍历整章。
   private nativeNewlineCount: number = 0
@@ -419,6 +422,18 @@ export class NativeRichEditorBridge {
     return this.imeComposing
   }
 
+  // Issue #1063 复审评论第 2 条：组件 onEditingChange 的编辑态事实。
+  // 失焦/取消这类没有正文变化的事件也要能驱动状态机：只更新内部状态并让 checkIdle
+  // 重新读取 preview/三方事实，必要时把「preview 已明确取消且正文未变」结算成 cancel；
+  // 绝不在这里 force 提交候选文本。
+  notifyEditingStateChanged(isEditing: boolean): void {
+    this.nativeEditing = isEditing
+    hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+      `editing state changed: isEditing=${this.nativeEditing} composing=${this.imeComposing}`)
+    this.checkIdle()
+    this.trySettleCancelledImeComposition()
+  }
+
   getLastNativeOperation(): NativeTextOperationSnapshot | null {
     return this.lastNativeOperation
   }
@@ -499,11 +514,12 @@ export class NativeRichEditorBridge {
       }
     }
     // stopEditing() 可能在同步回调里结算预编辑；以调用后的真实状态为准。
-    // - 仍在 composing，或 preview 明确存在/读取失败：必须等真实 commit/cancel 信号；
+    // - 已知仍在 composing，或 preview 明确存在：必须等真实 commit/cancel 信号；
+    // - preview 读取失败（unknown）不设信号等待：后续事件会重新读取 preview，
+    //   读到 empty 且三方同 revision 才放行，读不到则由各自 timer 超时失败；
     // - composing 已结束且 preview 明确为空：队列排空 + 同 revision 三方一致即可放行。
     const previewAfter: PreviewTextState = this.readPreviewTextState()
-    const requireImeSignal: boolean = this.richEditorController !== null &&
-      (this.imeComposing || previewAfter !== 'empty')
+    const requireImeSignal: boolean = this.imeComposing || previewAfter === 'present'
     this.requestSelectionFlush()
     const waiterPromise: Promise<void> = this.pushIdleWaiter('ime-settlement', requireImeSignal)
     this.checkIdle()
@@ -747,40 +763,63 @@ export class NativeRichEditorBridge {
     this.settleWaiters(this.buildCoreOnlyAlignmentFacts(), 'present', true)
   }
 
+  // 原生编辑器当前状态（屏障事实）：未绑定 / 未加载 / 已加载但读不到 / 可读。
+  private coreOnlyNativeEditorState(): NativeEditorState {
+    if (this.richEditorController === null) {
+      return 'unbound'
+    }
+    if (!this.nativeTextReady) {
+      return 'loading'
+    }
+    return this.lastNativeTextReadFailed ? 'read-failed' : 'ready'
+  }
+
   // 没有原生全文读取的需求时（普通保存 + 预编辑中），只需 Core revision/文本与 confirmed 基线。
   private buildCoreOnlyAlignmentFacts(): ImeAlignmentFacts {
     const snap = this.coordinator.getSnapshot()
     return {
       coreAvailable: snap !== null,
-      nativeEditorAvailable: this.richEditorController !== null && this.nativeTextReady,
+      nativeEditorState: this.coreOnlyNativeEditorState(),
       aligned: false,
       coreRevision: snap !== null ? snap.revision : -1,
       appliedRevision: this.lastAppliedRevision,
       coreText: snap !== null ? snap.text : '',
-      confirmedText: this.confirmedText
+      confirmedText: this.confirmedText,
+      coreSessionId: this.coordinator.getSessionId() ?? -1
     }
   }
 
+  // 三方校验结果 → 屏障事实。nativeAvailable 来自同一次原生全文读取：
+  // 已加载但读不到就是 read-failed，不能当成「没有原生编辑器」或「已对齐」。
   private buildAlignmentFacts(alignment: NativeCoreAlignmentResult): ImeAlignmentFacts {
     const snap = this.coordinator.getSnapshot()
+    let nativeEditorState: NativeEditorState = 'unbound'
+    if (this.richEditorController !== null) {
+      if (!this.nativeTextReady) {
+        nativeEditorState = 'loading'
+      } else {
+        nativeEditorState = alignment.nativeAvailable ? 'ready' : 'read-failed'
+      }
+    }
     return {
       coreAvailable: alignment.coreAvailable,
-      nativeEditorAvailable: this.richEditorController !== null && this.nativeTextReady,
+      nativeEditorState: nativeEditorState,
       aligned: alignment.matched,
       coreRevision: alignment.coreRevision,
       appliedRevision: alignment.appliedRevision,
       coreText: snap !== null ? snap.text : '',
-      confirmedText: this.confirmedText
+      confirmedText: this.confirmedText,
+      coreSessionId: this.coordinator.getSessionId() ?? -1
     }
   }
 
   // 按纯逻辑判定结算所有满足条件的 waiter。返回本轮结算数量。
-  // imeSettlementPending 由调用方给出：true 时普通屏障只冻已提交 revision，退出屏障等待。
+  // imeComposing 由调用方给出真实 composition 状态；previewState 单独交给退出屏障判定。
   private settleWaiters(alignment: ImeAlignmentFacts, previewState: PreviewTextState,
-    imeSettlementPending: boolean): number {
+    imeComposing: boolean): number {
     const waiters: ImeBarrierWaiter[] = this.imeBarrier.waiters()
     const state: ImeStateFacts = {
-      imeComposing: imeSettlementPending,
+      imeComposing: imeComposing,
       previewState: previewState
     }
     let settled: number = 0
@@ -800,7 +839,8 @@ export class NativeRichEditorBridge {
 
   private pushIdleWaiter(mode: ImeBarrierMode, requireImeSignal: boolean): Promise<void> {
     const registration = this.imeBarrier.register(
-      this.sessionId, this.lastAppliedRevision, this.nextEditSequence - 1, mode, requireImeSignal)
+      this.sessionId, this.coordinator.getSessionId() ?? -1,
+      this.lastAppliedRevision, this.nextEditSequence - 1, mode, requireImeSignal)
     this.checkIdle()
     return registration.promise
   }
@@ -925,23 +965,32 @@ export class NativeRichEditorBridge {
         this.nativeCoreDivergedSessionId = null
       }
       const previewState: PreviewTextState = this.readPreviewTextState()
-      const hasExitWaiter: boolean = this.imeBarrier.hasImeSettlementWaiter(this.sessionId)
-      // preview 明确存在时按「IME 结算未完成」处理；读取失败（unknown）只在退出屏障
-      // 需要严格结算时阻塞普通收敛，避免无预编辑的普通保存因一次读取失败改变行为。
-      const imeSettlementPending: boolean = this.imeComposing ||
-        previewState === 'present' || (previewState === 'unknown' && hasExitWaiter)
-      this.settleWaiters(this.buildAlignmentFacts(alignment), previewState, imeSettlementPending)
+      // composition 状态与 preview 分开传递：退出屏障要求 preview 明确为空，
+      // 普通保存只看已提交 revision，不因预编辑/读取失败被拖住。
+      this.settleWaiters(this.buildAlignmentFacts(alignment), previewState, this.imeComposing)
       if (this.imeBarrier.pendingCount() === 0) {
         return
       }
 
+      // Core 会话还在但读不到快照：没有任何可对齐的基线。等待者必须拿到确定失败，
+      // 不能静默 return 挂到超时（各自 timer 只是最后兜底）。
+      if (!alignment.coreAvailable) {
+        if (this.coordinator.getSessionId() !== null) {
+          this.imeBarrier.rejectSession(this.sessionId, CORE_SNAPSHOT_UNAVAILABLE,
+            `core snapshot unavailable at ${this.barrierStage}`
+              + ` mirrorLen=${alignment.nativeUtf16Length}`)
+        }
+        return
+      }
+
       const nativeEditorLoaded = this.richEditorController !== null && this.nativeTextReady
-      if (alignment.matched || !alignment.coreAvailable || !nativeEditorLoaded) {
+      if (alignment.matched || !nativeEditorLoaded) {
+        // 已对齐：没有待收敛；原生未加载/不可读：等待者由自己的 timer 给出确定结果。
         return
       }
 
       // preview 读取失败或仍有预编辑：不能把原生候选当正文收敛进 Core。
-      if (imeSettlementPending) {
+      if (this.imeComposing || previewState !== 'empty') {
         return
       }
 
@@ -1159,6 +1208,8 @@ export class NativeRichEditorBridge {
     this.nativeCoreConvergenceRunning = false
     this.nativeCoreRefreshRunning = false
     this.nativeTextReady = false
+    this.lastNativeTextReadFailed = false
+    this.nativeEditing = false
     this.confirmedText = ''
     this.confirmedRevision = -1
     this.lastAppliedRevision = -1
@@ -1267,19 +1318,20 @@ export class NativeRichEditorBridge {
     this.currentText = previousText.substring(0, startUtf16)
       + insertedText
       + previousText.substring(endUtf16)
-    this.nativeNewlineCount = Math.max(0,
-      this.nativeNewlineCount + countNewlines(insertedText) - countNewlines(oldText))
+    // Issue #1063 复审评论第 3 条：段落变化按统一规则在局部窗口判定，
+    // 覆盖跨编辑边界形成/拆开 CRLF 与 U+2029；newlineDelta 直接维护换行计数。
+    const change: LocalParagraphChange =
+      describeLocalParagraphChange(previousText, insertedText, startUtf16, endUtf16)
+    this.nativeNewlineCount = Math.max(0, this.nativeNewlineCount + change.newlineDelta)
     // 空文档第一次有字时需要重新发布段落/字体样式：空属性字符串没有可承载样式的位置。
     const becameNonEmpty: boolean = previousText.length === 0 && this.currentText.length > 0
-    const paragraphsChanged: boolean = becameNonEmpty ||
-      insertedText.indexOf('\n') >= 0 || oldText.indexOf('\n') >= 0
+    const paragraphsChanged: boolean = becameNonEmpty || change.paragraphsChanged
 
     if (pending !== null && pending.preview) {
       if (!this.imeComposing) {
         this.imeComposing = true
         this.imeComposingStartText = previousText
-        this.imeComposingStartNewlineCount = this.nativeNewlineCount
-          - countNewlines(insertedText) + countNewlines(oldText)
+        this.imeComposingStartNewlineCount = this.nativeNewlineCount - change.newlineDelta
       }
       this.recordNativeOperation({
         kind: 'typing',
@@ -1301,7 +1353,7 @@ export class NativeRichEditorBridge {
         factError: factError
       })
       this.notifyStateListener('native-change', paragraphsChanged,
-        this.insertedParagraphStarts(insertedText, startUtf16), becameNonEmpty)
+        change.newParagraphStarts, becameNonEmpty)
       // 预编辑态也可能有待收敛的状态机：给 checkIdle 一次事件机会（无 waiter 时立即返回）。
       this.checkIdle()
       return
@@ -1314,7 +1366,7 @@ export class NativeRichEditorBridge {
         this.reportNativeFactError('onContentDidChange',
           'ime composition ended without will-change facts; refusing to commit mirror diff')
         this.notifyStateListener('native-change', paragraphsChanged,
-          this.insertedParagraphStarts(insertedText, startUtf16), becameNonEmpty)
+          change.newParagraphStarts, becameNonEmpty)
         this.checkIdle()
         return
       }
@@ -1346,7 +1398,7 @@ export class NativeRichEditorBridge {
         factError: factError
       })
       this.notifyStateListener('native-change', paragraphsChanged,
-        this.insertedParagraphStarts(insertedText, startUtf16), becameNonEmpty)
+        change.newParagraphStarts, becameNonEmpty)
       this.checkIdle()
       return
     }
@@ -1390,7 +1442,7 @@ export class NativeRichEditorBridge {
     }
     this.enqueuePendingEdit(pendingEdit)
     this.notifyStateListener('native-change', paragraphsChanged,
-      this.insertedParagraphStarts(insertedText, startUtf16), becameNonEmpty)
+      change.newParagraphStarts, becameNonEmpty)
   }
 
   // previewText 读取：null 表示读取失败/接口不可用（unknown），绝不能当成 0。
@@ -1864,9 +1916,12 @@ export class NativeRichEditorBridge {
       }
 
       if (edit.sessionId === this.sessionId) {
-        const paragraphsChanged = edit.insertedText.indexOf('\n') >= 0 || edit.oldText.indexOf('\n') >= 0
-        this.notifyStateListener('edit-settled', paragraphsChanged,
-          this.insertedParagraphStarts(edit.insertedText, edit.startUtf16))
+        // Issue #1063 复审评论第 3 条：结算后的段落通知与原生通知使用同一套局部规则
+        // （baselineText 是这笔事务提交前的 Core 正文）。
+        const settledChange: LocalParagraphChange = describeLocalParagraphChange(
+          baselineText, edit.insertedText, edit.startUtf16, edit.startUtf16 + edit.oldText.length)
+        this.notifyStateListener('edit-settled', settledChange.paragraphsChanged,
+          settledChange.newParagraphStarts)
       }
     }
   }
@@ -1901,6 +1956,7 @@ export class NativeRichEditorBridge {
   // ── 原生编辑事实与运行时诊断（不含正文原文） ─────────────────────
 
   // 从属性字符串读取全文；失败返回 null（controller 未绑定组件时为 undefined）。
+  // 已绑定且已加载正文时，读取失败记为 read-failed：屏障不能把它当成三方一致。
   private readNativeFullText(): string | null {
     if (this.richEditorController === null) {
       return null
@@ -1908,14 +1964,21 @@ export class NativeRichEditorBridge {
     try {
       const styled: MutableStyledString = this.richEditorController.getStyledString()
       if (styled === undefined || styled === null) {
+        if (this.nativeTextReady) {
+          this.lastNativeTextReadFailed = true
+        }
         return null
       }
       const text: string = styled.getString()
       // 属性字符串模式没有 Span 列表；Span 数不再作为可读事实。
       this.lastReadNativeSpanCount = -1
+      this.lastNativeTextReadFailed = false
       return text
     } catch (e) {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `readNativeFullText error: ${JSON.stringify(e)}`)
+      if (this.nativeTextReady) {
+        this.lastNativeTextReadFailed = true
+      }
       return null
     }
   }
@@ -2041,14 +2104,6 @@ export class NativeRichEditorBridge {
     } catch (e) {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `state listener error: ${JSON.stringify(e)}`)
     }
-  }
-
-  // 本次替换文本里由统一段落规则形成的新段落起点（UTF-16，绝对位置）。
-  // 走 text_document_rules.ts 的统一段落规则（CRLF 是一个边界、U+2029 也是、
-  // 孤立 CR 不是），与 Core paragraph_byte_ranges 一致；
-  // 只用于核对段落样式继承，不参与 Core 正文事务。
-  private insertedParagraphStarts(insertedText: string, insertionStart: number): number[] {
-    return computeInsertedParagraphStarts(insertedText, insertionStart)
   }
 
   private validateNativeCoreAlignment(stage: string): NativeCoreAlignmentResult {

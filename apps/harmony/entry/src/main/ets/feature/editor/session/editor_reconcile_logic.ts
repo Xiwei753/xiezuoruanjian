@@ -16,6 +16,30 @@ import { computeMinimalTextDiff } from '../session/editor_patch_logic.ts'
 
 export type EditorSessionHealth = 'healthy' | 'reconciling' | 'conflict'
 
+// Issue #1063 复审评论第 2 条：会话内冲突重试结果。
+// recovered=false 时会话仍保持 conflict（或保持 reconciling 等真实结算），
+// errorCode 给出 NOT_IN_CONFLICT / RECONCILE_DEFERRED / IME_SETTLEMENT_CONFLICT /
+// IME_SETTLEMENT_SESSION_CHANGED 等明确原因。
+export interface ConflictRecoveryResult {
+  readonly recovered: boolean
+  readonly errorCode: string
+  readonly detail: string
+}
+
+/**
+ * 屏障/保存入口前的冲突恢复判定：只有真正恢复，或本来就不在冲突中（NOT_IN_CONFLICT，
+ * 例如会话仍在 reconciling，等待交给后面的屏障与超时）才允许继续。
+ *
+ * 其余结果（RECONCILE_DEFERRED、会话切换、不可合并冲突）都按失败收尾：
+ * 调用方走既有保存失败状态，原生正文与 pendingEdits 一条不丢。
+ */
+export function isConflictRecoverySatisfied(result: ConflictRecoveryResult | null): boolean {
+  if (result === null) {
+    return true
+  }
+  return result.recovered === true || result.errorCode === 'NOT_IN_CONFLICT'
+}
+
 // 冻结 pending edit 做 rebase 所需的最小事实（结构与 NativeRichEditorBridge.PendingEdit 兼容）。
 export interface FrozenEditFact {
   localSequence: number

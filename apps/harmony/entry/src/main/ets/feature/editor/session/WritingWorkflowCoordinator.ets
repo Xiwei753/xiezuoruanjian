@@ -29,6 +29,7 @@ import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { Routes, WritingRouteParams } from '../../../app/navigation/Routes'
 import { ActiveWritingSession, SyncBarrierBeginResult } from './ActiveWritingSessionRegistry'
 import { ImeSettlementError } from '../input/ime_settlement_barrier'
+import { ConflictRecoveryResult, isConflictRecoverySatisfied } from './editor_reconcile_logic'
 
 // 协调器需要页面展示的文案键（翻译成资源字符串由页面负责，协调器不 import UI 上下文）。
 export enum WritingTextKey {
@@ -158,6 +159,10 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // - bridgeFinishEditingAndWhenIdle：退出/同步，先 stopEditing() 结束预编辑再等队列稳定
   private bridgeWhenIdle: (() => Promise<void>) | null = null
   private bridgeFinishEditingAndWhenIdle: (() => Promise<void>) | null = null
+  // Issue #1063 复审评论第 2 条：会话内冲突重试入口（NativeRichEditorBridge.retryReconcile）。
+  // 冲突不再是只能 beginSession 解锁的终态：保存/同步/关闭前先尝试一次可验证 rebase，
+  // 失败就按既有失败状态收尾，原生正文与 pendingEdits 一条不丢。
+  private bridgeRetryReconcile: (() => Promise<ConflictRecoveryResult>) | null = null
   // Issue #1054：合法空文档意图由原生编辑事务记录（精确 sessionId/revision）。
   // 保存路径只凭这个事实决定是否允许空覆盖，不用 UI 的初始 content='' 推断。
   private emptyDocumentIntentCheck: ((sessionId: number, revision: number) => boolean) | null = null
@@ -256,6 +261,12 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
 
   setBridgeFinishEditingAndWhenIdle(fn: (() => Promise<void>) | null): void {
     this.bridgeFinishEditingAndWhenIdle = fn
+  }
+
+  // Issue #1063 复审评论第 2 条：会话内冲突重试（可验证 rebase）注入。
+  // 页面把 NativeRichEditorBridge.retryReconcile 接进来；不注入时保存/同步/关闭保持原行为。
+  setBridgeRetryReconcile(fn: (() => Promise<ConflictRecoveryResult>) | null): void {
+    this.bridgeRetryReconcile = fn
   }
 
   // Issue #1054：由页面把原生桥接的“合法清空意图”校验注入保存链路。
@@ -394,6 +405,30 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     hilog.error(0x0000, 'WritingWorkflowCoordinator',
       `editor barrier failed stage=${stage} code=${errorCode}: ${detail}`)
     return { stage: stage, errorCode: errorCode, detail: detail }
+  }
+
+  // Issue #1063 复审评论第 2 条：保存/同步/关闭前先在当前会话内重试一次冲突恢复。
+  // - 没有注入回调：返回 null（保持原行为）；
+  // - 已恢复，或本来就不在冲突中（reconciling 的等待交给后面的屏障与超时）：继续原屏障；
+  // - 其余结果：按既有形状返回失败，调用方复用既有失败状态；原生正文与 pendingEdits
+  //   仍保留在 bridge（绝不 beginSession 清事件）。
+  private async recoverConflictForBarrier(stage: string): Promise<EditorBarrierFailure | null> {
+    const retryReconcile = this.bridgeRetryReconcile
+    if (retryReconcile === null) {
+      return null
+    }
+    let result: ConflictRecoveryResult
+    try {
+      result = await retryReconcile()
+    } catch (err) {
+      return this.barrierFailure(stage, err)
+    }
+    if (isConflictRecoverySatisfied(result)) {
+      return null
+    }
+    hilog.error(0x0000, 'WritingWorkflowCoordinator',
+      `conflict recovery failed stage=${stage} code=${result.errorCode}: ${result.detail}`)
+    return { stage: stage, errorCode: result.errorCode, detail: result.detail }
   }
 
   // 编辑屏障失败：保留原生编辑状态，返回保存失败（不落盘旧 Core 正文）。
@@ -896,6 +931,16 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #927：返回真实成功/失败结果（只开一次保存事务），失败时保留 hasUnsavedChanges，
   // 调用方不得把「回调已调用」当成「已经落盘」。
   async performBackgroundSave(): Promise<boolean> {
+    // 没有打开的编辑会话：没有正文可保存，也没有可结算的原生输入。
+    // （不能因此进入 whenIdle：Core 快照不可用绝不代表“已空闲”。）
+    if (this.editorCoordinator.getSessionId() === null) {
+      return true
+    }
+    // Issue #1063 复审评论第 2 条：先尝试会话内冲突恢复；失败保留编辑并走既有保存失败状态。
+    const conflictFailure = await this.recoverConflictForBarrier('background-save')
+    if (conflictFailure !== null) {
+      return this.failSaveAfterBarrierFailure(conflictFailure)
+    }
     const idleFailure = await this.awaitBridgeIdle()
     if (idleFailure !== null) {
       return this.failSaveAfterBarrierFailure(idleFailure)
@@ -920,6 +965,13 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // 与 performGracefulClose 的区别：**不** close session、不 detach IME、不换章节。
   // 保存失败返回 ok:false 并恢复编辑输入；只有确实完成当前 snapshot 落盘才放行 Core 全量同步。
   async beginSyncBarrier(): Promise<SyncBarrierBeginResult> {
+    // Issue #1063 复审评论第 2 条：同步前先在当前会话内重试一次冲突恢复；
+    // 失败释放屏障并返回 ok:false，会话/正文/pendingEdits 原样保留，调用方可重试。
+    const conflictFailure = await this.recoverConflictForBarrier('sync-barrier')
+    if (conflictFailure !== null) {
+      this.endSyncBarrier()
+      return { ok: false }
+    }
     // 无编辑会话（零章节工作台 / 尚未打开正文）：无正文可被同步替换，直接放行。
     if (this.editorCoordinator.getSessionId() === null) {
       return { ok: true }
@@ -1140,7 +1192,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     if (this.closeTask !== null) {
       return this.closeTask
     }
-    const task: Promise<boolean> = this.doGracefulClose()
+    const task: Promise<boolean> = this.closeWithConflictRecovery()
     this.closeTask = task
     task.then(
       (closed: boolean) => {
@@ -1156,6 +1208,20 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       }
     )
     return task
+  }
+
+  // Issue #1063 复审评论第 2 条：关闭前先在当前会话内重试一次冲突恢复。
+  // 不可合并冲突返回 false 并保留会话（页面留在本页，可再次尝试），
+  // 绝不用 beginSession 清 pendingEdits 来“解锁”关闭。
+  private async closeWithConflictRecovery(): Promise<boolean> {
+    const conflictFailure = await this.recoverConflictForBarrier('graceful-close')
+    if (conflictFailure !== null) {
+      hilog.error(0x0000, 'WritingWorkflowCoordinator',
+        `close blocked by unresolved conflict stage=${conflictFailure.stage}`
+          + ` code=${conflictFailure.errorCode}`)
+      return false
+    }
+    return this.doGracefulClose()
   }
 
   // Issue #629 评论7 第5项：真实关闭逻辑（拆出，由 performGracefulClose 幂等包装）。

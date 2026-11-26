@@ -1349,6 +1349,11 @@ export struct SujianEditor {
         .enablePreviewText(true)
         .onEditingChange((isEditing: boolean) => {
           this.nativeEditing = isEditing
+          // Issue #1063 复审评论第 2 条：失焦/取消这类没有正文变化的事件也要驱动桥接状态机
+          // （只重新读取 preview 与三方事实，不 force 提交候选文本）。
+          if (this.richEditorBridge !== null) {
+            this.richEditorBridge.notifyEditingStateChanged(isEditing)
+          }
           this.scheduleCaretGeometryRefresh(false)
           this.scheduleRuntimeSnapshot()
         })

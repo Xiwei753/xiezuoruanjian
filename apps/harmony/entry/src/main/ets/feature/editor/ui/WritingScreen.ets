@@ -22,6 +22,7 @@ import { WritingSessionTracker } from '../stats/WritingSessionTracker'
 import { EditorEditResult, EditorSessionSnapshot, EditorEditOutcome } from '../../../corebridge/dto/EditorDtos'
 import { EditorTransactionCause, EditorOperationKind } from '../../../corebridge/dto/EditorDtos'
 import { NativeRichEditorBridge } from '../input/NativeRichEditorBridge'
+import { ConflictRecoveryResult } from '../session/editor_reconcile_logic'
 import { SujianEditor } from './SujianEditor'
 import { ProofReplayPanel } from './ProofReplayPanel'
 import { WideWritingWorkbench } from './wide/WideWritingWorkbench'
@@ -344,6 +345,10 @@ export struct WritingScreen {
     })
     this.writingWorkflow.setBridgeWhenIdle((): Promise<void> => this.richEditorBridge.whenIdle())
     this.writingWorkflow.setBridgeFinishEditingAndWhenIdle((): Promise<void> => this.richEditorBridge.finishEditingAndWhenIdle())
+    // Issue #1063 复审评论第 2 条：保存/同步/关闭前先尝试会话内冲突恢复（可验证 rebase）。
+    // 不可合并的冲突仍保留在 bridge 原生正文 + pendingEdits，走既有保存失败提示。
+    this.writingWorkflow.setBridgeRetryReconcile(
+      (): Promise<ConflictRecoveryResult> => this.richEditorBridge.retryReconcile())
     // Issue #1054：保存路径只接受“用户删除事务把当前非空会话删空”的精确 session/revision 意图，
     // 程序性初始空视图或未加载章节不会产生该意图。
     this.writingWorkflow.setEmptyDocumentIntentCheck(
@@ -522,6 +527,14 @@ export struct WritingScreen {
     if (!success) {
       hilog.warn(0x0000, 'WritingScreen', 'background save did not complete; unsaved content stays dirty')
     }
+  }
+
+  // Issue #1063 复审评论第 2 条：保存失败后点状态文字重试。
+  // 只调协调器既有的 performBackgroundSave（内部先重试会话内冲突恢复，再走原屏障/保存），
+  // 结果交给既有 listener 与 saveMessage，不在这里写第二套保存或状态。
+  private async retrySaveAfterConflict(): Promise<void> {
+    const saved: boolean = await this.writingWorkflow.performBackgroundSave()
+    this.onBackgroundSaveResult(saved)
   }
 
   // Issue #629 评论9 第3项：aboutToDisappear 只做页面已确定离开后的清理。
@@ -2581,6 +2594,13 @@ export struct WritingScreen {
         Text(this.getSaveStatusText())
           .fontSize(12)
           .fontColor(this.getSaveStatusColor())
+          // Issue #1063 复审评论第 2 条：保存失败时点状态文字重试一次保存。
+          // 内部仍走协调器既有的 performBackgroundSave / 保存失败状态，不另写保存流程。
+          .onClick(() => {
+            if (this.lastSaveFailed && !this.isSaving) {
+              void this.retrySaveAfterConflict()
+            }
+          })
       }
       .width('100%')
       .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
