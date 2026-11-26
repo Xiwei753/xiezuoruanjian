@@ -2717,6 +2717,18 @@ impl WriterCoreApi {
             );
         }
 
+        // Issue #729 + #1065 复审 #2：取消只阻止**远端发布**，已经落盘的本地结果
+        // 仍要收口——finalize、history、索引失效都要照常执行。提前 return 会让
+        // 平台看不到已提交的变更，也会漏写本地 history。
+        let cancelled_after_commit = Self::sync_cancelled(cancellation_token.as_ref());
+        if cancelled_after_commit {
+            round.discard();
+            publish_blocked = true;
+            log::info!(
+                "[sync] cancellation requested after per-target loop — skipping remote publish, keeping local bookkeeping"
+            );
+        }
+
         let mut publish_succeeded = false;
         let mut publish_error: Option<String> = None;
         if !publish_blocked {
@@ -2784,19 +2796,6 @@ impl WriterCoreApi {
         // 现在改为：perform_full_sync 在拿到终态后 spawn 后台线程执行 GC maintenance
         // （fire-and-forget），GC 失败只 log warn，不影响同步终态。
 
-        // Issue #729：整轮结束后检查取消令牌。
-        if Self::sync_cancelled(cancellation_token.as_ref()) {
-            log::info!(
-                "[sync] perform_full_sync: cancellation requested after per-target loop — persisting cancelled state"
-            );
-            self.core_write().persist_full_sync_cancelled();
-            return Ok(RoundOutcome {
-                result: Self::full_sync_noop_result(),
-                published_revision: None,
-                publish_succeeded: false,
-            });
-        }
-
         // Issue #763 评论 5831610228：finalize 前用 set_global_phase("commit") 清掉
         // 单一 current target，表示整轮进入全局 Commit 收口，没有单一 current target。
         if let Some(ref sink) = progress_sink {
@@ -2833,6 +2832,21 @@ impl WriterCoreApi {
         // 远端发布失败：把失败注入终态，平台与 checkpoint 都按失败处理，
         // 但已提交的本地结果、history 与索引失效照常收口（复审 #2、#3）。
         let mut result = result;
+        if cancelled_after_commit {
+            if matches!(
+                result.overall_status,
+                crate::sync::SyncStatus::Success
+                    | crate::sync::SyncStatus::NoChanges
+                    | crate::sync::SyncStatus::LatestWinsApplied
+            ) {
+                result.overall_status = crate::sync::SyncStatus::Error("cancelled".to_string());
+                result.error = Some(
+                    "sync cancelled after local commit; remote publish skipped".to_string(),
+                );
+                result.error_category = Some("cancelled".to_string());
+            }
+            self.core_write().persist_full_sync_cancelled();
+        }
         if let Some(message) = publish_error {
             if matches!(
                 result.overall_status,
