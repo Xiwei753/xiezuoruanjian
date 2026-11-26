@@ -291,7 +291,7 @@ pub enum ChapterCommitOutcome {
 mod journal;
 mod publish;
 pub(crate) use journal::commit_chapter_with_guard;
-pub(super) use journal::read_chapter_state;
+pub(crate) use journal::read_chapter_state;
 pub use journal::{
     mark_chapter_commit_projection, pending_chapter_proof_events,
     pending_chapter_proof_transactions, pending_chapter_sync_proof_fact_ids,

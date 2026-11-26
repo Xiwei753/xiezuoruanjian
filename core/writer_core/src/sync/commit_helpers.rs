@@ -896,15 +896,86 @@ fn commit_synced_chapter_bodies(
             let body_rel = chapter_body_rel_path(&change.key);
             let meta_rel = chapter_meta_rel_path(&change.key);
             if change.mutation == SyncedChapterMutation::Delete {
-                crate::chapter::delete_chapter(
+                let base = crate::chapter::commit::read_chapter_state(
+                    base_root,
+                    &change.key.volume_id,
+                    &change.key.chapter_id,
+                );
+                let live = crate::chapter::commit::read_chapter_state(
                     live_root,
                     &change.key.volume_id,
                     &change.key.chapter_id,
-                    app_data_root,
-                )?;
-                handled.insert(body_rel);
-                handled.insert(meta_rel);
-                continue;
+                );
+                match (base, live) {
+                    (
+                        Err(crate::error::Error::ChapterNotFound),
+                        Err(crate::error::Error::ChapterNotFound),
+                    ) => {
+                        // base 与 live 都不存在：删除已幂等完成。
+                        handled.insert(body_rel);
+                        handled.insert(meta_rel);
+                        continue;
+                    }
+                    (Err(crate::error::Error::ChapterNotFound), Ok(_)) => {
+                        return Err(crate::error::Error::Other(format!(
+                            "sync delete chapter created after base: {}/{}",
+                            change.key.volume_id, change.key.chapter_id
+                        )));
+                    }
+                    (Ok((_, base_text, base_version)), Ok(_)) => {
+                        let mut request =
+                            crate::chapter::ChapterCommitRequest::new(change.key.clone(), "");
+                        request.expected = Some(base_version);
+                        request.mutation = crate::chapter::ChapterMutationKind::Delete;
+                        request.source = crate::chapter::ChapterCommitSource::Sync;
+                        request.allow_empty_overwrite = true;
+                        request
+                            .sync_proof_facts
+                            .push(crate::chapter::ChapterSyncProofFact {
+                                event_id: format!(
+                                    "sync:{run_id}:{}:{}",
+                                    PathBuf::from("projects")
+                                        .join(&project_id)
+                                        .join(&body_rel)
+                                        .display(),
+                                    change.action_index
+                                ),
+                                key: request.key.clone(),
+                                before_text: Some(base_text),
+                                after_text: None,
+                                source_device_id: String::new(),
+                                occurred_at_ms: chrono::Utc::now().timestamp_millis(),
+                            });
+                        match crate::chapter::commit::commit_chapter_with_guard(
+                            live_root,
+                            Some(guard),
+                            request,
+                        )? {
+                            crate::chapter::ChapterCommitOutcome::Committed(_) => {
+                                handled.insert(body_rel);
+                                handled.insert(meta_rel);
+                            }
+                            crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
+                                return Err(crate::error::Error::Other(format!(
+                                    "sync delete conflicted for {}/{}: actual={:?}, dir={}",
+                                    change.key.volume_id,
+                                    change.key.chapter_id,
+                                    conflict.actual,
+                                    conflict.conflict_dir
+                                )));
+                            }
+                        }
+                        continue;
+                    }
+                    (Ok(_), Err(crate::error::Error::ChapterNotFound)) => {
+                        // live 已被删除（可能是外部）；不再重复发布。
+                        handled.insert(body_rel);
+                        handled.insert(meta_rel);
+                        continue;
+                    }
+                    (Err(error), _) => return Err(error),
+                    (_, Err(error)) => return Err(error),
+                }
             }
 
             let current = crate::chapter::commit::read_chapter_state_recovering(

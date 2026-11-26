@@ -14,7 +14,7 @@ use uuid::Uuid;
 use super::*;
 use crate::chapter::calculate_word_count;
 
-use super::publish::publish_decided;
+use super::publish::{publish_decided, publish_deleted};
 
 mod recovery;
 pub use recovery::{
@@ -95,6 +95,12 @@ pub(super) struct ChapterCommitManifest {
     /// 恢复时判断是否为创建提交；旧 journal 无此字段默认 false。
     #[serde(default)]
     pub(super) created: bool,
+    /// 删除提交：after 是 tombstone 版本，live 章节目录应移动到 trash。
+    #[serde(default)]
+    pub(super) deleted: bool,
+    /// 删除提交预先确定的 trash 绝对路径；恢复时按它幂等补全移动。
+    #[serde(default)]
+    pub(super) trash_path: Option<String>,
     /// 恢复时发现当前正文既不是 before 也不是 after，记录原因。
     #[serde(default)]
     pub(super) superseded_reason: Option<String>,
@@ -545,7 +551,14 @@ pub(crate) fn commit_chapter_with_guard(
         .transaction_id
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let content_changed = current != request.content;
+    let deleting = request.mutation == ChapterMutationKind::Delete;
+    if deleting && request.expected.is_none() {
+        return Err(Error::Other(format!(
+            "chapter delete requires expected version: {}/{}",
+            key.volume_id, key.chapter_id
+        )));
+    }
+    let content_changed = deleting || current != request.content;
     let meta_changed = request
         .meta_title
         .as_ref()
@@ -580,6 +593,7 @@ pub(crate) fn commit_chapter_with_guard(
         .collect::<Vec<_>>();
 
     if request.mutation != ChapterMutationKind::Create
+        && !deleting
         && !content_changed
         && !meta_changed
         && changed_additional.is_empty()
@@ -612,7 +626,7 @@ pub(crate) fn commit_chapter_with_guard(
     };
     let after = ChapterVersion {
         object_generation: generation,
-        revision: if content_changed || meta_changed {
+        revision: if content_changed || meta_changed || deleting {
             before.revision.saturating_add(1)
         } else {
             before.revision
@@ -670,6 +684,25 @@ pub(crate) fn commit_chapter_with_guard(
     }
     crate::storage::sync_dir(&tx_dir)?;
 
+    let trash_path = if deleting {
+        let app_data_root = project_root.ancestors().nth(2).ok_or_else(|| {
+            Error::Other("chapter delete cannot derive app data root".to_string())
+        })?;
+        Some(
+            app_data_root
+                .join("sync/trash")
+                .join(format!(
+                    "{}_{}_{}",
+                    Utc::now().timestamp_millis(),
+                    Uuid::new_v4(),
+                    key.chapter_id
+                ))
+                .to_string_lossy()
+                .to_string(),
+        )
+    } else {
+        None
+    };
     let mut pending_projections = request.projection_ids.clone();
     for fact in &request.sync_proof_facts {
         if !pending_projections.contains(&fact.event_id) {
@@ -704,6 +737,8 @@ pub(crate) fn commit_chapter_with_guard(
         meta_title: request.meta_title.clone(),
         meta_order: request.meta_order,
         created: request.mutation == ChapterMutationKind::Create,
+        deleted: deleting,
+        trash_path,
         superseded_reason: None,
     };
     write_manifest(&tx_dir, &manifest)?;
@@ -712,8 +747,12 @@ pub(crate) fn commit_chapter_with_guard(
     manifest.phase = ChapterCommitPhase::Decided;
     write_manifest(&tx_dir, &manifest)?;
 
-    // 3) 发布正文/元数据/附加文件投影。
-    let published = publish_decided(project_root, &tx_dir, &mut manifest)?;
+    // 3) 发布正文/元数据/附加文件投影；删除提交单独发布 trash+tombstone。
+    let published = if deleting {
+        publish_deleted(project_root, &tx_dir, &mut manifest)?
+    } else {
+        publish_decided(project_root, &tx_dir, &mut manifest)?
+    };
     if !published {
         let conflict_dir =
             write_conflict_material(project_root, &request, &current, &before, &transaction_id)?;
@@ -757,7 +796,11 @@ pub(crate) fn commit_chapter_with_guard(
         }
         files
     };
-    let meta_hash = md5_hex(&fs::read_to_string(key.meta_path(project_root))?);
+    let meta_hash = if deleting {
+        String::new()
+    } else {
+        md5_hex(&fs::read_to_string(key.meta_path(project_root))?)
+    };
 
     Ok(ChapterCommitOutcome::Committed(ChapterCommitReceipt {
         transaction_id,

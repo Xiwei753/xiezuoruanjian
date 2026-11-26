@@ -1,3 +1,4 @@
+use super::super::publish::{publish_decided, publish_deleted};
 use super::*;
 
 /// 保留 Superseded 事务的真实材料、pending 事件和冲突记录。
@@ -237,7 +238,11 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
                 continue;
             }
             ChapterCommitPhase::Decided => {
-                let published = publish_decided(project_root, &tx_dir, &mut manifest)?;
+                let published = if manifest.deleted {
+                    publish_deleted(project_root, &tx_dir, &mut manifest)?
+                } else {
+                    publish_decided(project_root, &tx_dir, &mut manifest)?
+                };
                 if !published {
                     let conflict_dir =
                         preserve_superseded_conflict(project_root, &tx_dir, &manifest)?;

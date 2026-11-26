@@ -1,7 +1,7 @@
 //! 章节提交的投影发布与 CAS 校验。
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
@@ -32,6 +32,81 @@ fn mark_superseded(
 /// 当前正文或元数据既不是 before 也不是 after 时拒绝写入（返回 `false`），
 /// 由调用方标记 Superseded 并保留冲突材料；绝不用旧 staging 覆盖新正文。
 /// 缺失正文与 IO 错误必须区分：缺失表示章节已被删除，不能当作空正文复活。
+
+/// 发布删除决议：把整章目录移动到 journal 预先固定的 trash 路径，并把
+/// tombstone 写入 sync state。rename 与 state 写之间崩溃时，journal 仍在
+/// Decided，恢复会按同一 trash_path 幂等补全。
+pub(super) fn publish_deleted(
+    project_root: &Path,
+    tx_dir: &Path,
+    manifest: &mut ChapterCommitManifest,
+) -> Result<bool> {
+    let key = &manifest.key;
+    let body_path = key.body_path(project_root);
+    let meta_path = key.meta_path(project_root);
+    let chapter_dir = body_path
+        .parent()
+        .ok_or_else(|| Error::Other("chapter delete has no parent directory".to_string()))?
+        .to_path_buf();
+    let Some(trash_path) = manifest.trash_path.as_ref().map(PathBuf::from) else {
+        return mark_superseded(
+            tx_dir,
+            manifest,
+            "chapter delete journal missing trash path".to_string(),
+        );
+    };
+
+    if chapter_dir.exists() {
+        let meta: Chapter = serde_json::from_str(&fs::read_to_string(&meta_path)?)?;
+        let body = fs::read_to_string(&body_path)?;
+        let body_sha = sha256_hex(&body);
+        let matches_before = meta.object_generation == manifest.before.object_generation
+            && meta.revision == manifest.before.revision
+            && body_sha == manifest.before.content_sha256;
+        if !matches_before {
+            return mark_superseded(
+                tx_dir,
+                manifest,
+                "chapter changed after delete decision".to_string(),
+            );
+        }
+        if let Some(parent) = trash_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(&chapter_dir, &trash_path)?;
+        if let Some(parent) = trash_path.parent() {
+            crate::storage::sync_dir(parent)?;
+        }
+    } else if !trash_path.exists() {
+        // 章节目录和 trash 都不在：删除已经完成过，不再伪造 tombstone。
+        manifest.phase = ChapterCommitPhase::Applied;
+        write_manifest(tx_dir, manifest)?;
+        return Ok(true);
+    }
+
+    let app_data_root = project_root
+        .ancestors()
+        .nth(2)
+        .ok_or_else(|| Error::Other("chapter delete cannot derive app data root".to_string()))?;
+    let rel_chapter_dir = chapter_dir
+        .strip_prefix(project_root)
+        .unwrap_or(&chapter_dir)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let rel_trash_path = trash_path
+        .strip_prefix(app_data_root)
+        .unwrap_or(&trash_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let mut state = crate::sync::SyncService::load_sync_state(project_root)?;
+    crate::trash::generate_tombstones(&mut state, &trash_path, &rel_chapter_dir, &rel_trash_path);
+    crate::sync::SyncService::save_sync_state(project_root, &state)?;
+
+    manifest.phase = ChapterCommitPhase::Applied;
+    write_manifest(tx_dir, manifest)?;
+    Ok(true)
+}
+
 pub(super) fn publish_decided(
     project_root: &Path,
     tx_dir: &Path,
