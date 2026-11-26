@@ -15,7 +15,7 @@ use super::result_cache::{
     ChapterCorrectionCacheState, ChapterCorrectionSlot, EditRange,
 };
 use super::scan_metrics::{record_correction_scan_event, CorrectionScanMetrics};
-use super::CorrectionStore;
+use super::{CorrectionStore, ModelCacheKey, ModelLoadSlot};
 
 /// Merge dirty segments whose expanded context windows touch or overlap. A
 /// segment's context is deterministic, so this does not change which text the
@@ -69,6 +69,12 @@ pub(crate) struct CorrectionScanner {
     /// `None` for a restore-only scanner: reading the committed chapter cache
     /// must never open the ONNX session or build an engine.
     engine: Option<Arc<CorrectionEngine>>,
+    /// Exact model identity this scanner was built from. Activity refreshes use
+    /// this key so scanning model A never extends model B's idle deadline.
+    model_key: Option<ModelCacheKey>,
+    /// Shared slot for `model_key`; kept to avoid a global cache lock per
+    /// inference window when refreshing the idle deadline.
+    model_slot: Option<Arc<ModelLoadSlot>>,
     model_available: bool,
     /// Fingerprint of the exact lexicon/model/dictionary snapshot captured
     /// when this scanner was built. It must travel with the engine so a
@@ -198,8 +204,12 @@ impl CorrectionScanner {
                 ("resource_fingerprint", scanner_fingerprint_before.clone()),
             ],
         );
+        let model_key = model_snapshot.key.clone();
+        let model_slot = model_key
+            .as_ref()
+            .and_then(CorrectionStore::model_slot_for_key);
         let engine = if let Some(engine) =
-            store.cached_engine(&project_id, lexicon_version, model_snapshot.key.as_ref())?
+            store.cached_engine(&project_id, lexicon_version, model_key.as_ref())?
         {
             engine
         } else {
@@ -232,6 +242,8 @@ impl CorrectionScanner {
             session_id,
             text_revision,
             engine: Some(engine),
+            model_key,
+            model_slot,
             model_available,
             scanner_fingerprint,
         })
@@ -261,6 +273,8 @@ impl CorrectionScanner {
             session_id,
             text_revision,
             engine: None,
+            model_key: None,
+            model_slot: None,
             model_available: false,
             scanner_fingerprint,
         })
@@ -479,7 +493,9 @@ impl CorrectionScanner {
             let end = group.last().map(|job| job.2).unwrap_or(start);
             let window_started = Instant::now();
             let window_result = self.scan_range(text, start, end);
-            self.store.note_model_activity();
+            if let (Some(key), Some(slot)) = (self.model_key.as_ref(), self.model_slot.as_ref()) {
+                self.store.note_model_activity(slot, key);
+            }
             metrics.model_duration_ms = metrics
                 .model_duration_ms
                 .saturating_add(window_started.elapsed().as_millis());

@@ -942,18 +942,29 @@ impl CorrectionStore {
     /// Publish a chapter/document leave signal without touching model locks or
     /// destroying an ONNX session on the GUI thread. The lifecycle thread
     /// decides whether an idle session is actually past its grace deadline.
-    /// Extend the idle deadline while a model scan is actually using a cached
-    /// session. The manager still protects it via the scanner's strong lease,
-    /// but a long scan must not leave `last_used` stale for the next keystroke.
-    pub(super) fn note_model_activity(&self) {
-        let Ok(slots) = model_cache().lock() else {
+    /// Resolve the process-shared slot for one exact model key. The scanner
+    /// keeps this handle so per-window activity updates do not lock or traverse
+    /// the process-wide path cache.
+    pub(super) fn model_slot_for_key(key: &ModelCacheKey) -> Option<Arc<ModelLoadSlot>> {
+        let slots = model_cache().lock().ok()?;
+        slots.get(&key.path).cloned()
+    }
+
+    /// Extend the idle deadline of exactly the model this scanner is using.
+    /// Scanning model A must not keep an unrelated idle model B alive; the
+    /// stamp/identity check also rejects a slot replaced by a newer generation.
+    pub(super) fn note_model_activity(&self, slot: &ModelLoadSlot, key: &ModelCacheKey) {
+        let Ok(mut state) = slot.state.lock() else {
             return;
         };
-        for slot in slots.values() {
-            let Ok(mut state) = slot.state.lock() else {
-                continue;
-            };
-            if let ModelLoadState::Ready { last_used, .. } = &mut *state {
+        if let ModelLoadState::Ready {
+            stamp,
+            identity,
+            last_used,
+            ..
+        } = &mut *state
+        {
+            if *stamp == key.stamp && *identity == key.identity {
                 *last_used = Instant::now();
             }
         }
