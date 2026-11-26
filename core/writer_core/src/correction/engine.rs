@@ -589,7 +589,7 @@ impl CorrectionScanner {
                     segment.dirty = false;
                 }
                 // 空 suggestions 也要写：它表示「已检查无建议」。
-                if let Some(record) = self.synced_record_for_segment(&guard, *index) {
+                if let Some(record) = self.synced_record_for_segment(&guard, *index, text) {
                     synced_records.push(record);
                 }
             }
@@ -791,7 +791,7 @@ impl CorrectionScanner {
             std::collections::HashMap::new();
         for record in records {
             by_segment
-                .entry((record.text_fingerprint, record.context_fingerprint))
+                .entry((record.text_sha256, record.context_sha256))
                 .or_insert(record.suggestions);
         }
         let mut hydrated = false;
@@ -799,17 +799,26 @@ impl CorrectionScanner {
             if segment.checked.is_some() {
                 continue;
             }
+            let start = segment.start_byte as usize;
+            let end = segment.end_byte as usize;
+            if start >= end || end > text.len() {
+                continue;
+            }
+            let (context_start, context_end) = context_range(text, start, end);
+            let Some(segment_text) = text.get(start..end) else {
+                continue;
+            };
+            let Some(context_text) = text.get(context_start..context_end) else {
+                continue;
+            };
             let key = (
-                segment.text_fingerprint.clone(),
-                segment.context_fingerprint.clone(),
+                synced_results::text_sha256(segment_text),
+                synced_results::text_sha256(context_text),
             );
             let Some(suggestions) = by_segment.remove(&key) else {
                 continue;
             };
-            let start = segment.start_byte as usize;
-            let end = segment.end_byte as usize;
-            if start >= end || end > text.len() || !suggestions_match(text, start, end, &suggestions)
-            {
+            if !suggestions_match(text, start, end, &suggestions) {
                 continue;
             }
             segment.checked = Some(suggestions);
@@ -826,8 +835,14 @@ impl CorrectionScanner {
         &self,
         guard: &ChapterCorrectionCacheState,
         index: usize,
+        text: &str,
     ) -> Option<SyncedCorrectionRecord> {
         let segment = guard.segments.get(index)?;
+        let start = segment.start_byte as usize;
+        let end = segment.end_byte as usize;
+        let segment_text = text.get(start..end)?;
+        let (context_start, context_end) = context_range(text, start, end);
+        let context_text = text.get(context_start..context_end)?;
         Some(SyncedCorrectionRecord {
             schema_version: synced_results::SCHEMA_VERSION,
             project_id: self.project_id.clone(),
@@ -837,8 +852,8 @@ impl CorrectionScanner {
             model_identity: self.model_identity.clone(),
             lexicon_identity: self.lexicon_identity.clone(),
             rules_identity: self.rules_identity.clone(),
-            text_fingerprint: segment.text_fingerprint.clone(),
-            context_fingerprint: segment.context_fingerprint.clone(),
+            text_sha256: synced_results::text_sha256(segment_text),
+            context_sha256: synced_results::text_sha256(context_text),
             suggestions: segment.checked.clone()?,
             checked: true,
         })

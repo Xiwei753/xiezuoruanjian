@@ -10,8 +10,8 @@ fn record(text: &str, context: &str) -> SyncedCorrectionRecord {
         model_identity: "model-a".to_string(),
         lexicon_identity: "lexicon-a".to_string(),
         rules_identity: "rule-a".to_string(),
-        text_fingerprint: text.to_string(),
-        context_fingerprint: context.to_string(),
+        text_sha256: text.to_string(),
+        context_sha256: context.to_string(),
         suggestions: Vec::new(),
         checked: true,
     }
@@ -59,7 +59,7 @@ fn write_is_idempotent_and_empty_suggestions_round_trip() {
     let loaded = load_records(root, "chapter-1", MODE_MODEL, "stable-a");
     assert_eq!(loaded.len(), 1);
     assert!(loaded[0].suggestions.is_empty() && loaded[0].checked);
-    assert!(loaded[0].text_fingerprint == "t" && loaded[0].context_fingerprint == "ctx");
+    assert!(loaded[0].text_sha256 == "t" && loaded[0].context_sha256 == "ctx");
 }
 
 #[test]
@@ -87,7 +87,7 @@ fn load_skips_bad_files_and_identity_mismatches() {
     assert!(write_record(root, &record("t3", "ctx")).unwrap());
     let loaded = load_records(root, "chapter-1", MODE_MODEL, "stable-a");
     assert_eq!(loaded.len(), 1);
-    assert_eq!(loaded[0].text_fingerprint, "t3");
+    assert_eq!(loaded[0].text_sha256, "t3");
     assert!(load_records(root, "chapter-1", MODE_RULES, "stable-a").is_empty());
     assert!(load_records(root, "chapter-1", MODE_MODEL, "stable-b").is_empty());
     assert!(load_records(root, "missing-chapter", MODE_MODEL, "stable-a").is_empty());

@@ -28,6 +28,8 @@ pub(crate) const RESULTS_DIR: &str = "correction/results";
 const RECORD_IDENTITY_PREFIX: &str = "correction-synced-v1";
 /// scanner 稳定身份前缀（与 legacy 指纹区分）。
 const SCANNER_STABLE_PREFIX: &str = "correction-scanner-sync-v1";
+/// 分段/上下文窗口算法的版本。算法变化会让旧记录不再复用，必须显式改版本。
+const SEGMENT_IDENTITY_VERSION: &str = "canonical-segment-v2";
 
 /// 本次扫描实际构建/使用了模型引擎。
 pub(crate) const MODE_MODEL: &str = "model";
@@ -50,8 +52,10 @@ pub(crate) struct SyncedCorrectionRecord {
     pub(crate) model_identity: String,
     pub(crate) lexicon_identity: String,
     pub(crate) rules_identity: String,
-    pub(crate) text_fingerprint: String,
-    pub(crate) context_fingerprint: String,
+    /// segment 文本的 SHA-256（强摘要，跨设备稳定）。
+    pub(crate) text_sha256: String,
+    /// segment 前后上下文的 SHA-256（强摘要）。
+    pub(crate) context_sha256: String,
     #[serde(default)]
     pub(crate) suggestions: Vec<CachedSuggestion>,
     /// 写入时恒为 true；加载时 false 的记录视为无效。
@@ -67,8 +71,8 @@ impl SyncedCorrectionRecord {
             &self.chapter_id,
             &self.mode,
             &self.scanner_stable,
-            &self.text_fingerprint,
-            &self.context_fingerprint,
+            &self.text_sha256,
+            &self.context_sha256,
         )
     }
 }
@@ -82,7 +86,8 @@ pub(crate) fn scanner_stable_identity(
     rules_identity: &str,
 ) -> String {
     let material = format!(
-        "{SCANNER_STABLE_PREFIX}|{model_identity}|{lexicon_identity}|{rules_identity}"
+        "{SCANNER_STABLE_PREFIX}|{SEGMENT_IDENTITY_VERSION}|{model_identity}|\
+         {lexicon_identity}|{rules_identity}"
     );
     sha256_hex(material.as_bytes())
 }
@@ -93,14 +98,19 @@ pub(crate) fn record_key(
     chapter_id: &str,
     mode: &str,
     scanner_stable: &str,
-    text_fingerprint: &str,
-    context_fingerprint: &str,
+    text_sha256: &str,
+    context_sha256: &str,
 ) -> String {
     let identity = format!(
-        "{RECORD_IDENTITY_PREFIX}|{project_id}|{chapter_id}|{mode}|{scanner_stable}|\
-         {text_fingerprint}|{context_fingerprint}"
+        "{RECORD_IDENTITY_PREFIX}|{SEGMENT_IDENTITY_VERSION}|{project_id}|{chapter_id}|\
+         {mode}|{scanner_stable}|{text_sha256}|{context_sha256}"
     );
     sha256_hex(identity.as_bytes())
+}
+
+/// 纯文本 SHA-256 摘要（强摘要，供同步记录身份使用）。
+pub(crate) fn text_sha256(text: &str) -> String {
+    sha256_hex(text.as_bytes())
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -229,7 +239,10 @@ pub(crate) fn load_records(
 /// 显式作品级回收：删除一个章节的全部同步记录文件。
 ///
 /// 不接入每台设备的章节删除路径；同步对象删除语义由同步并集分支决定。
-pub(crate) fn remove_chapter_records(project_root: &Path, chapter_id: &str) -> crate::Result<usize> {
+pub(crate) fn remove_chapter_records(
+    project_root: &Path,
+    chapter_id: &str,
+) -> crate::Result<usize> {
     let Some(dir) = chapter_records_dir(project_root, chapter_id) else {
         return Err(crate::Error::Other(
             "invalid correction synced result chapter id".into(),
