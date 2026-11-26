@@ -12,6 +12,8 @@
 //!
 //! 本模块不依赖任何平台 UI 类型，只接收、返回纯文本。
 
+use crate::editor::text_document_rules::paragraph_byte_ranges;
+
 /// 段落开头需要去除的空白字符：ASCII 空格、Tab、全角空格、NBSP。
 fn is_leading_strippable(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\u{3000}' | '\u{00A0}')
@@ -26,36 +28,11 @@ fn is_trailing_strippable(c: char) -> bool {
 ///
 /// 空段落被保留（连接后表现为连续换行），与 Qt 原实现一致。
 pub fn format_paragraphs(text: &str) -> String {
-    let mut paragraphs: Vec<&str> = Vec::new();
-    let mut start = 0usize;
-    let bytes = text.as_bytes();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        // 分隔符只有 ASCII 与 U+2029（UTF-8: E2 80 A9），
-        // 因此 start/i 始终落在字符边界上，切片安全。
-        if bytes[i] == b'\n' {
-            paragraphs.push(&text[start..i]);
-            i += 1;
-            start = i;
-        } else if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
-            paragraphs.push(&text[start..i]);
-            i += 2;
-            start = i;
-        } else if bytes[i] == 0xE2
-            && bytes.get(i + 1) == Some(&0x80)
-            && bytes.get(i + 2) == Some(&0xA9)
-        {
-            paragraphs.push(&text[start..i]);
-            i += 3;
-            start = i;
-        } else {
-            i += 1;
-        }
-    }
-    paragraphs.push(&text[start..]);
-
-    let mut formatted: Vec<&str> = Vec::with_capacity(paragraphs.len());
-    for paragraph in paragraphs {
+    // 段落分隔符规则（`\n` / `CRLF` / `U+2029`，孤立 `CR` 不分段）由
+    // `text_document_rules` 唯一维护，这里只做段落修剪与连接。
+    let mut formatted: Vec<&str> = Vec::with_capacity(paragraph_byte_ranges(text).len());
+    for (start, end) in paragraph_byte_ranges(text) {
+        let paragraph = &text[start..end];
         let trimmed_start = paragraph.trim_start_matches(is_leading_strippable);
         // 空行不去尾部（与 Qt 的 `if (p.length > 0)` 一致），保留空段落。
         let trimmed = if trimmed_start.is_empty() {

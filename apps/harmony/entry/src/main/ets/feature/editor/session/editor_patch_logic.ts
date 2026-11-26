@@ -4,8 +4,9 @@
 // 测试由 Node 单测直接 import。
 //
 // 包含三块纯逻辑：
-//   1. UTF-8 byte offset ↔ UTF-16 code unit offset 严格映射（utf8ByteOffsetToUtf16）
-//   2. patch 严格应用（applyPatchStrict）+ EditorEditResult → snapshot 增量更新（applyEditResultToSnapshot）
+//   1. UTF-8 byte offset ↔ UTF-16 code unit offset 严格映射（委托 input/text_offset_mapper.ts 的唯一实现）
+//   2. patch 批次校验（validatePatchBatch）+ 批量原子应用（applyEditResultToSnapshot）
+//      + 单 patch 严格应用（applyPatchStrict，保留给其它调用方）
 //   3. 串行命令队列（SerialCommandQueue）— 保证编辑命令按 enqueue 顺序执行，
 //      前一条完成才下一条；每条出队执行时才读当前 state，避免并发命令拿到同一个 expectedRevision。
 //
@@ -15,6 +16,20 @@
 // Issue #629 评论 5 第 3 部分：
 //   - applyEditResultToSnapshot 不再用"返回原 snapshot"表达失败，改成明确的 { ok, snapshot, reason } 结果。
 //   - 删除旧 deprecated applyPatch（UTF-8 byte offset 直接当 JS UTF-16 下标的错误实现）。
+//
+// Issue #1063 评论第 2 条（displayPatches 是 base 坐标的原子批次）：
+//   - 一个 EditorEditResult 的 displayPatches 全部以同一 baseRevision 的 **base 正文
+//     UTF-8 byte 坐标** 表示，数组按 replaceByteStart 严格降序且互不重叠。
+//   - 平台必须先把整批映射到 base 快照的 UTF-16 局部坐标并整体校验（revision 一致、
+//     越界、UTF-8 字符边界、严格降序、不重叠），全部通过后才从右往左重建正文，
+//     最后一次性替换 snapshot；任何一项失败都不产生部分修改。
+//   - 严禁把 byte offset 直接当 UTF-16 code unit，也严禁在逐项执行时重新按“当前文本”
+//     计算 byte→UTF-16 偏移（patch 都是 base 坐标，重算会静默移位）。
+
+import {
+  utf8ByteLength,
+  utf8ByteOffsetToUtf16 as utf8ByteOffsetToUtf16Strict
+} from '../input/text_offset_mapper.ts'
 
 /**
  * Issue #826 评论 10 阻塞 4.4：这里曾声明第二份手写 `DisplayPatch`，
@@ -114,51 +129,90 @@ export type ApplyEditResultOutcome =
 
 /**
  * UTF-8 byte offset → UTF-16 code unit offset（严格版）。
- * 逐 Unicode code point 累加 UTF-8 byte 长度和 UTF-16 code unit 长度。
- * byteOffset 必须恰好落在字符边界（某个 code point 的开始处）或等于文本总 byte 长度（末尾）。
- * 非字符边界（落在某个 code point 中间）或越界时返回 -1。
+ * byteOffset 必须恰好落在字符边界（某个编码单元的起始处）或等于文本总 byte 长度（末尾）；
+ * 非字符边界（落在某个编码单元中间）、非整数或越界时返回 -1。
  *
- * 与 TextOffsetMapper.utf8ToUtf16 的区别：后者在非边界时静默截断到前一个边界，
- * 本函数严格返回 -1，让调用方明确处理失败（从 Core snapshot() 恢复）。
+ * Issue #1063：换算实现只有一份，位于 input/text_offset_mapper.ts（孤立代理项按 WTF-8
+ * 3 byte 的统一协议），这里只保留同名导出给既有调用方，不再保留第二套算法。
  */
 export function utf8ByteOffsetToUtf16(text: string, byteOffset: number): number {
-  if (byteOffset < 0) return -1
-  if (byteOffset === 0) return 0
-  let byteLen = 0
-  let utf16Index = 0
-  let i = 0
-  while (i < text.length) {
-    const code = text.charCodeAt(i)
-    let charByteLen: number
-    let utf16Step: number
-    if (code < 0x80) {
-      charByteLen = 1
-      utf16Step = 1
-    } else if (code < 0x800) {
-      charByteLen = 2
-      utf16Step = 1
-    } else if (code >= 0xD800 && code <= 0xDBFF) {
-      // 高代理项：UTF-16 surrogate pair 对应 1 个 code point，UTF-8 4 字节，UTF-16 2 code unit。
-      charByteLen = 4
-      utf16Step = 2
-      i += 1  // 跳过低代理项
-    } else {
-      charByteLen = 3
-      utf16Step = 1
-    }
-    byteLen += charByteLen
-    utf16Index += utf16Step
-    i += 1
-    if (byteLen === byteOffset) {
-      return utf16Index
-    }
-    if (byteLen > byteOffset) {
-      // 落在当前 code point 中间，非字符边界
-      return -1
-    }
+  return utf8ByteOffsetToUtf16Strict(text, byteOffset)
+}
+
+/**
+ * patch 批次校验结果：ok=true 表示整批可原子应用；ok=false 的 reason 说明首个不合法项。
+ */
+export type PatchBatchValidation =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Issue #1063 评论第 2 条：把 displayPatches 当作同一 base 正文坐标的原子批次校验。
+ *
+ * 校验项（全部针对**原始 snapshot** 的 base 正文，不允许边执行边按新文本重算）：
+ *   1. 每项 patch.baseRevision === result.baseRevision（同一批次，不混 revision）；
+ *   2. replaceByteStart >= 0，replaceByteStart <= replaceByteEndExclusive；
+ *   3. 两个 byte 坐标都 <= snapshotText 的 UTF-8 byte 总长度；
+ *   4. 两个 byte 坐标都落在 UTF-8 字符边界上（严格版映射不为 -1）；
+ *   5. 数组按 replaceByteStart 严格降序（前一项 start > 后一项 start）；
+ *   6. 互不重叠（后一项 end <= 前一项 start）。
+ *
+ * 返回 { ok: true } 或 { ok: false, reason }；本函数不修改任何输入。
+ */
+export function validatePatchBatch(snapshotText: string, result: EditorEditResult): PatchBatchValidation {
+  const patches: PatchApplyView[] = result.displayPatches ?? []
+  if (patches.length === 0) {
+    return { ok: true }
   }
-  // 遍历完所有 code point 仍未达到 byteOffset → 越界
-  return -1
+  const textByteLength: number = utf8ByteLength(snapshotText)
+  let previousStart: number = -1
+  for (let i = 0; i < patches.length; i++) {
+    const patch: PatchApplyView = patches[i]
+    const start: number = patch.replaceByteStart
+    const end: number = patch.replaceByteEndExclusive
+    if (patch.baseRevision !== result.baseRevision) {
+      return {
+        ok: false,
+        reason: `patch[${i}] baseRevision=${patch.baseRevision} != batch baseRevision=${result.baseRevision}`
+      }
+    }
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) {
+      return { ok: false, reason: `patch[${i}] invalid range start=${start} end=${end}` }
+    }
+    if (start > textByteLength || end > textByteLength) {
+      return {
+        ok: false,
+        reason: `patch[${i}] range [${start}, ${end}) exceeds text byte length ${textByteLength}`
+      }
+    }
+    if (utf8ByteOffsetToUtf16(snapshotText, start) < 0) {
+      return { ok: false, reason: `patch[${i}] replaceByteStart=${start} is not a UTF-8 character boundary` }
+    }
+    if (utf8ByteOffsetToUtf16(snapshotText, end) < 0) {
+      return {
+        ok: false,
+        reason: `patch[${i}] replaceByteEndExclusive=${end} is not a UTF-8 character boundary`
+      }
+    }
+    if (i > 0) {
+      // 严格降序：前一项 start 必须严格大于后一项；同起点的变化已由 Core 合并成一项。
+      if (start >= previousStart) {
+        return {
+          ok: false,
+          reason: `patch[${i}] start=${start} is not strictly below previous start=${previousStart}`
+        }
+      }
+      // 不重叠：后一项 end 必须 <= 前一项 start。
+      if (end > previousStart) {
+        return {
+          ok: false,
+          reason: `patch[${i}] range [${start}, ${end}) overlaps previous patch starting at ${previousStart}`
+        }
+      }
+    }
+    previousStart = start
+  }
+  return { ok: true }
 }
 
 /**
@@ -167,6 +221,9 @@ export function utf8ByteOffsetToUtf16(text: string, byteOffset: number): number 
  *
  * 成功返回 { ok: true, text }；失败（非字符边界或越界）返回 { ok: false, reason }，
  * 让上层从 Core snapshot() 恢复，不静默截断。
+ *
+ * Issue #1063：批量应用走 applyEditResultToSnapshot 的批次原子路径；本函数保留导出
+ * 供其它只需单 patch 的调用方使用，不参与批量 snapshot 更新。
  */
 export function applyPatchStrict(
   text: string,
@@ -271,12 +328,19 @@ export function computeMinimalTextDiff(oldText: string, newText: string): Minima
  *   - outcome 为 invalidOffset → reason = 'invalidOffset'
  *   - outcome 为 invalidRange → reason = 'invalidRange'
  *   - outcome 为未知值 → reason = 'unknownOutcome:<value>'
- *   - patch 应用失败（非字符边界或越界）→ reason = 'patchFailed:<details>'
+ *   - patch 批次校验失败（revision 不一致/越界/非字符边界/升序/重叠）→ reason = 'patchFailed:<details>'
+ *   - 单个 patch 的 base 坐标映射失败 → reason = 'patchFailed:<details>'
  *
  * 调用方（EditorSessionState/Coordinator）收到 ok=false 时必须从 Core snapshot() 重建 state，
  * 不能吞失败让 UI 停在旧文本。
  *
- * 多个 patch 按顺序应用，每个 patch 都针对当时的当前文本转换 offset。
+ * Issue #1063 评论第 2 条：displayPatches 是同一 baseRevision 的原子批次，
+ * 全部坐标都相对**原始 snapshot.text**（不是逐项执行后的中间文本）。因此：
+ *   1. 先对 snapshot.text 一次校验完整批次（validatePatchBatch）；
+ *   2. 再把每个 patch 的两个 base byte offset 用严格映射各转一次 UTF-16 局部偏移；
+ *   3. 按 Core 已规范的严格降序，从右往左用 base UTF-16 区间 + insertedText 拼接新正文；
+ *   4. 全部成功后才一次性替换 snapshot.text，失败不产生任何部分修改。
+ *
  * compositionSession 非空时取其 generation；为空时保留原 snapshot.generation
  * （finishComposition 后 compositionSession=null，generation 不重置）。
  */
@@ -299,15 +363,62 @@ export function applyEditResultToSnapshot(
     && r.outcome !== NO_CHANGE) {
     return { ok: false, reason: `unknownOutcome:${r.outcome}` }
   }
-  let newText: string = snapshot.text
+
   const patches: PatchApplyView[] = r.displayPatches ?? []
-  for (let i = 0; i < patches.length; i++) {
-    const applied = applyPatchStrict(newText, patches[i])
-    if (applied.ok === false) {
-      return { ok: false, reason: `patchFailed:${applied.reason}` }
-    }
-    newText = applied.text
+  // 1. 整批校验：任何一项不合法都直接失败，绝不逐项“边试边改”。
+  const batchValidation: PatchBatchValidation = validatePatchBatch(snapshot.text, r)
+  if (batchValidation.ok === false) {
+    return { ok: false, reason: `patchFailed:${batchValidation.reason}` }
   }
+
+  // 2. base byte 坐标 → base UTF-16 局部偏移：每个 offset 只映射一次。
+  const baseText: string = snapshot.text
+  const patchStarts: number[] = []
+  const patchEnds: number[] = []
+  for (let i = 0; i < patches.length; i++) {
+    const startUtf16: number = utf8ByteOffsetToUtf16(baseText, patches[i].replaceByteStart)
+    if (startUtf16 < 0) {
+      return {
+        ok: false,
+        reason: `patchFailed:patch[${i}] replaceByteStart=${patches[i].replaceByteStart}`
+          + ` is not a UTF-8 character boundary`
+      }
+    }
+    const endUtf16: number = utf8ByteOffsetToUtf16(baseText, patches[i].replaceByteEndExclusive)
+    if (endUtf16 < 0) {
+      return {
+        ok: false,
+        reason: `patchFailed:patch[${i}] replaceByteEndExclusive=${patches[i].replaceByteEndExclusive}`
+          + ` is not a UTF-8 character boundary`
+      }
+    }
+    if (endUtf16 < startUtf16) {
+      return {
+        ok: false,
+        reason: `patchFailed:patch[${i}] endUtf16=${endUtf16} < startUtf16=${startUtf16}`
+      }
+    }
+    patchStarts.push(startUtf16)
+    patchEnds.push(endUtf16)
+  }
+
+  // 3. 严格降序 → 从右往左拼接：每段只取 base 文本的区间，坐标不随执行漂移。
+  // newText 始终表示“已处理（更靠右）的区间 + 它们右侧未改动的 base 文本”，
+  // 因此每一步是 insertedText + base[end, cursor) + 已处理结果。
+  let newText: string = ''
+  let cursorUtf16: number = baseText.length
+  for (let i = 0; i < patches.length; i++) {
+    const startUtf16: number = patchStarts[i]
+    const endUtf16: number = patchEnds[i]
+    if (startUtf16 > cursorUtf16 || endUtf16 > cursorUtf16) {
+      return { ok: false, reason: `patchFailed:patch[${i}] start=${startUtf16} overlaps previous segment` }
+    }
+    newText = patches[i].insertedText + baseText.substring(endUtf16, cursorUtf16) + newText
+    cursorUtf16 = startUtf16
+  }
+  newText = baseText.substring(0, cursorUtf16) + newText
+
+  // 4. 全部通过后一次性替换 snapshot。
   return {
     ok: true,
     snapshot: {

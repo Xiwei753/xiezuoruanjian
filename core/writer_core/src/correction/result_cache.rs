@@ -320,12 +320,10 @@ fn char_at(text: &str, index: usize) -> Option<char> {
 /// Clamps an arbitrary byte position to the start of its character. Edit
 /// boundaries are normally on character boundaries, but neighbor lookups can
 /// deliberately probe one byte before a boundary.
+///
+/// Issue #1063：钳位规则由 `editor::text_coordinates` 唯一维护。
 fn floor_char_boundary(text: &str, position: usize) -> usize {
-    let mut position = position.min(text.len());
-    while position > 0 && !text.is_char_boundary(position) {
-        position -= 1;
-    }
-    position
+    crate::editor::text_coordinates::clamp_to_char_boundary(text, position)
 }
 
 /// Byte offset just after a terminator run (and any closing marks) starting at

@@ -3,17 +3,20 @@
 // 背景：RichEditorParagraphStyle 只有整段缩进 leadingMargin，没有首行缩进 textIndent。
 // 首行缩进必须通过属性字符串（StyledString）的 ParagraphStyle.textIndent 表达。
 // 本文件只构造视觉样式：
-// - 按 Core 纯文本正文的真实段落（'\n'）切分，覆盖首段和末尾空段；
+// - 段落切分统一走 text_document_rules.ts（与 Core paragraph_byte_ranges 同规则）：
+//   CRLF（两个字符）是一个段落边界、U+2029 也是、`\n` 也是，孤立 CR 不是；
+//   连续分隔符保留空段，末尾分隔符产生末尾空段；
 // - 缩进量 = fontSize * autoIndentWidth，与 Qt 的 text_indent 语义一致；
 // - 不插入任何空格，不改变 UTF-8/UTF-16 正文坐标与 Core 文本。
 
 import { LengthMetrics } from '@kit.ArkUI'
+import { ParagraphRange, listParagraphRanges as listDocumentParagraphRanges } from './text_document_rules'
 
-// 单个真实段落在正文中的范围（UTF-16，end 不含换行符）。
+// 单个真实段落在正文中的范围（UTF-16，end 不含段落分隔符；CRLF 两个字符都不计入）。
 export interface StyledParagraphRange {
   start: number
   end: number
-  // 段落后面是否有硬换行；末尾段为 false。
+  // 段落后面是否有分隔符；末尾段为 false。
   hasTrailingNewline: boolean
 }
 
@@ -32,18 +35,21 @@ export function resolveTextIndentVp(options: StyledParagraphIndentOptions): numb
   return options.fontSize * options.autoIndentWidth
 }
 
-// 以 '\n' 切分真实段落；保留首段、连续空段和末尾空段。
-// 返回的 start/end 是段落内容范围，换行符不属于段落内容。
+// 以统一段落规则切分真实段落（CRLF 是一个边界、U+2029 也是、孤立 CR 不是）；
+// 保留首段、连续空段和末尾空段。返回的 start/end 是段落内容范围，分隔符不属于段落内容。
+// 显式逐字段映射为 StyledParagraphRange，避免 ArkTS 结构类型判定问题。
 export function listParagraphRanges(text: string): StyledParagraphRange[] {
+  const documentRanges: ParagraphRange[] = listDocumentParagraphRanges(text)
   const ranges: StyledParagraphRange[] = []
-  let paragraphStart = 0
-  for (let i = 0; i < text.length; i++) {
-    if (text.charCodeAt(i) === 10) {
-      ranges.push({ start: paragraphStart, end: i, hasTrailingNewline: true })
-      paragraphStart = i + 1
+  for (let i = 0; i < documentRanges.length; i++) {
+    const source: ParagraphRange = documentRanges[i]
+    const mapped: StyledParagraphRange = {
+      start: source.start,
+      end: source.end,
+      hasTrailingNewline: source.hasTrailingNewline
     }
+    ranges.push(mapped)
   }
-  ranges.push({ start: paragraphStart, end: text.length, hasTrailingNewline: false })
   return ranges
 }
 

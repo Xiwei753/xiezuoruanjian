@@ -73,8 +73,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use text_utils::{
-    byte_to_char_index, char_to_byte_index, clamp_to_char_boundary, next_char_boundary,
-    normalize_plain_text, prev_char_boundary,
+    byte_to_char_index, char_to_byte_index, clamp_to_char_boundary, normalize_plain_text,
 };
 
 use writer_core::editor::EditorTransactionCause;

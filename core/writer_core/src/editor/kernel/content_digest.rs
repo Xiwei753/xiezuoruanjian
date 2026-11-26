@@ -101,6 +101,22 @@ impl ContentDigest {
         format!("{CONTENT_DIGEST_VERSION}:{}", hex(&hasher.finalize()))
     }
 
+    /// 测试用：正文文本块（treap 节点）数量。
+    ///
+    /// treap 的每个节点持有一段正文；逐字输入若每字建一个节点，这个数字会随
+    /// 输入次数线性增长。seam coalesce 后它应按 `正文长度 / CHUNK_MAX_BYTES`
+    /// 有界增长。
+    #[cfg(test)]
+    pub(crate) fn leaf_count(&self) -> usize {
+        fn count(node: &NodeRef) -> usize {
+            match node {
+                None => 0,
+                Some(node) => 1 + count(&node.left) + count(&node.right),
+            }
+        }
+        count(&self.root)
+    }
+
     pub fn apply_changes(&mut self, changes: &[EditorChange]) -> crate::Result<()> {
         for change in changes {
             self.apply_change(change)?;
@@ -126,7 +142,9 @@ impl ContentDigest {
                     self.next_priority = self.next_priority.wrapping_add(1);
                     inserted = merge(inserted, Some(make_leaf(Arc::from(chunk), priority)));
                 }
-                self.root = merge(merge(left, inserted), right);
+                // 两次 seam join：left | inserted | right，边界相邻的有界叶子会
+                // 合并，普通逐字输入不会一字一节点。
+                self.root = merge_coalesced(merge_coalesced(left, inserted), right);
                 Ok(())
             }
             EditorChange::Delete { index, text } => {
@@ -142,7 +160,7 @@ impl ContentDigest {
                 }
                 let (left, rest) = split(self.root.take(), index)?;
                 let (_, right) = split(rest, text.len())?;
-                self.root = merge(left, right);
+                self.root = merge_coalesced(left, right);
                 Ok(())
             }
         }
@@ -168,7 +186,8 @@ fn chunk_text(text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-fn make_leaf(text: Arc<str>, priority: u64) -> Arc<Node> {
+/// 以已经过 splitmix64 的 priority 构造叶子（seam 合并复用邻居优先级时用）。
+fn make_leaf_with_priority(text: Arc<str>, priority: u64) -> Arc<Node> {
     let (hash1, hash2) = hash_bytes(text.as_bytes());
     let (pow1, pow2) = (pow(BASE1, text.len()), pow(BASE2, text.len()));
     let len = text.len();
@@ -179,7 +198,7 @@ fn make_leaf(text: Arc<str>, priority: u64) -> Arc<Node> {
         hash2,
         pow1,
         pow2,
-        priority: splitmix64(priority),
+        priority,
         left: None,
         right: None,
         subtree_len: len,
@@ -188,6 +207,10 @@ fn make_leaf(text: Arc<str>, priority: u64) -> Arc<Node> {
         subtree_pow1: pow1,
         subtree_pow2: pow2,
     })
+}
+
+fn make_leaf(text: Arc<str>, priority_seed: u64) -> Arc<Node> {
+    make_leaf_with_priority(text, splitmix64(priority_seed))
 }
 
 fn rebuild(original: &Node, left: NodeRef, right: NodeRef) -> Arc<Node> {
@@ -251,6 +274,53 @@ fn merge(left: NodeRef, right: NodeRef) -> NodeRef {
                 Some(rebuild(&right, new_left, right.right.clone()))
             }
         }
+    }
+}
+
+/// 相邻树的有界 seam 合并：把左树最右叶与右树最左叶合并成一个新叶子。
+///
+/// 只有两个边界文本块总长不超过 [`CHUNK_MAX_BYTES`] 时才合并；`Arc<str>` 由两段
+/// 合法 UTF-8 字符串拼接而来，结果仍是合法 UTF-8（不会产生孤立代理项），因此
+/// 无需额外校验。只复制这两个小块并重算该叶的 hash/pow；历史共享的子树 Arc
+/// 原样复用，不原地修改已存在节点。priority 取两叶中较大者，treap 的堆序由
+/// 标准 `merge` 重新保证。
+fn merge_coalesced(left: NodeRef, right: NodeRef) -> NodeRef {
+    let (Some(left_root), Some(right_root)) = (left.as_ref(), right.as_ref()) else {
+        return merge(left, right);
+    };
+    let left_tail_len = rightmost_leaf_len(left_root);
+    let right_head_len = leftmost_leaf_len(right_root);
+    if left_tail_len + right_head_len > CHUNK_MAX_BYTES {
+        return merge(left, right);
+    }
+
+    let left_split = left_root.subtree_len - left_tail_len;
+    let Ok((left_rest, Some(left_tail))) = split(left.clone(), left_split) else {
+        return merge(left, right);
+    };
+    let Ok((Some(right_head), right_rest)) = split(right.clone(), right_head_len) else {
+        return merge(left, right);
+    };
+
+    let mut combined = String::with_capacity(left_tail.len + right_head.len);
+    combined.push_str(&left_tail.text);
+    combined.push_str(&right_head.text);
+    let priority = left_tail.priority.max(right_head.priority);
+    let leaf = make_leaf_with_priority(Arc::from(combined), priority);
+    merge(left_rest, merge(Some(leaf), right_rest))
+}
+
+fn rightmost_leaf_len(node: &Node) -> usize {
+    match node.right.as_ref() {
+        Some(right) => rightmost_leaf_len(right),
+        None => node.len,
+    }
+}
+
+fn leftmost_leaf_len(node: &Node) -> usize {
+    match node.left.as_ref() {
+        Some(left) => leftmost_leaf_len(left),
+        None => node.len,
     }
 }
 
@@ -347,4 +417,98 @@ fn hex(bytes: &[u8]) -> String {
         out.push(char::from(LUT[usize::from(byte & 0x0f)]));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::strong_types::Utf8ByteOffset;
+
+    fn insert(offset: usize, text: &str) -> EditorChange {
+        EditorChange::Insert {
+            index: Utf8ByteOffset::unchecked(offset),
+            text: text.to_string(),
+        }
+    }
+
+    fn delete(offset: usize, text: &str) -> EditorChange {
+        EditorChange::Delete {
+            index: Utf8ByteOffset::unchecked(offset),
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn digest_is_independent_of_chunking_and_edit_sequence() {
+        let text = "a".repeat(CHUNK_MAX_BYTES + 137) + "中文😀结尾";
+        let reference = ContentDigest::from_text(&text);
+
+        // 不同分块：按任意字符边界把正文分批 insert。
+        let mut piecewise = ContentDigest::new();
+        let mut chunk_start = 0usize;
+        for (char_count, (byte_index, _)) in text.char_indices().enumerate() {
+            if char_count % 59 == 0 && byte_index > chunk_start {
+                assert!(piecewise
+                    .apply_change(&insert(chunk_start, &text[chunk_start..byte_index]))
+                    .is_ok());
+                chunk_start = byte_index;
+            }
+        }
+        assert!(piecewise
+            .apply_change(&insert(chunk_start, &text[chunk_start..]))
+            .is_ok());
+        assert_eq!(piecewise.digest(), reference.digest());
+        assert_eq!(piecewise.len(), text.len());
+
+        // 不同编辑序列：删掉再插回同一个字符后回到同一根摘要。
+        let Some(target) = text.find('中') else {
+            panic!("test text must contain 中");
+        };
+        let mut edited = ContentDigest::from_text(&text);
+        assert!(edited.apply_change(&delete(target, "中")).is_ok());
+        assert!(edited.apply_change(&insert(target, "中")).is_ok());
+        assert_eq!(edited.digest(), reference.digest());
+        assert_eq!(edited.len(), text.len());
+    }
+
+    #[test]
+    fn char_by_char_typing_keeps_leaf_count_bounded() {
+        let mut digest = ContentDigest::new();
+        let mut text = String::new();
+        for _ in 0..(CHUNK_MAX_BYTES * 2 + 17) {
+            assert!(digest.apply_change(&insert(text.len(), "字")).is_ok());
+            text.push('字');
+        }
+        // 每 4096 byte 才应形成一个新的有界叶子；允许常数个边界叶。
+        let expected_leaves = text.len().div_ceil(CHUNK_MAX_BYTES);
+        assert!(
+            digest.leaf_count() <= expected_leaves + 2,
+            "leaf_count={} expected<={} len={}",
+            digest.leaf_count(),
+            expected_leaves + 2,
+            text.len()
+        );
+        assert_eq!(digest.digest(), ContentDigest::from_text(&text).digest());
+    }
+
+    #[test]
+    fn adjacent_leaves_coalesce_but_never_exceed_chunk_limit() {
+        let mut digest = ContentDigest::new();
+        assert!(digest.apply_change(&insert(0, "abc")).is_ok());
+        assert!(digest.apply_change(&insert(3, "def")).is_ok());
+        assert_eq!(digest.leaf_count(), 1);
+        assert_eq!(digest.len(), 6);
+        assert_eq!(digest.digest(), ContentDigest::from_text("abcdef").digest());
+
+        // 超过 CHUNK_MAX_BYTES 的 seam 不合并，叶子仍然有界。
+        let long = "x".repeat(CHUNK_MAX_BYTES);
+        let mut large = ContentDigest::new();
+        assert!(large.apply_change(&insert(0, &long)).is_ok());
+        assert!(large.apply_change(&insert(long.len(), "y")).is_ok());
+        assert_eq!(large.leaf_count(), 2);
+        assert_eq!(
+            large.digest(),
+            ContentDigest::from_text(&format!("{long}y")).digest()
+        );
+    }
 }

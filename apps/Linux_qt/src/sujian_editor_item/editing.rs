@@ -505,6 +505,9 @@ impl SujianEditorItem {
         let _outcome = self.apply_edit_with_visuals(op, visual_cause, composition);
 
         self.pipeline.finish_composition_commit();
+        // Issue #1063: Core 事务已提交，再按 Core grapheme 边界吸附逻辑 cursor
+        // （只在需要时提交一次 CursorOnly 选区事务，不改正文）。
+        self.snap_committed_cursor_to_grapheme_boundary();
 
         // Issue #701 评论 5699573227 第三阶段 (F2/F7): 不再把
         // pending_preedit_cursor_rect 反写到 cursor_ctrl.visual_x/visual_y。
@@ -516,6 +519,24 @@ impl SujianEditorItem {
 
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::TextTransaction;
         self.emit_content_changed();
+    }
+
+    /// Issue #1063: IME commit 后把平台逻辑 cursor 吸附到真实字素边界。
+    ///
+    /// Core 事务提交完成后，`pipeline.cursor()` 可能落在某个字素簇内部
+    /// （例如平台按 Unicode scalar 报告的偏移）。这里只吸附逻辑 cursor：
+    /// anchor 与 head 都委托 Core `snap_to_grapheme_boundary`，发生变化时用
+    /// 一次 `SetSelection`（CursorOnly 选区事务）提交，正文不变。Selection
+    /// 事务不携带文本摘要，也不推进正文 revision。
+    fn snap_committed_cursor_to_grapheme_boundary(&mut self) {
+        let cursor = self.pipeline.cursor();
+        let anchor = self.pipeline.selection_anchor();
+        let snapped_cursor = self.pipeline.snap_to_grapheme_boundary(cursor);
+        let snapped_anchor = self.pipeline.snap_to_grapheme_boundary(anchor);
+        if snapped_cursor == cursor && snapped_anchor == anchor {
+            return;
+        }
+        let _ = self.pipeline.set_selection(snapped_anchor, snapped_cursor);
     }
 
     /// Issue #701 评论 5702675971: IME replace+commit — 接收 Qt 两步语义的
@@ -612,6 +633,9 @@ impl SujianEditorItem {
         let _outcome = self.apply_edit_with_visuals(op, visual_cause, composition);
 
         self.pipeline.finish_composition_commit();
+        // Issue #1063: Core 事务已提交，再按 Core grapheme 边界吸附逻辑 cursor
+        // （只在需要时提交一次 CursorOnly 选区事务，不改正文）。
+        self.snap_committed_cursor_to_grapheme_boundary();
 
         // Issue #701 评论 5699573227 第三阶段 (F2/F7): 不再把
         // pending_preedit_cursor_rect 反写到 cursor_ctrl.visual_x/visual_y。
@@ -878,6 +902,10 @@ impl SujianEditorItem {
         self.drain_pointer_frame_submissions();
         let pointer_sequence = self.pointer_diagnostics.ensure_active_sequence();
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
+        // Issue #1063: hit_test 给出的是布局内的 byte offset，可能落在字素簇
+        // 内部（例如组合音标/ZWJ 序列）。逻辑 cursor 统一吸附到 Core 的真实
+        // grapheme 边界；affinity 仍由布局决定，不参与吸附。
+        let index = self.pipeline.snap_to_grapheme_boundary(index);
         let old_cursor = self.pipeline.cursor();
         let old_anchor = self.pipeline.selection_anchor();
         let anchor = if extend {
@@ -1016,6 +1044,9 @@ impl SujianEditorItem {
         // Issue #705 评论 5718299909: 先 hit_test，确认 head/affinity 真的改变
         // 再 bump epoch。拖到当前 cursor 同一位置不应 bump。
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
+        // Issue #1063: 拖动选区的逻辑 head 同样吸附到 Core grapheme 边界，
+        // 避免选区端点落在字素簇内部。
+        let index = self.pipeline.snap_to_grapheme_boundary(index);
         self.cursor_ctrl.affinity = affinity;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::DragSelection;
         // Issue #712: 拖选设置 CursorMoveSource::DragSelection，跨行走 Snap。
@@ -1282,11 +1313,12 @@ impl SujianEditorItem {
         // 正文事务 caret 所有权。epoch 的定义是"用户手动改变了当前 caret 所有权/
         // 逻辑位置"，不是"用户按过一次键"。
         let current_cursor = self.pipeline.cursor();
-        let committed_text = self.pipeline.committed_text();
+        // Issue #1063: 水平移动必须与 Core 的 grapheme 边界（UAX #29）一致，
+        // 与 Backspace/Delete 共用同一套边界定义，不再按 Unicode scalar 步进。
         let next = if forward {
-            next_char_boundary(committed_text, current_cursor).unwrap_or(current_cursor)
+            self.pipeline.next_grapheme_boundary(current_cursor)
         } else {
-            prev_char_boundary(committed_text, current_cursor).unwrap_or(current_cursor)
+            self.pipeline.previous_grapheme_boundary(current_cursor)
         };
         if next == current_cursor && !extend {
             return;
@@ -1713,54 +1745,104 @@ fn record_clipboard_paste(
 /// Issue #705 评论 5718299909: 纯计算 word bounds，供 `select_word_at_impl` 和
 /// `long_press_at` / `select_word_at` 的 no-op 预判使用。
 ///
+/// Issue #1063 第 6 项：不再 `collect::<Vec<char>>()` 整章再求前缀长度；
+/// 从命中的 byte offset 向左右局部迭代 `char_indices`，按字符类别扩展。
+///
+/// 规则：
+/// - 当前字符（命中文末时取前一个字符）是空白/标点时，选中该分隔符的连续
+///   范围，不把右侧单词吸进来；
+/// - 否则向左右扩展到空白/标点为止。
+///
 /// 返回 `(byte_start, byte_end)`（UTF-8 byte offset，半开区间）。`text` 为空或
-/// `index > text.len()` 时返回 `None`。这是纯函数，不触碰任何 editor 状态，
-/// 因此可在 bump epoch 之前安全调用以预判选词结果是否会改变当前 selection。
+/// `index > text.len()` 时返回 `None`。这是纯函数，不触碰任何 editor 状态。
 fn compute_word_bounds(text: &str, index: usize) -> Option<(usize, usize)> {
     if text.is_empty() || index > text.len() {
         return None;
     }
-    let char_index = byte_to_char_index(text, index);
-    let chars: Vec<char> = text.chars().collect();
-    if chars.is_empty() {
-        return None;
-    }
-    let ci = char_index.min(chars.len().saturating_sub(1));
+    // 命中 offset 先按 Core 规则对齐到 char boundary；命中正好在文末时取前一个字符。
+    let hit = clamp_to_char_boundary(text, index);
+    let (current_start, current_char) = if hit >= text.len() {
+        text.char_indices().next_back()?
+    } else {
+        let ch = text[hit..].chars().next()?;
+        (hit, ch)
+    };
 
-    fn is_word_boundary(c: char) -> bool {
-        c.is_whitespace()
-            || c == '\n'
-            || c == ','
-            || c == '?'
-            || c == '!'
-            || c == '！'
-            || c == ';'
-            || c == ':'
-            || c == '"'
-            || c == '"'
-            || c == '\u{2018}'
-            || c == '\u{2019}'
-            || c == '？'
-            || c == '-'
-            || c == '.'
-            || c == '('
-            || c == ')'
-            || c == '（'
-            || c == '）'
-    }
+    let mut start = current_start;
+    let mut end = current_start + current_char.len_utf8();
+    let current_is_separator = is_word_separator(current_char);
 
-    let mut start = ci;
-    while start > 0 && !is_word_boundary(chars[start - 1]) {
-        start -= 1;
+    // 向左扩展：分隔符只吃同类分隔符，单词字符扩展到词首。
+    for (byte, ch) in text[..current_start].char_indices().rev() {
+        if is_word_separator(ch) != current_is_separator {
+            break;
+        }
+        start = byte;
     }
-    let mut end = ci + 1;
-    while end < chars.len() && !is_word_boundary(chars[end]) {
-        end += 1;
+    // 向右扩展：同样只吃同类字符，分隔符不会把右侧单词吸进来。
+    let base_end = end;
+    for (offset, ch) in text[base_end..].char_indices() {
+        if is_word_separator(ch) != current_is_separator {
+            break;
+        }
+        end = base_end + offset + ch.len_utf8();
     }
 
-    let byte_start = chars[..start].iter().map(|c| c.len_utf8()).sum::<usize>();
-    let byte_end = chars[..end].iter().map(|c| c.len_utf8()).sum::<usize>();
-    Some((byte_start, byte_end))
+    Some((start, end))
+}
+
+/// Issue #1063：选词用的空白/标点集合（中文语料 + ASCII 标点）。
+///
+/// 空白使用 `char::is_whitespace()`（含 U+3000 全角空格与 `\n`/`\t`），
+/// 标点覆盖中文 `，。、？！；：“”‘’（）【】《》〈〉…—·～` 与常见 ASCII 标点。
+fn is_word_separator(c: char) -> bool {
+    if c.is_whitespace() || c == '\u{3000}' {
+        return true;
+    }
+    matches!(
+        c,
+        '，' | '。'
+            | '、'
+            | '？'
+            | '！'
+            | '；'
+            | '：'
+            | '“'
+            | '”'
+            | '‘'
+            | '’'
+            | '（'
+            | '）'
+            | '【'
+            | '】'
+            | '《'
+            | '》'
+            | '〈'
+            | '〉'
+            | '…'
+            | '—'
+            | '·'
+            | '～'
+            | ','
+            | '?'
+            | '!'
+            | ';'
+            | ':'
+            | '"'
+            | '\''
+            | '-'
+            | '.'
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | '<'
+            | '>'
+            | '/'
+            | '\\'
+    )
 }
 
 /// Issue #824 评论 5971089641 第 9 节 / 评论 5972388049 第 4 节：

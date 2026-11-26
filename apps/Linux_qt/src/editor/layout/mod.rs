@@ -56,8 +56,10 @@ pub use hit_test::{
 pub use paragraph_height_index::{
     ParagraphHeightIndex, ParagraphLineCountIndex, ParagraphOffsetIndex,
 };
+use paragraph_layout_store::split_paragraphs_inclusive;
 pub use paragraph_layout_store::{
     AffectedParagraphRanges, ParagraphLayoutCacheKey, ParagraphLayoutEntry, ParagraphLayoutStore,
+    ParagraphSpan,
 };
 pub use qt_cache::{
     begin_layout_generation, clear_layout_generation, get_paragraph_layout_cursor_to_x_on_line,
@@ -735,7 +737,8 @@ impl EditorLayout {
                     (s, e, Some((s, e)))
                 } else {
                     // 无 display_patches 时回退到按段落 hash 比较，需要全文切分
-                    let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
+                    // Issue #1063：段落边界与分隔符长度来自 Core 规则。
+                    let new_paras: Vec<ParagraphSpan<'_>> = split_paragraphs_inclusive(text);
                     let (s, e) = self.compute_affected_byte_range(text, &new_paras, old_para_count);
                     (s, e, None)
                 };
@@ -927,7 +930,7 @@ impl EditorLayout {
     fn compute_affected_byte_range(
         &self,
         _text: &str,
-        new_paras: &[&str],
+        new_paras: &[ParagraphSpan<'_>],
         _old_para_count: usize,
     ) -> (usize, usize) {
         // 逐段比较，找内容不同的段落范围。
@@ -937,8 +940,8 @@ impl EditorLayout {
         let mut affected_end: Option<usize> = None;
 
         for (i, para) in new_paras.iter().enumerate() {
-            let para_text = para.trim_end_matches('\n');
-            let para_end = byte_start + para.len();
+            let para_text = para.content;
+            let para_end = byte_start + para.byte_len();
 
             // 从 store 获取旧段落的 cache_key，与新段落的 cache_key 比较
             if let Some(entry) = self.paragraph_store.entry(i) {

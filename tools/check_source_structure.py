@@ -325,6 +325,21 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "既有星图合并决策表测试，验证对象/成员三方合并；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/starmap/navigation.rs"), "production-test-bloat"):
         "既有画布导航测试，验证 portal/embed 路由；待拆分到独立 _tests.rs",
+
+    # --- Issue #1063：文本坐标/段落契约接线涉及的既有排版聚合根 ---
+    # 两个文件在本 Issue 基线（a400e7c29）上已是 1743/1653 有效行；
+    # 本 Issue 只把重复的段落识别与偏移换算换成 Core 契约调用。
+    (Path("apps/Linux_qt/src/editor/layout/paragraph_layout_store.rs"), "god-file"):
+        "段落排版聚合：段落切分、偏移索引与可见段落缓存共享同一份段落边界状态与失效路径；"
+        "#1063 基线已超过行数上限，本 Issue 仅把硬换行/CRLF 段落识别接到 Core "
+        "text_document_rules；TODO(#1063 后续任务) 按段落切分与缓存失效拆分",
+    (Path("apps/Linux_qt/src/editor/layout/paragraph_layout_store.rs"), "production-test-bloat"):
+        "既有段落排版测试，验证硬换行/CRLF 段落切分与可见段落缓存；"
+        "TODO(#1063) 拆到独立 paragraph_layout_store_tests.rs",
+    (Path("apps/Linux_qt/src/editor/layout/canonical_snapshot/prepare/full.rs"), "god-file"):
+        "全篇排版聚合：canonical snapshot 构建、偏移索引与受影响区间重排共享同一段落 span 缓存；"
+        "#1063 基线已超过行数上限，本 Issue 仅把段落识别接到 Core text_document_rules；"
+        "TODO(#1063 后续任务) 按 snapshot 构建与增量重排拆分",
 }
 
 

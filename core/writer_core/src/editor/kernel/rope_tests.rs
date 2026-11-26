@@ -10,6 +10,7 @@
 mod rope_tests {
     use super::super::result::EditorContentDelta;
     use super::super::result::EditorEditOutcome;
+    use super::super::result::EditorEditResult;
     use super::super::types::{DisplayPatch, EditorCommand, EditorOperationKind};
     use super::super::EditorKernel;
     use crate::editor::strong_types::{
@@ -18,27 +19,67 @@ mod rope_tests {
     };
     use crate::editor::transaction::{EditorTransactionCause, OffsetMap, OffsetMapKind};
 
-    /// 模拟 Android 对原子 patch batch 的应用。
+    /// 按 Core 给定的顺序应用原子 patch batch。
     ///
     /// 协议：一个 EditorEditResult 是一个原子 batch，batch 内所有 patch range 都使用
-    /// base（编辑前）文档坐标；Android 按 replace_byte_range.start 降序局部应用，
-    /// 右侧修改不影响左侧旧坐标。本函数复刻该应用顺序，用于断言 Core 生成的 patch
-    /// 列表与最终正文（snapshot）完全一致（Core/Android mirror 一致性）。
+    /// base（编辑前）文档坐标；Core 已按 replace_byte_range.start **严格降序**输出，
+    /// 调用方不得再排序。右侧修改不影响左侧旧坐标。本函数按给定顺序逐条应用，
+    /// 并在应用前断言降序、不重叠与坐标合法，用于断言 Core 生成的 patch 列表与
+    /// 最终正文（snapshot）完全一致（Core/平台 mirror 一致性）。
     fn apply_patches_descending(old: &str, patches: &[DisplayPatch]) -> String {
         let mut text = old.to_string();
-        let mut sorted: Vec<&DisplayPatch> = patches.iter().collect();
-        sorted.sort_by_key(|p| std::cmp::Reverse(p.replace_byte_range.start().value()));
-        for p in sorted {
-            let start = p.replace_byte_range.start().value();
-            let end = p.replace_byte_range.end().value();
+        let mut previous: Option<&DisplayPatch> = None;
+        for patch in patches {
+            let start = patch.replace_byte_range.start().value();
+            let end = patch.replace_byte_range.end().value();
+            if let Some(prev) = previous {
+                let previous_start = prev.replace_byte_range.start().value();
+                assert!(
+                    start < previous_start,
+                    "patch batch 必须严格降序: previous_start={previous_start} next_start={start}"
+                );
+                assert!(
+                    end <= previous_start,
+                    "patch batch 区间重叠: previous_start={previous_start} next_end={end}"
+                );
+            }
             assert!(
                 start <= text.len() && end <= text.len(),
                 "patch 范围 [{start},{end}) 超出当前文本长度 {}",
                 text.len()
             );
-            text.replace_range(start..end, &p.inserted_text);
+            text.replace_range(start..end, &patch.inserted_text);
+            previous = Some(patch);
         }
         text
+    }
+
+    /// patch batch 与 Core 正文/revision/inserted 坐标一致性断言。
+    fn assert_patch_batch_matches_kernel(
+        base_text: &str,
+        result: &EditorEditResult,
+        kernel: &EditorKernel,
+    ) {
+        assert_eq!(
+            result.new_revision,
+            EditorRevision::new(kernel.revision()),
+            "返回的 new_revision 必须等于内核当前 revision"
+        );
+        let final_text = apply_patches_descending(base_text, &result.display_patches);
+        assert_eq!(final_text, kernel.snapshot_text());
+        for patch in &result.display_patches {
+            assert_eq!(patch.base_revision, result.base_revision);
+            assert_eq!(patch.new_revision, result.new_revision);
+            let start = patch.inserted_byte_range.start().value();
+            let end = patch.inserted_byte_range.end().value();
+            assert_eq!(end - start, patch.inserted_text.len());
+            assert!(
+                end <= final_text.len(),
+                "inserted 区间 [{start},{end}) 超出最终正文长度 {}",
+                final_text.len()
+            );
+            assert_eq!(&final_text[start..end], patch.inserted_text);
+        }
     }
 
     fn insert(kernel: &mut EditorKernel, offset: usize, text: &str) -> EditorEditOutcome {
@@ -154,6 +195,104 @@ mod rope_tests {
         assert_eq!(kernel.previous_grapheme_boundary(1), 0);
         assert_eq!(kernel.next_grapheme_boundary(1), 3);
         assert_eq!(kernel.next_grapheme_boundary(3), 4);
+    }
+
+    #[test]
+    fn grapheme_boundary_zwj_couple_only_real_document_boundaries() {
+        // "👨‍👩" = 👨(4) + ZWJ(3) + 👩(4) = 11 byte，整个是**一个** grapheme cluster，
+        // 文档真实边界只有 0 与 11。offset=4（ZWJ 前）、7（ZWJ 后）、簇内/字符中间
+        // byte 都不得返回自身。
+        let text = "👨\u{200D}👩";
+        assert_eq!(text.len(), 11);
+        let kernel = EditorKernel::with_text(text.to_string(), 11).unwrap();
+        assert_eq!(kernel.next_grapheme_boundary(4), 11);
+        assert_eq!(kernel.previous_grapheme_boundary(4), 0);
+        assert_eq!(kernel.next_grapheme_boundary(7), 11);
+        assert_eq!(kernel.previous_grapheme_boundary(7), 0);
+        // 多字节字符中间（👨 的 byte 2、👩 的 byte 9）
+        assert_eq!(kernel.next_grapheme_boundary(2), 11);
+        assert_eq!(kernel.previous_grapheme_boundary(2), 0);
+        assert_eq!(kernel.next_grapheme_boundary(9), 11);
+        assert_eq!(kernel.previous_grapheme_boundary(9), 0);
+        // 文档首/末端
+        assert_eq!(kernel.next_grapheme_boundary(0), 11);
+        assert_eq!(kernel.next_grapheme_boundary(11), 11);
+        assert_eq!(kernel.previous_grapheme_boundary(11), 0);
+        assert_eq!(kernel.previous_grapheme_boundary(0), 0);
+        // snap：簇内任意位置都吸附到簇起点。
+        assert_eq!(kernel.snap_to_grapheme_boundary(4), 0);
+        assert_eq!(kernel.snap_to_grapheme_boundary(7), 0);
+        assert_eq!(kernel.snap_to_grapheme_boundary(11), 11);
+    }
+
+    #[test]
+    fn grapheme_boundary_triple_zwj_family() {
+        // "👩‍👩‍👧" = 4 + 3 + 4 + 3 + 4 = 18 byte，仍是单个 cluster。
+        let text = "👩\u{200D}👩\u{200D}👧";
+        assert_eq!(text.len(), 18);
+        let kernel = EditorKernel::with_text(text.to_string(), 18).unwrap();
+        for offset in [1usize, 3, 4, 7, 8, 11, 14, 17] {
+            assert_eq!(
+                kernel.previous_grapheme_boundary(u32::try_from(offset).unwrap()),
+                0,
+                "offset={offset} previous 必须回到文档真实边界"
+            );
+            assert_eq!(
+                kernel.next_grapheme_boundary(u32::try_from(offset).unwrap()),
+                18,
+                "offset={offset} next 必须到文档真实边界"
+            );
+        }
+    }
+
+    #[test]
+    fn grapheme_boundary_regional_indicator_pairs() {
+        // "🇨🇳🇯🇵" = 4 个 RI（每个 4 byte），按奇偶配对成两个 cluster：0..8、8..16。
+        let text = "🇨🇳🇯🇵";
+        assert_eq!(text.len(), 16);
+        let kernel = EditorKernel::with_text(text.to_string(), 16).unwrap();
+        // 第一对旗帜内部：真实边界 0 / 8。
+        assert_eq!(kernel.previous_grapheme_boundary(4), 0);
+        assert_eq!(kernel.next_grapheme_boundary(4), 8);
+        assert_eq!(kernel.previous_grapheme_boundary(7), 0);
+        assert_eq!(kernel.next_grapheme_boundary(7), 8);
+        // 第二对旗帜内部：真实边界 8 / 16。
+        assert_eq!(kernel.previous_grapheme_boundary(12), 8);
+        assert_eq!(kernel.next_grapheme_boundary(12), 16);
+        assert_eq!(kernel.previous_grapheme_boundary(15), 8);
+        assert_eq!(kernel.next_grapheme_boundary(15), 16);
+    }
+
+    #[test]
+    fn grapheme_boundary_crlf_and_end_offsets() {
+        // "a\r\nb"：真实边界 0, 1, 3, 4；offset=2 是 '\n' 字符起始但不是 grapheme 边界。
+        let text = "a\r\nb";
+        let kernel = EditorKernel::with_text(text.to_string(), 4).unwrap();
+        assert_eq!(kernel.previous_grapheme_boundary(2), 1);
+        assert_eq!(kernel.next_grapheme_boundary(2), 3);
+        assert_eq!(kernel.previous_grapheme_boundary(4), 3);
+        assert_eq!(kernel.next_grapheme_boundary(4), 4);
+        assert_eq!(kernel.snap_to_grapheme_boundary(2), 1);
+    }
+
+    #[test]
+    fn grapheme_boundary_combining_marks_mid_cluster() {
+        // "a" + 组合音标（U+0301/U+0308）+ "b"：0..5 是一个 cluster，真实边界 0/5/6。
+        let text = "a\u{0301}\u{0308}b";
+        let kernel = EditorKernel::with_text(text.to_string(), 6).unwrap();
+        for offset in [1usize, 2, 3, 4] {
+            assert_eq!(
+                kernel.previous_grapheme_boundary(u32::try_from(offset).unwrap()),
+                0
+            );
+            assert_eq!(
+                kernel.next_grapheme_boundary(u32::try_from(offset).unwrap()),
+                5
+            );
+        }
+        assert_eq!(kernel.next_grapheme_boundary(0), 5);
+        assert_eq!(kernel.previous_grapheme_boundary(6), 5);
+        assert_eq!(kernel.snap_to_grapheme_boundary(3), 0);
     }
 
     // ── EditorContentDelta：insert/delete/replace/空白/emoji ──
@@ -274,6 +413,81 @@ mod rope_tests {
         assert_eq!(finish.content_delta.inserted_chars, 2);
         assert_eq!(finish.content_delta.inserted_non_whitespace_chars, 2);
         assert_eq!(finish.content_delta.deleted_chars, 0);
+    }
+
+    #[test]
+    fn begin_composition_invalid_range_keeps_existing_session() {
+        // "ab👨‍👩"：a=0 b=1，ZWJ family=2..13（单个 grapheme cluster）。
+        let text = "ab👨\u{200D}👩";
+        assert_eq!(text.len(), 13);
+        let mut kernel = EditorKernel::with_text(text.to_string(), 13).unwrap();
+        let _begin = kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::point(13),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        let session_before = kernel.composition_session_info();
+        assert!(session_before.is_some());
+        let revision_before = kernel.revision();
+        let selection_before = kernel.selection();
+        let text_before = kernel.snapshot_text();
+
+        // 字素簇内部（offset 6 是 ZWJ 的 char boundary，但不是 grapheme 边界）非法。
+        let invalid_grapheme = kernel.apply(EditorCommand::BeginComposition {
+            replace_range: Utf8ByteRange::from_ordered(6, 13),
+            expected_revision: EditorRevision::new(revision_before),
+        });
+        assert!(matches!(
+            invalid_grapheme,
+            EditorEditOutcome::InvalidOffset(_)
+        ));
+        assert_eq!(kernel.composition_session_info(), session_before);
+        assert_eq!(kernel.revision(), revision_before);
+        assert_eq!(kernel.selection(), selection_before);
+        assert_eq!(kernel.snapshot_text(), text_before);
+
+        // 多字节字符中间字节（offset 3 在 👨 内部）同样非法。
+        let invalid_char = kernel.apply(EditorCommand::BeginComposition {
+            replace_range: Utf8ByteRange::from_ordered(3, 13),
+            expected_revision: EditorRevision::new(kernel.revision()),
+        });
+        assert!(matches!(invalid_char, EditorEditOutcome::InvalidOffset(_)));
+        assert_eq!(kernel.composition_session_info(), session_before);
+        assert_eq!(kernel.revision(), revision_before);
+        assert_eq!(kernel.snapshot_text(), text_before);
+    }
+
+    #[test]
+    fn ime_commit_without_edits_is_no_change_and_keeps_session() {
+        let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
+        let begin = kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::point(5),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        let session_before = kernel.composition_session_info();
+        assert!(session_before.is_some());
+        let revision_before = kernel.revision();
+        let selection_before = kernel.selection();
+
+        let outcome = kernel.apply(EditorCommand::ImeCommit {
+            selection_byte_range: Utf8ByteRange::point(0),
+            replacement_byte_range_after_selection: Utf8ByteRange::point(0),
+            inserted_text: String::new(),
+            cause: EditorTransactionCause::TypingCommit,
+            expected_revision: begin.new_revision,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::NoChange(_)));
+        let result = outcome.into_result();
+        assert_eq!(result.new_revision, EditorRevision::new(revision_before));
+        assert!(result.display_patches.is_empty());
+        assert!(result.changes.is_empty());
+        assert_eq!(kernel.revision(), revision_before);
+        assert_eq!(kernel.selection(), selection_before);
+        assert_eq!(kernel.composition_session_info(), session_before);
+        assert_eq!(kernel.snapshot_text(), "hello");
     }
 
     // ── delta Undo/Redo ──
@@ -495,18 +709,20 @@ mod rope_tests {
 
         let undid = undo(&mut kernel).into_result();
         assert_eq!(kernel.snapshot_text(), "abcd");
-        // 两个 undo patch 都退化为 point(1)；按列表顺序（after 在前）应用才得 "abcd"。
+        // 两条 inverse delta 在 undo 前文本里都退化为 point(1)（同起点）；Core 的
+        // patch batch 把它们合并成**一条**替换，插入文本按原 base 从左到右拼接
+        // 成 "bc"，一次应用即恢复 "abcd"。
+        assert_eq!(undid.display_patches.len(), 1);
         assert_eq!(
-            apply_patches_descending("ad", &undid.display_patches),
-            kernel.snapshot_text()
+            undid.display_patches[0].replace_byte_range,
+            Utf8ByteRange::point(1)
         );
+        assert_eq!(undid.display_patches[0].inserted_text, "bc");
+        assert_patch_batch_matches_kernel("ad", &undid, &kernel);
 
         let redid = redo(&mut kernel).into_result();
         assert_eq!(kernel.snapshot_text(), "ad");
-        assert_eq!(
-            apply_patches_descending("abcd", &redid.display_patches),
-            kernel.snapshot_text()
-        );
+        assert_patch_batch_matches_kernel("abcd", &redid, &kernel);
     }
 
     /// 相邻 deleteSurrounding undo 的 OffsetMap 尾段必须保持正确映射。
@@ -536,6 +752,116 @@ mod rope_tests {
         // old = undo 前文本 "ad"：头部 [0,1) 恒等；'d' 在 old 1，undo 后 "abcd" 中在 new 3。
         assert_eq!(map.map_old_to_new(0), Some(0));
         assert_eq!(map.map_old_to_new(1), Some(3));
+    }
+
+    // ── patch batch：多 delta、变长替换、镜像一致性 ──
+
+    #[test]
+    fn delete_surrounding_variable_length_batch_matches_snapshot() {
+        // "abXXcdYef"：光标 5。before=[2,4)="XX"（2 byte），after=[6,7)="Y"（1 byte）
+        // → "abcdef"。同一事务两条不同长度的局部删除，batch 必须严格降序、
+        // 不重叠，且 inserted 坐标与最终正文一致。
+        let mut kernel = EditorKernel::with_text("abXXcdYef".to_string(), 5).unwrap();
+        let r1 = kernel
+            .apply(EditorCommand::DeleteSurrounding {
+                before_byte_range: Utf8ByteRange::from_ordered(2, 4),
+                after_byte_range: Utf8ByteRange::from_ordered(6, 7),
+                cause: EditorTransactionCause::Delete,
+                expected_revision: EditorRevision::new(kernel.revision()),
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "abcdef");
+        assert_eq!(r1.display_patches.len(), 2);
+        assert_eq!(
+            r1.display_patches[0].replace_byte_range,
+            Utf8ByteRange::from_ordered(6, 7)
+        );
+        assert_eq!(
+            r1.display_patches[1].replace_byte_range,
+            Utf8ByteRange::from_ordered(2, 4)
+        );
+        assert_patch_batch_matches_kernel("abXXcdYef", &r1, &kernel);
+
+        // undo：以 "abcdef" 为 base 降序应用；redo 再回到 "abcdef" 前的正文。
+        let undid = undo(&mut kernel).into_result();
+        assert_patch_batch_matches_kernel("abcdef", &undid, &kernel);
+        let redid = redo(&mut kernel).into_result();
+        assert_patch_batch_matches_kernel("abXXcdYef", &redid, &kernel);
+    }
+
+    #[test]
+    fn ime_commit_insertion_at_selection_start_merges_in_reverse_execution_order() {
+        // "abXXcd"：删 selection [2,4)="XX"，再在删完后的 "abcd" 的起点 2 插入 "Z"
+        // → "abZcd"。两条 forward delta 的 base 起点均为 2；同起点合并必须按执行
+        // 顺序逆序拼接（后插入的 "Z" 落在更前面），最终为 replace [2,4) -> "Z"。
+        let mut kernel = EditorKernel::with_text("abXXcd".to_string(), 4).unwrap();
+        let r1 = kernel
+            .apply(EditorCommand::ImeCommit {
+                selection_byte_range: Utf8ByteRange::from_ordered(2, 4),
+                replacement_byte_range_after_selection: Utf8ByteRange::point(2),
+                inserted_text: "Z".to_string(),
+                cause: EditorTransactionCause::TypingCommit,
+                expected_revision: EditorRevision::new(kernel.revision()),
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "abZcd");
+        assert_eq!(r1.display_patches.len(), 1);
+        assert_eq!(
+            r1.display_patches[0].replace_byte_range,
+            Utf8ByteRange::from_ordered(2, 4)
+        );
+        assert_eq!(r1.display_patches[0].inserted_text, "Z");
+        assert_patch_batch_matches_kernel("abXXcd", &r1, &kernel);
+
+        let undid = undo(&mut kernel).into_result();
+        assert_patch_batch_matches_kernel("abZcd", &undid, &kernel);
+        let redid = redo(&mut kernel).into_result();
+        assert_patch_batch_matches_kernel("abXXcd", &redid, &kernel);
+    }
+
+    #[test]
+    fn ime_commit_multi_delta_batch_and_same_start_undo_merge() {
+        // "abXXcd"：先删 selection [2,4)="XX"，再在 base_text "abcd" 的 [2,4)="cd"
+        // 上插入 "ZZZ" → "abZZZ"。两条 delta，forward patch 不同长度。
+        let mut kernel = EditorKernel::with_text("abXXcd".to_string(), 6).unwrap();
+        let r1 = kernel
+            .apply(EditorCommand::ImeCommit {
+                selection_byte_range: Utf8ByteRange::from_ordered(2, 4),
+                replacement_byte_range_after_selection: Utf8ByteRange::from_ordered(2, 4),
+                inserted_text: "ZZZ".to_string(),
+                cause: EditorTransactionCause::TypingCommit,
+                expected_revision: EditorRevision::new(kernel.revision()),
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "abZZZ");
+        assert_eq!(r1.display_patches.len(), 2);
+        assert_eq!(
+            r1.display_patches[0].replace_byte_range,
+            Utf8ByteRange::from_ordered(4, 6)
+        );
+        assert_eq!(r1.display_patches[0].inserted_text, "ZZZ");
+        assert_eq!(
+            r1.display_patches[1].replace_byte_range,
+            Utf8ByteRange::from_ordered(2, 4)
+        );
+        assert!(r1.display_patches[1].inserted_text.is_empty());
+        assert_patch_batch_matches_kernel("abXXcd", &r1, &kernel);
+
+        // undo：两条 inverse delta 在 undo 前文本里同起点(2)，Core 合并成一条
+        // 替换 "XXcd"（保持原 base 左→右顺序），不是两条各自 point(2) 的 patch。
+        let undid = undo(&mut kernel).into_result();
+        assert_eq!(kernel.snapshot_text(), "abXXcd");
+        assert_eq!(undid.display_patches.len(), 1);
+        assert_eq!(
+            undid.display_patches[0].replace_byte_range,
+            Utf8ByteRange::from_ordered(2, 5)
+        );
+        assert_eq!(undid.display_patches[0].inserted_text, "XXcd");
+        assert_patch_batch_matches_kernel("abZZZ", &undid, &kernel);
+
+        let redid = redo(&mut kernel).into_result();
+        assert_eq!(kernel.snapshot_text(), "abZZZ");
+        assert_patch_batch_matches_kernel("abXXcd", &redid, &kernel);
     }
 
     // ── replace-all：多 delta ──
@@ -614,14 +940,15 @@ mod rope_tests {
             .into_result();
         assert_eq!(kernel.snapshot_text(), "aYYbYYc");
         assert_eq!(r1.display_patches.len(), 2);
+        // Core 按 base 坐标严格降序输出：右侧匹配 [3,4) 在前。
         assert_eq!(
             r1.display_patches[0].replace_byte_range,
-            Utf8ByteRange::from_ordered(1, 2)
+            Utf8ByteRange::from_ordered(3, 4)
         );
         assert_eq!(r1.display_patches[0].inserted_text, "YY");
         assert_eq!(
             r1.display_patches[1].replace_byte_range,
-            Utf8ByteRange::from_ordered(3, 4)
+            Utf8ByteRange::from_ordered(1, 2)
         );
         assert_eq!(r1.display_patches[1].inserted_text, "YY");
         // batch 内所有 patch 携带同一组 base/new revision（原子 batch 边界）。
@@ -653,14 +980,15 @@ mod rope_tests {
             .into_result();
         assert_eq!(kernel.snapshot_text(), "axbxc");
         assert_eq!(r1.display_patches.len(), 2);
+        // 降序 batch：右侧匹配 [4,6) 在前。
         assert_eq!(
             r1.display_patches[0].replace_byte_range,
-            Utf8ByteRange::from_ordered(1, 3)
+            Utf8ByteRange::from_ordered(4, 6)
         );
         assert_eq!(r1.display_patches[0].inserted_text, "x");
         assert_eq!(
             r1.display_patches[1].replace_byte_range,
-            Utf8ByteRange::from_ordered(4, 6)
+            Utf8ByteRange::from_ordered(1, 3)
         );
         assert_eq!(r1.display_patches[1].inserted_text, "x");
         assert_eq!(
@@ -682,12 +1010,12 @@ mod rope_tests {
         assert_eq!(r2.display_patches.len(), 2);
         assert_eq!(
             r2.display_patches[0].replace_byte_range,
-            Utf8ByteRange::from_ordered(1, 2)
+            Utf8ByteRange::from_ordered(4, 5)
         );
         assert_eq!(r2.display_patches[0].inserted_text, "YYY");
         assert_eq!(
             r2.display_patches[1].replace_byte_range,
-            Utf8ByteRange::from_ordered(4, 5)
+            Utf8ByteRange::from_ordered(1, 2)
         );
         assert_eq!(r2.display_patches[1].inserted_text, "YYY");
         assert_eq!(

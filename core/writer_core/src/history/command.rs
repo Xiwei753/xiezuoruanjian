@@ -110,22 +110,10 @@ fn apply_change(text: &mut String, change: &EditorChange) {
 /// 否则向左逐字节回退直到找到 char boundary。
 /// 超出文本长度时回退到文本末尾的 char boundary。
 /// 这保证光标不会落在多字节字符的中间字节上。
+///
+/// Issue #1063：钳位规则由 `editor::text_coordinates` 唯一维护。
 fn clamp_cursor_to_char_boundary(text: &str, offset: usize) -> usize {
-    if offset <= text.len() && text.is_char_boundary(offset) {
-        return offset;
-    }
-    if offset > text.len() {
-        let mut clamped = text.len();
-        while clamped > 0 && !text.is_char_boundary(clamped) {
-            clamped -= 1;
-        }
-        return clamped;
-    }
-    let mut clamped = offset;
-    while clamped > 0 && !text.is_char_boundary(clamped) {
-        clamped -= 1;
-    }
-    clamped
+    crate::editor::text_coordinates::clamp_to_char_boundary(text, offset)
 }
 
 #[cfg(test)]

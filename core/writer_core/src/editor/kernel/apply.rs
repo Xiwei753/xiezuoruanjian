@@ -1,6 +1,7 @@
+use super::patch_batch::{build_display_patches, PatchBatchItem};
 use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::EditorCommand;
-use super::types::{DisplayPatch, EditorOperationKind};
+use super::types::EditorOperationKind;
 use super::{EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
@@ -379,6 +380,9 @@ impl EditorKernel {
         }
 
         self.composition_session = None;
+        // base_len 必须是事务开始前的正文长度；DisplayPatch 的 base 坐标
+        // 都相对这一版正文。
+        let base_len = self.text.byte_len();
 
         // 局部 Rope edit，不 clone 全文。
         self.text.insert(byte_offset, text);
@@ -398,23 +402,29 @@ impl EditorKernel {
             deleted_text: String::new(),
             inserted_text: text.to_string(),
         };
+        let new_revision = self.revision;
+
+        // 事务 edits 的执行顺序与视图 patch batch 的顺序是两回事：
+        // 这里只提供本次局部 delta 的 base 坐标项，排序/同起点合并由
+        // patch_batch 统一负责。
+        let display_patches = build_display_patches(
+            base_revision,
+            new_revision,
+            new_selection,
+            base_len,
+            vec![PatchBatchItem {
+                replace_range: delta.old_range,
+                deleted_len: delta.deleted_text.len(),
+                inserted_text: &delta.inserted_text,
+            }],
+        );
+
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
-
-        let new_revision = self.revision;
-
-        let display_patches = vec![DisplayPatch {
-            base_revision,
-            new_revision,
-            replace_byte_range: Utf8ByteRange::point(byte_offset),
-            inserted_byte_range: Utf8ByteRange::from_ordered(byte_offset, byte_offset + text.len()),
-            inserted_text: text.to_string(),
-            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
-        }];
 
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
@@ -425,8 +435,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
-        before_text_sha256: String::new(),
-        after_text_sha256: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Insert,
             // 单次编辑从 delta 直接构造 offset map，不再扫全文。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -486,6 +496,7 @@ impl EditorKernel {
             .to_string();
 
         self.composition_session = None;
+        let base_len = self.text.byte_len();
 
         self.text.delete(byte_start..byte_end_exclusive);
         self.push_change(EditorChange::Delete {
@@ -503,24 +514,26 @@ impl EditorKernel {
             deleted_text: deleted_text.clone(),
             inserted_text: String::new(),
         };
+        let new_revision = self.revision;
+
+        let display_patches = build_display_patches(
+            base_revision,
+            new_revision,
+            new_selection,
+            base_len,
+            vec![PatchBatchItem {
+                replace_range: delta.old_range,
+                deleted_len: delta.deleted_text.len(),
+                inserted_text: &delta.inserted_text,
+            }],
+        );
+
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
-
-        let new_revision = self.revision;
-
-        let display_patches = vec![DisplayPatch {
-            base_revision,
-            new_revision,
-            replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
-            // Issue #826 评论 9 阻塞 1：纯删除的 inserted 区间是零长。
-            inserted_byte_range: Utf8ByteRange::point(byte_start),
-            inserted_text: String::new(),
-            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
-        }];
 
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
@@ -531,8 +544,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
-        before_text_sha256: String::new(),
-        after_text_sha256: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Delete,
             // 单次删除从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -590,6 +603,7 @@ impl EditorKernel {
             .to_string();
 
         self.composition_session = None;
+        let base_len = self.text.byte_len();
 
         self.text
             .replace(byte_start..byte_end_exclusive, replacement_text);
@@ -617,27 +631,26 @@ impl EditorKernel {
             deleted_text: deleted_text.clone(),
             inserted_text: replacement_text.to_string(),
         };
+        let new_revision = self.revision;
+
+        let display_patches = build_display_patches(
+            base_revision,
+            new_revision,
+            new_selection,
+            base_len,
+            vec![PatchBatchItem {
+                replace_range: delta.old_range,
+                deleted_len: delta.deleted_text.len(),
+                inserted_text: &delta.inserted_text,
+            }],
+        );
+
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
-
-        let new_revision = self.revision;
-        let new_selection = make_selection(new_cursor_val, new_cursor_val);
-
-        let display_patches = vec![DisplayPatch {
-            base_revision,
-            new_revision,
-            replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
-            inserted_byte_range: Utf8ByteRange::from_ordered(
-                byte_start,
-                byte_start + replacement_text.len(),
-            ),
-            inserted_text: replacement_text.to_string(),
-            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
-        }];
 
         let operation_kind = if byte_start == byte_end_exclusive {
             EditorOperationKind::Insert
@@ -656,8 +669,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
-        before_text_sha256: String::new(),
-        after_text_sha256: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             operation_kind,
             // 单次替换从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -708,6 +721,7 @@ impl EditorKernel {
         };
 
         self.composition_session = None;
+        let base_len = self.text.byte_len();
 
         // 局部 Rope insert，不 clone 全文。
         self.text.insert(byte_offset, &text);
@@ -727,24 +741,26 @@ impl EditorKernel {
             deleted_text: String::new(),
             inserted_text: text.clone(),
         };
+        let new_revision = self.revision;
+
+        let display_patches = build_display_patches(
+            base_revision,
+            new_revision,
+            new_selection,
+            base_len,
+            vec![PatchBatchItem {
+                replace_range: delta.old_range,
+                deleted_len: delta.deleted_text.len(),
+                inserted_text: &delta.inserted_text,
+            }],
+        );
+
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
-
-        let new_revision = self.revision;
-        let new_selection = make_selection(new_cursor_val, new_cursor_val);
-
-        let display_patches = vec![DisplayPatch {
-            base_revision,
-            new_revision,
-            replace_byte_range: Utf8ByteRange::point(byte_offset),
-            inserted_byte_range: Utf8ByteRange::from_ordered(byte_offset, byte_offset + text.len()),
-            inserted_text: text.clone(),
-            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
-        }];
 
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
@@ -755,8 +771,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
-        before_text_sha256: String::new(),
-        after_text_sha256: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Insert,
             // 单次换行插入从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -890,6 +906,7 @@ impl EditorKernel {
             .text
             .byte_slice(byte_start..byte_end_exclusive)
             .to_string();
+        let base_len = self.text.byte_len();
 
         self.text
             .replace(byte_start..byte_end_exclusive, replacement_text);
@@ -921,6 +938,20 @@ impl EditorKernel {
             deleted_text: deleted_text.clone(),
             inserted_text: replacement_text.to_string(),
         };
+        let new_revision = self.revision;
+
+        let display_patches = build_display_patches(
+            base_revision,
+            new_revision,
+            new_selection,
+            base_len,
+            vec![PatchBatchItem {
+                replace_range: delta.old_range,
+                deleted_len: delta.deleted_text.len(),
+                inserted_text: &delta.inserted_text,
+            }],
+        );
+
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
@@ -929,20 +960,6 @@ impl EditorKernel {
         self.redo_stack.clear();
         let is_composition_commit = self.composition_session.is_some();
         self.composition_session = None;
-
-        let new_revision = self.revision;
-
-        let display_patches = vec![DisplayPatch {
-            base_revision,
-            new_revision,
-            replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
-            inserted_byte_range: Utf8ByteRange::from_ordered(
-                byte_start,
-                byte_start + replacement_text.len(),
-            ),
-            inserted_text: replacement_text.to_string(),
-            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
-        }];
 
         let operation_kind = if is_composition_commit {
             EditorOperationKind::CompositionCommit
@@ -963,8 +980,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
-        before_text_sha256: String::new(),
-        after_text_sha256: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             operation_kind,
             // 单次 commit 从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -1160,26 +1177,23 @@ impl EditorKernel {
         }
         let new_revision = self.revision;
 
-        // 原子 patch batch — 每条 delta 一条局部 DisplayPatch
-        // （base 文档坐标，删除的 inserted_text 为空）。不再合成最外层单条 patch
-        // （把 before/after 之间的保留段 middle 重新拼接进 inserted_text）：
-        // 两个相距很远的删除会复制中间整段正文，且与 batch 协议不一致。
-        let display_patches: Vec<DisplayPatch> = edits
-            .iter()
-            .map(|d| DisplayPatch {
-                base_revision,
-                new_revision,
-                replace_byte_range: d.old_range,
-                // Issue #826 评论 9 阻塞 1：原子 batch 里每条 patch 的 inserted 区间
-                // 必须用 Core 自己算出的 new_range；前一处替换变长后，后一处在最终
-                // new 坐标里已经右移，不能用 replace_byte_range.start 推。
-                inserted_byte_range: d.new_range,
-                inserted_text: d.inserted_text.clone(),
-                resulting_selection_byte_range: EditorEditResult::selection_byte_range(
-                    new_selection,
-                ),
-            })
-            .collect();
+        // 原子 patch batch — 每条 delta 一条局部 patch（base 文档坐标，删除的
+        // inserted_text 为空）。事务 edits 的 push 顺序是执行顺序，不是视图
+        // 顺序；降序输出与同起点合并统一交给 patch_batch。
+        let display_patches = build_display_patches(
+            base_revision,
+            new_revision,
+            new_selection,
+            old_len,
+            edits
+                .iter()
+                .map(|delta| PatchBatchItem {
+                    replace_range: delta.old_range,
+                    deleted_len: delta.deleted_text.len(),
+                    inserted_text: &delta.inserted_text,
+                })
+                .collect(),
+        );
 
         self.undo_stack.push(UndoEntry {
             edits,
@@ -1197,8 +1211,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
-        before_text_sha256: String::new(),
-        after_text_sha256: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Delete,
             offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),
             content_delta,
@@ -1257,6 +1271,18 @@ impl EditorKernel {
         let has_sel = sel_min < sel_max;
         let has_rep = rep_min < rep_max;
         let has_ins = ins_len > 0;
+
+        // Issue #1063：无实际 edit 时必须在任何正文/revision/composition
+        // session/光标/undo 变更之前返回 NoChange，保持无改动命令状态与返回
+        // revision 一致。
+        if !has_sel && !has_rep && !has_ins {
+            return EditorEditOutcome::NoChange(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection_anchor,
+                old_selection_head,
+            ));
+        }
 
         // Issue #701 评论 5704688994 问题 2: 所有检查前置到任何 delete/insert 之前。
         // 旧实现先执行 self.text.delete(sel_min..sel_max) 再校验 rep char boundary，
@@ -1432,8 +1458,8 @@ impl EditorKernel {
 
         // 构造 delta 列表（按原始坐标 → final_text 坐标）。
         // 顺序：selection delta 先 push，replacement/插入 delta 后 push。
-        // 这保证 DisplayPatch 按 old_range.start 降序 stable 排序时，同起点处
-        // selection（非零长度删除）先于纯插入（零长度）应用。
+        // 这是事务 edits 的执行顺序；给视图的 patch batch 顺序由 patch_batch
+        // 按 base 坐标重新排序/合并，两者不能混为一谈。
         let mut edits: Vec<TextEditDelta> = Vec::with_capacity(4);
 
         // selection 删除 delta。
@@ -1503,43 +1529,25 @@ impl EditorKernel {
             });
         }
 
-        // 空操作（无选区 + 无 replacement + 空插入）已在上游过滤。
-        if edits.is_empty() {
-            return EditorEditOutcome::NoChange(self.noop_result(
-                base_revision,
-                old_cursor,
-                old_selection_anchor,
-                old_selection_head,
-            ));
-        }
-
-        self.undo_stack.push(UndoEntry {
-            edits: edits.clone(),
-            old_selection: make_selection(old_selection_anchor, old_selection_head),
-            new_selection,
-        });
-        self.redo_stack.clear();
-
+        // 无实际 edit 的情况已在上游提前返回 NoChange。
         let new_revision = self.revision;
 
-        // DisplayPatch：每条 delta 一条局部 DisplayPatch（base 文档坐标）。
-        // 所有 patch 共享同一个 base_revision/new_revision（原子 batch）。
-        let display_patches: Vec<DisplayPatch> = edits
-            .iter()
-            .map(|d| DisplayPatch {
-                base_revision,
-                new_revision,
-                replace_byte_range: d.old_range,
-                // Issue #826 评论 9 阻塞 1：原子 batch 里每条 patch 的 inserted 区间
-                // 必须用 Core 自己算出的 new_range；前一处替换变长后，后一处在最终
-                // new 坐标里已经右移，不能用 replace_byte_range.start 推。
-                inserted_byte_range: d.new_range,
-                inserted_text: d.inserted_text.clone(),
-                resulting_selection_byte_range: EditorEditResult::selection_byte_range(
-                    new_selection,
-                ),
-            })
-            .collect();
+        // 事务 edits 的 push 顺序是执行顺序；视图 batch 的降序输出与同起点
+        // 合并由 patch_batch 统一负责。所有 patch 共享同一组 base/new revision。
+        let display_patches = build_display_patches(
+            base_revision,
+            new_revision,
+            new_selection,
+            old_len,
+            edits
+                .iter()
+                .map(|delta| PatchBatchItem {
+                    replace_range: delta.old_range,
+                    deleted_len: delta.deleted_text.len(),
+                    inserted_text: &delta.inserted_text,
+                })
+                .collect(),
+        );
 
         // content_delta / offset_pairs 从 delta 构造。
         let mut content_delta = EditorContentDelta::default();
@@ -1557,6 +1565,13 @@ impl EditorKernel {
             ));
         }
 
+        self.undo_stack.push(UndoEntry {
+            edits,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
+        });
+        self.redo_stack.clear();
+
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -1566,8 +1581,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
-        before_text_sha256: String::new(),
-        after_text_sha256: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CompositionCommit,
             // 原子 IME commit 从 delta 构造 offset map。
             offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),
