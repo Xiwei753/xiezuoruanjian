@@ -8,7 +8,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use sujian_proof::{CorrectionEngine, Lexicon, LexiconPaths, ProofreadingModel};
@@ -173,6 +173,9 @@ enum ModelLoadState {
         stamp: ModelBundleStamp,
         identity: ModelIdentity,
         model: Arc<ProofreadingModel>,
+        /// Last scanner use, for the idle-release grace period. Active scans
+        /// keep a clone of `model`, so `Arc::strong_count > 1` protects them.
+        last_used: Instant,
     },
 }
 
@@ -291,6 +294,52 @@ pub(super) fn model_instance_count() -> usize {
     }
     count
 }
+
+/// Count engines that still hold a reference to a model session. This includes
+/// engines whose model key has already been superseded in `MODEL_CACHE`, so
+/// diagnostics can see in-flight/old sessions that `model_instance_count`
+/// (cached slots only) does not count.
+pub(super) fn engine_model_reference_count() -> usize {
+    let Some(stores) = STORE_REGISTRY.get() else {
+        return 0;
+    };
+    let Ok(stores) = stores.lock() else {
+        return 0;
+    };
+    let mut count = 0;
+    for inner in stores.values() {
+        let Ok(engines) = inner.engines.lock() else {
+            continue;
+        };
+        count += engines
+            .values()
+            .filter(|cached| cached.model_key.is_some())
+            .count();
+    }
+    count
+}
+
+/// Snapshot of the session lifecycle used by diagnostics. `cached` counts Ready
+/// slots; `engine_refs` counts engines that still hold a session (including old
+/// generations), and `generation` identifies the current model configuration.
+pub(super) struct ModelLifetimeMetrics {
+    pub cached: usize,
+    pub engine_refs: usize,
+    pub generation: u64,
+}
+
+pub(super) fn model_lifetime_metrics() -> ModelLifetimeMetrics {
+    ModelLifetimeMetrics {
+        cached: model_instance_count(),
+        engine_refs: engine_model_reference_count(),
+        generation: MODEL_CONFIG_GENERATION.load(Ordering::SeqCst),
+    }
+}
+
+/// How long a ready ONNX session may stay unused before opportunistic release.
+/// Scans keep an `Arc<ProofreadingModel>` lease, so an active or queued scan is
+/// never released; only a session with no engine/scan reference is collected.
+const IDLE_MODEL_GRACE: Duration = Duration::from_secs(120);
 
 /// Release every idle model session and invalidate loads that are still in
 /// flight. Called only when the configured model is really replaced or the
@@ -505,6 +554,101 @@ impl CorrectionStore {
             .map_err(|error| WriterError::Io(error.to_string()))?;
         *guard = next;
         Ok(result)
+    }
+
+    /// Opportunistically release ready sessions that have had no scanner and no
+    /// engine/scan reference for [`IDLE_MODEL_GRACE`]. Called on correction
+    /// document close and before opening a new scanner; a busy typing session
+    /// keeps `last_used` fresh, so this does not unload per keystroke or per
+    /// chapter switch.
+    pub fn release_idle_models(&self) -> Result<usize, WriterError> {
+        self.release_idle_models_with_grace(IDLE_MODEL_GRACE)
+    }
+
+    fn release_idle_models_with_grace(&self, grace: Duration) -> Result<usize, WriterError> {
+        let slots = model_cache()
+            .lock()
+            .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
+        // Only disturb engine caches when at least one session is actually past
+        // the grace period; a hot model must keep its engine across keystrokes.
+        let has_idle_session = slots.values().any(|slot| {
+            slot.state.lock().is_ok_and(|state| {
+                matches!(
+                    &*state,
+                    ModelLoadState::Ready { last_used, .. } if last_used.elapsed() >= grace
+                )
+            })
+        });
+        if !has_idle_session {
+            return Ok(0);
+        }
+        // Drop idle engine-cache entries first. They hold a strong reference to
+        // the model session; otherwise an otherwise idle slot could never reach
+        // `strong_count == 1`. Engines still owned by a scan/request stay.
+        if let Some(stores) = STORE_REGISTRY.get() {
+            if let Ok(stores) = stores.lock() {
+                for inner in stores.values() {
+                    if let Ok(mut engines) = inner.engines.lock() {
+                        engines.retain(|_, cached| Arc::strong_count(&cached.engine) > 1);
+                    }
+                }
+            }
+        }
+        let mut released_idle_ms: Vec<u128> = Vec::new();
+        for slot in slots.values() {
+            let Ok(mut state) = slot.state.lock() else {
+                continue;
+            };
+            let ModelLoadState::Ready {
+                last_used, model, ..
+            } = &*state
+            else {
+                continue;
+            };
+            let idle = last_used.elapsed();
+            // An active scan owns a clone of the model; only the slot's own
+            // `Arc` may remain before the session is truly idle.
+            if idle < grace || Arc::strong_count(model) != 1 {
+                continue;
+            }
+            released_idle_ms.push(idle.as_millis());
+            *state = ModelLoadState::Empty;
+            slot.wake.notify_all();
+        }
+        drop(slots);
+        let released = released_idle_ms.len();
+        if released > 0 {
+            let metrics = model_lifetime_metrics();
+            for idle_ms in released_idle_ms {
+                let mut fields = BTreeMap::new();
+                fields.insert("idle_ms".to_string(), serde_json::json!(idle_ms));
+                fields.insert("released".to_string(), serde_json::json!(released));
+                fields.insert(
+                    "model_cached".to_string(),
+                    serde_json::json!(metrics.cached),
+                );
+                fields.insert(
+                    "model_engine_refs".to_string(),
+                    serde_json::json!(metrics.engine_refs),
+                );
+                fields.insert(
+                    "model_generation".to_string(),
+                    serde_json::json!(metrics.generation),
+                );
+                writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+                    timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    sequence: 0,
+                    session_id: String::new(),
+                    level: writer_diagnostics::DiagnosticLevel::Info,
+                    origin: writer_diagnostics::DiagnosticOrigin::App,
+                    event: "correction.model.released".to_string(),
+                    target: "correction.model".to_string(),
+                    message: None,
+                    fields,
+                });
+            }
+        }
+        Ok(released)
     }
 
     pub fn set_model_path(&self, path: &Path) -> Result<(), WriterError> {
@@ -1436,6 +1580,7 @@ impl CorrectionStore {
     /// publishes its stale session.
     pub(super) fn configured_model_snapshot(&self) -> Result<ConfiguredModelSnapshot, WriterError> {
         let started = Instant::now();
+        self.release_idle_models_with_grace(IDLE_MODEL_GRACE)?;
         let configured_path = self.configured_model_path()?;
         let Some(configured_path) = configured_path else {
             return Ok(ConfiguredModelSnapshot {
@@ -1459,12 +1604,14 @@ impl CorrectionStore {
             .lock()
             .map_err(|_| WriterError::Other("correction model slot lock poisoned".into()))?;
         loop {
-            match &*state {
+            match &mut *state {
                 ModelLoadState::Ready {
                     stamp,
                     identity: ready_identity,
                     model,
+                    last_used,
                 } if *stamp == stamp_before => {
+                    *last_used = Instant::now();
                     let snapshot = ConfiguredModelSnapshot {
                         key: Some(ModelCacheKey {
                             path: path.clone(),
@@ -1549,6 +1696,7 @@ impl CorrectionStore {
             stamp: stamp_before.clone(),
             identity: identity.clone(),
             model: Arc::clone(&model),
+            last_used: Instant::now(),
         };
         slot.wake.notify_all();
         Ok(ConfiguredModelSnapshot {

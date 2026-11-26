@@ -82,7 +82,8 @@ pub fn prepare_animation_visuals_from_layout(
             Some(img)
         } else {
             None
-        };
+        }
+        .map(crate::editor::layout::texture_image::LineImage::shared);
 
         snapshots.push(super::AnimationRasterVisual {
             image,

@@ -49,7 +49,7 @@ pub struct CanonicalLineSnapshot {
     pub ascent: f64,
     pub descent: f64,
     pub x_end_trailing: f64,
-    pub image: Option<qmetaobject::QImage>,
+    pub(crate) image: Option<std::sync::Arc<crate::editor::layout::texture_image::LineImage>>,
     pub clusters: Vec<CanonicalClusterSnapshot>,
     /// Indices into `clusters`, sorted by paragraph-local UTF-8 byte range for range queries.
     pub cluster_byte_order: Vec<usize>,
@@ -87,7 +87,7 @@ pub struct CanonicalParagraphSnapshot {
 /// `paragraph_slot` + `qtextline_idx` 是稳定行身份。
 #[derive(Clone)]
 pub struct AnimationRasterVisual {
-    pub image: Option<qmetaobject::QImage>,
+    pub(crate) image: Option<std::sync::Arc<crate::editor::layout::texture_image::LineImage>>,
     pub paragraph_slot: usize,
     pub qtextline_idx: i32,
 }
@@ -158,7 +158,7 @@ pub struct CanonicalDocumentVisualSnapshot {
     /// - 段落 `i` 的行范围 `[paragraph_line_start(i), paragraph_line_end(i))`。
     /// - 前面段行数变化时，后缀段的行范围由前缀和自动平移。
     /// - 查视口时 O(log n) 前缀和查询，不需要反向扫描整个 HashMap。
-    /// Issue #901 第二十二轮问题4: Arc 共享行数前缀索引，O(1) clone。
+    /// - Issue #901 第二十二轮问题4: Arc 共享行数前缀索引，O(1) clone。
     pub paragraph_line_count_index:
         std::sync::Arc<super::paragraph_height_index::ParagraphLineCountIndex>,
 }

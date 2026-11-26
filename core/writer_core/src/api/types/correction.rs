@@ -135,6 +135,9 @@ pub struct CorrectionChapterSnapshotDto {
     pub text_revision: u64,
     pub suggestions: Vec<CorrectionSuggestionDto>,
     pub checked_ranges: Vec<CorrectionCheckedRangeDto>,
+    /// True when a segment is dirty or still has no verified result. Restore-only
+    /// responses use this to distinguish cached display from a real scan.
+    pub has_unchecked_segments: bool,
 }
 
 /// Scope of an explicit user ignore action.

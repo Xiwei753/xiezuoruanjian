@@ -517,7 +517,7 @@ impl SujianEditorItem {
             if let Some(previous) = previous {
                 let mut previous_images: std::collections::HashMap<
                     (u64, u32, usize, usize),
-                    qmetaobject::QImage,
+                    std::sync::Arc<super::line_snapshot::LineImage>,
                 > = std::collections::HashMap::with_capacity(previous.line_snapshots.len());
                 for line in &previous.line_snapshots {
                     if let Some(image) = line.image.as_ref() {
@@ -528,7 +528,7 @@ impl SujianEditorItem {
                                 line.byte_start,
                                 line.byte_end,
                             ),
-                            image.clone(),
+                            std::sync::Arc::clone(image),
                         );
                     }
                 }
@@ -568,7 +568,8 @@ impl SujianEditorItem {
                         if snapshot.line_snapshots[snapshot_index].image.is_some() {
                             continue;
                         }
-                        snapshot.line_snapshots[snapshot_index].image = Some(image.clone());
+                        snapshot.line_snapshots[snapshot_index].image =
+                            Some(std::sync::Arc::clone(image));
                         reused_indices.push(line_index);
                     }
 

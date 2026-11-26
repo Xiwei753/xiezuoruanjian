@@ -163,7 +163,7 @@ impl CorrectionScanner {
         // Issue #1061: a cache hit must not look like a 500 ms session
         // initialization. Log the single-flight outcome, whether a real ONNX
         // session was created, and how many sessions this process holds.
-        let model_instances = super::model_instance_count().to_string();
+        let model_lifetime = super::model_lifetime_metrics();
         record_correction_scan_event(
             "correction.model.load",
             vec![
@@ -184,7 +184,9 @@ impl CorrectionScanner {
                         .max(model_load_started_at.elapsed().as_millis())
                         .to_string(),
                 ),
-                ("model_instances", model_instances),
+                ("model_instances", model_lifetime.cached.to_string()),
+                ("model_engine_refs", model_lifetime.engine_refs.to_string()),
+                ("model_generation", model_lifetime.generation.to_string()),
                 ("resource_fingerprint", scanner_fingerprint_before.clone()),
             ],
         );
@@ -795,6 +797,10 @@ impl CorrectionScanner {
                 ("candidates_after_filter", filtered.len().to_string()),
             ],
         );
+        let has_unchecked_segments = guard
+            .segments
+            .iter()
+            .any(|segment| segment.dirty || segment.checked.is_none());
         let mut suggestions = filtered
             .into_iter()
             .map(|diagnostic| CorrectionSuggestionDto::try_from((diagnostic, self.text_revision)))
@@ -804,6 +810,7 @@ impl CorrectionScanner {
             text_revision: self.text_revision,
             suggestions,
             checked_ranges,
+            has_unchecked_segments,
         })
     }
 
@@ -812,6 +819,7 @@ impl CorrectionScanner {
             text_revision: self.text_revision,
             suggestions: Vec::new(),
             checked_ranges: Vec::new(),
+            has_unchecked_segments: false,
         })
     }
 }

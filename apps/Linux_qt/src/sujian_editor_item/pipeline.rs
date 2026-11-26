@@ -1,5 +1,6 @@
 // Issue #815 评论 6042062633 修改 8: 输入路径"编辑发生了但没有动画"的正式跳过事件。
 use super::edit_motion::{CompositionSession, CursorRect};
+#[cfg(test)]
 use super::edit_snapshot::EditorSnapshot;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, PreparedLineSnapshot};
@@ -15,9 +16,11 @@ use writer_core::editor::{
 };
 use writer_core::writing_stats::proof::content_digest_of_text;
 
-/// Issue #1061 第 2 项：正文行纹理缓存的明确字节上限。
-/// 超限时按插入顺序淘汰最老的快照纹理；被淘汰的图仍保留在
-/// `EditorLayoutSnapshot.line_snapshots[].image`，下一次准备纹理时可重新插入。
+/// Issue #1061 复审：正文行纹理缓存中 **仅缓存独占** 部分的字节上限。
+///
+/// 快照仍引用的 `LineImage` 不会被淘汰；它们计入 `texture_shared_bytes`，
+/// 待快照释放后才变成可淘汰字节。预算不再把"Map 条目占用"伪装成进程
+/// 图像总内存。
 const TEXTURE_CACHE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
 
 /// Qt 侧已确认正文镜像 — 持有与 Rust EditorKernel revision 对应的纯文本快照。
@@ -668,8 +671,8 @@ impl LinuxEditorPipeline {
 
     /// 保留最后成功显示帧和当前视觉过渡引用的行纹理。
     ///
-    /// Issue #1061 第 2 项：retain 之后执行字节预算，保证缓存有明确上限；
-    /// 淘汰只影响缓存条目，`get_line` 的查询语义不变。
+    /// Issue #1061 复审：retain 之后只对缓存独占字节执行预算；仍被快照
+    /// 共享的图保持可用，等快照释放后再回收。
     pub fn retain_active_snapshot_ids(&mut self, active_ids: &[LineSnapshotId]) {
         self.texture_cache.retain_active_snapshot_ids(active_ids);
         let evicted = self
@@ -685,13 +688,30 @@ impl LinuxEditorPipeline {
         let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
             std::collections::BTreeMap::new();
         fields.insert("evicted".to_string(), serde_json::json!(evicted));
+        let metrics = self.texture_cache.metrics();
         fields.insert(
             "texture_bytes".to_string(),
             serde_json::json!(self.texture_cache.byte_len()),
         );
         fields.insert(
             "texture_lines".to_string(),
-            serde_json::json!(self.texture_cache.line_count()),
+            serde_json::json!(metrics.lines),
+        );
+        fields.insert(
+            "texture_cache_only_bytes".to_string(),
+            serde_json::json!(metrics.cache_only_bytes),
+        );
+        fields.insert(
+            "texture_shared_bytes".to_string(),
+            serde_json::json!(metrics.shared_bytes),
+        );
+        fields.insert(
+            "texture_live_bytes".to_string(),
+            serde_json::json!(metrics.live_bytes),
+        );
+        fields.insert(
+            "active_visual_snapshots".to_string(),
+            serde_json::json!(metrics.active_visual_snapshots),
         );
         fields.insert(
             "budget_bytes".to_string(),
@@ -1246,6 +1266,7 @@ impl LinuxEditorPipeline {
     }
 
     pub fn set_current_layout_snapshot(&mut self, snapshot: Option<EditorLayoutSnapshot>) {
+        super::line_snapshot::set_active_visual_snapshots(usize::from(snapshot.is_some()));
         self.current_layout_snapshot = snapshot;
     }
 
@@ -1308,7 +1329,9 @@ impl super::SujianEditorItem {
             };
 
             if let Some(image) = line.image.as_ref() {
-                self.pipeline.texture_cache.insert_line(id, image.clone());
+                self.pipeline
+                    .texture_cache
+                    .insert_line(id, std::sync::Arc::clone(image));
                 prep.prepared.push(id);
                 continue;
             }
@@ -1322,6 +1345,7 @@ impl super::SujianEditorItem {
                 None => prep.missing.push(id),
             }
         }
+        self.pipeline.texture_cache.publish_metrics();
         prep
     }
 
@@ -1340,7 +1364,7 @@ impl super::SujianEditorItem {
         &self,
         source: &LocalTextSource<'_>,
         snapshot_line: &PreparedLineSnapshot,
-    ) -> Option<qmetaobject::QImage> {
+    ) -> Option<std::sync::Arc<super::line_snapshot::LineImage>> {
         let layout = source.layout?;
         let id = snapshot_line.id;
 

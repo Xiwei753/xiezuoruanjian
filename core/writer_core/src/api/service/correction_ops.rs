@@ -68,6 +68,13 @@ impl WriterCoreApi {
         self.correction_store()?.resource_status()
     }
 
+    /// Release an idle ONNX session after the correction document is closed.
+    /// Active scans keep their own strong lease, so this never interrupts them;
+    /// a recently used session stays cached for the next editing burst.
+    pub fn release_idle_correction_models(&self) -> ApiResult<usize> {
+        self.correction_store()?.release_idle_models()
+    }
+
     pub fn get_correction_model_path_status(
         &self,
         path: String,

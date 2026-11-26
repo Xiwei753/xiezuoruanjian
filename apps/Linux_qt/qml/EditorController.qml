@@ -117,6 +117,8 @@ QtObject {
     // Epoch attached to every in-flight request, so a delayed response from a
     // previous document cannot overwrite the current chapter's annotations.
     property var correctionRequestEpochs: ({})
+    property var correctionRequestKinds: ({})
+    property var correctionRestoreScanRequests: ({})
     // Issue #1032 复审：标注映射也进入 Rust 后台固定队列，QML 只投递轻量
     // 编辑事实并接收按章节 + revision 返回的异步结果。这里只保存展示侧的
     // 请求标识；切章 / 重置时丢弃旧页面回调，但不会删除已提交的后台事实。
@@ -440,8 +442,15 @@ QtObject {
         correctionCheckPending = false;
     }
 
-    function registerCorrectionRequest(requestId) {
+    function registerCorrectionRequest(requestId, kind) {
         correctionRequestEpochs[requestId] = correctionDocumentEpoch;
+        correctionRequestKinds[requestId] = kind;
+    }
+
+    function takeCorrectionRequestKind(requestId) {
+        var kind = correctionRequestKinds[requestId];
+        delete correctionRequestKinds[requestId];
+        return kind;
     }
 
     function takeCorrectionRequestEpoch(requestId) {
@@ -819,6 +828,8 @@ QtObject {
         clearAnnotationDisplayRequests();
         correctionApplyRequests = ({});
         correctionRequestEpochs = ({});
+        correctionRequestKinds = ({});
+        correctionRestoreScanRequests = ({});
         correctionScannedRevision = -1;
         correctionScannedProjectId = "";
         correctionScannedChapterId = "";
@@ -845,6 +856,8 @@ QtObject {
         correctionDocumentEpoch += 1;
         if (correctionDocumentEpoch > 2147483000) correctionDocumentEpoch = 1;
         correctionRequestEpochs = ({});
+        correctionRequestKinds = ({});
+        correctionRestoreScanRequests = ({});
         correctionScannedRevision = -1;
         correctionScannedProjectId = "";
         correctionScannedChapterId = "";
@@ -909,7 +922,7 @@ QtObject {
         correctionRequestSerial += 1;
         if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
         pendingCorrectionRequestId = correctionRequestSerial;
-        registerCorrectionRequest(pendingCorrectionRequestId);
+        registerCorrectionRequest(pendingCorrectionRequestId, "full_check");
         pendingCorrectionRevision = revision;
         pendingCorrectionProjectId = projectId;
         pendingCorrectionChapterId = chapterId;
@@ -930,7 +943,7 @@ QtObject {
     // Issue #954：从 Core 缓存读取当前章节仍有效的校对结果，不重跑模型。
     // 章节打开以及编辑事务连续性丢失时调用；Core 按文本/上下文指纹重新定位
     // 每条波线，QML 直接整体替换结果，不再本地推断 byte 偏移。
-    function requestCorrectionSnapshot() {
+    function requestCorrectionSnapshot(scanAfterRestore) {
         if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) return;
         if (!editorBackendRef.request_correction_snapshot) return;
         if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return;
@@ -966,7 +979,10 @@ QtObject {
         correctionRequestSerial += 1;
         if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
         pendingCorrectionRequestId = correctionRequestSerial;
-        registerCorrectionRequest(pendingCorrectionRequestId);
+        registerCorrectionRequest(pendingCorrectionRequestId, "restore");
+        if (scanAfterRestore === true) {
+            correctionRestoreScanRequests[pendingCorrectionRequestId] = true;
+        }
         pendingCorrectionRevision = revision;
         pendingCorrectionProjectId = projectId;
         pendingCorrectionChapterId = chapterId;
@@ -1078,7 +1094,7 @@ QtObject {
                 || correctionTrackedChapterId !== chapterId
                 || !editorBackendRef || !editorBackendRef.apply_correction_edits) {
             if (!correctionCheckPending) {
-                requestCorrectionSnapshot();
+                requestCorrectionSnapshot(true);
             }
             return;
         }
@@ -1123,7 +1139,7 @@ QtObject {
             return;
         }
         if (!success) {
-            if (!correctionCheckPending) requestCorrectionSnapshot();
+            if (!correctionCheckPending) requestCorrectionSnapshot(true);
             return;
         }
         if (Number(textRevision) < correctionTrackedRevision) return;
@@ -1138,20 +1154,21 @@ QtObject {
         if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) return;
         if (!editorBackendRef.request_correction_pending) return;
         if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return;
-        var snapshotText = getEditorPlainText();
         var revision = Number(targetEditorItem.text_revision);
         if (!isFinite(revision) || revision < 0) return;
-        // Issue #1061：这个 revision 的结果已经接受，继续排队只会复制整章
-        // 正文再跑一趟无脏区的 Core 任务。
+        // Issue #1061：这个 revision 的真实扫描结果已经接受，继续排队只会
+        // 复制整章正文再跑一趟无脏区的 Core 任务。先做身份/revision 去重，
+        // 避免被跳过的请求仍然先 getEditorPlainText() 克隆全文。
         if (revision === correctionScannedRevision
                 && projectId === correctionScannedProjectId
                 && chapterId === correctionScannedChapterId) return;
+        var snapshotText = getEditorPlainText();
         syncCorrectionTracking(snapshotText, revision);
 
         correctionRequestSerial += 1;
         if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
         pendingCorrectionRequestId = correctionRequestSerial;
-        registerCorrectionRequest(pendingCorrectionRequestId);
+        registerCorrectionRequest(pendingCorrectionRequestId, "pending");
         pendingCorrectionRevision = revision;
         pendingCorrectionProjectId = projectId;
         pendingCorrectionChapterId = chapterId;
@@ -1170,7 +1187,10 @@ QtObject {
     // Issue #954：Core 返回整章合并快照 { textRevision, suggestions, checkedRanges }，
     // 已按当前正文重新定位；QML 直接整体替换结果列表，不再本地合并。
     function receiveCorrectionSuggestions(requestId, textRevision, snapshotJson) {
+        var requestKind = takeCorrectionRequestKind(requestId);
         var requestEpoch = takeCorrectionRequestEpoch(requestId);
+        var scanAfterRestore = correctionRestoreScanRequests[requestId] === true;
+        delete correctionRestoreScanRequests[requestId];
         if (requestEpoch === undefined || requestEpoch !== correctionDocumentEpoch) return;
         var isPending = requestId === pendingCorrectionRequestId;
         if (isPending) {
@@ -1199,9 +1219,30 @@ QtObject {
             annotateCorrectionPositions(currentText, suggestions);
             updateCorrectionSuggestions(suggestions);
             syncCorrectionTracking(currentText, textRevision);
-            correctionScannedRevision = Number(textRevision);
-            correctionScannedProjectId = projectId;
-            correctionScannedChapterId = chapterId;
+            // Restore-only 只证明缓存结果可显示，不证明本 revision 的脏段已经
+            // 过模型；只有 pending/full_check 完成真正扫描才更新 scanned。
+            if (requestKind === "pending" || requestKind === "full_check") {
+                correctionScannedRevision = Number(textRevision);
+                correctionScannedProjectId = projectId;
+                correctionScannedChapterId = chapterId;
+            }
+            if (requestKind === "restore"
+                    && scanAfterRestore
+                    && parsed.hasUncheckedSegments === true
+                    && !correctionCheckPending) {
+                // 连续性重建走的 restore 不更新 scanned；Core 报告仍有未检查
+                // 段时补一次 pending，避免脏段一直等不到模型扫描。回调只允许
+                // 在原文档/epoch 内执行，避免切章后误扫新章节。
+                var restoreEpoch = correctionDocumentEpoch;
+                var restoreProject = projectId;
+                var restoreChapter = chapterId;
+                Qt.callLater(function() {
+                    if (correctionDocumentEpoch !== restoreEpoch
+                            || projectId !== restoreProject
+                            || chapterId !== restoreChapter) return;
+                    requestCorrectionPendingNow();
+                });
+            }
             if (isPending) {
                 correctionStatus = suggestions.length > 0
                         ? qsTr("发现 %1 条建议").arg(suggestions.length)
@@ -1215,6 +1256,8 @@ QtObject {
     }
 
     function receiveCorrectionFailure(requestId, textRevision, message) {
+        takeCorrectionRequestKind(requestId);
+        delete correctionRestoreScanRequests[requestId];
         var requestEpoch = takeCorrectionRequestEpoch(requestId);
         if (requestEpoch === undefined || requestEpoch !== correctionDocumentEpoch) return;
         if (requestId !== pendingCorrectionRequestId) return;

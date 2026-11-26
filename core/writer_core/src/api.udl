@@ -2048,6 +2048,7 @@ dictionary CorrectionChapterSnapshotDto {
     u64 text_revision;
     sequence<CorrectionSuggestionDto> suggestions;
     sequence<CorrectionCheckedRangeDto> checked_ranges;
+    boolean has_unchecked_segments;
 };
 
 dictionary CorrectionResourceStatusDto {

@@ -31,6 +31,7 @@ mod paragraph_height_index;
 mod paragraph_layout_store;
 mod qt_cache;
 mod test_support;
+pub(crate) mod texture_image;
 mod types;
 
 // ── re-export：外部公开类型 ──

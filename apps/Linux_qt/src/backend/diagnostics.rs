@@ -401,6 +401,29 @@ fn run_process_resource_monitor() {
                 serde_json::Value::from(thread_count),
             );
         }
+        // Issue #1061 复审：行纹理不再是单个 HashMap 的模糊占用，而是分成
+        // 缓存独占、快照共享和所有 LineImage 所有者的存活字节。
+        let texture = crate::sujian_editor_item::line_snapshot::texture_memory_metrics();
+        fields.insert(
+            "texture_cache_only_bytes".to_string(),
+            serde_json::Value::from(texture.cache_only_bytes),
+        );
+        fields.insert(
+            "texture_shared_bytes".to_string(),
+            serde_json::Value::from(texture.shared_bytes),
+        );
+        fields.insert(
+            "texture_live_bytes".to_string(),
+            serde_json::Value::from(texture.live_bytes),
+        );
+        fields.insert(
+            "texture_lines".to_string(),
+            serde_json::Value::from(texture.lines),
+        );
+        fields.insert(
+            "active_visual_snapshots".to_string(),
+            serde_json::Value::from(texture.active_visual_snapshots),
+        );
 
         // 进程 CPU：两次采样的 tick 差 / 墙钟差。
         // 第一次采样只建立基线，cpu_percent=0 并标 baseline=true。

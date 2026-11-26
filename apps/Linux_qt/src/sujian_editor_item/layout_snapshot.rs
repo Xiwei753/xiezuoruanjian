@@ -9,7 +9,6 @@ use crate::editor::layout::chunked_vec::ChunkedSlotMap;
 use crate::editor::layout::ParagraphHeightIndex;
 use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot, ParagraphId};
 use cpp::cpp;
-use qmetaobject::QImage;
 
 // Issue #724 评论 5751573705 问题1: C++ 侧头文件 + 外部函数声明。
 // 每个 cpp! 块独立编译，此处必须在本文件内 include 头文件和声明 extern。
@@ -100,7 +99,7 @@ pub(crate) struct PreparedLineSnapshot {
     /// Issue #904 复核 9：该段落完整高度（同版 canonical `height_index`）。
     /// 判断段落是否与视口相交时必须用「段首 + 段高」的矩形，而不是段首之间的短竖条。
     pub paragraph_height: f64,
-    pub image: Option<QImage>,
+    pub image: Option<std::sync::Arc<super::line_snapshot::LineImage>>,
     pub clusters: Vec<LineClusterSnapshot>,
     pub document_origin_y: f64,
     pub dpr: f64,
@@ -175,7 +174,7 @@ impl PreparedLineSnapshot {
     /// `prepare_visual_edit_textures` 真的把它插进了 `TextureCache`。
     #[cfg(test)]
     pub(crate) fn with_test_image(mut self, image: qmetaobject::QImage) -> Self {
-        self.image = Some(image);
+        self.image = Some(super::line_snapshot::LineImage::shared(image));
         self
     }
 }

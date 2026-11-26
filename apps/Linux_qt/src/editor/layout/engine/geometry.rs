@@ -294,7 +294,8 @@ pub fn prepare_paragraph_visual_snapshot(
             Some(img)
         } else {
             None
-        };
+        }
+        .map(crate::editor::layout::texture_image::LineImage::shared);
 
         let doc_byte_start = index_map.qchar_to_document_byte(qchar_start);
         let doc_byte_end = index_map.qchar_to_document_byte(qchar_end);
