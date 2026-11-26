@@ -201,6 +201,17 @@ impl WriterCoreApi {
                 );
             }
         }
+        // 同一个 durable 写入事实也要进同步账本：标签/星图存储等写路径只调用了
+        // 这个 history 入口，没有 change_set。删除按"落盘后文件已不存在"判定
+        // （Issue #1065 复审 #4）。
+        let entries: Vec<(std::path::PathBuf, bool)> = paths
+            .iter()
+            .map(|path| {
+                let deleting = !layout_guard.worktree_root.join(path).exists();
+                (path.clone(), deleting)
+            })
+            .collect();
+        self.project_sync_mutations_for_paths(&layout_guard, &entries, message);
     }
 
     /// 把一次已 durable 写事务的变更集投影成待同步 mutation 事实。
@@ -216,7 +227,31 @@ impl WriterCoreApi {
         message: &str,
     ) {
         use crate::storage::workspace_git::WorkspaceHistoryChange;
-        if message == "remote_lifecycle_delete" || change_set.is_empty() {
+        if change_set.is_empty() {
+            return;
+        }
+        let mut paths: Vec<(std::path::PathBuf, bool)> = Vec::new();
+        for change in &change_set.changes {
+            match change {
+                WorkspaceHistoryChange::Upsert(path) => paths.push((path.clone(), false)),
+                WorkspaceHistoryChange::Delete(path) => paths.push((path.clone(), true)),
+                // 子树删除（作品删除）由 target lifecycle 收口，不在这里逐文件展开。
+                WorkspaceHistoryChange::DeleteTree(_) => continue,
+            }
+        }
+        self.project_sync_mutations_for_paths(layout, &paths, message);
+    }
+
+    /// 把 workspace 相对路径 + 删除标记投影成各 target 的待同步 mutation。
+    ///
+    /// 同步自身的提交不投影，避免把刚拉下来的内容又标成本地待上传。
+    fn project_sync_mutations_for_paths(
+        &self,
+        layout: &crate::storage::git_repo_layout::GitRepoLayout,
+        paths: &[(std::path::PathBuf, bool)],
+        message: &str,
+    ) {
+        if message == "remote_lifecycle_delete" || message == "full_sync_commit" {
             return;
         }
         // sync_root → (target, [(相对路径, 是否删除)])
@@ -224,13 +259,8 @@ impl WriterCoreApi {
             std::path::PathBuf,
             (crate::sync::types::SyncTarget, Vec<(String, bool)>),
         > = std::collections::BTreeMap::new();
-        for change in &change_set.changes {
-            let (path, deleting) = match change {
-                WorkspaceHistoryChange::Upsert(path) => (path, false),
-                WorkspaceHistoryChange::Delete(path) => (path, true),
-                // 子树删除（作品删除）由 target lifecycle 收口，不在这里逐文件展开。
-                WorkspaceHistoryChange::DeleteTree(_) => continue,
-            };
+        for (path, deleting) in paths {
+            let deleting = *deleting;
             let Some(rel) = path.to_str() else {
                 continue;
             };
