@@ -1,7 +1,7 @@
 //! 作品级校对结果的同步记录（Issue #1064 评论 #7194523322 第 2、3 条）。
 //!
-//! 记录只保存**派生结果**：segment 指纹 + 相对 segment 起点的建议，不含章节
-//! 正文、不写正文版本/证明/CAS。布局是固定契约：
+//! 记录只保存**派生结果**：segment/上下文的 SHA-256 + 相对 segment 起点的建议，
+//! 不含章节正文、不写正文版本/证明/CAS。布局是固定契约：
 //!
 //! ```text
 //! <projects_root>/<project_id>/correction/results/<chapter_id>/<record_key>.json

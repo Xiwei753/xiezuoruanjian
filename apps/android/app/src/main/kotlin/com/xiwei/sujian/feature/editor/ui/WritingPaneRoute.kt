@@ -762,13 +762,6 @@ private fun CorrectionProgressLines(state: EditorCorrectionState) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (!state.scanInProgress && state.lastScanCompletedAtMillis != null && state.hasPendingScanWork) {
-            Text(
-                text = stringResource(R.string.editor_correction_status_pending),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     } else {
         Text(
             text = stringResource(R.string.editor_correction_status_not_checked),
