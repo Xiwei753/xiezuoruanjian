@@ -942,6 +942,23 @@ impl CorrectionStore {
     /// Publish a chapter/document leave signal without touching model locks or
     /// destroying an ONNX session on the GUI thread. The lifecycle thread
     /// decides whether an idle session is actually past its grace deadline.
+    /// Extend the idle deadline while a model scan is actually using a cached
+    /// session. The manager still protects it via the scanner's strong lease,
+    /// but a long scan must not leave `last_used` stale for the next keystroke.
+    pub(super) fn note_model_activity(&self) {
+        let Ok(slots) = model_cache().lock() else {
+            return;
+        };
+        for slot in slots.values() {
+            let Ok(mut state) = slot.state.lock() else {
+                continue;
+            };
+            if let ModelLoadState::Ready { last_used, .. } = &mut *state {
+                *last_used = Instant::now();
+            }
+        }
+    }
+
     pub fn note_correction_session_left(&self) {
         let mut fields = BTreeMap::new();
         fields.insert(

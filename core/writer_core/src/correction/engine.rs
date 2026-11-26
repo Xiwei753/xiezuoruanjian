@@ -479,6 +479,7 @@ impl CorrectionScanner {
             let end = group.last().map(|job| job.2).unwrap_or(start);
             let window_started = Instant::now();
             let window_result = self.scan_range(text, start, end);
+            self.store.note_model_activity();
             metrics.model_duration_ms = metrics
                 .model_duration_ms
                 .saturating_add(window_started.elapsed().as_millis());
