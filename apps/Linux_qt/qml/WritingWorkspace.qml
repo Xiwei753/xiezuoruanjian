@@ -493,6 +493,14 @@ Rectangle {
     // Issue #1062 评论 7194373427 第 1 项：本次恢复中搬进独立归档区、不再
     // 参与编辑器新会话的保留草稿章节 id。
     property var draftKeptChapters: []
+    // Issue #1062 评论 7195690539 第 1 项：恢复结果是按章契约。
+    // `draftBlockedChapters` 的原目录仍在可写槽位（归档失败/重试冲突），
+    // 打开这些章节会覆写未能隔离的旧事务，必须在载入正文前拒绝；
+    // `draftRetryChapters` 已在独立槽位登记自动重试，可以安全新写。
+    property var draftBlockedChapters: []
+    property var draftRetryChapters: []
+    // 这些按章结论只对本次恢复的作品有效；换作品后不能拿旧章节 id 误拦。
+    property string draftRestoreStateProjectId: ""
 
     Timer {
         id: draftRestorePollTimer
@@ -549,23 +557,45 @@ Rectangle {
     function finishProjectDraftRestore(status) {
         draftRestorePollTimer.stop()
         var ready = root.draftRestoreCallback
+        var restoredProjectId = root.draftRestoreProjectId
         root.draftRestoreCallback = null
         root.draftRestoreProjectId = ""
-        // Issue #1062 评论 7194373427 第 1 项：无法自动恢复的草稿已搬进
-        // 独立归档区；这里只做提示，打开章节仍走正常的新草稿槽位。
+        // Issue #1062 评论 7195690539 第 1 项：恢复结果按章收口。
+        // - kept/archived：旧草稿已搬进独立归档区，本章可以安全新写；
+        // - retry：旧事务在独立槽位等待下次自动重试，新会话写新槽；
+        // - blocked：归档失败/新会话冲突，原目录仍可能被覆写，该章必须阻断。
         var keptChapters = (status && status.keptChapters) ? status.keptChapters : []
+        var archivedChapters = (status && status.archivedChapters) ? status.archivedChapters : []
+        var retryChapters = (status && status.retryChapters) ? status.retryChapters : []
+        var blockedChapters = (status && status.blockedChapters) ? status.blockedChapters : []
         root.draftKeptChapters = keptChapters
+        root.draftRetryChapters = retryChapters
+        root.draftBlockedChapters = blockedChapters
+        root.draftRestoreStateProjectId = restoredProjectId
+        if (keptChapters.length > 0 && root.editorBackendRef)
+            root.editorBackendRef.save_status = qsTr("部分未提交草稿已归档保留；本章编辑将从已保存正文开始")
         if (keptChapters.length > 0) {
-            console.warn("chapter draft kept in quarantine (new session uses a fresh draft slot): "
+            console.warn("chapter drafts archived (kept originals readable, new session uses a fresh slot): "
                          + keptChapters.join(", "))
             console.log("draft.kept", JSON.stringify(keptChapters))
+        }
+        if (retryChapters.length > 0)
+            console.log("draft.retry", JSON.stringify(retryChapters))
+        if (blockedChapters.length > 0) {
+            console.warn("chapter drafts could not be archived; chapters are blocked: "
+                         + blockedChapters.join(", "))
+            if (root.editorBackendRef)
+                root.editorBackendRef.save_status = qsTr("部分章节的未提交草稿未能隔离，已阻止打开这些章节，请查看日志与保留目录")
         }
         if (status) {
             var restored = Number(status.restored || 0)
             var failed = Number(status.failed || 0)
             var kept = Number(status.kept || 0)
             console.info("chapter draft restore finished: restored=" + restored
-                         + ", failed=" + failed + ", kept=" + kept)
+                         + ", failed=" + failed + ", kept=" + kept
+                         + ", archived=" + archivedChapters.length
+                         + ", retry=" + retryChapters.length
+                         + ", blocked=" + blockedChapters.length)
             if (failed > 0) {
                 root.logWriterWarning("chapter_draft_restore_failed",
                     "restored=" + restored + ", failed=" + failed + ", kept=" + kept
@@ -763,6 +793,17 @@ Rectangle {
     function openChapter(pId, vId, cId, cTitle, onOpened) {
         var notify = typeof onOpened === "function" ? onOpened : null
         if (!pId || !vId || !cId) {
+            if (notify) notify(false, null)
+            return false
+        }
+        // Issue #1062 评论 7195690539 第 1 项：归档失败时旧目录仍在可写槽位，
+        // 打开该章会让新会话覆写未能隔离的草稿。按章节身份阻断，其他章节正常。
+        if (root.draftRestoreStateProjectId === pId
+                && root.draftBlockedChapters.indexOf(cId) >= 0) {
+            if (root.editorBackendRef)
+                root.editorBackendRef.save_status = qsTr("该章节有未能隔离的未提交草稿，已阻止打开以免覆盖；请查看日志与保留目录")
+            root.logWriterWarning("chapter_draft_restore_blocked_chapter",
+                                  "chapter=" + cId + ", project=" + pId)
             if (notify) notify(false, null)
             return false
         }

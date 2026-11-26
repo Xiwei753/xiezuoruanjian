@@ -17,8 +17,11 @@
 //   保留草稿归档（恢复失败时不再自动恢复）：
 //     app-meta/chapter-draft-kept/<chapter_id>/<stamp>/
 //
+//   可自动重试事务的独立槽位（归档原件 + 重试标记，下次进入作品搬回活动槽位）：
+//     app-meta/chapter-draft-retry/<chapter_id>/<stamp>.json
+//
 // 本文件做类型、内存 registry 与冻结/恢复/提交决议；磁盘布局、编解码与
-// 状态加载在 `chapter_draft::store`。
+// 状态加载在 `chapter_draft::store`，重试标记在 `chapter_draft::retry`。
 //
 // 关键约束：
 // - 内存 registry 只保留索引 + 正文 + 基线，不保留 projection 历史；
@@ -39,6 +42,7 @@ mod ack_commit;
 mod freeze;
 mod pending;
 mod restore;
+mod retry;
 mod scheduler;
 mod store;
 #[cfg(test)]
@@ -56,6 +60,9 @@ pub(crate) use ack_commit::{
 pub(crate) use freeze::freeze_batch_for;
 pub(crate) use pending::{clear_pending_input, pending_inputs, spool_failed_input};
 pub(crate) use restore::{list_project_drafts, restore_plan, restore_plan_strict, snapshot};
+pub(crate) use retry::{
+    clear_retry, list_retries, materialize_retry, record_retry, retry_chapters, RetryMaterialize,
+};
 pub(crate) use scheduler::{draft_metrics, flush_due, next_persist_deadline};
 
 const DRAFT_SCHEMA_VERSION: u32 = 2;
@@ -700,36 +707,53 @@ pub(crate) fn persist_current(
     Ok(())
 }
 
-/// 草稿被 journal 完全确认后删除（目录 + 旧格式文件 + 内存）。
+/// 草稿被 durable 决议完全确认后删除（terminal tombstone + 目录 + 旧格式文件）。
 ///
-/// Issue #1062 评论 7194373427 第 4 项：先落 terminal tombstone，再做目录
-/// 回收；回收失败只延迟空间释放，下次加载会继续重试，不能把删除错误当成
-/// 结算错误（调用方的 durable 决议此时已经成立）。
-pub(crate) fn remove(projects_root: &Path, project_id: &str, chapter_id: &str) {
+/// Issue #1062 评论 7195690539（附带结算链）：terminal 决议必须**先成功持久化**
+/// 才允许回收目录。tombstone 写失败时返回 Err 并保留目录与 registry，调用方
+/// 必须把它当成“本章仍在活动槽位”处理（归档或按章节阻断），不能静默删除。
+/// 目录回收失败只延迟空间释放：terminal 已 durable，下次加载继续重试 GC。
+pub(crate) fn remove(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> Result<(), String> {
     let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
-        return;
+        return Ok(());
     };
-    if let Ok(mut meta) =
-        store::read_meta_checked(&location.dir, &location.project_id, &location.chapter_id)
-    {
-        meta.terminal = true;
-        meta.facts.clear();
-        if let Err(error) = store::write_meta(&location.dir, &meta) {
-            log::warn!(
-                "write settled chapter draft tombstone failed: project={} chapter={}: {error}",
-                location.project_id,
-                location.chapter_id
-            );
+    match store::read_meta_checked(&location.dir, &location.project_id, &location.chapter_id) {
+        Ok(mut meta) => {
+            meta.terminal = true;
+            meta.facts.clear();
+            meta.text_blob.clear();
+            if let Err(error) = store::write_meta(&location.dir, &meta) {
+                return Err(format!(
+                    "write settled chapter draft tombstone failed: project={} chapter={}: {error}",
+                    location.project_id, location.chapter_id
+                ));
+            }
+        }
+        Err(error) if error.is_empty() => {
+            // 没有 meta：没有可持久化的决议，目录内容由下面统一回收。
+        }
+        Err(error) => {
+            return Err(format!(
+                "read chapter draft meta before settle failed: project={} chapter={}: {error}",
+                location.project_id, location.chapter_id
+            ));
         }
     }
+    lock_registry().remove(&location.key);
     if let Err(error) = store::remove_settled_storage(&location) {
+        // 决议已 durable；目录回收是可重试的独立 GC，不能反过来让调用方
+        // 以为数据仍在活动槽位。
         log::warn!(
             "settled chapter draft gc deferred: project={} chapter={}: {error}",
             location.project_id,
             location.chapter_id
         );
     }
-    lock_registry().remove(&location.key);
+    Ok(())
 }
 
 // ── 保留草稿归档（Issue #1062 评论 7194373427 第 1 项）────────────────────

@@ -790,3 +790,287 @@ mod stale_base_cleanup_tests {
         assert_eq!(status.kept, 0);
     }
 }
+
+mod restore_isolation_tests {
+    //! Issue #1062 评论 7195690539 第 1/2/3 项：恢复结果的按章隔离契约。
+
+    use super::super::draft_jobs::draft_restore_status;
+    use super::super::restore_draft::handle_restore_project;
+    use super::super::worker::ChapterSaveWorkerState;
+    use super::super::{ChapterRestoreCommand, ChapterSaveContext};
+    use crate::backend::chapter_draft;
+    use std::path::PathBuf;
+    use writer_core::api::WriterCoreApi;
+    use writer_core::writing_stats::proof::content_digest_of_text;
+
+    fn workspace() -> (tempfile::TempDir, WriterCoreApi, String, String, String) {
+        let temp = tempfile::tempdir().unwrap();
+        let projects_root = temp.path().join("projects");
+        let api = WriterCoreApi::new(temp.path(), projects_root.clone());
+        let project = api.create_project("作品").unwrap();
+        let volumes = api.list_volumes(&project.id).unwrap();
+        let volume_id = volumes.first().unwrap().id.clone();
+        let chapter = api
+            .create_chapter(&project.id, &volume_id, "第一章")
+            .unwrap();
+        api.save_chapter_content_versioned(
+            &project.id,
+            &volume_id,
+            &chapter.id,
+            "已提交正文",
+            None,
+            None,
+        )
+        .unwrap();
+        (temp, api, project.id, volume_id, chapter.id)
+    }
+
+    fn context(data_root: &std::path::Path, projects_root: &std::path::Path) -> ChapterSaveContext {
+        ChapterSaveContext::new(
+            &data_root.to_string_lossy(),
+            &projects_root.to_string_lossy(),
+            &writer_core::storage::GitRepoLayout {
+                worktree_root: data_root.to_path_buf(),
+                git_dir: data_root.join(".git"),
+            },
+        )
+    }
+
+    fn draft_dir(projects_root: &std::path::Path, project_id: &str, chapter_id: &str) -> PathBuf {
+        projects_root
+            .join(project_id)
+            .join("app-meta/chapter-drafts")
+            .join(chapter_id)
+    }
+
+    fn write_verified_draft(
+        projects_root: &std::path::Path,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        text: &str,
+    ) {
+        // 无逐字事实、只有正文快照：编辑器基线摘要与正文一致，允许发布。
+        // 这正是评论 #7195690539 第 2 项的“facts/pending 均为空”场景。
+        let digest = content_digest_of_text(text);
+        chapter_draft::note_text(
+            projects_root,
+            project_id,
+            chapter_id,
+            volume_id,
+            1,
+            "gen-1",
+            text.to_string(),
+            1,
+            &digest,
+            ("gen-1", 30, "base-sha"),
+            1,
+        );
+        chapter_draft::persist_current(projects_root, project_id, chapter_id, true)
+            .expect("persist");
+    }
+
+    /// 缺失正文 blob 必须作为“损坏草稿”进入恢复队列并归档，不能表现为空草稿。
+    #[test]
+    fn missing_text_blob_is_archived_and_does_not_open_a_fresh_slot() {
+        let (temp, api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        write_verified_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            "未提交正文",
+        );
+        let dir = draft_dir(&projects_root, &project_id, &chapter_id);
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
+        let blob = meta["textBlob"].as_str().unwrap().to_string();
+        std::fs::remove_file(dir.join("texts").join(&blob)).unwrap();
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project_id.clone(),
+            },
+        );
+
+        assert!(!dir.exists(), "损坏草稿必须离开可写槽位");
+        let status = draft_restore_status(&project_id);
+        assert_eq!(status.kept, 1);
+        assert!(status.kept_chapters.contains(&chapter_id));
+        assert!(status.archived_chapters.contains(&chapter_id));
+        assert!(status.blocked_chapters.is_empty());
+    }
+
+    /// 只有损坏 meta.json 的目录同样是未决事务：必须被识别并归档。
+    #[test]
+    fn meta_only_corrupt_draft_is_archived() {
+        let (temp, api, project_id, _volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        let dir = draft_dir(&projects_root, &project_id, &chapter_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("meta.json"), b"{ not-json").unwrap();
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project_id.clone(),
+            },
+        );
+
+        assert!(!dir.exists(), "损坏 meta 目录必须搬出可写槽位");
+        let status = draft_restore_status(&project_id);
+        assert_eq!(status.kept, 1);
+        assert!(status.archived_chapters.contains(&chapter_id));
+    }
+
+    /// meta JSON 合法但身份/版本损坏：同样是未决事务，必须归档。
+    #[test]
+    fn meta_schema_mismatch_is_archived() {
+        let (temp, api, project_id, _volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        let dir = draft_dir(&projects_root, &project_id, &chapter_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let meta = serde_json::json!({
+            "schemaVersion": 99,
+            "projectId": project_id,
+            "chapterId": chapter_id,
+        });
+        std::fs::write(dir.join("meta.json"), meta.to_string()).unwrap();
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project_id.clone(),
+            },
+        );
+
+        assert!(!dir.exists(), "身份/版本损坏的 meta 目录必须搬出可写槽位");
+        let status = draft_restore_status(&project_id);
+        assert!(status.archived_chapters.contains(&chapter_id));
+    }
+
+    /// 归档失败必须按章节阻断，原目录保持不动，QML 据此拒绝打开该章。
+    #[test]
+    fn archive_failure_blocks_only_that_chapter() {
+        let (temp, api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        // 让归档根成为普通文件：create_dir_all / rename 必然失败。
+        let kept_root = projects_root
+            .join(&project_id)
+            .join("app-meta")
+            .join("chapter-draft-kept");
+        std::fs::create_dir_all(kept_root.parent().unwrap()).unwrap();
+        std::fs::write(&kept_root, b"blocked").unwrap();
+        // 无事实、正文不是 live：走“外部变更/未证明保留”分支（永久归档）。
+        chapter_draft::note_text(
+            &projects_root,
+            &project_id,
+            &chapter_id,
+            &volume_id,
+            1,
+            "gen-1",
+            "未证明正文".to_string(),
+            1,
+            &content_digest_of_text("未证明正文"),
+            ("gen-1", 30, "base-sha"),
+            1,
+        );
+        chapter_draft::persist_current(&projects_root, &project_id, &chapter_id, true)
+            .expect("persist unproven draft");
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project_id.clone(),
+            },
+        );
+
+        assert!(
+            draft_dir(&projects_root, &project_id, &chapter_id).exists(),
+            "归档失败时原目录必须保持原样"
+        );
+        let status = draft_restore_status(&project_id);
+        assert!(status.blocked_chapters.contains(&chapter_id));
+        assert!(status.kept_chapters.is_empty());
+        assert!(status.archived_chapters.is_empty());
+    }
+
+    /// 可自动重试事务的独立槽位：归档 + 标记，再搬回活动槽位重试。
+    #[test]
+    fn retry_slot_roundtrip_and_active_conflict() {
+        let (temp, _api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        write_verified_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            "重试正文",
+        );
+        let archived = chapter_draft::quarantine(&projects_root, &project_id, &chapter_id)
+            .expect("quarantine")
+            .expect("archived path");
+        chapter_draft::record_retry(
+            &projects_root,
+            &project_id,
+            &chapter_id,
+            &volume_id,
+            std::path::Path::new(&archived),
+            "unit retry",
+            0,
+        )
+        .expect("record retry");
+        assert_eq!(
+            chapter_draft::retry_chapters(&projects_root, &project_id),
+            vec![chapter_id.clone()]
+        );
+        assert_eq!(
+            chapter_draft::materialize_retry(&projects_root, &project_id, &chapter_id)
+                .expect("materialize"),
+            chapter_draft::RetryMaterialize::Moved
+        );
+        assert!(draft_dir(&projects_root, &project_id, &chapter_id).exists());
+        assert!(chapter_draft::retry_chapters(&projects_root, &project_id).is_empty());
+
+        // 活动槽位已有新会话草稿时，可重试副本绝不覆盖。
+        let archived_again = chapter_draft::quarantine(&projects_root, &project_id, &chapter_id)
+            .expect("quarantine again")
+            .expect("archived again");
+        write_verified_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            "新会话正文",
+        );
+        chapter_draft::record_retry(
+            &projects_root,
+            &project_id,
+            &chapter_id,
+            &volume_id,
+            std::path::Path::new(&archived_again),
+            "unit retry conflict",
+            0,
+        )
+        .expect("record retry again");
+        assert_eq!(
+            chapter_draft::materialize_retry(&projects_root, &project_id, &chapter_id)
+                .expect("materialize conflict"),
+            chapter_draft::RetryMaterialize::ActiveDraftExists
+        );
+        assert_eq!(
+            chapter_draft::retry_chapters(&projects_root, &project_id),
+            vec![chapter_id]
+        );
+    }
+}

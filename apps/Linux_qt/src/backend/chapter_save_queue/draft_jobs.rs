@@ -75,6 +75,13 @@ pub(crate) struct ChapterDraftRestoreStatus {
     /// Issue #1062 评论 7194373427 第 1 项：这些章节本次不自动恢复，编辑器
     /// 新会话会使用全新目录，不再覆盖旧草稿。
     pub kept_chapters: Vec<String>,
+    /// 需要人处理/已外部解决、已永久归档的章节。
+    pub archived_chapters: Vec<String>,
+    /// 已归档且登记了自动重试（下次进入作品时搬回活动槽位重试）的章节。
+    pub retry_chapters: Vec<String>,
+    /// 归档失败、原目录仍在可写槽位的章节。QML 必须在打开这些章节之前
+    /// 拒绝进入编辑器，否则新会话会覆写未能隔离的旧事务。
+    pub blocked_chapters: Vec<String>,
     pub message: String,
 }
 
@@ -111,18 +118,18 @@ pub(crate) fn enqueue_restore_project(command: ChapterRestoreCommand) -> usize {
         Path::new(&command.context.projects_root),
         &command.project_id,
     );
-    // pending-inputs 也是未提交事件：只有 spool、尚无 facts/text 的草稿
-    // （首次事件在投影/正文写出前崩溃）同样必须进入恢复队列。
-    let count = drafts
-        .iter()
-        .filter(|draft| {
-            draft.fact_count > 0
-                || draft.text_present
-                || draft.pending_input_count > 0
-                || draft.pending_input_error.is_some()
-                || draft.draft_error.is_some()
-        })
-        .count();
+    // Issue #1062 评论 7195690539 第 2 项：发现到的每个草稿目录都必须等
+    // 恢复 actor 给出“恢复/归档”决议后才允许编辑器打开，不能因为摘要里
+    // fact/text 都为空（空事务头、缺失 blob 的候选）就放行。pending-inputs
+    // 同样计入。
+    let count = drafts.len()
+        // Issue #1062 评论 7195690539 第 1 项：可自动重试的事务在进入项目时
+        // 必须先搬回活动槽位再重试，同样要等待恢复 actor 完成决议。
+        + super::super::chapter_draft::retry_chapters(
+            Path::new(&command.context.projects_root),
+            &command.project_id,
+        )
+        .len();
     if count > 0 {
         if let Ok(mut states) = draft_restore_state().lock() {
             states.insert(

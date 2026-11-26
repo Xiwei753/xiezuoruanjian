@@ -67,6 +67,17 @@ pub(crate) fn list_project_drafts(projects_root: &Path, project_id: &str) -> Vec
             match store::read_summary_from_dir(projects_root, &path, project_id, chapter_id) {
                 Ok(Some(summary)) => drafts.push(summary),
                 Ok(None) => {
+                    // Issue #1062 评论 7195690539 第 3 项：已写 terminal 决议、
+                    // 只差目录回收的目录不是“损坏草稿”，不能又被当成恢复候选
+                    // 搬进归档区；这里补做一次 GC 后跳过。
+                    if let Some(location) =
+                        store::DraftLocation::new(projects_root, project_id, chapter_id)
+                    {
+                        if store::is_terminal(&location) {
+                            let _ = store::remove_settled_storage(&location);
+                            continue;
+                        }
+                    }
                     if store::draft_dir_has_content(&path) {
                         drafts.push(store::unreadable_summary(
                             &path,

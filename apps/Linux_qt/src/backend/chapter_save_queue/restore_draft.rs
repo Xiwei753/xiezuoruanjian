@@ -13,7 +13,8 @@ use writer_core::api::types::ChapterVersionDto;
 use writer_core::api::WriterCoreApi;
 
 use super::draft_jobs::{draft_restore_state, retry_pending_inputs};
-use super::{ChapterDraftRestoreStatus, ChapterRestoreCommand, ChapterSaveWorkerState};
+use super::kept_draft::{KeptDisposition, RestoreCounters};
+use super::{ChapterRestoreCommand, ChapterSaveWorkerState};
 
 pub(crate) fn version_display(version: &ChapterVersionDto) -> String {
     format!(
@@ -117,7 +118,7 @@ pub(super) fn handle_restore_project(
     command: ChapterRestoreCommand,
 ) {
     let projects_root = PathBuf::from(&command.context.projects_root);
-    let mut messages: Vec<String> = Vec::new();
+    let mut counters = RestoreCounters::default();
     // Issue #1062 评论 7191076411 第 1 项（平台侧）：Core durable journal 是
     // 草稿 ack 的唯一事实源；进入项目时先按 Core 记录对账，即使本地没有
     // 草稿也要把 Core 未确认的提交补写成本地 ack 并重放。
@@ -141,25 +142,74 @@ pub(super) fn handle_restore_project(
                     blocked_chapters.insert(failure.chapter_id.clone());
                 }
             }
-            messages.push(format!("core_draft_ack_reconcile_failed: {error}"));
+            counters
+                .messages
+                .push(format!("core_draft_ack_reconcile_failed: {error}"));
+        }
+    }
+    // Issue #1062 评论 7195690539 第 1 项：可自动重试的事务平时停在不可写归档
+    // 区，进入项目时先搬回活动槽位；活动槽位已有新会话草稿时绝不覆盖，保留
+    // 归档并按章阻断。
+    let mut retry_conflicts: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    {
+        let retries =
+            super::super::chapter_draft::list_retries(&projects_root, &command.project_id);
+        for candidate in retries {
+            let chapter_id = candidate.marker.chapter_id.clone();
+            match super::super::chapter_draft::materialize_retry(
+                &projects_root,
+                &command.project_id,
+                &chapter_id,
+            ) {
+                Ok(super::super::chapter_draft::RetryMaterialize::Moved) => {
+                    counters.note(&chapter_id, "retry slot materialized");
+                }
+                Ok(super::super::chapter_draft::RetryMaterialize::ActiveDraftExists) => {
+                    // 活动槽位已有本轮会处理的草稿：不覆盖重试副本，交给
+                    // 正常分支决议；本轮结束后再收敛过期标记（避免误删本轮
+                    // 刚刚重新登记的重试）。
+                    retry_conflicts.insert(chapter_id.clone());
+                    counters.note(
+                        &chapter_id,
+                        "retry deferred by newer active draft (old copy kept)",
+                    );
+                }
+                Ok(super::super::chapter_draft::RetryMaterialize::ArchivedMissing) => {
+                    counters.note(&chapter_id, "retry archived copy missing (marker cleared)");
+                }
+                Ok(super::super::chapter_draft::RetryMaterialize::NoMarker) => {}
+                Err(error) => {
+                    counters.failed += 1;
+                    counters.note(
+                        &chapter_id,
+                        format!("retry materialize failed kept: {error}"),
+                    );
+                }
+            }
         }
     }
     let drafts =
         super::super::chapter_draft::list_project_drafts(&projects_root, &command.project_id);
-    let mut restored = 0usize;
-    let mut failed = 0usize;
-    let mut kept = 0usize;
-    // Issue #1062 评论 7194373427 第 1 项：已搬进独立归档区的章节 id。
-    let mut kept_chapters: Vec<String> = Vec::new();
     let api = state.api_for(&command.context);
     for draft in drafts {
         let chapter_id = draft.chapter_id.clone();
         if reconcile_failed_all || blocked_chapters.contains(&chapter_id) {
-            failed += 1;
-            kept += 1;
-            messages.push(format!(
-                "{chapter_id}: core_draft_ack_reconcile_failed kept"
-            ));
+            counters.failed += 1;
+            counters.kept += 1;
+            counters.note(
+                &chapter_id,
+                "core_draft_ack_reconcile_failed kept (retryable)",
+            );
+            counters.keep(
+                &projects_root,
+                &command.project_id,
+                &chapter_id,
+                KeptDisposition::Retry {
+                    volume_id: draft.volume_id.clone(),
+                    reason: "core_draft_ack_reconcile_failed".to_string(),
+                    attempts: 0,
+                },
+            );
             continue;
         }
         // 先把 Core 投影构造失败的原始命令重试掉；仍失败就保留草稿，
@@ -173,11 +223,22 @@ pub(super) fn handle_restore_project(
             draft.session_id,
             &draft.generation,
         ) {
-            failed += 1;
-            kept += 1;
-            messages.push(format!(
-                "{chapter_id}: pending_fact_retry_failed kept: {error}"
-            ));
+            counters.failed += 1;
+            counters.kept += 1;
+            counters.note(
+                &chapter_id,
+                format!("pending_fact_retry_failed kept (retryable): {error}"),
+            );
+            counters.keep(
+                &projects_root,
+                &command.project_id,
+                &chapter_id,
+                KeptDisposition::Retry {
+                    volume_id: draft.volume_id.clone(),
+                    reason: format!("pending_fact_retry_failed: {error}"),
+                    attempts: 0,
+                },
+            );
             continue;
         }
         // Issue #1062 复审 P0：重试可能刚刚写出事实文件，不能用重试前的
@@ -189,11 +250,22 @@ pub(super) fn handle_restore_project(
         ) {
             Ok(inputs) => inputs,
             Err(error) => {
-                failed += 1;
-                kept += 1;
-                messages.push(format!(
-                    "{chapter_id}: pending_inputs_unreadable kept: {error}"
-                ));
+                counters.failed += 1;
+                counters.kept += 1;
+                counters.note(
+                    &chapter_id,
+                    format!("pending_inputs_unreadable kept (retryable): {error}"),
+                );
+                counters.keep(
+                    &projects_root,
+                    &command.project_id,
+                    &chapter_id,
+                    KeptDisposition::Retry {
+                        volume_id: draft.volume_id.clone(),
+                        reason: format!("pending_inputs_unreadable: {error}"),
+                        attempts: 0,
+                    },
+                );
                 continue;
             }
         };
@@ -209,54 +281,56 @@ pub(super) fn handle_restore_project(
                 // meta 缺失/不可读但有磁盘内容时，必须作为“未决”报告，
                 // 不能像“项目本来没有草稿”一样静默跳过。
                 if let Some(error) = draft.draft_error.as_deref() {
-                    failed += 1;
-                    kept += 1;
-                    messages.push(format!("{chapter_id}: draft_unreadable kept: {error}"));
-                    quarantine_kept_draft(
+                    counters.failed += 1;
+                    counters.kept += 1;
+                    counters.note(&chapter_id, format!("draft_unreadable kept: {error}"));
+                    counters.keep(
                         &projects_root,
                         &command.project_id,
                         &chapter_id,
-                        true,
-                        &mut kept,
-                        &mut failed,
-                        &mut kept_chapters,
-                        &mut messages,
+                        KeptDisposition::Archive,
                     );
                 }
                 continue;
             }
             Err(error) => {
-                failed += 1;
-                kept += 1;
-                messages.push(format!("{chapter_id}: draft_unreadable kept: {error}"));
-                quarantine_kept_draft(
+                counters.failed += 1;
+                counters.kept += 1;
+                counters.note(&chapter_id, format!("draft_unreadable kept: {error}"));
+                counters.keep(
                     &projects_root,
                     &command.project_id,
                     &chapter_id,
-                    true,
-                    &mut kept,
-                    &mut failed,
-                    &mut kept_chapters,
-                    &mut messages,
+                    KeptDisposition::Archive,
                 );
                 continue;
             }
         };
         if draft_dir_is_empty(pending_after.len(), plan.fact_count, plan.text.is_some()) {
             // 只有 meta 事务头的空壳草稿：无 pending、无事实、无正文。
-            super::super::chapter_draft::remove(&projects_root, &command.project_id, &chapter_id);
+            counters.settle_removed(&projects_root, &command.project_id, &chapter_id);
             continue;
         }
         let opened = match api.open_chapter(&command.project_id, &plan.volume_id, &plan.chapter_id)
         {
             Ok(content) => content,
             Err(error) => {
-                failed += 1;
-                kept += 1;
-                messages.push(format!(
-                    "{}: cannot read committed chapter: {error}",
-                    plan.chapter_id
-                ));
+                counters.failed += 1;
+                counters.kept += 1;
+                counters.note(
+                    &chapter_id,
+                    format!("cannot read committed chapter kept (retryable): {error}"),
+                );
+                counters.keep(
+                    &projects_root,
+                    &command.project_id,
+                    &chapter_id,
+                    KeptDisposition::Retry {
+                        volume_id: plan.volume_id.clone(),
+                        reason: format!("cannot read committed chapter: {error}"),
+                        attempts: 0,
+                    },
+                );
                 continue;
             }
         };
@@ -284,56 +358,48 @@ pub(super) fn handle_restore_project(
                 && plan.text_revision == plan.committed_text_revision
                 && plan.text_sha256 == plan.committed_text_sha256;
             if committed_live || committed_record {
-                super::super::chapter_draft::remove(
-                    &projects_root,
-                    &command.project_id,
-                    &plan.chapter_id,
-                );
+                counters.settle_removed(&projects_root, &command.project_id, &plan.chapter_id);
                 continue;
             }
         }
         // 有任何未确认事实来自别的会话/generation 时，绝不能把混合会话
         // 提交成“已完成”：既不 replay 也不保存，全部原件原样保留。
         if plan.mixed_sessions {
-            kept += 1;
-            messages.push(format!(
-                "{}: external_change_kept (mixed_sessions) draft_base={} disk_version={} {}",
-                plan.chapter_id,
-                version_display(&draft_base),
-                version_display(&opened.version),
-                plan.session_summary()
-            ));
-            quarantine_kept_draft(
+            counters.kept += 1;
+            counters.note(
+                &plan.chapter_id,
+                format!(
+                    "external_change_kept (mixed_sessions) draft_base={} disk_version={} {}",
+                    version_display(&draft_base),
+                    version_display(&opened.version),
+                    plan.session_summary()
+                ),
+            );
+            counters.keep(
                 &projects_root,
                 &command.project_id,
                 &plan.chapter_id,
-                false,
-                &mut kept,
-                &mut failed,
-                &mut kept_chapters,
-                &mut messages,
+                KeptDisposition::Archive,
             );
             continue;
         }
         // 草稿没有记录可校验的 base：沿用既有行为，不 replay、不保存。
         if !base_known {
-            kept += 1;
-            messages.push(format!(
-                "{}: external_change_kept (base_unverifiable) draft_base={} disk_version={} {}",
-                plan.chapter_id,
-                version_display(&draft_base),
-                version_display(&opened.version),
-                plan.session_summary()
-            ));
-            quarantine_kept_draft(
+            counters.kept += 1;
+            counters.note(
+                &plan.chapter_id,
+                format!(
+                    "external_change_kept (base_unverifiable) draft_base={} disk_version={} {}",
+                    version_display(&draft_base),
+                    version_display(&opened.version),
+                    plan.session_summary()
+                ),
+            );
+            counters.keep(
                 &projects_root,
                 &command.project_id,
                 &plan.chapter_id,
-                false,
-                &mut kept,
-                &mut failed,
-                &mut kept_chapters,
-                &mut messages,
+                KeptDisposition::Archive,
             );
             continue;
         }
@@ -345,22 +411,20 @@ pub(super) fn handle_restore_project(
             let origin = match original_base_text(&plan) {
                 Some(origin) => origin,
                 None => {
-                    kept += 1;
-                    messages.push(format!(
-                        "{}: base_unrecoverable kept (draft_base={} disk_version={})",
-                        plan.chapter_id,
-                        version_display(&draft_base),
-                        version_display(&opened.version)
-                    ));
-                    quarantine_kept_draft(
+                    counters.kept += 1;
+                    counters.note(
+                        &plan.chapter_id,
+                        format!(
+                            "base_unrecoverable kept (draft_base={} disk_version={})",
+                            version_display(&draft_base),
+                            version_display(&opened.version)
+                        ),
+                    );
+                    counters.keep(
                         &projects_root,
                         &command.project_id,
                         &plan.chapter_id,
-                        false,
-                        &mut kept,
-                        &mut failed,
-                        &mut kept_chapters,
-                        &mut messages,
+                        KeptDisposition::Archive,
                     );
                     continue;
                 }
@@ -369,11 +433,21 @@ pub(super) fn handle_restore_project(
                 match api.replay_editor_proof_batch(&plan.chapter_id, &origin, &plan.batch_json) {
                     Ok(text) => text,
                     Err(error) => {
-                        kept += 1;
-                        messages.push(format!(
-                            "{}: original_base_replay_failed kept: {error}",
-                            plan.chapter_id
-                        ));
+                        counters.kept += 1;
+                        counters.note(
+                            &plan.chapter_id,
+                            format!("original_base_replay_failed kept (retryable): {error}"),
+                        );
+                        counters.keep(
+                            &projects_root,
+                            &command.project_id,
+                            &plan.chapter_id,
+                            KeptDisposition::Retry {
+                                volume_id: plan.volume_id.clone(),
+                                reason: format!("original_base_replay_failed: {error}"),
+                                attempts: 0,
+                            },
+                        );
                         continue;
                     }
                 };
@@ -407,24 +481,22 @@ pub(super) fn handle_restore_project(
                     ),
                 ),
             }
-            kept += 1;
-            messages.push(format!(
-                "{}: external_change_kept (external_change) draft_base={} disk_version={} incoming_len={} {}",
-                plan.chapter_id,
-                version_display(&draft_base),
-                version_display(&opened.version),
-                incoming.len(),
-                plan.session_summary()
-            ));
-            quarantine_kept_draft(
+            counters.kept += 1;
+            counters.note(
+                &plan.chapter_id,
+                format!(
+                    "external_change_kept (external_change) draft_base={} disk_version={} incoming_len={} {}",
+                    version_display(&draft_base),
+                    version_display(&opened.version),
+                    incoming.len(),
+                    plan.session_summary()
+                ),
+            );
+            counters.keep(
                 &projects_root,
                 &command.project_id,
                 &plan.chapter_id,
-                false,
-                &mut kept,
-                &mut failed,
-                &mut kept_chapters,
-                &mut messages,
+                KeptDisposition::Archive,
             );
             continue;
         }
@@ -433,22 +505,14 @@ pub(super) fn handle_restore_project(
         // 的 revision。这属于正常状态，不能一律判成 replay_text_mismatch。
         let content = if plan.fact_count == 0 {
             let Some(text) = plan.text.clone() else {
-                super::super::chapter_draft::remove(
-                    &projects_root,
-                    &command.project_id,
-                    &plan.chapter_id,
-                );
+                counters.settle_removed(&projects_root, &command.project_id, &plan.chapter_id);
                 continue;
             };
             // Issue #1062 评论 7193130307 第 1 项：没有逐字事实时不能再用
             // “编辑器 revision > 章节 revision”判断；先看草稿正文是否已经
             // 就是当前 Core 版本（原始 SHA-256 协议），是则幂等清理。
             if writer_core::chapter::content_sha256(&text) == opened.version.content_sha256 {
-                super::super::chapter_draft::remove(
-                    &projects_root,
-                    &command.project_id,
-                    &plan.chapter_id,
-                );
+                counters.settle_removed(&projects_root, &command.project_id, &plan.chapter_id);
                 continue;
             }
             // 回执已确认收口过这份正文（meta 记录了编辑器 revision+摘要）：
@@ -457,107 +521,108 @@ pub(super) fn handle_restore_project(
                 && plan.text_revision == plan.committed_text_revision
                 && plan.text_sha256 == plan.committed_text_sha256;
             if committed_snapshot {
-                super::super::chapter_draft::remove(
-                    &projects_root,
-                    &command.project_id,
-                    &plan.chapter_id,
-                );
+                counters.settle_removed(&projects_root, &command.project_id, &plan.chapter_id);
                 continue;
             }
             // 不是 live 正文：只有仍是本次文档加载基线（同一编辑器会话、
             // revision 未变、摘要一致）才说明“没有新输入”；即使如此也与
             // live 不一致，属于外部更改，保留草稿等待人工/后续同步处理。
             if unchanged_baseline(&plan) {
-                failed += 1;
-                kept += 1;
-                messages.push(format!(
-                    "{}: external_change_without_proof kept (textRevision={} editorBase={})",
-                    plan.chapter_id, plan.text_revision, plan.editor_base_revision
-                ));
-                quarantine_kept_draft(
+                counters.failed += 1;
+                counters.kept += 1;
+                counters.note(
+                    &plan.chapter_id,
+                    format!(
+                        "external_change_without_proof kept (textRevision={} editorBase={})",
+                        plan.text_revision, plan.editor_base_revision
+                    ),
+                );
+                counters.keep(
                     &projects_root,
                     &command.project_id,
                     &plan.chapter_id,
-                    true,
-                    &mut kept,
-                    &mut failed,
-                    &mut kept_chapters,
-                    &mut messages,
+                    KeptDisposition::Archive,
                 );
                 continue;
             }
-            failed += 1;
-            kept += 1;
-            messages.push(format!(
-                "{}: draft_text_without_proof kept (textRevision={} editorBase={} textSha={})",
-                plan.chapter_id, plan.text_revision, plan.editor_base_revision, plan.text_sha256
-            ));
-            quarantine_kept_draft(
+            counters.failed += 1;
+            counters.kept += 1;
+            counters.note(
+                &plan.chapter_id,
+                format!(
+                    "draft_text_without_proof kept (textRevision={} editorBase={} textSha={})",
+                    plan.text_revision, plan.editor_base_revision, plan.text_sha256
+                ),
+            );
+            counters.keep(
                 &projects_root,
                 &command.project_id,
                 &plan.chapter_id,
-                true,
-                &mut kept,
-                &mut failed,
-                &mut kept_chapters,
-                &mut messages,
+                KeptDisposition::Archive,
             );
             continue;
         } else {
             if plan.text_revision > plan.event_end_revision {
                 // 正文比完整事件链还新：说明有编辑事件没落盘，保留草稿等
                 // 下一次重试，不能用“缺少事实”的正文覆盖。
-                failed += 1;
-                kept += 1;
-                messages.push(format!(
-                    "{}: text_ahead_of_events kept (textRevision={} eventEnd={})",
-                    plan.chapter_id, plan.text_revision, plan.event_end_revision
-                ));
+                counters.failed += 1;
+                counters.kept += 1;
+                counters.note(
+                    &plan.chapter_id,
+                    format!(
+                        "text_ahead_of_events kept (retryable, textRevision={} eventEnd={})",
+                        plan.text_revision, plan.event_end_revision
+                    ),
+                );
+                counters.keep(
+                    &projects_root,
+                    &command.project_id,
+                    &plan.chapter_id,
+                    KeptDisposition::Retry {
+                        volume_id: plan.volume_id.clone(),
+                        reason: "text_ahead_of_events".to_string(),
+                        attempts: 0,
+                    },
+                );
                 continue;
             }
             if let Some(draft_text) = plan.text.as_ref() {
                 if plan.text_revision < plan.event_end_revision {
-                    // 正文落后于事件链：先核对 text.txt 确实等于事件链在
+                    // 正文落后于事件链：先核对正文确实等于事件链在
                     // text_revision 的中间态，再继续 replay 后续事件。
                     let prefix = match batch_json_through_revision(&plan, plan.text_revision) {
                         Ok(json) if !json.is_empty() => json,
                         Ok(_) => {
-                            failed += 1;
-                            kept += 1;
-                            messages.push(format!(
-                                "{}: draft_text_precedes_events kept (textRevision={} firstEvent={})",
-                                plan.chapter_id,
-                                plan.text_revision,
-                                plan.facts.first().map_or(0, |fact| fact.revision)
-                            ));
-                            quarantine_kept_draft(
+                            counters.failed += 1;
+                            counters.kept += 1;
+                            counters.note(
+                                &plan.chapter_id,
+                                format!(
+                                    "draft_text_precedes_events kept (textRevision={} firstEvent={})",
+                                    plan.text_revision,
+                                    plan.facts.first().map_or(0, |fact| fact.revision)
+                                ),
+                            );
+                            counters.keep(
                                 &projects_root,
                                 &command.project_id,
                                 &plan.chapter_id,
-                                true,
-                                &mut kept,
-                                &mut failed,
-                                &mut kept_chapters,
-                                &mut messages,
+                                KeptDisposition::Archive,
                             );
                             continue;
                         }
                         Err(error) => {
-                            failed += 1;
-                            kept += 1;
-                            messages.push(format!(
-                                "{}: draft_prefix_encode_failed kept: {error}",
-                                plan.chapter_id
-                            ));
-                            quarantine_kept_draft(
+                            counters.failed += 1;
+                            counters.kept += 1;
+                            counters.note(
+                                &plan.chapter_id,
+                                format!("draft_prefix_encode_failed kept: {error}"),
+                            );
+                            counters.keep(
                                 &projects_root,
                                 &command.project_id,
                                 &plan.chapter_id,
-                                true,
-                                &mut kept,
-                                &mut failed,
-                                &mut kept_chapters,
-                                &mut messages,
+                                KeptDisposition::Archive,
                             );
                             continue;
                         }
@@ -566,31 +631,40 @@ pub(super) fn handle_restore_project(
                     {
                         Ok(mid) if mid == *draft_text => {}
                         Ok(_) => {
-                            failed += 1;
-                            kept += 1;
-                            messages.push(format!(
-                                "{}: draft_text_mismatch_at_revision kept (textRevision={})",
-                                plan.chapter_id, plan.text_revision
-                            ));
-                            quarantine_kept_draft(
+                            counters.failed += 1;
+                            counters.kept += 1;
+                            counters.note(
+                                &plan.chapter_id,
+                                format!(
+                                    "draft_text_mismatch_at_revision kept (textRevision={})",
+                                    plan.text_revision
+                                ),
+                            );
+                            counters.keep(
                                 &projects_root,
                                 &command.project_id,
                                 &plan.chapter_id,
-                                true,
-                                &mut kept,
-                                &mut failed,
-                                &mut kept_chapters,
-                                &mut messages,
+                                KeptDisposition::Archive,
                             );
                             continue;
                         }
                         Err(error) => {
-                            failed += 1;
-                            kept += 1;
-                            messages.push(format!(
-                                "{}: draft_prefix_replay_failed kept: {error}",
-                                plan.chapter_id
-                            ));
+                            counters.failed += 1;
+                            counters.kept += 1;
+                            counters.note(
+                                &plan.chapter_id,
+                                format!("draft_prefix_replay_failed kept (retryable): {error}"),
+                            );
+                            counters.keep(
+                                &projects_root,
+                                &command.project_id,
+                                &plan.chapter_id,
+                                KeptDisposition::Retry {
+                                    volume_id: plan.volume_id.clone(),
+                                    reason: format!("draft_prefix_replay_failed: {error}"),
+                                    attempts: 0,
+                                },
+                            );
                             continue;
                         }
                     }
@@ -602,23 +676,21 @@ pub(super) fn handle_restore_project(
                     if plan.text_revision == plan.event_end_revision {
                         if let Some(draft_text) = plan.text.as_ref() {
                             if text != *draft_text {
-                                failed += 1;
-                                kept += 1;
-                                messages.push(format!(
-                                    "{}: replay_text_mismatch failed kept (replayed_len={} draft_len={})",
-                                    plan.chapter_id,
-                                    text.len(),
-                                    draft_text.len()
-                                ));
-                                quarantine_kept_draft(
+                                counters.failed += 1;
+                                counters.kept += 1;
+                                counters.note(
+                                    &plan.chapter_id,
+                                    format!(
+                                        "replay_text_mismatch failed kept (replayed_len={} draft_len={})",
+                                        text.len(),
+                                        draft_text.len()
+                                    ),
+                                );
+                                counters.keep(
                                     &projects_root,
                                     &command.project_id,
                                     &plan.chapter_id,
-                                    true,
-                                    &mut kept,
-                                    &mut failed,
-                                    &mut kept_chapters,
-                                    &mut messages,
+                                    KeptDisposition::Archive,
                                 );
                                 continue;
                             }
@@ -627,9 +699,22 @@ pub(super) fn handle_restore_project(
                     text
                 }
                 Err(error) => {
-                    failed += 1;
-                    kept += 1;
-                    messages.push(format!("{}: replay_failed kept: {error}", plan.chapter_id));
+                    counters.failed += 1;
+                    counters.kept += 1;
+                    counters.note(
+                        &plan.chapter_id,
+                        format!("replay_failed kept (retryable): {error}"),
+                    );
+                    counters.keep(
+                        &projects_root,
+                        &command.project_id,
+                        &plan.chapter_id,
+                        KeptDisposition::Retry {
+                            volume_id: plan.volume_id.clone(),
+                            reason: format!("replay_failed: {error}"),
+                            attempts: 0,
+                        },
+                    );
                     continue;
                 }
             }
@@ -650,74 +735,56 @@ pub(super) fn handle_restore_project(
         );
         match result {
             Ok(_receipt) => {
-                super::super::chapter_draft::remove(
+                counters.settle_removed(&projects_root, &command.project_id, &plan.chapter_id);
+                counters.restored += 1;
+            }
+            Err(error) => {
+                counters.failed += 1;
+                counters.kept += 1;
+                counters.note(
+                    &plan.chapter_id,
+                    format!("save_draft_failed kept (retryable): {error}"),
+                );
+                counters.keep(
                     &projects_root,
                     &command.project_id,
                     &plan.chapter_id,
+                    KeptDisposition::Retry {
+                        volume_id: plan.volume_id.clone(),
+                        reason: format!("save_draft_failed: {error}"),
+                        attempts: 0,
+                    },
                 );
-                restored += 1;
-            }
-            Err(error) => {
-                failed += 1;
-                kept += 1;
-                messages.push(format!(
-                    "{}: save_draft_failed kept: {error}",
-                    plan.chapter_id
-                ));
             }
         }
         continue;
     }
-    if let Ok(mut states) = draft_restore_state().lock() {
-        states.insert(
-            command.project_id,
-            ChapterDraftRestoreStatus {
-                pending: false,
-                restored,
-                failed,
-                kept,
-                kept_chapters,
-                message: messages.join("; "),
-            },
-        );
-    }
-}
-
-/// 把“保留但不会再自动恢复”的草稿搬进独立归档区。
-///
-/// Issue #1062 评论 7194373427 第 1 项：kept 草稿如果继续留在
-/// `chapter-drafts/<chapter_id>/`，编辑器随后打开同一章的新会话会复用同一
-/// 槽位，覆盖旧正文/状态。归档成功后章节 id 记入 `kept_chapters`，供 QML
-/// 提示用户草稿已隔离保留。
-#[allow(clippy::too_many_arguments)]
-fn quarantine_kept_draft(
-    projects_root: &Path,
-    project_id: &str,
-    chapter_id: &str,
-    already_failed: bool,
-    kept: &mut usize,
-    failed: &mut usize,
-    kept_chapters: &mut Vec<String>,
-    messages: &mut Vec<String>,
-) {
-    match super::super::chapter_draft::quarantine(projects_root, project_id, chapter_id) {
-        Ok(Some(path)) => {
-            kept_chapters.push(chapter_id.to_string());
-            log::info!(
-                "kept chapter draft archived: project={project_id} chapter={chapter_id} path={path}"
-            );
-        }
-        // 没有可归档内容：按普通 kept 记录即可，不创建归档目录。
-        Ok(None) => {}
-        Err(error) => {
-            // 归档失败时原目录仍在可写槽位，新会话可能覆盖它，不能当成
-            // “已保留”：把该章的 kept 退回并记 failed，错误原样上报。
-            *kept = kept.saturating_sub(1);
-            if !already_failed {
-                *failed += 1;
+    // 活动槽位已处理完的章节，旧重试标记要么已被本轮重新登记（保留），
+    // 要么已经过期（清理），绝不能让下一次入口把过期副本搬回覆盖新正文。
+    if !retry_conflicts.is_empty() {
+        let registered: std::collections::BTreeSet<String> =
+            super::super::chapter_draft::list_retries(&projects_root, &command.project_id)
+                .into_iter()
+                .map(|candidate| candidate.marker.chapter_id)
+                .collect();
+        for chapter_id in retry_conflicts {
+            if registered.contains(&chapter_id) {
+                continue;
             }
-            messages.push(format!("{chapter_id}: quarantine failed: {error}"));
+            if let Err(error) = super::super::chapter_draft::clear_retry(
+                &projects_root,
+                &command.project_id,
+                &chapter_id,
+            ) {
+                counters.note(
+                    &chapter_id,
+                    format!("clear stale retry marker failed: {error}"),
+                );
+            }
         }
+    }
+    if let Ok(mut states) = draft_restore_state().lock() {
+        states.insert(command.project_id, counters.status());
     }
 }
 

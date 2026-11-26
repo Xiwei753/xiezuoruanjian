@@ -669,10 +669,36 @@ pub(super) fn read_summary_from_dir(
     }
     let file_count = list_fact_files(dir).map_or(0, |files| files.len());
     let fact_count = meta.index().len().max(file_count);
-    let text_present = if meta.text_blob.is_empty() {
-        dir.join(TEXT_FILE).is_file()
+    // Issue #1062 评论 7195690539 第 2 项：meta 明确引用的 blob 丢失是未决
+    // 损坏，不是“没有正文”。这里必须返回 Err 让调用方生成带 `draft_error` 的
+    // 恢复候选并等待归档，不能让摘要看起来像空草稿、让新会话抢先打开。
+    // 旧格式 `text.txt` 同理：meta 记录过正文但文件缺失（且不是已确认快照
+    // 的 tombstone）也必须作为损坏候选。
+    let text_present = if !meta.text_blob.is_empty() {
+        if !blob_path(dir, &meta.text_blob).is_file() {
+            return Err(format!(
+                "chapter draft text blob missing (kept): project={project_id} chapter={chapter_id} blob={} path={}",
+                meta.text_blob,
+                dir.display()
+            ));
+        }
+        true
+    } else if dir.join(TEXT_FILE).is_file() {
+        true
+    } else if meta.text_revision > 0 || !meta.text_sha256.is_empty() {
+        let committed_snapshot = !meta.committed_text_sha256.is_empty()
+            && meta.text_revision == meta.committed_text_revision
+            && meta.text_sha256 == meta.committed_text_sha256;
+        if !committed_snapshot {
+            return Err(format!(
+                "chapter draft text missing (kept): project={project_id} chapter={chapter_id} text_revision={} path={}",
+                meta.text_revision,
+                dir.display()
+            ));
+        }
+        true
     } else {
-        blob_path(dir, &meta.text_blob).is_file()
+        false
     };
     // 只有 pending-input 的草稿也要被发现；spool 读坏时仍按“有待处理”计入，
     // 并把错误留给恢复 actor 显式报告（不能当成空目录）。
@@ -705,8 +731,13 @@ pub(super) fn read_summary_from_dir(
 }
 
 /// 草稿目录里是否还有需要恢复的磁盘内容（meta 缺失时也据此发现草稿）。
+///
+/// Issue #1062 评论 7195690539 第 3 项：`meta.json` 本身就是事务内容。只有
+/// meta 存在、JSON 或字段损坏的目录必须先被识别成恢复候选，否则
+/// `quarantine` 会误判“目录没有内容”而把损坏事务留在新会话的可写槽位。
 pub(super) fn draft_dir_has_content(dir: &Path) -> bool {
-    dir.join(TEXT_FILE).is_file()
+    dir.join(META_FILE).is_file()
+        || dir.join(TEXT_FILE).is_file()
         || dir.join(TEXTS_DIR).is_dir()
         || dir.join(FACTS_DIR).is_dir()
         || dir.join(super::PENDING_INPUTS_DIR).is_dir()

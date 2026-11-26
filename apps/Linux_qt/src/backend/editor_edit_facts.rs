@@ -305,16 +305,20 @@ impl AppBackend {
         let status = crate::backend::chapter_save_queue::draft_restore_status(project_id);
         // Issue #1062 评论 7194373427 第 1 项：已归档（不可写）的保留草稿数量
         // 以磁盘为准；取不到 projects_root 时退回本次恢复记录的章节数。
-        let kept_draft_count = self
+        // Issue #1062 评论 7195690539 第 1 项：恢复结果是按章契约——归档成功
+        // 的章节可以安全新写；`blockedChapters` 是归档失败、必须拒绝新写的章。
+        let (kept_draft_count, retry_draft_count) = self
             .annotation_task_context()
             .map(|(_, projects_root, _)| {
-                crate::backend::chapter_draft::kept_drafts(
-                    std::path::Path::new(&projects_root),
-                    project_id,
+                let root = std::path::Path::new(&projects_root);
+                (
+                    crate::backend::chapter_draft::kept_drafts(root, project_id).len(),
+                    crate::backend::chapter_draft::retry_chapters(root, project_id).len(),
                 )
-                .len()
             })
-            .unwrap_or(status.kept_chapters.len());
+            .unwrap_or((status.kept_chapters.len(), status.retry_chapters.len()));
+        // 阻断章节只来自本次恢复决议（磁盘上不存在“阻断”状态）。
+        let blocked_draft_count = status.blocked_chapters.len();
         qjson_object_from_json(
             &serde_json::json!({
                 "pending": status.pending,
@@ -323,6 +327,11 @@ impl AppBackend {
                 "kept": status.kept,
                 "keptChapters": status.kept_chapters,
                 "keptDraftCount": kept_draft_count,
+                "archivedChapters": status.archived_chapters,
+                "retryChapters": status.retry_chapters,
+                "retryDraftCount": retry_draft_count,
+                "blockedChapters": status.blocked_chapters,
+                "blockedDraftCount": blocked_draft_count,
                 "message": status.message,
             })
             .to_string(),
