@@ -112,6 +112,7 @@ pub(crate) fn enqueue_restore_project(command: ChapterRestoreCommand) -> usize {
                 || draft.text_present
                 || draft.pending_input_count > 0
                 || draft.pending_input_error.is_some()
+                || draft.draft_error.is_some()
         })
         .count();
     if count == 0 {
@@ -462,7 +463,16 @@ pub(super) fn handle_restore_project(
             &chapter_id,
         ) {
             Ok(Some(plan)) => plan,
-            Ok(None) => continue,
+            Ok(None) => {
+                // meta 缺失/不可读但有磁盘内容时，必须作为“未决”报告，
+                // 不能像“项目本来没有草稿”一样静默跳过。
+                if let Some(error) = draft.draft_error.as_deref() {
+                    failed += 1;
+                    kept += 1;
+                    messages.push(format!("{chapter_id}: draft_unreadable kept: {error}"));
+                }
+                continue;
+            }
             Err(error) => {
                 failed += 1;
                 kept += 1;

@@ -338,6 +338,29 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                 } else {
                     receipt.pending_projections.clone()
                 };
+                // Issue #1062 复审 P0：Core journal 已确认这一批，但本地 ack
+                // 可能失败。先持久化 pending-ack（transaction + 已确认
+                // event IDs + 新版本），下次 freeze/恢复前幂等补做，避免旧
+                // 事件以旧 base 再次进入批次而永久 PROOF_BATCH_MISMATCH。
+                let pending_ack = crate::backend::chapter_draft::PendingAck {
+                    transaction_id: receipt.transaction_id.clone(),
+                    event_ids: acknowledged.clone(),
+                    base_generation: receipt.version.object_generation.clone(),
+                    base_revision: receipt.version.revision,
+                    base_sha256: receipt.version.content_sha256.clone(),
+                };
+                if let Err(error) = crate::backend::chapter_draft::record_pending_ack(
+                    &projects_root,
+                    &request.identity.project_id,
+                    &request.identity.chapter_id,
+                    &pending_ack,
+                ) {
+                    crate::backend::app_backend::debug_error_static(
+                        "chapter_draft",
+                        "record_pending_ack_failed",
+                        &error,
+                    );
+                }
                 draft_removed = match crate::backend::chapter_draft::mark_committed(
                     &projects_root,
                     &request.identity.project_id,
@@ -347,10 +370,18 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                     receipt.version.revision,
                     &receipt.version.content_sha256,
                 ) {
-                    Ok(removed) => removed,
+                    Ok(removed) => {
+                        crate::backend::chapter_draft::complete_pending_ack(
+                            &projects_root,
+                            &request.identity.project_id,
+                            &request.identity.chapter_id,
+                            &receipt.transaction_id,
+                        );
+                        removed
+                    }
                     Err(error) => {
-                        // ack 决议没有落盘：保留待 GC 事实与目录，等下一次
-                        // 保存/恢复按 Core journal 的确认事件重试。
+                        // ack 决议没有落盘：pending-ack 文件保留，下一次
+                        // freeze/恢复按 Core journal 的确认事件补做。
                         crate::backend::app_backend::debug_error_static(
                             "chapter_draft",
                             "mark_committed_deferred",

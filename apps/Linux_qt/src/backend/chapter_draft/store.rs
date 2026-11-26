@@ -542,8 +542,12 @@ pub(super) fn read_summary_from_dir(
     dir: &Path,
     project_id: &str,
     chapter_id: &str,
-) -> Option<super::ChapterDraft> {
-    let meta = read_meta(dir, project_id, chapter_id)?;
+) -> Result<Option<super::ChapterDraft>, String> {
+    let meta = match read_meta_checked(dir, project_id, chapter_id) {
+        Ok(meta) => meta,
+        Err(error) if error.is_empty() => return Ok(None),
+        Err(error) => return Err(error),
+    };
     let file_count = list_fact_files(dir).map_or(0, |files| files.len());
     let fact_count = meta.index().len().max(file_count);
     // 只有 pending-input 的草稿也要被发现；spool 读坏时仍按“有待处理”计入，
@@ -557,7 +561,7 @@ pub(super) fn read_summary_from_dir(
                 Some(error),
             ),
         };
-    Some(super::ChapterDraft {
+    Ok(Some(super::ChapterDraft {
         volume_id: meta.volume_id,
         chapter_id: chapter_id.to_string(),
         base_generation: meta.base_generation,
@@ -569,10 +573,53 @@ pub(super) fn read_summary_from_dir(
         fact_count,
         pending_input_count,
         pending_input_error,
+        draft_error: None,
         session_id: meta.session_id,
         generation: meta.generation,
         updated_at_ms: meta.updated_at_ms,
-    })
+    }))
+}
+
+/// 草稿目录里是否还有需要恢复的磁盘内容（meta 缺失时也据此发现草稿）。
+pub(super) fn draft_dir_has_content(dir: &Path) -> bool {
+    dir.join(TEXT_FILE).is_file()
+        || dir.join(FACTS_DIR).is_dir()
+        || dir.join(super::PENDING_INPUTS_DIR).is_dir()
+        || dir.join(super::ack::ACK_DIR).is_dir()
+}
+
+/// 为“meta 不可读/缺失但有磁盘内容”的目录合成恢复候选，保留 path 与错误。
+pub(super) fn unreadable_summary(
+    dir: &Path,
+    project_id: &str,
+    chapter_id: &str,
+    error: String,
+) -> super::ChapterDraft {
+    let fact_count = list_fact_files(dir).map_or(0, |files| files.len());
+    super::ChapterDraft {
+        volume_id: String::new(),
+        chapter_id: chapter_id.to_string(),
+        base_generation: String::new(),
+        base_revision: 0,
+        base_sha256: String::new(),
+        text_present: dir.join(TEXT_FILE).is_file(),
+        text_revision: 0,
+        text_sha256: String::new(),
+        fact_count,
+        pending_input_count: super::pending::pending_input_file_count(dir),
+        pending_input_error: None,
+        draft_error: Some(if error.is_empty() {
+            format!(
+                "chapter draft meta missing (kept): project={project_id} chapter={chapter_id} path={}",
+                dir.display()
+            )
+        } else {
+            format!("{error} (path={})", dir.display())
+        }),
+        session_id: 0,
+        generation: String::new(),
+        updated_at_ms: 0,
+    }
 }
 
 // ── 旧格式 <chapter_id>.json ──────────────────────────────────────────────

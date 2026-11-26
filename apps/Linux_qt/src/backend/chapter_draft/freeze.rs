@@ -18,6 +18,9 @@ pub(crate) fn freeze_batch_for(
     let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
         return Err(format!("invalid draft identity: {project_id}/{chapter_id}"));
     };
+    // 先把 Core 已确认、草稿侧尚未完成的 ack 幂等补做掉；否则旧事件会以
+    // 旧 base 的 before digest 再次进入批次，永久 PROOF_BATCH_MISMATCH。
+    super::replay_pending_acks(projects_root, project_id, chapter_id)?;
     match ensure_state_result(&location) {
         Ok(true) => {}
         Ok(false) => {

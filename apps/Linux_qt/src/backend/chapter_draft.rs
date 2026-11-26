@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 
 use store::DraftLocation;
 
+mod ack;
 mod freeze;
 mod pending;
 mod restore;
@@ -38,6 +39,9 @@ mod store;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use ack::{
+    complete_pending_ack, pending_ack_count, record_pending_ack, replay_pending_acks, PendingAck,
+};
 pub(crate) use freeze::freeze_batch_for;
 pub(crate) use pending::{clear_pending_input, pending_inputs, spool_failed_input};
 pub(crate) use restore::{list_project_drafts, restore_plan, restore_plan_strict, snapshot};
@@ -103,6 +107,9 @@ pub(crate) struct ChapterDraft {
     pub pending_input_count: usize,
     /// pending-inputs 读取失败时的诊断；有错误时仍视为“有待处理”，不能当空。
     pub pending_input_error: Option<String>,
+    /// meta/事实索引读取失败（或 meta 缺失但有磁盘内容）的诊断；恢复必须
+    /// 保留目录并向用户报告，不能当项目没有草稿。
+    pub draft_error: Option<String>,
     pub session_id: u64,
     pub generation: String,
     pub updated_at_ms: i64,
@@ -283,6 +290,7 @@ impl DraftState {
             fact_count: self.facts.len(),
             pending_input_count: self.failed_inputs.len(),
             pending_input_error: None,
+            draft_error: None,
             session_id: self.session_id,
             generation: self.generation.clone(),
             updated_at_ms: self.updated_at_ms,

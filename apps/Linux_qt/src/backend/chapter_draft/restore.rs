@@ -64,10 +64,21 @@ pub(crate) fn list_project_drafts(projects_root: &Path, project_id: &str) -> Vec
             {
                 continue;
             }
-            if let Some(summary) =
-                store::read_summary_from_dir(projects_root, &path, project_id, chapter_id)
-            {
-                drafts.push(summary);
+            match store::read_summary_from_dir(projects_root, &path, project_id, chapter_id) {
+                Ok(Some(summary)) => drafts.push(summary),
+                Ok(None) => {
+                    if store::draft_dir_has_content(&path) {
+                        drafts.push(store::unreadable_summary(
+                            &path,
+                            project_id,
+                            chapter_id,
+                            String::new(),
+                        ));
+                    }
+                }
+                Err(error) => drafts.push(store::unreadable_summary(
+                    &path, project_id, chapter_id, error,
+                )),
             }
             continue;
         }
@@ -104,6 +115,8 @@ pub(crate) fn restore_plan_strict(
     let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
         return Ok(None);
     };
+    // 恢复前先补做 pending-ack，保证草稿 base 与 Core journal 一致。
+    super::replay_pending_acks(projects_root, project_id, chapter_id)?;
     let state = match store::read_new_state(&location, false)? {
         Some(state) => state,
         None => match store::migrate_legacy(&location) {

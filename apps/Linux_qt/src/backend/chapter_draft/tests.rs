@@ -668,3 +668,142 @@ fn ack_cleanup_defers_when_fact_index_is_incomplete() {
         "ack decision must not be written from an incomplete index"
     );
 }
+
+#[test]
+fn pending_ack_replay_advances_base_and_removes_confirmed_prefix() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("e1");
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e2", 2, 7)).expect("e2");
+    persist_current(root, "p1", "c1", true).expect("persist draft");
+    record_pending_ack(
+        root,
+        "p1",
+        "c1",
+        &PendingAck {
+            transaction_id: "tx-1".to_string(),
+            event_ids: vec!["e1".to_string()],
+            base_generation: "g1".to_string(),
+            base_revision: 1,
+            base_sha256: "sha1".to_string(),
+        },
+    )
+    .expect("record ack");
+    forget_for_test(root, "p1", "c1");
+
+    assert_eq!(replay_pending_acks(root, "p1", "c1").expect("replay"), 1);
+    assert_eq!(pending_ack_count(root, "p1", "c1"), 0);
+    let location = draft_location(root);
+    assert!(!fact_file_path(&location.dir, 1, "e1").exists());
+    let plan = restore_plan_strict(root, "p1", "c1")
+        .expect("restore plan")
+        .expect("draft still has e2");
+    assert_eq!(plan.base_revision, 1);
+    assert_eq!(plan.fact_count, 1);
+    // 幂等：再重放一次是空操作。
+    assert_eq!(
+        replay_pending_acks(root, "p1", "c1").expect("replay again"),
+        0
+    );
+}
+
+#[test]
+fn pending_ack_replay_failure_keeps_files_and_blocks_freeze() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("e1");
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e2", 2, 7)).expect("e2");
+    persist_current(root, "p1", "c1", true).expect("persist draft");
+    record_pending_ack(
+        root,
+        "p1",
+        "c1",
+        &PendingAck {
+            transaction_id: "tx-2".to_string(),
+            event_ids: vec!["e1".to_string()],
+            base_generation: "g1".to_string(),
+            base_revision: 1,
+            base_sha256: "sha1".to_string(),
+        },
+    )
+    .expect("record ack");
+    let location = draft_location(root);
+    std::fs::remove_file(fact_file_path(&location.dir, 2, "e2")).expect("remove e2");
+    forget_for_test(root, "p1", "c1");
+
+    assert!(replay_pending_acks(root, "p1", "c1").is_err());
+    assert_eq!(pending_ack_count(root, "p1", "c1"), 1);
+    assert!(freeze_batch_for(root, "p1", "c1", 7, "g1", 2).is_err());
+
+    // 文件恢复后，freeze 先补做 ack，再只冻结仍保留的 e2。
+    std::fs::write(
+        fact_file_path(&location.dir, 2, "e2"),
+        serde_json::json!({
+            "eventId": "e2",
+            "revision": 2,
+            "sessionId": 7,
+            "projection": {"eventId": "e2", "revision": 2},
+        })
+        .to_string(),
+    )
+    .expect("restore e2");
+    forget_for_test(root, "p1", "c1");
+    assert_eq!(pending_ack_count(root, "p1", "c1"), 1);
+    let batch = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect("freeze after ack replay");
+    assert_eq!(ids(&batch), vec!["e2"]);
+    assert_eq!(pending_ack_count(root, "p1", "c1"), 0);
+}
+
+#[test]
+fn corrupt_meta_draft_is_listed_with_error_and_kept() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("fact");
+    let location = draft_location(root);
+    std::fs::write(location.dir.join(META_FILE), "{ broken meta").expect("corrupt meta");
+    let fact_path = fact_file_path(&location.dir, 1, "e1");
+    forget_for_test(root, "p1", "c1");
+
+    let listed = list_project_drafts(root, "p1");
+    let draft = listed
+        .iter()
+        .find(|draft| draft.chapter_id == "c1")
+        .expect("corrupt meta draft must not disappear");
+    assert!(
+        draft
+            .draft_error
+            .as_deref()
+            .is_some_and(|error| error.contains("invalid")),
+        "summary must surface meta error: {:?}",
+        draft.draft_error
+    );
+    assert_eq!(draft.fact_count, 1);
+    assert!(restore_plan_strict(root, "p1", "c1").is_err());
+    assert!(location.dir.exists());
+    assert!(fact_path.exists());
+}
+
+#[test]
+fn missing_meta_with_disk_content_is_listed_as_pending_recovery() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("fact");
+    let location = draft_location(root);
+    std::fs::remove_file(location.dir.join(META_FILE)).expect("remove meta");
+    forget_for_test(root, "p1", "c1");
+
+    let listed = list_project_drafts(root, "p1");
+    let draft = listed
+        .iter()
+        .find(|draft| draft.chapter_id == "c1")
+        .expect("meta-less draft with facts must be listed");
+    assert!(
+        draft
+            .draft_error
+            .as_deref()
+            .is_some_and(|error| error.contains("missing")),
+        "summary must report missing meta: {:?}",
+        draft.draft_error
+    );
+    assert!(location.dir.exists());
+}
