@@ -131,7 +131,7 @@ fn local_paths_fingerprint(
     sync_root: &std::path::Path,
     scope: SyncScope,
     app_group: Option<&AppDataGroup>,
-) -> String {
+) -> (String, usize) {
     let walk_roots = app_group
         .map(AppDataGroup::local_walk_roots)
         .unwrap_or_default();
@@ -187,6 +187,7 @@ fn local_paths_fingerprint(
         entries.push((rel, size, mtime_nanos));
     }
     entries.sort();
+    let file_count = entries.len();
     let mut hasher = Sha256::new();
     for (path, size, mtime_nanos) in entries {
         hasher.update(path.as_bytes());
@@ -194,7 +195,7 @@ fn local_paths_fingerprint(
         hasher.update(size.to_le_bytes());
         hasher.update(mtime_nanos.to_le_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    (format!("{:x}", hasher.finalize()), file_count)
 }
 
 /// 从一个已加载的 manifest 与账本事实计算 target 版本。
@@ -204,11 +205,17 @@ fn build_version(
     known_files: usize,
     group: Option<&AppDataGroup>,
     path_fingerprint: String,
+    local_file_count: usize,
 ) -> LocalTargetVersion {
     // 没有 manifest 却有基线（known_files 非空）：说明本地索引不可信（旧版布局、
     // 手工删除、迁移中断），必须完整扫描重建，不能靠增量比对宣布无变化。
     if manifest.is_none() && known_files > 0 {
         return LocalTargetVersion::ineligible("missing_baseline");
+    }
+    // 有数据但还没有 manifest：本 target 从未建立过基线，必须走完整同步把
+    // manifest 落下来，不能直接进入"无变化"快速路径（复审 #4）。
+    if manifest.is_none() && local_file_count > 0 {
+        return LocalTargetVersion::ineligible("missing_manifest");
     }
     let empty = SyncManifest::default();
     let manifest = manifest.unwrap_or(&empty);
@@ -260,13 +267,15 @@ pub(crate) fn app_group_version(
     }
     let manifest = read_manifest(app_data_root, &group.local_manifest_path())?;
     let pending = local_mutations::pending_records(app_data_root, SyncScope::App, Some(group))?;
-    let path_fingerprint = local_paths_fingerprint(app_data_root, SyncScope::App, Some(group));
+    let (path_fingerprint, local_file_count) =
+        local_paths_fingerprint(app_data_root, SyncScope::App, Some(group));
     Ok(build_version(
         manifest.as_ref(),
         pending,
         state.known_files.len(),
         Some(group),
         path_fingerprint,
+        local_file_count,
     ))
 }
 
@@ -288,13 +297,15 @@ pub(crate) fn project_version(project_root: &std::path::Path) -> crate::Result<L
     }
     let manifest = read_manifest(project_root, crate::sync::lww::SYNC_MANIFEST_PATH)?;
     let pending = local_mutations::pending_records(project_root, SyncScope::Project, None)?;
-    let path_fingerprint = local_paths_fingerprint(project_root, SyncScope::Project, None);
+    let (path_fingerprint, local_file_count) =
+        local_paths_fingerprint(project_root, SyncScope::Project, None);
     Ok(build_version(
         manifest.as_ref(),
         pending,
         state.known_files.len(),
         None,
         path_fingerprint,
+        local_file_count,
     ))
 }
 
