@@ -123,14 +123,6 @@ fn ensure_sequences(
     Ok(true)
 }
 
-/// 账本是否已损坏（只读检查，不修复）。
-///
-/// 同步调度用它把 target 判为 `ledger_corrupt`：这一轮必须完整核对，
-/// 由真实磁盘内容重建基线，不能在空索引上宣布无变化。
-pub(crate) fn ledger_is_corrupt(sync_root: &Path) -> bool {
-    load_records(sync_root).is_err()
-}
-
 /// 账本写出中断/被外部改写后的恢复：归档损坏文件，按空账本重建。
 ///
 /// 账本只是调度索引，不是业务事实来源：归档后 target 会走一次完整核对
@@ -336,9 +328,8 @@ pub(crate) fn pending_records_in(
     scope: SyncScope,
     app_group: Option<&AppDataGroup>,
 ) -> crate::error::Result<BTreeMap<String, LocalMutationRecord>> {
-    // 账本损坏时先归档重建：重建后由 version_snapshot 把该 target 判为
-    // ledger_corrupt 并做一次完整核对，不能在"空索引"上宣布无变化。
-    repair_corrupt_ledger(sync_root)?;
+    // 账本已在 read 阶段修复（latest_ledger），这里不再重复完整读一遍：
+    // App 组可能很多，逐组重读整份 JSONL 会把增量调度退化成全量 IO。
     // 已确认随远端提交发布的事实不算"待同步"。确认只看推送回执写入的序号，
     // 不用 known_files 是否包含该路径推断删除（复审 #3）。
     let confirmed_seq = match app_group {

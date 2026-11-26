@@ -240,12 +240,12 @@ fn build_version(
 ///
 /// `legacy_layout` 表示整份 App 目标仍处于旧版聚合清单/状态，这些 target
 /// 统一回到完整 LWW，不做增量推断。`ledger` 是整轮只读一次的 mutation 账本
-/// （App 组共享同一份 JSONL）；传 `None` 时按需自行加载。
+/// （App 组共享同一份 JSONL），由 `collect` 统一加载并判定损坏。
 pub(crate) fn app_group_version(
     app_data_root: &std::path::Path,
     group: &AppDataGroup,
     legacy_layout: bool,
-    ledger: Option<&std::collections::HashMap<String, local_mutations::LocalMutationRecord>>,
+    ledger: &std::collections::HashMap<String, local_mutations::LocalMutationRecord>,
 ) -> crate::Result<LocalTargetVersion> {
     if legacy_layout {
         return Ok(LocalTargetVersion::ineligible("legacy_layout"));
@@ -264,21 +264,9 @@ pub(crate) fn app_group_version(
     if !state.pending_take_remote.is_empty() {
         return Ok(LocalTargetVersion::ineligible("pending_take_remote"));
     }
-    // 账本损坏时这一轮必须完整核对并把损坏索引归档重建，不能在空索引上放行。
-    if local_mutations::ledger_is_corrupt(app_data_root) {
-        let _ = local_mutations::repair_corrupt_ledger(app_data_root);
-        return Ok(LocalTargetVersion::ineligible("ledger_corrupt"));
-    }
     let manifest = read_manifest(app_data_root, &group.local_manifest_path())?;
-    let pending = match ledger {
-        Some(ledger) => local_mutations::pending_records_in(
-            ledger,
-            app_data_root,
-            SyncScope::App,
-            Some(group),
-        )?,
-        None => local_mutations::pending_records(app_data_root, SyncScope::App, Some(group))?,
-    };
+    let pending =
+        local_mutations::pending_records_in(ledger, app_data_root, SyncScope::App, Some(group))?;
     let (path_fingerprint, local_file_count) =
         local_paths_fingerprint(app_data_root, SyncScope::App, Some(group));
     Ok(build_version(
@@ -303,12 +291,16 @@ pub(crate) fn project_version(project_root: &std::path::Path) -> crate::Result<L
     if !state.pending_take_remote.is_empty() {
         return Ok(LocalTargetVersion::ineligible("pending_take_remote"));
     }
-    if local_mutations::ledger_is_corrupt(project_root) {
-        let _ = local_mutations::repair_corrupt_ledger(project_root);
-        return Ok(LocalTargetVersion::ineligible("ledger_corrupt"));
-    }
+    let ledger = match local_mutations::latest_ledger(project_root) {
+        Ok(ledger) => ledger,
+        Err(_) => {
+            let _ = local_mutations::repair_corrupt_ledger(project_root);
+            return Ok(LocalTargetVersion::ineligible("ledger_corrupt"));
+        }
+    };
     let manifest = read_manifest(project_root, crate::sync::lww::SYNC_MANIFEST_PATH)?;
-    let pending = local_mutations::pending_records(project_root, SyncScope::Project, None)?;
+    let pending =
+        local_mutations::pending_records_in(&ledger, project_root, SyncScope::Project, None)?;
     let (path_fingerprint, local_file_count) =
         local_paths_fingerprint(project_root, SyncScope::Project, None);
     Ok(build_version(
@@ -371,15 +363,21 @@ pub(crate) fn collect(
     let mut no_change_targets = Vec::new();
     // App 数据组共享同一份 mutation 账本：整轮读一次，再按 group 的 owns_path
     // 过滤，不在每个 group 上重复加载同一个 JSONL（复审 #5）。
-    let app_ledger = local_mutations::latest_ledger(app_data_root).ok();
+    let app_ledger = match local_mutations::latest_ledger(app_data_root) {
+        Ok(ledger) => Some(ledger),
+        Err(_) => {
+            // 损坏索引归档重建一次；本轮所有 App 组都不能在空索引上判定"无变化"。
+            let _ = local_mutations::repair_corrupt_ledger(app_data_root);
+            None
+        }
+    };
 
     for group in crate::sync::app_data_group_catalog::discover_local_app_data_groups(app_data_root)?
     {
-        let version = if app_ledger.is_some() {
-            app_group_version(app_data_root, &group, legacy_layout, app_ledger.as_ref())?
+        let version = if let Some(ledger) = app_ledger.as_ref() {
+            app_group_version(app_data_root, &group, legacy_layout, ledger)?
         } else {
             // 账本损坏/读失败：本组不能走增量，明确判为不可增量并重建基线。
-            let _ = local_mutations::repair_corrupt_ledger(app_data_root);
             LocalTargetVersion::ineligible("ledger_corrupt")
         };
         let key = app_target_key(&group);
