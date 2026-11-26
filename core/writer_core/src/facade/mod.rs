@@ -26,6 +26,7 @@
 
 mod action_ops;
 mod chapter_proof_batch;
+mod editor_conflict;
 mod project_ops;
 mod recent_edits_ops;
 mod search_ops;

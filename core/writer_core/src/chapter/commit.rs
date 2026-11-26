@@ -277,6 +277,50 @@ pub struct ChapterConflict {
     pub conflict_dir: String,
 }
 
+/// 编辑会话冲突材料输入。
+///
+/// 与 [`ChapterCommitRequest`] 不同，这里只保存“按会话身份冻结的双方正文与共同基线”，
+/// 不发布正文、不检查空覆盖、不参与版本 CAS。`local.md` 是 Core 编辑会话当前正文，
+/// `incoming.md` 是原生编辑器正文，`base.md` 是共同基线（`Some("")` 表示合法空基线）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorConflictMaterialRequest {
+    pub key: ChapterKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_content: Option<String>,
+    pub core_content: String,
+    pub native_content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_version: Option<ChapterVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_version: Option<ChapterVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_session_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_session_id: Option<u64>,
+    /// Core 会话当前 revision（版本对象缺 generation/sha 时仍保留可追踪版本）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_revision: Option<u64>,
+    /// 共同基线 revision。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_revision: Option<u64>,
+    /// 平台本地变更序号，用于区分同一 revision 的连续冲突内容。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// 编辑会话冲突材料回执：材料目录与双方正文摘要，供平台按会话+内容版本跟踪。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorConflictMaterialReceipt {
+    pub transaction_id: String,
+    pub conflict_dir: String,
+    pub core_content_sha256: String,
+    pub native_content_sha256: String,
+}
+
 /// 一个仍有未确认证明投影的 journal，用于按章节/提交序号串行结算。
 #[derive(Debug, Clone)]
 pub struct PendingChapterProofTransaction {
@@ -329,5 +373,6 @@ pub use journal::{
     read_chapter_state_recovering, read_chapter_version, read_chapter_version_recovering,
     recover_pending_chapter_commits,
 };
+pub(crate) use journal::write_editor_conflict_material;
 #[cfg(test)]
 mod tests;

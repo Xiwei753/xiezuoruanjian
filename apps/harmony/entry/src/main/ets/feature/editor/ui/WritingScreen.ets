@@ -191,6 +191,8 @@ export struct WritingScreen {
   @State hasUnsavedChanges: boolean = false
   @State isAutoSaving: boolean = false
   @State lastSaveFailed: boolean = false
+  // Issue #1063 复审评论第 4 条：最近一次 Core 成功回执的冲突材料目录（无材料时为空串）。
+  @State conflictMaterialDir: string = ''
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   // 编辑会话协调器（唯一编辑命令入口），由协调器持有并驱动。
@@ -349,11 +351,11 @@ export struct WritingScreen {
     // 不可合并的冲突仍保留在 bridge 原生正文 + pendingEdits，走既有保存失败提示。
     this.writingWorkflow.setBridgeRetryReconcile(
       (): Promise<ConflictRecoveryResult> => this.richEditorBridge.retryReconcile())
-    // Issue #1063 复审评论：真实冲突把双方正文交给既有 Core 冲突材料机制持久保留
-    // （版本哨兵 CAS 不匹配 → conflict_dir），不新增第二套保存流程。
+    // Issue #1063 复审评论第 4 条：冲突材料只走协调器 persistEditorConflict。
+    // 协调器直接调用 Core 专用材料入口（只写材料、不发布正文），成功回执才记为已持久化；
+    // 实际材料目录随既有保存失败状态回流，页面不另造第二套保存/材料流程。
     this.richEditorBridge.setConflictPersistenceHandler(
-      (payload: EditorConflictPayload): Promise<boolean> =>
-        this.writingWorkflow.persistEditorConflict(payload))
+      (payload: EditorConflictPayload) => this.writingWorkflow.persistEditorConflict(payload))
     // Issue #1054：保存路径只接受“用户删除事务把当前非空会话删空”的精确 session/revision 意图，
     // 程序性初始空视图或未加载章节不会产生该意图。
     this.writingWorkflow.setEmptyDocumentIntentCheck(
@@ -473,6 +475,7 @@ export struct WritingScreen {
     this.isAutoSaving = state.isAutoSaving
     this.lastSaveFailed = state.lastSaveFailed
     this.saveMessage = state.saveMessage
+    this.conflictMaterialDir = state.conflictMaterialDir
 
     const snap = update.snapshot
     if (snap !== null) {
@@ -2605,6 +2608,10 @@ export struct WritingScreen {
           // 内部仍走协调器既有的 performBackgroundSave / 保存失败状态，不另写保存流程。
           .onClick(() => {
             if (this.lastSaveFailed && !this.isSaving) {
+              // Issue #1063 复审评论第 4 条：有实际冲突材料时先告诉用户材料位置，再走既有重试。
+              if (this.conflictMaterialDir.length > 0) {
+                this.showWritingToast(`冲突材料已保留：${this.conflictMaterialDir}`)
+              }
               void this.retrySaveAfterConflict()
             }
           })

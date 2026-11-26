@@ -744,4 +744,22 @@ impl WriterCoreApi {
         let _ = self.record_workspace_change_set_history(&change_set, "update_chapter_note");
         Ok(true)
     }
+
+    /// 写入编辑会话冲突材料：只保存 Core 当前正文、原生正文、共同基线与身份。
+    ///
+    /// 与正文提交保持同一锁顺序（workspace → Core），但材料入口没有正文发布权：
+    /// 不检查空覆盖、不比较版本、不推进 revision，也不写 chapter.md/meta。
+    pub fn write_editor_conflict_material(
+        &self,
+        request: EditorConflictMaterialRequestDto,
+    ) -> ApiResult<EditorConflictMaterialReceiptDto> {
+        let _workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
+            .map_err(WriterError::from)?;
+        let core_request = request.into_core();
+        let receipt = self
+            .core_write()
+            .write_editor_conflict_material(&core_request)
+            .map_err(WriterError::from)?;
+        Ok(receipt.into())
+    }
 }

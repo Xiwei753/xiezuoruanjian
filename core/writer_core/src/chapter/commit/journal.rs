@@ -328,13 +328,12 @@ fn write_conflict_material(
     let root = journal_root(project_root)
         .join(CONFLICT_DIR)
         .join(transaction_id);
-    fs::create_dir_all(&root)?;
-    if let Some(base) = request.base_content.as_deref() {
-        crate::storage::atomic_write_bytes(&root.join("base.md"), base.as_bytes())?;
-    }
-    crate::storage::atomic_write_bytes(&root.join("local.md"), current.as_bytes())?;
-    let incoming = request.content.clone();
-    crate::storage::atomic_write_bytes(&root.join("incoming.md"), incoming.as_bytes())?;
+    write_conflict_material_files(
+        &root,
+        request.base_content.as_deref(),
+        current,
+        &request.content,
+    )?;
     if let Some(expected) = request.expected.as_ref() {
         crate::storage::atomic_write_bytes(
             &root.join("expected.json"),
@@ -347,6 +346,69 @@ fn write_conflict_material(
     )?;
     crate::storage::sync_dir(&root)?;
     Ok(root.to_string_lossy().to_string())
+}
+
+/// 只写三方正文材料，不碰 CAS/空覆盖/正文投影。
+fn write_conflict_material_files(
+    root: &Path,
+    base: Option<&str>,
+    local: &str,
+    incoming: &str,
+) -> Result<()> {
+    fs::create_dir_all(root)?;
+    if let Some(base) = base {
+        crate::storage::atomic_write_bytes(&root.join("base.md"), base.as_bytes())?;
+    }
+    crate::storage::atomic_write_bytes(&root.join("local.md"), local.as_bytes())?;
+    crate::storage::atomic_write_bytes(&root.join("incoming.md"), incoming.as_bytes())?;
+    Ok(())
+}
+
+/// 编辑会话冲突材料入口：只保存 Core 当前正文（local.md）、原生正文（incoming.md）、
+/// 共同基线（base.md，空串也保留）与会话/版本身份，不发布正文、不做版本 CAS。
+pub(crate) fn write_editor_conflict_material(
+    project_root: &Path,
+    request: &EditorConflictMaterialRequest,
+) -> Result<EditorConflictMaterialReceipt> {
+    let transaction_id = Uuid::new_v4().to_string();
+    let root = journal_root(project_root)
+        .join(CONFLICT_DIR)
+        .join(&transaction_id);
+    write_conflict_material_files(
+        &root,
+        request.base_content.as_deref(),
+        &request.core_content,
+        &request.native_content,
+    )?;
+    let metadata = serde_json::json!({
+        "kind": "editor-session",
+        "projectId": request.key.project_id,
+        "volumeId": request.key.volume_id,
+        "chapterId": request.key.chapter_id,
+        "coreContentLen": request.core_content.len(),
+        "nativeContentLen": request.native_content.len(),
+        "baseContentLen": request.base_content.as_ref().map(String::len),
+        "coreVersion": request.core_version,
+        "localVersion": request.local_version,
+        "coreSessionId": request.core_session_id,
+        "localSessionId": request.local_session_id,
+        "coreRevision": request.core_revision,
+        "baseRevision": request.base_revision,
+        "changeSequence": request.change_sequence,
+        "detail": request.detail,
+        "createdAt": Utc::now().to_rfc3339(),
+    });
+    crate::storage::atomic_write_bytes(
+        &root.join("editor-session.json"),
+        serde_json::to_string_pretty(&metadata)?.as_bytes(),
+    )?;
+    crate::storage::sync_dir(&root)?;
+    Ok(EditorConflictMaterialReceipt {
+        transaction_id,
+        conflict_dir: root.to_string_lossy().to_string(),
+        core_content_sha256: sha256_hex(&request.core_content),
+        native_content_sha256: sha256_hex(&request.native_content),
+    })
 }
 
 fn ensure_empty_overwrite_allowed(

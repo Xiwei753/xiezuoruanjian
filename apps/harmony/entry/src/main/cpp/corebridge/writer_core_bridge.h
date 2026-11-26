@@ -84,6 +84,9 @@ char*  writer_core_save_chapter_versioned(const char* project_id, const char* vo
 char*  writer_core_clear_chapter_versioned(const char* project_id, const char* volume_id, const char* chapter_id, const char* expected_generation, int64_t expected_revision, const char* expected_sha256, const char* base_content);
 // JSON 版：一次传递全部参数，供 NAPI async work 在后台线程调用。
 char*  writer_core_save_chapter_versioned_json(const char* payload);
+// Issue #1063：只写冲突材料（base.md/local.md/incoming.md/editor-session.json），
+// 不发布正文、不做版本 CAS；payload 为 camelCase JSON，返回 ResultEnvelope。
+char*  writer_core_write_editor_conflict_material_json(const char* payload);
 
 // ── Recent edits ──
 char*  writer_core_get_recent_edits(void);

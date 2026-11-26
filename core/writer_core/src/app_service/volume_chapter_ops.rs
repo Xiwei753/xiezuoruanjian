@@ -1,6 +1,7 @@
 use crate::api::{
     ChapterContentDto, ChapterDraftAckDto, ChapterMetaDto, ChapterSaveReceiptDto,
-    ChapterVersionDto, ProjectWorkspaceSnapshotDto, VolumeDto, WriterError,
+    ChapterVersionDto, EditorConflictMaterialReceiptDto, EditorConflictMaterialRequestDto,
+    ProjectWorkspaceSnapshotDto, VolumeDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -223,6 +224,14 @@ impl super::WriterAppService {
             expected_version,
             base_content,
         )
+    }
+
+    /// 编辑会话冲突材料：只写材料，不发布正文。
+    pub fn write_editor_conflict_material(
+        &self,
+        request: EditorConflictMaterialRequestDto,
+    ) -> Result<EditorConflictMaterialReceiptDto, WriterError> {
+        self.api.write_editor_conflict_material(request)
     }
 
     pub fn save_chapter_content_versioned_with_batch(

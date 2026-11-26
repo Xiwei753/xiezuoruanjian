@@ -1,5 +1,6 @@
 import { IWriterCoreBridge } from '../../../main/ets/corebridge/IWriterCoreBridge'
 import { EditorTransactionCause } from '../../../main/ets/corebridge/dto/EditorDtos'
+import { EditorConflictMaterialRequest, EditorConflictMaterialReceipt } from '../../../main/ets/corebridge/dto/EditorConflictDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ChapterVersion, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
@@ -322,6 +323,19 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       pendingProjections: [] as string[]
     }
     return this.success(receipt)
+  }
+
+  // Issue #1063：冲突材料专用入口的 mock —— 不碰 mockChapterContents/Versions，
+  // 保持"只写材料、不发布正文"的语义。
+  async writeEditorConflictMaterial(
+    request: EditorConflictMaterialRequest): Promise<ResultEnvelope<EditorConflictMaterialReceipt>> {
+    await this.delay(10)
+    return this.success<EditorConflictMaterialReceipt>({
+      transactionId: 'mock-conflict-tx',
+      conflictDir: '/tmp/mock-conflict',
+      coreContentSha256: 'mock-core',
+      nativeContentSha256: 'mock-native'
+    })
   }
 
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,

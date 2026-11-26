@@ -31,8 +31,11 @@ import { ActiveWritingSession, SyncBarrierBeginResult } from './ActiveWritingSes
 import { ImeSettlementError } from '../input/ime_settlement_barrier'
 import { EditorConflictPayload } from '../input/NativeRichEditorBridge'
 import {
+  EditorConflictMaterialRequest,
+  EditorConflictMaterialReceipt
+} from '../../../corebridge/dto/EditorConflictDtos'
+import {
   ConflictRecoveryResult,
-  editorConflictVersionSentinel,
   isConflictRecoverySatisfied
 } from './editor_reconcile_logic'
 
@@ -65,6 +68,8 @@ export interface WritingWorkflowState {
   readonly isAutoSaving: boolean
   readonly lastSaveFailed: boolean
   readonly saveMessage: string
+  // Issue #1063 复审评论第 4 条：最近一次成功落盘的冲突材料目录；无材料时为空串。
+  readonly conflictMaterialDir: string
 }
 
 // 一次回流：显示状态 + （编辑会话驱动的）快照 / 编辑结果。
@@ -194,6 +199,10 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   private isAutoSaving: boolean = false
   private lastSaveFailed: boolean = false
   private saveMessage: string = ''
+  // Issue #1063 复审评论第 4 条：最近一次 Core 成功回执的冲突材料目录/事务身份。
+  // 保存失败时随状态回流给页面；成功保存或切换会话时清空，避免旧章材料串到新章。
+  private lastConflictMaterialDir: string = ''
+  private lastConflictTransactionId: string = ''
 
   // ── 异步事务 ──
   // Issue #629 评论7 第5项：幂等关闭事务 Promise；失败后重置允许重试。
@@ -275,39 +284,54 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   }
 
   /**
-   * Issue #1063 复审评论：真实冲突把双方正文交给既有 Core 冲突材料机制持久保留。
+   * Issue #1063 复审评论第 4 条：把桥接的冲突双方正文交给 Core 专用冲突材料入口。
    *
-   * 版本哨兵（空 contentSha256 / revision 0）使任意真实版本都不匹配 `ChapterCommitRequest`
-   * 的 CAS：Core 把磁盘当前正文（local.md）、传入的原生正文（incoming.md）与共同基线
-   * （base.md）写入既有 conflict_dir 后返回 CHAPTER_VERSION_CONFLICT，不会写正文。
-   * 走不带 proof batch 的普通版本 CAS：带快照路径会先校验 pending proof（可能直接拒绝）
-   * 且把版本冲突统一报成 CHAPTER_SAVE_FAILED，无法确认冲突材料已经落盘。
-   * 这里只更新既有保存失败状态，不新增持久化文件格式或第二套保存流程。
+   * 只写材料（base/core/native 三方与双方会话/revision/变更序号身份），
+   * 不发布正文、不做版本 CAS、不碰 proof batch，也不新增第二套保存流程。
+   * - 成功回执：记录实际目录与事务身份，更新既有保存失败状态并回流；
+   * - 失败/null：保留最近一次成功材料，返回 null 让桥接维持 failed 状态并可重试。
    */
-  async persistEditorConflict(payload: EditorConflictPayload): Promise<boolean> {
+  async persistEditorConflict(
+    payload: EditorConflictPayload): Promise<EditorConflictMaterialReceipt | null> {
     if (this.chapterId.length === 0) {
-      return false
+      return null
     }
-    const sentinel: ChapterVersion = editorConflictVersionSentinel() as ChapterVersion
-    const result = await this.bridge.persistChapterConflictMaterial(
-      this.chapterId, payload.nativeText, sentinel, payload.confirmedText)
-    if (!result.success && result.errorCode === 'CHAPTER_VERSION_CONFLICT') {
-      // Core 已把 local/incoming/base 写入既有 conflict_dir；只更新既有失败状态。
+    const request: EditorConflictMaterialRequest = {
+      chapterId: this.chapterId,
+      // Core 约定：null = 无共同基线（不写 base.md）；'' = 合法空基线。
+      baseContent: payload.confirmedText,
+      coreContent: payload.coreText,
+      nativeContent: payload.nativeText,
+      coreVersion: null,
+      localVersion: null,
+      coreSessionId: payload.coreSessionId >= 0 ? payload.coreSessionId : null,
+      localSessionId: payload.localSessionId,
+      coreRevision: payload.coreRevision,
+      baseRevision: payload.confirmedRevision,
+      changeSequence: payload.changeSequence,
+      detail: payload.detail
+    }
+    try {
+      const result = await this.bridge.writeEditorConflictMaterial(request)
+      if (!result.success || result.data === undefined) {
+        hilog.error(0x0000, 'WritingWorkflowCoordinator',
+          `conflict material not persisted chapter=${this.chapterId}`
+            + ` errorCode=${result.errorCode !== undefined ? result.errorCode : 'UNKNOWN'}`)
+        return null
+      }
+      const receipt: EditorConflictMaterialReceipt = result.data
+      this.lastConflictMaterialDir = receipt.conflictDir
+      this.lastConflictTransactionId = receipt.transactionId
       this.lastSaveFailed = true
       this.saveMessage = this.textProvider(WritingTextKey.SaveFailed)
       this.emit(null, null)
-      return true
+      return receipt
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      hilog.error(0x0000, 'WritingWorkflowCoordinator',
+        `conflict material persistence failed chapter=${this.chapterId}: ${detail}`)
+      return null
     }
-    // 哨兵空 sha 正常不会命中真实版本；若意外成功说明可能有正文写入，按失败记录，绝不静默。
-    // 其余错误（磁盘/会话/参数）同样只记录：冲突状态机与原生正文不受影响。
-    hilog.error(0x0000, 'WritingWorkflowCoordinator',
-      `conflict material persistence did not produce version conflict chapter=${this.chapterId}`
-        + ` success=${result.success}`
-        + ` errorCode=${result.errorCode !== undefined ? result.errorCode : 'UNKNOWN'}`)
-    this.lastSaveFailed = true
-    this.saveMessage = this.textProvider(WritingTextKey.SaveFailed)
-    this.emit(null, null)
-    return false
   }
 
   // Issue #1054：由页面把原生桥接的“合法清空意图”校验注入保存链路。
@@ -372,6 +396,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   private beginSessionBoundary(): number {
     this.sessionEpoch += 1
     this.saveChainTail = null
+    // Issue #1063 复审评论第 4 条：会话边界（切章/重新加载/同步回填）丢弃旧材料身份。
+    this.lastConflictMaterialDir = ''
+    this.lastConflictTransactionId = ''
     return this.sessionEpoch
   }
 
@@ -509,7 +536,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       isSaving: this.isSaving,
       isAutoSaving: this.isAutoSaving,
       lastSaveFailed: this.lastSaveFailed,
-      saveMessage: this.saveMessage
+      saveMessage: this.saveMessage,
+      conflictMaterialDir: this.lastConflictMaterialDir
     }
     const update: WritingWorkflowUpdate = {
       state: state,
@@ -927,6 +955,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     this.lastSavedVersion = receipt.version
     this.hasUnsavedChanges = false
     this.lastSaveFailed = false
+    // Issue #1063 复审评论第 4 条：保存成功即退出冲突失败态，旧材料身份不再展示。
+    this.lastConflictMaterialDir = ''
+    this.lastConflictTransactionId = ''
     const latest = this.editorCoordinator.getSnapshot()
     if (latest) {
       this.content = latest.text

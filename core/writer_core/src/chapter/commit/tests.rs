@@ -11,8 +11,9 @@ use super::journal::{
     ChapterCommitManifest, ChapterCommitPhase,
 };
 use super::{
-    commit_chapter_with_guard, ChapterCommitOutcome, ChapterCommitRequest, ChapterCommitSource,
-    ChapterKey, ChapterMutationKind, ChapterVersion, BODY_FILE, META_FILE,
+    commit_chapter_with_guard, write_editor_conflict_material, ChapterCommitOutcome,
+    ChapterCommitRequest, ChapterCommitSource, ChapterKey, ChapterMutationKind, ChapterVersion,
+    EditorConflictMaterialRequest, BODY_FILE, META_FILE,
 };
 use crate::writing_stats::{EventSource, Platform, WritingInputEvent};
 
@@ -234,4 +235,65 @@ fn draft_proof_events_stay_pending_until_platform_ack() {
     assert!(mark_chapter_commit_draft_ack(root, &receipt.transaction_id, "evt-2").unwrap());
     assert!(!journal_root(root).join(&receipt.transaction_id).exists());
     assert!(pending_chapter_draft_acks(root).unwrap().is_empty());
+}
+
+// Issue #1063 复审评论 #7193110423：冲突材料入口只写材料，不发布正文、不参与 CAS；
+// local.md 必须是编辑器当前 Core 正文，空 base 也要保留。
+#[test]
+fn editor_conflict_material_writes_three_way_material_without_publishing_body() {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("proj");
+    fs::create_dir_all(&project_root).unwrap();
+    let request = EditorConflictMaterialRequest {
+        key: ChapterKey::new("p1", "v1", "c1"),
+        base_content: Some(String::new()),
+        core_content: "Core 当前正文".to_string(),
+        native_content: "原生实际正文".to_string(),
+        core_version: Some(ChapterVersion {
+            object_generation: "gen-1".to_string(),
+            revision: 7,
+            content_sha256: sha256_hex("Core 当前正文"),
+        }),
+        local_version: Some(ChapterVersion {
+            object_generation: "gen-1".to_string(),
+            revision: 3,
+            content_sha256: sha256_hex("旧基线"),
+        }),
+        core_session_id: Some(11),
+        local_session_id: Some(5),
+        core_revision: Some(7),
+        base_revision: Some(3),
+        change_sequence: Some(42),
+        detail: Some("merge overlap".to_string()),
+    };
+    let receipt = write_editor_conflict_material(&project_root, &request).unwrap();
+    let dir = Path::new(&receipt.conflict_dir);
+    assert!(dir.join("base.md").exists(), "empty base must still be written");
+    assert_eq!(fs::read_to_string(dir.join("base.md")).unwrap(), "");
+    assert_eq!(
+        fs::read_to_string(dir.join("local.md")).unwrap(),
+        "Core 当前正文"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("incoming.md")).unwrap(),
+        "原生实际正文"
+    );
+    assert_eq!(receipt.core_content_sha256, sha256_hex("Core 当前正文"));
+    assert_eq!(receipt.native_content_sha256, sha256_hex("原生实际正文"));
+    assert!(receipt.conflict_dir.ends_with(&receipt.transaction_id));
+
+    let metadata: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("editor-session.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(metadata["kind"].as_str(), Some("editor-session"));
+    assert_eq!(metadata["coreSessionId"].as_u64(), Some(11));
+    assert_eq!(metadata["localSessionId"].as_u64(), Some(5));
+    assert_eq!(metadata["coreVersion"]["revision"].as_u64(), Some(7));
+    assert_eq!(metadata["localVersion"]["revision"].as_u64(), Some(3));
+
+    // 材料入口没有正文发布权：不会产生 volumes/chapter.md 或 journal 决议。
+    assert!(!project_root.join("volumes").exists());
+    assert!(!dir.join("chapter.md").exists());
+    assert!(!dir.join("manifest.json").exists());
 }

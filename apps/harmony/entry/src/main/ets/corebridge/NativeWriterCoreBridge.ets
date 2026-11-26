@@ -1,5 +1,6 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
 import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos'
+import { EditorConflictMaterialRequest, EditorConflictMaterialReceipt } from './dto/EditorConflictDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ChapterVersion, ProjectTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, BuiltinThemeDto } from './dto/SettingsDtos'
@@ -251,9 +252,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       proofSnapshotRevision, proofEventIds)
   }
 
-  async persistChapterConflictMaterial(chapterId: string, text: string,
-    expected: ChapterVersion, baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
-    return this.chapterBridge.persistChapterConflictMaterial(chapterId, text, expected, baseContent)
+  // Issue #1063：冲突材料专用入口（只写材料，不发布正文、不做版本 CAS）。
+  async writeEditorConflictMaterial(
+    request: EditorConflictMaterialRequest): Promise<ResultEnvelope<EditorConflictMaterialReceipt>> {
+    return this.chapterBridge.writeEditorConflictMaterial(request)
   }
 
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,

@@ -1,14 +1,14 @@
 // editor_reconcile_logic.ts — 会话冲突恢复的纯逻辑层（Issue #1063 复审评论）。
 //
-// 为什么单独抽出来：reconcile 既不能要求「模拟结果逐字等于原生全文」（那样 Core 与原生
-// 各自修改不同位置时永远失败），也不能凭 Core 当前 CAS 或「镜像==confirmed」就把未经确认
-// 的原生正文当权威。这里把三方合并与冲突会话状态机抽成不依赖 ArkUI 的纯逻辑：
-//   - 共同基线 = confirmedText（最后一次已确认的 Core 正文）；
-//   - Core 当前正文与原生实际正文分别是另外两侧；
-//   - 只有一侧变化时正常收敛；两侧都变化时先验证各自的 delta 能复现输入文本，再要求
-//     编辑区间不重叠，重叠（含同点不同插入）才进入真实冲突；
-//   - 冲突时调用方保留全部 pendingEdits 与原生正文，并把两份正文交给既有 Core 冲突材料
-//     机制持久保留（本文件只提供稳定的 CAS 不匹配版本哨兵，不新增持久化流程）。
+// 这一层只保留两件事：
+//   - 单段最小文本差量（computeTextDelta / applyTextDelta）：并发映射与撤销确认的
+//     基础工具，坐标是 UTF-16 code unit；
+//   - 冲突会话状态机 ReconcileSessionState：conflict 是确定结果，自动错误路径不能把它
+//     降级成 reconciling；只有显式重试入口能重新尝试。
+//
+// 三方合并与 pendingEdits 逐笔重基已迁到 editor_merge_plan.ts：旧实现用一段公共前后缀
+// diff 替代编辑事务确认，既没有核对 beforeText/oldText，也会把多笔离散编辑压成一段并
+// 允许切到代理对内部（复审评论第 3 条）。新的映射必须保留每笔编辑事实与顺序。
 //
 // 生产代码：feature/editor/input/NativeRichEditorBridge.ets。
 // 运行测试：node --experimental-strip-types __tests__/editor_reconcile_logic.test.mjs
@@ -39,7 +39,7 @@ export function isConflictRecoverySatisfied(result: ConflictRecoveryResult | nul
   return result.recovered === true || result.errorCode === 'NOT_IN_CONFLICT'
 }
 
-// ── 三方正文合并（纯 UTF-16 坐标） ──
+// ── 单段最小文本差量（纯 UTF-16 坐标） ──
 
 /**
  * 单段最小差量：`base[start, end)` → `replacement`。
@@ -76,134 +76,6 @@ export function computeTextDelta(base: string, text: string): TextDelta {
 /** 把单段差量应用到原文；用于验证 delta 确实复现目标文本。 */
 export function applyTextDelta(base: string, delta: TextDelta): string {
   return base.substring(0, delta.start) + delta.replacement + base.substring(delta.end)
-}
-
-export type ThreeWayMergeKind =
-  'converged'   // Core 与原生已逐字一致
-  | 'core-only' // 只有 Core 前进，原生仍是已确认基线
-  | 'native-only' // 只有原生有未确认差量，Core 仍是已确认基线
-  | 'merged'    // 两侧都有变化且互不重叠，merged 是合并结果
-  | 'conflict'  // 两侧改动重叠，必须保留双方正文
-
-export interface ThreeWayMergeResult {
-  ok: boolean
-  kind: ThreeWayMergeKind
-  // ok=true 时必须写入 Core 的目标正文；ok=false 时保持 Core 当前正文（诊断用）。
-  merged: string
-  reason: string
-}
-
-/**
- * 以 confirmedText 为共同基线做三方合并。
- *
- * 判定顺序：
- *   1. Core === native → converged；
- *   2. native === base → core-only（调用方在确认原生实际全文仍等于 base 后才能回填）；
- *   3. Core === base → native-only（调用方把 native 提交为新的 Core 正文）；
- *   4. 两侧都有变化：先验证 base+nativeDelta===native、base+coreDelta===core，
- *      区间不重叠 → 把 nativeDelta 映射到 Core 坐标后
- *      得到 merged；其余（重叠/同点不同插入）→ conflict。
- *
- * 不要求模拟结果逐字等于 native 之外的任何中间态；只要最终合并结果可证明包含双方编辑。
- */
-export function planThreeWayReconcile(base: string, core: string, native: string): ThreeWayMergeResult {
-  if (core === native) {
-    return { ok: true, kind: 'converged', merged: core, reason: '' }
-  }
-  if (native === base) {
-    return { ok: true, kind: 'core-only', merged: core, reason: '' }
-  }
-  if (core === base) {
-    return { ok: true, kind: 'native-only', merged: native, reason: '' }
-  }
-
-  const coreDelta: TextDelta = computeTextDelta(base, core)
-  const nativeDelta: TextDelta = computeTextDelta(base, native)
-  // 防御性：delta 必须逐字复现输入，否则说明 diff 实现有误，按冲突处理。
-  if (applyTextDelta(base, coreDelta) !== core || applyTextDelta(base, nativeDelta) !== native) {
-    return {
-      ok: false,
-      kind: 'conflict',
-      merged: core,
-      reason: 'delta verification failed'
-    }
-  }
-
-  const sameRange: boolean = coreDelta.start === nativeDelta.start && coreDelta.end === nativeDelta.end
-  if (sameRange) {
-    // 同一区间同一替换必然 core === native（已在函数开头收敛）；到这里的只能是不同改法。
-    return {
-      ok: false,
-      kind: 'conflict',
-      merged: core,
-      reason: `same range [${coreDelta.start}, ${coreDelta.end}) edited differently`
-    }
-  }
-
-  // 映射到 Core 坐标：Core 的改动区间整体在原生改动之前时，原生区间整体右移。
-  if (coreDelta.end <= nativeDelta.start) {
-    const shift: number = coreDelta.replacement.length - (coreDelta.end - coreDelta.start)
-    const mappedStart: number = nativeDelta.start + shift
-    const mappedEnd: number = nativeDelta.end + shift
-    if (mappedStart < 0 || mappedEnd > core.length) {
-      return {
-        ok: false,
-        kind: 'conflict',
-        merged: core,
-        reason: `mapped native delta out of bounds [${mappedStart}, ${mappedEnd}) coreLen=${core.length}`
-      }
-    }
-    return {
-      ok: true,
-      kind: 'merged',
-      merged: applyTextDelta(core, {
-        start: mappedStart,
-        end: mappedEnd,
-        replacement: nativeDelta.replacement
-      }),
-      reason: ''
-    }
-  }
-  if (nativeDelta.end <= coreDelta.start) {
-    return {
-      ok: true,
-      kind: 'merged',
-      merged: applyTextDelta(core, nativeDelta),
-      reason: ''
-    }
-  }
-  return {
-    ok: false,
-    kind: 'conflict',
-    merged: core,
-    reason: `overlapping edits core=[${coreDelta.start}, ${coreDelta.end})`
-      + ` native=[${nativeDelta.start}, ${nativeDelta.end})`
-  }
-}
-
-/**
- * 触发 Core 既有章节提交冲突材料的版本哨兵。
- *
- * `ChapterCommitRequest.expected` 的 CAS 比较要求 object_generation 与 content_sha256
- * 非空；这里故意使用空 sha256 与 revision 0，使任意真实版本都不可能匹配，Core 会把
- * 磁盘当前正文（local.md）、原生未确认正文（incoming.md）与 baseContent（base.md）
- * 写入既有 conflict_dir 后返回 CHAPTER_VERSION_CONFLICT，不会写正文。
- *
- * 调用方必须只在会话进入真实冲突时使用，并核对返回错误码是 CHAPTER_VERSION_CONFLICT；
- * 这是 #1062 持久提交所有权下的既有接口，不新增另一套持久化流程。
- */
-export interface EditorConflictVersionSentinel {
-  objectGeneration: string
-  revision: number
-  contentSha256: string
-}
-
-export function editorConflictVersionSentinel(): EditorConflictVersionSentinel {
-  return {
-    objectGeneration: 'editor-conflict-material',
-    revision: 0,
-    contentSha256: ''
-  }
 }
 
 /**

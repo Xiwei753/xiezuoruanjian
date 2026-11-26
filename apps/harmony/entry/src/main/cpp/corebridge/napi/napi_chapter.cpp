@@ -160,6 +160,18 @@ static napi_value NativeSaveChapterVersioned(napi_env env, napi_callback_info in
                                SaveChapterVersionedJsonWorker);
 }
 
+// Issue #1063：只写编辑会话冲突材料，不发布正文、不做版本 CAS。
+static char* WriteEditorConflictMaterialJsonWorker(const char* input) {
+    return writer_core_write_editor_conflict_material_json(input);
+}
+
+static napi_value NativeWriteEditorConflictMaterial(napi_env env, napi_callback_info info) {
+    std::string input;
+    NapiJsonAsyncReadArg(env, info, &input);
+    return NapiJsonAsyncSubmit(env, "writeEditorConflictMaterial", input.c_str(),
+                               WriteEditorConflictMaterialJsonWorker);
+}
+
 static napi_value NativeClearChapterVersioned(napi_env env, napi_callback_info info) {
     std::string input;
     NapiJsonAsyncReadArg(env, info, &input);
@@ -262,6 +274,7 @@ napi_property_descriptor* getChapterDescriptors(size_t* count) {
         {"nativeReorderChapters", nullptr, NativeReorderChapters, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeClearChapter", nullptr, NativeClearChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetRecentEdits", nullptr, NativeGetRecentEdits, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeWriteEditorConflictMaterial", nullptr, NativeWriteEditorConflictMaterial, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     *count = sizeof(desc) / sizeof(desc[0]);
     return desc;

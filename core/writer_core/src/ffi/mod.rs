@@ -14,6 +14,7 @@
 pub mod annotation_ops;
 pub mod app_state_ops;
 pub mod correction_ops;
+pub mod editor_conflict;
 pub mod editor_session_ops;
 pub mod project_ops;
 pub mod search_ops;

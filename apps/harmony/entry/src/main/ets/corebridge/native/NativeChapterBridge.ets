@@ -1,4 +1,6 @@
 import { ChapterMeta, ChapterContent, ChapterSaveReceipt, ChapterVersion } from '../dto/ProjectDtos'
+import { EditorConflictMaterialRequest, EditorConflictMaterialReceipt,
+  decodeEditorConflictMaterialReceipt } from '../dto/EditorConflictDtos'
 import { ResultEnvelope } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeChapterMeta, decodeChapterContent, decodeChapterSaveReceipt, decodeArray } from '../codec/CoreWireDecoders'
@@ -90,32 +92,34 @@ export class NativeChapterBridge {
     } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
   }
 
-  // Issue #1063：真实编辑器冲突只写 Core 既有冲突材料（local/incoming/base），
-  // 不带 proof batch，避免 pending proof 校验在版本 CAS 之前拒绝请求。
-  async persistChapterConflictMaterial(chapterId: string, text: string,
-    expected: ChapterVersion, baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
-    const loc = await this.core.resolveChapterLocation(chapterId)
+  // Issue #1063：编辑会话冲突材料专用入口。只写 base/local/incoming 与 editor-session.json，
+  // 不发布正文、不做版本 CAS；返回冲突事务 id 与冲突目录供状态机后续处理。
+  async writeEditorConflictMaterial(
+    request: EditorConflictMaterialRequest): Promise<ResultEnvelope<EditorConflictMaterialReceipt>> {
+    const loc = await this.core.resolveChapterLocation(request.chapterId)
     if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${request.chapterId} not found`}
     }
     try {
-      // 与 saveChapterVersioned 的 payload 对齐，但故意不携带 proofSnapshotRevision/proofEventIds：
-      // Core 走普通版本 CAS，预期版本失配后写冲突材料并返回 CHAPTER_VERSION_CONFLICT。
       const payload: string = JSON.stringify({
         projectId: loc.projectId,
         volumeId: loc.volumeId,
-        chapterId: chapterId,
-        content: text,
-        generation: expected.objectGeneration,
-        revision: expected.revision,
-        sha256: expected.contentSha256,
-        baseContent: baseContent,
-        allowEmptyOverwrite: false,
-        clear: false
+        chapterId: request.chapterId,
+        baseContent: request.baseContent,
+        coreContent: request.coreContent,
+        nativeContent: request.nativeContent,
+        coreVersion: request.coreVersion,
+        localVersion: request.localVersion,
+        coreSessionId: request.coreSessionId,
+        localSessionId: request.localSessionId,
+        coreRevision: request.coreRevision,
+        baseRevision: request.baseRevision,
+        changeSequence: request.changeSequence,
+        detail: request.detail
       })
-      const jsonStr: string = await this.core.getNativeModule().nativeSaveChapterVersioned(payload)
-      return this.core.decodeEnvelope<ChapterSaveReceipt>(jsonStr, decodeChapterSaveReceipt)
-    } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
+      const jsonStr: string = await this.core.getNativeModule().nativeWriteEditorConflictMaterial(payload)
+      return this.core.decodeEnvelope<EditorConflictMaterialReceipt>(jsonStr, decodeEditorConflictMaterialReceipt)
+    } catch (e) { return nativeError<EditorConflictMaterialReceipt>(e) }
   }
 
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
