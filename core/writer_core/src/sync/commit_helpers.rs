@@ -901,8 +901,9 @@ fn commit_synced_chapter_bodies(
                     &change.key.volume_id,
                     &change.key.chapter_id,
                 );
-                let live = crate::chapter::commit::read_chapter_state(
+                let live = crate::chapter::commit::read_chapter_state_recovering(
                     live_root,
+                    guard,
                     &change.key.volume_id,
                     &change.key.chapter_id,
                 );
@@ -922,10 +923,25 @@ fn commit_synced_chapter_bodies(
                             change.key.volume_id, change.key.chapter_id
                         )));
                     }
-                    (Ok((_, base_text, base_version)), Ok(_)) => {
+                    (Ok((_, base_text, base_version)), Ok((_, live_text, live_version))) => {
+                        let expected = if base_version.object_generation.is_empty()
+                            || base_version.content_sha256.is_empty()
+                        {
+                            if base_text != live_text
+                                || base_version.revision != live_version.revision
+                            {
+                                return Err(crate::error::Error::Other(format!(
+                                    "sync delete legacy base changed: {}/{}",
+                                    change.key.volume_id, change.key.chapter_id
+                                )));
+                            }
+                            live_version
+                        } else {
+                            base_version
+                        };
                         let mut request =
                             crate::chapter::ChapterCommitRequest::new(change.key.clone(), "");
-                        request.expected = Some(base_version);
+                        request.expected = Some(expected);
                         request.mutation = crate::chapter::ChapterMutationKind::Delete;
                         request.source = crate::chapter::ChapterCommitSource::Sync;
                         request.allow_empty_overwrite = true;
