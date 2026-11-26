@@ -206,6 +206,11 @@ pub(crate) fn build_replace_project_plan(
                 content,
             });
         } else if live_path.exists() {
+            // 作品级校对结果是不可变并集对象：整树还原时 live 独有的记录
+            // 也必须保留，不能被这次还原删掉（别台设备仍可能需要）。
+            if crate::correction::is_synced_result_path(&rel_str) {
+                continue;
+            }
             // live 有、staging 没有 → Delete。
             plan.content_actions
                 .push(CommitAction::Delete { rel_path: rel });
