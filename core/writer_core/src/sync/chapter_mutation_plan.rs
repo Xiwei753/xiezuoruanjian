@@ -135,6 +135,24 @@ pub(crate) fn plan_synced_chapter_mutations(
                             action_index,
                         });
                     entry.mutation = SyncedChapterMutation::Delete;
+                } else if let Some((volume_id, chapter_id)) = chapter_meta_parts(rel_path) {
+                    let entry = grouped
+                        .entry((volume_id.clone(), chapter_id.clone()))
+                        .or_insert_with(|| SyncedChapterChange {
+                            key: ChapterKey::new(
+                                project_id.to_string(),
+                                volume_id.clone(),
+                                chapter_id.clone(),
+                            ),
+                            mutation: SyncedChapterMutation::Delete,
+                            body: None,
+                            meta: None,
+                            action_index,
+                        });
+                    // 同章还有正文 Apply 时以正文为准，不能把章节删掉。
+                    if entry.body.is_none() && entry.mutation != SyncedChapterMutation::Replace {
+                        entry.mutation = SyncedChapterMutation::Delete;
+                    }
                 }
             }
         }
