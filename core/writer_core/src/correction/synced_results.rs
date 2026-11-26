@@ -9,14 +9,20 @@
 //!
 //! 记录身份不依赖绝对路径、mtime、设备或时间戳，因此同一作品在不同设备上对
 //! 同一段文本、同一 scanner 代际算出同一个 `record_key`，同步后自然去重。
-//! 同步语义是不可变并集：远端删除不删除本地记录，同 identity 不同内容保留本地。
+//! 结果 payload 也纳入身份：同一输入的不同有效结果成为不同不可变对象并集，
+//! 读端按文件键排序选确定性赢家；远端删除不删除本地记录。
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::sync::hash::content_md5;
+use crate::sync::local_mutations::{self, LocalMutationRecord};
+use crate::sync::SyncService;
+use crate::storage::transaction::SaveTransaction;
 
 use super::result_cache::CachedSuggestion;
 
@@ -67,6 +73,9 @@ pub(crate) struct SyncedCorrectionRecord {
 
 impl SyncedCorrectionRecord {
     /// 固定布局下的记录键（小写 hex SHA-256）。
+    ///
+    /// 身份包含规范化结果 payload 的摘要：同一输入身份下不同有效结果会落到
+    /// 不同不可变文件，而不是互相覆盖；读端按文件键排序取确定性赢家。
     pub(crate) fn record_key(&self) -> String {
         record_key(
             &self.project_id,
@@ -75,8 +84,53 @@ impl SyncedCorrectionRecord {
             &self.scanner_stable,
             &self.text_sha256,
             &self.context_sha256,
+            &payload_digest(&self.suggestions),
         )
     }
+}
+
+/// 规范化结果 payload 的 SHA-256：建议按字段全排序后逐字段长度前缀拼接，
+/// 不受 HashMap/JSON 键顺序影响，也不含设备/时间字段。
+pub(crate) fn payload_digest(suggestions: &[CachedSuggestion]) -> String {
+    let mut sorted: Vec<&CachedSuggestion> = suggestions.iter().collect();
+    sorted.sort_by(|left, right| {
+        (
+            left.start_byte,
+            left.end_byte,
+            left.original.as_str(),
+            left.replacement.as_str(),
+            left.source.as_str(),
+            left.rule_id.as_str(),
+            left.severity.as_str(),
+        )
+            .cmp(&(
+                right.start_byte,
+                right.end_byte,
+                right.original.as_str(),
+                right.replacement.as_str(),
+                right.source.as_str(),
+                right.rule_id.as_str(),
+                right.severity.as_str(),
+            ))
+    });
+    let mut canonical = String::new();
+    for suggestion in sorted {
+        push_digest_field(&mut canonical, &suggestion.start_byte.to_string());
+        push_digest_field(&mut canonical, &suggestion.end_byte.to_string());
+        push_digest_field(&mut canonical, &suggestion.original);
+        push_digest_field(&mut canonical, &suggestion.replacement);
+        push_digest_field(&mut canonical, &suggestion.source);
+        push_digest_field(&mut canonical, &suggestion.rule_id);
+        push_digest_field(&mut canonical, &suggestion.severity);
+    }
+    sha256_hex(canonical.as_bytes())
+}
+
+fn push_digest_field(buffer: &mut String, value: &str) {
+    buffer.push_str(&value.len().to_string());
+    buffer.push(':');
+    buffer.push_str(value);
+    buffer.push('\u{1f}');
 }
 
 /// scanner 稳定身份 = SHA-256(`correction-scanner-sync-v1|model|lexicon|rules`)。
@@ -102,10 +156,11 @@ pub(crate) fn record_key(
     scanner_stable: &str,
     text_sha256: &str,
     context_sha256: &str,
+    payload_sha256: &str,
 ) -> String {
     let identity = format!(
         "{RECORD_IDENTITY_PREFIX}|{SEGMENT_IDENTITY_VERSION}|{project_id}|{chapter_id}|\
-         {mode}|{scanner_stable}|{text_sha256}|{context_sha256}"
+         {mode}|{scanner_stable}|{text_sha256}|{context_sha256}|{payload_sha256}"
     );
     sha256_hex(identity.as_bytes())
 }
@@ -159,6 +214,26 @@ fn chapter_records_dir(project_root: &Path, chapter_id: &str) -> Option<PathBuf>
 fn normalize(record: &SyncedCorrectionRecord) -> SyncedCorrectionRecord {
     let mut record = record.clone();
     record.checked = true;
+    record.suggestions.sort_by(|left, right| {
+        (
+            left.start_byte,
+            left.end_byte,
+            left.original.as_str(),
+            left.replacement.as_str(),
+            left.source.as_str(),
+            left.rule_id.as_str(),
+            left.severity.as_str(),
+        )
+            .cmp(&(
+                right.start_byte,
+                right.end_byte,
+                right.original.as_str(),
+                right.replacement.as_str(),
+                right.source.as_str(),
+                right.rule_id.as_str(),
+                right.severity.as_str(),
+            ))
+    });
     record
 }
 
@@ -195,12 +270,118 @@ pub(crate) fn write_record(
     Ok(true)
 }
 
+/// 通过 Core 的业务对象持久事务发布一批记录，并把新增对象写入 mutation/outbox。
+///
+/// - 文件内容与 mutation 账本都未变时不写、不产生新的同步代次；
+/// - 文件已存在但账本缺事实时只补账本（重启后可重试未完成的发布）；
+/// - 同一路径只提交一次，批次成功后才追加 mutation，失败保留待发布责任。
+pub(crate) fn publish_records(
+    project_root: &Path,
+    records: &[SyncedCorrectionRecord],
+) -> crate::Result<(usize, usize)> {
+    if records.is_empty() {
+        return Ok((0, 0));
+    }
+    // 同步账本/状态损坏不能阻断校对结果的 durable 落盘：缺省只用空账本/空基线
+    // 继续写文件与 mutation，下一次同步会通过完整核对重建基线。
+    let latest = match local_mutations::load_latest(project_root) {
+        Ok(latest) => latest,
+        Err(error) => {
+            log::warn!("[correction] local mutation ledger read failed: {error}");
+            std::collections::HashMap::new()
+        }
+    };
+    let state = match SyncService::load_sync_state_read_only(project_root, None) {
+        Ok(state) => Some(state),
+        Err(error) => {
+            log::warn!("[correction] sync state read failed; publish without base hash: {error}");
+            None
+        }
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let device_id = state
+        .as_ref()
+        .map(|state| state.device_id.clone())
+        .filter(|device_id| !device_id.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let mut files: BTreeMap<String, String> = BTreeMap::new();
+    let mut mutation_paths: HashSet<String> = HashSet::new();
+    let mut mutations: Vec<LocalMutationRecord> = Vec::new();
+    for record in records {
+        if record.schema_version != SCHEMA_VERSION {
+            continue;
+        }
+        let normalized = normalize(record);
+        let Some(dir) = chapter_records_dir(project_root, &normalized.chapter_id) else {
+            continue;
+        };
+        let key = normalized.record_key();
+        let rel_path = format!("{RESULTS_DIR}/{}/{key}.json", normalized.chapter_id);
+        let json = serde_json::to_string(&normalized).map_err(|error| {
+            crate::Error::Other(format!("correction result encode failed: {error}"))
+        })?;
+        let content_hash = content_md5(json.as_bytes());
+        let path = dir.join(format!("{key}.json"));
+        let file_needs_write = std::fs::read(&path)
+            .map(|existing| existing != json.as_bytes())
+            .unwrap_or(true);
+        if file_needs_write {
+            files.insert(rel_path.clone(), json);
+        }
+        let mutation_needed = latest.get(&rel_path).map_or(true, |previous| {
+            !previous.is_upsert() || previous.content_hash != content_hash
+        });
+        if mutation_needed && mutation_paths.insert(rel_path.clone()) {
+            let (object_type, object_id) = local_mutations::object_identity(&rel_path);
+            mutations.push(LocalMutationRecord {
+                schema_version: 1,
+                transaction_id: String::new(),
+                sync_root: project_root.to_string_lossy().into_owned(),
+                path: rel_path.clone(),
+                object_type,
+                object_id,
+                op: "upsert".to_string(),
+                base_hash: state
+                    .as_ref()
+                    .and_then(|state| state.known_files.get(&rel_path).cloned()),
+                content_hash,
+                updated_at_ms: now_ms,
+                deleted_at_ms: None,
+                device_id: device_id.clone(),
+                object_revision: None,
+                seq: 0,
+            });
+        }
+    }
+    let mut transaction = if files.is_empty() {
+        None
+    } else {
+        Some(SaveTransaction::new(project_root))
+    };
+    if let Some(transaction) = transaction.as_mut() {
+        for (rel_path, json) in &files {
+            transaction.add_file(rel_path, json)?;
+        }
+        transaction.commit()?;
+    }
+    let transaction_id = match transaction.as_ref() {
+        Some(transaction) => transaction.transaction_id().to_string(),
+        None => uuid::Uuid::new_v4().to_string(),
+    };
+    for mutation in &mut mutations {
+        mutation.transaction_id = transaction_id.clone();
+    }
+    local_mutations::append_batch(project_root, &mutations)?;
+    Ok((files.len(), mutations.len()))
+}
+
 /// 加载一个章节在当前 mode + scanner 稳定身份下的全部记录。
 ///
 /// 目录或文件缺失、JSON 损坏、版本不符、身份不匹配都跳过；本函数不返回错误，
 /// 让恢复路径保持只读且可降级。
 pub(crate) fn load_records(
     project_root: &Path,
+    project_id: &str,
     chapter_id: &str,
     mode: &str,
     scanner_stable: &str,
@@ -225,11 +406,16 @@ pub(crate) fn load_records(
         let Ok(record) = serde_json::from_str::<SyncedCorrectionRecord>(&content) else {
             continue;
         };
+        let Some(file_key) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
         if record.schema_version != SCHEMA_VERSION
             || !record.checked
+            || record.project_id != project_id
             || record.chapter_id != chapter_id
             || record.mode != mode
             || record.scanner_stable != scanner_stable
+            || file_key != record.record_key()
         {
             continue;
         }

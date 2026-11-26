@@ -1103,6 +1103,11 @@ export class NativeRichEditorBridge {
 
       // 提交成功：立刻推进 receipt（已包含序号 + 原生侧基线），不能等整批结束才记录，
       // 否则后续分支进入 conflict 时这批已应用事件会丢，重试可能重复提交。
+      // Issue #1063 复审 #7195630106：重基与正常输入共用同一已应用事务结算，
+      // 用映射到真实 Core 基线的范围与 before/after 正文判断合法清空。
+      this.settleAppliedTransaction(coreSessionId, mapped.queueSequence,
+        expectedText, after.text, mapped.startUtf16, mapped.endUtf16,
+        mapped.insertedText, after.revision, cause)
       expectedText = expectedAfter
       expectedRevision = after.revision
       lastIncluded = mapped.queueSequence
@@ -2290,12 +2295,21 @@ export class NativeRichEditorBridge {
       }
 
       const snap = this.coordinator.getSnapshot()
-      if (snap === null) {
+      const coreSessionId: number | null = this.coordinator.getSessionId()
+      if (snap === null || coreSessionId === null) {
         this.enterConflict('no active core session during pending edit drain')
         return
       }
 
       const baselineText = snap.text
+      if (edit.insertedText.length === 0 && edit.oldText.length === 0) {
+        // 纯选择/无正文变化事件不进入编辑事务；直接消费，避免条件入口返回参数错误。
+        this.pendingEdits.shift()
+        if (edit.queueSequence > this.appliedEditSequence) {
+          this.appliedEditSequence = edit.queueSequence
+        }
+        continue
+      }
       if (baselineText !== edit.beforeText) {
         // 排队期间 Core 基线被推进：不在增量路径上猜编辑范围，交给统一三方合并处理。
         // 消费游标冻结（edit 保留在队首），reconcile 会把全部待提交编辑与 Core 侧改动合并。
@@ -2314,20 +2328,31 @@ export class NativeRichEditorBridge {
         return
       }
 
-      let result: ResultEnvelope<EditorEditResult> | null = null
-      if (edit.oldText.length > 0 && edit.insertedText.length > 0) {
-        result = await this.coordinator.replace(byteStart, byteEnd, edit.insertedText, edit.oldText, edit.cause)
-      } else if (edit.oldText.length > 0) {
-        result = await this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
-      } else if (edit.insertedText.length > 0) {
-        result = await this.coordinator.insert(byteStart, edit.insertedText, edit.cause)
-      }
+      // Issue #1063 复审评论 #7195630106：正常输入与重基共用同一个条件事务入口。
+      // 出队时再核对 session/revision/整篇正文/oldText；STALE 时不能消费事件。
+      const result: ResultEnvelope<EditorEditResult> =
+        await this.coordinator.conditionalEdit(
+          coreSessionId, snap.revision, snap.text,
+          byteStart, byteEnd, edit.insertedText, edit.oldText, edit.cause)
 
       if (edit.sessionId !== this.sessionId) {
         return
       }
 
-      if (result === null || !result.success || result.data === undefined ||
+      if (!result.success && result.errorCode === 'STALE_BASELINE') {
+        // 基线已前进但该编辑尚未应用：保留队首事件，交给统一重基重新映射。
+        this.enterReconciling(
+          `core baseline advanced during pending edit at offset ${edit.startUtf16}`)
+        return
+      }
+      if (!result.success && result.errorCode === 'SESSION_CHANGED') {
+        // 不把旧坐标提交到新会话；本地会话已替换时下一轮会丢弃该旧事件。
+        if (this.sessionId === edit.sessionId) {
+          this.enterConflict('core session changed during pending edit')
+        }
+        return
+      }
+      if (!result.success || result.data === undefined ||
           (result.data.outcome !== EditorEditOutcome.Applied &&
            result.data.outcome !== EditorEditOutcome.AppliedWithAdjustedSelection &&
            result.data.outcome !== EditorEditOutcome.NoChange)) {
@@ -2337,10 +2362,6 @@ export class NativeRichEditorBridge {
       }
 
       this.pendingEdits.shift()
-      // 这笔事务已经应用到 Core：推进全局队列序号，退出屏障据此判断 commit 已进入 Core。
-      if (edit.queueSequence > this.appliedEditSequence) {
-        this.appliedEditSequence = edit.queueSequence
-      }
 
       const newSnap = this.coordinator.getSnapshot()
       if (newSnap !== null && edit.sessionId === this.sessionId) {
@@ -2360,14 +2381,19 @@ export class NativeRichEditorBridge {
           this.nativeCoreDiverged = false
           this.nativeCoreDivergedSessionId = null
         }
-        // Issue #1054：记录/清理“用户删除至空”的合法意图。
-        this.updateEmptyDocumentIntent(edit, baselineText, newSnap.text, mappedStart, mappedEnd)
+        // 正常输入与重基共用同一已应用事务结算（队列确认 + 合法清空意图）。
+        this.settleAppliedTransaction(coreSessionId, edit.queueSequence,
+          baselineText, newSnap.text, mappedStart, mappedEnd, edit.insertedText,
+          newSnap.revision, edit.cause)
         if (result.data.outcome === EditorEditOutcome.AppliedWithAdjustedSelection &&
             this.richEditorController !== null) {
           const utf16Cursor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.cursor)
           const utf16Anchor = TextOffsetMapper.utf8ToUtf16(newSnap.text, newSnap.selectionAnchor)
           this.richEditorController.setSelection(utf16Anchor, utf16Cursor)
         }
+      } else if (edit.queueSequence > this.appliedEditSequence) {
+        // 事务已 Applied 但快照暂不可读：队列确认仍要前进，避免退出屏障永久等待。
+        this.appliedEditSequence = edit.queueSequence
       }
 
       if (edit.sessionId === this.sessionId) {
@@ -2381,27 +2407,33 @@ export class NativeRichEditorBridge {
     }
   }
 
-  // 只在编辑事务把整章正文由非空删成空、且删除范围覆盖全部旧正文时记录意图。
-  // 程序性初始空视图、卸载、切章不会进入这里；新的非空提交会清理旧意图。
-  private updateEmptyDocumentIntent(edit: PendingEdit, baselineText: string, newText: string,
-    mappedStart: number, mappedEnd: number): void {
-    if (newText.length > 0) {
-      this.emptyDocumentIntent = null
+  // 正常输入与重基共用的“已应用事务”结算入口：
+  // - 推进本地队列确认（退出屏障据此判断 commit 已进入 Core）；
+  // - 仅在真实事务把非空整章删成空、且删除范围覆盖全部旧正文时记录合法清空意图；
+  // - 非空提交清除旧意图；程序性初始空视图/恢复占位不调用这里。
+  private settleAppliedTransaction(coreSessionId: number, queueSequence: number,
+    beforeText: string, afterText: string, startUtf16: number, endUtf16: number,
+    insertedText: string, revision: number, cause: EditorTransactionCause): void {
+    if (queueSequence > this.appliedEditSequence) {
+      this.appliedEditSequence = queueSequence
+    }
+    if (afterText.length > 0) {
+      // 只有真实改动了正文的非空提交才清除旧意图；NoChange 不伪造一次提交。
+      if (afterText !== beforeText) {
+        this.emptyDocumentIntent = null
+      }
       return
     }
-    const coreSessionId = this.coordinator.getSessionId()
-    if (coreSessionId === null || baselineText.length === 0) {
+    if (beforeText.length === 0 || insertedText.length > 0) {
       return
     }
-    // 以映射到当前 Core 基线的删除范围判断：一次性覆盖整章旧正文才算合法清空事务。
-    const deletesWholeDocument: boolean = edit.insertedText.length === 0 &&
-      mappedStart === 0 && mappedEnd >= baselineText.length
-    if (!deletesWholeDocument) {
+    // 程序性恢复/占位不是用户清空事务，不能生成合法清空意图。
+    if (cause === EditorTransactionCause.Programmatic) {
       return
     }
-    const snapshot = this.coordinator.getSnapshot()
-    const revision = snapshot !== null ? snapshot.revision : this.lastAppliedRevision
-    this.emptyDocumentIntent = { sessionId: coreSessionId, revision: revision }
+    if (startUtf16 === 0 && endUtf16 >= beforeText.length) {
+      this.emptyDocumentIntent = { sessionId: coreSessionId, revision: revision }
+    }
   }
 
   private computeDiff(oldText: string, newText: string): TextDiff {

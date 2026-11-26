@@ -19,19 +19,20 @@ fn record(text: &str, context: &str) -> SyncedCorrectionRecord {
 
 #[test]
 fn record_key_is_stable_and_isolated() {
-    let base = record_key("p", "c", MODE_MODEL, "s", "t", "ctx");
-    assert_eq!(base, record_key("p", "c", MODE_MODEL, "s", "t", "ctx"));
+    let empty_payload = payload_digest(&[]);
+    let base = record_key("p", "c", MODE_MODEL, "s", "t", "ctx", &empty_payload);
+    assert_eq!(base, record_key("p", "c", MODE_MODEL, "s", "t", "ctx", &empty_payload));
     assert_eq!(base.len(), 64);
     assert!(base
         .bytes()
         .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
     for other in [
-        record_key("p2", "c", MODE_MODEL, "s", "t", "ctx"),
-        record_key("p", "c2", MODE_MODEL, "s", "t", "ctx"),
-        record_key("p", "c", MODE_RULES, "s", "t", "ctx"),
-        record_key("p", "c", MODE_MODEL, "s2", "t", "ctx"),
-        record_key("p", "c", MODE_MODEL, "s", "t2", "ctx"),
-        record_key("p", "c", MODE_MODEL, "s", "t", "ctx2"),
+        record_key("p2", "c", MODE_MODEL, "s", "t", "ctx", &empty_payload),
+        record_key("p", "c2", MODE_MODEL, "s", "t", "ctx", &empty_payload),
+        record_key("p", "c", MODE_RULES, "s", "t", "ctx", &empty_payload),
+        record_key("p", "c", MODE_MODEL, "s2", "t", "ctx", &empty_payload),
+        record_key("p", "c", MODE_MODEL, "s", "t2", "ctx", &empty_payload),
+        record_key("p", "c", MODE_MODEL, "s", "t", "ctx2", &empty_payload),
     ] {
         assert_ne!(base, other);
     }
@@ -56,7 +57,7 @@ fn write_is_idempotent_and_empty_suggestions_round_trip() {
         "equivalent record must not rewrite"
     );
     assert_eq!(first, std::fs::read_to_string(&path).unwrap());
-    let loaded = load_records(root, "chapter-1", MODE_MODEL, "stable-a");
+    let loaded = load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a");
     assert_eq!(loaded.len(), 1);
     assert!(loaded[0].suggestions.is_empty() && loaded[0].checked);
     assert!(loaded[0].text_sha256 == "t" && loaded[0].context_sha256 == "ctx");
@@ -83,12 +84,12 @@ fn load_skips_bad_files_and_identity_mismatches() {
         serde_json::to_string(&wrong_version).unwrap(),
     )
     .unwrap();
-    assert!(load_records(root, "chapter-1", MODE_MODEL, "stable-a").is_empty());
+    assert!(load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a").is_empty());
     assert!(write_record(root, &record("t3", "ctx")).unwrap());
-    let loaded = load_records(root, "chapter-1", MODE_MODEL, "stable-a");
+    let loaded = load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a");
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].text_sha256, "t3");
-    assert!(load_records(root, "chapter-1", MODE_RULES, "stable-a").is_empty());
-    assert!(load_records(root, "chapter-1", MODE_MODEL, "stable-b").is_empty());
-    assert!(load_records(root, "missing-chapter", MODE_MODEL, "stable-a").is_empty());
+    assert!(load_records(root, "project-a", "chapter-1", MODE_RULES, "stable-a").is_empty());
+    assert!(load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-b").is_empty());
+    assert!(load_records(root, "project-a", "missing-chapter", MODE_MODEL, "stable-a").is_empty());
 }

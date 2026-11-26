@@ -570,6 +570,15 @@ export class CorrectionCoordinator {
     this.errorMessage = ''
     this.notify()
     try {
+      // Issue #1064 复审 #7196305554：先用 restore-only 快照判断是否真有未检查段，
+      // 已由同步/本地缓存完整覆盖时直接收敛，不初始化 ONNX 模型。
+      const preflight = await this.bridge.getChapterSnapshot(
+        snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision)
+      if (preflight.success && preflight.data !== undefined &&
+          !preflight.data.hasUncheckedSegments) {
+        this.acceptCheckResult(generation, snapshot, preflight, 'restore')
+        return
+      }
       await this.prepareModelForScan()
       if (this.currentRequest(generation) === null) {
         return

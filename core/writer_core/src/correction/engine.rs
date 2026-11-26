@@ -691,10 +691,23 @@ impl CorrectionScanner {
         if guard.scanner_fingerprint != scanner_fingerprint {
             guard.segments.clear();
             guard.scanner_fingerprint = scanner_fingerprint.to_string();
+            guard.checked_mode = self.record_mode.to_string();
             guard.needs_reconcile = true;
             guard.semantic_dirty = true;
             guard.last_session_id = 0;
             guard.last_revision = 0;
+        }
+        // 规则降级/推理失败不能确认模型覆盖：目标模式变化时清空 checked、
+        // 标记 dirty，让下一次真实扫描重新建立覆盖；旧缓存未知模式也不会
+        // 被继承为模型覆盖。
+        if guard.checked_mode != self.record_mode {
+            for segment in &mut guard.segments {
+                segment.checked = None;
+                segment.dirty = true;
+            }
+            guard.checked_mode = self.record_mode.to_string();
+            guard.needs_reconcile = true;
+            guard.semantic_dirty = true;
         }
 
         let same_session = guard.last_session_id == self.session_id;
@@ -746,8 +759,12 @@ impl CorrectionScanner {
         // 同步目录（每笔都读目录会把按键路径变成 I/O 热路径）。
         if matches!(
             request,
-            CorrectionCheckRequest::RestoreOnly | CorrectionCheckRequest::All
+            CorrectionCheckRequest::RestoreOnly
+                | CorrectionCheckRequest::All
+                | CorrectionCheckRequest::Pending
         ) {
+            // Pending 是周期/手动的整章增量检查：先恢复可用同步覆盖，再判断
+            // 是否真的有未检查段需要初始化模型；Edits 热路径仍不读同步目录。
             self.restore_synced_records(guard, text);
         }
         guard.last_session_id = self.session_id;
@@ -755,36 +772,36 @@ impl CorrectionScanner {
         Ok(())
     }
 
-    /// 用同步记录回填未检查 segment。同 key 多条记录取首条。
+    /// 用同步记录回填未检查 segment。同输入身份多条记录按文件键排序取首条
+    /// （确定性赢家）；同文本重复段都用 get 回填，不消费唯一记录。
     fn restore_synced_records(&self, guard: &mut ChapterCorrectionCacheState, text: &str) {
+        let Some(project_root) = self.store.project_root(&self.project_id) else {
+            return;
+        };
+        let records = synced_results::load_records(
+            &project_root,
+            &self.project_id,
+            &self.chapter_id,
+            self.record_mode,
+            &self.scanner_stable,
+        );
+        if records.is_empty() {
+            return;
+        }
+        // 文件已存在但 mutation 账本缺失（上次发布失败）时在这里补账本；
+        // 只读本章记录，不重新扫描作品，也不加载模型。
+        if let Err(error) = synced_results::publish_records(&project_root, &records) {
+            log::warn!(
+                "[correction] synced result publication retry failed chapter_digest={} error={}",
+                content_fingerprint(&self.chapter_id),
+                error
+            );
+        }
         if !guard
             .segments
             .iter()
             .any(|segment| segment.checked.is_none())
         {
-            return;
-        }
-        let Some(project_root) = self.store.project_root(&self.project_id) else {
-            return;
-        };
-        let mut records = synced_results::load_records(
-            &project_root,
-            &self.chapter_id,
-            self.record_mode,
-            &self.scanner_stable,
-        );
-        // 配置了模型但本次只能规则扫描（模型文件缺失/加载降级）时，之前规则
-        // 代际写下的记录仍属于同一 scanner 稳定身份；恢复时回退读取 rules，
-        // 不把模型配置当成“一定有模型结果”。
-        if records.is_empty() && self.record_mode == synced_results::MODE_MODEL {
-            records = synced_results::load_records(
-                &project_root,
-                &self.chapter_id,
-                synced_results::MODE_RULES,
-                &self.scanner_stable,
-            );
-        }
-        if records.is_empty() {
             return;
         }
         let mut by_segment: std::collections::HashMap<(String, String), Vec<CachedSuggestion>> =
@@ -815,7 +832,7 @@ impl CorrectionScanner {
                 synced_results::text_sha256(segment_text),
                 synced_results::text_sha256(context_text),
             );
-            let Some(suggestions) = by_segment.remove(&key) else {
+            let Some(suggestions) = by_segment.get(&key).cloned() else {
                 continue;
             };
             if !suggestions_match(text, start, end, &suggestions) {
@@ -859,7 +876,8 @@ impl CorrectionScanner {
         })
     }
 
-    /// 写记录失败只记日志，不影响扫描结果/快照。
+    /// 用 Core 业务对象持久事务发布本批记录并追加 mutation 事实；
+    /// 失败只记日志，记录保留在磁盘，下一次恢复时补发布。
     fn persist_synced_records(&self, records: Vec<SyncedCorrectionRecord>) {
         if records.is_empty() {
             return;
@@ -867,10 +885,20 @@ impl CorrectionScanner {
         let Some(project_root) = self.store.project_root(&self.project_id) else {
             return;
         };
-        for record in &records {
-            if let Err(error) = synced_results::write_record(&project_root, record) {
+        match synced_results::publish_records(&project_root, &records) {
+            Ok((written, mutated)) => {
+                if written > 0 || mutated > 0 {
+                    log::debug!(
+                        "[correction] published synced results chapter_digest={} written={} mutated={}",
+                        content_fingerprint(&self.chapter_id),
+                        written,
+                        mutated
+                    );
+                }
+            }
+            Err(error) => {
                 log::warn!(
-                    "[correction] synced result write failed chapter_digest={} error={}",
+                    "[correction] synced result publish failed chapter_digest={} error={}",
                     content_fingerprint(&self.chapter_id),
                     error
                 );

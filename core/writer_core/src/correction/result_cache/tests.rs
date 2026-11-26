@@ -17,6 +17,7 @@ fn checked_segment(start: usize, end: usize, text: &str) -> CachedSegment {
 fn empty_state(text: &str) -> ChapterCorrectionCacheState {
     ChapterCorrectionCacheState {
         scanner_fingerprint: "scanner".to_string(),
+        checked_mode: "model".to_string(),
         segments: canonical_segments(text)
             .into_iter()
             .map(|(start, end)| checked_segment(start, end, text))

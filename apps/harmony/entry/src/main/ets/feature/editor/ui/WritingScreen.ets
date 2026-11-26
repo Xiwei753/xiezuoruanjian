@@ -1,6 +1,7 @@
 import { Routes, StarMapRouteParams, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import { WideLayoutMode } from '../../../app/navigation/wide/WideLayoutMode'
 import hilog from '@ohos.hilog'
+import { emitter } from '@kit.BasicServicesKit'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { LocalSettings, ThemeMode } from '../../../corebridge/dto/SettingsDtos'
@@ -29,6 +30,7 @@ import { WideWritingWorkbench } from './wide/WideWritingWorkbench'
 // Issue #825 复核8第 3 点：订阅"刚落盘的 LocalSettings"广播，
 // 让宽屏设置浮层的改动实时回流到本页（对齐 Linux 的 settingsBackend.onSettings_changed）。
 import { LocalSettingsStore } from '../../../feature/settings/presentation/LocalSettingsStore'
+import { SYNC_DURABLE_COMMIT_EVENT_ID } from '../../../feature/settings/presentation/SyncRunTypes'
 import {
   SyncRunListener,
   SyncRunPresentationState,
@@ -377,6 +379,10 @@ export struct WritingScreen {
     })
     this.correctionCoordinator.setScanCompletionListener((): void => {
       void this.cleanupInactiveCorrectionModels().catch(() => {})
+      // Issue #1064 复审 #7196305554：校对结果已由 Core 持久事务 + mutation
+      // 账本落盘；批次完成后唤醒既有 durable 上传调度，由调度器按版本比对
+      // 合并上传，不在这里另起同步循环。
+      emitter.emit({ eventId: SYNC_DURABLE_COMMIT_EVENT_ID })
     })
     // Issue #1064：模型只在真正需要扫描时准备；冷启动缓存全部有效就不加载 ONNX。
     this.correctionCoordinator.setModelPreparationHandler(

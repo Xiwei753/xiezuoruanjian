@@ -148,6 +148,9 @@ struct ChapterCorrectionCache {
     schema_version: u32,
     #[serde(default)]
     scanner_fingerprint: String,
+    /// 这些 checked 结果实际来自哪种扫描模式；旧缓存缺省时不能冒充模型覆盖。
+    #[serde(default)]
+    checked_mode: String,
     #[serde(default)]
     segments: Vec<PersistedSegment>,
 }
@@ -155,6 +158,8 @@ struct ChapterCorrectionCache {
 /// In-memory cache state plus the file location for one chapter.
 pub(crate) struct ChapterCorrectionCacheState {
     pub(crate) scanner_fingerprint: String,
+    /// 当前 checked 结果实际来自的扫描模式（model/rules）；空表示未知旧缓存。
+    pub(crate) checked_mode: String,
     /// Offset-ordered segments covering the current text in memory.
     pub(crate) segments: Vec<CachedSegment>,
     /// True when the on-disk representation no longer matches memory.
@@ -206,6 +211,7 @@ impl ChapterCorrectionCacheState {
     pub(crate) fn load(path: PathBuf) -> Self {
         let mut state = Self {
             scanner_fingerprint: String::new(),
+            checked_mode: String::new(),
             segments: Vec::new(),
             semantic_dirty: false,
             scanning: false,
@@ -238,6 +244,13 @@ impl ChapterCorrectionCacheState {
             return state;
         }
         state.scanner_fingerprint = cache.scanner_fingerprint;
+        state.checked_mode = cache.checked_mode;
+        // 旧缓存没有记录实际扫描模式：不能把规则结果当成模型覆盖继承下来；
+        // 清空 checked 后由下一次真实扫描重新建立覆盖（正文/建议不写回）。
+        if state.checked_mode.is_empty() {
+            state.needs_reconcile = true;
+            return state;
+        }
         state.segments = cache
             .segments
             .into_iter()
@@ -277,6 +290,7 @@ impl ChapterCorrectionCacheState {
         let cache = ChapterCorrectionCache {
             schema_version: SCHEMA_VERSION,
             scanner_fingerprint: self.scanner_fingerprint.clone(),
+            checked_mode: self.checked_mode.clone(),
             segments,
         };
         let json =

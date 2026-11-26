@@ -422,6 +422,19 @@ impl WriterCoreApi {
         text_revision: u64,
         text: String,
     ) -> ApiResult<CorrectionChapterSnapshotDto> {
+        // Issue #1064 复审 #7196305554：先做 restore-only 覆盖检查，已有同步/
+        // 本地覆盖且无未检查段时直接返回，不加载模型、不跑重扫描。
+        let restored = self
+            .correction_restore_scanner(
+                project_id.clone(),
+                chapter_id.clone(),
+                session_id,
+                text_revision,
+            )?
+            .chapter_snapshot(&text)?;
+        if !restored.has_unchecked_segments {
+            return Ok(restored);
+        }
         self.correction_scanner(project_id, chapter_id, session_id, text_revision)?
             .scan_pending(&text)
     }
