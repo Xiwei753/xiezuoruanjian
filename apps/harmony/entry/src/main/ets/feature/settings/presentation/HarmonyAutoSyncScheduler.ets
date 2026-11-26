@@ -61,6 +61,9 @@ export class HarmonyAutoSyncScheduler {
   private config: SyncConfig | null = null
   /** Core 持久化状态中的最近成功同步时刻（毫秒）；null 表示尚无成功记录或当前读不到。 */
   private lastSuccessMs: number | null = null
+  /** 最近一次同步尝试的 Core 时间（Unix 秒归一为毫秒）与失败事实，用于退避。 */
+  private lastAttemptMs: number | null = null
+  private lastAttemptFailed: boolean = false
   /** 进程当前是否前台：仅前台挂周期唤醒 timer。 */
   private isForeground: boolean = false
   /** 前台周期唤醒 timer（只是唤醒，不承诺后台执行）。 */
@@ -349,9 +352,10 @@ export class HarmonyAutoSyncScheduler {
   }
 
   /**
-   * 到期才同步：仅当 enabled && autoSync 且
-   * now - lastSuccess >= max(60, syncIntervalSeconds) * 1000 时进入
-   * SyncOperationController.performSync()。单一 running 任务互斥，重复触发合并为跳过。
+   * 到期才同步：enabled && autoSync && 用户间隔 > 0，且满足之一：
+   * - 上一轮成功（或无失败记录）：now - lastSuccess >= max(60, syncIntervalSeconds) * 1000；
+   * - 上一轮失败：now - lastAttempt >= 失败退避窗口（Issue #1065 复审 #6）。
+   * 单一 running 任务互斥，重复触发合并为跳过。
    */
   async runIfDue(): Promise<void> {
     if (!this.isAutoSyncActive()) {
@@ -511,11 +515,23 @@ export class HarmonyAutoSyncScheduler {
     // 决策前重读 Core 真源：进程内存里的 lastSuccessMs 只是缓存。
     await this.refreshLastSuccessFromCore()
     const intervalMs: number = this.effectiveIntervalMs()
-    const lastSuccessMs: number | null = this.lastSuccessMs
-    if (lastSuccessMs !== null && nowMs - lastSuccessMs < intervalMs) {
-      hilog.info(DOMAIN, TAG, 'runIfDue: not due, elapsedMs=%{public}s intervalMs=%{public}s',
-        (nowMs - lastSuccessMs).toString(), intervalMs.toString())
-      return
+    // Issue #1065 复审 #6：上一轮失败时按"尝试时间"退避，而不是拿旧的
+    // last_success_time 当基准（否则失败后每 60 秒都重新探测一次）。
+    if (this.lastAttemptFailed) {
+      const backoffMs: number = this.failureBackoffMs(intervalMs)
+      const attemptMs: number | null = this.lastAttemptMs
+      if (attemptMs !== null && nowMs - attemptMs < backoffMs) {
+        hilog.info(DOMAIN, TAG, 'runIfDue: backing off after failure, elapsedMs=%{public}s backoffMs=%{public}s',
+          (nowMs - attemptMs).toString(), backoffMs.toString())
+        return
+      }
+    } else {
+      const lastSuccessMs: number | null = this.lastSuccessMs
+      if (lastSuccessMs !== null && nowMs - lastSuccessMs < intervalMs) {
+        hilog.info(DOMAIN, TAG, 'runIfDue: not due, elapsedMs=%{public}s intervalMs=%{public}s',
+          (nowMs - lastSuccessMs).toString(), intervalMs.toString())
+        return
+      }
     }
     hilog.info(DOMAIN, TAG, 'runIfDue: due, entering performSync')
     const outcome: SyncOutcome = await SyncOperationController.getInstance().performSync('auto', 'auto_timer')
@@ -527,6 +543,21 @@ export class HarmonyAutoSyncScheduler {
     if (this.uploadWakePending) {
       this.scheduleUploadWake()
     }
+  }
+
+  /**
+   * 失败退避窗口：以用户间隔为上限，从 60 秒起翻倍（最多 5 次），
+   * 与 Core checkpoint.auto_retry_allowed 的退避口径一致，只是把
+   * "按尝试时间"落在平台调度上。
+   */
+  private failureBackoffMs(intervalMs: number): number {
+    const baseMs: number = 60 * 1000
+    const capMs: number = Math.min(intervalMs, 10 * 60 * 1000)
+    let backoffMs: number = baseMs
+    for (let i = 0; i < 4 && backoffMs * 2 <= capMs; i += 1) {
+      backoffMs *= 2
+    }
+    return Math.max(baseMs, Math.min(backoffMs, capMs))
   }
 
   /** 从 Core 当前持久化状态刷新最近成功时刻；读失败时保留上次读到的缓存值。 */
@@ -543,6 +574,11 @@ export class HarmonyAutoSyncScheduler {
       this.lastSuccessMs = state === null
         ? null
         : HarmonyAutoSyncScheduler.normalizeEpochMs(state.last_success_time)
+      this.lastAttemptMs = state === null
+        ? null
+        : HarmonyAutoSyncScheduler.normalizeEpochMs(state.last_attempt_time)
+      // Core 的 failed_targets 是本轮真实失败 target；非空即按尝试时间退避。
+      this.lastAttemptFailed = state !== null && state.failed_targets.length > 0
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'loadFullSyncState threw: %{public}s',
         e instanceof Error ? e.name : 'Unknown')

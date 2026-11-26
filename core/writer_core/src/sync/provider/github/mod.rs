@@ -91,6 +91,29 @@ impl SyncProvider for GitHubProvider {
         )
     }
 
+    /// REST 的 ref 查询本身就是轻量 HEAD 探测，不产生内容传输。
+    fn probe_remote_revision(&self) -> Result<Option<String>, ProviderError> {
+        self.remote_revision()
+    }
+
+    /// 用 compare API 取 base..HEAD 的变化路径（Issue #1065 复审 #5）：
+    /// 与 git_https 的 tree 差异契约一致，拿不到可靠差异时返回 None。
+    fn changed_paths_since(&self, base: &str) -> Result<Option<Vec<String>>, ProviderError> {
+        let Some(head) = self.remote_revision()? else {
+            return Ok(None);
+        };
+        if head == base {
+            return Ok(Some(Vec::new()));
+        }
+        client::compare_changed_paths(
+            self.transport(),
+            &self.config.api_base_url,
+            &self.config.token,
+            base,
+            &head,
+        )
+    }
+
     fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
         let transport = self.transport();
         let api_base = &self.config.api_base_url;

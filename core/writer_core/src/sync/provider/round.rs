@@ -404,23 +404,6 @@ impl<'a> RoundProvider<'a> {
             .collect()
     }
 
-    /// 丢弃指定路径的缓冲写入（内容与 live 不一致时的保守处理）。
-    pub fn discard_paths(&self, paths: &[String]) -> usize {
-        if paths.is_empty() {
-            return 0;
-        }
-        let Ok(mut state) = self.state.lock() else {
-            return 0;
-        };
-        let mut removed = 0;
-        for path in paths {
-            if state.entries.remove(path).is_some() {
-                removed += 1;
-            }
-        }
-        removed
-    }
-
     /// Drop every buffered write and check, leaving the remote untouched.
     pub fn discard(&self) {
         if let Ok(mut state) = self.state.lock() {

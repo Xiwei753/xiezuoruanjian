@@ -319,6 +319,47 @@ pub(crate) fn get_ref_revision(
         })
 }
 
+/// 比较两个提交之间变化的文件路径（Issue #1065 复审 #5）。
+///
+/// 只读取 `compare` 的 `files[].filename`，不下载内容；`base` 不在远端或
+/// 提交不可比较时返回 `Ok(None)`，由调用方退回完整扫描。
+pub(crate) fn compare_changed_paths(
+    transport: &dyn SyncTransport,
+    api_base: &str,
+    token: &str,
+    base: &str,
+    head: &str,
+) -> Result<Option<Vec<String>>, ProviderError> {
+    let url = format!("{api_base}/compare/{base}...{head}");
+    let response = execute_get(transport, &url, token)?;
+    if response.status == 404 || response.status == 422 {
+        // 422: base 是孤立提交或没有共同祖先，无法给出可靠差异。
+        return Ok(None);
+    }
+    if !(200..300).contains(&response.status) {
+        return Err(map_http_error(
+            "compare commits",
+            response.status,
+            String::from_utf8(response.body).unwrap_or_default(),
+        ));
+    }
+    let json: serde_json::Value =
+        serde_json::from_slice(&response.body).map_err(|error| ProviderError::Other {
+            reason: format!("invalid compare json: {error}"),
+        })?;
+    let Some(files) = json["files"].as_array() else {
+        // 超过 300 个文件时部分字段可能被省略；没有 files 数组视为不可靠差异。
+        return Ok(None);
+    };
+    let mut paths: Vec<String> = files
+        .iter()
+        .filter_map(|file| file["filename"].as_str().map(str::to_string))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    Ok(Some(paths))
+}
+
 /// 查询仓库根（用于 list 的 404 诊断：区分仓库不存在 vs 权限不足）。
 pub(crate) fn get_repo(
     transport: &dyn SyncTransport,

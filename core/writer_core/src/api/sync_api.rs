@@ -97,9 +97,11 @@ fn writer_error_is_retryable_network(error: &crate::api::error::WriterError) -> 
 /// commit 之后核对缓冲里待发布的字节是否仍是 live 的版本。
 ///
 /// 三方合并可能因为同步期间的并发编辑把正文写成与 staging 不同的版本；
-/// 此时继续发布 staging 旧字节会把更旧的版本推回远端。发现不一致就丢弃该
-/// 路径的缓冲写入：账本里更新的 mutation 仍在，下一轮继续发布。
-fn discard_stale_buffered_writes(
+/// 此时继续发布 staging 旧字节会把更旧的版本推回远端。这里只**检测**并返回
+/// 不一致的远端路径：本轮整轮不发布（丢弃缓冲），账本里更新的 mutation 仍在，
+/// 下一轮基于新的 live 内容重新构建批次。不能单条丢弃——generation 的
+/// manifest 仍引用该路径，缺内容发布出去会得到不完整的树。
+fn stale_buffered_writes(
     round: &crate::sync::provider::round::RoundProvider<'_>,
     live_root: &std::path::Path,
     remote_prefix: &str,
@@ -147,15 +149,7 @@ fn discard_stale_buffered_writes(
             }
         }
     }
-    if stale.is_empty() {
-        return 0;
-    }
-    let removed = round.discard_paths(&stale);
-    log::warn!(
-        "[sync] discard {} stale buffered write(s) after commit: live content changed during merge",
-        removed
-    );
-    removed
+    stale
 }
 
 fn target_blocks_round_publish(target: &crate::sync::types::TargetSyncResult) -> bool {
@@ -2491,6 +2485,8 @@ impl WriterCoreApi {
                 crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root).map_err(
                     |error| crate::api::error::WriterError::from(crate::error::Error::from(error)),
                 )?;
+            // commit 之后与 live 不一致的缓冲字节数量（本轮不发布）。
+            let mut stale_publish_paths: usize = 0;
             let mut proof_recovery_state =
                 match self.core_write().recover_pending_sync_proof_state() {
                     Ok(state) => state,
@@ -2539,13 +2535,20 @@ impl WriterCoreApi {
                     crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
                 commit_phase.finish_with_provider(&commit_outcome, provider);
                 // 只发布与已落盘内容一致的字节（Issue #1065 复审 #2）。
-                discard_stale_buffered_writes(
+                let stale_paths = stale_buffered_writes(
                     round,
                     &planned.target_live_root,
                     &planned.target.remote_prefix,
                     planned.project_id.as_deref(),
                     &target_committed_paths,
                 );
+                if !stale_paths.is_empty() {
+                    stale_publish_paths += stale_paths.len();
+                    log::warn!(
+                        "[sync] {} buffered writes changed on disk during commit; remote publish blocked for this round",
+                        stale_paths.len()
+                    );
+                }
 
                 if let Some(ref sink) = progress_sink {
                     let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
@@ -2686,14 +2689,15 @@ impl WriterCoreApi {
         // 本地 commit 之后再判定一次：commit 可能失败（工作区锁/flush/三方合并），
         // 也可能因为并发编辑得到与 staging 不同的结果。任一 target 没有真正落盘
         // 成功就不发布整轮远端树，避免推送未落盘的旧 staging 内容（复审 #2）。
-        let commit_blocked = all_targets.iter().any(|target| {
-            !matches!(
-                target.result.status,
-                crate::sync::types::SyncStatus::Success
-                    | crate::sync::types::SyncStatus::NoChanges
-                    | crate::sync::types::SyncStatus::LatestWinsApplied
-            )
-        });
+        let commit_blocked = stale_publish_paths > 0
+            || all_targets.iter().any(|target| {
+                !matches!(
+                    target.result.status,
+                    crate::sync::types::SyncStatus::Success
+                        | crate::sync::types::SyncStatus::NoChanges
+                        | crate::sync::types::SyncStatus::LatestWinsApplied
+                )
+            });
         if commit_blocked {
             round.discard();
             publish_blocked = true;
