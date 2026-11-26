@@ -773,7 +773,9 @@ private fun CorrectionProgressLines(state: EditorCorrectionState) {
 
 @Composable
 private fun lastScanStatus(state: EditorCorrectionState): String {
-    val completedAt = state.lastScanCompletedAtMillis ?: return stringResource(R.string.editor_correction_status_not_checked)
+    val completedAt =
+        state.lastScanCompletedAtMillis
+            ?: return stringResource(R.string.editor_correction_status_not_checked)
     val formatted =
         remember(completedAt) {
             java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT)
