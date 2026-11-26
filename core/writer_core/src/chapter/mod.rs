@@ -528,41 +528,38 @@ pub fn delete_chapter(
         .join(volume_id)
         .join("chapters")
         .join(chapter_id);
-    let target_canon = crate::delete_guard::validate_delete_target(
-        project_root,
-        &chapter_dir,
-        "chapter.meta.json",
-    )?;
+    // 保留 delete_guard 的路径校验；真正的删除事实由章节 journal 决议。
+    crate::delete_guard::validate_delete_target(project_root, &chapter_dir, "chapter.meta.json")?;
 
-    let trash_dir = app_data_root.join("sync/trash");
-    let _ = fs::create_dir_all(&trash_dir);
-    let trash_path = trash_dir.join(format!(
-        "{}_{}_{}",
-        chrono::Utc::now().timestamp_millis(),
-        uuid::Uuid::new_v4(),
-        chapter_id
-    ));
-    fs::rename(&target_canon, &trash_path)?;
+    let project_id = project_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let mut request = commit::ChapterCommitRequest::new(
+        commit::ChapterKey::new(project_id, volume_id, chapter_id),
+        String::new(),
+    );
+    request.mutation = commit::ChapterMutationKind::Delete;
+    request.source = commit::ChapterCommitSource::Api;
+    request.allow_empty_overwrite = true;
 
-    // 持久化 tombstone 到 project_root 的 SyncState（作品同步真正的 sync_root）。
-    // 不再吞 load/save 错误：tombstone 没真正落盘，事务就不能成功。
-    let mut state = crate::sync::SyncService::load_sync_state(project_root)?;
-    let rel_chapter_dir = chapter_dir
-        .strip_prefix(project_root)
-        .unwrap_or(&chapter_dir)
-        .to_string_lossy()
-        .replace("\\", "/");
-    let rel_trash_path = trash_path
-        .strip_prefix(app_data_root)
-        .unwrap_or(&trash_path)
-        .to_string_lossy()
-        .replace("\\", "/");
-
-    // The hash can be the hash of the folder, but currently we track files.
-    // To be consistent, we might want to register tombstones for all files in this directory.
-    crate::trash::generate_tombstones(&mut state, &trash_path, &rel_chapter_dir, &rel_trash_path);
-    crate::sync::SyncService::save_sync_state(project_root, &state)?;
-    Ok(())
+    let guard = crate::storage::WorkspaceWriteLock::acquire(app_data_root)?;
+    match commit::commit_chapter_with_guard(project_root, Some(&guard), request)? {
+        commit::ChapterCommitOutcome::Committed(_) => Ok(()),
+        commit::ChapterCommitOutcome::Conflict(conflict) => {
+            Err(crate::error::Error::ChapterVersionConflict {
+                chapter_id: chapter_id.to_string(),
+                expected_hash: conflict
+                    .expected
+                    .as_ref()
+                    .map(|version| version.content_sha256.clone())
+                    .unwrap_or_default(),
+                actual_hash: conflict.actual.content_sha256,
+                conflict_dir: conflict.conflict_dir,
+            })
+        }
+    }
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]

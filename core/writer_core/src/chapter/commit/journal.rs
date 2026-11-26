@@ -552,12 +552,6 @@ pub(crate) fn commit_chapter_with_guard(
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     let deleting = request.mutation == ChapterMutationKind::Delete;
-    if deleting && request.expected.is_none() {
-        return Err(Error::Other(format!(
-            "chapter delete requires expected version: {}/{}",
-            key.volume_id, key.chapter_id
-        )));
-    }
     let content_changed = deleting || current != request.content;
     let meta_changed = request
         .meta_title
