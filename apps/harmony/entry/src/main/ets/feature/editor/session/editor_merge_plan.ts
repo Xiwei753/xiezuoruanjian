@@ -209,6 +209,19 @@ export function planPendingEditRebase(
       const hasExternalChange: boolean =
         externalEnd > externalStart || externalDelta.replacement.length > 0
       if (hasExternalChange) {
+        // Issue #1063 复审评论 #7194530106：双方都在同一点做零长度插入时，空区间比较
+        // （s===de 或 e===ds）无法证明谁先谁后；没有共同事务身份就必须明确冲突，
+        // 不能按「先 Core 后原生」的默认顺序猜出一个合并结果。
+        if (spanStart === spanEnd && externalStart === externalEnd
+            && spanStart === externalStart
+            && edit.insertedText.length > 0 && externalDelta.replacement.length > 0) {
+          return failedPlan(
+            `pending edit #${edit.queueSequence} inserts at the same point`
+              + ` ${spanStart} as core delta without shared transaction identity`,
+            coreText,
+            coreDelta
+          )
+        }
         // 为什么重叠必须失败：两边都改了同一段文本，谁先谁后没有任何事实可以决定。
         // 继续往下猜要么丢掉用户编辑，要么把 Core 的改动覆盖掉；这里明确交给调用方。
         // 空区间边界（s===de 或 e===ds）不算重叠：插入点贴在改动区间的端点时可以确定先后。

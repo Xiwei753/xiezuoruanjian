@@ -978,6 +978,7 @@ export class NativeRichEditorBridge {
     }
 
     let expectedText: string = coreBase
+    let expectedRevision: number = snapshot.revision
     let lastIncluded: number = included
     // 已确认进入 Core 的那一段原生全文：中途 deferred 时它是下一轮原生侧共同基线。
     let includedNativeBase: string = nativeBase
@@ -1022,14 +1023,14 @@ export class NativeRichEditorBridge {
       }
 
       // 必须按队列顺序逐笔提交：每笔 mapped 坐标都是提交到「当时的 Core 正文」的坐标。
+      // Issue #1063 复审评论 #7194530106：不能先用冻结快照算坐标、再让 enqueueEdit 在出队时
+      // 读最新 revision 直接执行；统一走 conditionalEdit，在同一个 commandQueue 闭包里核对
+      // session/revision/整篇正文/oldText，通过后才按真实 cause 提交。
       let result: ResultEnvelope<EditorEditResult> | null = null
-      if (mapped.insertedText.length > 0 && mapped.oldText.length > 0) {
-        result = await this.coordinator.replace(
+      if (mapped.insertedText.length > 0 || mapped.oldText.length > 0) {
+        result = await this.coordinator.conditionalEdit(
+          coreSessionId, expectedRevision, expectedText,
           byteStart, byteEnd, mapped.insertedText, mapped.oldText, cause)
-      } else if (mapped.oldText.length > 0) {
-        result = await this.coordinator.delete(byteStart, byteEnd, EditorTransactionCause.Delete)
-      } else if (mapped.insertedText.length > 0) {
-        result = await this.coordinator.insert(byteStart, mapped.insertedText, cause)
       } else {
         // 事实本身没有正文变化（inserted/oldText 都为空）：不下发事务，直接视为已包含。
         lastIncluded = mapped.queueSequence
@@ -1043,15 +1044,30 @@ export class NativeRichEditorBridge {
       if (!this.reconcileSessionFactsIntact(localToken, coreSessionId)) {
         return false
       }
+      if (result !== null && !result.success && result.errorCode === 'STALE_BASELINE') {
+        // 出队核实时基线已前进、这笔事务尚未应用：保留已提交前缀的 receipt，
+        // 重新调度本轮把剩余事实映射到新 Core 正文，不进入 conflict、也不重复提交。
+        this.saveInFlightMerge(localToken, coreSessionId, includedNativeBase,
+          expectedText, expectedRevision, lastIncluded, freezeChangeSequence)
+        this.scheduleReconcile()
+        return true
+      }
+      if (result !== null && !result.success && result.errorCode === 'SESSION_CHANGED') {
+        // 原会话任务到此结束：本地会话已替换就静默放弃；Core 会话被换则明确冲突。
+        if (this.sessionId === localToken && this.coordinator.getSessionId() !== coreSessionId) {
+          this.enterConflict('core session changed during reconcile edit')
+        }
+        return false
+      }
       if (result === null || !result.success || result.data === undefined
           || (result.data.outcome !== EditorEditOutcome.Applied
               && result.data.outcome !== EditorEditOutcome.AppliedWithAdjustedSelection
               && result.data.outcome !== EditorEditOutcome.NoChange)) {
-        // 失败/SESSION_CHANGED/STALE_BASELINE/非预期 outcome：保留 receipt 与 pendingEdits。
+        // 失败/非预期 outcome：保留 receipt 与 pendingEdits。
         const failureSnap: EditorSessionSnapshot | null = this.coordinator.getSnapshot()
         this.saveInFlightMerge(localToken, coreSessionId, includedNativeBase,
           failureSnap !== null ? failureSnap.text : expectedText,
-          failureSnap !== null ? failureSnap.revision : this.lastAppliedRevision,
+          failureSnap !== null ? failureSnap.revision : expectedRevision,
           lastIncluded, freezeChangeSequence)
         this.enterConflict(`reconcile transaction failed:`
           + ` ${result !== null && result.errorCode !== undefined ? result.errorCode : 'UNKNOWN'}`)
@@ -1061,7 +1077,7 @@ export class NativeRichEditorBridge {
       const after: EditorSessionSnapshot | null = this.coordinator.getSnapshot()
       if (after === null) {
         this.saveInFlightMerge(localToken, coreSessionId, includedNativeBase,
-          expectedText, this.lastAppliedRevision, lastIncluded, freezeChangeSequence)
+          expectedText, expectedRevision, lastIncluded, freezeChangeSequence)
         this.enterConflict('core snapshot unavailable after reconcile transaction')
         return false
       }
@@ -1070,24 +1086,26 @@ export class NativeRichEditorBridge {
         : expectedText.substring(0, mapped.startUtf16)
           + mapped.insertedText
           + expectedText.substring(mapped.endUtf16)
+      const nextIncludedBase: string = includedNativeBase.substring(0, fact.startUtf16)
+        + fact.insertedText
+        + includedNativeBase.substring(fact.endUtf16)
       if (after.text !== expectedAfter) {
         // 事务已 Applied，不能把这笔编辑当成未提交：回执按实际已包含的 queueSequence 前进，
         // 下一轮只处理它之后的编辑；committedText 取 Core 实际正文，避免重复提交同一笔。
-        const nextIncludedBase: string = includedNativeBase.substring(0, fact.startUtf16)
-          + fact.insertedText
-          + includedNativeBase.substring(fact.endUtf16)
         this.saveInFlightMerge(localToken, coreSessionId, nextIncludedBase,
           after.text, after.revision, mapped.queueSequence, freezeChangeSequence)
         this.enterConflict('core text changed during reconcile transaction')
         return false
       }
 
-      // 提交成功：committedText 前进；原生侧共同基线按该笔原始 native 坐标同步前进。
+      // 提交成功：立刻推进 receipt（已包含序号 + 原生侧基线），不能等整批结束才记录，
+      // 否则后续分支进入 conflict 时这批已应用事件会丢，重试可能重复提交。
       expectedText = expectedAfter
+      expectedRevision = after.revision
       lastIncluded = mapped.queueSequence
-      includedNativeBase = includedNativeBase.substring(0, fact.startUtf16)
-        + fact.insertedText
-        + includedNativeBase.substring(fact.endUtf16)
+      includedNativeBase = nextIncludedBase
+      this.saveInFlightMerge(localToken, coreSessionId, includedNativeBase,
+        expectedText, expectedRevision, lastIncluded, freezeChangeSequence)
     }
 
     if (expectedText !== plan.resultText) {

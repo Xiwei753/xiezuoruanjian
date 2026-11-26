@@ -309,6 +309,18 @@ test('无 pendingEdits 且原生仍等于基线：Core 前进照常返回可提�
   assert.equal(applyTextDelta('base', plan.coreDelta), 'core-new')
 })
 
+test('同一点零长度插入（Core 插丙、原生插丁）必须明确冲突', () => {
+  // Issue #1063 复审评论 #7194530106：base=甲乙、Core=甲丙乙、native=甲丁乙，
+  // 两侧都在 UTF-16 位置 1 做零长度插入；没有共同事务身份，不能默认丁在丙前。
+  const plan = planPendingEditRebase('甲乙', '甲丙乙', '甲丁乙', [
+    { queueSequence: 1, beforeText: '甲乙', startUtf16: 1, endUtf16: 1, insertedText: '丁', oldText: '' },
+  ])
+  assert.equal(plan.ok, false)
+  assert.match(plan.reason, /same point/)
+  assert.equal(plan.edits.length, 0)
+  assert.equal(plan.resultText, '甲丙乙')
+})
+
 console.log('---')
 console.log(`✅ editor_merge_plan: ${passed} passed, ${failed} failed`)
 if (failed > 0) {

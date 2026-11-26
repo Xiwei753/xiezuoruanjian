@@ -278,6 +278,80 @@ export class EditorSessionCoordinator {
   }
 
   /**
+   * Issue #1063 复审评论 #7194530106：重基事务的统一条件编辑入口。
+   *
+   * 调用方（reconcileSession）在冻结快照上算好 byte 区间/oldText 后，必须在**出队时**
+   * 再核对同一 coreSessionId/revision/整篇正文，并确认 oldText 仍精确匹配，才允许按真实
+   * cause 调用 Core insert/delete/replace。任何一项不符都在应用前返回
+   * SESSION_CHANGED / STALE_BASELINE / INVALID_OFFSET，不会让旧坐标在新 revision 下执行。
+   */
+  async conditionalEdit(
+    expectedSessionId: number,
+    expectedRevision: number,
+    expectedText: string,
+    byteOffsetStart: number,
+    byteOffsetEnd: number,
+    insertedText: string,
+    originalText: string,
+    cause: EditorTransactionCause
+  ): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.commandQueue.enqueue<ResultEnvelope<EditorEditResult>>(async () => {
+      if (!this.state) {
+        return this.noSession<EditorEditResult>()
+      }
+      if (this.state.sessionId !== expectedSessionId) {
+        return { success: false, errorCode: 'SESSION_CHANGED' }
+      }
+      if (this.state.snapshot.revision !== expectedRevision ||
+          this.state.snapshot.text !== expectedText) {
+        return { success: false, errorCode: 'STALE_BASELINE' }
+      }
+      const targetSessionId = this.state.sessionId
+      const targetRevision = this.state.snapshot.revision
+      const byteLength: number = TextOffsetMapper.utf8ByteLength(expectedText)
+      if (byteOffsetStart < 0 || byteOffsetEnd < byteOffsetStart ||
+          byteOffsetEnd > byteLength) {
+        return { success: false, errorCode: 'INVALID_OFFSET' }
+      }
+      const utf16Start: number = TextOffsetMapper.utf8ByteOffsetToUtf16(expectedText, byteOffsetStart)
+      const utf16End: number = TextOffsetMapper.utf8ByteOffsetToUtf16(expectedText, byteOffsetEnd)
+      if (utf16Start < 0 || utf16End < 0 || utf16End < utf16Start
+          || expectedText.substring(utf16Start, utf16End) !== originalText) {
+        // oldText CAS：同 revision 下也不允许用旧坐标覆盖别的内容。
+        return { success: false, errorCode: 'STALE_BASELINE' }
+      }
+      if (insertedText.length === 0 && originalText.length === 0) {
+        return { success: false, errorCode: 'INVALID_ARGUMENT' }
+      }
+      let result: ResultEnvelope<EditorEditResult>
+      if (insertedText.length > 0 && originalText.length > 0) {
+        result = await this.bridge.replace(
+          targetSessionId, byteOffsetStart, byteOffsetEnd, insertedText, originalText,
+          cause, targetRevision)
+      } else if (originalText.length > 0) {
+        result = await this.bridge.delete(
+          targetSessionId, byteOffsetStart, byteOffsetEnd, cause, targetRevision)
+      } else {
+        result = await this.bridge.insert(
+          targetSessionId, byteOffsetStart, insertedText, cause, targetRevision)
+      }
+      if (!this.state || this.state.sessionId !== targetSessionId) {
+        return { success: false, errorCode: 'SESSION_CHANGED' }
+      }
+      if (result.success && result.data) {
+        const outcome: EditStateOutcome = this.state.withEditResult(result.data)
+        if (outcome.ok) {
+          this.state = outcome.state
+          this.notifyListener(result.data)
+        } else {
+          await this.recoverFromCoreSnapshot(result.data)
+        }
+      }
+      return result
+    })
+  }
+
+  /**
    * Issue #1053 评论 7098652618：原生正文与 Core 已提交正文的增量收敛事务。
    *
    * 与 replaceIfUnchanged 的区别：本方法接收目标全文 targetText，在 commandQueue 出队闭包内
