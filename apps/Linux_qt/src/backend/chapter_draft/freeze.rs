@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::pending;
 use super::store::{self, DraftLocation};
-use super::{ensure_state, lock_registry, DraftFactIndex, LoadedFact, MIXED_SESSION_ERROR};
+use super::{ensure_state_result, lock_registry, DraftFactIndex, LoadedFact, MIXED_SESSION_ERROR};
 
 pub(crate) fn freeze_batch_for(
     projects_root: &Path,
@@ -18,13 +18,22 @@ pub(crate) fn freeze_batch_for(
     let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
         return Err(format!("invalid draft identity: {project_id}/{chapter_id}"));
     };
-    if !ensure_state(&location) {
-        if location.legacy_path().exists() {
-            return Err(format!(
-                "legacy draft cannot migrate: {project_id}/{chapter_id}"
-            ));
+    match ensure_state_result(&location) {
+        Ok(true) => {}
+        Ok(false) => {
+            if location.legacy_path().exists() {
+                return Err(format!(
+                    "legacy draft cannot migrate: {project_id}/{chapter_id}"
+                ));
+            }
+            return Ok(Vec::new());
         }
-        return Ok(Vec::new());
+        // 磁盘事实/索引读不出来时是“未决”，绝不能退化成空批次通过保存。
+        Err(error) => {
+            return Err(format!(
+                "chapter draft unreadable (kept): {project_id}/{chapter_id}: {error}"
+            ))
+        }
     }
     // 先把上一次写盘失败的事实重试掉；仍失败就不能继续，否则会带着
     // 缺失事件把正文提交 durable（Issue #1062 复审第 3 项）。

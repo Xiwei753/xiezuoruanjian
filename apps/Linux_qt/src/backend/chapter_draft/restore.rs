@@ -18,8 +18,15 @@ pub(crate) fn snapshot(
     if let Some(state) = lock_registry().get(&location.key) {
         return Some(ChapterDraftSnapshot::from_state(state));
     }
-    if let Some(state) = store::read_new_state(&location, false) {
-        return Some(ChapterDraftSnapshot::from_state(&state));
+    match store::read_new_state(&location, false) {
+        Ok(Some(state)) => return Some(ChapterDraftSnapshot::from_state(&state)),
+        Ok(None) => {}
+        Err(error) => {
+            log::warn!(
+                "chapter draft unreadable (kept): project={project_id} chapter={chapter_id}: {error}"
+            );
+            return None;
+        }
     }
     let legacy = store::read_legacy(&location.legacy_path(), project_id, chapter_id)?;
     Some(ChapterDraftSnapshot::from_state(
@@ -85,61 +92,59 @@ pub(crate) fn list_project_drafts(projects_root: &Path, project_id: &str) -> Vec
     drafts
 }
 
-/// 读取草稿的恢复计划；任何文件缺失/损坏/正文摘要不一致都返回 None，
+/// 读取草稿的恢复计划；任何文件缺失/损坏/正文摘要不一致都返回 Err，
 /// 且不删除任何草稿文件（保留给下一次重试或人工排查）。
-pub(crate) fn restore_plan(
+///
+/// `Ok(None)` 只表示“没有草稿/meta”，与“存在但读不出来”严格区分。
+pub(crate) fn restore_plan_strict(
     projects_root: &Path,
     project_id: &str,
     chapter_id: &str,
-) -> Option<ChapterDraftRestorePlan> {
-    let location = DraftLocation::new(projects_root, project_id, chapter_id)?;
-    let state =
-        store::read_new_state(&location, false).or_else(|| store::migrate_legacy(&location))?;
+) -> Result<Option<ChapterDraftRestorePlan>, String> {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+        return Ok(None);
+    };
+    let state = match store::read_new_state(&location, false)? {
+        Some(state) => state,
+        None => match store::migrate_legacy(&location) {
+            Some(state) => state,
+            None => return Ok(None),
+        },
+    };
     if let Some(text) = state.text.as_ref() {
         if !state.text_sha256.is_empty() {
             let actual = writer_core::writing_stats::proof::content_digest_of_text(text);
             if actual != state.text_sha256 {
-                log::warn!(
-                    "draft text corrupt: {project_id}/{chapter_id} expected={} actual={actual}",
+                return Err(format!(
+                    "draft text corrupt (kept): {project_id}/{chapter_id} expected={} actual={actual}",
                     state.text_sha256
-                );
-                return None;
+                ));
             }
         }
     } else if state.text_revision > 0 || !state.text_sha256.is_empty() {
-        log::warn!(
-            "chapter draft text missing: project={project_id} chapter={chapter_id} text_revision={}",
+        return Err(format!(
+            "chapter draft text missing (kept): project={project_id} chapter={chapter_id} text_revision={}",
             state.text_revision
-        );
-        return None;
+        ));
     }
     let mut values = Vec::with_capacity(state.facts.len());
     let mut loaded: Vec<LoadedFact> = Vec::with_capacity(state.facts.len());
     for fact in &state.facts {
-        match read_projection(&location, fact) {
-            Ok(value) => {
-                loaded.push(LoadedFact {
-                    event_id: fact.event_id.clone(),
-                    revision: fact.revision,
-                    projection_json: value.to_string(),
-                });
-                values.push(value);
-            }
-            Err(error) => {
-                log::warn!("draft fact unreadable: {project_id}/{chapter_id}: {error}");
-                return None;
-            }
-        }
+        let value = read_projection(&location, fact).map_err(|error| {
+            format!("draft fact unreadable (kept): {project_id}/{chapter_id}: {error}")
+        })?;
+        loaded.push(LoadedFact {
+            event_id: fact.event_id.clone(),
+            revision: fact.revision,
+            projection_json: value.to_string(),
+        });
+        values.push(value);
     }
-    let batch_json = match serde_json::to_string(&values) {
-        Ok(json) => json,
-        Err(error) => {
-            log::warn!("draft batch encode failed: {project_id}/{chapter_id}: {error}");
-            return None;
-        }
-    };
+    let batch_json = serde_json::to_string(&values).map_err(|error| {
+        format!("draft batch encode failed: {project_id}/{chapter_id}: {error}")
+    })?;
     let sessions: HashSet<u64> = state.facts.iter().map(|fact| fact.session_id).collect();
-    Some(ChapterDraftRestorePlan {
+    Ok(Some(ChapterDraftRestorePlan {
         volume_id: state.volume_id.clone(),
         chapter_id: state.chapter_id.clone(),
         base_generation: state.base_generation.clone(),
@@ -155,7 +160,23 @@ pub(crate) fn restore_plan(
         session_id: state.session_id,
         generation: state.generation.clone(),
         mixed_sessions: sessions.len() > 1,
-    })
+    }))
+}
+
+/// 兼容入口：调用方只关心“是否有可恢复计划”。
+pub(crate) fn restore_plan(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> Option<ChapterDraftRestorePlan> {
+    restore_plan_strict(projects_root, project_id, chapter_id)
+        .map_err(|error| {
+            log::warn!(
+                "chapter draft restore plan unavailable (kept): {project_id}/{chapter_id}: {error}"
+            );
+        })
+        .ok()
+        .flatten()
 }
 
 /// 内存占用：内存索引事实条数、正文总字节数（不含 projection 历史）。

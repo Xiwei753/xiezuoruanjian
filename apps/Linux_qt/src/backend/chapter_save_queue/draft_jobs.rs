@@ -438,7 +438,7 @@ pub(super) fn handle_restore_project(
             continue;
         }
         // Issue #1062 复审 P0：重试可能刚刚写出事实文件，不能用重试前的
-        // draft.fact_count 判断清理；必须重新读取磁盘/内存状态。
+        // draft.fact_count 判断清理；重试后重新读取磁盘对象。
         let pending_after = match super::super::chapter_draft::pending_inputs(
             &projects_root,
             &command.project_id,
@@ -454,40 +454,27 @@ pub(super) fn handle_restore_project(
                 continue;
             }
         };
-        let current =
-            super::super::chapter_draft::snapshot(&projects_root, &command.project_id, &chapter_id);
-        let facts_present = current
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.fact_count > 0);
-        let text_present = current
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.text.is_some());
-        let plan = super::super::chapter_draft::restore_plan(
+        // 读取失败必须显式保留；只有 Ok(Some(plan)) 且证明为空才允许清理，
+        // Ok(None) 表示磁盘上本来就没有草稿，也不能据此删除任何东西。
+        let plan = match super::super::chapter_draft::restore_plan_strict(
             &projects_root,
             &command.project_id,
             &chapter_id,
-        );
-        let Some(plan) = plan else {
-            if draft_dir_is_empty(pending_after.len(), facts_present, text_present) {
-                // 只有 meta 事务头的空壳草稿：无 pending、无事实、无正文。
-                super::super::chapter_draft::remove(
-                    &projects_root,
-                    &command.project_id,
-                    &chapter_id,
-                );
-            } else {
+        ) {
+            Ok(Some(plan)) => plan,
+            Ok(None) => continue,
+            Err(error) => {
                 failed += 1;
                 kept += 1;
-                messages.push(format!(
-                    "{chapter_id}: draft_unreadable kept (pending={} facts={} text={}) ({})",
-                    pending_after.len(),
-                    facts_present,
-                    text_present,
-                    draft.diagnostic_summary()
-                ));
+                messages.push(format!("{chapter_id}: draft_unreadable kept: {error}"));
+                continue;
             }
-            continue;
         };
+        if draft_dir_is_empty(pending_after.len(), plan.fact_count, plan.text.is_some()) {
+            // 只有 meta 事务头的空壳草稿：无 pending、无事实、无正文。
+            super::super::chapter_draft::remove(&projects_root, &command.project_id, &chapter_id);
+            continue;
+        }
         let opened = match api.open_chapter(&command.project_id, &plan.volume_id, &plan.chapter_id)
         {
             Ok(content) => content,
@@ -717,10 +704,12 @@ pub(super) fn handle_restore_project(
     }
 }
 
-/// 草稿目录只允许在“无 pending 原始事件、无已提交待清理事实、无未提交正文”
-/// 时删除；损坏的 spool 会以 pending>0 保留。
-fn draft_dir_is_empty(pending_inputs: usize, facts_present: bool, text_present: bool) -> bool {
-    pending_inputs == 0 && !facts_present && !text_present
+/// 已成功读取的草稿清单显示“无 pending、无事实、无正文”时才允许删除。
+///
+/// 调用方只能传入 `restore_plan_strict` 成功返回的 plan；读取失败/未知
+/// 状态必须在调用前就作为 kept 报告，不能落到这个判断里。
+fn draft_dir_is_empty(pending_inputs: usize, fact_count: usize, has_text: bool) -> bool {
+    pending_inputs == 0 && fact_count == 0 && !has_text
 }
 
 #[cfg(test)]
@@ -759,11 +748,11 @@ mod tests {
     #[test]
     fn empty_draft_cleanup_requires_no_pending_facts_or_text() {
         use super::draft_dir_is_empty;
-        assert!(draft_dir_is_empty(0, false, false));
+        assert!(draft_dir_is_empty(0, 0, false));
         // 首次事件只有 spool、facts/text 尚未写出：绝不能按旧摘要删除。
-        assert!(!draft_dir_is_empty(1, false, false));
-        assert!(!draft_dir_is_empty(0, true, false));
-        assert!(!draft_dir_is_empty(0, false, true));
+        assert!(!draft_dir_is_empty(1, 0, false));
+        assert!(!draft_dir_is_empty(0, 1, false));
+        assert!(!draft_dir_is_empty(0, 0, true));
     }
 
     #[test]

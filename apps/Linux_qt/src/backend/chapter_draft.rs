@@ -40,7 +40,7 @@ mod tests;
 
 pub(crate) use freeze::freeze_batch_for;
 pub(crate) use pending::{clear_pending_input, pending_inputs, spool_failed_input};
-pub(crate) use restore::{list_project_drafts, restore_plan, snapshot};
+pub(crate) use restore::{list_project_drafts, restore_plan, restore_plan_strict, snapshot};
 pub(crate) use scheduler::{draft_metrics, flush_due, next_persist_deadline};
 
 const DRAFT_SCHEMA_VERSION: u32 = 2;
@@ -503,38 +503,37 @@ pub(crate) fn mark_committed(
     base_generation: &str,
     base_revision: u64,
     base_sha256: &str,
-) -> bool {
+) -> Result<bool, String> {
     let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
-        return false;
+        return Ok(false);
     };
-    if !ensure_state(&location) {
-        return false;
+    match ensure_state_result(&location) {
+        Ok(true) => {}
+        Ok(false) => return Ok(false),
+        Err(error) => return Err(error),
     }
     let acknowledged_set: HashSet<&str> = acknowledged.iter().map(String::as_str).collect();
-    let (merged, previous) = {
+    // 先在不完整索引上合并事实；失败时保留全部待 GC 事实与 Core durable
+    // receipt 对应关系，延后清理，不能基于缺失文件推进 ack 决议。
+    let (index, acked) = {
         let drafts = lock_registry();
         let Some(state) = drafts.get(&location.key) else {
-            return false;
+            return Ok(false);
         };
-        let acked: HashSet<String> = state.acked_event_ids.iter().cloned().collect();
-        let index = state.facts.clone();
-        let merged = store::merge_index(&location.dir, &index, &acked).unwrap_or_else(|error| {
-            log::warn!(
-                "chapter draft mark_committed merge failed: project={project_id} chapter={chapter_id}: {error}"
-            );
-            index.clone()
-        });
-        let previous = PersistedDraftHead {
-            facts: state.facts.clone(),
-            base_generation: state.base_generation.clone(),
-            base_revision: state.base_revision,
-            base_sha256: state.base_sha256.clone(),
-            acked_event_ids: state.acked_event_ids.clone(),
-            acked_through_revision: state.acked_through_revision,
-            updated_at_ms: state.updated_at_ms,
-        };
-        (merged, previous)
+        (
+            state.facts.clone(),
+            state
+                .acked_event_ids
+                .iter()
+                .cloned()
+                .collect::<HashSet<String>>(),
+        )
     };
+    let merged = store::merge_index(&location.dir, &index, &acked).map_err(|error| {
+        format!(
+            "chapter draft ack cleanup deferred (facts kept): project={project_id} chapter={chapter_id}: {error}"
+        )
+    })?;
     let mut remaining = Vec::with_capacity(merged.len());
     let mut removed = Vec::new();
     for fact in merged {
@@ -554,7 +553,16 @@ pub(crate) fn mark_committed(
     let (empty, meta, previous) = {
         let mut drafts = lock_registry();
         let Some(state) = drafts.get_mut(&location.key) else {
-            return false;
+            return Ok(false);
+        };
+        let previous = PersistedDraftHead {
+            facts: state.facts.clone(),
+            base_generation: state.base_generation.clone(),
+            base_revision: state.base_revision,
+            base_sha256: state.base_sha256.clone(),
+            acked_event_ids: state.acked_event_ids.clone(),
+            acked_through_revision: state.acked_through_revision,
+            updated_at_ms: state.updated_at_ms,
         };
         let mut acked_ids = state.acked_event_ids.clone();
         for event_id in acknowledged {
@@ -588,9 +596,8 @@ pub(crate) fn mark_committed(
     };
     if empty {
         drop_registry_and_storage(&location);
-        return true;
+        return Ok(true);
     }
-    let mut meta_persisted = true;
     if let Some(meta) = meta {
         match store::write_meta(&location.dir, &meta) {
             Ok(()) => {
@@ -600,10 +607,6 @@ pub(crate) fn mark_committed(
                 }
             }
             Err(error) => {
-                meta_persisted = false;
-                log::warn!(
-                    "persist draft ack meta failed: {project_id}/{chapter_id}: {error}; keep fact files"
-                );
                 if let Some(state) = lock_registry().get_mut(&location.key) {
                     state.facts = previous.facts;
                     state.base_generation = previous.base_generation;
@@ -614,11 +617,11 @@ pub(crate) fn mark_committed(
                     state.updated_at_ms = previous.updated_at_ms;
                     state.meta_dirty = true;
                 }
+                return Err(format!(
+                    "persist draft ack meta failed (facts kept): {project_id}/{chapter_id}: {error}"
+                ));
             }
         }
-    }
-    if !meta_persisted {
-        return false;
     }
     // ack 决议已持久化，现在才回收已确认前缀文件。删除失败只会留下孤儿
     // 文件：索引与 acked 记录都已不含它们，后续读取会跳过，不会卡住恢复。
@@ -629,7 +632,7 @@ pub(crate) fn mark_committed(
             }
         }
     }
-    false
+    Ok(false)
 }
 
 /// mark_committed 写 meta 失败时要恢复的草稿头（索引/基线/ack 记录）。
@@ -741,7 +744,17 @@ fn ensure_state_or_new(location: &DraftLocation, volume_id: &str) -> bool {
     if lock_registry().contains_key(&location.key) {
         return true;
     }
-    let loaded = store::load_state(location);
+    let loaded = match store::load_state(location) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            log::warn!(
+                "chapter draft load failed (kept): project={} chapter={}: {error}",
+                location.project_id,
+                location.chapter_id
+            );
+            return false;
+        }
+    };
     let mut drafts = lock_registry();
     if !drafts.contains_key(&location.key) {
         let state = loaded.unwrap_or_else(|| DraftState::new(location, volume_id));
@@ -750,12 +763,37 @@ fn ensure_state_or_new(location: &DraftLocation, volume_id: &str) -> bool {
     true
 }
 
+/// 确保状态可用：Ok(true)=已就绪，Ok(false)=没有草稿，Err=磁盘读到损坏数据。
+fn ensure_state_result(location: &DraftLocation) -> Result<bool, String> {
+    if lock_registry().contains_key(&location.key) {
+        return Ok(true);
+    }
+    match store::load_state(location)? {
+        Some(loaded) => {
+            lock_registry()
+                .entry(location.key.clone())
+                .or_insert(loaded);
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
 fn ensure_state(location: &DraftLocation) -> bool {
     if lock_registry().contains_key(&location.key) {
         return true;
     }
-    let Some(loaded) = store::load_state(location) else {
-        return false;
+    let loaded = match store::load_state(location) {
+        Ok(Some(loaded)) => loaded,
+        Ok(None) => return false,
+        Err(error) => {
+            log::warn!(
+                "chapter draft load failed (kept): project={} chapter={}: {error}",
+                location.project_id,
+                location.chapter_id
+            );
+            return false;
+        }
     };
     lock_registry()
         .entry(location.key.clone())

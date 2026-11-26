@@ -121,19 +121,15 @@ fn mark_committed_removes_only_the_acknowledged_prefix() {
         "g1",
         1,
         "base-1"
-    ));
+    )
+    .expect("ack cleanup"));
     let location = draft_location(root);
     assert!(fact_file_path(&location.dir, 1, "e1").exists());
 
-    assert!(!mark_committed(
-        root,
-        "p1",
-        "c1",
-        &["e1".to_string()],
-        "g1",
-        1,
-        "base-1"
-    ));
+    assert!(
+        !mark_committed(root, "p1", "c1", &["e1".to_string()], "g1", 1, "base-1")
+            .expect("ack cleanup")
+    );
     assert!(!fact_file_path(&location.dir, 1, "e1").exists());
     assert!(fact_file_path(&location.dir, 2, "e2").exists());
     assert!(fact_file_path(&location.dir, 3, "e3").exists());
@@ -156,7 +152,8 @@ fn mark_committed_removes_only_the_acknowledged_prefix() {
         "g1",
         3,
         "base-3"
-    ));
+    )
+    .expect("ack cleanup"));
     assert!(location.dir.join(TEXT_FILE).exists());
 }
 
@@ -169,15 +166,10 @@ fn mark_committed_removes_fact_only_draft_directory() {
     let location = draft_location(root);
     assert!(location.dir.exists());
 
-    assert!(mark_committed(
-        root,
-        "p1",
-        "c1",
-        &["e1".to_string()],
-        "g1",
-        1,
-        "base-1"
-    ));
+    assert!(
+        mark_committed(root, "p1", "c1", &["e1".to_string()], "g1", 1, "base-1")
+            .expect("ack cleanup")
+    );
     assert!(!location.dir.exists());
     assert!(snapshot(root, "p1", "c1").is_none());
 }
@@ -239,6 +231,8 @@ fn missing_or_corrupt_fact_file_fails_freeze_and_restore() {
         "error must name the event and path: {error}"
     );
     assert!(restore_plan(root, "p1", "c1").is_none());
+    // 严格入口必须把“读不出来”与“没有草稿”区分开。
+    assert!(restore_plan_strict(root, "p1", "c1").is_err());
 
     std::fs::write(&path, "{ this is not json").expect("corrupt fact file");
     forget_for_test(root, "p1", "c1");
@@ -414,27 +408,15 @@ fn mark_committed_is_recoverable_and_idempotent() {
     persist_current(root, "p1", "c1", true).expect("persist draft");
     let location = draft_location(root);
 
-    assert!(!mark_committed(
-        root,
-        "p1",
-        "c1",
-        &["e1".into()],
-        "g1",
-        1,
-        "sha1"
-    ));
+    assert!(
+        !mark_committed(root, "p1", "c1", &["e1".into()], "g1", 1, "sha1").expect("ack cleanup")
+    );
     // ack 后剩余事件仍可冻结；重复 ack 同一批不会报错也不会误删后一条。
     let remaining = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect("remaining fact");
     assert_eq!(ids(&remaining), vec!["e2"]);
-    assert!(!mark_committed(
-        root,
-        "p1",
-        "c1",
-        &["e1".into()],
-        "g1",
-        1,
-        "sha1"
-    ));
+    assert!(
+        !mark_committed(root, "p1", "c1", &["e1".into()], "g1", 1, "sha1").expect("ack cleanup")
+    );
     let remaining = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect("remaining fact again");
     assert_eq!(ids(&remaining), vec!["e2"]);
     assert!(fact_file_path(&location.dir, 2, "e2").exists());
@@ -614,5 +596,75 @@ fn corrupt_pending_only_draft_is_counted_and_reported() {
             .is_some_and(|error| error.contains("corrupted")),
         "summary must surface the spool error: {:?}",
         draft.pending_input_error
+    );
+}
+
+#[test]
+fn corrupt_fact_with_lagging_meta_is_reported_and_kept() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("fact");
+    persist_current(root, "p1", "c1", true).expect("persist draft");
+    let location = draft_location(root);
+    let fact_path = fact_file_path(&location.dir, 1, "e1");
+    let original = std::fs::read_to_string(&fact_path).expect("read fact");
+
+    // 模拟 meta 索引滞后（facts=[]）且事实文件损坏，无 text/pending。
+    let meta_path = location.dir.join(META_FILE);
+    let mut meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&meta_path).expect("read meta"))
+            .expect("meta json");
+    meta["facts"] = serde_json::json!([]);
+    std::fs::write(&meta_path, meta.to_string()).expect("rewrite meta");
+    std::fs::write(&fact_path, "{ broken").expect("corrupt fact");
+    forget_for_test(root, "p1", "c1");
+
+    let error = restore_plan_strict(root, "p1", "c1")
+        .expect_err("corrupt facts must be reported, not degraded to empty");
+    assert!(
+        error.contains("unreadable") || error.contains("corrupted"),
+        "unexpected error: {error}"
+    );
+    assert!(fact_path.exists(), "corrupt fact must be kept for evidence");
+    assert!(location.dir.exists(), "draft directory must not be removed");
+    assert!(
+        list_project_drafts(root, "p1")
+            .iter()
+            .any(|draft| draft.chapter_id == "c1"),
+        "recovery list must still discover the chapter"
+    );
+
+    // 文件修好后，滞后的 meta 索引仍应自动扫描补齐。
+    std::fs::write(&fact_path, original).expect("restore fact");
+    forget_for_test(root, "p1", "c1");
+    let plan = restore_plan_strict(root, "p1", "c1")
+        .expect("readable lagging meta")
+        .expect("restore plan");
+    assert_eq!(plan.fact_count, 1);
+    assert_eq!(plan.event_end_revision, 1);
+}
+
+#[test]
+fn ack_cleanup_defers_when_fact_index_is_incomplete() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("e1");
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e2", 2, 7)).expect("e2");
+    persist_current(root, "p1", "c1", true).expect("persist draft");
+    let location = draft_location(root);
+    // 索引里 e2 还在、文件被删：merge_index 必须报错，ack 决议不能推进。
+    std::fs::remove_file(fact_file_path(&location.dir, 2, "e2")).expect("remove e2");
+
+    let error = mark_committed(root, "p1", "c1", &["e1".to_string()], "g1", 1, "sha1")
+        .expect_err("ack cleanup must defer on incomplete facts");
+    assert!(error.contains("deferred"), "unexpected error: {error}");
+    assert!(location.dir.exists(), "draft dir must be kept");
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(location.dir.join(META_FILE)).expect("meta"))
+            .expect("meta json");
+    assert_eq!(
+        meta["facts"].as_array().map_or(0, Vec::len),
+        2,
+        "ack decision must not be written from an incomplete index"
     );
 }

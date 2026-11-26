@@ -338,7 +338,7 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                 } else {
                     receipt.pending_projections.clone()
                 };
-                draft_removed = crate::backend::chapter_draft::mark_committed(
+                draft_removed = match crate::backend::chapter_draft::mark_committed(
                     &projects_root,
                     &request.identity.project_id,
                     &request.identity.chapter_id,
@@ -346,7 +346,19 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                     &receipt.version.object_generation,
                     receipt.version.revision,
                     &receipt.version.content_sha256,
-                );
+                ) {
+                    Ok(removed) => removed,
+                    Err(error) => {
+                        // ack 决议没有落盘：保留待 GC 事实与目录，等下一次
+                        // 保存/恢复按 Core journal 的确认事件重试。
+                        crate::backend::app_backend::debug_error_static(
+                            "chapter_draft",
+                            "mark_committed_deferred",
+                            &error,
+                        );
+                        false
+                    }
+                };
             } else {
                 crate::backend::chapter_draft::remove(
                     &projects_root,

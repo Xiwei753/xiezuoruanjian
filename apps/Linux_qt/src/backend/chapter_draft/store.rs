@@ -124,29 +124,45 @@ impl MetaData {
 }
 
 pub(super) fn read_meta(dir: &Path, project_id: &str, chapter_id: &str) -> Option<MetaData> {
+    read_meta_checked(dir, project_id, chapter_id).ok()
+}
+
+/// 区分“没有 meta”（Ok(None)）与“meta 存在但不可用/身份不符”（Err）。
+///
+/// Issue #1062 复审：恢复链必须把后者当成未决状态并保留磁盘文件，不能与
+/// “从未有过草稿”混为一谈。
+pub(super) fn read_meta_checked(
+    dir: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> Result<MetaData, String> {
     let path = dir.join(META_FILE);
-    let content = std::fs::read_to_string(&path).ok()?;
-    let meta: MetaData = match serde_json::from_str(&content) {
-        Ok(meta) => meta,
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(String::new()),
         Err(error) => {
-            log::warn!(
-                "chapter draft meta invalid: path={}: {error}",
+            return Err(format!(
+                "read chapter draft meta {}: {error}",
                 path.display()
-            );
-            return None;
+            ))
         }
     };
+    let meta: MetaData = serde_json::from_str(&content).map_err(|error| {
+        format!(
+            "chapter draft meta invalid (kept): {}: {error}",
+            path.display()
+        )
+    })?;
     if meta.schema_version != DRAFT_SCHEMA_VERSION
         || meta.project_id != project_id
         || meta.chapter_id != chapter_id
     {
-        log::warn!(
-            "chapter draft meta identity/schema mismatch, skip: project={project_id} chapter={chapter_id} schema={}",
+        return Err(format!(
+            "chapter draft meta identity/schema mismatch (kept): project={project_id} chapter={chapter_id} schema={}",
             meta.schema_version
-        );
-        return None;
+        ));
     }
-    Some(meta)
+    Ok(meta)
 }
 
 pub(super) fn write_meta(dir: &Path, meta: &MetaData) -> Result<(), String> {
@@ -374,21 +390,27 @@ pub(super) fn write_text(dir: &Path, text: &str) -> Result<(), String> {
 
 // ── 状态加载与旧格式迁移 ──────────────────────────────────────────────────
 
-/// 读取新格式草稿；没有 meta.json 时返回 None。
-pub(super) fn read_new_state(location: &DraftLocation, trim: bool) -> Option<DraftState> {
-    let meta = read_meta(&location.dir, &location.project_id, &location.chapter_id)?;
-    let acked: HashSet<String> = meta.acked_event_ids.iter().cloned().collect();
-    let mut facts = match merge_index(&location.dir, &meta.index(), &acked) {
-        Ok(facts) => facts,
-        Err(error) => {
-            log::warn!(
-                "chapter draft facts unreadable: project={} chapter={}: {error}",
-                location.project_id,
-                location.chapter_id
-            );
-            meta.index()
-        }
+/// 读取新格式草稿。
+///
+/// `Ok(None)` = 没有 meta.json；任何 meta/facts 读取失败都返回 Err，由恢复
+/// 链显式报告并保留目录，绝不能降级成“空草稿”（Issue #1062 复审）。
+/// 目录保持只读：失败路径不删除、不重写任何文件。
+pub(super) fn read_new_state(
+    location: &DraftLocation,
+    trim: bool,
+) -> Result<Option<DraftState>, String> {
+    let meta = match read_meta_checked(&location.dir, &location.project_id, &location.chapter_id) {
+        Ok(meta) => meta,
+        Err(error) if error.is_empty() => return Ok(None),
+        Err(error) => return Err(error),
     };
+    let acked: HashSet<String> = meta.acked_event_ids.iter().cloned().collect();
+    let mut facts = merge_index(&location.dir, &meta.index(), &acked).map_err(|error| {
+        format!(
+            "chapter draft facts unreadable (kept): project={} chapter={}: {error}",
+            location.project_id, location.chapter_id
+        )
+    })?;
     facts.sort_by_key(|fact| fact.seq);
     let next_seq = facts.last().map_or(1, |fact| fact.seq.saturating_add(1));
     if trim && facts.len() > MAX_MEMORY_FACT_INDEX {
@@ -404,7 +426,7 @@ pub(super) fn read_new_state(location: &DraftLocation, trim: bool) -> Option<Dra
     .into_iter()
     .map(|input| (input.event_id, input.revision))
     .collect();
-    Some(DraftState {
+    Ok(Some(DraftState {
         project_id: location.project_id.clone(),
         volume_id: meta.volume_id,
         chapter_id: location.chapter_id.clone(),
@@ -434,12 +456,15 @@ pub(super) fn read_new_state(location: &DraftLocation, trim: bool) -> Option<Dra
         updated_at_ms: meta.updated_at_ms,
         meta_dirty: false,
         last_persist: None,
-    })
+    }))
 }
 
 /// registry 加载入口：新格式优先，其次迁移旧格式单文件。
-pub(super) fn load_state(location: &DraftLocation) -> Option<DraftState> {
-    read_new_state(location, true).or_else(|| migrate_legacy(location))
+pub(super) fn load_state(location: &DraftLocation) -> Result<Option<DraftState>, String> {
+    match read_new_state(location, true)? {
+        Some(state) => Ok(Some(state)),
+        None => Ok(migrate_legacy(location)),
+    }
 }
 
 /// 旧格式单文件迁移：写 facts/ + text.txt + meta.json，全部成功后才删除旧文件。
