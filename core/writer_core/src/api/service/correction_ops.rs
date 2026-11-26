@@ -9,7 +9,7 @@ use crate::correction::{CorrectionScanner, CorrectionStore};
 
 impl WriterCoreApi {
     fn correction_store(&self) -> ApiResult<CorrectionStore> {
-        CorrectionStore::open(&self.app_data_root)
+        CorrectionStore::open_with_projects_root(&self.app_data_root, &self.projects_root)
     }
 
     pub(crate) fn correction_scanner(

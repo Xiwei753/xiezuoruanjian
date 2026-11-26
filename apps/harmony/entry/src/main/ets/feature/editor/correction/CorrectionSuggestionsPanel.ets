@@ -14,6 +14,12 @@ export struct CorrectionSuggestionsPanel {
   @Prop resourceState: string = 'uninitialized'
   @Prop resourceMessage: string = ''
   @Prop checkMessage: string = ''
+  // Issue #1064：前台每 60s 的增量检查进度；已校对字节来自 Core 的 checkedRanges。
+  @Prop checkedBytes: number = 0
+  @Prop totalBytes: number = 0
+  @Prop pendingBytes: number = 0
+  @Prop hasUncheckedSegments: boolean = false
+  @Prop progressKnown: boolean = false
   onCheckChapter: (() => void) | null = null
   onApply: ((suggestion: MappedCorrectionSuggestion) => void) | null = null
   onIgnore: ((suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope) => void) | null = null
@@ -81,6 +87,29 @@ export struct CorrectionSuggestionsPanel {
       return '资源不可用'
     }
     return '资源未初始化'
+  }
+
+  private checkedPercent(): number {
+    if (!this.progressKnown) {
+      return 0
+    }
+    if (this.totalBytes <= 0) {
+      return 100
+    }
+    return Math.max(0, Math.min(100, Math.round(this.checkedBytes * 100 / this.totalBytes)))
+  }
+
+  private progressText(): string {
+    if (!this.progressKnown) {
+      return '正在读取校对进度…'
+    }
+    if (this.totalBytes <= 0) {
+      return '本章暂无正文'
+    }
+    if (this.hasUncheckedSegments || this.pendingBytes > 0) {
+      return `已校对 ${this.checkedPercent()}% · 待校对 ${100 - this.checkedPercent()}%`
+    }
+    return '已校对 100%'
   }
 
   private severityColor(suggestion: MappedCorrectionSuggestion): ResourceColor {
@@ -152,11 +181,20 @@ export struct CorrectionSuggestionsPanel {
         }
         Button('校对本章')
           .height(34)
-          .enabled(!this.isChecking)
           .margin({ left: 8 })
           .onClick(() => this.onCheckChapter?.())
       }
       .width('100%')
+
+      Text(`校对进度：${this.progressText()}`)
+        .fontSize(12)
+        .fontColor($r('sys.color.font_secondary'))
+        .width('100%')
+
+      Text('前台写作时每 60 秒自动检查新增内容；手动“校对本章”只补查剩余未校对区间。')
+        .fontSize(12)
+        .fontColor($r('sys.color.font_tertiary'))
+        .width('100%')
 
       if (this.resourceMessage.length > 0) {
         Text(`校对资源：${this.resourceLabel()} · ${this.resourceMessage}`)
@@ -181,7 +219,7 @@ export struct CorrectionSuggestionsPanel {
 
       if (!this.isChecking && this.suggestions.length === 0 &&
           this.errorMessage.length === 0 && this.checkMessage.length === 0) {
-        Text('点击“校对本章”开始检查；没有建议时会显示检查结果。')
+        Text('点击“校对本章”补查剩余区间；没有建议时会显示检查结果。')
           .fontSize(12)
           .fontColor($r('sys.color.font_secondary'))
           .width('100%')

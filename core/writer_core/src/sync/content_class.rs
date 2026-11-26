@@ -15,6 +15,10 @@
 
 use crate::sync::types::ManifestFileRecord;
 
+/// 作品级校对结果记录的路径判定由 `correction` 模块维护（记录布局契约），
+/// 同步侧复用同一判定，避免多份路径规则。
+pub(crate) use crate::correction::is_synced_result_path;
+
 /// 内容分类 — 决定同步策略。
 ///
 /// - UserTextDocument：用户创作的文本（章节正文、笔记等），走三路比较，
@@ -23,6 +27,8 @@ use crate::sync::types::ManifestFileRecord;
 /// - LocalOnly：本地专用数据（备份、app-meta 内部文件），不同步。
 /// - StarMap：星图业务对象（index.json、graph.json、meta、对象文件）。
 ///   index/graph 走按对象 ID 的三方集合合并；对象文件走 LWW。
+/// - CorrectionResult：作品级校对结果记录（`correction/results/**.json`）。
+///   不可变并集：远端删除不删本地，同路径不同内容保留本地。
 /// - GeneratedCache：生成/缓存数据，LWW 可接受。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContentClass {
@@ -36,6 +42,9 @@ pub(crate) enum ContentClass {
     /// StarMap business objects (index.json, graph.json, meta, object files).
     /// Semantic three-way merge by object ID for index/graph; LWW for object files.
     StarMap,
+    /// 作品级校对结果记录（`correction/results/**.json`）。按内容做不可变
+    /// 并集：远端删除不删本地，同路径不同内容保留本地，绝不按时间戳覆盖。
+    CorrectionResult,
     /// Generated or cache data. LWW is acceptable.
     GeneratedCache,
 }
@@ -62,6 +71,12 @@ pub(crate) fn classify_content_path(raw_path: &str) -> ContentClass {
     // 否则每次拖动/新增引用都会制造无业务意义的跨设备冲突。
     if path == "starmaps/library/references.json" {
         return ContentClass::LocalOnly;
+    }
+
+    // 作品级校对结果记录：每条记录都是不可变对象，按并集同步，不能走通用
+    // Metadata 的 LWW。必须在通用 `.json` 判断之前识别。
+    if crate::correction::is_synced_result_path(&path) {
+        return ContentClass::CorrectionResult;
     }
 
     // StarMap business objects: semantic merge for index/graph, LWW for object files.
@@ -279,6 +294,37 @@ pub(crate) fn resolve_lww(local: &LwwRecord, remote: &LwwRecord) -> LwwWinner {
         } else {
             LwwWinner::Local
         }
+    }
+}
+
+/// 校对结果对象的不可变并集决策。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CorrectionResultSyncDecision {
+    /// 双方都没有 / 双方内容相同，无需动作。
+    NoOp,
+    /// 本地缺失，接收远端内容。
+    ApplyIncoming,
+    /// 保留本地，绝不删除。`resend` 为 true 表示本地有内容而远端缺失/删除，
+    /// 应重新发布本地；false 表示同 identity 不同内容（理论不应发生），
+    /// 保留本地、记录诊断，两边都不覆盖。
+    KeepLocal { resend: bool },
+}
+
+/// 作品级校对结果对象的并集同步决策。
+///
+/// 与 LWW 无关：远端删除不会删除本地记录，较新时间戳也不会覆盖另一台设备
+/// 仍需要的记录。
+pub(crate) fn decide_correction_result_sync(
+    local_present: bool,
+    incoming_present: bool,
+    content_equal: bool,
+) -> CorrectionResultSyncDecision {
+    match (local_present, incoming_present) {
+        (false, false) => CorrectionResultSyncDecision::NoOp,
+        (false, true) => CorrectionResultSyncDecision::ApplyIncoming,
+        (true, false) => CorrectionResultSyncDecision::KeepLocal { resend: true },
+        (true, true) if content_equal => CorrectionResultSyncDecision::NoOp,
+        (true, true) => CorrectionResultSyncDecision::KeepLocal { resend: false },
     }
 }
 

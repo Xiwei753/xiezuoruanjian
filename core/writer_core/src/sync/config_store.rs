@@ -238,6 +238,8 @@ impl crate::sync::SyncService {
     /// - `chapter.md`：章节正文，LWW 或三路比较
     /// - `project.json` / `volume.json` / `chapter.meta.json`：结构化元数据
     /// - `characters/`：角色数据
+    /// - `correction/results/<chapter_id>/<record_key>.json`：作品级校对结果记录
+    ///   （不可变并集，远端删除不删本地）
     /// - `annotations/{tags,bindings,entries,anchors,links}/<id>.json`：独立注释对象
     /// - `app-meta/sync/manifest.sync.json`：同步清单
     ///
@@ -269,7 +271,7 @@ impl crate::sync::SyncService {
         }
     }
 
-    /// 作品级白名单：作品正文/元数据/角色/同步清单。
+    /// 作品级白名单：作品正文/元数据/角色/校对结果/同步清单。
     fn is_project_whitelisted_path(rel_path: &str) -> bool {
         // 作品自身内容
         if rel_path == "project.json" {
@@ -285,6 +287,11 @@ impl crate::sync::SyncService {
             return false;
         }
         if rel_path.starts_with("characters/") {
+            return true;
+        }
+        // 作品级校对结果记录：按 segment 的不可变并集同步，不参与 LWW，
+        // 远端删除也不会删除本地记录。
+        if crate::correction::is_synced_result_path(&rel_path) {
             return true;
         }
         if Self::is_annotation_record_path(&rel_path) {

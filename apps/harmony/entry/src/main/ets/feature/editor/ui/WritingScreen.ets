@@ -29,6 +29,11 @@ import { WideWritingWorkbench } from './wide/WideWritingWorkbench'
 // Issue #825 复核8第 3 点：订阅"刚落盘的 LocalSettings"广播，
 // 让宽屏设置浮层的改动实时回流到本页（对齐 Linux 的 settingsBackend.onSettings_changed）。
 import { LocalSettingsStore } from '../../../feature/settings/presentation/LocalSettingsStore'
+import {
+  SyncRunListener,
+  SyncRunPresentationState,
+  SyncRunSnapshot
+} from '../../../feature/settings/presentation/SyncRunPresentationState'
 import { ActiveWritingSessionRegistry } from '../session/ActiveWritingSessionRegistry'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { EditorViewportState } from '../render/EditorViewportState'
@@ -128,6 +133,36 @@ class WritingSessionLifecycleObserver implements LifecycleObserver {
   }
 }
 
+// Issue #1064：纠错周期只在前台活动章节运行；退后台/失焦停止本章 timer，
+// 回到前台只恢复缓存并重新启动 60s 周期，不立即扫描。
+class CorrectionScheduleLifecycleObserver implements LifecycleObserver {
+  private coordinator: CorrectionCoordinator
+
+  constructor(coordinator: CorrectionCoordinator) {
+    this.coordinator = coordinator
+  }
+
+  onForeground(): void {
+    this.coordinator.onPageForeground()
+  }
+
+  onBackground(): void {
+    this.coordinator.onPageBackground()
+  }
+
+  onFocus(): void {
+    this.coordinator.onPageForeground()
+  }
+
+  onBlur(): void {
+    this.coordinator.onPageBackground()
+  }
+
+  onDestroy(): void {
+    this.coordinator.onPageBackground()
+  }
+}
+
 @Component
 export struct WritingScreen {
   navPathStack: NavPathStack = new NavPathStack()
@@ -145,6 +180,12 @@ export struct WritingScreen {
   @State correctionResourceState: string = 'uninitialized'
   @State correctionResourceMessage: string = '校对资源尚未初始化'
   @State correctionCheckMessage: string = ''
+  // Issue #1064：面板的已校对/待校对进度与周期检查状态。
+  @State correctionCheckedBytes: number = 0
+  @State correctionTotalBytes: number = 0
+  @State correctionPendingBytes: number = 0
+  @State correctionHasUncheckedSegments: boolean = false
+  @State correctionProgressKnown: boolean = false
   @State correctionSheetOpen: boolean = false
   @State annotationPanelOpen: boolean = false
   @State proofReplayOpen: boolean = false
@@ -264,6 +305,10 @@ export struct WritingScreen {
   // Issue #981：真实前台写作计时；与编辑字数事件共用同一条进程级串行统计队列。
   private writingSessionTracker: WritingSessionTracker = new WritingSessionTracker(this.editorStatsQueue, 'harmony')
   private writingSessionLifecycleObserver: LifecycleObserver | null = null
+  // Issue #1064：纠错调度生命周期与同步回流（只恢复缓存）。
+  private correctionScheduleObserver: LifecycleObserver | null = null
+  private syncRunUnsubscribe: (() => void) | null = null
+  private lastSyncPhase: string = 'idle'
   // Issue #920 A：写作流程协调器。页面只把事件交给它，并映射它产出的显示状态。
   private writingTextProvider: WritingTextProvider = (key: WritingTextKey): string => this.resolveWritingText(key)
   private writingWorkflow: WritingWorkflowCoordinator = new WritingWorkflowCoordinator(
@@ -324,10 +369,18 @@ export struct WritingScreen {
       this.correctionResourceState = state.resourceState
       this.correctionResourceMessage = state.resourceMessage
       this.correctionCheckMessage = state.checkMessage
+      this.correctionCheckedBytes = state.checkedBytes
+      this.correctionTotalBytes = state.totalBytes
+      this.correctionPendingBytes = state.pendingBytes
+      this.correctionHasUncheckedSegments = state.hasUncheckedSegments
+      this.correctionProgressKnown = state.progressKnown
     })
     this.correctionCoordinator.setScanCompletionListener((): void => {
       void this.cleanupInactiveCorrectionModels().catch(() => {})
     })
+    // Issue #1064：模型只在真正需要扫描时准备；冷启动缓存全部有效就不加载 ONNX。
+    this.correctionCoordinator.setModelPreparationHandler(
+      (): Promise<void> => this.ensureBundledCorrectionModel())
     // Issue #920 A：把路由上下文交给协调器，并注册显示状态回流 + 会话打开后的平台侧恢复。
     const workflowConfig: WritingWorkflowConfig = {
       chapterId: this.chapterId,
@@ -337,9 +390,8 @@ export struct WritingScreen {
     }
     this.writingWorkflow.configure(workflowConfig)
     this.writingWorkflow.setSessionOpenedHook((snap: EditorSessionSnapshot): Promise<void> => {
-      // Issue #958：Core 就绪、会话打开后再尝试内置模型兜底；不阻塞会话恢复，
-      // 失败保持可重试（由 CorrectionCoordinator 判定是否已处理）。
-      void this.ensureBundledCorrectionModel()
+      // Issue #1064：开章/冷启动只恢复缓存，不在这里初始化模型；真正需要
+      // 扫描时由 CorrectionCoordinator 的 modelPreparationHandler 延迟准备。
       return this.restoreContinuationEditorState(snap)
     })
     this.writingWorkflow.setListener((update: WritingWorkflowUpdate): void => {
@@ -419,6 +471,27 @@ export struct WritingScreen {
     if (this.lifecycle.isForeground() && this.lifecycle.isFocused()) {
       this.writingSessionTracker.resume()
     }
+
+    // Issue #1064：纠错周期跟随页面前后台；页面打开时观察者不会补发 onForeground，
+    // 显式起一次（只恢复缓存，60s 后才首轮扫描）。
+    const correctionObserver: LifecycleObserver =
+      new CorrectionScheduleLifecycleObserver(this.correctionCoordinator)
+    this.correctionScheduleObserver = correctionObserver
+    this.lifecycle.addObserver(correctionObserver)
+    if (this.lifecycle.isForeground()) {
+      this.correctionCoordinator.onPageForeground()
+    }
+    // 同步回流只读 Core 缓存刷新结果，不在同步完成回调里启动模型扫描。
+    const syncState: SyncRunPresentationState = SyncRunPresentationState.getInstance()
+    this.lastSyncPhase = syncState.snapshot().phase
+    const syncListener: SyncRunListener = (snapshot: SyncRunSnapshot): void => {
+      const finished: boolean = snapshot.phase === 'success' || snapshot.phase === 'failed'
+      if (finished && this.lastSyncPhase === 'in_progress') {
+        this.correctionCoordinator.restoreCachedResults()
+      }
+      this.lastSyncPhase = snapshot.phase
+    }
+    this.syncRunUnsubscribe = syncState.subscribe(syncListener)
 
     // Issue #825 复核8第 3 点：订阅 LocalSettings 落盘广播，让宽屏设置浮层的改动实时回流到本页。
     this.unsubscribeLocalSettings = LocalSettingsStore.getInstance().subscribe(
@@ -561,6 +634,16 @@ export struct WritingScreen {
     if (this.writingSessionLifecycleObserver) {
       this.lifecycle.removeObserver(this.writingSessionLifecycleObserver)
       this.writingSessionLifecycleObserver = null
+    }
+    // Issue #1064：页面销毁停止纠错周期表；脏区保留在 Core，重开时再恢复缓存。
+    this.correctionCoordinator.onPageBackground()
+    if (this.correctionScheduleObserver) {
+      this.lifecycle.removeObserver(this.correctionScheduleObserver)
+      this.correctionScheduleObserver = null
+    }
+    if (this.syncRunUnsubscribe) {
+      this.syncRunUnsubscribe()
+      this.syncRunUnsubscribe = null
     }
     // Issue #981 复核：片段已进入与字数事件共用的队列。关闭时把队列刷到当前序号，
     // 确认尾部片段落盘后再解除统计读取屏障，避免统计页读到半套数据。
@@ -1722,6 +1805,11 @@ export struct WritingScreen {
           resourceState: this.correctionResourceState,
           resourceMessage: this.correctionResourceMessage,
           checkMessage: this.correctionCheckMessage,
+          checkedBytes: this.correctionCheckedBytes,
+          totalBytes: this.correctionTotalBytes,
+          pendingBytes: this.correctionPendingBytes,
+          hasUncheckedSegments: this.correctionHasUncheckedSegments,
+          progressKnown: this.correctionProgressKnown,
           onCheckChapter: (): void => { void this.checkCurrentChapter() },
           onApply: (suggestion: MappedCorrectionSuggestion): void => { void this.applyCorrection(suggestion) },
           onIgnore: (suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope): void => {

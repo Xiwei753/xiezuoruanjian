@@ -1047,8 +1047,11 @@ export class NativeRichEditorBridge {
       if (result !== null && !result.success && result.errorCode === 'STALE_BASELINE') {
         // 出队核实时基线已前进、这笔事务尚未应用：保留已提交前缀的 receipt，
         // 重新调度本轮把剩余事实映射到新 Core 正文，不进入 conflict、也不重复提交。
+        const staleSnap: EditorSessionSnapshot | null = this.coordinator.getSnapshot()
         this.saveInFlightMerge(localToken, coreSessionId, includedNativeBase,
-          expectedText, expectedRevision, lastIncluded, freezeChangeSequence)
+          staleSnap !== null ? staleSnap.text : expectedText,
+          staleSnap !== null ? staleSnap.revision : expectedRevision,
+          lastIncluded, freezeChangeSequence)
         this.scheduleReconcile()
         return true
       }

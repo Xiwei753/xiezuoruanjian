@@ -21,12 +21,14 @@ export interface CorrectionCheckedRangeDto {
 /**
  * Core merged chapter snapshot (issue #954). Suggestions are repositioned to the
  * requested revision; unchanged segments reuse cached results without rerunning
- * the model. checkedRanges lists ranges already verified against current text.
+ * the model. checkedRanges lists ranges already verified against current text;
+ * hasUncheckedSegments is true while any segment is dirty or has no verified result.
  */
 export interface CorrectionChapterSnapshotDto {
   textRevision: number
   suggestions: CorrectionSuggestionDto[]
   checkedRanges: CorrectionCheckedRangeDto[]
+  hasUncheckedSegments: boolean
 }
 
 export interface CorrectionResourceStatusDto {
@@ -112,6 +114,7 @@ export function decodeCorrectionChapterSnapshot(data: Object): DecodeResult<Corr
   const textRevision = record['textRevision']
   const suggestionsValue = record['suggestions']
   const checkedRangesValue = record['checkedRanges']
+  const hasUncheckedSegmentsValue = record['hasUncheckedSegments']
   if (typeof textRevision !== 'number' || !Array.isArray(suggestionsValue) ||
       !Array.isArray(checkedRangesValue)) {
     return { ok: false, error: 'data: invalid CorrectionChapterSnapshotDto fields' }
@@ -137,7 +140,12 @@ export function decodeCorrectionChapterSnapshot(data: Object): DecodeResult<Corr
     value: {
       textRevision: textRevision,
       suggestions: suggestions,
-      checkedRanges: checkedRanges
+      checkedRanges: checkedRanges,
+      // Older native builds omitted the field; absence means "no pending segment" only
+      // when the response is otherwise a complete snapshot, so default to false.
+      hasUncheckedSegments: typeof hasUncheckedSegmentsValue === 'boolean'
+        ? hasUncheckedSegmentsValue
+        : false
     }
   }
 }

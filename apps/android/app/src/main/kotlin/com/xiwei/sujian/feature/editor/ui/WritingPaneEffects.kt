@@ -144,6 +144,9 @@ internal suspend fun applyExternalDocumentFact(
     }
     if (fact.origin == com.xiwei.sujian.feature.editor.session.DocumentFactOrigin.SYNC_MERGED) {
         viewModel.applyExternalContentToUi(targetId, fact.text, fact.sourceVersion.contentHash)
+        // Issue #1064：同步回流只恢复 Core 的缓存快照，不触发扫描；脏区留给
+        // 前台章节的 60s 周期或用户手动校对。
+        viewModel.restoreCorrectionSnapshot(targetId)
     }
 }
 

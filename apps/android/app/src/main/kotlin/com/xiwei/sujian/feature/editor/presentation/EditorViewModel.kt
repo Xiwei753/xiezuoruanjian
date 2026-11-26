@@ -537,7 +537,10 @@ class EditorViewModel(
         }
     }
 
-    /** Restore Core's cached chapter suggestions for the current revision without rescanning. */
+    /**
+     * Issue #1064：开章/回前台/同步回流只恢复 Core 的缓存快照，不触发扫描；
+     * 缓存缺失或仍有未检查段时由前台章节的 60s 周期或手动校对补查。
+     */
     fun restoreCorrectionSnapshot(targetId: String) {
         if (inputFrozen || isLoadingChapter) return
         val identity = currentCorrectionIdentity() ?: return
@@ -548,10 +551,29 @@ class EditorViewModel(
         }
     }
 
+    /**
+     * Issue #1064：前台活动章节启动 60s 周期增量检查。开章后首轮在 60s 后触发，
+     * 连续输入不重置；同一章节重复调用是幂等的。
+     */
+    fun startCorrectionSchedule(targetId: String) {
+        val identity = currentCorrectionIdentity() ?: return
+        if (identity.targetId != targetId) return
+        correctionCoordinator?.startPeriodicScan(identity)
+    }
+
+    /** 后台/切章/页面销毁停止本章周期检查；未完成脏区保留，回前台重新计时。 */
+    fun stopCorrectionSchedule(targetId: String? = null) {
+        correctionCoordinator?.stopPeriodicScan(targetId)
+    }
+
     fun clearCorrectionSuggestions(targetId: String) {
         correctionCoordinator?.clear(targetId)
     }
 
+    /**
+     * Issue #1064 手动校对：立即提交当前已结算正文的增量检查（复用同一单飞入口）；
+     * 扫描进行中时合并待办，不并行跑模型，也不自动修改正文。
+     */
     fun requestCorrectionChapter(targetId: String) {
         if (inputFrozen || isLoadingChapter) return
         val identity = currentCorrectionIdentity() ?: return
@@ -582,6 +604,9 @@ class EditorViewModel(
                     is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> {
                         withContext(Dispatchers.IO) { correctionResourceRepository.setActiveModel(model) }
                         withContext(Dispatchers.IO) { removeReleasedCorrectionModels() }
+                        // Issue #1064: model identity changed — only mark the
+                        // chapter dirty; the next periodic/manual check revalidates.
+                        correctionCoordinator?.markScanPending()
                         refreshCorrectionResourceState(
                             CorrectionResourceFeedback(
                                 CorrectionResourceFeedbackLevel.Success,
@@ -665,6 +690,11 @@ class EditorViewModel(
                             getApplication<Application>().getString(R.string.editor_correction_resource_dictionary_imported),
                         )
                     }
+                if (result.importedFiles.isNotEmpty()) {
+                    // Issue #1064: dictionary resources changed the scanner
+                    // fingerprint — mark dirty and wait for the periodic round.
+                    correctionCoordinator?.markScanPending()
+                }
                 refreshCorrectionResourceState(feedback)
             } catch (_: Exception) {
                 refreshCorrectionResourceState(
@@ -940,9 +970,9 @@ class EditorViewModel(
             if (correctionIdentity != null && correctionIdentity.targetId == targetId &&
                 editResult.displayPatches.isNotEmpty()
             ) {
-                // Stage-one mappings are queued into one ordered consumer; the
-                // model scan stays debounced and latest-only inside the coordinator.
-                correctionCoordinator?.enqueueEdits(correctionIdentity, editResult, fullNewText, lease)
+                // Issue #1064: queue only the stage-one dirty ranges; the model
+                // runs on the foreground chapter's 60s round or a manual check.
+                correctionCoordinator?.enqueueEdits(correctionIdentity, editResult, lease)
             }
             viewModelScope.launch {
                 _editFactEvents.send(
@@ -1078,6 +1108,8 @@ class EditorViewModel(
     fun finishWorkspaceClose(targetId: String) {
         val session = currentSession ?: return
         if (chapterTargetId(session.projectId, session.volumeId, session.chapterId) != targetId) return
+        // Issue #1064：离开正文页停止本章周期检查；未完成脏区留在 Core。
+        stopCorrectionSchedule(targetId)
         // #641：关闭前 flush bridge（IME composition 上屏内容提交给 Core）。
         flushBridgeForClose(targetId)
         releaseBridge(targetId)

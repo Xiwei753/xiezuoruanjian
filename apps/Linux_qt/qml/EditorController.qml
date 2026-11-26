@@ -94,6 +94,20 @@ QtObject {
     property var correctionDictionaryResources: []
     property var correctionEntityNames: []
     property bool correctionCheckPending: false
+    // Issue #1064：纠错调度只认「应用前台 + 已打开活动章节」。前台状态由
+    // WritingWorkspace 从 main.qml 的写作会话前台定义注入；退后台只停表，
+    // 不清任何待检查脏区。
+    property bool applicationForeground: false
+    // 当前章节是否仍有待检查区间。编辑事务只标脏，词典/规则变化重新标脏；
+    // 只有一次真实扫描明确报告没有未检查段时才清零。
+    property bool correctionDirty: false
+    // 是否已经收到当前文档的有效快照。冷启动已全部有效时不得为一次空检查
+    // 初始化模型。
+    property bool correctionSnapshotKnown: false
+    // 最近一次快照覆盖的区间数，仅用于面板进度展示。
+    property int correctionCheckedRangeCount: 0
+    // 最近一次真实扫描（restore-only 显示恢复不算）的完成时间。
+    property double correctionLastCheckAtMs: 0
     property int correctionRequestSerial: 0
     property int pendingCorrectionRequestId: 0
     property double pendingCorrectionRevision: -1
@@ -101,16 +115,17 @@ QtObject {
     property string pendingCorrectionChapterId: ""
     property string pendingCorrectionText: ""
     property bool pendingCorrectionSilent: false
+    readonly property bool correctionScanRunning: correctionInFlightScanId > 0
+    // Issue #1064：手动检查与 60s 周期检查共用 #1062 的单飞执行队列。
+    // 扫描进行中只记录补跑标记，绝不并行提交第二笔模型任务。
+    property int correctionInFlightScanId: 0
+    property bool correctionPeriodicScanQueued: false
+    property bool correctionManualScanQueued: false
+    readonly property int correctionPeriodicIntervalMs: 60000
     property string correctionTrackedText: ""
     property double correctionTrackedRevision: -1
     property string correctionTrackedProjectId: ""
     property string correctionTrackedChapterId: ""
-    // Issue #1061：最近一次已接受校对结果的 (document, revision)。同一
-    // revision 的重复 pending 请求没有新脏区，不必再复制整章正文并等待
-    // 一次 Core 队列任务。
-    property double correctionScannedRevision: -1
-    property string correctionScannedProjectId: ""
-    property string correctionScannedChapterId: ""
     // Identifies one opened editor document inside Core's per-chapter cache.
     // It is a backend identity only; request IDs above remain UI-only.
     property int correctionDocumentEpoch: 1
@@ -118,7 +133,6 @@ QtObject {
     // previous document cannot overwrite the current chapter's annotations.
     property var correctionRequestEpochs: ({})
     property var correctionRequestKinds: ({})
-    property var correctionRestoreScanRequests: ({})
     // Issue #1032 复审：标注映射也进入 Rust 后台固定队列，QML 只投递轻量
     // 编辑事实并接收按章节 + revision 返回的异步结果。这里只保存展示侧的
     // 请求标识；切章 / 重置时丢弃旧页面回调，但不会删除已提交的后台事实。
@@ -175,11 +189,33 @@ QtObject {
         onTriggered: controller.refreshChapterAnnotations()
     }
 
-    // Issue #954：编辑事务先走轻量位置更新，模型扫描防抖到输入停顿后一次。
-    property var correctionScanDebounceTimer: Timer {
-        interval: 250
-        repeat: false
-        onTriggered: controller.requestCorrectionPendingNow()
+    // Issue #1064：删除 250ms 输入停顿防抖。纠错扫描改为手动触发 + 前台
+    // 活动章节每 60s 周期检查；连续输入、纯选区变化都不重置周期。定时器
+    // 只在 chapterId 提交、回到前台时启动，切章/退后台/关闭时停止。
+    property var correctionPeriodicTimer: Timer {
+        interval: controller.correctionPeriodicIntervalMs
+        repeat: true
+        running: false
+        onTriggered: controller.onCorrectionPeriodicTick()
+    }
+
+    // 章节身份提交（开章 / 清空）后本章重新起算首轮 60s；旧章的补跑标记
+    // 属于旧文档，直接丢弃。
+    onChapterIdChanged: {
+        controller.correctionPeriodicScanQueued = false;
+        controller.correctionManualScanQueued = false;
+        controller.syncCorrectionPeriodicTimer(true);
+    }
+
+    // Issue #1064：回到前台只恢复 Core 缓存中的有效结果并重新起算周期，
+    // 不立即跑模型；退后台停止本章定时器，待检查脏区保持原样。
+    onApplicationForegroundChanged: {
+        if (controller.applicationForeground) {
+            controller.syncCorrectionPeriodicTimer(true);
+            controller.requestCorrectionSnapshot();
+        } else {
+            controller.correctionPeriodicTimer.stop();
+        }
     }
 
     // Autosave timer
@@ -465,7 +501,9 @@ QtObject {
     }
 
     function cancelPendingCorrectionRequest() {
-        correctionScanDebounceTimer.stop();
+        correctionInFlightScanId = 0;
+        correctionPeriodicScanQueued = false;
+        correctionManualScanQueued = false;
         correctionRequestSerial += 1;
         if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
         pendingCorrectionRequestId = correctionRequestSerial;
@@ -859,10 +897,6 @@ QtObject {
         correctionApplyRequests = ({});
         correctionRequestEpochs = ({});
         correctionRequestKinds = ({});
-        correctionRestoreScanRequests = ({});
-        correctionScannedRevision = -1;
-        correctionScannedProjectId = "";
-        correctionScannedChapterId = "";
         pendingCorrectionRevision = -1;
         pendingCorrectionProjectId = "";
         pendingCorrectionChapterId = "";
@@ -879,7 +913,9 @@ QtObject {
         editorBackendRef.release_correction_session(releaseProjectId, releaseChapterId);
     }
 
-    function invalidateCorrectionResults() {
+    // markDirty=true 用于正文/词典/规则/模型已经变化的调用点：旧结果不能
+    // 再当作当前文档的已校对状态，等待下一个周期或手动请求重新扫描。
+    function invalidateCorrectionResults(markDirty) {
         cancelPendingCorrectionRequest();
         clearAnnotationDisplayRequests();
         correctionApplyRequests = ({});
@@ -887,10 +923,10 @@ QtObject {
         if (correctionDocumentEpoch > 2147483000) correctionDocumentEpoch = 1;
         correctionRequestEpochs = ({});
         correctionRequestKinds = ({});
-        correctionRestoreScanRequests = ({});
-        correctionScannedRevision = -1;
-        correctionScannedProjectId = "";
-        correctionScannedChapterId = "";
+        correctionDirty = markDirty === true;
+        correctionSnapshotKnown = markDirty === true;
+        correctionCheckedRangeCount = 0;
+        correctionLastCheckAtMs = 0;
         pendingCorrectionRevision = -1;
         pendingCorrectionProjectId = "";
         pendingCorrectionChapterId = "";
@@ -930,53 +966,129 @@ QtObject {
         return false;
     }
 
+    // Issue #1064：手动校对入口。复用 #1062 的单飞校对队列，立即提交一次
+    // 当前已结算正文的检查；Core 只扫描脏区与尚未检查的段。正在扫描时
+    // 不并行提交，只记下补跑请求，本轮终态回执后再跑一次。
     function requestCorrectionChapter() {
-        if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) {
-            correctionError = qsTr("请先打开一个章节。");
+        return submitCorrectionScan("manual");
+    }
+
+    // 周期到点：仅前台活动章节计时；有待检查区间才提交，扫描进行中只置
+    // pending 标记，不新开并行扫描。
+    function onCorrectionPeriodicTick() {
+        if (!applicationForeground || !chapterId) {
+            correctionPeriodicTimer.stop();
             return;
         }
-        if (!editorBackendRef.request_correction_chapter) {
-            correctionError = qsTr("当前版本不支持校对。");
+        if (correctionInFlightScanId > 0) {
+            correctionPeriodicScanQueued = true;
             return;
         }
+        // 进度未知（刚开章、恢复快照还没回来）时不能因为 dirty=false 就跳过：
+        // 首次周期仍要提交，由 Core 判断是否真的没有待检查区间。
+        if (correctionSnapshotKnown && !correctionDirty) return;
+        submitCorrectionScan("periodic");
+    }
 
-        cancelPendingCorrectionRequest();
+    function syncCorrectionPeriodicTimer(restartFirstRound) {
+        if (!applicationForeground || !chapterId) {
+            correctionPeriodicTimer.stop();
+            return;
+        }
+        if (restartFirstRound === true) correctionPeriodicTimer.restart();
+        else if (!correctionPeriodicTimer.running) correctionPeriodicTimer.start();
+    }
 
-        var snapshotText = getEditorPlainText();
+    function submitCorrectionScan(origin) {
+        if (!projectId || !chapterId) {
+            if (origin === "manual") correctionError = qsTr("请先打开一个章节。");
+            return false;
+        }
+        if (!editorBackendRef || !targetEditorItem
+                || !editorBackendRef.request_correction_pending) {
+            if (origin === "manual") correctionError = qsTr("当前版本不支持校对。");
+            return false;
+        }
+        if (!applicationForeground) return false;
+        if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return false;
+        if (loadedEditorDocumentIdentity() !== editorDocumentIdentity()) return false;
+
+        if (correctionInFlightScanId > 0) {
+            if (origin === "manual") {
+                correctionManualScanQueued = true;
+                correctionStatus = qsTr("当前检查完成后将继续检查待校对区间…");
+            } else {
+                correctionPeriodicScanQueued = true;
+            }
+            return false;
+        }
+
+        // 冷启动已全部有效（或刚完成扫描且没有新脏区）时，不为一次空检查
+        // 初始化模型。
+        if (correctionSnapshotKnown && !correctionDirty) {
+            if (origin === "manual") correctionStatus = qsTr("本章已全部校对。");
+            return false;
+        }
+
         var revision = Number(targetEditorItem.text_revision);
         if (!isFinite(revision) || revision < 0) {
             correctionError = qsTr("无法读取正文版本。");
-            return;
+            return false;
         }
+        var snapshotText = getEditorPlainText();
         ensureCorrectionTracking(snapshotText, revision);
+
         correctionRequestSerial += 1;
         if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
-        pendingCorrectionRequestId = correctionRequestSerial;
-        registerCorrectionRequest(pendingCorrectionRequestId, "full_check");
+        var requestId = correctionRequestSerial;
+        pendingCorrectionRequestId = requestId;
+        registerCorrectionRequest(requestId, "pending");
         pendingCorrectionRevision = revision;
         pendingCorrectionProjectId = projectId;
         pendingCorrectionChapterId = chapterId;
         pendingCorrectionText = snapshotText;
         pendingCorrectionSilent = false;
         correctionError = "";
-        correctionStatus = qsTr("正在校对本章…");
+        correctionStatus = origin === "manual"
+                ? qsTr("正在检查待校对区间…")
+                : qsTr("正在后台检查待校对区间…");
         correctionCheckPending = true;
-        editorBackendRef.request_correction_chapter(
-            pendingCorrectionRequestId,
+        correctionInFlightScanId = requestId;
+        editorBackendRef.request_correction_pending(
+            requestId,
             projectId,
             chapterId,
             correctionDocumentEpoch,
             revision,
             snapshotText);
+        return true;
     }
 
-    // Issue #954：从 Core 缓存读取当前章节仍有效的校对结果，不重跑模型。
-    // 章节打开以及编辑事务连续性丢失时调用；Core 按文本/上下文指纹重新定位
-    // 每条波线，QML 直接整体替换结果，不再本地推断 byte 偏移。
-    function requestCorrectionSnapshot(scanAfterRestore) {
+    // 扫描终态后消费补跑标记：手动请求立即补跑一次；周期请求只在仍有
+    // 脏区时补跑一次，正文移动过快时不追着连续扫。
+    function runQueuedCorrectionScan() {
+        if (correctionInFlightScanId > 0) return;
+        if (!applicationForeground || !chapterId) return;
+        if (correctionManualScanQueued) {
+            correctionManualScanQueued = false;
+            correctionPeriodicScanQueued = false;
+            submitCorrectionScan("manual");
+            return;
+        }
+        if (!correctionPeriodicScanQueued) return;
+        correctionPeriodicScanQueued = false;
+        if (correctionDirty) submitCorrectionScan("periodic");
+    }
+
+    // Issue #954/#1064：从 Core 缓存读取当前章节仍有效的校对结果，不重跑
+    // 模型。开章、回前台、同步回流都只走这条 restore-only 路径；编辑事务
+    // 连续性丢失时也只恢复显示，扫描交给周期或手动入口。
+    function requestCorrectionSnapshot() {
         if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) return;
         if (!editorBackendRef.request_correction_snapshot) return;
         if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return;
+        // 已有真实扫描在途时，它的整章快照会覆盖显示，不再排一次 restore。
+        if (correctionInFlightScanId > 0) return;
         // Issue #1055 复审：编辑事务连续性重建也会走到这里。编辑器实际载入的
         // 文档与 controller 当前身份不一致时，读到的正文可能已属于另一章，
         // 绝不能用旧 ID 投递。
@@ -986,7 +1098,6 @@ QtObject {
                 + ", current=" + editorDocumentIdentity());
             return;
         }
-        correctionScanDebounceTimer.stop();
 
         var snapshotText = getEditorPlainText();
         var revision = Number(targetEditorItem.text_revision);
@@ -1002,6 +1113,9 @@ QtObject {
             pendingCorrectionChapterId = "";
             pendingCorrectionText = "";
             pendingCorrectionSilent = false;
+            correctionSnapshotKnown = true;
+            correctionDirty = false;
+            correctionCheckedRangeCount = 0;
             updateCorrectionSuggestions([]);
             return;
         }
@@ -1010,16 +1124,12 @@ QtObject {
         if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
         pendingCorrectionRequestId = correctionRequestSerial;
         registerCorrectionRequest(pendingCorrectionRequestId, "restore");
-        if (scanAfterRestore === true) {
-            correctionRestoreScanRequests[pendingCorrectionRequestId] = true;
-        }
         pendingCorrectionRevision = revision;
         pendingCorrectionProjectId = projectId;
         pendingCorrectionChapterId = chapterId;
         pendingCorrectionText = snapshotText;
         pendingCorrectionSilent = true;
-        // Issue #978 新评论: 快照请求本身也要标记在途，避免连续性丢失时连续按键
-        // 反复触发整章读取。
+        // 快照请求本身也要标记在途，避免连续性丢失时连续按键反复触发整章读取。
         correctionCheckPending = true;
         editorBackendRef.request_correction_snapshot(
             pendingCorrectionRequestId,
@@ -1104,10 +1214,11 @@ QtObject {
         return suggestions;
     }
 
-    // Issue #954：编辑事务先只把真实 patch 范围交给 Core 更新内存段索引，
-    // 不读取/复制整章正文，也不立刻运行模型。输入停顿后再提交一次“扫描脏段”。
+    // Issue #954/#1064：编辑事务只做轻量段落位置映射与脏区标记，不读取/
+    // 复制整章正文，也不触发扫描。模型阶段统一由 60s 周期或手动入口提交。
     function reconcileCorrectionEdit(baseRevision, newRevision, patchRangesJson) {
         if (!targetEditorItem || isLoadingChapter || isApplyingFormat) return;
+        correctionDirty = true;
         var actualRevision = Number(targetEditorItem.text_revision);
         var base = Number(baseRevision);
         var next = Number(newRevision);
@@ -1117,14 +1228,15 @@ QtObject {
         // Issue #1032：事实改成逐条排队后，处理某条历史 patch 时编辑器可能已经
         // 走到更晚的 revision；只要 base 与已跟踪 revision 连续，就按队列顺序
         // 重放该 patch。actualRevision < next 才表示真的丢失了连续性。
-        // 只有真正失去连续性时才由快照请求读取一次正文；已有请求在途时不重复。
+        // Issue #1064：失去连续性时只恢复一次缓存显示，不再借 restore 回调
+        // 立即补扫；脏区留给下一个周期或手动检查。
         if (!isFinite(base) || !isFinite(next) || actualRevision < next
                 || base !== correctionTrackedRevision
                 || correctionTrackedProjectId !== projectId
                 || correctionTrackedChapterId !== chapterId
                 || !editorBackendRef || !editorBackendRef.apply_correction_edits) {
             if (!correctionCheckPending) {
-                requestCorrectionSnapshot(true);
+                requestCorrectionSnapshot();
             }
             return;
         }
@@ -1133,9 +1245,8 @@ QtObject {
         correctionTrackedProjectId = projectId;
         correctionTrackedChapterId = chapterId;
         // Issue #954/#978: 只把 patch/revision 交给 Core 更新内存段索引，
-        // 不复制整章正文；模型阶段由 requestCorrectionPendingNow 在停顿后读取一次。
-        // Issue #1032：QML 不再同步等待；Rust 校对队列按章节 FIFO 执行，
-        // 完成结果通过 correction_edits_applied 带回章节 + revision。
+        // 不复制整章正文。Issue #1032：QML 不再同步等待；Rust 校对队列按
+        // 章节 FIFO 执行，完成结果通过 correction_edits_applied 带回。
         correctionApplyRequestSerial += 1;
         if (correctionApplyRequestSerial > 2147483000) correctionApplyRequestSerial = 1;
         var applyRequestId = correctionApplyRequestSerial;
@@ -1169,61 +1280,29 @@ QtObject {
             return;
         }
         if (!success) {
-            if (!correctionCheckPending) requestCorrectionSnapshot(true);
+            correctionDirty = true;
+            if (!correctionCheckPending) requestCorrectionSnapshot();
             return;
         }
         if (Number(textRevision) < correctionTrackedRevision) return;
+        // 编辑映射只推进轻量索引并保留脏区；扫描由周期或手动入口提交。
         correctionError = "";
-        correctionStatus = qsTr("正在校对修改段落…");
-        correctionScanDebounceTimer.restart();
-    }
-
-    // Issue #954：模型阶段。仅在输入停顿后取一次当前正文，Core 只扫描第一阶段
-    // 记录的脏窗口；连续输入不会为每个按键排队一次全文模型任务。
-    function requestCorrectionPendingNow() {
-        if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) return;
-        if (!editorBackendRef.request_correction_pending) return;
-        if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return;
-        var revision = Number(targetEditorItem.text_revision);
-        if (!isFinite(revision) || revision < 0) return;
-        // Issue #1061：这个 revision 的真实扫描结果已经接受，继续排队只会
-        // 复制整章正文再跑一趟无脏区的 Core 任务。先做身份/revision 去重，
-        // 避免被跳过的请求仍然先 getEditorPlainText() 克隆全文。
-        if (revision === correctionScannedRevision
-                && projectId === correctionScannedProjectId
-                && chapterId === correctionScannedChapterId) return;
-        var snapshotText = getEditorPlainText();
-        syncCorrectionTracking(snapshotText, revision);
-
-        correctionRequestSerial += 1;
-        if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
-        pendingCorrectionRequestId = correctionRequestSerial;
-        registerCorrectionRequest(pendingCorrectionRequestId, "pending");
-        pendingCorrectionRevision = revision;
-        pendingCorrectionProjectId = projectId;
-        pendingCorrectionChapterId = chapterId;
-        pendingCorrectionText = snapshotText;
-        pendingCorrectionSilent = false;
-        correctionCheckPending = true;
-        editorBackendRef.request_correction_pending(
-            pendingCorrectionRequestId,
-            projectId,
-            chapterId,
-            correctionDocumentEpoch,
-            revision,
-            snapshotText);
+        correctionDirty = true;
     }
 
     // Issue #954：Core 返回整章合并快照 { textRevision, suggestions, checkedRanges }，
     // 已按当前正文重新定位；QML 直接整体替换结果列表，不再本地合并。
     function receiveCorrectionSuggestions(requestId, textRevision, snapshotJson) {
-        var requestKind = takeCorrectionRequestKind(requestId);
+        takeCorrectionRequestKind(requestId);
         var requestEpoch = takeCorrectionRequestEpoch(requestId);
-        var scanAfterRestore = correctionRestoreScanRequests[requestId] === true;
-        delete correctionRestoreScanRequests[requestId];
-        if (requestEpoch === undefined || requestEpoch !== correctionDocumentEpoch) return;
+        var scanFinished = requestId === correctionInFlightScanId;
+        if (scanFinished) correctionInFlightScanId = 0;
+        if (requestEpoch === undefined || requestEpoch !== correctionDocumentEpoch) {
+            if (scanFinished) runQueuedCorrectionScan();
+            return;
+        }
         var isPending = requestId === pendingCorrectionRequestId;
-        if (isPending) {
+        if (isPending || scanFinished) {
             correctionCheckPending = false;
         }
         // Request IDs only drive the pending indicator. Core always returns a
@@ -1232,7 +1311,17 @@ QtObject {
         if (!targetEditorItem
                 || textRevision !== Number(targetEditorItem.text_revision)
                 || projectId !== correctionTrackedProjectId
-                || chapterId !== correctionTrackedChapterId) return;
+                || chapterId !== correctionTrackedChapterId) {
+            if (scanFinished) {
+                // 扫描期间正文又前进：本轮结果不能挂到新正文上，脏区保留，
+                // 不追着移动中的正文连续扫，等下一个周期或手动请求。
+                correctionDirty = true;
+                correctionPeriodicScanQueued = false;
+                correctionStatus = qsTr("正文已更新，本轮检查结果已跳过。");
+                runQueuedCorrectionScan();
+            }
+            return;
+        }
         var currentText = getEditorPlainText();
         try {
             var parsed = JSON.parse(String(snapshotJson));
@@ -1249,31 +1338,16 @@ QtObject {
             annotateCorrectionPositions(currentText, suggestions);
             updateCorrectionSuggestions(suggestions);
             syncCorrectionTracking(currentText, textRevision);
-            // Restore-only 只证明缓存结果可显示，不证明本 revision 的脏段已经
-            // 过模型；只有 pending/full_check 完成真正扫描、且 Core 明确没有
-            // 未检查段时才更新 scanned（窗口中止/过期任务会带 hasUncheckedSegments）。
-            if ((requestKind === "pending" || requestKind === "full_check")
-                    && parsed.hasUncheckedSegments !== true) {
-                correctionScannedRevision = Number(textRevision);
-                correctionScannedProjectId = projectId;
-                correctionScannedChapterId = chapterId;
-            }
-            if (requestKind === "restore"
-                    && scanAfterRestore
-                    && parsed.hasUncheckedSegments === true
-                    && !correctionCheckPending) {
-                // 连续性重建走的 restore 不更新 scanned；Core 报告仍有未检查
-                // 段时补一次 pending，避免脏段一直等不到模型扫描。回调只允许
-                // 在原文档/epoch 内执行，避免切章后误扫新章节。
-                var restoreEpoch = correctionDocumentEpoch;
-                var restoreProject = projectId;
-                var restoreChapter = chapterId;
-                Qt.callLater(function() {
-                    if (correctionDocumentEpoch !== restoreEpoch
-                            || projectId !== restoreProject
-                            || chapterId !== restoreChapter) return;
-                    requestCorrectionPendingNow();
-                });
+            // Issue #1064：restore-only 只证明缓存结果可显示，不证明当前
+            // revision 的待检查区间已经过模型；只有快照明确报告没有未检查段
+            // 才把本章视为已校对。窗口中止/过期任务同样会带 true。
+            var hasUnchecked = parsed.hasUncheckedSegments === true;
+            correctionDirty = hasUnchecked;
+            correctionSnapshotKnown = true;
+            correctionCheckedRangeCount = Array.isArray(parsed.checkedRanges)
+                    ? parsed.checkedRanges.length : 0;
+            if (scanFinished) {
+                correctionLastCheckAtMs = Date.now();
             }
             if (isPending) {
                 correctionStatus = suggestions.length > 0
@@ -1281,27 +1355,39 @@ QtObject {
                         : qsTr("未发现建议。");
             }
         } catch (error) {
-            if (!isPending) return;
-            correctionError = String(error);
-            correctionStatus = "";
+            if (isPending) {
+                correctionError = String(error);
+                correctionStatus = "";
+            }
         }
+        if (scanFinished) runQueuedCorrectionScan();
     }
 
     function receiveCorrectionFailure(requestId, textRevision, message) {
         takeCorrectionRequestKind(requestId);
-        delete correctionRestoreScanRequests[requestId];
         var requestEpoch = takeCorrectionRequestEpoch(requestId);
-        if (requestEpoch === undefined || requestEpoch !== correctionDocumentEpoch) return;
-        if (requestId !== pendingCorrectionRequestId) return;
-        var silent = pendingCorrectionSilent;
+        var scanFinished = requestId === correctionInFlightScanId;
+        if (scanFinished) correctionInFlightScanId = 0;
+        if (requestEpoch === undefined || requestEpoch !== correctionDocumentEpoch) {
+            if (scanFinished) runQueuedCorrectionScan();
+            return;
+        }
+        if (requestId !== pendingCorrectionRequestId && !scanFinished) return;
+        var silent = scanFinished ? false : pendingCorrectionSilent;
         correctionCheckPending = false;
+        if (scanFinished) {
+            correctionDirty = true;
+            correctionLastCheckAtMs = Date.now();
+        }
         if (silent) return;
         if (textRevision !== Number(targetEditorItem ? targetEditorItem.text_revision : -1)) {
             correctionStatus = qsTr("正文已变化，请重新校对。");
+            if (scanFinished) runQueuedCorrectionScan();
             return;
         }
         correctionStatus = "";
         correctionError = String(message || qsTr("校对失败。"));
+        if (scanFinished) runQueuedCorrectionScan();
     }
 
     function suggestionIsCurrent(suggestion) {
@@ -1381,7 +1467,7 @@ QtObject {
 
     function acceptCorrection(suggestion) {
         if (!suggestionIsCurrent(suggestion)) {
-            invalidateCorrectionResults();
+            invalidateCorrectionResults(true);
             correctionStatus = qsTr("正文已变化，请重新校对。");
             return false;
         }
@@ -1392,7 +1478,7 @@ QtObject {
             suggestion.replacement,
             suggestion.textRevision);
         if (!applied) {
-            invalidateCorrectionResults();
+            invalidateCorrectionResults(true);
             correctionStatus = qsTr("建议已过期或原文不匹配，请重新校对。");
             return false;
         }
@@ -1403,7 +1489,7 @@ QtObject {
 
     function ignoreCorrection(suggestion, scope) {
         if (!suggestionIsCurrent(suggestion)) {
-            invalidateCorrectionResults();
+            invalidateCorrectionResults(true);
             correctionStatus = qsTr("正文已变化，请重新校对。");
             return false;
         }
@@ -1434,6 +1520,12 @@ QtObject {
             }
         }
         updateCorrectionSuggestions(remaining);
+        if (scope === "rule") {
+            // 停用规则会改变 scanner 指纹；沿用脏区标记，等周期或手动请求
+            // 重新生成结果，不在忽略回调里直接扫描。
+            correctionDirty = true;
+            correctionSnapshotKnown = true;
+        }
         correctionStatus = scope === "once" ? qsTr("已忽略这一次。")
                 : scope === "chapter" ? qsTr("已在本章忽略此类建议。")
                 : qsTr("已停用此规则。") ;
@@ -1477,9 +1569,9 @@ QtObject {
         }
         correctionDictionaryError = "";
         refreshCorrectionEntityNames();
-        invalidateCorrectionResults();
-        requestCorrectionChapter();
-        correctionStatus = qsTr("已删除名称对应关系，正在重新校对本章。");
+        // Issue #1064：词典变化只重新标脏，等 60s 周期或手动检查再扫描。
+        invalidateCorrectionResults(true);
+        correctionStatus = qsTr("已删除名称对应关系，将在下次检查时生效。");
         return true;
     }
 
@@ -1499,11 +1591,11 @@ QtObject {
         }
         correctionError = "";
         refreshCorrectionEntityNames();
-        invalidateCorrectionResults();
-        requestCorrectionChapter();
+        // Issue #1064：词典变化只重新标脏，等 60s 周期或手动检查再扫描。
+        invalidateCorrectionResults(true);
         correctionStatus = kind === "alias"
-                ? qsTr("已登记为同一名称的别名，正在重新校对本章。")
-                : qsTr("已登记为错误写法，正在重新校对本章。");
+                ? qsTr("已登记为同一名称的别名，将在下次检查时生效。")
+                : qsTr("已登记为错误写法，将在下次检查时生效。");
         return true;
     }
 
@@ -1529,16 +1621,15 @@ QtObject {
             return false;
         }
         correctionError = "";
-        // The dictionary changed the scanner fingerprint. Rebuild the visible
-        // results against the new protection set instead of hiding unrelated
-        // suggestions by matching their original text.
-        invalidateCorrectionResults();
-        requestCorrectionChapter();
+        // The dictionary changed the scanner fingerprint. Invalidate the
+        // visible results against the new protection set, but let the periodic
+        // or manual scan rebuild them instead of scanning in this callback.
+        invalidateCorrectionResults(true);
         correctionStatus = entryKind === "person"
-                ? qsTr("已作为人物加入作品词典，正在重新校对本章。")
+                ? qsTr("已作为人物加入作品词典，将在下次检查时生效。")
                 : entryKind === "place"
-                  ? qsTr("已作为地点加入作品词典，正在重新校对本章。")
-                  : qsTr("已作为普通术语加入作品词典，正在重新校对本章。");
+                  ? qsTr("已作为地点加入作品词典，将在下次检查时生效。")
+                  : qsTr("已作为普通术语加入作品词典，将在下次检查时生效。");
         return true;
     }
 
@@ -1553,7 +1644,9 @@ QtObject {
             return false;
         }
         correctionError = "";
-        correctionStatus = qsTr("模型路径已保存。");
+        // 模型身份变化会让旧建议失效；只重新标脏，等周期或手动请求。
+        invalidateCorrectionResults(true);
+        correctionStatus = qsTr("模型路径已保存，将在下次检查时生效。");
         return true;
     }
 
@@ -1605,7 +1698,9 @@ QtObject {
         }
         correctionDictionaryResources = result.resources || [];
         correctionDictionaryError = "";
-        correctionStatus = qsTr("已导入词库：%1").arg(result.fileName || "");
+        // 词库文件属于 scanner 指纹的一部分；只重新标脏，等周期或手动请求。
+        invalidateCorrectionResults(true);
+        correctionStatus = qsTr("已导入词库：%1，将在下次检查时生效。").arg(result.fileName || "");
         return true;
     }
 
@@ -2663,8 +2758,8 @@ QtObject {
             loadedProjectId, loadedChapterId);
         refreshCorrectionEntityNames(pId);
         isLoadingChapter = false;
-        // Issue #954：章节打开只恢复 Core 缓存中仍有效的校对结果；未校对过的
-        // 段落由后续编辑事务或手动“检查本章”补算，不因切章重扫整章。
+        // Issue #954/#1064：章节打开只恢复 Core 缓存中仍有效的校对结果，
+        // 不立即加载模型；待检查区间交给开章 60s 后的周期或手动检查。
         // Issue #1055 复审：正文已经换成新章节，但 controller.projectId/volumeId/
         // chapterId 由外层 WritingWorkspace 在本次调用返回后才提交。直接调用会
         // 用新正文 + 旧章节 ID 投递快照，因此排到下一事件循环；身份或 epoch
@@ -2787,7 +2882,9 @@ QtObject {
             isApplyingFormat = false;
         }
 
-        invalidateCorrectionResults();
+        // 格式化重建了正文与 revision：旧结果失效并重新标脏，先恢复缓存显示，
+        // 实际扫描等下一个周期或手动请求。
+        invalidateCorrectionResults(true);
         syncCorrectionTracking(plain, Number(targetEditorItem.text_revision));
         requestCorrectionSnapshot();
 

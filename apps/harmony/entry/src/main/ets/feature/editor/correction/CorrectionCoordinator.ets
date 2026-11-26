@@ -5,6 +5,7 @@ import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import { CorrectionIgnoreScope, ICorrectionBridge } from './ICorrectionBridge'
 import {
   CorrectionChapterSnapshotDto,
+  CorrectionCheckedRangeDto,
   CorrectionModelPathStatusDto,
   CorrectionResourceStatusDto,
   CorrectionSuggestionDto,
@@ -14,6 +15,12 @@ import {
 // Issue #1054：校对资源/模型的真实生命周期状态，界面必须能区分。
 export type CorrectionResourceState = 'uninitialized' | 'preparing' | 'ready' | 'rulesOnly' | 'error'
 
+// Issue #1064：前台活动章节的周期增量扫描间隔。连续输入不重置，首轮在开章后 60s。
+const CHAPTER_SCAN_INTERVAL_MS: number = 60000
+
+/** Where a chapter check came from; restore-only never runs the model. */
+type CorrectionCheckOrigin = 'restore' | 'periodic' | 'manual'
+
 export interface CorrectionPresentationState {
   suggestions: MappedCorrectionSuggestion[]
   isChecking: boolean
@@ -21,6 +28,12 @@ export interface CorrectionPresentationState {
   resourceState: CorrectionResourceState
   resourceMessage: string
   checkMessage: string
+  // Issue #1064：面板显示已校对/待校对进度，数据来自 Core 的 checkedRanges。
+  checkedBytes: number
+  totalBytes: number
+  pendingBytes: number
+  hasUncheckedSegments: boolean
+  progressKnown: boolean
 }
 
 export type CorrectionStateListener = (state: CorrectionPresentationState) => void
@@ -52,9 +65,20 @@ export class CorrectionCoordinator {
   private resourceMessage: string = '校对资源尚未初始化'
   private checkMessage: string = ''
   private requestGeneration: number = 0
-  private pendingScanTimer: number = -1
-  private pendingScanSnapshot: CorrectionRequestSnapshot | null = null
-  private pendingScanGeneration: number = 0
+  // Issue #1064：前台活动章节的单周期调度。编辑只标脏，不再启动/重置扫描定时器。
+  private chapterScanTimer: number = -1
+  private foreground: boolean = false
+  private scanInFlight: boolean = false
+  private pendingScanFlag: boolean = false
+  private dirtySinceLastScan: boolean = false
+  private hasUncheckedSegments: boolean = false
+  /** Core 缓存是否已给出当前章进度；未知期间视为有待检查内容，避免误报“已校对完成”。 */
+  private progressKnown: boolean = false
+  private checkedBytes: number = 0
+  private totalBytes: number = 0
+  private pendingBytes: number = 0
+  private lastResourceSignature: string = ''
+  private modelPreparation: (() => Promise<void>) | null = null
   /** Stage-one edit mappings run one at a time in transaction order. */
   private applyChain: Promise<void> = Promise.resolve()
   /** Cleared on chapter/session reset so old mappings cannot target a new document. */
@@ -93,9 +117,104 @@ export class CorrectionCoordinator {
       errorMessage: this.errorMessage,
       resourceState: this.resourceState,
       resourceMessage: this.resourceMessage,
-      checkMessage: this.checkMessage
+      checkMessage: this.checkMessage,
+      checkedBytes: this.checkedBytes,
+      totalBytes: this.totalBytes,
+      pendingBytes: this.pendingBytes,
+      hasUncheckedSegments: this.hasUncheckedSegments,
+      progressKnown: this.progressKnown
     }
     this.listener(state)
+  }
+
+  /**
+   * Issue #1064：模型准备延迟到真正需要扫描时。冷启动/开章若缓存全部有效，
+   * 恢复路径不得初始化 ONNX 模型。
+   */
+  setModelPreparationHandler(handler: (() => Promise<void>) | null): void {
+    this.modelPreparation = handler
+  }
+
+  /** Page became foreground/visible again: restore cache only, then restart the 60s cycle. */
+  onPageForeground(): void {
+    this.foreground = true
+    if (this.current !== null) {
+      void this.refreshResourceState()
+      this.restoreCachedResults()
+    }
+    this.startChapterScanTimer()
+  }
+
+  /** Page left foreground/visibility: stop this chapter's timer and keep pending dirty state. */
+  onPageBackground(): void {
+    this.foreground = false
+    this.stopChapterScanTimer()
+  }
+
+  /** Sync/reopen/foreground refresh: read Core's cache, never start a model scan. */
+  restoreCachedResults(): void {
+    if (this.current === null) {
+      return
+    }
+    void this.restoreChapterSnapshot(this.requestGeneration)
+  }
+
+  private startChapterScanTimer(): void {
+    if (!this.foreground || this.current === null || this.chapterScanTimer >= 0) {
+      return
+    }
+    this.chapterScanTimer = setInterval((): void => {
+      this.onChapterScanTick()
+    }, CHAPTER_SCAN_INTERVAL_MS)
+  }
+
+  private stopChapterScanTimer(): void {
+    if (this.chapterScanTimer >= 0) {
+      clearInterval(this.chapterScanTimer)
+      this.chapterScanTimer = -1
+    }
+  }
+
+  /**
+   * 60s tick：只有前台活动章节、存在待检查区间且当前没有扫描时才提交增量扫描；
+   * 扫描进行中只置待办标志，不并行启动第二次模型扫描。
+   */
+  private onChapterScanTick(): void {
+    if (!this.foreground || this.current === null) {
+      this.stopChapterScanTimer()
+      return
+    }
+    if (this.scanInFlight) {
+      this.pendingScanFlag = true
+      return
+    }
+    if (this.isChecking || !this.hasPendingCheck()) {
+      return
+    }
+    void this.requestIncrementalScanFromCurrent('periodic')
+  }
+
+  private async requestIncrementalScanFromCurrent(origin: 'periodic' | 'manual'): Promise<void> {
+    const snapshot = this.current
+    const sessionId = this.editor.getSessionId()
+    const editorSnapshot = this.editor.getSnapshot()
+    if (snapshot === null || sessionId === null || editorSnapshot === null ||
+        snapshot.sessionId !== sessionId || snapshot.revision !== editorSnapshot.revision ||
+        snapshot.text !== editorSnapshot.text) {
+      return
+    }
+    await this.performIncrementalScan(origin, snapshot, this.requestGeneration)
+  }
+
+  private hasPendingCheck(): boolean {
+    return !this.progressKnown || this.dirtySinceLastScan || this.hasUncheckedSegments ||
+      this.pendingBytes > 0
+  }
+
+  private markCorrectionDirty(): void {
+    this.dirtySinceLastScan = true
+    this.hasUncheckedSegments = true
+    this.notify()
   }
 
   /**
@@ -108,6 +227,7 @@ export class CorrectionCoordinator {
     const sessionId = this.editor.getSessionId()
     if (sessionId === null || projectId.length === 0 || chapterId.length === 0) {
       this.applyEpoch++
+      this.stopChapterScanTimer()
       this.invalidate()
       return
     }
@@ -115,11 +235,14 @@ export class CorrectionCoordinator {
     if (snapshot.composition !== undefined) {
       this.current = null
       this.applyEpoch++
+      this.stopChapterScanTimer()
       this.invalidate()
       return
     }
 
     const previous = this.current
+    const chapterChanged: boolean = previous === null || previous.projectId !== projectId ||
+      previous.chapterId !== chapterId || previous.sessionId !== sessionId
     if (previous !== null && (previous.projectId !== projectId || previous.chapterId !== chapterId ||
         previous.sessionId !== sessionId)) {
       // A reopened chapter must not receive queued mappings from the old one.
@@ -143,16 +266,29 @@ export class CorrectionCoordinator {
     this.requestGeneration++
     const generation = this.requestGeneration
     this.errorMessage = ''
+    if (chapterChanged) {
+      // 开章：只恢复缓存；60s 后首轮周期检查。旧章节尚未完成的脏区保留在 Core。
+      this.stopChapterScanTimer()
+      this.pendingScanFlag = false
+      this.dirtySinceLastScan = false
+      this.hasUncheckedSegments = false
+      this.progressKnown = false
+      this.checkedBytes = 0
+      this.totalBytes = 0
+      this.pendingBytes = 0
+    }
     this.notify()
+    this.startChapterScanTimer()
 
     if (editResult !== null && editResult.displayPatches.length > 0 &&
         editResult.newRevision === snapshot.revision &&
         editResult.baseRevision <= snapshot.revision) {
-      this.isChecking = true
-      this.notify()
+      // 编辑事务只做轻量段落映射和脏区标记，不启动扫描，也不重置周期。
       this.enqueueApplyEdits(generation, nextSnapshot, editResult)
     } else {
-      this.isChecking = false
+      if (!this.scanInFlight) {
+        this.isChecking = false
+      }
       this.notify()
       void this.restoreChapterSnapshot(generation)
     }
@@ -160,11 +296,13 @@ export class CorrectionCoordinator {
 
   private invalidate(): void {
     this.requestGeneration++
-    if (this.pendingScanTimer >= 0) {
-      clearTimeout(this.pendingScanTimer)
-      this.pendingScanTimer = -1
-    }
-    this.pendingScanSnapshot = null
+    this.pendingScanFlag = false
+    this.dirtySinceLastScan = false
+    this.hasUncheckedSegments = false
+    this.progressKnown = false
+    this.checkedBytes = 0
+    this.totalBytes = 0
+    this.pendingBytes = 0
     this.suggestions = []
     this.isChecking = false
     this.errorMessage = ''
@@ -175,12 +313,18 @@ export class CorrectionCoordinator {
   clear(): void {
     this.current = null
     this.applyEpoch++
+    this.stopChapterScanTimer()
     this.invalidate()
   }
 
   /** Forward a user-selected local model file to Core; no model path is assumed by the platform. */
   async setModelPath(path: string): Promise<ResultEnvelope<boolean>> {
-    return this.bridge.setModelPath(path)
+    const result = await this.bridge.setModelPath(path)
+    if (result.success) {
+      // 模型身份变化只标脏，等周期或手动请求，不立即扫描。
+      this.markCorrectionDirty()
+    }
+    return result
   }
 
   async getResourceStatus(): Promise<ResultEnvelope<CorrectionResourceStatusDto>> {
@@ -226,6 +370,22 @@ export class CorrectionCoordinator {
       this.resourceState = 'error'
       this.resourceMessage = '未找到可用的校对模型或词典资源'
     }
+    // 词典/规则文件在设置页变化时没有页面内事件；这里比较 Core 状态签名，
+    // 变化只标脏，等周期或手动检查。
+    const signature: string = [
+      status.modelPath ?? '',
+      String(status.modelConfigured),
+      String(status.modelFileAvailable),
+      String(status.modelMigrationRequired),
+      String(status.bundledLexiconAvailable),
+      status.installedDictionaryFiles.join(','),
+      status.missingDictionaryFiles.join(',')
+    ].join('|')
+    if (this.lastResourceSignature.length > 0 && signature !== this.lastResourceSignature) {
+      this.dirtySinceLastScan = true
+      this.hasUncheckedSegments = true
+    }
+    this.lastResourceSignature = signature
     this.notify()
   }
 
@@ -297,6 +457,9 @@ export class CorrectionCoordinator {
       this.bundledModelAttempted = true
       this.resourceState = 'ready'
       this.resourceMessage = '内置 AI 校对模型已就绪'
+      // 模型身份已变化，本轮扫描必须让 Core 按新 scanner fingerprint 重新校验。
+      this.dirtySinceLastScan = true
+      this.hasUncheckedSegments = true
       this.notify()
     } else {
       this.resourceState = 'error'
@@ -329,7 +492,7 @@ export class CorrectionCoordinator {
     }
     const result = await this.bridge.getChapterSnapshot(
       snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision)
-    this.acceptCheckResult(generation, snapshot, result, true)
+    this.acceptCheckResult(generation, snapshot, result, 'restore')
   }
 
   private enqueueApplyEdits(generation: number, snapshot: CorrectionRequestSnapshot,
@@ -362,7 +525,9 @@ export class CorrectionCoordinator {
       ])
     }
     if (ranges.length === 0) {
-      this.isChecking = false
+      if (!this.scanInFlight) {
+        this.isChecking = false
+      }
       this.notify()
       void this.restoreChapterSnapshot(generation)
       return
@@ -375,55 +540,96 @@ export class CorrectionCoordinator {
     }
     if (!result.success || generation !== this.requestGeneration) {
       if (!result.success && generation === this.requestGeneration) {
-        this.isChecking = false
+        if (!this.scanInFlight) {
+          this.isChecking = false
+        }
         this.errorMessage = result.userMessage ?? result.errorCode ?? '校对暂不可用'
         this.notify()
       }
       return
     }
-    this.pendingScanSnapshot = snapshot
-    this.pendingScanGeneration = generation
-    if (this.pendingScanTimer >= 0) {
-      clearTimeout(this.pendingScanTimer)
-    }
-    this.pendingScanTimer = setTimeout(() => {
-      this.pendingScanTimer = -1
-      const pending = this.pendingScanSnapshot
-      if (pending === null || this.pendingScanGeneration !== this.requestGeneration) {
-        return
-      }
-      this.pendingScanSnapshot = null
-      void this.scanPending(this.pendingScanGeneration, pending)
-    }, 250)
+    // 轻量事务已完成段落位置映射；只标脏，扫描交给前台 60s 周期或手动请求。
+    this.dirtySinceLastScan = true
+    this.hasUncheckedSegments = true
+    this.notify()
   }
 
-  private async scanPending(generation: number, snapshot: CorrectionRequestSnapshot): Promise<void> {
+  /**
+   * 唯一的增量扫描入口（复用 Core 的 scanPending 单飞队列）。调用方必须提供
+   * 当前已结算正文的冻结快照；扫描期间到达的周期/手动请求只置 pending 标志，
+   * 结束后补跑一次，不并行运行第二个模型扫描。
+   */
+  private async performIncrementalScan(origin: 'periodic' | 'manual',
+    snapshot: CorrectionRequestSnapshot, generation: number): Promise<void> {
+    if (this.scanInFlight) {
+      this.pendingScanFlag = true
+      return
+    }
+    this.scanInFlight = true
+    this.isChecking = true
+    this.errorMessage = ''
+    this.notify()
     try {
+      await this.prepareModelForScan()
+      if (this.currentRequest(generation) === null) {
+        return
+      }
       const result = await this.bridge.scanPending(
         snapshot.sessionId, snapshot.projectId, snapshot.chapterId,
         snapshot.revision, snapshot.text)
-      this.acceptCheckResult(generation, snapshot, result, false)
+      this.acceptCheckResult(generation, snapshot, result, origin)
+    } catch (e) {
+      if (origin === 'manual') {
+        this.errorMessage = `校对请求失败：${String(e)}`
+        this.checkMessage = ''
+      } else {
+        this.checkMessage = `自动检查失败：${String(e)}`
+      }
+      this.notify()
     } finally {
+      this.scanInFlight = false
+      this.isChecking = false
+      this.notify()
       this.notifyScanCompleted()
+      const rerun: boolean = this.pendingScanFlag
+      this.pendingScanFlag = false
+      if (rerun && this.foreground && this.current !== null) {
+        void this.requestIncrementalScanFromCurrent(origin)
+      }
+    }
+  }
+
+  /** 只有真正需要扫描时才准备内置模型；缓存全部有效时冷启动不加载模型。 */
+  private async prepareModelForScan(): Promise<void> {
+    const prepare = this.modelPreparation
+    if (prepare === null) {
+      return
+    }
+    try {
+      await prepare()
+    } catch (e) {
+      // 模型准备失败不阻断固定规则/词典扫描；资源状态由准备流程写入。
+      this.checkMessage = `模型准备失败，使用固定规则/词典：${String(e)}`
     }
   }
 
   /**
    * Issue #1054 复审：页面在开始完整输入屏障（原生队列 + Core 队列）前先占用一次
-   * “校对本章”操作。同步置 isChecking，避免屏障期间重复点击启动第二次校对。
+   * “校对本章”操作。Issue #1064：扫描进行中点击手动校对只合并待办，当前扫描结束后
+   * 补跑一次；绝不再启动第二个模型扫描。
    */
   beginCheckRequest(): boolean {
+    if (this.scanInFlight) {
+      this.pendingScanFlag = true
+      return false
+    }
     if (this.isChecking) {
       return false
     }
     this.isChecking = true
     this.errorMessage = ''
     this.checkMessage = ''
-    if (this.pendingScanTimer >= 0) {
-      clearTimeout(this.pendingScanTimer)
-      this.pendingScanTimer = -1
-    }
-    this.pendingScanSnapshot = null
+    this.pendingScanFlag = false
     // 先作废旧扫描；真正的 revision 在完整屏障结束后再冻结。
     this.requestGeneration++
     this.notify()
@@ -455,10 +661,10 @@ export class CorrectionCoordinator {
   }
 
   /**
-   * 完整输入屏障之后的校对入口：调用方已 await bridge.finishEditingAndWhenIdle()
-   * 与 editor.whenIdle()，并固定了 project/chapter/session。这里只做：
-   * 等待进行中的模型准备结束 → 重读真实资源状态 → 冻结当前 revision → Core 校对 →
-   * 仅投影同一 session/revision 的结果。报错全部走 errorMessage/checkMessage。
+   * 完整输入屏障之后的手动校对入口：调用方已 await bridge.finishEditingAndWhenIdle()
+   * 与 editor.whenIdle()，并固定了 project/chapter/session。Issue #1064：手动的
+   * “校对本章”立即提交当前已结算正文的增量检查（Core scanPending，单飞），
+   * 默认只补查剩余未校对区间；不会启动整章 All 扫描。
    */
   async checkChapterAfterInputBarrier(expectedProjectId: string, expectedChapterId: string,
     expectedSessionId: number): Promise<void> {
@@ -467,6 +673,7 @@ export class CorrectionCoordinator {
         return
       }
     }
+    let completedByScan: boolean = false
     try {
       const pendingModel = this.bundledModelPromise
       if (pendingModel !== null) {
@@ -499,16 +706,26 @@ export class CorrectionCoordinator {
       this.current = request
       this.requestGeneration++
       const generation = this.requestGeneration
-      const result = await this.bridge.checkChapter(
-        request.sessionId, request.projectId, request.chapterId, request.revision)
-      this.acceptCheckResult(generation, request, result, false)
+      if (!this.hasPendingCheck()) {
+        this.errorMessage = ''
+        this.checkMessage = '本章已校对完成，暂无待检查内容'
+        return
+      }
+      if (this.scanInFlight) {
+        // 周期扫描恰在屏障期间启动：不并行，交给它结束后补跑一次。
+        this.pendingScanFlag = true
+        return
+      }
+      completedByScan = true
+      await this.performIncrementalScan('manual', request, generation)
     } catch (e) {
       this.errorMessage = `校对请求失败：${String(e)}`
       this.checkMessage = ''
     } finally {
-      this.isChecking = false
-      this.notify()
-      this.notifyScanCompleted()
+      if (!completedByScan) {
+        this.isChecking = false
+        this.notify()
+      }
     }
   }
 
@@ -556,16 +773,22 @@ export class CorrectionCoordinator {
   }
 
   private acceptCheckResult(generation: number, snapshot: CorrectionRequestSnapshot,
-    result: ResultEnvelope<CorrectionChapterSnapshotDto>, silent: boolean): void {
+    result: ResultEnvelope<CorrectionChapterSnapshotDto>, origin: CorrectionCheckOrigin): void {
     if (generation !== this.requestGeneration) {
       return
     }
+    const silent: boolean = origin === 'restore'
     const current = this.currentRequest(generation)
     if (current === null) {
-      if (!silent) {
+      if (origin === 'manual') {
         // 校对返回时正文/会话已推进：结果不能投影到新 revision，给出可见原因。
         this.invalidate()
         this.errorMessage = '章节内容或会话已变化，本次校对结果已丢弃，请重新校对'
+        this.notify()
+      } else if (origin === 'periodic') {
+        // 自动扫描结果作废时不打扰用户；下一轮周期继续补查。
+        this.hasUncheckedSegments = true
+        this.checkMessage = '正文已更新，本轮自动检查已跳过'
         this.notify()
       }
       return
@@ -579,6 +802,11 @@ export class CorrectionCoordinator {
       if (silent) {
         return
       }
+      if (origin === 'periodic') {
+        this.checkMessage = `自动检查未完成：${this.describeCheckFailure(result)}`
+        this.notify()
+        return
+      }
       this.isChecking = false
       this.suggestions = []
       this.checkMessage = ''
@@ -589,6 +817,7 @@ export class CorrectionCoordinator {
     if (!silent) {
       this.isChecking = false
     }
+    this.updateCheckedProgress(snapshot.text, data.checkedRanges, data.hasUncheckedSegments)
     const mapped: MappedCorrectionSuggestion[] = []
     for (let i = 0; i < data.suggestions.length; i++) {
       const suggestion = this.mapSuggestion(snapshot.text, snapshot.revision, data.suggestions[i])
@@ -599,7 +828,7 @@ export class CorrectionCoordinator {
     // Core already merged cached and freshly scanned segments; replace wholesale.
     this.suggestions = mapped
     this.errorMessage = ''
-    if (!silent) {
+    if (origin === 'manual') {
       const baseMessage = mapped.length > 0
         ? `检查完成：发现 ${mapped.length} 条建议`
         : '检查完成：未发现问题'
@@ -607,8 +836,37 @@ export class CorrectionCoordinator {
       // 不能把“规则未发现”展示成 AI 校对完成。
       const label = this.resourceLabel()
       this.checkMessage = label.length > 0 ? `[${label}] ${baseMessage}` : baseMessage
+    } else if (origin === 'periodic') {
+      const baseMessage = mapped.length > 0
+        ? `自动检查：发现 ${mapped.length} 条建议`
+        : '自动检查：未发现新问题'
+      const label = this.resourceLabel()
+      this.checkMessage = label.length > 0 ? `[${label}] ${baseMessage}` : baseMessage
     }
     this.notify()
+  }
+
+  /** 用 Core 的 checkedRanges 合并区间，得到当前 revision 的已校对/待校对字节进度。 */
+  private updateCheckedProgress(text: string, checkedRanges: CorrectionCheckedRangeDto[],
+    hasUncheckedSegments: boolean): void {
+    const totalBytes: number = utf16ToUtf8(text, text.length)
+    let checked: number = 0
+    let cursor: number = 0
+    for (let i = 0; i < checkedRanges.length; i++) {
+      const range = checkedRanges[i]
+      const start: number = Math.max(cursor, range.startByte)
+      const end: number = Math.min(range.endByte, totalBytes)
+      if (end > start) {
+        checked += end - start
+        cursor = end
+      }
+    }
+    this.totalBytes = totalBytes
+    this.checkedBytes = Math.min(checked, totalBytes)
+    this.pendingBytes = this.totalBytes - this.checkedBytes
+    this.hasUncheckedSegments = hasUncheckedSegments
+    this.progressKnown = true
+    this.dirtySinceLastScan = false
   }
 
   private mapSuggestion(text: string, revision: number,
@@ -716,6 +974,8 @@ export class CorrectionCoordinator {
     }
     if (result.success && result.data === true && this.current === request) {
       this.removeSuggestion(suggestion)
+      // 词典变化只重标脏区，等下一轮周期或手动请求，不立即扫描。
+      this.markCorrectionDirty()
     }
     return result
   }
@@ -734,7 +994,10 @@ export class CorrectionCoordinator {
   }
 
   dispose(): void {
+    this.foreground = false
+    this.stopChapterScanTimer()
     this.clear()
+    this.modelPreparation = null
     this.listener = null
     this.scanCompletionListener = null
   }

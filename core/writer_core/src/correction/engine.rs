@@ -11,10 +11,11 @@ use crate::api::{
 
 use super::result_cache::{
     apply_pending_windows, content_fingerprint, context_range,
-    mark_unseen_segments_in_edit_windows, reconcile_edits, reconcile_full, CachedSuggestion,
-    ChapterCorrectionCacheState, ChapterCorrectionSlot, EditRange,
+    mark_unseen_segments_in_edit_windows, reconcile_edits, reconcile_full, suggestions_match,
+    CachedSuggestion, ChapterCorrectionCacheState, ChapterCorrectionSlot, EditRange,
 };
 use super::scan_metrics::{record_correction_scan_event, CorrectionScanMetrics};
+use super::synced_results::{self, SyncedCorrectionRecord};
 use super::{CorrectionStore, ModelCacheKey, ModelLoadSlot};
 
 /// Merge dirty segments whose expanded context windows touch or overlap. A
@@ -81,6 +82,12 @@ pub(crate) struct CorrectionScanner {
     /// preference change between construction and `check` cannot label old
     /// results with a newer scanner generation.
     scanner_fingerprint: String,
+    /// 跨设备稳定身份 + 本次扫描实际使用的模式，写入作品级同步记录。
+    scanner_stable: String,
+    record_mode: &'static str,
+    model_identity: String,
+    lexicon_identity: String,
+    rules_identity: String,
 }
 
 /// What a check request is allowed to recompute.
@@ -141,7 +148,8 @@ impl CorrectionScanner {
         // Bracket resource loading with the fingerprint so the captured
         // generation always describes the exact lexicon/model the engine was
         // built from, even if a dictionary or settings change races setup.
-        let scanner_fingerprint_before = store.scanner_fingerprint(&project_id)?;
+        let identity_before = store.scanner_identity(&project_id)?;
+        let scanner_fingerprint_before = identity_before.fingerprint.clone();
         let (lexicon_version, lexicon) = store.lexicon_snapshot_for_project(&project_id)?;
         let model_load_started_at = Instant::now();
         let model_snapshot = match store.configured_model_snapshot() {
@@ -229,12 +237,19 @@ impl CorrectionScanner {
                 Arc::new(engine),
             )?
         };
-        let scanner_fingerprint = store.scanner_fingerprint(&project_id)?;
-        if scanner_fingerprint != scanner_fingerprint_before {
+        let identity_after = store.scanner_identity(&project_id)?;
+        if identity_after.fingerprint != identity_before.fingerprint {
             return Err(WriterError::Other(
                 "correction scanner configuration changed during setup; retry the request".into(),
             ));
         }
+        // `mode="model"` 当且仅当本次扫描实际构建/使用了模型引擎；纯规则扫描
+        // 必须写成 `rules`，不能冒用模型结果。
+        let record_mode = if model_available {
+            synced_results::MODE_MODEL
+        } else {
+            synced_results::MODE_RULES
+        };
         Ok(Self {
             store,
             project_id,
@@ -245,7 +260,12 @@ impl CorrectionScanner {
             model_key,
             model_slot,
             model_available,
-            scanner_fingerprint,
+            scanner_fingerprint: identity_before.fingerprint,
+            scanner_stable: identity_before.scanner_stable,
+            record_mode,
+            model_identity: identity_before.model_identity,
+            lexicon_identity: identity_before.lexicon_identity,
+            rules_identity: identity_before.rules_identity,
         })
     }
 
@@ -265,7 +285,7 @@ impl CorrectionScanner {
         session_id: u64,
         text_revision: u64,
     ) -> Result<Self, WriterError> {
-        let scanner_fingerprint = store.scanner_fingerprint(&project_id)?;
+        let identity = store.scanner_identity(&project_id)?;
         Ok(Self {
             store,
             project_id,
@@ -276,7 +296,14 @@ impl CorrectionScanner {
             model_key: None,
             model_slot: None,
             model_available: false,
-            scanner_fingerprint,
+            scanner_fingerprint: identity.fingerprint,
+            scanner_stable: identity.scanner_stable,
+            // Restore-only 不构建引擎；恢复记录按当前配置模式读取（有模型配置
+            // 读 model 记录，否则读 rules 记录）。
+            record_mode: identity.configured_mode,
+            model_identity: identity.model_identity,
+            lexicon_identity: identity.lexicon_identity,
+            rules_identity: identity.rules_identity,
         })
     }
 
@@ -547,6 +574,7 @@ impl CorrectionScanner {
         // discard these results and let the caller retry on a fresh scanner.
         self.ensure_scanner_current()?;
         let mut changed = false;
+        let mut synced_records = Vec::new();
         for (group, diagnostics) in groups.iter().zip(scanned) {
             for (index, start, end) in group {
                 let suggestions = suggestions_in_segment(&diagnostics, *start, *end)?;
@@ -560,6 +588,10 @@ impl CorrectionScanner {
                     segment.checked = Some(suggestions);
                     segment.dirty = false;
                 }
+                // 空 suggestions 也要写：它表示「已检查无建议」。
+                if let Some(record) = self.synced_record_for_segment(&guard, *index) {
+                    synced_records.push(record);
+                }
             }
         }
         metrics.candidates_filtered_by_segment = metrics
@@ -569,7 +601,11 @@ impl CorrectionScanner {
         // does not need to rewrite the chapter cache file.
         guard.semantic_dirty |= changed;
         guard.save()?;
-        self.assemble_snapshot(&guard)
+        let snapshot = self.assemble_snapshot(&guard)?;
+        drop(guard);
+        // 同步记录是派生结果：写失败只告警，不影响本次扫描结果与快照。
+        self.persist_synced_records(synced_records);
+        Ok(snapshot)
     }
 
     /// True when another edit/session already moved this chapter past the
@@ -704,9 +740,127 @@ impl CorrectionScanner {
                 )?;
             }
         }
+        // Issue #1064：在窗口重建/失效之后回填作品级校对结果。只填
+        // `checked.is_none()` 且 text/context 指纹都匹配的 segment；不启动
+        // 模型、不改正文，也不全量重写本地 cache。编辑事务的逐键映射不读
+        // 同步目录（每笔都读目录会把按键路径变成 I/O 热路径）。
+        if matches!(
+            request,
+            CorrectionCheckRequest::RestoreOnly | CorrectionCheckRequest::All
+        ) {
+            self.restore_synced_records(guard, text);
+        }
         guard.last_session_id = self.session_id;
         guard.last_revision = self.text_revision;
         Ok(())
+    }
+
+    /// 用同步记录回填未检查 segment。同 key 多条记录取首条。
+    fn restore_synced_records(&self, guard: &mut ChapterCorrectionCacheState, text: &str) {
+        if !guard
+            .segments
+            .iter()
+            .any(|segment| segment.checked.is_none())
+        {
+            return;
+        }
+        let Some(project_root) = self.store.project_root(&self.project_id) else {
+            return;
+        };
+        let mut records = synced_results::load_records(
+            &project_root,
+            &self.chapter_id,
+            self.record_mode,
+            &self.scanner_stable,
+        );
+        // 配置了模型但本次只能规则扫描（模型文件缺失/加载降级）时，之前规则
+        // 代际写下的记录仍属于同一 scanner 稳定身份；恢复时回退读取 rules，
+        // 不把模型配置当成“一定有模型结果”。
+        if records.is_empty() && self.record_mode == synced_results::MODE_MODEL {
+            records = synced_results::load_records(
+                &project_root,
+                &self.chapter_id,
+                synced_results::MODE_RULES,
+                &self.scanner_stable,
+            );
+        }
+        if records.is_empty() {
+            return;
+        }
+        let mut by_segment: std::collections::HashMap<(String, String), Vec<CachedSuggestion>> =
+            std::collections::HashMap::new();
+        for record in records {
+            by_segment
+                .entry((record.text_fingerprint, record.context_fingerprint))
+                .or_insert(record.suggestions);
+        }
+        let mut hydrated = false;
+        for segment in &mut guard.segments {
+            if segment.checked.is_some() {
+                continue;
+            }
+            let key = (
+                segment.text_fingerprint.clone(),
+                segment.context_fingerprint.clone(),
+            );
+            let Some(suggestions) = by_segment.remove(&key) else {
+                continue;
+            };
+            let start = segment.start_byte as usize;
+            let end = segment.end_byte as usize;
+            if start >= end || end > text.len() || !suggestions_match(text, start, end, &suggestions)
+            {
+                continue;
+            }
+            segment.checked = Some(suggestions);
+            segment.dirty = false;
+            hydrated = true;
+        }
+        // 恢复确实新增了 checked，按既有语义标记本地 cache 需要写回。
+        // Restore-only 从不保存，因此不会因此重写整章 cache。
+        guard.semantic_dirty |= hydrated;
+    }
+
+    /// 为本次成功写入的 segment 构造同步记录（只含派生结果，不含正文）。
+    fn synced_record_for_segment(
+        &self,
+        guard: &ChapterCorrectionCacheState,
+        index: usize,
+    ) -> Option<SyncedCorrectionRecord> {
+        let segment = guard.segments.get(index)?;
+        Some(SyncedCorrectionRecord {
+            schema_version: synced_results::SCHEMA_VERSION,
+            project_id: self.project_id.clone(),
+            chapter_id: self.chapter_id.clone(),
+            mode: self.record_mode.to_string(),
+            scanner_stable: self.scanner_stable.clone(),
+            model_identity: self.model_identity.clone(),
+            lexicon_identity: self.lexicon_identity.clone(),
+            rules_identity: self.rules_identity.clone(),
+            text_fingerprint: segment.text_fingerprint.clone(),
+            context_fingerprint: segment.context_fingerprint.clone(),
+            suggestions: segment.checked.clone()?,
+            checked: true,
+        })
+    }
+
+    /// 写记录失败只记日志，不影响扫描结果/快照。
+    fn persist_synced_records(&self, records: Vec<SyncedCorrectionRecord>) {
+        if records.is_empty() {
+            return;
+        }
+        let Some(project_root) = self.store.project_root(&self.project_id) else {
+            return;
+        };
+        for record in &records {
+            if let Err(error) = synced_results::write_record(&project_root, record) {
+                log::warn!(
+                    "[correction] synced result write failed chapter_digest={} error={}",
+                    content_fingerprint(&self.chapter_id),
+                    error
+                );
+            }
+        }
     }
 
     fn dirty_indices(

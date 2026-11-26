@@ -43,6 +43,34 @@ Item {
             elide: Text.ElideRight
         }
 
+        // Issue #1064：手动/周期共用同一结果快照，面板展示待校对/已校对进度
+        // 与最近一次真实检查时间；restore-only 恢复不会伪装成一次检查。
+        Label {
+            Layout.fillWidth: true
+            visible: !!root.editorControllerRef
+            opacity: 0.8
+            font: Kirigami.Theme.smallFont
+            elide: Text.ElideRight
+            text: {
+                var controller = root.editorControllerRef
+                if (!controller) return ""
+                var parts = [qsTr("已校对区间 %1").arg(controller.correctionCheckedRangeCount)]
+                if (!controller.correctionSnapshotKnown) {
+                    parts.push(qsTr("尚未读取缓存"))
+                } else if (controller.correctionDirty) {
+                    parts.push(qsTr("待校对"))
+                } else {
+                    parts.push(qsTr("全部已校对"))
+                }
+                if (controller.correctionLastCheckAtMs > 0) {
+                    parts.push(qsTr("上次检查 %1").arg(
+                                   new Date(controller.correctionLastCheckAtMs)
+                                   .toLocaleTimeString(Qt.locale(), "hh:mm")))
+                }
+                return parts.join(" · ")
+            }
+        }
+
         RowLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing

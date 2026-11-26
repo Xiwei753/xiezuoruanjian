@@ -116,6 +116,70 @@ fn lww_record_time_delete_prefers_deleted_at() {
     assert_eq!(lww_record_time(&rec), 2000);
 }
 
+// ── 作品级校对结果分类（Issue #1064）──
+
+const CORRECTION_RECORD_KEY: &str =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+#[test]
+fn classify_correction_result_paths() {
+    let record = format!("correction/results/c1/{CORRECTION_RECORD_KEY}.json");
+    assert_eq!(
+        classify_content_path(&record),
+        ContentClass::CorrectionResult
+    );
+    // 只有 correction/results/<chapter>/<key>.json 是结果对象。
+    assert_eq!(
+        classify_content_path("correction/results/c1/notes.txt"),
+        ContentClass::GeneratedCache
+    );
+    assert_eq!(
+        classify_content_path("correction/results/c1.json"),
+        ContentClass::GeneratedCache
+    );
+    assert_eq!(
+        classify_content_path("correction/other.json"),
+        ContentClass::GeneratedCache
+    );
+    // 其他既有分类保持不变。
+    assert_eq!(
+        classify_content_path("project.json"),
+        ContentClass::Metadata
+    );
+    assert_eq!(
+        classify_content_path("backups/x.md"),
+        ContentClass::LocalOnly
+    );
+}
+
+#[test]
+fn correction_results_follow_immutable_union_semantics() {
+    // 远端删除：保留本地并重新发布，绝不删除本地。
+    assert_eq!(
+        decide_correction_result_sync(true, false, false),
+        CorrectionResultSyncDecision::KeepLocal { resend: true }
+    );
+    // 本地缺失、远端存在：接收远端。
+    assert_eq!(
+        decide_correction_result_sync(false, true, false),
+        CorrectionResultSyncDecision::ApplyIncoming
+    );
+    // 双方内容相同：幂等。
+    assert_eq!(
+        decide_correction_result_sync(true, true, true),
+        CorrectionResultSyncDecision::NoOp
+    );
+    // 同 identity 不同内容：保留本地，不按时间戳覆盖，也不重发。
+    assert_eq!(
+        decide_correction_result_sync(true, true, false),
+        CorrectionResultSyncDecision::KeepLocal { resend: false }
+    );
+    assert_eq!(
+        decide_correction_result_sync(false, false, true),
+        CorrectionResultSyncDecision::NoOp
+    );
+}
+
 // ── 星图路径分类测试（issue #902 第八轮复核）──
 
 #[test]

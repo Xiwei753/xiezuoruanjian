@@ -1958,6 +1958,8 @@ Kirigami.ApplicationWindow {
                 themeController: themeController
                 appState: window.appState
                 annotationBackendRef: annotationBackend
+                // Issue #1064：纠错 60s 周期只在前台活动章节计时；退后台/最小化停止。
+                applicationForeground: window.writingSessionForeground
                 searchBackendRef: searchBackend
                 aiAvailable: settingsBackend.ai_available
                 aiEnabled: settingsBackend.ai_enabled

@@ -17,6 +17,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -58,6 +59,8 @@ import com.xiwei.sujian.feature.editor.presentation.confirmEditorAttached
 import com.xiwei.sujian.feature.editor.presentation.isCurrentChapter
 import com.xiwei.sujian.feature.editor.presentation.onEditorApplied
 import com.xiwei.sujian.feature.editor.session.EditorCorrectionIgnoreScope
+import com.xiwei.sujian.feature.editor.session.EditorCorrectionScanTrigger
+import com.xiwei.sujian.feature.editor.session.EditorCorrectionState
 import com.xiwei.sujian.feature.editor.session.EditorCorrectionSuggestion
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
@@ -301,7 +304,14 @@ private fun WritingPaneEditorContent(
                     }
                 }
 
-            SetupCorrectionRequests(viewModel, targetId, bridge)
+            SetupCorrectionRequests(
+                viewModel = viewModel,
+                targetId = targetId,
+                bridge = bridge,
+                sessionId = sessionState.sessionId,
+                loading = uiState.loading,
+                isActivePane = isActivePane,
+            )
 
             val projection = coordinator.sessionCoordinator.getProjectionSnapshot(targetId)
             val viewportState =
@@ -418,8 +428,16 @@ private fun WritingPaneEditorContent(
                         Text(stringResource(R.string.annotation_sheet_title))
                     }
                 }
+                val correctionProgress =
+                    correctionState.takeIf {
+                        it.targetId == targetId &&
+                            it.projectId == projectId &&
+                            it.chapterId == chapterId &&
+                            it.sessionId == sessionState.sessionId
+                    }
                 CorrectionResourceStatusRow(
                     state = correctionResources,
+                    correction = correctionProgress,
                     onManage = { showCorrectionResources = true },
                     onCheckChapter = { viewModel.requestCorrectionChapter(targetId) },
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -641,6 +659,7 @@ private fun AnnotationLinkResolutionStateDto.displayMessage(): String =
 @Composable
 private fun CorrectionResourceStatusRow(
     state: EditorCorrectionResourceState,
+    correction: EditorCorrectionState?,
     onManage: () -> Unit,
     onCheckChapter: () -> Unit,
     modifier: Modifier = Modifier,
@@ -686,6 +705,9 @@ private fun CorrectionResourceStatusRow(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (correction != null) {
+                        CorrectionProgressLines(correction)
+                    }
                 }
                 TextButton(onClick = onManage, enabled = !state.preparing) {
                     Text(stringResource(R.string.editor_correction_resource_manage))
@@ -702,6 +724,74 @@ private fun CorrectionResourceStatusRow(
                 )
             }
         }
+    }
+}
+
+/**
+ * Issue #1064：面板进度 — Core 的 checked_ranges 覆盖比例即已校对/待校对进度，
+ * 另显示正在检查、待检查改动或最近一次检查的时间与来源。
+ */
+@Composable
+private fun CorrectionProgressLines(state: EditorCorrectionState) {
+    if (state.totalByteCount > 0) {
+        val checkedPercent =
+            ((state.checkedByteCount.toLong() * 100L) / state.totalByteCount.toLong())
+                .toInt()
+                .coerceIn(0, 100)
+        LinearProgressIndicator(
+            progress = { state.checkedByteCount.toFloat() / state.totalByteCount.toFloat() },
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        )
+        Text(
+            text = stringResource(
+                R.string.editor_correction_progress,
+                checkedPercent,
+                100 - checkedPercent,
+            ),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        val status =
+            when {
+                state.scanInProgress -> stringResource(R.string.editor_correction_status_scanning)
+                state.lastScanCompletedAtMillis != null -> lastScanStatus(state)
+                state.hasPendingScanWork -> stringResource(R.string.editor_correction_status_pending)
+                else -> stringResource(R.string.editor_correction_status_not_checked)
+            }
+        Text(
+            text = status,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (!state.scanInProgress && state.lastScanCompletedAtMillis != null && state.hasPendingScanWork) {
+            Text(
+                text = stringResource(R.string.editor_correction_status_pending),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    } else {
+        Text(
+            text = stringResource(R.string.editor_correction_status_not_checked),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun lastScanStatus(state: EditorCorrectionState): String {
+    val completedAt = state.lastScanCompletedAtMillis ?: return stringResource(R.string.editor_correction_status_not_checked)
+    val formatted =
+        remember(completedAt) {
+            java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT)
+                .format(java.util.Date(completedAt))
+        }
+    return when (state.lastScanTrigger) {
+        EditorCorrectionScanTrigger.MANUAL ->
+            stringResource(R.string.editor_correction_status_last_manual, formatted)
+        EditorCorrectionScanTrigger.PERIODIC ->
+            stringResource(R.string.editor_correction_status_last_periodic, formatted)
+        null -> stringResource(R.string.editor_correction_status_not_checked)
     }
 }
 
@@ -932,15 +1022,46 @@ private fun WritingPaneCorrectionHintCollector(
     }
 }
 
-/** Chapter open restores Core's committed cache; edits use their real transaction ranges. */
+/**
+ * Issue #1064：开章/同步回流只恢复 Core 的缓存快照（不触发扫描）；前台活动
+ * 章节在开章后启动 60s 周期增量检查，退后台/切章/页面销毁停止定时器，回前台
+ * 重新计时并刷新缓存。
+ */
 @Composable
 private fun SetupCorrectionRequests(
     viewModel: EditorViewModel,
     targetId: String,
     bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge,
+    sessionId: ULong?,
+    loading: Boolean,
+    isActivePane: Boolean,
 ) {
-    LaunchedEffect(viewModel, targetId, bridge) {
+    LaunchedEffect(viewModel, targetId, bridge, sessionId) {
         viewModel.restoreCorrectionSnapshot(targetId)
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(viewModel, targetId, sessionId, loading, isActivePane, lifecycleOwner) {
+        val lifecycle = lifecycleOwner.lifecycle
+        if (!loading && isActivePane && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            viewModel.startCorrectionSchedule(targetId)
+        }
+        val observer =
+            LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> {
+                        viewModel.restoreCorrectionSnapshot(targetId)
+                        if (isActivePane) viewModel.startCorrectionSchedule(targetId)
+                    }
+                    Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP ->
+                        viewModel.stopCorrectionSchedule(targetId)
+                    else -> Unit
+                }
+            }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            viewModel.stopCorrectionSchedule(targetId)
+        }
     }
 }
 

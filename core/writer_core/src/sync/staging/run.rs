@@ -275,6 +275,8 @@ impl StagingRun {
     ///   （时间戳 device_id 决胜，不再固定 remote-wins）。
     /// - [`ContentClass::LocalOnly`]：按 [`StagingCommitClass`] 进一步细分——
     ///   EngineState 写回 live，PlatformConfig/Skip 不写回。
+    /// - [`ContentClass::CorrectionResult`]：不可变并集——远端删除不删本地，
+    ///   同 identity 不同内容保留本地，不按时间戳覆盖。
     ///
     /// CommitPlan 拆 `content_actions` `engine_state_actions`。
     /// `app-meta/sync/manifest.sync.json` 和 `app-meta/sync/state.local.json` 作为
@@ -290,8 +292,9 @@ impl StagingRun {
     )]
     pub fn compute_commit_plan(&self, live_root: &Path) -> Result<CommitPlan> {
         use crate::sync::content_class::{
-            classify_content_path, is_document_content_path, resolve_lww, three_way_resolve,
-            ContentClass, LwwWinner, ThreeWayResult,
+            classify_content_path, decide_correction_result_sync, is_document_content_path,
+            is_synced_result_path, resolve_lww, three_way_resolve, ContentClass,
+            CorrectionResultSyncDecision, LwwWinner, ThreeWayResult,
         };
         use crate::sync::staging::starmap_merge::{
             is_starmap_graph_meta_path, is_starmap_index_path, is_starmap_library_entry_path,
@@ -588,6 +591,29 @@ impl StagingRun {
                                 content: merged,
                             });
                         }
+                    }
+                }
+            } else if is_synced_result_path(&rel_str) {
+                // 校对结果对象是不可变并集：远端删除（incoming 缺失）不删本地；
+                // 本地缺失且远端存在才应用远端；内容相同 noop；同 identity
+                // 不同内容保留本地并记录诊断，不按时间戳覆盖。
+                match decide_correction_result_sync(
+                    local.is_some(),
+                    incoming.is_some(),
+                    local == incoming,
+                ) {
+                    CorrectionResultSyncDecision::NoOp => plan.noop.push(rel),
+                    CorrectionResultSyncDecision::ApplyIncoming => {
+                        apply_incoming(&mut plan, rel, incoming, StagingCommitClass::Content);
+                    }
+                    CorrectionResultSyncDecision::KeepLocal { resend } => {
+                        if !resend && local.is_some() && incoming.is_some() {
+                            log::warn!(
+                                "[sync] correction result content mismatch for {} — keeping local",
+                                rel_str
+                            );
+                        }
+                        plan.keep_local.push(rel);
                     }
                 }
             } else if is_document_content_path(&rel_str) {

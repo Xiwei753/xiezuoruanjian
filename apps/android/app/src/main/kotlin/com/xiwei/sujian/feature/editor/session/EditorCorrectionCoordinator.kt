@@ -4,22 +4,29 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.projection.EditResult
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-private const val CORRECTION_SCAN_DEBOUNCE_MS = 250L
+/**
+ * Issue #1064：前台活动章节的增量校对周期。开章后首轮在本周期结束时触发；
+ * 连续输入不重置周期，退后台/切章停止定时器，脏区保留在 Core。
+ */
+private const val CORRECTION_SCAN_PERIOD_MS = 60_000L
 
 /** Stable document identity captured for each correction request and accept action. */
 data class EditorCorrectionIdentity(
@@ -41,6 +48,15 @@ data class EditorCorrectionSuggestion(
     val textRevision: Long,
 )
 
+/**
+ * Issue #1064：谁提交了当前/最近一次增量检查 — 手动校对立即提交，周期调度
+ * 每 60s 在有待检查脏区时提交一次；两者共用同一单飞入口。
+ */
+enum class EditorCorrectionScanTrigger {
+    MANUAL,
+    PERIODIC,
+}
+
 data class EditorCorrectionState(
     val targetId: String? = null,
     val projectId: String? = null,
@@ -48,6 +64,18 @@ data class EditorCorrectionState(
     val sessionId: ULong? = null,
     val textRevision: Long? = null,
     val suggestions: List<EditorCorrectionSuggestion> = emptyList(),
+    /** Core 已验证的 UTF-8 字节数（checked_ranges 覆盖部分）；未覆盖字节仍需检查。 */
+    val checkedByteCount: Int = 0,
+    /** 检查时正文的 UTF-8 字节长度；0 表示还没有可用的检查快照。 */
+    val totalByteCount: Int = 0,
+    /** Core 报告的待检查区间（脏段或从未验证的段）是否仍存在。 */
+    val hasUncheckedSegments: Boolean = false,
+    /** 编辑事务已标脏、但周期/手动检查尚未提交。 */
+    val hasPendingScanWork: Boolean = false,
+    /** 当前是否有增量检查在跑（同一时间最多一个）。 */
+    val scanInProgress: Boolean = false,
+    val lastScanCompletedAtMillis: Long? = null,
+    val lastScanTrigger: EditorCorrectionScanTrigger? = null,
 )
 
 enum class EditorCorrectionIgnoreScope {
@@ -84,39 +112,37 @@ class EditorCorrectionCoordinator(
     private val _state = MutableStateFlow(EditorCorrectionState())
     val state: StateFlow<EditorCorrectionState> = _state.asStateFlow()
     private val pendingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var pendingScanJob: Job? = null
     /** Invalidated on session close so queued edit mappings cannot target a reopened chapter. */
     private val applyEpoch = AtomicLong(0L)
     /**
      * Stage-one edit mappings must reach Core in transaction order. A single
-     * consumer applies them sequentially; the debounced model scan remains a
-     * separate latest-only step, so rapid typing still coalesces.
+     * consumer applies them sequentially. No model scan is scheduled here any
+     * more (Issue #1064): the ordered apply only records Core's dirty windows.
      */
     private val applyChannel = Channel<PendingApply>(Channel.UNLIMITED)
     private val applyScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     /**
-     * Only the newest transaction keeps a full-text candidate for the debounced
-     * model scan. Older stage-one queue entries deliberately hold no chapter
-     * text, so a slow consumer cannot retain one full copy per keystroke.
+     * Issue #1064 单飞扫描入口的待办标志：编辑事务/资源变化置位，周期或手动
+     * 提交一次增量检查，Core 返回仍有无待检查段时保持置位。
      */
+    private val scanWorkPending = AtomicBoolean(false)
+    private val scanGate = Any()
+    /** 唤醒扫描泵的合并信号 — 只在有待办时发送，重复触发合并成一个。 */
+    private val scanSignals = Channel<Unit>(Channel.CONFLATED)
+    /** 下一次增量检查的原因；扫描中只更新该标志，结束后补跑一轮。 */
+    private var pendingScanTrigger: EditorCorrectionScanTrigger? = null
+    private val scanWaiters = mutableListOf<CompletableDeferred<Unit>>()
+    /** 当前在跑的增量检查 Job — restore/采纳建议/清空时取消，不与新检查并行。 */
     @Volatile
-    private var pendingScanCandidate: PendingScan? = null
-    private val pendingScanCandidateLock = Any()
+    private var inFlightScanJob: Job? = null
+    private var periodicScanJob: Job? = null
+    private var periodicScanTargetId: String? = null
     /** Set once the owning ViewModel is destroyed; no later work may publish or enqueue. */
     private val disposed = AtomicBoolean(false)
-
-    private data class PendingScan(
-        val identity: EditorCorrectionIdentity,
-        val lease: EditorInputLease,
-        val generation: Long,
-        val textRevision: Long,
-        val text: String,
-    )
 
     private data class PendingApply(
         val identity: EditorCorrectionIdentity,
         val lease: EditorInputLease,
-        val generation: Long,
         val applyEpoch: Long,
         val textRevision: Long,
         val baseRevision: Long,
@@ -129,22 +155,26 @@ class EditorCorrectionCoordinator(
                 applyEdits(request)
             }
         }
+        // 单飞扫描泵：所有周期/手动请求都经同一入口串行执行，不并行跑模型。
+        pendingScope.launch {
+            for (signal in scanSignals) {
+                drainScanTriggers()
+            }
+        }
     }
 
     /**
      * Queue the editor transaction's real display patches; never infer edits from the caret.
      *
-     * The stage-one queue carries only revision/ranges/lease. [text] is the full
-     * committed text at [EditResult.newRevision], but it is kept in the single
-     * [pendingScanCandidate] slot for the debounced model scan rather than copied
-     * into every queued transaction. The live kernel may already be at a newer
-     * revision when this request reaches Core, so the revision must not be re-read
-     * here: Core applies the patches against its committed segment index.
+     * The stage-one queue carries only revision/ranges/lease. The live kernel
+     * may already be at a newer revision when this request reaches Core, so the
+     * revision must not be re-read here: Core applies the patches against its
+     * committed segment index. Issue #1064: this only records dirty windows —
+     * the model runs on the periodic/manual incremental check, never per edit.
      */
     fun enqueueEdits(
         identity: EditorCorrectionIdentity,
         edit: EditResult,
-        text: String,
         lease: EditorInputLease,
     ) {
         if (disposed.get()) return
@@ -165,10 +195,10 @@ class EditorCorrectionCoordinator(
                         it.insertedByteEndExclusive.toUInt(),
                     )
                 }
-        val generation = requestGeneration.incrementAndGet()
-        // A newer edit supersedes the pending model scan immediately; its own
-        // ordered apply will schedule the next scan after committing.
-        pendingScanJob?.cancel()
+        requestGeneration.incrementAndGet()
+        // Issue #1064：编辑事务只保留轻量脏区标记，不再触发 250ms 停抖扫描；
+        // 周期检查或手动校对会在下一次轮到时提交增量检查。
+        if (edits.isNotEmpty()) scanWorkPending.set(true)
         if (!_state.value.matchesIdentity(identity)) {
             _state.value = EditorCorrectionState(
                 targetId = identity.targetId,
@@ -176,15 +206,14 @@ class EditorCorrectionCoordinator(
                 chapterId = identity.chapterId,
             )
         }
-        _state.value = _state.value.copy(sessionId = lease.sessionId)
-        setPendingScanCandidate(
-            PendingScan(identity, lease, generation, edit.newRevision, text),
+        _state.value = _state.value.copy(
+            sessionId = lease.sessionId,
+            hasPendingScanWork = scanWorkPending.get(),
         )
         applyChannel.trySend(
             PendingApply(
                 identity = identity,
                 lease = lease,
-                generation = generation,
                 applyEpoch = applyEpoch.get(),
                 textRevision = edit.newRevision,
                 baseRevision = edit.baseRevision,
@@ -214,147 +243,203 @@ class EditorCorrectionCoordinator(
                     )
                 }
             if (applied !is BridgeResult.Success) {
-                if (request.generation == requestGeneration.get() &&
-                    request.applyEpoch == applyEpoch.get()
-                ) {
-                    clearPendingScanCandidate(request)
-                }
+                // Dirty windows stay with Core; the next periodic/manual round
+                // reconciles whatever this queued mapping could not record.
+                scanWorkPending.set(true)
+                syncPendingScanFlag()
                 return
             }
         }
-        if (request.applyEpoch != applyEpoch.get()) return
-        // Only the latest revision runs the model. Older mappings have already
-        // reached Core above, so no transaction is lost.
-        if (request.generation != requestGeneration.get() ||
-            currentIdentity() != request.identity ||
-            sessionCoordinator.currentInputLease() != request.lease
-        ) {
+        // No scan is scheduled here: Issue #1064 runs the model on the chapter's
+        // 60s periodic round or on an explicit manual check.
+    }
+
+    /**
+     * Issue #1064 单飞入口：周期/手动增量检查都从这里提交。扫描进行中只记录
+     * 待办（[pendingScanTrigger]），当前一轮结束后由 [drainScanTriggers] 补跑
+     * 一轮；任何时刻最多一个模型扫描。
+     */
+    private fun submitScan(
+        trigger: EditorCorrectionScanTrigger,
+        waiter: CompletableDeferred<Unit>? = null,
+    ) {
+        if (disposed.get()) {
+            waiter?.complete(Unit)
             return
         }
-        pendingScanJob?.cancel()
-        val pending = takePendingScanCandidate(request) ?: return
-        pendingScanJob =
-            pendingScope.launch {
-                delay(CORRECTION_SCAN_DEBOUNCE_MS)
-                scanPending(pending)
+        var notify = false
+        synchronized(scanGate) {
+            if (trigger == EditorCorrectionScanTrigger.PERIODIC && !scanWorkPending.get() &&
+                _state.value.totalByteCount > 0
+            ) {
+                waiter?.complete(Unit)
+                return
             }
+            val merged =
+                when {
+                    trigger == EditorCorrectionScanTrigger.MANUAL -> EditorCorrectionScanTrigger.MANUAL
+                    else -> pendingScanTrigger ?: EditorCorrectionScanTrigger.PERIODIC
+                }
+            pendingScanTrigger = merged
+            waiter?.let { scanWaiters += it }
+            notify = true
+        }
+        if (notify) scanSignals.trySend(Unit)
     }
 
-    private fun setPendingScanCandidate(candidate: PendingScan?) {
-        synchronized(pendingScanCandidateLock) {
-            pendingScanCandidate = candidate
+    /** 按提交顺序消费待办；扫描期间到达的请求合并成一轮补扫。 */
+    private suspend fun drainScanTriggers() {
+        while (currentCoroutineContext().isActive) {
+            val request =
+                synchronized(scanGate) {
+                    val next = pendingScanTrigger ?: return
+                    pendingScanTrigger = null
+                    val waiters = scanWaiters.toList()
+                    scanWaiters.clear()
+                    next to waiters
+                }
+            val scanJob =
+                pendingScope.launch {
+                    try {
+                        performIncrementalScan(request.first)
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // Transport/bridge failures keep the dirty windows for
+                        // the next periodic round; never retry in a tight loop.
+                        scanWorkPending.set(true)
+                    }
+                }
+            inFlightScanJob = scanJob
+            try {
+                scanJob.join()
+            } finally {
+                if (inFlightScanJob === scanJob) inFlightScanJob = null
+                request.second.forEach { it.complete(Unit) }
+            }
         }
     }
 
-    private fun takePendingScanCandidate(request: PendingApply): PendingScan? =
-        synchronized(pendingScanCandidateLock) {
-            val candidate = pendingScanCandidate ?: return@synchronized null
-            if (!pendingScanMatches(candidate, request)) {
-                return@synchronized null
-            }
-            pendingScanCandidate = null
-            candidate
+    /** 取消正在跑的检查与待办；restore/采纳/清空必须抢占单飞入口。 */
+    private fun cancelInFlightScan() {
+        val waiters: List<CompletableDeferred<Unit>>
+        synchronized(scanGate) {
+            pendingScanTrigger = null
+            waiters = scanWaiters.toList()
+            scanWaiters.clear()
         }
+        inFlightScanJob?.cancel()
+        inFlightScanJob = null
+        waiters.forEach { it.complete(Unit) }
+    }
 
-    private fun clearPendingScanCandidate(request: PendingApply) {
-        synchronized(pendingScanCandidateLock) {
-            val candidate = pendingScanCandidate ?: return@synchronized
-            if (pendingScanMatches(candidate, request)) {
-                pendingScanCandidate = null
+    /**
+     * Issue #1064：一次增量检查读取当前已结算正文的 revision，交给 Core 只补
+     * 脏段与未验证段；不与编辑事务契约耦合，也不修改正文。
+     */
+    private suspend fun performIncrementalScan(trigger: EditorCorrectionScanTrigger) {
+        val identity = currentIdentity() ?: return
+        val lease = sessionCoordinator.currentInputLease() ?: return
+        if (lease.targetId != identity.targetId) return
+        val generation = requestGeneration.incrementAndGet()
+        val before =
+            withContext(Dispatchers.IO) { sessionCoordinator.queryTargetSnapshot(identity.targetId) }
+                ?: return
+        if (!snapshotMatchesLease(before, lease)) return
+        markScanInProgress(identity, lease)
+        try {
+            val response =
+                withContext(Dispatchers.IO) {
+                    // Issue #1064：周期/手动都走 Core 的增量入口，只补脏段与
+                    // 未验证段；不调用整章 All 扫描。
+                    appServiceBridge.scanCorrectionPending(
+                        sessionId = lease.sessionId,
+                        projectId = identity.projectId,
+                        chapterId = identity.chapterId,
+                        textRevision = before.revision.toULong(),
+                        text = before.text,
+                    )
+                }
+            val snapshot = (response as? BridgeResult.Success)?.data ?: return
+            val stillCurrent =
+                withContext(Dispatchers.IO) {
+                    sessionCoordinator.currentInputLease() == lease &&
+                        sessionCoordinator.queryTargetSnapshot(identity.targetId)?.revision == before.revision
+                }
+            if (!stillCurrent || generation != requestGeneration.get() || currentIdentity() != identity) {
+                return
             }
+            if (sessionCoordinator.sessionState.revision != before.revision) return
+            if (snapshot.textRevision.toLong() != before.revision) return
+            scanWorkPending.set(snapshot.hasUncheckedSegments)
+            publishSnapshot(identity, lease, before.text, before.revision, snapshot, trigger)
+        } finally {
+            clearScanInProgress(identity)
         }
     }
 
-    private fun pendingScanMatches(candidate: PendingScan, request: PendingApply): Boolean =
-        candidate.generation == request.generation &&
-            candidate.textRevision == request.textRevision &&
-            candidate.identity == request.identity &&
-            candidate.lease == request.lease
-
-    private suspend fun scanPending(pending: PendingScan) {
-        if (pending.generation != requestGeneration.get() || currentIdentity() != pending.identity) return
-        if (sessionCoordinator.currentInputLease() != pending.lease) return
-        val response =
-            withContext(Dispatchers.IO) {
-                appServiceBridge.scanCorrectionPending(
-                    sessionId = pending.lease.sessionId,
-                    projectId = pending.identity.projectId,
-                    chapterId = pending.identity.chapterId,
-                    textRevision = pending.textRevision.toULong(),
-                    text = pending.text,
-                )
-            }
-        val snapshot = (response as? BridgeResult.Success)?.data ?: return
-        val stillCurrent =
-            withContext(Dispatchers.IO) {
-                sessionCoordinator.currentInputLease() == pending.lease
-            }
-        if (!stillCurrent || pending.generation != requestGeneration.get() ||
-            currentIdentity() != pending.identity
-        ) {
-            return
+    /**
+     * Issue #1064：前台活动章节的 60s 周期调度。开章后首轮在周期结束时触发；
+     * 连续输入不重置周期。切章/退后台由 [stopPeriodicScan] 取消，未完成脏区
+     * 留在 Core，回前台重新开始一轮新的 60s。
+     */
+    fun startPeriodicScan(identity: EditorCorrectionIdentity) {
+        if (disposed.get()) return
+        synchronized(scanGate) {
+            if (periodicScanJob?.isActive == true && periodicScanTargetId == identity.targetId) return
+            periodicScanJob?.cancel()
+            periodicScanTargetId = identity.targetId
+            periodicScanJob =
+                pendingScope.launch {
+                    while (isActive) {
+                        delay(CORRECTION_SCAN_PERIOD_MS)
+                        val lease = sessionCoordinator.currentInputLease() ?: continue
+                        if (lease.targetId != identity.targetId) return@launch
+                        if (currentIdentity() != identity) continue
+                        submitScan(EditorCorrectionScanTrigger.PERIODIC)
+                    }
+                }
         }
-        if (sessionCoordinator.sessionState.revision != pending.textRevision) return
-        if (snapshot.textRevision.toLong() != pending.textRevision) return
-
-        _state.value = EditorCorrectionState(
-            targetId = pending.identity.targetId,
-            projectId = pending.identity.projectId,
-            chapterId = pending.identity.chapterId,
-            sessionId = pending.lease.sessionId,
-            textRevision = pending.textRevision,
-            suggestions = mappedSuggestions(pending.text, pending.textRevision, snapshot.suggestions),
-        )
     }
 
+    /** 后台/切章/页面销毁停止本章定时器；脏区与缓存都保留。 */
+    fun stopPeriodicScan(targetId: String? = null) {
+        synchronized(scanGate) {
+            if (targetId != null && periodicScanTargetId != null && periodicScanTargetId != targetId) return
+            periodicScanJob?.cancel()
+            periodicScanJob = null
+            periodicScanTargetId = null
+        }
+    }
+
+    /** 词典/模型/规则变化后重新标脏，等下一次周期或手动检查。 */
+    fun markScanPending() {
+        if (disposed.get()) return
+        scanWorkPending.set(true)
+        syncPendingScanFlag()
+    }
+
+    /**
+     * Issue #1064：手动校对入口 — 立即把当前已结算正文交给 Core 做一次增量
+     * 检查（只补脏段与未验证段）。扫描进行中时合并为一次补跑，不并行跑模型；
+     * 不自动修改正文。
+     */
     suspend fun checkChapter(identity: EditorCorrectionIdentity) {
-        pendingScanJob?.cancel()
-        setPendingScanCandidate(null)
+        if (disposed.get()) return
         val lease = sessionCoordinator.currentInputLease() ?: return
         if (lease.targetId != identity.targetId || currentIdentity() != identity) return
-        val generation = requestGeneration.incrementAndGet()
-        if (!_state.value.matchesIdentity(identity)) {
-            _state.value = EditorCorrectionState(
-                targetId = identity.targetId,
-                projectId = identity.projectId,
-                chapterId = identity.chapterId,
-            )
-        }
-        _state.value = _state.value.copy(sessionId = lease.sessionId)
-        val before = withContext(Dispatchers.IO) { sessionCoordinator.queryTargetSnapshot(identity.targetId) } ?: return
-        if (!snapshotMatchesLease(before, lease)) return
-
-        val response =
-            withContext(Dispatchers.IO) {
-                appServiceBridge.checkCorrectionChapter(
-                    sessionId = lease.sessionId,
-                    projectId = identity.projectId,
-                    chapterId = identity.chapterId,
-                    textRevision = before.revision.toULong(),
-                )
-            }
-        val snapshot = (response as? BridgeResult.Success)?.data ?: return
-        val stillCurrent =
-            withContext(Dispatchers.IO) {
-                sessionCoordinator.currentInputLease() == lease &&
-                    sessionCoordinator.queryTargetSnapshot(identity.targetId)?.revision == before.revision
-            }
-        if (!stillCurrent || generation != requestGeneration.get() || currentIdentity() != identity) return
-        if (snapshot.textRevision.toLong() != before.revision) return
-
-        _state.value = EditorCorrectionState(
-            targetId = identity.targetId,
-            projectId = identity.projectId,
-            chapterId = identity.chapterId,
-            sessionId = lease.sessionId,
-            textRevision = before.revision,
-            suggestions = mappedSuggestions(before.text, before.revision, snapshot.suggestions),
-        )
+        val waiter = CompletableDeferred<Unit>()
+        submitScan(EditorCorrectionScanTrigger.MANUAL, waiter)
+        waiter.await()
     }
 
-    /** Restore Core's cached chapter suggestions without scanning; failures leave state untouched. */
+    /**
+     * Issue #1064：开章/回前台/同步回流只恢复 Core 的缓存快照，绝不在这里
+     * 触发扫描（旧的 restore 取消后立即补扫路径已删除）。恢复结果只更新展示
+     * 与进度；仍有未检查段时留给 60s 周期或手动校对。
+     */
     suspend fun restoreChapterSnapshot(identity: EditorCorrectionIdentity) {
-        pendingScanJob?.cancel()
+        cancelInFlightScan()
         val lease = sessionCoordinator.currentInputLease() ?: return
         if (lease.targetId != identity.targetId || currentIdentity() != identity) return
         val generation = requestGeneration.incrementAndGet()
@@ -380,13 +465,14 @@ class EditorCorrectionCoordinator(
         if (!stillCurrent || generation != requestGeneration.get() || currentIdentity() != identity) return
         if (snapshot.textRevision.toLong() != before.revision) return
 
-        _state.value = EditorCorrectionState(
-            targetId = identity.targetId,
-            projectId = identity.projectId,
-            chapterId = identity.chapterId,
-            sessionId = lease.sessionId,
-            textRevision = before.revision,
-            suggestions = mappedSuggestions(before.text, before.revision, snapshot.suggestions),
+        scanWorkPending.set(snapshot.hasUncheckedSegments)
+        publishSnapshot(
+            identity = identity,
+            lease = lease,
+            text = before.text,
+            revision = before.revision,
+            snapshot = snapshot,
+            trigger = null,
         )
     }
 
@@ -395,7 +481,7 @@ class EditorCorrectionCoordinator(
         suggestion: EditorCorrectionSuggestion,
     ): EditorCorrectionAcceptResult {
         requestGeneration.incrementAndGet()
-        pendingScanJob?.cancel()
+        cancelInFlightScan()
         val lease = sessionCoordinator.currentInputLease() ?: return EditorCorrectionAcceptResult.Stale
         if (lease.targetId != identity.targetId || currentIdentity() != identity) {
             return EditorCorrectionAcceptResult.Stale
@@ -451,12 +537,22 @@ class EditorCorrectionCoordinator(
             return EditorCorrectionAcceptResult.Stale
         }
 
+        // The accepted replacement changed the body: cached coverage from the
+        // previous revision no longer describes this text, so it is pending
+        // again for the next periodic round or a manual check.
+        scanWorkPending.set(true)
+        val previous = baseStateFor(identity)
         _state.value = EditorCorrectionState(
             targetId = identity.targetId,
             projectId = identity.projectId,
             chapterId = identity.chapterId,
             sessionId = lease.sessionId,
             textRevision = after.revision,
+            totalByteCount = after.text.toByteArray(Charsets.UTF_8).size,
+            hasUncheckedSegments = true,
+            hasPendingScanWork = true,
+            lastScanCompletedAtMillis = previous.lastScanCompletedAtMillis,
+            lastScanTrigger = previous.lastScanTrigger,
         )
         return EditorCorrectionAcceptResult.Applied(identity, before, after, edit)
     }
@@ -516,18 +612,19 @@ class EditorCorrectionCoordinator(
                 suggestions = _state.value.suggestions.filterNot { it.original == entry },
             )
         }
+        if (added) markScanPending()
         return added
     }
 
     fun clear(targetId: String? = null) {
         if (disposed.get()) return
+        if (targetId != null && _state.value.targetId != targetId) return
         requestGeneration.incrementAndGet()
-        pendingScanJob?.cancel()
-        if (targetId == null || _state.value.targetId == targetId) {
-            applyEpoch.incrementAndGet()
-            setPendingScanCandidate(null)
-            _state.value = EditorCorrectionState()
-        }
+        stopPeriodicScan(targetId)
+        cancelInFlightScan()
+        applyEpoch.incrementAndGet()
+        scanWorkPending.set(false)
+        _state.value = EditorCorrectionState()
     }
 
     /**
@@ -539,9 +636,9 @@ class EditorCorrectionCoordinator(
         if (!disposed.compareAndSet(false, true)) return
         applyEpoch.incrementAndGet()
         requestGeneration.incrementAndGet()
-        pendingScanJob?.cancel()
-        pendingScanJob = null
-        setPendingScanCandidate(null)
+        stopPeriodicScan()
+        cancelInFlightScan()
+        scanWorkPending.set(false)
         applyChannel.close()
         applyScope.cancel()
         pendingScope.cancel()
@@ -555,6 +652,80 @@ class EditorCorrectionCoordinator(
         sessionCoordinator.sessionState.activeTargetId == lease.targetId &&
             sessionCoordinator.sessionState.sessionId == lease.sessionId &&
             sessionCoordinator.sessionState.revision == snapshot.revision
+
+    /** 同一章节上一份状态（保留“最近检查”展示），身份不符时从空状态开始。 */
+    private fun baseStateFor(identity: EditorCorrectionIdentity): EditorCorrectionState =
+        _state.value.takeIf { it.matchesIdentity(identity) } ?: EditorCorrectionState()
+
+    private fun markScanInProgress(
+        identity: EditorCorrectionIdentity,
+        lease: EditorInputLease,
+    ) {
+        val base = baseStateFor(identity)
+        _state.value = base.copy(
+            targetId = identity.targetId,
+            projectId = identity.projectId,
+            chapterId = identity.chapterId,
+            sessionId = lease.sessionId,
+            scanInProgress = true,
+        )
+    }
+
+    private fun clearScanInProgress(identity: EditorCorrectionIdentity) {
+        val current = _state.value
+        if (current.matchesIdentity(identity) && current.scanInProgress) {
+            _state.value = current.copy(scanInProgress = false)
+        }
+    }
+
+    private fun syncPendingScanFlag() {
+        if (disposed.get()) return
+        val current = _state.value
+        if (current.hasPendingScanWork != scanWorkPending.get()) {
+            _state.value = current.copy(hasPendingScanWork = scanWorkPending.get())
+        }
+    }
+
+    /**
+     * Issue #1064：把一次 Core 快照发布成面板状态。restore（[trigger] 为 null）
+     * 只更新缓存结果与进度，不算一次“检查完成”；扫描会同时记录最近检查时间
+     * 与触发来源。
+     */
+    private fun publishSnapshot(
+        identity: EditorCorrectionIdentity,
+        lease: EditorInputLease,
+        text: String,
+        revision: Long,
+        snapshot: uniffi.writer_core.CorrectionChapterSnapshotDto,
+        trigger: EditorCorrectionScanTrigger?,
+    ) {
+        val totalBytes = text.toByteArray(Charsets.UTF_8).size
+        val checkedBytes =
+            snapshot.checkedRanges
+                .sumOf { range ->
+                    val start = range.startByte.toLong().coerceIn(0L, totalBytes.toLong())
+                    val end = range.endByte.toLong().coerceIn(0L, totalBytes.toLong())
+                    (end - start).coerceAtLeast(0L)
+                }.coerceAtMost(totalBytes.toLong())
+                .toInt()
+        val previous = baseStateFor(identity)
+        _state.value = EditorCorrectionState(
+            targetId = identity.targetId,
+            projectId = identity.projectId,
+            chapterId = identity.chapterId,
+            sessionId = lease.sessionId,
+            textRevision = revision,
+            suggestions = mappedSuggestions(text, revision, snapshot.suggestions),
+            checkedByteCount = checkedBytes,
+            totalByteCount = totalBytes,
+            hasUncheckedSegments = snapshot.hasUncheckedSegments,
+            hasPendingScanWork = scanWorkPending.get(),
+            scanInProgress = false,
+            lastScanCompletedAtMillis =
+                if (trigger != null) System.currentTimeMillis() else previous.lastScanCompletedAtMillis,
+            lastScanTrigger = trigger ?: previous.lastScanTrigger,
+        )
+    }
 
     private fun validByteRange(text: String, startByte: Int, endByte: Int): Boolean {
         val bytes = text.toByteArray(Charsets.UTF_8).size

@@ -224,6 +224,69 @@ fn commit_plan_local_changed_remote_deleted_is_conflict() {
 }
 
 #[test]
+fn commit_plan_correction_result_remote_delete_keeps_local() {
+    let tmp = TempDir::new().unwrap();
+    let live = tmp.path().join("live");
+    fs::create_dir_all(&live).unwrap();
+    // 作品级校对结果记录的固定布局。
+    let rel = PathBuf::from(
+        "correction/results/c1/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json",
+    );
+    crate::storage::atomic_write_string(&live.join(&rel), r#"{"checked":true}"#).unwrap();
+
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+    run.build_base_snapshot_from_live(&live, std::slice::from_ref(&rel))
+        .unwrap();
+    // 远端删除：staging 没有该记录。本地记录必须保留，不能生成 Delete。
+    let plan = run.compute_commit_plan(&live).unwrap();
+    assert!(
+        plan.content_actions.is_empty(),
+        "remote delete must never delete local correction results"
+    );
+    assert_eq!(plan.keep_local, vec![rel]);
+    assert!(plan.conflict.is_empty());
+}
+
+#[test]
+fn commit_plan_correction_results_keep_both_sides() {
+    let tmp = TempDir::new().unwrap();
+    let live = tmp.path().join("live");
+    fs::create_dir_all(&live).unwrap();
+    let local_rel = PathBuf::from(
+        "correction/results/c1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+    );
+    let remote_rel =
+        "correction/results/c1/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json";
+    crate::storage::atomic_write_string(&live.join(&local_rel), r#"{"local":true}"#).unwrap();
+
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+    run.build_base_snapshot_from_live(&live, std::slice::from_ref(&local_rel))
+        .unwrap();
+    // 设备 B 在远端新增另一条记录，本地已有记录必须同时保留。
+    crate::storage::atomic_write_string(
+        &run.staging_root().join(remote_rel),
+        r#"{"remote":true}"#,
+    )
+    .unwrap();
+
+    let plan = run.compute_commit_plan(&live).unwrap();
+    assert_eq!(plan.keep_local, vec![local_rel]);
+    assert_eq!(plan.content_actions.len(), 1);
+    match &plan.content_actions[0] {
+        CommitAction::Apply { rel_path, content } => {
+            assert_eq!(
+                rel_path.as_path(),
+                std::path::Path::new(remote_rel),
+                "remote-added correction result must be applied"
+            );
+            assert_eq!(content.as_slice(), &br#"{"remote":true}"#[..]);
+        }
+        CommitAction::Delete { .. } => panic!("correction result must never be deleted"),
+    }
+    assert!(plan.conflict.is_empty());
+}
+
+#[test]
 fn walk_commit_candidates_skips_git_sujian_migrate_source() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();

@@ -49,6 +49,9 @@ Rectangle {
     property var settingsBackendRef: null
     property var workspaceBackendRef: null
     property var appState: ({})
+    // Issue #1064：应用 + 窗口前台状态由 main.qml 注入；纠错 60s 周期只在
+    // 前台活动章节上计时。
+    property bool applicationForeground: false
     // Issue #1014：由 main.qml 注入的全局桌面布局状态；栏宽与折叠状态都从这里读写。
     property var layoutState: null
     property string pageKey: "writing"
@@ -397,6 +400,8 @@ Rectangle {
         editorBackendRef: root.editorBackendRef
         annotationBackendRef: root.annotationBackendRef
         dt: root.dt
+        // Issue #1064：退后台停止纠错周期表，回前台只恢复缓存。
+        applicationForeground: root.applicationForeground
         onChapterLoaded: function(projectId, volumeId, chapterId) {
             root.chapterLoaded(projectId, volumeId, chapterId)
         }
@@ -1318,6 +1323,11 @@ Rectangle {
         target: root.syncBackendRef
         function onSync_action_completed() {
             root.checkConflictsAfterSync();
+            // Issue #1064：同步回流只恢复 Core 缓存中的校对结果，不立即扫描；
+            // 待检查区间交给前台 60s 周期或手动校对。
+            if (editorController.chapterId) {
+                editorController.requestCorrectionSnapshot();
+            }
         }
     }
 

@@ -25,8 +25,10 @@ use crate::api::{
 mod engine;
 mod result_cache;
 mod scan_metrics;
+mod synced_results;
 
 pub(crate) use engine::CorrectionScanner;
+pub(crate) use synced_results::is_synced_result_path;
 pub(crate) use result_cache::EditRange;
 use result_cache::{
     apply_edits_light, cache_file_name, mark_unseen_segments_in_edit_windows, modified_stamp,
@@ -102,6 +104,9 @@ struct CachedNamedEntries {
 
 struct CorrectionStoreInner {
     path: PathBuf,
+    /// 作品根目录。用于作品级校对结果的同步记录；`None` 表示该进程只做本地
+    /// 缓存（`CorrectionStore::open` 的既有语义），不写同步记录。
+    projects_root: Mutex<Option<PathBuf>>,
     preferences: Mutex<PersistedCorrectionPreferences>,
     /// Read-only projection of annotation NamedEntry records for proofreading.
     /// Writes go through AnnotationStore; this is only a process cache.
@@ -348,6 +353,19 @@ struct CachedCorrectionEngine {
     lexicon_version: u64,
     model_key: Option<ModelCacheKey>,
     engine: Arc<CorrectionEngine>,
+}
+
+/// 一次 scanner 代际的两类身份：本地缓存指纹 + 跨设备稳定身份。
+pub(super) struct ScannerSyncedIdentity {
+    /// 既有 `scanner_fingerprint` 语义（含路径/mtime），本地缓存失效仍靠它。
+    pub(super) fingerprint: String,
+    /// 跨设备稳定 scanner 身份（路径无关的内容/配置事实）。
+    pub(super) scanner_stable: String,
+    pub(super) model_identity: String,
+    pub(super) lexicon_identity: String,
+    pub(super) rules_identity: String,
+    /// 只按当前配置判断的模式；真正扫描时以实际构建的引擎为准。
+    pub(super) configured_mode: &'static str,
 }
 
 /// A process-shared, app-data-root-scoped correction preferences store.
@@ -641,6 +659,50 @@ fn sha256_file(path: &Path) -> Result<String, WriterError> {
     let mut hasher = sha2::Sha256::new();
     std::io::copy(&mut file, &mut hasher).map_err(|error| WriterError::Io(error.to_string()))?;
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// 词典文件内容指纹缓存。键含长度与 mtime：文件内容变化时 mtime 会变，
+/// 因此重复构造 scanner（含每章 open 的 restore-only 路径）不必反复整文件哈希。
+type LexiconContentDigestCache = HashMap<(PathBuf, u64, Option<SystemTime>), String>;
+static LEXICON_CONTENT_DIGESTS: OnceLock<Mutex<LexiconContentDigestCache>> = OnceLock::new();
+
+fn lexicon_content_digest_cache() -> &'static Mutex<LexiconContentDigestCache> {
+    LEXICON_CONTENT_DIGESTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lexicon_file_content_digest(
+    path: &Path,
+    stamp: &LexiconFileStamp,
+) -> Result<String, WriterError> {
+    let key = (
+        path.to_path_buf(),
+        stamp.len.unwrap_or_default(),
+        stamp.modified,
+    );
+    {
+        let cache = lexicon_content_digest_cache()
+            .lock()
+            .map_err(|_| WriterError::Other("correction lexicon digest cache poisoned".into()))?;
+        if let Some(digest) = cache.get(&key) {
+            return Ok(digest.clone());
+        }
+    }
+    let digest = sha256_file(path)?;
+    let mut cache = lexicon_content_digest_cache()
+        .lock()
+        .map_err(|_| WriterError::Other("correction lexicon digest cache poisoned".into()))?;
+    cache.insert(key, digest.clone());
+    Ok(digest)
+}
+
+/// 稳定身份用的 SHA-256 串联（与本地缓存用的 64 位 [`parts_fingerprint`] 区分）。
+fn stable_parts_digest(parts: &[String]) -> String {
+    let mut hasher = sha2::Sha256::new();
+    for part in parts {
+        hasher.update(part.as_bytes());
+        hasher.update([0x1f]);
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 fn model_identity(
@@ -998,13 +1060,29 @@ fn collect_idle_model_resources() -> Option<RetiredModelResources> {
 
 impl CorrectionStore {
     pub fn open(app_data_root: &Path) -> Result<Self, WriterError> {
+        Self::open_inner(app_data_root, None)
+    }
+
+    /// 打开校对存储并绑定作品根目录，让扫描结果同时写入作品级同步记录。
+    ///
+    /// 进程注册表仍按 `app_data_root` 复用；已存在的 inner 若还没有作品根，
+    /// 这里补上（只补一次），后续调用不再改变。
+    pub fn open_with_projects_root(
+        app_data_root: &Path,
+        projects_root: &Path,
+    ) -> Result<Self, WriterError> {
+        Self::open_inner(app_data_root, Some(projects_root))
+    }
+
+    fn open_inner(app_data_root: &Path, projects_root: Option<&Path>) -> Result<Self, WriterError> {
         let registry = STORE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
         let mut stores = registry
             .lock()
             .map_err(|_| WriterError::Other("correction store registry lock poisoned".into()))?;
         let key = app_data_root.to_path_buf();
-        let inner = if let Some(inner) = stores.get(&key) {
-            Arc::clone(inner)
+        let existing = stores.get(&key).map(Arc::clone);
+        let inner = if let Some(inner) = existing {
+            inner
         } else {
             let path = key.join("correction.local.json");
             let preferences = if path.exists() {
@@ -1017,6 +1095,7 @@ impl CorrectionStore {
             };
             let inner = Arc::new(CorrectionStoreInner {
                 path,
+                projects_root: Mutex::new(projects_root.map(Path::to_path_buf)),
                 preferences: Mutex::new(preferences),
                 named_entries: Mutex::new(HashMap::new()),
                 once_ignored: Mutex::new(HashSet::new()),
@@ -1029,10 +1108,26 @@ impl CorrectionStore {
                 engines: Mutex::new(HashMap::new()),
                 result_caches: Mutex::new(HashMap::new()),
             });
-            stores.insert(key, Arc::clone(&inner));
+            stores.insert(key.clone(), Arc::clone(&inner));
             inner
         };
+        drop(stores);
+        if let Some(projects_root) = projects_root {
+            let mut root = inner
+                .projects_root
+                .lock()
+                .map_err(|_| WriterError::Other("correction projects root lock poisoned".into()))?;
+            if root.is_none() {
+                *root = Some(projects_root.to_path_buf());
+            }
+        }
         Ok(Self { inner })
+    }
+
+    /// 作品根目录；未绑定作品根时返回 `None`（不写同步记录）。
+    pub(super) fn project_root(&self, project_id: &str) -> Option<PathBuf> {
+        let root = self.inner.projects_root.lock().ok()?;
+        root.as_ref().map(|root| root.join(project_id))
     }
 
     fn update_preferences<F, R>(&self, update: F) -> Result<R, WriterError>
@@ -1762,6 +1857,18 @@ impl CorrectionStore {
     /// entries. Ignore choices are applied when a snapshot is assembled and are
     /// deliberately excluded so they never force a rescan.
     pub(super) fn scanner_fingerprint(&self, project_id: &str) -> Result<String, WriterError> {
+        Ok(self.scanner_identity(project_id)?.fingerprint)
+    }
+
+    /// 同时产出两类身份：
+    ///
+    /// - `fingerprint`：既有本地缓存指纹，含模型/词典路径与 mtime，语义不变；
+    /// - 稳定身份（model/lexicon/rules + `scanner_stable`）：不含绝对路径、
+    ///   mtime、设备或时间戳，供跨设备校对结果记录使用。
+    pub(super) fn scanner_identity(
+        &self,
+        project_id: &str,
+    ) -> Result<ScannerSyncedIdentity, WriterError> {
         let (model_path, disabled_rules) = {
             let guard =
                 self.inner.preferences.lock().map_err(|_| {
@@ -1783,7 +1890,7 @@ impl CorrectionStore {
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "no-model".to_string()),
         ];
-        if let Some(path) = &model_path {
+        let model_identity = if let Some(path) = &model_path {
             match model_bundle_identity_for_fingerprint(path) {
                 Ok((stamp, identity)) => {
                     parts.push(format!(
@@ -1795,33 +1902,59 @@ impl CorrectionStore {
                         identity.tokenizer_sha256,
                         identity.calibrator_version
                     ));
+                    format!(
+                        "{}:{}:{}:{}",
+                        identity.model_sha256,
+                        identity.vocab_sha256,
+                        identity.tokenizer_sha256,
+                        identity.calibrator_version
+                    )
                 }
-                Err(_) => parts.push("model:missing".to_string()),
+                Err(_) => {
+                    parts.push("model:missing".to_string());
+                    "model:missing".to_string()
+                }
             }
-        }
+        } else {
+            "no-model".to_string()
+        };
         let data_root = self
             .inner
             .path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("correction-data");
+        let mut lexicon_parts = Vec::new();
         for name in CORRECTION_DICTIONARY_FILES {
-            let (_, stamp) = optional_lexicon_file(&data_root, name)?;
+            let (path, stamp) = optional_lexicon_file(&data_root, name)?;
             parts.push(format!(
                 "lexicon:{name}:{:?}:{}",
                 stamp.len,
                 modified_stamp(stamp.modified)
             ));
+            match path.as_deref().filter(|_| stamp.len.is_some()) {
+                Some(path) => lexicon_parts.push(format!(
+                    "lexicon:{name}:{}",
+                    lexicon_file_content_digest(path, &stamp)?
+                )),
+                None => lexicon_parts.push(format!("lexicon:{name}:missing")),
+            }
         }
         for entry in self.dictionary_entry_records(project_id)? {
             parts.push(format!("dictionary:{:?}:{}", entry.kind, entry.text));
+            lexicon_parts.push(format!("dictionary:{:?}:{}", entry.kind, entry.text));
         }
         for relation in self.entity_name_records(project_id)? {
             parts.push(format!(
                 "entity-name:{:?}:{}:{}",
                 relation.kind, relation.canonical, relation.name
             ));
+            lexicon_parts.push(format!(
+                "entity-name:{:?}:{}:{}",
+                relation.kind, relation.canonical, relation.name
+            ));
         }
+        let mut named_entries = Vec::new();
         if let Some(cached) = self
             .inner
             .named_entries
@@ -1831,12 +1964,37 @@ impl CorrectionStore {
         {
             for entry in &cached.entries {
                 parts.push(format!("named-entry:{}", entry.canonical_name));
+                named_entries.push(entry.canonical_name.clone());
             }
         }
-        for rule in disabled_rules {
+        // 专名缓存按 entry_id 排序，跨设备的 entry_id 顺序可能不同；稳定身份
+        // 只按专名本身排序，保证同一词库在两端得到同一个身份。
+        named_entries.sort();
+        for name in named_entries {
+            lexicon_parts.push(format!("named-entry:{name}"));
+        }
+        let rules_identity = disabled_rules.join("|");
+        for rule in &disabled_rules {
             parts.push(format!("disabled-rule:{rule}"));
         }
-        Ok(parts_fingerprint(&parts))
+        let lexicon_identity = stable_parts_digest(&lexicon_parts);
+        let scanner_stable = synced_results::scanner_stable_identity(
+            &model_identity,
+            &lexicon_identity,
+            &rules_identity,
+        );
+        Ok(ScannerSyncedIdentity {
+            fingerprint: parts_fingerprint(&parts),
+            scanner_stable,
+            model_identity,
+            lexicon_identity,
+            rules_identity,
+            configured_mode: if model_path.is_some() {
+                synced_results::MODE_MODEL
+            } else {
+                synced_results::MODE_RULES
+            },
+        })
     }
 
     pub fn lexicon_for_project(&self, project_id: &str) -> Result<Arc<Lexicon>, WriterError> {

@@ -415,6 +415,24 @@ mod tests {
             "characters/role1.json",
             crate::sync::SyncScope::Project
         ));
+        // 作品级校对结果记录：只白名单 correction/results/ 下的 .json
+        assert!(SyncService::is_whitelisted_path(
+            "correction/results/c1/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json",
+            crate::sync::SyncScope::Project
+        ));
+        assert!(!SyncService::is_whitelisted_path(
+            "correction/results/c1/record.bin",
+            crate::sync::SyncScope::Project
+        ));
+        // correction/ 下除结果记录外的路径仍不同步（app-meta 的 LocalOnly 不变）。
+        assert!(!SyncService::is_whitelisted_path(
+            "correction/results/c1.json",
+            crate::sync::SyncScope::Project
+        ));
+        assert!(!SyncService::is_whitelisted_path(
+            "correction/other.json",
+            crate::sync::SyncScope::Project
+        ));
         // 作品自己的同步元数据
         assert!(SyncService::is_whitelisted_path(
             "app-meta/sync/manifest.sync.json",

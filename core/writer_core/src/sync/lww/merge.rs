@@ -30,7 +30,10 @@
 //!   修复"远端删除被本地复活"。
 //! - 远端同路径更新通过 LWW 时间戳比较进入合并，修复"远端更新丢失"。
 
-use crate::sync::content_class::is_document_content_path;
+use crate::sync::content_class::{
+    decide_correction_result_sync, is_document_content_path, is_synced_result_path,
+    CorrectionResultSyncDecision,
+};
 use crate::sync::path::ValidatedSyncPath;
 use crate::sync::provider::SyncProvider;
 use crate::sync::scanner::scan_for_sync;
@@ -743,6 +746,44 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
 
         let local_opt = local_records.get(&path);
         let remote_opt = remote_records.get(&path);
+
+        // 作品级校对结果对象是不可变并集：远端删除不删本地、远端新增下载、
+        // 同路径不同内容保留本地；双方都存在时也不能被较新时间戳覆盖。
+        if is_synced_result_path(&path) {
+            if let (Some(local_rec), Some(remote_rec)) = (local_opt, remote_opt) {
+                let local_present = local_rec.op == "upsert";
+                let remote_present = remote_rec.op == "upsert";
+                match decide_correction_result_sync(
+                    local_present,
+                    remote_present,
+                    local_rec.content_hash == remote_rec.content_hash,
+                ) {
+                    CorrectionResultSyncDecision::NoOp => {
+                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        ignored_files.push(path);
+                    }
+                    CorrectionResultSyncDecision::ApplyIncoming => {
+                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        to_download.push(path);
+                    }
+                    CorrectionResultSyncDecision::KeepLocal { resend } => {
+                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        if resend {
+                            // 远端删除/缺失但本地仍有记录：重新发布，别台设备
+                            // 仍需要的记录不会被这次删除带走。
+                            to_upload.push(path);
+                        } else {
+                            log::warn!(
+                                "[sync] correction result content mismatch path={} — keeping local",
+                                path
+                            );
+                            ignored_files.push(path);
+                        }
+                    }
+                }
+                continue;
+            }
+        }
 
         match (local_opt, remote_opt) {
             (Some(local_rec), None) => {

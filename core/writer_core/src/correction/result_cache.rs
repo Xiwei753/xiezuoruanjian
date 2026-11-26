@@ -508,7 +508,7 @@ fn segment_key(text_fingerprint: &str, context_fingerprint: &str) -> String {
     format!("{text_fingerprint}:{context_fingerprint}")
 }
 
-fn suggestions_match(
+pub(crate) fn suggestions_match(
     text: &str,
     start: usize,
     end: usize,
