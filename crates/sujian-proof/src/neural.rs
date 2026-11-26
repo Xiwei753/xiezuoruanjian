@@ -85,7 +85,11 @@ impl ProofreadingModel {
         } else {
             AllocatorType::Device
         };
-        // Issue #1062 三.1：按进程内存预算选择 ORT session 的内存配置。
+        // Issue #1062 三.1：按进程内存预算方向选择 ORT session 的内存配置。
+        //
+        // 注意：这是基于分配器语义的实验性配置，**没有新的实机 RSS/PSS 记录**
+        // 证明 1 GiB 预算已经满足；需要配合 process.resource 的匿名/文件
+        // RSS/PSS 分项在真机复核后再下结论，不能仅凭关闭 arena 就宣称达标。
         //
         // 取舍：arena 分配器用一次 mmap 换分配速度，但会跨 run 保留高水位；
         // 校对窗口长度随正文变化，动态形状下 arena 只增不还，RSS 峰值会停在
