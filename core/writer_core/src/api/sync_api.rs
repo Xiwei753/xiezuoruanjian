@@ -1322,6 +1322,22 @@ impl WriterCoreApi {
                         .is_some_and(|identity| checkpoint.repository_identity == *identity)
             });
 
+        // 预检/传输阶段的失败也要写退避：否则自动调度会在每次前台唤醒里
+        // 重试同一个坏状态，而 checkpoint 停留在旧版本（复审 #3）。
+        let persist_failure_checkpoint = |consumed: Option<&str>| {
+            self.persist_checkpoint(
+                &app_data_root,
+                repo_identity.as_deref(),
+                checkpoint.as_ref(),
+                None,
+                None,
+                consumed,
+                None,
+                false,
+                diagnostic_operation_id,
+            );
+        };
+
         // 失败退避只约束自动触发。手动/启动/交接/前台/网络恢复（force_sync）
         // 不受退避窗口限制，否则用户手动重试会被上一次失败挡住。
         if !force_sync {
@@ -1359,6 +1375,7 @@ impl WriterCoreApi {
                     "remote_probe",
                     &writer_error,
                 );
+                persist_failure_checkpoint(None);
                 log::warn!(
                     "[sync] remote_probe failed: error_code={}",
                     writer_error.code()
@@ -1484,6 +1501,7 @@ impl WriterCoreApi {
                     "remote_revision",
                     &writer_error,
                 );
+                persist_failure_checkpoint(None);
                 log::warn!(
                     "[sync] remote_revision failed: error_code={}",
                     writer_error.code()
@@ -1618,6 +1636,7 @@ impl WriterCoreApi {
                         "target_catalog".to_string(),
                         msg,
                     );
+                    persist_failure_checkpoint(remote_revision_before.as_deref());
                     return Err(crate::api::error::WriterError::from(e));
                 }
             };
@@ -1672,6 +1691,7 @@ impl WriterCoreApi {
                             "target_catalog".to_string(),
                             msg,
                         );
+                        persist_failure_checkpoint(remote_revision_before.as_deref());
                         return Err(crate::api::error::WriterError::from(e));
                     }
                 }
