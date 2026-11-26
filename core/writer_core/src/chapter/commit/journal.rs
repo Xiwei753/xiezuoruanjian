@@ -794,7 +794,11 @@ pub(crate) fn commit_chapter_with_guard(
     // 5) 把本次已 durable 提交的对象投影成待同步事实（Issue #1065 复审 #4）。
     //    与 journal 同一决议顺序：正文/元数据/附加文件已落盘，删除已进 trash。
     //    账本只是调度索引：投影失败只警告，下一次本地路径指纹仍能发现变化。
-    let committed_upserts = if deleting {
+    //    同步自身的提交（ChapterCommitSource::Sync）不投影：那是远端内容的落地，
+    //    不是本地业务变更；把它标成待上传会把刚拉下来的内容又回推远端。
+    let skip_mutation_projection =
+        deleting || request.source == crate::chapter::ChapterCommitSource::Sync;
+    let committed_upserts = if skip_mutation_projection {
         Vec::new()
     } else {
         let mut files = Vec::new();
