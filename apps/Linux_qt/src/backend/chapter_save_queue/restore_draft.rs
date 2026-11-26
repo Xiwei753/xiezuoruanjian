@@ -350,32 +350,57 @@ pub(super) fn handle_restore_project(
         // 退出/崩溃时 facts 可能已经包含最后几次输入，而 text.txt 还是较早
         // 的 revision。这属于正常状态，不能一律判成 replay_text_mismatch。
         let content = if plan.fact_count == 0 {
-            match plan.text.clone() {
-                Some(text) => {
-                    // 评论 7191076411 第 3 项：没有逐字证明事实链时，只有
-                    // “载入后没有新输入”（textRevision 未超过 base）才允许把
-                    // 草稿正文当已证明内容提交；否则是拿未证明正文冒充完成，
-                    // 保留草稿等逐字事实落盘。
-                    if plan.text_revision > plan.base_revision && plan.text_revision != 0 {
-                        failed += 1;
-                        kept += 1;
-                        messages.push(format!(
-                            "{}: draft_text_without_proof kept (textRevision={} baseRevision={})",
-                            plan.chapter_id, plan.text_revision, plan.base_revision
-                        ));
-                        continue;
-                    }
-                    text
-                }
-                None => {
-                    super::super::chapter_draft::remove(
-                        &projects_root,
-                        &command.project_id,
-                        &plan.chapter_id,
-                    );
-                    continue;
-                }
+            let Some(text) = plan.text.clone() else {
+                super::super::chapter_draft::remove(
+                    &projects_root,
+                    &command.project_id,
+                    &plan.chapter_id,
+                );
+                continue;
+            };
+            // Issue #1062 评论 7193130307 第 1 项：没有逐字事实时不能再用
+            // “编辑器 revision > 章节 revision”判断；先看草稿正文是否已经
+            // 就是当前 Core 版本（原始 SHA-256 协议），是则幂等清理。
+            if writer_core::chapter::content_sha256(&text) == opened.version.content_sha256 {
+                super::super::chapter_draft::remove(
+                    &projects_root,
+                    &command.project_id,
+                    &plan.chapter_id,
+                );
+                continue;
             }
+            // 回执已确认收口过这份正文（meta 记录了编辑器 revision+摘要）：
+            // 即使 live 随后被同步改过，也不能把已提交正文当未证明新编辑。
+            let committed_snapshot = !plan.committed_text_sha256.is_empty()
+                && plan.text_revision == plan.committed_text_revision
+                && plan.text_sha256 == plan.committed_text_sha256;
+            if committed_snapshot {
+                super::super::chapter_draft::remove(
+                    &projects_root,
+                    &command.project_id,
+                    &plan.chapter_id,
+                );
+                continue;
+            }
+            // 不是 live 正文：只有仍是本次文档加载基线（同一编辑器会话、
+            // revision 未变、摘要一致）才说明“没有新输入”；即使如此也与
+            // live 不一致，属于外部更改，保留草稿等待人工/后续同步处理。
+            if unchanged_baseline(&plan) {
+                failed += 1;
+                kept += 1;
+                messages.push(format!(
+                    "{}: external_change_without_proof kept (textRevision={} editorBase={})",
+                    plan.chapter_id, plan.text_revision, plan.editor_base_revision
+                ));
+                continue;
+            }
+            failed += 1;
+            kept += 1;
+            messages.push(format!(
+                "{}: draft_text_without_proof kept (textRevision={} editorBase={} textSha={})",
+                plan.chapter_id, plan.text_revision, plan.editor_base_revision, plan.text_sha256
+            ));
+            continue;
         } else {
             if plan.text_revision > plan.event_end_revision {
                 // 正文比完整事件链还新：说明有编辑事件没落盘，保留草稿等

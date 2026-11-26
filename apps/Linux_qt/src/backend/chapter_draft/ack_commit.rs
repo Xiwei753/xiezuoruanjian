@@ -216,7 +216,13 @@ pub(super) fn text_is_verified(state: &DraftState) -> bool {
         return fact.session_id == state.session_id && fact.after_text_sha256 == state.text_sha256;
     }
     if let Some(latest) = state.facts.last() {
-        return latest.session_id == state.session_id && state.text_revision <= latest.revision;
+        // Issue #1062 评论 7193130307 第 3 项：只有旧格式事实（没有事件终态
+        // 摘要）才允许按水位判断；新事实必须存在覆盖该快照 revision 的精确
+        // 记录并核对摘要，不能用“后一条事实 revision 更大”猜前一份快照已被
+        // 证明。
+        return latest.after_text_sha256.is_empty()
+            && latest.session_id == state.session_id
+            && state.text_revision <= latest.revision;
     }
     // 2) 没有事实：只有仍是本次文档加载基线的正文（revision 未变且摘要一致）
     //    才算“确实没有修改”，可以发布为可提交草稿。
@@ -240,4 +246,71 @@ pub(crate) fn text_ready_for_commit(
     drafts
         .get(&location.key)
         .is_some_and(|state| state.text.is_some() && text_is_verified(state))
+}
+
+/// 保存回执确认后精确收口草稿正文：只有与本次已提交快照完全同一份的
+/// 编辑器正文才允许清除。
+///
+/// Issue #1062 评论 7193130307 第 2 项：`mark_committed` 只处理事实与 base，
+/// 若不收口 text，已提交正文会一直留在草稿里；事实 ack 之后它变成“无事实、
+/// revision 超过加载基线”的僵尸候选，每次进入作品都被当成缺证明的新编辑。
+///
+/// 条件（全部满足才清）：
+/// - 同一编辑器会话；
+/// - 草稿正文 revision 等于本次保存快照 revision；
+/// - 正文内容摘要（QML 上报的内容根摘要）与快照摘要一致，缺失时按原文相等。
+///
+/// 已到达的更高 revision 正文（保存期间继续输入）原样保留，等下一笔保存。
+pub(crate) fn settle_saved_text(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+    session_id: u64,
+    snapshot_revision: u64,
+    snapshot_digest: &str,
+) -> bool {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+        return false;
+    };
+    let mut drafts = lock_registry();
+    let Some(state) = drafts.get_mut(&location.key) else {
+        return false;
+    };
+    let Some(text) = state.text.as_deref() else {
+        return false;
+    };
+    if state.session_id != session_id || state.text_revision != snapshot_revision {
+        return false;
+    }
+    let digest_matches = if snapshot_digest.is_empty() {
+        true
+    } else {
+        writer_core::writing_stats::proof::content_digest_of_text(text) == snapshot_digest
+    };
+    if !digest_matches {
+        return false;
+    }
+    state.text = None;
+    state.text_revision = snapshot_revision;
+    state.text_sha256 = String::new();
+    state.persisted_text_revision = 0;
+    state.persisted_text_sha256 = String::new();
+    state.text_dirty = false;
+    state.meta_dirty = true;
+    state.committed_text_revision = snapshot_revision;
+    state.committed_text_sha256 = snapshot_digest.to_string();
+    state.updated_at_ms = now_ms();
+    drop(drafts);
+    // 已提交正文不能留在 text.txt：meta 的 textRevision 归零后，磁盘上的旧
+    // 文件会被恢复链当成正文候选。
+    let path = location.dir.join(store::TEXT_FILE);
+    if let Err(error) = std::fs::remove_file(&path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            log::warn!(
+                "remove committed chapter draft text {}: {error}",
+                path.display()
+            );
+        }
+    }
+    true
 }

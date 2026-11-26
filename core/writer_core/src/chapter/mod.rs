@@ -196,6 +196,15 @@ pub fn list_chapters(project_root: &Path, volume_id: &str) -> Result<Vec<Chapter
 /// 当前实现为非空白字符计数，适用于 CJK 文本（每个汉字计为一个字）。
 /// 对英文等空格分词语言，此计数不等于传统"单词数"。
 #[allow(clippy::cast_possible_truncation)]
+/// 章节版本的正文摘要协议：完整正文的原始 SHA-256（十六进制）。
+///
+/// 与 `ChapterVersion.content_sha256` 一致；平台端用它判断草稿正文是否已经
+/// 就是当前已提交版本（不同协议的内容根摘要不能直接比较）。
+pub fn content_sha256(text: &str) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(text.as_bytes()))
+}
+
 pub fn calculate_word_count(text: &str) -> u32 {
     text.chars().filter(|c| !c.is_whitespace()).count() as u32
 }

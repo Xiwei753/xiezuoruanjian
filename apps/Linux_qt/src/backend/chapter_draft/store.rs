@@ -116,6 +116,8 @@ pub(super) struct MetaData {
     pub(super) editor_base_revision: u64,
     pub(super) editor_base_sha256: String,
     pub(super) editor_base_session: u64,
+    pub(super) committed_text_revision: u64,
+    pub(super) committed_text_sha256: String,
 }
 
 impl MetaData {
@@ -207,6 +209,8 @@ pub(super) fn meta_from_state(
         editor_base_revision: state.editor_base_revision,
         editor_base_sha256: state.editor_base_sha256.clone(),
         editor_base_session: state.editor_base_session,
+        committed_text_revision: state.committed_text_revision,
+        committed_text_sha256: state.committed_text_sha256.clone(),
     }
 }
 
@@ -467,6 +471,8 @@ pub(super) fn read_new_state(
         editor_base_revision: meta.editor_base_revision,
         editor_base_sha256: meta.editor_base_sha256,
         editor_base_session: meta.editor_base_session,
+        committed_text_revision: meta.committed_text_revision,
+        committed_text_sha256: meta.committed_text_sha256,
         projects_root: location.projects_root.clone(),
         updated_at_ms: meta.updated_at_ms,
         meta_dirty: false,
@@ -764,6 +770,8 @@ pub(super) fn legacy_state(
         editor_base_revision: 0,
         editor_base_sha256: String::new(),
         editor_base_session: 0,
+        committed_text_revision: 0,
+        committed_text_sha256: String::new(),
         acked_through_revision: 0,
         projects_root: location.projects_root.clone(),
         updated_at_ms: legacy.updated_at_ms,

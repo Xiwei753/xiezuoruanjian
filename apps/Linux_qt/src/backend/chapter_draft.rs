@@ -46,7 +46,7 @@ pub(crate) use ack::{
     complete_pending_ack, reconciled_ack, reconciled_acks, record_pending_ack, replay_pending_acks,
     PendingAck,
 };
-pub(crate) use ack_commit::{mark_committed, text_ready_for_commit};
+pub(crate) use ack_commit::{mark_committed, settle_saved_text, text_ready_for_commit};
 pub(crate) use freeze::freeze_batch_for;
 pub(crate) use pending::{clear_pending_input, pending_inputs, spool_failed_input};
 pub(crate) use restore::{list_project_drafts, restore_plan, restore_plan_strict, snapshot};
@@ -206,6 +206,9 @@ pub(crate) struct ChapterDraftRestorePlan {
     /// 本次文档加载时的编辑器 revision 与基线摘要（编辑器坐标）。
     pub editor_base_revision: u64,
     pub editor_base_sha256: String,
+    /// 已由 Core 回执确认收口的编辑器正文 revision/摘要。
+    pub committed_text_revision: u64,
+    pub committed_text_sha256: String,
 }
 
 impl ChapterDraftRestorePlan {
@@ -252,6 +255,10 @@ struct DraftState {
     editor_base_sha256: String,
     /// 记录 editor_base_* 所属编辑器会话；新会话（新一次加载）重新初始化。
     editor_base_session: u64,
+    /// 最近一次 Core durable 回执确认收口的编辑器正文 revision/摘要。
+    /// 恢复时据此把“已提交正文”与“未证明新编辑”区分开。
+    committed_text_revision: u64,
+    committed_text_sha256: String,
     projects_root: std::path::PathBuf,
     updated_at_ms: i64,
     meta_dirty: bool,
@@ -286,6 +293,8 @@ impl DraftState {
             editor_base_revision: 0,
             editor_base_sha256: String::new(),
             editor_base_session: 0,
+            committed_text_revision: 0,
+            committed_text_sha256: String::new(),
             projects_root: location.projects_root.clone(),
             updated_at_ms: now_ms(),
             meta_dirty: false,

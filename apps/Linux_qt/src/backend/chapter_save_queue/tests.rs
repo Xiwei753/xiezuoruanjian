@@ -182,6 +182,8 @@ mod restore_draft_tests {
             mixed_sessions: false,
             editor_base_revision: 0,
             editor_base_sha256: String::new(),
+            committed_text_revision: 0,
+            committed_text_sha256: String::new(),
         }
     }
 
@@ -334,5 +336,320 @@ mod restore_draft_tests {
         unknown.base_revision = 0;
         assert!(!base_matches_plan(&unknown, &version));
         assert!(!base_matches_plan(&unknown, &ChapterVersionDto::default()));
+    }
+}
+
+mod restore_contract_tests {
+    use super::super::draft_jobs::draft_restore_status;
+    use super::super::restore_draft::handle_restore_project;
+    use super::super::worker::ChapterSaveWorkerState;
+    use super::super::{ChapterRestoreCommand, ChapterSaveContext};
+    use crate::backend::chapter_draft;
+    use std::path::PathBuf;
+    use writer_core::api::WriterCoreApi;
+    use writer_core::writing_stats::proof::content_digest_of_text;
+
+    fn workspace() -> (tempfile::TempDir, WriterCoreApi, String, String, String) {
+        let temp = tempfile::tempdir().unwrap();
+        let projects_root = temp.path().join("projects");
+        let api = WriterCoreApi::new(temp.path(), projects_root.clone());
+        let project = api.create_project("作品").unwrap();
+        let volumes = api.list_volumes(&project.id).unwrap();
+        let volume_id = volumes.first().unwrap().id.clone();
+        let chapter = api
+            .create_chapter(&project.id, &volume_id, "第一章")
+            .unwrap();
+        // 推进到 revision 30，复现“章节已保存多次、编辑器重新从 0/1 打开”。
+        for revision in 0..30 {
+            api.save_chapter_content_versioned(
+                &project.id,
+                &volume_id,
+                &chapter.id,
+                &format!("已提交正文 {}", revision + 1),
+                None,
+                None,
+            )
+            .unwrap();
+        }
+        (temp, api, project.id, volume_id, chapter.id)
+    }
+
+    fn draft_dir(projects_root: &std::path::Path, project_id: &str, chapter_id: &str) -> PathBuf {
+        projects_root
+            .join(project_id)
+            .join("app-meta/chapter-drafts")
+            .join(chapter_id)
+    }
+
+    /// 模拟旧版本已经写盘的“未证明新正文”草稿：章节持久 revision=30，
+    /// 编辑器本次从 0 打开后 revision=1，且没有逐字事实。
+    #[allow(clippy::too_many_arguments)]
+    fn write_unproven_draft(
+        projects_root: &std::path::Path,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        text: &str,
+        base_generation: &str,
+        base_revision: u64,
+        base_sha256: &str,
+    ) {
+        let dir = draft_dir(projects_root, project_id, chapter_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("text.txt"), text).unwrap();
+        let meta = serde_json::json!({
+            "schemaVersion": 2,
+            "projectId": project_id,
+            "volumeId": volume_id,
+            "chapterId": chapter_id,
+            "workspaceKey": "workspace",
+            "generation": base_generation,
+            "sessionId": 1,
+            "baseGeneration": base_generation,
+            "baseRevision": base_revision,
+            "baseSha256": base_sha256,
+            "textRevision": 1,
+            "textSha256": content_digest_of_text(text),
+            "updatedAtMs": 1,
+            "facts": [],
+            "ackedEventIds": [],
+            "ackedThroughRevision": 0,
+            "appliedTransactions": [],
+            "editorBaseRevision": 0,
+            "editorBaseSha256": "editor-base-sha",
+            "editorBaseSession": 1,
+            "committedTextRevision": 0,
+            "committedTextSha256": ""
+        });
+        std::fs::write(
+            dir.join("meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn context(data_root: &std::path::Path, projects_root: &std::path::Path) -> ChapterSaveContext {
+        ChapterSaveContext::new(
+            &data_root.to_string_lossy(),
+            &projects_root.to_string_lossy(),
+            &writer_core::storage::GitRepoLayout {
+                worktree_root: data_root.to_path_buf(),
+                git_dir: data_root.join(".git"),
+            },
+        )
+    }
+
+    /// Issue #1062 评论 7193130307 第 1 项：无事实、编辑器 revision 未前进但
+    /// 正文不是 live 内容时，恢复必须保留草稿且不调用 Core 保存。
+    #[test]
+    fn unproven_new_text_is_never_committed_by_restore() {
+        let (temp, api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        let opened = api
+            .open_chapter(&project_id, &volume_id, &chapter_id)
+            .unwrap();
+        assert_eq!(opened.version.revision, 30);
+        write_unproven_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            "未证明新正文",
+            &opened.version.object_generation,
+            opened.version.revision,
+            &opened.version.content_sha256,
+        );
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project_id.clone(),
+            },
+        );
+
+        let opened = state
+            .api_for(&context(temp.path(), &projects_root))
+            .open_chapter(&project_id, &volume_id, &chapter_id)
+            .unwrap();
+        assert_eq!(
+            opened.content, "已提交正文 30",
+            "Core 正文不能被未证明草稿覆盖"
+        );
+        assert!(
+            draft_dir(&projects_root, &project_id, &chapter_id)
+                .join("text.txt")
+                .exists(),
+            "未证明正文必须保留在草稿里等待事实落盘"
+        );
+        let status = draft_restore_status(&project_id);
+        assert_eq!(status.kept, 1);
+        assert!(
+            status.message.contains("draft_text_without_proof"),
+            "unexpected restore message: {}",
+            status.message
+        );
+    }
+
+    /// Issue #1062 评论 7193130307 第 2 项：崩溃后只剩“已确认正文 + 无事实”
+    /// 的目录时，按当前 Core 版本摘要幂等清理，不算未证明新编辑。
+    #[test]
+    fn committed_text_matching_live_version_is_cleaned_without_save() {
+        let (temp, api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        let opened = api
+            .open_chapter(&project_id, &volume_id, &chapter_id)
+            .unwrap();
+        write_unproven_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            &opened.content,
+            &opened.version.object_generation,
+            opened.version.revision,
+            &opened.version.content_sha256,
+        );
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project_id.clone(),
+            },
+        );
+
+        assert!(
+            !draft_dir(&projects_root, &project_id, &chapter_id).exists(),
+            "与 live 一致的已确认正文应清理草稿，不产生缺证明候选"
+        );
+        let reopened = state
+            .api_for(&context(temp.path(), &projects_root))
+            .open_chapter(&project_id, &volume_id, &chapter_id)
+            .unwrap();
+        assert_eq!(reopened.content, opened.content);
+        assert_eq!(reopened.version.revision, opened.version.revision);
+    }
+
+    /// Issue #1062 评论 7193130307 第 2 项：保存成功并 ack 后，同一份已确认
+    /// 正文必须收口，不能留下“无事实 + 旧正文”的僵尸草稿。
+    #[test]
+    fn committed_text_is_settled_and_draft_directory_removed() {
+        let (temp, api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        let root = projects_root.as_path();
+        let text = "已提交正文";
+        let digest = content_digest_of_text(text);
+        chapter_draft::note_text(
+            root,
+            &project_id,
+            &chapter_id,
+            &volume_id,
+            1,
+            "gen-1",
+            text.to_string(),
+            1,
+            &digest,
+            ("gen-1", 30, "base-sha"),
+            0,
+        );
+        chapter_draft::note_fact(
+            root,
+            &project_id,
+            &chapter_id,
+            &volume_id,
+            1,
+            "gen-1",
+            chapter_draft::DraftFact {
+                event_id: "e1".to_string(),
+                revision: 1,
+                session_id: 1,
+                projection_json: serde_json::json!({
+                    "eventId": "e1",
+                    "revision": 1,
+                    "event": {"proof": {"afterTextSha256": digest}}
+                })
+                .to_string(),
+            },
+        )
+        .unwrap();
+        chapter_draft::persist_current(root, &project_id, &chapter_id, true).unwrap();
+
+        assert!(chapter_draft::settle_saved_text(
+            root,
+            &project_id,
+            &chapter_id,
+            1,
+            1,
+            &digest,
+        ));
+        assert!(
+            chapter_draft::mark_committed(
+                root,
+                &project_id,
+                &chapter_id,
+                "tx-1",
+                &["e1".to_string()],
+                "gen-1",
+                31,
+                "after-sha"
+            )
+            .unwrap(),
+            "正文已收口且事实全部 ack：整章草稿应删除"
+        );
+        assert!(
+            !draft_dir(&projects_root, &project_id, &chapter_id).exists(),
+            "已提交正文收口且事实 ack 后应删除整章草稿"
+        );
+    }
+
+    /// Issue #1062 评论 7193130307 第 2 项：保存 A 期间已输入 B 时只清 A。
+    #[test]
+    fn settle_keeps_newer_text_arrived_during_save() {
+        let (_temp, _api, project_id, volume_id, chapter_id) = workspace();
+        let temp2 = tempfile::tempdir().unwrap();
+        let root = temp2.path();
+        let digest_a = content_digest_of_text("A");
+        let digest_b = content_digest_of_text("B");
+        chapter_draft::note_text(
+            root,
+            &project_id,
+            &chapter_id,
+            &volume_id,
+            1,
+            "gen-1",
+            "A".to_string(),
+            1,
+            &digest_a,
+            ("gen-1", 30, "base-sha"),
+            0,
+        );
+        chapter_draft::note_text(
+            root,
+            &project_id,
+            &chapter_id,
+            &volume_id,
+            1,
+            "gen-1",
+            "B".to_string(),
+            2,
+            &digest_b,
+            ("gen-1", 30, "base-sha"),
+            0,
+        );
+
+        assert!(!chapter_draft::settle_saved_text(
+            root,
+            &project_id,
+            &chapter_id,
+            1,
+            1,
+            &digest_a,
+        ));
+        let snapshot = chapter_draft::snapshot(root, &project_id, &chapter_id).unwrap();
+        assert_eq!(snapshot.text.as_deref(), Some("B"));
+        assert_eq!(snapshot.text_revision, 2);
     }
 }

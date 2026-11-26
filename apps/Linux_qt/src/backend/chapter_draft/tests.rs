@@ -1029,3 +1029,58 @@ fn mark_committed_keeps_text_only_draft() {
     assert_eq!(plan.text.as_deref(), Some(text));
     assert_eq!(plan.base_revision, 2);
 }
+
+/// Issue #1062 评论 7193130307 第 3 项：快照 revision 没有精确事实覆盖时，
+/// 不能仅凭“后面的事实 revision 更大”就认定正文已被证明。
+#[test]
+fn snapshot_without_covering_fact_is_not_published_even_if_watermark_is_higher() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    let text = "中间态正文";
+    let sha256 = writer_core::writing_stats::proof::content_digest_of_text(text);
+    note_text(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g1",
+        text.to_string(),
+        2,
+        &sha256,
+        ("g1", 30, "base-sha"),
+        0,
+    );
+    let fact_digest = writer_core::writing_stats::proof::content_digest_of_text("事件终态");
+    let projection = serde_json::json!({
+        "event": {"proof": {"afterTextSha256": fact_digest}},
+        "baselineText": "基线"
+    });
+    assert_eq!(
+        projection_after_text_sha256(&projection.to_string()),
+        fact_digest
+    );
+    note_fact(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g1",
+        DraftFact {
+            event_id: "e5".to_string(),
+            revision: 5,
+            session_id: 7,
+            projection_json: projection.to_string(),
+        },
+    )
+    .expect("fact");
+
+    assert!(!text_ready_for_commit(root, "p1", "c1"));
+    persist_current(root, "p1", "c1", true).expect("persist");
+    let location = draft_location(root);
+    assert!(
+        !location.dir.join(TEXT_FILE).exists(),
+        "没有覆盖该 revision 的事实摘要时不得发布正文"
+    );
+}

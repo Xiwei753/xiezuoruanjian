@@ -29,6 +29,9 @@ pub(super) struct ChapterSaveChain {
 pub(crate) struct ChapterSaveWorkerState {
     apis: HashMap<String, WriterCoreApi>,
     chains: HashMap<String, ChapterSaveChain>,
+    /// 测试注入的 Core API（生产路径按 context 懒建）。
+    #[cfg(test)]
+    test_api: Option<WriterCoreApi>,
 }
 
 impl ChapterSaveWorkerState {
@@ -36,10 +39,24 @@ impl ChapterSaveWorkerState {
         Self {
             apis: HashMap::new(),
             chains: HashMap::new(),
+            #[cfg(test)]
+            test_api: None,
         }
     }
 
+    /// 测试用：固定返回注入的 Core API，避免依赖真实布局上下文。
+    #[cfg(test)]
+    pub(super) fn for_tests(api: WriterCoreApi) -> Self {
+        let mut state = Self::new();
+        state.test_api = Some(api);
+        state
+    }
+
     pub(super) fn api_for(&mut self, context: &ChapterSaveContext) -> &WriterCoreApi {
+        #[cfg(test)]
+        if let Some(api) = self.test_api.as_mut() {
+            return api;
+        }
         let key = context.key();
         self.apis.entry(key).or_insert_with(|| {
             crate::backend::app_backend::with_layout_core_api(
@@ -425,6 +442,32 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                 &receipt.version.content_sha256,
             ) {
                 Ok(removed) => {
+                    // Issue #1062 评论 7193130307 第 2 项：Core 已 durable 这
+                    // 笔快照，草稿里同一会话、同一 revision、同一摘要的正文
+                    // 必须精确收口；保存期间到达的更高 revision 正文保留。
+                    if !removed
+                        && crate::backend::chapter_draft::settle_saved_text(
+                            &projects_root,
+                            &request.identity.project_id,
+                            &request.identity.chapter_id,
+                            request.identity.session_id,
+                            request.identity.snapshot_revision,
+                            &request.identity.snapshot_sha256,
+                        )
+                    {
+                        if let Err(error) = crate::backend::chapter_draft::persist_current(
+                            &projects_root,
+                            &request.identity.project_id,
+                            &request.identity.chapter_id,
+                            true,
+                        ) {
+                            log::warn!(
+                                "persist settled chapter draft after save failed: project={} chapter={}: {error}",
+                                request.identity.project_id,
+                                request.identity.chapter_id
+                            );
+                        }
+                    }
                     // Issue #1062 评论 7191076411 第 1 项（平台侧）：本地
                     // mark_committed 成功后要把这次提交的精确 ack 回写 Core
                     // journal。回写失败时 pending-ack 文件保留，下一次进入
