@@ -90,6 +90,22 @@ where
 }
 
 impl StarMapStore {
+    /// 取出节点迁移解码用的素材库视图；第一次调用时按
+    /// `starmaps/library/references.json` 懒加载。
+    ///
+    /// 解码期间借用它，调用方必须把同一个视图放回
+    /// `self.node_object_bindings`，同一 store 生命周期内只读一次索引。
+    fn take_node_object_bindings(
+        &mut self,
+    ) -> Result<crate::starmap::migration::nodes::NodeObjectBindings> {
+        match self.node_object_bindings.take() {
+            Some(bindings) => Ok(bindings),
+            None => crate::starmap::migration::nodes::NodeObjectBindings::load_reference_bindings(
+                &self.app_data_root,
+            ),
+        }
+    }
+
     /// 严格加载单个 node：文件缺失 / IO 失败 / JSON 解析失败 / 内部 ID 不一致
     /// 都返回 `Err`（仍 push diagnostic 到 recovery_log 便于调试）。
     /// 不再返回 `Option<T>` 吞掉错误——GraphMeta 声明的对象必须加载成功。
@@ -97,6 +113,10 @@ impl StarMapStore {
     /// Issue #1062：旧格式完整节点经统一迁移入口
     /// [`crate::starmap::migration::nodes::decode_node_object`] 解码；加载时先写
     /// 共享本体、再把节点文件重写成实例（原子写），然后才继续本体投影。
+    /// 解码带上本 store 懒加载并缓存的 `NodeObjectBindings`：旧端只写
+    /// `{instanceId, position}`、缺 `assetId` 的实例，或跨作品复用导致真实
+    /// `assetId` 不等于 `instanceId` 时，仍能按 `references.json` 反向绑定
+    /// 解析出稳定素材身份。
     /// 迁移失败 fail-closed：错误带星图 ID、对象 ID 和节点路径，不返回半成品。
     pub(in crate::starmap::store) fn try_load_node(
         &mut self,
@@ -121,13 +141,34 @@ impl StarMapStore {
             )));
         }
         let bytes = std::fs::read(&node_path)?;
-        let plan = match crate::starmap::migration::nodes::decode_node_object(
+        let bindings = match self.take_node_object_bindings() {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                self.recovery_log.push(LoadDiagnostic {
+                    kind: LoadDiagnosticKind::Corrupt,
+                    object_type: "node instance".to_string(),
+                    object_id: node_id.to_string(),
+                    detail: format!(
+                        "node reference bindings load failed: starmap_id={}: {error}",
+                        self.starmap_id
+                    ),
+                });
+                return Err(Error::Other(format!(
+                    "node '{}' migration failed: starmap_id={}: {error}",
+                    node_id, self.starmap_id
+                )));
+            }
+        };
+        let decoded = crate::starmap::migration::nodes::decode_node_object(
             &self.app_data_root,
             &self.starmap_id,
             node_id,
             &bytes,
-            None,
-        ) {
+            Some(&bindings),
+        );
+        // 放回缓存：同一 store 后续加载的节点复用同一份反向绑定视图。
+        self.node_object_bindings = Some(bindings);
+        let plan = match decoded {
             Ok(plan) => plan,
             Err(error) => {
                 self.recovery_log.push(LoadDiagnostic {

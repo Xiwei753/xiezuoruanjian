@@ -4,14 +4,41 @@ use std::path::Path;
 use chrono::Utc;
 
 use super::super::Chapter;
+use super::super::ChapterProofProjection;
 use super::journal::{
-    journal_root, mark_pending, md5_hex, read_current, recover_pending_chapter_commits, sha256_hex,
-    write_manifest, ChapterCommitManifest, ChapterCommitPhase,
+    journal_root, mark_chapter_commit_draft_ack, mark_pending, md5_hex, pending_chapter_draft_acks,
+    read_current, recover_pending_chapter_commits, sha256_hex, write_manifest,
+    ChapterCommitManifest, ChapterCommitPhase,
 };
 use super::{
     commit_chapter_with_guard, ChapterCommitOutcome, ChapterCommitRequest, ChapterCommitSource,
     ChapterKey, ChapterMutationKind, ChapterVersion, BODY_FILE, META_FILE,
 };
+use crate::writing_stats::{EventSource, Platform, WritingInputEvent};
+
+fn proof_projection(event_id: &str) -> ChapterProofProjection {
+    let event = WritingInputEvent::with_identity(
+        event_id.to_string(),
+        1_000,
+        "dev-1",
+        Platform::Desktop,
+        "desktop",
+        "p1",
+        "v1",
+        "c1",
+        EventSource::HumanTyped,
+        1,
+        0,
+        0,
+        0,
+        0,
+        "session-1",
+    );
+    ChapterProofProjection {
+        event,
+        baseline_text: Some(String::new()),
+    }
+}
 
 fn create_test_chapter(root: &Path) -> ChapterKey {
     let volume = "v1";
@@ -138,6 +165,7 @@ fn recovery_applies_decided_body_but_never_overwrites_newer_content() {
         additional_files: Vec::new(),
         phase: ChapterCommitPhase::Decided,
         pending_projections: Vec::new(),
+        draft_ack_projections: Vec::new(),
         created_meta: None,
         meta_title: None,
         meta_order: None,
@@ -167,4 +195,43 @@ fn recovery_applies_decided_body_but_never_overwrites_newer_content() {
     assert!(recovered.iter().any(|item| item.superseded));
     let (_meta, content, _version) = read_current(root, &key).unwrap();
     assert_eq!(content, "B");
+}
+
+/// Issue #1062：平台草稿的原始证明事件必须留在同一 durable 决议里，
+/// 由草稿精确 ack 后才能清理；Core 不能把它们当作自己的统计投影。
+#[test]
+fn draft_proof_events_stay_pending_until_platform_ack() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let key = create_test_chapter(root);
+
+    let mut request = ChapterCommitRequest::new(key.clone(), "abc");
+    request.allow_empty_overwrite = true;
+    request.proof_events = vec![proof_projection("evt-1"), proof_projection("evt-2")];
+    let receipt = match commit_chapter_with_guard(root, None, request).unwrap() {
+        ChapterCommitOutcome::Committed(receipt) => receipt,
+        ChapterCommitOutcome::Conflict(conflict) => panic!("unexpected conflict: {conflict:?}"),
+    };
+    assert!(
+        receipt.pending_projections.is_empty(),
+        "draft facts must not be scheduled as Core statistics projections"
+    );
+
+    let acks = pending_chapter_draft_acks(root).unwrap();
+    assert_eq!(acks.len(), 1);
+    assert_eq!(acks[0].transaction_id, receipt.transaction_id);
+    assert_eq!(acks[0].event_ids, vec!["evt-1", "evt-2"]);
+    assert_eq!(acks[0].after.revision, receipt.after.revision);
+    assert!(journal_root(root).join(&receipt.transaction_id).exists());
+
+    // 进程重启扫描：仍保留该事务，等待平台草稿确认。
+    let recovered = recover_pending_chapter_commits(root).unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].draft_ack_projections.len(), 2);
+
+    assert!(!mark_chapter_commit_draft_ack(root, &receipt.transaction_id, "evt-1").unwrap());
+    assert!(journal_root(root).join(&receipt.transaction_id).exists());
+    assert!(mark_chapter_commit_draft_ack(root, &receipt.transaction_id, "evt-2").unwrap());
+    assert!(!journal_root(root).join(&receipt.transaction_id).exists());
+    assert!(pending_chapter_draft_acks(root).unwrap().is_empty());
 }

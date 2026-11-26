@@ -128,6 +128,16 @@ dictionary ChapterContentDto {
     ChapterVersionDto version;
 };
 
+dictionary ChapterDraftAckDto {
+    string transaction_id;
+    string project_id;
+    string volume_id;
+    string chapter_id;
+    sequence<string> event_ids;
+    ChapterVersionDto after;
+    u64 commit_sequence;
+};
+
 dictionary ChapterSaveReceiptDto {
     string chapter_relative_path;
     u32 content_len;
@@ -1175,6 +1185,14 @@ interface WriterAppService {
     /// Issue #1062 1.2：清空正文使用与保存相同的显式原始证明批次协议。
     [Throws=WriterError]
     ChapterSaveReceiptDto clear_chapter_content_versioned_with_proof_batch(string project_id, string volume_id, string chapter_id, ChapterVersionDto? expected_version, string? base_content, u64 proof_snapshot_revision, string proof_batch_json);
+
+    /// Issue #1062：Core journal 中仍需平台草稿确认的提交（跨进程确认事实源）。
+    [Throws=WriterError]
+    sequence<ChapterDraftAckDto> list_pending_chapter_draft_acks(string project_id);
+
+    /// Issue #1062：确认平台草稿已完成某笔提交的精确 ack。
+    [Throws=WriterError]
+    u32 acknowledge_chapter_commit_draft(string project_id, string transaction_id, sequence<string> event_ids);
 
     [Throws=WriterError]
     boolean update_chapter_note(string project_id, string volume_id, string chapter_id, string note);

@@ -1141,3 +1141,62 @@ fn load_remaining_objects_errors_for_missing_declared_node() {
         "load_remaining_objects must Err for a missing declared node, got: {result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #1062：本地加载必须带上 references.json 反向绑定
+// ---------------------------------------------------------------------------
+
+/// 旧端实例只写 `instanceId`/`position`，共享本体来自另一个作品；本地
+/// `try_load_node` 必须按 references.json 反向绑定解析 assetId 并迁移落盘。
+#[test]
+fn try_load_node_resolves_cross_project_reference_binding() {
+    let dir = TempDir::new().unwrap();
+    let starmap_id = "sm_local";
+    let instance_id = "n1";
+    let asset_id = "asset_shared_from_other_project";
+    let starmap_dir = dir.path().join("starmaps").join(starmap_id);
+    std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
+
+    // 跨作品复用：真实 assetId 与 instanceId 不同，绑定记录属于另一作品。
+    let source = make_test_node(instance_id, "共享标题");
+    let definition = crate::starmap::types::StarMapNodeDefinition::from_node(asset_id, &source);
+    crate::starmap::library::save_node_definition(dir.path(), &definition).unwrap();
+    crate::starmap::library::record_node_reference(
+        dir.path(),
+        starmap_id,
+        Some("p_other"),
+        instance_id,
+        asset_id,
+    )
+    .unwrap();
+
+    write_to_bucket(
+        &starmap_dir,
+        "nodes",
+        instance_id,
+        &serde_json::json!({
+            "instanceId": instance_id,
+            "position": {"x": 3.0, "y": 4.0}
+        })
+        .to_string(),
+    );
+
+    let mut store = StarMapStore::new(dir.path(), starmap_id);
+    let node = store
+        .try_load_node(instance_id)
+        .expect("local load must resolve the reference binding");
+    assert_eq!(node.id, instance_id);
+    assert_eq!(node.asset_id, asset_id);
+    assert_eq!(node.title, "共享标题");
+    assert_eq!(node.position.x, 3.0);
+    assert_eq!(node.position.y, 4.0);
+
+    let node_path = starmap_dir
+        .join("nodes")
+        .join(package_storage::bucket_for_id(instance_id))
+        .join(format!("{instance_id}.json"));
+    let rewritten: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&node_path).unwrap()).unwrap();
+    assert_eq!(rewritten["assetId"], asset_id);
+    assert_eq!(rewritten["projectId"], "p_other");
+}

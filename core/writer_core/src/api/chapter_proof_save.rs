@@ -184,4 +184,44 @@ impl WriterCoreApi {
         }
         Ok((receipt.clone().into(), receipt))
     }
+
+    /// 列出 Core journal 中仍需平台草稿确认的提交（Issue #1062）。
+    pub fn list_pending_chapter_draft_acks(
+        &self,
+        project_id: String,
+    ) -> ApiResult<Vec<ChapterDraftAckDto>> {
+        let project_root = self.projects_root.join(&project_id);
+        let acks = crate::chapter::commit::pending_chapter_draft_acks(&project_root)
+            .map_err(WriterError::from)?;
+        Ok(acks.into_iter().map(Into::into).collect())
+    }
+
+    /// 确认平台草稿已完成某笔提交的精确 ack。
+    ///
+    /// 传入空 `event_ids` 时只推进 `transaction_id` 的现有状态；每确认一个
+    /// 事件 ID 返回计数。journal 全部确认后自行清理。
+    pub fn acknowledge_chapter_commit_draft(
+        &self,
+        project_id: String,
+        transaction_id: String,
+        event_ids: Vec<String>,
+    ) -> ApiResult<u32> {
+        let project_root = self.projects_root.join(&project_id);
+        let mut acknowledged = 0u32;
+        for event_id in event_ids {
+            if event_id.is_empty() {
+                continue;
+            }
+            if crate::chapter::commit::mark_chapter_commit_draft_ack(
+                &project_root,
+                &transaction_id,
+                &event_id,
+            )
+            .map_err(WriterError::from)?
+            {
+                acknowledged += 1;
+            }
+        }
+        Ok(acknowledged)
+    }
 }

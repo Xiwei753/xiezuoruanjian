@@ -146,3 +146,135 @@ fn prune_rotates_past_undelivered_head_and_reclaims_delivered_entries() {
         .contains_key(&(MAX_RETAINED_RESULTS as u32 + 2)));
     assert!(!store.entries.contains_key(&2));
 }
+
+mod restore_draft_tests {
+    use super::super::restore_draft::{
+        base_matches_plan, baseline_text_from_projection, draft_dir_is_empty, original_base_text,
+        restore_commit_revision, version_display,
+    };
+    use crate::backend::chapter_draft::{ChapterDraftRestorePlan, LoadedFact};
+    use writer_core::api::types::ChapterVersionDto;
+
+    fn plan(fact_count: usize, text_revision: u64, event_end: u64) -> ChapterDraftRestorePlan {
+        ChapterDraftRestorePlan {
+            volume_id: "v1".to_string(),
+            chapter_id: "c1".to_string(),
+            base_generation: "g1".to_string(),
+            base_revision: 1,
+            base_sha256: "sha".to_string(),
+            text: None,
+            text_revision,
+            text_sha256: String::new(),
+            fact_count,
+            batch_json: "[]".to_string(),
+            facts: if fact_count > 0 {
+                vec![LoadedFact {
+                    event_id: "e1".to_string(),
+                    revision: event_end,
+                    projection_json: "{}".to_string(),
+                }]
+            } else {
+                Vec::new()
+            },
+            event_end_revision: event_end,
+            session_id: 7,
+            generation: "g1".to_string(),
+            mixed_sessions: false,
+        }
+    }
+
+    #[test]
+    fn empty_draft_cleanup_requires_no_pending_facts_or_text() {
+        assert!(draft_dir_is_empty(0, 0, false));
+        // 首次事件只有 spool、facts/text 尚未写出：绝不能按旧摘要删除。
+        assert!(!draft_dir_is_empty(1, 0, false));
+        assert!(!draft_dir_is_empty(0, 1, false));
+        assert!(!draft_dir_is_empty(0, 0, true));
+    }
+
+    #[test]
+    fn replay_terminal_text_commits_at_event_end_revision() {
+        // text.txt 落后一个事件（revision 4），事件链到 5：提交必须用 5。
+        assert_eq!(restore_commit_revision(&plan(2, 4, 5)), 5);
+        // 没有事实时仍用正文 revision。
+        assert_eq!(restore_commit_revision(&plan(0, 4, 0)), 4);
+    }
+
+    #[test]
+    fn baseline_text_comes_from_first_fact_projection() {
+        // Core 的 ChapterProofProjection 以 camelCase 序列化。
+        assert_eq!(
+            baseline_text_from_projection(r#"{"event":{},"baselineText":"abc"}"#),
+            Some("abc".to_string())
+        );
+        // 缺失、null、空串都视为没有可恢复的旧基线。
+        assert_eq!(baseline_text_from_projection(r#"{"event":{}}"#), None);
+        assert_eq!(
+            baseline_text_from_projection(r#"{"baselineText":null}"#),
+            None
+        );
+        assert_eq!(
+            baseline_text_from_projection(r#"{"baselineText":""}"#),
+            None
+        );
+        // JSON 损坏不能猜测基线。
+        assert_eq!(baseline_text_from_projection("not json"), None);
+
+        // original_base_text 只取事件链第一条事实的基线。
+        let mut draft = plan(1, 0, 5);
+        draft.facts[0].projection_json = r#"{"baselineText":"abc"}"#.to_string();
+        draft.facts.push(LoadedFact {
+            event_id: "e2".to_string(),
+            revision: 6,
+            projection_json: r#"{"baselineText":"later"}"#.to_string(),
+        });
+        assert_eq!(original_base_text(&draft), Some("abc".to_string()));
+        // 没有事实或第一条事实没有基线时不可恢复。
+        assert_eq!(original_base_text(&plan(0, 0, 0)), None);
+        let mut missing = plan(1, 0, 5);
+        missing.facts[0].projection_json = r#"{"event":{}}"#.to_string();
+        assert_eq!(original_base_text(&missing), None);
+    }
+
+    #[test]
+    fn base_matches_requires_generation_revision_and_sha() {
+        let draft = plan(0, 0, 0);
+        let version = ChapterVersionDto {
+            object_generation: "g1".to_string(),
+            revision: 1,
+            content_sha256: "sha".to_string(),
+        };
+        assert!(base_matches_plan(&draft, &version));
+        // revision / generation / sha 任一不同都不算同一条基线。
+        assert!(!base_matches_plan(
+            &draft,
+            &ChapterVersionDto {
+                object_generation: "g1".to_string(),
+                revision: 2,
+                content_sha256: "sha".to_string(),
+            }
+        ));
+        assert!(!base_matches_plan(
+            &draft,
+            &ChapterVersionDto {
+                object_generation: "g2".to_string(),
+                revision: 1,
+                content_sha256: "sha".to_string(),
+            }
+        ));
+        assert!(!base_matches_plan(
+            &draft,
+            &ChapterVersionDto {
+                object_generation: "g1".to_string(),
+                revision: 1,
+                content_sha256: "other".to_string(),
+            }
+        ));
+        // base 为空（generation 空、revision 0）不可校验，即使磁盘版本全空也不匹配。
+        let mut unknown = plan(0, 0, 0);
+        unknown.base_generation = String::new();
+        unknown.base_revision = 0;
+        assert!(!base_matches_plan(&unknown, &version));
+        assert!(!base_matches_plan(&unknown, &ChapterVersionDto::default()));
+    }
+}

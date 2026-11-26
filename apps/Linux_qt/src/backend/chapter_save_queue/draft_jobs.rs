@@ -18,7 +18,10 @@ use std::sync::{Mutex, OnceLock};
 use writer_core::api::types::ChapterVersionDto;
 use writer_core::api::WriterCoreApi;
 
-use super::{worker_sender, ChapterSaveContext, ChapterSaveJob, ChapterSaveWorkerState};
+use super::{
+    take_draft_text_snapshot, worker_sender, ChapterSaveContext, ChapterSaveJob,
+    ChapterSaveWorkerState,
+};
 
 /// 一条待持久化的编辑事实。
 pub(crate) struct ChapterFactCommand {
@@ -37,11 +40,12 @@ pub(crate) struct ChapterFactCommand {
     pub input: writer_core::api::EditorChangeStatsInputDto,
 }
 
-/// 编辑器正文变化命令（Issue #1062 三.4：只带身份与唤醒）。
+/// 编辑器正文变化命令（Issue #1062 三.4 / 评论 7191076411 第 2 项：只带身份）。
 ///
-/// 正文、revision/sha256 与 base 不再随命令进入无界 channel：GUI 线程先把
-/// 它们写进 chapter_draft 的内存 registry，worker 收到命令时只按身份把该
-/// 草稿按 2s 节流落盘，`force` 表示保存/关窗/离开作品边界的立即写入。
+/// 正文、revision/sha256 与 base 不再随命令进入无界 channel，也不由 GUI 线程
+/// 直接改写草稿 registry：GUI 把它们放进 [`super::DRAFT_TEXT_MAILBOX`] 的最新
+/// 快照，worker 处理到本命令时在 actor 线程按顺序写入草稿；`force` 表示保存/
+/// 关窗/离开作品边界的立即写入。
 pub(crate) struct ChapterDraftTextCommand {
     pub context: ChapterSaveContext,
     pub project_id: String,
@@ -70,7 +74,7 @@ pub(crate) struct ChapterDraftRestoreStatus {
 static DRAFT_RESTORE_STATE: OnceLock<Mutex<HashMap<String, ChapterDraftRestoreStatus>>> =
     OnceLock::new();
 
-fn draft_restore_state() -> &'static Mutex<HashMap<String, ChapterDraftRestoreStatus>> {
+pub(super) fn draft_restore_state() -> &'static Mutex<HashMap<String, ChapterDraftRestoreStatus>> {
     DRAFT_RESTORE_STATE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -90,14 +94,11 @@ pub(crate) fn enqueue_fact(command: ChapterFactCommand) -> Result<(), String> {
         .map_err(|_| "chapter save queue worker has exited".to_string())
 }
 
-/// UI 线程：更新草稿正文并把落盘交给 actor。
-pub(crate) fn enqueue_draft_text(command: ChapterDraftTextCommand) -> Result<(), String> {
-    worker_sender()
-        .send(ChapterSaveJob::DraftText(command))
-        .map_err(|_| "chapter save queue worker has exited".to_string())
-}
-
 /// UI 线程：项目进入时请求重放草稿；返回待处理草稿数。
+///
+/// Issue #1062 评论 7191076411 第 1 项（平台侧配合）：即使本地没有草稿也
+/// 必须入队一次 RestoreProject，让 worker 对账 Core journal 里未确认的草稿
+/// ack；`pending` 标志只在确实有草稿/待处理内容时置 true，避免 QML 无谓等待。
 pub(crate) fn enqueue_restore_project(command: ChapterRestoreCommand) -> usize {
     let drafts = super::super::chapter_draft::list_project_drafts(
         Path::new(&command.context.projects_root),
@@ -115,17 +116,16 @@ pub(crate) fn enqueue_restore_project(command: ChapterRestoreCommand) -> usize {
                 || draft.draft_error.is_some()
         })
         .count();
-    if count == 0 {
-        return 0;
-    }
-    if let Ok(mut states) = draft_restore_state().lock() {
-        states.insert(
-            command.project_id.clone(),
-            ChapterDraftRestoreStatus {
-                pending: true,
-                ..ChapterDraftRestoreStatus::default()
-            },
-        );
+    if count > 0 {
+        if let Ok(mut states) = draft_restore_state().lock() {
+            states.insert(
+                command.project_id.clone(),
+                ChapterDraftRestoreStatus {
+                    pending: true,
+                    ..ChapterDraftRestoreStatus::default()
+                },
+            );
+        }
     }
     let project_id = command.project_id.clone();
     if worker_sender()
@@ -345,431 +345,55 @@ pub(super) fn retry_pending_inputs(
     Ok(retried)
 }
 
-/// 把内存 registry 里已更新的草稿正文按节流落盘；`force` 时立即写整章。
+/// actor 线程：把 mailbox 里该章最新的正文快照写进草稿 registry，再交给
+/// `persist_current` 按证明水位与节流决定是否落盘。
+///
+/// Issue #1062 评论 7191076411 第 2 项：正文不再由 GUI 线程直接改 registry。
+/// 命令按 actor 顺序到达，快照始终是该章最新一份；没有快照（已被更早命令
+/// 取走）时只做一次节流落盘。
 pub(super) fn handle_draft_text(command: ChapterDraftTextCommand) {
+    let projects_root = Path::new(&command.context.projects_root);
+    let mut force = command.force;
+    if let Some(snapshot) =
+        take_draft_text_snapshot(&command.context, &command.project_id, &command.chapter_id)
+    {
+        force |= snapshot.force;
+        // base 只在草稿状态未初始化时生效；之后由 Core durable receipt /
+        // pending-ack 推进（见 chapter_draft::note_text）。
+        super::super::chapter_draft::note_text(
+            projects_root,
+            &command.project_id,
+            &command.chapter_id,
+            &command.volume_id,
+            snapshot.session_id,
+            &snapshot.generation,
+            snapshot.text.to_string(),
+            snapshot.revision,
+            &snapshot.sha256,
+            (
+                &snapshot.base_generation,
+                snapshot.base_revision,
+                &snapshot.base_sha256,
+            ),
+        );
+        log::debug!(
+            "chapter draft text snapshot applied: project={} chapter={} revision={} wait_ms={}",
+            command.project_id,
+            command.chapter_id,
+            snapshot.revision,
+            snapshot.updated_at.elapsed().as_millis()
+        );
+    }
     if let Err(error) = super::super::chapter_draft::persist_current(
-        Path::new(&command.context.projects_root),
+        projects_root,
         &command.project_id,
         &command.chapter_id,
-        command.force,
+        force,
     ) {
         log::warn!(
             "persist chapter draft text failed: project={} chapter={}: {error}",
             command.project_id,
             command.chapter_id
         );
-    }
-}
-
-fn version_display(version: &ChapterVersionDto) -> String {
-    format!(
-        "{}@{} sha={}",
-        version.object_generation, version.revision, version.content_sha256
-    )
-}
-
-/// 恢复提交使用的 proof snapshot revision：有事实时是事件终态 revision，
-/// 否则是草稿正文 revision。
-///
-/// Issue #1062 复审：replay 成功后的正文是事件终态，继续传 text.txt 的旧
-/// revision 会让 Core 判成 `new_revision > snapshot_revision`。
-fn restore_commit_revision(plan: &super::super::chapter_draft::ChapterDraftRestorePlan) -> u64 {
-    if plan.fact_count > 0 {
-        plan.event_end_revision
-    } else {
-        plan.text_revision
-    }
-}
-
-/// 事件链中 revision <= 上限的投影 JSON 数组；为空返回空串。
-fn batch_json_through_revision(
-    plan: &super::super::chapter_draft::ChapterDraftRestorePlan,
-    through: u64,
-) -> Result<String, String> {
-    let mut values = Vec::new();
-    for fact in plan.facts.iter().filter(|fact| fact.revision <= through) {
-        let value: serde_json::Value = serde_json::from_str(&fact.projection_json)
-            .map_err(|error| format!("decode draft fact revision={}: {error}", fact.revision))?;
-        values.push(value);
-    }
-    if values.is_empty() {
-        return Ok(String::new());
-    }
-    serde_json::to_string(&values).map_err(|error| format!("encode draft prefix batch: {error}"))
-}
-
-/// 项目进入时按同一批次协议重放未完成草稿。
-///
-/// 四种出口：
-/// - 基线一致：用草稿事实 replay（或草稿正文）作为内容提交，成功才删草稿；
-/// - 基线不一致（外部同步/MCP 改过、generation 变了、混合会话）：不覆盖，
-///   用草稿 base 作 expected 调一次保存让 Core 落冲突材料，然后保留草稿；
-/// - base 为空不可校验：直接保留，不调用保存；
-/// - 无事实且无正文：直接删除。
-pub(super) fn handle_restore_project(
-    state: &mut ChapterSaveWorkerState,
-    command: ChapterRestoreCommand,
-) {
-    let projects_root = PathBuf::from(&command.context.projects_root);
-    let drafts =
-        super::super::chapter_draft::list_project_drafts(&projects_root, &command.project_id);
-    let mut restored = 0usize;
-    let mut failed = 0usize;
-    let mut kept = 0usize;
-    let mut messages: Vec<String> = Vec::new();
-    let api = state.api_for(&command.context);
-    for draft in drafts {
-        let chapter_id = draft.chapter_id.clone();
-        // 先把 Core 投影构造失败的原始命令重试掉；仍失败就保留草稿，
-        // 不能带着缺失事件把正文提交成“完整”状态。
-        if let Err(error) = retry_pending_inputs(
-            api,
-            &projects_root,
-            &command.project_id,
-            &chapter_id,
-            &draft.volume_id,
-            draft.session_id,
-            &draft.generation,
-        ) {
-            failed += 1;
-            kept += 1;
-            messages.push(format!(
-                "{chapter_id}: pending_fact_retry_failed kept: {error}"
-            ));
-            continue;
-        }
-        // Issue #1062 复审 P0：重试可能刚刚写出事实文件，不能用重试前的
-        // draft.fact_count 判断清理；重试后重新读取磁盘对象。
-        let pending_after = match super::super::chapter_draft::pending_inputs(
-            &projects_root,
-            &command.project_id,
-            &chapter_id,
-        ) {
-            Ok(inputs) => inputs,
-            Err(error) => {
-                failed += 1;
-                kept += 1;
-                messages.push(format!(
-                    "{chapter_id}: pending_inputs_unreadable kept: {error}"
-                ));
-                continue;
-            }
-        };
-        // 读取失败必须显式保留；只有 Ok(Some(plan)) 且证明为空才允许清理，
-        // Ok(None) 表示磁盘上本来就没有草稿，也不能据此删除任何东西。
-        let plan = match super::super::chapter_draft::restore_plan_strict(
-            &projects_root,
-            &command.project_id,
-            &chapter_id,
-        ) {
-            Ok(Some(plan)) => plan,
-            Ok(None) => {
-                // meta 缺失/不可读但有磁盘内容时，必须作为“未决”报告，
-                // 不能像“项目本来没有草稿”一样静默跳过。
-                if let Some(error) = draft.draft_error.as_deref() {
-                    failed += 1;
-                    kept += 1;
-                    messages.push(format!("{chapter_id}: draft_unreadable kept: {error}"));
-                }
-                continue;
-            }
-            Err(error) => {
-                failed += 1;
-                kept += 1;
-                messages.push(format!("{chapter_id}: draft_unreadable kept: {error}"));
-                continue;
-            }
-        };
-        if draft_dir_is_empty(pending_after.len(), plan.fact_count, plan.text.is_some()) {
-            // 只有 meta 事务头的空壳草稿：无 pending、无事实、无正文。
-            super::super::chapter_draft::remove(&projects_root, &command.project_id, &chapter_id);
-            continue;
-        }
-        let opened = match api.open_chapter(&command.project_id, &plan.volume_id, &plan.chapter_id)
-        {
-            Ok(content) => content,
-            Err(error) => {
-                failed += 1;
-                kept += 1;
-                messages.push(format!(
-                    "{}: cannot read committed chapter: {error}",
-                    plan.chapter_id
-                ));
-                continue;
-            }
-        };
-        // Issue #1062 复审第 1 项：事实落盘与正文草稿落盘是两条独立节流，
-        // 退出/崩溃时 facts 可能已经包含最后几次输入，而 text.txt 还是较早
-        // 的 revision。这属于正常状态，不能一律判成 replay_text_mismatch。
-        let content = if plan.fact_count == 0 {
-            match plan.text.clone() {
-                Some(text) => text,
-                None => {
-                    super::super::chapter_draft::remove(
-                        &projects_root,
-                        &command.project_id,
-                        &plan.chapter_id,
-                    );
-                    continue;
-                }
-            }
-        } else {
-            if plan.text_revision > plan.event_end_revision {
-                // 正文比完整事件链还新：说明有编辑事件没落盘，保留草稿等
-                // 下一次重试，不能用“缺少事实”的正文覆盖。
-                failed += 1;
-                kept += 1;
-                messages.push(format!(
-                    "{}: text_ahead_of_events kept (textRevision={} eventEnd={})",
-                    plan.chapter_id, plan.text_revision, plan.event_end_revision
-                ));
-                continue;
-            }
-            if let Some(draft_text) = plan.text.as_ref() {
-                if plan.text_revision < plan.event_end_revision {
-                    // 正文落后于事件链：先核对 text.txt 确实等于事件链在
-                    // text_revision 的中间态，再继续 replay 后续事件。
-                    let prefix = match batch_json_through_revision(&plan, plan.text_revision) {
-                        Ok(json) if !json.is_empty() => json,
-                        Ok(_) => {
-                            failed += 1;
-                            kept += 1;
-                            messages.push(format!(
-                                "{}: draft_text_precedes_events kept (textRevision={} firstEvent={})",
-                                plan.chapter_id,
-                                plan.text_revision,
-                                plan.facts.first().map_or(0, |fact| fact.revision)
-                            ));
-                            continue;
-                        }
-                        Err(error) => {
-                            failed += 1;
-                            kept += 1;
-                            messages.push(format!(
-                                "{}: draft_prefix_encode_failed kept: {error}",
-                                plan.chapter_id
-                            ));
-                            continue;
-                        }
-                    };
-                    match api.replay_editor_proof_batch(&plan.chapter_id, &opened.content, &prefix)
-                    {
-                        Ok(mid) if mid == *draft_text => {}
-                        Ok(_) => {
-                            failed += 1;
-                            kept += 1;
-                            messages.push(format!(
-                                "{}: draft_text_mismatch_at_revision kept (textRevision={})",
-                                plan.chapter_id, plan.text_revision
-                            ));
-                            continue;
-                        }
-                        Err(error) => {
-                            failed += 1;
-                            kept += 1;
-                            messages.push(format!(
-                                "{}: draft_prefix_replay_failed kept: {error}",
-                                plan.chapter_id
-                            ));
-                            continue;
-                        }
-                    }
-                }
-            }
-            match api.replay_editor_proof_batch(&plan.chapter_id, &opened.content, &plan.batch_json)
-            {
-                Ok(text) => {
-                    if plan.text_revision == plan.event_end_revision {
-                        if let Some(draft_text) = plan.text.as_ref() {
-                            if text != *draft_text {
-                                failed += 1;
-                                kept += 1;
-                                messages.push(format!(
-                                    "{}: replay_text_mismatch failed kept (replayed_len={} draft_len={})",
-                                    plan.chapter_id,
-                                    text.len(),
-                                    draft_text.len()
-                                ));
-                                continue;
-                            }
-                        }
-                    }
-                    text
-                }
-                Err(error) => {
-                    failed += 1;
-                    kept += 1;
-                    messages.push(format!("{}: replay_failed kept: {error}", plan.chapter_id));
-                    continue;
-                }
-            }
-        };
-        // Issue #1062 复审：全链 replay 成功后提交的正文是事件终态，proof
-        // snapshot revision 必须跟着到 event_end_revision；继续用 text.txt
-        // 的旧 revision 会被 Core 判成 new_revision > snapshot_revision。
-        let commit_revision = restore_commit_revision(&plan);
-        let draft_base = ChapterVersionDto {
-            object_generation: plan.base_generation.clone(),
-            revision: plan.base_revision,
-            content_sha256: plan.base_sha256.clone(),
-        };
-        let base_known = !plan.base_generation.is_empty() || plan.base_revision > 0;
-        let base_matches = base_known
-            && plan.base_generation == opened.version.object_generation
-            && plan.base_revision == opened.version.revision
-            && plan.base_sha256 == opened.version.content_sha256;
-        if base_matches && !plan.mixed_sessions {
-            let result = api.save_chapter_content_versioned_with_proof_batch(
-                &command.project_id,
-                &plan.volume_id,
-                &plan.chapter_id,
-                &content,
-                Some(opened.version),
-                Some(opened.content),
-                commit_revision,
-                &plan.batch_json,
-                true,
-            );
-            match result {
-                Ok(_receipt) => {
-                    super::super::chapter_draft::remove(
-                        &projects_root,
-                        &command.project_id,
-                        &plan.chapter_id,
-                    );
-                    restored += 1;
-                }
-                Err(error) => {
-                    failed += 1;
-                    kept += 1;
-                    messages.push(format!(
-                        "{}: save_draft_failed kept: {error}",
-                        plan.chapter_id
-                    ));
-                }
-            }
-            continue;
-        }
-        if base_known && !base_matches {
-            // 不覆盖外部更新：用草稿记录的原始 base 作 expected，让 Core
-            // 写出冲突材料（预期 CHAPTER_VERSION_CONFLICT），草稿原样保留。
-            let result = api.save_chapter_content_versioned_with_proof_batch(
-                &command.project_id,
-                &plan.volume_id,
-                &plan.chapter_id,
-                &content,
-                Some(draft_base.clone()),
-                Some(opened.content),
-                commit_revision,
-                &plan.batch_json,
-                true,
-            );
-            match result {
-                Ok(_receipt) => crate::backend::app_backend::debug_error_static(
-                    "chapter_draft",
-                    "restore_conflict_save_unexpected_ok",
-                    &format!(
-                        "project={} chapter={}: draft base was unexpectedly accepted",
-                        command.project_id, plan.chapter_id
-                    ),
-                ),
-                Err(error) if error.code() == "CHAPTER_VERSION_CONFLICT" => {}
-                Err(error) => crate::backend::app_backend::debug_error_static(
-                    "chapter_draft",
-                    "restore_conflict_save_failed",
-                    &format!(
-                        "project={} chapter={}: {error}",
-                        command.project_id, plan.chapter_id
-                    ),
-                ),
-            }
-        }
-        let reason = if !base_known {
-            "base_unverifiable"
-        } else if plan.mixed_sessions {
-            "mixed_sessions"
-        } else {
-            "external_change"
-        };
-        kept += 1;
-        messages.push(format!(
-            "{}: external_change_kept ({reason}) draft_base={} disk_version={} {}",
-            plan.chapter_id,
-            version_display(&draft_base),
-            version_display(&opened.version),
-            plan.session_summary()
-        ));
-    }
-    if let Ok(mut states) = draft_restore_state().lock() {
-        states.insert(
-            command.project_id,
-            ChapterDraftRestoreStatus {
-                pending: false,
-                restored,
-                failed,
-                kept,
-                message: messages.join("; "),
-            },
-        );
-    }
-}
-
-/// 已成功读取的草稿清单显示“无 pending、无事实、无正文”时才允许删除。
-///
-/// 调用方只能传入 `restore_plan_strict` 成功返回的 plan；读取失败/未知
-/// 状态必须在调用前就作为 kept 报告，不能落到这个判断里。
-fn draft_dir_is_empty(pending_inputs: usize, fact_count: usize, has_text: bool) -> bool {
-    pending_inputs == 0 && fact_count == 0 && !has_text
-}
-
-#[cfg(test)]
-mod tests {
-    use super::restore_commit_revision;
-    use crate::backend::chapter_draft::{ChapterDraftRestorePlan, LoadedFact};
-
-    fn plan(fact_count: usize, text_revision: u64, event_end: u64) -> ChapterDraftRestorePlan {
-        ChapterDraftRestorePlan {
-            volume_id: "v1".to_string(),
-            chapter_id: "c1".to_string(),
-            base_generation: "g1".to_string(),
-            base_revision: 1,
-            base_sha256: "sha".to_string(),
-            text: None,
-            text_revision,
-            text_sha256: String::new(),
-            fact_count,
-            batch_json: "[]".to_string(),
-            facts: if fact_count > 0 {
-                vec![LoadedFact {
-                    event_id: "e1".to_string(),
-                    revision: event_end,
-                    projection_json: "{}".to_string(),
-                }]
-            } else {
-                Vec::new()
-            },
-            event_end_revision: event_end,
-            session_id: 7,
-            generation: "g1".to_string(),
-            mixed_sessions: false,
-        }
-    }
-
-    #[test]
-    fn empty_draft_cleanup_requires_no_pending_facts_or_text() {
-        use super::draft_dir_is_empty;
-        assert!(draft_dir_is_empty(0, 0, false));
-        // 首次事件只有 spool、facts/text 尚未写出：绝不能按旧摘要删除。
-        assert!(!draft_dir_is_empty(1, 0, false));
-        assert!(!draft_dir_is_empty(0, 1, false));
-        assert!(!draft_dir_is_empty(0, 0, true));
-    }
-
-    #[test]
-    fn replay_terminal_text_commits_at_event_end_revision() {
-        // text.txt 落后一个事件（revision 4），事件链到 5：提交必须用 5。
-        assert_eq!(restore_commit_revision(&plan(2, 4, 5)), 5);
-        // 没有事实时仍用正文 revision。
-        assert_eq!(restore_commit_revision(&plan(0, 4, 0)), 4);
     }
 }

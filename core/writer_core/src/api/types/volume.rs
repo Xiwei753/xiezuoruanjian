@@ -108,6 +108,37 @@ impl From<ChapterOpenResult> for ChapterContentDto {
     }
 }
 
+/// 一笔 Core 已 durable、但平台草稿尚未确认的提交（Issue #1062）。
+///
+/// 平台进入作品时按 `commit_sequence` 顺序重放：先本地 `mark_committed`，
+/// 成功后才调用 `acknowledge_chapter_commit_draft`。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterDraftAckDto {
+    pub transaction_id: String,
+    pub project_id: String,
+    pub volume_id: String,
+    pub chapter_id: String,
+    pub event_ids: Vec<String>,
+    /// 该提交实际发布的正文版本；重放 ack 时用它推进草稿 base。
+    pub after: ChapterVersionDto,
+    pub commit_sequence: u64,
+}
+
+impl From<crate::chapter::commit::PendingChapterDraftAck> for ChapterDraftAckDto {
+    fn from(ack: crate::chapter::commit::PendingChapterDraftAck) -> Self {
+        Self {
+            transaction_id: ack.transaction_id,
+            project_id: ack.key.project_id,
+            volume_id: ack.key.volume_id,
+            chapter_id: ack.key.chapter_id,
+            event_ids: ack.event_ids,
+            after: ack.after.into(),
+            commit_sequence: ack.commit_sequence,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterSaveReceiptDto {

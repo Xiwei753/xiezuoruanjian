@@ -101,6 +101,9 @@ pub struct StarMapStore {
     /// 这里只是当前画布的加载缓存。
     pub(super) node_assets: HashMap<String, String>,
     pub(super) node_assets_loaded: bool,
+    /// 节点迁移解码用的素材库视图（`starmaps/library/references.json` 反向
+    /// 绑定）。懒加载一次，同一 store 生命周期内复用，见 `try_load_node`。
+    pub(super) node_object_bindings: Option<crate::starmap::migration::nodes::NodeObjectBindings>,
     pub(super) edges: HashMap<String, StarMapEdge>,
     pub(super) embeds: HashMap<String, StarMapEmbed>,
     /// 链接读投影：唯一持久化所有者是 annotations 仓库，见
@@ -133,6 +136,7 @@ impl StarMapStore {
             nodes: HashMap::new(),
             node_assets: HashMap::new(),
             node_assets_loaded: false,
+            node_object_bindings: None,
             edges: HashMap::new(),
             embeds: HashMap::new(),
             links: HashMap::new(),

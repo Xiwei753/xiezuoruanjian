@@ -251,6 +251,7 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
                         key: manifest.key.clone(),
                         after: manifest.after.clone(),
                         pending_projections: manifest.pending_projections.clone(),
+                        draft_ack_projections: manifest.draft_ack_projections.clone(),
                         superseded: true,
                         conflict_dir: Some(conflict_dir),
                     });
@@ -266,7 +267,7 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
             }
         }
 
-        if manifest.pending_projections.is_empty() {
+        if manifest.pending_projections.is_empty() && manifest.draft_ack_projections.is_empty() {
             manifest.phase = ChapterCommitPhase::Finished;
             write_manifest(&tx_dir, &manifest)?;
             let _ = remove_transaction_dir(&tx_dir);
@@ -277,10 +278,73 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
             key: manifest.key.clone(),
             after: manifest.after.clone(),
             pending_projections: manifest.pending_projections.clone(),
+            draft_ack_projections: manifest.draft_ack_projections.clone(),
             superseded: false,
             conflict_dir: None,
         });
     }
     clear_pending_if_idle(project_root)?;
     Ok(recovered)
+}
+
+/// 列出 Core 已 durable、但平台草稿尚未确认的原始证明事件。
+///
+/// Issue #1062：Qt 本地 pending-acks 只是缓存；跨进程确认事实源是这里。
+/// 平台启动/进入作品时按 commit_sequence 顺序重放，再回写
+/// `mark_chapter_commit_draft_ack`。
+pub fn pending_chapter_draft_acks(
+    project_root: &Path,
+) -> Result<Vec<super::PendingChapterDraftAck>> {
+    let root = journal_root(project_root);
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut acks = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let manifest_path = entry.path().join("manifest.json");
+        let Ok(raw) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<ChapterCommitManifest>(&raw) else {
+            continue;
+        };
+        if manifest.draft_ack_projections.is_empty()
+            || !matches!(
+                manifest.phase,
+                ChapterCommitPhase::Applied | ChapterCommitPhase::Decided
+            )
+        {
+            continue;
+        }
+        acks.push((
+            manifest.commit_sequence,
+            manifest.created_at_ms,
+            super::PendingChapterDraftAck {
+                transaction_id: manifest.transaction_id.clone(),
+                key: manifest.key.clone(),
+                event_ids: manifest.draft_ack_projections.clone(),
+                after: manifest.after.clone(),
+                commit_sequence: manifest.commit_sequence,
+            },
+        ));
+    }
+    acks.sort_by(|left, right| {
+        (
+            left.0,
+            left.1,
+            &left.2.key.chapter_id,
+            &left.2.transaction_id,
+        )
+            .cmp(&(
+                right.0,
+                right.1,
+                &right.2.key.chapter_id,
+                &right.2.transaction_id,
+            ))
+    });
+    Ok(acks.into_iter().map(|(_, _, ack)| ack).collect())
 }

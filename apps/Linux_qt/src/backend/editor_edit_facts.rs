@@ -240,22 +240,22 @@ impl AppBackend {
             &projects_root,
             &layout,
         );
-        // Issue #1062 三.4：正文先写进草稿内存 registry（同一 GUI 线程；只有
-        // 进程内还没有该章状态时才会读一次小索引），命令只带身份与唤醒；保存
-        // worker 按节流/force 把这份正文落盘，不再让整章正文随每次编辑进入
-        // 无界 mpsc 队列。
-        crate::backend::chapter_draft::note_text(
-            std::path::Path::new(&projects_root),
-            project_id,
-            chapter_id,
-            volume_id,
-            session_id,
-            base_generation,
-            text.to_string(),
+        // Issue #1062 评论 7191076411 第 2 项：GUI 线程不再直接改写草稿
+        // registry。正文只作为不可变快照放进该章 mailbox（同一章节保留最新
+        // 一份），由 actor 按命令顺序写入草稿，并在证明事实覆盖该 revision
+        // 后才落盘；保存回执推进的 base 不会被下一次 GUI 更新回退。
+        let snapshot = crate::backend::chapter_save_queue::DraftTextSnapshot {
+            text: std::sync::Arc::from(text),
             revision,
-            sha256,
-            (base_generation, base_revision, base_sha256),
-        );
+            sha256: sha256.to_string(),
+            session_id,
+            generation: base_generation.to_string(),
+            base_generation: base_generation.to_string(),
+            base_revision,
+            base_sha256: base_sha256.to_string(),
+            force,
+            updated_at: std::time::Instant::now(),
+        };
         let command = crate::backend::chapter_save_queue::ChapterDraftTextCommand {
             context,
             project_id: project_id.to_string(),
@@ -263,7 +263,9 @@ impl AppBackend {
             chapter_id: chapter_id.to_string(),
             force,
         };
-        if let Err(error) = crate::backend::chapter_save_queue::enqueue_draft_text(command) {
+        if let Err(error) =
+            crate::backend::chapter_save_queue::enqueue_draft_text(command, snapshot)
+        {
             self.debug_error("chapter_draft", "enqueue_draft_text_failed", &error);
         }
     }

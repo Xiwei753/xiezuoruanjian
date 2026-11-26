@@ -1,0 +1,91 @@
+//! durable commit decision 的磁盘结构（旧 journal 兼容字段见 serde default）。
+
+use super::*;
+
+/// journal 中的一个附加文件投影。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AdditionalFilePlan {
+    pub(crate) target_relative: String,
+    pub(crate) staging_filename: String,
+    /// 提交决议时的目标文件摘要；`None` 表示目标原本不存在。
+    #[serde(default)]
+    pub(crate) before_sha256: Option<String>,
+    pub(crate) sha256: String,
+}
+
+/// durable commit decision。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChapterCommitManifest {
+    pub(crate) schema_version: u32,
+    pub(crate) transaction_id: String,
+    /// project root 的绝对路径；journal 本身在 project root 内，恢复时以它
+    /// 为准校验，防止 journal 被移动到另一个项目后误写。
+    pub(crate) project_root: String,
+    pub(crate) key: ChapterKey,
+    pub(crate) mutation: ChapterMutationKind,
+    pub(crate) source: ChapterCommitSource,
+    pub(crate) created_at_ms: i64,
+    pub(crate) occurred_at_ms: i64,
+    /// 项目内单调提交序号，用于证明投影按因果顺序重放。
+    #[serde(default)]
+    pub(crate) commit_sequence: u64,
+    pub(crate) event_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) proof_events: Vec<super::ChapterProofProjection>,
+    #[serde(default)]
+    pub(crate) sync_proof_facts: Vec<super::ChapterSyncProofFact>,
+    pub(crate) expected: Option<ChapterVersion>,
+    pub(crate) before: ChapterVersion,
+    pub(crate) after: ChapterVersion,
+    pub(crate) body_changed: bool,
+    pub(crate) content_len: usize,
+    pub(crate) content_md5: String,
+    pub(crate) word_count: u32,
+    pub(crate) updated_at: String,
+    pub(crate) additional_files: Vec<AdditionalFilePlan>,
+    pub(crate) phase: ChapterCommitPhase,
+    pub(crate) pending_projections: Vec<String>,
+    /// Issue #1062：由平台草稿负责确认的原始证明事件 ID。与
+    /// pending_projections 同一 durable 决议保存；平台草稿完成精确 ack 后
+    /// 才清除，重启时平台据此重放草稿 ack（Core 不重复写统计）。
+    #[serde(default)]
+    pub(crate) draft_ack_projections: Vec<String>,
+    /// Create 提交的初始 meta；发布时正文/meta 都不存在才允许写入。
+    #[serde(default)]
+    pub(crate) created_meta: Option<Chapter>,
+    /// 与正文同一决议的标题/顺序；None 表示不修改。
+    #[serde(default)]
+    pub(crate) meta_title: Option<String>,
+    #[serde(default)]
+    pub(crate) meta_order: Option<i32>,
+    /// 恢复时判断是否为创建提交；旧 journal 无此字段默认 false。
+    #[serde(default)]
+    pub(crate) created: bool,
+    /// 删除提交：after 是 tombstone 版本，live 章节目录应移动到 trash。
+    #[serde(default)]
+    pub(crate) deleted: bool,
+    /// 删除提交的真实 app data root（用于计算相对 trash 路径）。
+    #[serde(default)]
+    pub(crate) app_data_root: Option<String>,
+    /// 删除提交预先确定的 trash 绝对路径；恢复时按它幂等补全移动。
+    #[serde(default)]
+    pub(crate) trash_path: Option<String>,
+    /// 恢复时发现当前正文既不是 before 也不是 after，记录原因。
+    #[serde(default)]
+    pub(crate) superseded_reason: Option<String>,
+}
+
+/// 一次待恢复 journal 的可读结果。
+#[derive(Debug, Clone)]
+pub struct ChapterCommitRecovery {
+    pub transaction_id: String,
+    pub key: ChapterKey,
+    pub after: ChapterVersion,
+    pub pending_projections: Vec<String>,
+    /// 仍需平台草稿确认的原始证明事件 ID（与 pending_projections 分开）。
+    pub draft_ack_projections: Vec<String>,
+    pub superseded: bool,
+    pub conflict_dir: Option<String>,
+}

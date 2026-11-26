@@ -285,6 +285,16 @@ pub struct PendingChapterProofTransaction {
     pub commit_sequence: u64,
 }
 
+/// 一笔 Core 已 durable、但平台草稿尚未确认的提交。
+#[derive(Debug, Clone)]
+pub struct PendingChapterDraftAck {
+    pub transaction_id: String,
+    pub key: ChapterKey,
+    pub event_ids: Vec<String>,
+    pub after: ChapterVersion,
+    pub commit_sequence: u64,
+}
+
 /// 一次同步实际应用到某章节的结果。平台端按它决定是否需要重载正文，
 /// 不再依赖全局 `local_content_changed` bool。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,10 +323,11 @@ mod publish;
 pub(crate) use journal::commit_chapter_with_guard;
 pub(crate) use journal::read_chapter_state;
 pub use journal::{
-    mark_chapter_commit_projection, pending_chapter_proof_events,
-    pending_chapter_proof_transactions, pending_chapter_sync_proof_fact_ids,
-    pending_chapter_sync_proof_facts, read_chapter_state_recovering, read_chapter_version,
-    read_chapter_version_recovering, recover_pending_chapter_commits,
+    mark_chapter_commit_draft_ack, mark_chapter_commit_projection, pending_chapter_draft_acks,
+    pending_chapter_proof_events, pending_chapter_proof_transactions,
+    pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
+    read_chapter_state_recovering, read_chapter_version, read_chapter_version_recovering,
+    recover_pending_chapter_commits,
 };
 #[cfg(test)]
 mod tests;

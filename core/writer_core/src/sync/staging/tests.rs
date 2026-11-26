@@ -1,4 +1,6 @@
-use super::starmap_merge::merge_starmap_graph_with_objects;
+use super::starmap_merge::{
+    merge_starmap_graph_with_object_versions, merge_starmap_graph_with_objects, NodeObjectContext,
+};
 use super::*;
 use std::fs;
 use std::path::PathBuf;
@@ -782,4 +784,90 @@ fn starmap_node_instance_identity_mismatch_reports_path() {
     assert!(message.contains("object_type=node"), "{message}");
     assert!(message.contains("member_id=n1"), "{message}");
     assert!(message.contains("instance_id=other"), "{message}");
+}
+
+/// 缺 `assetId` 的新格式实例在 base/local/incoming 三方都按同一解码入口
+/// 走反向绑定解析，不因缺少字段把整组打成冲突（Issue #1062 第 5 项）。
+#[test]
+fn starmap_missing_asset_id_instances_use_reference_binding_on_all_sides() {
+    let tmp = TempDir::new().unwrap();
+    let live = tmp.path().join("live");
+    fs::create_dir_all(live.join("starmaps")).unwrap();
+
+    let starmap_id = "sm_x";
+    let node_id = "n1";
+    // base 与 local 相同（位置 1,1），incoming 改了位置（2,2）→ ApplyIncoming；
+    // 三份实例都没有 assetId。
+    let base_and_local = serde_json::to_vec_pretty(&serde_json::json!({
+        "instanceId": node_id,
+        "position": { "x": 1.0, "y": 1.0 },
+        "starmapId": starmap_id,
+    }))
+    .unwrap();
+    let incoming = serde_json::to_vec_pretty(&serde_json::json!({
+        "instanceId": node_id,
+        "position": { "x": 2.0, "y": 2.0 },
+        "starmapId": starmap_id,
+    }))
+    .unwrap();
+    let graph = make_graph_meta_json(starmap_id, &[node_id], 0);
+
+    let mut bindings = crate::starmap::migration::nodes::NodeObjectBindings::new();
+    bindings.insert_instance_reference(starmap_id, node_id, "asset_shared", Some("p_other"));
+
+    // 三方预校验同级：base/local/incoming 缺 assetId 都从同一份绑定解析。
+    for (side, bytes) in [
+        ("base", &base_and_local),
+        ("local", &base_and_local),
+        ("incoming", &incoming),
+    ] {
+        let plan = crate::starmap::migration::nodes::decode_node_object_validation(
+            &live,
+            starmap_id,
+            node_id,
+            bytes,
+            Some(&bindings),
+        )
+        .unwrap_or_else(|error| panic!("{side} validation failed: {error}"));
+        assert_eq!(plan.instance.asset_id, "asset_shared", "side={side}");
+    }
+
+    let objects = vec![(
+        PathBuf::from(format!("starmaps/{starmap_id}/nodes/n1/n1.json")),
+        "node".to_string(),
+        node_id.to_string(),
+        Some(base_and_local.clone()),
+        Some(base_and_local),
+        Some(incoming),
+    )];
+
+    let context = NodeObjectContext {
+        app_data_root: &live,
+        bindings: &bindings,
+    };
+
+    let output = merge_starmap_graph_with_object_versions(
+        starmap_id,
+        Some(&graph),
+        Some(&graph),
+        Some(&graph),
+        None,
+        None,
+        None,
+        &objects,
+        None,
+        &std::collections::HashMap::new(),
+        Some(&context),
+    )
+    .expect("missing assetId must resolve from the reference binding on every side");
+
+    let (published_id, plan) = output
+        .node_object_plans
+        .iter()
+        .find(|(id, _)| id == node_id)
+        .expect("winning incoming plan must be published");
+    assert_eq!(published_id, node_id);
+    assert_eq!(plan.instance.asset_id, "asset_shared");
+    assert_eq!(plan.instance.project_id.as_deref(), Some("p_other"));
+    assert!(plan.rewrite_instance);
 }

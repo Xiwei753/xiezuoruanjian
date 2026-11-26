@@ -110,6 +110,8 @@ pub(super) struct MetaData {
     pub(super) acked_event_ids: Vec<String>,
     /// 已确认到的正文 revision（诊断与防止 ack 记录无限增长）。
     pub(super) acked_through_revision: u64,
+    /// 已应用过的 Core journal transaction ID：重放同一事务幂等，不回退 base。
+    pub(super) applied_transactions: Vec<String>,
 }
 
 impl MetaData {
@@ -197,6 +199,7 @@ pub(super) fn meta_from_state(
         facts: state.facts.clone(),
         acked_event_ids: state.acked_event_ids.clone(),
         acked_through_revision: state.acked_through_revision,
+        applied_transactions: state.applied_transactions.clone(),
     }
 }
 
@@ -452,6 +455,7 @@ pub(super) fn read_new_state(
         failed_inputs,
         acked_event_ids: meta.acked_event_ids,
         acked_through_revision: meta.acked_through_revision,
+        applied_transactions: meta.applied_transactions,
         projects_root: location.projects_root.clone(),
         updated_at_ms: meta.updated_at_ms,
         meta_dirty: false,
@@ -742,6 +746,7 @@ pub(super) fn legacy_state(
         failed_facts: Vec::new(),
         failed_inputs: Vec::new(),
         acked_event_ids: Vec::new(),
+        applied_transactions: Vec::new(),
         acked_through_revision: 0,
         projects_root: location.projects_root.clone(),
         updated_at_ms: legacy.updated_at_ms,

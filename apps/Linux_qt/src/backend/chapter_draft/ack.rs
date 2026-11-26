@@ -22,6 +22,10 @@ pub(crate) struct PendingAck {
     pub base_generation: String,
     pub base_revision: u64,
     pub base_sha256: String,
+    /// 本地草稿已完成 ack（mark_committed 成功），但 Core journal 的
+    /// 草稿确认尚未回写。只有回写成功后才删除文件。
+    #[serde(default)]
+    pub reconciled: bool,
 }
 
 fn ack_dir(location: &DraftLocation) -> PathBuf {
@@ -85,7 +89,12 @@ pub(crate) fn complete_pending_ack(
     }
 }
 
-/// 重放所有待补做的 ack（按文件名排序，幂等）。
+/// 重放所有待补做的 ack（幂等，按对象版本单调顺序）。
+///
+/// Issue #1062 复审：ack 文件名是 UUID，不能按文件名执行；多笔 ack 必须按
+/// `base_revision` 递增顺序推进，否则旧事务会把已推进的 base 降回去。
+/// 本地 mark_committed 成功后只把 ack 标为 `reconciled`，文件保留到 Core
+/// journal 的草稿确认回写成功（见 `complete_pending_ack`）。
 ///
 /// 任何不可读/损坏的 ack 文件都保留并返回 Err：保存/恢复必须继续被挡住，
 /// 不能把“ack 未完成”当成没有未提交证明。
@@ -103,18 +112,14 @@ pub(crate) fn replay_pending_acks(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(error) => return Err(format!("read pending acks dir {}: {error}", dir.display())),
     };
-    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut acks: Vec<(PendingAck, PathBuf)> = Vec::new();
     for entry in entries {
         let entry =
             entry.map_err(|error| format!("read pending acks dir {}: {error}", dir.display()))?;
         let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            paths.push(path);
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
         }
-    }
-    paths.sort();
-    let mut replayed = 0usize;
-    for path in paths {
         let content = std::fs::read_to_string(&path)
             .map_err(|error| format!("read pending ack {}: {error}", path.display()))?;
         let ack: PendingAck = serde_json::from_str(&content).map_err(|error| {
@@ -123,10 +128,28 @@ pub(crate) fn replay_pending_acks(
         if ack.transaction_id.is_empty() || ack.event_ids.is_empty() {
             return Err(format!("pending ack incomplete (kept): {}", path.display()));
         }
+        acks.push((ack, path));
+    }
+    // 同一对象 generation + 递增 revision；generation 不同按事务 ID 稳定排序。
+    acks.sort_by(|(left, _), (right, _)| {
+        (
+            &left.base_generation,
+            left.base_revision,
+            &left.transaction_id,
+        )
+            .cmp(&(
+                &right.base_generation,
+                right.base_revision,
+                &right.transaction_id,
+            ))
+    });
+    let mut replayed = 0usize;
+    for (mut ack, path) in acks {
         super::mark_committed(
             projects_root,
             project_id,
             chapter_id,
+            &ack.transaction_id,
             &ack.event_ids,
             &ack.base_generation,
             ack.base_revision,
@@ -138,14 +161,89 @@ pub(crate) fn replay_pending_acks(
                 ack.transaction_id
             )
         })?;
-        if let Err(error) = std::fs::remove_file(&path) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                log::warn!("remove replayed pending ack {}: {error}", path.display());
-            }
+        if !ack.reconciled {
+            ack.reconciled = true;
+            let json = serde_json::to_string(&ack).map_err(|error| {
+                format!(
+                    "encode reconciled pending ack {}: {error}",
+                    ack.transaction_id
+                )
+            })?;
+            writer_core::storage::atomic_write_string(&path, &json).map_err(|error| {
+                format!("write reconciled pending ack {}: {error}", path.display())
+            })?;
         }
         replayed = replayed.saturating_add(1);
     }
     Ok(replayed)
+}
+
+/// 把某笔 ack 标为已本地完成（mark_committed 成功后由 worker 调用）。
+pub(crate) fn reconciled_ack(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+    transaction_id: &str,
+) {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+        return;
+    };
+    let path = ack_path(&location, transaction_id);
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(mut ack) = serde_json::from_str::<PendingAck>(&content) else {
+        return;
+    };
+    if ack.reconciled {
+        return;
+    }
+    ack.reconciled = true;
+    if let Ok(json) = serde_json::to_string(&ack) {
+        if let Err(error) = writer_core::storage::atomic_write_string(&path, &json) {
+            log::warn!("write reconciled pending ack {}: {error}", path.display());
+        }
+    }
+}
+
+/// 本地已完成、等待回写 Core journal 的 ack（按 base_revision 递增）。
+pub(crate) fn reconciled_acks(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> Result<Vec<(PendingAck, PathBuf)>, String> {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+        return Ok(Vec::new());
+    };
+    let dir = ack_dir(&location);
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("read pending acks dir {}: {error}", dir.display())),
+    };
+    let mut acks = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("read pending acks dir {}: {error}", dir.display()))?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(ack) = serde_json::from_str::<PendingAck>(&content) else {
+            continue;
+        };
+        if ack.reconciled {
+            acks.push((ack, path));
+        }
+    }
+    acks.sort_by(|(left, _), (right, _)| {
+        (left.base_revision, &left.transaction_id)
+            .cmp(&(right.base_revision, &right.transaction_id))
+    });
+    Ok(acks)
 }
 
 /// 当前待补做的 ack 数量（诊断/测试）。

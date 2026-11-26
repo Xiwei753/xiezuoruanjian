@@ -146,6 +146,9 @@ pub(super) fn chapter_save_worker_loop(receiver: mpsc::Receiver<ChapterSaveJob>)
             },
         }
     }
+    // worker 退出后不会再消费 DraftText 命令：丢弃 mailbox 里的正文快照，
+    // 不能把整章正文留在进程内（发送失败路径也会自行清理）。
+    super::clear_draft_text_mailbox();
 }
 
 fn handle_job(state: &mut ChapterSaveWorkerState, job: ChapterSaveJob) {
@@ -156,7 +159,7 @@ fn handle_job(state: &mut ChapterSaveWorkerState, job: ChapterSaveJob) {
         }
         ChapterSaveJob::DraftText(command) => draft_jobs::handle_draft_text(command),
         ChapterSaveJob::RestoreProject(command) => {
-            draft_jobs::handle_restore_project(state, command);
+            super::restore_draft::handle_restore_project(state, command);
         }
         ChapterSaveJob::Drain(ack) => {
             // 退出边界：先把已到期的 dirty 草稿落盘，再确认此前保存全部完成；
@@ -173,6 +176,19 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
     let Some(request) = claim_save(request_id) else {
         return;
     };
+    // Issue #1062 评论 7191076411 第 1 项（平台侧）：Core durable journal 是
+    // 草稿 ack 的唯一事实源。保存（freeze）前先把 Core 侧本批未确认的草稿
+    // 提交对账到本地：写成本地 ack、重放 mark_committed 并回写 Core，避免
+    // 旧事件以旧 base 再次进入证明批次。
+    {
+        let api = state.api_for(&request.context);
+        super::core_ack::reconcile_core_acks(
+            api,
+            request.context.projects_root(),
+            &request.identity.project_id,
+            Some(request.identity.chapter_id.as_str()),
+        );
+    }
     let chain_key = chapter_chain_key(&request);
     let (effective_expected, effective_base, chained) = {
         let chain = state.chains.get(&chain_key);
@@ -327,17 +343,23 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
 
     match save_result {
         Ok(receipt) => {
-            // journal 已确认：只 ack 本批包含的事件，快照之后的编辑事实留在
-            // 草稿里等下一次保存；没有剩余事实时删除草稿。
-            let mut draft_removed = false;
-            if !frozen_event_ids.is_empty() {
-                // 以 journal 回执确认的 event IDs 为准（Core 只回本批进入
-                // durable journal 的投影）；回执缺失时才退回冻结批次。
-                let acknowledged = if receipt.pending_projections.is_empty() {
-                    frozen_event_ids.clone()
-                } else {
-                    receipt.pending_projections.clone()
-                };
+            // journal 已确认：只 ack 本批包含的事件；快照之后的编辑事实留在
+            // 草稿里等下一次保存。
+            //
+            // Issue #1062 评论 7191076411 第 3 项：不能用“冻结批次为空”推断
+            // 整章草稿为空并删除目录——GUI 可能已经带来更新的正文（或在
+            // 处理中的较新快照）。统一交给 mark_committed 在锁内按 Core
+            // durable 回执结算：只有它确认没有剩余的 facts/正文时才返回
+            // Ok(true) 表示目录已删。
+            // 以 journal 回执确认的 event IDs 为准（Core 只回本批进入
+            // durable journal 的投影）；回执缺失时才退回冻结批次。
+            let acknowledged = if receipt.pending_projections.is_empty() {
+                frozen_event_ids.clone()
+            } else {
+                receipt.pending_projections.clone()
+            };
+            let mut pending_ack_recorded = false;
+            if !acknowledged.is_empty() {
                 // Issue #1062 复审 P0：Core journal 已确认这一批，但本地 ack
                 // 可能失败。先持久化 pending-ack（transaction + 已确认
                 // event IDs + 新版本），下次 freeze/恢复前幂等补做，避免旧
@@ -348,59 +370,71 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                     base_generation: receipt.version.object_generation.clone(),
                     base_revision: receipt.version.revision,
                     base_sha256: receipt.version.content_sha256.clone(),
+                    reconciled: false,
                 };
-                if let Err(error) = crate::backend::chapter_draft::record_pending_ack(
+                match crate::backend::chapter_draft::record_pending_ack(
                     &projects_root,
                     &request.identity.project_id,
                     &request.identity.chapter_id,
                     &pending_ack,
                 ) {
-                    crate::backend::app_backend::debug_error_static(
+                    Ok(()) => pending_ack_recorded = true,
+                    Err(error) => crate::backend::app_backend::debug_error_static(
                         "chapter_draft",
                         "record_pending_ack_failed",
                         &error,
-                    );
+                    ),
                 }
-                draft_removed = match crate::backend::chapter_draft::mark_committed(
-                    &projects_root,
-                    &request.identity.project_id,
-                    &request.identity.chapter_id,
-                    &acknowledged,
-                    &receipt.version.object_generation,
-                    receipt.version.revision,
-                    &receipt.version.content_sha256,
-                ) {
-                    Ok(removed) => {
-                        crate::backend::chapter_draft::complete_pending_ack(
-                            &projects_root,
+            }
+            let draft_removed = match crate::backend::chapter_draft::mark_committed(
+                &projects_root,
+                &request.identity.project_id,
+                &request.identity.chapter_id,
+                &receipt.transaction_id,
+                &acknowledged,
+                &receipt.version.object_generation,
+                receipt.version.revision,
+                &receipt.version.content_sha256,
+            ) {
+                Ok(removed) => {
+                    // Issue #1062 评论 7191076411 第 1 项（平台侧）：本地
+                    // mark_committed 成功后要把这次提交的精确 ack 回写 Core
+                    // journal。回写失败时 pending-ack 文件保留，下一次进入
+                    // 作品/保存前由 reconcile_core_acks 重试，不能提前删。
+                    if pending_ack_recorded {
+                        super::core_ack::acknowledge_core_transaction(
+                            api,
+                            request.context.projects_root(),
                             &request.identity.project_id,
                             &request.identity.chapter_id,
                             &receipt.transaction_id,
+                            &acknowledged,
                         );
-                        removed
                     }
-                    Err(error) => {
-                        // ack 决议没有落盘：pending-ack 文件保留，下一次
-                        // freeze/恢复按 Core journal 的确认事件补做。
-                        crate::backend::app_backend::debug_error_static(
-                            "chapter_draft",
-                            "mark_committed_deferred",
-                            &error,
-                        );
-                        false
-                    }
-                };
-            } else {
-                crate::backend::chapter_draft::remove(
+                    removed
+                }
+                Err(error) => {
+                    // ack 决议没有落盘：pending-ack 文件保留，下一次
+                    // freeze/恢复按 Core journal 的确认事件补做。
+                    crate::backend::app_backend::debug_error_static(
+                        "chapter_draft",
+                        "mark_committed_deferred",
+                        &error,
+                    );
+                    false
+                }
+            };
+            // Issue #1062 复审第 2 项：保存边界立即强制 flush 草稿正文，
+            // 不能把回执之后的更新只留在内存里等 2s 节流。`persist_current`
+            // 自己按 `text_is_verified` 判断正文是否已被证明覆盖；没有可发布
+            // 正文（含草稿本就不存在）时不必空转。
+            if !draft_removed
+                && crate::backend::chapter_draft::text_ready_for_commit(
                     &projects_root,
                     &request.identity.project_id,
                     &request.identity.chapter_id,
-                );
-                draft_removed = true;
-            }
-            // Issue #1062 复审第 2 项：保存边界立即强制 flush 草稿正文，
-            // 不能把回执之后的更新只留在内存里等 2s 节流。
-            if !draft_removed {
+                )
+            {
                 if let Err(error) = crate::backend::chapter_draft::persist_current(
                     &projects_root,
                     &request.identity.project_id,

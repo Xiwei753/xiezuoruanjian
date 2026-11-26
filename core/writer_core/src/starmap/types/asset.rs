@@ -88,6 +88,13 @@ impl StarMapAssetRef {
 pub struct StarMapNodeInstance {
     pub instance_id: String,
     /// 共享素材本体 ID；旧数据中可能等于 `instance_id`。
+    ///
+    /// 旧端只写 `{instanceId, position}`，缺 `assetId` 时反序列化不能在迁移层
+    /// 之前失败：这里按空串接收，由
+    /// [`crate::starmap::migration::nodes::decode_node_object`] 按实例反向绑定 /
+    /// 旧节点 id 解析出稳定身份并重写。正式输出仍必须非空——解析不出身份时
+    /// 解码返回身份冲突错误，绝不写出空 `assetId`。
+    #[serde(default)]
     pub asset_id: String,
     #[serde(default)]
     pub position: StarMapPoint,

@@ -24,7 +24,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use writer_core::api::types::{ChapterSaveReceiptDto, ChapterVersionDto};
@@ -36,13 +36,15 @@ use worker::chapter_save_worker_loop;
 use worker::ChapterSaveWorkerState;
 
 mod conflict_material;
+mod core_ack;
 mod draft_jobs;
+mod restore_draft;
 mod tests;
 mod worker;
 
 pub(crate) use draft_jobs::{
-    draft_restore_status, enqueue_draft_text, enqueue_fact, enqueue_restore_project,
-    ChapterDraftRestoreStatus, ChapterDraftTextCommand, ChapterFactCommand, ChapterRestoreCommand,
+    draft_restore_status, enqueue_fact, enqueue_restore_project, ChapterDraftRestoreStatus,
+    ChapterDraftTextCommand, ChapterFactCommand, ChapterRestoreCommand,
 };
 
 /// 保存任务所属工作区。AppRef / AppBackend 仍只在 GUI 线程使用；
@@ -82,6 +84,88 @@ impl ChapterSaveContext {
             git_dir: PathBuf::from(&self.git_dir),
         }
     }
+}
+
+/// 编辑器正文快照：GUI 只投递不可变数据，不直接改写草稿 registry。
+///
+/// Issue #1062 评论 7191076411 第 2 项：正文 revision/sha256 与事实连续水位、
+/// durable base 必须由同一章节 actor（本章程唯一 worker）串行维护。GUI 线程
+/// 把最新快照放进 [`DRAFT_TEXT_MAILBOX`]（同一章节只保留一份），命令本身只
+/// 带身份；worker 处理到该命令时才在 actor 线程调用 `chapter_draft::note_text`。
+pub(crate) struct DraftTextSnapshot {
+    pub text: Arc<str>,
+    pub revision: u64,
+    pub sha256: String,
+    pub session_id: u64,
+    /// 对象 generation（当前编辑器载入的版本）；base 未初始化时用于身份。
+    pub generation: String,
+    pub base_generation: String,
+    pub base_revision: u64,
+    pub base_sha256: String,
+    /// true = 保存/关窗/离开作品边界，落盘时立即写整章。
+    pub force: bool,
+    /// 快照产生时间，仅用于诊断快照在 mailbox 里等待了多久。
+    pub updated_at: Instant,
+}
+
+/// 正文快照 mailbox：key = workspace + 项目 + 章节，同一章节只保留最新一份。
+///
+/// 旧实现由 GUI 线程直接改写草稿 registry、再投递只带身份的命令；Registry
+/// 里的正文可能已经比事实队列新。现在正文快照和命令一起按 actor 处理顺序
+/// 生效，正文也不再随每次编辑进入无界 mpsc。
+static DRAFT_TEXT_MAILBOX: OnceLock<Mutex<HashMap<String, DraftTextSnapshot>>> = OnceLock::new();
+
+fn draft_text_mailbox() -> &'static Mutex<HashMap<String, DraftTextSnapshot>> {
+    DRAFT_TEXT_MAILBOX.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lock_draft_text_mailbox() -> MutexGuard<'static, HashMap<String, DraftTextSnapshot>> {
+    draft_text_mailbox()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn draft_text_mailbox_key(
+    context: &ChapterSaveContext,
+    project_id: &str,
+    chapter_id: &str,
+) -> String {
+    format!("{}\u{1f}{}\u{1f}{}", context.key(), project_id, chapter_id)
+}
+
+/// UI 线程：把最新正文快照覆盖进该章 mailbox，再投递只带身份的唤醒命令。
+///
+/// “覆盖 + 发送”在同一把 mailbox 锁内完成，worker 取走的一定是不旧于本次
+/// 命令的快照；同一章节的旧快照直接被最新一份替换，不排队。
+pub(crate) fn enqueue_draft_text(
+    command: ChapterDraftTextCommand,
+    snapshot: DraftTextSnapshot,
+) -> Result<(), String> {
+    let key = draft_text_mailbox_key(&command.context, &command.project_id, &command.chapter_id);
+    let mut mailbox = lock_draft_text_mailbox();
+    mailbox.insert(key.clone(), snapshot);
+    let sent = worker_sender().send(ChapterSaveJob::DraftText(command));
+    if sent.is_err() {
+        // worker 已退出：没有消费者会再来取这份快照，立刻清理。
+        mailbox.remove(&key);
+        drop(mailbox);
+        return Err("chapter save queue worker has exited".to_string());
+    }
+    Ok(())
+}
+
+/// worker 线程：取走该章最新正文快照（同一章节只保留一份）。
+pub(crate) fn take_draft_text_snapshot(
+    context: &ChapterSaveContext,
+    project_id: &str,
+    chapter_id: &str,
+) -> Option<DraftTextSnapshot> {
+    lock_draft_text_mailbox().remove(&draft_text_mailbox_key(context, project_id, chapter_id))
+}
+
+/// worker 退出时清空 mailbox：命令不会再被消费，正文快照不能留在进程里。
+pub(super) fn clear_draft_text_mailbox() {
+    lock_draft_text_mailbox().clear();
 }
 
 /// 一次保存请求的不可变身份。结果回执原样带回这些字段，QML 用它校验

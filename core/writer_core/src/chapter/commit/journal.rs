@@ -16,9 +16,11 @@ use crate::chapter::calculate_word_count;
 
 use super::publish::{publish_decided, publish_deleted};
 
+mod manifest;
 mod recovery;
+pub(crate) use manifest::{AdditionalFilePlan, ChapterCommitManifest, ChapterCommitRecovery};
 pub use recovery::{
-    pending_chapter_proof_events, pending_chapter_proof_transactions,
+    pending_chapter_draft_acks, pending_chapter_proof_events, pending_chapter_proof_transactions,
     pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
     recover_pending_chapter_commits,
 };
@@ -37,87 +39,6 @@ pub enum ChapterCommitPhase {
     Finished,
     /// 决议期间发现更新版本，保留材料但绝不覆盖。
     Superseded,
-}
-
-/// journal 中的一个附加文件投影。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct AdditionalFilePlan {
-    pub(super) target_relative: String,
-    pub(super) staging_filename: String,
-    /// 提交决议时的目标文件摘要；`None` 表示目标原本不存在。
-    #[serde(default)]
-    pub(super) before_sha256: Option<String>,
-    pub(super) sha256: String,
-}
-
-/// durable commit decision。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ChapterCommitManifest {
-    pub(super) schema_version: u32,
-    pub(super) transaction_id: String,
-    /// project root 的绝对路径；journal 本身在 project root 内，恢复时以它
-    /// 为准校验，防止 journal 被移动到另一个项目后误写。
-    pub(super) project_root: String,
-    pub(super) key: ChapterKey,
-    pub(super) mutation: ChapterMutationKind,
-    pub(super) source: ChapterCommitSource,
-    pub(super) created_at_ms: i64,
-    pub(super) occurred_at_ms: i64,
-    /// 项目内单调提交序号，用于证明投影按因果顺序重放。
-    #[serde(default)]
-    pub(super) commit_sequence: u64,
-    pub(super) event_ids: Vec<String>,
-    #[serde(default)]
-    pub(super) proof_events: Vec<super::ChapterProofProjection>,
-    #[serde(default)]
-    pub(super) sync_proof_facts: Vec<super::ChapterSyncProofFact>,
-    pub(super) expected: Option<ChapterVersion>,
-    pub(super) before: ChapterVersion,
-    pub(super) after: ChapterVersion,
-    pub(super) body_changed: bool,
-    pub(super) content_len: usize,
-    pub(super) content_md5: String,
-    pub(super) word_count: u32,
-    pub(super) updated_at: String,
-    pub(super) additional_files: Vec<AdditionalFilePlan>,
-    pub(super) phase: ChapterCommitPhase,
-    pub(super) pending_projections: Vec<String>,
-    /// Create 提交的初始 meta；发布时正文/meta 都不存在才允许写入。
-    #[serde(default)]
-    pub(super) created_meta: Option<Chapter>,
-    /// 与正文同一决议的标题/顺序；None 表示不修改。
-    #[serde(default)]
-    pub(super) meta_title: Option<String>,
-    #[serde(default)]
-    pub(super) meta_order: Option<i32>,
-    /// 恢复时判断是否为创建提交；旧 journal 无此字段默认 false。
-    #[serde(default)]
-    pub(super) created: bool,
-    /// 删除提交：after 是 tombstone 版本，live 章节目录应移动到 trash。
-    #[serde(default)]
-    pub(super) deleted: bool,
-    /// 删除提交的真实 app data root（用于计算相对 trash 路径）。
-    #[serde(default)]
-    pub(super) app_data_root: Option<String>,
-    /// 删除提交预先确定的 trash 绝对路径；恢复时按它幂等补全移动。
-    #[serde(default)]
-    pub(super) trash_path: Option<String>,
-    /// 恢复时发现当前正文既不是 before 也不是 after，记录原因。
-    #[serde(default)]
-    pub(super) superseded_reason: Option<String>,
-}
-
-/// 一次待恢复 journal 的可读结果。
-#[derive(Debug, Clone)]
-pub struct ChapterCommitRecovery {
-    pub transaction_id: String,
-    pub key: ChapterKey,
-    pub after: ChapterVersion,
-    pub pending_projections: Vec<String>,
-    pub superseded: bool,
-    pub conflict_dir: Option<String>,
 }
 
 pub(super) fn sha256_hex(text: &str) -> String {
@@ -715,6 +636,16 @@ pub(crate) fn commit_chapter_with_guard(
     } else {
         None
     };
+    // 平台草稿负责确认的原始证明事件：同一 durable 决议保存，不进入
+    // pending_projections（那套由 Core 自己写统计）。
+    let mut draft_ack_ids: Vec<String> = request
+        .proof_events
+        .iter()
+        .map(|fact| fact.event_id().to_string())
+        .filter(|event_id| !event_id.is_empty())
+        .collect();
+    draft_ack_ids.sort();
+    draft_ack_ids.dedup();
     let mut pending_projections = request.projection_ids.clone();
     for fact in &request.sync_proof_facts {
         if !pending_projections.contains(&fact.event_id) {
@@ -745,6 +676,7 @@ pub(crate) fn commit_chapter_with_guard(
         additional_files: additional_plans,
         phase: ChapterCommitPhase::Prepared,
         pending_projections,
+        draft_ack_projections: draft_ack_ids,
         created_meta: (request.mutation == ChapterMutationKind::Create).then(|| meta.clone()),
         meta_title: request.meta_title.clone(),
         meta_order: request.meta_order,
@@ -780,9 +712,10 @@ pub(crate) fn commit_chapter_with_guard(
         }));
     }
 
-    // 4) 无滞后投影时立即清理；有投影则保留 journal，由调用方确认后清除。
+    // 4) 无滞后投影（Core 统计投影 + 平台草稿 ack）时立即清理；否则保留
+    // journal，由调用方逐条确认后清除。
     let mut pending = manifest.pending_projections.clone();
-    if pending.is_empty() {
+    if pending.is_empty() && manifest.draft_ack_projections.is_empty() {
         manifest.phase = ChapterCommitPhase::Finished;
         write_manifest(&tx_dir, &manifest)?;
         let _ = remove_transaction_dir(&tx_dir);
@@ -833,45 +766,5 @@ pub(crate) fn commit_chapter_with_guard(
     }))
 }
 
-/// 确认一个投影完成。所有投影确认后 journal 进入 Finished 并清理。
-///
-/// 当前编辑保存路径在 receipt 返回后补写统计/证明；平台端重发同一批事件时
-/// 可调用本函数推进 journal。
-pub fn mark_chapter_commit_projection(
-    project_root: &Path,
-    transaction_id: &str,
-    projection_id: &str,
-) -> Result<bool> {
-    let tx_dir = journal_root(project_root).join(transaction_id);
-    let manifest_path = tx_dir.join("manifest.json");
-    if !manifest_path.exists() {
-        return Ok(false);
-    }
-    let mut manifest: ChapterCommitManifest =
-        serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
-    manifest
-        .pending_projections
-        .retain(|id| id != projection_id);
-    if manifest.pending_projections.is_empty()
-        && matches!(
-            manifest.phase,
-            ChapterCommitPhase::Applied | ChapterCommitPhase::Decided
-        )
-    {
-        if manifest.phase == ChapterCommitPhase::Decided {
-            let published = publish_decided(project_root, &tx_dir, &mut manifest)?;
-            if !published {
-                clear_pending_if_idle(project_root)?;
-                return Ok(false);
-            }
-        }
-        manifest.phase = ChapterCommitPhase::Finished;
-    }
-    write_manifest(&tx_dir, &manifest)?;
-    if manifest.phase == ChapterCommitPhase::Finished {
-        let _ = remove_transaction_dir(&tx_dir);
-        clear_pending_if_idle(project_root)?;
-        return Ok(true);
-    }
-    Ok(false)
-}
+mod ack;
+pub use ack::{mark_chapter_commit_draft_ack, mark_chapter_commit_projection};

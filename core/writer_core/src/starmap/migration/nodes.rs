@@ -10,9 +10,11 @@
 //!   `starmaps/library/nodes/<bucket>/<asset_id>.json`。
 //!
 //! 旧数据里的画布节点文件仍是旧版 [`StarMapNode`]（title/kind/content/anchors/
-//! portal/style/position…，没有 `assetId`）。本模块是唯一的解码入口：
-//! 新格式实例、旧格式完整节点、素材库共同基线、同步 incoming 全部走这里，
-//! 输出一个完整的对象级计划 [`NodeObjectPlan`]：
+//! portal/style/position…，没有 `assetId`）。旧端也可能已写出只含
+//! `instanceId`/`position` 的实例文件（同样缺 `assetId`）：两种输入都先按
+//! 对象形状进入实例/旧节点解码，`assetId` 缺失由稳定身份解析补全。本模块是
+//! 唯一的解码入口：新格式实例、旧格式完整节点、素材库共同基线、同步 incoming
+//! 全部走这里，输出一个完整的对象级计划 [`NodeObjectPlan`]：
 //!
 //! - `definition`：需要写进素材库的共享本体（已有同内容本体时为 `None`）；
 //! - `instance`：画布节点文件应保存的实例（含解析出的稳定 `assetId`）；
@@ -225,7 +227,11 @@ fn decode_node_object_impl(
     content_check: bool,
 ) -> Result<NodeObjectPlan> {
     let node_path = node_rel_path_string(starmap_id, object_id);
-    // 先按新格式实例解析。旧完整节点没有 `instanceId`，不会命中这个分支。
+    // 先按新格式实例解析。旧完整节点没有 `instanceId`，不会命中这个分支；
+    // `StarMapNodeInstance::asset_id` 带 `#[serde(default)]`，旧端只写
+    // `{instanceId, position}` 的实例也能先进入 `decode_instance`，再由
+    // 反向绑定 / 旧节点 id 补全稳定身份，而不是在这里退化成
+    // `missing field assetId` 的解析错误。
     match serde_json::from_slice::<StarMapNodeInstance>(bytes) {
         Ok(instance) => decode_instance(
             app_data_root,
@@ -365,10 +371,14 @@ fn resolve_instance_asset_id(
     if lookup_definition(app_data_root, existing_bindings, object_id)?.is_some() {
         return Ok(object_id.to_string());
     }
+    // 既没有反向绑定，也没有能对上旧节点 id 的本体：身份无法判定。
+    // 保留原始字节，交给调用方按身份冲突处理；绝不静默生成新 asset id。
     Err(Error::Other(format!(
-        "starmap node instance has empty assetId and no shared definition to resolve: \
-         path={node_path} object_type=node object_id={object_id} starmap_id={starmap_id} \
-         candidate_asset_id={object_id}"
+        "starmap node identity conflict: path={node_path} object_type=node \
+         object_id={object_id} starmap_id={starmap_id} instance_asset_id=<empty> \
+         candidate_asset_id={object_id} conflict_fields=assetId \
+         detail=empty assetId has no reference binding or shared definition to resolve; \
+         preserve original node bytes"
     )))
 }
 

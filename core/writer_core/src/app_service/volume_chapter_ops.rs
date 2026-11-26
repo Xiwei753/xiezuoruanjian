@@ -1,6 +1,6 @@
 use crate::api::{
-    ChapterContentDto, ChapterMetaDto, ChapterSaveReceiptDto, ChapterVersionDto,
-    ProjectWorkspaceSnapshotDto, VolumeDto, WriterError,
+    ChapterContentDto, ChapterDraftAckDto, ChapterMetaDto, ChapterSaveReceiptDto,
+    ChapterVersionDto, ProjectWorkspaceSnapshotDto, VolumeDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -318,6 +318,25 @@ impl super::WriterAppService {
             proof_snapshot_revision,
             &proof_batch_json,
         )
+    }
+
+    /// 列出 Core journal 中仍需平台草稿确认的提交（Issue #1062）。
+    pub fn list_pending_chapter_draft_acks(
+        &self,
+        project_id: String,
+    ) -> Result<Vec<ChapterDraftAckDto>, WriterError> {
+        self.api.list_pending_chapter_draft_acks(project_id)
+    }
+
+    /// 确认平台草稿已完成某笔提交的精确 ack（Issue #1062）。
+    pub fn acknowledge_chapter_commit_draft(
+        &self,
+        project_id: String,
+        transaction_id: String,
+        event_ids: Vec<String>,
+    ) -> Result<u32, WriterError> {
+        self.api
+            .acknowledge_chapter_commit_draft(project_id, transaction_id, event_ids)
     }
 
     pub fn clear_chapter_content(

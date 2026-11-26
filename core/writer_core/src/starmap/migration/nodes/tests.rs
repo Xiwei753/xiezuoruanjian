@@ -169,3 +169,104 @@ fn reference_index_bindings_resolve_empty_asset_identity() {
     assert_eq!(plan.instance.project_id.as_deref(), Some("p1"));
     assert!(plan.rewrite_instance);
 }
+
+#[test]
+fn instance_without_asset_id_field_resolves_reference_binding() {
+    let dir = tempdir().unwrap();
+    let starmap_id = "sm_1";
+    let node_id = "n1";
+    let asset_id = "asset_shared";
+    // 共享本体属于另一作品：真实 assetId 与 instanceId 不同。
+    let source: StarMapNode = serde_json::from_value(legacy_node_json(node_id)).unwrap();
+    let definition = StarMapNodeDefinition::from_node(asset_id, &source);
+    crate::starmap::library::save_node_definition(dir.path(), &definition).unwrap();
+    crate::starmap::library::record_node_reference(
+        dir.path(),
+        starmap_id,
+        Some("p_other"),
+        node_id,
+        asset_id,
+    )
+    .unwrap();
+    let bindings = NodeObjectBindings::load_reference_bindings(dir.path()).unwrap();
+
+    // 旧端写出的实例：只有 `instanceId`/`position`，连 `assetId` 键都没有。
+    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+        "instanceId": node_id,
+        "position": {"x": 1.0, "y": 2.0}
+    }))
+    .unwrap();
+
+    let plan =
+        decode_node_object(dir.path(), starmap_id, node_id, &bytes, Some(&bindings)).unwrap();
+    assert_eq!(plan.instance.asset_id, asset_id);
+    assert_eq!(plan.instance.project_id.as_deref(), Some("p_other"));
+    assert_eq!(plan.instance.starmap_id, starmap_id);
+    assert!(plan.rewrite_instance);
+    assert!(plan.definition.is_none());
+    assert!(!plan.wrote_definition);
+
+    // 正式输出必须带非空 assetId；持久化后再次解码不再重写。
+    persist_node_object_plan(dir.path(), starmap_id, node_id, &plan).unwrap();
+    let node_path = dir
+        .path()
+        .join(package_storage::node_rel_path(starmap_id, node_id));
+    let rewritten: Value = serde_json::from_slice(&std::fs::read(&node_path).unwrap()).unwrap();
+    assert_eq!(rewritten["instanceId"], node_id);
+    assert_eq!(rewritten["assetId"], asset_id);
+    assert_eq!(rewritten["projectId"], "p_other");
+
+    let rewritten_bytes = serde_json::to_vec(&rewritten).unwrap();
+    let again = decode_node_object(
+        dir.path(),
+        starmap_id,
+        node_id,
+        &rewritten_bytes,
+        Some(&bindings),
+    )
+    .unwrap();
+    assert!(!again.rewrite_instance);
+    assert_eq!(again.instance.asset_id, asset_id);
+}
+
+#[test]
+fn instance_without_asset_id_or_binding_reports_identity_conflict() {
+    let dir = tempdir().unwrap();
+    let starmap_id = "sm_1";
+    let node_id = "n1";
+    // 素材库只有另一个 asset id 的本体，与节点 id 对不上，也没有反向绑定。
+    let source: StarMapNode = serde_json::from_value(legacy_node_json(node_id)).unwrap();
+    let definition = StarMapNodeDefinition::from_node("asset_other", &source);
+    crate::starmap::library::save_node_definition(dir.path(), &definition).unwrap();
+
+    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+        "instanceId": node_id,
+        "position": {"x": 1.0, "y": 2.0}
+    }))
+    .unwrap();
+    let node_path = dir
+        .path()
+        .join(package_storage::node_rel_path(starmap_id, node_id));
+    std::fs::create_dir_all(node_path.parent().unwrap()).unwrap();
+    std::fs::write(&node_path, &bytes).unwrap();
+
+    let error = decode_node_object(dir.path(), starmap_id, node_id, &bytes, None)
+        .expect_err("empty assetId without a binding must be an identity conflict");
+    let message = error.to_string();
+    assert!(
+        message.contains("starmap node identity conflict"),
+        "{message}"
+    );
+    assert!(message.contains("object_id=n1"), "{message}");
+    assert!(message.contains("candidate_asset_id=n1"), "{message}");
+    assert!(message.contains("conflict_fields=assetId"), "{message}");
+    assert!(
+        message.contains("preserve original node bytes"),
+        "{message}"
+    );
+    assert_eq!(
+        std::fs::read(&node_path).unwrap(),
+        bytes,
+        "解码失败必须保留原始节点字节"
+    );
+}

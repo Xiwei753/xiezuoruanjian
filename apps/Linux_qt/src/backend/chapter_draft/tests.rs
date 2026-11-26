@@ -117,6 +117,7 @@ fn mark_committed_removes_only_the_acknowledged_prefix() {
         root,
         "p1",
         "c1",
+        "tx-missing",
         &["missing".to_string()],
         "g1",
         1,
@@ -126,10 +127,17 @@ fn mark_committed_removes_only_the_acknowledged_prefix() {
     let location = draft_location(root);
     assert!(fact_file_path(&location.dir, 1, "e1").exists());
 
-    assert!(
-        !mark_committed(root, "p1", "c1", &["e1".to_string()], "g1", 1, "base-1")
-            .expect("ack cleanup")
-    );
+    assert!(!mark_committed(
+        root,
+        "p1",
+        "c1",
+        "tx-1",
+        &["e1".to_string()],
+        "g1",
+        1,
+        "base-1"
+    )
+    .expect("ack cleanup"));
     assert!(!fact_file_path(&location.dir, 1, "e1").exists());
     assert!(fact_file_path(&location.dir, 2, "e2").exists());
     assert!(fact_file_path(&location.dir, 3, "e3").exists());
@@ -148,6 +156,7 @@ fn mark_committed_removes_only_the_acknowledged_prefix() {
         root,
         "p1",
         "c1",
+        "tx-2",
         &["e2".to_string(), "e3".to_string()],
         "g1",
         3,
@@ -155,6 +164,65 @@ fn mark_committed_removes_only_the_acknowledged_prefix() {
     )
     .expect("ack cleanup"));
     assert!(location.dir.join(TEXT_FILE).exists());
+}
+
+/// Issue #1062 评论 7191076411 第 1 项：多笔 ack 只允许同一对象 generation
+/// 的递增 revision；旧事务重放幂等，不得把已推进的 base 降回去。
+#[test]
+fn replayed_or_older_ack_never_regresses_draft_base() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7));
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e2", 2, 7));
+    persist_current(root, "p1", "c1", true).expect("persist draft");
+
+    assert!(!mark_committed(
+        root,
+        "p1",
+        "c1",
+        "tx-1",
+        &["e1".to_string()],
+        "g1",
+        1,
+        "base-1"
+    )
+    .expect("first ack"));
+    assert!(
+        !mark_committed(root, "p1", "c1", "tx-2", &[], "g1", 2, "base-2")
+            .expect("second ack advances base")
+    );
+    let plan = restore_plan(root, "p1", "c1").expect("restore plan");
+    assert_eq!(plan.base_revision, 2);
+    assert_eq!(plan.base_sha256, "base-2");
+
+    // 同一事务重放（带更小的旧版本）不得回退 base。
+    assert!(
+        !mark_committed(root, "p1", "c1", "tx-2", &[], "g1", 1, "base-1")
+            .expect("replayed ack is idempotent")
+    );
+    let plan = restore_plan(root, "p1", "c1").expect("restore plan");
+    assert_eq!(plan.base_revision, 2, "replayed ack must not regress base");
+    assert_eq!(plan.base_sha256, "base-2");
+
+    // 另一个未见过的事务带更小 revision 也不能回退。
+    assert!(
+        !mark_committed(root, "p1", "c1", "tx-older", &[], "g1", 1, "base-stale")
+            .expect("older ack")
+    );
+    let plan = restore_plan(root, "p1", "c1").expect("restore plan");
+    assert_eq!(
+        plan.base_revision, 2,
+        "older revision must not regress base"
+    );
+
+    // 同 generation 的更大 revision 正常前进。
+    assert!(
+        !mark_committed(root, "p1", "c1", "tx-3", &[], "g1", 3, "base-3")
+            .expect("newer ack advances base")
+    );
+    let plan = restore_plan(root, "p1", "c1").expect("restore plan");
+    assert_eq!(plan.base_revision, 3);
+    assert_eq!(plan.base_sha256, "base-3");
 }
 
 #[test]
@@ -166,10 +234,17 @@ fn mark_committed_removes_fact_only_draft_directory() {
     let location = draft_location(root);
     assert!(location.dir.exists());
 
-    assert!(
-        mark_committed(root, "p1", "c1", &["e1".to_string()], "g1", 1, "base-1")
-            .expect("ack cleanup")
-    );
+    assert!(mark_committed(
+        root,
+        "p1",
+        "c1",
+        "tx-1",
+        &["e1".to_string()],
+        "g1",
+        1,
+        "base-1"
+    )
+    .expect("ack cleanup"));
     assert!(!location.dir.exists());
     assert!(snapshot(root, "p1", "c1").is_none());
 }
@@ -256,7 +331,7 @@ fn restore_plan_rejects_corrupt_text_and_keeps_files() {
         7,
         "g1",
         "actual text".to_string(),
-        2,
+        1,
         "content-v1:deadbeef",
         ("g1", 0, ""),
     );
@@ -409,13 +484,15 @@ fn mark_committed_is_recoverable_and_idempotent() {
     let location = draft_location(root);
 
     assert!(
-        !mark_committed(root, "p1", "c1", &["e1".into()], "g1", 1, "sha1").expect("ack cleanup")
+        !mark_committed(root, "p1", "c1", "tx-1", &["e1".into()], "g1", 1, "sha1")
+            .expect("ack cleanup")
     );
     // ack 后剩余事件仍可冻结；重复 ack 同一批不会报错也不会误删后一条。
     let remaining = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect("remaining fact");
     assert_eq!(ids(&remaining), vec!["e2"]);
     assert!(
-        !mark_committed(root, "p1", "c1", &["e1".into()], "g1", 1, "sha1").expect("ack cleanup")
+        !mark_committed(root, "p1", "c1", "tx-1", &["e1".into()], "g1", 1, "sha1")
+            .expect("ack cleanup")
     );
     let remaining = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect("remaining fact again");
     assert_eq!(ids(&remaining), vec!["e2"]);
@@ -655,8 +732,17 @@ fn ack_cleanup_defers_when_fact_index_is_incomplete() {
     // 索引里 e2 还在、文件被删：merge_index 必须报错，ack 决议不能推进。
     std::fs::remove_file(fact_file_path(&location.dir, 2, "e2")).expect("remove e2");
 
-    let error = mark_committed(root, "p1", "c1", &["e1".to_string()], "g1", 1, "sha1")
-        .expect_err("ack cleanup must defer on incomplete facts");
+    let error = mark_committed(
+        root,
+        "p1",
+        "c1",
+        "tx-1",
+        &["e1".to_string()],
+        "g1",
+        1,
+        "sha1",
+    )
+    .expect_err("ack cleanup must defer on incomplete facts");
     assert!(error.contains("deferred"), "unexpected error: {error}");
     assert!(location.dir.exists(), "draft dir must be kept");
     let meta: serde_json::Value =
@@ -686,13 +772,22 @@ fn pending_ack_replay_advances_base_and_removes_confirmed_prefix() {
             base_generation: "g1".to_string(),
             base_revision: 1,
             base_sha256: "sha1".to_string(),
+            reconciled: false,
         },
     )
     .expect("record ack");
     forget_for_test(root, "p1", "c1");
 
     assert_eq!(replay_pending_acks(root, "p1", "c1").expect("replay"), 1);
-    assert_eq!(pending_ack_count(root, "p1", "c1"), 0);
+    // 本地 mark_committed 成功只把 ack 标为 reconciled；文件保留到 Core
+    // journal 的草稿确认回写成功（见 core_ack）。
+    assert_eq!(pending_ack_count(root, "p1", "c1"), 1);
+    assert_eq!(
+        reconciled_acks(root, "p1", "c1")
+            .expect("reconciled acks")
+            .len(),
+        1
+    );
     let location = draft_location(root);
     assert!(!fact_file_path(&location.dir, 1, "e1").exists());
     let plan = restore_plan_strict(root, "p1", "c1")
@@ -700,11 +795,12 @@ fn pending_ack_replay_advances_base_and_removes_confirmed_prefix() {
         .expect("draft still has e2");
     assert_eq!(plan.base_revision, 1);
     assert_eq!(plan.fact_count, 1);
-    // 幂等：再重放一次是空操作。
+    // 幂等：再重放一次只重复本地结算，不产生第二笔提交。
     assert_eq!(
         replay_pending_acks(root, "p1", "c1").expect("replay again"),
-        0
+        1
     );
+    assert_eq!(pending_ack_count(root, "p1", "c1"), 1);
 }
 
 #[test]
@@ -724,6 +820,7 @@ fn pending_ack_replay_failure_keeps_files_and_blocks_freeze() {
             base_generation: "g1".to_string(),
             base_revision: 1,
             base_sha256: "sha1".to_string(),
+            reconciled: false,
         },
     )
     .expect("record ack");
@@ -751,7 +848,14 @@ fn pending_ack_replay_failure_keeps_files_and_blocks_freeze() {
     assert_eq!(pending_ack_count(root, "p1", "c1"), 1);
     let batch = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect("freeze after ack replay");
     assert_eq!(ids(&batch), vec!["e2"]);
-    assert_eq!(pending_ack_count(root, "p1", "c1"), 0);
+    // 本地 ack 已完成但 Core 回写还没发生：文件保留，等下一次对账。
+    assert_eq!(pending_ack_count(root, "p1", "c1"), 1);
+    assert_eq!(
+        reconciled_acks(root, "p1", "c1")
+            .expect("reconciled acks")
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -806,4 +910,112 @@ fn missing_meta_with_disk_content_is_listed_as_pending_recovery() {
         draft.draft_error
     );
     assert!(location.dir.exists());
+}
+
+#[test]
+fn note_text_base_is_initialized_once() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    let sha_v1 = writer_core::writing_stats::proof::content_digest_of_text("V1");
+    // 首次 note_text 用 QML 上报的 committed base 初始化草稿基线。
+    note_text(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g1",
+        "V1".to_string(),
+        1,
+        &sha_v1,
+        ("g1", 1, "sha-v1"),
+    );
+    // 回执还没被 GUI 收到时继续输入：旧 base 不能把已初始化的基线回退。
+    let sha_v0 = writer_core::writing_stats::proof::content_digest_of_text("V0");
+    note_text(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g0",
+        "V0".to_string(),
+        0,
+        &sha_v0,
+        ("g0", 0, ""),
+    );
+
+    let state = snapshot(root, "p1", "c1").expect("draft state");
+    assert_eq!(state.base_generation, "g1");
+    assert_eq!(state.base_revision, 1);
+    assert_eq!(state.base_sha256, "sha-v1");
+}
+
+#[test]
+fn text_is_persisted_only_after_fact_covers_it() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    let text = "第一行\n第二行";
+    let sha256 = writer_core::writing_stats::proof::content_digest_of_text(text);
+    note_text(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g1",
+        text.to_string(),
+        2,
+        &sha256,
+        ("g1", 1, "base-sha"),
+    );
+
+    // base 只到 1、还没有 revision 2 的事实：正文候选只留在内存里。
+    persist_current(root, "p1", "c1", true).expect("persist candidate meta");
+    let location = draft_location(root);
+    assert!(!location.dir.join(TEXT_FILE).exists());
+    assert!(!text_ready_for_commit(root, "p1", "c1"));
+
+    // 证明事实覆盖 revision 2 之后才允许发布整章正文。
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e2", 2, 7)).expect("fact");
+    assert!(text_ready_for_commit(root, "p1", "c1"));
+    persist_current(root, "p1", "c1", true).expect("persist text");
+    assert_eq!(
+        std::fs::read_to_string(location.dir.join(TEXT_FILE)).expect("text file"),
+        text
+    );
+}
+
+#[test]
+fn mark_committed_keeps_text_only_draft() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    let text = "已覆盖 base 的正文";
+    let sha256 = writer_core::writing_stats::proof::content_digest_of_text(text);
+    note_text(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g1",
+        text.to_string(),
+        1,
+        &sha256,
+        ("g1", 1, "base-1"),
+    );
+    persist_current(root, "p1", "c1", true).expect("persist text");
+    let location = draft_location(root);
+    assert!(location.dir.join(TEXT_FILE).exists());
+
+    // 空证明批次的保存回执只推进 base：草稿里仍有正文时不能删除目录，
+    // 否则正在继续输入的新版本会随旧保存回执一起消失。
+    assert!(
+        !mark_committed(root, "p1", "c1", "tx-2", &[], "g1", 2, "base-2")
+            .expect("ack without facts")
+    );
+    assert!(location.dir.join(TEXT_FILE).exists());
+    let plan = restore_plan(root, "p1", "c1").expect("draft kept");
+    assert_eq!(plan.text.as_deref(), Some(text));
+    assert_eq!(plan.base_revision, 2);
 }
