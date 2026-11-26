@@ -1162,28 +1162,28 @@ impl WriterCoreApi {
             (core.app_data_root.clone(), core.projects_root.clone())
         };
         // App 组共享同一份账本：只读一次，再按 group 过滤。
-        let app_ledger = match crate::sync::local_mutations::latest_ledger(&app_data_root) {
-            Ok(ledger) => Some(ledger),
+        let ledger = match crate::sync::local_mutations::latest_ledger(&app_data_root) {
+            Ok(ledger) => ledger,
             // 账本损坏/读失败：宁可让平台做一次完整探测，也不要误报"无待上传"。
             Err(_) => return true,
         };
-        if let (Ok(groups), Some(ledger)) = (
-            crate::sync::app_data_group_catalog::discover_local_app_data_groups(&app_data_root),
-            app_ledger.as_ref(),
-        ) {
-            for group in groups {
-                let pending = crate::sync::local_mutations::pending_records_in(
-                    ledger,
-                    &app_data_root,
-                    crate::sync::types::SyncScope::App,
-                    Some(&group),
-                );
-                match pending {
-                    Ok(records) if records.is_empty() => {}
-                    Ok(_) => return true,
-                    Err(_) => return true,
+        match crate::sync::app_data_group_catalog::discover_local_app_data_groups(&app_data_root) {
+            Ok(groups) => {
+                for group in groups {
+                    let pending = crate::sync::local_mutations::pending_records_in(
+                        &ledger,
+                        &app_data_root,
+                        crate::sync::types::SyncScope::App,
+                        Some(&group),
+                    );
+                    match pending {
+                        Ok(records) if records.is_empty() => {}
+                        Ok(_) => return true,
+                        Err(_) => return true,
+                    }
                 }
             }
+            Err(_) => return true,
         }
         match crate::project::list_projects(&projects_root) {
             Ok(projects) => {
