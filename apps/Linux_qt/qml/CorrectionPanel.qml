@@ -79,9 +79,10 @@ Item {
                 Layout.fillWidth: true
                 text: root.editorControllerRef && root.editorControllerRef.correctionCheckPending
                       ? qsTr("正在检查") : qsTr("检查本章")
+                // 扫描进行中仍允许点击：控制器把请求合并为本轮结束后的补跑，
+                // 不并行启动第二个模型任务。
                 enabled: !!(root.editorControllerRef
-                            && root.editorControllerRef.chapterId
-                            && !root.editorControllerRef.correctionCheckPending)
+                            && root.editorControllerRef.chapterId)
                 onClicked: root.editorControllerRef.requestCorrectionChapter()
             }
 
