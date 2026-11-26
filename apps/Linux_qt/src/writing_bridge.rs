@@ -36,6 +36,9 @@ pub struct LinuxChapterOpenData {
     pub volume_id: String,
     pub chapter_id: String,
     pub meta: writer_core::api::types::ChapterMetaDto,
+    /// 本次读到的正文持久化版本。与章节目录 meta 无关，必须来自
+    /// `ChapterContentDto.version`，否则保存 base 会与正文断线。
+    pub version: writer_core::api::types::ChapterVersionDto,
 }
 
 pub fn open_chapter(
@@ -48,14 +51,15 @@ pub fn open_chapter(
     let chapter_meta = chapters.into_iter().find(|ch| ch.id == chapter_id);
 
     if let Some(meta) = chapter_meta {
-        let content = api.open_chapter(project_id, volume_id, chapter_id)?;
+        let chapter = api.open_chapter(project_id, volume_id, chapter_id)?;
         Ok(LinuxChapterOpenData {
-            content: content.content,
+            content: chapter.content,
             title: meta.title.clone(),
             project_id: project_id.to_string(),
             volume_id: volume_id.to_string(),
             chapter_id: chapter_id.to_string(),
             meta,
+            version: chapter.version,
         })
     } else {
         Err(writer_core::api::error::WriterError::ChapterNotFound)

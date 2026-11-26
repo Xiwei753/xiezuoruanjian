@@ -125,19 +125,44 @@ fn resolve_chain_base(
 
 pub(super) fn chapter_save_worker_loop(receiver: mpsc::Receiver<ChapterSaveJob>) {
     let mut state = ChapterSaveWorkerState::new();
-    while let Ok(job) = receiver.recv() {
-        match job {
-            ChapterSaveJob::Save(request_id) => handle_chapter_save(&mut state, request_id),
-            ChapterSaveJob::RecordFact(command) => {
-                draft_jobs::handle_record_fact(&mut state, command);
+    loop {
+        // Issue #1062 三.4：草稿正文不再随命令进 channel，而是留在内存
+        // registry 里按 2s 节流落盘。worker 在等保存命令时最多睡到最近一次
+        // persist 截止；到点先 flush_due，再继续接收。
+        match crate::backend::chapter_draft::next_persist_deadline() {
+            Some(deadline) => {
+                let wait = deadline.saturating_duration_since(Instant::now());
+                match receiver.recv_timeout(wait) {
+                    Ok(job) => handle_job(&mut state, job),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        crate::backend::chapter_draft::flush_due();
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
             }
-            ChapterSaveJob::DraftText(command) => draft_jobs::handle_draft_text(command),
-            ChapterSaveJob::RestoreProject(command) => {
-                draft_jobs::handle_restore_project(&mut state, command);
-            }
-            ChapterSaveJob::Drain(ack) => {
-                let _ = ack.send(());
-            }
+            None => match receiver.recv() {
+                Ok(job) => handle_job(&mut state, job),
+                Err(_) => break,
+            },
+        }
+    }
+}
+
+fn handle_job(state: &mut ChapterSaveWorkerState, job: ChapterSaveJob) {
+    match job {
+        ChapterSaveJob::Save(request_id) => handle_chapter_save(state, request_id),
+        ChapterSaveJob::RecordFact(command) => {
+            draft_jobs::handle_record_fact(state, command);
+        }
+        ChapterSaveJob::DraftText(command) => draft_jobs::handle_draft_text(command),
+        ChapterSaveJob::RestoreProject(command) => {
+            draft_jobs::handle_restore_project(state, command);
+        }
+        ChapterSaveJob::Drain(ack) => {
+            // 退出边界：先把已到期的 dirty 草稿落盘，再确认此前保存全部完成；
+            // flush_due 只记录持久化错误，worker 不因草稿写盘失败退出。
+            crate::backend::chapter_draft::flush_due();
+            let _ = ack.send(());
         }
     }
 }
@@ -186,6 +211,34 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
         .expected
         .as_ref()
         .map_or("", |version| version.object_generation.as_str());
+    // Issue #1062 复审第 3 项：Core 投影构造失败的原始命令必须先重试成功，
+    // 否则这次保存会越过真实编辑事件的 revision，把证明链断开。
+    if let Err(error) = draft_jobs::retry_pending_inputs(
+        api,
+        &projects_root,
+        &request.identity.project_id,
+        &request.identity.chapter_id,
+        &request.identity.volume_id,
+        request.identity.session_id,
+        base_generation,
+    ) {
+        complete_error(
+            request_id,
+            ChapterSaveError {
+                code: "PROOF_FACT_PENDING_RETRY_FAILED".to_string(),
+                message_key: "error.proof_fact_pending_retry_failed".to_string(),
+                message_args: serde_json::json!({
+                    "projectId": request.identity.project_id,
+                    "chapterId": request.identity.chapter_id,
+                }),
+                raw_error: error,
+                conflict: false,
+            },
+            chained,
+            String::new(),
+        );
+        return;
+    }
     let frozen_facts = match crate::backend::chapter_draft::freeze_batch_for(
         &projects_root,
         &request.identity.project_id,
@@ -276,6 +329,7 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
         Ok(receipt) => {
             // journal 已确认：只 ack 本批包含的事件，快照之后的编辑事实留在
             // 草稿里等下一次保存；没有剩余事实时删除草稿。
+            let mut draft_removed = false;
             if !frozen_event_ids.is_empty() {
                 // 以 journal 回执确认的 event IDs 为准（Core 只回本批进入
                 // durable journal 的投影）；回执缺失时才退回冻结批次。
@@ -284,7 +338,7 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                 } else {
                     receipt.pending_projections.clone()
                 };
-                crate::backend::chapter_draft::mark_committed(
+                draft_removed = crate::backend::chapter_draft::mark_committed(
                     &projects_root,
                     &request.identity.project_id,
                     &request.identity.chapter_id,
@@ -299,6 +353,23 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                     &request.identity.project_id,
                     &request.identity.chapter_id,
                 );
+                draft_removed = true;
+            }
+            // Issue #1062 复审第 2 项：保存边界立即强制 flush 草稿正文，
+            // 不能把回执之后的更新只留在内存里等 2s 节流。
+            if !draft_removed {
+                if let Err(error) = crate::backend::chapter_draft::persist_current(
+                    &projects_root,
+                    &request.identity.project_id,
+                    &request.identity.chapter_id,
+                    true,
+                ) {
+                    log::warn!(
+                        "force persist chapter draft after save failed: project={} chapter={}: {error}",
+                        request.identity.project_id,
+                        request.identity.chapter_id
+                    );
+                }
             }
             if let Some(chain) = state.chains.get_mut(&chain_key) {
                 chain.receipt = Some(receipt.version.clone());

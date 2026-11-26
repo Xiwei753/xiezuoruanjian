@@ -142,6 +142,10 @@ QtObject {
     property string committedChapterGeneration: ""
     property double committedChapterRevision: 0
     property string committedChapterSha256: ""
+    // Issue #1062 评论 #7187981523：本次文档正文是否已和一份完整的三元组
+    // 同时安装。开章前先置 false，只有开章成功并写入 version 后才与
+    // markEditorDocumentLoaded 同一时刻置 true。
+    property bool chapterVersionInstalled: false
 
     // Issue #1059 评论 7160801242 第 4 项：正文保存不再同步阻塞 GUI。
     //
@@ -201,6 +205,18 @@ QtObject {
         repeat: true
         running: false
         onTriggered: controller.pollChapterSaveResults()
+    }
+
+    // Issue #1062 评论 #7187981523：保存 guard 活跃时同步前的 durable 落盘
+    // 不再假装成功。等 guard 解除后重新走完整保存路径，期间只保留一个
+    // continuation，避免调用方永久挂起。
+    property var pendingSyncFlushContinuation: null
+
+    property var syncFlushGuardTimer: Timer {
+        interval: 50
+        repeat: true
+        running: false
+        onTriggered: controller.pollPendingSyncFlush()
     }
 
     property var settingsGuardTimer: Timer {
@@ -1640,6 +1656,10 @@ QtObject {
     // Issue #1062 1.3：上一会话仍在等待的 continuation 以失败回执收口，
     // 不能让调用方永久挂起。
     function markEditorDocumentLoaded(pId, vId, cId) {
+        // Issue #1062 评论 #7187981523：版本与文档身份的原子性由开章入口
+        // （openChapterContentNow）负责——它先校验并安装完整 version，再调用
+        // 本函数。格式化/重载走的是同一章节的持久版本，不重新安装 version，
+        // 因此这里不能以 chapterVersionInstalled 拒绝，否则会跳过会话重置。
         editorDocumentProjectId = pId || "";
         editorDocumentVolumeId = vId || "";
         editorDocumentChapterId = cId || "";
@@ -1656,6 +1676,7 @@ QtObject {
         cachedDraftSha256 = "";
         cachedDraftAvailable = false;
         chapterSavePollTimer.stop();
+        return true;
     }
 
     // Issue #1051：跨卷移动了当前正在编辑的章节时，只迁移文档身份（卷 ID），
@@ -1859,6 +1880,20 @@ QtObject {
         }
     }
 
+    // Issue #1062 评论 #7187981523：guard 解除后重走一次完整 flush。
+    // 没有 continuation 时停止轮询；guard 仍活跃则继续等。
+    function pollPendingSyncFlush() {
+        if (typeof pendingSyncFlushContinuation !== "function") {
+            syncFlushGuardTimer.stop();
+            return;
+        }
+        if (saveGuardActive()) return;
+        syncFlushGuardTimer.stop();
+        var continuation = pendingSyncFlushContinuation;
+        pendingSyncFlushContinuation = null;
+        flushActiveEditorBeforeSync(continuation);
+    }
+
     // Issue #1062 1.3：同步前的正文 durable 落盘改为异步续接。
     // 成功 / 失败都通过 onDone(ok) 通知；失败原因写入 syncFlushFailureReason。
     function flushActiveEditorBeforeSync(onDone) {
@@ -1869,8 +1904,20 @@ QtObject {
             return;
         }
         if (saveGuardActive()) {
-            pendingAutoSaveAfterGuard = false;
-            if (finished) finished(true);
+            // Issue #1062 评论 #7187981523：guard 期间没有 durable 回执，
+            // 不能直接 finished(true)。保留 continuation，guard 解除后
+            // 重新走快照 + 入队 + 回执；被新调用覆盖时旧的以失败收口。
+            if (typeof pendingSyncFlushContinuation === "function") {
+                var supersededContinuation = pendingSyncFlushContinuation;
+                pendingSyncFlushContinuation = null;
+                logWriterWarning("flush_before_sync_guard_superseded",
+                    "reason=guard_active_new_request, identity=" + editorDocumentIdentity());
+                supersededContinuation(false);
+            }
+            pendingSyncFlushContinuation = function(ok) {
+                if (finished) finished(ok);
+            };
+            syncFlushGuardTimer.running = true;
             return;
         }
         // Issue #1052：同步前的落盘同样只消费同一时点的完整 Core 快照。
@@ -1918,11 +1965,25 @@ QtObject {
         }
     }
 
+    // Issue #1062 评论 #7187981523：保存 base 只能来自完整的持久化版本。
+    // objectGeneration 允许任意非空字符串（不做格式判断）；revision 必须是
+    // 合法非负整数，0 是合法版本；contentSha256 必须是字符串。
+    function isCompleteChapterVersion(version) {
+        if (!version || typeof version !== "object") return false;
+        if (typeof version.objectGeneration !== "string") return false;
+        if (typeof version.revision !== "number" || !Number.isInteger(version.revision)
+                || version.revision < 0) return false;
+        if (typeof version.contentSha256 !== "string") return false;
+        return true;
+    }
+
+    // 只有完整版本才能写入 committedChapter*；返回值表示是否安装成功。
     function applyCommittedChapterVersion(version) {
-        if (!version) return;
-        committedChapterGeneration = String(version.objectGeneration || "");
-        committedChapterRevision = Number(version.revision || 0);
-        committedChapterSha256 = String(version.contentSha256 || "");
+        if (!isCompleteChapterVersion(version)) return false;
+        committedChapterGeneration = version.objectGeneration;
+        committedChapterRevision = version.revision;
+        committedChapterSha256 = version.contentSha256;
+        return true;
     }
 
     function committedChapterVersionMatches(version) {
@@ -2499,20 +2560,55 @@ QtObject {
         return {"queued": true, "requestId": requestId};
     }
 
+    // 开章失败 / 版本不完整时的统一收口：恢复上一章已提交三元组，不替换正文、
+    // 不清 undo、不调用 markEditorDocumentLoaded，保证上一文档的原始保存状态仍在。
+    function finishChapterOpenFailure(pId, vId, cId, reason, previousVersion, previousInstalled) {
+        committedChapterGeneration = String(previousVersion.objectGeneration || "");
+        committedChapterRevision = Number(previousVersion.revision || 0);
+        committedChapterSha256 = String(previousVersion.contentSha256 || "");
+        // 回滚到上一文档时，它原有的版本安装状态也必须一并恢复，否则下次
+        // 开章前会被当成"新正文 + 未安装版本"。
+        chapterVersionInstalled = previousInstalled === true;
+        isLoadingChapter = false;
+        chapterLoadFailed(pId, vId, cId, String(reason || "open_failed"));
+        return null;
+    }
+
     // 同步打开章节正文（不负责切章前的保存）。
     function openChapterContentNow(pId, vId, cId) {
         isLoadingChapter = true;
+
+        // Issue #1062 评论 #7187981523：替换正文前先留住上一章版本用于失败
+        // 回滚，并清空本章 base。任何失败都不能让上一章版本继续给本章当 base。
+        var previousVersion = {
+            "objectGeneration": committedChapterGeneration,
+            "revision": committedChapterRevision,
+            "contentSha256": committedChapterSha256
+        };
+        var previousInstalled = chapterVersionInstalled;
+        committedChapterGeneration = "";
+        committedChapterRevision = 0;
+        committedChapterSha256 = "";
+        chapterVersionInstalled = false;
 
         var result = editorBackendRef.open_chapter(pId, vId, cId);
 
         if (!result.success) {
             console.error("[SujianDebug] Failed to open chapter:", result.errorCode || result.rawError);
-            isLoadingChapter = false;
-            chapterLoadFailed(pId, vId, cId, String(result.rawError || result.errorCode || "open_failed"));
-            return null;
+            return finishChapterOpenFailure(pId, vId, cId,
+                result.rawError || result.errorCode || "open_failed", previousVersion, previousInstalled);
         }
 
-        var content = normalizePlainText(result.data ? result.data.content || "" : "");
+        var loadedData = result.data || {};
+        // Issue #1062 评论 #7187981523：版本必须在 load_document_text /
+        // reload_plain_text 之前校验。缺字段时先失败，不能留下"新正文 + 空 base"。
+        if (!isCompleteChapterVersion(loadedData.version)) {
+            console.error("[SujianDebug] Open chapter returned incomplete version");
+            return finishChapterOpenFailure(pId, vId, cId, "version_missing", previousVersion, previousInstalled);
+        }
+
+        // 打开文档绝不隐式改写正文：直接使用 Core 返回的纯文本。
+        var content = result.data ? String(result.data.content || "") : "";
 
         // Document identity is the complete project/volume/chapter tuple. A
         // different chapter can have the same canonical text (including empty).
@@ -2531,12 +2627,19 @@ QtObject {
         // 身份取 Core 返回的权威 data.projectId/volumeId/chapterId（与
         // WritingWorkspace 提交给 controller 的值同源），避免请求参数与
         // authoritative 身份不一致导致所有保存被误判为过期快照。
-        var loadedData = result.data || {};
-        applyCommittedChapterVersion(loadedData.version);
+        // Issue #1062 评论 #7187981523：先安装版本，再置 installed，最后与
+        // markEditorDocumentLoaded 同一时刻完成，二者不可分开。
+        if (!applyCommittedChapterVersion(loadedData.version)) {
+            return finishChapterOpenFailure(pId, vId, cId, "version_missing", previousVersion);
+        }
+        chapterVersionInstalled = true;
         var loadedProjectId = String(loadedData.projectId || pId);
         var loadedVolumeId = String(loadedData.volumeId || vId);
         var loadedChapterId = String(loadedData.chapterId || cId);
-        markEditorDocumentLoaded(loadedProjectId, loadedVolumeId, loadedChapterId);
+        if (!markEditorDocumentLoaded(loadedProjectId, loadedVolumeId, loadedChapterId)) {
+            chapterVersionInstalled = false;
+            return finishChapterOpenFailure(pId, vId, cId, "version_not_installed", previousVersion, previousInstalled);
+        }
         // 即使同一章节文本相同，新页面 / 新 EditorKernel 也是新的 Core
         // 标注会话；必须领取进程级唯一 ID，不能沿用旧页面的数字 epoch。
         beginAnnotationDocumentSession();
@@ -2607,6 +2710,7 @@ QtObject {
             committedChapterGeneration = "";
             committedChapterRevision = 0;
             committedChapterSha256 = "";
+            chapterVersionInstalled = false;
             explicitEmptySavePending = false;
             lastPotentialExplicitClearAtMs = 0;
             // Issue #1059：清空文档即开启新的保存会话；未完成回执不再应用到

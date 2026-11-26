@@ -13,9 +13,10 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 use writer_core::api::types::ChapterVersionDto;
+use writer_core::api::WriterCoreApi;
 
 use super::{worker_sender, ChapterSaveContext, ChapterSaveJob, ChapterSaveWorkerState};
 
@@ -32,21 +33,16 @@ pub(crate) struct ChapterFactCommand {
     pub input: writer_core::api::EditorChangeStatsInputDto,
 }
 
-/// 编辑器正文变化命令。
+/// 编辑器正文变化命令（Issue #1062 三.4：只带身份与唤醒）。
+///
+/// 正文、revision/sha256 与 base 不再随命令进入无界 channel：GUI 线程先把
+/// 它们写进 chapter_draft 的内存 registry，worker 收到命令时只按身份把该
+/// 草稿按 2s 节流落盘，`force` 表示保存/关窗/离开作品边界的立即写入。
 pub(crate) struct ChapterDraftTextCommand {
     pub context: ChapterSaveContext,
     pub project_id: String,
     pub volume_id: String,
     pub chapter_id: String,
-    pub session_id: u64,
-    /// 对象 generation（草稿侧过滤用；与 base_generation 分开）。
-    pub generation: String,
-    pub text: Arc<str>,
-    pub revision: u64,
-    pub sha256: String,
-    pub base_generation: String,
-    pub base_revision: u64,
-    pub base_sha256: String,
     /// true = 立即写整章正文（保存/关窗/离开作品边界）。
     pub force: bool,
 }
@@ -144,24 +140,63 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
     let revision = command.input.new_revision;
     let session_id = command.session_id.parse::<u64>().unwrap_or(0);
     let api = state.api_for(&command.context);
+    // Issue #1062 复审第 3 项：Core 投影构造失败也要保留完整原始 command 的
+    // 重试责任——把它持久化到草稿目录，并让该 revision 之前的快照不可提交；
+    // 下一次保存/恢复时用同一 event ID 重试，绝不静默丢掉这次真实编辑。
+    let input_snapshot = command.input.clone();
     let projection_json = match api.record_editor_proof_fact(command.input) {
         Ok(json) => json,
         Err(error) => {
-            crate::backend::app_backend::debug_error_static(
-                "chapter_draft",
-                "record_editor_proof_fact_failed",
-                &format!(
-                    "project={} chapter={} event={event_id}: {error}",
-                    command.project_id, command.chapter_id
-                ),
-            );
+            let input_json = match serde_json::to_string(&input_snapshot) {
+                Ok(json) => json,
+                Err(encode_error) => {
+                    crate::backend::app_backend::debug_error_static(
+                        "chapter_draft",
+                        "record_editor_proof_fact_encode_failed",
+                        &format!(
+                            "project={} chapter={} event={event_id}: {encode_error}",
+                            command.project_id, command.chapter_id
+                        ),
+                    );
+                    return;
+                }
+            };
+            if let Err(spool_error) = super::super::chapter_draft::spool_failed_input(
+                Path::new(&command.context.projects_root),
+                &command.project_id,
+                &command.chapter_id,
+                &command.volume_id,
+                session_id,
+                &command.generation,
+                revision,
+                &event_id,
+                &input_json,
+            ) {
+                crate::backend::app_backend::debug_error_static(
+                    "chapter_draft",
+                    "record_editor_proof_fact_spool_failed",
+                    &format!(
+                        "project={} chapter={} event={event_id}: api={error}; spool={spool_error}",
+                        command.project_id, command.chapter_id
+                    ),
+                );
+            } else {
+                crate::backend::app_backend::debug_error_static(
+                    "chapter_draft",
+                    "record_editor_proof_fact_deferred",
+                    &format!(
+                        "project={} chapter={} event={event_id} revision={revision}: {error}",
+                        command.project_id, command.chapter_id
+                    ),
+                );
+            }
             return;
         }
     };
     if projection_json.is_empty() {
         return;
     }
-    super::super::chapter_draft::note_fact(
+    if let Err(error) = super::super::chapter_draft::note_fact(
         Path::new(&command.context.projects_root),
         &command.project_id,
         &command.chapter_id,
@@ -174,7 +209,16 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
             session_id,
             projection_json,
         },
-    );
+    ) {
+        crate::backend::app_backend::debug_error_static(
+            "chapter_draft",
+            "note_fact_failed",
+            &format!(
+                "project={} chapter={}: {error}",
+                command.project_id, command.chapter_id
+            ),
+        );
+    }
     if let Err(error) = super::super::chapter_draft::persist_current(
         Path::new(&command.context.projects_root),
         &command.project_id,
@@ -192,37 +236,90 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
     }
 }
 
-/// 更新草稿正文；`force` 时立即写整章。
+/// 用同一 event ID 重试所有 Core 投影构造失败的原始命令。
+///
+/// 成功一条就写进草稿并删除 spool 文件；任何一条失败立即返回 Err，
+/// 由调用方拒绝越过该 revision 的保存/恢复（Issue #1062 复审第 3 项）。
+pub(super) fn retry_pending_inputs(
+    api: &WriterCoreApi,
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+    volume_id: &str,
+    session_id: u64,
+    generation: &str,
+) -> Result<usize, String> {
+    let mut retried = 0usize;
+    for input in super::super::chapter_draft::pending_inputs(projects_root, project_id, chapter_id)
+    {
+        let dto: writer_core::api::EditorChangeStatsInputDto =
+            serde_json::from_str(&input.input_json).map_err(|error| {
+                format!(
+                    "pending proof input decode failed: event={} revision={}: {error}",
+                    input.event_id, input.revision
+                )
+            })?;
+        let projection = api.record_editor_proof_fact(dto).map_err(|error| {
+            format!(
+                "record pending proof fact event={}: {error}",
+                input.event_id
+            )
+        })?;
+        // spooled 输入自带原始会话/generation；调用方参数只在旧记录缺字段时兜底。
+        let fact_session = if input.session_id == 0 {
+            session_id
+        } else {
+            input.session_id
+        };
+        let fact_volume = if input.volume_id.is_empty() {
+            volume_id
+        } else {
+            input.volume_id.as_str()
+        };
+        let fact_generation = if input.generation.is_empty() {
+            generation
+        } else {
+            input.generation.as_str()
+        };
+        if !projection.is_empty() {
+            super::super::chapter_draft::note_fact(
+                projects_root,
+                project_id,
+                chapter_id,
+                fact_volume,
+                fact_session,
+                fact_generation,
+                super::super::chapter_draft::DraftFact {
+                    event_id: input.event_id.clone(),
+                    revision: input.revision,
+                    session_id: fact_session,
+                    projection_json: projection,
+                },
+            )?;
+        }
+        super::super::chapter_draft::clear_pending_input(
+            projects_root,
+            project_id,
+            chapter_id,
+            &input.event_id,
+        );
+        retried = retried.saturating_add(1);
+    }
+    Ok(retried)
+}
+
+/// 把内存 registry 里已更新的草稿正文按节流落盘；`force` 时立即写整章。
 pub(super) fn handle_draft_text(command: ChapterDraftTextCommand) {
-    super::super::chapter_draft::note_text(
-        Path::new(&command.context.projects_root),
-        &command.project_id,
-        &command.chapter_id,
-        &command.volume_id,
-        command.session_id,
-        &command.generation,
-        command.text.to_string(),
-        command.revision,
-        &command.sha256,
-        (
-            &command.base_generation,
-            command.base_revision,
-            &command.base_sha256,
-        ),
-    );
     if let Err(error) = super::super::chapter_draft::persist_current(
         Path::new(&command.context.projects_root),
         &command.project_id,
         &command.chapter_id,
         command.force,
     ) {
-        crate::backend::app_backend::debug_error_static(
-            "chapter_draft",
-            "persist_draft_text_failed",
-            &format!(
-                "project={} chapter={}: {error}",
-                command.project_id, command.chapter_id
-            ),
+        log::warn!(
+            "persist chapter draft text failed: project={} chapter={}: {error}",
+            command.project_id,
+            command.chapter_id
         );
     }
 }
@@ -232,6 +329,23 @@ fn version_display(version: &ChapterVersionDto) -> String {
         "{}@{} sha={}",
         version.object_generation, version.revision, version.content_sha256
     )
+}
+
+/// 事件链中 revision <= 上限的投影 JSON 数组；为空返回空串。
+fn batch_json_through_revision(
+    plan: &super::super::chapter_draft::ChapterDraftRestorePlan,
+    through: u64,
+) -> Result<String, String> {
+    let mut values = Vec::new();
+    for fact in plan.facts.iter().filter(|fact| fact.revision <= through) {
+        let value: serde_json::Value = serde_json::from_str(&fact.projection_json)
+            .map_err(|error| format!("decode draft fact revision={}: {error}", fact.revision))?;
+        values.push(value);
+    }
+    if values.is_empty() {
+        return Ok(String::new());
+    }
+    serde_json::to_string(&values).map_err(|error| format!("encode draft prefix batch: {error}"))
 }
 
 /// 项目进入时按同一批次协议重放未完成草稿。
@@ -256,6 +370,24 @@ pub(super) fn handle_restore_project(
     let api = state.api_for(&command.context);
     for draft in drafts {
         let chapter_id = draft.chapter_id.clone();
+        // 先把 Core 投影构造失败的原始命令重试掉；仍失败就保留草稿，
+        // 不能带着缺失事件把正文提交成“完整”状态。
+        if let Err(error) = retry_pending_inputs(
+            api,
+            &projects_root,
+            &command.project_id,
+            &chapter_id,
+            &draft.volume_id,
+            draft.session_id,
+            &draft.generation,
+        ) {
+            failed += 1;
+            kept += 1;
+            messages.push(format!(
+                "{chapter_id}: pending_fact_retry_failed kept: {error}"
+            ));
+            continue;
+        }
         if draft.fact_count == 0 && !draft.text_present {
             super::super::chapter_draft::remove(&projects_root, &command.project_id, &chapter_id);
             continue;
@@ -285,43 +417,110 @@ pub(super) fn handle_restore_project(
                 continue;
             }
         };
-        let replayed = if plan.fact_count > 0 {
+        // Issue #1062 复审第 1 项：事实落盘与正文草稿落盘是两条独立节流，
+        // 退出/崩溃时 facts 可能已经包含最后几次输入，而 text.txt 还是较早
+        // 的 revision。这属于正常状态，不能一律判成 replay_text_mismatch。
+        let content = if plan.fact_count == 0 {
+            match plan.text.clone() {
+                Some(text) => text,
+                None => {
+                    super::super::chapter_draft::remove(
+                        &projects_root,
+                        &command.project_id,
+                        &plan.chapter_id,
+                    );
+                    continue;
+                }
+            }
+        } else {
+            if plan.text_revision > plan.event_end_revision {
+                // 正文比完整事件链还新：说明有编辑事件没落盘，保留草稿等
+                // 下一次重试，不能用“缺少事实”的正文覆盖。
+                failed += 1;
+                kept += 1;
+                messages.push(format!(
+                    "{}: text_ahead_of_events kept (textRevision={} eventEnd={})",
+                    plan.chapter_id, plan.text_revision, plan.event_end_revision
+                ));
+                continue;
+            }
+            if let Some(draft_text) = plan.text.as_ref() {
+                if plan.text_revision < plan.event_end_revision {
+                    // 正文落后于事件链：先核对 text.txt 确实等于事件链在
+                    // text_revision 的中间态，再继续 replay 后续事件。
+                    let prefix = match batch_json_through_revision(&plan, plan.text_revision) {
+                        Ok(json) if !json.is_empty() => json,
+                        Ok(_) => {
+                            failed += 1;
+                            kept += 1;
+                            messages.push(format!(
+                                "{}: draft_text_precedes_events kept (textRevision={} firstEvent={})",
+                                plan.chapter_id,
+                                plan.text_revision,
+                                plan.facts.first().map_or(0, |fact| fact.revision)
+                            ));
+                            continue;
+                        }
+                        Err(error) => {
+                            failed += 1;
+                            kept += 1;
+                            messages.push(format!(
+                                "{}: draft_prefix_encode_failed kept: {error}",
+                                plan.chapter_id
+                            ));
+                            continue;
+                        }
+                    };
+                    match api.replay_editor_proof_batch(&plan.chapter_id, &opened.content, &prefix)
+                    {
+                        Ok(mid) if mid == *draft_text => {}
+                        Ok(_) => {
+                            failed += 1;
+                            kept += 1;
+                            messages.push(format!(
+                                "{}: draft_text_mismatch_at_revision kept (textRevision={})",
+                                plan.chapter_id, plan.text_revision
+                            ));
+                            continue;
+                        }
+                        Err(error) => {
+                            failed += 1;
+                            kept += 1;
+                            messages.push(format!(
+                                "{}: draft_prefix_replay_failed kept: {error}",
+                                plan.chapter_id
+                            ));
+                            continue;
+                        }
+                    }
+                }
+            }
             match api.replay_editor_proof_batch(&plan.chapter_id, &opened.content, &plan.batch_json)
             {
-                Ok(text) => Some(text),
+                Ok(text) => {
+                    if plan.text_revision == plan.event_end_revision {
+                        if let Some(draft_text) = plan.text.as_ref() {
+                            if text != *draft_text {
+                                failed += 1;
+                                kept += 1;
+                                messages.push(format!(
+                                    "{}: replay_text_mismatch failed kept (replayed_len={} draft_len={})",
+                                    plan.chapter_id,
+                                    text.len(),
+                                    draft_text.len()
+                                ));
+                                continue;
+                            }
+                        }
+                    }
+                    text
+                }
                 Err(error) => {
                     failed += 1;
                     kept += 1;
                     messages.push(format!("{}: replay_failed kept: {error}", plan.chapter_id));
                     continue;
                 }
-            }
-        } else {
-            None
-        };
-        if let (Some(replayed_text), Some(draft_text)) = (replayed.as_ref(), plan.text.as_ref()) {
-            if replayed_text != draft_text {
-                failed += 1;
-                kept += 1;
-                messages.push(format!(
-                    "{}: replay_text_mismatch failed kept (replayed_len={} draft_len={})",
-                    plan.chapter_id,
-                    replayed_text.len(),
-                    draft_text.len()
-                ));
-                continue;
-            }
-        }
-        let content = match (replayed, plan.text.clone()) {
-            (Some(replayed_text), _) => replayed_text,
-            (None, Some(draft_text)) => draft_text,
-            (None, None) => {
-                super::super::chapter_draft::remove(
-                    &projects_root,
-                    &command.project_id,
-                    &plan.chapter_id,
-                );
-                continue;
             }
         };
         let draft_base = ChapterVersionDto {

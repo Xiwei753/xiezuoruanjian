@@ -54,9 +54,9 @@ fn freeze_reads_back_this_session_prefix_after_reload() {
 
     // 模拟进程重启：丢掉内存 registry，只靠磁盘恢复。
     forget_for_test(root, "p1", "c1");
-    let prefix = freeze_batch_for(root, "p1", "c1", 7, "g1", 4).expect("freeze prefix");
+    let prefix = freeze_batch_for(root, "p1", "c1", 7, "g1", 3).expect("freeze prefix");
     assert_eq!(ids(&prefix), vec!["e1", "e2"]);
-    assert!(prefix.iter().all(|fact| fact.revision <= 4));
+    assert!(prefix.iter().all(|fact| fact.revision <= 3));
 
     let all = freeze_batch_for(root, "p1", "c1", 7, "g1", 5).expect("freeze all");
     assert_eq!(ids(&all), vec!["e1", "e2", "e3"]);
@@ -233,7 +233,7 @@ fn missing_or_corrupt_fact_file_fails_freeze_and_restore() {
     let path = fact_file_path(&location.dir, 2, "e2");
 
     std::fs::remove_file(&path).expect("remove fact file");
-    let error = freeze_batch_for(root, "p1", "c1", 7, "g1", 5).expect_err("missing fact must fail");
+    let error = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect_err("missing fact must fail");
     assert!(
         error.contains("e2"),
         "error must name the event and path: {error}"
@@ -242,7 +242,7 @@ fn missing_or_corrupt_fact_file_fails_freeze_and_restore() {
 
     std::fs::write(&path, "{ this is not json").expect("corrupt fact file");
     forget_for_test(root, "p1", "c1");
-    let error = freeze_batch_for(root, "p1", "c1", 7, "g1", 5).expect_err("corrupt fact must fail");
+    let error = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect_err("corrupt fact must fail");
     assert!(
         error.contains("corrupted"),
         "error must name corruption: {error}"
@@ -293,7 +293,7 @@ fn freeze_and_restore_recover_facts_when_meta_index_lags() {
     std::fs::write(&meta_path, value.to_string()).expect("rewrite meta");
     forget_for_test(root, "p1", "c1");
 
-    let batch = freeze_batch_for(root, "p1", "c1", 7, "g1", 10).expect("recover from facts dir");
+    let batch = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect("recover from facts dir");
     assert_eq!(ids(&batch), vec!["e1", "e2"]);
 
     forget_for_test(root, "p1", "c1");
@@ -357,4 +357,118 @@ fn draft_metrics_counts_index_and_text_bytes_only() {
     let (facts, bytes) = draft_metrics();
     assert!(facts >= 1);
     assert!(bytes >= 5);
+}
+
+#[test]
+fn freeze_rejects_snapshot_ahead_of_last_event() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 2, 7));
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e2", 3, 7));
+    persist_current(root, "p1", "c1", true).expect("persist draft");
+
+    // 快照 revision 4 之前发生过编辑，但事件链只到 3：不能把“找不到”
+    // 当成“本来没有”而带着不完整证明提交正文。
+    let error = freeze_batch_for(root, "p1", "c1", 7, "g1", 4).expect_err("gap must fail");
+    assert!(error.contains("not current"), "unexpected error: {error}");
+    assert_eq!(
+        ids(&freeze_batch_for(root, "p1", "c1", 7, "g1", 3).expect("exact snapshot")),
+        vec!["e1", "e2"]
+    );
+}
+
+#[test]
+fn failed_fact_write_blocks_snapshot_until_retry_succeeds() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("first fact");
+    persist_current(root, "p1", "c1", true).expect("persist draft");
+    let location = draft_location(root);
+    // 目标路径被目录占住，原子的写盘 rename 会失败。
+    let blocked = fact_file_path(&location.dir, 2, "e2");
+    std::fs::create_dir_all(&blocked).expect("occupy fact path");
+
+    let error = note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e2", 2, 7))
+        .expect_err("fact write must fail");
+    assert!(error.contains("write draft fact failed"), "{error}");
+    let blocked_error =
+        freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect_err("failed fact blocks snapshot");
+    assert!(
+        blocked_error.contains("retry draft fact failed")
+            || blocked_error.contains("persistence failed"),
+        "unexpected error: {blocked_error}"
+    );
+
+    // 故障解除后冻结前会重试失败事件，并把批次补齐。
+    std::fs::remove_dir_all(&blocked).expect("clear blocked path");
+    let batch = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect("retry recovers");
+    assert_eq!(ids(&batch), vec!["e1", "e2"]);
+}
+
+#[test]
+fn mark_committed_is_recoverable_and_idempotent() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("e1");
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e2", 2, 7)).expect("e2");
+    persist_current(root, "p1", "c1", true).expect("persist draft");
+    let location = draft_location(root);
+
+    assert!(!mark_committed(
+        root,
+        "p1",
+        "c1",
+        &["e1".into()],
+        "g1",
+        1,
+        "sha1"
+    ));
+    // ack 后剩余事件仍可冻结；重复 ack 同一批不会报错也不会误删后一条。
+    let remaining = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect("remaining fact");
+    assert_eq!(ids(&remaining), vec!["e2"]);
+    assert!(!mark_committed(
+        root,
+        "p1",
+        "c1",
+        &["e1".into()],
+        "g1",
+        1,
+        "sha1"
+    ));
+    let remaining = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect("remaining fact again");
+    assert_eq!(ids(&remaining), vec!["e2"]);
+    assert!(fact_file_path(&location.dir, 2, "e2").exists());
+    // 已确认的 e1 文件已删除，但 meta 的 acked 记录让缺失文件不再报错。
+    let plan = restore_plan(root, "p1", "c1").expect("restore plan after ack");
+    assert_eq!(plan.event_end_revision, 2);
+    assert_eq!(plan.facts.len(), 1);
+}
+
+#[test]
+fn pending_fact_inputs_round_trip() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    spool_failed_input(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g1",
+        2,
+        "e1",
+        r#"{"eventId":"e1","newRevision":2}"#,
+    )
+    .expect("spool input");
+    let pending = pending_inputs(root, "p1", "c1");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].event_id, "e1");
+    assert_eq!(pending[0].revision, 2);
+    assert!(pending[0].input_json.contains("newRevision"));
+    // 未重试成功前，该 revision 的正文快照不可提交。
+    let error = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect_err("pending input blocks");
+    assert!(error.contains("persistence failed"), "{error}");
+    clear_pending_input(root, "p1", "c1", "e1");
+    assert!(pending_inputs(root, "p1", "c1").is_empty());
+    assert!(freeze_batch_for(root, "p1", "c1", 7, "g1", 2).is_ok());
 }

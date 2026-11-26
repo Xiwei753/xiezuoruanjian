@@ -56,6 +56,7 @@ pub(super) struct DraftLocation {
     pub(super) project_id: String,
     pub(super) chapter_id: String,
     pub(super) workspace_key: String,
+    pub(super) projects_root: PathBuf,
     pub(super) dir: PathBuf,
     pub(super) key: String,
     legacy_path: PathBuf,
@@ -71,6 +72,7 @@ impl DraftLocation {
         Some(Self {
             project_id: project_id.to_string(),
             chapter_id: chapter_id.to_string(),
+            projects_root: projects_root.to_path_buf(),
             dir: drafts_root.join(chapter_id),
             legacy_path: drafts_root.join(format!("{chapter_id}.json")),
             key: format!("{workspace_key}\u{1f}{project_id}\u{1f}{chapter_id}"),
@@ -102,6 +104,12 @@ pub(super) struct MetaData {
     pub(super) text_sha256: String,
     pub(super) updated_at_ms: i64,
     pub(super) facts: Vec<DraftFactIndex>,
+    /// Issue #1062 复审：已随 durable receipt 确认、随后才删除事实文件的
+    /// event ID。meta 先写索引再删文件；两步之间崩溃时，缺失文件命中这里
+    /// 就按“已确认”跳过，真正未确认的缺失事实仍然报错。
+    pub(super) acked_event_ids: Vec<String>,
+    /// 已确认到的正文 revision（诊断与防止 ack 记录无限增长）。
+    pub(super) acked_through_revision: u64,
 }
 
 impl MetaData {
@@ -171,6 +179,8 @@ pub(super) fn meta_from_state(
         text_sha256: text_sha256.to_string(),
         updated_at_ms: state.updated_at_ms,
         facts: state.facts.clone(),
+        acked_event_ids: state.acked_event_ids.clone(),
+        acked_through_revision: state.acked_through_revision,
     }
 }
 
@@ -288,21 +298,39 @@ pub(super) fn list_fact_files(dir: &Path) -> Result<Vec<(u64, PathBuf)>, String>
 
 /// meta 索引与 facts/ 目录合并：索引缺失（meta 滞后）时读文件补齐。
 ///
-/// 索引里有、目录里没有的条目必须保留：冻结时读不到文件要报错，不能把
-/// “文件被删/丢失”当成“已确认删除”静默跳过（确认删除由 mark_committed
-/// 同时删文件并重写索引）。
+/// Issue #1062 复审：`acked` 是已经随 durable receipt 确认的 event ID。ack
+/// 决议先写进 meta，再删除事实文件；若删除与 meta 写入之间崩溃，索引里已经
+/// 没有这些条目、目录里也可能已经没有文件——它们必须按已确认跳过。反过来，
+/// 索引里有、目录里没有、且不在 acked 里的条目必须报错，不能把“文件被删/
+/// 丢失”当成“已确认删除”静默跳过。目录里存在但索引没有的文件如果是 acked
+/// 的残留（删除中断），同样跳过。
 pub(super) fn merge_index(
     dir: &Path,
     index: &[DraftFactIndex],
+    acked: &HashSet<String>,
 ) -> Result<Vec<DraftFactIndex>, String> {
     let files = list_fact_files(dir)?;
     let mut by_seq: HashMap<u64, DraftFactIndex> =
         index.iter().cloned().map(|fact| (fact.seq, fact)).collect();
+    let present_seqs: HashSet<u64> = files.iter().map(|(seq, _)| *seq).collect();
+    for (seq, fact) in &by_seq {
+        if present_seqs.contains(seq) || acked.contains(fact.event_id.as_str()) {
+            continue;
+        }
+        return Err(format!(
+            "draft fact file missing: seq={seq} event={} dir={}",
+            fact.event_id,
+            dir.display()
+        ));
+    }
     for (seq, path) in files {
         if by_seq.contains_key(&seq) {
             continue;
         }
         let parsed = read_fact_file(&path)?;
+        if acked.contains(parsed.event_id.as_str()) {
+            continue;
+        }
         by_seq.insert(
             seq,
             DraftFactIndex {
@@ -349,7 +377,8 @@ pub(super) fn write_text(dir: &Path, text: &str) -> Result<(), String> {
 /// 读取新格式草稿；没有 meta.json 时返回 None。
 pub(super) fn read_new_state(location: &DraftLocation, trim: bool) -> Option<DraftState> {
     let meta = read_meta(&location.dir, &location.project_id, &location.chapter_id)?;
-    let mut facts = match merge_index(&location.dir, &meta.index()) {
+    let acked: HashSet<String> = meta.acked_event_ids.iter().cloned().collect();
+    let mut facts = match merge_index(&location.dir, &meta.index(), &acked) {
         Ok(facts) => facts,
         Err(error) => {
             log::warn!(
@@ -387,6 +416,11 @@ pub(super) fn read_new_state(location: &DraftLocation, trim: bool) -> Option<Dra
         text_dirty: false,
         facts,
         next_seq,
+        failed_facts: Vec::new(),
+        failed_inputs: Vec::new(),
+        acked_event_ids: meta.acked_event_ids,
+        acked_through_revision: meta.acked_through_revision,
+        projects_root: location.projects_root.clone(),
         updated_at_ms: meta.updated_at_ms,
         meta_dirty: false,
         last_persist: None,
@@ -609,6 +643,11 @@ pub(super) fn legacy_state(
         text_dirty: false,
         facts,
         next_seq,
+        failed_facts: Vec::new(),
+        failed_inputs: Vec::new(),
+        acked_event_ids: Vec::new(),
+        acked_through_revision: 0,
+        projects_root: location.projects_root.clone(),
         updated_at_ms: legacy.updated_at_ms,
         meta_dirty: false,
         last_persist: None,

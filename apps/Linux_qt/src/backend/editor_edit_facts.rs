@@ -226,23 +226,32 @@ impl AppBackend {
         let Some((data_root, projects_root, layout)) = self.annotation_task_context() else {
             return;
         };
+        let context = crate::backend::chapter_save_queue::ChapterSaveContext::new(
+            &data_root,
+            &projects_root,
+            &layout,
+        );
+        // Issue #1062 三.4：正文先写进草稿内存 registry（同一 GUI 线程；只有
+        // 进程内还没有该章状态时才会读一次小索引），命令只带身份与唤醒；保存
+        // worker 按节流/force 把这份正文落盘，不再让整章正文随每次编辑进入
+        // 无界 mpsc 队列。
+        crate::backend::chapter_draft::note_text(
+            std::path::Path::new(&projects_root),
+            project_id,
+            chapter_id,
+            volume_id,
+            session_id,
+            base_generation,
+            text.to_string(),
+            revision,
+            sha256,
+            (base_generation, base_revision, base_sha256),
+        );
         let command = crate::backend::chapter_save_queue::ChapterDraftTextCommand {
-            context: crate::backend::chapter_save_queue::ChapterSaveContext::new(
-                &data_root,
-                &projects_root,
-                &layout,
-            ),
+            context,
             project_id: project_id.to_string(),
             volume_id: volume_id.to_string(),
             chapter_id: chapter_id.to_string(),
-            session_id,
-            generation: base_generation.to_string(),
-            text: std::sync::Arc::from(text),
-            revision,
-            sha256: sha256.to_string(),
-            base_generation: base_generation.to_string(),
-            base_revision,
-            base_sha256: base_sha256.to_string(),
             force,
         };
         if let Err(error) = crate::backend::chapter_save_queue::enqueue_draft_text(command) {

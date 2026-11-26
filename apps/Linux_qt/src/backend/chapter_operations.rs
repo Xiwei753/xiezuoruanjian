@@ -66,6 +66,7 @@ impl AppBackend {
                         "volumeId": v,
                         "chapterId": c,
                         "meta": content.meta,
+                        "version": content.version,
                     });
                     writer_core::api::ResultEnvelope::success(data)
                         .to_json_string()

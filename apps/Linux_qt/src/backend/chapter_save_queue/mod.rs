@@ -255,8 +255,12 @@ pub(crate) struct ChapterSaveQueueMetrics {
     pub pending_requests: usize,
     /// 结果表保留的记录数（含已交付但未淘汰的回执）。
     pub retained_results: usize,
-    /// 仍在内存里的正文快照字节数。
+    /// 仍在内存里的正文快照字节数（结果表 + mailbox）。
     pub content_bytes: usize,
+    /// 仍在 mailbox 里等待认领的请求数。
+    pub mailbox_requests: usize,
+    /// mailbox 里等待认领的正文快照字节数。
+    pub mailbox_bytes: usize,
 }
 
 /// 读取保存队列当前占用。诊断线程使用，不阻塞 worker。
@@ -274,6 +278,13 @@ pub(crate) fn queue_metrics() -> ChapterSaveQueueMetrics {
             metrics.pending_requests += 1;
         }
         metrics.content_bytes = metrics.content_bytes.saturating_add(entry.content.len());
+    }
+    // mailbox 里的请求在 worker 认领前同样占着整章正文；单独统计，便于区分
+    // “已入队未执行”的积压与结果表回执占用（Issue #1062 三.4）。
+    for request in store.mailbox.values() {
+        metrics.mailbox_requests = metrics.mailbox_requests.saturating_add(1);
+        metrics.mailbox_bytes = metrics.mailbox_bytes.saturating_add(request.content.len());
+        metrics.content_bytes = metrics.content_bytes.saturating_add(request.content.len());
     }
     metrics
 }
@@ -311,19 +322,28 @@ pub(crate) fn next_request_id() -> u32 {
 
 fn prune_store(store: &mut ChapterSaveStore) {
     while store.entries.len() >= MAX_RETAINED_RESULTS {
-        let Some(oldest) = store.order.pop_front() else {
-            return;
-        };
-        let evict = store
-            .entries
-            .get(&oldest)
-            .map(|entry| entry.state == ChapterSaveState::Terminal && entry.delivered)
-            .unwrap_or(true);
-        if evict {
-            store.entries.remove(&oldest);
-        } else {
-            // 还在队列里/尚未交付的结果不淘汰，放回队尾等下一次机会。
-            store.order.push_back(oldest);
+        // Issue #1062 1.3：只淘汰已终态且已交付的回执；本轮不可淘汰的条目
+        // 旋转到队尾继续等下一次机会，不能因为最老条目还不可淘汰就整体停手
+        // （否则表满后永远不会再回收）。
+        let mut evicted = false;
+        for _ in 0..store.order.len() {
+            let Some(oldest) = store.order.pop_front() else {
+                return;
+            };
+            let evict = store
+                .entries
+                .get(&oldest)
+                .map(|entry| entry.state == ChapterSaveState::Terminal && entry.delivered)
+                .unwrap_or(true);
+            if evict {
+                store.entries.remove(&oldest);
+                evicted = true;
+            } else {
+                // 还在队列里/尚未交付的结果不淘汰，旋转到队尾。
+                store.order.push_back(oldest);
+            }
+        }
+        if !evicted {
             return;
         }
     }
@@ -615,18 +635,25 @@ pub(crate) fn enqueue(request: ChapterSaveRequest) -> Result<(), String> {
     Ok(())
 }
 
-/// 合并 key：workspace + 对象 generation + 真实会话。
+/// 合并 key：workspace + 项目 + 章节 + 卷 + 对象 generation + 真实会话。
 ///
-/// 同会话内只有更高 revision 的快照可以接替（见 [`supersede_pending`]）；
-/// generation 变化（外部重建/迁移）或会话变化都不合并。
+/// 只有同一 workspace、同一项目、同一卷、同一章节、同一 generation 且同一
+/// 会话里的更高 revision 快照才能接替（见 [`supersede_pending`]）；缺少
+/// 章节/卷隔离会让同 workspace 内不同章节在 generation 为空且 session 数值
+/// 相同时互相 supersede。卷进入 key 只为避免跨卷移动后误判，把不同卷的同名
+/// 章节分开；supersede 仍要求 revision 严格更高。generation 变化（外部重建/
+/// 迁移）或会话变化都不合并。
 fn save_merge_key(request: &ChapterSaveRequest) -> String {
     let generation = request
         .expected
         .as_ref()
         .map_or("", |version| version.object_generation.as_str());
     format!(
-        "{}\x1f{}\x1f{}",
+        "{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}",
         request.context.key(),
+        request.identity.project_id,
+        request.identity.chapter_id,
+        request.identity.volume_id,
         generation,
         request.identity.session_id,
     )

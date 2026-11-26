@@ -397,10 +397,12 @@ fn insert_model_lifetime_fields(fields: &mut BTreeMap<String, serde_json::Value>
     }
 }
 
-/// 追加保存/统计队列的内存占用分项（Issue #1062 三.4）。
+/// 追加保存/统计队列与草稿 registry 的内存占用分项（Issue #1062 三.4）。
 ///
 /// 两个钩子只读原子量或结果表短锁，采样线程不会阻塞保存 worker；正文快照
-/// 字节只统计结果表仍持有的 `Arc<str>`，不是历史累计写入量。
+/// 字节只统计结果表/mailbox 仍持有的 `Arc<str>`，不是历史累计写入量。
+/// 草稿正文留在内存 registry 里等 worker 落盘，单独统计其事实索引条数与
+/// 正文字节数。
 fn insert_queue_occupancy_fields(fields: &mut BTreeMap<String, serde_json::Value>) {
     let queue = crate::backend::chapter_save_queue::queue_metrics();
     fields.insert(
@@ -414,6 +416,23 @@ fn insert_queue_occupancy_fields(fields: &mut BTreeMap<String, serde_json::Value
     fields.insert(
         "chapter_save_content_bytes".to_string(),
         serde_json::Value::from(queue.content_bytes),
+    );
+    fields.insert(
+        "chapter_save_mailbox_requests".to_string(),
+        serde_json::Value::from(queue.mailbox_requests),
+    );
+    fields.insert(
+        "chapter_save_mailbox_bytes".to_string(),
+        serde_json::Value::from(queue.mailbox_bytes),
+    );
+    let (draft_fact_index, draft_text_bytes) = crate::backend::chapter_draft::draft_metrics();
+    fields.insert(
+        "chapter_draft_fact_index".to_string(),
+        serde_json::Value::from(draft_fact_index),
+    );
+    fields.insert(
+        "chapter_draft_text_bytes".to_string(),
+        serde_json::Value::from(draft_text_bytes),
     );
     fields.insert(
         "stats_pending_bytes".to_string(),
