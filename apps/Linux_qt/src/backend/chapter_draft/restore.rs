@@ -117,13 +117,20 @@ pub(crate) fn restore_plan_strict(
     };
     // 恢复前先补做 pending-ack，保证草稿 base 与 Core journal 一致。
     super::replay_pending_acks(projects_root, project_id, chapter_id)?;
-    let state = match store::read_new_state(&location, false)? {
+    let mut state = match store::read_new_state(&location, false)? {
         Some(state) => state,
         None => match store::migrate_legacy(&location) {
             Some(state) => state,
             None => return Ok(None),
         },
     };
+    // Issue #1062 评论 7193847871 第 2 项：meta 的 committedText* 是正文已
+    // 收口的 durable 决议。已确认快照对应的 text.txt（删除残留或缺失）都不能
+    // 再作为待恢复正文；否则一次 meta 成功、文件删除失败的崩溃会让恢复报
+    // “text missing” 永久卡住。
+    let committed_text = !state.committed_text_sha256.is_empty()
+        && state.text_revision == state.committed_text_revision
+        && state.text_sha256 == state.committed_text_sha256;
     if let Some(text) = state.text.as_ref() {
         if !state.text_sha256.is_empty() {
             let actual = writer_core::writing_stats::proof::content_digest_of_text(text);
@@ -134,11 +141,16 @@ pub(crate) fn restore_plan_strict(
                 ));
             }
         }
-    } else if state.text_revision > 0 || !state.text_sha256.is_empty() {
+    } else if (state.text_revision > 0 || !state.text_sha256.is_empty()) && !committed_text {
         return Err(format!(
             "chapter draft text missing (kept): project={project_id} chapter={chapter_id} text_revision={}",
             state.text_revision
         ));
+    }
+    if committed_text {
+        // 已确认快照的残留 text.txt 不作为待恢复正文；没有 text.txt 时也不
+        // 按缺失报错（meta 决议说明正文已由 Core 提交）。
+        state.text = None;
     }
     let mut values = Vec::with_capacity(state.facts.len());
     let mut loaded: Vec<LoadedFact> = Vec::with_capacity(state.facts.len());

@@ -4,6 +4,15 @@
 
 use super::*;
 
+/// 本次 Core 回执对应的编辑器快照；只有正文仍是这份快照时才收口。
+#[derive(Clone, Debug)]
+pub(crate) struct TextSettlement {
+    pub session_id: u64,
+    pub snapshot_revision: u64,
+    pub snapshot_digest: String,
+}
+
+/// 只结算事实与 base；正文收口由 [`mark_committed_with_settlement`] 承担。
 pub(crate) fn mark_committed(
     projects_root: &Path,
     project_id: &str,
@@ -13,6 +22,35 @@ pub(crate) fn mark_committed(
     base_generation: &str,
     base_revision: u64,
     base_sha256: &str,
+) -> Result<bool, String> {
+    mark_committed_with_settlement(
+        projects_root,
+        project_id,
+        chapter_id,
+        transaction_id,
+        acknowledged,
+        base_generation,
+        base_revision,
+        base_sha256,
+        None,
+    )
+}
+
+/// 同一 meta durable 决议：事实 ack + base 推进 + 精确正文收口（tombstone）。
+///
+/// Issue #1062 评论 7193847871 第 2 项：正文清除必须与事实 ack 一起先写
+/// meta，成功后才能删除 text.txt；meta 写失败返回 Err，调用方不得向 Core
+/// 回写 draft ack。
+pub(crate) fn mark_committed_with_settlement(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+    transaction_id: &str,
+    acknowledged: &[String],
+    base_generation: &str,
+    base_revision: u64,
+    base_sha256: &str,
+    settlement: Option<&TextSettlement>,
 ) -> Result<bool, String> {
     let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
         return Ok(false);
@@ -60,7 +98,7 @@ pub(crate) fn mark_committed(
     // Issue #1062 复审第 4 项：先把 ack 决议（剩余索引 + 已确认 event ID）
     // 持久化，再删除事实文件。顺序反过来时，两步之间崩溃会让 meta 继续
     // 引用已删文件，下一次 freeze 把已提交事件当成损坏而永久卡住。
-    let (empty, meta, previous) = {
+    let (empty, meta, previous, settle_text) = {
         let mut drafts = lock_registry();
         let Some(state) = drafts.get_mut(&location.key) else {
             return Ok(false);
@@ -73,6 +111,14 @@ pub(crate) fn mark_committed(
             acked_event_ids: state.acked_event_ids.clone(),
             acked_through_revision: state.acked_through_revision,
             applied_transactions: state.applied_transactions.clone(),
+            text: state.text.clone(),
+            text_revision: state.text_revision,
+            text_sha256: state.text_sha256.clone(),
+            persisted_text_revision: state.persisted_text_revision,
+            persisted_text_sha256: state.persisted_text_sha256.clone(),
+            text_dirty: state.text_dirty,
+            committed_text_revision: state.committed_text_revision,
+            committed_text_sha256: state.committed_text_sha256.clone(),
             updated_at_ms: state.updated_at_ms,
         };
         let mut acked_ids = state.acked_event_ids.clone();
@@ -120,6 +166,29 @@ pub(crate) fn mark_committed(
                 state.applied_transactions.drain(0..overflow);
             }
         }
+        // Issue #1062 评论 7193847871 第 2 项：正文收口与事实 ack 在同一个
+        // meta 决议里持久化；只有 meta 写成功后才删除 text.txt，Core journal
+        // 的确认也必须等这一步成功。
+        let settle_text = settlement.is_some_and(|settlement| {
+            state.text.is_some()
+                && state.session_id == settlement.session_id
+                && state.text_revision == settlement.snapshot_revision
+                && (settlement.snapshot_digest.is_empty()
+                    || writer_core::writing_stats::proof::content_digest_of_text(
+                        state.text.as_deref().unwrap_or_default(),
+                    ) == settlement.snapshot_digest)
+        });
+        if settle_text {
+            let settlement = settlement.expect("settlement checked above");
+            state.text = None;
+            state.text_dirty = false;
+            // tombstone：meta 记录已确认快照的 revision/摘要，恢复链据此把
+            // 缺失/残留的 text.txt 当作已提交内容，而不是损坏草稿。
+            state.persisted_text_revision = settlement.snapshot_revision;
+            state.persisted_text_sha256 = settlement.snapshot_digest.clone();
+            state.committed_text_revision = settlement.snapshot_revision;
+            state.committed_text_sha256 = settlement.snapshot_digest.clone();
+        }
         state.updated_at_ms = now_ms();
         state.meta_dirty = true;
         // Issue #1062 评论 7191076411 第 3 项：只有锁内状态确认没有剩余的事实
@@ -137,7 +206,7 @@ pub(crate) fn mark_committed(
                 &state.persisted_text_sha256,
             )
         });
-        (empty, meta, previous)
+        (empty, meta, previous, settle_text)
     };
     if empty {
         drop_registry_and_storage(&location);
@@ -160,12 +229,33 @@ pub(crate) fn mark_committed(
                     state.acked_event_ids = previous.acked_event_ids;
                     state.acked_through_revision = previous.acked_through_revision;
                     state.applied_transactions = previous.applied_transactions;
+                    state.text = previous.text;
+                    state.text_revision = previous.text_revision;
+                    state.text_sha256 = previous.text_sha256;
+                    state.persisted_text_revision = previous.persisted_text_revision;
+                    state.persisted_text_sha256 = previous.persisted_text_sha256;
+                    state.text_dirty = previous.text_dirty;
+                    state.committed_text_revision = previous.committed_text_revision;
+                    state.committed_text_sha256 = previous.committed_text_sha256;
                     state.updated_at_ms = previous.updated_at_ms;
                     state.meta_dirty = true;
                 }
                 return Err(format!(
                     "persist draft ack meta failed (facts kept): {project_id}/{chapter_id}: {error}"
                 ));
+            }
+        }
+    }
+    if settle_text {
+        let path = location.dir.join(store::TEXT_FILE);
+        if let Err(error) = std::fs::remove_file(&path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                // meta 已写 tombstone：残留 text.txt 会在读取时按已确认快照
+                // 丢弃，不会当成新编辑。
+                log::warn!(
+                    "remove committed chapter draft text {}: {error}",
+                    path.display()
+                );
             }
         }
     }
@@ -190,6 +280,14 @@ struct PersistedDraftHead {
     acked_event_ids: Vec<String>,
     acked_through_revision: u64,
     applied_transactions: Vec<String>,
+    text: Option<String>,
+    text_revision: u64,
+    text_sha256: String,
+    persisted_text_revision: u64,
+    persisted_text_sha256: String,
+    text_dirty: bool,
+    committed_text_revision: u64,
+    committed_text_sha256: String,
     updated_at_ms: i64,
 }
 
@@ -246,71 +344,4 @@ pub(crate) fn text_ready_for_commit(
     drafts
         .get(&location.key)
         .is_some_and(|state| state.text.is_some() && text_is_verified(state))
-}
-
-/// 保存回执确认后精确收口草稿正文：只有与本次已提交快照完全同一份的
-/// 编辑器正文才允许清除。
-///
-/// Issue #1062 评论 7193130307 第 2 项：`mark_committed` 只处理事实与 base，
-/// 若不收口 text，已提交正文会一直留在草稿里；事实 ack 之后它变成“无事实、
-/// revision 超过加载基线”的僵尸候选，每次进入作品都被当成缺证明的新编辑。
-///
-/// 条件（全部满足才清）：
-/// - 同一编辑器会话；
-/// - 草稿正文 revision 等于本次保存快照 revision；
-/// - 正文内容摘要（QML 上报的内容根摘要）与快照摘要一致，缺失时按原文相等。
-///
-/// 已到达的更高 revision 正文（保存期间继续输入）原样保留，等下一笔保存。
-pub(crate) fn settle_saved_text(
-    projects_root: &Path,
-    project_id: &str,
-    chapter_id: &str,
-    session_id: u64,
-    snapshot_revision: u64,
-    snapshot_digest: &str,
-) -> bool {
-    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
-        return false;
-    };
-    let mut drafts = lock_registry();
-    let Some(state) = drafts.get_mut(&location.key) else {
-        return false;
-    };
-    let Some(text) = state.text.as_deref() else {
-        return false;
-    };
-    if state.session_id != session_id || state.text_revision != snapshot_revision {
-        return false;
-    }
-    let digest_matches = if snapshot_digest.is_empty() {
-        true
-    } else {
-        writer_core::writing_stats::proof::content_digest_of_text(text) == snapshot_digest
-    };
-    if !digest_matches {
-        return false;
-    }
-    state.text = None;
-    state.text_revision = snapshot_revision;
-    state.text_sha256 = String::new();
-    state.persisted_text_revision = 0;
-    state.persisted_text_sha256 = String::new();
-    state.text_dirty = false;
-    state.meta_dirty = true;
-    state.committed_text_revision = snapshot_revision;
-    state.committed_text_sha256 = snapshot_digest.to_string();
-    state.updated_at_ms = now_ms();
-    drop(drafts);
-    // 已提交正文不能留在 text.txt：meta 的 textRevision 归零后，磁盘上的旧
-    // 文件会被恢复链当成正文候选。
-    let path = location.dir.join(store::TEXT_FILE);
-    if let Err(error) = std::fs::remove_file(&path) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            log::warn!(
-                "remove committed chapter draft text {}: {error}",
-                path.display()
-            );
-        }
-    }
-    true
 }

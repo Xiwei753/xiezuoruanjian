@@ -415,6 +415,9 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                     base_generation: receipt.version.object_generation.clone(),
                     base_revision: receipt.version.revision,
                     base_sha256: receipt.version.content_sha256.clone(),
+                    editor_session_id: request.identity.session_id,
+                    snapshot_revision: request.identity.snapshot_revision,
+                    snapshot_digest: request.identity.snapshot_sha256.clone(),
                     reconciled: false,
                 };
                 match crate::backend::chapter_draft::record_pending_ack(
@@ -431,7 +434,7 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                     ),
                 }
             }
-            let draft_removed = match crate::backend::chapter_draft::mark_committed(
+            let draft_removed = match crate::backend::chapter_draft::mark_committed_with_settlement(
                 &projects_root,
                 &request.identity.project_id,
                 &request.identity.chapter_id,
@@ -440,34 +443,17 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                 &receipt.version.object_generation,
                 receipt.version.revision,
                 &receipt.version.content_sha256,
+                Some(&crate::backend::chapter_draft::TextSettlement {
+                    session_id: request.identity.session_id,
+                    snapshot_revision: request.identity.snapshot_revision,
+                    snapshot_digest: request.identity.snapshot_sha256.clone(),
+                }),
             ) {
                 Ok(removed) => {
-                    // Issue #1062 评论 7193130307 第 2 项：Core 已 durable 这
-                    // 笔快照，草稿里同一会话、同一 revision、同一摘要的正文
-                    // 必须精确收口；保存期间到达的更高 revision 正文保留。
-                    if !removed
-                        && crate::backend::chapter_draft::settle_saved_text(
-                            &projects_root,
-                            &request.identity.project_id,
-                            &request.identity.chapter_id,
-                            request.identity.session_id,
-                            request.identity.snapshot_revision,
-                            &request.identity.snapshot_sha256,
-                        )
-                    {
-                        if let Err(error) = crate::backend::chapter_draft::persist_current(
-                            &projects_root,
-                            &request.identity.project_id,
-                            &request.identity.chapter_id,
-                            true,
-                        ) {
-                            log::warn!(
-                                "persist settled chapter draft after save failed: project={} chapter={}: {error}",
-                                request.identity.project_id,
-                                request.identity.chapter_id
-                            );
-                        }
-                    }
+                    // Issue #1062 评论 7193847871 第 2 项：正文收口已并入
+                    // mark_committed 的同一 meta 决议；只有它返回 Ok（meta 已
+                    // durable）才会回写 Core journal 的 draft ack。
+                    //
                     // Issue #1062 评论 7191076411 第 1 项（平台侧）：本地
                     // mark_committed 成功后要把这次提交的精确 ack 回写 Core
                     // journal。回写失败时 pending-ack 文件保留，下一次进入

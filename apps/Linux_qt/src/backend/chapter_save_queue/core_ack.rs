@@ -138,6 +138,11 @@ pub(super) fn reconcile_core_acks(
             base_generation: ack.after.object_generation.clone(),
             base_revision: ack.after.revision,
             base_sha256: ack.after.content_sha256.clone(),
+            // Core journal 只保存章节版本坐标，不含平台编辑器快照；这里的
+            // ack 只结算事实/base，正文是否已提交由恢复链按 live 摘要确认。
+            editor_session_id: 0,
+            snapshot_revision: 0,
+            snapshot_digest: String::new(),
             reconciled: false,
         };
         match chapter_draft::record_pending_ack(root, project_id, &ack.chapter_id, &pending) {

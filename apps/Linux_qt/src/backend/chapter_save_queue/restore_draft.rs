@@ -250,6 +250,26 @@ pub(super) fn handle_restore_project(
         let base_known = !plan.base_generation.is_empty() || plan.base_revision > 0;
         let base_matches = base_matches_plan(&plan, &opened.version);
         let commit_revision = restore_commit_revision(&plan);
+        // Issue #1062 评论 7193847871 第 3 项：无事实草稿只要正文已经等于
+        // 当前 live 正文（Core 原始 SHA-256 协议）或 meta 已记录为确认快照，
+        // 就是已提交内容的残留；stale base 不能把这种情况判成外部冲突。
+        if plan.fact_count == 0 {
+            let committed_live = plan.text.as_ref().is_some_and(|text| {
+                writer_core::chapter::content_sha256(text) == opened.version.content_sha256
+            });
+            let committed_record = plan.text.is_some()
+                && !plan.committed_text_sha256.is_empty()
+                && plan.text_revision == plan.committed_text_revision
+                && plan.text_sha256 == plan.committed_text_sha256;
+            if committed_live || committed_record {
+                super::super::chapter_draft::remove(
+                    &projects_root,
+                    &command.project_id,
+                    &plan.chapter_id,
+                );
+                continue;
+            }
+        }
         // 有任何未确认事实来自别的会话/generation 时，绝不能把混合会话
         // 提交成“已完成”：既不 replay 也不保存，全部原件原样保留。
         if plan.mixed_sessions {

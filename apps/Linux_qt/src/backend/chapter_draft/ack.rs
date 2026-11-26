@@ -22,6 +22,10 @@ pub(crate) struct PendingAck {
     pub base_generation: String,
     pub base_revision: u64,
     pub base_sha256: String,
+    /// 本次提交快照的编辑器会话与 revision；重放时用于精确收口正文。
+    pub editor_session_id: u64,
+    pub snapshot_revision: u64,
+    pub snapshot_digest: String,
     /// 本地草稿已完成 ack（mark_committed 成功），但 Core journal 的
     /// 草稿确认尚未回写。只有回写成功后才删除文件。
     #[serde(default)]
@@ -64,9 +68,25 @@ pub(crate) fn record_pending_ack(
     let dir = ack_dir(&location);
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("create pending ack dir {}: {error}", dir.display()))?;
-    let json = serde_json::to_string(ack)
-        .map_err(|error| format!("encode pending ack {}: {error}", ack.transaction_id))?;
     let path = ack_path(&location, &ack.transaction_id);
+    // 同一 transaction 已存在本地 ack 时保留它携带的编辑器快照坐标与
+    // reconciled 决议：Core journal 对账写回的 ack 只有章节版本坐标，直接
+    // 覆盖会丢失“精确收口已提交正文”的能力（Issue #1062 评论 7193847871）。
+    let mut ack = ack.clone();
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        if let Ok(existing) = serde_json::from_str::<PendingAck>(&existing) {
+            if ack.snapshot_digest.is_empty() && !existing.snapshot_digest.is_empty() {
+                ack.editor_session_id = existing.editor_session_id;
+                ack.snapshot_revision = existing.snapshot_revision;
+                ack.snapshot_digest = existing.snapshot_digest;
+            }
+            if existing.reconciled && existing.event_ids == ack.event_ids {
+                ack.reconciled = true;
+            }
+        }
+    }
+    let json = serde_json::to_string(&ack)
+        .map_err(|error| format!("encode pending ack {}: {error}", ack.transaction_id))?;
     writer_core::storage::atomic_write_string(&path, &json)
         .map_err(|error| format!("write pending ack {}: {error}", path.display()))
 }
@@ -145,7 +165,17 @@ pub(crate) fn replay_pending_acks(
     });
     let mut replayed = 0usize;
     for (mut ack, path) in acks {
-        super::mark_committed(
+        // 带编辑器快照坐标的 ack 可以顺带收口已提交正文；只来自 Core
+        // journal 的兼容 ack（旧文件/无快照信息）只结算事实与 base。
+        let settlement =
+            (!ack.snapshot_digest.is_empty() || ack.snapshot_revision > 0).then(|| {
+                super::TextSettlement {
+                    session_id: ack.editor_session_id,
+                    snapshot_revision: ack.snapshot_revision,
+                    snapshot_digest: ack.snapshot_digest.clone(),
+                }
+            });
+        super::mark_committed_with_settlement(
             projects_root,
             project_id,
             chapter_id,
@@ -154,6 +184,7 @@ pub(crate) fn replay_pending_acks(
             &ack.base_generation,
             ack.base_revision,
             &ack.base_sha256,
+            settlement.as_ref(),
         )
         .map_err(|error| {
             format!(

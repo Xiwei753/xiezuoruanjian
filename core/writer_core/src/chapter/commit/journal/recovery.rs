@@ -292,6 +292,10 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
 /// Issue #1062：Qt 本地 pending-acks 只是缓存；跨进程确认事实源是这里。
 /// 平台启动/进入作品时按 commit_sequence 顺序重放，再回写
 /// `mark_chapter_commit_draft_ack`。
+///
+/// 没有 manifest 的残留目录按 Prepared 跳过；manifest 存在但不可读或
+/// JSON 损坏时返回 `Err`，此时无法判定是否仍有待确认事项，调用方必须
+/// 保持保存闸门关闭。
 pub fn pending_chapter_draft_acks(
     project_root: &Path,
 ) -> Result<Vec<super::PendingChapterDraftAck>> {
@@ -305,12 +309,40 @@ pub fn pending_chapter_draft_acks(
         if !entry.file_type()?.is_dir() {
             continue;
         }
-        let manifest_path = entry.path().join("manifest.json");
-        let Ok(raw) = fs::read_to_string(&manifest_path) else {
+        let tx_dir = entry.path();
+        let tx_name = entry.file_name().to_string_lossy().into_owned();
+        if tx_name == CONFLICT_DIR {
             continue;
+        }
+        let manifest_path = tx_dir.join("manifest.json");
+        let raw = match fs::read_to_string(&manifest_path) {
+            Ok(raw) => raw,
+            Err(error) => {
+                // 只有残留材料、没有 durable 决议的目录按 Prepared 跳过；
+                // manifest 存在却读不出来说明无法判定是否仍有待确认事项，
+                // 必须向上报错，不能把它当成“无待确认”放行保存闸门。
+                if !manifest_path.exists() {
+                    continue;
+                }
+                return Err(crate::error::Error::Io(std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "chapter commit journal manifest unreadable: transaction={tx_name}, path={}, error={error}",
+                        manifest_path.display()
+                    ),
+                )));
+            }
         };
-        let Ok(manifest) = serde_json::from_str::<ChapterCommitManifest>(&raw) else {
-            continue;
+        let manifest = match serde_json::from_str::<ChapterCommitManifest>(&raw) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                return Err(crate::error::Error::Json(
+                    <serde_json::Error as serde::de::Error>::custom(format!(
+                        "chapter commit journal manifest corrupt: transaction={tx_name}, path={}, error={error}",
+                        manifest_path.display()
+                    )),
+                ));
+            }
         };
         if manifest.draft_ack_projections.is_empty()
             || !matches!(

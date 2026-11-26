@@ -760,6 +760,95 @@ fn ack_cleanup_defers_when_fact_index_is_incomplete() {
 }
 
 #[test]
+fn settlement_meta_failure_keeps_text_and_ack_responsibility() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    let text = "已提交正文";
+    let digest = writer_core::writing_stats::proof::content_digest_of_text(text);
+    note_text(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g1",
+        text.to_string(),
+        1,
+        &digest,
+        ("g1", 1, "base-1"),
+        0,
+    );
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("e1");
+    // 保留一条未确认事实，避免“全部 ack + 正文收口”走目录删除的短路分支，
+    // 确保本测试真正覆盖 meta 写盘失败。
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e2", 2, 7)).expect("e2");
+    persist_current(root, "p1", "c1", true).expect("persist draft");
+    let location = draft_location(root);
+    let previous_mode = std::fs::metadata(&location.dir)
+        .expect("draft dir metadata")
+        .permissions()
+        .mode();
+    std::fs::set_permissions(&location.dir, std::fs::Permissions::from_mode(0o500))
+        .expect("make draft dir read-only");
+
+    let error = mark_committed_with_settlement(
+        root,
+        "p1",
+        "c1",
+        "tx-1",
+        &["e1".to_string()],
+        "g1",
+        2,
+        "base-2",
+        Some(&TextSettlement {
+            session_id: 7,
+            snapshot_revision: 1,
+            snapshot_digest: digest.clone(),
+        }),
+    )
+    .expect_err("meta write failure must keep the ack decision pending");
+    assert!(error.contains("persist draft ack meta failed"), "{error}");
+    std::fs::set_permissions(
+        &location.dir,
+        std::fs::Permissions::from_mode(previous_mode),
+    )
+    .expect("restore draft dir permissions");
+
+    // meta 未 durable：text.txt 与事实都还在，重放仍能作出同一决议。
+    assert!(location.dir.join(TEXT_FILE).exists());
+    let plan = restore_plan(root, "p1", "c1").expect("plan after failed settle");
+    assert_eq!(plan.text.as_deref(), Some(text));
+    assert_eq!(plan.fact_count, 2);
+
+    assert!(
+        !mark_committed_with_settlement(
+            root,
+            "p1",
+            "c1",
+            "tx-1",
+            &["e1".to_string()],
+            "g1",
+            2,
+            "base-2",
+            Some(&TextSettlement {
+                session_id: 7,
+                snapshot_revision: 1,
+                snapshot_digest: digest,
+            }),
+        )
+        .expect("retry after meta becomes writable"),
+        "还有未确认事实：目录不能删除"
+    );
+    assert!(!location.dir.join(TEXT_FILE).exists(), "已确认正文已收口");
+    let plan = restore_plan(root, "p1", "c1").expect("plan after settled ack");
+    assert_eq!(plan.text, None);
+    assert_eq!(plan.fact_count, 1);
+    assert_eq!(plan.facts[0].event_id, "e2");
+}
+
+#[test]
 fn pending_ack_replay_advances_base_and_removes_confirmed_prefix() {
     let workspace = temp_workspace();
     let root = workspace.path();
@@ -776,6 +865,9 @@ fn pending_ack_replay_advances_base_and_removes_confirmed_prefix() {
             base_generation: "g1".to_string(),
             base_revision: 1,
             base_sha256: "sha1".to_string(),
+            editor_session_id: 0,
+            snapshot_revision: 0,
+            snapshot_digest: String::new(),
             reconciled: false,
         },
     )
@@ -824,6 +916,9 @@ fn pending_ack_replay_failure_keeps_files_and_blocks_freeze() {
             base_generation: "g1".to_string(),
             base_revision: 1,
             base_sha256: "sha1".to_string(),
+            editor_session_id: 0,
+            snapshot_revision: 0,
+            snapshot_digest: String::new(),
             reconciled: false,
         },
     )

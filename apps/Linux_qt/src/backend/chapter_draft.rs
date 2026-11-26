@@ -46,7 +46,9 @@ pub(crate) use ack::{
     complete_pending_ack, reconciled_ack, reconciled_acks, record_pending_ack, replay_pending_acks,
     PendingAck,
 };
-pub(crate) use ack_commit::{mark_committed, settle_saved_text, text_ready_for_commit};
+pub(crate) use ack_commit::{
+    mark_committed, mark_committed_with_settlement, text_ready_for_commit, TextSettlement,
+};
 pub(crate) use freeze::freeze_batch_for;
 pub(crate) use pending::{clear_pending_input, pending_inputs, spool_failed_input};
 pub(crate) use restore::{list_project_drafts, restore_plan, restore_plan_strict, snapshot};
@@ -398,6 +400,11 @@ pub(crate) fn note_text(
         state.editor_base_session = session_id;
         state.editor_base_revision = editor_base_revision;
         state.editor_base_sha256.clear();
+        // 新编辑器会话的 revision 从 0 重新计数，旧会话的已确认正文标识
+        // 不能用来识别新会话的正文（否则同 revision 的新编辑会被误判成
+        // 已提交残留）。
+        state.committed_text_revision = 0;
+        state.committed_text_sha256.clear();
     }
     if state.editor_base_sha256.is_empty() && revision == state.editor_base_revision {
         state.editor_base_sha256 = sha256.to_string();

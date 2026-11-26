@@ -577,16 +577,9 @@ mod restore_contract_tests {
         .unwrap();
         chapter_draft::persist_current(root, &project_id, &chapter_id, true).unwrap();
 
-        assert!(chapter_draft::settle_saved_text(
-            root,
-            &project_id,
-            &chapter_id,
-            1,
-            1,
-            &digest,
-        ));
+        // 正文收口与事实 ack 必须在同一个 meta 决议里完成。
         assert!(
-            chapter_draft::mark_committed(
+            chapter_draft::mark_committed_with_settlement(
                 root,
                 &project_id,
                 &chapter_id,
@@ -594,7 +587,12 @@ mod restore_contract_tests {
                 &["e1".to_string()],
                 "gen-1",
                 31,
-                "after-sha"
+                "after-sha",
+                Some(&chapter_draft::TextSettlement {
+                    session_id: 1,
+                    snapshot_revision: 1,
+                    snapshot_digest: digest.clone(),
+                }),
             )
             .unwrap(),
             "正文已收口且事实全部 ack：整章草稿应删除"
@@ -640,16 +638,122 @@ mod restore_contract_tests {
             0,
         );
 
-        assert!(!chapter_draft::settle_saved_text(
+        assert!(!chapter_draft::mark_committed_with_settlement(
             root,
             &project_id,
             &chapter_id,
-            1,
-            1,
-            &digest_a,
-        ));
+            "tx-1",
+            &[],
+            "gen-1",
+            31,
+            "after-sha",
+            Some(&chapter_draft::TextSettlement {
+                session_id: 1,
+                snapshot_revision: 1,
+                snapshot_digest: digest_a.clone(),
+            }),
+        )
+        .expect("ack"));
         let snapshot = chapter_draft::snapshot(root, &project_id, &chapter_id).unwrap();
         assert_eq!(snapshot.text.as_deref(), Some("B"));
         assert_eq!(snapshot.text_revision, 2);
+    }
+}
+
+mod stale_base_cleanup_tests {
+    use super::super::draft_jobs::draft_restore_status;
+    use super::super::restore_draft::handle_restore_project;
+    use super::super::worker::ChapterSaveWorkerState;
+    use super::super::{ChapterRestoreCommand, ChapterSaveContext};
+    use writer_core::api::WriterCoreApi;
+
+    fn context(data_root: &std::path::Path, projects_root: &std::path::Path) -> ChapterSaveContext {
+        ChapterSaveContext::new(
+            &data_root.to_string_lossy(),
+            &projects_root.to_string_lossy(),
+            &writer_core::storage::GitRepoLayout {
+                worktree_root: data_root.to_path_buf(),
+                git_dir: data_root.join(".git"),
+            },
+        )
+    }
+
+    /// Issue #1062 评论 7193847871 第 3 项：草稿正文已经等于 live 正文，但
+    /// 草稿记录的 base 还是旧版本（异常退出未推进）时，恢复必须幂等清理，
+    /// 不能报 base_unrecoverable 永久保留。
+    #[test]
+    fn stale_base_with_live_text_is_cleaned_without_save() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects_root = temp.path().join("projects");
+        let api = WriterCoreApi::new(temp.path(), projects_root.clone());
+        let project = api.create_project("作品").unwrap();
+        let volumes = api.list_volumes(&project.id).unwrap();
+        let volume_id = volumes.first().unwrap().id.clone();
+        let chapter = api
+            .create_chapter(&project.id, &volume_id, "第一章")
+            .unwrap();
+        let live = "Core 已提交正文";
+        api.save_chapter_content_versioned(&project.id, &volume_id, &chapter.id, live, None, None)
+            .unwrap();
+        let opened = api
+            .open_chapter(&project.id, &volume_id, &chapter.id)
+            .unwrap();
+        let dir = projects_root
+            .join(&project.id)
+            .join("app-meta/chapter-drafts")
+            .join(&chapter.id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("text.txt"), live).unwrap();
+        let meta = serde_json::json!({
+            "schemaVersion": 2,
+            "projectId": project.id,
+            "volumeId": volume_id,
+            "chapterId": chapter.id,
+            "workspaceKey": "workspace",
+            "generation": "gen-stale",
+            "sessionId": 1,
+            "baseGeneration": "gen-stale",
+            "baseRevision": 7,
+            "baseSha256": "stale-base-sha",
+            "textRevision": 1,
+            "textSha256": writer_core::writing_stats::proof::content_digest_of_text(live),
+            "updatedAtMs": 1,
+            "facts": [],
+            "ackedEventIds": [],
+            "ackedThroughRevision": 0,
+            "appliedTransactions": [],
+            "editorBaseRevision": 0,
+            "editorBaseSha256": "",
+            "editorBaseSession": 1,
+            "committedTextRevision": 0,
+            "committedTextSha256": ""
+        });
+        std::fs::write(
+            dir.join("meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project.id.clone(),
+            },
+        );
+
+        assert!(
+            !dir.exists(),
+            "已提交正文与 live 一致时应清理草稿，不能因 stale base 保留"
+        );
+        let reopened = state
+            .api_for(&context(temp.path(), &projects_root))
+            .open_chapter(&project.id, &volume_id, &chapter.id)
+            .unwrap();
+        assert_eq!(reopened.content, live);
+        assert_eq!(reopened.version.revision, opened.version.revision);
+        let status = draft_restore_status(&project.id);
+        assert_eq!(status.kept, 0);
     }
 }
