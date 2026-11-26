@@ -104,6 +104,7 @@ fn problem1_prepare_full_sync_includes_deleted_project_target() {
             false,
             secrets,
             &remote_catalog,
+            &[],
             remote_catalog_snapshot,
         )
         .expect("prepare_full_sync 应成功");

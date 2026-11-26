@@ -232,7 +232,12 @@ fn issue_931_missing_local_file_with_remote_tombstone_converges_to_delete() {
 
     // 远端 delete 是真实删除事实：正常收敛，不算 unresolved。
     assert!(outcome.unresolved_missing_paths.is_empty());
-    assert!(outcome.local_deletes.contains(&"project.json".to_string()));
+    // Issue #993：本地文件已缺失时远端 delete 无需再 move_to_trash，
+    // 不伪造本地删除动作，也不能反向变成本地 delete 上传。
+    assert!(!outcome.local_deletes.contains(&"project.json".to_string()));
+    assert!(!outcome
+        .remote_delete_paths
+        .contains(&"project.json".to_string()));
 
     let rec = outcome
         .merged_manifest

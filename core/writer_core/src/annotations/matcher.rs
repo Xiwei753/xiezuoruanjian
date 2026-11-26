@@ -172,7 +172,11 @@ fn occurrences(text: &str, needle: &str) -> Vec<(usize, usize)> {
     matches
 }
 
-fn matcher_fingerprint(text: &str, entries: &[NamedEntry], manual_ranges: &[(usize, usize)]) -> u64 {
+fn matcher_fingerprint(
+    text: &str,
+    entries: &[NamedEntry],
+    manual_ranges: &[(usize, usize)],
+) -> u64 {
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     let mut entries: Vec<_> = entries

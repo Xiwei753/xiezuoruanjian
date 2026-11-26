@@ -1185,8 +1185,12 @@ impl crate::sync::SyncService {
         )?;
 
         // 重建全部派生索引。
-        let derived =
-            Self::rebuild_derived_indexes_for_graph(starmap_id, &graph, &object_contents)?;
+        let derived = Self::rebuild_derived_indexes_for_graph(
+            sync_root,
+            starmap_id,
+            &graph,
+            &object_contents,
+        )?;
         graph.edge_relation_index = derived.edge_relation_index;
         graph.embed_host_index = derived.embed_host_index;
         graph.link_relation_index = derived.link_relation_index;
@@ -1402,11 +1406,17 @@ impl crate::sync::SyncService {
     /// 的对象返回 `Err`，因此 `object_contents` 应包含 graph 全部成员。
     /// `parse_member_object` 返回 `Ok(None)` 的分支理论上不再触发，保留为
     /// 防御性 `continue`；解析失败（对象文件损坏）仍返回 `Err`。
+    ///
+    /// **Issue #1062**：节点对象经统一迁移入口
+    /// [`crate::starmap::migration::nodes::decode_node_object`] 校验，旧格式完整
+    /// 节点不再被误判为损坏；身份冲突带星图、对象和路径返回 `Err`。
     fn rebuild_derived_indexes_for_graph(
-        _starmap_id: &str,
+        sync_root: &Path,
+        starmap_id: &str,
         graph: &crate::starmap::store::meta::GraphMeta,
         object_contents: &ObjectContentMap,
     ) -> crate::Result<crate::sync::staging::starmap_merge::DerivedIndexes> {
+        use crate::starmap::package_storage::bucket_for_id;
         use crate::starmap::store::relation_index::{EdgeRelationIndex, EmbedHostIndex};
         use crate::starmap::types::{StarMapEdge, StarMapEmbed};
 
@@ -1437,6 +1447,42 @@ impl crate::sync::SyncService {
             });
         }
 
+        // 节点对象：统一迁移入口校验（旧格式完整节点 / 实例都合法）。
+        let node_bindings =
+            crate::starmap::migration::nodes::NodeObjectBindings::load_reference_bindings(
+                sync_root,
+            )
+            .map_err(|error| {
+                crate::Error::Other(format!(
+                    "rebuild_derived_indexes_for_graph: 读取素材库实例绑定失败 \
+                     (starmap_id={starmap_id}, root={}): {error}",
+                    sync_root.display()
+                ))
+            })?;
+        for node_id in &graph.node_ids {
+            let key = ("node".to_string(), node_id.clone());
+            let Some(bytes) = object_contents.get(&key) else {
+                continue;
+            };
+            let rel_path = format!(
+                "starmaps/{starmap_id}/nodes/{}/{node_id}.json",
+                bucket_for_id(node_id)
+            );
+            crate::starmap::migration::nodes::decode_node_object(
+                sync_root,
+                starmap_id,
+                node_id,
+                bytes,
+                Some(&node_bindings),
+            )
+            .map_err(|error| {
+                crate::Error::Other(format!(
+                    "rebuild_derived_indexes_for_graph: 节点对象迁移校验失败 \
+                     (starmap_id={starmap_id}, object_id={node_id}, path={rel_path}): {error}"
+                ))
+            })?;
+        }
+
         // 链接索引由 StarMapStore 的 annotations 投影实时构建，不再写入
         // graph.json 的派生索引；这里保持空 vec 兼容冲突解决输出。
         let link_relation_index = Vec::new();
@@ -1445,6 +1491,9 @@ impl crate::sync::SyncService {
             edge_relation_index,
             embed_host_index,
             link_relation_index,
+            // 冲突解决直接写回快照内容；实例改写/本体发布由 Store 加载时的
+            // 统一迁移入口完成，这里不产生发布计划。
+            node_object_plans: Vec::new(),
         })
     }
 
@@ -1829,8 +1878,12 @@ impl crate::sync::SyncService {
             .collect();
 
         // 重建派生索引
-        let derived =
-            Self::rebuild_derived_indexes_for_graph(starmap_id, &graph, &remaining_contents)?;
+        let derived = Self::rebuild_derived_indexes_for_graph(
+            sync_root,
+            starmap_id,
+            &graph,
+            &remaining_contents,
+        )?;
         graph.edge_relation_index = derived.edge_relation_index;
         graph.embed_host_index = derived.embed_host_index;
         graph.link_relation_index = derived.link_relation_index;
@@ -2094,8 +2147,12 @@ impl crate::sync::SyncService {
             Self::read_remote_meta_snapshot(sync_root, &starmap_id, snapshot_dir_rel)?;
 
         // 重建派生索引
-        let derived =
-            Self::rebuild_derived_indexes_for_graph(&starmap_id, &remote_graph, &object_contents)?;
+        let derived = Self::rebuild_derived_indexes_for_graph(
+            sync_root,
+            &starmap_id,
+            &remote_graph,
+            &object_contents,
+        )?;
         remote_graph.edge_relation_index = derived.edge_relation_index;
         remote_graph.embed_host_index = derived.embed_host_index;
         remote_graph.link_relation_index = derived.link_relation_index;

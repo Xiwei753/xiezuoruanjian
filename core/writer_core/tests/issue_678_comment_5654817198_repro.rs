@@ -20,6 +20,28 @@ use tempfile::tempdir;
 use writer_core::chapter;
 use writer_core::volume;
 
+/// 构造生产格式的 `chapter.meta.json`。
+///
+/// `Chapter` 是强类型元数据（`id`/`title`/`created_at`/`updated_at`/`word_count`/`hash`
+/// 都是必填字段）。手写 `{"id":"ch1"}` 会触发 `missing field title`，所以 fixture
+/// 统一用 Core 的 `Chapter` 类型序列化，保证与当前磁盘格式一致。
+fn chapter_meta_json(id: &str, title: &str) -> String {
+    let meta = writer_core::chapter::Chapter {
+        id: id.to_string(),
+        title: title.to_string(),
+        created_at: "2026-01-01T00:00:00+00:00".to_string(),
+        updated_at: "2026-01-01T00:00:00+00:00".to_string(),
+        order: 0,
+        word_count: 7,
+        hash: String::new(),
+        note: None,
+        object_generation: String::new(),
+        revision: 0,
+        content_sha256: String::new(),
+    };
+    serde_json::to_string(&meta).unwrap()
+}
+
 // ---------------------------------------------------------------------------
 // 辅助：定位仓库根目录（从 CARGO_MANIFEST_DIR 向上找 Cargo.toml workspace）
 // ---------------------------------------------------------------------------
@@ -359,7 +381,11 @@ fn verify_problem4c_chapter_tombstone_correct_sync_root() {
         .join("chapters")
         .join(chapter_id);
     fs::create_dir_all(&chapter_dir).unwrap();
-    fs::write(chapter_dir.join("chapter.meta.json"), r#"{"id":"ch1"}"#).unwrap();
+    fs::write(
+        chapter_dir.join("chapter.meta.json"),
+        chapter_meta_json(chapter_id, "第一章"),
+    )
+    .unwrap();
     fs::write(chapter_dir.join("chapter.md"), "content").unwrap();
 
     // 在 project_root 和 app_data_root 都创建 sync state

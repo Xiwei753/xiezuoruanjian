@@ -112,34 +112,14 @@ pub(crate) fn select_pending_editor_proof(
                         .map(|proof| proof.before_text_sha256.as_str())?;
                     provided_baseline
                         .filter(|baseline| {
-                            before_hash.is_empty() || before_hash == text_sha256(baseline)
+                            before_hash.is_empty() || proof_digest_matches(before_hash, baseline)
                         })
                         .map(str::to_string)
                 });
             if let Some(baseline) = baseline {
                 // 能拿到本批起点正文时，按事件顺序逐步 replay，并核对每条
                 // before/after 摘要。只比最终摘要无法发现批次中间被替换。
-                let mut replayed = baseline;
-                for projection in &selected {
-                    let Some(proof) = projection.event.proof.as_ref() else {
-                        return Vec::new();
-                    };
-                    if !proof.before_text_sha256.is_empty()
-                        && proof.before_text_sha256 != text_sha256(&replayed)
-                    {
-                        return Vec::new();
-                    }
-                    if !proof.changes.is_empty()
-                        && crate::writing_stats::proof::apply_changes(&mut replayed, &proof.changes)
-                            .is_err()
-                    {
-                        return Vec::new();
-                    }
-                    if proof.after_text_sha256 != text_sha256(&replayed) {
-                        return Vec::new();
-                    }
-                }
-                if replayed != content {
+                if replay_editor_proof_events(&selected, &baseline, content).is_err() {
                     return Vec::new();
                 }
             }
@@ -148,3 +128,187 @@ pub(crate) fn select_pending_editor_proof(
         None => Vec::new(),
     }
 }
+
+/// 事件摘要是否等于给定正文的摘要。
+///
+/// 新事件保存增量内容根摘要（`content-root-v1:`），旧事件保存完整
+/// SHA-256（`sha256:v1:`）；两种格式都必须能校验，不能只认其中一种。
+pub(crate) fn proof_digest_matches(value: &str, text: &str) -> bool {
+    use crate::writing_stats::proof::{content_digest_of_text, CONTENT_DIGEST_VERSION};
+    if value.starts_with(CONTENT_DIGEST_VERSION) {
+        value == content_digest_of_text(text)
+    } else {
+        value == crate::writing_stats::proof::text_sha256(text)
+    }
+}
+
+/// 按事件顺序 replay 一批证明事实，校验摘要链与终点正文。
+///
+/// `baseline` 是批次起点正文；每条事件的 `changes` 依次应用，逐条核对
+/// before/after 摘要，最后要求 replay 结果等于保存正文。任何不连续都返回
+/// `Err`，调用方必须拒绝本次保存。
+pub(crate) fn replay_editor_proof_events(
+    events: &[crate::chapter::ChapterProofProjection],
+    baseline: &str,
+    content: &str,
+) -> crate::Result<()> {
+    let replayed = replay_batch_from_baseline(events, baseline)?;
+    if replayed != content {
+        return Err(crate::Error::Other(
+            "replayed proof batch does not end at saved content".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 从基线正文逐条 replay 原始证明批次，返回最终正文。
+///
+/// 逐条核对 before/after 摘要（同时兼容增量内容摘要与旧 SHA-256），
+/// 任一条不一致即返回 `Err`。终点正文由调用方自行核对。
+pub(crate) fn replay_batch_from_baseline(
+    events: &[crate::chapter::ChapterProofProjection],
+    baseline: &str,
+) -> crate::Result<String> {
+    use crate::writing_stats::proof::apply_changes;
+
+    let mut replayed = baseline.to_string();
+    for projection in events {
+        let event_id = projection.event_id();
+        let Some(proof) = projection.event.proof.as_ref() else {
+            return Err(crate::Error::Other(format!(
+                "proof event {event_id} has no replayable payload"
+            )));
+        };
+        if proof.changes.is_empty() {
+            return Err(crate::Error::Other(format!(
+                "proof event {event_id} has empty changes"
+            )));
+        }
+        if !proof.before_text_sha256.is_empty()
+            && !proof_digest_matches(&proof.before_text_sha256, &replayed)
+        {
+            return Err(crate::Error::Other(format!(
+                "proof event {event_id} before digest does not match replayed text"
+            )));
+        }
+        apply_changes(&mut replayed, &proof.changes)?;
+        if !proof.after_text_sha256.is_empty()
+            && !proof_digest_matches(&proof.after_text_sha256, &replayed)
+        {
+            return Err(crate::Error::Other(format!(
+                "proof event {event_id} after digest does not match replayed text"
+            )));
+        }
+    }
+    Ok(replayed)
+}
+
+/// 校验平台显式传入的原始证明批次（Issue #1062 1.2）。
+///
+/// 与旧的“按正文摘要从全局 pending 队列猜批次”不同，正式路径只认调用方
+/// 随保存一起冻结的原始事实：这里逐条 replay 校验 revision 顺序、session、
+/// 摘要链与终点正文。任何不一致返回 [`crate::Error::ProofBatchMismatch`]，
+/// 保存不发布正文。
+pub(crate) fn validate_explicit_editor_proof_batch(
+    chapter_id: &str,
+    events: &[crate::chapter::ChapterProofProjection],
+    content: &str,
+    snapshot_revision: u64,
+    base_content: Option<&str>,
+) -> crate::Result<()> {
+    use crate::writing_stats::proof::content_digest_of_text;
+
+    if events.is_empty() {
+        return Ok(());
+    }
+    let mismatch = |detail: String| crate::error::Error::ProofBatchMismatch {
+        chapter_id: chapter_id.to_string(),
+        detail,
+    };
+    let mut previous_revision: Option<u64> = None;
+    let mut previous_after: Option<&str> = None;
+    let mut session: Option<&str> = None;
+    for projection in events {
+        let event_id = projection.event_id();
+        let Some(proof) = projection.event.proof.as_ref() else {
+            return Err(mismatch(format!("event {event_id} has no proof payload")));
+        };
+        if proof.before_text_sha256.is_empty() || proof.after_text_sha256.is_empty() {
+            return Err(mismatch(format!(
+                "event {event_id} missing before/after digest"
+            )));
+        }
+        if proof.changes.is_empty() {
+            return Err(mismatch(format!("event {event_id} has empty changes")));
+        }
+        if snapshot_revision > 0 && proof.new_revision > snapshot_revision {
+            return Err(mismatch(format!(
+                "event {event_id} revision {} is after snapshot revision {snapshot_revision}",
+                proof.new_revision
+            )));
+        }
+        if proof.new_revision <= proof.base_revision {
+            return Err(mismatch(format!(
+                "event {event_id} revision {} does not advance base {}",
+                proof.new_revision, proof.base_revision
+            )));
+        }
+        if let Some(previous) = previous_revision {
+            if proof.base_revision != previous {
+                return Err(mismatch(format!(
+                    "event {event_id} base revision {} does not continue previous {}",
+                    proof.base_revision, previous
+                )));
+            }
+        }
+        if !proof.session_id.is_empty() {
+            match session {
+                Some(expected) if expected != proof.session_id => {
+                    return Err(mismatch(format!(
+                        "event {event_id} session {} differs from batch session {expected}",
+                        proof.session_id
+                    )));
+                }
+                None => session = Some(proof.session_id.as_str()),
+                _ => {}
+            }
+        }
+        match previous_after {
+            Some(after) if after != proof.before_text_sha256 => {
+                return Err(mismatch(format!(
+                    "event {event_id} before digest does not continue previous event"
+                )));
+            }
+            Some(_) => {}
+            None => {
+                if let Some(base) = base_content {
+                    if !proof_digest_matches(&proof.before_text_sha256, base) {
+                        return Err(mismatch(format!(
+                            "event {event_id} before digest does not match committed base content"
+                        )));
+                    }
+                }
+            }
+        }
+        previous_after = Some(proof.after_text_sha256.as_str());
+        previous_revision = Some(proof.new_revision);
+    }
+    let terminal = previous_after.unwrap_or_default();
+    if terminal != content_digest_of_text(content) && !proof_digest_matches(terminal, content) {
+        return Err(mismatch(
+            "proof batch terminal digest does not match saved content".to_string(),
+        ));
+    }
+    if let Some(baseline) = events
+        .first()
+        .and_then(|projection| projection.baseline_text.as_deref())
+    {
+        replay_editor_proof_events(events, baseline, content)
+            .map_err(|error| mismatch(format!("replay failed: {error}")))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "chapter_proof_batch_tests.rs"]
+mod tests;

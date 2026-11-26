@@ -152,9 +152,17 @@ QtObject {
     property double chapterSaveSession: 0
     property var pendingChapterSaves: ({})
     property var pendingChapterSaveIds: []
-    // Issue #1059：本编辑会话已上报、尚未随正文 durable 的证明事件。
-    // 每项 { id, revision }，保存快照冻结时只把当前列表交给 Core。
-    property var pendingProofEvents: []
+    // Issue #1062 1.3：保存回执续接。requestId -> 回调；终态回执到达后由
+    // consumeChapterSaveReceipt 取走并只调用一次，pending 不回调。
+    property var chapterSaveContinuations: ({})
+    // 切章 / 同步 / 关窗等边界的等待上限；超时只通知等待方失败，
+    // 回执仍继续轮询并应用，避免旧 base 被永久丢掉。
+    readonly property int chapterSaveReceiptTimeoutMs: 3000
+    // 最近一次交给章节 actor 的草稿正文缓存：编辑器销毁后只能读这份值。
+    property string cachedDraftText: ""
+    property double cachedDraftRevision: 0
+    property string cachedDraftSha256: ""
+    property bool cachedDraftAvailable: false
     property bool chapterSaveConflictNotified: false
 
     property var annotationRefreshTimer: Timer {
@@ -266,8 +274,12 @@ QtObject {
         repeat: false
         onTriggered: {
             if (!controller.chapterId || !controller.editorBackendRef) return;
-            var plainText = controller.getEditorPlainText();
+            // Issue #1062 1.3：一次 Core 快照同时供字数统计与可恢复草稿使用，
+            // 草稿正文摘要直接取快照里的 contentSha256，不在 QML 自己算。
+            var snapshot = controller.readCommittedEditorSnapshot("draft_autosave");
+            var plainText = snapshot.ok ? snapshot.text : controller.getEditorPlainText();
             controller.editorBackendRef.calculate_word_count(plainText);
+            if (snapshot.ok) controller.updateActiveChapterDraft(snapshot, false);
         }
     }
 
@@ -308,22 +320,18 @@ QtObject {
                 editRangesJson: String(editRangesJson || "[]")
             });
             if (controller.chapterId && controller.editorBackendRef) {
-                var proofEventId = controller.editorBackendRef.record_editor_change_stats(
+                // Issue #1062 1.3：编辑事实由后端同时持久化为可恢复草稿，
+                // QML 不再维护待提交证明事件批次。
+                controller.editorBackendRef.record_editor_change_stats(
                     controller.projectId, controller.volumeId, controller.chapterId,
                     cause, insertedChars, deletedChars, changesJson,
                     baseRevision, newRevision, oldSelectionAnchor, oldSelectionHead,
                     newSelectionAnchor, newSelectionHead,
                     controller.proofBaselineSent ? "" : controller.proofBaselineText,
                     beforeTextSha256, afterTextSha256);
-                if (proofEventId) {
-                    controller.pendingProofEvents.push({
-                        "id": String(proofEventId),
-                        "revision": Number(newRevision)
-                    });
+                if (changesJson && changesJson !== "[]") {
+                    controller.proofBaselineSent = true;
                 }
-            if (changesJson && changesJson !== "[]") {
-                controller.proofBaselineSent = true;
-            }
             }
         }
     }
@@ -1220,8 +1228,10 @@ QtObject {
             updateCorrectionSuggestions(suggestions);
             syncCorrectionTracking(currentText, textRevision);
             // Restore-only 只证明缓存结果可显示，不证明本 revision 的脏段已经
-            // 过模型；只有 pending/full_check 完成真正扫描才更新 scanned。
-            if (requestKind === "pending" || requestKind === "full_check") {
+            // 过模型；只有 pending/full_check 完成真正扫描、且 Core 明确没有
+            // 未检查段时才更新 scanned（窗口中止/过期任务会带 hasUncheckedSegments）。
+            if ((requestKind === "pending" || requestKind === "full_check")
+                    && parsed.hasUncheckedSegments !== true) {
                 correctionScannedRevision = Number(textRevision);
                 correctionScannedProjectId = projectId;
                 correctionScannedChapterId = chapterId;
@@ -1626,6 +1636,8 @@ QtObject {
     //
     // Issue #1059：同时开启新的保存会话并丢弃上一会话的待应用回执。旧请求的
     // 写盘仍由 Rust 队列完成（不会丢数据），但它不能再改写新文档的 base/buffer。
+    // Issue #1062 1.3：上一会话仍在等待的 continuation 以失败回执收口，
+    // 不能让调用方永久挂起。
     function markEditorDocumentLoaded(pId, vId, cId) {
         editorDocumentProjectId = pId || "";
         editorDocumentVolumeId = vId || "";
@@ -1637,7 +1649,11 @@ QtObject {
         chapterSaveConflictNotified = false;
         pendingChapterSaves = ({});
         pendingChapterSaveIds = [];
-        pendingProofEvents = [];
+        abandonChapterSaveContinuations("editor_document_loaded");
+        cachedDraftText = "";
+        cachedDraftRevision = 0;
+        cachedDraftSha256 = "";
+        cachedDraftAvailable = false;
         chapterSavePollTimer.stop();
     }
 
@@ -1842,12 +1858,19 @@ QtObject {
         }
     }
 
-    function flushActiveEditorBeforeSync() {
+    // Issue #1062 1.3：同步前的正文 durable 落盘改为异步续接。
+    // 成功 / 失败都通过 onDone(ok) 通知；失败原因写入 syncFlushFailureReason。
+    function flushActiveEditorBeforeSync(onDone) {
         syncFlushFailureReason = ""
-        if (!editorBackendRef || !chapterId || !projectId || !volumeId) return true;
+        var finished = typeof onDone === "function" ? onDone : null;
+        if (!editorBackendRef || !chapterId || !projectId || !volumeId) {
+            if (finished) finished(true);
+            return;
+        }
         if (saveGuardActive()) {
             pendingAutoSaveAfterGuard = false;
-            return true;
+            if (finished) finished(true);
+            return;
         }
         // Issue #1052：同步前的落盘同样只消费同一时点的完整 Core 快照。
         var snapshot = readCommittedEditorSnapshot("flush_before_sync");
@@ -1856,40 +1879,42 @@ QtObject {
             logWriterWarning("flush_before_sync_snapshot_rejected",
                 "reason=" + snapshot.reason
                 + ", identity=" + editorDocumentIdentity())
-            return false;
+            if (finished) finished(false);
+            return;
         }
         if (snapshot.suspiciousEmpty) {
             syncFlushFailureReason = qsTr("检测到可疑空正文，已阻止保存")
             logWriterWarning("flush_before_sync_blocked_empty", "blocked suspicious empty save before sync");
-            return false;
-        }
-        var plainText = snapshot.text;
-        // 不能仅凭全文相等跳过：输入后还原会留下待提交证明批次，正文相同
-        // 仍需让 Core 建仅事件 journal 并确认事件 durable。
-        var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
-        var enqueued = saveEditorSnapshotVersioned(plainText, allowEmptyOverwrite,
-            "flush_before_sync", snapshot.revision, snapshot.contentSha256);
-        if (!enqueued || enqueued.queued !== true) {
-            syncFlushFailureReason = qsTr("保存当前章节失败")
-            logWriterWarning("flush_before_sync_failed", "save queue rejected snapshot");
-            return false;
+            if (finished) finished(false);
+            return;
         }
         // Issue #1059：同步前必须有已落盘回执；“已入队”不等于已保存。
-        var result = waitChapterSaveResult(enqueued.requestId, 3000);
-        if (String(result.status || "") === "ok") {
-            return true;
+        var requestId = enqueueChapterSaveSnapshot(snapshot, "flush_before_sync",
+            function(result) {
+                var status = String(result && result.status ? result.status : "");
+                if (status === "ok") {
+                    if (finished) finished(true);
+                    return;
+                }
+                // 不新增未翻译文案：pending/timeout 只在等不到回执时出现，细节进日志。
+                if (status === "pending" || (result && result.timedOut === true)) {
+                    syncFlushFailureReason = qsTr("保存当前章节失败")
+                    logWriterWarning("flush_before_sync_pending",
+                        "chapter save receipt timed out before sync")
+                } else {
+                    syncFlushFailureReason = result
+                        ? (result.rawError || result.messageKey || result.errorCode
+                           || qsTr("保存当前章节失败"))
+                        : qsTr("保存当前章节失败")
+                }
+                logWriterWarning("flush_before_sync_failed", "save failed before sync, blocking sync");
+                if (finished) finished(false);
+            });
+        if (requestId <= 0) {
+            if (!syncFlushFailureReason) syncFlushFailureReason = qsTr("保存当前章节失败")
+            logWriterWarning("flush_before_sync_failed", "save queue rejected snapshot");
+            if (finished) finished(false);
         }
-        if (String(result.status || "") === "pending") {
-            // 不新增未翻译文案：pending 只在等不到回执时出现，细节进日志。
-            syncFlushFailureReason = qsTr("保存当前章节失败")
-            logWriterWarning("flush_before_sync_pending", "chapter save receipt timed out before sync")
-        } else {
-            syncFlushFailureReason = result
-                ? (result.rawError || result.messageKey || result.errorCode || qsTr("保存当前章节失败"))
-                : qsTr("保存当前章节失败")
-        }
-        logWriterWarning("flush_before_sync_failed", "save failed before sync, blocking sync");
-        return false;
     }
 
     function applyCommittedChapterVersion(version) {
@@ -1906,18 +1931,56 @@ QtObject {
                 && String(version.contentSha256 || "") === committedChapterSha256;
     }
 
-    // 只移除回执已确认的 event ID；保存期间新增的事件继续留在批次中。
-    function acknowledgeProofEvents(ids) {
-        if (!ids || ids.length === 0) return;
-        var acknowledged = {};
-        for (var i = 0; i < ids.length; i++) acknowledged[String(ids[i])] = true;
-        var remaining = [];
-        for (var j = 0; j < pendingProofEvents.length; j++) {
-            if (!acknowledged[String(pendingProofEvents[j].id)]) {
-                remaining.push(pendingProofEvents[j]);
-            }
+    // Issue #1062 1.3：把正文快照交给章节 actor 维护可恢复草稿。
+    // force=true 只用于保存 / 切章 / 离开作品 / 关窗等边界。
+    // 内容摘要取 Core 快照的 contentSha256，不在 QML 侧重新计算。
+    function updateActiveChapterDraft(snapshot, force) {
+        if (!editorBackendRef || !editorBackendRef.update_chapter_draft_text) return false;
+        if (!snapshot || snapshot.ok !== true) return false;
+        if (!projectId || !chapterId) return false;
+        if (loadedEditorDocumentIdentity() !== editorDocumentIdentity()) return false;
+        editorBackendRef.update_chapter_draft_text(
+            projectId, volumeId, chapterId,
+            snapshot.text, Number(snapshot.revision), String(snapshot.contentSha256 || ""),
+            committedChapterGeneration, Number(committedChapterRevision), committedChapterSha256,
+            force === true);
+        cacheChapterDraftSnapshot(snapshot);
+        return true;
+    }
+
+    // Issue #1062 1.3：离开作品 / 切路由前用当前 Core 快照 force 刷新草稿。
+    // update_chapter_draft_text 只向章节 actor 投递命令，不做 GUI 线程磁盘 I/O。
+    function flushActiveChapterDraftNow() {
+        var snapshot = readCommittedEditorSnapshot("leave_writing");
+        if (!snapshot.ok) {
+            logWriterWarning("chapter_draft_leave_skipped", "reason=" + snapshot.reason);
+            return false;
         }
-        pendingProofEvents = remaining;
+        return updateActiveChapterDraft(snapshot, true);
+    }
+
+    function cacheChapterDraftSnapshot(snapshot) {
+        if (!snapshot || snapshot.ok !== true) return;
+        cachedDraftText = snapshot.text;
+        cachedDraftRevision = Number(snapshot.revision);
+        cachedDraftSha256 = String(snapshot.contentSha256 || "");
+        cachedDraftAvailable = true;
+    }
+
+    // Issue #1062 1.3：编辑器销毁 / 离开作品时只能读缓存值，不再访问
+    // 可能已销毁的 SujianEditorItem；读不到就跳过并记日志。
+    function flushCachedDraftBeforeUnload() {
+        if (!editorBackendRef || !editorBackendRef.update_chapter_draft_text) return false;
+        if (!projectId || !chapterId || !cachedDraftAvailable) {
+            logWriterWarning("chapter_draft_unload_skipped",
+                "reason=no_cached_draft, identity=" + editorDocumentIdentity());
+            return false;
+        }
+        editorBackendRef.update_chapter_draft_text(
+            projectId, volumeId, chapterId, cachedDraftText, Number(cachedDraftRevision),
+            cachedDraftSha256, committedChapterGeneration,
+            Number(committedChapterRevision), committedChapterSha256, true);
+        return true;
     }
 
     // 保存成功后只清除 receipt 已确认的这批编辑，不清除随后输入的内容。
@@ -1939,18 +2002,13 @@ QtObject {
     //
     // 不再同步调用 backend.save_chapter_versioned，也不读取 Core 回执：
     // 返回对象只表示“已入队”，committedChapter* 绝不在入队时改写。结果由
-    // pollChapterSaveResults / waitChapterSaveResult 通过回执应用。
+    // pollChapterSaveResults 通过回执应用。Issue #1062 1.3：证明事实由后端随
+    // 编辑事实持久化，快照元数据不再携带证明事件批次。
     function saveEditorSnapshotVersioned(plainText, allowEmptyOverwrite, reason, snapshotRevision, snapshotSha) {
         if (!editorBackendRef || !editorBackendRef.enqueue_chapter_save_versioned) {
             return {"success": false, "queued": false, "errorCode": "SAVE_QUEUE_UNAVAILABLE"};
         }
         // 不可变快照元数据（正文 / base 正文单独传，避免整章 JSON 转义）。
-        var proofEventIds = [];
-        for (var i = 0; i < pendingProofEvents.length; i++) {
-            if (Number(pendingProofEvents[i].revision) <= Number(snapshotRevision)) {
-                proofEventIds.push(String(pendingProofEvents[i].id));
-            }
-        }
         var meta = {
             "sessionId": Number(chapterSaveSession),
             "projectId": String(projectId),
@@ -1961,8 +2019,7 @@ QtObject {
             "expectedRevision": Number(committedChapterRevision),
             "expectedContentSha256": committedChapterSha256,
             "snapshotRevision": Number(snapshotRevision),
-            "snapshotSha256": String(snapshotSha),
-            "proofEventIds": proofEventIds
+            "snapshotSha256": String(snapshotSha)
         };
         var requestId = Number(editorBackendRef.enqueue_chapter_save_versioned(
             JSON.stringify(meta), plainText, lastSavedEditorText));
@@ -1980,9 +2037,10 @@ QtObject {
             "session": Number(chapterSaveSession),
             "snapshotRevision": Number(snapshotRevision),
             "snapshotSha256": String(snapshotSha),
-            "proofEventIds": proofEventIds.slice(0),
             "text": plainText,
             "reason": String(reason || ""),
+            "enqueuedAtMs": Date.now(),
+            "timedOutNotified": false,
             "baseGeneration": committedChapterGeneration,
             "baseRevision": committedChapterRevision,
             "baseSha256": committedChapterSha256
@@ -2001,6 +2059,8 @@ QtObject {
 
     // 回执必须同时匹配“原请求”和“当前文档 + 当前保存会话”。切章、重载、
     // 格式化、清空以及新的打开会话都会让旧回执失效；旧结果只能丢弃。
+    // Issue #1062 1.3：整数回执字段用显式存在性 + 整数检查，0 是合法值，
+    // 不能再用 `|| -1` 把 0 当缺失。
     function chapterSaveResultMatchesDocument(expected, result) {
         if (!expected || !result) return false;
         if (String(result.projectId || "") !== String(expected.projectId)
@@ -2008,8 +2068,18 @@ QtObject {
                 || String(result.chapterId || "") !== String(expected.chapterId)) {
             return false;
         }
-        if (Number(result.sessionId || 0) !== Number(expected.session)) return false;
-        if (Number(result.snapshotRevision || -1) !== Number(expected.snapshotRevision)) return false;
+        if (typeof result.sessionId !== "number"
+                || !Number.isInteger(result.sessionId)
+                || result.sessionId < 0
+                || result.sessionId !== Number(expected.session)) {
+            return false;
+        }
+        if (typeof result.snapshotRevision !== "number"
+                || !Number.isInteger(result.snapshotRevision)
+                || result.snapshotRevision < 0
+                || result.snapshotRevision !== Number(expected.snapshotRevision)) {
+            return false;
+        }
         if (String(result.snapshotSha256 || "") !== String(expected.snapshotSha256)) return false;
         // 当前 controller 文档身份与保存会话必须仍是同一个，且编辑器实际载入
         // 的章节没有被外层切换窗口改掉（Issue #1052 的身份校验继续生效）。
@@ -2027,6 +2097,49 @@ QtObject {
         var index = pendingChapterSaveIds.indexOf(requestId);
         if (index >= 0) pendingChapterSaveIds.splice(index, 1);
         delete pendingChapterSaves[requestId];
+    }
+
+    // Issue #1062 1.3：保存回执的唯一收口。终态时先取走 continuation 再调用，
+    // pending 不回调；重复调用或迟到回执不会二次触发。
+    function consumeChapterSaveReceipt(requestId, result) {
+        if (!result) return false;
+        if (String(result.status || "") === "pending") return false;
+        var key = String(requestId);
+        var callback = chapterSaveContinuations[key];
+        if (typeof callback !== "function") {
+            delete chapterSaveContinuations[key];
+            return false;
+        }
+        delete chapterSaveContinuations[key];
+        callback(result);
+        return true;
+    }
+
+    // 会话被重建 / 清空时，等待中的调用方必须收到失败回执而不能永久挂起。
+    // 延迟到下一事件循环，避免在打开章节的调用栈里重入保存。
+    function abandonChapterSaveContinuations(reason) {
+        var keys = [];
+        for (var key in chapterSaveContinuations) keys.push(String(key));
+        for (var i = 0; i < keys.length; i += 1) {
+            var requestKey = keys[i];
+            var callback = chapterSaveContinuations[requestKey];
+            delete chapterSaveContinuations[requestKey];
+            if (typeof callback !== "function") continue;
+            logWriterWarning("editor_save_continuation_abandoned",
+                "requestId=" + requestKey + ", reason=" + reason);
+            var abandonedResult = {
+                "status": "error",
+                "success": false,
+                "terminal": true,
+                "timedOut": false,
+                "errorCode": "SAVE_SUPERSEDED",
+                "requestId": Number(requestKey)
+            };
+            var invoke = (function(cb, value) {
+                return function() { cb(value); };
+            })(callback, abandonedResult);
+            Qt.callLater(invoke);
+        }
     }
 
     // 应用一条终态回执。只有文档/会话/快照全部匹配才推进 base 与
@@ -2059,7 +2172,6 @@ QtObject {
                 finishEditorSave(expected.text, expected.snapshotRevision,
                     expected.reason, expected.snapshotSha256);
             }
-            acknowledgeProofEvents(expected.proofEventIds);
             logWriterInfo("editor_save_committed_async",
                 "requestId=" + requestId + ", reason=" + expected.reason
                 + ", chained=" + (result.chained === true)
@@ -2105,52 +2217,58 @@ QtObject {
     }
 
     // 按入队顺序消费已完成的回执；未完成返回 pending 继续等下一轮。
+    // Issue #1062 1.3：终态回执应用后交给 consumeChapterSaveReceipt 唤醒等待方。
     function pollChapterSaveResults() {
         if (!editorBackendRef || !editorBackendRef.poll_chapter_save_result) {
             chapterSavePollTimer.stop();
+            abandonChapterSaveContinuations("save_poll_unavailable");
             return 0;
         }
         var applied = 0;
+        var now = Date.now();
         var ids = pendingChapterSaveIds.slice(0);
         for (var i = 0; i < ids.length; i += 1) {
             var requestId = Number(ids[i]);
             var expected = pendingChapterSaves[requestId];
             if (!expected) {
                 takePendingChapterSave(requestId);
+                consumeChapterSaveReceipt(requestId, {
+                    "status": "error", "success": false, "terminal": true,
+                    "timedOut": false, "errorCode": "SAVE_STATE_LOST",
+                    "requestId": requestId
+                });
                 continue;
             }
             var result = editorBackendRef.poll_chapter_save_result(
                 requestId, projectId, volumeId, chapterId, chapterSaveSession);
             if (!result) continue;
             var status = String(result.status || "");
-            if (status === "pending" || result.timedOut === true) continue;
+            if (status === "pending" || result.timedOut === true) {
+                // 轮询本身不阻塞；超时只通知等待方失败，回执仍继续应用，
+                // 后续请求的 base 仍由 Rust 队列推进。
+                if (!expected.timedOutNotified
+                        && typeof chapterSaveContinuations[String(requestId)] === "function"
+                        && now - Number(expected.enqueuedAtMs || now)
+                            >= chapterSaveReceiptTimeoutMs) {
+                    expected.timedOutNotified = true;
+                    logWriterWarning("editor_save_receipt_timeout",
+                        "requestId=" + requestId + ", reason=" + expected.reason
+                        + ", identity=" + editorDocumentIdentity());
+                    consumeChapterSaveReceipt(requestId, {
+                        "status": "error", "success": false, "terminal": true,
+                        "timedOut": true, "errorCode": "SAVE_RECEIPT_TIMEOUT",
+                        "requestId": requestId
+                    });
+                }
+                continue;
+            }
             takePendingChapterSave(requestId);
             applied += 1;
             applyChapterSaveResult(requestId, expected, result);
+            consumeChapterSaveReceipt(requestId, result);
         }
         if (pendingChapterSaveIds.length === 0) chapterSavePollTimer.stop();
         return applied;
-    }
-
-    // 切章/同步等需要落盘保证的边界：等指定请求完成，再按顺序应用此前
-    // 已完成的回执，保证 base 单调推进（不会用旧回执覆盖新版本）。
-    function waitChapterSaveResult(requestId, timeoutMs) {
-        if (!editorBackendRef || !editorBackendRef.wait_chapter_save_result) {
-            return {"status": "unknown", "requestId": requestId, "success": false};
-        }
-        var result = editorBackendRef.wait_chapter_save_result(
-            requestId, Number(timeoutMs), projectId, volumeId, chapterId, chapterSaveSession);
-        if (!result) return {"status": "unknown", "requestId": requestId, "success": false};
-        pollChapterSaveResults();
-        if (String(result.status || "") !== "pending") {
-            var expected = pendingChapterSaves[requestId];
-            if (expected) {
-                takePendingChapterSave(requestId);
-                applyChapterSaveResult(requestId, expected, result);
-            }
-            chapterSavePollTimer.running = pendingChapterSaveIds.length > 0;
-        }
-        return result;
     }
 
     // Issue #1059：同步/外部写入后的按章版本协调。只有同一章节、本地没有
@@ -2213,55 +2331,85 @@ QtObject {
     //    不早于最近一笔编辑事务；
     // 3. 不再根据正文长度变化猜测"丢字"——保存是否合法只由快照本身证明。
     //
-    // Issue #1059：普通保存只入队，不阻塞 GUI；切章 / 跨卷移动 / 同步前等
-    // 必须确认已落盘的调用点仍拿到“durable 成功”布尔值，由 saveCurrentChapter
-    // 等待指定请求的回执（I/O 仍在后台 worker）。
-    function saveCurrentChapter() {
-        return saveCurrentChapterInternal(true);
-    }
-
-    // 自动保存路径：只投递快照并立刻返回，结果由轮询回执应用。
-    function queueCurrentChapterSave() {
-        return saveCurrentChapterInternal(false);
-    }
-
-    function saveCurrentChapterInternal(waitForCommit) {
-        if (!editorBackendRef || !chapterId || !projectId || !volumeId) return false;
+    // Issue #1059：普通保存只入队，不阻塞 GUI。
+    // Issue #1062 1.3：requestChapterSave 读快照、入队并登记 continuation，
+    // 立即返回 requestId（0 表示未入队）；结果由轮询回执经
+    // consumeChapterSaveReceipt 唤醒。durable 语义通过 onDone(ok, result)
+    // 异步续接，GUI 线程不再同步等待。
+    function requestChapterSave(reason, callback) {
+        if (!editorBackendRef || !chapterId || !projectId || !volumeId) return 0;
         if (saveGuardActive()) {
             pendingAutoSaveAfterGuard = true;
-            return false;
+            return 0;
         }
 
-        var snapshot = readCommittedEditorSnapshot(
-            waitForCommit ? "save_current_chapter" : "queue_current_chapter");
+        var snapshot = readCommittedEditorSnapshot(reason);
         if (!snapshot.ok) {
             logWriterWarning("save_current_chapter_snapshot_rejected",
                 "reason=" + snapshot.reason
                 + ", identity=" + editorDocumentIdentity());
-            return false;
+            return 0;
         }
         if (snapshot.suspiciousEmpty) {
-            return blockUnsafeEmptySave("save_current_chapter", {
+            blockUnsafeEmptySave("save_current_chapter", {
                 "editorItemLength": snapshot.text.length
             });
+            return 0;
         }
+        return enqueueChapterSaveSnapshot(snapshot, reason, callback);
+    }
 
+    // 快照入队 + continuation 登记的唯一实现。保存前先用 force=true 把
+    // 最新正文写进可恢复草稿（保存 / 切章 / 同步 / 关窗边界）。
+    function enqueueChapterSaveSnapshot(snapshot, reason, callback) {
+        if (!snapshot || snapshot.ok !== true) return 0;
+        updateActiveChapterDraft(snapshot, true);
         var plainText = snapshot.text;
-        // 不能仅凭全文相等跳过：输入后还原会留下待提交证明批次，正文相同
+        // 不能仅凭全文相等跳过：输入后还原会留下待提交编辑事实，正文相同
         // 仍需让 Core 建仅事件 journal 并确认事件 durable。
         var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
         var enqueued = saveEditorSnapshotVersioned(plainText, allowEmptyOverwrite,
-            waitForCommit ? "save_current_chapter" : "autosave_queue",
-            snapshot.revision, snapshot.contentSha256);
-        if (!enqueued || enqueued.queued !== true) return false;
-        if (!waitForCommit) return true;
-        var result = waitChapterSaveResult(enqueued.requestId, 3000);
-        return String(result.status || "") === "ok";
+            reason, snapshot.revision, snapshot.contentSha256);
+        if (!enqueued || enqueued.queued !== true) return 0;
+        var requestId = Number(enqueued.requestId);
+        if (typeof callback === "function") {
+            chapterSaveContinuations[String(requestId)] = callback;
+        }
+        return requestId;
+    }
+
+    // 显式保存入口：onDone(ok, result) 一定会被调用一次；立即失败时延后到
+    // 下一事件循环，避免在调用栈里重入保存。
+    function saveCurrentChapter(onDone) {
+        var finished = typeof onDone === "function" ? onDone : null;
+        var completed = false;
+        var complete = function(ok, result) {
+            if (completed) return;
+            completed = true;
+            if (finished) finished(ok, result);
+        };
+        var requestId = requestChapterSave("save_current_chapter", function(result) {
+            complete(String(result && result.status ? result.status : "") === "ok", result);
+        });
+        if (requestId <= 0) {
+            Qt.callLater(function() { complete(false, null); });
+        }
+        return requestId;
+    }
+
+    // 自动保存路径：只投递快照并立刻返回，结果由轮询回执应用。
+    function queueCurrentChapterSave() {
+        return requestChapterSave("autosave_queue");
     }
 
     // Load chapter: content comes from Rust core as plain text.
-    // Returns the full result object so caller can update state.
-    function loadChapterContentWithIds(pId, vId, cId) {
+    //
+    // Issue #1062 1.3：需要先保存当前章节时改为异步续接——保存回执 ok 后
+    // 才打开新章；失败时写 save_status 并放弃本次切章，不冒险丢正文。
+    // 返回：立即打开时返回 Core 结果对象；已排入保存回执时返回
+    // {queued:true, requestId}；直接拒绝返回 null。onLoaded 恰好调用一次。
+    function loadChapterContentWithIds(pId, vId, cId, onLoaded) {
+        var notify = typeof onLoaded === "function" ? onLoaded : null;
         if (!cId || !pId || !vId || !editorBackendRef) return null;
         if (!targetEditorItem) return null;
         if (isLoadingChapter) return null;
@@ -2272,20 +2420,47 @@ QtObject {
         // "没有删除事务但正文变少"的形状。保存失败时阻止切章，不冒险丢正文。
         var switchingChapter = chapterId.length > 0
                 && (pId !== projectId || vId !== volumeId || cId !== chapterId);
-        if (switchingChapter) {
-            var saved = saveCurrentChapter();
-            if (!saved) {
+        if (!switchingChapter) {
+            var immediate = openChapterContentNow(pId, vId, cId);
+            if (notify) notify(immediate);
+            return immediate;
+        }
+
+        var requestId = requestChapterSave("chapter_switch", function(result) {
+            if (String(result && result.status ? result.status : "") !== "ok") {
+                isLoadingChapter = false;
                 logWriterWarning("chapter_switch_save_blocked",
                     "from=" + editorDocumentIdentity()
                     + ", to=" + pId + "|" + vId + "|" + cId
-                    + ", saveResult=" + saved);
+                    + ", status=" + String(result && result.status ? result.status : "")
+                    + ", errorCode=" + String(result
+                        && (result.errorCode || result.messageKey) || ""));
                 if (editorBackendRef) {
                     editorBackendRef.save_status = qsTr("当前章节尚未成功保存，已阻止切换");
                 }
-                return null;
+                if (notify) notify(null);
+                return;
             }
+            var loaded = openChapterContentNow(pId, vId, cId);
+            if (notify) notify(loaded);
+        });
+        if (requestId <= 0) {
+            logWriterWarning("chapter_switch_save_blocked",
+                "from=" + editorDocumentIdentity()
+                + ", to=" + pId + "|" + vId + "|" + cId
+                + ", saveQueueRejected=true");
+            if (editorBackendRef) {
+                editorBackendRef.save_status = qsTr("当前章节尚未成功保存，已阻止切换");
+            }
+            return null;
         }
+        // 回执到达前继续保持加载 guard，阻止重复切章 / 保存。
+        isLoadingChapter = true;
+        return {"queued": true, "requestId": requestId};
+    }
 
+    // 同步打开章节正文（不负责切章前的保存）。
+    function openChapterContentNow(pId, vId, cId) {
         isLoadingChapter = true;
 
         var result = editorBackendRef.open_chapter(pId, vId, cId);
@@ -2366,6 +2541,15 @@ QtObject {
     // 用 isLoadingChapter 包住清理，避免清空正文被当成用户编辑触发保存。
     // 同步删除当前章节/分卷/作品后调用，使编辑器退回"请选择或新建章节"。
     function clearActiveChapter() {
+        // Issue #1062 1.3：清空身份前把最新正文 force 写进可恢复草稿。
+        var unloadSnapshot = readCommittedEditorSnapshot("clear_active_chapter");
+        if (unloadSnapshot.ok) {
+            updateActiveChapterDraft(unloadSnapshot, true);
+        } else {
+            logWriterWarning("chapter_draft_clear_skipped",
+                "reason=" + unloadSnapshot.reason
+                + ", identity=" + editorDocumentIdentity());
+        }
         isLoadingChapter = true;
         try {
             releaseCorrectionSession(projectId, chapterId);
@@ -2391,7 +2575,11 @@ QtObject {
             chapterSaveConflictNotified = false;
             pendingChapterSaves = ({});
             pendingChapterSaveIds = [];
-            pendingProofEvents = [];
+            abandonChapterSaveContinuations("clear_active_chapter");
+            cachedDraftText = "";
+            cachedDraftRevision = 0;
+            cachedDraftSha256 = "";
+            cachedDraftAvailable = false;
             chapterSavePollTimer.stop();
             clearEditorDocumentIdentity();
             correctionEntityNames = [];

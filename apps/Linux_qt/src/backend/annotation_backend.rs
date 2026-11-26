@@ -449,7 +449,7 @@ fn drain_pending_annotation_edits(api_state: &mut AnnotationApiState, key: &str)
             None => {
                 (job.callback)(AnnotationWorkerEvent::Edits {
                     request_id: job.request_id,
-                        document_session_id: job.document_session_id,
+                    document_session_id: job.document_session_id,
                     project_id: job.project_id,
                     chapter_id: job.chapter_id,
                     base_revision: job.base_revision,

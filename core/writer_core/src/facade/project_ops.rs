@@ -472,6 +472,69 @@ impl super::WriterCore {
         Ok(result)
     }
 
+    /// 携带平台冻结的原始证明批次保存正文（Issue #1062 1.2）。
+    ///
+    /// 与 [`Self::save_chapter_verified_with_changes_versioned`] 的区别：正式
+    /// 路径不再按 event ID 去全局 pending map 里取证明，也不按正文摘要猜批次。
+    /// 调用方随快照一起冻结原始事实，这里逐条 replay 校验后与正文、版本、meta
+    /// 和附加文件进入同一 durable journal；journal 决议成功后再投影证明。
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_chapter_verified_with_proof_batch(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        allow_empty_overwrite: bool,
+        additional_files: &[(String, String)],
+        expected_version: Option<crate::chapter::ChapterVersion>,
+        base_content: Option<&str>,
+        proof_snapshot_revision: u64,
+        proof_events: &[crate::chapter::ChapterProofProjection],
+        workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
+    ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
+        let project_root = self.project_root(project_id);
+        // 先结算此前 journal 里滞留的投影；它不参与本批决议，失败也不阻塞。
+        self.retry_pending_chapter_proof_projections(&project_root);
+        super::chapter_proof_batch::validate_explicit_editor_proof_batch(
+            chapter_id,
+            proof_events,
+            content,
+            proof_snapshot_revision,
+            base_content,
+        )?;
+        let projection_ids: Vec<String> = proof_events
+            .iter()
+            .map(|event| event.event_id().to_string())
+            .filter(|event_id| !event_id.is_empty())
+            .collect();
+        let result = chapter::save_chapter_verified_with_changes_and_files_versioned_with_proof(
+            &project_root,
+            volume_id,
+            chapter_id,
+            content,
+            allow_empty_overwrite,
+            additional_files,
+            expected_version,
+            base_content,
+            &projection_ids,
+            &self.app_data_root,
+            workspace_lock,
+            proof_events,
+            (proof_snapshot_revision > 0).then_some(proof_snapshot_revision),
+        )?;
+        if !proof_events.is_empty() && !result.0.transaction_id.is_empty() {
+            let completed: std::collections::HashSet<String> = proof_events
+                .iter()
+                .map(|event| event.event_id().to_string())
+                .filter(|event_id| !event_id.is_empty())
+                .collect();
+            self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed);
+            self.apply_pending_chapter_proof(&project_root, &result.0.transaction_id);
+        }
+        Ok(result)
+    }
+
     /// 清空章节正文并核对 base 版本。
     pub fn clear_chapter_content_verified_with_version(
         &self,
@@ -508,8 +571,7 @@ impl super::WriterCore {
     ) -> Result<ChapterSaveReceipt> {
         let project_root = self.project_root(project_id);
         self.retry_pending_chapter_proof_projections(&project_root);
-        let pending_proof =
-            self.pending_editor_proof_for(project_id, volume_id, chapter_id);
+        let pending_proof = self.pending_editor_proof_for(project_id, volume_id, chapter_id);
         if proof_snapshot_revision.is_some() && proof_event_ids.is_empty() {
             if !pending_proof.is_empty() {
                 return Err(crate::error::Error::ProofBatchIncomplete {

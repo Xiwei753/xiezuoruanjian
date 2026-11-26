@@ -160,6 +160,8 @@ fn test_chapter_save_receipt_dto_json_contract() {
             revision: 4,
             content_sha256: "sha256".to_string(),
         },
+        transaction_id: String::new(),
+        pending_projections: Vec::new(),
     };
     let json = serde_json::to_value(&dto).unwrap();
     assert_eq!(
@@ -175,7 +177,9 @@ fn test_chapter_save_receipt_dto_json_contract() {
                 "objectGeneration": "gen-1",
                 "revision": 4,
                 "contentSha256": "sha256"
-            }
+            },
+            "transactionId": "",
+            "pendingProjections": []
         })
     );
     let deserialized: ChapterSaveReceiptDto = serde_json::from_value(json).unwrap();

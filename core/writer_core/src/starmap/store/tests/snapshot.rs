@@ -167,6 +167,11 @@ fn phased_snapshot_preserves_embed_link() {
         created_at: 0,
         updated_at: 0,
     });
+    // 新契约（Issue #1060）：链接唯一事实在 annotations 仓库，快照按仓库重建；
+    // 只 upsert_link 内存投影不会落盘，这里用 add_link 写入仓库。
+    store
+        .add_link(make_test_link("lk1", "link", &sid, "n1"))
+        .unwrap();
     flush_store(&mut store);
     let snapshot = load_full_snapshot(dir.path(), &sid);
     assert_eq!(snapshot.embeds.len(), 1);

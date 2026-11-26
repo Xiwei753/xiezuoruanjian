@@ -24,6 +24,7 @@ fn test_stats_summary_dto_contract() {
             end_date: "2024-01-02".to_string(),
         },
         total_human_typed_chars: 100,
+        total_verified_typed_chars: 100,
         total_pasted_chars: 50,
         total_deleted_chars: 10,
         total_ai_inserted_chars: 5,
@@ -44,6 +45,7 @@ fn test_stats_summary_dto_contract() {
         "totalNetDeltaChars",
         "totalPastedChars",
         "totalSessions",
+        "totalVerifiedTypedChars",
     ]
     .into_iter()
     .map(|s| s.to_string())

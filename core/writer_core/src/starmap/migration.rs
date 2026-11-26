@@ -59,6 +59,7 @@ use serde_json::Value;
 use crate::error::{Error, Result};
 
 mod links;
+pub(crate) mod nodes;
 mod tags;
 
 /// 旧 index schema 版本（`starmaps: Vec<StarMapMeta>` 数组）。

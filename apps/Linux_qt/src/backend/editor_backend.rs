@@ -216,6 +216,33 @@ pub struct EditorBackend {
             after_text_sha256: QString,
         ) -> QString
     ),
+    /// Issue #1062 1.3：编辑器正文变化交给章节 actor 更新可恢复草稿。
+    #[allow(dead_code)]
+    update_chapter_draft_text: qt_method!(
+        fn(
+            &mut self,
+            project_id: QString,
+            volume_id: QString,
+            chapter_id: QString,
+            text: QString,
+            revision: u64,
+            sha256: QString,
+            base_generation: QString,
+            base_revision: u64,
+            base_sha256: QString,
+            force: bool,
+        )
+    ),
+    /// Issue #1062 1.3：项目进入时重放未完成草稿，返回待处理数量。
+    #[allow(dead_code)]
+    restore_project_chapter_drafts: qt_method!(fn(&mut self, project_id: QString) -> u32),
+    /// Issue #1062 1.3：草稿恢复状态（QML 轮询）。
+    #[allow(dead_code)]
+    chapter_draft_restore_status: qt_method!(fn(&mut self, project_id: QString) -> QJsonObject),
+    /// Issue #1062 1.3：当前章节草稿快照（只读诊断/恢复提示）。
+    #[allow(dead_code)]
+    chapter_draft_snapshot:
+        qt_method!(fn(&mut self, project_id: QString, chapter_id: QString) -> QJsonObject),
     #[allow(dead_code)]
     get_writing_stats_summary:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
@@ -649,7 +676,6 @@ impl EditorBackend {
             allow_empty_overwrite: meta.allow_empty_overwrite,
             expected,
             base_content,
-            proof_event_ids: meta.proof_event_ids.clone(),
             context: chapter_save_queue::ChapterSaveContext::new(
                 &data_root,
                 &projects_root,
@@ -972,6 +998,67 @@ impl EditorBackend {
                 QString::from("")
             }
         }
+    }
+
+    /// Issue #1062 1.3：正文变化交给章节 actor；`force` 边界立即写整章。
+    #[allow(clippy::too_many_arguments)]
+    fn update_chapter_draft_text(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        text: QString,
+        revision: u64,
+        sha256: QString,
+        base_generation: QString,
+        base_revision: u64,
+        base_sha256: QString,
+        force: bool,
+    ) {
+        let (project, volume, chapter, text, sha, base_generation, base_sha) = (
+            project_id.to_string(),
+            volume_id.to_string(),
+            chapter_id.to_string(),
+            text.to_string(),
+            sha256.to_string(),
+            base_generation.to_string(),
+            base_sha256.to_string(),
+        );
+        let _ = self.with_app(|app| {
+            app.update_chapter_draft_text(
+                &project,
+                &volume,
+                &chapter,
+                &text,
+                revision,
+                &sha,
+                &base_generation,
+                base_revision,
+                &base_sha,
+                force,
+            )
+        });
+    }
+
+    /// Issue #1062 1.3：项目进入时重放未完成草稿。
+    fn restore_project_chapter_drafts(&mut self, project_id: QString) -> u32 {
+        let project = project_id.to_string();
+        self.with_app(|app| app.restore_project_chapter_drafts(&project))
+            .unwrap_or(0)
+    }
+
+    /// Issue #1062 1.3：草稿恢复状态轮询。
+    fn chapter_draft_restore_status(&mut self, project_id: QString) -> QJsonObject {
+        let project = project_id.to_string();
+        self.with_app(|app| app.chapter_draft_restore_status(&project))
+            .unwrap_or_default()
+    }
+
+    /// Issue #1062 1.3：当前章节草稿快照（只读）。
+    fn chapter_draft_snapshot(&mut self, project_id: QString, chapter_id: QString) -> QJsonObject {
+        let (project, chapter) = (project_id.to_string(), chapter_id.to_string());
+        self.with_app(|app| app.chapter_draft_snapshot(&project, &chapter))
+            .unwrap_or_default()
     }
 
     /// Issue #935：异步请求统计面板快照（非阻塞，结果走信号回 GUI 线程）。

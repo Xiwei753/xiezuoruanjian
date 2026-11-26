@@ -619,7 +619,7 @@ fn formal_edge_arrow_is_clickable_at_small_threshold() {
     let inside_x = (cx + (r.arrow_tip_x + r.arrow_left_x) / 2.0) / 2.0;
     let inside_y = (cy + (r.arrow_tip_y + r.arrow_left_y) / 2.0) / 2.0;
     assert!(
-        point_in_triangle(
+        point_in_triangle_f64(
             inside_x,
             inside_y,
             r.arrow_tip_x,
@@ -632,14 +632,15 @@ fn formal_edge_arrow_is_clickable_at_small_threshold() {
         "前提：取样点必须落在箭头三角形内部"
     );
     let shaft_only =
-        point_to_segment_distance(inside_x, inside_y, r.start_x, r.start_y, r.end_x, r.end_y);
+        point_to_segment_distance_f64(inside_x, inside_y, r.start_x, r.start_y, r.end_x, r.end_y);
     assert!(
         shaft_only > 1.0,
         "前提：该点离箭杆 > 1 world（got {}）",
         shaft_only
     );
     assert_eq!(
-        hit_test_edge_renders_with_threshold(inside_x, inside_y, &batch.renders, 1.0).as_deref(),
+        hit_test_edge_renders_with_threshold(inside_x as f32, inside_y as f32, &batch.renders, 1.0)
+            .as_deref(),
         Some("edge_1"),
         "正式边箭头内部在小 threshold 下也必须命中"
     );

@@ -264,9 +264,14 @@ fn parse_proc_stat(line: &str) -> Option<ProcStat> {
     })
 }
 
-/// /proc/self/status 中与内存/线程相关的快照
+/// /proc/self/status 中与内存/线程相关的快照。
+///
+/// Linux 的 `RssAnon`/`RssFile` 只出现在 status（smaps_rollup 没有这两个
+/// 字段），因此匿名/文件 RSS 从 status 读，PSS 细分从 smaps_rollup 读。
 struct ProcStatusSample {
     rss_kb: Option<u64>,
+    rss_anon_kb: Option<u64>,
+    rss_file_kb: Option<u64>,
     vm_size_kb: Option<u64>,
     threads: Option<u64>,
 }
@@ -282,22 +287,48 @@ fn read_status_value(content: &str, key: &str) -> Option<u64> {
     })
 }
 
-/// 读取 /proc/self/status 的 VmRSS / VmSize / Threads。
+/// 读取 /proc/self/status 的 VmRSS / RssAnon / RssFile / VmSize / Threads。
 fn read_proc_status() -> Option<ProcStatusSample> {
     let content = std::fs::read_to_string("/proc/self/status").ok()?;
     Some(ProcStatusSample {
         rss_kb: read_status_value(&content, "VmRSS"),
+        rss_anon_kb: read_status_value(&content, "RssAnon"),
+        rss_file_kb: read_status_value(&content, "RssFile"),
         vm_size_kb: read_status_value(&content, "VmSize"),
         threads: read_status_value(&content, "Threads"),
     })
 }
 
-/// 读取 /proc/self/smaps_rollup 的 `Pss:`（kB）。
+/// /proc/self/smaps_rollup 的内存细分（kB）。
 ///
-/// 文件不存在（旧内核/受限环境）或读取失败都返回 None，只跳过该字段。
-fn read_pss_kb() -> Option<u64> {
+/// 内核在 smaps_rollup 里使用带下划线的 `Pss_Anon`/`Pss_File`（不是 status
+/// 里的 `RssAnon`/`RssFile`）；缺失字段保持 None，老内核或受限环境下静默跳过。
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SmapsRollupSample {
+    pss_kb: Option<u64>,
+    pss_anon_kb: Option<u64>,
+    pss_file_kb: Option<u64>,
+}
+
+/// 解析 smaps_rollup 正文的 Pss / Pss_Anon / Pss_File（纯函数，便于单测）。
+///
+/// 同时兼容 `Pss_Anon` 与 `PssAnon` 两种写法：主流内核用下划线，个别版本/
+/// 包装层可能去掉；都读不到就是 None。
+fn parse_smaps_rollup(content: &str) -> SmapsRollupSample {
+    SmapsRollupSample {
+        pss_kb: read_status_value(content, "Pss"),
+        pss_anon_kb: read_status_value(content, "Pss_Anon")
+            .or_else(|| read_status_value(content, "PssAnon")),
+        pss_file_kb: read_status_value(content, "Pss_File")
+            .or_else(|| read_status_value(content, "PssFile")),
+    }
+}
+
+/// 读取 /proc/self/smaps_rollup；文件不存在（旧内核/受限环境）或读取失败
+/// 都返回 None，调用方只跳过这些字段。
+fn read_smaps_rollup() -> Option<SmapsRollupSample> {
     let content = std::fs::read_to_string("/proc/self/smaps_rollup").ok()?;
-    read_status_value(&content, "Pss")
+    Some(parse_smaps_rollup(&content))
 }
 
 /// 读取 /proc/self/stat 的累计 CPU tick；失败返回 None。
@@ -338,6 +369,58 @@ fn read_thread_stat_samples() -> Option<(usize, Vec<(u64, ProcStat)>)> {
     Some((thread_count, samples))
 }
 
+/// 追加校对模型生命周期分项（Issue #1062 三.4 / A3）。
+///
+/// `model_lifetime_snapshot()` 只读缓存计数、淘汰队列和配置代数，不加载模型；
+/// 任一键缺失就跳过该字段，模型模块未初始化也不会让诊断线程失败。
+fn insert_model_lifetime_fields(fields: &mut BTreeMap<String, serde_json::Value>) {
+    let snapshot = writer_core::correction::model_lifetime_snapshot();
+    for (key, field) in [
+        ("cached", "model_cached_sessions"),
+        ("engine_refs", "model_engine_refs"),
+        ("retired_models", "model_retired_models"),
+        ("retired_engines", "model_retired_engines"),
+        ("generation", "model_generation"),
+    ] {
+        if let Some(value) = snapshot.get(key).and_then(serde_json::Value::as_u64) {
+            fields.insert(field.to_string(), serde_json::Value::from(value));
+        }
+    }
+    if let Some(configured) = snapshot
+        .get("model_configured")
+        .and_then(serde_json::Value::as_bool)
+    {
+        fields.insert(
+            "model_configured".to_string(),
+            serde_json::Value::Bool(configured),
+        );
+    }
+}
+
+/// 追加保存/统计队列的内存占用分项（Issue #1062 三.4）。
+///
+/// 两个钩子只读原子量或结果表短锁，采样线程不会阻塞保存 worker；正文快照
+/// 字节只统计结果表仍持有的 `Arc<str>`，不是历史累计写入量。
+fn insert_queue_occupancy_fields(fields: &mut BTreeMap<String, serde_json::Value>) {
+    let queue = crate::backend::chapter_save_queue::queue_metrics();
+    fields.insert(
+        "chapter_save_pending_requests".to_string(),
+        serde_json::Value::from(queue.pending_requests),
+    );
+    fields.insert(
+        "chapter_save_retained_results".to_string(),
+        serde_json::Value::from(queue.retained_results),
+    );
+    fields.insert(
+        "chapter_save_content_bytes".to_string(),
+        serde_json::Value::from(queue.content_bytes),
+    );
+    fields.insert(
+        "stats_pending_bytes".to_string(),
+        serde_json::Value::from(crate::backend::stats_writer::pending_bytes()),
+    );
+}
+
 /// 启动进程资源采样线程（幂等）
 ///
 /// 线程名 `process-resource-monitor`：首个样本在启动 5 秒后采集，此后每 30 秒
@@ -376,14 +459,42 @@ fn run_process_resource_monitor() {
         };
         let cpu_ticks = read_self_cpu_ticks();
         let thread_samples = read_thread_stat_samples();
-        let pss_kb = read_pss_kb();
+        let smaps = read_smaps_rollup();
 
         let mut fields: BTreeMap<String, serde_json::Value> = BTreeMap::new();
         if let Some(rss_kb) = status.rss_kb {
             fields.insert("rss_kb".to_string(), serde_json::Value::from(rss_kb));
         }
-        if let Some(pss_kb) = pss_kb {
-            fields.insert("pss_kb".to_string(), serde_json::Value::from(pss_kb));
+        // Issue #1062 三.4：RSS 拆成匿名/文件两类，配合 PSS 细分判断增长来自
+        // ORT 匿名内存还是模型文件映射；读不到就省略，不用 0 冒充。
+        if let Some(rss_anon_kb) = status.rss_anon_kb {
+            fields.insert(
+                "rss_anon_kb".to_string(),
+                serde_json::Value::from(rss_anon_kb),
+            );
+        }
+        if let Some(rss_file_kb) = status.rss_file_kb {
+            fields.insert(
+                "rss_file_kb".to_string(),
+                serde_json::Value::from(rss_file_kb),
+            );
+        }
+        if let Some(smaps) = smaps.as_ref() {
+            if let Some(pss_kb) = smaps.pss_kb {
+                fields.insert("pss_kb".to_string(), serde_json::Value::from(pss_kb));
+            }
+            if let Some(pss_anon_kb) = smaps.pss_anon_kb {
+                fields.insert(
+                    "pss_anon_kb".to_string(),
+                    serde_json::Value::from(pss_anon_kb),
+                );
+            }
+            if let Some(pss_file_kb) = smaps.pss_file_kb {
+                fields.insert(
+                    "pss_file_kb".to_string(),
+                    serde_json::Value::from(pss_file_kb),
+                );
+            }
         }
         if let Some(vm_size_kb) = status.vm_size_kb {
             fields.insert(
@@ -424,6 +535,11 @@ fn run_process_resource_monitor() {
             "active_visual_snapshots".to_string(),
             serde_json::Value::from(texture.active_visual_snapshots),
         );
+
+        // Issue #1062 三.4：模型 session 生命周期与保存/统计队列的占用。
+        // 两类读取都只做只读快照，不和 30 秒采样周期之外的逻辑耦合。
+        insert_model_lifetime_fields(&mut fields);
+        insert_queue_occupancy_fields(&mut fields);
 
         // 进程 CPU：两次采样的 tick 差 / 墙钟差。
         // 第一次采样只建立基线，cpu_percent=0 并标 baseline=true。
@@ -614,5 +730,42 @@ mod tests {
         assert_eq!(stat.utime_ticks, 8);
         assert_eq!(stat.stime_ticks, 2);
         assert_eq!(stat.cpu_ticks(), 10);
+    }
+
+    /// Issue #1062 三.4：smaps_rollup 的 PSS 细分。内核实际字段名是
+    /// `Pss_Anon`/`Pss_File`（下划线），不是 status 的 `RssAnon`/`RssFile`。
+    #[test]
+    fn test_parse_smaps_rollup_kernel_field_names() {
+        let content = "\
+5620ed8cf000-7fff7195e000 ---p 00000000 00:00 0                          [rollup]
+Rss:                2076 kB
+Pss:                 151 kB
+Pss_Dirty:           104 kB
+Pss_Anon:            104 kB
+Pss_File:             47 kB
+Pss_Shmem:             0 kB
+Anonymous:           104 kB
+";
+        let sample = parse_smaps_rollup(content);
+        assert_eq!(sample.pss_kb, Some(151));
+        assert_eq!(sample.pss_anon_kb, Some(104));
+        assert_eq!(sample.pss_file_kb, Some(47));
+    }
+
+    /// Issue #1062 三.4：老内核缺 Pss_Anon/Pss_File 时保持 None，不 panic。
+    #[test]
+    fn test_parse_smaps_rollup_missing_breakdown() {
+        let sample = parse_smaps_rollup("Rss: 8 kB\nPss: 4 kB\n");
+        assert_eq!(sample.pss_kb, Some(4));
+        assert_eq!(sample.pss_anon_kb, None);
+        assert_eq!(sample.pss_file_kb, None);
+    }
+
+    /// 兼容无下划线的 PssAnon/PssFile 写法。
+    #[test]
+    fn test_parse_smaps_rollup_accepts_underscoreless_alias() {
+        let sample = parse_smaps_rollup("PssAnon: 12 kB\nPssFile: 34 kB\n");
+        assert_eq!(sample.pss_anon_kb, Some(12));
+        assert_eq!(sample.pss_file_kb, Some(34));
     }
 }

@@ -2,20 +2,26 @@
 //!
 //! Issue #928 更新：publish 判定不再只看作品级 whole-work LWW；本轮 merge 产生文件级
 //! 内容/tombstone 变化（`remote_upload_paths` / `remote_delete_paths` 非空）时，即使远端
-//! Upsert 严格赢也必须 publish 新 generation 并通过 catalog CAS 推进 active_generation。
-//! 因此场景 4/10 在第二轮出现新的可见 generation 且本地仍有文件级变化时会再次 publish
-//! （每次 publish 都携带真实变化，不是重复 publish）；场景 11/13 的本地 tombstone 属于
-//! 文件级 tombstone 变化，会触发 publish 新 generation 并如实报告 local_deletes
-//! （超过 30 天的墓碑记录仍按既有清理规则从 manifest 记录中移除）。
+//! Upsert 严格赢也必须发布新树并通过 catalog CAS 推进。因此场景 11/13 的本地 tombstone 属于
+//! 文件级 tombstone 变化，会触发发布并如实报告 local_deletes（超过 30 天的墓碑记录仍按
+//! 既有清理规则从 manifest 记录中移除）。
+//!
+//! Issue #1012 更新：内容发布不再写不可见的 `projects/P/__generations__/G/`（也没有
+//! `generation.meta.json`），改为每轮把 merge 后的完整树一次性 `commit_batch` 到稳定前缀
+//! `projects/P`，catalog 的 `active_generation` 因此被清成 `None`（legacy 指针退场）。
+//! 本文件的 `publish_count()` 相应改为「命中项目稳定树的 `commit_batch` 次数」。
+//!
+//! Issue #990 更新：catalog CAS 遇到 `precondition_failed` 时不再在本轮内重新 merge 重试，
+//! 而是把分类原样上抛，交给完整同步入口新建 provider 后整轮重规划。场景 4/10 因此断言
+//! 「单轮只发布一次 + 返回 `precondition_failed`」，不再断言同一 `run_transfer` 内发布两次。
 //!
 //! 覆盖场景：
-//! 1. 无文件级变化不 publish：remote Upsert 同时间戳严格赢 + staging 无变化 → publish_count == 0，返回 NoChanges。
+//! 1. 无文件级变化不 publish：remote Upsert 同时间戳严格赢 + staging 无变化 → publish_count == 0，返回 Success。
 //! 2. candidate 严格赢仍 publish：remote record 时间更小 → candidate 严格赢 → publish_count == 1，CAS Applied，返回 Success。
 //! 3. 远端无 record 仍 publish：catalog 无该 target record → publish_count == 1，CAS Applied。
-//! 4. CAS 期间 snapshot 变化才下一轮：publish 前判定 candidate 赢，但 CAS 返回 RemoteWinner(Upsert)
-//!    → 下一轮重新 merge；仍有文件级变化 → 再 publish 一次，CAS 成功后 active_generation 指向
-//!    第二轮 generation。publish_count == 2。
-//! 5. RemoteWinner(Delete) 语义不变：remote record op == Delete 且严格赢 → 清远端对象，不 publish generation。
+//! 4. CAS 期间 snapshot 变化（#990）：先发布一次稳定树，CAS 注入冲突 → 返回
+//!    `precondition_failed` 交给完整同步入口整轮重规划，本轮不重复发布。
+//! 5. RemoteWinner(Delete) 语义不变：remote record op == Delete 且严格赢 → 清远端对象，不 publish。
 //!
 //! Issue #716 评论 5741695768 追加 2 个场景：
 //! 6. remote Upsert 严格赢 + 本轮 merge 产生 unresolved conflict 且无文件级 upload/delete 变化 → publish_count == 0，PartialConflict，冲突列表非空。
@@ -44,33 +50,36 @@ use writer_core::sync::types::{
     SyncStatus, SyncTarget, TargetLifecycleCatalog, TargetLifecycleRecord,
 };
 
-/// `__generations__` 子目录名 — 与 `full_sync::generation::GENERATION_SUBDIR` 一致。
-const GENERATION_SUBDIR: &str = "__generations__";
-/// `generation.meta.json` 文件名 — 与 `generation_gc::GENERATION_META_FILENAME` 一致。
-const GENERATION_META_FILENAME: &str = "generation.meta.json";
+/// 本项目在远端的稳定树前缀（#1012：内容不再写到 `__generations__/G`）。
+const PROJECT_TREE_PREFIX: &str = "projects/p1";
 
-/// 计数对 `__generations__` 路径 write 的 mock provider。
+/// 计数稳定树发布次数的 mock provider。
+///
+/// #1012 起 `transfer_live_project` 每轮把 merge 后的完整树一次性 `commit_batch` 到
+/// `projects/P`，不再有 `__generations__/G/generation.meta.json`。因此：
+/// - `publish_count()`：命中项目树的 `commit_batch` 次数（一次 batch = 一次发布）；
+/// - `tree_writes()`：命中项目树的 mutation 总数（0 表示本轮没碰远端树）。
 struct CountingProvider {
     inner: MemoryProvider,
-    generation_writes: AtomicUsize,
-    generation_meta_writes: AtomicUsize,
+    tree_publishes: AtomicUsize,
+    tree_writes: AtomicUsize,
 }
 
 impl CountingProvider {
     fn new(inner: MemoryProvider) -> Self {
         Self {
             inner,
-            generation_writes: AtomicUsize::new(0),
-            generation_meta_writes: AtomicUsize::new(0),
+            tree_publishes: AtomicUsize::new(0),
+            tree_writes: AtomicUsize::new(0),
         }
     }
 
     fn publish_count(&self) -> usize {
-        self.generation_meta_writes.load(Ordering::SeqCst) / 2
+        self.tree_publishes.load(Ordering::SeqCst)
     }
 
-    fn generation_writes(&self) -> usize {
-        self.generation_writes.load(Ordering::SeqCst)
+    fn tree_writes(&self) -> usize {
+        self.tree_writes.load(Ordering::SeqCst)
     }
 }
 
@@ -90,55 +99,37 @@ impl SyncProvider for CountingProvider {
         content: &[u8],
         precondition: WritePrecondition,
     ) -> Result<RemoteVersion, ProviderError> {
-        if path.contains(GENERATION_SUBDIR) {
-            self.generation_writes.fetch_add(1, Ordering::SeqCst);
-            if path.ends_with(GENERATION_META_FILENAME) {
-                self.generation_meta_writes.fetch_add(1, Ordering::SeqCst);
-            }
+        if path.starts_with(PROJECT_TREE_PREFIX) {
+            self.tree_writes.fetch_add(1, Ordering::SeqCst);
         }
         self.inner.write(path, content, precondition)
     }
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         self.inner.delete(path, precondition)
     }
-    /// Issue #761：batch 路径下 commit_batch 提交所有 mutation。
-    /// 计数 meta writes（+2，让 publish_count = meta_writes / 2 仍然正确：
-    /// batch 路径 1 次 publish = 1 次 commit_batch = 1 个 meta mutation）。
+    /// #1012：batch 路径下 1 次覆盖项目树的 `commit_batch` 就是 1 次发布。
     fn commit_batch(
         &self,
         mutations: &[BatchMutation],
         message: &str,
     ) -> Result<BatchCommitResult, ProviderError> {
-        for m in mutations {
-            count_batch_generation_write(m, &self.generation_writes, &self.generation_meta_writes);
+        let tree_mutations = mutations
+            .iter()
+            .filter(|m| m.path().starts_with(PROJECT_TREE_PREFIX))
+            .count();
+        if tree_mutations > 0 {
+            self.tree_publishes.fetch_add(1, Ordering::SeqCst);
+            self.tree_writes.fetch_add(tree_mutations, Ordering::SeqCst);
         }
         self.inner.commit_batch(mutations, message)
     }
 }
 
-/// Issue #761：batch 路径下计数 generation write / meta write。
-fn count_batch_generation_write(
-    m: &BatchMutation,
-    generation_writes: &AtomicUsize,
-    generation_meta_writes: &AtomicUsize,
-) {
-    let path = m.path();
-    if !path.contains(GENERATION_SUBDIR) {
-        return;
-    }
-    generation_writes.fetch_add(1, Ordering::SeqCst);
-    if path.ends_with(GENERATION_META_FILENAME) {
-        // batch 路径 1 次 publish = 1 个 meta mutation，
-        // 计数 +2 让 publish_count = meta_writes / 2 == 1。
-        generation_meta_writes.fetch_add(2, Ordering::SeqCst);
-    }
-}
-
-/// 场景 4 专用：第一次 IfMatch 写 catalog 时注入冲突（写入更新的 record 后返回 PreconditionFailed）。
+/// 场景 4/10 专用：第一次 IfMatch 写 catalog 时注入冲突（写入更新的 record 后返回 PreconditionFailed）。
 struct ConflictInjectingProvider {
     inner: MemoryProvider,
-    generation_writes: AtomicUsize,
-    generation_meta_writes: AtomicUsize,
+    tree_publishes: AtomicUsize,
+    tree_writes: AtomicUsize,
     conflict_injected: AtomicBool,
     conflict_catalog: Vec<u8>,
 }
@@ -147,15 +138,15 @@ impl ConflictInjectingProvider {
     fn new(inner: MemoryProvider, conflict_catalog: Vec<u8>) -> Self {
         Self {
             inner,
-            generation_writes: AtomicUsize::new(0),
-            generation_meta_writes: AtomicUsize::new(0),
+            tree_publishes: AtomicUsize::new(0),
+            tree_writes: AtomicUsize::new(0),
             conflict_injected: AtomicBool::new(false),
             conflict_catalog,
         }
     }
 
     fn publish_count(&self) -> usize {
-        self.generation_meta_writes.load(Ordering::SeqCst) / 2
+        self.tree_publishes.load(Ordering::SeqCst)
     }
 }
 
@@ -193,25 +184,27 @@ impl SyncProvider for ConflictInjectingProvider {
                 reason: "injected conflict for scenario 4".to_string(),
             });
         }
-        if path.contains(GENERATION_SUBDIR) {
-            self.generation_writes.fetch_add(1, Ordering::SeqCst);
-            if path.ends_with(GENERATION_META_FILENAME) {
-                self.generation_meta_writes.fetch_add(1, Ordering::SeqCst);
-            }
+        if path.starts_with(PROJECT_TREE_PREFIX) {
+            self.tree_writes.fetch_add(1, Ordering::SeqCst);
         }
         self.inner.write(path, content, precondition)
     }
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         self.inner.delete(path, precondition)
     }
-    /// Issue #761：batch 路径下 commit_batch 计数 meta writes（+2，同 CountingProvider）。
+    /// #1012：batch 路径下 1 次覆盖项目树的 `commit_batch` 就是 1 次发布。
     fn commit_batch(
         &self,
         mutations: &[BatchMutation],
         message: &str,
     ) -> Result<BatchCommitResult, ProviderError> {
-        for m in mutations {
-            count_batch_generation_write(m, &self.generation_writes, &self.generation_meta_writes);
+        let tree_mutations = mutations
+            .iter()
+            .filter(|m| m.path().starts_with(PROJECT_TREE_PREFIX))
+            .count();
+        if tree_mutations > 0 {
+            self.tree_publishes.fetch_add(1, Ordering::SeqCst);
+            self.tree_writes.fetch_add(tree_mutations, Ordering::SeqCst);
         }
         self.inner.commit_batch(mutations, message)
     }
@@ -287,9 +280,11 @@ fn build_plan(
     }
 }
 
-/// 场景 1：不重复 publish — remote Upsert 同时间戳严格赢 → publish_count == 0，NoChanges。
+/// 场景 1：不重复 publish — remote Upsert 同时间戳严格赢 → publish_count == 0，Success。
 ///
-/// 远端 generation 有内容，但 remote 严格赢，merge 不会产生任何变化（本地 staging 为空）。
+/// 远端树有内容，但 remote 严格赢，本地没有可上传的文件；merge 只把远端文件下载到本地
+/// （单侧变化，不是 LWW 自动裁决，见 Issue #1018），因此终态是 Success 而不是 NoChanges，
+/// 更不是 LatestWinsApplied。
 #[test]
 fn regression_no_redundant_publish_remote_upsert_strictly_wins() {
     const T: i64 = 10_000;
@@ -316,7 +311,9 @@ fn regression_no_redundant_publish_remote_upsert_strictly_wins() {
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider_inner, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
@@ -346,14 +343,13 @@ fn regression_no_redundant_publish_remote_upsert_strictly_wins() {
         0,
         "remote Upsert 同时间戳严格赢时不应 publish"
     );
-    assert_eq!(provider.generation_writes(), 0);
-    // merge 下载了远端内容，应返回 LatestWinsApplied（不是 NoChanges）
+    assert_eq!(provider.tree_writes(), 0);
+    // merge 下载了远端内容，应返回 Success（不是 NoChanges）。
+    // Issue #1018：只有「双方相对基线都变化、由 LWW 自动裁决」才报 LatestWinsApplied；
+    // 这里只有远端单侧有文件、本地无对应记录，属于纯下载，终态是 Success。
     assert!(
-        matches!(
-            transfer.targets[0].result.status,
-            SyncStatus::LatestWinsApplied
-        ),
-        "merge 下载了远端正文应返回 LatestWinsApplied，实际 {:?}",
+        matches!(transfer.targets[0].result.status, SyncStatus::Success),
+        "merge 下载了远端正文应返回 Success，实际 {:?}",
         transfer.targets[0].result.status
     );
     assert!(
@@ -378,7 +374,9 @@ fn regression_candidate_strictly_wins_publishes_once() {
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider).unwrap();
@@ -435,11 +433,13 @@ fn regression_no_remote_record_publishes_once() {
     );
 }
 
-/// 场景 4（#928 更新）：CAS 期间 snapshot 变化才下一轮 — 第一轮 candidate 赢 publish，
-/// CAS 返回 RemoteWinner(Upsert)（远端已推进到 gen_after_conflict）；第二轮重新 merge 后
-/// 本地 volumes/v1/chapter.md 仍不在新 visible generation（文件级变化）→ 再 publish 一次；
-/// CAS 成功后 active_generation 指向第二轮 generation。第一轮本地变化不丢失。
-/// publish_count == 2（每次 publish 都携带真实文件级变化）。
+/// 场景 4（#990 更新）：CAS 期间 snapshot 变化 → 本轮只发布一次，然后把
+/// `precondition_failed` 原样上抛，交给完整同步入口新建 provider 后整轮重规划。
+///
+/// #990 之前 `apply_generation_pointer` 会在本轮内重新读 catalog → 重新 merge → 再发布，
+/// 于是同一 `run_transfer` 里 publish_count == 2。固定快照下 provider 读不到新的 HEAD，
+/// 本轮重试只会在旧快照上循环，所以现在改为「发布一次 + 返回 precondition_failed」。
+/// 已发布的内容不会因此丢失：稳定树在 CAS 之前就已经写好。
 #[test]
 fn regression_cas_conflict_retries_only_when_snapshot_changed() {
     const T: i64 = 10_000;
@@ -456,7 +456,9 @@ fn regression_cas_conflict_retries_only_when_snapshot_changed() {
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider_inner, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
@@ -469,7 +471,7 @@ fn regression_cas_conflict_retries_only_when_snapshot_changed() {
     upsert_record(&mut conflict_catalog, conflict_record);
     let conflict_catalog_bytes = serde_json::to_vec(&conflict_catalog).unwrap();
 
-    // 在 gen_after_conflict 下写入内容，这样第二轮 merge 会下载新内容
+    // 在 gen_after_conflict 下写入内容，模拟另一台设备推进了可见内容
     let conflict_gen_prefix = "projects/p1/__generations__/gen_after_conflict";
     write_remote_generation(
         &provider_inner,
@@ -489,38 +491,43 @@ fn regression_cas_conflict_retries_only_when_snapshot_changed() {
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
-        2,
-        "第一轮 candidate 赢 publish 1 次；CAS 竞争失败后第二轮 merge 仍有文件级变化\
-         （本地 volumes/v1/chapter.md 不在新 visible generation gen_after_conflict）→ 再\
-         publish 1 次，总计 2 次（#928：每次 publish 都携带真实变化，不是重复 publish）"
-    );
-    // 第二轮 candidate 不赢 → RemoteWins(Upsert)，但文件级变化必须 publish；merge 下载了
-    // 远端新内容 → LatestWinsApplied
-    assert!(
-        matches!(
-            transfer.targets[0].result.status,
-            SyncStatus::LatestWinsApplied
-        ),
-        "第二轮 merge 下载了远端新内容应返回 LatestWinsApplied，实际 {:?}",
-        transfer.targets[0].result.status
+        1,
+        "#990：CAS 冲突不在本轮重试，单轮只发布一次后把 precondition_failed 上抛"
     );
 
-    // 第二轮 publish 后 active_generation 应指向含本地 volumes/v1/chapter.md 的新 generation
-    // —— 第一轮本地变化不得因 CAS 竞争丢失。
+    // 状态：precondition_failed → 完整同步入口新建 provider、重新读 catalog、整轮重规划。
+    // `precondition_failed` 本身被 `Error::recoverable()` 归为不可重试（FatalError），
+    // 重规划由 error_category 驱动（见 api/sync_api.rs full_sync_has_precondition_failure）。
+    let status = &transfer.targets[0].result.status;
+    assert!(
+        matches!(
+            status,
+            SyncStatus::RecoverableError(_) | SyncStatus::FatalError(_)
+        ),
+        "CAS 冲突应是错误终态而不是成功，实际 {status:?}"
+    );
+    assert_eq!(
+        transfer.targets[0].result.error_category.as_deref(),
+        Some("precondition_failed"),
+        "CAS 冲突必须保留 precondition_failed 分类，不能被降级成普通错误"
+    );
+
+    // 发布发生在 CAS 之前：稳定树里已经有本地 volumes/v1/chapter.md，
+    // 第一轮本地变化不因 CAS 竞争丢失。
+    let published = provider
+        .read("projects/p1/volumes/v1/chapter.md")
+        .unwrap()
+        .expect("稳定树应包含本地 chapter.md（发布在 CAS 之前完成）");
+    assert_eq!(published.content, b"chapter content".to_vec());
+
+    // 本轮没有覆盖注入的远端 catalog。
     let snapshot = load_remote_catalog(&provider).unwrap();
     let record = find_record(&snapshot.catalog, "projects/p1").unwrap();
-    let active = record
-        .active_generation
-        .as_deref()
-        .expect("active_generation 应指向新 generation");
-    assert_ne!(active, "gen_after_conflict");
-    let published = provider
-        .read(&format!(
-            "projects/p1/__generations__/{active}/volumes/v1/chapter.md"
-        ))
-        .unwrap()
-        .expect("第二轮 generation 应包含本地 chapter.md（第一轮本地变化不得丢失）");
-    assert_eq!(published.content, b"chapter content".to_vec());
+    assert_eq!(
+        record.active_generation.as_deref(),
+        Some("gen_after_conflict"),
+        "CAS 冲突时不得覆盖远端已推进的 catalog"
+    );
 }
 
 /// 场景 5：RemoteWinner(Delete) 语义不变 — remote record op == Delete 且严格赢
@@ -540,7 +547,9 @@ fn regression_remote_winner_delete_semantics_unchanged() {
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider).unwrap();
@@ -554,7 +563,7 @@ fn regression_remote_winner_delete_semantics_unchanged() {
     assert_eq!(
         provider.publish_count(),
         0,
-        "remote Delete 严格赢时不应 publish generation"
+        "remote Delete 严格赢时不应发布内容（不改远端树、不推进 catalog）"
     );
     // RemoteWins(Delete) → 清远端对象 + LocalLifecycleCommitAction::DeleteProject
     // 返回状态应为 NoChanges（cleanup 成功，无 retained_conflict）
@@ -582,8 +591,8 @@ fn regression_remote_winner_delete_semantics_unchanged() {
 /// 而不是被 RemoteWins(Upsert)/AlreadyCurrent 吞成 NoChanges。
 struct FailingReadProvider {
     inner: MemoryProvider,
-    generation_writes: AtomicUsize,
-    generation_meta_writes: AtomicUsize,
+    tree_publishes: AtomicUsize,
+    tree_writes: AtomicUsize,
     fail_read_path: String,
 }
 
@@ -591,14 +600,14 @@ impl FailingReadProvider {
     fn new(inner: MemoryProvider, fail_read_path: String) -> Self {
         Self {
             inner,
-            generation_writes: AtomicUsize::new(0),
-            generation_meta_writes: AtomicUsize::new(0),
+            tree_publishes: AtomicUsize::new(0),
+            tree_writes: AtomicUsize::new(0),
             fail_read_path,
         }
     }
 
     fn publish_count(&self) -> usize {
-        self.generation_meta_writes.load(Ordering::SeqCst) / 2
+        self.tree_publishes.load(Ordering::SeqCst)
     }
 }
 
@@ -623,25 +632,27 @@ impl SyncProvider for FailingReadProvider {
         content: &[u8],
         precondition: WritePrecondition,
     ) -> Result<RemoteVersion, ProviderError> {
-        if path.contains(GENERATION_SUBDIR) {
-            self.generation_writes.fetch_add(1, Ordering::SeqCst);
-            if path.ends_with(GENERATION_META_FILENAME) {
-                self.generation_meta_writes.fetch_add(1, Ordering::SeqCst);
-            }
+        if path.starts_with(PROJECT_TREE_PREFIX) {
+            self.tree_writes.fetch_add(1, Ordering::SeqCst);
         }
         self.inner.write(path, content, precondition)
     }
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         self.inner.delete(path, precondition)
     }
-    /// Issue #761：batch 路径下 commit_batch 计数 meta writes（+2，同 CountingProvider）。
+    /// #1012：batch 路径下 1 次覆盖项目树的 `commit_batch` 就是 1 次发布。
     fn commit_batch(
         &self,
         mutations: &[BatchMutation],
         message: &str,
     ) -> Result<BatchCommitResult, ProviderError> {
-        for m in mutations {
-            count_batch_generation_write(m, &self.generation_writes, &self.generation_meta_writes);
+        let tree_mutations = mutations
+            .iter()
+            .filter(|m| m.path().starts_with(PROJECT_TREE_PREFIX))
+            .count();
+        if tree_mutations > 0 {
+            self.tree_publishes.fetch_add(1, Ordering::SeqCst);
+            self.tree_writes.fetch_add(tree_mutations, Ordering::SeqCst);
         }
         self.inner.commit_batch(mutations, message)
     }
@@ -768,7 +779,9 @@ fn regression_remote_upsert_wins_with_merge_conflict_preserves_partial_conflict(
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider_inner, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
@@ -837,7 +850,9 @@ fn regression_remote_upsert_wins_with_merge_error_preserves_error() {
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider_inner, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
@@ -868,12 +883,15 @@ fn regression_remote_upsert_wins_with_merge_error_preserves_error() {
 }
 
 /// 场景 8（Issue #716 评论 5742191453）：remote Upsert 严格赢 + merge 下载远端正文
-/// → publish_count == 0，LatestWinsApplied，downloaded_files 非空。
+/// → publish_count == 0，Success，downloaded_files 非空。
 ///
 /// 修复前：RemoteWins(Upsert) 分支返回 `retained_conflict.unwrap_or(NoChanges)` = NoChanges，
 /// merge 下载的正文被丢弃，full-sync 统计报 0，搜索索引不重建。
 /// 修复后：merge_outcome 归一化时构造 merge_result 携带变化字段，
-/// RemoteWins(Upsert) 返回 merge_result → LatestWinsApplied + 非空 downloaded_files。
+/// RemoteWins(Upsert) 返回 merge_result → 非空 downloaded_files。
+///
+/// Issue #1018：终态是 Success 而不是 LatestWinsApplied —— 只有「双方相对基线都变化、
+/// 由 LWW 自动裁决」才算 latest-wins，纯远端下载不是裁决。
 #[test]
 fn remote_upsert_wins_with_downloaded_files_returns_latest_wins_applied() {
     const T: i64 = 10_000;
@@ -902,7 +920,9 @@ fn remote_upsert_wins_with_downloaded_files_returns_latest_wins_applied() {
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider_inner, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
@@ -932,13 +952,10 @@ fn remote_upsert_wins_with_downloaded_files_returns_latest_wins_applied() {
         0,
         "remote Upsert 严格赢时不应 publish"
     );
-    // 关键断言：结果应为 LatestWinsApplied，不是 NoChanges
+    // 关键断言：结果应为 Success（下载了远端正文），不是 NoChanges
     assert!(
-        matches!(
-            transfer.targets[0].result.status,
-            SyncStatus::LatestWinsApplied
-        ),
-        "merge 下载了远端正文应返回 LatestWinsApplied，实际 {:?}",
+        matches!(transfer.targets[0].result.status, SyncStatus::Success),
+        "merge 下载了远端正文应返回 Success，实际 {:?}",
         transfer.targets[0].result.status
     );
     // downloaded_files 非空，并包含对应 chapter 路径
@@ -1060,7 +1077,9 @@ fn regression_scenario_9_pending_take_remote_failed_swallowed_as_success() {
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider_inner, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
@@ -1123,16 +1142,15 @@ fn regression_scenario_9_pending_take_remote_failed_swallowed_as_success() {
     );
 }
 
-/// 场景 10（Issue #716 评论 5742849844 问题 2 + Issue #928）：CAS 重试保留前一轮本地变化。
+/// 场景 10（Issue #716 评论 5742849844 问题 2 + Issue #928 + #990）：CAS 冲突不丢前一轮本地变化。
 ///
-/// 第一轮 merge 下载远端 volumes/v1/chapters/chapter.md 并上传本地 volumes/v1/chapter.md
-/// → publish 1 次 → CAS 注入新的 remote generation → continue。
-/// 第二轮 visible generation 已换，但本地 volumes/v1/chapter.md 仍不在其中（文件级变化）
-/// → 按 #928 再 publish 1 次（远端推进后重新 merge、按路径 re-publish；每次 publish 都携带
-/// 真实变化，不是重复 publish）。
+/// 第一轮 merge 下载远端 volumes/v1/chapters/chapter.md，并把本地 volumes/v1/chapter.md
+/// 发布到稳定树 `projects/p1` 后，CAS 注入新的 remote catalog → `precondition_failed`。
 ///
-/// 正确行为：状态 LatestWinsApplied，downloaded_files 保留第一轮的下载，publish_count == 2，
-/// 最终 generation 含本地 chapter.md（第一轮本地变化不得丢失）。
+/// #990 之后不再在同一个 `run_transfer` 内重新 merge/publish：固定快照下 provider 读不到
+/// 新的 HEAD，本轮重试只会在旧快照上循环。正确行为因此是「发布 1 次 + 返回
+/// `precondition_failed` 交给完整同步入口整轮重规划」，并且第一轮已经发布/下载的内容
+/// 不会丢失（稳定树里有本地 chapter.md）。
 #[test]
 fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
     const T: i64 = 10_000;
@@ -1150,7 +1168,9 @@ fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider_inner, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
@@ -1173,7 +1193,7 @@ fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
     upsert_record(&mut conflict_catalog, conflict_record);
     let conflict_catalog_bytes = serde_json::to_vec(&conflict_catalog).unwrap();
 
-    // gen_after_conflict 放相同内容的 chapter（与第一轮下载后 staging 内容相同 → 第二轮 merge NoOp）
+    // gen_after_conflict 放相同内容的 chapter（重规划后 merge 仍是 NoOp）
     let conflict_gen_prefix = "projects/p1/__generations__/gen_after_conflict";
     write_remote_generation(
         &provider_inner,
@@ -1188,55 +1208,67 @@ fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
     let tmp = TempDir::new().unwrap();
     // 本地 staging 有 chapter.md（内容 "chapter content"，时间戳 T）
     // 远端 gen_existing 有 volumes/v1/chapters/chapter.md（内容 "remote chapter content"，时间戳 T-2）
-    // 第一轮 merge 下载远端 chapter → downloaded_files 非空
+    // 第一轮 merge 下载远端 chapter → 本轮 downloaded_files 非空（#990 后不再跨轮累计）
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
-    let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
+    let plan = build_plan(
+        &tmp,
+        staging_root.clone(),
+        T,
+        DEVICE_LOCAL,
+        remote_catalog_snapshot,
+    );
 
     let transfer = run_transfer(&provider, &plan, None, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
-        2,
-        "第一轮 candidate 赢 publish 1 次；CAS 竞争失败后第二轮 merge 仍有文件级变化\
-         （本地 volumes/v1/chapter.md 不在新 visible generation）→ 再 publish 1 次，合计 2 次"
+        1,
+        "#990：CAS 冲突不在本轮重试，单轮只发布一次"
     );
 
     let status = &transfer.targets[0].result.status;
-    eprintln!(
-        "场景 10 实际状态: {:?}, downloaded_files: {:?}",
-        status, transfer.targets[0].result.downloaded_files
+
+    // ── 断言正确行为（Issue #716 评论 5742849844 问题 2 + #990）──
+    // CAS 冲突把 precondition_failed 上抛，由完整同步入口整轮重规划；
+    // 本轮不能假装成功，也绝不能把已发布的本地内容回滚。
+    // `precondition_failed` 被 `Error::recoverable()` 归为不可重试（FatalError），
+    // 整轮重规划由 error_category 驱动（api/sync_api.rs full_sync_has_precondition_failure）。
+    assert!(
+        matches!(
+            status,
+            SyncStatus::RecoverableError(_) | SyncStatus::FatalError(_)
+        ),
+        "CAS 冲突应是错误终态而不是成功，实际 {status:?}"
+    );
+    assert_eq!(
+        transfer.targets[0].result.error_category.as_deref(),
+        Some("precondition_failed"),
+        "CAS 冲突必须保留 precondition_failed 分类"
     );
 
-    // ── 断言正确行为（Issue #716 评论 5742849844 问题 2 已修复）──
-    // CAS 重试不应丢失前一轮的本地变化。最终状态应为 LatestWinsApplied，
-    // downloaded_files 保留第一轮的下载。
+    // 第一轮已把本地 volumes/v1/chapter.md 发布到稳定树 —— 本地变化不得因 CAS 竞争丢失。
+    let published = provider
+        .read("projects/p1/volumes/v1/chapter.md")
+        .unwrap()
+        .expect("稳定树应包含本地 chapter.md（第一轮本地变化不得丢失）");
+    assert_eq!(published.content, b"chapter content".to_vec());
+
+    // 第一轮 merge 下载的远端正文同样已经写到 staging（本地），不会因为 CAS 失败而消失。
+    let downloaded_remote = staging_root.join("volumes/v1/chapters/chapter.md");
     assert!(
-        matches!(status, SyncStatus::LatestWinsApplied),
-        "CAS 重试后应返回 LatestWinsApplied（保留第一轮本地变化），实际 {:?}",
-        status
-    );
-    assert!(
-        !transfer.targets[0].result.downloaded_files.is_empty(),
-        "downloaded_files 应保留第一轮的下载（非空），实际 {:?}",
-        transfer.targets[0].result.downloaded_files
+        downloaded_remote.exists(),
+        "第一轮 merge 下载的远端 chapter.md 应留在 staging，实际缺失 {}",
+        downloaded_remote.display()
     );
 
-    // #928：最终 active generation 必须包含本地 volumes/v1/chapter.md
-    // —— 第一轮本地变化不得因 CAS 竞争丢失。
+    // 本轮没有覆盖注入的远端 catalog。
     let snapshot = load_remote_catalog(&provider).unwrap();
     let record = find_record(&snapshot.catalog, "projects/p1").unwrap();
-    let active = record
-        .active_generation
-        .as_deref()
-        .expect("active_generation 应指向新 generation");
-    assert_ne!(active, "gen_after_conflict");
-    let published = provider
-        .read(&format!(
-            "projects/p1/__generations__/{active}/volumes/v1/chapter.md"
-        ))
-        .unwrap()
-        .expect("最终 generation 应包含本地 chapter.md（第一轮本地变化不得丢失）");
-    assert_eq!(published.content, b"chapter content".to_vec());
+    assert_eq!(
+        record.active_generation.as_deref(),
+        Some("gen_after_conflict"),
+        "CAS 冲突时不得覆盖远端已推进的 catalog"
+    );
 }
 
 /// 场景 11（Issue #716 评论 5742849844 问题 3 + Issue #928 更新）：本地 tombstone 传播。
@@ -1246,9 +1278,10 @@ fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
 ///
 /// #928 之前：整体 lifecycle remote 严格赢 → RemoteWins(Upsert) → 不 publish，local_deletes 必须
 /// 为空（旧实现把未执行的远端删除报成 local_deletes，是 bug）。
-/// #928 之后：本地 tombstone 是文件级 tombstone 变化 → 即使 remote Upsert 严格赢也必须 publish
-/// 新 generation（manifest 含 project.json 的 delete 墓碑记录），并通过 catalog CAS 推进
-/// active_generation。因此 local_deletes 应如实报告已通过新 generation 执行的删除路径。
+/// #928 之后：本地 tombstone 是文件级 tombstone 变化 → 即使 remote Upsert 严格赢也必须发布
+/// 稳定树（manifest 含 project.json 的 delete 墓碑记录），并通过 catalog CAS 记录发布结果
+/// （#1012 起内容进稳定树 `projects/p1`，legacy `active_generation` 清成 None）。
+/// 因此 local_deletes 应如实报告已通过稳定树执行的删除路径。
 ///
 /// 时间戳设计（避免 30 天 delete 墓碑清理）：
 /// - `now_ms`：当前毫秒时间戳
@@ -1258,7 +1291,7 @@ fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
 ///   - `deleted_at_ms > purge_time`（30 天前）→ delete 记录不被清理
 /// - `T_BIG = now_ms + 1000000`：remote catalog lww_time → remote 严格赢 candidate
 #[test]
-#[allow(clippy::too_many_lines)] // #928：新 generation 指针/清单断言使场景变长
+#[allow(clippy::too_many_lines)] // #928/#1012：稳定树清单与 legacy 指针断言使场景变长
 fn regression_scenario_11_tombstone_publishes_new_generation_and_reports_local_deletes() {
     const DEVICE_REMOTE: &str = "device_remote";
     const DEVICE_LOCAL: &str = "device_local";
@@ -1292,7 +1325,9 @@ fn regression_scenario_11_tombstone_publishes_new_generation_and_reports_local_d
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider_inner, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
@@ -1338,7 +1373,7 @@ fn regression_scenario_11_tombstone_publishes_new_generation_and_reports_local_d
 
     // candidate lww_time ≈ now_ms - 100000（delete 记录），remote record lww_time = t_big
     // candidate < remote → 作品级 LWW remote 赢，但 #928：本地 tombstone 是文件级
-    // tombstone 变化（remote_delete_paths 非空）→ 仍必须 publish 新 generation。
+    // tombstone 变化（remote_delete_paths 非空）→ 仍必须把稳定树（含 delete 墓碑）发布出去。
     let candidate_lww_time = deleted_at_secs * 1000;
     let plan = build_plan(
         &tmp,
@@ -1353,16 +1388,16 @@ fn regression_scenario_11_tombstone_publishes_new_generation_and_reports_local_d
     assert_eq!(
         provider.publish_count(),
         1,
-        "#928：本地 tombstone 是文件级变化，remote Upsert 作品级 LWW 赢也必须 publish 新 generation"
+        "#928：本地 tombstone 是文件级变化，remote Upsert 作品级 LWW 赢也必须发布稳定树"
     );
 
     // ── 断言正确行为（Issue #716 评论 5742849844 问题 3 + Issue #928）──
-    // 新 generation 已发布，local_deletes 应如实报告本轮通过新 generation 执行的删除路径；
+    // 稳定树已发布，local_deletes 应如实报告本轮通过新树执行的删除路径；
     // 而不是把"未执行的远端删除"报成 local_deletes。
     let status = &transfer.targets[0].result.status;
     assert!(
         matches!(status, SyncStatus::LatestWinsApplied),
-        "#928：tombstone 发布新 generation 后应为 LatestWinsApplied，实际 {:?}",
+        "#928：tombstone 发布稳定树后应为 LatestWinsApplied，实际 {:?}",
         status
     );
     assert_eq!(
@@ -1371,21 +1406,20 @@ fn regression_scenario_11_tombstone_publishes_new_generation_and_reports_local_d
         "#928：local_deletes 应如实报告已通过新 generation 执行的删除路径"
     );
 
-    // 新 generation 的 manifest 必须包含 project.json 的 delete 墓碑记录，
-    // 且 active_generation 已通过 CAS 推进到新 generation。
+    // 稳定树的 manifest 必须包含 project.json 的 delete 墓碑记录。#1012：内容发布到
+    // `projects/p1`，catalog 里遗留的 legacy `active_generation` 指针被清成 None。
     let snapshot = load_remote_catalog(&provider).unwrap();
     let record = find_record(&snapshot.catalog, "projects/p1").unwrap();
-    let active = record
-        .active_generation
-        .as_deref()
-        .expect("active_generation 应指向新 generation");
-    assert_ne!(active, GEN_EXISTING);
+    assert!(
+        record.active_generation.is_none(),
+        "稳定树发布后 legacy active_generation 应为 None，实际 {:?}",
+        record.active_generation
+    );
+    assert_ne!(record.active_generation.as_deref(), Some(GEN_EXISTING));
     let manifest_obj = provider
-        .read(&format!(
-            "projects/p1/__generations__/{active}/app-meta/sync/manifest.sync.json"
-        ))
+        .read("projects/p1/app-meta/sync/manifest.sync.json")
         .unwrap()
-        .expect("新 generation 应包含 manifest.sync.json");
+        .expect("稳定树应包含 manifest.sync.json");
     let manifest: SyncManifest = serde_json::from_slice(&manifest_obj.content).unwrap();
     let record = manifest
         .files
@@ -1440,7 +1474,9 @@ fn regression_scenario_12_candidate_wins_pending_take_remote_failed_no_publish()
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider_inner, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
@@ -1492,13 +1528,13 @@ fn regression_scenario_12_candidate_wins_pending_take_remote_failed_no_publish()
 /// #928 之前：remote lifecycle 严格赢 → RemoteWins(Upsert) → 不 publish，
 /// 本地 project.json 的 delete 墓碑永远传播不到远端。
 /// #928 之后：本地 tombstone 是文件级变化 → 发布新 generation：conflict 路径
-/// 通过 ReuseVersion 复用远端 blob，project.json 写入 delete 墓碑记录，catalog CAS
-/// 推进 active_generation（作品级 LWW 保持 remote 的 T/device_remote 不降级）。
+/// 通过 ReuseVersion 复用远端 blob，project.json 写入 delete 墓碑记录，稳定树
+/// `projects/p1` 一次提交发布（作品级 LWW 保持 remote 的 T/device_remote 不降级）。
 ///
 /// 正确行为：结果 = PartialConflict（冲突状态保留，非冲突的删除路径已生效）；
-/// local_deletes 如实报告已通过新 generation 执行的删除路径 ["project.json"]。
+/// local_deletes 如实报告已通过稳定树执行的删除路径 ["project.json"]。
 #[test]
-#[allow(clippy::too_many_lines)] // #928：新 generation 指针/清单断言使场景变长
+#[allow(clippy::too_many_lines)] // #928/#1012：稳定树清单与 legacy 指针断言使场景变长
 fn regression_scenario_13_conflict_with_remote_delete_paths_still_publishes() {
     const T: i64 = 10_000;
     const DEVICE_REMOTE: &str = "device_remote";
@@ -1537,7 +1573,9 @@ fn regression_scenario_13_conflict_with_remote_delete_paths_still_publishes() {
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider_inner, &snapshot).unwrap();
     let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
@@ -1573,7 +1611,7 @@ fn regression_scenario_13_conflict_with_remote_delete_paths_still_publishes() {
 
     // candidate lww_time = T（chapter.md 的 LWW 时间），remote record lww_time = T
     // 同时间戳，DEVICE_REMOTE > DEVICE_LOCAL → 作品级 LWW remote 赢；
-    // 但 #928：本地 project.json tombstone 是文件级变化 → 仍必须 publish 新 generation。
+    // 但 #928：本地 project.json tombstone 是文件级变化 → 仍必须发布稳定树。
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
     let transfer = run_transfer(&provider, &plan, None, None, None);
@@ -1581,7 +1619,7 @@ fn regression_scenario_13_conflict_with_remote_delete_paths_still_publishes() {
     assert_eq!(
         provider.publish_count(),
         1,
-        "#928：本地 tombstone 是文件级变化，作品级 LWW remote 赢也必须 publish 新 generation"
+        "#928：本地 tombstone 是文件级变化，作品级 LWW remote 赢也必须发布稳定树"
     );
 
     // ── 断言正确行为（Issue #716 评论 5743264448 问题 2 + Issue #928）──
@@ -1603,10 +1641,10 @@ fn regression_scenario_13_conflict_with_remote_delete_paths_still_publishes() {
         "#928：local_deletes 应如实报告已通过新 generation 执行的删除路径"
     );
 
-    // 新 generation manifest 应保留 conflict 路径的远端记录（ReuseVersion 复用 blob，
+    // 稳定树 manifest 应保留 conflict 路径的远端记录（ReuseVersion 复用 blob，
     // 不因冲突丢失快照内容）。注意：project.json 的 delete 墓碑时间戳为 8s（1970 年代），
     // 会被 merge 的"30 天 delete 墓碑清理"从 manifest 记录中清除——因此这里只校验
-    // conflict 路径仍在；墓碑传播语义由 local_deletes 与 active_generation 推进保证。
+    // conflict 路径仍在；墓碑传播语义由 local_deletes 与稳定树发布保证。
     let snapshot = load_remote_catalog(&provider).unwrap();
     let record = find_record(&snapshot.catalog, "projects/p1").unwrap();
     assert_eq!(
@@ -1614,17 +1652,19 @@ fn regression_scenario_13_conflict_with_remote_delete_paths_still_publishes() {
         (T, DEVICE_REMOTE),
         "#928：作品级 LWW 不应被降级（仍为 remote 的 T/device_remote）"
     );
-    let active = record
-        .active_generation
-        .as_deref()
-        .expect("active_generation 应指向新 generation");
-    assert_ne!(active, GEN_EXISTING);
-    let generation_manifest_path =
-        format!("projects/p1/__generations__/{active}/app-meta/sync/manifest.sync.json");
+    // #1012：内容发布到稳定树 `projects/p1`，catalog 里遗留的 legacy
+    // `active_generation` 指针被清成 None。
+    assert!(
+        record.active_generation.is_none(),
+        "稳定树发布后 legacy active_generation 应为 None，实际 {:?}",
+        record.active_generation
+    );
+    assert_ne!(record.active_generation.as_deref(), Some(GEN_EXISTING));
+    let generation_manifest_path = "projects/p1/app-meta/sync/manifest.sync.json";
     let manifest_obj = provider
-        .read(&generation_manifest_path)
+        .read(generation_manifest_path)
         .unwrap()
-        .expect("新 generation 应包含 manifest.sync.json");
+        .expect("稳定树应包含 manifest.sync.json");
     let manifest: SyncManifest = serde_json::from_slice(&manifest_obj.content).unwrap();
     let chapter = manifest
         .files

@@ -305,7 +305,8 @@ impl AppBackend {
     }
 
     // AppBackend::get_starmap_graph_json
-    pub(crate) fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {        let sid = starmap_id.to_string();
+    pub(crate) fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
+        let sid = starmap_id.to_string();
         if let Some(core) = self.core_api() {
             match core.get_starmap_graph(&sid) {
                 Ok(g) => {

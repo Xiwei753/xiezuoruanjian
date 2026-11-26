@@ -70,6 +70,11 @@ pub enum Error {
         chapter_id: String,
         missing: Vec<String>,
     },
+    /// 显式证明批次与保存正文不一致：事件链断裂、revision 顺序不单调，
+    /// 或批次终点摘要不等于正文摘要。保存不发布正文，同一批重试也不会
+    /// 成功；平台必须按 durable 编辑事实重新冻结批次（Issue #1062 1.2）。
+    #[error("proof batch mismatch: chapter_id={chapter_id}, detail={detail}")]
+    ProofBatchMismatch { chapter_id: String, detail: String },
     /// 功能未实现。
     #[error("Not implemented")]
     NotImplemented,
@@ -172,6 +177,7 @@ impl Error {
             Error::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
             Error::ChapterVersionConflict { .. } => "CHAPTER_VERSION_CONFLICT",
             Error::ProofBatchIncomplete { .. } => "PROOF_BATCH_INCOMPLETE",
+            Error::ProofBatchMismatch { .. } => "PROOF_BATCH_MISMATCH",
             Error::NotImplemented => "NOT_IMPLEMENTED",
             Error::RefuseToDeleteRoot => "REFUSE_DELETE_ROOT",
             Error::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
@@ -207,6 +213,7 @@ impl Error {
             Error::EmptyOverwriteBlocked { .. } => false,
             Error::ChapterVersionConflict { .. } => false,
             Error::ProofBatchIncomplete { .. } => true,
+            Error::ProofBatchMismatch { .. } => false,
             Error::NotImplemented => false,
             Error::RefuseToDeleteRoot => false,
             Error::InvalidDeleteTarget(_) => false,

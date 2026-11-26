@@ -383,7 +383,7 @@ pub struct AppBackend {
     /// UI 线程 enqueue，独立 worker thread 串行写盘，不阻塞输入热路径。
     /// workspace 切换时旧 writer drop（worker 自然退出），新 writer 用新 root 重建。
     /// `Option<StatsWriterHandle>` 的 `Default` 是 `None`，满足 `#[derive(Default)]`。
-    stats_writer: Option<crate::backend::stats_writer::StatsWriterHandle>,
+    pub(crate) stats_writer: Option<crate::backend::stats_writer::StatsWriterHandle>,
     /// Issue #981：前台写作计时状态机。时长用 `Instant` 单调时钟测量；
     /// 只有窗口前台且正文页可交互时才会产生切片。
     writing_session: std::sync::Mutex<
@@ -766,7 +766,7 @@ impl AppBackend {
         log::warn!(target: module, "{}: {}", event, message);
     }
 
-    fn debug_error(&self, module: &str, event: &str, message: &str) {
+    pub(crate) fn debug_error(&self, module: &str, event: &str, message: &str) {
         if debug_level_enabled(module, DebugLevel::Error) {
             let ws_exists = self.current_has_data_root;
             let proj = self.selected_project_id.as_deref().unwrap_or("none");
@@ -971,6 +971,7 @@ mod tests {
             operation_id: "".to_string(),
             sync_status: "conflict".to_string(),
             action_result: "Conflict".to_string(),
+            chapter_changes_json: String::new(),
             workspace_generation: 0,
             data_root: "".to_string(),
         };
@@ -988,6 +989,7 @@ mod tests {
             operation_id: "".to_string(),
             sync_status: "error".to_string(),
             action_result: "Failed".to_string(),
+            chapter_changes_json: String::new(),
             workspace_generation: 0,
             data_root: "".to_string(),
         };
@@ -1092,6 +1094,7 @@ mod tests {
             operation_id: "op-stale".to_string(),
             sync_status: "success".to_string(),
             action_result: "OK".to_string(),
+            chapter_changes_json: String::new(),
             workspace_generation: 0,
             data_root: "".to_string(),
         };
@@ -1120,6 +1123,7 @@ mod tests {
             operation_id: "op-fresh".to_string(),
             sync_status: "error".to_string(),
             action_result: "Failed".to_string(),
+            chapter_changes_json: String::new(),
             workspace_generation: 0,
             data_root: "".to_string(),
         };
@@ -1215,6 +1219,7 @@ mod tests {
             operation_id: "op-old".to_string(),
             sync_status: "success".to_string(),
             action_result: "OK".to_string(),
+            chapter_changes_json: String::new(),
             workspace_generation: gen_at_sync_start, // 1，已过期
             data_root: path_str.clone(),
         };

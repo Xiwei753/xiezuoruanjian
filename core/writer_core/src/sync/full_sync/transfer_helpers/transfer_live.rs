@@ -457,7 +457,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 &accumulated_local_trashed_files,
                                 &accumulated_overwritten_files,
                                 &accumulated_ignored_files,
-                        &accumulated_auto_adjudicated_files,
+                                &accumulated_auto_adjudicated_files,
                             );
                             return (r, None, None);
                         }
@@ -492,7 +492,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                     &accumulated_local_trashed_files,
                                     &accumulated_overwritten_files,
                                     &accumulated_ignored_files,
-                        &accumulated_auto_adjudicated_files,
+                                    &accumulated_auto_adjudicated_files,
                                 );
                                 return (r, None, None);
                             }
@@ -540,7 +540,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                             &accumulated_local_trashed_files,
                             &accumulated_overwritten_files,
                             &accumulated_ignored_files,
-                        &accumulated_auto_adjudicated_files,
+                            &accumulated_auto_adjudicated_files,
                         );
                         return (result, None, None);
                     }
@@ -568,7 +568,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 &accumulated_local_trashed_files,
                                 &accumulated_overwritten_files,
                                 &accumulated_ignored_files,
-                        &accumulated_auto_adjudicated_files,
+                                &accumulated_auto_adjudicated_files,
                             );
                             return (r, None, None);
                         }
@@ -772,7 +772,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 &accumulated_local_trashed_files,
                                 &accumulated_overwritten_files,
                                 &accumulated_ignored_files,
-                        &accumulated_auto_adjudicated_files,
+                                &accumulated_auto_adjudicated_files,
                             );
                             return (result, None, None);
                         }
@@ -833,7 +833,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                     &accumulated_local_trashed_files,
                                     &accumulated_overwritten_files,
                                     &accumulated_ignored_files,
-                        &accumulated_auto_adjudicated_files,
+                                    &accumulated_auto_adjudicated_files,
                                 );
                                 return (final_result, None, action);
                             }

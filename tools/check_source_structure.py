@@ -109,6 +109,9 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     (Path("core/writer_core/src/search/api.rs"), "god-file"):
         "搜索 API 聚合层：查询/替换/高亮共享同一查询解析与命中流，"
         "已按子模块拆分内部函数",
+    (Path("core/writer_core/src/correction/result_cache.rs"), "god-file"):
+        "校对结果缓存：分段窗口/语义脏标记/待扫描窗口共享同一缓存键与版本推进；"
+        "#1062 只补齐窗口状态与测试 fixture，生产代码 1065 行待后续按窗口/分段拆分",
     (Path("core/writer_core/src/correction/mod.rs"), "god-file"):
         "校对聚合根：模型强引用缓存、single-flight、专名/词库版本、引擎缓存与"
         "偏好持久化共享同一进程级 CorrectionStore；模型装载已拆到单文件，"
@@ -136,6 +139,12 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "同步冲突解决聚合：take-remote/keep-local/星图对象删除共享同一冲突状态与 "
         "known_files 基线，拆分需先抽出冲突状态类型；#1059 正在把正文恢复迁入章节提交协调器；"
         "TODO(#1059) 后续按 keep-local/take-remote/星图拆分",
+    (Path("core/writer_core/src/writing_stats/contribution_store.rs"), "god-file"):
+        "星图贡献事件存储：tombstone/分区/回放/检查点共享同一分区读写与压缩入口；"
+        "#1062 只刷新测试 fixture，生产代码 1803 行待后续按分区/回放拆分",
+    (Path("core/writer_core/src/writing_stats/projection.rs"), "god-file"):
+        "写作统计投影：事件扫描/范围聚合/趋势分桶/会话与设备分解共享同一投影语义；"
+        "#1062 只补齐 DTO 字段 fixture，生产代码 2047 行待后续按投影维度拆分",
     (Path("core/writer_core/src/writing_stats/store.rs"), "god-file"):
         "写作统计存储：聚合/持久化/查询共享同一时间窗口索引，"
         "已按读写路径拆分内部函数",
@@ -188,6 +197,9 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     (Path("apps/Linux_qt/src/sujian_editor_item/mod.rs"), "god-file"):
         "Qt 编辑器项模块根：组件注册/属性/信号共享同一 QML 绑定上下文，"
         "拆分会破坏 QML 元对象注册一致性；TODO(#597) 后续按子域提取子模块",
+    (Path("apps/Linux_qt/src/sujian_editor_item/text_motion.rs"), "god-file"):
+        "Qt 局部文字动画状态机：目标快照/裁剪/采样共享同一逐帧运动上下文；"
+        "#1062 只补测试 fixture 与释放点，既有文件 1542 行生产代码待后续按动画阶段拆分",
     (Path("apps/Linux_qt/src/sujian_editor_item/rendering.rs"), "god-file"):
         "Qt 编辑器项渲染逻辑：文本/光标/选区/背景共享同一绘制上下文，"
         "拆分会破坏绘制批次合并优化；TODO(#597) 后续按绘制层提取子模块",

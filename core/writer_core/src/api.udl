@@ -527,6 +527,8 @@ enum WriterError {
     "EmptyOverwriteBlocked",
     "ChapterVersionConflict",
     "ProofBatchIncomplete",
+    /// 显式证明批次与保存正文不一致；同一批重试不会成功。
+    "ProofBatchMismatch",
     "NotImplemented",
     "RefuseToDeleteRoot",
     "InvalidDeleteTarget",
@@ -1156,6 +1158,11 @@ interface WriterAppService {
     [Throws=WriterError]
     ChapterSaveReceiptDto save_chapter_content_versioned_with_batch(string project_id, string volume_id, string chapter_id, string content, ChapterVersionDto? expected_version, string? base_content, u64 proof_snapshot_revision, sequence<string> proof_event_ids, boolean allow_empty_overwrite);
 
+    /// Issue #1062 1.2：显式原始证明批次保存。proof_batch_json 是
+    /// record_editor_proof_fact 返回值的 JSON 数组；Core 逐条 replay 校验。
+    [Throws=WriterError]
+    ChapterSaveReceiptDto save_chapter_content_versioned_with_proof_batch(string project_id, string volume_id, string chapter_id, string content, ChapterVersionDto? expected_version, string? base_content, u64 proof_snapshot_revision, string proof_batch_json, boolean allow_empty_overwrite);
+
     [Throws=WriterError]
     ChapterSaveReceiptDto clear_chapter_content(string project_id, string volume_id, string chapter_id);
 
@@ -1164,6 +1171,10 @@ interface WriterAppService {
 
     [Throws=WriterError]
     ChapterSaveReceiptDto clear_chapter_content_versioned_with_batch(string project_id, string volume_id, string chapter_id, ChapterVersionDto? expected_version, string? base_content, u64 proof_snapshot_revision, sequence<string> proof_event_ids);
+
+    /// Issue #1062 1.2：清空正文使用与保存相同的显式原始证明批次协议。
+    [Throws=WriterError]
+    ChapterSaveReceiptDto clear_chapter_content_versioned_with_proof_batch(string project_id, string volume_id, string chapter_id, ChapterVersionDto? expected_version, string? base_content, u64 proof_snapshot_revision, string proof_batch_json);
 
     [Throws=WriterError]
     boolean update_chapter_note(string project_id, string volume_id, string chapter_id, string note);
@@ -1339,6 +1350,15 @@ interface WriterAppService {
     // contentDelta，source 分类由 Core 决定，端侧不要自己拼 source 字符串。
     [Throws=WriterError]
     void record_editor_change_stats(EditorChangeStatsInputDto input);
+
+    /// Issue #1062 1.2：把一次编辑事务冻结为可回放的原始证明事实（JSON）。
+    /// 平台持久化后，保存时作为显式批次传回；不再依赖进程内 pending map。
+    [Throws=WriterError]
+    string record_editor_proof_fact(EditorChangeStatsInputDto input);
+
+    /// Issue #1062 1.1：从未提交草稿的原始证明批次 replay 出最终正文。
+    [Throws=WriterError]
+    string replay_editor_proof_batch(string chapter_id, string baseline, string proof_batch_json);
 
     // 按章节回放证明事件。request_json 为 ProofReplayRequest 的 camelCase JSON，
     // 返回目标时刻正文、选区、进度与链校验结果；播放器只渲染该结果。

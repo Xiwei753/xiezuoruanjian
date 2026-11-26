@@ -3,21 +3,23 @@
 //! 覆盖四个核心契约（行为级，不是字符串常量断言）：
 //!
 //! 1. **批量原子发布**：`capabilities().batch == true` 时，一个 target 的一次
-//!    generation 发布 = 恰好一次 `commit_batch`；manifest、内容 mutation 与
-//!    `generation.meta.json`（直接 `complete=true`）在同一批提交里，
+//!    内容发布 = 恰好一次 `commit_batch`；manifest 与内容 mutation 在同一批提交里，
 //!    不再逐文件 `provider.write()`。空远端首次同步（`merge_outcome == None`）同样
 //!    走 batch 路径（评论 5828969186 问题 2）。
+//!    Issue #1012 更新：发布目标是稳定树 `projects/p1`（不再是不可见的
+//!    `__generations__/G/` + `generation.meta.json`）。
 //! 2. **冲突路径复用远端 blob**：unresolved conflict 的路径必须用
-//!    `RemoteVersion`（旧 visible generation 的 blob）生成 `ReuseVersion`，
+//!    `RemoteVersion`（旧可见快照的 blob）生成 `ReuseVersion`，
 //!    绝不读本地冲突正文冒充 merged remote record；没有远端 blob 可复用时
-//!    整个 target 返回 `PartialConflict`，不发布内容不完整的 generation。
+//!    整个 target 返回 `PartialConflict`，不发布内容不完整的树。
 //! 3. **MemoryProvider batch 原子性**：中途失败（如 `ReuseVersion` 引用不存在的版本）
 //!    时整个 batch 不生效，不留半事务（评论 5828969186 问题 3）。
-//! 4. **ref CAS 冲突重试**：Git branch ref 被别的设备推进（409/422）时重读 catalog
-//!    并进入下一轮 CAS 重试，不直接打成 fatal（评论 5828969186 问题 4）。
+//! 4. **ref CAS 冲突不吞成成功**：Git branch ref 被别的设备推进（409/422）时保留
+//!    `precondition_failed` 分类交给整轮重规划（Issue #990：不在本轮重放旧 mutations），
+//!    绝不覆盖并发设备刚提交的 head。
 //!
-//! 这些断言驱动真实的 `run_transfer` → `transfer_live_project` →
-//! `publish_generation` 路径（`MemoryProvider` 声明 `batch=true`）。
+//! 这些断言驱动真实的 `run_transfer` → `transfer_live_project` → 稳定树发布路径
+//! （`MemoryProvider` 声明 `batch=true`）。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -306,7 +308,9 @@ fn seed_remote_catalog(
     upsert_record(&mut catalog, record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(provider, &snapshot).unwrap();
     load_remote_catalog(provider).unwrap()
@@ -349,17 +353,22 @@ fn build_plan(
     }
 }
 
-/// 取出 batch 中命中给定路径后缀的 mutation。
+/// 取出 batch 中命中稳定树路径 `projects/p1/<path_suffix>` 的唯一 mutation。
+///
+/// #1012：发布目标是稳定树 `projects/p1`，同一批里还可能带删除 legacy
+/// `__generations__/...` 旧对象的 mutation，因此必须按完整稳定树路径精确匹配，
+/// 不能用「后缀相同」过滤。
 fn mutation_for<'a>(batch: &'a RecordedBatch, path_suffix: &str) -> &'a BatchMutation {
+    let needle = format!("{PROJECT_PREFIX}/{path_suffix}");
     let matched: Vec<&BatchMutation> = batch
         .mutations
         .iter()
-        .filter(|m| m.path().ends_with(path_suffix))
+        .filter(|m| m.path() == needle)
         .collect();
     assert_eq!(
         matched.len(),
         1,
-        "batch 中应恰好有 1 个 mutation 命中 {path_suffix}，实际 {:?}",
+        "batch 中应恰好有 1 个 mutation 命中 {needle}，实际 {:?}",
         batch
             .mutations
             .iter()
@@ -369,19 +378,24 @@ fn mutation_for<'a>(batch: &'a RecordedBatch, path_suffix: &str) -> &'a BatchMut
     matched[0]
 }
 
-/// 断言 batch 中 meta mutation 直接写 `complete=true`。
-fn assert_meta_complete_true(batch: &RecordedBatch) -> String {
-    let meta = mutation_for(batch, GENERATION_META_FILENAME);
-    let BatchMutation::Put { path, content } = meta else {
-        panic!("generation.meta.json 必须是 Put，实际 {meta:?}");
-    };
-    let json: serde_json::Value = serde_json::from_slice(content).unwrap();
-    assert_eq!(
-        json["complete"], true,
-        "batch 路径必须直接写 complete=true（不再先 false 再 true），实际 {json}"
+/// 断言 batch 里没有任何**写入**落在 generation 目录 / `generation.meta.json`。
+///
+/// Issue #1012：远端快照改成稳定树 `projects/P`，每轮一次 `commit_batch` 直接把
+/// merge 后的完整树提交上去，不再发布不可见的 generation 目录，也就没有
+/// `generation.meta.json` 这种「先 false 再 true」的两阶段标记。同一批可以出现
+/// `Delete` legacy `__generations__/...` 旧对象的 mutation（迁移清理），那是允许的。
+fn assert_no_generation_meta(batch: &RecordedBatch) {
+    let written_generation_paths: Vec<&str> = batch
+        .mutations
+        .iter()
+        .filter(|m| !matches!(m, BatchMutation::Delete { .. }))
+        .map(BatchMutation::path)
+        .filter(|path| path.contains(GENERATION_SUBDIR) || path.ends_with(GENERATION_META_FILENAME))
+        .collect();
+    assert!(
+        written_generation_paths.is_empty(),
+        "#1012：稳定树发布不应再写 generation 目录或 generation.meta.json，实际 {written_generation_paths:?}"
     );
-    path.trim_end_matches(&format!("/{GENERATION_META_FILENAME}"))
-        .to_string()
 }
 
 /// 场景 1（Issue #761 Part 3/4）：unresolved conflict → 一次原子 batch 发布。
@@ -441,8 +455,8 @@ fn regression_issue_761_conflict_reuses_remote_blob_in_single_atomic_batch() {
     );
     let batch = &batches[0];
     assert!(
-        batch.message.contains("generation"),
-        "commit message 应带 generation 上下文，实际 {:?}",
+        batch.message.contains("publish tree"),
+        "commit message 应带稳定树发布上下文，实际 {:?}",
         batch.message
     );
 
@@ -477,24 +491,10 @@ fn regression_issue_761_conflict_reuses_remote_blob_in_single_atomic_batch() {
         other => panic!("manifest 必须是 Put，实际 {other:?}"),
     }
 
-    // ── meta 直接 complete=true，且与内容同一批 ──
-    let new_gen_prefix = assert_meta_complete_true(batch);
-    assert_ne!(
-        new_gen_prefix, remote_gen_prefix,
-        "必须发布到新 generation prefix"
-    );
-    let new_gen_id = new_gen_prefix.rsplit('/').next().expect("generation id");
-    assert!(
-        !batch.mutations.iter().any(|m| {
-            matches!(m, BatchMutation::Put { content, .. }
-                if serde_json::from_slice::<serde_json::Value>(content)
-                    .map(|v| v["complete"] == false)
-                    .unwrap_or(false))
-        }),
-        "batch 路径不应出现 complete=false 的中间 meta"
-    );
+    // ── #1012：不再有 generation.meta.json / 新 generation prefix ──
+    assert_no_generation_meta(batch);
 
-    // ── CAS 成功：catalog 指向新 generation，README 说的冲突不阻塞安全文件 ──
+    // ── CAS 成功：catalog 清掉 legacy generation 指针，README 说的冲突不阻塞安全文件 ──
     let status = &transfer.targets[0].result.status;
     assert!(
         matches!(status, SyncStatus::PartialConflict),
@@ -513,32 +513,30 @@ fn regression_issue_761_conflict_reuses_remote_blob_in_single_atomic_batch() {
     let catalog_after = load_remote_catalog(&provider).unwrap();
     let record = find_record(&catalog_after.catalog, PROJECT_PREFIX).expect("catalog record");
     assert_eq!(
-        record.active_generation.as_deref(),
-        Some(new_gen_id),
-        "CAS 成功后 catalog 应指向新 generation"
+        record.active_generation, None,
+        "#1012：稳定树 projects/p1 就是远端快照，legacy active_generation 应为 None"
     );
 
-    // ── 新 generation 里冲突章是远端可见版本，安全文件是本地新内容 ──
+    // ── 稳定树里冲突章是远端可见版本，安全文件是本地新内容 ──
     let published_conflict = provider
-        .read(&format!("{new_gen_prefix}/{CONFLICT_PATH}"))
+        .read(&format!("{PROJECT_PREFIX}/{CONFLICT_PATH}"))
         .unwrap()
-        .expect("冲突路径在新 generation 应有对象");
+        .expect("冲突路径在稳定树应有对象");
     assert_eq!(
         published_conflict.content, REMOTE_CONFLICT_CONTENT,
-        "新 generation 的冲突路径必须是远端可见版本，不能是本地冲突正文"
+        "稳定树的冲突路径必须是远端可见版本，不能是本地冲突正文"
     );
     let published_safe = provider
-        .read(&format!("{new_gen_prefix}/{SAFE_PATH}"))
+        .read(&format!("{PROJECT_PREFIX}/{SAFE_PATH}"))
         .unwrap()
-        .expect("安全文件在新 generation 应有对象");
+        .expect("安全文件在稳定树应有对象");
     assert_eq!(published_safe.content, SAFE_CONTENT);
 
     eprintln!(
         "[BUGFIX_REGRESSION_TRACE] Issue #761 批量原子发布：commit_batch 调用 {} 次、\
-         逐文件 generation write {} 次、新 generation {}（冲突路径 ReuseVersion=远端 blob）",
+         逐文件 generation write {} 次、稳定树 {PROJECT_PREFIX}（冲突路径 ReuseVersion=远端 blob）",
         batches.len(),
         provider.generation_file_writes(),
-        new_gen_id
     );
 }
 
@@ -836,7 +834,7 @@ fn regression_issue_761_first_sync_empty_remote_uses_batch_without_file_writes()
         "首次同步没有旧 blob 可复用，不应出现 ReuseVersion"
     );
 
-    // ── manifest 与 meta(complete=true) 同一批 ──
+    // ── #1012：manifest 与内容同一批提交，不再有 generation.meta.json ──
     match mutation_for(batch, SYNC_MANIFEST_PATH) {
         BatchMutation::Put { content, .. } => {
             let manifest: SyncManifest = serde_json::from_slice(content).unwrap();
@@ -848,60 +846,51 @@ fn regression_issue_761_first_sync_empty_remote_uses_batch_without_file_writes()
         }
         other => panic!("manifest 必须是 Put，实际 {other:?}"),
     }
-    let new_gen_prefix = assert_meta_complete_true(batch);
-    assert!(
-        new_gen_prefix.contains(GENERATION_SUBDIR),
-        "meta 必须落在 generation prefix，实际 {new_gen_prefix}"
-    );
+    assert_no_generation_meta(batch);
 
-    // ── 发布成功：catalog 指向这次 batch 的 generation，正文按原字节存在 ──
+    // ── 发布成功：稳定树含正文原字节，legacy active_generation 保持 None ──
+    // Issue #1018：首次同步是单侧上传，不是 LWW 自动裁决，终态是 Success。
     let status = &transfer.targets[0].result.status;
     assert!(
-        matches!(status, SyncStatus::LatestWinsApplied),
-        "首次同步发布后应是 LatestWinsApplied，实际 {status:?}"
+        matches!(status, SyncStatus::Success),
+        "首次同步发布后应是 Success，实际 {status:?}"
     );
     let catalog_after = load_remote_catalog(&provider).unwrap();
     let record = find_record(&catalog_after.catalog, PROJECT_PREFIX).expect("catalog record");
-    let gen_id = record
-        .active_generation
-        .as_deref()
-        .expect("首次同步应写入 active_generation");
     assert_eq!(
-        format!("{PROJECT_PREFIX}/{GENERATION_SUBDIR}/{gen_id}"),
-        new_gen_prefix,
-        "catalog 应指向同一次 batch 发布的 generation"
+        record.active_generation, None,
+        "#1012：稳定树 projects/p1 就是远端快照，legacy active_generation 应为 None"
     );
 
     let published = provider
-        .read(&format!("{new_gen_prefix}/{utf8_path}"))
+        .read(&format!("{PROJECT_PREFIX}/{utf8_path}"))
         .unwrap()
-        .expect("generation 内应有正文对象");
+        .expect("稳定树内应有正文对象");
     assert_eq!(
         published.content, utf8_content,
-        "generation 内正文必须是原始 UTF-8 字节"
+        "稳定树内正文必须是原始 UTF-8 字节"
     );
 
     eprintln!(
         "[BUGFIX_REGRESSION_TRACE] Issue #761 空远端首次同步：commit_batch 1 次、\
-         逐文件 generation write {} 次、generation {}（全部 upsert 走 Put）",
+         逐文件 generation write {} 次、稳定树 {PROJECT_PREFIX}（全部 upsert 走 Put）",
         provider.generation_file_writes(),
-        gen_id
     );
 }
 
-/// 场景 6（Issue #761 评论 5828969186 问题 4）：branch ref CAS 冲突进入重试，不是 fatal。
+/// 场景 6（Issue #761 评论 5828969186 问题 4 + Issue #990）：branch ref CAS 冲突不吞成成功。
 ///
-/// 远端已有 visible generation（因此 generation 发布必然走 batch 路径），
-/// 第一次 `commit_batch` 模拟另一台设备在本次提交期间推进 branch（ref PATCH 409/422）：
+/// 远端已有可见内容（走 batch 路径），第一次 `commit_batch` 模拟另一台设备在本次提交期间
+/// 推进 branch（ref PATCH 409/422）：
 /// - `PreconditionFailed` → Core `SyncRemoteError(category=precondition_failed)`；
-/// - transfer 必须重新 `load_remote_catalog` 后 continue `MAX_CAS_RETRIES` 循环；
-/// - 重试轮次看到并发设备更新的 record（LWW 更大）→ 收敛，不再发布第二次；
-/// - 最终状态不得是 `FatalError`（修复前这里会直接打成 fatal）。
+/// - #990：固定快照下不能在本轮重读新 HEAD，因此本轮只尝试一次发布，把
+///   `precondition_failed` 分类原样上抛，由完整同步入口新建 provider 后整轮重规划；
+/// - 并发设备的 record 绝不能被覆盖（force=false 语义）。
 #[test]
 fn regression_issue_761_ref_cas_conflict_retries_instead_of_fatal() {
     let tmp = TempDir::new().unwrap();
     let inner = MemoryProvider::new();
-    // 远端已有 visible generation（与场景 1 同一 fixture：CONFLICT_PATH 冲突、
+    // 远端已有可见内容（与场景 1 同一 fixture：CONFLICT_PATH 冲突、
     // SAFE_PATH 为本地新文件 → candidate (T, DEVICE_LOCAL) 严格赢，必须 publish）。
     let remote_gen_prefix = format!("{PROJECT_PREFIX}/{GENERATION_SUBDIR}/{GEN_EXISTING}");
     write_remote_generation(
@@ -933,24 +922,27 @@ fn regression_issue_761_ref_cas_conflict_retries_instead_of_fatal() {
     assert_eq!(transfer.targets.len(), 1);
 
     let status = &transfer.targets[0].result.status;
+    // #990：ref 被并发推进 → 整轮重规划。这里断言结构化分类被保留，
+    // 而不是被当成 NoChanges/Success 吞掉（修复前的缺陷是「静默成功」）。
     assert!(
-        !matches!(
+        matches!(
             status,
-            SyncStatus::FatalError(_) | SyncStatus::RecoverableError(_)
+            SyncStatus::RecoverableError(_) | SyncStatus::FatalError(_)
         ),
-        "ref CAS 冲突是正常竞争，应重试后收敛，实际 {status:?}（error={:?}）",
+        "ref CAS 冲突必须如实报错（交给整轮重规划），实际 {status:?}（error={:?}）",
         transfer.targets[0].result.error
     );
+    assert_eq!(
+        transfer.targets[0].result.error_category.as_deref(),
+        Some("precondition_failed"),
+        "ref CAS 冲突必须保留 precondition_failed 分类，供 full_sync_has_precondition_failure 触发整轮重规划"
+    );
 
-    // Issue #779 评论 5854082763：publish_generation_batch 对 PreconditionFailed 做有限次重试。
-    // 第一次 commit_batch 撞 PreconditionFailed（ref 被并发设备推进）→ publish_generation_batch
-    // 内部重试，第二次 commit_batch 成功（generation 文件发布）。但 apply_lifecycle_record
-    // CAS 失败 → 重读 catalog 看到并发设备更新的 record（LWW 更大）→ RemoteWinner →
-    // transfer 层重试 → candidate 不赢，收敛。并发设备的 record 未被覆盖。
+    // 固定快照下只尝试一次发布，不在本轮重放旧 mutations。
     assert_eq!(
         provider.recorded_batches().len(),
-        2,
-        "publish_generation_batch 内部重试一次后成功，apply_lifecycle_record CAS 兜底收敛"
+        1,
+        "#990：ref CAS 冲突不在本轮重试，只提交一次后交给整轮重规划"
     );
 
     // 并发设备的 record 未被覆盖（force=false 语义：绝不覆盖别人刚提交的 head）。
@@ -960,8 +952,9 @@ fn regression_issue_761_ref_cas_conflict_retries_instead_of_fatal() {
     assert_eq!(record.updated_at_ms, T + 1000);
 
     eprintln!(
-        "[BUGFIX_REGRESSION_TRACE] Issue #761 ref CAS 冲突：commit_batch 2 次（#779 内部重试）后 apply_lifecycle_record CAS 兜底收敛、\
-         状态 {status:?}（不再是 FatalError）"
+        "[BUGFIX_REGRESSION_TRACE] Issue #761 ref CAS 冲突：commit_batch 1 次后把 \
+         precondition_failed 交给整轮重规划、并发设备 record（device_other）未被覆盖、\
+         状态 {status:?}"
     );
 }
 
@@ -1154,31 +1147,38 @@ fn regression_issue_761_real_first_sync_no_manifest_device_id_consistent() {
         other => panic!("manifest 必须是 Put，实际 {other:?}"),
     }
 
-    // 12. meta 直接 complete=true。
-    let new_gen_prefix = assert_meta_complete_true(batch);
-    let new_gen_id = new_gen_prefix.rsplit('/').next().expect("generation id");
+    // 12. #1012：不再有 generation.meta.json，稳定树就是远端快照。
+    assert_no_generation_meta(batch);
 
-    // 13. catalog 最终指向新 generation。
+    // 13. catalog 的 legacy generation 指针保持 None。
     let catalog_after = load_remote_catalog(&provider).unwrap();
     let record = find_record(&catalog_after.catalog, PROJECT_PREFIX).expect("catalog record");
     assert_eq!(
-        record.active_generation.as_deref(),
-        Some(new_gen_id),
-        "CAS 成功后 catalog 应指向新 generation"
+        record.active_generation, None,
+        "#1012：稳定树 projects/p1 就是远端快照，legacy active_generation 应为 None"
     );
 
-    // 14. 状态应是 LatestWinsApplied（首次同步发布了内容）。
+    // 14. 状态应是 Success（首次同步上传了内容；单侧上传不是 LWW 自动裁决，#1018）。
     assert!(
-        matches!(status, SyncStatus::LatestWinsApplied),
-        "首次同步发布后应是 LatestWinsApplied，实际 {status:?}"
+        matches!(status, SyncStatus::Success),
+        "首次同步发布后应是 Success，实际 {status:?}"
+    );
+
+    // 15. 稳定树里能按原字节读回正文。
+    let published = provider
+        .read(&format!("{PROJECT_PREFIX}/{chapter_rel}"))
+        .unwrap()
+        .expect("稳定树内应有正文对象");
+    assert_eq!(
+        published.content, chapter_content,
+        "稳定树内正文必须是原始字节"
     );
 
     eprintln!(
         "[BUGFIX_REGRESSION_TRACE] Issue #761 真实首次同步无 manifest 修复后：\
-         commit_batch {} 次、逐文件 generation write {} 次、generation {}（全部 upsert 走 Put）、\
-         staging 已生成 manifest、known_files 包含正文、catalog 指向新 generation",
+         commit_batch {} 次、逐文件 generation write {} 次、稳定树 {PROJECT_PREFIX}（全部 upsert 走 Put）、\
+         staging 已生成 manifest、known_files 包含正文、legacy active_generation=None",
         batches.len(),
         provider.generation_file_writes(),
-        new_gen_id
     );
 }

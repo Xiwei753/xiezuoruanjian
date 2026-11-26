@@ -974,9 +974,8 @@ fn build_sync_commit_receipt(
 }
 
 fn chapter_project_root(root: &Path, key: &crate::chapter::ChapterKey) -> PathBuf {
-    let candidate = root.join("projects").join(&key.project_id);
-    if candidate.is_dir() {
-        candidate
+    if root.join("projects").is_dir() {
+        root.join("projects").join(&key.project_id)
     } else {
         root.to_path_buf()
     }
@@ -1026,10 +1025,7 @@ fn commit_synced_chapter_bodies(
     chapter_sources: &ChapterSourceMap,
     receipts: &mut Vec<crate::chapter::ChapterSyncCommitReceipt>,
 ) -> (std::collections::HashSet<PathBuf>, crate::error::Result<()>) {
-    use super::chapter_mutation_plan::{
-        chapter_body_rel_path, chapter_meta_rel_path, plan_synced_chapter_mutations,
-        SyncedChapterMutation,
-    };
+    use super::chapter_mutation_plan::{plan_synced_chapter_mutations, SyncedChapterMutation};
 
     let mut handled = std::collections::HashSet::new();
     let project_id = live_root
@@ -1052,7 +1048,6 @@ fn commit_synced_chapter_bodies(
             let base_chapter_root = chapter_project_root(base_root, &change.key);
             let body_rel = chapter_target_rel_path(live_root, &change.key, false);
             let meta_rel = chapter_target_rel_path(live_root, &change.key, true);
-            let _ = (chapter_body_rel_path, chapter_meta_rel_path);
             if change.mutation == SyncedChapterMutation::Delete {
                 let base = crate::chapter::commit::read_chapter_state(
                     &base_chapter_root,

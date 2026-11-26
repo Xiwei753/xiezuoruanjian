@@ -596,8 +596,18 @@ fn migrate_starmap_graph_drops_legacy_external_hyperlinks_and_keeps_internal_lin
         &link_path,
         &json!({
             "linkId": "link-1",
-            "source": {"starmapId": starmap_id, "segments": [], "target": {"type": "starmap"}},
-            "target": {"starmapId": starmap_id, "segments": [], "target": {"type": "starmap"}},
+            // 新契约（Issue #1060）：画布链接源必须是本画布节点实例；
+            // Starmap/带穿越段的路径不再是合法 link source。
+            "source": {
+                "starmapId": starmap_id,
+                "segments": [],
+                "target": {"type": "node", "node_id": "n1"}
+            },
+            "target": {
+                "starmapId": starmap_id,
+                "segments": [],
+                "target": {"type": "starmap"}
+            },
             "label": "internal",
             "createdAt": 0,
             "updatedAt": 0,
@@ -645,9 +655,19 @@ fn migrate_starmap_graph_drops_legacy_external_hyperlinks_and_keeps_internal_lin
         !hyperlink_path.exists(),
         "legacy external hyperlink object file must be removed during migration"
     );
+    // 新契约（Issue #1060）：链接唯一持久事实迁入 annotations 仓库，
+    // 旧包内 links/ 文件迁出后不再保留。
     assert!(
-        link_path.exists(),
-        "internal link object file must be preserved during migration"
+        !link_path.exists(),
+        "legacy link object file must be moved to annotations repo during migration"
+    );
+    assert!(
+        dir.path()
+            .join("annotations")
+            .join("links")
+            .join("link-1.json")
+            .is_file(),
+        "internal link must be migrated into the annotations link repository"
     );
 }
 

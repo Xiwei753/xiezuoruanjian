@@ -199,24 +199,49 @@ Kirigami.ApplicationWindow {
         }
     }
 
-    function preSyncBarrier() {
+    // Issue #1062 1.3：同步前保存屏障改为异步续接。先等正文 durable 回执
+    // （flushActiveEditorBeforeSync），再 flush 编辑事实与应用设置，最后
+    // onDone(ok, reason) 通知调用方；不再在 GUI 线程同步等待保存。
+    function preSyncBarrier(onDone) {
         manualSyncBarrierFailureReason = ""
+        var finished = typeof onDone === "function" ? onDone : null
+        var completed = false
+        var finish = function(ok, reason) {
+            // 异步 flush 与同步异常路径都收口到这里，保证只通知一次。
+            if (completed) return
+            completed = true
+            if (!ok && reason) manualSyncBarrierFailureReason = reason
+            if (finished) finished(ok, manualSyncBarrierFailureReason)
+        }
+        var flushFactsAndSettings = function() {
+            if (editorBackend) {
+                editorBackend.flush_recent_edits()
+            }
+            if (settingsBackend) {
+                if (!settingsBackend.flush_pending_settings_save()) {
+                    finish(false, qsTr("保存应用设置失败"))
+                    return
+                }
+            }
+            finish(true, "")
+        }
         if (appController.inWriting && writingWorkspaceLoader.item) {
-            if (!writingWorkspaceLoader.item.flushActiveEditorBeforeSync()) {
-                manualSyncBarrierFailureReason = writingWorkspaceLoader.item.preSyncFlushFailureReason || ""
-                return false
+            var workspace = writingWorkspaceLoader.item
+            var onFlushed = function(ok) {
+                if (!ok) {
+                    finish(false, workspace.preSyncFlushFailureReason || "")
+                    return
+                }
+                flushFactsAndSettings()
             }
-        }
-        if (editorBackend) {
-            editorBackend.flush_recent_edits()
-        }
-        if (settingsBackend) {
-            if (!settingsBackend.flush_pending_settings_save()) {
-                manualSyncBarrierFailureReason = qsTr("保存应用设置失败")
-                return false
+            try {
+                workspace.flushActiveEditorBeforeSync(onFlushed)
+            } catch (e) {
+                finish(false, e && e.toString ? e.toString() : qsTr("保存当前章节失败"))
             }
+            return
         }
-        return true
+        flushFactsAndSettings()
     }
 
     // Issue #983：自动同步的唯一 QML 定时入口。QML 只负责每 30 秒唤醒一次；
@@ -251,41 +276,40 @@ Kirigami.ApplicationWindow {
         }
         if (!due) return false
 
-        var barrierPassed = false
-        try {
-            barrierPassed = window.preSyncBarrier()
-        } catch (e) {
-            barrierPassed = false
-            window.manualSyncBarrierFailureReason = String(e)
-        }
-        if (!barrierPassed) {
-            var reason = window.manualSyncBarrierFailureReason || qsTr("保存失败")
-            // 同一失败原因不每 30 秒重复刷日志；原因变化时再记一次。
-            if (reason !== autoSyncLastPreflightFailureReason) {
-                autoSyncLastPreflightFailureReason = reason
-                window.logAutoSyncEvent("warn", "auto_sync_preflight_failed",
-                                        "trigger=" + trigger + ", reason=" + reason)
+        // Issue #1062 1.3：屏障异步完成后才发起同步；等待期间若窗口已进入
+        // 退出流程则放弃本次自动同步。
+        window.preSyncBarrier(function(barrierPassed) {
+            if (window.autoSyncShutdown) return
+            if (!barrierPassed) {
+                var reason = window.manualSyncBarrierFailureReason || qsTr("保存失败")
+                // 同一失败原因不每 30 秒重复刷日志；原因变化时再记一次。
+                if (reason !== autoSyncLastPreflightFailureReason) {
+                    autoSyncLastPreflightFailureReason = reason
+                    window.logAutoSyncEvent("warn", "auto_sync_preflight_failed",
+                                            "trigger=" + trigger + ", reason=" + reason)
+                }
+                return
             }
-            return false
-        }
-        autoSyncLastPreflightFailureReason = ""
+            autoSyncLastPreflightFailureReason = ""
 
-        var operationId = ""
-        try {
-            operationId = String(syncBackend.start_auto_sync(trigger) || "").trim()
-        } catch (e) {
-            window.logAutoSyncEvent("warn", "auto_sync_dispatch_failed",
-                                    "trigger=" + trigger + ", error=" + e)
-            return false
-        }
-        if (operationId.length > 0) {
-            window.logAutoSyncEvent("info", "auto_sync_started",
-                                    "trigger=" + trigger + ", operation_id=" + operationId)
-            return true
-        }
-        window.logAutoSyncEvent("info", "auto_sync_not_started",
-                                "trigger=" + trigger + ", reason=backend_recheck")
-        return false
+            var operationId = ""
+            try {
+                operationId = String(syncBackend.start_auto_sync(trigger) || "").trim()
+            } catch (e) {
+                window.logAutoSyncEvent("warn", "auto_sync_dispatch_failed",
+                                        "trigger=" + trigger + ", error=" + e)
+                return
+            }
+            if (operationId.length > 0) {
+                window.logAutoSyncEvent("info", "auto_sync_started",
+                                        "trigger=" + trigger + ", operation_id=" + operationId)
+                return
+            }
+            window.logAutoSyncEvent("info", "auto_sync_not_started",
+                                    "trigger=" + trigger + ", reason=backend_recheck")
+        })
+        // “已发起到期检查”，真正是否启动由屏障回调决定。
+        return true
     }
 
     // Issue #1058：窗口真正从后台恢复时的交接检查（handoff）。
@@ -494,15 +518,26 @@ Kirigami.ApplicationWindow {
                 + " request_id=" + manualSyncRequestId
                 + " phase=request_recorded")
 
-        var barrierPassed = false
+        // Issue #1062 1.3：保存屏障改为异步续接；同步真正发起在屏障回调里
+        // 完成。返回值是本轮同步请求编号（“已发起”语义），最终操作编号由
+        // continueManualSyncAfterBarrier 记录到 manualSyncDisplayOperationId。
+        var requestSerial = manualSyncRequestSerial
         try {
-            barrierPassed = window.preSyncBarrier()
+            window.preSyncBarrier(function(barrierPassed) {
+                if (requestSerial !== window.manualSyncRequestSerial) return
+                window.continueManualSyncAfterBarrier(barrierPassed)
+            })
         } catch (e) {
             var exceptionReason = e && e.toString ? e.toString() : qsTr("编辑内容保存过程发生异常")
             return showManualSyncNotStarted(
                 qsTr("当前编辑内容尚未保存。%1").arg(exceptionReason),
                 "manual_sync_precondition_failed")
         }
+        return manualSyncRequestId
+    }
+
+    // Issue #1062 1.3：保存屏障完成后的手动同步收口。
+    function continueManualSyncAfterBarrier(barrierPassed) {
         if (!barrierPassed) {
             var saveReason = manualSyncBarrierFailureReason
                 || (editorBackend && editorBackend.save_status
@@ -649,8 +684,14 @@ Kirigami.ApplicationWindow {
     function openGlobalSearch(context) {
         // 打开搜索前先收口当前编辑内容，让 Core 索引包含刚落盘的正文；
         // 保存失败不阻断搜索，只保留后端给出的保存状态。
+        // Issue #1062 1.3：保存屏障异步执行，搜索结果浮层不等待它。
         try {
-            window.preSyncBarrier()
+            window.preSyncBarrier(function(ok) {
+                if (!ok) {
+                    window.debugLog("search", "pre_search_flush_failed",
+                                    window.manualSyncBarrierFailureReason || "save_failed")
+                }
+            })
         } catch (e) {
             window.debugLog("search", "pre_search_flush_failed", String(e))
         }
@@ -1115,21 +1156,31 @@ Kirigami.ApplicationWindow {
             return false
         }
         // 离开或定位当前章节前先保存。保存失败时不跳转，搜索浮层保持打开。
+        // Issue #1062 1.3：保存屏障异步续接，成功后才执行跳转。
         if (appController.inWriting) {
-            var saved = true
             try {
-                saved = window.preSyncBarrier()
+                window.preSyncBarrier(function(saved) {
+                    if (!saved) {
+                        var reason = window.manualSyncBarrierFailureReason
+                            || qsTr("当前章节尚未保存")
+                        globalSearchOverlay.showMessage(qsTr("无法离开当前章节：%1").arg(reason))
+                        return
+                    }
+                    window.performSearchNavigation(result, target)
+                })
             } catch (e) {
-                saved = false
-            }
-            if (!saved) {
-                var reason = window.manualSyncBarrierFailureReason
+                var exceptionReason = window.manualSyncBarrierFailureReason
                     || qsTr("当前章节尚未保存")
-                globalSearchOverlay.showMessage(qsTr("无法离开当前章节：%1").arg(reason))
+                globalSearchOverlay.showMessage(qsTr("无法离开当前章节：%1").arg(exceptionReason))
                 return false
             }
+            return true
         }
+        return window.performSearchNavigation(result, target)
+    }
 
+    // Issue #1062 1.3：保存屏障通过后的搜索结果跳转。
+    function performSearchNavigation(result, target) {
         if (target.chapterId) {
             var projectId = target.projectId || ""
             var volumeId = target.volumeId || ""
@@ -1478,8 +1529,13 @@ Kirigami.ApplicationWindow {
         // 即时抓取视口快照，不依赖 700ms 节流缓存。
         appController.beforeLeaveWriting = function() {
             var workspace = writingWorkspaceLoader.item;
-            if (workspace)
+            if (workspace) {
                 workspace.saveActiveViewState();
+                // Issue #1062 1.3：卸载前用仍存活的编辑器把最新正文 force
+                // 写进可恢复草稿；路由切换不等 durable 保存。
+                if (workspace.flushActiveChapterDraft)
+                    workspace.flushActiveChapterDraft();
+            }
         };
         appController.restoreWorkspace();
         // 启动时同步一次真实前台状态，避免窗口已经 active 却不触发 onActiveChanged。
@@ -1495,10 +1551,66 @@ Kirigami.ApplicationWindow {
         });
     }
 
+    // Issue #1062 1.3：关窗流程先异步等待正文 durable 回执 + 同步前落盘，
+    // 不允许在 GUI 线程同步等待保存。超时 / 失败按现有策略提示并拒绝关窗。
+    property bool closeFlushInProgress: false
+    property bool closeFlushPassed: false
+    property int closeFlushSerial: 0
+
+    Timer {
+        id: closeFlushTimeoutTimer
+        interval: 8000
+        repeat: false
+        onTriggered: {
+            if (!window.closeFlushInProgress) return
+            window.closeFlushInProgress = false
+            window.closeFlushSerial += 1
+            // 关窗被拒绝，恢复自动同步；下一次关窗重新等正文落盘。
+            window.autoSyncShutdown = false
+            window.showPassiveNotification(qsTr("正文保存超时，已取消关闭"), 8000)
+        }
+    }
+
     onClosing: {
         // Issue #1047：退出前立即保存当前章节光标/滚动位置。
         if (appController.inWriting && writingWorkspaceLoader.item)
             writingWorkspaceLoader.item.saveActiveViewState()
+
+        // Issue #1062 1.3：第一次关窗只发起异步 flush 并拒绝本次关闭；
+        // 正文 durable 回执成功后再显式关窗进入统计收尾。
+        if (!window.closeFlushPassed) {
+            close.accepted = false
+            if (window.closeFlushInProgress) return
+            window.closeFlushInProgress = true
+            window.closeFlushSerial += 1
+            // 等待回执期间不再启动新的自动同步；被拒绝关窗时恢复。
+            window.autoSyncShutdown = true
+            var flushSerial = window.closeFlushSerial
+            var proceed = function(ok, reason) {
+                if (flushSerial !== window.closeFlushSerial) return
+                closeFlushTimeoutTimer.stop()
+                window.closeFlushInProgress = false
+                if (!ok) {
+                    window.autoSyncShutdown = false
+                    window.showPassiveNotification(
+                        qsTr("正文尚未保存，已取消关闭：%1")
+                            .arg(reason || qsTr("保存当前章节失败")), 8000)
+                    return
+                }
+                window.closeFlushPassed = true
+                Qt.callLater(function() { window.close() })
+            }
+            closeFlushTimeoutTimer.start()
+            try {
+                window.preSyncBarrier(function(ok) {
+                    proceed(ok, window.manualSyncBarrierFailureReason)
+                })
+            } catch (e) {
+                proceed(false, e && e.toString ? e.toString() : "")
+            }
+            return
+        }
+
         if (editorBackend) {
             // 先结算当前计时切片并等统计 writer 落盘，确认成功后才正式结束会话，
             // 避免 process::exit 丢掉最后不足 30 秒的切片。
@@ -1506,6 +1618,10 @@ Kirigami.ApplicationWindow {
             var statsCloseError = editorBackend.close_writing_session_and_wait("close")
             if (statsCloseError && statsCloseError.length > 0) {
                 close.accepted = false
+                // 关窗被拒绝后用户会继续写作：下一次关窗必须重新等正文落盘，
+                // 并恢复自动同步。
+                window.closeFlushPassed = false
+                window.autoSyncShutdown = false
                 window.showPassiveNotification(qsTr("写作统计尚未保存：%1").arg(statsCloseError), 8000)
                 return
             }
@@ -2157,7 +2273,8 @@ Kirigami.ApplicationWindow {
             syncBackendRef: syncBackend
             editorBackendRef: editorBackend
             themeControllerRef: themeController
-            beforeSyncHook: function() { return window.preSyncBarrier() }
+            // Issue #1062 1.3：保存屏障异步化，调用方传 onDone(ok) 取结果。
+            beforeSyncHook: function(onDone) { return window.preSyncBarrier(onDone) }
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));
                 // Issue #724 评论 5750911834 问题 3: 改用 reload_from_backend_if_changed()

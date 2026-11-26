@@ -354,6 +354,64 @@ impl CanonicalDocumentVisualSnapshot {
         self.resolve_visual_line_range(start_idx, end_idx)
     }
 
+    /// Issue #1062 三.2：动画快照唯一允许物化的行集合 = 视口（含与
+    /// `LineSnapshotBuilder` 相同的边距）∪ 本次编辑受影响段落。
+    ///
+    /// 动画路径（`build_editor_layout_snapshot_with_canonical` 等）此前对整章调用
+    /// `resolved_visual_lines()`，长文每笔 IME commit 都会把整章 `VisualLine`
+    /// 物化一遍。本方法把物化范围收口到"快照真正会保留的行"：
+    /// - 视口段范围用 `height_index.paragraphs_in_y_range` O(log n) 二分；
+    /// - 受影响段范围用 `paragraph_offset_index.byte_to_paragraph` O(log n) 定位，
+    ///   屏幕外被推到视口外的行也要保留（动画旧/新几何需要）；
+    /// - 两者并集连续，再一次性 `resolve_visual_line_range` 物化，不逐行扫描全章。
+    ///
+    /// 无高度/偏移索引时退化为全章物化（与原行为一致，只发生在首帧/invalidate 后）。
+    /// 快照构建按行再做一次视口裁剪，所以本方法返回的是超集，不会漏掉快照行。
+    pub fn resolve_viewport_and_affected_visual_lines(
+        &self,
+        scroll_y: f64,
+        viewport_h: f64,
+        affected_range: Option<(usize, usize)>,
+    ) -> Vec<VisualLine> {
+        if self.visual_lines.is_empty() {
+            return Vec::new();
+        }
+        if self.height_index.is_empty() || self.paragraph_offset_index.is_empty() {
+            return self.resolved_visual_lines().into_owned();
+        }
+
+        let margin = viewport_h.max(100.0);
+        let (mut first, mut last_excl) = self
+            .height_index
+            .paragraphs_in_y_range(scroll_y - margin, scroll_y + viewport_h + margin);
+
+        if let Some((start, end)) = affected_range {
+            // 零长度 range（光标处插入）用 start 自身定位段落；与
+            // `LineSnapshotBuilder::affected_paragraph_slot_range` 的分母语义一致。
+            let paragraph_count = self.paragraph_offset_index.len();
+            let last_byte = end.saturating_sub(1).max(start);
+            let affected_first = self
+                .paragraph_offset_index
+                .byte_to_paragraph(start)
+                .min(paragraph_count.saturating_sub(1));
+            let affected_last = self
+                .paragraph_offset_index
+                .byte_to_paragraph(last_byte)
+                .min(paragraph_count.saturating_sub(1));
+            first = first.min(affected_first);
+            last_excl = last_excl.max(affected_last + 1);
+        }
+
+        let paragraph_count = self.paragraphs.len();
+        let first = first.min(paragraph_count);
+        let last_excl = last_excl.min(paragraph_count);
+        if first >= last_excl {
+            return Vec::new();
+        }
+        let (start_idx, end_idx) = self.paragraph_visual_line_range(first, last_excl);
+        self.resolve_visual_line_range(start_idx, end_idx)
+    }
+
     /// Issue #901 第二十轮阻塞1: 返回 `[first_logical_slot, last_logical_slot_excl)`
     /// 段落范围对应的 `visual_lines` 行索引范围 `[start_idx, end_idx)`。
     ///

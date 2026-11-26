@@ -301,8 +301,14 @@ pub fn inject_animation_visuals_into_snapshot(
                 // 不覆盖基础 canonical 排版已产出的 cluster。
                 // Issue #901 第十八轮问题3: 只在 image 真正存在时才计为成功注入。
                 // image:None 不计成功注入，避免误报纹理可用。
-                let image_present = anim_line.image.is_some();
-                line.image = anim_line.image.clone();
+                //
+                // Issue #1062 三.2：目标行已有 `LineImage` 时复用已有共享所有权，
+                // 不再用新栅格覆盖。同一 snapshot 内一行只能有一个图像所有者；
+                // canonical 排版已经为受影响行生成过图的场景，二次提取是纯浪费。
+                let image_present = line.image.is_none() && anim_line.image.is_some();
+                if line.image.is_none() {
+                    line.image = anim_line.image;
+                }
                 if image_present {
                     injected_count += 1;
                 }

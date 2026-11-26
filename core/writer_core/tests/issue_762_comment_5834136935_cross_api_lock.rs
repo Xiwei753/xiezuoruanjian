@@ -147,7 +147,9 @@ fn write_remote_catalog_for_projects(
     }
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(provider, &snapshot).unwrap();
     load_remote_catalog(provider).unwrap()

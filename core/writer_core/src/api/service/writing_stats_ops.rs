@@ -14,6 +14,35 @@ impl WriterCoreApi {
             .map_err(WriterError::from)
     }
 
+    /// 构造一次编辑事务的原始证明事实并返回 JSON（Issue #1062 1.2）。
+    ///
+    /// 与 `record_editor_change_stats` 并行：统计/证明写入仍走各自管线，
+    /// 这里只把「可回放的原始事件」交给平台持久化（Qt 的编辑事实/草稿 actor）。
+    /// 正式保存时平台把它作为显式批次传回，Core 不再依赖全局 pending map。
+    pub fn record_editor_proof_fact(
+        &self,
+        input: crate::api::EditorChangeStatsInputDto,
+    ) -> ApiResult<String> {
+        self.core_write()
+            .record_editor_proof_fact(&input)
+            .map_err(WriterError::from)
+    }
+
+    /// 从未提交草稿的原始证明批次 replay 出最终正文（Issue #1062 1.1）。
+    ///
+    /// 恢复流程先读当前已提交正文作为基线，再用这里的结果作为要保存的
+    /// 草稿正文；批次与基线/摘要不一致时返回真实错误，草稿保留不删。
+    pub fn replay_editor_proof_batch(
+        &self,
+        chapter_id: &str,
+        baseline: &str,
+        proof_batch_json: &str,
+    ) -> ApiResult<String> {
+        self.core_write()
+            .replay_editor_proof_batch(chapter_id, baseline, proof_batch_json)
+            .map_err(WriterError::from)
+    }
+
     /// 按章节回放证明事件。`request_json` 为 `ProofReplayRequest` 的 camelCase
     /// JSON；返回目标时刻正文、选区、进度与链校验结果。播放器只渲染本结果，
     /// 不在平台端推演编辑规则。

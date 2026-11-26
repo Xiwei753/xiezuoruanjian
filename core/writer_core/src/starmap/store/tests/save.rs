@@ -420,7 +420,11 @@ fn link_flush_save_queue_persists_via_save_queue() {
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    let link = make_test_link("l1", "Test");
+    store.upsert_node(make_test_node("n1", "Source"));
+    // 新契约（Issue #1060）：链接由 add_link 直接写 annotations 仓库，
+    // 不再经过 store 的 save queue；这里保留 enqueue(SaveQueueEntry::Link)
+    // 验证旧入口不会重复写盘。
+    let link = make_test_link("l1", "Test", &meta.starmap_id, "n1");
     store.add_link(link).unwrap();
     store.enqueue_save(SaveQueueEntry::Link);
     store.enqueue_save(SaveQueueEntry::GraphMeta);
@@ -441,7 +445,8 @@ fn delete_link_flush_save_queue_persists_via_save_queue() {
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    let link = make_test_link("l1", "Test");
+    store.upsert_node(make_test_node("n1", "Source"));
+    let link = make_test_link("l1", "Test", &meta.starmap_id, "n1");
     store.add_link(link).unwrap();
     // Issue #1060：链接由 annotations 仓库直接持久化，不再进入 store 的 dirty 写队列。
     assert_eq!(store.get_link("l1").map(|l| l.link_id.as_str()), Some("l1"));
@@ -457,18 +462,22 @@ fn delete_link_flush_save_queue_persists_via_save_queue() {
         "after flush, graph_meta.link_ids must contain the link_id"
     );
 
+    // 新契约（Issue #1060）：delete_link 直接写 annotations 仓库 tombstone，
+    // 不再经过 save queue 的 DeleteLink 分支；graph_meta.link_ids 是派生缓存。
+    store.delete_link("l1").unwrap();
     store.flush().unwrap();
+
     let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
     store2.load_full().unwrap();
-    assert_eq!(store2.link_count(), 1);
+    assert_eq!(store2.link_count(), 0);
     assert!(
-        store2
+        !store2
             .graph_meta
             .as_ref()
             .unwrap()
             .link_ids
             .contains(&"l1".to_string()),
-        "link_id must persist in graph.json after flush"
+        "已删除的 link_id 必须从 graph.json 派生缓存移除"
     );
 }
 
@@ -577,7 +586,12 @@ fn flush_resume_journal_only_processes_journal_objects_not_all_pending() {
         "B 仍 pending，应留在 deleted_node_ids"
     );
     // tombstones 只含 A，不含 B。
-    let sync_state = SyncService::load_sync_state(dir.path()).unwrap();
+    // 新契约：`starmaps/**` 删除事实按星图 App data group 持久化，
+    // 读取时必须走对应 group 的 SyncState，而不是扁平 state.local.json。
+    let starmap_target = crate::sync::types::SyncTarget::app_data_group(
+        crate::sync::types::AppDataGroup::Starmap(starmap_id.clone()),
+    );
+    let sync_state = SyncService::load_sync_state_for_target(dir.path(), &starmap_target).unwrap();
     let has_a_tomb = sync_state
         .tombstones
         .iter()
@@ -596,7 +610,7 @@ fn flush_resume_journal_only_processes_journal_objects_not_all_pending() {
         !store.deleted_node_ids.contains("nB"),
         "B 完成后应从 deleted_node_ids 移除"
     );
-    let sync_state2 = SyncService::load_sync_state(dir.path()).unwrap();
+    let sync_state2 = SyncService::load_sync_state_for_target(dir.path(), &starmap_target).unwrap();
     let has_b_tomb2 = sync_state2
         .tombstones
         .iter()

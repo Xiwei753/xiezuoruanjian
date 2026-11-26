@@ -56,6 +56,34 @@ impl super::WriterCore {
         serde_json::to_value(frame).map_err(Into::into)
     }
 
+    /// 按原始证明批次从基线正文 replay 出最终正文（Issue #1062 1.1）。
+    ///
+    /// 平台把未提交草稿保存为原始事实后，恢复时需要先还原“这批事实对应的
+    /// 最终正文”：这里逐条应用 changes 并核对摘要链，返回 replay 结果。
+    /// 批次与正文不一致时返回 [`crate::Error::ProofBatchMismatch`]。
+    pub fn replay_editor_proof_batch(
+        &self,
+        chapter_id: &str,
+        baseline: &str,
+        proof_batch_json: &str,
+    ) -> Result<String> {
+        let events: Vec<crate::chapter::ChapterProofProjection> =
+            if proof_batch_json.trim().is_empty() {
+                Vec::new()
+            } else {
+                serde_json::from_str(proof_batch_json)?
+            };
+        if events.is_empty() {
+            return Ok(baseline.to_string());
+        }
+        super::chapter_proof_batch::replay_batch_from_baseline(&events, baseline).map_err(|error| {
+            crate::error::Error::ProofBatchMismatch {
+                chapter_id: chapter_id.to_string(),
+                detail: format!("replay failed: {error}"),
+            }
+        })
+    }
+
     /// 导出离线可校验的章节证明包（包含历史正文，调用方需提示用户）。
     pub fn export_chapter_proof(
         &self,
@@ -90,10 +118,6 @@ impl super::WriterCore {
         &self,
         input: &crate::api::EditorChangeStatsInputDto,
     ) -> Result<()> {
-        use crate::editor::transaction::{EditorChange, EditorCursor, EditorSelection};
-        use crate::editor::EditorTransactionCause;
-        use crate::writing_stats::proof::{ProofEditPayload, PROOF_FORMAT_VERSION};
-
         // 编辑热路径不再扫描整个工作区的同步证明意图：恢复只在工作区打开、
         // 启动和同步开始时各做一次，避免每次按键都枚举目录。
 
@@ -110,6 +134,45 @@ impl super::WriterCore {
                 input.occurred_at_ms,
             );
         }
+
+        let Some(projection) = self.build_editor_proof_projection(input)? else {
+            return Ok(());
+        };
+        // 证明事件先留在 Core，随下一次正文提交写入同一 durable journal。
+        // 只有 journal 决议成功后才允许写统计/证明，链头不能超越已提交正文。
+        let key = self.pending_proof_key(&input.project_id, &input.volume_id, &input.chapter_id);
+        self.enqueue_pending_editor_proof(key, projection);
+        Ok(())
+    }
+
+    /// 构造一次编辑事务的原始证明投影并序列化为 JSON 交给平台持久化
+    /// （Issue #1062 1.2）。
+    ///
+    /// 正式保存路径不再依赖进程内全局 pending map：平台把这份原始事实随
+    /// 快照冻结（Qt 的编辑事实/草稿 actor），保存时作为显式批次传回，Core
+    /// 逐条 replay 校验后与正文进入同一 durable journal。
+    /// 返回空串表示本次事务没有可回放的证明（老客户端只报计数）。
+    pub fn record_editor_proof_fact(
+        &self,
+        input: &crate::api::EditorChangeStatsInputDto,
+    ) -> Result<String> {
+        if input.changes.is_empty() {
+            return Ok(String::new());
+        }
+        let Some(projection) = self.build_editor_proof_projection(input)? else {
+            return Ok(String::new());
+        };
+        Ok(serde_json::to_string(&projection)?)
+    }
+
+    /// 由编辑事实构造证明投影；不写 pending map，供显式批次保存直接使用。
+    fn build_editor_proof_projection(
+        &self,
+        input: &crate::api::EditorChangeStatsInputDto,
+    ) -> Result<Option<crate::chapter::ChapterProofProjection>> {
+        use crate::editor::transaction::{EditorChange, EditorCursor, EditorSelection};
+        use crate::editor::EditorTransactionCause;
+        use crate::writing_stats::proof::{ProofEditPayload, PROOF_FORMAT_VERSION};
 
         // 设备身份由 Core 读/建，不让平台端传；平台初始化注入的稳定 ID 优先。
         let platform = self.effective_platform(&input.platform);
@@ -157,7 +220,7 @@ impl super::WriterCore {
         };
 
         if inserted == 0 && deleted == 0 && pasted == 0 {
-            return Ok(());
+            return Ok(None);
         }
 
         let mut event = WritingInputEvent::with_identity(
@@ -208,17 +271,10 @@ impl super::WriterCore {
             parent_event_id: input.parent_event_id.clone(),
         });
 
-        // 证明事件先留在 Core，随下一次正文提交写入同一 durable journal。
-        // 只有 journal 决议成功后才允许写统计/证明，链头不能超越已提交正文。
-        let key = self.pending_proof_key(&input.project_id, &input.volume_id, &input.chapter_id);
-        self.enqueue_pending_editor_proof(
-            key,
-            crate::chapter::ChapterProofProjection {
-                event,
-                baseline_text: input.baseline_text.clone(),
-            },
-        );
-        Ok(())
+        Ok(Some(crate::chapter::ChapterProofProjection {
+            event,
+            baseline_text: input.baseline_text.clone(),
+        }))
     }
 
     fn enqueue_pending_editor_proof(

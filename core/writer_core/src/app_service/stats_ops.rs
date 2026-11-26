@@ -98,6 +98,34 @@ impl super::WriterAppService {
         self.api.record_editor_change_stats(input)
     }
 
+    /// 构造一次编辑事务的原始证明事实并返回 JSON，供平台持久化为可恢复草稿
+    /// （Issue #1062 1.2）。不写全局 pending map，返回空串表示没有可回放证明。
+    pub fn record_editor_proof_fact(
+        &self,
+        input: EditorChangeStatsInputDto,
+    ) -> Result<String, WriterError> {
+        self.api.record_editor_proof_fact(input)
+    }
+
+    /// 与 [`Self::record_editor_proof_fact`] 相同，但入参是 DTO 的 JSON。
+    /// 跨端桥需要显式 DTO 时用类型化入口；JSON 变体只给已有 JSON 管线的平台。
+    pub fn record_editor_proof_fact_json(&self, input_json: String) -> Result<String, WriterError> {
+        let input: EditorChangeStatsInputDto =
+            serde_json::from_str(&input_json).map_err(WriterError::from)?;
+        self.api.record_editor_proof_fact(input)
+    }
+
+    /// 从未提交草稿的原始证明批次 replay 出最终正文（Issue #1062 1.1）。
+    pub fn replay_editor_proof_batch(
+        &self,
+        chapter_id: String,
+        baseline: String,
+        proof_batch_json: String,
+    ) -> Result<String, WriterError> {
+        self.api
+            .replay_editor_proof_batch(&chapter_id, &baseline, &proof_batch_json)
+    }
+
     pub fn replay_chapter_proof_json(&self, request_json: String) -> Result<String, WriterError> {
         self.api.replay_chapter_proof_json(&request_json)
     }

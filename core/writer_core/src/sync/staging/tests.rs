@@ -201,6 +201,16 @@ fn commit_plan_local_changed_remote_deleted_is_conflict() {
     let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from("note.md")])
         .unwrap();
+    // 新契约：三方比较的基线来自持久 SyncState.known_files（最后一次同步共识），
+    // 不能用 Prepare 时的 live 快照冒充；没有基线时 incoming=None 会退化成
+    // “本地单方修改”。这里写入真实基线，构造远端删除 + 本地修改。
+    let mut state = crate::sync::types::SyncState::default();
+    state.device_id = "test-device".to_string();
+    state.known_files.insert(
+        "note.md".to_string(),
+        format!("{:x}", md5::compute(b"base")),
+    );
+    crate::sync::SyncService::save_sync_state(&live, &state).unwrap();
     // local 改了，远端删除（staging 没有 note.md）。
     crate::storage::atomic_write_string(&live.join("note.md"), "local-changed").unwrap();
 
@@ -309,6 +319,15 @@ fn staging_remote_deleted_local_modified_records_remote_deleted_kind() {
     let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(note_rel)])
         .unwrap();
+    // 新契约：三方比较基线取持久 SyncState.known_files。没有基线时
+    // incoming=None 会被当成“本地单方修改”而不是远端删除。
+    let mut state = crate::sync::types::SyncState::default();
+    state.device_id = "test-device".to_string();
+    state.known_files.insert(
+        note_rel.to_string(),
+        format!("{:x}", md5::compute(b"base-A")),
+    );
+    crate::sync::SyncService::save_sync_state(&live, &state).unwrap();
     // live 改成 B（atomic_write rename 替换，base 保留旧 inode）。
     crate::storage::atomic_write_string(&note_abs, "local-B").unwrap();
     // staging 不放 note.md（模拟远端删除，incoming=None）。
@@ -648,14 +667,15 @@ fn prepare_staging_runs_migrates_local_stats_group_before_seed() {
     let runs = prepare_staging_runs(&mut plan).unwrap();
     assert_eq!(runs.len(), 1);
     assert!(runs[0].prepare_error().is_none());
+    // 新契约：已封口业务日以 zstd 归档段持久化
+    // (`proof/archive/<date>.events.jsonl.zst`)，不再保留明文 events.jsonl。
     // 迁移写进 live 的新分区，随后 seed 进入 staging。
-    assert!(live
-        .join("stats/events/device_1/2024-05-01.events.jsonl")
-        .is_file());
-    assert!(runs[0]
-        .staging_root()
-        .join("stats/events/device_1/2024-05-01.events.jsonl")
-        .is_file());
+    let archive_rel = "stats/events/device_1/proof/archive/2024-05-01.events.jsonl.zst";
+    assert!(
+        live.join(archive_rel).is_file(),
+        "migration must seal the closed day into the proof archive"
+    );
+    assert!(runs[0].staging_root().join(archive_rel).is_file());
     assert!(plan.targets[0].staging_root.is_some());
 }
 

@@ -131,9 +131,156 @@ struct CachedLexicon {
     dictionary_entries: Vec<CorrectionDictionaryEntryDto>,
     entity_names: Vec<CorrectionEntityNameDto>,
     named_entries: Vec<AnnotationNamedEntryDto>,
+    /// 生成这份词库时读到的统一关系源版本（AnnotationStore 专名目录 stamp）。
+    /// 增量/整表重建的判定见 [`CachedLexicon::additions`]。
+    relation_version: String,
     version: u64,
     lexicon: Arc<Lexicon>,
 }
+
+/// 只新增、不删除/不改名的词表增量。
+struct LexiconAdditions {
+    dictionary: Vec<CorrectionDictionaryEntryDto>,
+    entity_names: Vec<CorrectionEntityNameDto>,
+    named_entities: Vec<String>,
+}
+
+impl CachedLexicon {
+    /// 计算新快照相对这份缓存“只新增”的词条。
+    ///
+    /// Issue #1062 三.3：专名缓存按统一关系源版本增量更新。版本前进说明
+    /// AnnotationStore 的专名/关系变了，这里只把新增的专名、别名与错拼关系
+    /// 叠加到已有词库上；作者词典新增词条同理。任何被删除或改名的词条都返回
+    /// `None`，交给调用方整表重建，避免旧关系残留在 `WorkEntityLexicon` 里。
+    fn additions(
+        &self,
+        dictionary_entries: &[CorrectionDictionaryEntryDto],
+        entity_names: &[CorrectionEntityNameDto],
+        named_entries: &[AnnotationNamedEntryDto],
+        relation_version: &str,
+    ) -> Option<LexiconAdditions> {
+        if self
+            .dictionary_entries
+            .iter()
+            .any(|old| !dictionary_entries.contains(old))
+        {
+            return None;
+        }
+        // 改名/删除的专名会让已派生的别名与错拼关系失效，无法用增量表达。
+        if self.named_entries.iter().any(|old| {
+            !named_entries
+                .iter()
+                .any(|current| current.canonical_name == old.canonical_name)
+        }) {
+            return None;
+        }
+        let relation_changed = self.relation_version != relation_version;
+        // 关系被删除/改名后旧别名必须从 WorkEntityLexicon 消失，无法用增量表达。
+        if self
+            .entity_names
+            .iter()
+            .any(|old| !entity_names.contains(old))
+        {
+            return None;
+        }
+        // 版本没变却多出关系，说明专名缓存与关系源不同步：宁可整表重建。
+        if !relation_changed && self.entity_names.len() != entity_names.len() {
+            return None;
+        }
+        let dictionary = dictionary_entries
+            .iter()
+            .filter(|entry| !self.dictionary_entries.contains(entry))
+            .cloned()
+            .collect::<Vec<_>>();
+        let named_entities = named_entries
+            .iter()
+            .filter(|entry| {
+                !self
+                    .named_entries
+                    .iter()
+                    .any(|old| old.canonical_name == entry.canonical_name)
+            })
+            .map(|entry| entry.canonical_name.clone())
+            .collect::<Vec<_>>();
+        let entity_names = entity_names
+            .iter()
+            .filter(|relation| !self.entity_names.contains(relation))
+            .cloned()
+            .collect::<Vec<_>>();
+        Some(LexiconAdditions {
+            dictionary,
+            entity_names,
+            named_entities,
+        })
+    }
+
+    /// 在缓存的 `Lexicon` 上只叠加新增词条；词库文件与基础词表完全不重读。
+    fn overlaid(
+        &self,
+        additions: &LexiconAdditions,
+        dictionary_entries: &[CorrectionDictionaryEntryDto],
+    ) -> Arc<Lexicon> {
+        let mut lexicon = (*self.lexicon).clone();
+        for entry in &additions.dictionary {
+            match entry.kind {
+                CorrectionDictionaryEntryKindDto::Person => lexicon
+                    .insert_work_entity(entry.text.clone(), sujian_proof::ProperNameKind::Person),
+                CorrectionDictionaryEntryKindDto::Place => lexicon
+                    .insert_work_entity(entry.text.clone(), sujian_proof::ProperNameKind::Place),
+                CorrectionDictionaryEntryKindDto::Term => {
+                    lexicon.insert_protected_word(entry.text.clone());
+                }
+            }
+        }
+        for canonical in &additions.named_entities {
+            // 与整表重建同一规则：类型化词典已经贡献的专名不重复插入。
+            if !dictionary_entries.iter().any(|entry| {
+                entry.text == *canonical
+                    && matches!(
+                        entry.kind,
+                        CorrectionDictionaryEntryKindDto::Person
+                            | CorrectionDictionaryEntryKindDto::Place
+                    )
+            }) {
+                lexicon.insert_work_entity(canonical.clone(), sujian_proof::ProperNameKind::Person);
+            }
+        }
+        for relation in &additions.entity_names {
+            match relation.kind {
+                CorrectionEntityNameKindDto::Alias => {
+                    lexicon.insert_work_entity_alias(&relation.canonical, relation.name.clone());
+                }
+                CorrectionEntityNameKindDto::Misspelling => {
+                    lexicon
+                        .insert_work_entity_misspelling(&relation.canonical, relation.name.clone());
+                }
+            }
+        }
+        Arc::new(lexicon)
+    }
+}
+
+/// 一次词库快照的全部输入：词库文件戳、作者词典、专名关系与关系源版本。
+struct LexiconSnapshotParts {
+    files: Vec<LexiconFileStamp>,
+    dictionary_entries: Vec<CorrectionDictionaryEntryDto>,
+    entity_names: Vec<CorrectionEntityNameDto>,
+    named_entries: Vec<AnnotationNamedEntryDto>,
+    relation_version: String,
+}
+
+/// 词库缓存查询结果。
+enum LexiconCacheOutcome {
+    /// 缓存命中；返回前可能已刷新关系源版本戳。
+    Hit(u64, Arc<Lexicon>),
+    /// 只叠加新增词条得到的新词库，尚未发布。
+    Incremental(Arc<Lexicon>),
+    /// 必须整表重建。
+    Miss,
+}
+
+/// 当前活动项目的词库缓存锁。
+type ActiveLexiconCache<'a> = MutexGuard<'a, HashMap<String, CachedLexicon>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct ModelFileStamp {
@@ -372,6 +519,42 @@ pub(super) fn model_lifetime_metrics() -> ModelLifetimeMetrics {
         retired_engines,
         generation: MODEL_CONFIG_GENERATION.load(Ordering::SeqCst),
     }
+}
+
+/// 当前进程的校对模型生命周期只读快照（Issue #1062 三.4）。
+///
+/// 平台诊断（`process.resource`）用它观察 ORT session 是否被重复创建或迟迟
+/// 不释放。函数只读取现有缓存计数、淘汰队列长度和配置代数，不加载模型、
+/// 不改变缓存；注册表未初始化时按“未配置”返回。
+pub fn model_lifetime_snapshot() -> serde_json::Value {
+    let metrics = model_lifetime_metrics();
+    serde_json::json!({
+        "cached": metrics.cached,
+        "engine_refs": metrics.engine_refs,
+        "retired_models": metrics.retired_models,
+        "retired_engines": metrics.retired_engines,
+        "generation": metrics.generation,
+        "model_configured": model_path_configured(),
+    })
+}
+
+/// 是否有任一已打开的 `CorrectionStore` 配置了模型路径。
+///
+/// 锁顺序与 `model_path_status` 一致（stores → preferences），诊断线程只做
+/// 短暂只读；锁中毒或注册表未建立都按未配置处理，不 panic、不阻塞模型加载。
+fn model_path_configured() -> bool {
+    let Some(stores) = STORE_REGISTRY.get() else {
+        return false;
+    };
+    let Ok(stores) = stores.lock() else {
+        return false;
+    };
+    stores.values().any(|inner| {
+        inner
+            .preferences
+            .lock()
+            .is_ok_and(|preferences| preferences.model_path.is_some())
+    })
 }
 
 /// How long a ready ONNX session may stay unused before opportunistic release.
@@ -1222,10 +1405,13 @@ impl CorrectionStore {
     /// writable source of truth.
     ///
     /// A read-only refresh calls this only when the source directory version
-    /// changed. Only a real entry change may invalidate the lexicon and the
-    /// strong correction engine; rebuilding them unconditionally dropped the
-    /// model's last strong reference and reopened the ONNX session hundreds of
-    /// milliseconds later.
+    /// changed. Only a real entry change may invalidate the strong correction
+    /// engine; rebuilding it unconditionally dropped the model's last strong
+    /// reference and reopened the ONNX session hundreds of milliseconds later.
+    ///
+    /// Issue #1062 三.3：关系源版本变化不再直接丢弃词库缓存。下一次
+    /// [`Self::lexicon_snapshot_for_project`] 会用 [`CachedLexicon::additions`]
+    /// 判断这次变化能否只叠加新专名；只有删除/改名才整表重建。
     pub(crate) fn set_named_entries_for_project(
         &self,
         project_id: &str,
@@ -1255,9 +1441,9 @@ impl CorrectionStore {
                 },
             );
         }
-        if let Ok(mut lexicons) = self.inner.lexicons.lock() {
-            lexicons.remove(project_id);
-        }
+        // The engine embeds the previous lexicon snapshot, so it must never be
+        // reused after a relation change. The lexicon itself is kept until the
+        // next snapshot decides between an incremental overlay and a rebuild.
         if let Ok(mut engines) = self.inner.engines.lock() {
             engines.remove(project_id);
         }
@@ -1658,6 +1844,105 @@ impl CorrectionStore {
             .map(|(_, lexicon)| lexicon)
     }
 
+    /// 锁住当前活动项目的词库缓存；项目已切换或代数不符时返回 `None`。
+    fn active_lexicon_cache(
+        &self,
+        project_id: &str,
+        project_generation: u64,
+    ) -> Result<Option<ActiveLexiconCache<'_>>, WriterError> {
+        let active_project =
+            self.inner.active_project.lock().map_err(|_| {
+                WriterError::Other("active correction project lock poisoned".into())
+            })?;
+        if active_project.project_id.as_deref() != Some(project_id)
+            || active_project.generation != project_generation
+        {
+            return Ok(None);
+        }
+        self.inner
+            .lexicons
+            .lock()
+            .map(Some)
+            .map_err(|_| WriterError::Other("correction lexicon cache lock poisoned".into()))
+    }
+
+    /// 命中缓存或算出只叠新增词的词库；两者都不成立时要求整表重建。
+    fn cached_lexicon_snapshot(
+        &self,
+        project_id: &str,
+        project_generation: u64,
+        parts: &LexiconSnapshotParts,
+    ) -> Result<LexiconCacheOutcome, WriterError> {
+        let Some(mut cache) = self.active_lexicon_cache(project_id, project_generation)? else {
+            return Ok(LexiconCacheOutcome::Miss);
+        };
+        let Some(cached) = cache.get_mut(project_id) else {
+            return Ok(LexiconCacheOutcome::Miss);
+        };
+        if cached.files != parts.files {
+            return Ok(LexiconCacheOutcome::Miss);
+        }
+        if cached.dictionary_entries == parts.dictionary_entries
+            && cached.entity_names == parts.entity_names
+            && cached.named_entries == parts.named_entries
+        {
+            // 名字没有变化，只有 sync/MCP 重写了关系源目录：只更新版本戳，
+            // 词库与引擎保持有效。
+            if cached.relation_version != parts.relation_version {
+                cached.relation_version = parts.relation_version.clone();
+            }
+            return Ok(LexiconCacheOutcome::Hit(
+                cached.version,
+                Arc::clone(&cached.lexicon),
+            ));
+        }
+        let Some(additions) = cached.additions(
+            &parts.dictionary_entries,
+            &parts.entity_names,
+            &parts.named_entries,
+            &parts.relation_version,
+        ) else {
+            return Ok(LexiconCacheOutcome::Miss);
+        };
+        Ok(LexiconCacheOutcome::Incremental(
+            cached.overlaid(&additions, &parts.dictionary_entries),
+        ))
+    }
+
+    /// 发布叠加后的词库：新版本号让旧引擎失效，词库文件保持原样。
+    fn publish_incremental_lexicon(
+        &self,
+        project_id: &str,
+        parts: LexiconSnapshotParts,
+        lexicon: Arc<Lexicon>,
+    ) -> Result<u64, WriterError> {
+        let version = self.next_lexicon_version()?;
+        let mut cache = self
+            .inner
+            .lexicons
+            .lock()
+            .map_err(|_| WriterError::Other("correction lexicon cache lock poisoned".into()))?;
+        let mut engines = self
+            .inner
+            .engines
+            .lock()
+            .map_err(|_| WriterError::Other("correction engine cache lock poisoned".into()))?;
+        engines.remove(project_id);
+        cache.insert(
+            project_id.to_string(),
+            CachedLexicon {
+                files: parts.files,
+                dictionary_entries: parts.dictionary_entries,
+                entity_names: parts.entity_names,
+                named_entries: parts.named_entries,
+                relation_version: parts.relation_version,
+                version,
+                lexicon: Arc::clone(&lexicon),
+            },
+        );
+        Ok(version)
+    }
+
     pub(super) fn lexicon_snapshot_for_project(
         &self,
         project_id: &str,
@@ -1665,14 +1950,17 @@ impl CorrectionStore {
         let project_generation = self.activate_project_cache(project_id)?;
         let dictionary_entries = self.dictionary_entry_records(project_id)?;
         let entity_names = self.entity_name_records(project_id)?;
-        let named_entries = self
-            .inner
-            .named_entries
-            .lock()
-            .map_err(|_| WriterError::Other("correction named entry cache lock poisoned".into()))?
-            .get(project_id)
-            .map(|cached| cached.entries.clone())
-            .unwrap_or_default();
+        // 关系源版本与专名记录在同一次加锁里读出，增量判断不会把两个版本的
+        // 数据混在一起（issue #1062 三.3）。
+        let (named_entries, relation_version) = {
+            let guard = self.inner.named_entries.lock().map_err(|_| {
+                WriterError::Other("correction named entry cache lock poisoned".into())
+            })?;
+            match guard.get(project_id) {
+                Some(cached) => (cached.entries.clone(), cached.source_stamp.clone()),
+                None => (Vec::new(), String::new()),
+            }
+        };
         let data_root = self
             .inner
             .path
@@ -1690,35 +1978,29 @@ impl CorrectionStore {
             optional_lexicon_file(&data_root, "proper_name.txt")?;
         let (ignored_words, ignored_words_stamp) =
             optional_lexicon_file(&data_root, "ignored_words.txt")?;
-        let files = vec![
-            word_freq_stamp,
-            custom_confusion_stamp,
-            person_name_stamp,
-            place_name_stamp,
-            proper_name_stamp,
-            ignored_words_stamp,
-        ];
+        let parts = LexiconSnapshotParts {
+            files: vec![
+                word_freq_stamp,
+                custom_confusion_stamp,
+                person_name_stamp,
+                place_name_stamp,
+                proper_name_stamp,
+                ignored_words_stamp,
+            ],
+            dictionary_entries,
+            entity_names,
+            named_entries,
+            relation_version,
+        };
 
-        {
-            let active_project = self.inner.active_project.lock().map_err(|_| {
-                WriterError::Other("active correction project lock poisoned".into())
-            })?;
-            if active_project.project_id.as_deref() == Some(project_id)
-                && active_project.generation == project_generation
-            {
-                let cache = self.inner.lexicons.lock().map_err(|_| {
-                    WriterError::Other("correction lexicon cache lock poisoned".into())
-                })?;
-                if let Some(cached) = cache.get(project_id) {
-                    if cached.files == files
-                        && cached.dictionary_entries == dictionary_entries
-                        && cached.entity_names == entity_names
-                        && cached.named_entries == named_entries
-                    {
-                        return Ok((cached.version, Arc::clone(&cached.lexicon)));
-                    }
-                }
+        match self.cached_lexicon_snapshot(project_id, project_generation, &parts)? {
+            LexiconCacheOutcome::Hit(version, lexicon) => return Ok((version, lexicon)),
+            LexiconCacheOutcome::Incremental(lexicon) => {
+                let version =
+                    self.publish_incremental_lexicon(project_id, parts, Arc::clone(&lexicon))?;
+                return Ok((version, lexicon));
             }
+            LexiconCacheOutcome::Miss => {}
         }
 
         let mut lexicon = Lexicon::from_paths(&LexiconPaths {
@@ -1730,7 +2012,7 @@ impl CorrectionStore {
             ignored_words,
         })
         .map_err(|error| WriterError::Io(error.to_string()))?;
-        for entry in &dictionary_entries {
+        for entry in &parts.dictionary_entries {
             match entry.kind {
                 CorrectionDictionaryEntryKindDto::Person => {
                     lexicon.insert_work_entity(
@@ -1749,8 +2031,8 @@ impl CorrectionStore {
                 }
             }
         }
-        for entry in &named_entries {
-            if !dictionary_entries.iter().any(|dictionary_entry| {
+        for entry in &parts.named_entries {
+            if !parts.dictionary_entries.iter().any(|dictionary_entry| {
                 dictionary_entry.text == entry.canonical_name
                     && matches!(
                         dictionary_entry.kind,
@@ -1767,7 +2049,7 @@ impl CorrectionStore {
                 );
             }
         }
-        for relation in &entity_names {
+        for relation in &parts.entity_names {
             match relation.kind {
                 CorrectionEntityNameKindDto::Alias => {
                     lexicon.insert_work_entity_alias(&relation.canonical, relation.name.clone());
@@ -1799,10 +2081,10 @@ impl CorrectionStore {
             .lock()
             .map_err(|_| WriterError::Other("correction lexicon cache lock poisoned".into()))?;
         if let Some(cached) = cache.get(project_id) {
-            if cached.files == files
-                && cached.dictionary_entries == dictionary_entries
-                && cached.entity_names == entity_names
-                && cached.named_entries == named_entries
+            if cached.files == parts.files
+                && cached.dictionary_entries == parts.dictionary_entries
+                && cached.entity_names == parts.entity_names
+                && cached.named_entries == parts.named_entries
             {
                 return Ok((cached.version, Arc::clone(&cached.lexicon)));
             }
@@ -1818,10 +2100,11 @@ impl CorrectionStore {
         cache.insert(
             project_id.to_string(),
             CachedLexicon {
-                files,
-                dictionary_entries,
-                entity_names,
-                named_entries,
+                files: parts.files,
+                dictionary_entries: parts.dictionary_entries,
+                entity_names: parts.entity_names,
+                named_entries: parts.named_entries,
+                relation_version: parts.relation_version,
                 version,
                 lexicon: Arc::clone(&lexicon),
             },

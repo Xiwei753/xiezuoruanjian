@@ -32,8 +32,11 @@ fn link_save_reload_update_delete_round_trip() {
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    let link = make_test_link("l1", "Test Link");
-    store.upsert_link(link.clone());
+    store.upsert_node(make_test_node("n1", "Source"));
+    // 新契约（Issue #1060）：链接唯一事实在 annotations 仓库，add_link 直接持久化；
+    // upsert_link 只改内存投影，不再写盘。
+    let link = make_test_link("l1", "Test Link", &meta.starmap_id, "n1");
+    store.add_link(link).unwrap();
     store.flush().unwrap();
     assert_eq!(store.link_count(), 1);
     assert!(store.get_link("l1").is_some());
@@ -264,7 +267,8 @@ fn add_link_updates_graph_meta_link_ids() {
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    let link = make_test_link("l1", "Test");
+    store.upsert_node(make_test_node("n1", "Source"));
+    let link = make_test_link("l1", "Test", &meta.starmap_id, "n1");
     store.add_link(link).unwrap();
     // Issue #1060：链接由 annotations 仓库直接持久化，不再进入 store 的 dirty 写队列。
     assert_eq!(store.get_link("l1").map(|l| l.link_id.as_str()), Some("l1"));
@@ -302,7 +306,8 @@ fn delete_link_updates_graph_meta_link_ids() {
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    let link = make_test_link("l1", "Test");
+    store.upsert_node(make_test_node("n1", "Source"));
+    let link = make_test_link("l1", "Test", &meta.starmap_id, "n1");
     store.add_link(link).unwrap();
     store.flush().unwrap();
 

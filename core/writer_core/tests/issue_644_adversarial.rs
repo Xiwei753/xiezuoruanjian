@@ -36,6 +36,28 @@ fn write_rel(root: &Path, rel: &str, content: &str) {
     fs::write(path, content).unwrap();
 }
 
+/// 构造最小合法 `manifest.sync.json`（强类型 [`SyncManifest`] JSON）。
+///
+/// `manifest.sync.json` 现在是强类型 JSON，`compute_commit_plan` 会解析
+/// base / live / staging 三份 manifest；fixture 不能再写任意字符串
+/// （否则 `manifest_read_failed: manifest parse error`）。
+fn manifest_json(paths: &[&str]) -> String {
+    use writer_core::sync::types::{ManifestFileRecord, SyncManifest};
+    let files = paths
+        .iter()
+        .map(|path| ManifestFileRecord {
+            path: (*path).to_string(),
+            content_hash: "fixture-hash".to_string(),
+            updated_at_ms: 1,
+            deleted_at_ms: None,
+            device_id: "fixture-device".to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        })
+        .collect();
+    serde_json::to_string(&SyncManifest { files }).unwrap()
+}
+
 fn sync_result_with_status(status: SyncStatus) -> SyncResult {
     SyncResult {
         status,
@@ -95,12 +117,16 @@ fn adv_p1_manifest_sync_json_goes_to_engine_state_actions() {
     let live = tmp.path().join("live");
     let manifest = "app-meta/sync/manifest.sync.json";
 
-    write_rel(&live, manifest, "base-manifest");
+    write_rel(&live, manifest, &manifest_json(&[]));
     let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(manifest)])
         .unwrap();
     // Transfer 在 staging 写入新 manifest（incoming 改了）
-    write_rel(&run.staging_root(), manifest, "incoming-manifest-v2");
+    write_rel(
+        &run.staging_root(),
+        manifest,
+        &manifest_json(&["project.json"]),
+    );
 
     let plan = run.compute_commit_plan(&live).unwrap();
 
@@ -296,11 +322,12 @@ fn adv_p1_engine_state_writes_incoming_content_not_base() {
     let live = tmp.path().join("live");
     let manifest = "app-meta/sync/manifest.sync.json";
 
-    write_rel(&live, manifest, "base-manifest");
+    write_rel(&live, manifest, &manifest_json(&[]));
     let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(manifest)])
         .unwrap();
-    write_rel(&run.staging_root(), manifest, "incoming-authoritative");
+    let incoming_manifest = manifest_json(&["project.json"]);
+    write_rel(&run.staging_root(), manifest, &incoming_manifest);
 
     let plan = run.compute_commit_plan(&live).unwrap();
 
@@ -313,8 +340,16 @@ fn adv_p1_engine_state_writes_incoming_content_not_base() {
     let content = applied.expect("应有 manifest 的 Apply 动作");
     assert_eq!(
         String::from_utf8(content).unwrap(),
-        "incoming-authoritative",
+        incoming_manifest,
         "对抗式失败：engine_state 写回的应是 staging 里的 incoming 内容（最新权威值）"
+    );
+    // base 是空 manifest、incoming 带 1 条记录：写回内容必须不是 base。
+    let applied_manifest: writer_core::sync::types::SyncManifest =
+        serde_json::from_str(&incoming_manifest).unwrap();
+    assert_eq!(
+        applied_manifest.files.len(),
+        1,
+        "对抗式失败：incoming manifest 应携带远端记录（base 为空）"
     );
 }
 
@@ -374,6 +409,9 @@ fn adv_p2_partial_conflict_commits_non_conflict_files_and_conflict_metadata() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::PartialConflict),
+            group_id: None,
+            failure_path: None,
+            failure_phase: None,
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
@@ -430,6 +468,9 @@ fn adv_p2_fatal_error_skips_staging_commit() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::FatalError("auth failed".to_string())),
+            group_id: None,
+            failure_path: None,
+            failure_phase: None,
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
@@ -473,6 +514,9 @@ fn adv_p2_recoverable_error_skips_staging_commit() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::RecoverableError("network".to_string())),
+            group_id: None,
+            failure_path: None,
+            failure_phase: None,
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
@@ -502,7 +546,7 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
     let manifest = "app-meta/sync/manifest.sync.json";
 
     write_rel(&project_live, project_json, "base-content");
-    write_rel(&project_live, manifest, "base-manifest");
+    write_rel(&project_live, manifest, &manifest_json(&[]));
     let run = StagingRun::create(&app_data, project_live.clone()).unwrap();
     run.build_base_snapshot_from_live(
         &project_live,
@@ -510,7 +554,8 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
     )
     .unwrap();
     write_rel(&run.staging_root(), project_json, "incoming-content");
-    write_rel(&run.staging_root(), manifest, "incoming-manifest");
+    let incoming_manifest = manifest_json(&["project.json"]);
+    write_rel(&run.staging_root(), manifest, &incoming_manifest);
 
     let transfer_result = FullSyncTransferResult {
         targets: vec![TargetSyncResult {
@@ -518,6 +563,9 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::Success),
+            group_id: None,
+            failure_path: None,
+            failure_phase: None,
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
@@ -531,7 +579,10 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
     let live_project = fs::read_to_string(project_live.join(project_json)).unwrap();
     assert_eq!(live_project, "incoming-content");
     let live_manifest = fs::read_to_string(project_live.join(manifest)).unwrap();
-    assert_eq!(live_manifest, "incoming-manifest");
+    assert_eq!(
+        live_manifest, incoming_manifest,
+        "对抗式失败：Success → engine_state 应写回 incoming manifest"
+    );
 }
 
 /// 对抗式：PartialConflict 时 transfer_result.conflicts 里的路径不写回 live
@@ -581,6 +632,9 @@ fn adv_p2_partial_conflict_excludes_conflict_paths_from_content_actions() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result,
+            group_id: None,
+            failure_path: None,
+            failure_phase: None,
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],

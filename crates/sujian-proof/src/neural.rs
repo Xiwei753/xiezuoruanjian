@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use ort::execution_providers::CPUExecutionProvider;
+use ort::memory::{AllocationDevice, AllocatorType, MemoryInfo, MemoryType};
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
 
@@ -76,9 +78,36 @@ impl ProofreadingModel {
         // 固定 1，节点顺序执行，并关闭两处 allow_spinning —— 交互进程的后台
         // session 不该用忙等自旋换吞吐。接口依据锁定版本 ort =2.0.0-rc.10。
         let intra_threads = background_intra_threads();
+        let arena_alloc = ort_arena_alloc_enabled();
+        log_ort_session_memory_config(intra_threads, arena_alloc);
+        let allocator_type = if arena_alloc {
+            AllocatorType::Arena
+        } else {
+            AllocatorType::Device
+        };
+        // Issue #1062 三.1：按进程内存预算选择 ORT session 的内存配置。
+        //
+        // 取舍：arena 分配器用一次 mmap 换分配速度，但会跨 run 保留高水位；
+        // 校对窗口长度随正文变化，动态形状下 arena 只增不还，RSS 峰值会停在
+        // 历史最大窗口。非 arena（Device）把内存及时还给系统 allocator，
+        // 分配次数更多、单窗口略慢，但更贴近真实张量占用。默认选非 arena；
+        // 只有显式 SUJIAN_ORT_ARENA_ALLOC=1 才切回 arena，用于同进程 A/B。
+        let memory_info = MemoryInfo::new(
+            AllocationDevice::CPU,
+            0,
+            allocator_type,
+            MemoryType::Default,
+        )
+        .map_err(|error| CorrectionError::Model(error.to_string()))?;
         let session = Session::builder()
             .map_err(|error| CorrectionError::Model(error.to_string()))?
             .with_optimization_level(GraphOptimizationLevel::Level1)
+            .map_err(|error| CorrectionError::Model(error.to_string()))?
+            // ort 2.0.0-rc.10 的 with_memory_pattern(false) 对应
+            // DisableMemPattern：按首次/历史 run 的输入形状缓存并复用中间
+            // 缓冲；校对窗口长度随正文变化，动态形状下会一直保留历史最大
+            // 形状的高水位，关闭后每轮按实际形状重新分配。
+            .with_memory_pattern(false)
             .map_err(|error| CorrectionError::Model(error.to_string()))?
             .with_intra_threads(intra_threads)
             .map_err(|error| CorrectionError::Model(error.to_string()))?
@@ -89,6 +118,17 @@ impl ProofreadingModel {
             .with_intra_op_spinning(false)
             .map_err(|error| CorrectionError::Model(error.to_string()))?
             .with_inter_op_spinning(false)
+            .map_err(|error| CorrectionError::Model(error.to_string()))?
+            // 注意 rc10 的 with_allocator 只在 commit_finalize 里创建一个
+            // allocator 供读取 input/output 元数据（impl_commit.rs），不会
+            // 改写执行期 CPU EP 的 arena；执行期分配由 CPU EP 的
+            // with_arena_allocator 控制（Enable/DisableCpuMemArena）。两处
+            // 必须共用 arena_alloc 开关，否则 A/B 对比会混入两个变量。
+            .with_execution_providers([CPUExecutionProvider::default()
+                .with_arena_allocator(arena_alloc)
+                .build()])
+            .map_err(|error| CorrectionError::Model(error.to_string()))?
+            .with_allocator(memory_info)
             .map_err(|error| CorrectionError::Model(error.to_string()))?
             .commit_from_file(&model_path)
             .map_err(|error| {
@@ -130,6 +170,10 @@ impl ProofreadingModel {
         let ids = window.input_ids.clone();
         let mask = window.attention_mask.clone();
         let types = window.token_type_ids.clone();
+        // Issue #1062 三.1：一次 run 的输入/输出都不跨窗口保留。
+        // `session.run` 会消耗 `ort::inputs!` 构造的 SessionInputs，三个 i64
+        // 输入 tensor 在 run 返回时释放；输出 `outputs` 在返回预测前显式
+        // drop，不会和下一个窗口的 logits 叠加。
         let outputs = if self.has_token_type_ids {
             session
                 .run(ort::inputs![
@@ -213,6 +257,9 @@ impl ProofreadingModel {
                 },
             ));
         }
+        // 标量预测已全部拷出：logits/shape 的借用在这里结束，显式释放本窗口
+        // 的输出 OrtValue，再进入下一个窗口，不在 session/Mutex 上留存张量。
+        drop(outputs);
         Ok(predictions)
     }
 
@@ -234,6 +281,10 @@ impl NeuralPredictor for ProofreadingModel {
             .lock()
             .map_err(|_| CorrectionError::Model("model session lock poisoned".to_string()))?;
         let mut positions = BTreeMap::<usize, (usize, PositionPrediction)>::new();
+        // Issue #1062 三.1：扫描保持流式。每个窗口在 `predict_encoded_window`
+        // 内完成一次 run 并释放输入/输出 OrtValue；这里只把标量预测按原文字节
+        // 位置合并（重叠窗口保留离边缘更远的一条），不累积整章 logits。窗口
+        // 元数据本身只是 i64 token id，由 tokenizer 按文本长度一次性切分。
         for window in encoded.windows() {
             for (edge, prediction) in
                 self.predict_encoded_window(&mut session, &encoded, &window)?
@@ -262,6 +313,32 @@ fn background_intra_threads() -> usize {
         .map(|count| count.get())
         .unwrap_or(1);
     available.saturating_sub(1).clamp(1, 2)
+}
+
+/// ORT CPU 分配器模式：默认 Device（非 arena）；`SUJIAN_ORT_ARENA_ALLOC=1`
+/// 才切回 Arena，便于同一份二进制做进程内对照。
+///
+/// 只认精确的 `"1"`，避免 `"0"`/`"false"` 等拼写歧义；该开关只影响新建的
+/// session，不改变依赖版本，也不改变 ORT 的进程级默认值。
+fn ort_arena_alloc_enabled() -> bool {
+    matches!(std::env::var("SUJIAN_ORT_ARENA_ALLOC").as_deref(), Ok("1"))
+}
+
+/// 每个进程只记录一次实际选中的 ORT session 内存/线程配置。
+///
+/// 本 crate 没有 `log` 依赖（Issue #1062 限定只改源文件），而模型加载发生在
+/// 应用日志后端初始化之后，用 stderr 输出一次即可被 Linux 启动日志收走。
+/// `OnceLock` 保证重复加载/重建 session 时不会刷屏。
+fn log_ort_session_memory_config(intra_threads: usize, arena_alloc: bool) {
+    static LOGGED: OnceLock<()> = OnceLock::new();
+    if LOGGED.set(()).is_ok() {
+        eprintln!(
+            "[sujian-proof] ort_session_memory: allocator={} memory_pattern=disabled \
+             intra_threads={intra_threads} inter_threads=1 parallel_execution=false \
+             spinning=false (SUJIAN_ORT_ARENA_ALLOC=1 enables arena)",
+            if arena_alloc { "arena" } else { "device" }
+        );
+    }
 }
 
 /// Keep the prediction whose window is farthest from an edge. Extracted from

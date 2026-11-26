@@ -3,14 +3,57 @@
 //! The editor remains owned by its existing `SujianEditorItem` Core kernel.
 //! This module only sends immutable text snapshots to WriterCoreApi. QML maps
 //! the returned UTF-8 byte-range endpoints onto Qt's UTF-16 string positions.
+//!
+//! Issue #1062 三.3：校对请求与正文保存 actor 完全解耦。这里只把工作区路径
+//! 快照交给进程级校对执行器；任务启动后自建 `WriterCoreApi`，失败（模型
+//! 加载、扫描、超时）只经 completion 信号和诊断回报，绝不持有编辑器锁或保存
+//! 队列 sender，因此不可能阻塞/回滚正文落盘。
 
 pub(crate) use super::correction_queue::release_correction_queue;
-use super::correction_queue::submit_correction_job;
+use super::correction_queue::{submit_correction_job, CorrectionJobClass};
 use super::*;
 use writer_core::api::types::{
     CorrectionDictionaryEntryKindDto, CorrectionEditRangeDto, CorrectionEntityNameDto,
     CorrectionEntityNameKindDto, CorrectionIgnoreScopeDto,
 };
+
+/// 校对任务的独立工作区句柄。
+///
+/// Issue #1062 三.3：正文保存 actor 与校对任务的所有权分离。校对任务只持有
+/// 打开工作区时得到的路径快照（data root / projects root / Git layout），
+/// 启动时自建 `WriterCoreApi`，从不捕获 `AppBackend`、编辑器锁、保存队列
+/// sender 或正文 buffer；模型加载失败、扫描失败和超时因此只能通过
+/// `completion` 与诊断回报，无法回滚或阻塞正文落盘。
+struct CorrectionJobContext {
+    data_root: String,
+    projects_root: String,
+    layout: writer_core::storage::git_repo_layout::GitRepoLayout,
+}
+
+impl CorrectionJobContext {
+    /// Capture the workspace handles on the caller (GUI) thread. Only plain
+    /// workspace paths and the storage layout cross the thread boundary.
+    fn capture(app: &AppBackend) -> Result<Self, String> {
+        if !app.current_has_data_root || app.current_data_root.is_empty() {
+            return Err("Core 尚未打开工作区".to_string());
+        }
+        let layout = app
+            .current_workspace_git_layout
+            .clone()
+            .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?;
+        Ok(Self {
+            data_root: app.current_data_root.clone(),
+            projects_root: app.current_projects_root.clone(),
+            layout,
+        })
+    }
+
+    /// Build the job's own Core API. Every task owns its instance, so a slow or
+    /// failed proofreading request never shares a lock with the save actor.
+    fn core_api(&self) -> writer_core::api::WriterCoreApi {
+        with_layout_core_api(&self.data_root, &self.projects_root, &self.layout)
+    }
+}
 
 /// Issue #985：RPM 包安装的 MacBERT4CSC ONNX 资源目录。
 ///
@@ -293,20 +336,7 @@ impl AppBackend {
         text: String,
         completion: CorrectionQueryCallback,
     ) -> Result<(), String> {
-        let (data_root, projects_root, layout) =
-            if self.current_has_data_root && !self.current_data_root.is_empty() {
-                let layout = self
-                    .current_workspace_git_layout
-                    .clone()
-                    .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?;
-                (
-                    self.current_data_root.clone(),
-                    self.current_projects_root.clone(),
-                    layout,
-                )
-            } else {
-                return Err("Core 尚未打开工作区".to_string());
-            };
+        let context = CorrectionJobContext::capture(self)?;
 
         submit_correction_job(
             project_id.clone(),
@@ -315,9 +345,9 @@ impl AppBackend {
             session_id,
             text_revision,
             "chapter_all",
-            false,
+            CorrectionJobClass::Scan,
             move || {
-                let api = with_layout_core_api(&data_root, &projects_root, &layout);
+                let api = context.core_api();
                 // The Core API receives an owned snapshot so model loading and
                 // chapter scanning never block typing, layout, or saving.
                 let result = api
@@ -347,6 +377,10 @@ impl AppBackend {
     /// restore waves instantly on chapter open; edits go through
     /// `request_correction_edits_apply` and `request_correction_pending` so
     /// Core maps only changed ranges and scans only dirty segments.
+    ///
+    /// Issue #1062 三.3: restore-only 只证明缓存结果可显示，不证明本 revision
+    /// 的脏区已经过模型。它不推进队列的 latest revision、不取代待扫描任务，
+    /// 返回的 `hasUncheckedSegments` 仍按 Core 缓存的 `dirty`/未检查段计算。
     pub(crate) fn request_correction_snapshot(
         &self,
         request_id: u32,
@@ -357,21 +391,10 @@ impl AppBackend {
         text: String,
         completion: CorrectionQueryCallback,
     ) -> Result<(), String> {
-        let (data_root, projects_root, layout) =
-            if self.current_has_data_root && !self.current_data_root.is_empty() {
-                let layout = self
-                    .current_workspace_git_layout
-                    .clone()
-                    .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?;
-                (
-                    self.current_data_root.clone(),
-                    self.current_projects_root.clone(),
-                    layout,
-                )
-            } else {
-                return Err("Core 尚未打开工作区".to_string());
-            };
+        let context = CorrectionJobContext::capture(self)?;
 
+        // Restore-only: `Display` jobs never publish a scanned revision and can
+        // never replace a queued model scan for the same chapter.
         submit_correction_job(
             project_id.clone(),
             chapter_id.clone(),
@@ -379,9 +402,9 @@ impl AppBackend {
             session_id,
             text_revision,
             "snapshot",
-            true,
+            CorrectionJobClass::Display,
             move || {
-                let api = with_layout_core_api(&data_root, &projects_root, &layout);
+                let api = context.core_api();
                 let result = api
                     .correction_chapter_snapshot(
                         project_id,
@@ -421,20 +444,7 @@ impl AppBackend {
         end_byte: u32,
         completion: CorrectionQueryCallback,
     ) -> Result<(), String> {
-        let (data_root, projects_root, layout) =
-            if self.current_has_data_root && !self.current_data_root.is_empty() {
-                let layout = self
-                    .current_workspace_git_layout
-                    .clone()
-                    .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?;
-                (
-                    self.current_data_root.clone(),
-                    self.current_projects_root.clone(),
-                    layout,
-                )
-            } else {
-                return Err("Core 尚未打开工作区".to_string());
-            };
+        let context = CorrectionJobContext::capture(self)?;
 
         submit_correction_job(
             project_id.clone(),
@@ -443,9 +453,9 @@ impl AppBackend {
             session_id,
             text_revision,
             "segment",
-            true,
+            CorrectionJobClass::Scan,
             move || {
-                let api = with_layout_core_api(&data_root, &projects_root, &layout);
+                let api = context.core_api();
                 let result = api
                     .check_correction_segment(
                         project_id,
@@ -483,20 +493,7 @@ impl AppBackend {
         edits_json: String,
         completion: CorrectionQueryCallback,
     ) -> Result<(), String> {
-        let (data_root, projects_root, layout) =
-            if self.current_has_data_root && !self.current_data_root.is_empty() {
-                let layout = self
-                    .current_workspace_git_layout
-                    .clone()
-                    .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?;
-                (
-                    self.current_data_root.clone(),
-                    self.current_projects_root.clone(),
-                    layout,
-                )
-            } else {
-                return Err("Core 尚未打开工作区".to_string());
-            };
+        let context = CorrectionJobContext::capture(self)?;
         let edits = parse_correction_edits_json(&edits_json)?;
         submit_correction_job(
             project_id.clone(),
@@ -505,9 +502,9 @@ impl AppBackend {
             session_id,
             text_revision,
             "edit_apply",
-            false,
+            CorrectionJobClass::EditMapping,
             move || {
-                let api = with_layout_core_api(&data_root, &projects_root, &layout);
+                let api = context.core_api();
                 let result = api
                     .apply_correction_edits(
                         project_id.clone(),
@@ -538,20 +535,7 @@ impl AppBackend {
         text: String,
         completion: CorrectionQueryCallback,
     ) -> Result<(), String> {
-        let (data_root, projects_root, layout) =
-            if self.current_has_data_root && !self.current_data_root.is_empty() {
-                let layout = self
-                    .current_workspace_git_layout
-                    .clone()
-                    .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?;
-                (
-                    self.current_data_root.clone(),
-                    self.current_projects_root.clone(),
-                    layout,
-                )
-            } else {
-                return Err("Core 尚未打开工作区".to_string());
-            };
+        let context = CorrectionJobContext::capture(self)?;
         submit_correction_job(
             project_id.clone(),
             chapter_id.clone(),
@@ -559,9 +543,9 @@ impl AppBackend {
             session_id,
             text_revision,
             "pending",
-            true,
+            CorrectionJobClass::Scan,
             move || {
-                let api = with_layout_core_api(&data_root, &projects_root, &layout);
+                let api = context.core_api();
                 let result = api
                     .scan_correction_pending(
                         project_id,
@@ -597,20 +581,7 @@ impl AppBackend {
         text: String,
         completion: CorrectionQueryCallback,
     ) -> Result<(), String> {
-        let (data_root, projects_root, layout) =
-            if self.current_has_data_root && !self.current_data_root.is_empty() {
-                let layout = self
-                    .current_workspace_git_layout
-                    .clone()
-                    .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?;
-                (
-                    self.current_data_root.clone(),
-                    self.current_projects_root.clone(),
-                    layout,
-                )
-            } else {
-                return Err("Core 尚未打开工作区".to_string());
-            };
+        let context = CorrectionJobContext::capture(self)?;
 
         // Edit transactions must reach Core in revision order. Skipping one
         // would leave a revision gap, forcing a whole-chapter reconcile and
@@ -622,9 +593,9 @@ impl AppBackend {
             session_id,
             text_revision,
             "edits",
-            false,
+            CorrectionJobClass::EditMapping,
             move || {
-                let api = with_layout_core_api(&data_root, &projects_root, &layout);
+                let api = context.core_api();
                 let result = serde_json::from_str::<Vec<[u32; 4]>>(&edits_json)
                     .map_err(|error| format!("校对编辑范围格式无效: {error}"))
                     .and_then(|ranges| {

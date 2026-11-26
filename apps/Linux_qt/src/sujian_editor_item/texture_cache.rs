@@ -31,9 +31,18 @@ impl TextureCache {
         self.line_store.retain(active_snapshot_ids);
     }
 
-    /// Issue #1061 第 2 项：当前缓存的行纹理估算总字节数。
+    /// 当前缓存的行纹理估算总字节数。
     pub fn byte_len(&self) -> usize {
         self.line_store.byte_len()
+    }
+
+    /// Issue #1062 三.2：离开章节/切换文档/关闭文档时清空全部 CPU 行图所有权。
+    ///
+    /// 不只清正文文本：`LineImage` 的 Arc、字节预算计数、淘汰队列一并清空，
+    /// 旧文档的行图不能跨文档继续占用进程内存。GPU 侧 `QSGTexture` 由渲染线程
+    /// 动画层清理，这里释放的是缓存实际持有的 CPU 图像。
+    pub fn clear(&mut self) {
+        self.line_store.clear();
     }
 
     /// Issue #1061 复审：仅缓存持有、可安全淘汰的字节数。

@@ -133,8 +133,8 @@ fn resolve_lww_path(
         has_baseline && (remote_rec.op == "delete" || remote_rec.content_hash != base_hash);
     // 双方都相对基线变化，且变化结果确实不同，才算真正的分歧；双方独立
     // 得到相同内容或都删除同一文件不属于冲突裁决。
-    let diverged = local_rec.op != remote_rec.op
-        || local_rec.content_hash != remote_rec.content_hash;
+    let diverged =
+        local_rec.op != remote_rec.op || local_rec.content_hash != remote_rec.content_hash;
     let both_changed = local_changed && remote_changed && diverged;
 
     match resolve_lww(&local, &remote) {

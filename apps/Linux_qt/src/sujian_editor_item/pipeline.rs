@@ -673,8 +673,23 @@ impl LinuxEditorPipeline {
     ///
     /// Issue #1061 复审：retain 之后只对缓存独占字节执行预算；仍被快照
     /// 共享的图保持可用，等快照释放后再回收。
+    ///
+    /// Issue #1062 三.2：调用方传入的 active ids 是"本帧静态层 + 未确认帧"的集合，
+    /// 这里再合并当前布局快照与活动动画真正引用的源行 id。动画结束/取消后
+    /// `TextMotion` 被清空，其旧 revision 的源 id 不再进入本集合，下一帧
+    /// retain 即删除对应缓存条目（`LineImage` 若仍被快照共享则由快照 Arc 持有）。
     pub fn retain_active_snapshot_ids(&mut self, active_ids: &[LineSnapshotId]) {
-        self.texture_cache.retain_active_snapshot_ids(active_ids);
+        let mut retained: Vec<LineSnapshotId> = active_ids
+            .iter()
+            .copied()
+            .filter(|id| !id.is_none())
+            .collect();
+        for id in self.collect_active_snapshot_ids_from_layout() {
+            if !retained.contains(&id) {
+                retained.push(id);
+            }
+        }
+        self.texture_cache.retain_active_snapshot_ids(&retained);
         let evicted = self
             .texture_cache
             .enforce_byte_budget(TEXTURE_CACHE_BUDGET_BYTES);
@@ -1253,6 +1268,11 @@ impl LinuxEditorPipeline {
     ///
     /// 局部动画的旧行纹理不再走这里，而是由 `TextMotion::source_snapshot_ids()`
     /// 显式持有；这里只保留当前 canonical 布局的行。
+    ///
+    /// Issue #1062 三.2：活动动画的旧/新源行 id 也属于"当前仍被引用"的集合。
+    /// `TextMotion` 只持有 id、不持有 `LineImage`，若调用方（编辑提交后的
+    /// retain）只收集当前布局，旧 revision 的源纹理会在动画第一帧就被删掉。
+    /// 这里把两侧合并，动画结束/取消（`TextMotion` 清空）后旧 id 自然消失。
     pub fn collect_active_snapshot_ids_from_layout(&self) -> Vec<LineSnapshotId> {
         let mut ids: Vec<LineSnapshotId> = Vec::new();
         if let Some(snap) = self.current_layout_snapshot.as_ref() {
@@ -1262,12 +1282,75 @@ impl LinuxEditorPipeline {
                 }
             }
         }
+        if let Some(motion) = self.text_motion.as_ref() {
+            for id in motion.source_snapshot_ids() {
+                if !id.is_none() && !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
         ids
     }
 
+    /// 安装当前布局快照；传 `None` 表示文档视觉状态整体失效。
+    ///
+    /// Issue #1062 三.2：切章/关闭文档/布局失效时不能只清正文或只换快照。
+    /// 本入口统一释放旧文档的视觉所有权：
+    /// - 当前/历史 `EditorLayoutSnapshot`（行几何 + 行图 Arc）
+    /// - `TextMotion` 活动动画（源行 id 租约）
+    /// - `pending_promoted_layout`（未消费的 promoted canonical）
+    /// - 纹理缓存全部 CPU 行图与字节计数
+    ///
+    /// 待渲染帧队列由 `SujianEditorItem::reset_document_visual_state` 在调用本方法
+    /// 之前用 `discard_all_frames()` 清空，避免旧帧 snapshot_ids 阻止回收。
     pub fn set_current_layout_snapshot(&mut self, snapshot: Option<EditorLayoutSnapshot>) {
+        if snapshot.is_none() {
+            self.release_document_visual_state();
+        }
         super::line_snapshot::set_active_visual_snapshots(usize::from(snapshot.is_some()));
         self.current_layout_snapshot = snapshot;
+    }
+
+    /// Issue #1062 三.2：清空所有只属于旧文档/旧 revision 的视觉所有权。
+    ///
+    /// 返回 `(释放的纹理字节数, 释放的纹理条数)` 供诊断记录。释放顺序：
+    /// 先丢掉动画计划与待提升布局，再清纹理缓存（此时不会再有人回读行图）。
+    fn release_document_visual_state(&mut self) -> (usize, usize) {
+        let released_bytes = self.texture_cache.byte_len();
+        let released_lines = self.texture_cache.line_count();
+        self.text_motion = None;
+        self.pending_promoted_layout = None;
+        self.texture_cache.clear();
+        if released_bytes > 0 || released_lines > 0 {
+            self.record_texture_release(released_bytes, released_lines);
+        }
+        (released_bytes, released_lines)
+    }
+
+    /// Issue #1062 三.2：记录一次文档视觉所有权释放（切章/清文档）。
+    fn record_texture_release(&self, released_bytes: usize, released_lines: usize) {
+        let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+            std::collections::BTreeMap::new();
+        fields.insert(
+            "released_bytes".to_string(),
+            serde_json::json!(released_bytes),
+        );
+        fields.insert(
+            "released_lines".to_string(),
+            serde_json::json!(released_lines),
+        );
+        fields.insert("active_visual_snapshots".to_string(), serde_json::json!(0));
+        writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            sequence: 0,
+            session_id: String::new(),
+            level: writer_diagnostics::DiagnosticLevel::Info,
+            origin: writer_diagnostics::DiagnosticOrigin::App,
+            event: "editor.texture.release".to_string(),
+            target: "editor.texture".to_string(),
+            message: None,
+            fields,
+        });
     }
 
     /// Issue #658 评论 5622829886 问题 1: 取出 record_visual_transaction 产生的

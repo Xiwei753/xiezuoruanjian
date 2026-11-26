@@ -93,41 +93,99 @@ impl StarMapStore {
     /// 严格加载单个 node：文件缺失 / IO 失败 / JSON 解析失败 / 内部 ID 不一致
     /// 都返回 `Err`（仍 push diagnostic 到 recovery_log 便于调试）。
     /// 不再返回 `Option<T>` 吞掉错误——GraphMeta 声明的对象必须加载成功。
+    ///
+    /// Issue #1062：旧格式完整节点经统一迁移入口
+    /// [`crate::starmap::migration::nodes::decode_node_object`] 解码；加载时先写
+    /// 共享本体、再把节点文件重写成实例（原子写），然后才继续本体投影。
+    /// 迁移失败 fail-closed：错误带星图 ID、对象 ID 和节点路径，不返回半成品。
     pub(in crate::starmap::store) fn try_load_node(
         &mut self,
         node_id: &str,
     ) -> Result<StarMapNode> {
         let dir = self.starmap_dir();
-        let instance: StarMapNodeInstance = load_object_strict(
-            &mut self.recovery_log,
-            &dir,
-            "nodes",
-            "node instance",
-            node_id,
-            "instanceId",
-            |n: &StarMapNodeInstance| n.instance_id.as_str(),
-        )?;
-        if !instance.starmap_id.is_empty() && instance.starmap_id != self.starmap_id {
+        let node_path = dir
+            .join("nodes")
+            .join(package_storage::bucket_for_id(node_id))
+            .join(format!("{}.json", node_id));
+        if !node_path.exists() {
+            self.recovery_log.push(LoadDiagnostic {
+                kind: LoadDiagnosticKind::Missing,
+                object_type: "node instance".to_string(),
+                object_id: node_id.to_string(),
+                detail: format!("node instance file not found: {}", node_path.display()),
+            });
             return Err(Error::Other(format!(
-                "node instance {} belongs to starmap {}, expected {}",
-                node_id, instance.starmap_id, self.starmap_id
+                "node instance '{}' file not found: {}",
+                node_id,
+                node_path.display()
             )));
         }
+        let bytes = std::fs::read(&node_path)?;
+        let plan = match crate::starmap::migration::nodes::decode_node_object(
+            &self.app_data_root,
+            &self.starmap_id,
+            node_id,
+            &bytes,
+            None,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.recovery_log.push(LoadDiagnostic {
+                    kind: LoadDiagnosticKind::Corrupt,
+                    object_type: "node instance".to_string(),
+                    object_id: node_id.to_string(),
+                    detail: format!(
+                        "node migration/decode failed: path={} starmap_id={}: {error}",
+                        node_path.display(),
+                        self.starmap_id
+                    ),
+                });
+                return Err(Error::Other(format!(
+                    "node '{}' migration failed: path={} starmap_id={}: {error}",
+                    node_id,
+                    node_path.display(),
+                    self.starmap_id
+                )));
+            }
+        };
+        if plan.wrote_definition || plan.rewrite_instance {
+            crate::starmap::migration::nodes::persist_node_object_plan(
+                &self.app_data_root,
+                &self.starmap_id,
+                node_id,
+                &plan,
+            )
+            .map_err(|error| {
+                Error::Other(format!(
+                    "node '{}' migration write failed: path={} starmap_id={}: {error}",
+                    node_id,
+                    node_path.display(),
+                    self.starmap_id
+                ))
+            })?;
+        }
+
+        let instance = plan.instance;
         let asset_id = instance.asset_id.clone();
         self.node_assets
             .insert(node_id.to_string(), asset_id.clone());
-        let definition =
-            crate::starmap::library::load_node_definition(&self.app_data_root, &asset_id)?
-                .ok_or_else(|| {
-                    Error::Other(format!(
-                        "shared node definition missing for instance {} -> {}",
-                        node_id, asset_id
-                    ))
-                })?;
+        let definition = match plan.definition {
+            Some(definition) => definition,
+            None => crate::starmap::library::load_node_definition(&self.app_data_root, &asset_id)?
+                .unwrap_or_else(|| {
+                    // Issue #1062：实例可以先于/独立于共享本体存在（旧数据、
+                    // 旧端只写实例的包）。缺本体不阻断加载，用只存在于内存的
+                    // 占位本体完成投影；不写回素材库，不伪造共享内容。
+                    crate::starmap::migration::nodes::placeholder_definition(&instance)
+                }),
+        };
         if definition.asset_id != asset_id {
             return Err(Error::Other(format!(
-                "shared node definition id mismatch for {}: {}",
-                asset_id, definition.asset_id
+                "shared node definition id mismatch for {}: {} (path={} starmap_id={})",
+                asset_id,
+                definition.asset_id,
+                node_path.display(),
+                self.starmap_id
             )));
         }
         Ok(definition.instantiate_instance(&instance))

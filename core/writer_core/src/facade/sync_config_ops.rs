@@ -60,10 +60,11 @@ impl super::WriterCore {
                 )));
             }
         };
-        let raw: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(format!(
+        let raw: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
                 "sync_config_file_decode: {e}"
-            ))))?;
+            )))
+        })?;
 
         // 新格式：直接反序列化（provider_config 字段已存在或为 None）。
         if let Ok(mut config) = serde_json::from_str::<crate::sync::SyncConfig>(&content) {
@@ -114,9 +115,8 @@ impl super::WriterCore {
             #[cfg(feature = "github-api")]
             {
                 let migrated = migrate_legacy_sync_config(&raw, config);
-                self.save_sync_config(&migrated).map_err(|error| {
-                    sync_config_context(error, "sync_config_migration_write")
-                })?;
+                self.save_sync_config(&migrated)
+                    .map_err(|error| sync_config_context(error, "sync_config_migration_write"))?;
                 return Ok(migrated);
             }
             #[cfg(not(feature = "github-api"))]
@@ -368,10 +368,11 @@ impl super::WriterCore {
             #[serde(default)]
             token: Option<String>,
         }
-        let legacy: LegacySecrets = serde_json::from_str(&content)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(format!(
+        let legacy: LegacySecrets = serde_json::from_str(&content).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
                 "sync_credentials_file_decode: {e}"
-            ))))?;
+            )))
+        })?;
         Ok(legacy
             .token
             .map(crate::sync::SyncSecrets::from_secret)

@@ -49,6 +49,7 @@ fn github_token(secrets: &SyncSecretsDto) -> String {
         .as_ref()
         .map(|ps| match ps {
             ProviderSecretsDto::GitHub { token } => token.clone(),
+            ProviderSecretsDto::GitHttps { .. } => String::new(),
         })
         .unwrap_or_default()
 }

@@ -31,6 +31,16 @@ use writer_core::api::types::{ChapterSaveReceiptDto, ChapterVersionDto};
 use writer_core::api::WriterCoreApi;
 use writer_core::storage::git_repo_layout::GitRepoLayout;
 
+use conflict_material::find_conflict_material;
+
+mod conflict_material;
+mod draft_jobs;
+
+pub(crate) use draft_jobs::{
+    draft_restore_status, enqueue_draft_text, enqueue_fact, enqueue_restore_project,
+    ChapterDraftRestoreStatus, ChapterDraftTextCommand, ChapterFactCommand, ChapterRestoreCommand,
+};
+
 /// 保存任务所属工作区。AppRef / AppBackend 仍只在 GUI 线程使用；
 /// 后台只拿 roots + 已 bootstrap 的 GitRepoLayout 重新构造 WriterCoreApi。
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -49,6 +59,10 @@ impl ChapterSaveContext {
             worktree_root: layout.worktree_root.to_string_lossy().into_owned(),
             git_dir: layout.git_dir.to_string_lossy().into_owned(),
         }
+    }
+
+    pub(crate) fn projects_root(&self) -> &str {
+        &self.projects_root
     }
 
     fn key(&self) -> String {
@@ -89,9 +103,6 @@ pub(crate) struct ChapterSaveRequest {
     pub expected: Option<ChapterVersionDto>,
     /// 冲突材料里的 base 正文，只用于三方材料，不参与正文比较。
     pub base_content: Option<String>,
-    /// 本批编辑事件的稳定 ID；由 QML 在冻结快照时一并冻结，Core 只提交这些
-    /// 事件，不再按正文摘要猜批次。
-    pub proof_event_ids: Vec<String>,
     pub context: ChapterSaveContext,
 }
 
@@ -116,9 +127,6 @@ pub(crate) struct ChapterSaveSnapshotMeta {
     pub snapshot_revision: u64,
     #[serde(default)]
     pub snapshot_sha256: String,
-    /// 冻结快照时已记录的编辑事件 ID；与 snapshot_revision 一起构成显式批次。
-    #[serde(default)]
-    pub proof_event_ids: Vec<String>,
 }
 
 impl ChapterSaveSnapshotMeta {
@@ -205,12 +213,45 @@ const MAX_RETAINED_RESULTS: usize = 128;
 /// 每章正文都留在内存。
 const MAX_CHAPTER_CHAINS: usize = 64;
 /// 冲突材料定位的时间窗口：只看本轮保存刚写入的材料目录。
-const CONFLICT_MATERIAL_WINDOW: Duration = Duration::from_secs(120);
+pub(super) const CONFLICT_MATERIAL_WINDOW: Duration = Duration::from_secs(120);
 
 #[derive(Default)]
 struct ChapterSaveStore {
     entries: HashMap<u32, ChapterSaveEntry>,
     order: VecDeque<u32>,
+}
+
+/// 保存队列占用快照（Issue #1062 3.4：保存/证明队列字节数）。
+///
+/// 只统计仍在结果表里的请求：终态且已交付的正文在交付后即释放，
+/// 这里反映的是“真正还占着内存”的部分，不用历史累计值。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ChapterSaveQueueMetrics {
+    /// 尚未终态的请求数（等待 worker 写盘）。
+    pub pending_requests: usize,
+    /// 结果表保留的记录数（含已交付但未淘汰的回执）。
+    pub retained_results: usize,
+    /// 结果表仍持有的正文快照字节数。
+    pub content_bytes: usize,
+}
+
+/// 读取保存队列当前占用。诊断线程使用，不阻塞 worker。
+pub(crate) fn queue_metrics() -> ChapterSaveQueueMetrics {
+    let (mutex, _) = results();
+    let Ok(store) = mutex.lock() else {
+        return ChapterSaveQueueMetrics::default();
+    };
+    let mut metrics = ChapterSaveQueueMetrics {
+        retained_results: store.entries.len(),
+        ..ChapterSaveQueueMetrics::default()
+    };
+    for entry in store.entries.values() {
+        if !entry.terminal {
+            metrics.pending_requests += 1;
+        }
+        metrics.content_bytes = metrics.content_bytes.saturating_add(entry.content.len());
+    }
+    metrics
 }
 
 static CHAPTER_SAVE_RESULTS: OnceLock<(Mutex<ChapterSaveStore>, Condvar)> = OnceLock::new();
@@ -316,7 +357,7 @@ pub(crate) fn complete_error(
 }
 
 fn snapshot_entry(entry: &mut ChapterSaveEntry, delivered_now: bool) -> ChapterSaveSnapshot {
-    ChapterSaveSnapshot {
+    let snapshot = ChapterSaveSnapshot {
         identity: entry.identity.clone(),
         content: Arc::clone(&entry.content),
         outcome: entry.outcome.clone(),
@@ -324,7 +365,14 @@ fn snapshot_entry(entry: &mut ChapterSaveEntry, delivered_now: bool) -> ChapterS
         conflict_draft_path: entry.conflict_draft_path.clone(),
         terminal: entry.terminal,
         delivered_now,
+    };
+    if delivered_now && entry.terminal {
+        // 终态首次交付后不再需要正文副本：调用方只在 delivered_now 时应用
+        // 保存副作用，保留整章正文只会让结果表随历史回执持续增长
+        // （Issue #1062 第 1.3 项：清理已完成回执和历史快照引用）。
+        entry.content = Arc::from("");
     }
+    snapshot
 }
 
 /// 非阻塞读取。终态只标记一次 delivered_now，调用方据此决定是否应用
@@ -371,6 +419,13 @@ pub(crate) fn wait(request_id: u32, timeout: Duration) -> ChapterSaveWait {
 
 enum ChapterSaveJob {
     Save(ChapterSaveRequest),
+    /// 一条编辑事实：actor 构造原始证明投影并持久化为可恢复草稿
+    /// （Issue #1062 1.1：编辑事实与保存命令同一 actor）。
+    RecordFact(ChapterFactCommand),
+    /// 编辑器正文变化：更新草稿正文；`force` 表示保存/离开边界立即落盘。
+    DraftText(ChapterDraftTextCommand),
+    /// 项目进入时按同一批次协议重放未完成草稿。
+    RestoreProject(ChapterRestoreCommand),
     /// 关窗/切工作区前的落盘屏障：worker 处理到这里时此前全部保存已完成。
     Drain(mpsc::Sender<()>),
 }
@@ -531,6 +586,13 @@ fn chapter_save_worker_loop(receiver: mpsc::Receiver<ChapterSaveJob>) {
     while let Ok(job) = receiver.recv() {
         match job {
             ChapterSaveJob::Save(request) => handle_chapter_save(&mut state, request),
+            ChapterSaveJob::RecordFact(command) => {
+                draft_jobs::handle_record_fact(&mut state, command);
+            }
+            ChapterSaveJob::DraftText(command) => draft_jobs::handle_draft_text(command),
+            ChapterSaveJob::RestoreProject(command) => {
+                draft_jobs::handle_restore_project(&mut state, command);
+            }
             ChapterSaveJob::Drain(ack) => {
                 let _ = ack.send(());
             }
@@ -570,7 +632,83 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request: ChapterSaveR
     state.prune_chains(&chain_key);
 
     let api = state.api_for(&request.context);
-    let save_result = api.save_chapter_content_versioned_with_snapshot(
+    let projects_root = PathBuf::from(&request.context.projects_root);
+    // Issue #1062 1.1：证明批次由 actor 从自己的编辑事实草稿里冻结，不再用
+    // QML 传来的 event ID 去 Core 全局 pending map 猜批次。快照 revision 之前
+    // 的连续事实前缀随正文一起提交；之后的事实留给下一次保存。
+    let frozen_facts = match super::chapter_draft::freeze_batch_for(
+        &projects_root,
+        &request.identity.project_id,
+        &request.identity.chapter_id,
+        request.identity.snapshot_revision,
+    ) {
+        Ok(facts) => facts,
+        Err(error) => {
+            // 冻结失败不能退化成“无证明保存”：否则这批事实的 before 链会
+            // 与之后提交的正文基线脱节，后续保存永久 PROOF_BATCH_MISMATCH。
+            crate::backend::app_backend::debug_error_static(
+                "chapter_save_queue",
+                "freeze_proof_batch_failed",
+                &format!(
+                    "request_id={} project={} chapter={}: {error}",
+                    request_id, request.identity.project_id, request.identity.chapter_id
+                ),
+            );
+            complete_error(
+                request_id,
+                ChapterSaveError {
+                    code: "PROOF_BATCH_FREEZE_FAILED".to_string(),
+                    message_key: "error.proof_batch_freeze_failed".to_string(),
+                    message_args: serde_json::json!({ "detail": error }),
+                    raw_error: error,
+                    conflict: false,
+                },
+                chained,
+                String::new(),
+            );
+            return;
+        }
+    };
+    let frozen_event_ids: Vec<String> = frozen_facts
+        .iter()
+        .map(|fact| fact.event_id.clone())
+        .collect();
+    let proof_batch_json = match frozen_facts
+        .iter()
+        .map(|fact| {
+            serde_json::from_str::<serde_json::Value>(&fact.projection_json)
+                .map_err(|error| format!("event={} projection 无法解析: {error}", fact.event_id))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .and_then(|values| {
+            serde_json::to_string(&values).map_err(|error| format!("批次序列化失败: {error}"))
+        }) {
+        Ok(json) => json,
+        Err(error) => {
+            crate::backend::app_backend::debug_error_static(
+                "chapter_save_queue",
+                "freeze_proof_batch_failed",
+                &format!(
+                    "request_id={} project={} chapter={}: {error}",
+                    request_id, request.identity.project_id, request.identity.chapter_id
+                ),
+            );
+            complete_error(
+                request_id,
+                ChapterSaveError {
+                    code: "PROOF_BATCH_FREEZE_FAILED".to_string(),
+                    message_key: "error.proof_batch_freeze_failed".to_string(),
+                    message_args: serde_json::json!({ "detail": error }),
+                    raw_error: error,
+                    conflict: false,
+                },
+                chained,
+                String::new(),
+            );
+            return;
+        }
+    };
+    let save_result = api.save_chapter_content_versioned_with_proof_batch(
         &request.identity.project_id,
         &request.identity.volume_id,
         &request.identity.chapter_id,
@@ -578,12 +716,38 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request: ChapterSaveR
         effective_expected,
         effective_base,
         request.identity.snapshot_revision,
-        &request.proof_event_ids,
+        &proof_batch_json,
         request.allow_empty_overwrite,
     );
 
     match save_result {
         Ok(receipt) => {
+            // journal 已确认：只 ack 本批包含的事件，快照之后的编辑事实留在
+            // 草稿里等下一次保存；没有剩余事实时删除草稿。
+            if !frozen_event_ids.is_empty() {
+                // 以 journal 回执确认的 event IDs 为准（Core 只回本批进入
+                // durable journal 的投影）；回执缺失时才退回冻结批次。
+                let acknowledged = if receipt.pending_projections.is_empty() {
+                    frozen_event_ids.clone()
+                } else {
+                    receipt.pending_projections.clone()
+                };
+                super::chapter_draft::mark_committed(
+                    &projects_root,
+                    &request.identity.project_id,
+                    &request.identity.chapter_id,
+                    &acknowledged,
+                    &receipt.version.object_generation,
+                    receipt.version.revision,
+                    &receipt.version.content_sha256,
+                );
+            } else {
+                super::chapter_draft::remove(
+                    &projects_root,
+                    &request.identity.project_id,
+                    &request.identity.chapter_id,
+                );
+            }
             if let Some(chain) = state.chains.get_mut(&chain_key) {
                 chain.receipt = Some(receipt.version.clone());
                 chain.text = Arc::clone(&request.content);
@@ -634,48 +798,4 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request: ChapterSaveR
             );
         }
     }
-}
-
-/// 在 Core 的章节提交冲突材料目录里定位本次快照刚写入的 `incoming.md`。
-///
-/// 目录布局由 Core 持有（`app-meta/chapter-commits/conflicts/<transaction_id>`），
-/// 这里只读、只用于把“冲突正文已持久化”的路径回给 QML，不参与任何业务决议。
-fn find_conflict_material(request: &ChapterSaveRequest) -> String {
-    let root = Path::new(&request.context.projects_root)
-        .join(&request.identity.project_id)
-        .join("app-meta")
-        .join("chapter-commits")
-        .join("conflicts");
-    let Ok(entries) = std::fs::read_dir(&root) else {
-        return String::new();
-    };
-    let mut candidates: Vec<(SystemTime, PathBuf)> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            if !path.is_dir() {
-                return None;
-            }
-            let modified = entry.metadata().ok()?.modified().ok()?;
-            Some((modified, path))
-        })
-        .collect();
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
-    let Some(since) = SystemTime::now().checked_sub(CONFLICT_MATERIAL_WINDOW) else {
-        return String::new();
-    };
-    for (modified, path) in candidates.into_iter().take(8) {
-        if modified < since {
-            break;
-        }
-        let Ok(bytes) = std::fs::read(path.join("incoming.md")) else {
-            continue;
-        };
-        if bytes == request.content.as_bytes() {
-            return path.to_string_lossy().into_owned();
-        }
-    }
-    // 找不到目录不代表冲突正文没落盘（可能有清理/权限问题），调用方按
-    // Core 的 CHAPTER_VERSION_CONFLICT 语义把冲突材料视为已持久化即可。
-    String::new()
 }

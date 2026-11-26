@@ -24,6 +24,10 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::error::{Error, Result};
+use crate::starmap::migration::nodes::{
+    decode_node_object, decode_node_object_in_memory, decode_node_object_validation,
+    NodeObjectBindings, NodeObjectPlan,
+};
 use crate::starmap::store::meta::{
     DeletedSinceLastSync, DeletionEntry, GraphMeta, CURRENT_SCHEMA_VERSION,
 };
@@ -1068,6 +1072,17 @@ pub(crate) struct DerivedIndexes {
     pub edge_relation_index: Vec<EdgeRelationIndex>,
     pub embed_host_index: Vec<EmbedHostIndex>,
     pub link_relation_index: Vec<LinkRelationIndex>,
+    /// 胜出节点对象经严格迁移入口解码后的计划（Issue #1062）。
+    pub node_object_plans: Vec<(String, NodeObjectPlan)>,
+}
+
+/// 派生索引重建时可用的素材库上下文。
+///
+/// `app_data_root` 用于读取共享本体；`bindings` 带上 base/staging 的素材库
+/// 视图，避免远端刚加入的本体被误判为缺失。
+pub(crate) struct NodeObjectContext<'a> {
+    pub app_data_root: &'a std::path::Path,
+    pub bindings: &'a NodeObjectBindings,
 }
 
 /// 从合并后的对象文件内容重建派生索引。
@@ -1083,17 +1098,23 @@ pub(crate) struct DerivedIndexes {
 /// - `embed_host_index`：从 embed 对象的 `host_path` 构建
 /// - `link_relation_index`：从 link 对象的 `source`/`target` 构建
 ///
-/// 节点文件按 `StarMapNodeInstance` 解析；`kind` 属于素材库
-/// `StarMapNodeDefinition`，不在画布实例文件中，因此这里不再统计
-/// `node_kind_counts`，该派生缓存由统一存储加载/重建路径维护。
+/// 节点对象统一经 [`crate::starmap::migration::nodes::decode_node_object`] 校验：
+/// 新格式实例校验身份；旧格式完整节点按稳定身份生成"本体 + 实例"计划，
+/// 不再因为缺少 `assetId` 把整个星图组打成 `missing field assetId`。
+/// `kind` 属于素材库 `StarMapNodeDefinition`，不在画布实例文件中，因此这里
+/// 不统计 `node_kind_counts`，该派生缓存由统一存储加载/重建路径维护。
+///
+/// `node_context` 为 `None` 时是纯 bytes 校验（没有 app root 的调用点，
+/// 例如测试）；此时不做素材库内容冲突判定。
 #[allow(clippy::too_many_lines)]
 pub(crate) fn rebuild_derived_indexes(
     starmap_id: &str,
     member_ids: &MergedMemberIds,
     object_contents: &HashMap<(String, String), Vec<u8>>,
+    node_context: Option<&NodeObjectContext<'_>>,
 ) -> Result<DerivedIndexes> {
     use crate::starmap::package_storage::bucket_for_id;
-    use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapNodeInstance};
+    use crate::starmap::types::{StarMapEdge, StarMapEmbed};
 
     let mut edge_relation_index: Vec<EdgeRelationIndex> = Vec::new();
     let mut embed_host_index: Vec<EmbedHostIndex> = Vec::new();
@@ -1127,36 +1148,21 @@ pub(crate) fn rebuild_derived_indexes(
     // 链接对象文件重建；合并输出保持空 vec。
     let link_relation_index: Vec<LinkRelationIndex> = Vec::new();
 
-    // 校验节点实例身份。画布节点文件只保存实例引用，不含 kind/title 等
-    // 素材定义字段；按旧 StarMapNode 解析会把整个星图组打成 missing field id。
+    // 统一入口严格解码胜出节点对象。旧格式节点不再失败；身份/内容冲突错误
+    // 原样带上 starmap_id、object_id 和对象文件路径。
+    let mut node_object_plans: Vec<(String, NodeObjectPlan)> = Vec::new();
     for node_id in &member_ids.node_ids {
         let key = ("node".to_string(), node_id.clone());
-        if let Some(bytes) = object_contents.get(&key) {
-            let rel_path = format!(
-                "starmaps/{starmap_id}/nodes/{}/{node_id}.json",
-                bucket_for_id(node_id)
-            );
-            let instance: StarMapNodeInstance = serde_json::from_slice(bytes).map_err(|error| {
-                crate::Error::Other(format!(
-                    "parse starmap node instance failed: path={rel_path} \
-                         object_type=node object_id={node_id} starmap_id={starmap_id}: {error}"
-                ))
-            })?;
-            if instance.instance_id != *node_id {
-                return Err(crate::Error::Other(format!(
-                    "starmap node instance identity mismatch: path={rel_path} \
-                     object_type=node member_id={node_id} instance_id={} starmap_id={starmap_id}",
-                    instance.instance_id
-                )));
-            }
-            if !instance.starmap_id.is_empty() && instance.starmap_id != starmap_id {
-                return Err(crate::Error::Other(format!(
-                    "starmap node instance belongs to another graph: path={rel_path} \
-                     object_type=node object_id={node_id} instance_starmap_id={} \
-                     starmap_id={starmap_id}",
-                    instance.starmap_id
-                )));
-            }
+        let Some(bytes) = object_contents.get(&key) else {
+            continue;
+        };
+        let rel_path = format!(
+            "starmaps/{starmap_id}/nodes/{}/{node_id}.json",
+            bucket_for_id(node_id)
+        );
+        let plan = decode_node_side(starmap_id, node_id, &rel_path, bytes, node_context)?;
+        if plan.rewrite_instance || plan.wrote_definition {
+            node_object_plans.push((node_id.clone(), plan));
         }
     }
 
@@ -1164,6 +1170,36 @@ pub(crate) fn rebuild_derived_indexes(
         edge_relation_index,
         embed_host_index,
         link_relation_index,
+        node_object_plans,
+    })
+}
+
+/// 解码单个节点对象（base/local/incoming 任一侧）。
+///
+/// 有素材库上下文时走完整迁移入口（含已有本体内容冲突判定）；没有 app root
+/// 的纯计算调用点只做 bytes 级别校验。
+fn decode_node_side(
+    starmap_id: &str,
+    object_id: &str,
+    rel_path: &str,
+    bytes: &[u8],
+    node_context: Option<&NodeObjectContext<'_>>,
+) -> Result<NodeObjectPlan> {
+    let decoded = match node_context {
+        Some(context) => decode_node_object(
+            context.app_data_root,
+            starmap_id,
+            object_id,
+            bytes,
+            Some(context.bindings),
+        ),
+        None => decode_node_object_in_memory(starmap_id, object_id, bytes),
+    };
+    decoded.map_err(|error| {
+        crate::Error::Other(format!(
+            "starmap node object decode failed: path={rel_path} \
+             object_type=node object_id={object_id} starmap_id={starmap_id}: {error}"
+        ))
     })
 }
 
@@ -1309,6 +1345,98 @@ pub(crate) enum GraphLifecycleDecision {
     DeleteModifyConflict { is_local_deleted: bool },
 }
 
+/// 在三方语义合并之前，对 base/local/incoming 的节点对象做统一入口预校验。
+///
+/// incoming/base 的旧格式节点与本地一样经同一解码入口校验，不能只处理本地。
+/// 这里只做格式和对象内身份校验：非胜出侧不会被发布，它的历史共享内容与
+/// 现在的素材库本体不同是正常的，不能据此把整组打成身份冲突。真正胜出
+/// （会被发布）的一侧在 [`rebuild_derived_indexes`] 里严格解码。
+#[allow(clippy::type_complexity)]
+fn validate_node_side_plans(
+    starmap_id: &str,
+    objects: &[(
+        std::path::PathBuf,
+        String,
+        String,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+    )],
+    initial_node_ids: &HashSet<String>,
+    node_context: Option<&NodeObjectContext<'_>>,
+) -> Result<()> {
+    for (rel_path, object_type, object_id, base, local, incoming) in objects {
+        if object_type != "node" || !initial_node_ids.contains(object_id) {
+            continue;
+        }
+        let rel = rel_path.to_string_lossy().replace('\\', "/");
+        for (side, bytes) in [("base", base), ("local", local), ("incoming", incoming)] {
+            let Some(bytes) = bytes else {
+                continue;
+            };
+            // 两侧都改时 base 只是非 JSON 哨兵，不是真实对象内容。
+            if side == "base" && serde_json::from_slice::<serde_json::Value>(bytes).is_err() {
+                continue;
+            }
+            decode_node_side_validation(starmap_id, object_id, &rel, side, bytes, node_context)?;
+        }
+    }
+    Ok(())
+}
+
+/// 非胜出侧节点对象校验解码（不比较素材库现有本体内容）。
+fn decode_node_side_validation(
+    starmap_id: &str,
+    object_id: &str,
+    rel_path: &str,
+    side: &str,
+    bytes: &[u8],
+    node_context: Option<&NodeObjectContext<'_>>,
+) -> Result<NodeObjectPlan> {
+    let decoded = match node_context {
+        Some(context) => decode_node_object_validation(
+            context.app_data_root,
+            starmap_id,
+            object_id,
+            bytes,
+            Some(context.bindings),
+        ),
+        None => decode_node_object_in_memory(starmap_id, object_id, bytes),
+    };
+    decoded.map_err(|error| {
+        crate::Error::Other(format!(
+            "starmap node object decode failed: path={rel_path} \
+             object_type=node object_id={object_id} starmap_id={starmap_id} \
+             side={side}: {error}"
+        ))
+    })
+}
+
+/// 按合并决议过滤需要发布的节点迁移计划。
+///
+/// - `ApplyIncoming`：胜出内容是 incoming，计划取自 incoming 严格解码；
+/// - `KeepLocal` / `NoOp`：胜出内容是本地当前内容；
+/// - `Conflict` / `Delete`：保留原始材料，不发布任何改写。
+fn publishable_node_plans(
+    winning_plans: &[(String, NodeObjectPlan)],
+    decisions: &HashMap<String, ObjectMergeDecision>,
+    final_member_ids: &[String],
+) -> Vec<(String, NodeObjectPlan)> {
+    let mut out: Vec<(String, NodeObjectPlan)> = Vec::new();
+    for (node_id, plan) in winning_plans {
+        if !final_member_ids.iter().any(|member| member == node_id) {
+            continue;
+        }
+        match decisions.get(node_id) {
+            Some(ObjectMergeDecision::ApplyIncoming(_))
+            | Some(ObjectMergeDecision::KeepLocal)
+            | Some(ObjectMergeDecision::NoOp) => out.push((node_id.clone(), plan.clone())),
+            Some(ObjectMergeDecision::Conflict(_)) | Some(ObjectMergeDecision::Delete) | None => {}
+        }
+    }
+    out
+}
+
 /// 星图 graph.json + 对象文件统一合并输出。
 #[derive(Debug)]
 pub(crate) struct StarmapGraphMergeOutput {
@@ -1321,6 +1449,11 @@ pub(crate) struct StarmapGraphMergeOutput {
     /// run.rs 据此在 `plan.conflict` 中添加 graph.json 的 `StagingConflict`，
     /// 不再只靠对象级 `Conflict(RemoteDeleted)` 隐式传递整图冲突。
     pub graph_conflict: Option<crate::sync::types::SyncConflictKind>,
+    /// 合并后存活节点的对象级迁移计划（Issue #1062）。
+    ///
+    /// 只有需要改写（旧格式节点或缺 `assetId` 的实例）的计划会进入这里；
+    /// run.rs 用同一份计划发布实例改写与新共享本体，冲突/删除对象不发布。
+    pub node_object_plans: Vec<(String, NodeObjectPlan)>,
 }
 
 /// 解析整图生命周期决策（issue #902 第十二轮复核）。
@@ -1495,6 +1628,7 @@ pub(crate) fn merge_starmap_graph_with_objects(
         objects,
         None,
         &HashMap::new(),
+        None,
     )
 }
 
@@ -1520,6 +1654,7 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
     )],
     lifecycle_override: Option<GraphLifecycleDecision>,
     object_versions: &HashMap<String, (Option<LwwRecord>, Option<LwwRecord>)>,
+    node_context: Option<&NodeObjectContext<'_>>,
 ) -> Result<StarmapGraphMergeOutput> {
     // --- 1. 解析 graph 成员并确定对象保留边界 ---
     let base_meta = parse_graph_meta(graph_base)?;
@@ -1550,6 +1685,7 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
                 object_decisions: decisions,
                 lifecycle_decision,
                 graph_conflict: None,
+                node_object_plans: Vec::new(),
             });
         }
         GraphLifecycleDecision::DeleteModifyConflict { is_local_deleted } => {
@@ -1567,6 +1703,7 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
                 object_decisions: decisions,
                 lifecycle_decision,
                 graph_conflict: Some(conflict_kind),
+                node_object_plans: Vec::new(),
             });
         }
         GraphLifecycleDecision::Normal => {}
@@ -1579,6 +1716,17 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
         local_meta.as_ref(),
         incoming_meta.as_ref(),
     );
+
+    // --- 1.5 先产出对象级计划（Issue #1062）---
+    // base/local/incoming 的旧格式节点都必须经统一迁移入口预校验，不允许
+    // "只处理本地、跳过远端"；胜出侧在第 8 步严格解码并生成迁移计划。
+    // 不在初始成员集合里的孤儿对象会被删除，不参与迁移计划。
+    validate_node_side_plans(
+        starmap_id,
+        objects,
+        &initial_members.sets.node_ids,
+        node_context,
+    )?;
 
     // --- 2. 对每个对象做三方决策，收集最终胜出 bytes ---
     let mut object_decisions: Vec<(std::path::PathBuf, ObjectMergeDecision)> = Vec::new();
@@ -1645,6 +1793,7 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
             object_decisions,
             lifecycle_decision,
             graph_conflict: None,
+            node_object_plans: Vec::new(),
         });
     }
 
@@ -1715,7 +1864,15 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
     );
 
     // --- 8. 重建派生索引 ---
-    let derived = rebuild_derived_indexes(starmap_id, &member_ids, &final_objects)?;
+    let derived = rebuild_derived_indexes(starmap_id, &member_ids, &final_objects, node_context)?;
+
+    // 合并决议确定后，只有存活且确实发生改写的节点计划才发布：冲突/删除
+    // 节点保留原始材料，不做半迁移。
+    let published_node_plans = publishable_node_plans(
+        &derived.node_object_plans,
+        &node_decisions,
+        &member_ids.node_ids,
+    );
 
     // --- 9. revision 绑定对象决策 + package_revision ---
     let local_pr = local_meta.as_ref().map(|m| m.package_revision).unwrap_or(0);
@@ -1817,6 +1974,7 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
         object_decisions,
         lifecycle_decision,
         graph_conflict: None,
+        node_object_plans: published_node_plans,
     })
 }
 
@@ -3336,5 +3494,80 @@ mod tests {
              (local deleted, live graph absent), got {:?}",
             record.starmap_ids
         );
+    }
+
+    // --- Issue #1062：旧格式节点组不再整组失败，产出定义/实例迁移计划 ---
+
+    #[test]
+    fn issue_1062_legacy_node_merges_into_definition_and_instance_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = make_graph_meta_bytes("sm_legacy", &["n1"], &[("n1", 1)], 1, 10);
+        let legacy_node = serde_json::to_vec_pretty(&serde_json::json!({
+            "id": "n1",
+            "title": "旧节点",
+            "kind": "Note",
+            "content": {"type": "empty"},
+            "anchors": [],
+            "portal": null,
+            "position": {"x": 3.0, "y": 4.0},
+            "style": {},
+            "provenance": {},
+            "createdAt": 1,
+            "updatedAt": 2
+        }))
+        .unwrap();
+        let objects = vec![(
+            std::path::PathBuf::from("starmaps/sm_legacy/nodes/00/n1.json"),
+            "node".to_string(),
+            "n1".to_string(),
+            None,
+            Some(legacy_node),
+            None,
+        )];
+        let bindings = NodeObjectBindings::new();
+        let context = NodeObjectContext {
+            app_data_root: dir.path(),
+            bindings: &bindings,
+        };
+
+        let output = merge_starmap_graph_with_object_versions(
+            "sm_legacy",
+            // local-only：base/incoming 都不存在，只是本地新增了一张旧格式
+            // 节点。若把 base 设成与 local 相同而 incoming 缺失，整图生命周期
+            // 会按“远端删除、本地未改”判成 Delete，根本到不了对象级迁移。
+            None,
+            Some(&graph),
+            None,
+            None,
+            None,
+            None,
+            &objects,
+            None,
+            &HashMap::new(),
+            Some(&context),
+        )
+        .expect("legacy node group must not fail the whole starmap merge");
+
+        assert!(matches!(
+            &output.object_decisions[0].1,
+            ObjectMergeDecision::KeepLocal
+        ));
+        assert_eq!(
+            output.node_object_plans.len(),
+            1,
+            "legacy node must produce one object-level migration plan"
+        );
+        let (node_id, plan) = &output.node_object_plans[0];
+        assert_eq!(node_id, "n1");
+        assert!(plan.rewrite_instance, "canvas file must be rewritten");
+        assert_eq!(plan.instance.asset_id, "n1");
+        assert_eq!(plan.instance.position.x, 3.0);
+        assert_eq!(plan.instance.position.y, 4.0);
+        let definition = plan
+            .definition
+            .as_ref()
+            .expect("shared definition must be planned");
+        assert_eq!(definition.asset_id, "n1");
+        assert_eq!(definition.title, "旧节点");
     }
 }

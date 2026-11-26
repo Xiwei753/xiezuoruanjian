@@ -103,8 +103,8 @@ pub(super) fn publish_tree_snapshot(
         result.overwritten_files = outcome.overwritten_files.clone();
         result.ignored_files = outcome.ignored_files.clone();
     }
-    let auto_adjudicated = merge_outcome
-        .is_some_and(|outcome| !outcome.auto_adjudicated_files.is_empty());
+    let auto_adjudicated =
+        merge_outcome.is_some_and(|outcome| !outcome.auto_adjudicated_files.is_empty());
     if result.uploaded_files.is_empty()
         && result.downloaded_files.is_empty()
         && result.local_deletes.is_empty()
@@ -314,8 +314,8 @@ fn publish_snapshot_batch(
         r.overwritten_files = outcome.overwritten_files.clone();
         r.ignored_files = outcome.ignored_files.clone();
     }
-    let auto_adjudicated = merge_outcome
-        .is_some_and(|outcome| !outcome.auto_adjudicated_files.is_empty());
+    let auto_adjudicated =
+        merge_outcome.is_some_and(|outcome| !outcome.auto_adjudicated_files.is_empty());
     if r.uploaded_files.is_empty()
         && r.downloaded_files.is_empty()
         && r.local_deletes.is_empty()

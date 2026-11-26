@@ -797,7 +797,9 @@ fn test_remote_only_delete_cleanup_executes() {
     );
     let catalog_snapshot = crate::sync::types::RemoteTargetCatalogSnapshot {
         catalog: catalog.clone(),
-        version: crate::sync::provider::model::RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用不存在哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: crate::sync::provider::model::RemoteVersion::new("__nonexistent__"),
     };
     crate::sync::target_lifecycle::write_remote_catalog(&provider, &catalog_snapshot).unwrap();
 

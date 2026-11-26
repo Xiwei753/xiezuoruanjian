@@ -292,10 +292,18 @@ fn delete_node_blocked_by_cross_canvas_link_reference() {
     add_node(&core, &root, "n_root");
     add_node(&core, &child, "n_child");
 
-    // 在根图创建 Link，source 指向子图的 n_child
+    // 在根图创建 Link：新契约（Issue #1060）link source 必须是本画布节点，
+    // 跨图引用只能出现在 target 侧（经 EnterEmbed 指向子图 n_child）。
     let link = crate::starmap::types::StarMapLink {
         link_id: "lk_test".to_string(),
         source: StarMapTargetPath {
+            starmap_id: root.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n_root".to_string(),
+            },
+        },
+        target: StarMapTargetPath {
             starmap_id: root.clone(),
             segments: vec![StarMapPathSegment::EnterEmbed {
                 instance_id: "em_root_child".to_string(),
@@ -304,20 +312,13 @@ fn delete_node_blocked_by_cross_canvas_link_reference() {
                 node_id: "n_child".to_string(),
             },
         },
-        target: StarMapTargetPath {
-            starmap_id: root.clone(),
-            segments: vec![],
-            target: StarMapTargetDetail::Node {
-                node_id: "n_root".to_string(),
-            },
-        },
         label: None,
         created_at: 0,
         updated_at: 0,
     };
     core.add_starmap_link(&root, link).unwrap();
 
-    // 删除子图的 n_child 应该失败（根图的 Link 引用了它）
+    // 删除子图的 n_child 应该失败（根图的 Link target 引用了它）
     let err = core.delete_starmap_node(&child, "n_child");
     assert!(err.is_err(), "有跨图 Link 引用时必须拒绝删除被引用的节点");
 }

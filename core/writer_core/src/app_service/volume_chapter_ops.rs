@@ -271,6 +271,55 @@ impl super::WriterAppService {
         )
     }
 
+    /// 显式原始证明批次保存（Issue #1062 1.2）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_chapter_content_versioned_with_proof_batch(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        content: String,
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<String>,
+        proof_snapshot_revision: u64,
+        proof_batch_json: String,
+        allow_empty_overwrite: bool,
+    ) -> Result<ChapterSaveReceiptDto, WriterError> {
+        self.api.save_chapter_content_versioned_with_proof_batch(
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            &content,
+            expected_version,
+            base_content,
+            proof_snapshot_revision,
+            &proof_batch_json,
+            allow_empty_overwrite,
+        )
+    }
+
+    /// 清空正文使用与保存相同的显式原始证明批次协议（Issue #1062 1.2）。
+    pub fn clear_chapter_content_versioned_with_proof_batch(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<String>,
+        proof_snapshot_revision: u64,
+        proof_batch_json: String,
+    ) -> Result<ChapterSaveReceiptDto, WriterError> {
+        self.api.clear_chapter_content_versioned_with_proof_batch(
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            expected_version,
+            base_content,
+            proof_snapshot_revision,
+            &proof_batch_json,
+        )
+    }
+
     pub fn clear_chapter_content(
         &self,
         project_id: String,

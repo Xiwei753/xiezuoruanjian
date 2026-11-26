@@ -8,7 +8,6 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
 pub(crate) enum TextDecorationKind {
     SpellErrorWave,
     SpellWarningWave,
@@ -332,15 +331,17 @@ fn build_line_geometry(
                                 continue;
                             }
                             let stroke = (0.9 / dpr).min(available_descent * 0.5);
-                            let amplitude = (0.8 / dpr)
-                                .min((available_descent - stroke).max(0.0) * 0.5);
+                            let amplitude =
+                                (0.8 / dpr).min((available_descent - stroke).max(0.0) * 0.5);
                             let center_y = baseline + (available_descent - stroke) * 0.5;
                             let vertices = if span.kind == TextDecorationKind::SpellErrorWave {
                                 &mut error_vertices
                             } else {
                                 &mut warning_vertices
                             };
-                            append_wave_strip(vertices, left, right, center_y, amplitude, stroke, dpr);
+                            append_wave_strip(
+                                vertices, left, right, center_y, amplitude, stroke, dpr,
+                            );
                         }
                         TextDecorationKind::Highlight => append_rect(
                             &mut highlight_vertices,

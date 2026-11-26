@@ -27,33 +27,53 @@ pub(crate) struct SyncedChapterChange {
     pub(crate) action_index: usize,
 }
 
-fn chapter_body_parts(path: &Path) -> Option<(String, String)> {
+fn chapter_body_parts(path: &Path) -> Option<(Option<String>, String, String)> {
     let parts: Vec<String> = path
         .components()
         .map(|component| component.as_os_str().to_string_lossy().into_owned())
         .collect();
-    if parts.len() == 5
-        && parts[0] == "volumes"
-        && parts[2] == "chapters"
-        && parts[4] == "chapter.md"
+    let (offset, project_id) = if parts.len() == 7 && parts[0] == "projects" {
+        (2, Some(parts[1].clone()))
+    } else if parts.len() == 5 && parts[0] == "volumes" {
+        (0, None)
+    } else {
+        return None;
+    };
+    if parts[offset] == "volumes"
+        && parts[offset + 2] == "chapters"
+        && parts[offset + 4] == "chapter.md"
     {
-        Some((parts[1].clone(), parts[3].clone()))
+        Some((
+            project_id,
+            parts[offset + 1].clone(),
+            parts[offset + 3].clone(),
+        ))
     } else {
         None
     }
 }
 
-fn chapter_meta_parts(path: &Path) -> Option<(String, String)> {
+fn chapter_meta_parts(path: &Path) -> Option<(Option<String>, String, String)> {
     let parts: Vec<String> = path
         .components()
         .map(|component| component.as_os_str().to_string_lossy().into_owned())
         .collect();
-    if parts.len() == 5
-        && parts[0] == "volumes"
-        && parts[2] == "chapters"
-        && parts[4] == "chapter.meta.json"
+    let (offset, project_id) = if parts.len() == 7 && parts[0] == "projects" {
+        (2, Some(parts[1].clone()))
+    } else if parts.len() == 5 && parts[0] == "volumes" {
+        (0, None)
+    } else {
+        return None;
+    };
+    if parts[offset] == "volumes"
+        && parts[offset + 2] == "chapters"
+        && parts[offset + 4] == "chapter.meta.json"
     {
-        Some((parts[1].clone(), parts[3].clone()))
+        Some((
+            project_id,
+            parts[offset + 1].clone(),
+            parts[offset + 3].clone(),
+        ))
     } else {
         None
     }
@@ -68,11 +88,13 @@ pub(crate) fn plan_synced_chapter_mutations(
     project_id: &str,
     actions: &[CommitAction],
 ) -> crate::error::Result<Vec<SyncedChapterChange>> {
-    let mut grouped: BTreeMap<(String, String), SyncedChapterChange> = BTreeMap::new();
+    let mut grouped: BTreeMap<(String, String, String), SyncedChapterChange> = BTreeMap::new();
     for (action_index, action) in actions.iter().enumerate() {
         match action {
             CommitAction::Apply { rel_path, content } => {
-                if let Some((volume_id, chapter_id)) = chapter_body_parts(rel_path) {
+                if let Some((project_override, volume_id, chapter_id)) =
+                    chapter_body_parts(rel_path)
+                {
                     let content = std::str::from_utf8(content)
                         .map_err(|error| {
                             crate::error::Error::Other(format!(
@@ -82,10 +104,16 @@ pub(crate) fn plan_synced_chapter_mutations(
                         })?
                         .to_string();
                     let entry = grouped
-                        .entry((volume_id.clone(), chapter_id.clone()))
+                        .entry((
+                            project_override
+                                .clone()
+                                .unwrap_or_else(|| project_id.to_string()),
+                            volume_id.clone(),
+                            chapter_id.clone(),
+                        ))
                         .or_insert_with(|| SyncedChapterChange {
                             key: ChapterKey::new(
-                                project_id.to_string(),
+                                project_override.unwrap_or_else(|| project_id.to_string()),
                                 volume_id.clone(),
                                 chapter_id.clone(),
                             ),
@@ -96,7 +124,9 @@ pub(crate) fn plan_synced_chapter_mutations(
                         });
                     entry.body = Some(content);
                     entry.mutation = SyncedChapterMutation::Replace;
-                } else if let Some((volume_id, chapter_id)) = chapter_meta_parts(rel_path) {
+                } else if let Some((project_override, volume_id, chapter_id)) =
+                    chapter_meta_parts(rel_path)
+                {
                     let meta = serde_json::from_slice::<Chapter>(content).map_err(|error| {
                         crate::error::Error::Other(format!(
                             "sync chapter meta is invalid {}: {error}",
@@ -104,10 +134,16 @@ pub(crate) fn plan_synced_chapter_mutations(
                         ))
                     })?;
                     let entry = grouped
-                        .entry((volume_id.clone(), chapter_id.clone()))
+                        .entry((
+                            project_override
+                                .clone()
+                                .unwrap_or_else(|| project_id.to_string()),
+                            volume_id.clone(),
+                            chapter_id.clone(),
+                        ))
                         .or_insert_with(|| SyncedChapterChange {
                             key: ChapterKey::new(
-                                project_id.to_string(),
+                                project_override.unwrap_or_else(|| project_id.to_string()),
                                 volume_id.clone(),
                                 chapter_id.clone(),
                             ),
@@ -120,12 +156,20 @@ pub(crate) fn plan_synced_chapter_mutations(
                 }
             }
             CommitAction::Delete { rel_path } => {
-                if let Some((volume_id, chapter_id)) = chapter_body_parts(rel_path) {
+                if let Some((project_override, volume_id, chapter_id)) =
+                    chapter_body_parts(rel_path)
+                {
                     let entry = grouped
-                        .entry((volume_id.clone(), chapter_id.clone()))
+                        .entry((
+                            project_override
+                                .clone()
+                                .unwrap_or_else(|| project_id.to_string()),
+                            volume_id.clone(),
+                            chapter_id.clone(),
+                        ))
                         .or_insert_with(|| SyncedChapterChange {
                             key: ChapterKey::new(
-                                project_id.to_string(),
+                                project_override.unwrap_or_else(|| project_id.to_string()),
                                 volume_id.clone(),
                                 chapter_id.clone(),
                             ),
@@ -135,12 +179,20 @@ pub(crate) fn plan_synced_chapter_mutations(
                             action_index,
                         });
                     entry.mutation = SyncedChapterMutation::Delete;
-                } else if let Some((volume_id, chapter_id)) = chapter_meta_parts(rel_path) {
+                } else if let Some((project_override, volume_id, chapter_id)) =
+                    chapter_meta_parts(rel_path)
+                {
                     let entry = grouped
-                        .entry((volume_id.clone(), chapter_id.clone()))
+                        .entry((
+                            project_override
+                                .clone()
+                                .unwrap_or_else(|| project_id.to_string()),
+                            volume_id.clone(),
+                            chapter_id.clone(),
+                        ))
                         .or_insert_with(|| SyncedChapterChange {
                             key: ChapterKey::new(
-                                project_id.to_string(),
+                                project_override.unwrap_or_else(|| project_id.to_string()),
                                 volume_id.clone(),
                                 chapter_id.clone(),
                             ),

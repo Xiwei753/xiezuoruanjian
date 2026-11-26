@@ -1672,20 +1672,22 @@ mod starmap_tail_tests {
             .unwrap();
         for position in positions {
             let event = serde_json::json!({
-                "eventId": format!("event-{position}"),
-                "originDeviceId": "device1",
-                "occurredAtMs": position,
-                "projectId": "",
-                "objectType": "starmap_node",
-                "objectId": format!("node-{position}"),
-                "containerId": "sm1",
+                // ContributionEvent 外层是 snake_case（无 rename_all），
+                // 只有 replay_delta 内部是 camelCase（StarMapProofDelta）。
+                "event_id": format!("event-{position}"),
+                "origin_device_id": "device1",
+                "occurred_at_ms": position,
+                "project_id": "",
+                "object_type": "star_map_node",
+                "object_id": format!("node-{position}"),
+                "container_id": "sm1",
                 "operation": "create",
                 "actor": "human",
                 "entrypoint": "ui",
-                "transactionId": format!("transaction-{position}"),
-                "replayDelta": {
+                "transaction_id": format!("transaction-{position}"),
+                "replay_delta": {
                     "starmapId": "sm1",
-                    "objectType": "starmap_node",
+                    "objectType": "star_map_node",
                     "objectId": format!("node-{position}"),
                     "operation": "create",
                     "branchPosition": position

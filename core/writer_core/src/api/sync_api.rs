@@ -2653,15 +2653,45 @@ impl WriterCoreApi {
                     // 章节 A→B→A→B 不会被内容 hash 误去重。事件 ID 固定后重发复用。
                     let sync_event_id =
                         format!("sync:{}:{}:{}", run.run_id(), path.display(), action_index);
-                    let intent = match intent_sink.load(&sync_event_id) {
-                        Ok(Some(intent)) => intent,
+                    // Issue #1062 1.4：已提交正文不能因为旧 SyncProofIntent 不存在
+                    // 而判同步失败。意图只是“设备/发生时间”的持久化载体；缺失时用
+                    // 本次提交的真实 before/after、固定 event ID 和当前时间补记，
+                    // 证明链仍按真实正文接续。
+                    let (source_device, occurred_at_ms) = match intent_sink.load(&sync_event_id) {
+                        Ok(Some(intent)) => {
+                            let expected_action = if committed.deleted {
+                                crate::sync::proof_intent::SyncProofAction::Delete
+                            } else {
+                                crate::sync::proof_intent::SyncProofAction::Apply
+                            };
+                            if intent.event_id != sync_event_id
+                                || intent.action_index != action_index
+                                || intent.workspace_path != path.display().to_string()
+                                || intent.action != expected_action
+                                || intent.is_delete() != committed.deleted
+                                || intent.project_id != project_id
+                                || intent.volume_id != volume_id
+                                || intent.chapter_id != chapter_id
+                                || intent.occurred_at_ms <= 0
+                                || intent.before_text.as_deref() != before_text.as_deref()
+                                || intent.after_text.as_deref() != after_text.as_deref()
+                            {
+                                proof_errors.push(format!(
+                                    "同步证明意图与本次提交不匹配，已保留待恢复: {}",
+                                    sync_event_id
+                                ));
+                                continue;
+                            }
+                            (intent.source_device_id, intent.occurred_at_ms)
+                        }
                         Ok(None) => {
-                            proof_errors.push(format!(
-                                "同步证明意图缺失，已保留待恢复: {} {}",
-                                sync_event_id,
-                                path.display()
-                            ));
-                            continue;
+                            // 缺意图不再阻塞：device 交给 Core 的稳定身份，
+                            // 时间取本次同步提交的真实时刻。
+                            log::warn!(
+                                "sync proof intent missing for committed chapter, \
+                                 recording fact without intent: {sync_event_id}"
+                            );
+                            (String::new(), chrono::Utc::now().timestamp_millis())
                         }
                         Err(error) => {
                             proof_errors.push(format!(
@@ -2671,39 +2701,14 @@ impl WriterCoreApi {
                             continue;
                         }
                     };
-                    let expected_action = if committed.deleted {
-                        crate::sync::proof_intent::SyncProofAction::Delete
-                    } else {
-                        crate::sync::proof_intent::SyncProofAction::Apply
-                    };
-                    if intent.event_id != sync_event_id
-                        || intent.action_index != action_index
-                        || intent.workspace_path != path.display().to_string()
-                        || intent.action != expected_action
-                        || intent.is_delete() != committed.deleted
-                        || intent.project_id != project_id
-                        || intent.volume_id != volume_id
-                        || intent.chapter_id != chapter_id
-                        || intent.occurred_at_ms <= 0
-                        || intent.before_text.as_deref() != before_text.as_deref()
-                        || intent.after_text.as_deref() != after_text.as_deref()
-                    {
-                        proof_errors.push(format!(
-                            "同步证明意图与本次提交不匹配，已保留待恢复: {}",
-                            sync_event_id
-                        ));
-                        continue;
-                    }
-                    let occurred_at_ms = intent.occurred_at_ms;
-                    let source_device = intent.source_device_id.as_str();
                     match core.record_sync_content_change_at(
                         &project_id,
                         &volume_id,
                         &chapter_id,
-                        intent.before_text.as_deref(),
-                        intent.after_text.as_deref(),
+                        before_text.as_deref(),
+                        after_text.as_deref(),
                         &sync_event_id,
-                        source_device,
+                        source_device.as_str(),
                         "",
                         occurred_at_ms,
                     ) {
@@ -2726,9 +2731,22 @@ impl WriterCoreApi {
                 }
                 core.refresh_sync_proof_intents_pending();
                 if !chapter_commit_receipts.is_empty() {
-                    // 正文已落盘；立即尝试按 journal 顺序结算证明事实。投影失败
-                    // 只保留 journal pending，不影响正文提交，也不反馈成证明缺失。
-                    core.retry_pending_chapter_proof_projections(run.target_live_root());
+                    // 正文已落盘；立即按回执所属 project root 结算 journal 证明。
+                    // app target 的 live_root 是 projects 的父目录，不能拿它当
+                    // 项目根扫描 journal。投影失败只保留 pending，不影响正文提交。
+                    let target_root = std::path::Path::new(run.target_live_root());
+                    let mut project_roots = std::collections::HashSet::new();
+                    for receipt in &chapter_commit_receipts {
+                        let project_root = if target_root.join("projects").is_dir() {
+                            target_root.join("projects").join(&receipt.key.project_id)
+                        } else {
+                            target_root.to_path_buf()
+                        };
+                        project_roots.insert(project_root);
+                    }
+                    for project_root in project_roots {
+                        core.retry_pending_chapter_proof_projections(&project_root);
+                    }
                 }
                 if !proof_errors.is_empty() {
                     let detail = proof_errors.join("; ");

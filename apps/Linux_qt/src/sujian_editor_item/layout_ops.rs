@@ -387,86 +387,25 @@ impl SujianEditorItem {
         };
         let text_color = self.current_text_color.to_string();
 
-        // Issue #901 第十八轮: 将全章物化改为只物化受影响段落 + 视口段落的行。
-        //
-        // 旧实现（第十四轮问题1）调用 resolved_visual_lines() 物化整章所有视觉行，
-        // 然后在物化后的行上用 partition_point 定位 affected range 和视口行范围。
-        // 对于大文档（数千行），每帧 O(整章) 物化是性能瓶颈。
-        //
-        // 新实现：
-        // 1. 用 paragraph_offset_index.byte_to_paragraph() 定位 affected range 的段落范围
-        // 2. 用 height_index.paragraphs_in_y_range() 定位视口段落范围
-        // 3. 合并段落范围，用 cache_slot 在未物化的 visual_lines 上二分查找行索引范围
-        // 4. 只物化这些行（resolve_visual_line_range）
-        // 5. 在物化后的子集上做 partition_point 定位 affected range 行和视口行
-        // 当 paragraph_offset_index 或 height_index 为空时，退化到全章物化逻辑。
+        // Issue #901 第十八轮问题1: 只物化视口内行（含预取边距）∪ 本次编辑受影响
+        // 段落的行，避免对长篇文档物化整章所有视觉行。
+        // Issue #1062 三.2：物化范围收口到 canonical snapshot 的单一入口
+        // `resolve_viewport_and_affected_visual_lines`，与
+        // `LineSnapshotBuilder` 的段落裁剪口径保持一致，保证快照里保留下来的行
+        // 都能在动画事实源中按身份定位；不再在本函数里维护第二套范围计算。
+        // 该入口无高度索引时才退化为全章物化（首帧/参数失效后的边界情况）。
         let (affected_start, affected_end) = affected_range.unwrap_or((0, 0));
 
         let max_line_h = doc_snapshot.font_size * doc_snapshot.line_spacing * 2.0 + 8.0;
         let vp_top = scroll_y - max_line_h;
         let vp_bottom = scroll_y + viewport_h + max_line_h;
 
-        // 计算需要物化的段落范围 [para_start, para_end)。
-        // 合并 affected range 段落范围和视口段落范围的并集。
-        let has_indices = !doc_snapshot.paragraph_offset_index.is_empty()
-            && !doc_snapshot.height_index.is_empty();
-
-        let resolved: std::borrow::Cow<'_, [VisualLine]> = if has_indices {
-            // 定位 affected range 的段落范围。
-            let (aff_para_start, aff_para_end) = if affected_start < affected_end {
-                let p_start = doc_snapshot
-                    .paragraph_offset_index
-                    .byte_to_paragraph(affected_start);
-                let p_end = doc_snapshot
-                    .paragraph_offset_index
-                    .byte_to_paragraph(affected_end.saturating_sub(1));
-                (p_start, p_end + 1)
-            } else {
-                (0, 0)
-            };
-
-            // 定位视口段落范围。
-            let (vp_para_start, vp_para_end) = doc_snapshot
-                .height_index
-                .paragraphs_in_y_range(vp_top, vp_bottom);
-
-            // 合并段落范围并集。
-            let para_start = if aff_para_start < aff_para_end {
-                aff_para_start.min(vp_para_start)
-            } else {
-                vp_para_start
-            };
-            let para_end = if aff_para_start < aff_para_end {
-                aff_para_end.max(vp_para_end)
-            } else {
-                vp_para_end
-            };
-
-            if para_start < para_end {
-                // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 索引查行范围，
-                // 替换 raw partition_point(logical_slot)。
-                // 插段后复用后缀行的 raw logical_slot 没有更新，二分查找找错；
-                // paragraph_id_to_line_range 按 visual_lines 实际行顺序构建，
-                // 索引为空时退化为 partition_point(logical_slot)。
-                let (line_start_idx, line_end_idx) =
-                    doc_snapshot.paragraph_visual_line_range(para_start, para_end);
-
-                if line_start_idx < line_end_idx {
-                    // 只物化需要的行，不物化整章。
-                    let materialized =
-                        doc_snapshot.resolve_visual_line_range(line_start_idx, line_end_idx);
-                    std::borrow::Cow::Owned(materialized)
-                } else {
-                    doc_snapshot.resolved_visual_lines()
-                }
-            } else {
-                doc_snapshot.resolved_visual_lines()
-            }
-        } else {
-            // paragraph_offset_index 或 height_index 为空，退化到全章物化。
-            doc_snapshot.resolved_visual_lines()
-        };
-        let resolved_lines = resolved.as_ref();
+        let resolved = doc_snapshot.resolve_viewport_and_affected_visual_lines(
+            scroll_y,
+            viewport_h,
+            affected_range,
+        );
+        let resolved_lines = resolved.as_slice();
 
         // 合并 affected range 行索引和视口内可见行索引。
         use std::collections::HashSet;
@@ -502,6 +441,15 @@ impl SujianEditorItem {
         let mut affected_line_indices: Vec<usize> = line_indices_set.into_iter().collect();
         affected_line_indices.sort_unstable();
 
+        // 本版快照行索引：行 byte 范围在本版内唯一，用它把物化行映射回
+        // `PreparedLineSnapshot`。复用上一版行图与栅格化缺图行都用这一份索引，
+        // 避免每行再线性扫描 `line_snapshots`。
+        let mut snapshot_index_by_range: std::collections::HashMap<(usize, usize), usize> =
+            std::collections::HashMap::with_capacity(snapshot.line_snapshots.len());
+        for (index, line) in snapshot.line_snapshots.iter().enumerate() {
+            snapshot_index_by_range.insert((line.byte_start, line.byte_end), index);
+        }
+
         // Issue #1061 第 6 项：渲染参数指纹一致时，复用上一版快照里已栅格化的行图，
         // 只对剩余行重新栅格化，避免每笔编辑无条件重画整屏行图。
         //
@@ -533,15 +481,6 @@ impl SujianEditorItem {
                     }
                 }
                 if !previous_images.is_empty() {
-                    // 本版快照的行按 byte 范围定位（行不重叠，范围唯一）。
-                    let mut snapshot_index_by_range: std::collections::HashMap<
-                        (usize, usize),
-                        usize,
-                    > = std::collections::HashMap::with_capacity(snapshot.line_snapshots.len());
-                    for (index, line) in snapshot.line_snapshots.iter().enumerate() {
-                        snapshot_index_by_range.insert((line.byte_start, line.byte_end), index);
-                    }
-
                     let mut reused_indices: Vec<usize> = Vec::new();
                     for &line_index in &affected_line_indices {
                         let Some(line) = resolved_lines.get(line_index) else {
@@ -606,38 +545,53 @@ impl SujianEditorItem {
         };
 
         if !affected_line_indices.is_empty() {
-            let anim_visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
-                &source_handle,
-                &affected_line_indices,
-                dpr,
-                &text_color,
-            );
-
-            // 构建 (paragraph_slot, qtextline_idx) → byte_start 映射，用于匹配 PreparedLineSnapshot。
-            // Issue #901 第十七轮问题3: 用 cache_slot（段落编号）作 key，
-            // 与 AnimationRasterVisual.paragraph_slot 同语义。
+            // Issue #1062 三.2：同一 snapshot 内每行只栅格化一次。
+            // 已有 `image` 的行（上一版复用或 canonical 共享）直接复用已有
+            // `LineImage`，不再重复 materialize；空行没有可绘制字形也跳过。
             use std::collections::HashMap;
-            let mut para_qtextline_to_byte_start: HashMap<(usize, i32), usize> =
+            let mut raster_snapshot_index: HashMap<(i32, i32), usize> =
                 HashMap::with_capacity(affected_line_indices.len());
-            for &idx in &affected_line_indices {
-                let vl = &resolved_lines[idx];
-                para_qtextline_to_byte_start
-                    .insert((vl.cache_slot as usize, vl.qtextline_idx), vl.byte_start);
+            let mut raster_line_indices: Vec<usize> = Vec::new();
+            for &line_index in &affected_line_indices {
+                let Some(line) = resolved_lines.get(line_index) else {
+                    continue;
+                };
+                let Some(&snapshot_index) =
+                    snapshot_index_by_range.get(&(line.byte_start, line.byte_end))
+                else {
+                    continue;
+                };
+                let target = &snapshot.line_snapshots[snapshot_index];
+                if target.image.is_some() || target.clusters.is_empty() {
+                    continue;
+                }
+                // `AnimationRasterVisual.paragraph_slot` 是 logical_slot（文档次序），
+                // 与 `VisualLine.logical_slot` 同源；不能用物理 cache_slot 匹配。
+                raster_snapshot_index
+                    .insert((line.logical_slot, line.qtextline_idx), snapshot_index);
+                raster_line_indices.push(line_index);
             }
 
-            // 把 QImage 填充到对应的 PreparedLineSnapshot。
-            for anim_line in anim_visuals {
-                if let Some(image) = anim_line.image {
-                    if let Some(&byte_start) = para_qtextline_to_byte_start
-                        .get(&(anim_line.paragraph_slot, anim_line.qtextline_idx))
-                    {
-                        if let Some(prep_line) = snapshot
-                            .line_snapshots
-                            .iter_mut()
-                            .find(|pl| pl.byte_start == byte_start)
-                        {
-                            prep_line.image = Some(image);
-                        }
+            if !raster_line_indices.is_empty() {
+                let anim_visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
+                    &source_handle,
+                    &raster_line_indices,
+                    dpr,
+                    &text_color,
+                );
+                for anim_line in anim_visuals {
+                    let Some(image) = anim_line.image else {
+                        continue;
+                    };
+                    let Some(&snapshot_index) = raster_snapshot_index
+                        .get(&(anim_line.paragraph_slot as i32, anim_line.qtextline_idx))
+                    else {
+                        continue;
+                    };
+                    let target = &mut snapshot.line_snapshots[snapshot_index];
+                    // 已有共享图不覆盖：同一 snapshot 内一行只有一个图像所有者。
+                    if target.image.is_none() {
+                        target.image = Some(image);
                     }
                 }
             }
@@ -819,16 +773,16 @@ impl SujianEditorItem {
             &paragraph_ids,
         );
 
-        // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
-        // TODO(issue-901): 后续优化为按需查询 — 此处需遍历物化行做 diff 比较
-        // 和 composition range 覆盖检查，难以简单改为按需物化。
-        //
-        // Issue #901 第二十一轮问题5: 本轮复核确认保留。此处 resolved_visual_lines
-        // 用于 IME composition 的 old/new visual line diff 比较和 animation visual 提取，
-        // 需要完整的物化行列表做逐行比较。改为按需物化需要重构 diff 算法，
-        // 正确性风险高，保留标注。此路径仅在 IME composition 时触发，非每笔普通输入热路径。
-        let resolved = doc_snapshot.resolved_visual_lines();
-        let resolved_lines = resolved.as_ref();
+        // Issue #1062 三.2：只物化「视口（含预取边距）∪ 受影响段落」的行，
+        // 不再对整章调用 `resolved_visual_lines()`。`LineSnapshotBuilder` 用同一
+        // 范围构建快照，因此快照里保留的每一行都能在本事实源中按稳定身份定位；
+        // 视口外的普通行不会进入物化集合，也不会产生 QImage。
+        let resolved = doc_snapshot.resolve_viewport_and_affected_visual_lines(
+            scroll_y,
+            viewport_h,
+            composition_range,
+        );
+        let resolved_lines = resolved.as_slice();
 
         // Issue #904 评论 5: 本版布局事实源（generation + 物化视觉行）。
         //
@@ -851,28 +805,41 @@ impl SujianEditorItem {
         };
 
         // Issue #658 评论 5625515748 问题 3: 从已有 prepared layout 提取受影响行的动画视觉
-        // （QImage/glyph/cluster）并注入到 doc_snapshot，使 LineSnapshotBuilder 能消费。
-        // 只有 composition_range 非空时才提取（None 表示全篇 fallback 语义，scoped 排版
+        // 并注入到 doc_snapshot，使 LineSnapshotBuilder 能消费。
+        // 只有 composition_range 非空时才提取（None 表示无受影响范围，scoped 排版
         // 已对全篇 generate_animation_visuals=false，无动画视觉需提取）。
         // Issue #904 清理: 不再按旧 reflow diff 挑行，也不再合并 active rebind ranges。
         // IME commit 的纹理提取只取"包含 Core 受影响字节范围的段落所覆盖的行"，
         // 与普通输入的 `build_incremental_animation_snapshot` 同一范围语义；下游纯 y
         // 位移段落由 `TextMotion.paragraph_moves` 处理。
+        //
+        // Issue #1062 三.2：`prepare_document_visual_snapshot_scoped` 已在排版时
+        // 为受影响段落生成 `LineImage`，这里只为本版 canonical 仍缺图的行补栅格。
+        // 已有图的行直接由快照 Arc 共享，绝不重复 materialize 同一行；
+        // `inject_animation_visuals_into_snapshot` 也只填空位、不覆盖已有图。
         if affected_start < affected_end {
-            // Issue #904 清理: 不再用旧 reflow diff（`compare_old_new_visual_lines` /
-            // `reusable_move_pairs`），直接按受影响字节范围过滤 resolved 行。
             let line_ids: Vec<usize> = resolved_lines
                 .iter()
                 .enumerate()
-                .filter(|(_, l)| l.byte_start < affected_end && l.byte_end > affected_start)
+                .filter(|(_, l)| {
+                    !l.para_text.is_empty()
+                        && l.byte_start < affected_end
+                        && l.byte_end > affected_start
+                })
+                .filter(|(_, l)| {
+                    let slot = l.logical_slot.max(0) as usize;
+                    doc_snapshot
+                        .paragraphs
+                        .get(slot)
+                        .and_then(|para| para.lines.get(l.qtextline_idx as usize))
+                        .map_or(true, |canonical_line| canonical_line.image.is_none())
+                })
                 .map(|(i, _)| i)
                 .collect();
             if !line_ids.is_empty() {
-                // Issue #810 评论 5932233052 问题1: cluster 已由基础 canonical 排版直接产出
-                //（prepare_document_visual_snapshot_scoped 现在始终产出 cluster）。
-                // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
-                // QImage/纹理（返回 AnimationRasterVisual，不携带 cluster），
-                // 不再为动画单独补 cluster。inject 只注入 image，不覆盖已有 cluster。
+                // Issue #810 评论 5932233052 问题1: cluster 已由基础 canonical 排版直接产出。
+                // 此处 prepare_animation_visuals_from_layout 只提取可延迟的 QImage/纹理
+                //（返回 AnimationRasterVisual，不携带 cluster），不覆盖已有 cluster。
                 // Issue #904 评论 5: 复用本版布局事实源的 handle，不再另建一份。
                 let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
                     &source_handle,

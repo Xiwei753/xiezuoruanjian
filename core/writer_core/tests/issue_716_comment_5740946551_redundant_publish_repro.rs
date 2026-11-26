@@ -29,9 +29,9 @@
 //! 2. 远端 visible generation（`gen_existing`）为空；本地 staging 有 chapter.md，
 //!    post-transfer LWW = `(T, device_local)`，`"device_local" < "device_remote"`。
 //! 3. 调用 `run_transfer` 触发 `transfer_live_project`。
-//! 4. 断言：`publish_count == 1`（有文件级变化必须 publish，且不重复），新 generation
-//!    含 chapter.md，catalog `active_generation` 推进、作品级 LWW 仍为远端赢家，
-//!    返回 `LatestWinsApplied`。
+//! 4. 断言：有文件级变化必须发布一次（且不重复），稳定树 `projects/p1` 含 chapter.md，
+//!    catalog 的 legacy `active_generation` 保持 `None`、作品级 LWW 仍为远端赢家，
+//!    返回 `Success`（单侧上传不是 LWW 自动裁决，见 Issue #1018）。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -172,7 +172,9 @@ fn repro_issue_716_comment_5740946551_redundant_publish() {
     upsert_record(&mut catalog, remote_record);
     let snapshot = RemoteTargetCatalogSnapshot {
         catalog,
-        version: RemoteVersion::new("v1"),
+        // 首次写入远端 catalog 必须用「不存在」哨兵，否则 CAS IfMatch 会 409；
+        // 与 load_remote_catalog 对空远端返回的 version 一致。
+        version: RemoteVersion::new("__nonexistent__"),
     };
     write_remote_catalog(&provider, &snapshot).unwrap();
 
@@ -285,13 +287,11 @@ fn repro_issue_716_comment_5740946551_redundant_publish() {
     );
 
     // 返回的 SyncResult：本地增量已应用（非 NoChanges——chapter.md 已上传）。
+    // Issue #1018：单侧上传不是 LWW 自动裁决，终态是 Success，不是 LatestWinsApplied。
     let result = &transfer.targets[0].result;
     assert!(
-        matches!(
-            result.status,
-            writer_core::sync::SyncStatus::LatestWinsApplied
-        ),
-        "返回状态应为 LatestWinsApplied（本地增量已上传），实际 {:?}",
+        matches!(result.status, writer_core::sync::SyncStatus::Success),
+        "返回状态应为 Success（本地增量已上传），实际 {:?}",
         result.status
     );
     assert!(

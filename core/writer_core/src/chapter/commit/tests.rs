@@ -142,6 +142,9 @@ fn recovery_applies_decided_body_but_never_overwrites_newer_content() {
         meta_title: None,
         meta_order: None,
         created: false,
+        deleted: false,
+        app_data_root: None,
+        trash_path: None,
         superseded_reason: None,
     };
     write_manifest(&tx_dir, &manifest).unwrap();

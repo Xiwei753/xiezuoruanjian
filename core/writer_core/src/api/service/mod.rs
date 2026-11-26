@@ -16,6 +16,8 @@ mod contribution_ops;
 mod correction_ops;
 mod mcp_ops;
 
+pub(crate) use annotation_ops::PreparedAnnotationEditSave;
+
 pub struct WriterCoreApi {
     pub(crate) app_data_root: PathBuf,
     pub(crate) projects_root: PathBuf,
@@ -457,6 +459,8 @@ mod tests {
             new_selection_head: 0,
             sync_source_device_id: String::new(),
             parent_event_id: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
         };
 
         let receipt = api

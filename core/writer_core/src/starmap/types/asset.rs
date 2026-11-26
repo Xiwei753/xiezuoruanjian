@@ -25,7 +25,12 @@ pub enum StarMapAssetKind {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StarMapAssetScope {
     Global,
-    Project { project_id: String },
+    Project {
+        // `rename_all` 只作用于变体名，变体字段必须显式 camelCase；否则
+        // 写出 `projectId`、读回却要求 `project_id`，往返即失败。
+        #[serde(rename = "projectId")]
+        project_id: String,
+    },
 }
 
 impl StarMapAssetScope {

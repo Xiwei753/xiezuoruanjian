@@ -151,18 +151,31 @@ pub fn save_node_instance(
         .join(format!("{}.json", instance.instance_id)))
 }
 
-/// 兼容入口：画布文件只保存实例，目标本体默认为实例 ID。
+/// 兼容入口：旧端只提交完整 [`StarMapNode`]，这里经统一迁移入口拆成
+/// 共享本体 + 画布实例。
+///
+/// 语义与 Issue #1062 的二.1 一致：
+/// - 稳定 `assetId` 由 [`crate::starmap::migration::nodes::decode_node_object`]
+///   解析（已有实例绑定 → 素材库旧 id → 旧节点 id），不生成随机 ID；
+/// - 素材库缺少本体时写本体，已有同内容本体则复用；
+/// - 画布文件始终写成 [`StarMapNodeInstance`]，不会留下"只有实例没有本体"的数据。
+/// - 身份冲突（同一 asset id 已存在不同共享内容）返回明确错误，不写半成品。
 pub fn save_node(app_data_root: &Path, starmap_id: &str, node: &StarMapNode) -> Result<PathBuf> {
-    let instance = StarMapNodeInstance {
-        instance_id: node.id.clone(),
-        asset_id: node.id.clone(),
-        position: node.position.clone(),
-        starmap_id: starmap_id.to_string(),
-        project_id: None,
-        created_at: node.created_at,
-        updated_at: node.updated_at,
-    };
-    save_node_instance(app_data_root, starmap_id, &instance)
+    let bytes = serde_json::to_vec_pretty(node)?;
+    let plan = crate::starmap::migration::nodes::decode_node_object(
+        app_data_root,
+        starmap_id,
+        &node.id,
+        &bytes,
+        None,
+    )?;
+    crate::starmap::migration::nodes::persist_node_object_plan(
+        app_data_root,
+        starmap_id,
+        &node.id,
+        &plan,
+    )?;
+    Ok(node_rel_path(starmap_id, &node.id))
 }
 
 /// 直接 unlink 的旧删除 API：生产代码不得调用。

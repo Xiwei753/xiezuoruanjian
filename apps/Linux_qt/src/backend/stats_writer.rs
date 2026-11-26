@@ -31,9 +31,60 @@
 // 待补写列表里，用首次入队就固定的 event_id / occurred_at_ms 在同一串行队列中
 // 重放；查询前先补写，仍有失败则回报错误而不是表面成功的快照。
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use writer_core::editor::EditorTransactionCause;
 use writer_core::storage::git_repo_layout::GitRepoLayout;
+
+/// 待补写编辑事实的近似字节数（Issue #1062 3.4：保存/证明队列字节）。
+///
+/// worker 每消费/补写一条命令后重算；UI 线程只读，不参与统计本身。
+static PENDING_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+/// 当前待补写编辑事实的近似占用字节。诊断线程读取，不阻塞 writer。
+pub(crate) fn pending_bytes() -> usize {
+    PENDING_BYTES.load(Ordering::Relaxed)
+}
+
+fn command_bytes(cmd: &StatsWriteCommand) -> usize {
+    match cmd {
+        StatsWriteCommand::Editor {
+            changes_json,
+            baseline_text,
+            session_id,
+            event_id,
+            project_id,
+            volume_id,
+            chapter_id,
+            before_text_sha256,
+            after_text_sha256,
+            ..
+        } => {
+            changes_json.len()
+                + baseline_text.as_ref().map_or(0, String::len)
+                + session_id.len()
+                + event_id.len()
+                + project_id.len()
+                + volume_id.len()
+                + chapter_id.len()
+                + before_text_sha256.len()
+                + after_text_sha256.len()
+        }
+        StatsWriteCommand::ActivitySegment(segment) => {
+            segment.project_id.len()
+                + segment.volume_id.len()
+                + segment.chapter_id.len()
+                + segment.starmap_id.len()
+                + segment.session_id.len()
+                + segment.event_id.len()
+        }
+    }
+}
+
+fn refresh_pending_bytes(pending_records: &[StatsWriteCommand]) {
+    let bytes = pending_records.iter().map(command_bytes).sum();
+    PENDING_BYTES.store(bytes, Ordering::Relaxed);
+}
 
 /// UI 线程构造的写统计命令。只带统计事实，不带 QObject/QML 引用。
 pub(crate) enum StatsWriteCommand {
@@ -200,6 +251,7 @@ fn flush_pending_records(
         }
     }
     *pending_records = still_failed;
+    refresh_pending_bytes(pending_records);
     pending_records.len()
 }
 
@@ -254,6 +306,7 @@ impl StatsWriterHandle {
                         StatsWriterMessage::Record(cmd) => {
                             if try_record_stats(&api, &cmd).is_err() {
                                 pending_records.push(cmd);
+                                refresh_pending_bytes(&pending_records);
                             }
                         }
                         StatsWriterMessage::Barrier(ack) => {
@@ -263,9 +316,7 @@ impl StatsWriterHandle {
                             let result = if remaining == 0 {
                                 Ok(())
                             } else {
-                                Err(format!(
-                                    "stats-writer: {remaining} 条编辑事实尚未写盘成功"
-                                ))
+                                Err(format!("stats-writer: {remaining} 条编辑事实尚未写盘成功"))
                             };
                             let _ = ack.send(result);
                         }

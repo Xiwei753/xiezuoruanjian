@@ -359,6 +359,7 @@ impl CorrectionScanner {
             CorrectionCheckRequest::Range(_, _) => "range",
             CorrectionCheckRequest::All => "all",
         };
+        let restore_only = matches!(request, CorrectionCheckRequest::RestoreOnly);
         let mut metrics = CorrectionScanMetrics::new(
             self.session_id,
             self.text_revision,
@@ -373,7 +374,13 @@ impl CorrectionScanner {
 
         let result = self.check_inner(text, request, &mut metrics);
         if metrics.result == "running" {
-            metrics.result = if result.is_ok() { "success" } else { "error" };
+            // Issue #1062 三.3：restore-only 只读缓存，绝不能记成一次完成的扫描
+            // （`success`），否则诊断会把未扫描的脏区读成已确认。
+            metrics.result = match (restore_only, result.is_ok()) {
+                (true, true) => "restore_only",
+                (_, true) => "success",
+                (_, false) => "error",
+            };
         }
         if let Ok(snapshot) = &result {
             metrics.final_suggestions = snapshot.suggestions.len();
@@ -428,7 +435,7 @@ impl CorrectionScanner {
         if self.is_stale(&guard) {
             metrics.result = "stale";
             metrics.observe_cache(&guard);
-            return self.empty_snapshot();
+            return self.unfinished_snapshot();
         }
         self.prepare_state(&mut guard, text, &request, scanner_fingerprint)?;
         metrics.observe_cache(&guard);
@@ -519,7 +526,7 @@ impl CorrectionScanner {
             metrics.result = "stale";
             metrics.dirty_preserved_segments = dirty.len();
             metrics.aborted_at_window = window_index;
-            return self.empty_snapshot();
+            return self.unfinished_snapshot();
         }
         if let Some(error) = scan_error {
             metrics.dirty_preserved_segments = dirty.len();
@@ -533,7 +540,7 @@ impl CorrectionScanner {
             || guard.needs_reconcile
         {
             metrics.result = "stale";
-            return self.empty_snapshot();
+            return self.unfinished_snapshot();
         }
         // Never label old-engine results with a newer generation: if the
         // model, dictionary, or disabled-rule set changed while the scan ran,
@@ -606,12 +613,12 @@ impl CorrectionScanner {
                 return self.assemble_snapshot(&guard);
             }
             metrics.result = "stale";
-            return self.empty_snapshot();
+            return self.unfinished_snapshot();
         }
         if self.is_stale(&guard) {
             metrics.observe_cache(&guard);
             metrics.result = "stale";
-            return self.empty_snapshot();
+            return self.unfinished_snapshot();
         }
         self.prepare_state(
             &mut guard,
@@ -709,18 +716,22 @@ impl CorrectionScanner {
     ) -> Vec<usize> {
         match request {
             CorrectionCheckRequest::RestoreOnly => Vec::new(),
+            // A segment stays `dirty` until a scan replaces its cached result.
+            // Filtering by `checked.is_none()` would leave a dirty segment with
+            // an older cached value unscanned forever, so pending/edits always
+            // pick up every dirty segment.
             CorrectionCheckRequest::Edits { .. } | CorrectionCheckRequest::Pending => guard
                 .segments
                 .iter()
                 .enumerate()
-                .filter(|(_, segment)| segment.dirty && segment.checked.is_none())
+                .filter(|(_, segment)| segment.dirty)
                 .map(|(index, _)| index)
                 .collect(),
             CorrectionCheckRequest::All => guard
                 .segments
                 .iter()
                 .enumerate()
-                .filter(|(_, segment)| segment.checked.is_none())
+                .filter(|(_, segment)| segment.dirty || segment.checked.is_none())
                 .map(|(index, _)| index)
                 .collect(),
             CorrectionCheckRequest::Range(range_start, range_end) => guard
@@ -839,12 +850,18 @@ impl CorrectionScanner {
         })
     }
 
-    fn empty_snapshot(&self) -> Result<CorrectionChapterSnapshotDto, WriterError> {
+    /// Snapshot for a request that could not verify the current revision
+    /// (stale scanner, scan aborted at a window boundary, or a restore that
+    /// raced a newer scan). It carries no suggestions, but it must never claim
+    /// the revision is fully checked: the dirty regions are still pending, and
+    /// `has_unchecked_segments` is what tells the editor to request the model
+    /// scan again (issue #1062 三.3).
+    fn unfinished_snapshot(&self) -> Result<CorrectionChapterSnapshotDto, WriterError> {
         Ok(CorrectionChapterSnapshotDto {
             text_revision: self.text_revision,
             suggestions: Vec::new(),
             checked_ranges: Vec::new(),
-            has_unchecked_segments: false,
+            has_unchecked_segments: true,
         })
     }
 }
@@ -868,5 +885,38 @@ mod tests {
             absolute_suggestion_range(100, &suggestion).expect("range"),
             (103, 108)
         );
+    }
+
+    /// Issue #1062 三.3：restore-only 只回放缓存，任何一次都不能把该 revision
+    /// 报告成“已扫描”。未检查的段必须继续以 `has_unchecked_segments` 暴露，
+    /// 否则编辑器会把恢复显示当成一次完成的扫描。
+    #[test]
+    fn restore_only_snapshot_never_claims_the_revision_is_checked() {
+        let root = std::env::temp_dir().join(format!(
+            "sujian-correction-restore-only-{}",
+            std::process::id()
+        ));
+        let store = CorrectionStore::open(&root).expect("correction store");
+        let text = "第一句。第二句。第三句。";
+        for _ in 0..2 {
+            let scanner = CorrectionScanner::restore_only(
+                store.clone(),
+                "project".to_string(),
+                "chapter".to_string(),
+                7,
+                11,
+            )
+            .expect("restore-only scanner");
+            let snapshot = scanner.chapter_snapshot(text).expect("restore snapshot");
+            assert_eq!(snapshot.text_revision, 11);
+            assert!(
+                snapshot.suggestions.is_empty() && snapshot.checked_ranges.is_empty(),
+                "restore-only must never present cached results as a scan"
+            );
+            assert!(
+                snapshot.has_unchecked_segments,
+                "restore-only must keep the revision pending instead of confirming a scan"
+            );
+        }
     }
 }

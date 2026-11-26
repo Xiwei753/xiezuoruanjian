@@ -176,13 +176,16 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        // 同 rename：guard 不能留在实参临时值里，否则后续记录路径一旦再取
+        // core 写锁就是同线程自锁。
+        let after_meta = self.core_write().get_starmap(&starmap_id).ok();
         self.record_starmap_meta_with_context(
             &crate::writing_stats::current_mutation_context(),
             project_id.as_deref(),
             &starmap_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            self.core_write().get_starmap(&starmap_id).ok().as_ref(),
+            after_meta.as_ref(),
             crate::starmap::load_index(&self.app_data_root)
                 .ok()
                 .map(|index| index.root_starmap_ids),
@@ -1696,13 +1699,17 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        // after 快照先落到局部变量再传引用：直接写在实参里会让 `core_write()`
+        // 的 guard 活到整条调用语句结束，而贡献记录内部还会再取一次 core 写锁
+        // （starmap_meta_replay_baseline），同一线程自锁。
+        let after_meta = self.core_write().get_starmap(starmap_id).ok();
         self.record_starmap_meta_with_context(
             &crate::writing_stats::current_mutation_context(),
             project_id.as_deref(),
             starmap_id,
             crate::writing_stats::ContributionOperation::Update,
             before_meta.as_ref(),
-            self.core_write().get_starmap(starmap_id).ok().as_ref(),
+            after_meta.as_ref(),
             None,
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;

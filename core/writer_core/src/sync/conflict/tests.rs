@@ -144,14 +144,16 @@ fn test_restore_starmap_link_membership() {
     let root = tmp.path();
     write_graph(root, "sm_1", &make_graph_json("sm_1"));
 
+    // 新契约（Issue #1060）：链接不是星图包内对象，唯一事实在 annotations
+    // 仓库；同步冲突恢复不会再向 graph.json 的派生成员表 link_ids 添加链接。
     let path = "starmaps/sm_1/links/00/link_001.json";
     let content = make_object_bytes("link", "link_001");
     SyncService::restore_starmap_object_membership(root, path, &content).unwrap();
 
     let graph = read_graph(root, "sm_1");
     assert!(
-        graph.link_ids.iter().any(|x| x == "link_001"),
-        "link_001 should be in link_ids after restore"
+        graph.link_ids.is_empty(),
+        "links are not package objects: restore must not derive link_ids membership"
     );
 }
 

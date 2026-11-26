@@ -61,17 +61,16 @@ fn test_transaction_recovery_staging_exists() {
     let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
     fs::write(tx_dir.join(MANIFEST_FILENAME), &manifest_json).unwrap();
 
+    // 新契约：`add_file` 已把内容原子写入事务目录的 staging 文件，恢复时按
+    // `expected_after_hash` 校验 staging 完整性；这里不能再拿不存在的目标文件
+    // 覆盖 staging（会写入空内容导致校验失败）。
     for entry in &tx.entries {
         let staging_path = tx_dir.join(&entry.staging_filename);
-        let target_path = ws.join(&entry.target_relative);
-        if let Some(parent) = target_path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(
-            &staging_path,
-            fs::read_to_string(target_path).unwrap_or_default(),
-        )
-        .unwrap();
+        assert!(
+            staging_path.is_file(),
+            "add_file must stage content before commit: {}",
+            staging_path.display()
+        );
     }
 
     let recovered = recover_pending_transactions(ws);
@@ -96,6 +95,7 @@ fn test_transaction_recovery_staging_lost() {
             target_relative: "projects/p1/volumes/v1/chapters/c1/chapter.md".to_string(),
             is_delete: false,
             expected_after_hash: None,
+            expected_before_hash: None,
         }],
         phase: TransactionPhase::Prepared,
         backup_entries: Vec::new(),

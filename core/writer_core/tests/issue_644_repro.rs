@@ -40,6 +40,28 @@ fn write_rel(root: &Path, rel: &str, content: &str) {
     fs::write(path, content).unwrap();
 }
 
+/// 构造最小合法 `manifest.sync.json`（强类型 [`SyncManifest`] JSON）。
+///
+/// `manifest.sync.json` 现在是强类型 JSON，`compute_commit_plan` 会解析
+/// base / live / staging 三份 manifest；fixture 不能再写任意字符串
+/// （否则 `manifest_read_failed: manifest parse error`）。
+fn manifest_json(paths: &[&str]) -> String {
+    use writer_core::sync::types::{ManifestFileRecord, SyncManifest};
+    let files = paths
+        .iter()
+        .map(|path| ManifestFileRecord {
+            path: (*path).to_string(),
+            content_hash: "fixture-hash".to_string(),
+            updated_at_ms: 1,
+            deleted_at_ms: None,
+            device_id: "fixture-device".to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        })
+        .collect();
+    serde_json::to_string(&SyncManifest { files }).unwrap()
+}
+
 /// 判断 commit plan 的 `content_actions` 或 `engine_state_actions` 里是否包含
 /// 给定 `rel_path` 的 `Apply` 动作。
 fn plan_applies_contains(plan: &writer_core::sync::staging::CommitPlan, rel: &str) -> bool {
@@ -117,8 +139,8 @@ fn repro_issue644_p1_app_meta_engine_state_expected_to_be_committed() {
     let manifest = "app-meta/sync/manifest.sync.json";
     let state = "app-meta/sync/state.local.json";
 
-    // live = base（同步前）
-    write_rel(&live, manifest, "base-manifest");
+    // live = base（同步前）。manifest 必须是合法强类型 JSON。
+    write_rel(&live, manifest, &manifest_json(&[]));
     write_rel(&live, state, "base-state");
 
     let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
@@ -126,7 +148,11 @@ fn repro_issue644_p1_app_meta_engine_state_expected_to_be_committed() {
         .unwrap();
 
     // Transfer 在 staging 里写入新内容（incoming 改了，local==base 没动）
-    write_rel(&run.staging_root(), manifest, "incoming-manifest");
+    write_rel(
+        &run.staging_root(),
+        manifest,
+        &manifest_json(&["project.json"]),
+    );
     write_rel(&run.staging_root(), state, "incoming-state");
 
     let plan = run.compute_commit_plan(&live).unwrap();
@@ -158,14 +184,15 @@ fn repro_issue644_p1_app_meta_engine_state_now_committed() {
     let manifest = "app-meta/sync/manifest.sync.json";
     let state = "app-meta/sync/state.local.json";
 
-    write_rel(&live, manifest, "base-manifest");
+    write_rel(&live, manifest, &manifest_json(&[]));
     write_rel(&live, state, "base-state");
 
     let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
     run.build_base_snapshot_from_live(&live, &[PathBuf::from(manifest), PathBuf::from(state)])
         .unwrap();
 
-    write_rel(&run.staging_root(), manifest, "incoming-manifest");
+    let incoming_manifest = manifest_json(&["project.json"]);
+    write_rel(&run.staging_root(), manifest, &incoming_manifest);
     write_rel(&run.staging_root(), state, "incoming-state");
 
     let plan = run.compute_commit_plan(&live).unwrap();
@@ -180,12 +207,19 @@ fn repro_issue644_p1_app_meta_engine_state_now_committed() {
         plan.needs_sync_state_merge,
         "修复后：state.local.json 触发 needs_sync_state_merge（三方语义合并）"
     );
-    // 且内容是 incoming（staging 里的最新权威值）。
+    // 且内容是 incoming（staging 里的最新权威值），不是 base 的空 manifest。
     let manifest_content = plan_applied_content(&plan, manifest).unwrap();
     assert_eq!(
         String::from_utf8(manifest_content).unwrap(),
-        "incoming-manifest",
+        incoming_manifest,
         "修复后：engine_state 写回的是 staging 里的 incoming 内容"
+    );
+    let applied: writer_core::sync::types::SyncManifest =
+        serde_json::from_str(&incoming_manifest).unwrap();
+    assert_eq!(
+        applied.files.len(),
+        1,
+        "incoming manifest 应携带远端记录，base 是空 manifest"
     );
 }
 
@@ -233,6 +267,9 @@ fn repro_issue644_p2_partial_conflict_expected_to_commit_non_conflict_files() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::PartialConflict),
+            group_id: None,
+            failure_path: None,
+            failure_phase: None,
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
@@ -279,6 +316,9 @@ fn repro_issue644_p2_partial_conflict_now_commits_non_conflict_files() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::PartialConflict),
+            group_id: None,
+            failure_path: None,
+            failure_phase: None,
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],

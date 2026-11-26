@@ -7,6 +7,24 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Instant;
 
+/// Which queue slot one correction job occupies.
+///
+/// Issue #1062 三.3：只保留当前编辑会话最新的待校对 revision 与脏区。扫描与
+/// 恢复显示任务可以被新请求取代；编辑映射必须按 revision 顺序全部执行，否则
+/// Core 的段索引会出现 revision 缺口。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CorrectionJobClass {
+    /// 轻量编辑映射（`edits` / `edit_apply`）：不跑模型，只把事务的真实改动
+    /// 区应用到 Core 的段索引，永远不能被丢弃。
+    EditMapping,
+    /// 模型扫描（`pending` / `chapter_all` / `segment`）：只保留该章当前编辑
+    /// 会话最新的 revision，旧 revision 在窗口边界退出。
+    Scan,
+    /// restore-only 缓存读取（`snapshot`）：不跑模型，也不代表任何 revision
+    /// 已经扫描完成，因此它可以被更新的扫描取代，但绝不能反过来取代扫描。
+    Display,
+}
+
 /// A bounded, process-wide correction executor. One FIFO thread serializes
 /// model work for every chapter; lightweight edit mappings run on the caller's
 /// thread and never wait for that thread. The executor owns no per-chapter
@@ -19,15 +37,17 @@ struct CorrectionJob {
     text_revision: u64,
     kind: &'static str,
     queued_at: Instant,
-    coalescable: bool,
+    class: CorrectionJobClass,
     run: Box<dyn FnOnce() -> bool + Send>,
 }
 
 struct CorrectionQueue {
     jobs: Mutex<VecDeque<CorrectionJob>>,
     wake: Condvar,
-    /// Newest `(session, revision)` submitted for each chapter. Used only to
-    /// skip obsolete display/scan jobs; edit mappings are never skipped.
+    /// Newest `(session, revision)` a real scan was submitted for, per chapter.
+    /// Used only to skip obsolete scan and display jobs; edit mappings are never
+    /// skipped. restore-only displays deliberately never publish here: they do
+    /// not scan, so they must not make a revision look checked.
     latest: Mutex<HashMap<(String, String), (u64, u64)>>,
     /// Document that most recently asked for proofreading. A coalescable job
     /// popped after the writer already left that chapter must not initialize a
@@ -121,7 +141,7 @@ fn correction_executor(queue: Arc<CorrectionQueue>) {
         let queue_depth = jobs.len();
         drop(jobs);
 
-        if job.coalescable {
+        if job.class != CorrectionJobClass::EditMapping {
             let latest = queue
                 .latest
                 .lock()
@@ -131,6 +151,9 @@ fn correction_executor(queue: Arc<CorrectionQueue>) {
                         .copied()
                 })
                 .unwrap_or(None);
+            // 窗口边界：每次扫描窗口开始前重新读一次 latest revision。扫描任务
+            // 被同一章更新的 revision 取代；restore-only 只比最新的真实扫描旧时
+            // 才跳过，它自己的提交不会推进 latest，因此不可能把扫描标记为已完成。
             let superseded = latest.is_some_and(|(session_id, text_revision)| {
                 job.session_id < session_id
                     || (job.session_id == session_id && job.text_revision < text_revision)
@@ -174,7 +197,23 @@ fn correction_executor(queue: Arc<CorrectionQueue>) {
             Some(queue_depth),
         );
         let execution_started_at = Instant::now();
-        let succeeded = (job.run)();
+        // 失败/panic 只能落在校对诊断里：执行器线程必须活到下一个任务，否则
+        // 正文保存 actor 之外的校对通道会永久停摆。用 `Mutex` 作为显式的
+        // panic 边界（毒化后仍可取回闭包），不靠 `AssertUnwindSafe` 掩盖
+        // 任务闭包里的回调/借用状态。
+        let run = std::sync::Mutex::new(job.run);
+        let run_result = std::panic::catch_unwind(move || {
+            let run = run
+                .into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            run()
+        });
+        let succeeded = matches!(run_result, Ok(true));
+        let failure_reason = match &run_result {
+            Ok(true) => None,
+            Ok(false) => Some("core_or_encoding_error"),
+            Err(_) => Some("job_panicked"),
+        };
         record_correction_job_event(
             "correction.job.end",
             job.request_id,
@@ -182,7 +221,7 @@ fn correction_executor(queue: Arc<CorrectionQueue>) {
             job.text_revision,
             job.kind,
             Some(if succeeded { "success" } else { "error" }),
-            (!succeeded).then_some("core_or_encoding_error"),
+            failure_reason,
             Some(queue_wait_ms),
             Some(execution_started_at.elapsed().as_millis()),
             Some(queue_depth),
@@ -240,6 +279,26 @@ fn correction_job_document_obsolete(job: &CorrectionJob) -> bool {
     }
 }
 
+/// True when `queued` belongs to the same revision as `(session_id,
+/// text_revision)` or an older one. Revisions are only comparable inside one
+/// editor session, so an older session always counts as older here.
+fn correction_job_is_older(queued: &CorrectionJob, session_id: u64, text_revision: u64) -> bool {
+    queued.session_id < session_id
+        || (queued.session_id == session_id && queued.text_revision <= text_revision)
+}
+
+/// True only for a strictly older revision. A manual whole-chapter check queued
+/// for the same revision covers more than a dirty-window scan, so an equal
+/// revision never justifies dropping it.
+fn correction_job_is_strictly_older(
+    queued: &CorrectionJob,
+    session_id: u64,
+    text_revision: u64,
+) -> bool {
+    queued.session_id < session_id
+        || (queued.session_id == session_id && queued.text_revision < text_revision)
+}
+
 pub(crate) fn submit_correction_job(
     project_id: String,
     chapter_id: String,
@@ -247,11 +306,15 @@ pub(crate) fn submit_correction_job(
     session_id: u64,
     text_revision: u64,
     kind: &'static str,
-    coalescable: bool,
+    class: CorrectionJobClass,
     run: impl FnOnce() -> bool + Send + 'static,
 ) -> Result<(), String> {
-    record_correction_latest(&project_id, &chapter_id, session_id, text_revision);
-    if coalescable {
+    // restore-only 读取不算“最新待校对 revision”：它不跑模型，不能替换仍然
+    // 排在队首的真实扫描（issue #1062 三.3：restore-only 不能确认完成扫描）。
+    if class == CorrectionJobClass::Scan {
+        record_correction_latest(&project_id, &chapter_id, session_id, text_revision);
+    }
+    if class != CorrectionJobClass::EditMapping {
         record_active_correction_document(&project_id, &chapter_id, session_id);
     }
     let queue = correction_queue();
@@ -273,23 +336,31 @@ pub(crate) fn submit_correction_job(
             return Err("校对任务队列锁已损坏".to_string());
         }
     };
-    // Issue #1061: a newer snapshot/pending request supersedes an older one
-    // that is still waiting in this FIFO. Dropping it here releases the whole
-    // chapter text clone immediately instead of keeping it queued until its
-    // turn, and the newer request scans the same dirty windows collected by
-    // the lightweight edit phase. Edit mappings are never dropped.
+    // Issue #1061/#1062 三.3：同一章、同一编辑会话只保留最新的待校对 revision。
+    // 新请求到达时就把排队中的旧扫描/旧恢复丢掉，立刻释放整章正文克隆，而不是
+    // 等它排到队首再在窗口边界发现已过期；编辑映射永远按 revision 顺序执行。
     let mut coalesced = 0usize;
-    if coalescable && matches!(kind, "snapshot" | "pending") {
+    if class != CorrectionJobClass::EditMapping {
         let mut retained = VecDeque::with_capacity(jobs.len());
         while let Some(queued) = jobs.pop_front() {
-            let queued_is_older = queued.session_id < session_id
-                || (queued.session_id == session_id && queued.text_revision <= text_revision);
-            let superseded = queued.coalescable
-                && queued_is_older
-                && queued.project_id == project_id
-                && queued.chapter_id == chapter_id
-                && matches!(queued.kind, "snapshot" | "pending");
-            if superseded {
+            let same_document = queued.project_id == project_id && queued.chapter_id == chapter_id;
+            let queued_is_older = correction_job_is_older(&queued, session_id, text_revision);
+            let supersedes = same_document
+                && match (class, queued.class) {
+                    // 新扫描返回整章快照：更旧 revision 的扫描与恢复都丢掉；
+                    // 同一 revision 上它只取代排队中的脏区扫描，手动整章检查
+                    // (`chapter_all`) 覆盖更广，让它自己跑完。
+                    (CorrectionJobClass::Scan, CorrectionJobClass::Scan) => {
+                        correction_job_is_strictly_older(&queued, session_id, text_revision)
+                            || (queued_is_older && queued.kind != "chapter_all")
+                    }
+                    (CorrectionJobClass::Scan, CorrectionJobClass::Display) => queued_is_older,
+                    // restore-only 只能取代更早的 restore-only，绝不能丢弃仍然
+                    // 需要的模型扫描，否则脏区永远等不到扫描窗口。
+                    (CorrectionJobClass::Display, CorrectionJobClass::Display) => queued_is_older,
+                    _ => false,
+                };
+            if supersedes {
                 coalesced += 1;
                 record_correction_job_event(
                     "correction.job.coalesced",
@@ -317,7 +388,7 @@ pub(crate) fn submit_correction_job(
         text_revision,
         kind,
         queued_at: Instant::now(),
-        coalescable,
+        class,
         run: Box::new(run),
     });
     let queue_depth = jobs.len();
@@ -383,7 +454,9 @@ pub(crate) fn release_correction_queue(project_id: &str, chapter_id: &str) {
         // revision order. Dropping one leaves a revision gap and forces the
         // next chapter check to reconcile the whole text, so they always run;
         // scan/display jobs for the closed chapter are discarded.
-        if job.project_id == project_id && job.chapter_id == chapter_id && job.kind != "edit_apply"
+        if job.project_id == project_id
+            && job.chapter_id == chapter_id
+            && job.class != CorrectionJobClass::EditMapping
         {
             record_correction_job_event(
                 "correction.job.skipped",

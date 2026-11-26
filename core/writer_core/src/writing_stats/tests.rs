@@ -303,6 +303,8 @@ fn test_speed_buckets_generation() {
             session_id: "s1".to_string(),
             local_date: String::new(),
             proof: None,
+            starmap_id: None,
+            verified_typed: true,
         };
         api.record_event(event).unwrap();
     }
@@ -352,6 +354,8 @@ fn speed_test_event_with_source(
         session_id: "s1".to_string(),
         local_date: String::new(),
         proof: None,
+        starmap_id: None,
+        verified_typed: true,
     }
 }
 
@@ -582,6 +586,8 @@ fn test_session_gap_detection() {
         session_id: "s1".to_string(),
         local_date: String::new(),
         proof: None,
+        starmap_id: None,
+        verified_typed: true,
     };
     store.record_event(event1).unwrap();
 
@@ -604,6 +610,8 @@ fn test_session_gap_detection() {
         session_id: "s1".to_string(),
         local_date: String::new(),
         proof: None,
+        starmap_id: None,
+        verified_typed: true,
     };
     store.record_event(event2).unwrap();
 
@@ -1049,6 +1057,26 @@ fn test_per_project_active_time_is_independent() {
     e3.project_id = "proj2".to_string();
     api.record_event(e3).unwrap();
 
+    // 新契约（#981）：活跃时间只来自平台实测计时切片，不再用事件时间差推算。
+    // proj1 一段 10 秒前台计时；proj2 没有计时切片，活跃时间保持 0。
+    api.record_activity_segment(
+        crate::writing_stats::WritingActivitySegment::new(
+            "seg-proj1".to_string(),
+            "dev-1",
+            Platform::Desktop,
+            "desktop",
+            "proj1",
+            "vol1",
+            "chap1",
+            "session-p1",
+            now_ms,
+            now_ms + 10_000,
+            "idle",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
     let today = StatsApi::today_date();
     let project_stats = api
         .get_stats_by_project(&DateRange {
@@ -1087,6 +1115,25 @@ fn test_per_chapter_active_time_is_independent() {
     let mut e3 = speed_test_event(now_ms + 5_000, 20);
     e3.chapter_id = "chap2".to_string();
     api.record_event(e3).unwrap();
+
+    // 新契约（#981）：章节活跃时间只取实测计时切片；chap2 无切片保持 0。
+    api.record_activity_segment(
+        crate::writing_stats::WritingActivitySegment::new(
+            "seg-chap1".to_string(),
+            "dev-1",
+            Platform::Desktop,
+            "desktop",
+            "proj1",
+            "vol1",
+            "chap1",
+            "session-c1",
+            now_ms,
+            now_ms + 10_000,
+            "idle",
+        )
+        .unwrap(),
+    )
+    .unwrap();
 
     let today = StatsApi::today_date();
     let chapter_stats = api
@@ -1207,6 +1254,8 @@ fn test_typing_replace_counts_deleted() {
         session_id: "s1".to_string(),
         local_date: String::new(),
         proof: None,
+        starmap_id: None,
+        verified_typed: true,
     };
     api.record_event(event).unwrap();
 
@@ -1248,6 +1297,8 @@ fn test_paste_replace_counts_deleted() {
         session_id: "s1".to_string(),
         local_date: String::new(),
         proof: None,
+        starmap_id: None,
+        verified_typed: true,
     };
     api.record_event(event).unwrap();
 
@@ -1293,6 +1344,8 @@ fn test_speed_curve_zero_bucket_minutes_clamped() {
         session_id: "s1".to_string(),
         local_date: String::new(),
         proof: None,
+        starmap_id: None,
+        verified_typed: true,
     };
     api.record_event(event).unwrap();
 
@@ -1342,6 +1395,8 @@ fn test_days_count_from_business_date() {
         session_id: "s1".to_string(),
         local_date: String::new(),
         proof: None,
+        starmap_id: None,
+        verified_typed: true,
     };
     api.record_event(event1).unwrap();
 
@@ -1364,6 +1419,8 @@ fn test_days_count_from_business_date() {
         session_id: "s1".to_string(),
         local_date: String::new(),
         proof: None,
+        starmap_id: None,
+        verified_typed: true,
     };
     api.record_event(event2).unwrap();
 
@@ -1929,14 +1986,22 @@ fn test_explorer_multi_device_same_window_not_one_long_session() {
     let api = StatsApi::new(temp_dir.path());
 
     // dev-a：10:00–10:01；dev-b：10:00:30–10:01:30。混在一起会变成 90 秒假会话。
-    let base = 1_780_000_000_000_i64;
+    // 计时切片的业务日由 start_at_ms 按本机时区推导，base 必须真实落在
+    // 2026-05-10 10:00（而不是一个固定但跨日的毫秒值）。
+    use chrono::TimeZone;
+    let base = chrono::Local
+        .with_ymd_and_hms(2026, 5, 10, 10, 0, 0)
+        .single()
+        .expect("2026-05-10 10:00 is a valid local time")
+        .timestamp_millis();
     let mut a1 = explorer_event(base, "2026-05-10", EventSource::HumanTyped, 10);
     a1.device_id = "dev-a".to_string();
     let mut a2 = explorer_event(base + 60_000, "2026-05-10", EventSource::HumanTyped, 10);
     a2.device_id = "dev-a".to_string();
     let mut b1 = explorer_event(base + 30_000, "2026-05-10", EventSource::HumanTyped, 10);
     b1.device_id = "dev-b".to_string();
-    let mut b2 = explorer_event(base + 90_000, "2026-05-10", EventSource::HumanTyped, 10);
+    // 10:01 落在 dev-b 的 [10:00:30, 10:01:30) 窗口内（终点开区间）。
+    let mut b2 = explorer_event(base + 60_000, "2026-05-10", EventSource::HumanTyped, 10);
     b2.device_id = "dev-b".to_string();
     for event in [a1, a2, b1, b2] {
         api.record_event(event).unwrap();

@@ -34,13 +34,22 @@ fn make_test_node(id: &str, title: &str) -> StarMapNode {
         definition_revision: 0,
     }
 }
-fn make_test_link(link_id: &str, label: &str) -> StarMapLink {
+/// 新契约（Issue #1060）：链接源必须是画布本地节点实例，
+/// `Starmap`/带穿越段的路径不再是合法的 link source。
+fn make_test_link(
+    link_id: &str,
+    label: &str,
+    starmap_id: &str,
+    source_node_id: &str,
+) -> StarMapLink {
     StarMapLink {
         link_id: link_id.to_string(),
         source: StarMapTargetPath {
-            starmap_id: "self".to_string(),
+            starmap_id: starmap_id.to_string(),
             segments: vec![],
-            target: StarMapTargetDetail::Starmap,
+            target: StarMapTargetDetail::Node {
+                node_id: source_node_id.to_string(),
+            },
         },
         target: StarMapTargetPath {
             starmap_id: "other".to_string(),

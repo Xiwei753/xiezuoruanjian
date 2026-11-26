@@ -4260,6 +4260,28 @@ mod tests {
         assert_eq!(plan.conflict[0].rel_path, PathBuf::from(chapter_rel));
         assert!(plan.conflict[0].remote_snapshot_path.is_none());
 
+        // 新契约（#1059 章节提交协议）：take_remote 恢复正文必须读到
+        // chapter.meta.json 的 generation/revision；只写正文会以 ChapterNotFound
+        // 失败。冲突计划确认后再补齐章节元数据，避免它参与本用例的三方计划断言。
+        let chapter_meta = crate::chapter::Chapter {
+            id: "c1".to_string(),
+            title: "Chapter 1".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            order: 0,
+            word_count: local_content.chars().count() as u32,
+            hash: String::new(),
+            note: None,
+            object_generation: "gen-c1".to_string(),
+            revision: 1,
+            content_sha256: String::new(),
+        };
+        std::fs::write(
+            chapter_abs.parent().unwrap().join("chapter.meta.json"),
+            serde_json::to_string_pretty(&chapter_meta).unwrap(),
+        )
+        .unwrap();
+
         // 手动模拟 commit_helpers::save_conflict_snapshots：
         // 读 staging incoming → save_conflict_copy → 填 remote_snapshot_path。
         // 必须在 run.cleanup() 之前（cleanup 删 staging）。

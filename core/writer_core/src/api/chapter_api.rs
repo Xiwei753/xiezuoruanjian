@@ -18,7 +18,7 @@ pub struct MoveChapterOutcome {
     pub journal_token: String,
 }
 
-fn get_chapter_title(
+pub(crate) fn get_chapter_title(
     api: &WriterCoreApi,
     project_id: &str,
     volume_id: &str,
@@ -705,49 +705,16 @@ impl WriterCoreApi {
                 proof_event_ids,
             )
             .map_err(WriterError::from)?;
-
-        if clear_content {
-            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
-                action: crate::search::SearchIndexAction::Delete,
-                object_id: format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id),
-                scope: crate::search::SearchScope::All,
-                title: String::new(),
-                body: String::new(),
-                target: None,
-            });
-        } else {
-            let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
-            let entry = crate::search::extractor::extract_chapter_body_entry(
-                project_id, volume_id, chapter_id, &ch_title, content,
-            );
-            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
-                action: crate::search::SearchIndexAction::Upsert,
-                object_id: entry.object_id.clone(),
-                scope: entry.scope,
-                title: entry.title.clone(),
-                body: entry.body.clone(),
-                target: Some(entry.target.clone()),
-            });
-        }
-        if let Some(pending) = pending_annotations {
-            if pending.baseline_id.is_some() {
-                self.finish_annotation_edit_save(&pending)?;
-            }
-            self.refresh_annotation_search_index(project_id, "save_chapter_content");
-        }
-        // 空 change set 表示正文、元数据和附加文件都没有实质变化：
-        // 不写新的 workspace history / 对象 mutation，也不刷新版本事实。
-        if !change_set.is_empty() {
-            let _ = self.record_workspace_change_set_history(
-                &change_set,
-                if clear_content {
-                    "clear_chapter_content"
-                } else {
-                    "save_chapter_content"
-                },
-            );
-        }
-        Ok((receipt.clone().into(), receipt))
+        self.finalize_chapter_content_save(
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+            clear_content,
+            pending_annotations,
+            &change_set,
+            receipt,
+        )
     }
 
     /// 更新章节备注（note 字段，独立于正文）。

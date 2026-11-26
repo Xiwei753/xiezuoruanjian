@@ -83,6 +83,7 @@ fn test_writing_stats_summary_dto_serialization() {
             end_date: "2023-10-31".to_string(),
         },
         total_human_typed_chars: 1000,
+        total_verified_typed_chars: 1000,
         total_pasted_chars: 200,
         total_deleted_chars: 50,
         total_ai_inserted_chars: 300,
@@ -100,6 +101,7 @@ fn test_writing_stats_summary_dto_serialization() {
                 "endDate": "2023-10-31"
             },
             "totalHumanTypedChars": 1000,
+            "totalVerifiedTypedChars": 1000,
             "totalPastedChars": 200,
             "totalDeletedChars": 50,
             "totalAiInsertedChars": 300,
@@ -270,6 +272,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
         history_scope: "localEvents".to_string(),
         lifetime: WritingStatsLifetimeDto {
             total_human_typed_chars: 0,
+            verified_typed_chars: 0,
             first_writing_date: None,
             last_writing_date: None,
             elapsed_calendar_days: 0,
@@ -285,6 +288,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
             has_selection: false,
             range: None,
             total_human_typed_chars: 0,
+            verified_typed_chars: 0,
             total_active_seconds: 0,
             writing_days: 0,
             average_chars_per_day: None,
@@ -300,6 +304,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
                 end_date: "2026-10-18".to_string(),
             },
             total_human_typed_chars: 0,
+            verified_typed_chars: 0,
             total_active_seconds: 0,
             writing_days: 0,
             average_chars_per_day: None,
@@ -336,6 +341,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
             },
         },
         contributions: None,
+        star_map: None,
     };
 
     let json = serde_json::to_value(&dto).unwrap();
@@ -345,6 +351,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
             "historyScope": "localEvents",
             "lifetime": {
                 "totalHumanTypedChars": 0,
+                "verifiedTypedChars": 0,
                 "firstWritingDate": null,
                 "lastWritingDate": null,
                 "elapsedCalendarDays": 0,
@@ -360,6 +367,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
                 "hasSelection": false,
                 "range": null,
                 "totalHumanTypedChars": 0,
+                "verifiedTypedChars": 0,
                 "totalActiveSeconds": 0,
                 "writingDays": 0,
                 "averageCharsPerDay": null,
@@ -372,6 +380,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
                 "preset": "lifetime",
                 "range": { "startDate": "2026-10-18", "endDate": "2026-10-18" },
                 "totalHumanTypedChars": 0,
+                "verifiedTypedChars": 0,
                 "totalActiveSeconds": 0,
                 "writingDays": 0,
                 "averageCharsPerDay": null,
@@ -400,6 +409,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
         history_scope: "localEvents".to_string(),
         lifetime: WritingStatsLifetimeDto {
             total_human_typed_chars: 1234,
+            verified_typed_chars: 1234,
             first_writing_date: Some("2026-03-10".to_string()),
             last_writing_date: Some("2026-10-18".to_string()),
             elapsed_calendar_days: 223,
@@ -418,6 +428,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
                 end_date: "2026-10-18".to_string(),
             }),
             total_human_typed_chars: 300,
+            verified_typed_chars: 300,
             total_active_seconds: 600,
             writing_days: 5,
             average_chars_per_day: Some(60.0),
@@ -433,6 +444,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
                 end_date: "2026-10-18".to_string(),
             },
             total_human_typed_chars: 300,
+            verified_typed_chars: 300,
             total_active_seconds: 600,
             writing_days: 5,
             average_chars_per_day: Some(60.0),
@@ -478,6 +490,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
             },
         },
         contributions: None,
+        star_map: None,
     };
 
     let json = serde_json::to_value(&dto).unwrap();
@@ -487,6 +500,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
             "historyScope": "localEvents",
             "lifetime": {
                 "totalHumanTypedChars": 1234,
+                "verifiedTypedChars": 1234,
                 "firstWritingDate": "2026-03-10",
                 "lastWritingDate": "2026-10-18",
                 "elapsedCalendarDays": 223,
@@ -502,6 +516,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
                 "hasSelection": true,
                 "range": { "startDate": "2026-10-12", "endDate": "2026-10-18" },
                 "totalHumanTypedChars": 300,
+                "verifiedTypedChars": 300,
                 "totalActiveSeconds": 600,
                 "writingDays": 5,
                 "averageCharsPerDay": 60.0,
@@ -514,6 +529,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
                 "preset": "last7Days",
                 "range": { "startDate": "2026-10-12", "endDate": "2026-10-18" },
                 "totalHumanTypedChars": 300,
+                "verifiedTypedChars": 300,
                 "totalActiveSeconds": 600,
                 "writingDays": 5,
                 "averageCharsPerDay": 60.0,

@@ -79,10 +79,16 @@ fn load_full_errors_for_missing_declared_link() {
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), "test-id");
-    // fail-closed：GraphMeta 声明 link 但文件缺失 → Err。
+    // 新契约（Issue #1060）：链接唯一持久化在 annotations 仓库；
+    // `GraphMeta.link_ids` 只是派生缓存。声明的旧缓存条目没有对应仓库记录时
+    // 不算损坏，按仓库重建为 []，不 fail-closed。
+    let result = store
+        .load_full()
+        .expect("load_full must not Err on stale derived link_ids cache");
+    assert_eq!(result.loaded_link_count, 0);
     assert!(
-        store.load_full().is_err(),
-        "load_full must Err when GraphMeta declares a link but its file is missing"
+        store.graph_meta_link_ids().is_empty(),
+        "stale link_ids cache must be rebuilt from annotations repo"
     );
 }
 #[test]
@@ -492,15 +498,22 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
     std::fs::write(&graph_path, &graph_json).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    // 只加载 GraphMeta 阶段，不加载 objects（load_full 会因声明的 link 文件缺失而 Err）。
+    // 只加载 GraphMeta 阶段。
     store.load_phased(LoadPhase::GraphMeta).unwrap();
 
+    // 新契约（Issue #1060）：链接不在星图包内，没有可缺失的 links/*.json，
+    // `link_ids` 只是派生缓存。列表以 annotations 仓库为准，空仓库即空列表，
+    // 不再为旧缓存条目产出 missing diagnostic；缓存被重建为空。
     let result = store.list_links_with_diagnostics().unwrap();
     assert!(
-        !result.diagnostics.is_empty(),
-        "should report missing link as diagnostic"
+        result.diagnostics.is_empty(),
+        "links are not package objects: no missing-link diagnostic may be reported"
     );
-    assert_eq!(result.diagnostics[0].object_id, "missing-link");
+    assert!(result.items.is_empty());
+    assert!(
+        store.graph_meta_link_ids().is_empty(),
+        "stale link_ids cache must be reconciled to the annotations repo"
+    );
 }
 #[test]
 fn prefetch_only_loads_adjacent_edges() {
@@ -882,11 +895,11 @@ fn repro_781_load_full_missing_declared_node_must_error() {
     );
 }
 
-/// 复现问题 2（补充）：load_full 对 GraphMeta 声明的 link 文件缺失必须 Err。
+/// 复现问题 2（补充）：load_full 对 GraphMeta 声明的 link 文件缺失不得误报。
 ///
-/// 场景：schema "4" graph.json 声明 link "missing-link"，但对应文件不存在。
-/// 期望：load_full 返回 Err。
-/// 当前错误行为：返回 Ok 且 loaded_link_count=0（残缺图）。
+/// 场景：schema "4" graph.json 遗留派生缓存 `link_ids=["missing-link"]`。
+/// 新契约（Issue #1060）：链接唯一事实在 annotations 仓库，包内不存在
+/// `links/*.json`；该声明只是过期派生缓存，必须按仓库重建而不是 fail-closed。
 #[test]
 fn repro_781_load_full_missing_declared_link_must_error() {
     let dir = TempDir::new().unwrap();
@@ -916,14 +929,15 @@ fn repro_781_load_full_missing_declared_link_must_error() {
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), "test-id");
-    let result = store.load_full();
-
-    // 期望：fail-closed 返回 Err。
-    // 当前 bug 行为：返回 Ok 且 loaded_link_count=0（残缺图）。
+    // 新契约（Issue #1060）：`link_ids` 是 annotations 仓库的派生缓存，
+    // 过期的 "missing-link" 必须被重建掉，而不是当成缺失包内对象报错。
+    let result = store
+        .load_full()
+        .expect("stale derived link_ids cache must not fail package load");
+    assert_eq!(result.loaded_link_count, 0);
     assert!(
-        result.is_err(),
-        "repro_781: load_full must Err when GraphMeta declares a link but its file is missing, \
-         but got Ok (current bug: returns incomplete graph as if successful). result={result:?}"
+        store.graph_meta_link_ids().is_empty(),
+        "stale link_ids cache must be rebuilt from annotations repo"
     );
 }
 
@@ -1015,8 +1029,10 @@ fn load_full_errors_when_object_internal_id_mismatches_filename() {
         created_at: 0,
         updated_at: 0,
     };
-    let mismatched_link = make_test_link("id-in-file", "L");
+    let mismatched_link = make_test_link("id-in-file", "L", starmap_id, "id-in-file");
 
+    // 新契约（Issue #1060）：links 不是星图包内对象，内部 id 校验只适用于
+    // nodes/edges/embeds；旧 links/ 目录由迁移迁出，不再参与对象加载。
     let cases = [
         (
             "nodes",
@@ -1036,12 +1052,6 @@ fn load_full_errors_when_object_internal_id_mismatches_filename() {
             "embed-a",
             serde_json::to_string(&mismatched_embed).unwrap(),
         ),
-        (
-            "links",
-            "linkIds",
-            "link-a",
-            serde_json::to_string(&mismatched_link).unwrap(),
-        ),
     ];
     for (subdir, field, declared_id, content) in cases {
         write_to_bucket(&starmap_dir, subdir, declared_id, &content);
@@ -1060,6 +1070,31 @@ fn load_full_errors_when_object_internal_id_mismatches_filename() {
              '{declared_id}', got: {result:?}"
         );
     }
+
+    // 新契约（Issue #1060）：旧 links/ 文件不是星图包对象，加载时会一次性
+    // 迁移进 annotations 仓库；链接身份取自记录内部的 `linkId`，文件名不再参与
+    // id 一致性校验，因此文件名不匹配不会让 load_full 失败。
+    write_to_bucket(
+        &starmap_dir,
+        "links",
+        "link-a",
+        &serde_json::to_string(&mismatched_link).unwrap(),
+    );
+    write_graph_meta_declaring(
+        &starmap_dir,
+        starmap_id,
+        "linkIds",
+        vec!["link-a".to_string()],
+    );
+    let mut store = StarMapStore::new(dir.path(), starmap_id);
+    let result = store
+        .load_full()
+        .expect("legacy links/ files must be migrated, not treated as package objects");
+    assert_eq!(result.loaded_link_count, 1);
+    assert!(
+        store.get_link("id-in-file").is_some(),
+        "legacy link must be migrated by its internal linkId, not the file name"
+    );
 }
 
 #[test]

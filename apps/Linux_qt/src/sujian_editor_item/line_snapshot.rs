@@ -55,10 +55,30 @@ impl LineTextureStore {
         self.textures.contains_key(id)
     }
 
+    /// 清空全部缓存条目与字节计数。
+    ///
+    /// Issue #1062 三.2：离开章节/切换文档/关闭文档时，旧文档的所有 CPU 行图
+    /// 所有权必须立即释放，不能等下一帧 `retain` 的 active ids 集合来间接淘汰。
+    /// 清空后 `cache_only_bytes()` / `shared_bytes()` / `byte_len()` 都是 0，
+    /// `publish_metrics()` 同步进程级诊断分项。GPU 侧纹理由渲染线程动画层清理，
+    /// 本方法只释放缓存持有的 `LineImage`（真实 CPU 图像所有权）。
+    pub fn clear(&mut self) {
+        self.textures.clear();
+        self.byte_len = 0;
+        self.next_sequence = 0;
+        self.evict_queue.clear();
+        self.publish_metrics();
+    }
+
     /// 只保留在给定 active ids 集合里的纹理。
     ///
     /// 事务完成/cancel/rebase 后，用当前所有 active transaction 实际还引用的
     /// LineSnapshotId 集合做 retain，不误删相邻事务还在用的纹理。
+    ///
+    /// Issue #1062 三.2：历史 revision 的收口也在这里完成——动画结束/取消后
+    /// `TextMotion` 不再提供源 id，调用方传入的 active ids 里自然没有旧 revision，
+    /// 本方法立即删除这些缓存条目；仍被布局快照共享的 `LineImage` 由快照自己的
+    /// `Arc` 持有，删缓存条目不破坏绘制。
     pub fn retain(&mut self, active_ids: &[LineSnapshotId]) {
         let active_set: std::collections::HashSet<&LineSnapshotId> = active_ids.iter().collect();
         let mut removed_bytes = 0usize;
@@ -156,5 +176,106 @@ impl LineTextureStore {
 impl Default for LineTextureStore {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::layout::run_on_qt_thread;
+
+    fn line_image(width: u32, height: u32) -> Arc<LineImage> {
+        LineImage::shared(qmetaobject::QImage::new(
+            qmetaobject::QSize { width, height },
+            qmetaobject::ImageFormat::ARGB32_Premultiplied,
+        ))
+    }
+
+    fn id(revision: u64, paragraph: u64, ordinal: u32) -> LineSnapshotId {
+        LineSnapshotId::new(revision, paragraph, ordinal)
+    }
+
+    /// Issue #1062 三.2：历史 revision 只由 active ids 决定去留。
+    ///
+    /// 动画结束/取消后旧 revision 不再出现在 active ids 里，`retain` 必须立即
+    /// 删除其缓存条目并归还字节预算；当前 revision 的行保留。
+    #[test]
+    fn retain_releases_historical_revision_bytes() {
+        run_on_qt_thread(|| {
+            let mut store = LineTextureStore::new();
+            let old = id(7, 0, 0);
+            let current = id(8, 0, 0);
+            store.insert(old, line_image(8, 2));
+            store.insert(current, line_image(4, 2));
+            assert_eq!(store.byte_len(), 8 * 2 * 4 + 4 * 2 * 4);
+            assert_eq!(store.line_count(), 2);
+
+            store.retain(&[current]);
+
+            assert_eq!(store.line_count(), 1);
+            assert_eq!(store.byte_len(), 4 * 2 * 4);
+            assert!(store.get(&current).is_some());
+            assert!(store.get(&old).is_none());
+        });
+    }
+
+    /// Issue #1062 三.2：预算只淘汰缓存独占（真实可释放）的 `LineImage`。
+    ///
+    /// 仍被快照/测试共享的图即使超预算也不能删；它计入 `shared_bytes()`，
+    /// 等最后一个共享所有者释放后才变成可淘汰字节。
+    #[test]
+    fn byte_budget_evicts_only_cache_only_images() {
+        run_on_qt_thread(|| {
+            let mut store = LineTextureStore::new();
+            let shared = id(1, 0, 0);
+            let cache_only = id(1, 1, 0);
+            let shared_image = line_image(10, 10);
+            store.insert(shared, Arc::clone(&shared_image));
+            store.insert(cache_only, line_image(2, 2));
+
+            let evicted = store.enforce_byte_budget(0);
+
+            assert_eq!(evicted, 1);
+            assert!(store.get(&shared).is_some(), "共享图不能被预算淘汰");
+            assert!(store.get(&cache_only).is_none(), "独占图必须被预算淘汰");
+            assert_eq!(store.cache_only_bytes(), 0);
+            assert_eq!(store.shared_bytes(), 10 * 10 * 4);
+            drop(shared_image);
+        });
+    }
+
+    /// Issue #1062 三.2：切章/关闭文档清空所有缓存所有权与字节分项。
+    #[test]
+    fn clear_releases_all_cache_ownership() {
+        run_on_qt_thread(|| {
+            let mut store = LineTextureStore::new();
+            store.insert(id(1, 0, 0), line_image(8, 4));
+            store.insert(id(1, 1, 0), line_image(2, 2));
+            assert!(store.byte_len() > 0);
+
+            store.clear();
+
+            assert_eq!(store.line_count(), 0);
+            assert_eq!(store.byte_len(), 0);
+            assert_eq!(store.cache_only_bytes(), 0);
+            assert_eq!(store.shared_bytes(), 0);
+
+            store.insert(id(2, 0, 0), line_image(1, 1));
+            assert_eq!(store.line_count(), 1);
+            assert_eq!(store.byte_len(), 4);
+        });
+    }
+
+    #[test]
+    fn duplicate_insert_keeps_single_byte_ownership() {
+        run_on_qt_thread(|| {
+            let mut store = LineTextureStore::new();
+            let line = id(3, 0, 0);
+            store.insert(line, line_image(4, 4));
+            assert_eq!(store.byte_len(), 4 * 4 * 4);
+            store.insert(line, line_image(2, 2));
+            assert_eq!(store.line_count(), 1);
+            assert_eq!(store.byte_len(), 2 * 2 * 4);
+        });
     }
 }

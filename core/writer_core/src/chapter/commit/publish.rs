@@ -89,12 +89,34 @@ pub(super) fn publish_deleted(
         )));
     }
 
+    // Issue #1062 1.4：app data root 只认请求写进 manifest 的真实路径；旧
+    // journal 缺字段时，从同一 manifest 记录的真实 trash 路径反推
+    //（`<app_data_root>/sync/trash/<token>`），不再用 `project_root.ancestors()`
+    // 猜目录层级——独立 projects_root 会让猜测指到错误的工作区。
     let app_data_root = manifest
         .app_data_root
         .as_deref()
         .map(PathBuf::from)
-        .or_else(|| project_root.ancestors().nth(2).map(Path::to_path_buf))
-        .ok_or_else(|| Error::Other("chapter delete cannot derive app data root".to_string()))?;
+        .or_else(|| {
+            let trash = manifest.trash_path.as_deref().map(PathBuf::from)?;
+            let trash_root = trash.parent()?;
+            if trash_root.file_name().and_then(|name| name.to_str()) != Some("trash")
+                || trash_root
+                    .parent()?
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    != Some("sync")
+            {
+                return None;
+            }
+            trash_root.parent()?.parent().map(Path::to_path_buf)
+        })
+        .ok_or_else(|| {
+            Error::Other(format!(
+                "chapter delete manifest lacks app_data_root/trash_path: tx={}",
+                manifest.transaction_id
+            ))
+        })?;
     let rel_chapter_dir = chapter_dir
         .strip_prefix(project_root)
         .unwrap_or(&chapter_dir)

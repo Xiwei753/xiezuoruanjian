@@ -618,23 +618,44 @@ pub fn extract_starmap_entries(
         if nodes_dir.exists() {
             if let Ok(node_files) = scan_json_files(&nodes_dir) {
                 for (nid, node_file) in node_files {
-                    let node: Option<crate::starmap::types::StarMapNode> =
-                        std::fs::read_to_string(&node_file)
-                            .ok()
-                            .and_then(|s| serde_json::from_str(&s).ok());
-                    if let Some(n) = node {
-                        // Issue #1060：节点上的旧 `tags` 字段已迁到 annotations
-                        // 仓库，星图实体条目不再携带第二份标签文本。
-                        let content = extract_node_search_text(&n.content);
-                        if !n.title.is_empty() || !content.is_empty() {
-                            entries.push(extract_starmap_node_entry(
-                                &sid,
-                                &nid,
-                                bound_project,
-                                &n.title,
-                                &content,
-                            ));
-                        }
+                    // 新契约（Issue #1060/#1062）：节点文件保存 StarMapNodeInstance，
+                    // 共享标题/正文在素材库定义里；必须走统一解码入口，不能把节点文件
+                    // 当完整 StarMapNode 反序列化。
+                    let Ok(bytes) = std::fs::read(&node_file) else {
+                        continue;
+                    };
+                    let Ok(plan) = crate::starmap::migration::nodes::decode_node_object(
+                        app_data_root,
+                        &sid,
+                        &nid,
+                        &bytes,
+                        None,
+                    ) else {
+                        continue;
+                    };
+                    let definition = match plan.definition {
+                        Some(definition) => Some(definition),
+                        None => crate::starmap::library::load_node_definition(
+                            app_data_root,
+                            &plan.instance.asset_id,
+                        )
+                        .ok()
+                        .flatten(),
+                    };
+                    let Some(definition) = definition else {
+                        continue;
+                    };
+                    // Issue #1060：节点上的旧 `tags` 字段已迁到 annotations
+                    // 仓库，星图实体条目不再携带第二份标签文本。
+                    let content = extract_node_search_text(&definition.content);
+                    if !definition.title.is_empty() || !content.is_empty() {
+                        entries.push(extract_starmap_node_entry(
+                            &sid,
+                            &nid,
+                            bound_project,
+                            &definition.title,
+                            &content,
+                        ));
                     }
                 }
             }

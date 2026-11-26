@@ -681,16 +681,18 @@ pub(crate) fn commit_chapter_with_guard(
     }
     crate::storage::sync_dir(&tx_dir)?;
 
+    // Issue #1062 1.4：删除决议必须拿到调用方传入的真实 app data root / trash
+    // 路径；不再从 `project_root.ancestors()` 推断（独立 projects_root 会推错）。
     let deletion_app_data_root = if deleting {
-        Some(
-            request
-                .app_data_root
-                .clone()
-                .or_else(|| project_root.ancestors().nth(2).map(Path::to_path_buf))
-                .ok_or_else(|| {
-                    Error::Other("chapter delete cannot derive app data root".to_string())
-                })?,
-        )
+        Some(request.app_data_root.clone().ok_or_else(|| {
+            Error::Other(format!(
+                "chapter delete commit has no app_data_root: tx={}, key={}/{}/{}",
+                request.transaction_id.as_deref().unwrap_or("<new>"),
+                key.project_id,
+                key.volume_id,
+                key.chapter_id
+            ))
+        })?)
     } else {
         None
     };

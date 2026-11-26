@@ -68,9 +68,41 @@ impl StarMapStore {
             let mut succeeded = true;
             for node_id in &ids {
                 if let Some(node) = self.nodes.get(node_id) {
+                    // Issue #1062：画布节点文件只保存实例，共享内容必须落在
+                    // 素材库本体里。flush 只补写缺失的本体，绝不覆盖已有本体
+                    // （本体编辑走 library 的独立事务），保证低层写入不会留下
+                    // "只有实例没有本体"的数据。
+                    let asset_id = self.asset_id_for_node(&node.id);
+                    let mut shared = node.clone();
+                    shared.asset_id = asset_id.clone();
+                    let definition_missing = match crate::starmap::library::load_node_definition(
+                        &self.app_data_root,
+                        &asset_id,
+                    ) {
+                        Ok(definition) => definition.is_none(),
+                        Err(_) => {
+                            succeeded = false;
+                            break;
+                        }
+                    };
+                    if definition_missing {
+                        let definition = crate::starmap::types::StarMapNodeDefinition::from_node(
+                            asset_id.clone(),
+                            &shared,
+                        );
+                        if crate::starmap::library::save_node_definition(
+                            &self.app_data_root,
+                            &definition,
+                        )
+                        .is_err()
+                        {
+                            succeeded = false;
+                            break;
+                        }
+                    }
                     let instance = crate::starmap::types::StarMapNodeInstance {
                         instance_id: node.id.clone(),
-                        asset_id: self.asset_id_for_node(&node.id),
+                        asset_id,
                         position: node.position.clone(),
                         starmap_id: self.starmap_id.clone(),
                         project_id: None,

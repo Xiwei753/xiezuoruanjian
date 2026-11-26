@@ -38,6 +38,10 @@ pub enum WriterError {
     /// 显式证明批次不完整；保存未发布正文，调用方可重试同一批。
     #[error("Proof batch incomplete")]
     ProofBatchIncomplete,
+    /// 显式证明批次与保存正文不一致；同一批重试不会成功，平台须按
+    /// durable 编辑事实重新冻结批次（Issue #1062 1.2）。
+    #[error("Proof batch mismatch: {0}")]
+    ProofBatchMismatch(String),
     #[error("Not implemented")]
     NotImplemented,
     #[error("Refuse to delete root")]
@@ -100,6 +104,7 @@ impl WriterError {
             WriterError::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
             WriterError::ChapterVersionConflict => "CHAPTER_VERSION_CONFLICT",
             WriterError::ProofBatchIncomplete => "PROOF_BATCH_INCOMPLETE",
+            WriterError::ProofBatchMismatch(_) => "PROOF_BATCH_MISMATCH",
             WriterError::NotImplemented => "NOT_IMPLEMENTED",
             WriterError::RefuseToDeleteRoot => "REFUSE_DELETE_ROOT",
             WriterError::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
@@ -131,6 +136,7 @@ impl WriterError {
             WriterError::EmptyOverwriteBlocked { .. } => "error.empty_overwrite_blocked",
             WriterError::ChapterVersionConflict => "error.chapter_version_conflict",
             WriterError::ProofBatchIncomplete => "error.proof_batch_incomplete",
+            WriterError::ProofBatchMismatch(_) => "error.proof_batch_mismatch",
             WriterError::NotImplemented => "error.not_implemented",
             WriterError::RefuseToDeleteRoot => "error.refuse_delete_root",
             WriterError::InvalidDeleteTarget(_) => "error.invalid_delete_target",
@@ -249,6 +255,7 @@ impl From<crate::error::Error> for WriterError {
             },
             Error::ChapterVersionConflict { .. } => WriterError::ChapterVersionConflict,
             Error::ProofBatchIncomplete { .. } => WriterError::ProofBatchIncomplete,
+            Error::ProofBatchMismatch { detail, .. } => WriterError::ProofBatchMismatch(detail),
             Error::NotImplemented => WriterError::NotImplemented,
             Error::RefuseToDeleteRoot => WriterError::RefuseToDeleteRoot,
             Error::InvalidDeleteTarget(s) => WriterError::InvalidDeleteTarget(s),

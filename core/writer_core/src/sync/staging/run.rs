@@ -4,6 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
+use crate::starmap::migration::nodes::NodeObjectPlan;
 use uuid::Uuid;
 
 use super::commit_plan::*;
@@ -808,6 +809,26 @@ impl StagingRun {
             }
         }
 
+        // 节点迁移入口需要素材库视图（references.json 绑定 + incoming/base 的
+        // 共享本体）。`live_root` 对星图组就是 app_data_root，素材库与画布同根。
+        let node_bindings =
+            crate::starmap::migration::nodes::NodeObjectBindings::load_reference_bindings(
+                live_root,
+            )
+            .map_err(|error| {
+                crate::Error::Other(format!(
+                    "compute_commit_plan: load starmap node reference bindings failed \
+                     (live_root={}): {error}",
+                    live_root.display()
+                ))
+            })?
+            .with_definition_root(staging_root.clone())
+            .with_definition_root(base_root.clone());
+        let node_context = crate::sync::staging::starmap_merge::NodeObjectContext {
+            app_data_root: live_root,
+            bindings: &node_bindings,
+        };
+
         // --- 统一处理星图 graph.json + 对象文件 ---
         // 对每个 starmap_group 执行统一合并，确保 graph.json 成员表与对象文件
         // 决策一致（issue #902 第十轮复核）。graph.json 和对象文件不再逐文件独立裁决。
@@ -965,6 +986,7 @@ impl StagingRun {
                 &objects,
                 lifecycle_override,
                 &object_versions,
+                Some(&node_context),
             )
             .map_err(|error| {
                 crate::Error::Other(format!(
@@ -1031,22 +1053,53 @@ impl StagingRun {
 
             // 对象决策装入 CommitPlan
             for (idx, (obj_rel, decision)) in output.object_decisions.iter().enumerate() {
-                let (_, _, _, _obj_base, obj_local, obj_incoming) = &objects[idx];
+                let (_, object_type, object_id, _obj_base, obj_local, obj_incoming) = &objects[idx];
                 let base_hash = known_hash_for(&live_known_files, obj_rel).unwrap_or_default();
                 let local_hash = md5_hex(obj_local);
                 let incoming_hash = md5_hex(obj_incoming);
+                // Issue #1062：旧格式节点/缺 assetId 实例的对象级迁移计划与合并
+                // 决议一起发布；冲突或删除对象没有计划，保留原始材料。
+                let node_plan = if object_type == "node" {
+                    output
+                        .node_object_plans
+                        .iter()
+                        .find(|(id, _)| id == object_id)
+                        .map(|(_, plan)| plan)
+                } else {
+                    None
+                };
                 match decision {
                     ObjectMergeDecision::NoOp => {
-                        plan.noop.push(obj_rel.clone());
+                        if let Some(node_plan) = node_plan {
+                            push_node_migration_actions(&mut plan, obj_rel, node_plan)?;
+                        } else {
+                            plan.noop.push(obj_rel.clone());
+                        }
                     }
                     ObjectMergeDecision::KeepLocal => {
-                        plan.keep_local.push(obj_rel.clone());
+                        if let Some(node_plan) = node_plan {
+                            push_node_migration_actions(&mut plan, obj_rel, node_plan)?;
+                        } else {
+                            plan.keep_local.push(obj_rel.clone());
+                        }
                     }
                     ObjectMergeDecision::ApplyIncoming(content) => {
-                        plan.content_actions.push(CommitAction::Apply {
-                            rel_path: obj_rel.clone(),
-                            content: content.clone(),
-                        });
+                        if let Some(node_plan) = node_plan {
+                            if node_plan.rewrite_instance {
+                                push_node_migration_actions(&mut plan, obj_rel, node_plan)?;
+                            } else {
+                                plan.content_actions.push(CommitAction::Apply {
+                                    rel_path: obj_rel.clone(),
+                                    content: content.clone(),
+                                });
+                                push_node_definition_action(&mut plan, node_plan)?;
+                            }
+                        } else {
+                            plan.content_actions.push(CommitAction::Apply {
+                                rel_path: obj_rel.clone(),
+                                content: content.clone(),
+                            });
+                        }
                     }
                     ObjectMergeDecision::Delete => {
                         starmap_pruned_object_paths
@@ -1755,6 +1808,51 @@ fn list_live_file_paths(live_root: &Path) -> Result<Vec<PathBuf>> {
     }
     walk_commit_candidates(live_root, live_root, &mut out)?;
     Ok(out)
+}
+
+/// 发布节点对象迁移计划：改写画布实例文件 + 写出缺失/生成的共享本体。
+///
+/// 与合并决议使用同一份 [`NodeObjectPlan`]：不会只补 `assetId` 而丢掉本体，
+/// 也不会在冲突/删除对象上写半成品。本体先于实例进入同一 `CommitPlan`，
+/// 由 SaveTransaction 一次原子提交。
+fn push_node_migration_actions(
+    plan: &mut CommitPlan,
+    obj_rel: &Path,
+    node_plan: &NodeObjectPlan,
+) -> Result<()> {
+    if node_plan.rewrite_instance {
+        let content = node_plan.instance_bytes()?;
+        upsert_content_action(plan, obj_rel.to_path_buf(), content);
+    }
+    push_node_definition_action(plan, node_plan)
+}
+
+/// 发布计划中缺失的共享本体（已有同内容本体时 `definition=None`，不写）。
+fn push_node_definition_action(plan: &mut CommitPlan, node_plan: &NodeObjectPlan) -> Result<()> {
+    let Some(definition) = &node_plan.definition else {
+        return Ok(());
+    };
+    let rel_path = crate::starmap::library::node_definition_rel_path(&definition.asset_id);
+    let content = serde_json::to_vec_pretty(definition)?;
+    upsert_content_action(plan, rel_path, content);
+    Ok(())
+}
+
+/// 同一路径只保留一个 Apply 动作（多个画布实例可能解析到同一个新本体）。
+fn upsert_content_action(plan: &mut CommitPlan, rel_path: PathBuf, content: Vec<u8>) {
+    for action in &mut plan.content_actions {
+        if let CommitAction::Apply {
+            rel_path: existing, ..
+        } = action
+        {
+            if existing == &rel_path {
+                *action = CommitAction::Apply { rel_path, content };
+                return;
+            }
+        }
+    }
+    plan.content_actions
+        .push(CommitAction::Apply { rel_path, content });
 }
 
 /// 列出 base/staging 下参与 commit 比较的候选路径。

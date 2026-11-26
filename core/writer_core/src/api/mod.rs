@@ -6,6 +6,7 @@
 
 pub mod bootstrap;
 pub mod chapter_api;
+mod chapter_proof_save;
 pub mod diagnostics_api;
 pub mod envelope;
 pub mod error;

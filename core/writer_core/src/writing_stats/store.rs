@@ -2126,11 +2126,12 @@ mod tests {
         store.record_event(event.clone()).unwrap();
         store.record_event(event).unwrap();
 
-        let yesterday_path = tmp
+        // 新契约：已关闭的业务日以 zstd 归档段持久化，明文 .events.jsonl 只在
+        // 当天开放；重发旧事件必须落在其原始归档日，不能漂移到今天。
+        let yesterday_archive = tmp
             .path()
-            .join("stats/events/device_1")
-            .join(format!("{yesterday}.events.jsonl"));
-        assert!(yesterday_path.exists());
+            .join(checkpoint::archive_relative_path("device_1", &yesterday));
+        assert!(yesterday_archive.exists());
         assert!(!tmp
             .path()
             .join("stats/events/device_1")
