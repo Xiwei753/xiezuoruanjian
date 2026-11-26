@@ -309,6 +309,12 @@ export class HarmonyAutoSyncScheduler {
       hilog.info(DOMAIN, TAG, 'onBackgroundSaved: auto sync inactive, skip handoff sync')
       return
     }
+    if (!this.uploadWakePending) {
+      // 没有已落盘的业务变更就没有上传内容：退后台保存结束不做空闲交接，
+      // 远端变化交给前台的轻量探测（Issue #1065 复审 #6）。
+      hilog.info(DOMAIN, TAG, 'onBackgroundSaved: no durable mutation pending, skip handoff')
+      return
+    }
     hilog.info(DOMAIN, TAG, 'onBackgroundSaved: background save finished, starting handoff sync')
     const generation: number = this.nextHandoffGeneration()
     await this.performHandoffSync('background_handoff', generation)
@@ -468,6 +474,8 @@ export class HarmonyAutoSyncScheduler {
       const outcome: SyncOutcome = await SyncOperationController.getInstance().performSync('auto', trigger)
       const isLatest: boolean = generation === this.handoffRequestGeneration
       if (outcome.phase === 'success') {
+        // Core 成功即表示本轮待发布事实已经确认或确实无内容可发布。
+        this.uploadWakePending = false
         if (isLatest) {
           this.handoffPendingGeneration = 0
         }
@@ -563,9 +571,16 @@ export class HarmonyAutoSyncScheduler {
     return seconds * 1000
   }
 
+  /**
+   * 自动同步是否生效。
+   *
+   * 间隔 <= 0 按"不自动同步"处理（Issue #1065 复审 #6）：0 间隔表示只用
+   * 手动入口，平台不能自行把 0 当成 60 秒周期去唤醒 Core。
+   */
   private isAutoSyncActive(): boolean {
     const config: SyncConfig | null = this.config
-    return config !== null && config.enabled && config.autoSync
+    return config !== null && config.enabled && config.autoSync &&
+      config.syncIntervalSeconds > 0
   }
 
   private startForegroundTimer(): void {

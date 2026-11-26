@@ -901,9 +901,12 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         return false
       }
       this.applySaveReceipt(request, receipt)
-      // Issue #1065：正文已 durable，通知调度器"有新的已落盘事实待上传"。
-      // 调度器按用户间隔把多次提交合并成一次同步，这里不直接发起同步。
-      emitter.emit({ eventId: SYNC_DURABLE_COMMIT_EVENT_ID })
+      // Issue #1065：只有真正产生 durable 提交的回执才算业务变更（同内容保存
+      // 的 no-op 回执 transaction_id 为空）。调度器按用户间隔把多次提交合并成
+      // 一次同步，这里不直接发起同步。
+      if (receipt.transactionId.length > 0) {
+        emitter.emit({ eventId: SYNC_DURABLE_COMMIT_EVENT_ID })
+      }
       // 正文已 durable，精确 ack 本次请求携带的证明事件；不能按累计
       // revision 清空，否则并发新编辑会丢失。
       this.statsQueue.acknowledgeProofEvents(request.proofEventIds)
