@@ -29,7 +29,12 @@ import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { Routes, WritingRouteParams } from '../../../app/navigation/Routes'
 import { ActiveWritingSession, SyncBarrierBeginResult } from './ActiveWritingSessionRegistry'
 import { ImeSettlementError } from '../input/ime_settlement_barrier'
-import { ConflictRecoveryResult, isConflictRecoverySatisfied } from './editor_reconcile_logic'
+import { EditorConflictPayload } from '../input/NativeRichEditorBridge'
+import {
+  ConflictRecoveryResult,
+  editorConflictVersionSentinel,
+  isConflictRecoverySatisfied
+} from './editor_reconcile_logic'
 
 // 协调器需要页面展示的文案键（翻译成资源字符串由页面负责，协调器不 import UI 上下文）。
 export enum WritingTextKey {
@@ -267,6 +272,42 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // 页面把 NativeRichEditorBridge.retryReconcile 接进来；不注入时保存/同步/关闭保持原行为。
   setBridgeRetryReconcile(fn: (() => Promise<ConflictRecoveryResult>) | null): void {
     this.bridgeRetryReconcile = fn
+  }
+
+  /**
+   * Issue #1063 复审评论：真实冲突把双方正文交给既有 Core 冲突材料机制持久保留。
+   *
+   * 版本哨兵（空 contentSha256 / revision 0）使任意真实版本都不匹配 `ChapterCommitRequest`
+   * 的 CAS：Core 把磁盘当前正文（local.md）、传入的原生正文（incoming.md）与共同基线
+   * （base.md）写入既有 conflict_dir 后返回 CHAPTER_VERSION_CONFLICT，不会写正文。
+   * 走不带 proof batch 的普通版本 CAS：带快照路径会先校验 pending proof（可能直接拒绝）
+   * 且把版本冲突统一报成 CHAPTER_SAVE_FAILED，无法确认冲突材料已经落盘。
+   * 这里只更新既有保存失败状态，不新增持久化文件格式或第二套保存流程。
+   */
+  async persistEditorConflict(payload: EditorConflictPayload): Promise<boolean> {
+    if (this.chapterId.length === 0) {
+      return false
+    }
+    const sentinel: ChapterVersion = editorConflictVersionSentinel() as ChapterVersion
+    const result = await this.bridge.persistChapterConflictMaterial(
+      this.chapterId, payload.nativeText, sentinel, payload.confirmedText)
+    if (!result.success && result.errorCode === 'CHAPTER_VERSION_CONFLICT') {
+      // Core 已把 local/incoming/base 写入既有 conflict_dir；只更新既有失败状态。
+      this.lastSaveFailed = true
+      this.saveMessage = this.textProvider(WritingTextKey.SaveFailed)
+      this.emit(null, null)
+      return true
+    }
+    // 哨兵空 sha 正常不会命中真实版本；若意外成功说明可能有正文写入，按失败记录，绝不静默。
+    // 其余错误（磁盘/会话/参数）同样只记录：冲突状态机与原生正文不受影响。
+    hilog.error(0x0000, 'WritingWorkflowCoordinator',
+      `conflict material persistence did not produce version conflict chapter=${this.chapterId}`
+        + ` success=${result.success}`
+        + ` errorCode=${result.errorCode !== undefined ? result.errorCode : 'UNKNOWN'}`)
+    this.lastSaveFailed = true
+    this.saveMessage = this.textProvider(WritingTextKey.SaveFailed)
+    this.emit(null, null)
+    return false
   }
 
   // Issue #1054：由页面把原生桥接的“合法清空意图”校验注入保存链路。

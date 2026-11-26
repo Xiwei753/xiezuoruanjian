@@ -21,7 +21,7 @@ import { EditorStatsQueue } from '../stats/EditorStatsQueue'
 import { WritingSessionTracker } from '../stats/WritingSessionTracker'
 import { EditorEditResult, EditorSessionSnapshot, EditorEditOutcome } from '../../../corebridge/dto/EditorDtos'
 import { EditorTransactionCause, EditorOperationKind } from '../../../corebridge/dto/EditorDtos'
-import { NativeRichEditorBridge } from '../input/NativeRichEditorBridge'
+import { NativeRichEditorBridge, EditorConflictPayload } from '../input/NativeRichEditorBridge'
 import { ConflictRecoveryResult } from '../session/editor_reconcile_logic'
 import { SujianEditor } from './SujianEditor'
 import { ProofReplayPanel } from './ProofReplayPanel'
@@ -349,6 +349,11 @@ export struct WritingScreen {
     // 不可合并的冲突仍保留在 bridge 原生正文 + pendingEdits，走既有保存失败提示。
     this.writingWorkflow.setBridgeRetryReconcile(
       (): Promise<ConflictRecoveryResult> => this.richEditorBridge.retryReconcile())
+    // Issue #1063 复审评论：真实冲突把双方正文交给既有 Core 冲突材料机制持久保留
+    // （版本哨兵 CAS 不匹配 → conflict_dir），不新增第二套保存流程。
+    this.richEditorBridge.setConflictPersistenceHandler(
+      (payload: EditorConflictPayload): Promise<boolean> =>
+        this.writingWorkflow.persistEditorConflict(payload))
     // Issue #1054：保存路径只接受“用户删除事务把当前非空会话删空”的精确 session/revision 意图，
     // 程序性初始空视图或未加载章节不会产生该意图。
     this.writingWorkflow.setEmptyDocumentIntentCheck(
@@ -576,6 +581,8 @@ export struct WritingScreen {
     // 清除协调器监听器（避免 close 后回调）。
     this.writingWorkflow.dispose()
     this.correctionCoordinator.dispose()
+    // Issue #1063 复审评论：页面销毁时解除冲突持久化回调，避免旧页面触碰已结束的写作流程。
+    this.richEditorBridge.setConflictPersistenceHandler(null)
     // Issue #1063：页面退出时给所有 idle waiter 确定结果（不悬挂保存/退出屏障）。
     this.richEditorBridge.cancelIdleWaiters('writing screen disposed')
     if (this.viewportContinuationTimer !== -1) {

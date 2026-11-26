@@ -26,15 +26,19 @@
 // - 切章时以 sessionId 隔离旧回调，旧队列不可触碰新章节 UI。
 //
 // Issue #1063 评论第 4 条：会话健康状态机（替代只由 beginSession 重置的 idleError）
-//   healthy ──映射/事务失败──▶ reconciling ──可验证 rebase 成功──▶ healthy
-//                                   └──映射失败/重叠/文本不一致──▶ conflict
-//   - reconciling：冻结 pendingEdits（含每条 edit 的 beforeText 基线），从 Core 当前
-//     snapshot 与原生实际全文计算可验证 rebase，由原串行 editQueue 提交；期间 idle waiters
-//     保持挂起，syncFromCore 不回写覆盖原生正文。
+//   healthy ──镜像/事务与 Core 不一致──▶ reconciling ──三方合并可验证收敛──▶ healthy
+//                                   └──两侧编辑重叠/无法证明可丢弃──▶ conflict
+//   - reconciling：冻结 pendingEdits（消费游标不前进），以共同基线 confirmedText、
+//     Core 当前 snapshot 与原生实际全文做三方合并：只有一侧变化时直接收敛，两侧改动
+//     不同位置时合并后提交 Core，区间重叠才是真实冲突。全部正文写入都经程序性入口，
+//     不再有「Core 前进就刷新原生 / 原生前进就收敛 Core」两套独立覆盖路径。
+//     期间 idle waiters 保持挂起，syncFromCore 不回写覆盖原生正文。
 //   - conflict：保留原生正文和全部未确认事件，不调用 syncFromCore 覆盖；waiters 立即以
-//     明确原因 reject，诊断字段 nativeCoreDiverged 同步置 true。
+//     明确原因 reject，诊断字段 nativeCoreDiverged 同步置 true。真实冲突把双方正文交给
+//     既有 Core 冲突材料机制（版本 CAS 不匹配 → conflict_dir 的 local/incoming/base）
+//     持久保留，一次冲突只请求一次，不新增第二套持久化流程。
 //   - 复审评论第 2 条：conflict 不是终态。retryReconcile() 在当前会话内把状态切回
-//     reconciling，基于当前 Core snapshot 重新做可验证 rebase；成功恢复 healthy，
+//     reconciling，基于当前 Core snapshot 重新做三方合并；成功恢复 healthy，
 //     失败保持 conflict 且一条事件不丢。beginSession 仍是会话替换语义，但不是唯一解锁路径。
 //   - 失败不再用单一 idleError 锁死编辑：错误详情写在 conflictDetail（只读 getter 供诊断）。
 
@@ -43,10 +47,8 @@ import { computeMinimalTextDiff } from '../session/editor_patch_logic'
 import {
   EditorSessionHealth,
   ReconcileSessionState,
-  attemptFrozenRebase,
-  mapEditRangeToBaseline,
-  FrozenRebaseAttempt,
-  EditRangeMap,
+  planThreeWayReconcile,
+  ThreeWayMergeResult,
   ConflictRecoveryResult
 } from '../session/editor_reconcile_logic'
 import {
@@ -169,8 +171,25 @@ interface PendingNativeChange {
   changeSequence: number
 }
 
-// Issue #1063：冻结 pendingEdits 在 Core 当前正文上的模拟应用结果由
-// session/editor_reconcile_logic.ts 的 attemptFrozenRebase 计算（纯逻辑，可单测）。
+// Issue #1063：冻结 pendingEdits 与当前 Core/原生正文的三方合并由
+// session/editor_reconcile_logic.ts 的 planThreeWayReconcile 计算（纯逻辑，可单测）。
+
+// Issue #1063 复审评论：真实冲突要保留双方正文。本类型只描述交给既有 Core 冲突材料
+// 机制的输入，不引入新的持久化文件格式或第二套保存流程。
+export interface EditorConflictPayload {
+  // 原生编辑器里尚未进入 Core 的正文（Core 冲突材料的 incoming.md）。
+  nativeText: string
+  // 冲突发生时最近一次 Core 快照正文（诊断/对照用；local.md 由 Core 从磁盘读取）。
+  coreText: string
+  // 三方合并的共同基线（Core 冲突材料的 base.md）。
+  confirmedText: string
+  // 进入冲突的原因（合并重叠/原生拒绝写入等）。
+  detail: string
+  // 本地会话令牌（beginSession 递增），用于诊断冲突属于哪一次打开章节。
+  localSessionId: number
+  // Core 编辑会话 id；无会话时为 -1。
+  coreSessionId: number
+}
 
 // 记录一次原生文本操作所需的字段（补 hash/会话事实后落到快照）。
 interface NativeOperationFacts {
@@ -271,8 +290,6 @@ export class NativeRichEditorBridge {
   private nativeCoreDivergedSessionId: number | null = null
   private stateListener: NativeEditorStateListener | null = null
   private barrierStage: string = 'save-when-idle'
-  private nativeCoreConvergenceRunning: boolean = false
-  private static readonly NATIVE_CORE_CONVERGENCE_MAX_ATTEMPTS: number = 3
   // 原生编辑器是否已加载过 Core 正文。未加载时 currentText 只是空占位，
   // 不能把它当成「原生正文与 Core 不一致」去收敛，否则会把 Core 正文清空。
   private nativeTextReady: boolean = false
@@ -281,7 +298,11 @@ export class NativeRichEditorBridge {
   private lastNativeTextReadFailed: boolean = false
   // 组件 onEditingChange 的最新状态（失焦/取消这类无正文变化事件也会驱动 checkIdle）。
   private nativeEditing: boolean = false
-  private nativeCoreRefreshRunning: boolean = false
+  // Issue #1063 复审评论：真实冲突时把双方正文交给既有 Core 冲突材料机制的回调
+  // （页面注入 WritingWorkflowCoordinator.persistEditorConflict）。
+  private conflictPersistenceHandler: ((payload: EditorConflictPayload) => Promise<boolean>) | null = null
+  // 一次冲突只请求一次冲突材料：重复 enterConflict 不再重复提交（Core 已写过材料）。
+  private conflictPersistenceRequested: boolean = false
   // 换行数按编辑增量维护，快照不再每 150ms 遍历整章。
   private nativeNewlineCount: number = 0
   private coreNewlineCount: number = 0
@@ -312,6 +333,13 @@ export class NativeRichEditorBridge {
 
   setStateListener(listener: NativeEditorStateListener | null): void {
     this.stateListener = listener
+  }
+
+  // Issue #1063 复审评论：真实冲突的持久化出口。页面只在会话存续期间注入；
+  // 页面销毁时传 null，避免旧页面回调触碰已结束的写作流程。
+  setConflictPersistenceHandler(
+    handler: ((payload: EditorConflictPayload) => Promise<boolean>) | null): void {
+    this.conflictPersistenceHandler = handler
   }
 
   isProgrammaticUpdate(): boolean {
@@ -557,7 +585,10 @@ export class NativeRichEditorBridge {
   /**
    * 进入 conflict：保留原生正文与全部未确认事件，不调用 syncFromCore 回写覆盖原生文本；
    * 所有 idle waiters 以明确原因 reject。诊断字段 nativeCoreDiverged 与状态机保持一致，
-   * 阻止 refreshNativeMirrorFromCore/syncFromCore 覆盖仍在原生编辑器里的正文。
+   * 阻止 syncFromCore 覆盖仍在原生编辑器里的正文。
+   *
+   * Issue #1063 复审评论：真实冲突把两份正文交给既有 Core 冲突材料机制持久保留
+   * （一次冲突只请求一次，不阻塞状态机）。
    */
   private enterConflict(reason: string): void {
     this.sessionState.enterConflict(reason)
@@ -567,6 +598,44 @@ export class NativeRichEditorBridge {
       `session conflict: ${reason} pendingEdits=${this.pendingEdits.length}`
         + ` nativeLen=${this.currentText.length}`)
     this.rejectWaitersForConflict()
+    this.requestConflictPersistence(reason)
+  }
+
+  /**
+   * 把冲突双方的正文交给页面注入的持久化回调。
+   *
+   * 回调只走既有章节提交接口（版本哨兵必然 CAS 不匹配 → Core 写 conflict_dir 后返回
+   * CHAPTER_VERSION_CONFLICT），本方法不新增文件格式、不等待结果、不改变 conflict 状态。
+   */
+  private requestConflictPersistence(reason: string): void {
+    const handler = this.conflictPersistenceHandler
+    if (handler === null || this.conflictPersistenceRequested) {
+      return
+    }
+    this.conflictPersistenceRequested = true
+    const snap = this.coordinator.getSnapshot()
+    const coreSessionId: number | null = this.coordinator.getSessionId()
+    // 镜像可能落后于原生实际全文：持久化必须以原生当前正文为准，不能只存旧镜像。
+    const liveNativeText: string | null = this.readNativeFullText()
+    const payload: EditorConflictPayload = {
+      nativeText: liveNativeText !== null ? liveNativeText : this.currentText,
+      coreText: snap !== null ? snap.text : '',
+      confirmedText: this.confirmedText,
+      detail: reason,
+      localSessionId: this.sessionId,
+      coreSessionId: coreSessionId !== null ? coreSessionId : -1
+    }
+    hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+      `requesting conflict material persistence nativeLen=${payload.nativeText.length}`
+        + ` confirmedLen=${payload.confirmedText.length} coreLen=${payload.coreText.length}`)
+    handler(payload).then((persisted: boolean): void => {
+      hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+        `conflict material persistence finished persisted=${persisted} detail=${reason}`)
+    }).catch((e: Object): void => {
+      // 持久化失败只记录：冲突状态机与原生正文不受影响，仍走既有保存失败提示。
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+        `conflict material persistence error: ${JSON.stringify(e)}`)
+    })
   }
 
   private rejectWaitersForConflict(): void {
@@ -616,15 +685,18 @@ export class NativeRichEditorBridge {
   }
 
   /**
-   * 从 Core 当前 snapshot 与原生实际全文计算可验证 rebase。
+   * 统一的会话三方合并（Issue #1063 复审评论：删除绕过 reconcile 的第二套覆盖路径）。
    *
-   * 判定顺序：
-   *   1. 原生全文 === Core 快照 → 直接收敛 healthy（丢弃已确认的冻结 edit，恢复消费）；
-   *   2. 否则按 edit 原始顺序把冻结 pendingEdits 映射到 Core 当前正文，逐笔校验 oldText，
-   *      模拟结果必须与原生全文完全一致；全部通过才提交一笔 Programmatic replaceSlice；
-   *   3. 提交后再次校验 Core 快照文本 === 原生全文、revision === lastAppliedRevision，
-   *      才恢复 healthy 并清空已确认的 pendingEdits；
-   *   4. 任一映射失败/重叠/文本不一致/事务失败 → conflict（保留原生正文与未确认事件）。
+   * 共同基线是 confirmedText（最后一次已确认的 Core 正文），另外两侧分别是 Core 当前
+   * snapshot 与原生实际全文。判定顺序（纯逻辑在 planThreeWayReconcile）：
+   *   1. converged（Core === native）：丢弃已确认的冻结 edit，恢复消费，不写任何一侧；
+   *   2. core-only（native === base）：只有不存在冻结 edit 时才能证明原生没有未反映的编辑；
+   *      重新核对会话/版本/原生全文后，用程序性入口把 Core 正文写回原生；
+   *   3. native-only / merged：先把合并结果提交 Core（若需要），再把结果程序性写回原生；
+   *   4. conflict（同区间不同改法/同点不同插入/区间重叠）：保留原生正文与全部 pendingEdits，
+   *      把两份正文交给既有 Core 冲突材料机制持久保留。
+   *
+   * 每一处 await 之后的结论都要重新核对会话、revision 与原生全文，不跨 await 用旧事实。
    *
    * @returns true 表示本轮因预编辑/原生变更未结算而推迟（调用方不要在同一条微任务链上
    *          立即重排，等结算回调再驱动），false 表示已给出确定结论（healthy 或 conflict）。
@@ -634,7 +706,7 @@ export class NativeRichEditorBridge {
       return false
     }
     if (this.pendingNativeChange !== null || this.imeComposing) {
-      // 预编辑/原生变更未结算：镜像与 Core 都还不是稳定基线，等结算回调后再 rebase
+      // 预编辑/原生变更未结算：镜像与 Core 都还不是稳定基线，等结算回调后重新合并
       // （commitImeCompositionFromBaseline / onContentDidChange 会再次触发）。
       // 返回 true ≠ 已收敛：调用方不能在同一条微任务链上立即重排，否则会形成忙等循环。
       hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
@@ -645,10 +717,13 @@ export class NativeRichEditorBridge {
     // 冻结这一批 edit：drain 在 reconciling 期间不消费，新 edit 排在它们之后。
     const frozen: PendingEdit[] = this.pendingEdits.slice()
     const frozenCount: number = frozen.length
+    // 本轮合并的共同基线。成功提交 Core 后推进到新 Core 正文：否则下一轮会把
+    // 「已经提交进 Core 的编辑」当成两侧同区间不同改法而误判冲突。
+    let base: string = this.confirmedText
     let attempts: number = 0
     while (attempts < BRIDGE_RECONCILE_MAX_ATTEMPTS) {
       attempts++
-      // 每轮重读 Core 会话/快照：会话在 reconcile 期间可能被替换（重开章节），
+      // 每轮重读 Core 会话/快照：会话在合并期间可能被替换（重开章节），
       // 不能沿用上一轮的 sessionId，否则会一直 SESSION_CHANGED。
       const coreSessionId = this.coordinator.getSessionId()
       if (coreSessionId === null) {
@@ -672,68 +747,132 @@ export class NativeRichEditorBridge {
         this.currentText = nativeText
         this.nativeNewlineCount = countNewlines(nativeText)
       }
-      if (nativeText === snap.text) {
-        // 原生全文与 Core 快照逐字相等：直接收敛，不提交任何 rebase 事务。
+      const plan: ThreeWayMergeResult = planThreeWayReconcile(base, snap.text, nativeText)
+      if (plan.kind === 'converged') {
+        // 原生全文与 Core 快照逐字相等：直接收敛，不提交任何事务。
         this.dropFrozenEdits(frozen, frozenCount)
-        this.confirmRebaseConverged(snap.text, snap.revision)
+        this.confirmRebaseConverged(nativeText, snap.revision)
         hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
-          `reconcile converged without rebase: coreRevision=${snap.revision} droppedEdits=${frozenCount}`)
+          `reconcile converged: coreRevision=${snap.revision} droppedEdits=${frozenCount}`)
         this.refreshSelectionAfterConvergence()
         this.wakeDrain()
         return false
       }
-      const simulated: FrozenRebaseAttempt = attemptFrozenRebase(frozen, snap.text)
-      if (!simulated.recovered) {
-        this.enterConflict(simulated.reason)
-        return false
-      }
-      if (simulated.text !== nativeText) {
-        this.enterConflict(
-          `frozen edits do not reproduce native text`
-            + ` firstMismatch=${firstMismatchUtf16(simulated.text, nativeText)}`
-            + ` simulatedLen=${simulated.text.length} nativeLen=${nativeText.length}`)
-        return false
-      }
-      // diff 只用于诊断：真正提交的是「Core 当前正文 → 原生全文」的最小差量，
-      // replaceSliceIfUnchanged 会在 Core 侧再算一次并核对 expectedText。
-      const diff = this.computeDiff(snap.text, nativeText)
-      const result = await this.coordinator.replaceSliceIfUnchanged(
-        coreSessionId, snap.revision, snap.text, nativeText, EditorTransactionCause.Programmatic)
-      if (sessionAtEntry !== this.sessionId) {
-        return false
-      }
-      if (result.success && result.data !== undefined) {
-        const after = this.coordinator.getSnapshot()
-        if (after !== null && after.text === nativeText && after.revision === result.data.newRevision) {
-          this.dropFrozenEdits(frozen, frozenCount)
-          this.confirmRebaseConverged(after.text, after.revision)
-          hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
-            `reconcile committed rebase revision=${snap.revision}->${after.revision}`
-              + ` diff=[${diff.start}, ${diff.end}) insertedUtf16=${diff.replacement.length}`
-              + ` confirmedEdits=${frozenCount}`)
-          this.refreshSelectionAfterConvergence()
-          this.wakeDrain()
+      if (plan.kind === 'core-only') {
+        // 原生仍停在共同基线：存在冻结 edit 就无法证明它们已反映在原生正文里，按真实冲突处理。
+        if (frozenCount > 0) {
+          this.enterConflict(
+            `native text still equals confirmed baseline with ${frozenCount} unsynced edit(s)`)
           return false
         }
-        // Core 回流与原生全文不一致：重读基线再试。
-        continue
+        // 写原生之前重新核对事实：会话/版本/文本与刚才读取的完全一致。
+        const checkSessionId = this.coordinator.getSessionId()
+        const checkSnap = this.coordinator.getSnapshot()
+        const checkNativeText: string | null = this.readNativeFullText()
+        if (this.sessionId !== sessionAtEntry
+            || checkSessionId !== coreSessionId
+            || checkSnap === null
+            || checkSnap.revision !== snap.revision
+            || checkSnap.text !== snap.text
+            || checkNativeText === null
+            || checkNativeText !== nativeText
+            || checkNativeText !== base) {
+          // 事实在读取期间变化：重读基线再判定（次数有上限）。
+          continue
+        }
+        const applied: boolean = this.applyProgrammaticText(snap.text)
+        const acceptedText: string | null = applied ? this.readNativeFullText() : null
+        if (!applied || acceptedText === null || acceptedText !== snap.text) {
+          this.enterConflict(
+            `native editor did not accept core text applied=${applied}`
+              + ` acceptedLen=${acceptedText !== null ? acceptedText.length : -1}`
+              + ` coreLen=${snap.text.length}`)
+          return false
+        }
+        this.currentText = snap.text
+        this.nativeNewlineCount = countNewlines(snap.text)
+        this.confirmRebaseConverged(snap.text, snap.revision)
+        hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+          `reconcile applied core-only text: coreRevision=${snap.revision} droppedEdits=0`)
+        this.refreshSelectionAfterConvergence()
+        this.wakeDrain()
+        return false
       }
-      if (result.errorCode === 'SESSION_CHANGED') {
-        // Core 会话在 reconcile 期间被替换：重读会话/基线再判定（次数有上限）。
-        continue
+      if (plan.kind === 'native-only' || plan.kind === 'merged') {
+        // 合并结果 = 双方编辑的并集（native-only 时就是原生全文）。
+        const merged: string = plan.merged
+        let mergedRevision: number = snap.revision
+        if (merged !== snap.text) {
+          // 把合并结果提交 Core；replaceSliceIfUnchanged 会在 Core 侧再核对一次 expectedText。
+          const result = await this.coordinator.replaceSliceIfUnchanged(
+            coreSessionId, snap.revision, snap.text, merged, EditorTransactionCause.Programmatic)
+          if (this.sessionId !== sessionAtEntry) {
+            return false
+          }
+          if (!result.success || result.data === undefined) {
+            if (result.errorCode === 'STALE_BASELINE' || result.errorCode === 'SESSION_CHANGED') {
+              // Core 正文/会话在合并期间被推进：重读基线重新合并（次数有上限）。
+              continue
+            }
+            this.enterConflict(
+              `reconcile transaction failed: ${result.errorCode !== undefined ? result.errorCode : 'UNKNOWN'}`)
+            return false
+          }
+          const after = this.coordinator.getSnapshot()
+          if (after === null || after.text !== merged || after.revision !== result.data.newRevision
+              || this.coordinator.getSessionId() !== coreSessionId) {
+            // Core 回流/会话与合并结果不一致：重读基线再判定（次数有上限）。
+            continue
+          }
+          mergedRevision = after.revision
+          // Core 已经是这次合并结果：本轮共同基线跟着前进，下一轮只处理 Core 之后的新改动。
+          base = merged
+        }
+        if (nativeText !== merged) {
+          // 写原生之前重新核对事实：会话/revision/合并结果/原生全文都必须与已确定的结论一致。
+          const checkSessionId = this.coordinator.getSessionId()
+          const checkSnap = this.coordinator.getSnapshot()
+          const checkNativeText: string | null = this.readNativeFullText()
+          if (this.sessionId !== sessionAtEntry
+              || checkSessionId !== coreSessionId
+              || checkSnap === null
+              || checkSnap.revision !== mergedRevision
+              || checkSnap.text !== merged
+              || checkNativeText === null
+              || checkNativeText !== nativeText) {
+            continue
+          }
+          const applied: boolean = this.applyProgrammaticText(merged)
+          const acceptedText: string | null = applied ? this.readNativeFullText() : null
+          if (!applied || acceptedText === null || acceptedText !== merged) {
+            // 原生拒绝写入：保留 pendingEdits 与原生正文，进入真实冲突。
+            this.enterConflict(
+              `native editor did not accept merged text applied=${applied}`
+                + ` acceptedLen=${acceptedText !== null ? acceptedText.length : -1}`
+                + ` mergedLen=${merged.length}`)
+            return false
+          }
+          this.currentText = merged
+          this.nativeNewlineCount = countNewlines(merged)
+        }
+        this.confirmRebaseConverged(merged, mergedRevision)
+        this.dropFrozenEdits(frozen, frozenCount)
+        hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+          `reconcile merged: revision=${snap.revision}->${mergedRevision} kind=${plan.kind}`
+            + ` confirmedEdits=${frozenCount}`)
+        this.refreshSelectionAfterConvergence()
+        this.wakeDrain()
+        return false
       }
-      if (result.errorCode === 'STALE_BASELINE' && attempts < BRIDGE_RECONCILE_MAX_ATTEMPTS) {
-        // Core 正文在映射期间被推进：重读基线重算映射。
-        continue
-      }
-      this.enterConflict(`reconcile transaction failed: ${result.errorCode !== undefined ? result.errorCode : 'UNKNOWN'}`)
+      // planThreeWayReconcile 只剩 conflict：保留双方正文与全部未确认事件。
+      this.enterConflict(plan.reason)
       return false
     }
     this.enterConflict(`reconcile did not converge after ${attempts} attempt(s)`)
     return false
   }
 
-  // 只有可验证 rebase 成功（或原生已与 Core 逐字一致）才丢弃冻结前缀；
+  // 只有三方合并收敛（或原生已与 Core 逐字一致）才丢弃冻结前缀；
   // 同时推进队列序号，退出屏障据此确认「提交的事务已进入 Core」。
   private dropFrozenEdits(frozen: PendingEdit[], frozenCount: number): void {
     for (let i = 0; i < frozenCount; i++) {
@@ -744,7 +883,9 @@ export class NativeRichEditorBridge {
     this.pendingEdits = this.pendingEdits.slice(frozenCount)
   }
 
-  // rebase 收敛：三方状态、revision 与 confirmed 基线一起对齐后恢复 healthy。
+  // 三方合并收敛：三方状态、revision 与 confirmed 基线一起对齐后恢复 healthy。
+  // 恢复 healthy 时允许下一次真实冲突重新请求冲突材料持久化。
+  // 原生全文在这一刻已被读回核对，因此编辑器正文一定已加载（不许再当空占位）。
   private confirmRebaseConverged(text: string, revision: number): void {
     this.lastAppliedRevision = revision
     this.confirmedText = text
@@ -752,6 +893,8 @@ export class NativeRichEditorBridge {
     this.coreNewlineCount = countNewlines(text)
     this.nativeCoreDiverged = false
     this.nativeCoreDivergedSessionId = null
+    this.conflictPersistenceRequested = false
+    this.nativeTextReady = true
     this.sessionState.confirmHealthy()
   }
 
@@ -994,172 +1137,25 @@ export class NativeRichEditorBridge {
         return
       }
 
-      if (alignment.coreAdvanced) {
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
-          `core text advanced beyond native mirror: appliedRevision=${alignment.appliedRevision}`
-            + ` coreRevision=${alignment.coreRevision}`)
-        if (this.nativeCoreRefreshRunning) {
-          return
-        }
-        this.nativeCoreRefreshRunning = true
-        void this.refreshNativeMirrorFromCore()
+      // Issue #1063 复审评论：未对齐时不再有「Core 前进就刷新原生 / 原生前进就收敛 Core」
+      // 两套独立覆盖路径。统一进入三方合并 reconcile：只有确实没有待结算的原生事实时才调度，
+      // 否则保持原 gating（等待输入/IME/选区结算后再由回调驱动）。
+      if (this.sessionState.isConflict()) {
         return
       }
-
-      // 未对齐：等待者保持挂起，先用原生全文收敛 Core；收敛失败才向等待者返回真实错误。
-      if (this.nativeCoreConvergenceRunning) {
+      const blocked: boolean = this.pendingEdits.length > 0 || this.drainRunning ||
+        this.imeComposing || this.pendingNativeChange !== null || this.pendingSelectionIntent !== null
+      if (blocked) {
         return
       }
-      if (!alignment.nativeAvailable) {
-        this.failNativeCoreAlignment(
-          `native full text unavailable; mirrorLen=${alignment.nativeUtf16Length} coreLen=${alignment.coreUtf16Length}`)
-        return
-      }
-      if (!alignment.mirrorMatchesEditor) {
-        this.reportNativeFactError('barrier',
-          `mirror diverged from native text firstMismatch=${alignment.firstMismatchUtf16}`)
-        this.currentText = alignment.nativeText
-        this.nativeNewlineCount = countNewlines(alignment.nativeText)
-      }
-      void this.convergeNativeTextToCore()
+      this.enterReconciling(`native/core mismatch: stage=${this.barrierStage}`
+        + ` mirrorLen=${alignment.nativeUtf16Length} coreLen=${alignment.coreUtf16Length}`
+        + ` firstMismatch=${alignment.firstMismatchUtf16}`
+        + ` nativeAvailable=${alignment.nativeAvailable}`)
+      // enterReconciling 已调度一次；这里显式再调一次只是钉住「同一轮只调度一次」的语义
+      // （scheduleReconcile 自身幂等）。
+      this.scheduleReconcile()
     })
-  }
-
-  // Core 先行推进时刷新原生正文，刷新后由 checkIdle 重新做三方校验。
-  // Issue #1063：只有 healthy 才允许 Core → 原生回写；reconciling/conflict 时绝不能覆盖原生正文。
-  private async refreshNativeMirrorFromCore(): Promise<void> {
-    if (this.sessionState.getHealth() !== 'healthy') {
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
-        `refreshNativeMirrorFromCore refused: session is ${this.sessionState.getHealth()}`)
-      return
-    }
-    const sessionAtEntry = this.sessionId
-    try {
-      this.nativeCoreDiverged = false
-      this.nativeCoreDivergedSessionId = null
-      await this.syncFromCore()
-      if (sessionAtEntry !== this.sessionId) {
-        return
-      }
-      const snap = this.coordinator.getSnapshot()
-      const editorText = this.readNativeFullText()
-      if (snap === null || editorText === null) {
-        this.failNativeCoreAlignment('cannot refresh native mirror from core')
-        return
-      }
-      if (editorText !== snap.text) {
-        this.failNativeCoreAlignment(
-          `native editor did not accept core text after refresh nativeLen=${editorText.length} coreLen=${snap.text.length}`)
-        return
-      }
-      this.currentText = snap.text
-      this.nativeNewlineCount = countNewlines(snap.text)
-      this.coreNewlineCount = this.nativeNewlineCount
-      this.nativeTextReady = true
-      this.lastAppliedRevision = snap.revision
-      this.confirmedText = snap.text
-      this.confirmedRevision = snap.revision
-    } catch (e) {
-      this.failNativeCoreAlignment(`refresh native mirror error: ${JSON.stringify(e)}`)
-    } finally {
-      this.nativeCoreRefreshRunning = false
-      if (sessionAtEntry === this.sessionId) {
-        this.checkIdle()
-      }
-    }
-  }
-
-  // 原生正文 → Core 已提交正文的收敛事务：按最小差量只提交实际改变区间。
-  private async convergeNativeTextToCore(): Promise<void> {
-    if (this.nativeCoreConvergenceRunning) {
-      return
-    }
-    this.nativeCoreConvergenceRunning = true
-    const sessionAtEntry = this.sessionId
-    let attempts = 0
-    try {
-      while (attempts < NativeRichEditorBridge.NATIVE_CORE_CONVERGENCE_MAX_ATTEMPTS) {
-        if (sessionAtEntry !== this.sessionId) {
-          return
-        }
-        if (this.pendingEdits.length > 0 || this.drainRunning || this.imeComposing) {
-          return
-        }
-        const coreSessionId = this.coordinator.getSessionId()
-        const snap = this.coordinator.getSnapshot()
-        if (coreSessionId === null || snap === null) {
-          this.failNativeCoreAlignment('no active core session during convergence')
-          return
-        }
-        const editorText = this.readNativeFullText()
-        if (editorText === null) {
-          this.failNativeCoreAlignment('native full text unavailable during convergence')
-          return
-        }
-        if (editorText !== this.currentText) {
-          this.reportNativeFactError('converge',
-            `mirror behind native text firstMismatch=${firstMismatchUtf16(this.currentText, editorText)}`)
-          this.currentText = editorText
-          this.nativeNewlineCount = countNewlines(editorText)
-        }
-        if (this.lastAppliedRevision !== snap.revision) {
-          return
-        }
-        if (snap.text === this.currentText) {
-          this.lastAppliedRevision = snap.revision
-          this.confirmedText = snap.text
-          this.confirmedRevision = snap.revision
-          this.coreNewlineCount = countNewlines(snap.text)
-          this.nativeCoreDiverged = false
-          this.nativeCoreDivergedSessionId = null
-          this.refreshSelectionAfterConvergence()
-          return
-        }
-        const diff = this.computeDiff(snap.text, this.currentText)
-        if (diff.start === diff.end && diff.replacement.length === 0) {
-          return
-        }
-        const byteStart = TextOffsetMapper.utf16ToUtf8Checked(snap.text, diff.start)
-        const byteEnd = TextOffsetMapper.utf16ToUtf8Checked(snap.text, diff.end)
-        if (byteStart === null || byteEnd === null) {
-          this.failNativeCoreAlignment(
-            `invalid convergence offsets start=${diff.start} end=${diff.end} coreLen=${snap.text.length}`)
-          return
-        }
-        attempts++
-        const result = await this.coordinator.replaceSliceIfUnchanged(
-          coreSessionId, snap.revision, snap.text, this.currentText, EditorTransactionCause.Programmatic)
-        if (sessionAtEntry !== this.sessionId) {
-          return
-        }
-        if (result.success && result.data !== undefined) {
-          const after = this.coordinator.getSnapshot()
-          if (after !== null && after.text === this.currentText) {
-            this.lastAppliedRevision = after.revision
-            this.confirmedText = after.text
-            this.confirmedRevision = after.revision
-            this.coreNewlineCount = countNewlines(after.text)
-            this.nativeCoreDiverged = false
-            this.nativeCoreDivergedSessionId = null
-            this.refreshSelectionAfterConvergence()
-            return
-          }
-          continue
-        }
-        if (result.errorCode === 'SESSION_CHANGED') {
-          return
-        }
-      }
-      this.failNativeCoreAlignment(
-        `native text did not converge with core after ${attempts} attempt(s)`)
-    } catch (e) {
-      this.failNativeCoreAlignment(`convergence error: ${JSON.stringify(e)}`)
-    } finally {
-      this.nativeCoreConvergenceRunning = false
-      if (sessionAtEntry === this.sessionId) {
-        this.checkIdle()
-      }
-    }
   }
 
   // 无法把原生全文与 Core 收敛：进入 conflict（保留原生正文与未确认事件），
@@ -1205,8 +1201,8 @@ export class NativeRichEditorBridge {
     this.nativeFactError = null
     this.nativeCoreDiverged = false
     this.nativeCoreDivergedSessionId = null
-    this.nativeCoreConvergenceRunning = false
-    this.nativeCoreRefreshRunning = false
+    // 新会话允许再次请求冲突材料持久化（旧会话的冲突已交给 Core 保留）。
+    this.conflictPersistenceRequested = false
     this.nativeTextReady = false
     this.lastNativeTextReadFailed = false
     this.nativeEditing = false
@@ -1829,27 +1825,15 @@ export class NativeRichEditorBridge {
       }
 
       const baselineText = snap.text
-      let mappedStart: number
-      let mappedEnd: number
-
-      if (baselineText === edit.beforeText) {
-        mappedStart = edit.startUtf16
-        mappedEnd = edit.endUtf16
-      } else {
-        const mapped: EditRangeMap | null = mapEditRangeToBaseline(edit, baselineText)
-        if (mapped === null) {
-          // 映射失败：不在这里丢事件，交给 reconcile 判定可验证 rebase 或 conflict。
-          this.enterReconciling(`cannot map pending edit at offset ${edit.startUtf16}: overlapping diff`)
-          return
-        }
-        const currentSlice = baselineText.substring(mapped.startUtf16, mapped.endUtf16)
-        if (currentSlice !== edit.oldText) {
-          this.enterReconciling(`cannot map pending edit at offset ${edit.startUtf16}: text mismatch`)
-          return
-        }
-        mappedStart = mapped.startUtf16
-        mappedEnd = mapped.endUtf16
+      if (baselineText !== edit.beforeText) {
+        // 排队期间 Core 基线被推进：不在增量路径上猜编辑范围，交给统一三方合并处理。
+        // 消费游标冻结（edit 保留在队首），reconcile 会把全部待提交编辑与 Core 侧改动合并。
+        this.enterReconciling(
+          `core baseline advanced before pending edit at offset ${edit.startUtf16}`)
+        return
       }
+      const mappedStart: number = edit.startUtf16
+      const mappedEnd: number = edit.endUtf16
 
       const byteStart = TextOffsetMapper.utf16ToUtf8Checked(baselineText, mappedStart)
       const byteEnd = TextOffsetMapper.utf16ToUtf8Checked(baselineText, mappedEnd)
@@ -2229,6 +2213,10 @@ export class NativeRichEditorBridge {
   // 程序回放：从 Core snapshot 同步正文到 RichEditor。
   // Issue #1063：reconciling/conflict 或还有 pendingEdits/IME 预编辑时不覆盖 RichEditor，
   // 保留用户可见正文（与状态机一致，不再读已删除的 idleError）。
+  // Issue #1063 复审评论：外部 Core 刷新不得覆盖尚未进入镜像的原生正文。
+  // - 写原生之前先读原生实际全文：读不到按对齐失败收尾；与镜像不一致只做事实修正并
+  //   交给三方合并 reconcile，绝不调用 applyProgrammaticText 覆盖用户的未确认输入；
+  // - 真正写入前后重新核对会话/revision/原生全文，写入后读回必须逐字等于 Core 正文。
   async syncFromCore(): Promise<void> {
     const sessionAtEntry = this.sessionId
     await this.editQueue
@@ -2274,7 +2262,26 @@ export class NativeRichEditorBridge {
       return
     }
 
+    // Issue #1063 复审评论：写原生之前以原生实际全文为准核对镜像。
+    const nativeText: string | null = this.readNativeFullText()
+    if (nativeText === null) {
+      this.failNativeCoreAlignment(
+        `syncFromCore cannot read native full text mirrorLen=${this.currentText.length}`
+          + ` coreLen=${snap.text.length}`)
+      return
+    }
+    if (nativeText !== this.currentText) {
+      // 镜像落后或有未确认的原生差量：只按事实修正镜像，绝不在这里用 Core 正文覆盖；
+      // 是否能把两侧改动合并交给统一三方合并（可能需要真实冲突持久化）。
+      this.reportNativeFactError('syncFromCore',
+        `unmirrored native delta firstMismatch=${firstMismatchUtf16(this.currentText, nativeText)}`)
+      this.enterReconciling('syncFromCore: native text has unmirrored delta')
+      this.scheduleReconcile()
+      return
+    }
+
     if (this.currentText === snap.text) {
+      // 原生实际全文已在上方核对等于镜像，这里只推进版本与诊断事实。
       this.nativeNewlineCount = countNewlines(this.currentText)
       this.coreNewlineCount = this.nativeNewlineCount
       this.lastAppliedRevision = snap.revision
@@ -2310,33 +2317,63 @@ export class NativeRichEditorBridge {
     let syncStart = 0
     let syncEnd = 0
     let syncInsertedLength = 0
+    let factsStable: boolean = false
+    let writeAccepted: boolean = false
 
     this.programmaticUpdate = true
     try {
-      const diff = this.computeDiff(previousText, snap.text)
-      syncStart = diff.start
-      syncEnd = diff.end
-      syncInsertedLength = diff.replacement.length
-      if (diff.start < diff.end || diff.replacement.length > 0) {
-        this.applyProgrammaticText(snap.text)
-      }
-      this.currentText = snap.text
-      this.nativeNewlineCount = countNewlines(snap.text)
-      this.coreNewlineCount = this.nativeNewlineCount
-      this.restoreSelectionState(previousSelection, snap.text.length)
+      // 真正写原生之前重新核对事实：会话/revision/Core 正文/原生全文都必须与上面一致。
+      const checkSessionId = this.coordinator.getSessionId()
+      const checkSnap = this.coordinator.getSnapshot()
+      const checkNativeText: string | null = this.readNativeFullText()
+      factsStable = this.sessionId === sessionAtEntry
+        && checkSessionId !== null
+        && checkSnap !== null
+        && checkSnap.revision === snap.revision
+        && checkSnap.text === snap.text
+        && checkNativeText === nativeText
+      if (factsStable) {
+        const diff = this.computeDiff(previousText, snap.text)
+        syncStart = diff.start
+        syncEnd = diff.end
+        syncInsertedLength = diff.replacement.length
+        const applied: boolean = this.applyProgrammaticText(snap.text)
+        // 写入必须读回核对：读不到或读回不一致都不算写入成功。
+        const acceptedText: string | null = applied ? this.readNativeFullText() : null
+        writeAccepted = applied && acceptedText !== null && acceptedText === snap.text
+        if (writeAccepted) {
+          this.currentText = snap.text
+          this.nativeNewlineCount = countNewlines(snap.text)
+          this.coreNewlineCount = this.nativeNewlineCount
+          this.restoreSelectionState(previousSelection, snap.text.length)
 
-      this.lastAppliedRevision = snap.revision
-      this.confirmedText = snap.text
-      this.confirmedRevision = snap.revision
-      this.nativeCoreDiverged = false
-      this.nativeCoreDivergedSessionId = null
-      if (snap.text.length > 0) {
-        this.emptyDocumentIntent = null
+          this.lastAppliedRevision = snap.revision
+          this.confirmedText = snap.text
+          this.confirmedRevision = snap.revision
+          this.nativeCoreDiverged = false
+          this.nativeCoreDivergedSessionId = null
+          if (snap.text.length > 0) {
+            this.emptyDocumentIntent = null
+          }
+        }
       }
     } catch (e) {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `syncFromCore error: ${JSON.stringify(e)}`)
     } finally {
       this.programmaticUpdate = false
+    }
+
+    if (!factsStable) {
+      // 等待期间会话/基线/原生正文变化：本次不写、不推进任何基线，交回下一次同步或状态机。
+      hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+        'syncFromCore: facts changed before programmatic write, skipped')
+      return
+    }
+    if (!writeAccepted) {
+      this.failNativeCoreAlignment(
+        `syncFromCore: native editor did not accept core text mirrorLen=${this.currentText.length}`
+          + ` coreLen=${snap.text.length}`)
+      return
     }
 
     this.recordNativeOperation({

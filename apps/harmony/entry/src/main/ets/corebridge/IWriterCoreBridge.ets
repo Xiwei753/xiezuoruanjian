@@ -38,6 +38,12 @@ export interface IWriterCoreBridge {
   saveChapterVersioned(chapterId: string, text: string, expected: ChapterVersion,
     baseContent: string, allowEmptyOverwrite: boolean,
     proofSnapshotRevision: number, proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>>
+  // Issue #1063：把真实编辑器冲突的双方正文写入 Core 既有 conflict_dir。
+  // 故意不带 proof batch：带快照的保存会先校验 pending proof（可能直接拒绝提交），
+  // 且该路径把版本冲突统一报成 CHAPTER_SAVE_FAILED。这里走普通版本 CAS，
+  // 预期版本故意失配，Core 写冲突材料后返回 CHAPTER_VERSION_CONFLICT，正文不变。
+  persistChapterConflictMaterial(chapterId: string, text: string, expected: ChapterVersion,
+    baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
   clearChapterVersioned(chapterId: string, expected: ChapterVersion,
     baseContent: string, proofSnapshotRevision: number,
     proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>>

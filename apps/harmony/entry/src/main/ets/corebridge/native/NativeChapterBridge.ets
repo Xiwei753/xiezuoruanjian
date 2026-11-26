@@ -90,6 +90,34 @@ export class NativeChapterBridge {
     } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
   }
 
+  // Issue #1063：真实编辑器冲突只写 Core 既有冲突材料（local/incoming/base），
+  // 不带 proof batch，避免 pending proof 校验在版本 CAS 之前拒绝请求。
+  async persistChapterConflictMaterial(chapterId: string, text: string,
+    expected: ChapterVersion, baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    const loc = await this.core.resolveChapterLocation(chapterId)
+    if (!loc) {
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
+    }
+    try {
+      // 与 saveChapterVersioned 的 payload 对齐，但故意不携带 proofSnapshotRevision/proofEventIds：
+      // Core 走普通版本 CAS，预期版本失配后写冲突材料并返回 CHAPTER_VERSION_CONFLICT。
+      const payload: string = JSON.stringify({
+        projectId: loc.projectId,
+        volumeId: loc.volumeId,
+        chapterId: chapterId,
+        content: text,
+        generation: expected.objectGeneration,
+        revision: expected.revision,
+        sha256: expected.contentSha256,
+        baseContent: baseContent,
+        allowEmptyOverwrite: false,
+        clear: false
+      })
+      const jsonStr: string = await this.core.getNativeModule().nativeSaveChapterVersioned(payload)
+      return this.core.decodeEnvelope<ChapterSaveReceipt>(jsonStr, decodeChapterSaveReceipt)
+    } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
+  }
+
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
     baseContent: string, proofSnapshotRevision: number,
     proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>> {

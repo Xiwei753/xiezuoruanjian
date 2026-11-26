@@ -1,21 +1,24 @@
-// editor_reconcile_logic.test.mjs — 冲突会话内可恢复的纯逻辑回归
-// （Issue #1063 复审评论第 2 条）。
+// editor_reconcile_logic.test.mjs — 三方正文合并与冲突会话恢复的纯逻辑回归
+// （Issue #1063 复审评论第 4 条）。
 //
 // 直接 import 生产模块 session/editor_reconcile_logic.ts，不伪造 ArkUI 运行时。
 // 验证：
-//   1. 冲突重试成功：attemptFrozenRebase 可把冻结 pendingEdits 映射到新的 Core 基线，
-//      返回 consumedEdits；调用方据此清理，状态机 confirmHealthy 后清 conflict。
-//   2. 重试失败：模拟返回 consumedEdits=0；调用方保持 conflict 与全部 pendingEdits，
-//      不丢事件。
-//   3. conflict 不会被自动错误降级成 reconciling；只有 beginManualRetry 能重新尝试。
-//   4. 映射到基线：edit 前的 Core 变化可平移范围；与 edit 重叠的差异明确失败。
+//   1. 单段 delta 可复现输入文本；候选竞态示例（base=甲乙丙、Core=甲乙丁、native=戊乙丙）
+//      必须合并成戊乙丁，而不是进入冲突。
+//   2. 两侧同一区间不同改法 / 同点不同插入 / 区间重叠 → conflict，保留双方正文与事件。
+//   3. Core-only、native-only、converged 分类正确。
+//   4. delta 在 Core 改动之前插入时映射右移，在之后时保持原位。
+//   5. conflict 不会被自动错误降级成 reconciling；只有 beginManualRetry 能重新尝试。
+//   6. 冲突材料版本哨兵永远不可能匹配真实版本（空 sha256）。
 //
 // 运行：node --experimental-strip-types __tests__/editor_reconcile_logic.test.mjs
 
 import { strict as assert } from 'node:assert'
 import {
-  attemptFrozenRebase,
-  mapEditRangeToBaseline,
+  applyTextDelta,
+  computeTextDelta,
+  editorConflictVersionSentinel,
+  planThreeWayReconcile,
   ReconcileSessionState,
 } from '../editor_reconcile_logic.ts'
 
@@ -26,126 +29,135 @@ const test = (name, fn) => {
   console.log(`  [PASS] ${name}`)
 }
 
-// 冻结的 pending edit：结构与 NativeRichEditorBridge.PendingEdit 兼容。
-function edit(localSequence, beforeText, startUtf16, endUtf16, insertedText, oldText) {
-  return { localSequence, beforeText, startUtf16, endUtf16, insertedText, oldText }
-}
-
-// 模拟 bridge 的 retryReconcile：只有 recovered 才丢弃已确认前缀；失败一条不丢。
-function runRetry(state, frozen, coreText, nativeText) {
-  const pending = frozen.slice()
-  state.beginManualRetry('manual conflict retry')
-  const attempt = attemptFrozenRebase(pending, coreText)
-  if (!attempt.recovered || attempt.text !== nativeText) {
-    state.enterConflict(attempt.recovered
-      ? 'frozen edits do not reproduce native text'
-      : attempt.reason)
-    return { state, pending, attempt }
-  }
-  pending.splice(0, attempt.consumedEdits)
-  state.confirmHealthy()
-  return { state, pending, attempt }
-}
-
-console.log('editor_reconcile_logic：Conflict 是会话内可恢复状态（Issue #1063 复审评论第 2 条）')
+console.log('editor_reconcile_logic：三方合并与冲突会话恢复')
 console.log('---')
 
-const frozenEdits = [
-  edit(1, 'hello world', 0, 5, '你好', 'hello'),
-  edit(2, '你好 world', 3, 8, '世界', 'world'),
-]
-
-// ── 1. 可验证 rebase ──
-
-test('baseline 未变时 edit 范围原样映射', () => {
-  const mapped = mapEditRangeToBaseline(frozenEdits[0], 'hello world')
-  assert.deepEqual(mapped, { startUtf16: 0, endUtf16: 5 })
+// ── 1. delta 基础 ──
+test('computeTextDelta/applyTextDelta 对 ASCII、CRLF、emoji 都能复现输入', () => {
+  const cases = [
+    ['abcdef', 'abXdef'],
+    ['第一段\r\n第二段', '第一段\r\n第二段\n尾段'],
+    ['a😀b', 'a😁b'],
+    ['abc', 'abc'],
+    ['', '新增'],
+    ['删除', ''],
+  ]
+  for (const [base, text] of cases) {
+    assert.equal(applyTextDelta(base, computeTextDelta(base, text)), text, `${base} -> ${text}`)
+  }
 })
 
-test('Core 在 edit 之后追加内容：edit 范围保持不变并成功重放', () => {
-  const attempt = attemptFrozenRebase(frozenEdits, 'hello world!!')
-  assert.equal(attempt.recovered, true)
-  assert.equal(attempt.consumedEdits, frozenEdits.length)
-  assert.equal(attempt.text, '你好 世界!!')
+// ── 2. 三方合并 ──
+test('converged：Core 与原生逐字一致', () => {
+  const plan = planThreeWayReconcile('base', 'same', 'same')
+  assert.equal(plan.ok, true)
+  assert.equal(plan.kind, 'converged')
+  assert.equal(plan.merged, 'same')
 })
 
-test('Core 在 edit 之前插入内容：edit 范围按前缀长度平移', () => {
-  const shifted = [edit(1, 'world', 0, 5, '世界', 'world')]
-  const mapped = mapEditRangeToBaseline(shifted[0], 'hello world')
-  assert.deepEqual(mapped, { startUtf16: 6, endUtf16: 11 })
-  const attempt = attemptFrozenRebase(shifted, 'hello world')
-  assert.equal(attempt.recovered, true)
-  assert.equal(attempt.text, 'hello 世界')
+test('core-only：原生仍是已确认基线，Core 先行', () => {
+  const plan = planThreeWayReconcile('base', 'core-new', 'base')
+  assert.equal(plan.ok, true)
+  assert.equal(plan.kind, 'core-only')
+  assert.equal(plan.merged, 'core-new')
 })
 
-test('与 edit 重叠的 Core 变化明确失败，consumedEdits=0', () => {
-  const attempt = attemptFrozenRebase(frozenEdits, 'HELLO WORLD')
-  assert.equal(attempt.recovered, false)
-  assert.equal(attempt.consumedEdits, 0)
-  assert.match(attempt.reason, /cannot map frozen edit #1/)
+test('native-only：Core 未变，原生有未确认差量', () => {
+  const plan = planThreeWayReconcile('base', 'base', 'native-new')
+  assert.equal(plan.ok, true)
+  assert.equal(plan.kind, 'native-only')
+  assert.equal(plan.merged, 'native-new')
 })
 
-test('模拟结果必须与原生全文一致，否则仍按冲突处理（不吞事件）', () => {
+test('两侧改不同位置：按共同基线合并（甲乙丙/甲乙丁/戊乙丙 → 戊乙丁）', () => {
+  const plan = planThreeWayReconcile('甲乙丙', '甲乙丁', '戊乙丙')
+  assert.equal(plan.ok, true)
+  assert.equal(plan.kind, 'merged')
+  assert.equal(plan.merged, '戊乙丁')
+})
+
+test('两侧同一区间同一改法：已是同一正文，按 converged 收敛', () => {
+  const plan = planThreeWayReconcile('abcdef', 'abXdef', 'abXdef')
+  assert.equal(plan.ok, true)
+  assert.equal(plan.kind, 'converged')
+  assert.equal(plan.merged, 'abXdef')
+})
+
+test('两侧同一区间不同改法：conflict', () => {
+  const plan = planThreeWayReconcile('abcdef', 'abXdef', 'abYdef')
+  assert.equal(plan.ok, false)
+  assert.equal(plan.kind, 'conflict')
+  assert.equal(plan.merged, 'abXdef')
+})
+
+test('同一点不同插入：conflict，不猜顺序', () => {
+  const plan = planThreeWayReconcile('abcdef', 'abXcdef', 'abYcdef')
+  assert.equal(plan.ok, false)
+  assert.equal(plan.kind, 'conflict')
+})
+
+test('Core 改区间包含原生改动：conflict', () => {
+  const plan = planThreeWayReconcile('abcdef', 'aXYef', 'abZdef')
+  assert.equal(plan.ok, false)
+  assert.equal(plan.kind, 'conflict')
+})
+
+test('原生在 Core 改区间之前插入：映射到 Core 后右移', () => {
+  const plan = planThreeWayReconcile('abcdef', 'aXbcdef', 'aYZdef')
+  assert.equal(plan.ok, true)
+  assert.equal(plan.kind, 'merged')
+  // core 在 1 插入 X（+1），native 的 [1,3) 映射到 core 的 [2,4)。
+  assert.equal(plan.merged, 'aXYZdef')
+})
+
+test('原生在 Core 改区间之后插入：位置不变', () => {
+  const plan = planThreeWayReconcile('abcdef', 'abXdef', 'abcZdef')
+  assert.equal(plan.ok, true)
+  assert.equal(plan.kind, 'merged')
+  assert.equal(plan.merged, 'abXZdef')
+})
+
+test('合并结果同时包含双方编辑；emoji 相邻编辑不产生非法拼接', () => {
+  const base = 'a😀b'
+  const core = 'a😁b'
+  const native = 'a😀Zb'
+  const plan = planThreeWayReconcile(base, core, native)
+  assert.equal(plan.ok, true)
+  assert.equal(plan.kind, 'merged')
+  assert.equal(plan.merged, 'a😁Zb')
+})
+
+// ── 3. 冲突会话状态机 ──
+test('conflict 不会被自动错误降级成 reconciling', () => {
   const state = new ReconcileSessionState()
-  state.enterConflict('original conflict')
-  const result = runRetry(state, frozenEdits, 'hello world!!', '你好 世界')
-  assert.equal(result.attempt.recovered, true)
-  assert.equal(result.pending.length, frozenEdits.length)
-  assert.equal(state.getHealth(), 'conflict')
-  assert.match(state.getConflictDetail(), /do not reproduce native text/)
-})
-
-// ── 2. 冲突重试状态机 ──
-
-test('conflict 重试成功：清 conflict 并只清理已确认事件', () => {
-  const state = new ReconcileSessionState()
-  state.enterConflict('overlapping frozen edit')
+  state.enterConflict('overlap')
   assert.equal(state.isConflict(), true)
-
-  const result = runRetry(state, frozenEdits, 'hello world!!', '你好 世界!!')
-  assert.equal(result.attempt.recovered, true)
-  assert.equal(result.pending.length, 0)
-  assert.equal(state.getHealth(), 'healthy')
-  assert.equal(state.getConflictDetail(), null)
-  assert.equal(state.getReconcileReason(), '')
-})
-
-test('conflict 重试失败：保持 conflict 与全部 pendingEdits（一条不丢）', () => {
-  const state = new ReconcileSessionState()
-  state.enterConflict('overlapping frozen edit')
-  const result = runRetry(state, frozenEdits, 'HELLO WORLD', '你好 世界')
-  assert.equal(result.attempt.recovered, false)
-  assert.equal(result.pending.length, frozenEdits.length)
-  assert.deepEqual(result.pending, frozenEdits)
+  assert.equal(state.enterReconciling('retry'), false)
   assert.equal(state.getHealth(), 'conflict')
-  assert.match(state.getConflictDetail(), /cannot map frozen edit/)
+  assert.equal(state.getConflictDetail(), 'overlap')
 })
 
-test('conflict 不会被自动失败降级成 reconciling', () => {
+test('只有 beginManualRetry 能重新尝试；成功后清 conflict', () => {
   const state = new ReconcileSessionState()
-  state.enterConflict('terminal-looking conflict')
-  assert.equal(state.enterReconciling('automatic retry attempt'), false)
-  assert.equal(state.getHealth(), 'conflict')
-  assert.equal(state.getConflictDetail(), 'terminal-looking conflict')
-})
-
-test('只有 beginManualRetry 能把 conflict 切回 reconciling', () => {
-  const state = new ReconcileSessionState()
-  state.enterConflict('needs manual retry')
-  assert.equal(state.beginManualRetry('user retry'), true)
+  state.enterConflict('overlap')
+  assert.equal(state.beginManualRetry('manual'), true)
   assert.equal(state.getHealth(), 'reconciling')
-  // 重试期间自动错误仍不能把它拉回 healthy；失败要重新进入 conflict。
-  state.enterConflict('retry failed again')
-  assert.equal(state.getHealth(), 'conflict')
-  assert.equal(state.beginManualRetry('second retry'), true)
+  // 重试期间保留原冲突原因供诊断。
+  assert.equal(state.getConflictDetail(), 'overlap')
   state.confirmHealthy()
   assert.equal(state.getHealth(), 'healthy')
+  assert.equal(state.getConflictDetail(), null)
 })
 
-test('无冲突时 beginManualRetry 不改变状态', () => {
-  const state = new ReconcileSessionState()
-  assert.equal(state.beginManualRetry('nothing to retry'), false)
-  assert.equal(state.getHealth(), 'healthy')
+// ── 4. 冲突材料版本哨兵 ──
+test('冲突材料版本哨兵永远不可能匹配真实版本', () => {
+  const sentinel = editorConflictVersionSentinel()
+  assert.ok(sentinel.objectGeneration.length > 0)
+  assert.equal(sentinel.contentSha256, '')
+  assert.ok(sentinel.revision >= 0)
+  // Core 的 expected_matches 要求 content_sha256/content_sha256 非空；
+  // 空 sha 保证走冲突材料分支而不是覆盖正文。
+  assert.notEqual(sentinel.contentSha256.length, 64)
 })
 
 console.log('---')

@@ -251,6 +251,11 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       proofSnapshotRevision, proofEventIds)
   }
 
+  async persistChapterConflictMaterial(chapterId: string, text: string,
+    expected: ChapterVersion, baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    return this.chapterBridge.persistChapterConflictMaterial(chapterId, text, expected, baseContent)
+  }
+
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
     baseContent: string, proofSnapshotRevision: number,
     proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>> {
