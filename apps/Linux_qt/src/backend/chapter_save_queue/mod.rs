@@ -96,6 +96,8 @@ pub(crate) struct DraftTextSnapshot {
     pub text: Arc<str>,
     pub revision: u64,
     pub sha256: String,
+    /// 本次文档加载时的编辑器 revision（编辑器坐标，不是章节持久化 revision）。
+    pub editor_base_revision: u64,
     pub session_id: u64,
     /// 对象 generation（当前编辑器载入的版本）；base 未初始化时用于身份。
     pub generation: String,

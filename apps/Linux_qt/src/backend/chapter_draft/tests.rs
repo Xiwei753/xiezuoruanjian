@@ -39,6 +39,7 @@ fn store_text(root: &Path, text: &str, revision: u64) {
         revision,
         &sha256,
         ("g1", 0, ""),
+        0,
     );
 }
 
@@ -267,6 +268,7 @@ fn restore_plan_returns_draft_base_and_batch_json() {
         3,
         &sha256,
         ("generation-base", 9, "sha-base"),
+        0,
     );
     persist_current(root, "p1", "c1", true).expect("persist draft");
     forget_for_test(root, "p1", "c1");
@@ -334,6 +336,7 @@ fn restore_plan_rejects_corrupt_text_and_keeps_files() {
         1,
         "content-v1:deadbeef",
         ("g1", 0, ""),
+        0,
     );
     persist_current(root, "p1", "c1", true).expect("persist draft");
     forget_for_test(root, "p1", "c1");
@@ -551,6 +554,7 @@ fn corrupt_pending_input_blocks_saves_across_restart() {
         2,
         &writer_core::writing_stats::proof::content_digest_of_text("正文"),
         ("g1", 1, "base-sha"),
+        0,
     );
     spool_failed_input(
         root,
@@ -929,6 +933,7 @@ fn note_text_base_is_initialized_once() {
         1,
         &sha_v1,
         ("g1", 1, "sha-v1"),
+        0,
     );
     // 回执还没被 GUI 收到时继续输入：旧 base 不能把已初始化的基线回退。
     let sha_v0 = writer_core::writing_stats::proof::content_digest_of_text("V0");
@@ -943,6 +948,7 @@ fn note_text_base_is_initialized_once() {
         0,
         &sha_v0,
         ("g0", 0, ""),
+        0,
     );
 
     let state = snapshot(root, "p1", "c1").expect("draft state");
@@ -967,10 +973,13 @@ fn text_is_persisted_only_after_fact_covers_it() {
         text.to_string(),
         2,
         &sha256,
-        ("g1", 1, "base-sha"),
+        // 章节已经保存过 30 次：持久 revision=30 与编辑器 revision 不是同一
+        // 坐标；它不能把编辑器 revision 2 的未证明正文判成“已覆盖”。
+        ("g1", 30, "base-sha"),
+        0,
     );
 
-    // base 只到 1、还没有 revision 2 的事实：正文候选只留在内存里。
+    // 还没有覆盖编辑器 revision 2 的事实：正文候选只留在内存里。
     persist_current(root, "p1", "c1", true).expect("persist candidate meta");
     let location = draft_location(root);
     assert!(!location.dir.join(TEXT_FILE).exists());
@@ -1003,6 +1012,7 @@ fn mark_committed_keeps_text_only_draft() {
         1,
         &sha256,
         ("g1", 1, "base-1"),
+        1,
     );
     persist_current(root, "p1", "c1", true).expect("persist text");
     let location = draft_location(root);

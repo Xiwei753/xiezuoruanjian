@@ -150,7 +150,7 @@ fn prune_rotates_past_undelivered_head_and_reclaims_delivered_entries() {
 mod restore_draft_tests {
     use super::super::restore_draft::{
         base_matches_plan, baseline_text_from_projection, draft_dir_is_empty, original_base_text,
-        restore_commit_revision, version_display,
+        restore_commit_revision, unchanged_baseline, version_display,
     };
     use crate::backend::chapter_draft::{ChapterDraftRestorePlan, LoadedFact};
     use writer_core::api::types::ChapterVersionDto;
@@ -180,6 +180,8 @@ mod restore_draft_tests {
             session_id: 7,
             generation: "g1".to_string(),
             mixed_sessions: false,
+            editor_base_revision: 0,
+            editor_base_sha256: String::new(),
         }
     }
 
@@ -201,13 +203,69 @@ mod restore_draft_tests {
     }
 
     #[test]
+    #[test]
+    fn empty_baseline_is_a_real_baseline() {
+        // Issue #1062 评论 7192111899 第 3 项：空章的基线是合法空串。
+        assert_eq!(
+            baseline_text_from_projection(r#"{"baselineText":""}"#),
+            Some(String::new())
+        );
+        assert_eq!(
+            baseline_text_from_projection(r#"{"baselineText":"abc"}"#),
+            Some("abc".to_string())
+        );
+        assert_eq!(baseline_text_from_projection(r#"{}"#), None);
+    }
+
+    #[test]
+    fn unchanged_baseline_requires_same_editor_revision_and_digest() {
+        let mut plan = plan(0, 3, 0);
+        // 章节已保存过 30 次、编辑器从 0 重新打开：持久 revision 不参与比较。
+        plan.base_revision = 30;
+        assert!(
+            !unchanged_baseline(&plan),
+            "persistent base revision must not verify an edited editor snapshot"
+        );
+        plan.base_revision = 1;
+        plan.text = Some("abc".to_string());
+        plan.text_revision = 3;
+        plan.editor_base_revision = 3;
+        plan.editor_base_sha256 = "digest-abc".to_string();
+        plan.text_sha256 = "digest-abc".to_string();
+        assert!(unchanged_baseline(&plan));
+
+        plan.text_revision = 4;
+        assert!(!unchanged_baseline(&plan), "编辑过但没有事实不能当基线");
+        plan.text_revision = 3;
+        plan.text_sha256 = "digest-other".to_string();
+        assert!(!unchanged_baseline(&plan), "摘要不一致不能当基线");
+        plan.editor_base_sha256.clear();
+        assert!(!unchanged_baseline(&plan), "没有基线摘要不能证明未修改");
+    }
+
+    #[test]
+    fn original_base_text_accepts_empty_chapter_baseline() {
+        let mut plan = plan(1, 0, 1);
+        plan.facts = vec![LoadedFact {
+            event_id: "e1".to_string(),
+            revision: 1,
+            projection_json: r#"{"event":{},"baselineText":""}"#.to_string(),
+        }];
+        assert_eq!(
+            original_base_text(&plan),
+            Some(String::new()),
+            "新建作品的第一个空章必须能还原出空基线"
+        );
+    }
+
+    #[test]
     fn baseline_text_comes_from_first_fact_projection() {
         // Core 的 ChapterProofProjection 以 camelCase 序列化。
         assert_eq!(
             baseline_text_from_projection(r#"{"event":{},"baselineText":"abc"}"#),
             Some("abc".to_string())
         );
-        // 缺失、null、空串都视为没有可恢复的旧基线。
+        // 缺失/null 表示没有可恢复的旧基线；空串是合法空章基线。
         assert_eq!(baseline_text_from_projection(r#"{"event":{}}"#), None);
         assert_eq!(
             baseline_text_from_projection(r#"{"baselineText":null}"#),
@@ -215,7 +273,7 @@ mod restore_draft_tests {
         );
         assert_eq!(
             baseline_text_from_projection(r#"{"baselineText":""}"#),
-            None
+            Some(String::new())
         );
         // JSON 损坏不能猜测基线。
         assert_eq!(baseline_text_from_projection("not json"), None);

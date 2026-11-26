@@ -28,6 +28,7 @@ impl AppBackend {
         new_selection_anchor: u64,
         new_selection_head: u64,
         baseline_text: QString,
+        baseline_provided: bool,
         before_text_sha256: QString,
         after_text_sha256: QString,
         base_generation: QString,
@@ -59,7 +60,12 @@ impl AppBackend {
             old_selection_head,
             new_selection_anchor,
             new_selection_head,
-            (&baseline_text, &before_text_sha256, &after_text_sha256),
+            (
+                &baseline_text,
+                baseline_provided,
+                &before_text_sha256,
+                &after_text_sha256,
+            ),
             &base_generation,
             base_chapter_revision,
             &base_chapter_sha256,
@@ -123,7 +129,7 @@ impl AppBackend {
         old_selection_head: u64,
         new_selection_anchor: u64,
         new_selection_head: u64,
-        digests: (&QString, &QString, &QString),
+        digests: (&QString, bool, &QString, &QString),
         generation: &QString,
         chapter_base_revision: u64,
         chapter_base_sha256: &QString,
@@ -157,11 +163,10 @@ impl AppBackend {
         let Some((data_root, projects_root, layout)) = self.annotation_task_context() else {
             return;
         };
-        let (baseline, before_sha, after_sha) = digests;
-        let baseline_text = {
-            let text = baseline.to_string();
-            (!text.is_empty()).then_some(text)
-        };
+        let (baseline, baseline_provided, before_sha, after_sha) = digests;
+        // Issue #1062 评论 7192111899 第 3 项：空章的第一条编辑事件基线就是
+        // 合法空串；必须用显式“是否提供基线”区分“没有基线”，不能丢空串。
+        let baseline_text = baseline_provided.then(|| baseline.to_string());
         let input = writer_core::api::EditorChangeStatsInputDto {
             platform: "linux".to_string(),
             project_id: project,
@@ -227,6 +232,7 @@ impl AppBackend {
         base_generation: &str,
         base_revision: u64,
         base_sha256: &str,
+        editor_base_revision: u64,
         force: bool,
     ) {
         if project_id.is_empty() || chapter_id.is_empty() {
@@ -248,6 +254,7 @@ impl AppBackend {
             text: std::sync::Arc::from(text),
             revision,
             sha256: sha256.to_string(),
+            editor_base_revision,
             session_id,
             generation: base_generation.to_string(),
             base_generation: base_generation.to_string(),
@@ -262,6 +269,7 @@ impl AppBackend {
             volume_id: volume_id.to_string(),
             chapter_id: chapter_id.to_string(),
             force,
+            editor_base_revision,
         };
         if let Err(error) =
             crate::backend::chapter_save_queue::enqueue_draft_text(command, snapshot)

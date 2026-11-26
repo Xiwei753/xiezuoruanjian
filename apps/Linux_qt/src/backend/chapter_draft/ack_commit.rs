@@ -1,0 +1,243 @@
+// 草稿 ack 决议：把 Core durable receipt 落到本地事实索引/基线/正文。
+//
+// 拆出以控制 chapter_draft.rs 体积（Issue #1062 复审）；行为与调用方不变。
+
+use super::*;
+
+pub(crate) fn mark_committed(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+    transaction_id: &str,
+    acknowledged: &[String],
+    base_generation: &str,
+    base_revision: u64,
+    base_sha256: &str,
+) -> Result<bool, String> {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+        return Ok(false);
+    };
+    match ensure_state_result(&location) {
+        Ok(true) => {}
+        Ok(false) => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    let acknowledged_set: HashSet<&str> = acknowledged.iter().map(String::as_str).collect();
+    // 先在不完整索引上合并事实；失败时保留全部待 GC 事实与 Core durable
+    // receipt 对应关系，延后清理，不能基于缺失文件推进 ack 决议。
+    let (index, acked) = {
+        let drafts = lock_registry();
+        let Some(state) = drafts.get(&location.key) else {
+            return Ok(false);
+        };
+        (
+            state.facts.clone(),
+            state
+                .acked_event_ids
+                .iter()
+                .cloned()
+                .collect::<HashSet<String>>(),
+        )
+    };
+    let merged = store::merge_index(&location.dir, &index, &acked).map_err(|error| {
+        format!(
+            "chapter draft ack cleanup deferred (facts kept): project={project_id} chapter={chapter_id}: {error}"
+        )
+    })?;
+    let mut remaining = Vec::with_capacity(merged.len());
+    let mut removed = Vec::new();
+    for fact in merged {
+        if acknowledged_set.contains(fact.event_id.as_str()) {
+            removed.push(store::fact_file_path(
+                &location.dir,
+                fact.seq,
+                &fact.event_id,
+            ));
+        } else {
+            remaining.push(fact);
+        }
+    }
+    // Issue #1062 复审第 4 项：先把 ack 决议（剩余索引 + 已确认 event ID）
+    // 持久化，再删除事实文件。顺序反过来时，两步之间崩溃会让 meta 继续
+    // 引用已删文件，下一次 freeze 把已提交事件当成损坏而永久卡住。
+    let (empty, meta, previous) = {
+        let mut drafts = lock_registry();
+        let Some(state) = drafts.get_mut(&location.key) else {
+            return Ok(false);
+        };
+        let previous = PersistedDraftHead {
+            facts: state.facts.clone(),
+            base_generation: state.base_generation.clone(),
+            base_revision: state.base_revision,
+            base_sha256: state.base_sha256.clone(),
+            acked_event_ids: state.acked_event_ids.clone(),
+            acked_through_revision: state.acked_through_revision,
+            applied_transactions: state.applied_transactions.clone(),
+            updated_at_ms: state.updated_at_ms,
+        };
+        let mut acked_ids = state.acked_event_ids.clone();
+        for event_id in acknowledged {
+            if !acked_ids.iter().any(|existing| existing == event_id) {
+                acked_ids.push(event_id.clone());
+            }
+        }
+        let overflow = acked_ids.len().saturating_sub(MAX_MEMORY_FACT_INDEX);
+        if overflow > 0 {
+            acked_ids.drain(0..overflow);
+        }
+        state.facts = remaining;
+        state.trim_index();
+        state.acked_event_ids = acked_ids;
+        state.acked_through_revision = state.acked_through_revision.max(base_revision);
+        // Issue #1062 评论 7191076411 第 1 项：多笔 ack 只允许同一对象
+        // generation 的递增 revision；旧事务重放幂等，不得把 base 降回去。
+        let replayed = !transaction_id.is_empty()
+            && state
+                .applied_transactions
+                .iter()
+                .any(|applied| applied == transaction_id);
+        let same_object = state.base_generation.is_empty()
+            || base_generation.is_empty()
+            || state.base_generation == base_generation;
+        let advances = !replayed
+            && (state.base_generation.is_empty()
+                || (same_object && base_revision >= state.base_revision)
+                // 外部替换会生成新对象 generation；Core 回执是权威顺序，
+                // 但在同一 generation 内绝不接受更小的 revision。
+                || !same_object);
+        if advances {
+            state.base_generation = base_generation.to_string();
+            state.base_revision = base_revision;
+            state.base_sha256 = base_sha256.to_string();
+        }
+        if !transaction_id.is_empty() && !replayed {
+            state.applied_transactions.push(transaction_id.to_string());
+            let overflow = state
+                .applied_transactions
+                .len()
+                .saturating_sub(MAX_MEMORY_FACT_INDEX);
+            if overflow > 0 {
+                state.applied_transactions.drain(0..overflow);
+            }
+        }
+        state.updated_at_ms = now_ms();
+        state.meta_dirty = true;
+        // Issue #1062 评论 7191076411 第 3 项：只有锁内状态确认没有剩余的事实
+        // 与正文（包括尚未写出/转换的失败事实与待转换 input）时才允许删除
+        // 整章草稿；空证明批次不能推断章节草稿为空。
+        let empty = state.facts.is_empty()
+            && state.failed_facts.is_empty()
+            && state.failed_inputs.is_empty()
+            && state.text.is_none();
+        let meta = (!empty).then(|| {
+            store::meta_from_state(
+                &location,
+                state,
+                state.persisted_text_revision,
+                &state.persisted_text_sha256,
+            )
+        });
+        (empty, meta, previous)
+    };
+    if empty {
+        drop_registry_and_storage(&location);
+        return Ok(true);
+    }
+    if let Some(meta) = meta {
+        match store::write_meta(&location.dir, &meta) {
+            Ok(()) => {
+                if let Some(state) = lock_registry().get_mut(&location.key) {
+                    state.meta_dirty = false;
+                    state.last_persist = Some(Instant::now());
+                }
+            }
+            Err(error) => {
+                if let Some(state) = lock_registry().get_mut(&location.key) {
+                    state.facts = previous.facts;
+                    state.base_generation = previous.base_generation;
+                    state.base_revision = previous.base_revision;
+                    state.base_sha256 = previous.base_sha256;
+                    state.acked_event_ids = previous.acked_event_ids;
+                    state.acked_through_revision = previous.acked_through_revision;
+                    state.applied_transactions = previous.applied_transactions;
+                    state.updated_at_ms = previous.updated_at_ms;
+                    state.meta_dirty = true;
+                }
+                return Err(format!(
+                    "persist draft ack meta failed (facts kept): {project_id}/{chapter_id}: {error}"
+                ));
+            }
+        }
+    }
+    // ack 决议已持久化，现在才回收已确认前缀文件。删除失败只会留下孤儿
+    // 文件：索引与 acked 记录都已不含它们，后续读取会跳过，不会卡住恢复。
+    for path in removed {
+        if let Err(error) = std::fs::remove_file(&path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("remove chapter draft fact {}: {error}", path.display());
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// mark_committed 写 meta 失败时要恢复的草稿头（索引/基线/ack 记录）。
+struct PersistedDraftHead {
+    facts: Vec<DraftFactIndex>,
+    base_generation: String,
+    base_revision: u64,
+    base_sha256: String,
+    acked_event_ids: Vec<String>,
+    acked_through_revision: u64,
+    applied_transactions: Vec<String>,
+    updated_at_ms: i64,
+}
+
+/// 正文候选是否已被 durable 证明水位覆盖。
+///
+/// 正文 revision 不得超过基线 revision 或已记录事实的最大 revision；没有被
+/// 证明覆盖的正文只能留在内存里当候选，不能写进可恢复/可提交的 text.txt。
+pub(super) fn text_is_verified(state: &DraftState) -> bool {
+    // Issue #1062 评论 7192111899 第 1 项：编辑器 revision 与章节持久化
+    // revision 是两套坐标（同一章保存过 30 次后，重新打开仍从 0/1 递增），
+    // 章节 base_revision 绝不能参与证明水位比较。
+    //
+    // 1) 有覆盖该快照 revision 的事实：必须同一编辑器会话，且事实记录的事件
+    //    终态摘要与快照正文摘要一致。
+    if let Some(fact) = state
+        .facts
+        .iter()
+        .find(|fact| fact.revision == state.text_revision)
+    {
+        if fact.after_text_sha256.is_empty() {
+            // 旧格式事实没有事件终态摘要：只能按同一会话的水位判断。
+            return fact.session_id == state.session_id;
+        }
+        return fact.session_id == state.session_id && fact.after_text_sha256 == state.text_sha256;
+    }
+    if let Some(latest) = state.facts.last() {
+        return latest.session_id == state.session_id && state.text_revision <= latest.revision;
+    }
+    // 2) 没有事实：只有仍是本次文档加载基线的正文（revision 未变且摘要一致）
+    //    才算“确实没有修改”，可以发布为可提交草稿。
+    !state.editor_base_sha256.is_empty()
+        && state.text_revision == state.editor_base_revision
+        && state.text_sha256 == state.editor_base_sha256
+}
+
+/// 该章草稿是否有一份已被证明覆盖、可以发布的正文候选。
+///
+/// 读内存 registry；没有状态（从未编辑或已被结算删除）时返回 false。
+pub(crate) fn text_ready_for_commit(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> bool {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+        return false;
+    };
+    let drafts = lock_registry();
+    drafts
+        .get(&location.key)
+        .is_some_and(|state| state.text.is_some() && text_is_verified(state))
+}

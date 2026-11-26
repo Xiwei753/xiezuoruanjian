@@ -168,6 +168,8 @@ pub(crate) fn restore_plan_strict(
         text_sha256: state.text_sha256.clone(),
         fact_count: state.facts.len(),
         event_end_revision: loaded.last().map_or(0, |fact| fact.revision),
+        editor_base_revision: state.editor_base_revision,
+        editor_base_sha256: state.editor_base_sha256.clone(),
         batch_json,
         facts: loaded,
         session_id: state.session_id,

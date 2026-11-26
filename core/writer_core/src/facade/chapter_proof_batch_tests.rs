@@ -195,3 +195,27 @@ fn replay_batch_from_baseline_detects_broken_chain() {
     assert_eq!(error.code(), "PROOF_BATCH_MISMATCH");
     assert!(replay_batch_from_baseline(&broken, baseline).is_err());
 }
+
+/// Issue #1062 评论 7192111899 第 3 项：空章节的基线是合法空串，
+/// 第一条编辑事件必须能从 `Some("")` 基线上 replay，而不是“没有基线”。
+#[test]
+fn validate_explicit_batch_accepts_empty_chapter_baseline() {
+    let events = vec![projection(
+        proof_event(
+            "evt-empty",
+            "",
+            "x",
+            vec![insert(0, "x")],
+            0,
+            1,
+            1,
+            "session-1",
+        ),
+        Some(""),
+    )];
+
+    validate_explicit_editor_proof_batch("c1", &events, "x", 1, Some(""))
+        .expect("empty chapter baseline must validate");
+    let replayed = replay_batch_from_baseline(&events, "").expect("empty baseline replay");
+    assert_eq!(replayed, "x");
+}

@@ -112,6 +112,10 @@ pub(super) struct MetaData {
     pub(super) acked_through_revision: u64,
     /// 已应用过的 Core journal transaction ID：重放同一事务幂等，不回退 base。
     pub(super) applied_transactions: Vec<String>,
+    /// 本次文档加载时的编辑器 revision / 基线摘要（编辑器坐标，见 #1062 复审）。
+    pub(super) editor_base_revision: u64,
+    pub(super) editor_base_sha256: String,
+    pub(super) editor_base_session: u64,
 }
 
 impl MetaData {
@@ -200,6 +204,9 @@ pub(super) fn meta_from_state(
         acked_event_ids: state.acked_event_ids.clone(),
         acked_through_revision: state.acked_through_revision,
         applied_transactions: state.applied_transactions.clone(),
+        editor_base_revision: state.editor_base_revision,
+        editor_base_sha256: state.editor_base_sha256.clone(),
+        editor_base_session: state.editor_base_session,
     }
 }
 
@@ -356,6 +363,7 @@ pub(super) fn merge_index(
                 event_id: parsed.event_id,
                 revision: parsed.revision,
                 session_id: parsed.session_id,
+                after_text_sha256: super::projection_after_text_sha256(&parsed.projection_json),
                 seq,
             },
         );
@@ -456,6 +464,9 @@ pub(super) fn read_new_state(
         acked_event_ids: meta.acked_event_ids,
         acked_through_revision: meta.acked_through_revision,
         applied_transactions: meta.applied_transactions,
+        editor_base_revision: meta.editor_base_revision,
+        editor_base_sha256: meta.editor_base_sha256,
+        editor_base_session: meta.editor_base_session,
         projects_root: location.projects_root.clone(),
         updated_at_ms: meta.updated_at_ms,
         meta_dirty: false,
@@ -695,6 +706,9 @@ pub(super) fn read_legacy(path: &Path, project_id: &str, chapter_id: &str) -> Op
                 event_id: item.event_id,
                 revision: item.revision,
                 session_id: 0,
+                after_text_sha256: super::projection_after_text_sha256(
+                    &item.projection.to_string(),
+                ),
                 seq,
             },
             item.projection.to_string(),
@@ -747,6 +761,9 @@ pub(super) fn legacy_state(
         failed_inputs: Vec::new(),
         acked_event_ids: Vec::new(),
         applied_transactions: Vec::new(),
+        editor_base_revision: 0,
+        editor_base_sha256: String::new(),
+        editor_base_session: 0,
         acked_through_revision: 0,
         projects_root: location.projects_root.clone(),
         updated_at_ms: legacy.updated_at_ms,

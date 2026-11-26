@@ -180,14 +180,42 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
     // 草稿 ack 的唯一事实源。保存（freeze）前先把 Core 侧本批未确认的草稿
     // 提交对账到本地：写成本地 ack、重放 mark_committed 并回写 Core，避免
     // 旧事件以旧 base 再次进入证明批次。
+    //
+    // 评论 #7192111899 第 2 项：对账失败时不能继续 freeze。Core journal 里
+    // 尚未复制到本地的草稿 ack 对 freeze 不可见，放行会让旧事实以旧 base
+    // 进入保存链。这里以终态错误完成请求，让 QML continuation 拿到明确失败。
     {
         let api = state.api_for(&request.context);
-        super::core_ack::reconcile_core_acks(
+        if let Err(error) = super::core_ack::reconcile_core_acks(
             api,
             request.context.projects_root(),
             &request.identity.project_id,
             Some(request.identity.chapter_id.as_str()),
-        );
+        ) {
+            let message = error.to_string();
+            log::warn!(
+                "reconcile core draft acks before save failed: project={} chapter={}: {message}",
+                request.identity.project_id,
+                request.identity.chapter_id
+            );
+            complete_error(
+                request_id,
+                ChapterSaveError {
+                    code: "DRAFT_ACK_RECONCILE_FAILED".to_string(),
+                    message_key: "error.draft_ack_reconcile_failed".to_string(),
+                    message_args: serde_json::json!({
+                        "projectId": request.identity.project_id,
+                        "chapterId": request.identity.chapter_id,
+                        "detail": message.clone(),
+                    }),
+                    raw_error: message,
+                    conflict: false,
+                },
+                false,
+                String::new(),
+            );
+            return;
+        }
     }
     let chain_key = chapter_chain_key(&request);
     let (effective_expected, effective_base, chained) = {

@@ -77,12 +77,9 @@ pub(crate) fn base_matches_plan(
 /// None，JSON 损坏也返回 None，由调用方按“基线不可恢复”保留草稿。
 pub(crate) fn baseline_text_from_projection(json: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
-    let baseline = value.get("baselineText")?.as_str()?;
-    if baseline.is_empty() {
-        None
-    } else {
-        Some(baseline.to_string())
-    }
+    // Issue #1062 评论 7192111899 第 3 项：空章基线是合法的 `""`；只有字段
+    // 完全缺失（或非字符串）才表示“没有基线”。
+    value.get("baselineText")?.as_str().map(str::to_string)
 }
 
 /// 草稿事件链第一条事实携带的原始基线正文，用于外部变更后的冲突材料。
@@ -93,6 +90,16 @@ pub(crate) fn original_base_text(
     plan: &super::super::chapter_draft::ChapterDraftRestorePlan,
 ) -> Option<String> {
     baseline_text_from_projection(&plan.facts.first()?.projection_json)
+}
+
+/// 无事实草稿是否仍是本次文档加载基线（编辑器坐标未变、摘要一致）。
+pub(crate) fn unchanged_baseline(
+    plan: &super::super::chapter_draft::ChapterDraftRestorePlan,
+) -> bool {
+    plan.text.is_some()
+        && plan.text_revision == plan.editor_base_revision
+        && !plan.editor_base_sha256.is_empty()
+        && plan.text_sha256 == plan.editor_base_sha256
 }
 
 /// 项目进入时按同一批次协议重放未完成草稿。
@@ -110,27 +117,49 @@ pub(super) fn handle_restore_project(
     command: ChapterRestoreCommand,
 ) {
     let projects_root = PathBuf::from(&command.context.projects_root);
+    let mut messages: Vec<String> = Vec::new();
     // Issue #1062 评论 7191076411 第 1 项（平台侧）：Core durable journal 是
     // 草稿 ack 的唯一事实源；进入项目时先按 Core 记录对账，即使本地没有
     // 草稿也要把 Core 未确认的提交补写成本地 ack 并重放。
+    // Issue #1062 评论 7192111899 第 2 项：对账失败必须阻止对应章节的旧事实
+    // replay/提交；Core journal 仍保留原始证明事件，下一次入口重新对账。
+    let mut blocked_chapters: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    let mut reconcile_failed_all = false;
     {
         let api = state.api_for(&command.context);
-        super::core_ack::reconcile_core_acks(
+        if let Err(error) = super::core_ack::reconcile_core_acks(
             api,
             command.context.projects_root(),
             &command.project_id,
             None,
-        );
+        ) {
+            if error.failures().is_empty() {
+                reconcile_failed_all = true;
+            } else {
+                for failure in error.failures() {
+                    blocked_chapters.insert(failure.chapter_id.clone());
+                }
+            }
+            messages.push(format!("core_draft_ack_reconcile_failed: {error}"));
+        }
     }
     let drafts =
         super::super::chapter_draft::list_project_drafts(&projects_root, &command.project_id);
     let mut restored = 0usize;
     let mut failed = 0usize;
     let mut kept = 0usize;
-    let mut messages: Vec<String> = Vec::new();
     let api = state.api_for(&command.context);
     for draft in drafts {
         let chapter_id = draft.chapter_id.clone();
+        if reconcile_failed_all || blocked_chapters.contains(&chapter_id) {
+            failed += 1;
+            kept += 1;
+            messages.push(format!(
+                "{chapter_id}: core_draft_ack_reconcile_failed kept"
+            ));
+            continue;
+        }
         // 先把 Core 投影构造失败的原始命令重试掉；仍失败就保留草稿，
         // 不能带着缺失事件把正文提交成“完整”状态。
         if let Err(error) = retry_pending_inputs(

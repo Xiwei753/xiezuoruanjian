@@ -53,6 +53,8 @@ pub(crate) struct ChapterDraftTextCommand {
     pub chapter_id: String,
     /// true = 立即写整章正文（保存/关窗/离开作品边界）。
     pub force: bool,
+    /// 本次文档加载时的编辑器 revision（编辑器坐标，不是章节持久化 revision）。
+    pub editor_base_revision: u64,
 }
 
 /// 项目进入时重放草稿的请求。
@@ -375,6 +377,7 @@ pub(super) fn handle_draft_text(command: ChapterDraftTextCommand) {
                 snapshot.base_revision,
                 &snapshot.base_sha256,
             ),
+            snapshot.editor_base_revision,
         );
         log::debug!(
             "chapter draft text snapshot applied: project={} chapter={} revision={} wait_ms={}",

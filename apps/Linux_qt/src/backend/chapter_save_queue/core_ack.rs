@@ -6,34 +6,126 @@
 // `mark_committed`，成功后才回写 Core。跨进程确认事实源始终是 Core journal，
 // 本文件只做幂等桥接。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::path::Path;
 
 use writer_core::WriterCoreApi;
 
 use crate::backend::chapter_draft;
 
+/// 单笔草稿 ack 对账失败明细。
+///
+/// `transaction_id` 为空表示失败发生在章节级步骤（重放/读取本地 ack），
+/// 无法归属到某一笔 Core journal 事务。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ReconcileFailure {
+    pub transaction_id: String,
+    pub volume_id: String,
+    pub chapter_id: String,
+    pub reason: String,
+}
+
+/// 一次对账的汇总。
+#[derive(Clone, Debug, Default)]
+pub(super) struct ReconcileOutcome {
+    /// 完成 replay 的章节数。
+    pub chapters: usize,
+    /// 失败明细；只在 `Ok` 时为空（有失败时随 `ReconcileError` 返回）。
+    pub failures: Vec<ReconcileFailure>,
+}
+
+/// 对账失败：`list_pending_chapter_draft_acks` 整批失败时 `failures` 为空，
+/// 逐笔失败时 `failures` 列出全部 transaction/chapter，`message` 是完整文本。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ReconcileError {
+    failures: Vec<ReconcileFailure>,
+    message: String,
+}
+
+impl ReconcileError {
+    fn batch(message: String) -> Self {
+        Self {
+            failures: Vec::new(),
+            message,
+        }
+    }
+
+    fn from_failures(
+        project_id: &str,
+        chapter_id: Option<&str>,
+        failures: Vec<ReconcileFailure>,
+    ) -> Self {
+        let mut message = format!(
+            "core draft ack reconcile failed: project={project_id} chapter={} failures={}",
+            chapter_id.unwrap_or("*"),
+            failures.len()
+        );
+        for failure in &failures {
+            message.push_str(&format!(
+                "; tx={} volume={} chapter={}: {}",
+                if failure.transaction_id.is_empty() {
+                    "-"
+                } else {
+                    failure.transaction_id.as_str()
+                },
+                failure.volume_id.as_str(),
+                failure.chapter_id.as_str(),
+                failure.reason
+            ));
+        }
+        Self { failures, message }
+    }
+
+    pub(super) fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub(super) fn failures(&self) -> &[ReconcileFailure] {
+        &self.failures
+    }
+}
+
+impl fmt::Display for ReconcileError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ReconcileError {}
+
 /// 把 Core 中未确认的草稿提交合并进本地 pending-acks，重放并回写 Core。
 ///
 /// `chapter_id` 为 `None` 时对账项目内全部章节（进入作品/恢复草稿路径）；
 /// 指定章节时只处理该章（保存路径，在 freeze 之前调用）。
 ///
-/// 返回本次对账涉及的章节数；失败只记诊断，不阻断保存/恢复本身。
+/// 任何一笔 ack 没能落到本地/回写 Core 都返回 `Err`：此时 Core journal 仍
+/// 保留原始证明事件，调用方（保存链）必须在对账完成前不 freeze、不提交，
+/// 否则旧事实会以旧 base 再次进入证明批次。
 pub(super) fn reconcile_core_acks(
     api: &WriterCoreApi,
     projects_root: &str,
     project_id: &str,
     chapter_id: Option<&str>,
-) -> usize {
+) -> Result<ReconcileOutcome, ReconcileError> {
     let root = Path::new(projects_root);
     let acks = match api.list_pending_chapter_draft_acks(project_id.to_string()) {
         Ok(acks) => acks,
         Err(error) => {
-            log::warn!("list pending chapter draft acks {project_id}: {error}");
-            return 0;
+            let message = format!(
+                "list pending chapter draft acks: project={project_id} chapter={}: {error}",
+                chapter_id.unwrap_or("*")
+            );
+            log::warn!("{message}");
+            return Err(ReconcileError::batch(message));
         }
     };
-    let mut chapters = BTreeSet::new();
+    let mut outcome = ReconcileOutcome::default();
+    // 章节 -> 该章事务的卷 ID（失败明细需要卷/章定位）。
+    let mut chapters: BTreeMap<String, String> = BTreeMap::new();
+    // 有 ack 写盘失败或重放失败的章节：整章不再 replay/放行，避免只结算
+    // 一部分就进入保存。
+    let mut blocked: BTreeSet<String> = BTreeSet::new();
     for ack in acks {
         if let Some(filter) = chapter_id {
             if ack.chapter_id != filter {
@@ -48,57 +140,99 @@ pub(super) fn reconcile_core_acks(
             base_sha256: ack.after.content_sha256.clone(),
             reconciled: false,
         };
-        if let Err(error) =
-            chapter_draft::record_pending_ack(root, project_id, &ack.chapter_id, &pending)
-        {
-            log::warn!(
-                "record core draft ack {project_id}/{} {}: {error}",
-                ack.chapter_id,
-                ack.transaction_id
-            );
+        match chapter_draft::record_pending_ack(root, project_id, &ack.chapter_id, &pending) {
+            Ok(()) => {
+                chapters
+                    .entry(ack.chapter_id.clone())
+                    .or_insert_with(|| ack.volume_id.clone());
+            }
+            Err(error) => {
+                blocked.insert(ack.chapter_id.clone());
+                outcome.failures.push(ReconcileFailure {
+                    transaction_id: ack.transaction_id.clone(),
+                    volume_id: ack.volume_id.clone(),
+                    chapter_id: ack.chapter_id.clone(),
+                    reason: format!("record pending ack (kept): {error}"),
+                });
+            }
+        }
+    }
+    for (chapter, volume_id) in chapters {
+        if blocked.contains(&chapter) {
             continue;
         }
-        chapters.insert(ack.chapter_id);
-    }
-    let mut reconciled_chapters = 0usize;
-    for chapter in chapters {
         if let Err(error) = chapter_draft::replay_pending_acks(root, project_id, &chapter) {
-            log::warn!("replay pending acks {project_id}/{chapter}: {error}");
+            outcome.failures.push(ReconcileFailure {
+                transaction_id: String::new(),
+                volume_id: volume_id.clone(),
+                chapter_id: chapter.clone(),
+                reason: format!("replay pending acks (kept): {error}"),
+            });
             continue;
         }
-        reconciled_chapters = reconciled_chapters.saturating_add(1);
-        flush_reconciled_acks(api, projects_root, project_id, &chapter);
+        outcome.chapters = outcome.chapters.saturating_add(1);
+        outcome.failures.extend(flush_reconciled_acks(
+            api,
+            projects_root,
+            project_id,
+            &chapter,
+            &volume_id,
+        ));
     }
-    reconciled_chapters
+    if outcome.failures.is_empty() {
+        return Ok(outcome);
+    }
+    let error = ReconcileError::from_failures(project_id, chapter_id, outcome.failures);
+    log::warn!("{error}");
+    Err(error)
 }
 
 /// 回写某章所有本地已完成、Core 尚未确认的 ack。
+///
+/// 返回失败明细（空表示全部回写成功）；回写失败的本地 ack 文件保留，下一次
+/// 对账重试。调用方不得在失败时继续 freeze/提交本批保存。
 pub(super) fn flush_reconciled_acks(
     api: &WriterCoreApi,
     projects_root: &str,
     project_id: &str,
     chapter_id: &str,
-) {
+    volume_id: &str,
+) -> Vec<ReconcileFailure> {
     let root = Path::new(projects_root);
     let acks = match chapter_draft::reconciled_acks(root, project_id, chapter_id) {
         Ok(acks) => acks,
         Err(error) => {
-            log::warn!("read reconciled acks {project_id}/{chapter_id}: {error}");
-            return;
+            return vec![ReconcileFailure {
+                transaction_id: String::new(),
+                volume_id: volume_id.to_string(),
+                chapter_id: chapter_id.to_string(),
+                reason: format!("read reconciled acks: {error}"),
+            }];
         }
     };
+    let mut failures = Vec::new();
     for (ack, _path) in acks {
-        if acknowledge_one(
-            api,
-            projects_root,
-            project_id,
-            chapter_id,
-            &ack.transaction_id,
-            &ack.event_ids,
-        ) {
-            chapter_draft::complete_pending_ack(root, project_id, chapter_id, &ack.transaction_id);
+        match acknowledge_one(api, project_id, &ack.transaction_id, &ack.event_ids) {
+            Ok(()) => {
+                chapter_draft::complete_pending_ack(
+                    root,
+                    project_id,
+                    chapter_id,
+                    &ack.transaction_id,
+                );
+            }
+            Err(error) => {
+                // 本地 ack 文件保留：Core journal 未确认，下一次对账必须重试。
+                failures.push(ReconcileFailure {
+                    transaction_id: ack.transaction_id.clone(),
+                    volume_id: volume_id.to_string(),
+                    chapter_id: chapter_id.to_string(),
+                    reason: format!("acknowledge chapter commit draft (kept): {error}"),
+                });
+            }
         }
     }
+    failures
 }
 
 /// 回写单笔 Core 草稿确认；成功后删除本地 ack 文件。
@@ -122,14 +256,7 @@ pub(super) fn acknowledge_core_transaction(
         chapter_id,
         transaction_id,
     );
-    if acknowledge_one(
-        api,
-        projects_root,
-        project_id,
-        chapter_id,
-        transaction_id,
-        event_ids,
-    ) {
+    if acknowledge_one(api, project_id, transaction_id, event_ids).is_ok() {
         chapter_draft::complete_pending_ack(
             Path::new(projects_root),
             project_id,
@@ -144,87 +271,21 @@ pub(super) fn acknowledge_core_transaction(
 
 fn acknowledge_one(
     api: &WriterCoreApi,
-    _projects_root: &str,
     project_id: &str,
-    _chapter_id: &str,
     transaction_id: &str,
     event_ids: &[String],
-) -> bool {
-    match api.acknowledge_chapter_commit_draft(
+) -> Result<(), String> {
+    api.acknowledge_chapter_commit_draft(
         project_id.to_string(),
         transaction_id.to_string(),
         event_ids.to_vec(),
-    ) {
-        Ok(_) => true,
-        Err(error) => {
-            log::warn!("acknowledge chapter commit draft {project_id}/{transaction_id}: {error}");
-            false
-        }
-    }
+    )
+    .map(|_| ())
+    .map_err(|error| {
+        log::warn!("acknowledge chapter commit draft {project_id}/{transaction_id}: {error}");
+        error.to_string()
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Issue #1062 评论 7191076411 第 1 项：Core journal 是草稿 ack 的唯一
-    /// 事实源；重启后即使本地没有草稿文件，也要按 Core 未确认记录回写并清理
-    /// journal，不能留下永远无法确认的提交。
-    #[test]
-    fn reconcile_core_acks_finishes_journal_without_local_draft() {
-        let temp = tempfile::tempdir().unwrap();
-        let projects_root = temp.path().join("projects");
-        let project_root = projects_root.join("p1");
-        let tx_dir = project_root.join("app-meta/chapter-commits").join("tx-1");
-        std::fs::create_dir_all(&tx_dir).unwrap();
-        let manifest = serde_json::json!({
-            "schemaVersion": 1,
-            "transactionId": "tx-1",
-            "projectRoot": project_root.to_string_lossy(),
-            "key": {"projectId": "p1", "volumeId": "v1", "chapterId": "c1"},
-            "mutation": "replace",
-            "source": "api",
-            "createdAtMs": 1,
-            "occurredAtMs": 1,
-            "commitSequence": 1,
-            "eventIds": ["evt-1"],
-            "proofEvents": [],
-            "syncProofFacts": [],
-            "expected": null,
-            "before": {"objectGeneration": "gen-1", "revision": 2, "contentSha256": "before"},
-            "after": {"objectGeneration": "gen-1", "revision": 3, "contentSha256": "after"},
-            "bodyChanged": true,
-            "contentLen": 3,
-            "contentMd5": "md5",
-            "wordCount": 1,
-            "updatedAt": "2026-01-01T00:00:00Z",
-            "additionalFiles": [],
-            "phase": "applied",
-            "pendingProjections": [],
-            "draftAckProjections": ["evt-1"]
-        });
-        std::fs::write(
-            tx_dir.join("manifest.json"),
-            serde_json::to_string_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-
-        let api = WriterCoreApi::new(temp.path(), projects_root.clone());
-        reconcile_core_acks(&api, projects_root.to_str().unwrap(), "p1", None);
-
-        assert!(
-            !tx_dir.exists(),
-            "Core journal must be cleaned after the platform acknowledged its draft facts"
-        );
-        let ack_dir = project_root
-            .join("app-meta/chapter-drafts/c1")
-            .join("pending-acks");
-        let leftovers: Vec<_> = std::fs::read_dir(&ack_dir)
-            .map(|entries| entries.flatten().collect())
-            .unwrap_or_default();
-        assert!(
-            leftovers.is_empty(),
-            "local ack cache must be removed after Core confirmation: {leftovers:?}"
-        );
-    }
-}
+mod tests;

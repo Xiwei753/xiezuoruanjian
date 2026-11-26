@@ -308,6 +308,7 @@ pub(super) fn retry_failed_facts(location: &DraftLocation) -> Result<(), String>
                 event_id: fact.event_id.clone(),
                 revision: fact.revision,
                 session_id: fact.session_id,
+                after_text_sha256: super::projection_after_text_sha256(&fact.projection_json),
                 seq,
             });
             state.trim_index();

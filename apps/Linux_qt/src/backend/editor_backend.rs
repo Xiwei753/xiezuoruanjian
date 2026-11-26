@@ -212,6 +212,7 @@ pub struct EditorBackend {
             new_selection_anchor: u64,
             new_selection_head: u64,
             baseline_text: QString,
+            baseline_provided: bool,
             before_text_sha256: QString,
             after_text_sha256: QString,
             editor_session_id: u64,
@@ -235,6 +236,7 @@ pub struct EditorBackend {
             base_generation: QString,
             base_revision: u64,
             base_sha256: QString,
+            editor_base_revision: u64,
             force: bool,
         )
     ),
@@ -935,6 +937,7 @@ impl EditorBackend {
         new_selection_anchor: u64,
         new_selection_head: u64,
         baseline_text: QString,
+        baseline_provided: bool,
         before_text_sha256: QString,
         after_text_sha256: QString,
         editor_session_id: u64,
@@ -1007,6 +1010,7 @@ impl EditorBackend {
                 new_selection_anchor,
                 new_selection_head,
                 baseline_text,
+                baseline_provided,
                 before_text_sha256,
                 after_text_sha256,
                 base_generation,
@@ -1040,6 +1044,7 @@ impl EditorBackend {
         base_generation: QString,
         base_revision: u64,
         base_sha256: QString,
+        editor_base_revision: u64,
         force: bool,
     ) {
         let (project, volume, chapter, text, sha, base_generation, base_sha) = (
@@ -1063,6 +1068,7 @@ impl EditorBackend {
                 &base_generation,
                 base_revision,
                 &base_sha,
+                editor_base_revision,
                 force,
             )
         });

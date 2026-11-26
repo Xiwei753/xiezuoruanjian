@@ -303,6 +303,9 @@ QtObject {
     // 后续事件由 Core 用链式 hash 承接，不重复传整章。
     property bool proofBaselineSent: false
     property string proofBaselineText: ""
+    // 本次文档加载时的编辑器 revision（编辑器坐标，不是章节持久化 revision）；
+    // 草稿证明水位只用编辑器坐标比较（Issue #1062 评论 7192111899 第 1 项）。
+    property int chapterEditorBaseRevision: 0
 
     // NOTE: sync is NOT triggered by save. Auto-sync has been removed
     // (Issue #729). This is intentional: save ≠ sync.
@@ -344,6 +347,7 @@ QtObject {
                     baseRevision, newRevision, oldSelectionAnchor, oldSelectionHead,
                     newSelectionAnchor, newSelectionHead,
                     controller.proofBaselineSent ? "" : controller.proofBaselineText,
+                    !controller.proofBaselineSent,
                     beforeTextSha256, afterTextSha256,
                     Number(controller.chapterSaveSession), controller.committedChapterGeneration,
                     Number(controller.committedChapterRevision), controller.committedChapterSha256);
@@ -2006,7 +2010,7 @@ QtObject {
             projectId, volumeId, chapterId, Number(chapterSaveSession),
             snapshot.text, Number(snapshot.revision), String(snapshot.contentSha256 || ""),
             committedChapterGeneration, Number(committedChapterRevision), committedChapterSha256,
-            force === true);
+            Number(chapterEditorBaseRevision), force === true);
         cacheChapterDraftSnapshot(snapshot);
         return true;
     }
@@ -2043,7 +2047,8 @@ QtObject {
             projectId, volumeId, chapterId, Number(chapterSaveSession),
             cachedDraftText, Number(cachedDraftRevision),
             cachedDraftSha256, committedChapterGeneration,
-            Number(committedChapterRevision), committedChapterSha256, true);
+            Number(committedChapterRevision), committedChapterSha256,
+            Number(chapterEditorBaseRevision), true);
         return true;
     }
 
@@ -2649,6 +2654,7 @@ QtObject {
         lastSavedEditorText = content;
         proofBaselineText = content;
         proofBaselineSent = false;
+        chapterEditorBaseRevision = 0;
         explicitEmptySavePending = false;
         lastPotentialExplicitClearAtMs = 0;
         releaseCorrectionSession(controller.projectId, controller.chapterId);
