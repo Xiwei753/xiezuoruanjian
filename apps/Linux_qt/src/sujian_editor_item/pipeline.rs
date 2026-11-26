@@ -11,7 +11,7 @@ use super::PreeditAttribute;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 use qmetaobject::QObject;
 use writer_core::editor::{
-    EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel, EditorRevision,
+    DisplayPatch, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel, EditorRevision,
     EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
 };
 use writer_core::writing_stats::proof::content_digest_of_text;
@@ -133,33 +133,31 @@ impl CommittedTextMirror {
     /// 不变量：成功返回后，mirror 的 revision 与 kernel 的 new_revision 一致，
     /// 正文和选区与 kernel 状态同步。
     pub fn apply_edit_result(&mut self, result: &EditorEditResult) -> Result<(), String> {
-        // 协议（Issue #1063：批次顺序与坐标由 Core 唯一决定，平台不得再排序）：
+        // Issue #701 评论 5704688994 问题 4: 原子 patch batch。
+        // display_patches 是"同一 base revision 的原子 batch"：Core ImeCommit /
+        // DeleteSurrounding 会为多个 delta 生成多条 DisplayPatch，共享同一个
+        // base_revision/new_revision。旧实现循环中每应用一条 patch 就立刻把
+        // self.revision 改成 new_revision，第二条 patch 一定报 revision discontinuity。
+        //
+        // 协议：
         // 1. 先一次检查 result.base_revision 与 mirror.revision 一致；
-        // 2. 所有 patch 按原始 mirror 文本坐标一次性校验：start<=end、在镜像内、
-        //    两端在 char boundary 上、按给定顺序严格降序（start 不允许相等）且
-        //    互不重叠（后一条 end <= 前一条 start）。任何一条失败则 self.text
-        //    保持原样，调用方必须从 kernel snapshot 重建镜像；
-        // 3. 校验通过后严格按 Core 给定的降序逐条 apply，不再做平台私有排序；
+        // 2. 所有 patch 按原始 mirror 文本坐标校验（应用前校验，失败则 self.text 不变）；
+        // 3. 按 replace_byte_range.start 从大到小 stable 排序后应用（前面的编辑不会
+        //    移动后面的坐标）；同起点保持原顺序（防御性，Core 应保证不产生同起点 patch）；
         // 4. 全部应用完成后只设置一次 self.revision = new_revision。
         if result.base_revision.value() != self.revision {
             return Err(format!(
                 "CommittedTextMirror revision discontinuity: expected {}, got {}. Must reload from kernel snapshot.",
-                self.revision,
-                result.base_revision.value()
+                self.revision, result.base_revision.value()
             ));
         }
 
-        let mut previous_range: Option<(usize, usize)> = None;
+        // 校验阶段：所有 patch 按原始 mirror 文本坐标检查越界 / char boundary。
+        // 任何一条失败则返回错误，self.text 未被修改，状态一致。
         for patch in &result.display_patches {
             let range = patch.replace_byte_range.to_std_range();
             let start = range.start;
             let end = range.end;
-            if start > end {
-                return Err(format!(
-                    "CommittedTextMirror patch range inverted: [{}, {}). Must reload from kernel snapshot.",
-                    start, end
-                ));
-            }
             if start > self.text.len() || end > self.text.len() {
                 return Err(format!(
                     "CommittedTextMirror patch range out of bounds: [{}, {}) vs text len {}. Must reload from kernel snapshot.",
@@ -172,27 +170,13 @@ impl CommittedTextMirror {
                     start, end
                 ));
             }
-            if let Some((previous_start, _)) = previous_range {
-                // Core 契约：patch 按 replace_byte_range.start 严格降序、互不重叠。
-                if start >= previous_start {
-                    return Err(format!(
-                        "CommittedTextMirror patches not strictly descending: start {} after previous start {}. Must reload from kernel snapshot.",
-                        start, previous_start
-                    ));
-                }
-                if end > previous_start {
-                    return Err(format!(
-                        "CommittedTextMirror patches overlap: [{}, {}) vs previous start {}. Must reload from kernel snapshot.",
-                        start, end, previous_start
-                    ));
-                }
-            }
-            previous_range = Some((start, end));
         }
 
-        // 应用阶段：严格按 Core 给定顺序（降序、不重叠）逐条替换。
-        // 右侧修改不影响左侧旧坐标，因此不需要、也不允许平台再排序。
-        for patch in &result.display_patches {
+        // 应用阶段：按 replace_byte_range.start 从大到小 stable 排序后应用。
+        // 右侧修改不影响左侧旧坐标。应用阶段不再校验（校验阶段已完成）。
+        let mut sorted: Vec<&DisplayPatch> = result.display_patches.iter().collect();
+        sorted.sort_by_key(|p| std::cmp::Reverse(p.replace_byte_range.start().value()));
+        for patch in sorted {
             let range = patch.replace_byte_range.to_std_range();
             self.text.replace_range(range, &patch.inserted_text);
         }
@@ -610,15 +594,6 @@ impl LinuxEditorPipeline {
     /// `byte_offset >= len` 时返回 len（无法前进）。
     pub fn next_grapheme_boundary(&self, byte_offset: usize) -> usize {
         self.kernel.next_grapheme_boundary(byte_offset as u32) as usize
-    }
-
-    /// 把任意 byte offset 吸附到它所在（或之前）的真实 grapheme 边界。
-    ///
-    /// Issue #1063：点击命中、IME commit 等平台输入给出的逻辑 cursor 必须停在
-    /// Core 认定的 UAX #29 边界上。委托到 Core EditorKernel，保证与方向键、
-    /// Backspace/Delete 使用同一套边界定义。
-    pub fn snap_to_grapheme_boundary(&self, byte_offset: usize) -> usize {
-        self.kernel.snap_to_grapheme_boundary(byte_offset as u32) as usize
     }
 
     pub fn composition(&self) -> &CompositionState {

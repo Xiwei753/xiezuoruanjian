@@ -1,5 +1,5 @@
 use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
-use super::types::EditorOperationKind;
+use super::types::{DisplayPatch, EditorOperationKind};
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
@@ -41,19 +41,14 @@ impl EditorKernel {
         let new_chars: u32 = new_text.chars().count() as u32;
         let new_non_ws: u32 = new_text.chars().filter(|c| !c.is_whitespace()).count() as u32;
 
-        // Issue #1063：所有 DisplayPatch 批次统一由 patch_batch 构造；load 是
-        // 冷路径的一次全文替换（单条 patch，trivially 降序）。
-        let display_patches = super::patch_batch::build_display_patches(
+        let display_patches = vec![DisplayPatch {
             base_revision,
             new_revision,
-            new_selection,
-            old_len,
-            vec![super::patch_batch::PatchBatchItem {
-                replace_range: Utf8ByteRange::from_start_len(0, old_len),
-                deleted_len: old_len,
-                inserted_text: &new_text,
-            }],
-        );
+            replace_byte_range: Utf8ByteRange::from_start_len(0, old_len),
+            inserted_byte_range: Utf8ByteRange::from_start_len(0, new_text.len()),
+            inserted_text: new_text,
+            resulting_selection_byte_range: Utf8ByteRange::point(resolved_cursor),
+        }];
 
         let result = EditorEditResult {
             transaction_id: self.take_transaction_id(),
@@ -64,8 +59,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::Load,
             changes: Vec::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Load,
             offset_map: Some(OffsetMap::from_single_edit(old_len, (0, old_len), new_len)),
             content_delta: EditorContentDelta {
@@ -96,8 +91,8 @@ impl EditorKernel {
             new_selection: current_selection,
             cause: EditorTransactionCause::Programmatic,
             changes: Vec::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CursorOnly,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -121,8 +116,8 @@ impl EditorKernel {
             new_selection: old_selection,
             cause: EditorTransactionCause::Programmatic,
             changes: Vec::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CursorOnly,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -135,10 +130,18 @@ impl EditorKernel {
     }
 
     /// Rope 版 char boundary clamp（不 materialize 全文）。
-    ///
-    /// Issue #1063：钳位规则由 `text_coordinates` 唯一维护，这里只保留入口名。
     pub(crate) fn clamp_to_char_boundary(rope: &crop::Rope, offset: usize) -> usize {
-        crate::editor::text_coordinates::rope_clamp_to_char_boundary(rope, offset)
+        if offset > rope.byte_len() {
+            return rope.byte_len();
+        }
+        if rope.is_char_boundary(offset) {
+            return offset;
+        }
+        let mut clamped = offset;
+        while clamped > 0 && !rope.is_char_boundary(clamped) {
+            clamped -= 1;
+        }
+        clamped
     }
 
     pub(crate) fn normalize_range(start: usize, end: usize) -> (usize, usize) {

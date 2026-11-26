@@ -3,9 +3,14 @@ use serde::{Deserialize, Serialize};
 use crate::editor::strong_types::Utf8ByteOffset;
 
 pub(crate) fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
-    // Issue #1063：UTF-8 偏移钳位规则由 `text_coordinates` 唯一维护；
-    // 保留本入口名以兼容既有调用方。
-    crate::editor::text_coordinates::clamp_to_char_boundary(text, index)
+    if index > text.len() {
+        return text.len();
+    }
+    let mut safe = index;
+    while safe > 0 && !text.is_char_boundary(safe) {
+        safe -= 1;
+    }
+    safe
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

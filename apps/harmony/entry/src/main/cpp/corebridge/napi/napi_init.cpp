@@ -192,37 +192,22 @@ static char* dup_napi_string(napi_env env, napi_value value, char* buf, size_t b
     return buf;
 }
 
-// 字符串创建统一失败语义：napi_create_string_utf8 失败（通常为 OOM / env 关闭）
-// 时抛出 JS 异常并返回 nullptr，由 ArkTS 调用方（如 NativeEditorSessionBridge）
-// 的 try/catch 转成 NATIVE_ERROR；不自造未定义值冒充结果。
-static napi_value ThrowNapiStringError(napi_env env, const char* detail) {
-    napi_throw_error(env, "E_NAPI_STRING", detail);
-    return nullptr;
-}
-
 // ReturnJsonString: Bridge helper — wraps a core-allocated JSON char* into a NAPI string.
 //   Takes ownership of `json`: calls writer_core_free_string after copying to NAPI value.
 //   Returns a minimal error envelope if json is null.
 //
-//   SAFETY: json 的所有权在调用时转移给本函数，且只释放一次。无论
-//   napi_create_string_utf8 是否成功，json 都会被 writer_core_free_string 释放；
-//   失败时返回 nullptr（已抛 E_NAPI_STRING），不会泄漏也不会重复释放。
-//   NULL_RESULT 分支是静态字面量，不涉及 Core 所有权。
+//   SAFETY: json 的所有权在调用时转移给本函数。无论 napi_create_string_utf8
+//   是否成功，json 都会被 writer_core_free_string 释放。如果 napi 调用失败，
+//   result 为未定义值但 json 已释放，不会泄漏。
 static napi_value ReturnJsonString(napi_env env, char* json) {
     if (json == nullptr) {
         napi_value empty;
-        if (napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"NULL_RESULT\"}",
-                                    NAPI_AUTO_LENGTH, &empty) != napi_ok) {
-            return ThrowNapiStringError(env, "Failed to create NULL_RESULT JSON string");
-        }
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"NULL_RESULT\"}", 47, &empty);
         return empty;
     }
     napi_value result;
-    napi_status create_status = napi_create_string_utf8(env, json, strlen(json), &result);
+    napi_create_string_utf8(env, json, strlen(json), &result);
     writer_core_free_string(json);
-    if (create_status != napi_ok) {
-        return ThrowNapiStringError(env, "Failed to create Core JSON string");
-    }
     return result;
 }
 
@@ -361,19 +346,16 @@ static napi_value NativeUpdateNetworkState(napi_env env, napi_callback_info info
 
 // NativeGetLoadStatus: Returns current core load status as JSON string, or null on failure.
 static napi_value NativeGetLoadStatus(napi_env env, napi_callback_info info) {
-    char* status_json = writer_core_get_load_status();
-    if (status_json == nullptr) {
+    char* status = writer_core_get_load_status();
+    if (status == nullptr) {
         napi_value null_val;
         napi_get_null(env, &null_val);
         return null_val;
     }
 
     napi_value result;
-    napi_status create_status = napi_create_string_utf8(env, status_json, strlen(status_json), &result);
-    writer_core_free_string(status_json);
-    if (create_status != napi_ok) {
-        return ThrowNapiStringError(env, "Failed to create load status JSON string");
-    }
+    napi_create_string_utf8(env, status, strlen(status), &result);
+    writer_core_free_string(status);
     return result;
 }
 
@@ -563,20 +545,14 @@ static napi_value NativeExportDiagnostics(napi_env env, napi_callback_info info)
     if (zip_path == nullptr) {
         // Return error JSON envelope
         napi_value err;
-        if (napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"EXPORT_FAILED\"}",
-                                    NAPI_AUTO_LENGTH, &err) != napi_ok) {
-            return ThrowNapiStringError(env, "Failed to create export error JSON string");
-        }
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"EXPORT_FAILED\"}", 44, &err);
         return err;
     }
 
     // Return zip path string, then free the core-allocated char*
     napi_value result;
-    napi_status create_status = napi_create_string_utf8(env, zip_path, strlen(zip_path), &result);
+    napi_create_string_utf8(env, zip_path, strlen(zip_path), &result);
     writer_core_free_string(zip_path);
-    if (create_status != napi_ok) {
-        return ThrowNapiStringError(env, "Failed to create export path string");
-    }
     return result;
 }
 
@@ -585,18 +561,13 @@ static napi_value NativeGetLastError(napi_env env, napi_callback_info info) {
     char* err = writer_core_get_last_error();
     if (err == nullptr) {
         napi_value empty;
-        if (napi_create_string_utf8(env, "", NAPI_AUTO_LENGTH, &empty) != napi_ok) {
-            return ThrowNapiStringError(env, "Failed to create empty string");
-        }
+        napi_create_string_utf8(env, "", 0, &empty);
         return empty;
     }
 
     napi_value result;
-    napi_status create_status = napi_create_string_utf8(env, err, strlen(err), &result);
+    napi_create_string_utf8(env, err, strlen(err), &result);
     writer_core_free_string(err);
-    if (create_status != napi_ok) {
-        return ThrowNapiStringError(env, "Failed to create last error string");
-    }
     return result;
 }
 
@@ -631,9 +602,7 @@ static napi_value NativeGetHilogSnapshot(napi_env env, napi_callback_info info) 
 
     napi_value result;
     if (hilog_records.empty()) {
-        if (napi_create_string_utf8(env, "", NAPI_AUTO_LENGTH, &result) != napi_ok) {
-            return ThrowNapiStringError(env, "Failed to create empty hilog snapshot");
-        }
+        napi_create_string_utf8(env, "", 0, &result);
         return result;
     }
 
@@ -642,9 +611,7 @@ static napi_value NativeGetHilogSnapshot(napi_env env, napi_callback_info info) 
     for (const std::string& record : hilog_records) {
         snapshot += record;
     }
-    if (napi_create_string_utf8(env, snapshot.c_str(), snapshot.size(), &result) != napi_ok) {
-        return ThrowNapiStringError(env, "Failed to create hilog snapshot string");
-    }
+    napi_create_string_utf8(env, snapshot.c_str(), snapshot.size(), &result);
     return result;
 }
 
@@ -689,9 +656,7 @@ static napi_value NativeGetHilogCaptureStats(napi_env env, napi_callback_info in
     size_t json_len = std::min(static_cast<size_t>(len), sizeof(json) - 1);
 
     napi_value result;
-    if (napi_create_string_utf8(env, json, json_len, &result) != napi_ok) {
-        return ThrowNapiStringError(env, "Failed to create hilog capture stats JSON string");
-    }
+    napi_create_string_utf8(env, json, json_len, &result);
     return result;
 }
 

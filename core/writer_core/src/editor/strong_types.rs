@@ -87,15 +87,26 @@ impl Utf8ByteOffset {
     }
 
     pub fn clamp(text: &str, offset: usize) -> Self {
-        // Issue #1063：钳位方向（越界到文末、字符中间向左）由 Core 统一维护。
-        Self(crate::editor::text_coordinates::clamp_to_char_boundary(
-            text, offset,
-        ))
+        let clamped = if offset > text.len() {
+            text.len()
+        } else {
+            crate::editor::transaction::clamp_to_char_boundary(text, offset)
+        };
+        Self(clamped)
     }
 
     /// Rope 版 clamp（不 materialize 全文）。
     pub fn clamp_rope(rope: &crop::Rope, offset: usize) -> Self {
-        Self(crate::editor::text_coordinates::rope_clamp_to_char_boundary(rope, offset))
+        let clamped = if offset > rope.byte_len() {
+            rope.byte_len()
+        } else {
+            let mut safe = offset;
+            while safe > 0 && !rope.is_char_boundary(safe) {
+                safe -= 1;
+            }
+            safe
+        };
+        Self(clamped)
     }
 
     pub fn unchecked(offset: usize) -> Self {

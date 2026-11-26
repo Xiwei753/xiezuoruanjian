@@ -741,12 +741,7 @@ impl SujianEditorItem {
         // Issue #901 第三十八轮缺口3: 不再无条件 rebuild_from_text。
         // 检查 store 段落数是否与 committed_text 段落数匹配。匹配则跳过 rebuild
         //（store 已通过增量排版同步，ID 序列有效），不匹配才 rebuild。
-        // Issue #1063：段落数按 Core 段落规则统计（`\n`/`CRLF`/`U+2029`），
-        // 与 `split_paragraphs_with_hard_break` 的 store 段数一致；空正文仍算 1 段。
-        let committed_para_count =
-            writer_core::editor::text_document_rules::paragraph_byte_ranges(committed_text)
-                .len()
-                .max(1);
+        let committed_para_count = committed_text.split('\n').count();
         let store_para_count = self.editor_layout.paragraph_store().paragraph_count();
         if store_para_count != committed_para_count {
             self.editor_layout.paragraph_store_mut().rebuild_from_text(

@@ -4,12 +4,7 @@
 // 要有明确字段。本类定义滚动偏移 + 视口尺寸 + 内容尺寸，供 SujianEditor 滚动时回调给
 // WritingScreen、接续恢复时由 editor.restoreViewport(state) 消费。
 //
-// Issue #1063 评论第 6 条（鸿蒙 viewport 从未采集）：新增 topVisibleByteOffset，
-// 表示“视口左上角命中的字符在正文中的 Core UTF-8 byte offset”，-1 表示未知/不可读。
-// 它是跨设备恢复滚动位置的稳定锚点（byte offset 不随设备字号/宽度/dpi 变化），
-// 比 scrollTop 像素更适合接续；scrollTop/contentHeight 仍保留给同设备/同排版就近恢复。
-//
-// 所有像素坐标单位均为 px，相对编辑器内容坐标系（与渲染层 Stack align(TopStart) 一致）。
+// 所有坐标单位均为 px，相对编辑器内容坐标系（与渲染层 Stack align(TopStart) 一致）。
 // scrollTop/scrollLeft 是内容滚动偏移（内容左上角相对视口左上角的偏移，向下/向右为正）。
 // viewportWidth/viewportHeight 是视口可见区域尺寸。
 // contentWidth/contentHeight 是内容总尺寸（正文+选区+composition+caret 在同一滚动坐标系里）。
@@ -21,7 +16,6 @@ interface EditorViewportStateDto {
   viewportHeight: number
   contentWidth: number
   contentHeight: number
-  topVisibleByteOffset: number
 }
 
 export class EditorViewportState {
@@ -31,8 +25,6 @@ export class EditorViewportState {
   readonly viewportHeight: number  // 视口可见高度（px）
   readonly contentWidth: number    // 内容总宽度（px）
   readonly contentHeight: number   // 内容总高度（px）
-  // 视口左上角命中的字符在正文中的 Core UTF-8 byte offset；-1 表示未知（不可读/未采集）。
-  readonly topVisibleByteOffset: number
 
   constructor(
     scrollTop: number = 0,
@@ -40,8 +32,7 @@ export class EditorViewportState {
     viewportWidth: number = 0,
     viewportHeight: number = 0,
     contentWidth: number = 0,
-    contentHeight: number = 0,
-    topVisibleByteOffset: number = -1
+    contentHeight: number = 0
   ) {
     this.scrollTop = scrollTop
     this.scrollLeft = scrollLeft
@@ -49,12 +40,10 @@ export class EditorViewportState {
     this.viewportHeight = viewportHeight
     this.contentWidth = contentWidth
     this.contentHeight = contentHeight
-    this.topVisibleByteOffset = topVisibleByteOffset
   }
 
   // clamp：确保 scrollTop/scrollLeft 在 [0, maxScroll] 范围内。
   // 防止接续恢复时传入越界 offset（目标设备内容尺寸不同）。
-  // topVisibleByteOffset 只允许 >= 0 或 -1（未知），负值统一归一为 -1。
   clamped(): EditorViewportState {
     const maxScrollTop: number = Math.max(0, this.contentHeight - this.viewportHeight)
     const maxScrollLeft: number = Math.max(0, this.contentWidth - this.viewportWidth)
@@ -64,8 +53,7 @@ export class EditorViewportState {
       this.viewportWidth,
       this.viewportHeight,
       this.contentWidth,
-      this.contentHeight,
-      this.topVisibleByteOffset >= 0 ? this.topVisibleByteOffset : -1
+      this.contentHeight
     )
   }
 
@@ -79,7 +67,7 @@ export class EditorViewportState {
   }
 
   // 序列化/反序列化（接续 payload 用 JSON 透传）。
-  // fromObject 容错：缺失字段用 0（topVisibleByteOffset 用 -1 表示未知），非有限数同样归一。
+  // fromObject 容错：缺失字段用 0，非有限数用 0。
   static fromObject(obj: Record<string, Object>): EditorViewportState {
     const num = (k: string): number => {
       const v: Object | undefined = obj[k]
@@ -89,25 +77,13 @@ export class EditorViewportState {
       const n: number = v as number
       return typeof n === 'number' && isFinite(n) ? n : 0
     }
-    const byteOffset = (k: string): number => {
-      const v: Object | undefined = obj[k]
-      if (v === undefined || v === null) {
-        return -1
-      }
-      const n: number = v as number
-      if (typeof n !== 'number' || !isFinite(n) || !Number.isInteger(n) || n < 0) {
-        return -1
-      }
-      return n
-    }
     return new EditorViewportState(
       num('scrollTop'),
       num('scrollLeft'),
       num('viewportWidth'),
       num('viewportHeight'),
       num('contentWidth'),
-      num('contentHeight'),
-      byteOffset('topVisibleByteOffset')
+      num('contentHeight')
     )
   }
 
@@ -118,8 +94,7 @@ export class EditorViewportState {
       viewportWidth: this.viewportWidth,
       viewportHeight: this.viewportHeight,
       contentWidth: this.contentWidth,
-      contentHeight: this.contentHeight,
-      topVisibleByteOffset: this.topVisibleByteOffset
+      contentHeight: this.contentHeight
     }
     return obj
   }
@@ -131,6 +106,5 @@ export class EditorViewportState {
       && this.viewportHeight === other.viewportHeight
       && this.contentWidth === other.contentWidth
       && this.contentHeight === other.contentHeight
-      && this.topVisibleByteOffset === other.topVisibleByteOffset
   }
 }

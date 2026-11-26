@@ -13,8 +13,6 @@ pub mod autocorrect;
 pub mod formatting;
 pub mod kernel;
 pub mod strong_types;
-pub mod text_coordinates;
-pub mod text_document_rules;
 pub mod text_edit_session;
 pub mod transaction;
 

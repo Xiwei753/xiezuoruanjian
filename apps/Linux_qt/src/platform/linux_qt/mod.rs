@@ -18,6 +18,7 @@ pub mod clipboard_focus_adapter;
 pub mod desktop_settings;
 pub mod runtime_environment;
 pub mod screen_geometry;
+pub mod utf16_converter;
 
 pub use clipboard_focus_adapter::LinuxQtClipboardFocusAdapter;
 pub use runtime_environment::{configure_qpa_and_input_method, RuntimeEnvConfig};

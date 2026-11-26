@@ -23,7 +23,6 @@ use std::sync::Arc;
 use super::chunked_vec::{ChunkedSlotMap, PersistentChunkedVec};
 use super::paragraph_height_index::{ParagraphLineCountIndex, ParagraphOffsetIndex};
 use super::types::{ParagraphId, VisualLine};
-use writer_core::editor::{text_coordinates, text_document_rules};
 
 // ── 稳定段落身份 ──
 //
@@ -176,43 +175,9 @@ impl ParagraphLayoutEntry {
     }
 }
 
-// ── Issue #901 第二十三轮问题1 / Issue #1063 第 6 项: 统一段落切分 ──
-
-/// 一个段落在原文中的切分结果（Core 段落规则）。
-///
-/// `content` 是去掉段落分隔符后的正文；`separator` 是紧随其后的分隔符
-/// （`\n`、`CRLF` 或 `U+2029`），文末最后一段为 `""`。孤立 `CR` 不是分隔符，
-/// 会留在 `content` 内。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ParagraphSpan<'a> {
-    /// 段落正文（不含段落分隔符）。
-    pub content: &'a str,
-    /// 紧随其后的段落分隔符；文末最后一段为空串。
-    pub separator: &'a str,
-}
-
-impl ParagraphSpan<'_> {
-    /// 该段后是否有段落分隔符。
-    pub fn hard_break(&self) -> bool {
-        !self.separator.is_empty()
-    }
-
-    /// 该段在原文中占用的 UTF-8 byte 长度（正文 + 分隔符）。
-    pub fn byte_len(&self) -> usize {
-        self.content.len() + self.separator.len()
-    }
-
-    /// 该段在原文中占用的 UTF-16 code unit 长度（正文 + 分隔符）。
-    pub fn qchar_len(&self) -> usize {
-        text_coordinates::utf16_len(self.content) + text_coordinates::utf16_len(self.separator)
-    }
-}
+// ── Issue #901 第二十三轮问题1: 统一段落切分 ──
 
 /// 统一段落切分：生成 `(content, hard_break)` 序列，包括末尾换行产生的尾空段。
-///
-/// 段落规则由 Core [`text_document_rules::paragraph_byte_ranges`] 唯一决定：
-/// `CRLF` 是一个段落边界（不是 `\r` + `\n` 两个字符）、`\n` 与 `U+2029` 同样是
-/// 段落边界，孤立 `CR` 不是。
 ///
 /// 与 `str::split_inclusive('\n')` 的区别：`split_inclusive` 对 `甲\n` 只产生
 /// `["甲\n"]`（一个条目），不产生尾空段；本函数产生尾空段，使 store entries、
@@ -224,61 +189,28 @@ impl ParagraphSpan<'_> {
 /// - `甲` → `[("甲", false)]`
 /// - `甲\n乙` → `[("甲", true), ("乙", false)]`
 /// - `甲\n乙\n` → `[("甲", true), ("乙", true), ("", false)]`
-/// - `甲\r\n乙` → `[("甲", true), ("乙", false)]`
 /// - `` → `[("", false)]`
 ///
-/// `content` 是去掉段落分隔符的段落正文；`hard_break` 表示该段后是否有分隔符。
-/// 尾空段（末尾分隔符后的空段）`hard_break=false`，因为没有后续分隔符。
+/// `content` 是去掉 `'\n'` 的段落正文；`hard_break` 表示该段后是否有 `'\n'`。
+/// 尾空段（末尾 `'\n'` 后的空段）`hard_break=false`，因为没有后续 `'\n'`。
 pub fn split_paragraphs_with_hard_break(text: &str) -> Vec<(&str, bool)> {
     if text.is_empty() {
         return vec![("", false)];
     }
-    let ranges = text_document_rules::paragraph_byte_ranges(text);
-    let range_count = ranges.len();
-    ranges
-        .into_iter()
-        .enumerate()
-        .map(|(index, (start, end))| (&text[start..end], index + 1 < range_count))
-        .collect()
-}
-
-/// 正文是否以段落分隔符结尾（`\n`、`CRLF` 的 `\n` 或 `U+2029`）。
-///
-/// 孤立 `CR` 不是段落边界，因此不算结尾分隔符。供排版路径判断是否需要补充
-/// 尾空段，避免只识别 `'\n'` 时漏掉 `U+2029`。
-pub fn ends_with_paragraph_separator(text: &str) -> bool {
-    text.ends_with('\n') || text.ends_with('\u{2029}')
-}
-
-/// 按 Core 段落规则切分正文，返回带分隔符信息的段落，**不含**末尾分隔符
-/// 产生的尾空段（形状与 `str::split_inclusive('\n')` 一致）。
-///
-/// 供排版路径逐段遍历使用：`content` 去掉 `\n`/`CRLF`/`U+2029` 分隔符，
-/// `separator` 保留真实分隔符，byte/qchar 坐标推进用 [`ParagraphSpan::byte_len`]
-/// / [`ParagraphSpan::qchar_len`] 精确计算，不再假设分隔符永远是 1 byte。
-pub fn split_paragraphs_inclusive(text: &str) -> Vec<ParagraphSpan<'_>> {
-    let ranges = text_document_rules::paragraph_byte_ranges(text);
-    let range_count = ranges.len();
-    if range_count == 0 {
-        return Vec::new();
-    }
-    let mut spans = Vec::with_capacity(range_count);
-    for (index, &(start, end)) in ranges.iter().enumerate() {
-        // 末尾分隔符产生的尾空段不进入 inclusive 结果。
-        if index + 1 == range_count && start == end && end == text.len() {
-            continue;
+    let mut result = Vec::new();
+    let mut start = 0usize;
+    let bytes = text.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' {
+            // SAFETY: i 是 '\n' 字节位置，start..i 是有效的 UTF-8 边界
+            //（'\n' 是单字节 ASCII，不会切割多字节字符）。
+            result.push((&text[start..i], true));
+            start = i + 1;
         }
-        let separator_end = if index + 1 < range_count {
-            ranges[index + 1].0
-        } else {
-            text.len()
-        };
-        spans.push(ParagraphSpan {
-            content: &text[start..end],
-            separator: &text[end..separator_end],
-        });
     }
-    spans
+    // 处理最后一段（不以 \n 结尾的剩余部分，或末尾 \n 后的空段）
+    result.push((&text[start..], false));
+    result
 }
 
 // ── 受影响段落范围 ──
@@ -1624,13 +1556,12 @@ impl ParagraphLayoutStore {
 
     /// Issue #901: 根据新旧文本差异确定受影响段落索引列表。
     ///
-    /// 比较新旧文本的段落分割（Core 段落规则：`\n`、`CRLF`、`U+2029`），
-    /// 找出内容不同的段落索引。
+    /// 比较新旧文本的段落分割（按 `'\n'` 分段），找出内容不同的段落索引。
     /// 用于增量排版：只有这些段落需要重新走 QTextLayout，其他段落可复用。
     ///
     /// # 算法
     ///
-    /// 1. 将 `old_text` 和 `new_text` 按 Core 段落规则分段。
+    /// 1. 将 `old_text` 和 `new_text` 按 `'\n'` 分段。
     /// 2. 逐段比较文本内容，内容不同的段落标记为受影响。
     /// 3. 段落数量变化（换行拆段/删回车合段）时，从第一个变化点起所有后续段落
     ///    都标记为受影响（因为 byte offset 全部漂移）。
@@ -1643,16 +1574,20 @@ impl ParagraphLayoutStore {
             return Vec::new();
         }
 
-        let old_paras = split_paragraphs_inclusive(old_text);
-        let new_paras = split_paragraphs_inclusive(new_text);
+        let old_paras: Vec<&str> = old_text.split_inclusive('\n').collect();
+        let new_paras: Vec<&str> = new_text.split_inclusive('\n').collect();
 
         let mut affected: Vec<usize> = Vec::new();
         let min_len = old_paras.len().min(new_paras.len());
 
-        // 逐段比较段落文本内容（分隔符已由 Core 规则剥离）
+        // 逐段比较段落文本内容（去掉尾部换行符），找第一个不同的段落
         let mut first_diff: Option<usize> = None;
         for i in 0..min_len {
-            if old_paras[i].content != new_paras[i].content {
+            // 比较段落文本内容，忽略尾部换行符差异
+            //（末尾换行符变化只是因为后面增删了段落，不影响本段 shaping）
+            let old_text = old_paras[i].trim_end_matches('\n');
+            let new_text = new_paras[i].trim_end_matches('\n');
+            if old_text != new_text {
                 first_diff = Some(i);
                 break;
             }

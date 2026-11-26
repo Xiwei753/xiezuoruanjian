@@ -1,6 +1,5 @@
-use super::patch_batch::{build_display_patches, PatchBatchItem};
 use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
-use super::types::EditorOperationKind;
+use super::types::{DisplayPatch, EditorOperationKind};
 use super::{CompositionSessionState, EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{
@@ -10,20 +9,6 @@ use crate::editor::strong_types::{
 use crate::editor::transaction::{EditorChange, EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
-    /// byte offset 是否落在整个文档的 UAX #29 扩展字素边界上。
-    ///
-    /// Issue #1063：composition 的 replace range 由 Core 统一吸附/校验，
-    /// 平台不能从簇中间开始预输入。
-    fn is_grapheme_boundary(&self, offset: usize) -> bool {
-        let Ok(offset_u32) = u32::try_from(offset) else {
-            return false;
-        };
-        matches!(
-            usize::try_from(self.snap_to_grapheme_boundary(offset_u32)),
-            Ok(boundary) if boundary == offset
-        )
-    }
-
     pub(crate) fn apply_begin_composition(
         &mut self,
         replace_start: usize,
@@ -33,6 +18,13 @@ impl EditorKernel {
         old_selection_anchor: usize,
         old_selection_head: usize,
     ) -> EditorEditOutcome {
+        // Session-divergence recovery: if a composition session already exists, the
+        // platform has lost track of it (e.g. an aborted IME interaction, or a soft reset
+        // that cleared the adapter's composition state without cancelling the kernel
+        // session). A stale session would reject every subsequent plain commit
+        // (StaleRevision) and block all future compositions, so a new begin is
+        // authoritative: drop the stale session and start fresh with the new range.
+        self.composition_session = None;
         if replace_start > replace_end_exclusive {
             return EditorEditOutcome::InvalidRange(self.noop_result(
                 base_revision,
@@ -59,28 +51,6 @@ impl EditorKernel {
                 old_selection_head,
             ));
         }
-        // Issue #1063：composition 的 replace range 也必须落在整个文档的
-        // UAX #29 扩展字素边界上（例如不能从 emoji ZWJ 簇中间开始）。
-        // 非法 begin 不得改动已有 session，因此校验全部通过后才替换。
-        if !self.is_grapheme_boundary(replace_start)
-            || !self.is_grapheme_boundary(replace_end_exclusive)
-        {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(
-                base_revision,
-                old_cursor,
-                old_selection_anchor,
-                old_selection_head,
-            ));
-        }
-
-        // Session-divergence recovery: if a composition session already exists, the
-        // platform has lost track of it (e.g. an aborted IME interaction, or a soft reset
-        // that cleared the adapter's composition state without cancelling the kernel
-        // session). A stale session would reject every subsequent plain commit
-        // (StaleRevision) and block all future compositions, so a new begin is
-        // authoritative: drop the stale session and start fresh with the new range.
-        // 只有上面的 range / 边界 / 越界校验全部通过后才执行。
-        self.composition_session = None;
 
         let session_id = self.next_composition_session_id;
         self.next_composition_session_id =
@@ -106,8 +76,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
             changes: Vec::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -151,8 +121,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
             changes: Vec::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -198,8 +168,8 @@ impl EditorKernel {
                 new_selection,
                 cause: EditorTransactionCause::TypingCommit,
                 changes: Vec::new(),
-                before_text_sha256: String::new(),
-                after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
                 operation_kind: EditorOperationKind::CompositionCommit,
                 offset_map: None,
                 content_delta: EditorContentDelta::default(),
@@ -223,7 +193,6 @@ impl EditorKernel {
 
         // 先取局部删除文本，再局部 Rope replace，不 clone 全文。
         let deleted_text = self.text.byte_slice(replace_start..replace_end).to_string();
-        let base_len = self.text.byte_len();
         self.text
             .replace(replace_start..replace_end, &committed_text);
         if !deleted_text.is_empty() {
@@ -273,26 +242,26 @@ impl EditorKernel {
             deleted_text: deleted_text.clone(),
             inserted_text: committed_text.clone(),
         };
-        let new_revision = self.revision;
-
-        let display_patches = build_display_patches(
-            base_revision,
-            new_revision,
-            new_selection,
-            base_len,
-            vec![PatchBatchItem {
-                replace_range: delta.old_range,
-                deleted_len: delta.deleted_text.len(),
-                inserted_text: &delta.inserted_text,
-            }],
-        );
-
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
+
+        let new_revision = self.revision;
+
+        let display_patches = vec![DisplayPatch {
+            base_revision,
+            new_revision,
+            replace_byte_range: Utf8ByteRange::from_ordered(replace_start, replace_end),
+            inserted_byte_range: Utf8ByteRange::from_ordered(
+                replace_start,
+                replace_start + committed_text.len(),
+            ),
+            inserted_text: committed_text.clone(),
+            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
+        }];
 
         let edit_result = EditorEditResult {
             transaction_id: self.take_transaction_id(),
@@ -303,8 +272,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::TypingCommit,
             changes: Vec::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CompositionCommit,
             // 单次 composition commit 从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -369,8 +338,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
             changes: Vec::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CompositionCancel,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -430,8 +399,8 @@ impl EditorKernel {
                 new_selection,
                 cause: EditorTransactionCause::ImeComposition,
                 changes: Vec::new(),
-                before_text_sha256: String::new(),
-                after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
                 operation_kind: EditorOperationKind::CompositionUpdate,
                 offset_map: None,
                 content_delta: EditorContentDelta::default(),
@@ -455,8 +424,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
             changes: Vec::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -499,8 +468,8 @@ impl EditorKernel {
                 new_selection,
                 cause: EditorTransactionCause::ImeComposition,
                 changes: Vec::new(),
-                before_text_sha256: String::new(),
-                after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
                 operation_kind: EditorOperationKind::CompositionUpdate,
                 offset_map: None,
                 content_delta: EditorContentDelta::default(),
@@ -524,8 +493,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
             changes: Vec::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -568,8 +537,8 @@ impl EditorKernel {
                 new_selection,
                 cause: EditorTransactionCause::ImeComposition,
                 changes: Vec::new(),
-                before_text_sha256: String::new(),
-                after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
                 operation_kind: EditorOperationKind::CompositionUpdate,
                 offset_map: None,
                 content_delta: EditorContentDelta::default(),
@@ -598,8 +567,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
             changes: Vec::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -642,8 +611,8 @@ impl EditorKernel {
                 new_selection,
                 cause: EditorTransactionCause::ImeComposition,
                 changes: Vec::new(),
-                before_text_sha256: String::new(),
-                after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
                 operation_kind: EditorOperationKind::CompositionUpdate,
                 offset_map: None,
                 content_delta: EditorContentDelta::default(),
@@ -673,8 +642,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
             changes: Vec::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),

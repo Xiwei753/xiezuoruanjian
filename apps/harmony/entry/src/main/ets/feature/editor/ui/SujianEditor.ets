@@ -17,8 +17,6 @@
 
 import { NativeRichEditorBridge, NativeEditorStateEvent } from '../input/NativeRichEditorBridge'
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
-import { TextOffsetMapper } from '../input/TextOffsetMapper'
-import { EditorViewportState } from '../render/EditorViewportState'
 import {
   StyledParagraphIndentOptions,
   buildParagraphIndentStyles,
@@ -57,25 +55,11 @@ const SCROLL_CARET_STABLE_FRAMES = 4
 // 原生几何不可读（未闪烁等）时无法判定惯性结束，超过该时长即停止追踪。
 const SCROLL_CARET_TRACKING_MAX_MS = 2500
 const SCROLL_CARET_EPSILON_VP = 0.01
-// Issue #1063 评论第 6 条：视口采样节流（约 200ms），滚动/输入期间合并上报。
-const EDITOR_VIEWPORT_PUBLISH_THROTTLE_MS = 200
-// 手指抬起后原生惯性滚动还会继续：延迟补采一次，拿到最终静止位置。
-const EDITOR_VIEWPORT_SETTLE_SAMPLE_MS = 350
-// 行高前缀和最多扫描这么多行：超长章节放弃像素估算（contentHeight/scrollTop 记 0），
-// 但仍按字形命中给出 topVisibleByteOffset，避免一次采样读上万次 LineMetrics。
-const EDITOR_VIEWPORT_LINE_PREFIX_MAX_LINES = 4000
 
 // 原生选区（UTF-16；不可读时为 -1）。
 interface NativeSelectionOffsets {
   start: number
   end: number
-}
-
-// Issue #1063：视口几何采样结果（全部为真实读数；不可读时为 -1/0，不伪造）。
-interface EditorViewportGeometry {
-  topVisibleByteOffset: number
-  scrollTopPx: number
-  contentHeightPx: number
 }
 
 // 原生光标几何采样。hasRect=false 表示接口暂时不可读；
@@ -176,9 +160,6 @@ export struct SujianEditor {
     (_utf16Offset: number, _revision: number, _text: string): boolean => false
   onHyperlinkTap: (utf16Offset: number, revision: number, text: string) => boolean =
     (_utf16Offset: number, _revision: number, _text: string): boolean => false
-  // Issue #1063 评论第 6 条：真实视口回调（滚动/布局/输入变化时按 ~200ms 节流上报）。
-  // 由 WritingScreen 更新 currentViewport 并写进接续 payload；不可读字段保持 -1/0。
-  onViewportChange: (viewport: EditorViewportState) => void = (_viewport: EditorViewportState): void => {}
   @Prop @Watch('onFormatChanged') fontSize: number = 16
   @Prop @Watch('onFormatChanged') lineSpacingMultiplier: number = 1.8
   // Issue #1054：与 Linux Qt 共用同一首行缩进设置语义。
@@ -243,12 +224,6 @@ export struct SujianEditor {
   private pendingFullStylePublish: boolean = false
   // 正文样式全量发布次数（诊断用）。
   private stylePublishCount: number = 0
-  // Issue #1063：视口采样状态（节流句柄、上次上报值、行高前缀和缓存）。
-  private viewportPublishTimerId: number = -1
-  private viewportSettleTimerId: number = -1
-  private lastPublishedViewport: EditorViewportState | null = null
-  private lineTopPrefixPx: number[] = []
-  private lineTopPrefixLineCount: number = -1
 
   aboutToAppear(): void {
     this.caretFrameCallback.setAction((): void => {
@@ -267,8 +242,6 @@ export struct SujianEditor {
     this.stopScrollCaretTracking()
     this.scrollCaretFrameCallback.setAction(null)
     this.cancelSnapshotTimer()
-    // Issue #1063：视口采样定时器成对清理，卸载后不再回调页面。
-    this.cancelViewportPublishTimer()
     if (this.paragraphVerifyTimer !== -1) {
       clearTimeout(this.paragraphVerifyTimer)
       this.paragraphVerifyTimer = -1
@@ -373,9 +346,6 @@ export struct SujianEditor {
       this.scheduleCaretGeometryRefresh(true)
       this.stylePublishCount++
       this.refreshPublishedStyleFacts(text)
-      // Issue #1063：字号/行距/缩进变化会改变整章行高与前缀和，重建缓存并重采样视口。
-      this.invalidateViewportLayoutCache()
-      this.scheduleViewportPublish()
     } catch (e) {
       this.paragraphStyleApplied = false
       this.paragraphStyleError = `setStyledString failed (${reason}): ${JSON.stringify(e)}`
@@ -696,9 +666,6 @@ export struct SujianEditor {
     }
     this.scheduleCaretGeometryRefresh(true)
     this.publishRuntimeSnapshot()
-    // Issue #1063：初次装载后立即上报真实视口（不等节流窗口）。
-    this.invalidateViewportLayoutCache()
-    this.publishViewportSnapshot()
   }
 
   async syncFromCore(): Promise<void> {
@@ -707,8 +674,6 @@ export struct SujianEditor {
       this.refreshPublishedStyleFacts(this.richEditorBridge.getCurrentText())
       this.scheduleCaretGeometryRefresh(true)
       this.publishRuntimeSnapshot()
-      this.invalidateViewportLayoutCache()
-      this.publishViewportSnapshot()
     }
   }
 
@@ -719,9 +684,6 @@ export struct SujianEditor {
       // 切章/换文后选区与视口都换了：自绘光标直接定位。
       this.scheduleCaretGeometryRefresh(true)
       this.publishRuntimeSnapshot()
-      // Issue #1063：换章后行高前缀和与视口锚点都失效，立即重建并上报。
-      this.invalidateViewportLayoutCache()
-      this.publishViewportSnapshot()
     }
   }
 
@@ -880,149 +842,6 @@ export struct SujianEditor {
     }
   }
 
-  // ── Issue #1063 评论第 6 条：真实视口采样 ─────────────────────────
-  // 复用原生 LayoutManager 采样路径（与 handleContentClick/readCurrentLineMetrics 同一来源）：
-  //   viewportWidth/Height 来自 onAreaChange 的组件尺寸；
-  //   topVisibleByteOffset 来自相对可视区左上角 (0,0) 的字形命中 offset → UTF-8 byte；
-  //   scrollTop/contentHeight 由各行 LineMetrics.height 的前缀和估算（缓存前缀和）。
-  // 任何一项读不到就保持 -1/0，不伪造数据。
-
-  private cancelViewportPublishTimer(): void {
-    if (this.viewportPublishTimerId !== -1) {
-      clearTimeout(this.viewportPublishTimerId)
-      this.viewportPublishTimerId = -1
-    }
-    if (this.viewportSettleTimerId !== -1) {
-      clearTimeout(this.viewportSettleTimerId)
-      this.viewportSettleTimerId = -1
-    }
-  }
-
-  // 正文/宽度/布局变化都会改变换行与行高前缀和：下次采样重建缓存。
-  private invalidateViewportLayoutCache(): void {
-    this.lineTopPrefixPx = []
-    this.lineTopPrefixLineCount = -1
-  }
-
-  private scheduleViewportPublish(): void {
-    if (this.viewportPublishTimerId !== -1) {
-      return
-    }
-    this.viewportPublishTimerId = setTimeout((): void => {
-      this.viewportPublishTimerId = -1
-      this.publishViewportSnapshot()
-    }, EDITOR_VIEWPORT_PUBLISH_THROTTLE_MS)
-  }
-
-  // 手指抬起后补采一次：原生惯性滚动结束时没有新的回调，只有这里能拿到静止视口。
-  private scheduleViewportSettleSample(): void {
-    if (this.viewportSettleTimerId !== -1) {
-      clearTimeout(this.viewportSettleTimerId)
-    }
-    this.viewportSettleTimerId = setTimeout((): void => {
-      this.viewportSettleTimerId = -1
-      this.publishViewportSnapshot()
-    }, EDITOR_VIEWPORT_SETTLE_SAMPLE_MS)
-  }
-
-  // 立即采样并上报（值未变化时不重复回调）。
-  private publishViewportSnapshot(): void {
-    if (!this.editorReady) {
-      return
-    }
-    const text: string = this.richEditorBridge !== null ? this.richEditorBridge.getCurrentText() : ''
-    const geometry: EditorViewportGeometry = this.sampleViewportGeometry(text)
-    const widthPx: number = Math.max(0, this.vpToPx(this.editorWidthVp))
-    const heightPx: number = Math.max(0, this.vpToPx(this.editorHeightVp))
-    // 本编辑器正文纵向流式排版、不横向滚动：内容宽度按视口宽度上报，不伪造横向范围。
-    const viewport = new EditorViewportState(
-      geometry.scrollTopPx,
-      0,
-      widthPx,
-      heightPx,
-      widthPx,
-      geometry.contentHeightPx,
-      geometry.topVisibleByteOffset
-    )
-    const previous: EditorViewportState | null = this.lastPublishedViewport
-    if (previous !== null && previous.equals(viewport)) {
-      return
-    }
-    this.lastPublishedViewport = viewport
-    this.onViewportChange(viewport)
-  }
-
-  private sampleViewportGeometry(text: string): EditorViewportGeometry {
-    try {
-      const layoutManager = this.richEditorController.getLayoutManager()
-      if (layoutManager === undefined || layoutManager === null) {
-        return { topVisibleByteOffset: -1, scrollTopPx: 0, contentHeightPx: 0 }
-      }
-      const lineCount: number = layoutManager.getLineCount()
-      if (lineCount <= 0) {
-        return { topVisibleByteOffset: -1, scrollTopPx: 0, contentHeightPx: 0 }
-      }
-      const glyph = layoutManager.getGlyphPositionAtCoordinate(0, 0)
-      if (glyph === undefined || glyph === null) {
-        return { topVisibleByteOffset: -1, scrollTopPx: 0, contentHeightPx: 0 }
-      }
-      const utf16Offset: number = glyph.position
-      const byteOffset: number | null = TextOffsetMapper.utf16ToUtf8Checked(text, utf16Offset)
-      const topVisibleByteOffset: number = byteOffset !== null ? byteOffset : -1
-      if (lineCount > EDITOR_VIEWPORT_LINE_PREFIX_MAX_LINES) {
-        // 超长章节：放弃像素估算，只保留真实 byte 锚点，避免一次采样读上万次 LineMetrics。
-        return { topVisibleByteOffset: topVisibleByteOffset, scrollTopPx: 0, contentHeightPx: 0 }
-      }
-      // 行高前缀和：行数变化（或缓存被正文/宽度变化清空）时重建一次。
-      if (this.lineTopPrefixLineCount !== lineCount || this.lineTopPrefixPx.length !== lineCount + 1) {
-        const prefix: number[] = [0]
-        let total: number = 0
-        for (let i = 0; i < lineCount; i++) {
-          let height: number = 0
-          try {
-            const metrics = layoutManager.getLineMetrics(i)
-            if (metrics !== undefined && metrics !== null && Number.isFinite(metrics.height)) {
-              height = metrics.height
-            }
-          } catch (e) {
-            height = 0
-          }
-          total += height
-          prefix.push(total)
-        }
-        this.lineTopPrefixPx = prefix
-        this.lineTopPrefixLineCount = lineCount
-      }
-      const prefix: number[] = this.lineTopPrefixPx
-      const contentHeightPx: number = prefix.length > 0 ? prefix[prefix.length - 1] : 0
-      // 视口顶部命中字符所在行：按 LineMetrics.startIndex/endIndex 二分定位。
-      let lineIndex: number = 0
-      let low: number = 0
-      let high: number = lineCount - 1
-      while (low <= high) {
-        const mid: number = Math.floor((low + high) / 2)
-        const metrics = layoutManager.getLineMetrics(mid)
-        if (utf16Offset < metrics.startIndex) {
-          high = mid - 1
-        } else if (utf16Offset > metrics.endIndex) {
-          low = mid + 1
-        } else {
-          lineIndex = mid
-          break
-        }
-      }
-      const scrollTopPx: number = lineIndex < prefix.length ? prefix[lineIndex] : 0
-      return {
-        topVisibleByteOffset: topVisibleByteOffset,
-        scrollTopPx: scrollTopPx,
-        contentHeightPx: contentHeightPx
-      }
-    } catch (e) {
-      // 布局不可读：不伪造数据，保持未知。
-      return { topVisibleByteOffset: -1, scrollTopPx: 0, contentHeightPx: 0 }
-    }
-  }
-
   // 只抓光标所在行的 LineMetrics；行索引由系统布局的 startIndex/endIndex 二分定位。
   private readCurrentLineMetrics(caretUtf16: number): RichEditorLineMetricsSnapshot | null {
     try {
@@ -1119,11 +938,6 @@ export struct SujianEditor {
     if (event.type === TouchType.Down || event.type === TouchType.Move ||
       event.type === TouchType.Up || event.type === TouchType.Cancel) {
       this.startScrollCaretTracking()
-      // Issue #1063：滚动不改变选区，视口锚点只能沿触摸/帧路径采样（节流 ~200ms）。
-      this.scheduleViewportPublish()
-      if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        this.scheduleViewportSettleSample()
-      }
     }
   }
 
@@ -1192,12 +1006,9 @@ export struct SujianEditor {
     }
     // 滚动期目标坐标直接随动，不走平滑插值；编辑导致的普通迁移仍由 onIdle 平滑处理。
     this.applyCaretGeometrySample(sample, true)
-    // Issue #1063：复用逐帧追踪路径采样视口（某节拍内多次调用由 200ms 节流合并）。
-    this.scheduleViewportPublish()
     const timedOut: boolean = Date.now() - this.scrollCaretLastActivityMs >= SCROLL_CARET_TRACKING_MAX_MS
     if (this.scrollCaretStableFrames >= SCROLL_CARET_STABLE_FRAMES || timedOut) {
       this.stopScrollCaretTracking()
-      this.scheduleViewportSettleSample()
       return
     }
     this.postScrollCaretFrame()
@@ -1320,9 +1131,6 @@ export struct SujianEditor {
                 }
                 this.scheduleCaretGeometryRefresh(false)
                 this.scheduleRuntimeSnapshot()
-                // Issue #1063：正文变化后视口锚点需要重采样；行高前缀和按行数变化自动重建，
-                // 不在逐键回调里整章重扫 LineMetrics。
-                this.scheduleViewportPublish()
               }
             })
             this.editorReady = true
@@ -1338,8 +1146,6 @@ export struct SujianEditor {
           }
           this.scheduleCaretGeometryRefresh(false)
           this.scheduleRuntimeSnapshot()
-          // 光标移动可能带动原生滚动（caret 滚动到可见区），视口锚点需重新采样。
-          this.scheduleViewportPublish()
         })
         .onPaste(() => {
           if (this.richEditorBridge) {
@@ -1357,9 +1163,6 @@ export struct SujianEditor {
           this.editorHeightVp = Number(newArea.height)
           this.scheduleCaretGeometryRefresh(true)
           this.scheduleRuntimeSnapshot()
-          // 宽度变化会重新换行：行高前缀和失效，采样组件尺寸 + 视口锚点。
-          this.invalidateViewportLayoutCache()
-          this.scheduleViewportPublish()
         })
         // 滚动/拖选会移动原生视口但不会改变选区：触摸期开始逐帧追踪，
         // 抬起后由同一追踪继续覆盖原生惯性滚动，避免浮层停在松手前的坐标。

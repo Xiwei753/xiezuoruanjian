@@ -12,9 +12,8 @@
 //      - invalidRange → ok=false, reason='invalidRange'
 //      - noChange 保留 revision 但更新 selection
 //      - appliedWithAdjustedSelection 正常应用
-//      - 多 patch 批次：同一 baseRevision + 严格降序才可应用（Issue #1063）
 //      - patch 失败（非字符边界）→ ok=false, reason='patchFailed:...'
-//      - 多 patch 批次某项非法 → ok=false（整批原子失败）
+//      - 多 patch 中途失败 → ok=false
 //   4. 删除的 deprecated applyPatch 不再存在（import 应为 undefined）
 //   5. SerialCommandQueue 串行：enqueue 顺序、每条出队才执行、前一条完成才下一条
 //   6. DTO 形状完整性
@@ -317,16 +316,14 @@ test('applyEditResultToSnapshot: 中文 patch 正常应用 → "你好世界"', 
   assert.equal(r.snapshot.revision, 2)
 })
 
-test('applyEditResultToSnapshot: 多 patch 降序批次含中文 → "大家你好世界"', () => {
-  // Issue #1063：同一批次共用 baseRevision，且按 replaceByteStart 严格降序；
-  // 两个 patch 的 byte offset 都相对原始 snapshot.text（'你好'，6 byte）。
+test('applyEditResultToSnapshot: 多 patch 顺序应用含中文 → "大家你好世界"', () => {
   const snapshot = makeSnapshot({ text: '你好', revision: 1, cursor: 2, selectionAnchor: 2, generation: 0 })
   const result = makeResult({
     outcome: APPLIED, baseRevision: 1, newRevision: 3,
     displayPatches: [
-      { baseRevision: 1, newRevision: 3, replaceByteStart: 6, replaceByteEndExclusive: 6,
+      { baseRevision: 1, newRevision: 2, replaceByteStart: 6, replaceByteEndExclusive: 6,
         insertedText: '世界', resultingSelectionStart: 4, resultingSelectionEnd: 4 },
-      { baseRevision: 1, newRevision: 3, replaceByteStart: 0, replaceByteEndExclusive: 0,
+      { baseRevision: 2, newRevision: 3, replaceByteStart: 0, replaceByteEndExclusive: 0,
         insertedText: '大家', resultingSelectionStart: 0, resultingSelectionEnd: 2 },
     ],
     newSelectionAnchor: 0, newSelectionHead: 2,
@@ -495,14 +492,14 @@ test('applyEditResultToSnapshot: patch 失败（非字符边界）→ { ok: fals
   assert.equal(r.snapshot, undefined)
 })
 
-test('applyEditResultToSnapshot: 多 patch 批次某项非字符边界 → { ok: false, reason: "patchFailed:..." }', () => {
+test('applyEditResultToSnapshot: 多 patch 中途失败 → { ok: false, reason: "patchFailed:..." }', () => {
   const snapshot = makeSnapshot({ text: '你好', revision: 1, cursor: 2, selectionAnchor: 2, generation: 0 })
   const result = makeResult({
     outcome: APPLIED, baseRevision: 1, newRevision: 3,
     displayPatches: [
-      { baseRevision: 1, newRevision: 3, replaceByteStart: 6, replaceByteEndExclusive: 6,
+      { baseRevision: 1, newRevision: 2, replaceByteStart: 6, replaceByteEndExclusive: 6,
         insertedText: '世界', resultingSelectionStart: 4, resultingSelectionEnd: 4 },
-      { baseRevision: 1, newRevision: 3, replaceByteStart: 1, replaceByteEndExclusive: 3,  // 非边界
+      { baseRevision: 2, newRevision: 3, replaceByteStart: 1, replaceByteEndExclusive: 3,  // 非边界
         insertedText: 'X', resultingSelectionStart: 0, resultingSelectionEnd: 0 },
     ],
     newSelectionAnchor: 0, newSelectionHead: 0,

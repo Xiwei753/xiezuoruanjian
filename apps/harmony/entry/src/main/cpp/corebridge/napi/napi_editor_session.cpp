@@ -1,35 +1,58 @@
 // ── Editor Session NAPI handlers ──
-// Included by napi_init.cpp — expects ReturnJsonString, ThrowNapiStringError and
-// writer_core_bridge.h to be available. 与 Android TextEditSessionBridge 职责对齐。
+// Included by napi_init.cpp — expects ReturnJsonString, dup_napi_string and writer_core_bridge.h
+// to be available. 与 Android TextEditSessionBridge 职责对齐。
 //
-// 参数约定（Issue #1063 评论 5）：
-// - 参数读取统一走 napi_editor_args.h：字符串校验 napi_typeof、两次
-//   napi_get_value_string_utf8 的 status 与写入量；uint64
-//   （session_id / expected_revision / composition_*）拒绝负数/非整数/越界；
-//   uint32（byte offset 等）拒绝负数与超出 UINT32_MAX 的值。
-// - 参数个数不足或类型/范围非法时不调用 Rust，直接返回
-//   INVALID_ARGUMENT ResultEnvelope JSON；任何失败路径都不会把 nullptr 或
-//   未初始化 buffer 交给 C ABI。
-// - 字符串参数动态分配（new[]），调用 C ABI 后立即 delete[]，
-//   所有失败分支在返回前释放已分配的 buffer。
+// 参数约定：
+// - uint64 参数（session_id / expected_revision / composition_*）通过 napi_get_value_int64
+//   读取（ArkTS number；超 2^63 的 revision/session_id 不支持，需调用方保证）。
+// - uint32 参数通过 napi_get_value_uint32 读取。
+// - 字符串参数动态分配（dup_str），调用 C ABI 后立即 delete[]。
 // - 所有 handler 返回 ReturnJsonString(env, json)，json 由 core 分配，须 writer_core_free_string 释放。
-
-#include "napi_editor_args.h"
 
 // ── Inline helpers（本域专用）──
 
-// ReturnInvalidArg: 参数个数/类型/范围非法时的统一返回。
-//   napi_editor_args.h 的 INVALID_ARGUMENT JSON 是静态字面量，不能交给
-//   ReturnJsonString（后者按 Core 所有权用 writer_core_free_string 释放），
-//   因此这里直接用 napi_create_string_utf8 构造返回值；创建失败与其它
-//   NAPI 字符串创建失败保持同一语义（抛 E_NAPI_STRING 并返回 nullptr）。
-static napi_value ReturnInvalidArg(napi_env env) {
-    napi_value result;
-    if (napi_create_string_utf8(env, napi_editor_invalid_arg_json(),
-                                NAPI_AUTO_LENGTH, &result) != napi_ok) {
-        return ThrowNapiStringError(env, "Failed to create INVALID_ARGUMENT JSON string");
+// get_u64: 从 napi_value 读取 uint64_t（ArkTS number → int64 → uint64_t）。
+// ArkTS 侧 sessionId/revision 用 number（JSON.parse 返回），实际值 < 2^63，cast 安全。
+static uint64_t get_u64(napi_env env, napi_value value) {
+    int64_t val = 0;
+    napi_get_value_int64(env, value, &val);
+    return static_cast<uint64_t>(val);
+}
+
+// get_u32: 从 napi_value 读取 uint32_t。
+static uint32_t get_u32(napi_env env, napi_value value) {
+    uint32_t val = 0;
+    napi_get_value_uint32(env, value, &val);
+    return val;
+}
+
+// dup_str: 动态分配并复制 NAPI string。返回 new char[]，调用方须 delete[]。
+static char* dup_str(napi_env env, napi_value value) {
+    size_t len = 0;
+    napi_get_value_string_utf8(env, value, nullptr, 0, &len);
+    char* buf = new char[len + 1];
+    napi_get_value_string_utf8(env, value, buf, len + 1, &len);
+    return buf;
+}
+
+// arg_u64: 取第 i 个 uint64 参数；i >= argc 时返回 0。
+static uint64_t arg_u64(napi_env env, const napi_value* args, size_t argc, size_t i) {
+    return (i < argc) ? get_u64(env, args[i]) : 0;
+}
+
+// arg_u32: 取第 i 个 uint32 参数；i >= argc 时返回 0。
+static uint32_t arg_u32(napi_env env, const napi_value* args, size_t argc, size_t i) {
+    return (i < argc) ? get_u32(env, args[i]) : 0;
+}
+
+// arg_str: 取第 i 个字符串参数（动态分配）；i >= argc 时返回空字符串（new char[1]）。
+static char* arg_str(napi_env env, const napi_value* args, size_t argc, size_t i) {
+    if (i >= argc) {
+        char* empty = new char[1];
+        empty[0] = '\0';
+        return empty;
     }
-    return result;
+    return dup_str(env, args[i]);
 }
 
 // ── Editor Session handlers ──
@@ -40,20 +63,9 @@ static napi_value NativeEditorSessionCreate(napi_env env, napi_callback_info inf
     napi_value args[3];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint32_t initial_cursor_byte_offset = 0;
-    if (argc < 3 || !napi_arg_get_u32(env, args[2], &initial_cursor_byte_offset)) {
-        return ReturnInvalidArg(env);
-    }
-
-    char* target_id = nullptr;
-    if (!napi_arg_get_string(env, args[0], &target_id)) {
-        return ReturnInvalidArg(env);
-    }
-    char* initial_text = nullptr;
-    if (!napi_arg_get_string(env, args[1], &initial_text)) {
-        delete[] target_id;
-        return ReturnInvalidArg(env);
-    }
+    char* target_id = arg_str(env, args, argc, 0);
+    char* initial_text = arg_str(env, args, argc, 1);
+    uint32_t initial_cursor_byte_offset = arg_u32(env, args, argc, 2);
 
     napi_value result = ReturnJsonString(env,
         writer_core_editor_session_create(target_id, initial_text, initial_cursor_byte_offset));
@@ -68,10 +80,7 @@ static napi_value NativeEditorSessionClose(napi_env env, napi_callback_info info
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    if (argc < 1 || !napi_arg_get_u64(env, args[0], &session_id)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
     return ReturnJsonString(env, writer_core_editor_session_close(session_id));
 }
 
@@ -81,10 +90,7 @@ static napi_value NativeEditorSessionSnapshot(napi_env env, napi_callback_info i
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    if (argc < 1 || !napi_arg_get_u64(env, args[0], &session_id)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
     return ReturnJsonString(env, writer_core_editor_session_snapshot(session_id));
 }
 
@@ -94,26 +100,11 @@ static napi_value NativeEditorSessionInsert(napi_env env, napi_callback_info inf
     napi_value args[5];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint32_t byte_offset = 0;
-    uint64_t expected_revision = 0;
-    // 先校验参数个数与全部数值参数，避免在可能失败的读取之后才分配字符串。
-    if (argc < 5
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u32(env, args[1], &byte_offset)
-        || !napi_arg_get_u64(env, args[4], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
-
-    char* text = nullptr;
-    if (!napi_arg_get_string(env, args[2], &text)) {
-        return ReturnInvalidArg(env);
-    }
-    char* cause = nullptr;
-    if (!napi_arg_get_string(env, args[3], &cause)) {
-        delete[] text;
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint32_t byte_offset = arg_u32(env, args, argc, 1);
+    char* text = arg_str(env, args, argc, 2);
+    char* cause = arg_str(env, args, argc, 3);
+    uint64_t expected_revision = arg_u64(env, args, argc, 4);
 
     napi_value result = ReturnJsonString(env,
         writer_core_editor_session_insert(session_id, byte_offset, text, cause, expected_revision));
@@ -128,22 +119,11 @@ static napi_value NativeEditorSessionDelete(napi_env env, napi_callback_info inf
     napi_value args[5];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint32_t byte_start = 0;
-    uint32_t byte_end_exclusive = 0;
-    uint64_t expected_revision = 0;
-    if (argc < 5
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u32(env, args[1], &byte_start)
-        || !napi_arg_get_u32(env, args[2], &byte_end_exclusive)
-        || !napi_arg_get_u64(env, args[4], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
-
-    char* cause = nullptr;
-    if (!napi_arg_get_string(env, args[3], &cause)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint32_t byte_start = arg_u32(env, args, argc, 1);
+    uint32_t byte_end_exclusive = arg_u32(env, args, argc, 2);
+    char* cause = arg_str(env, args, argc, 3);
+    uint64_t expected_revision = arg_u64(env, args, argc, 4);
 
     napi_value result = ReturnJsonString(env,
         writer_core_editor_session_delete(session_id, byte_start, byte_end_exclusive, cause, expected_revision));
@@ -157,33 +137,13 @@ static napi_value NativeEditorSessionReplace(napi_env env, napi_callback_info in
     napi_value args[7];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint32_t byte_start = 0;
-    uint32_t byte_end_exclusive = 0;
-    uint64_t expected_revision = 0;
-    if (argc < 7
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u32(env, args[1], &byte_start)
-        || !napi_arg_get_u32(env, args[2], &byte_end_exclusive)
-        || !napi_arg_get_u64(env, args[6], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
-
-    char* replacement_text = nullptr;
-    if (!napi_arg_get_string(env, args[3], &replacement_text)) {
-        return ReturnInvalidArg(env);
-    }
-    char* original_text = nullptr;
-    if (!napi_arg_get_string(env, args[4], &original_text)) {
-        delete[] replacement_text;
-        return ReturnInvalidArg(env);
-    }
-    char* cause = nullptr;
-    if (!napi_arg_get_string(env, args[5], &cause)) {
-        delete[] replacement_text;
-        delete[] original_text;
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint32_t byte_start = arg_u32(env, args, argc, 1);
+    uint32_t byte_end_exclusive = arg_u32(env, args, argc, 2);
+    char* replacement_text = arg_str(env, args, argc, 3);
+    char* original_text = arg_str(env, args, argc, 4);
+    char* cause = arg_str(env, args, argc, 5);
+    uint64_t expected_revision = arg_u64(env, args, argc, 6);
 
     napi_value result = ReturnJsonString(env,
         writer_core_editor_session_replace(session_id, byte_start, byte_end_exclusive,
@@ -200,17 +160,10 @@ static napi_value NativeEditorSessionSetSelection(napi_env env, napi_callback_in
     napi_value args[4];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint32_t anchor_byte_offset = 0;
-    uint32_t head_byte_offset = 0;
-    uint64_t expected_revision = 0;
-    if (argc < 4
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u32(env, args[1], &anchor_byte_offset)
-        || !napi_arg_get_u32(env, args[2], &head_byte_offset)
-        || !napi_arg_get_u64(env, args[3], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint32_t anchor_byte_offset = arg_u32(env, args, argc, 1);
+    uint32_t head_byte_offset = arg_u32(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
 
     return ReturnJsonString(env,
         writer_core_editor_session_set_selection(session_id, anchor_byte_offset, head_byte_offset, expected_revision));
@@ -222,14 +175,8 @@ static napi_value NativeEditorSessionUndo(napi_env env, napi_callback_info info)
     napi_value args[2];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint64_t expected_revision = 0;
-    if (argc < 2
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u64(env, args[1], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
-
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t expected_revision = arg_u64(env, args, argc, 1);
     return ReturnJsonString(env, writer_core_editor_session_undo(session_id, expected_revision));
 }
 
@@ -239,14 +186,8 @@ static napi_value NativeEditorSessionRedo(napi_env env, napi_callback_info info)
     napi_value args[2];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint64_t expected_revision = 0;
-    if (argc < 2
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u64(env, args[1], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
-
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t expected_revision = arg_u64(env, args, argc, 1);
     return ReturnJsonString(env, writer_core_editor_session_redo(session_id, expected_revision));
 }
 
@@ -258,37 +199,17 @@ static napi_value NativeEditorSessionCommitText(napi_env env, napi_callback_info
     napi_value args[11];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint32_t byte_start = 0;
-    uint32_t byte_end_exclusive = 0;
-    uint32_t resulting_selection_anchor = 0;
-    uint32_t resulting_selection_head = 0;
-    uint64_t composition_session_id = 0;
-    uint64_t composition_base_revision = 0;
-    uint64_t composition_generation = 0;
-    uint64_t expected_revision = 0;
-    if (argc < 11
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u32(env, args[1], &byte_start)
-        || !napi_arg_get_u32(env, args[2], &byte_end_exclusive)
-        || !napi_arg_get_u32(env, args[4], &resulting_selection_anchor)
-        || !napi_arg_get_u32(env, args[5], &resulting_selection_head)
-        || !napi_arg_get_u64(env, args[6], &composition_session_id)
-        || !napi_arg_get_u64(env, args[7], &composition_base_revision)
-        || !napi_arg_get_u64(env, args[8], &composition_generation)
-        || !napi_arg_get_u64(env, args[10], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
-
-    char* replacement_text = nullptr;
-    if (!napi_arg_get_string(env, args[3], &replacement_text)) {
-        return ReturnInvalidArg(env);
-    }
-    char* cause = nullptr;
-    if (!napi_arg_get_string(env, args[9], &cause)) {
-        delete[] replacement_text;
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint32_t byte_start = arg_u32(env, args, argc, 1);
+    uint32_t byte_end_exclusive = arg_u32(env, args, argc, 2);
+    char* replacement_text = arg_str(env, args, argc, 3);
+    uint32_t resulting_selection_anchor = arg_u32(env, args, argc, 4);
+    uint32_t resulting_selection_head = arg_u32(env, args, argc, 5);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 6);
+    uint64_t composition_base_revision = arg_u64(env, args, argc, 7);
+    uint64_t composition_generation = arg_u64(env, args, argc, 8);
+    char* cause = arg_str(env, args, argc, 9);
+    uint64_t expected_revision = arg_u64(env, args, argc, 10);
 
     napi_value result = ReturnJsonString(env,
         writer_core_editor_session_commit_text(session_id, byte_start, byte_end_exclusive, replacement_text,
@@ -307,26 +228,13 @@ static napi_value NativeEditorSessionDeleteSurrounding(napi_env env, napi_callba
     napi_value args[7];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint32_t before_byte_start = 0;
-    uint32_t before_byte_end_exclusive = 0;
-    uint32_t after_byte_start = 0;
-    uint32_t after_byte_end_exclusive = 0;
-    uint64_t expected_revision = 0;
-    if (argc < 7
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u32(env, args[1], &before_byte_start)
-        || !napi_arg_get_u32(env, args[2], &before_byte_end_exclusive)
-        || !napi_arg_get_u32(env, args[3], &after_byte_start)
-        || !napi_arg_get_u32(env, args[4], &after_byte_end_exclusive)
-        || !napi_arg_get_u64(env, args[6], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
-
-    char* cause = nullptr;
-    if (!napi_arg_get_string(env, args[5], &cause)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint32_t before_byte_start = arg_u32(env, args, argc, 1);
+    uint32_t before_byte_end_exclusive = arg_u32(env, args, argc, 2);
+    uint32_t after_byte_start = arg_u32(env, args, argc, 3);
+    uint32_t after_byte_end_exclusive = arg_u32(env, args, argc, 4);
+    char* cause = arg_str(env, args, argc, 5);
+    uint64_t expected_revision = arg_u64(env, args, argc, 6);
 
     napi_value result = ReturnJsonString(env,
         writer_core_editor_session_delete_surrounding(session_id, before_byte_start, before_byte_end_exclusive,
@@ -342,17 +250,10 @@ static napi_value NativeEditorSessionBeginComposition(napi_env env, napi_callbac
     napi_value args[4];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint32_t replace_start = 0;
-    uint32_t replace_end_exclusive = 0;
-    uint64_t expected_revision = 0;
-    if (argc < 4
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u32(env, args[1], &replace_start)
-        || !napi_arg_get_u32(env, args[2], &replace_end_exclusive)
-        || !napi_arg_get_u64(env, args[3], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint32_t replace_start = arg_u32(env, args, argc, 1);
+    uint32_t replace_end_exclusive = arg_u32(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
 
     return ReturnJsonString(env,
         writer_core_editor_session_begin_composition(session_id, replace_start, replace_end_exclusive, expected_revision));
@@ -365,24 +266,12 @@ static napi_value NativeEditorSessionUpdateComposition(napi_env env, napi_callba
     napi_value args[6];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint64_t composition_session_id = 0;
-    uint64_t composition_generation = 0;
-    uint32_t new_preedit_cursor_utf16 = 0;
-    uint64_t expected_revision = 0;
-    if (argc < 6
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u64(env, args[1], &composition_session_id)
-        || !napi_arg_get_u64(env, args[2], &composition_generation)
-        || !napi_arg_get_u32(env, args[4], &new_preedit_cursor_utf16)
-        || !napi_arg_get_u64(env, args[5], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
-
-    char* new_preedit_text = nullptr;
-    if (!napi_arg_get_string(env, args[3], &new_preedit_text)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 1);
+    uint64_t composition_generation = arg_u64(env, args, argc, 2);
+    char* new_preedit_text = arg_str(env, args, argc, 3);
+    uint32_t new_preedit_cursor_utf16 = arg_u32(env, args, argc, 4);
+    uint64_t expected_revision = arg_u64(env, args, argc, 5);
 
     napi_value result = ReturnJsonString(env,
         writer_core_editor_session_update_composition(session_id, composition_session_id, composition_generation,
@@ -397,17 +286,10 @@ static napi_value NativeEditorSessionFinishComposition(napi_env env, napi_callba
     napi_value args[4];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint64_t composition_session_id = 0;
-    uint64_t composition_generation = 0;
-    uint64_t expected_revision = 0;
-    if (argc < 4
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u64(env, args[1], &composition_session_id)
-        || !napi_arg_get_u64(env, args[2], &composition_generation)
-        || !napi_arg_get_u64(env, args[3], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 1);
+    uint64_t composition_generation = arg_u64(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
 
     return ReturnJsonString(env,
         writer_core_editor_session_finish_composition(session_id, composition_session_id,
@@ -420,17 +302,10 @@ static napi_value NativeEditorSessionCancelComposition(napi_env env, napi_callba
     napi_value args[4];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint64_t composition_session_id = 0;
-    uint64_t composition_generation = 0;
-    uint64_t expected_revision = 0;
-    if (argc < 4
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u64(env, args[1], &composition_session_id)
-        || !napi_arg_get_u64(env, args[2], &composition_generation)
-        || !napi_arg_get_u64(env, args[3], &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 1);
+    uint64_t composition_generation = arg_u64(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
 
     return ReturnJsonString(env,
         writer_core_editor_session_cancel_composition(session_id, composition_session_id,
@@ -443,10 +318,7 @@ static napi_value NativeEditorSessionGetText(napi_env env, napi_callback_info in
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    if (argc < 1 || !napi_arg_get_u64(env, args[0], &session_id)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
     return ReturnJsonString(env, writer_core_editor_session_get_text(session_id));
 }
 
@@ -456,10 +328,7 @@ static napi_value NativeEditorSessionGetRevision(napi_env env, napi_callback_inf
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    if (argc < 1 || !napi_arg_get_u64(env, args[0], &session_id)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
     return ReturnJsonString(env, writer_core_editor_session_get_revision(session_id));
 }
 
@@ -470,13 +339,8 @@ static napi_value NativeEditorSessionPreviousGraphemeBoundary(napi_env env, napi
     napi_value args[2];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint32_t byte_offset = 0;
-    if (argc < 2
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u32(env, args[1], &byte_offset)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint32_t byte_offset = arg_u32(env, args, argc, 1);
     return ReturnJsonString(env, writer_core_editor_session_previous_grapheme_boundary(session_id, byte_offset));
 }
 
@@ -487,26 +351,9 @@ static napi_value NativeEditorSessionNextGraphemeBoundary(napi_env env, napi_cal
     napi_value args[2];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint32_t byte_offset = 0;
-    if (argc < 2
-        || !napi_arg_get_u64(env, args[0], &session_id)
-        || !napi_arg_get_u32(env, args[1], &byte_offset)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint32_t byte_offset = arg_u32(env, args, argc, 1);
     return ReturnJsonString(env, writer_core_editor_session_next_grapheme_boundary(session_id, byte_offset));
-}
-
-// 以下四个 composition grapheme 操作参数相同：
-// (session_id, composition_session_id, composition_generation, expected_revision)。
-static bool ReadCompositionGraphemeArgs(napi_env env, const napi_value* args, size_t argc,
-                                        uint64_t* session_id, uint64_t* composition_session_id,
-                                        uint64_t* composition_generation, uint64_t* expected_revision) {
-    return argc >= 4
-        && napi_arg_get_u64(env, args[0], session_id)
-        && napi_arg_get_u64(env, args[1], composition_session_id)
-        && napi_arg_get_u64(env, args[2], composition_generation)
-        && napi_arg_get_u64(env, args[3], expected_revision);
 }
 
 // NativeEditorSessionCompositionMoveGraphemeLeft(session_id, composition_session_id, composition_generation, expected_revision)
@@ -515,14 +362,10 @@ static napi_value NativeEditorSessionCompositionMoveGraphemeLeft(napi_env env, n
     napi_value args[4];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint64_t composition_session_id = 0;
-    uint64_t composition_generation = 0;
-    uint64_t expected_revision = 0;
-    if (!ReadCompositionGraphemeArgs(env, args, argc, &session_id, &composition_session_id,
-                                     &composition_generation, &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 1);
+    uint64_t composition_generation = arg_u64(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
 
     return ReturnJsonString(env,
         writer_core_editor_session_composition_move_grapheme_left(session_id, composition_session_id, composition_generation, expected_revision));
@@ -534,14 +377,10 @@ static napi_value NativeEditorSessionCompositionMoveGraphemeRight(napi_env env, 
     napi_value args[4];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint64_t composition_session_id = 0;
-    uint64_t composition_generation = 0;
-    uint64_t expected_revision = 0;
-    if (!ReadCompositionGraphemeArgs(env, args, argc, &session_id, &composition_session_id,
-                                     &composition_generation, &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 1);
+    uint64_t composition_generation = arg_u64(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
 
     return ReturnJsonString(env,
         writer_core_editor_session_composition_move_grapheme_right(session_id, composition_session_id, composition_generation, expected_revision));
@@ -553,14 +392,10 @@ static napi_value NativeEditorSessionCompositionDeleteGraphemeBackward(napi_env 
     napi_value args[4];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint64_t composition_session_id = 0;
-    uint64_t composition_generation = 0;
-    uint64_t expected_revision = 0;
-    if (!ReadCompositionGraphemeArgs(env, args, argc, &session_id, &composition_session_id,
-                                     &composition_generation, &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 1);
+    uint64_t composition_generation = arg_u64(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
 
     return ReturnJsonString(env,
         writer_core_editor_session_composition_delete_grapheme_backward(session_id, composition_session_id, composition_generation, expected_revision));
@@ -572,14 +407,10 @@ static napi_value NativeEditorSessionCompositionDeleteGraphemeForward(napi_env e
     napi_value args[4];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    uint64_t session_id = 0;
-    uint64_t composition_session_id = 0;
-    uint64_t composition_generation = 0;
-    uint64_t expected_revision = 0;
-    if (!ReadCompositionGraphemeArgs(env, args, argc, &session_id, &composition_session_id,
-                                     &composition_generation, &expected_revision)) {
-        return ReturnInvalidArg(env);
-    }
+    uint64_t session_id = arg_u64(env, args, argc, 0);
+    uint64_t composition_session_id = arg_u64(env, args, argc, 1);
+    uint64_t composition_generation = arg_u64(env, args, argc, 2);
+    uint64_t expected_revision = arg_u64(env, args, argc, 3);
 
     return ReturnJsonString(env,
         writer_core_editor_session_composition_delete_grapheme_forward(session_id, composition_session_id, composition_generation, expected_revision));

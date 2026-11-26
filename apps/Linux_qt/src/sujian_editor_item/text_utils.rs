@@ -1,27 +1,28 @@
-//! 纯文本转换工具 — Core 文本坐标规则的 Qt 薄适配层（Issue #1063）。
-//!
-//! UTF-8 byte ↔ UTF-16/char 换算、char boundary 钳位与导入文本规范化只维护
-//! Core `writer_core::editor::text_coordinates` / `text_document_rules` 一套规则；
-//! 这里只做调用转发，不再写第二套边界扫描。
+//! 纯文本转换工具 — UTF-8 byte offset / char boundary 归一化与对齐。
 //!
 //! 所有函数都是纯计算，不触碰任何编辑器状态。
 //! 正文真相由 EditorKernel 持有，CommittedTextMirror 作为 Qt 只读平台投影。
 
 /// 将富文本/平台文本归一化为编辑器纯文本。
 ///
-/// Issue #1063：规则由 Core [`writer_core::editor::text_document_rules::normalize_inserted_text`]
-/// 唯一定义：段落分隔符 U+2029 / CRLF / 孤立 CR → `\n`，保留 `\n` 与 `\t`，
-/// 过滤其余控制字符。归一化后的文本可直接写入 `chapter.md`（正文永远是纯文本）。
+/// 规则：段落分隔符 U+2029 → `\n`，CRLF/CR → `\n`，
+/// 保留 `\n` 和 `\t`，过滤其余控制字符。
+/// 归一化后的文本可直接写入 `chapter.md`（正文永远是纯文本）。
 pub fn normalize_plain_text(text: &str) -> String {
-    writer_core::editor::text_document_rules::normalize_inserted_text(text)
+    let replaced = text
+        .replace('\u{2029}', "\n")
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    replaced
+        .chars()
+        .filter(|&c| c == '\n' || c == '\t' || !c.is_control())
+        .collect()
 }
 
 /// 返回 `index` 之前最近的 char boundary（UTF-8 byte offset）。
 ///
-/// Issue #1063：光标/删除已统一改用 Core grapheme 边界
-/// （`next_grapheme_boundary` / `previous_grapheme_boundary`），生产路径不再
-/// 按 Unicode scalar 步进。此函数只保留给本模块既有单元测试，语义不变。
-#[cfg(test)]
+/// 用于退格删除：定位前一个字符的起始字节位置。
+/// 如果 `index` 为 0 或文本为空则返回 `None`。
 pub fn prev_char_boundary(text: &str, index: usize) -> Option<usize> {
     if index == 0 || text.is_empty() {
         return None;
@@ -34,9 +35,8 @@ pub fn prev_char_boundary(text: &str, index: usize) -> Option<usize> {
 
 /// 返回 `index` 之后最近的 char boundary（UTF-8 byte offset）。
 ///
-/// Issue #1063：生产路径已统一改用 Core grapheme 边界；此函数只保留给本模块
-/// 既有单元测试，语义不变。
-#[cfg(test)]
+/// 用于 Delete 键：定位后一个字符的起始字节位置。
+/// 如果 `index` 已在文本末尾则返回 `None`；末尾字符之后返回 `text.len()`。
 pub fn next_char_boundary(text: &str, index: usize) -> Option<usize> {
     if index >= text.len() {
         return None;
@@ -49,15 +49,26 @@ pub fn next_char_boundary(text: &str, index: usize) -> Option<usize> {
 
 /// 将 UTF-8 byte offset 对齐到最近的 char boundary。
 ///
-/// 直接委托 Core [`writer_core::editor::text_coordinates::clamp_to_char_boundary`]：
-/// 越界返回 `text.len()`；落在多字节字符中间时向左回退到字符起始。
+/// 超出文本长度时返回 `text.len()`；落在多字节字符中间时向左回退。
 /// 所有外部输入的 offset（来自 IME、光标移动等）都应经过此函数校验。
-pub use writer_core::editor::text_coordinates::clamp_to_char_boundary;
+pub fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
+    if index > text.len() {
+        return text.len();
+    }
+    if text.is_char_boundary(index) {
+        return index;
+    }
+    let mut clamped = index;
+    while clamped > 0 && !text.is_char_boundary(clamped) {
+        clamped -= 1;
+    }
+    clamped
+}
 
 /// UTF-8 byte offset → 字符索引（char count）。
 ///
-/// 先用 Core `clamp_to_char_boundary` 对齐 offset，再计算 `[0..offset)` 范围内的
-/// 字符数。用于需要字符级计数的场景（如 Android StaticLayout）。
+/// 先将 byte offset 对齐到 char boundary，再计算 `[0..offset)` 范围内的字符数。
+/// 用于需要字符级计数的场景（如 Android StaticLayout）。
 pub fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
     text[..clamp_to_char_boundary(text, byte_index)]
         .chars()

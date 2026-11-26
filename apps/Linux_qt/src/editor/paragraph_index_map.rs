@@ -72,28 +72,34 @@ impl ParagraphIndexMap {
 
 /// 全文级 UTF-16 code unit (QChar) offset → UTF-8 byte offset 转换。
 ///
-/// Issue #1063：委托 Core
-/// [`writer_core::editor::text_coordinates::utf16_to_utf8_clamped`]，不再维护
-/// 第二套 UTF-16/UTF-8 长度算法。语义与 Qt/QChar 既有约定一致：
-/// 代理对中的低代理项（trailing surrogate）映射到该字符的 UTF-8 起始 byte
-/// offset，超出文本末尾的 offset 返回 `text.len()`。
+/// 代理对中的低代理项（trailing surrogate）映射到该字符的 UTF-8 起始 byte offset，
+/// 与 ParagraphIndexMap 的行为一致。超出文本末尾的 offset 返回 `text.len()`。
 pub fn utf16_code_unit_to_utf8_byte(text: &str, qchar_offset: usize) -> usize {
-    writer_core::editor::text_coordinates::utf16_to_utf8_clamped(text, qchar_offset)
+    let mut utf16_offset: usize = 0;
+    for (byte_pos, ch) in text.char_indices() {
+        if utf16_offset == qchar_offset {
+            return byte_pos;
+        }
+        let utf16_len = ch.len_utf16();
+        if utf16_offset + utf16_len > qchar_offset && utf16_len > 1 {
+            return byte_pos;
+        }
+        utf16_offset += utf16_len;
+    }
+    text.len()
 }
 
 /// 全文级 UTF-16 code unit range → UTF-8 byte range 转换。
 ///
 /// `qchar_length` 为 UTF-16 code unit 数量（非字符数），返回半开区间
-/// (byte_start, byte_end)。两端都委托
-/// [`utf16_code_unit_to_utf8_byte`]（Core 方向性钳位），代理对中的低代理项
-/// 按字符起始处理。
+/// (byte_start, byte_end)。代理对中的低代理项按字符起始处理。
 pub fn utf16_code_unit_range_to_utf8_byte_range(
     text: &str,
     qchar_start: usize,
     qchar_length: usize,
 ) -> (usize, usize) {
     let byte_start = utf16_code_unit_to_utf8_byte(text, qchar_start);
-    let byte_end = utf16_code_unit_to_utf8_byte(text, qchar_start.saturating_add(qchar_length));
+    let byte_end = utf16_code_unit_to_utf8_byte(text, qchar_start + qchar_length);
     (byte_start, byte_end)
 }
 
@@ -103,12 +109,29 @@ pub fn utf16_code_unit_range_to_utf8_byte_range(
 /// UTF-16 code unit（QChar 位置）。Rust 内部用 UTF-8 byte offset 表示光标/
 /// 选区位置，传给 Qt 前必须转成 UTF-16 code unit。
 ///
-/// Issue #1063：委托 Core
-/// [`writer_core::editor::text_coordinates::utf8_to_utf16_clamped`]：先把 byte
-/// offset 按 Core 规则对齐到 char boundary（落在多字节字符中间时左对齐），
-/// 超界钳到文本末尾。与 `utf16_code_unit_to_utf8_byte` 互为反向。
+/// 先把 byte offset 对齐到 UTF-8 char boundary（防止落在多字节字符中间），
+/// 再对前缀 `[0..aligned_byte)` 用 `encode_utf16().count()` 得到 Qt QChar 位置。
+/// 超出文本末尾的 byte offset 返回全文 UTF-16 code unit 长度。
+///
+/// 与 `utf16_code_unit_to_utf8_byte` 互为反向：对任意 char boundary byte
+/// offset `b`，有 `utf8_byte_to_utf16_code_unit(text, b)` 等于该位置对应的
+/// QChar 位置；对任意 QChar 位置 `q`，有
+/// `utf8_byte_to_utf16_code_unit(text, utf16_code_unit_to_utf8_byte(text, q)) == q`
+/// 当 `q` 落在字符起始时成立。
 pub fn utf8_byte_to_utf16_code_unit(text: &str, byte_offset: usize) -> usize {
-    writer_core::editor::text_coordinates::utf8_to_utf16_clamped(text, byte_offset)
+    let aligned = if byte_offset >= text.len() {
+        text.len()
+    } else if text.is_char_boundary(byte_offset) {
+        byte_offset
+    } else {
+        // 向左回退到最近的 char boundary，与 clamp_to_char_boundary 行为一致。
+        let mut clamped = byte_offset;
+        while clamped > 0 && !text.is_char_boundary(clamped) {
+            clamped -= 1;
+        }
+        clamped
+    };
+    text[..aligned].encode_utf16().count()
 }
 
 #[cfg(test)]
