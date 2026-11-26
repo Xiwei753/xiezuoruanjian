@@ -186,6 +186,14 @@ impl CorrectionScanner {
                 ),
                 ("model_instances", model_lifetime.cached.to_string()),
                 ("model_engine_refs", model_lifetime.engine_refs.to_string()),
+                (
+                    "model_retired_models",
+                    model_lifetime.retired_models.to_string(),
+                ),
+                (
+                    "model_retired_engines",
+                    model_lifetime.retired_engines.to_string(),
+                ),
                 ("model_generation", model_lifetime.generation.to_string()),
                 ("resource_fingerprint", scanner_fingerprint_before.clone()),
             ],

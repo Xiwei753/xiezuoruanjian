@@ -1546,11 +1546,8 @@ impl EditorBackend {
         );
         // Issue #1061 复审：离开校对文档时只回收已超过空闲宽限期的 session；
         // 活动扫描持有模型强引用，不会被这里打断。
-        let api = self.with_app(|app| app.core_api()).ok().flatten();
-        if let Some(api) = api {
-            if let Err(error) = api.release_idle_correction_models() {
-                log::warn!(target: "correction", "release_idle_correction_models_failed: {error}");
-            }
+        if let Some(api) = self.with_app(|app| app.core_api()).ok().flatten() {
+            api.note_correction_session_left();
         }
     }
 

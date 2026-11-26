@@ -8,6 +8,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -223,6 +224,7 @@ fn model_cache() -> &'static Mutex<ModelSlotRegistry> {
 }
 
 fn model_slot(path: &Path) -> Result<Arc<ModelLoadSlot>, WriterError> {
+    let _ = ensure_model_lifecycle_manager();
     let mut slots = model_cache()
         .lock()
         .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
@@ -238,22 +240,41 @@ fn model_slot(path: &Path) -> Result<Arc<ModelLoadSlot>, WriterError> {
 
 /// Drop engine-cache entries that point at a model resource the user no
 /// longer has configured, unless a scan still owns the engine.
-fn release_unconfigured_engines(inner: &CorrectionStoreInner, key: &Path) {
+fn take_unconfigured_engines(
+    inner: &CorrectionStoreInner,
+    key: &Path,
+) -> Vec<Arc<CorrectionEngine>> {
     let Ok(mut engines) = inner.engines.lock() else {
-        return;
+        return Vec::new();
     };
+    let mut removed = Vec::new();
     engines.retain(|_, cached| {
-        cached.model_key.as_ref().map(|model| &model.path) != Some(&key.to_path_buf())
-            || Arc::strong_count(&cached.engine) > 1
+        let matches_path =
+            cached.model_key.as_ref().map(|model| &model.path) == Some(&key.to_path_buf());
+        if matches_path && Arc::strong_count(&cached.engine) == 1 {
+            removed.push(Arc::clone(&cached.engine));
+            false
+        } else {
+            true
+        }
     });
+    removed
 }
 
-/// Release one idle model slot and wake any waiter so it reloads from config.
-fn clear_model_slot(slot: &ModelLoadSlot) {
-    if let Ok(mut state) = slot.state.lock() {
-        *state = ModelLoadState::Empty;
-    }
+/// Move one idle model slot out and wake waiters so they reload from config.
+fn take_model_slot(slot: &ModelLoadSlot) -> Option<Arc<ProofreadingModel>> {
+    let Ok(mut state) = slot.state.lock() else {
+        return None;
+    };
+    let previous = std::mem::replace(&mut *state, ModelLoadState::Empty);
     slot.wake.notify_all();
+    match previous {
+        ModelLoadState::Ready { model, .. } => Some(model),
+        other => {
+            *state = other;
+            None
+        }
+    }
 }
 
 /// Wait for a single-flight model load without holding any other lock.
@@ -325,13 +346,30 @@ pub(super) fn engine_model_reference_count() -> usize {
 pub(super) struct ModelLifetimeMetrics {
     pub cached: usize,
     pub engine_refs: usize,
+    pub retired_models: usize,
+    pub retired_engines: usize,
     pub generation: u64,
 }
 
 pub(super) fn model_lifetime_metrics() -> ModelLifetimeMetrics {
+    let (retired_models, retired_engines) = retired_model_resources()
+        .lock()
+        .map(|queue| {
+            queue
+                .iter()
+                .fold((0usize, 0usize), |(models, engines), batch| {
+                    (
+                        models.saturating_add(batch.models.len()),
+                        engines.saturating_add(batch.engines.len()),
+                    )
+                })
+        })
+        .unwrap_or((0, 0));
     ModelLifetimeMetrics {
         cached: model_instance_count(),
         engine_refs: engine_model_reference_count(),
+        retired_models,
+        retired_engines,
         generation: MODEL_CONFIG_GENERATION.load(Ordering::SeqCst),
     }
 }
@@ -498,6 +536,283 @@ const CORRECTION_DICTIONARY_FILES: [&str; 6] = [
     "ignored_words.txt",
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelReleaseReason {
+    Idle,
+    ConfigurationReplaced,
+}
+
+impl ModelReleaseReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::ConfigurationReplaced => "configuration_replaced",
+        }
+    }
+}
+
+/// Resources moved out of the caches but not dropped yet. The lifecycle
+/// manager thread drops them, so the GUI thread never destroys a large ONNX
+/// Runtime session while switching chapters or changing settings.
+struct RetiredModelResources {
+    reason: ModelReleaseReason,
+    generation: u64,
+    idle_ms: Option<u128>,
+    models: Vec<Arc<ProofreadingModel>>,
+    engines: Vec<Arc<CorrectionEngine>>,
+}
+
+struct ModelManagerWake {
+    state: Mutex<()>,
+    condvar: Condvar,
+}
+
+static RETIRED_MODEL_RESOURCES: OnceLock<Mutex<Vec<RetiredModelResources>>> = OnceLock::new();
+static MODEL_MANAGER_WAKE: OnceLock<ModelManagerWake> = OnceLock::new();
+static MODEL_MANAGER_READY: OnceLock<bool> = OnceLock::new();
+
+fn retired_model_resources() -> &'static Mutex<Vec<RetiredModelResources>> {
+    RETIRED_MODEL_RESOURCES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn model_manager_wake() -> &'static ModelManagerWake {
+    MODEL_MANAGER_WAKE.get_or_init(|| ModelManagerWake {
+        state: Mutex::new(()),
+        condvar: Condvar::new(),
+    })
+}
+
+/// Start the per-process model lifecycle thread once. Returns false only when
+/// the thread could not be spawned; callers then release synchronously so a
+/// failed spawn cannot leak sessions forever.
+fn ensure_model_lifecycle_manager() -> bool {
+    *MODEL_MANAGER_READY.get_or_init(|| {
+        let wake = model_manager_wake();
+        match thread::Builder::new()
+            .name("correction-model-lifecycle".to_string())
+            .spawn(move || model_lifecycle_loop(wake))
+        {
+            Ok(_) => true,
+            Err(error) => {
+                log::warn!(
+                    target: "correction",
+                    "correction_model_lifecycle_spawn_failed: {error}"
+                );
+                false
+            }
+        }
+    })
+}
+
+fn model_lifecycle_loop(wake: &'static ModelManagerWake) {
+    loop {
+        let guard = wake
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (guard, _) = wake
+            .condvar
+            .wait_timeout(guard, Duration::from_secs(15))
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drop(guard);
+        release_retired_model_resources("correction-model-lifecycle");
+        if let Some(resources) = collect_idle_model_resources() {
+            release_model_resources(resources, "correction-model-lifecycle");
+        }
+    }
+}
+
+fn release_retired_model_resources(thread_label: &'static str) {
+    let batches = {
+        let Ok(mut queue) = retired_model_resources().lock() else {
+            return;
+        };
+        std::mem::take(&mut *queue)
+    };
+    for resources in batches {
+        release_model_resources(resources, thread_label);
+    }
+}
+
+/// Drop the actual ONNX Runtime owners. Must be called without any correction
+/// cache lock held, from the lifecycle thread normally.
+fn release_model_resources(resources: RetiredModelResources, thread_label: &'static str) {
+    let model_count = resources.models.len();
+    let engine_count = resources.engines.len();
+    if model_count == 0 && engine_count == 0 {
+        return;
+    }
+    let started = Instant::now();
+    // Drop engines first: their predictors may hold the same model session.
+    drop(resources.engines);
+    drop(resources.models);
+    let release_ms = started.elapsed().as_millis();
+    let metrics = model_lifetime_metrics();
+    let mut fields = BTreeMap::new();
+    fields.insert(
+        "reason".to_string(),
+        serde_json::json!(resources.reason.as_str()),
+    );
+    fields.insert("thread".to_string(), serde_json::json!(thread_label));
+    fields.insert("release_ms".to_string(), serde_json::json!(release_ms));
+    fields.insert(
+        "released_models".to_string(),
+        serde_json::json!(model_count),
+    );
+    fields.insert(
+        "released_engines".to_string(),
+        serde_json::json!(engine_count),
+    );
+    if let Some(idle_ms) = resources.idle_ms {
+        fields.insert("idle_ms".to_string(), serde_json::json!(idle_ms));
+    }
+    fields.insert(
+        "model_generation".to_string(),
+        serde_json::json!(resources.generation),
+    );
+    fields.insert(
+        "model_cached".to_string(),
+        serde_json::json!(metrics.cached),
+    );
+    fields.insert(
+        "model_engine_refs".to_string(),
+        serde_json::json!(metrics.engine_refs),
+    );
+    fields.insert(
+        "model_retired_models".to_string(),
+        serde_json::json!(metrics.retired_models),
+    );
+    fields.insert(
+        "model_retired_engines".to_string(),
+        serde_json::json!(metrics.retired_engines),
+    );
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level: writer_diagnostics::DiagnosticLevel::Info,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: "correction.model.released".to_string(),
+        target: "correction.model".to_string(),
+        message: None,
+        fields,
+    });
+}
+
+fn retire_model_resources(resources: RetiredModelResources) {
+    if resources.models.is_empty() && resources.engines.is_empty() {
+        return;
+    }
+    if !ensure_model_lifecycle_manager() {
+        release_model_resources(resources, "caller-fallback");
+        return;
+    }
+    if let Ok(mut queue) = retired_model_resources().lock() {
+        queue.push(resources);
+    }
+    model_manager_wake().condvar.notify_all();
+}
+
+/// Collect idle Ready sessions and their idle engine-cache entries. Active
+/// scanner/engine leases are left in place; the model slot keeps its `Arc`
+/// until the scanner naturally finishes and the next manager pass runs.
+fn collect_idle_model_resources() -> Option<RetiredModelResources> {
+    let slots = model_cache().lock().ok()?;
+    let now = Instant::now();
+    let expired_paths: HashSet<PathBuf> = slots
+        .iter()
+        .filter_map(|(path, slot)| {
+            let state = slot.state.lock().ok()?;
+            match &*state {
+                ModelLoadState::Ready { last_used, .. }
+                    if now.saturating_duration_since(*last_used) >= IDLE_MODEL_GRACE =>
+                {
+                    Some(path.clone())
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    if expired_paths.is_empty() {
+        return None;
+    }
+
+    let mut engines = Vec::new();
+    let mut active_paths: HashSet<PathBuf> = HashSet::new();
+    if let Some(stores) = STORE_REGISTRY.get() {
+        if let Ok(stores) = stores.lock() {
+            for inner in stores.values() {
+                let Ok(mut cache) = inner.engines.lock() else {
+                    continue;
+                };
+                let keys: Vec<_> = cache
+                    .iter()
+                    .filter(|(_, cached)| {
+                        cached
+                            .model_key
+                            .as_ref()
+                            .is_some_and(|key| expired_paths.contains(&key.path))
+                    })
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                for key in keys {
+                    let Some(cached) = cache.get(&key) else {
+                        continue;
+                    };
+                    let Some(model_key) = cached.model_key.as_ref() else {
+                        continue;
+                    };
+                    if Arc::strong_count(&cached.engine) > 1 {
+                        active_paths.insert(model_key.path.clone());
+                        continue;
+                    }
+                    if let Some(cached) = cache.remove(&key) {
+                        engines.push(cached.engine);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut models = Vec::new();
+    let mut idle_ms = 0u128;
+    for path in &expired_paths {
+        let Some(slot) = slots.get(path) else {
+            continue;
+        };
+        let Ok(mut state) = slot.state.lock() else {
+            continue;
+        };
+        let ModelLoadState::Ready {
+            last_used, model, ..
+        } = &*state
+        else {
+            continue;
+        };
+        let idle = last_used.elapsed();
+        if idle < IDLE_MODEL_GRACE || active_paths.contains(path) || Arc::strong_count(model) != 1 {
+            continue;
+        }
+        let previous = std::mem::replace(&mut *state, ModelLoadState::Empty);
+        if let ModelLoadState::Ready { model, .. } = previous {
+            idle_ms = idle_ms.max(idle.as_millis());
+            models.push(model);
+        }
+        slot.wake.notify_all();
+    }
+    drop(slots);
+    if models.is_empty() && engines.is_empty() {
+        return None;
+    }
+    Some(RetiredModelResources {
+        reason: ModelReleaseReason::Idle,
+        generation: MODEL_CONFIG_GENERATION.load(Ordering::SeqCst),
+        idle_ms: Some(idle_ms),
+        models,
+        engines,
+    })
+}
+
 impl CorrectionStore {
     pub fn open(app_data_root: &Path) -> Result<Self, WriterError> {
         let registry = STORE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
@@ -556,101 +871,6 @@ impl CorrectionStore {
         Ok(result)
     }
 
-    /// Opportunistically release ready sessions that have had no scanner and no
-    /// engine/scan reference for [`IDLE_MODEL_GRACE`]. Called on correction
-    /// document close and before opening a new scanner; a busy typing session
-    /// keeps `last_used` fresh, so this does not unload per keystroke or per
-    /// chapter switch.
-    pub fn release_idle_models(&self) -> Result<usize, WriterError> {
-        self.release_idle_models_with_grace(IDLE_MODEL_GRACE)
-    }
-
-    fn release_idle_models_with_grace(&self, grace: Duration) -> Result<usize, WriterError> {
-        let slots = model_cache()
-            .lock()
-            .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
-        // Only disturb engine caches when at least one session is actually past
-        // the grace period; a hot model must keep its engine across keystrokes.
-        let has_idle_session = slots.values().any(|slot| {
-            slot.state.lock().is_ok_and(|state| {
-                matches!(
-                    &*state,
-                    ModelLoadState::Ready { last_used, .. } if last_used.elapsed() >= grace
-                )
-            })
-        });
-        if !has_idle_session {
-            return Ok(0);
-        }
-        // Drop idle engine-cache entries first. They hold a strong reference to
-        // the model session; otherwise an otherwise idle slot could never reach
-        // `strong_count == 1`. Engines still owned by a scan/request stay.
-        if let Some(stores) = STORE_REGISTRY.get() {
-            if let Ok(stores) = stores.lock() {
-                for inner in stores.values() {
-                    if let Ok(mut engines) = inner.engines.lock() {
-                        engines.retain(|_, cached| Arc::strong_count(&cached.engine) > 1);
-                    }
-                }
-            }
-        }
-        let mut released_idle_ms: Vec<u128> = Vec::new();
-        for slot in slots.values() {
-            let Ok(mut state) = slot.state.lock() else {
-                continue;
-            };
-            let ModelLoadState::Ready {
-                last_used, model, ..
-            } = &*state
-            else {
-                continue;
-            };
-            let idle = last_used.elapsed();
-            // An active scan owns a clone of the model; only the slot's own
-            // `Arc` may remain before the session is truly idle.
-            if idle < grace || Arc::strong_count(model) != 1 {
-                continue;
-            }
-            released_idle_ms.push(idle.as_millis());
-            *state = ModelLoadState::Empty;
-            slot.wake.notify_all();
-        }
-        drop(slots);
-        let released = released_idle_ms.len();
-        if released > 0 {
-            let metrics = model_lifetime_metrics();
-            for idle_ms in released_idle_ms {
-                let mut fields = BTreeMap::new();
-                fields.insert("idle_ms".to_string(), serde_json::json!(idle_ms));
-                fields.insert("released".to_string(), serde_json::json!(released));
-                fields.insert(
-                    "model_cached".to_string(),
-                    serde_json::json!(metrics.cached),
-                );
-                fields.insert(
-                    "model_engine_refs".to_string(),
-                    serde_json::json!(metrics.engine_refs),
-                );
-                fields.insert(
-                    "model_generation".to_string(),
-                    serde_json::json!(metrics.generation),
-                );
-                writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
-                    timestamp_ms: chrono::Utc::now().timestamp_millis(),
-                    sequence: 0,
-                    session_id: String::new(),
-                    level: writer_diagnostics::DiagnosticLevel::Info,
-                    origin: writer_diagnostics::DiagnosticOrigin::App,
-                    event: "correction.model.released".to_string(),
-                    target: "correction.model".to_string(),
-                    message: None,
-                    fields,
-                });
-            }
-        }
-        Ok(released)
-    }
-
     pub fn set_model_path(&self, path: &Path) -> Result<(), WriterError> {
         let key = validate_model_candidate(path)?;
         let slots = model_cache()
@@ -678,17 +898,35 @@ impl CorrectionStore {
         // releases the old session and invalidates loads still in flight. The
         // next scanner opens exactly one new session.
         MODEL_CONFIG_GENERATION.fetch_add(1, Ordering::SeqCst);
+        let generation = MODEL_CONFIG_GENERATION.load(Ordering::SeqCst);
+        let mut retired_models = Vec::new();
         for slot in slots.values() {
             let Ok(mut state) = slot.state.lock() else {
                 continue;
             };
-            if !matches!(*state, ModelLoadState::Loading) {
-                *state = ModelLoadState::Empty;
+            if matches!(*state, ModelLoadState::Loading) {
+                slot.wake.notify_all();
+                continue;
+            }
+            let previous = std::mem::replace(&mut *state, ModelLoadState::Empty);
+            if let ModelLoadState::Ready { model, .. } = previous {
+                retired_models.push(model);
             }
             slot.wake.notify_all();
         }
+        let retired_engines: Vec<Arc<CorrectionEngine>> =
+            engines.drain().map(|(_, cached)| cached.engine).collect();
         *preferences = next;
-        engines.clear();
+        drop(engines);
+        drop(preferences);
+        drop(slots);
+        retire_model_resources(RetiredModelResources {
+            reason: ModelReleaseReason::ConfigurationReplaced,
+            generation,
+            idle_ms: None,
+            models: retired_models,
+            engines: retired_engines,
+        });
         Ok(())
     }
 
@@ -699,6 +937,29 @@ impl CorrectionStore {
             .lock()
             .map_err(|_| WriterError::Other("correction preferences lock poisoned".into()))?;
         Ok(guard.model_path.clone())
+    }
+
+    /// Publish a chapter/document leave signal without touching model locks or
+    /// destroying an ONNX session on the GUI thread. The lifecycle thread
+    /// decides whether an idle session is actually past its grace deadline.
+    pub fn note_correction_session_left(&self) {
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "model_generation".to_string(),
+            serde_json::json!(MODEL_CONFIG_GENERATION.load(Ordering::SeqCst)),
+        );
+        writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            sequence: 0,
+            session_id: String::new(),
+            level: writer_diagnostics::DiagnosticLevel::Info,
+            origin: writer_diagnostics::DiagnosticOrigin::App,
+            event: "correction.model.session_left".to_string(),
+            target: "correction.model".to_string(),
+            message: None,
+            fields,
+        });
+        model_manager_wake().condvar.notify_all();
     }
 
     pub fn resource_status(&self) -> Result<CorrectionResourceStatusDto, WriterError> {
@@ -778,9 +1039,10 @@ impl CorrectionStore {
             }
         }
 
+        let mut retired_engines = Vec::new();
         if !configured {
             for inner in stores.values() {
-                release_unconfigured_engines(inner, &key);
+                retired_engines.extend(take_unconfigured_engines(inner, &key));
             }
         }
 
@@ -796,18 +1058,31 @@ impl CorrectionStore {
                 .is_ok_and(|state| matches!(*state, ModelLoadState::Loading))
         });
         let in_use = engine_in_use || loading;
+        let mut retired_model = None;
         if !configured && !in_use {
             MODEL_CONFIG_GENERATION.fetch_add(1, Ordering::SeqCst);
             if let Some(slot) = models.remove(&key) {
-                clear_model_slot(&slot);
+                retired_model = take_model_slot(&slot);
             }
         }
 
-        Ok(CorrectionModelPathStatusDto {
+        let status = CorrectionModelPathStatusDto {
             configured,
             in_use,
             deletion_eligible: !configured && !in_use,
-        })
+        };
+        drop(stores);
+        drop(models);
+        if retired_model.is_some() || !retired_engines.is_empty() {
+            retire_model_resources(RetiredModelResources {
+                reason: ModelReleaseReason::ConfigurationReplaced,
+                generation: MODEL_CONFIG_GENERATION.load(Ordering::SeqCst),
+                idle_ms: None,
+                models: retired_model.into_iter().collect(),
+                engines: retired_engines,
+            });
+        }
+        Ok(status)
     }
 
     pub fn dictionary_entries(&self, project_id: &str) -> Result<Vec<String>, WriterError> {
@@ -1580,7 +1855,6 @@ impl CorrectionStore {
     /// publishes its stale session.
     pub(super) fn configured_model_snapshot(&self) -> Result<ConfiguredModelSnapshot, WriterError> {
         let started = Instant::now();
-        self.release_idle_models_with_grace(IDLE_MODEL_GRACE)?;
         let configured_path = self.configured_model_path()?;
         let Some(configured_path) = configured_path else {
             return Ok(ConfiguredModelSnapshot {
@@ -1681,9 +1955,21 @@ impl CorrectionStore {
                 return Err(error);
             }
         };
+        let model = Arc::new(opened);
         if !configured_unchanged {
             *state = ModelLoadState::Empty;
             slot.wake.notify_all();
+            drop(state);
+            // The session opened against a superseded configuration has never
+            // been published. Hand it to the lifecycle thread so the large
+            // ONNX Runtime object is not destroyed on this request thread.
+            retire_model_resources(RetiredModelResources {
+                reason: ModelReleaseReason::ConfigurationReplaced,
+                generation: MODEL_CONFIG_GENERATION.load(Ordering::SeqCst),
+                idle_ms: None,
+                models: vec![model],
+                engines: Vec::new(),
+            });
             return match stamp_after {
                 Ok(_) => Err(WriterError::Other(
                     "correction model configuration changed while it was being opened; retry the request".into(),
@@ -1691,7 +1977,6 @@ impl CorrectionStore {
                 Err(error) => Err(error),
             };
         }
-        let model = Arc::new(opened);
         *state = ModelLoadState::Ready {
             stamp: stamp_before.clone(),
             identity: identity.clone(),
