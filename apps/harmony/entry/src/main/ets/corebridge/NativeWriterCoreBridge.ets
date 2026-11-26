@@ -252,8 +252,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
-    baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
-    return this.chapterBridge.clearChapterVersioned(chapterId, expected, baseContent)
+    baseContent: string, proofSnapshotRevision: number,
+    proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    return this.chapterBridge.clearChapterVersioned(
+      chapterId, expected, baseContent, proofSnapshotRevision, proofEventIds)
   }
 
   async clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {

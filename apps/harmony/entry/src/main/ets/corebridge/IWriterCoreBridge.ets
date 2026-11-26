@@ -39,7 +39,8 @@ export interface IWriterCoreBridge {
     baseContent: string, allowEmptyOverwrite: boolean,
     proofSnapshotRevision: number, proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>>
   clearChapterVersioned(chapterId: string, expected: ChapterVersion,
-    baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
+    baseContent: string, proofSnapshotRevision: number,
+    proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>>
   clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
   createChapter(volumeId: string, name: string): Promise<ResultEnvelope<ChapterMeta>>
   renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>>

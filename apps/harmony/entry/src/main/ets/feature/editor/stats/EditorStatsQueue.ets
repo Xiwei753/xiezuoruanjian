@@ -175,9 +175,6 @@ export class EditorStatsQueue {
       volumeId: volumeId,
       chapterId: chapterId
     })
-    if (this.recentProofRefs.length > 2048) {
-      this.recentProofRefs = this.recentProofRefs.slice(this.recentProofRefs.length - 2048)
-    }
   }
 
   /** Issue #981：实测写作片段与编辑字数事件进入同一串行队列，稳定 eventId 由平台预先固定。 */
@@ -237,6 +234,25 @@ export class EditorStatsQueue {
       }
     }
     return ids
+  }
+
+  /**
+   * 正文 durable 回执确认后，只移除这次请求实际携带的 event ID。
+   * 未确认事件继续保留；旧会话/其他章节的 ID 不受影响。
+   */
+  acknowledgeProofEvents(eventIds: string[]): void {
+    if (eventIds.length === 0) {
+      return
+    }
+    const acknowledged: Set<string> = new Set<string>(eventIds)
+    const remaining: ProofBatchRef[] = []
+    for (let i = 0; i < this.recentProofRefs.length; i++) {
+      const ref = this.recentProofRefs[i]
+      if (!acknowledged.has(ref.eventId)) {
+        remaining.push(ref)
+      }
+    }
+    this.recentProofRefs = remaining
   }
 
   /**

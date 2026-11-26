@@ -160,6 +160,25 @@ class ChapterRepository(
             writingBridge.clearChapterContent(projectId, volumeId, chapterId, expectedVersion)
         }
 
+    override suspend fun clearChapterContentWithProofBatch(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        expectedVersion: ChapterVersion?,
+        proofSnapshotRevision: Long,
+        proofEventIds: List<String>,
+    ): BridgeResult<ChapterSaveReceipt> =
+        withContext(ioDispatcher) {
+            writingBridge.clearChapterContentWithProofBatch(
+                projectId,
+                volumeId,
+                chapterId,
+                expectedVersion,
+                proofSnapshotRevision,
+                proofEventIds,
+            )
+        }
+
     /**
      * #624 评论13 第4项：字数统计同样必须 main-safe — 正文加载后的
      * calculateWordCount 是整章文本同步跨 UniFFI 的调用，不得跑在调用方

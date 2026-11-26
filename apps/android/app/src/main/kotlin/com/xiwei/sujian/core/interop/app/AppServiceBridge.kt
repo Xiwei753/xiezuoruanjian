@@ -210,6 +210,22 @@ open class AppServiceBridge(
         proofEventIds,
     )
 
+    fun clearChapterContentWithProofBatch(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        expectedVersion: com.xiwei.sujian.feature.project.data.model.ChapterVersion?,
+        proofSnapshotRevision: Long,
+        proofEventIds: List<String>,
+    ) = chapterBridge.clearChapterContentWithProofBatch(
+        projectId,
+        volumeId,
+        chapterId,
+        expectedVersion,
+        proofSnapshotRevision,
+        proofEventIds,
+    )
+
     fun clearChapterContent(
         projectId: String,
         volumeId: String,

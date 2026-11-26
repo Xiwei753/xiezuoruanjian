@@ -91,7 +91,8 @@ export class NativeChapterBridge {
   }
 
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
-    baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    baseContent: string, proofSnapshotRevision: number,
+    proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     const loc = await this.core.resolveChapterLocation(chapterId)
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
@@ -106,6 +107,8 @@ export class NativeChapterBridge {
         sha256: expected.contentSha256,
         baseContent: baseContent,
         allowEmptyOverwrite: true,
+        proofSnapshotRevision: proofSnapshotRevision,
+        proofEventIds: proofEventIds,
         clear: true
       })
       const jsonStr: string = await this.core.getNativeModule().nativeClearChapterVersioned(payload)

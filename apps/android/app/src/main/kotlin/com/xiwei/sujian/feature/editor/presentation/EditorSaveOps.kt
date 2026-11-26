@@ -369,14 +369,26 @@ private suspend fun EditorViewModel.saveChapterAttempt(
             _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
             return SaveAttemptResult.Finished(false)
         }
+        val useBatch = batchPort != null && proofBatch.snapshotRevision > 0
         val result =
             if (contentToSave.isEmpty()) {
-                effectiveChapterSavePort.clearChapterContent(
-                    session.projectId,
-                    session.volumeId,
-                    session.chapterId,
-                    expectedVersion,
-                )
+                if (batchPort != null && proofBatch.snapshotRevision > 0) {
+                    batchPort.clearChapterContentWithProofBatch(
+                        session.projectId,
+                        session.volumeId,
+                        session.chapterId,
+                        expectedVersion,
+                        proofBatch.snapshotRevision,
+                        proofBatch.eventIds,
+                    )
+                } else {
+                    effectiveChapterSavePort.clearChapterContent(
+                        session.projectId,
+                        session.volumeId,
+                        session.chapterId,
+                        expectedVersion,
+                    )
+                }
             } else if (batchPort != null && proofBatch.snapshotRevision > 0) {
                 batchPort.saveChapterContentWithProofBatch(
                     session.projectId,
@@ -397,8 +409,12 @@ private suspend fun EditorViewModel.saveChapterAttempt(
                 )
             }
         when (result) {
-            is com.xiwei.sujian.core.interop.common.BridgeResult.Success ->
+            is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> {
+                if (useBatch) {
+                    statsRepository.acknowledgeProofEvents(proofBatch.eventIds)
+                }
                 handleSaveSuccess(result, contentToSave, session, lease, saveStartedAt)
+            }
             is com.xiwei.sujian.core.interop.common.BridgeResult.Error ->
                 handleSaveError(result, contentToSave, session, isAutoSave, saveStartedAt)
             com.xiwei.sujian.core.interop.common.BridgeResult.NotLoaded ->

@@ -294,6 +294,15 @@ class WritingStatsRepository(
         }
     }
 
+    /** 正文 durable 回执确认后，只删除本次请求实际提交的 event ID。 */
+    fun acknowledgeProofEvents(eventIds: List<String>) {
+        if (eventIds.isEmpty()) return
+        synchronized(enqueueLock) {
+            val acknowledged = eventIds.toHashSet()
+            recentProofRefs.removeAll { it.eventId in acknowledged }
+        }
+    }
+
     fun recordEditorChangeStats(
         projectId: String,
         volumeId: String,
@@ -353,9 +362,6 @@ class WritingStatsRepository(
                     newRevision = newRevision,
                 ),
             )
-            if (recentProofRefs.size > 2048) {
-                recentProofRefs.removeAt(0)
-            }
         }
     }
 

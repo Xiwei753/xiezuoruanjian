@@ -156,6 +156,36 @@ class ChapterBridge internal constructor(
             }
         }
 
+    fun clearChapterContentWithProofBatch(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        expectedVersion: com.xiwei.sujian.feature.project.data.model.ChapterVersion?,
+        proofSnapshotRevision: Long,
+        proofEventIds: List<String>,
+    ): BridgeResult<ChapterSaveReceipt> =
+        holder.wrapResult {
+            holder.service.clearChapterContentVersionedWithBatch(
+                projectId,
+                volumeId,
+                chapterId,
+                expectedVersion?.let {
+                    uniffi.writer_core.ChapterVersionDto(
+                        it.objectGeneration,
+                        it.revision.toULong(),
+                        it.contentSha256,
+                    )
+                },
+                null,
+                proofSnapshotRevision.toULong(),
+                proofEventIds,
+            ).toModel()
+        }.also { result ->
+            if (result is BridgeResult.Success) {
+                mirrorChangeSink?.chapterChanged(projectId, volumeId, chapterId)
+            }
+        }
+
     fun clearChapterContent(
         projectId: String,
         volumeId: String,

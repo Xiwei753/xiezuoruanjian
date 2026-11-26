@@ -746,7 +746,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       // 空正文只有在入队时已确认的授权下才走显式 clear 入口。
       const result = request.allowEmptyOverwrite
         ? await this.bridge.clearChapterVersioned(
-            request.chapterId, request.baseVersion, request.baseContent)
+            request.chapterId, request.baseVersion, request.baseContent,
+            request.revision, request.proofEventIds)
         : await this.bridge.saveChapterVersioned(
             request.chapterId, request.text, request.baseVersion, request.baseContent, false,
             request.revision, request.proofEventIds)
@@ -777,6 +778,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         return false
       }
       this.applySaveReceipt(request, receipt)
+      // 正文已 durable，精确 ack 本次请求携带的证明事件；不能按累计
+      // revision 清空，否则并发新编辑会丢失。
+      this.statsQueue.acknowledgeProofEvents(request.proofEventIds)
       // 只有这次回执能推进直接后继的冻结 base；外部同步/切章/删除不会走到这里。
       this.advanceSuccessors(request, receipt.version)
       return true

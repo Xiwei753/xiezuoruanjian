@@ -39,4 +39,13 @@ interface ChapterProofBatchSavePort {
         proofSnapshotRevision: Long,
         proofEventIds: List<String>,
     ): BridgeResult<ChapterSaveReceipt>
+
+    suspend fun clearChapterContentWithProofBatch(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        expectedVersion: ChapterVersion?,
+        proofSnapshotRevision: Long,
+        proofEventIds: List<String>,
+    ): BridgeResult<ChapterSaveReceipt>
 }

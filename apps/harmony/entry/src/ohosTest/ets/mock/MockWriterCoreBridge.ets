@@ -325,8 +325,10 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
-    baseContent: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
-    return this.saveChapterVersioned(chapterId, '', expected, baseContent, true, 0, [])
+    baseContent: string, proofSnapshotRevision: number,
+    proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    return this.saveChapterVersioned(
+      chapterId, '', expected, baseContent, true, proofSnapshotRevision, proofEventIds)
   }
 
   async saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
