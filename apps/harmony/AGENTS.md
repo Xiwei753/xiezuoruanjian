@@ -31,6 +31,8 @@
 
 ## 工具链与构建
 
+> 以下命令都属于「构建」，除非用户本轮明确要求，否则不要执行；这里只是备查。
+
 - 工具链由 `tools/setup_harmony_cli.sh` 安装（默认 `~/.harmony-cli`，**不需要 DevEco Studio**）。每个新 shell 先 `source tools/setup_harmony_cli.sh`，它导出 `DEVECO_SDK_HOME`（hvigor 定位 SDK 的唯一来源）。完整流程见 [docs/harmonyos/DEVECO_CLI.md](../../../docs/harmonyos/DEVECO_CLI.md)。
 - Rust Core 动态库由 `tools/build_harmony.sh`（Linux/macOS）或 `tools/build_harmony.ps1`（Windows）交叉编译，产物落到 `entry/src/main/prebuilt/arm64-v8a/libwriter_core_ffi.so`。
 - CI 的 `HarmonyOS Static Analysis` 只跑 `default@CompileArkTS`，不做完整 `assembleHap`，**它绿灯不代表能打出 HAP**；C++ 桥接与 Rust FFI 的链接问题只有在本地 `assembleHap` 才暴露，`tools/check_harmony_native_bridge.py` 就是补这个缺口的静态守卫。
