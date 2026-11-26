@@ -455,7 +455,24 @@ impl<'a> RoundProvider<'a> {
         let mut mutations: Vec<BatchMutation> = entries
             .into_iter()
             .filter_map(|(path, entry)| match entry {
-                Some(BufferedValue::Content(content)) => Some(BatchMutation::Put { path, content }),
+                Some(BufferedValue::Content(content)) => {
+                    // 内容与基线逐字节相同（git blob OID 一致）时不进入 batch：
+                    // 重复上传既浪费一次网络写，也会在 REST batch 上制造"内容没变
+                    // 的提交"（Issue #1065 伪空提交）。
+                    if let Some(existing) = baseline.get(&path) {
+                        // 只对 git 对象名（40 位 hex）比较；非 git 后端的版本串
+                        // 不参与，避免误判。
+                        let existing = existing.as_str();
+                        if crate::sync::hash::is_legacy_git_blob_oid(existing)
+                            && crate::sync::hash::git_blob_oid(&content)
+                                .map(|digest| digest == existing)
+                                .unwrap_or(false)
+                        {
+                            return None;
+                        }
+                    }
+                    Some(BatchMutation::Put { path, content })
+                }
                 Some(BufferedValue::Version(version)) => {
                     if baseline.get(&path) == Some(&version) {
                         None
@@ -491,6 +508,20 @@ impl<'a> RoundProvider<'a> {
             mutations.push(BatchMutation::CheckObject {
                 path,
                 expected_version,
+            });
+        }
+
+        // 过滤后可能只剩"什么也不用写"：不再发起一次空提交。
+        if mutations.is_empty() {
+            return Ok(RoundFlushOutcome {
+                committed: false,
+                result: BatchCommitResult {
+                    revision: self
+                        .base_revision
+                        .clone()
+                        .unwrap_or_else(|| RemoteVersion::new("")),
+                    touched_paths: Vec::new(),
+                },
             });
         }
 
