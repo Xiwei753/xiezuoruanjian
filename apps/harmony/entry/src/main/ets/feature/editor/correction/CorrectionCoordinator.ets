@@ -950,6 +950,10 @@ export class CorrectionCoordinator {
     }
     if (result.success && result.data === true && this.current === request) {
       this.removeSuggestion(suggestion)
+      if (scope === 'rule') {
+        // 停用规则改变 scanner 指纹：旧结果只保留展示，重新检查等到周期/手动。
+        this.markCorrectionDirty()
+      }
     }
     return result
   }

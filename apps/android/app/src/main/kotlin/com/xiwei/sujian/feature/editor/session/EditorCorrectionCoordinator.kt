@@ -596,6 +596,10 @@ class EditorCorrectionCoordinator(
                     _state.value.suggestions - suggestion
                 }
             _state.value = _state.value.copy(suggestions = remaining)
+            if (scope == EditorCorrectionIgnoreScope.RULE) {
+                // 停用规则会改变 scanner 指纹：旧结果不能冒充新代际，等周期/手动。
+                markScanPending()
+            }
         }
         return ignored
     }
