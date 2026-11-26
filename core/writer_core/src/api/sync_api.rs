@@ -131,6 +131,12 @@ fn stale_buffered_writes(
             },
             None => raw.clone(),
         };
+        // 同步元数据（manifest/state/conflicts/账本）在三方合并里会被重写，
+        // 其字节本来就不等于传输期缓冲的版本；它们不是业务对象内容，不能因此
+        // 把整轮发布判成"内容过期"（会 livelock 在永远不发布）。
+        if rel.starts_with("app-meta/sync/") {
+            continue;
+        }
         let live_path = live_root.join(&rel);
         let Ok(content) = std::fs::read(&live_path) else {
             continue;
@@ -2697,15 +2703,12 @@ impl WriterCoreApi {
         // 本地 commit 之后再判定一次：commit 可能失败（工作区锁/flush/三方合并），
         // 也可能因为并发编辑得到与 staging 不同的结果。任一 target 没有真正落盘
         // 成功就不发布整轮远端树，避免推送未落盘的旧 staging 内容（复审 #2）。
-        let commit_blocked = stale_publish_paths > 0
-            || all_targets.iter().any(|target| {
-                !matches!(
-                    target.result.status,
-                    crate::sync::types::SyncStatus::Success
-                        | crate::sync::types::SyncStatus::NoChanges
-                        | crate::sync::types::SyncStatus::LatestWinsApplied
-                )
-            });
+        // 只有"确实失败/未落盘"的 target 才阻断发布：冲突（Conflict /
+        // PartialConflict）是成功落盘的终态，冲突路径由 generation 复用远端
+        // blob、LWW 排除上传处理，不能因此冻结其它独立对象的发布
+        // （Issue #1065 复审 #2、#4）。
+        let commit_blocked =
+            stale_publish_paths > 0 || all_targets.iter().any(target_blocks_round_publish);
         if commit_blocked {
             round.discard();
             publish_blocked = true;
