@@ -263,6 +263,25 @@ Kirigami.ApplicationWindow {
     // startup（工作区首次打开）与 handoff（窗口从后台恢复）只绕过间隔条件，
     // 配置、工作区、single-flight 判断仍由 SyncBackend/AppBackend 完成。
     // 同步启动后的新变更进入下一轮同步，不把本轮开始时的快照当成最新。
+    // Issue #1065：到期后真正发起自动同步（保存屏障与轻量探测共用的唯一入口）。
+    function dispatchAutoSync(trigger) {
+        var operationId = ""
+        try {
+            operationId = String(syncBackend.start_auto_sync(trigger) || "").trim()
+        } catch (e) {
+            window.logAutoSyncEvent("warn", "auto_sync_dispatch_failed",
+                                    "trigger=" + trigger + ", error=" + e)
+            return
+        }
+        if (operationId.length > 0) {
+            window.logAutoSyncEvent("info", "auto_sync_started",
+                                    "trigger=" + trigger + ", operation_id=" + operationId)
+            return
+        }
+        window.logAutoSyncEvent("info", "auto_sync_not_started",
+                                "trigger=" + trigger + ", reason=backend_recheck")
+    }
+
     function maybeStartAutoSync(trigger) {
         if (autoSyncShutdown || !syncBackend || typeof syncBackend.auto_sync_due !== "function")
             return false
@@ -275,6 +294,23 @@ Kirigami.ApplicationWindow {
             return false
         }
         if (!due) return false
+
+        // Issue #1065：Core 账本里没有待上传的已落盘变更、且当前不在写作会话中时，
+        // 本轮只做轻量探测（Core 只读 HEAD/版本 checkpoint），不进入写作区保存
+        // 屏障；写作会话期间仍先保存再发布，避免下载覆盖正在编辑的正文。
+        var hasPending = true
+        try {
+            if (typeof syncBackend.has_pending_sync_mutations === "function") {
+                hasPending = syncBackend.has_pending_sync_mutations() === true
+            }
+        } catch (e) {
+            hasPending = true
+        }
+        if (!hasPending && !appController.inWriting) {
+            autoSyncLastPreflightFailureReason = ""
+            window.dispatchAutoSync(trigger)
+            return true
+        }
 
         // Issue #1062 1.3：屏障异步完成后才发起同步；等待期间若窗口已进入
         // 退出流程则放弃本次自动同步。
@@ -291,22 +327,7 @@ Kirigami.ApplicationWindow {
                 return
             }
             autoSyncLastPreflightFailureReason = ""
-
-            var operationId = ""
-            try {
-                operationId = String(syncBackend.start_auto_sync(trigger) || "").trim()
-            } catch (e) {
-                window.logAutoSyncEvent("warn", "auto_sync_dispatch_failed",
-                                        "trigger=" + trigger + ", error=" + e)
-                return
-            }
-            if (operationId.length > 0) {
-                window.logAutoSyncEvent("info", "auto_sync_started",
-                                        "trigger=" + trigger + ", operation_id=" + operationId)
-                return
-            }
-            window.logAutoSyncEvent("info", "auto_sync_not_started",
-                                    "trigger=" + trigger + ", reason=backend_recheck")
+            window.dispatchAutoSync(trigger)
         })
         // “已发起到期检查”，真正是否启动由屏障回调决定。
         return true

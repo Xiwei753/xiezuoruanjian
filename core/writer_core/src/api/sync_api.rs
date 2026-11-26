@@ -94,6 +94,70 @@ fn writer_error_is_retryable_network(error: &crate::api::error::WriterError) -> 
 /// Whether a target failure means the round's merged tree is incomplete and
 /// must not be published.  Isolated `migration` failures (for example one
 /// stats partition) do not invalidate the other groups.
+/// commit 之后核对缓冲里待发布的字节是否仍是 live 的版本。
+///
+/// 三方合并可能因为同步期间的并发编辑把正文写成与 staging 不同的版本；
+/// 此时继续发布 staging 旧字节会把更旧的版本推回远端。发现不一致就丢弃该
+/// 路径的缓冲写入：账本里更新的 mutation 仍在，下一轮继续发布。
+fn discard_stale_buffered_writes(
+    round: &crate::sync::provider::round::RoundProvider<'_>,
+    live_root: &std::path::Path,
+    remote_prefix: &str,
+    project_id: Option<&str>,
+    committed_paths: &[crate::sync::commit_helpers::CommittedPath],
+) -> usize {
+    let buffered = round.buffered_put_digests();
+    if buffered.is_empty() {
+        return 0;
+    }
+    let project_prefix = project_id.map(|id| format!("projects/{id}/"));
+    let mut stale: Vec<String> = Vec::new();
+    for committed in committed_paths {
+        if committed.deleted {
+            continue;
+        }
+        let Some(raw) = committed.path.to_str() else {
+            continue;
+        };
+        let raw = raw.replace('\\', "/");
+        // 作品 target 的 committed path 是 workspace-relative（projects/<id>/...），
+        // live root 已经指向作品目录；App target 的路径本来就是 app 根相对路径。
+        let rel = match project_prefix.as_deref() {
+            Some(prefix) => match raw.strip_prefix(prefix) {
+                Some(rel) => rel.to_string(),
+                None => continue,
+            },
+            None => raw.clone(),
+        };
+        let live_path = live_root.join(&rel);
+        let Ok(content) = std::fs::read(&live_path) else {
+            continue;
+        };
+        let live_digest = crate::sync::hash::content_md5(&content);
+        let suffix = format!("/{rel}");
+        for (remote_path, buffered_digest) in &buffered {
+            if !remote_path.starts_with(remote_prefix) {
+                continue;
+            }
+            if (remote_path == &rel || remote_path.ends_with(&suffix))
+                && buffered_digest != &live_digest
+                && !stale.contains(remote_path)
+            {
+                stale.push(remote_path.clone());
+            }
+        }
+    }
+    if stale.is_empty() {
+        return 0;
+    }
+    let removed = round.discard_paths(&stale);
+    log::warn!(
+        "[sync] discard {} stale buffered write(s) after commit: live content changed during merge",
+        removed
+    );
+    removed
+}
+
 fn target_blocks_round_publish(target: &crate::sync::types::TargetSyncResult) -> bool {
     if target.failure_phase.as_deref() == Some("migration") {
         return false;
@@ -1090,6 +1154,52 @@ impl WriterCoreApi {
         }
         if let Err(error) = next.save(app_data_root) {
             log::warn!("[sync] failed to persist full-sync checkpoint: {error}");
+        }
+    }
+
+    /// 是否存在尚未随远端提交确认的本地业务变更。
+    ///
+    /// 只读 mutation 账本（对象级 dirty index），不做网络探测、不扫描磁盘内容：
+    /// 平台端用它决定"这一轮只需要轻量探测"还是"有东西要上传"。读不到时按
+    /// 保守值 `true` 返回，避免把"不知道"当成"没有变更"。
+    pub fn sync_has_pending_mutations(&self) -> bool {
+        let (app_data_root, projects_root) = {
+            let core = self.core_read();
+            (core.app_data_root.clone(), core.projects_root.clone())
+        };
+        if let Ok(groups) =
+            crate::sync::app_data_group_catalog::discover_local_app_data_groups(&app_data_root)
+        {
+            for group in groups {
+                let pending = crate::sync::local_mutations::pending_records(
+                    &app_data_root,
+                    crate::sync::types::SyncScope::App,
+                    Some(&group),
+                );
+                match pending {
+                    Ok(records) if records.is_empty() => {}
+                    Ok(_) => return true,
+                    Err(_) => return true,
+                }
+            }
+        }
+        match crate::project::list_projects(&projects_root) {
+            Ok(projects) => {
+                for project in projects {
+                    let project_root = projects_root.join(&project.id);
+                    match crate::sync::local_mutations::pending_records(
+                        &project_root,
+                        crate::sync::types::SyncScope::Project,
+                        None,
+                    ) {
+                        Ok(records) if records.is_empty() => {}
+                        Ok(_) => return true,
+                        Err(_) => return true,
+                    }
+                }
+                false
+            }
+            Err(_) => true,
         }
     }
 
@@ -2428,6 +2538,14 @@ impl WriterCoreApi {
                 let commit_outcome =
                     crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
                 commit_phase.finish_with_provider(&commit_outcome, provider);
+                // 只发布与已落盘内容一致的字节（Issue #1065 复审 #2）。
+                discard_stale_buffered_writes(
+                    round,
+                    &planned.target_live_root,
+                    &planned.target.remote_prefix,
+                    planned.project_id.as_deref(),
+                    &target_committed_paths,
+                );
 
                 if let Some(ref sink) = progress_sink {
                     let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);

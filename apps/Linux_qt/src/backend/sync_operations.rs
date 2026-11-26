@@ -437,6 +437,17 @@ impl AppBackend {
         }
     }
 
+    /// 是否存在尚未随远端提交确认的本地业务变更（Issue #1065）。
+    ///
+    /// 只读 Core 的 mutation 账本，不触网、不扫描正文：QML 用它决定到期唤醒时
+    /// 是"直接轻量探测"还是"先走写作区保存屏障再发布"。Core 不可用时按保守值
+    /// `true` 返回（当成有变更，仍走完整屏障）。
+    pub(crate) fn has_pending_sync_mutations(&self) -> bool {
+        self.core_api()
+            .map(|api| api.sync_has_pending_mutations())
+            .unwrap_or(true)
+    }
+
     /// Issue #983：QML 定时器只负责唤醒，到期判定与去重全部在这里完成。
     /// Issue #1058：`trigger` 决定是否绕过间隔；启动/交接检查仍走同一套门禁。
     pub(crate) fn auto_sync_due(&mut self, trigger: AutoSyncTrigger) -> bool {

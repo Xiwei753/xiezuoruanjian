@@ -166,6 +166,9 @@ pub struct SyncBackend {
     // 间隔条件，配置、工作区与 single-flight 判断保持不变。
     #[allow(dead_code)]
     auto_sync_due: qt_method!(fn(&mut self, trigger: QString) -> bool),
+    // Issue #1065：只读 Core mutation 账本，判断到期唤醒是否需要保存屏障。
+    #[allow(dead_code)]
+    has_pending_sync_mutations: qt_method!(fn(&self) -> bool),
     #[allow(dead_code)]
     start_auto_sync: qt_method!(fn(&mut self, trigger: QString) -> QString),
     // Issue #1058 复审：QML 在 sync_action_completed 里取一次待处理交接请求；
@@ -691,6 +694,12 @@ impl SyncBackend {
     fn take_pending_handoff(&mut self) -> bool {
         self.with_app_mut(|app| app.take_pending_handoff())
             .unwrap_or(false)
+    }
+
+    // Issue #1065：是否存在待上传的本地业务变更（只读 Core 账本）。
+    fn has_pending_sync_mutations(&self) -> bool {
+        self.with_app(|app| app.has_pending_sync_mutations())
+            .unwrap_or(true)
     }
 
     fn auto_sync_due(&mut self, trigger: QString) -> bool {
