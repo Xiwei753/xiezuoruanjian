@@ -2493,6 +2493,7 @@ pub(crate) fn commit_single_target_staging(
                 &safe_content_actions,
                 false,
                 &proof_recovery_records,
+                &[],
                 None,
             ) {
                 Ok((tx, _)) => tx,
