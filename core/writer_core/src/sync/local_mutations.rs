@@ -306,6 +306,36 @@ pub(crate) fn pending_records(
     scope: SyncScope,
     app_group: Option<&AppDataGroup>,
 ) -> crate::error::Result<BTreeMap<String, LocalMutationRecord>> {
+    let ledger = latest_ledger(sync_root)?;
+    pending_records_in(&ledger, sync_root, scope, app_group)
+}
+
+/// 读取并修复账本，返回"路径 → 最新事实"的索引（已补序号）。
+///
+/// App 数据组共享同一份账本：一轮调度里只读一次，再按 group 过滤，
+/// 不能在每个 group 上重复加载同一个 JSONL（复审 #5）。
+pub(crate) fn latest_ledger(
+    sync_root: &Path,
+) -> crate::error::Result<HashMap<String, LocalMutationRecord>> {
+    // 账本损坏时先归档重建：重建后由 version_snapshot 把该 target 判为
+    // ledger_corrupt 并做一次完整核对，不能在"空索引"上宣布无变化。
+    repair_corrupt_ledger(sync_root)?;
+    let mut records = load_records(sync_root)?;
+    ensure_sequences(sync_root, &mut records)?;
+    let mut latest: HashMap<String, LocalMutationRecord> = HashMap::new();
+    for record in records {
+        latest.insert(record.path.clone(), record);
+    }
+    Ok(latest)
+}
+
+/// 从一个已读入的账本索引里挑出某个 target 的待同步事实。
+pub(crate) fn pending_records_in(
+    ledger: &HashMap<String, LocalMutationRecord>,
+    sync_root: &Path,
+    scope: SyncScope,
+    app_group: Option<&AppDataGroup>,
+) -> crate::error::Result<BTreeMap<String, LocalMutationRecord>> {
     // 账本损坏时先归档重建：重建后由 version_snapshot 把该 target 判为
     // ledger_corrupt 并做一次完整核对，不能在"空索引"上宣布无变化。
     repair_corrupt_ledger(sync_root)?;
@@ -321,27 +351,21 @@ pub(crate) fn pending_records(
             .map(|state| state.confirmed_mutation_seq)
             .unwrap_or_default(),
     };
-    let mut records = load_records(sync_root)?;
-    ensure_sequences(sync_root, &mut records)?;
-    let mut latest: HashMap<String, LocalMutationRecord> = HashMap::new();
-    for record in records {
-        latest.insert(record.path.clone(), record);
-    }
     let mut pending = BTreeMap::new();
-    for (path, record) in latest {
-        if !is_sync_business_path(&path, scope) {
+    for (path, record) in ledger {
+        if !is_sync_business_path(path, scope) {
             continue;
         }
         if let Some(group) = app_group {
-            if !group.owns_path(&path) {
+            if !group.owns_path(path) {
                 continue;
             }
         }
         // seq == 0 是旧版本账本（尚未分配序号）写入的事实，永远不能被判为已确认。
-        if record.seq != 0 && record.seq <= confirmed_seq.get(&path).copied().unwrap_or(0) {
+        if record.seq != 0 && record.seq <= confirmed_seq.get(path).copied().unwrap_or(0) {
             continue;
         }
-        pending.insert(path, record);
+        pending.insert(path.clone(), record.clone());
     }
     Ok(pending)
 }

@@ -1161,11 +1161,19 @@ impl WriterCoreApi {
             let core = self.core_read();
             (core.app_data_root.clone(), core.projects_root.clone())
         };
-        if let Ok(groups) =
-            crate::sync::app_data_group_catalog::discover_local_app_data_groups(&app_data_root)
-        {
+        // App 组共享同一份账本：只读一次，再按 group 过滤。
+        let app_ledger = match crate::sync::local_mutations::latest_ledger(&app_data_root) {
+            Ok(ledger) => Some(ledger),
+            // 账本损坏/读失败：宁可让平台做一次完整探测，也不要误报"无待上传"。
+            Err(_) => return true,
+        };
+        if let (Ok(groups), Some(ledger)) = (
+            crate::sync::app_data_group_catalog::discover_local_app_data_groups(&app_data_root),
+            app_ledger.as_ref(),
+        ) {
             for group in groups {
-                let pending = crate::sync::local_mutations::pending_records(
+                let pending = crate::sync::local_mutations::pending_records_in(
+                    ledger,
                     &app_data_root,
                     crate::sync::types::SyncScope::App,
                     Some(&group),

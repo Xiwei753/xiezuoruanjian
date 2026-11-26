@@ -236,12 +236,16 @@ fn build_version(
     }
 }
 
-/// App 数据组版本。`legacy_layout` 表示整份 App 目标仍处于旧版聚合清单/状态，
-/// 这些 target 统一回到完整 LWW，不做增量推断。
+/// App 数据组 target 版本。
+///
+/// `legacy_layout` 表示整份 App 目标仍处于旧版聚合清单/状态，这些 target
+/// 统一回到完整 LWW，不做增量推断。`ledger` 是整轮只读一次的 mutation 账本
+/// （App 组共享同一份 JSONL）；传 `None` 时按需自行加载。
 pub(crate) fn app_group_version(
     app_data_root: &std::path::Path,
     group: &AppDataGroup,
     legacy_layout: bool,
+    ledger: Option<&std::collections::HashMap<String, local_mutations::LocalMutationRecord>>,
 ) -> crate::Result<LocalTargetVersion> {
     if legacy_layout {
         return Ok(LocalTargetVersion::ineligible("legacy_layout"));
@@ -266,7 +270,15 @@ pub(crate) fn app_group_version(
         return Ok(LocalTargetVersion::ineligible("ledger_corrupt"));
     }
     let manifest = read_manifest(app_data_root, &group.local_manifest_path())?;
-    let pending = local_mutations::pending_records(app_data_root, SyncScope::App, Some(group))?;
+    let pending = match ledger {
+        Some(ledger) => local_mutations::pending_records_in(
+            ledger,
+            app_data_root,
+            SyncScope::App,
+            Some(group),
+        )?,
+        None => local_mutations::pending_records(app_data_root, SyncScope::App, Some(group))?,
+    };
     let (path_fingerprint, local_file_count) =
         local_paths_fingerprint(app_data_root, SyncScope::App, Some(group));
     Ok(build_version(
@@ -357,10 +369,19 @@ pub(crate) fn collect(
     };
     let mut targets = BTreeMap::new();
     let mut no_change_targets = Vec::new();
+    // App 数据组共享同一份 mutation 账本：整轮读一次，再按 group 的 owns_path
+    // 过滤，不在每个 group 上重复加载同一个 JSONL（复审 #5）。
+    let app_ledger = local_mutations::latest_ledger(app_data_root).ok();
 
     for group in crate::sync::app_data_group_catalog::discover_local_app_data_groups(app_data_root)?
     {
-        let version = app_group_version(app_data_root, &group, legacy_layout)?;
+        let version = if app_ledger.is_some() {
+            app_group_version(app_data_root, &group, legacy_layout, app_ledger.as_ref())?
+        } else {
+            // 账本损坏/读失败：本组不能走增量，明确判为不可增量并重建基线。
+            let _ = local_mutations::repair_corrupt_ledger(app_data_root);
+            LocalTargetVersion::ineligible("ledger_corrupt")
+        };
         let key = app_target_key(&group);
         let target = SyncTarget::app_data_group(group);
         no_change_targets.push(no_change_target(
