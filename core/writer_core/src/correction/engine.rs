@@ -893,7 +893,9 @@ impl CorrectionScanner {
                 .segments
                 .iter()
                 .enumerate()
-                .filter(|(_, segment)| segment.dirty)
+                // 未验证段（冷启动/整章重建）也必须进模型；只按 dirty 过滤会
+                // 让初次 Pending 扫描永远找不到工作。
+                .filter(|(_, segment)| segment.dirty || segment.checked.is_none())
                 .map(|(index, _)| index)
                 .collect(),
             CorrectionCheckRequest::All => guard
