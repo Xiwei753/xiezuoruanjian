@@ -2262,6 +2262,44 @@ QtObject {
                 }
                 continue;
             }
+            if (status === "superseded") {
+                // Issue #1062 1.1：同一会话更新的快照接替了本请求，正文与
+                // 证明由接替者的回执落盘。把等待方续接到接替者；接替者已
+                // 被消费时用显式失败让调用方重试，不能假装成功。
+                var supersededBy = Number(result.supersededBy || 0);
+                var supersededKey = String(requestId);
+                var supersededCallback = chapterSaveContinuations[supersededKey];
+                delete chapterSaveContinuations[supersededKey];
+                takePendingChapterSave(requestId);
+                applied += 1;
+                logWriterInfo("editor_save_superseded",
+                    "requestId=" + requestId + ", by=" + supersededBy
+                    + ", reason=" + expected.reason);
+                if (typeof supersededCallback === "function") {
+                    var successorKey = String(supersededBy);
+                    if (supersededBy > 0 && pendingChapterSaves[supersededBy]) {
+                        var successorCallback = chapterSaveContinuations[successorKey];
+                        if (typeof successorCallback === "function") {
+                            chapterSaveContinuations[successorKey] = (function(first, second) {
+                                return function(value) { first(value); second(value); };
+                            })(successorCallback, supersededCallback);
+                        } else {
+                            chapterSaveContinuations[successorKey] = supersededCallback;
+                        }
+                    } else {
+                        var supersededResult = {
+                            "status": "error", "success": false, "terminal": true,
+                            "timedOut": false, "errorCode": "SAVE_SUPERSEDED",
+                            "requestId": requestId, "supersededBy": supersededBy
+                        };
+                        var invokeSuperseded = (function(cb, value) {
+                            return function() { cb(value); };
+                        })(supersededCallback, supersededResult);
+                        Qt.callLater(invokeSuperseded);
+                    }
+                }
+                continue;
+            }
             takePendingChapterSave(requestId);
             applied += 1;
             applyChapterSaveResult(requestId, expected, result);

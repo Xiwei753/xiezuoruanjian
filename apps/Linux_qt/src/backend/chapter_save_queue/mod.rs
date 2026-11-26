@@ -175,6 +175,11 @@ pub(crate) enum ChapterSaveOutcome {
     Pending,
     Ok(ChapterSaveReceiptDto),
     Error(ChapterSaveError),
+    /// 同一会话里更新的快照已经入队：本请求不再执行，等待方续接到
+    /// `by`（Issue #1062 1.1：合并同一会话尚未执行的保存快照）。
+    Superseded {
+        by: u32,
+    },
 }
 
 /// 结果表里的一条记录。正文用 Arc<str> 保存，轮询 pending 不会复制整章正文。
@@ -186,6 +191,8 @@ struct ChapterSaveEntry {
     conflict_draft_path: String,
     terminal: bool,
     delivered: bool,
+    /// worker 是否已经开始执行；已开始的请求不能再用新快照合并。
+    started: bool,
 }
 
 /// GUI 线程读到的结果视图。
@@ -258,6 +265,38 @@ static CHAPTER_SAVE_RESULTS: OnceLock<(Mutex<ChapterSaveStore>, Condvar)> = Once
 static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 static CHAPTER_SAVE_WORKER: OnceLock<mpsc::Sender<ChapterSaveJob>> = OnceLock::new();
 
+/// 同一（项目, 卷, 章节, 会话）最近一次入队的保存 id。
+static LATEST_PENDING_SAVES: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
+/// 已被更新快照取代、尚未执行的保存：旧 id -> 接替者 id。
+static SUPERSEDED_SAVES: OnceLock<Mutex<HashMap<u32, u32>>> = OnceLock::new();
+
+fn latest_pending_saves() -> &'static Mutex<HashMap<String, u32>> {
+    LATEST_PENDING_SAVES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn superseded_saves() -> &'static Mutex<HashMap<u32, u32>> {
+    SUPERSEDED_SAVES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 请求是否已被 worker 取走执行（或已终态）。
+fn entry_started(request_id: u32) -> bool {
+    let (mutex, _) = results();
+    let Ok(store) = mutex.lock() else {
+        return true;
+    };
+    store
+        .entries
+        .get(&request_id)
+        .is_some_and(|entry| entry.started || entry.terminal)
+}
+
+fn take_superseded(request_id: u32) -> Option<u32> {
+    superseded_saves()
+        .lock()
+        .ok()
+        .and_then(|mut map| map.remove(&request_id))
+}
+
 fn results() -> &'static (Mutex<ChapterSaveStore>, Condvar) {
     CHAPTER_SAVE_RESULTS.get_or_init(|| (Mutex::new(ChapterSaveStore::default()), Condvar::new()))
 }
@@ -309,6 +348,7 @@ fn register_entry(identity: ChapterSaveIdentity, content: Arc<str>) {
             conflict_draft_path: String::new(),
             terminal: false,
             delivered: false,
+            started: false,
         },
     );
 }
@@ -334,6 +374,9 @@ pub(crate) fn complete_ok(request_id: u32, receipt: ChapterSaveReceiptDto, chain
         entry.chained = chained;
         entry.terminal = true;
     }
+    if let Ok(mut superseded) = superseded_saves().lock() {
+        superseded.remove(&request_id);
+    }
     condvar.notify_all();
 }
 
@@ -352,6 +395,39 @@ pub(crate) fn complete_error(
         entry.chained = chained;
         entry.conflict_draft_path = conflict_draft_path;
         entry.terminal = true;
+    }
+    if let Ok(mut superseded) = superseded_saves().lock() {
+        superseded.remove(&request_id);
+    }
+    condvar.notify_all();
+}
+
+/// 标记请求已被 worker 取走：此后入队的新快照不能再合并它。
+fn mark_entry_started(request_id: u32) {
+    let (mutex, _) = results();
+    let Ok(mut store) = mutex.lock() else {
+        return;
+    };
+    if let Some(entry) = store.entries.get_mut(&request_id) {
+        entry.started = true;
+    }
+}
+
+/// 被更新快照取代的请求：立刻终态，不再写盘；等待方由 QML 续接到 `by`。
+///
+/// 在 `enqueue` 里同步调用（worker 还没轮到它），worker 随后只会丢弃该任务。
+fn complete_superseded(request_id: u32, superseded_by: u32) {
+    let (mutex, condvar) = results();
+    let mut store = mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(entry) = store.entries.get_mut(&request_id) {
+        entry.outcome = ChapterSaveOutcome::Superseded { by: superseded_by };
+        entry.terminal = true;
+        entry.content = Arc::from("");
+    }
+    if let Ok(mut superseded) = superseded_saves().lock() {
+        superseded.remove(&request_id);
     }
     condvar.notify_all();
 }
@@ -459,7 +535,29 @@ fn worker_sender() -> &'static mpsc::Sender<ChapterSaveJob> {
 /// UI 线程调用：登记 pending 结果并按入队顺序交给唯一 worker，立刻返回。
 pub(crate) fn enqueue(request: ChapterSaveRequest) -> Result<(), String> {
     let request_id = request.identity.request_id;
+    let session_key = format!(
+        "{}\x1f{}\x1f{}\x1f{}",
+        request.identity.project_id,
+        request.identity.volume_id,
+        request.identity.chapter_id,
+        request.identity.session_id,
+    );
     register_entry(request.identity.clone(), Arc::clone(&request.content));
+    // Issue #1062 1.1：合并同一会话尚未执行的保存快照。编辑事实已经随
+    // 每次编辑进入 actor 草稿，替换正文快照不会丢证明事件序列；被取代的
+    // 请求立刻返回 Superseded，等待方续接到接替者。
+    if let Ok(mut latest) = latest_pending_saves().lock() {
+        if let Some(previous) = latest.insert(session_key, request_id) {
+            if previous != request_id && !entry_started(previous) {
+                if let Ok(mut superseded) = superseded_saves().lock() {
+                    superseded.insert(previous, request_id);
+                }
+                // 立即给出终态：被取代的请求不会执行，QML 无需等 worker
+                // 走到它才把等待方续接到接替者。
+                complete_superseded(previous, request_id);
+            }
+        }
+    }
     worker_sender()
         .send(ChapterSaveJob::Save(request))
         .map_err(|_| format!("chapter save queue worker has exited (request_id={request_id})"))
@@ -602,6 +700,11 @@ fn chapter_save_worker_loop(receiver: mpsc::Receiver<ChapterSaveJob>) {
 
 fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request: ChapterSaveRequest) {
     let request_id = request.identity.request_id;
+    if take_superseded(request_id).is_some() {
+        // 入队时已经被更新快照取代并给出过 Superseded 终态，这里只丢弃任务。
+        return;
+    }
+    mark_entry_started(request_id);
     let chain_key = chapter_chain_key(&request);
     let (effective_expected, effective_base, chained) = {
         let chain = state.chains.get(&chain_key);

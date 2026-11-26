@@ -812,6 +812,14 @@ impl EditorBackend {
                 }
                 value
             }
+            chapter_save_queue::ChapterSaveOutcome::Superseded { by } => serde_json::json!({
+                // 同一会话更新的快照已经接替本请求：不写盘、不推进 base，
+                // QML 把等待方续接到接替者的回执上。
+                "success": false,
+                "status": "superseded",
+                "supersededBy": by,
+                "changedEntities": []
+            }),
             chapter_save_queue::ChapterSaveOutcome::Error(error) => {
                 if apply_side_effects {
                     let _ = self.with_app_mut(|app| {
