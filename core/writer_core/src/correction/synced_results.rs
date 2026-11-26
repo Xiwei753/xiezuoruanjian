@@ -30,6 +30,8 @@ const RECORD_IDENTITY_PREFIX: &str = "correction-synced-v1";
 const SCANNER_STABLE_PREFIX: &str = "correction-scanner-sync-v1";
 /// 分段/上下文窗口算法的版本。算法变化会让旧记录不再复用，必须显式改版本。
 const SEGMENT_IDENTITY_VERSION: &str = "canonical-segment-v2";
+/// 校对引擎/规则/词典构建算法的版本；与分析结果语义绑定。
+const ENGINE_IDENTITY_VERSION: &str = "correction-engine-v11";
 
 /// 本次扫描实际构建/使用了模型引擎。
 pub(crate) const MODE_MODEL: &str = "model";
@@ -86,8 +88,8 @@ pub(crate) fn scanner_stable_identity(
     rules_identity: &str,
 ) -> String {
     let material = format!(
-        "{SCANNER_STABLE_PREFIX}|{SEGMENT_IDENTITY_VERSION}|{model_identity}|\
-         {lexicon_identity}|{rules_identity}"
+        "{SCANNER_STABLE_PREFIX}|{SEGMENT_IDENTITY_VERSION}|{ENGINE_IDENTITY_VERSION}|\
+         {model_identity}|{lexicon_identity}|{rules_identity}"
     );
     sha256_hex(material.as_bytes())
 }

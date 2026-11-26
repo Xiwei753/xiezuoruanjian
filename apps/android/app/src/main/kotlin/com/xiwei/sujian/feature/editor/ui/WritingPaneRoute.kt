@@ -739,7 +739,7 @@ private fun CorrectionProgressLines(state: EditorCorrectionState) {
                 .toInt()
                 .coerceIn(0, 100)
         LinearProgressIndicator(
-            progress = { state.checkedByteCount.toFloat() / state.totalByteCount.toFloat() },
+            progress = checkedPercent / 100f,
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
         )
         Text(
