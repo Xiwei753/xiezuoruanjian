@@ -1163,6 +1163,9 @@ interface WriterAppService {
     ChapterSaveReceiptDto clear_chapter_content_versioned(string project_id, string volume_id, string chapter_id, ChapterVersionDto? expected_version, string? base_content);
 
     [Throws=WriterError]
+    ChapterSaveReceiptDto clear_chapter_content_versioned_with_batch(string project_id, string volume_id, string chapter_id, ChapterVersionDto? expected_version, string? base_content, u64 proof_snapshot_revision, sequence<string> proof_event_ids);
+
+    [Throws=WriterError]
     boolean update_chapter_note(string project_id, string volume_id, string chapter_id, string note);
 
     [Throws=WriterError]

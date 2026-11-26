@@ -656,6 +656,33 @@ impl WriterCoreApi {
         .map(|(dto, _)| dto)
     }
 
+    /// 清空正文并携带与保存相同的显式证明批次。
+    pub fn clear_chapter_content_versioned_with_batch(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        expected_version: Option<ChapterVersionDto>,
+        base_content: Option<String>,
+        proof_snapshot_revision: u64,
+        proof_event_ids: &[String],
+    ) -> ApiResult<ChapterSaveReceiptDto> {
+        self.save_chapter_content_internal(
+            project_id,
+            volume_id,
+            chapter_id,
+            "",
+            true,
+            true,
+            expected_version,
+            base_content.as_deref(),
+            &[],
+            Some(proof_snapshot_revision),
+            proof_event_ids,
+        )
+        .map(|(dto, _)| dto)
+    }
+
     /// 保存正文并在同一 journal 决议中登记编辑事件投影。
     ///
     /// 返回的 receipt 带 `transaction_id` / `pending_projections`；调用方逐条

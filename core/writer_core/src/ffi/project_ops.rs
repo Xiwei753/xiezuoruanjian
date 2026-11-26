@@ -411,42 +411,51 @@ pub unsafe extern "C" fn writer_core_save_chapter_versioned_json(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    if !clear {
-        if let Some(snapshot_revision) = proof_snapshot_revision {
-            let Ok(expected_revision) = u64::try_from(revision) else {
-                return err_json("INVALID_ARGUMENT", "expected_revision is negative");
-            };
-            let expected = crate::api::ChapterVersionDto {
-                object_generation: generation.clone(),
-                revision: expected_revision,
-                content_sha256: sha256.clone(),
-            };
-            let base = (!base_content.is_empty()).then_some(base_content.clone());
-            let project = project_id.clone();
-            let volume = volume_id.clone();
-            let chapter = chapter_id.clone();
-            let content_value = content.clone();
-            let event_ids = proof_event_ids;
-            return match with_app_service(move |svc| {
-                let receipt = svc
-                    .save_chapter_content_versioned_with_batch(
-                        project,
-                        volume,
-                        chapter,
-                        content_value,
-                        Some(expected),
-                        base,
-                        snapshot_revision,
-                        event_ids,
-                        allow_empty,
-                    )
-                    .map_err(|error| format!("{}", error))?;
-                Ok(receipt)
-            }) {
-                Ok(receipt) => ok_json(&receipt),
-                Err(error) => err_json("CHAPTER_SAVE_FAILED", &error),
-            };
-        }
+    if let Some(snapshot_revision) = proof_snapshot_revision {
+        let Ok(expected_revision) = u64::try_from(revision) else {
+            return err_json("INVALID_ARGUMENT", "expected_revision is negative");
+        };
+        let expected = crate::api::ChapterVersionDto {
+            object_generation: generation.clone(),
+            revision: expected_revision,
+            content_sha256: sha256.clone(),
+        };
+        let base = (!base_content.is_empty()).then_some(base_content.clone());
+        let project = project_id.clone();
+        let volume = volume_id.clone();
+        let chapter = chapter_id.clone();
+        let content_value = content.clone();
+        let event_ids = proof_event_ids;
+        return match with_app_service(move |svc| {
+            let receipt = if clear {
+                svc.clear_chapter_content_versioned_with_batch(
+                    project,
+                    volume,
+                    chapter,
+                    Some(expected),
+                    base,
+                    snapshot_revision,
+                    event_ids,
+                )
+            } else {
+                svc.save_chapter_content_versioned_with_batch(
+                    project,
+                    volume,
+                    chapter,
+                    content_value,
+                    Some(expected),
+                    base,
+                    snapshot_revision,
+                    event_ids,
+                    allow_empty,
+                )
+            }
+            .map_err(|error| format!("{}", error))?;
+            Ok(receipt)
+        }) {
+            Ok(receipt) => ok_json(&receipt),
+            Err(error) => err_json("CHAPTER_SAVE_FAILED", &error),
+        };
     }
     let c_project = match std::ffi::CString::new(project_id) {
         Ok(value) => value,

@@ -482,14 +482,51 @@ impl super::WriterCore {
         base_content: Option<&str>,
         workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     ) -> Result<ChapterSaveReceipt> {
-        let project_root = self.project_root(project_id);
-        self.retry_pending_chapter_proof_projections(&project_root);
-        let proof_events = select_pending_editor_proof(
-            self.pending_editor_proof_for(project_id, volume_id, chapter_id),
-            "",
+        self.clear_chapter_content_verified_with_version_and_batch(
+            project_id,
+            volume_id,
+            chapter_id,
+            expected_version,
+            base_content,
+            workspace_lock,
             None,
             &[],
-            None,
+        )
+    }
+
+    /// 清空正文并携带与保存相同的显式证明批次。
+    pub fn clear_chapter_content_verified_with_version_and_batch(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        expected_version: Option<crate::chapter::ChapterVersion>,
+        base_content: Option<&str>,
+        workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
+        proof_snapshot_revision: Option<u64>,
+        proof_event_ids: &[String],
+    ) -> Result<ChapterSaveReceipt> {
+        let project_root = self.project_root(project_id);
+        self.retry_pending_chapter_proof_projections(&project_root);
+        let pending_proof =
+            self.pending_editor_proof_for(project_id, volume_id, chapter_id);
+        if proof_snapshot_revision.is_some() && proof_event_ids.is_empty() {
+            if !pending_proof.is_empty() {
+                return Err(crate::error::Error::ProofBatchIncomplete {
+                    chapter_id: chapter_id.to_string(),
+                    missing: pending_proof
+                        .iter()
+                        .map(|event| event.event_id().to_string())
+                        .collect(),
+                });
+            }
+        }
+        let proof_events = select_pending_editor_proof(
+            pending_proof,
+            "",
+            proof_snapshot_revision,
+            proof_event_ids,
+            base_content,
         );
         let projection_ids: Vec<String> = proof_events
             .iter()
@@ -510,7 +547,7 @@ impl super::WriterCore {
                 &self.app_data_root,
                 workspace_lock,
                 &proof_events,
-                None,
+                proof_snapshot_revision,
             )?;
         if !proof_events.is_empty() && !receipt.transaction_id.is_empty() {
             let completed: std::collections::HashSet<String> = proof_events
