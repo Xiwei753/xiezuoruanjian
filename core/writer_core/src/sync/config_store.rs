@@ -691,6 +691,9 @@ fn filter_state_for_app_group(mut state: SyncState, group: &AppDataGroup) -> Syn
         .pending_take_remote
         .retain(|path| group.owns_path(path));
     state
+        .confirmed_mutation_seq
+        .retain(|path, _| group.owns_path(path));
+    state
 }
 
 impl crate::sync::SyncService {

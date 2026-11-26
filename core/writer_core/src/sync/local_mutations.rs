@@ -45,6 +45,9 @@ pub(crate) struct LocalMutationRecord {
     pub device_id: String,
     #[serde(default)]
     pub object_revision: Option<u64>,
+    /// 该事实在账本内的单调序号；推送成功后按序号确认并压缩历史前缀。
+    #[serde(default)]
+    pub seq: u64,
 }
 
 fn schema_version() -> u32 {
@@ -65,32 +68,94 @@ pub(crate) fn ledger_path(sync_root: &Path) -> PathBuf {
     sync_root.join(LOCAL_MUTATIONS_PATH)
 }
 
-/// 读取账本最新事实。损坏行只跳过，不阻断同步；账本本身不是业务正文。
-pub(crate) fn load_latest(
+/// 按行读取账本事实。
+///
+/// 账本现在是增量调度的唯一依据：损坏行不能再被静默跳过，否则那条业务事实
+/// 会永久漏同步。损坏由 [`repair_corrupt_ledger`] 显式归档并重建基线，
+/// 这里只负责如实报错（Issue #1065 复审 #4）。
+pub(crate) fn load_records(
     sync_root: &Path,
-) -> crate::error::Result<HashMap<String, LocalMutationRecord>> {
+) -> crate::error::Result<Vec<LocalMutationRecord>> {
     let path = ledger_path(sync_root);
     let content = match fs::read_to_string(&path) {
         Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error.into()),
     };
-    let mut records = HashMap::new();
-    for line in content.lines() {
+    let mut records = Vec::new();
+    for (line_index, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        match serde_json::from_str::<LocalMutationRecord>(line) {
-            Ok(record) => {
-                records.insert(record.path.clone(), record);
-            }
+        let record = serde_json::from_str::<LocalMutationRecord>(line).map_err(|error| {
+            crate::Error::Other(format!(
+                "local mutation ledger corrupt at line {}: {error}",
+                line_index + 1
+            ))
+        })?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+/// 账本是否已损坏（只读检查，不修复）。
+///
+/// 同步调度用它把 target 判为 `ledger_corrupt`：这一轮必须完整核对，
+/// 由真实磁盘内容重建基线，不能在空索引上宣布无变化。
+pub(crate) fn ledger_is_corrupt(sync_root: &Path) -> bool {
+    load_records(sync_root).is_err()
+}
+
+/// 账本写出中断/被外部改写后的恢复：归档损坏文件，按空账本重建。
+///
+/// 账本只是调度索引，不是业务事实来源：归档后 target 会走一次完整核对
+/// （见 `version_snapshot` 的 `ledger_corrupt` 不 eligible），由真实磁盘内容
+/// 建立新基线。返回是否发生了重建。
+pub(crate) fn repair_corrupt_ledger(sync_root: &Path) -> crate::error::Result<bool> {
+    if load_records(sync_root).is_ok() {
+        return Ok(false);
+    }
+    let path = ledger_path(sync_root);
+    if path.exists() {
+        let archived = path.with_extension(format!(
+            "corrupt-{}.jsonl",
+            chrono::Utc::now().timestamp()
+        ));
+        match fs::rename(&path, &archived) {
+            Ok(()) => log::warn!(
+                "[sync] local mutation ledger corrupt; archived to {} and rebuilt",
+                archived.display()
+            ),
             Err(error) => {
-                log::warn!("[sync] skip malformed local mutation fact: {error}");
+                log::warn!("[sync] cannot archive corrupt local mutation ledger: {error}");
+                fs::remove_file(&path)?;
             }
         }
     }
-    Ok(records)
+    Ok(true)
+}
+
+/// 读取账本最新事实（按 path 取最后一条）。
+///
+/// 调用方包含 manifest 投影等必须能继续工作的路径：损坏行先归档重建再按空
+/// 索引继续，具体 target 的"必须完整核对"由 `version_snapshot` 负责标记。
+pub(crate) fn load_latest(
+    sync_root: &Path,
+) -> crate::error::Result<HashMap<String, LocalMutationRecord>> {
+    let records = match load_records(sync_root) {
+        Ok(records) => records,
+        Err(error) => {
+            log::warn!("[sync] local mutation ledger corrupt; rebuilding: {error}");
+            repair_corrupt_ledger(sync_root)?;
+            Vec::new()
+        }
+    };
+    let mut latest = HashMap::new();
+    for record in records {
+        latest.insert(record.path.clone(), record);
+    }
+    Ok(latest)
 }
 
 pub(crate) fn append_batch(
@@ -100,21 +165,33 @@ pub(crate) fn append_batch(
     if records.is_empty() {
         return Ok(());
     }
-    // 同一对象重复写入同一内容不产生新的待同步事实。账本在成功发布后才压缩，
+    // 账本损坏时先归档重建：写入路径不能因为历史损坏而拒绝记录新的业务事实。
+    repair_corrupt_ledger(sync_root)?;
+    let existing = load_records(sync_root)?;
+    let mut next_seq = existing.iter().map(|record| record.seq).max().unwrap_or(0) + 1;
+    let mut latest: HashMap<String, LocalMutationRecord> = HashMap::new();
+    for record in existing {
+        latest.insert(record.path.clone(), record);
+    }
+    // 同一对象重复写入同一内容不产生新的待同步事实。账本在发布确认后才压缩，
     // 因此这里只需和当前最后一条事实比较：op/内容哈希/对象版本都没变就不是
     // 业务变更，不追加记录，也不产生新的待同步代次。
-    let latest = load_latest(sync_root)?;
-    let fresh: Vec<&LocalMutationRecord> = records
-        .iter()
-        .filter(|record| match latest.get(&record.path) {
-            Some(previous) => {
-                previous.op != record.op
-                    || previous.content_hash != record.content_hash
-                    || previous.object_revision != record.object_revision
-            }
-            None => true,
-        })
-        .collect();
+    let mut fresh: Vec<LocalMutationRecord> = Vec::new();
+    for record in records {
+        let unchanged = latest.get(&record.path).is_some_and(|previous| {
+            previous.op == record.op
+                && previous.content_hash == record.content_hash
+                && previous.object_revision == record.object_revision
+        });
+        if unchanged {
+            continue;
+        }
+        let mut record = record.clone();
+        record.seq = next_seq;
+        next_seq += 1;
+        latest.insert(record.path.clone(), record.clone());
+        fresh.push(record);
+    }
     if fresh.is_empty() {
         return Ok(());
     }
@@ -124,7 +201,7 @@ pub(crate) fn append_batch(
     }
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     for record in fresh {
-        writeln!(file, "{}", serde_json::to_string(record)?)?;
+        writeln!(file, "{}", serde_json::to_string(&record)?)?;
     }
     file.sync_data()?;
     Ok(())
@@ -140,16 +217,19 @@ pub(crate) fn pending_records(
     scope: SyncScope,
     app_group: Option<&AppDataGroup>,
 ) -> crate::error::Result<BTreeMap<String, LocalMutationRecord>> {
-    // 已被共同基线确认的事实不算"待同步"：账本按组压缩，未压缩的旧事实
-    // 不能把 target 永久标脏（否则每次空闲调度都会重跑该 target 的合并）。
-    let known_files = match app_group {
+    // 账本损坏时先归档重建：重建后由 version_snapshot 把该 target 判为
+    // ledger_corrupt 并做一次完整核对，不能在"空索引"上宣布无变化。
+    repair_corrupt_ledger(sync_root)?;
+    // 已确认随远端提交发布的事实不算"待同步"。确认只看推送回执写入的序号，
+    // 不用 known_files 是否包含该路径推断删除（复审 #3）。
+    let confirmed_seq = match app_group {
         Some(group) => {
             crate::sync::SyncService::load_sync_state_read_only_for_group(sync_root, group, None)
-                .map(|state| state.known_files)
+                .map(|state| state.confirmed_mutation_seq)
                 .unwrap_or_default()
         }
         None => crate::sync::SyncService::load_sync_state_read_only(sync_root, None)
-            .map(|state| state.known_files)
+            .map(|state| state.confirmed_mutation_seq)
             .unwrap_or_default(),
     };
     let mut pending = BTreeMap::new();
@@ -162,14 +242,7 @@ pub(crate) fn pending_records(
                 continue;
             }
         }
-        let confirmed = if record.is_upsert() {
-            known_files.get(&path) == Some(&record.content_hash)
-        } else if record.is_delete() {
-            !known_files.contains_key(&path)
-        } else {
-            false
-        };
-        if confirmed {
+        if record.seq <= confirmed_seq.get(&path).copied().unwrap_or(0) {
             continue;
         }
         pending.insert(path, record);
@@ -200,60 +273,91 @@ pub(crate) fn is_ledger_path(rel_path: &str) -> bool {
     rel_path.replace('\\', "/") == LOCAL_MUTATIONS_PATH
 }
 
-/// 同步成功提交后，删除已被共同基线确认的账本事实。
+/// 推送回执里的一条已发布对象事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PublishedMutation {
+    pub path: String,
+    /// `upsert` / `delete`。
+    pub op: String,
+    pub content_hash: String,
+    /// 构建发布批次时读取的那条账本事实的序号。
+    pub seq: u64,
+}
+
+/// 远端提交成功后按回执确认 mutation：推进 known_files、记录确认序号、压缩历史前缀。
 ///
-/// 只压缩指定分组：其他分组的事实仍可能尚未发布。upsert 只有在组级
-/// `known_files` 已等于该事实的 content_hash 时才算确认；delete 只有在该路径
-/// 已从组级 known_files 消失时才算确认。
-pub(crate) fn compact_confirmed(
+/// `published` 必须来自本轮真正成功的远端提交；确认只覆盖 seq 及其之前的历史，
+/// 同步期间新写入的并发事实（更大的 seq）保留为下一轮的 outbox。
+pub(crate) fn mark_confirmed(
     sync_root: &Path,
-    group: &AppDataGroup,
-    known_files: &HashMap<String, String>,
+    target: &crate::sync::types::SyncTarget,
+    published: &[PublishedMutation],
 ) -> crate::error::Result<()> {
-    let path = ledger_path(sync_root);
-    let content = match fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-    let mut kept = Vec::new();
+    if published.is_empty() {
+        return Ok(());
+    }
+    let mut state = crate::sync::SyncService::load_sync_state_for_target(sync_root, target)?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    for entry in published {
+        if entry.op == "delete" {
+            state.known_files.remove(&entry.path);
+            state.known_files_updated_at.remove(&entry.path);
+            state
+                .tombstones
+                .retain(|tombstone| tombstone.original_path != entry.path);
+        } else {
+            state
+                .known_files
+                .insert(entry.path.clone(), entry.content_hash.clone());
+            state
+                .known_files_updated_at
+                .insert(entry.path.clone(), now_ms);
+        }
+        let current = state
+            .confirmed_mutation_seq
+            .get(&entry.path)
+            .copied()
+            .unwrap_or(0);
+        if entry.seq > current {
+            state.confirmed_mutation_seq.insert(entry.path.clone(), entry.seq);
+        }
+    }
+    crate::sync::SyncService::save_sync_state_for_target(sync_root, target, &state)?;
+    compact_confirmed_prefix(sync_root, published)
+}
+
+/// 按已确认序号压缩账本历史前缀。
+///
+/// 只逐条删除"hash 相同"的行会让同一路径上更早的旧事实复活（复审 #3）：
+/// 确认是单调的序号事实，因此删掉该路径上 seq <= 已确认序号的整段历史。
+fn compact_confirmed_prefix(
+    sync_root: &Path,
+    published: &[PublishedMutation],
+) -> crate::error::Result<()> {
+    let confirmed: HashMap<&str, u64> = published
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry.seq))
+        .collect();
+    let records = load_records(sync_root)?;
+    let mut kept: Vec<LocalMutationRecord> = Vec::with_capacity(records.len());
     let mut changed = false;
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+    for record in records {
+        let confirmed_seq = confirmed.get(record.path.as_str()).copied().unwrap_or(0);
+        if record.seq != 0 && record.seq <= confirmed_seq {
+            changed = true;
             continue;
         }
-        match serde_json::from_str::<LocalMutationRecord>(line) {
-            Ok(record) => {
-                let same_group = crate::sync::config_store::app_data_group_for_path(&record.path)
-                    .as_ref()
-                    == Some(group);
-                let confirmed = same_group
-                    && if record.is_upsert() {
-                        known_files.get(&record.path) == Some(&record.content_hash)
-                    } else if record.is_delete() {
-                        !known_files.contains_key(&record.path)
-                    } else {
-                        false
-                    };
-                if confirmed {
-                    changed = true;
-                } else {
-                    kept.push(line.to_string());
-                }
-            }
-            Err(_) => kept.push(line.to_string()),
-        }
+        kept.push(record);
     }
     if !changed {
         return Ok(());
     }
-    let mut output = kept.join("\n");
-    if !output.is_empty() {
+    let mut output = String::new();
+    for record in &kept {
+        output.push_str(&serde_json::to_string(record)?);
         output.push('\n');
     }
-    crate::storage::atomic_write_string(&path, &output)?;
-    Ok(())
+    crate::storage::atomic_write_string(&ledger_path(sync_root), &output)
 }
 
 /// 从同步对象相对路径解析稳定对象身份。

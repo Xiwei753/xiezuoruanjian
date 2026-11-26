@@ -1171,6 +1171,12 @@ pub struct SyncState {
     /// download these paths before any three-way comparison, then clear the set.
     #[serde(default)]
     pub pending_take_remote: std::collections::HashSet<String>,
+    /// 已随远端提交发布并被回执确认的 mutation 序号（path → seq）。
+    ///
+    /// 账本只保留序号更大的事实；删除是否确认由推送回执决定，
+    /// 不再用"known_files 里没有该路径"推断（Issue #1065 复审 #3）。
+    #[serde(default)]
+    pub confirmed_mutation_seq: std::collections::BTreeMap<String, u64>,
 }
 
 impl Default for SyncState {
@@ -1186,6 +1192,7 @@ impl Default for SyncState {
             known_files_updated_at: std::collections::HashMap::new(),
             conflicted_files: std::collections::HashSet::new(),
             pending_take_remote: std::collections::HashSet::new(),
+            confirmed_mutation_seq: std::collections::BTreeMap::new(),
         }
     }
 }

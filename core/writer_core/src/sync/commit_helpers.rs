@@ -1284,7 +1284,6 @@ fn apply_commit_plan_with_optional_merge(
     content_actions: &[crate::sync::staging::CommitAction],
     backup_mode: bool,
     proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
-    deferred_upload_paths: &[String],
     mut chapter_receipts: Option<&mut Vec<crate::chapter::ChapterSyncCommitReceipt>>,
 ) -> std::result::Result<
     (
@@ -1344,7 +1343,6 @@ fn apply_commit_plan_with_optional_merge(
             content_actions.append(&mut rebased_anchor_actions);
         }
         let mut engine_state_actions = plan.engine_state_actions.clone();
-        let mut committed_state: Option<crate::sync::types::SyncState> = None;
 
         let result = if plan.needs_sync_state_merge {
             let base_root = run.base_root();
@@ -1377,12 +1375,20 @@ fn apply_commit_plan_with_optional_merge(
                     &mut merged_state,
                 )?;
             }
-            // 本轮要上传、但尚未确认远端发布的本地对象版本，不能推进
-            // known_files。known_files 是"远端已确认基线"，不是"本地磁盘内容"：
-            // 提前推进会让下一轮把未发布的本地内容当成已同步，要么永不重推，
-            // 要么被远端旧内容覆盖。账本事实保持未确认，下一轮继续作为 outbox。
+            // 尚未被远端发布确认的本地事实，不能推进 known_files。
+            // known_files 是"远端已确认基线"，不是"本地磁盘内容"：提前推进会让
+            // 下一轮把未发布的本地内容当成已同步，要么永不重推，要么被远端旧内容
+            // 覆盖。覆盖范围是账本里该 target 的全部未确认事实（上传、删除、墓碑），
+            // 不只是本次 uploaded_files（Issue #1065 复审 #3）。
             // 基线取本轮 base_root 的 state（同步开始前已确认的远端版本）。
-            if !deferred_upload_paths.is_empty() {
+            let scope = if app_group.is_some() {
+                crate::sync::types::SyncScope::App
+            } else {
+                crate::sync::types::SyncScope::Project
+            };
+            let deferred = crate::sync::local_mutations::pending_records(live_root, scope, app_group)
+                .unwrap_or_default();
+            if !deferred.is_empty() {
                 let base_state = match app_group {
                     Some(group) => {
                         crate::sync::SyncService::load_sync_state_read_only_for_group(
@@ -1393,7 +1399,7 @@ fn apply_commit_plan_with_optional_merge(
                 };
                 match base_state {
                     Ok(base_state) => {
-                        for path in deferred_upload_paths {
+                        for path in deferred.keys() {
                             match base_state.known_files.get(path) {
                                 Some(hash) => {
                                     merged_state.known_files.insert(path.clone(), hash.clone());
@@ -1407,12 +1413,11 @@ fn apply_commit_plan_with_optional_merge(
                     }
                     Err(error) => {
                         log::warn!(
-                            "[sync] cannot load base state for deferred uploads;                              keeping merged known_files: {error}"
+                            "[sync] cannot load base state for unconfirmed mutations; keeping merged known_files: {error}"
                         );
                     }
                 }
             }
-            committed_state = Some(merged_state.clone());
             apply_commit_plan_with_sync_state_merge_for_group(
                 live_root,
                 &content_actions,
@@ -1433,26 +1438,8 @@ fn apply_commit_plan_with_optional_merge(
             )
         };
 
-        if result.is_ok() {
-            if let Some(group) = run.app_group() {
-                let state = match &committed_state {
-                    Some(state) => Some(state.clone()),
-                    None => crate::sync::SyncService::load_sync_state_read_only_for_group(
-                        live_root, group, None,
-                    )
-                    .ok(),
-                };
-                if let Some(state) = state {
-                    if let Err(error) = crate::sync::local_mutations::compact_confirmed(
-                        live_root,
-                        group,
-                        &state.known_files,
-                    ) {
-                        log::warn!("local mutation ledger compaction failed: {error}");
-                    }
-                }
-            }
-        }
+        // 账本不再在 commit 阶段压缩：确认改为"远端提交回执 + 序号"驱动
+        // （见 local_mutations::mark_confirmed），避免用本地 known_files 冒充已发布。
         if result.is_ok()
             && matches!(
                 run.app_group(),
@@ -1923,7 +1910,6 @@ pub(crate) fn apply_staging_commits_for_targets(
                     &plan.content_actions,
                     false,
                     &[],
-                    &[],
                     None,
                 ) {
                     Ok((tx, _)) => tx,
@@ -2034,7 +2020,6 @@ pub(crate) fn apply_staging_commits_for_targets(
                     &plan,
                     &safe_content_actions,
                     false,
-                    &[],
                     &[],
                     None,
                 ) {
@@ -2364,7 +2349,6 @@ pub(crate) fn commit_single_target_staging(
                 &plan.content_actions,
                 false,
                 &proof_recovery_records,
-                &target.result.uploaded_files,
                 Some(&mut *chapter_receipts),
             ) {
                 Ok((tx, _)) => tx,
@@ -2489,7 +2473,6 @@ pub(crate) fn commit_single_target_staging(
                 &safe_content_actions,
                 false,
                 &proof_recovery_records,
-                &target.result.uploaded_files,
                 None,
             ) {
                 Ok((tx, _)) => tx,

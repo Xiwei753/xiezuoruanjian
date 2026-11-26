@@ -651,6 +651,8 @@ fn make_mutation_record(
         deleted_at_ms: (op == "delete").then_some(now_ms),
         device_id: device_id.to_string(),
         object_revision,
+        // 序号由账本在追加时统一分配；这里只是待追加的事实。
+        seq: 0,
     }
 }
 

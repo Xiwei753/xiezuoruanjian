@@ -291,6 +291,9 @@ struct RoundOutcome {
     result: FullSyncResultDto,
     /// 本轮实际创建的远端提交（未发布时为 None）。
     published_revision: Option<String>,
+    /// 本轮远端发布是否成功完成（含"确认无需提交"）。只有成功发布才能确认
+    /// 本地 mutation；失败/跳过时账本事实必须保持未确认（复审 #3）。
+    publish_succeeded: bool,
 }
 
 fn add_fingerprint_field(hasher: &mut Sha256, key: &str, value: &[u8]) {
@@ -332,6 +335,42 @@ fn sync_target_checkpoint_key(target: &crate::sync::full_sync::PlannedTarget) ->
         .project_id
         .as_ref()
         .map(|project_id| format!("project:{project_id}"))
+}
+
+/// 本轮开始前各 target 的未确认 mutation 快照（path → op/hash/seq）。
+///
+/// 推送成功后只按这份快照确认"确实随本轮提交发布"的事实；同步期间新写入的
+/// 更大序号保留为下一轮 outbox（Issue #1065 复审 #3）。
+type PendingMutationMap =
+    std::collections::BTreeMap<String, std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>>;
+
+fn collect_preflight_pending(
+    plan: &crate::sync::full_sync::FullSyncPlan,
+) -> PendingMutationMap {
+    let mut pending = PendingMutationMap::new();
+    for planned in &plan.targets {
+        let Some(key) = sync_target_checkpoint_key(planned) else {
+            continue;
+        };
+        let scope = if planned.target.app_group.is_some() {
+            crate::sync::types::SyncScope::App
+        } else {
+            crate::sync::types::SyncScope::Project
+        };
+        match crate::sync::local_mutations::pending_records(
+            &planned.target_live_root,
+            scope,
+            planned.target.app_group.as_ref(),
+        ) {
+            Ok(records) => {
+                pending.insert(key, records);
+            }
+            Err(error) => {
+                log::warn!("[sync] cannot read pending mutations for plan target: {error}");
+            }
+        }
+    }
+    pending
 }
 
 fn repository_identity(config: &crate::sync::SyncConfig) -> Option<String> {
@@ -1007,6 +1046,12 @@ impl WriterCoreApi {
                 if let Some(succeeded) = succeeded {
                     let mut versions = std::collections::BTreeMap::new();
                     for (key, version) in &snapshot.targets {
+                        // 还有未确认 mutation 的 target 不写入 checkpoint：
+                        // 下一轮必须重新进入计划确认它们，不能靠"指纹相同"跳过
+                        // （Issue #1065 复审 #3）。
+                        if version.pending_objects > 0 {
+                            continue;
+                        }
                         if succeeded.contains(key) {
                             versions.insert(key.clone(), to_checkpoint_version(version));
                         } else if let Some(existing) = next.target_versions.get(key) {
@@ -1018,6 +1063,7 @@ impl WriterCoreApi {
                     next.target_versions = snapshot
                         .targets
                         .iter()
+                        .filter(|(_, version)| version.pending_objects == 0)
                         .map(|(key, version)| (key.clone(), to_checkpoint_version(version)))
                         .collect();
                 }
@@ -1030,6 +1076,11 @@ impl WriterCoreApi {
             }
         } else {
             next.record_failure(now);
+            // 失败不清空已消费的远端版本：这一轮的合并确实基于它，下一轮
+            // 不必重新 fetch 同一 HEAD；未确认的本地事实由账本保留（复审 #3）。
+            if let Some(revision) = consumed_remote_revision {
+                next.remote_revision = revision.to_string();
+            }
             log::info!(
                 "[sync] operation {} failed; next auto retry at {} (consecutive={})",
                 operation_id,
@@ -1039,6 +1090,79 @@ impl WriterCoreApi {
         }
         if let Err(error) = next.save(app_data_root) {
             log::warn!("[sync] failed to persist full-sync checkpoint: {error}");
+        }
+    }
+
+    /// 按推送回执确认本轮实际发布的对象事实（Issue #1065 复审 #3）。
+    ///
+    /// 只确认 preflight 快照里存在、且本轮确实随提交发布的 mutation：推进
+    /// known_files、记录确认序号、按序号压缩账本历史前缀。同步期间新写入的
+    /// 更新事实序号更大，保留到下一轮；失败/跳过的发布不确认任何事实。
+    fn confirm_published_targets(
+        &self,
+        preflight_pending: &PendingMutationMap,
+        targets: &[crate::sync::types::TargetSyncResult],
+    ) {
+        let (app_data_root, projects_root) = {
+            let core = self.core_read();
+            (core.app_data_root.clone(), core.projects_root.clone())
+        };
+        for target in targets {
+            let key = match (&target.group_id, &target.project_id) {
+                (Some(group_id), _) => format!("app:{group_id}"),
+                (None, Some(project_id)) => format!("project:{project_id}"),
+                _ => continue,
+            };
+            let Some(pending) = preflight_pending.get(&key) else {
+                continue;
+            };
+            let (sync_root, sync_target) = match (&target.group_id, &target.project_id) {
+                (Some(group_id), _) => match crate::sync::types::AppDataGroup::from_id(group_id) {
+                    Ok(group) => (
+                        app_data_root.clone(),
+                        crate::sync::types::SyncTarget::app_data_group(group),
+                    ),
+                    Err(_) => continue,
+                },
+                (None, Some(project_id)) => (
+                    projects_root.join(project_id),
+                    crate::sync::types::SyncTarget::project(project_id),
+                ),
+                _ => continue,
+            };
+            let mut published = Vec::new();
+            for path in &target.result.uploaded_files {
+                if let Some(record) = pending.get(path) {
+                    if record.is_upsert() {
+                        published.push(crate::sync::local_mutations::PublishedMutation {
+                            path: path.clone(),
+                            op: "upsert".to_string(),
+                            content_hash: record.content_hash.clone(),
+                            seq: record.seq,
+                        });
+                    }
+                }
+            }
+            for path in &target.result.local_deletes {
+                if let Some(record) = pending.get(path) {
+                    if record.is_delete() {
+                        published.push(crate::sync::local_mutations::PublishedMutation {
+                            path: path.clone(),
+                            op: "delete".to_string(),
+                            content_hash: record.content_hash.clone(),
+                            seq: record.seq,
+                        });
+                    }
+                }
+            }
+            if published.is_empty() {
+                continue;
+            }
+            if let Err(error) =
+                crate::sync::local_mutations::mark_confirmed(&sync_root, &sync_target, &published)
+            {
+                log::warn!("[sync] confirm published mutations failed for {key}: {error}");
+            }
         }
     }
 
@@ -1432,7 +1556,10 @@ impl WriterCoreApi {
                                 .target_versions
                                 .get(key)
                                 .is_some_and(|stored| stored.matches(&to_checkpoint_version(version)));
-                            if locally_changed {
+                            // 未确认 mutation 必须进入本轮计划：即使指纹与 checkpoint
+                            // 记录相同（例如上一轮推送成功但尚未确认），也不能被过滤掉，
+                            // 否则这些事实永远等不到下一轮（Issue #1065 复审 #3）。
+                            if locally_changed || version.pending_objects > 0 {
                                 remote_keys.insert(key.clone());
                             }
                         }
@@ -1768,6 +1895,10 @@ impl WriterCoreApi {
                 return Err(crate::api::error::WriterError::from(e));
             }
         }
+        // 在 seed 之前固定各 target 的未确认事实：seed 复制的是这一刻的 live
+        // 内容，推送成功后只按这份快照的序号确认；seed 之后写入的更新事实
+        // 序号更大，保留为下一轮 outbox（Issue #1065 复审 #3）。
+        let preflight_pending = collect_preflight_pending(&plan);
         let staging_phase = SyncDiagnosticPhase::start_with_provider(
             diagnostic_operation_id,
             "staging",
@@ -1814,7 +1945,8 @@ impl WriterCoreApi {
         let RoundOutcome {
             result,
             published_revision,
-        } = self.perform_full_sync_with_provider_for_run(
+            publish_succeeded,
+        } = match self.perform_full_sync_with_provider_for_run(
             provider.as_ref(),
             &round,
             &plan,
@@ -1824,7 +1956,27 @@ impl WriterCoreApi {
             target_progress,
             diagnostic_operation_id,
             remote_revision_before.as_deref(),
-        )?;
+            &preflight_pending,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                // 失败也要落退避与已消费的远端版本：否则自动调度会在每个前台
+                // 唤醒里重试同一个坏状态，而 checkpoint 却停留在旧版本
+                // （Issue #1065 复审 #3）。已落盘的本地结果不回滚。
+                self.persist_checkpoint(
+                    &app_data_root,
+                    repo_identity.as_deref(),
+                    checkpoint.as_ref(),
+                    None,
+                    None,
+                    remote_revision_before.as_deref(),
+                    None,
+                    false,
+                    diagnostic_operation_id,
+                );
+                return Err(error);
+            }
+        };
 
         let fully_converged = matches!(
             result.overall_status.as_str(),
@@ -1862,10 +2014,14 @@ impl WriterCoreApi {
                 repo_identity.as_deref(),
                 checkpoint.as_ref(),
                 Some(&snapshot),
-                if fully_converged { Some(&succeeded) } else { None },
+                if fully_converged && publish_succeeded {
+                    Some(&succeeded)
+                } else {
+                    None
+                },
                 remote_revision_before.as_deref(),
                 published_revision.as_deref(),
-                fully_converged,
+                fully_converged && publish_succeeded,
                 diagnostic_operation_id,
             );
         }
@@ -1927,6 +2083,7 @@ impl WriterCoreApi {
             target_progress,
             &operation_id,
             None,
+            &PendingMutationMap::new(),
         )
         .map(|outcome| outcome.result)
     }
@@ -1943,6 +2100,7 @@ impl WriterCoreApi {
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
         diagnostic_operation_id: &str,
         remote_revision: Option<&str>,
+        preflight_pending: &PendingMutationMap,
     ) -> ApiResult<RoundOutcome> {
         struct PendingTargetCommit {
             target_index: usize,
@@ -2154,11 +2312,12 @@ impl WriterCoreApi {
             return Ok(RoundOutcome {
                 result: Self::full_sync_noop_result(),
                 published_revision: None,
+                publish_succeeded: false,
             });
         }
         // 有 target 失败时仍然先提交已下载/已合并的内容到 live：单侧下载和
         // 合并结果不要求远端写成功才能落盘。只是不发布不完整的 tree。
-        let publish_blocked = pending_commits
+        let mut publish_blocked = pending_commits
             .iter()
             .any(|pending| target_blocks_round_publish(&pending.result));
         if publish_blocked {
@@ -2363,6 +2522,27 @@ impl WriterCoreApi {
                     .extend(target_committed_paths.into_iter().map(|path| path.path));
             }
 
+        // 本地 commit 之后再判定一次：commit 可能失败（工作区锁/flush/三方合并），
+        // 也可能因为并发编辑得到与 staging 不同的结果。任一 target 没有真正落盘
+        // 成功就不发布整轮远端树，避免推送未落盘的旧 staging 内容（复审 #2）。
+        let commit_blocked = all_targets.iter().any(|target| {
+            !matches!(
+                target.result.status,
+                crate::sync::types::SyncStatus::Success
+                    | crate::sync::types::SyncStatus::NoChanges
+                    | crate::sync::types::SyncStatus::LatestWinsApplied
+            )
+        });
+        if commit_blocked {
+            round.discard();
+            publish_blocked = true;
+            log::warn!(
+                "[sync] local commit did not fully succeed; remote publish discarded for this round"
+            );
+        }
+
+        let mut publish_succeeded = false;
+        let mut publish_error: Option<String> = None;
         if !publish_blocked {
             // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
             // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
@@ -2377,6 +2557,7 @@ impl WriterCoreApi {
             let publish_started_at = Instant::now();
             match round.flush() {
                 Ok(outcome) => {
+                    publish_succeeded = true;
                     if outcome.committed {
                         published_revision = Some(outcome.result.revision.0.clone());
                     }
@@ -2392,6 +2573,9 @@ impl WriterCoreApi {
                         publish_started_at.elapsed().as_millis()
                     );
                     publish_phase.finish_with_provider(outcome, provider);
+                    // 远端提交成功：按回执确认本轮实际发布的对象事实，推进
+                    // known_files 并按序号压缩账本历史前缀。失败/跳过不确认。
+                    self.confirm_published_targets(preflight_pending, &all_targets);
                 }
                 Err(error) => {
                     log::warn!(
@@ -2404,9 +2588,10 @@ impl WriterCoreApi {
                     for run in &staging_runs {
                         run.cleanup();
                     }
-                    return Err(crate::api::error::WriterError::from(
-                        crate::error::Error::from(error),
-                    ));
+                    // 本地 commit 已经落盘：远端发布失败不回滚、也不提前返回，
+                    // 仍然走 finalize/history/索引失效，让平台看到实际变更与
+                    // 明确的失败终态（复审 #2、#3）。
+                    publish_error = Some(format!("remote_publish_failed: {error}"));
                 }
             }
 
@@ -2432,6 +2617,7 @@ impl WriterCoreApi {
             return Ok(RoundOutcome {
                 result: Self::full_sync_noop_result(),
                 published_revision: None,
+                publish_succeeded: false,
             });
         }
 
@@ -2468,12 +2654,31 @@ impl WriterCoreApi {
             self.process_lifecycle_receipt(receipt);
         }
 
+        // 远端发布失败：把失败注入终态，平台与 checkpoint 都按失败处理，
+        // 但已提交的本地结果、history 与索引失效照常收口（复审 #2、#3）。
+        let mut result = result;
+        if let Some(message) = publish_error {
+            if matches!(
+                result.overall_status,
+                crate::sync::SyncStatus::Success
+                    | crate::sync::SyncStatus::NoChanges
+                    | crate::sync::SyncStatus::LatestWinsApplied
+            ) {
+                result.overall_status = crate::sync::SyncStatus::RecoverableError(
+                    "remote_publish_failed".to_string(),
+                );
+                result.error = Some(message);
+                result.error_category = Some("remote_publish_failed".to_string());
+                result.message_key = Some("sync.result.network_failed".to_string());
+            }
+        }
         let mut result: FullSyncResultDto = result.into();
         result.local_content_changed = local_content_changed;
         result.chapter_changes = chapter_changes.into_iter().map(Into::into).collect();
         Ok(RoundOutcome {
             result,
             published_revision,
+            publish_succeeded,
         })
     }
 

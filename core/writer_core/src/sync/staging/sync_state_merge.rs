@@ -319,6 +319,18 @@ pub(crate) fn merge_sync_state_three_way_for_target(
         .cloned()
         .collect();
 
+    // 上传确认序号是单调事实：三方合并取每个路径上的最大序号，不能让 commit
+    // 覆盖掉已确认的事实（否则账本会重新变脏）。
+    let mut confirmed_mutation_seq = base_state.confirmed_mutation_seq.clone();
+    for source in [&live_state, &staging_state] {
+        for (path, seq) in &source.confirmed_mutation_seq {
+            let entry = confirmed_mutation_seq.entry(path.clone()).or_insert(0);
+            if *seq > *entry {
+                *entry = *seq;
+            }
+        }
+    }
+
     let merged_state = SyncState {
         last_sync_time: merged_last_sync_time,
         last_error: merged_last_error,
@@ -330,6 +342,7 @@ pub(crate) fn merge_sync_state_three_way_for_target(
         known_files_updated_at: merged_known_files_updated_at,
         conflicted_files: merged_conflicted_files,
         pending_take_remote: merged_pending_take_remote,
+        confirmed_mutation_seq,
     };
 
     Ok((merged_state, merged_conflicts_json))

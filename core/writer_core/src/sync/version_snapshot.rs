@@ -122,12 +122,88 @@ fn read_manifest(sync_root: &std::path::Path, relative: &str) -> crate::Result<O
     Ok(Some(manifest))
 }
 
+/// 本 target 拥有的同步对象路径指纹（路径 + 大小 + mtime 纳秒）。
+///
+/// 只读目录元数据，不读文件内容：它用来发现"还没接入 mutation 账本"的写入
+/// 路径造成的本地变化，保证增量调度不会漏同步；具体差异仍由随后的完整核对
+/// （LWW + commit）处理。
+fn local_paths_fingerprint(
+    sync_root: &std::path::Path,
+    scope: SyncScope,
+    app_group: Option<&AppDataGroup>,
+) -> String {
+    let walk_roots = app_group
+        .map(AppDataGroup::local_walk_roots)
+        .unwrap_or_default();
+    let keep_dir = |rel: &str| -> bool {
+        if walk_roots.is_empty() {
+            return true;
+        }
+        walk_roots
+            .iter()
+            .any(|root| root == rel || root.starts_with(&format!("{rel}/")))
+    };
+    let walker = walkdir::WalkDir::new(sync_root)
+        .into_iter()
+        .filter_entry(|item| {
+            if item.depth() == 0 || !item.file_type().is_dir() {
+                return true;
+            }
+            let Ok(rel) = item.path().strip_prefix(sync_root) else {
+                return true;
+            };
+            keep_dir(&rel.to_string_lossy().replace('\\', "/"))
+        });
+    let mut entries: Vec<(String, u64, u128)> = Vec::new();
+    for item in walker {
+        let Ok(entry) = item else {
+            continue;
+        };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let Ok(rel) = entry.path().strip_prefix(sync_root) else {
+            continue;
+        };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if rel.starts_with(".git/") || rel == ".git" {
+            continue;
+        }
+        if !crate::sync::SyncService::is_whitelisted_path(&rel, scope) {
+            continue;
+        }
+        if let Some(group) = app_group {
+            if !crate::sync::SyncService::is_whitelisted_app_group_path(&rel, group) {
+                continue;
+            }
+        }
+        let metadata = entry.metadata().ok();
+        let size = metadata.as_ref().map(std::fs::Metadata::len).unwrap_or(0);
+        let mtime_nanos = metadata
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        entries.push((rel, size, mtime_nanos));
+    }
+    entries.sort();
+    let mut hasher = Sha256::new();
+    for (path, size, mtime_nanos) in entries {
+        hasher.update(path.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(size.to_le_bytes());
+        hasher.update(mtime_nanos.to_le_bytes());
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 /// 从一个已加载的 manifest 与账本事实计算 target 版本。
 fn build_version(
     manifest: Option<&SyncManifest>,
     pending: BTreeMap<String, local_mutations::LocalMutationRecord>,
     known_files: usize,
     group: Option<&AppDataGroup>,
+    path_fingerprint: String,
 ) -> LocalTargetVersion {
     // 没有 manifest 却有基线（known_files 非空）：说明本地索引不可信（旧版布局、
     // 手工删除、迁移中断），必须完整扫描重建，不能靠增量比对宣布无变化。
@@ -136,8 +212,16 @@ fn build_version(
     }
     let empty = SyncManifest::default();
     let manifest = manifest.unwrap_or(&empty);
+    // 对象指纹 = manifest/账本投影 + 本 target 拥有的本地路径元数据。
+    // 后者是未接入 mutation 账本的写入路径的安全网：任何文件增删改都会改变
+    // 指纹并让该 target 走完整核对，不会因为账本没有记录而漏同步
+    // （Issue #1065 复审 #4）。
+    let mut hasher = Sha256::new();
+    hasher.update(fingerprint_objects(manifest, &pending, group).as_bytes());
+    hasher.update(b"|");
+    hasher.update(path_fingerprint.as_bytes());
     LocalTargetVersion {
-        object_fingerprint: fingerprint_objects(manifest, &pending, group),
+        object_fingerprint: format!("{:x}", hasher.finalize()),
         pending_fingerprint: local_mutations::pending_digest(&pending),
         pending_objects: pending.len(),
         eligible: true,
@@ -169,13 +253,20 @@ pub(crate) fn app_group_version(
     if !state.pending_take_remote.is_empty() {
         return Ok(LocalTargetVersion::ineligible("pending_take_remote"));
     }
+    // 账本损坏时这一轮必须完整核对并把损坏索引归档重建，不能在空索引上放行。
+    if local_mutations::ledger_is_corrupt(app_data_root) {
+        let _ = local_mutations::repair_corrupt_ledger(app_data_root);
+        return Ok(LocalTargetVersion::ineligible("ledger_corrupt"));
+    }
     let manifest = read_manifest(app_data_root, &group.local_manifest_path())?;
     let pending = local_mutations::pending_records(app_data_root, SyncScope::App, Some(group))?;
+    let path_fingerprint = local_paths_fingerprint(app_data_root, SyncScope::App, Some(group));
     Ok(build_version(
         manifest.as_ref(),
         pending,
         state.known_files.len(),
         Some(group),
+        path_fingerprint,
     ))
 }
 
@@ -191,13 +282,19 @@ pub(crate) fn project_version(project_root: &std::path::Path) -> crate::Result<L
     if !state.pending_take_remote.is_empty() {
         return Ok(LocalTargetVersion::ineligible("pending_take_remote"));
     }
+    if local_mutations::ledger_is_corrupt(project_root) {
+        let _ = local_mutations::repair_corrupt_ledger(project_root);
+        return Ok(LocalTargetVersion::ineligible("ledger_corrupt"));
+    }
     let manifest = read_manifest(project_root, crate::sync::lww::SYNC_MANIFEST_PATH)?;
     let pending = local_mutations::pending_records(project_root, SyncScope::Project, None)?;
+    let path_fingerprint = local_paths_fingerprint(project_root, SyncScope::Project, None);
     Ok(build_version(
         manifest.as_ref(),
         pending,
         state.known_files.len(),
         None,
+        path_fingerprint,
     ))
 }
 
@@ -319,11 +416,19 @@ pub(crate) fn target_key_for_remote_path(
         }
         return None;
     }
-    // 远端 App 数据组的路径没有本地 group 前缀，按本地分组归属映射。
-    for group in app_groups {
-        if group.owns_path(&path) {
-            return Some(app_target_key(group));
+    // App 数据组的远端前缀是 app/__groups__/<storage_key>，不是本地相对路径：
+    // 直接拿完整远端路径喂 owns_path 永远映射不到，会让每次远端 App 更新都回落
+    // 到"影响全部 target"（Issue #1065 复审 #5）。
+    if let Some(rest) = path.strip_prefix("app/__groups__/") {
+        let storage_key = rest.split('/').next()?;
+        for group in app_groups {
+            if group.storage_key() == storage_key {
+                return Some(app_target_key(group));
+            }
         }
+        return None;
     }
+    // 兼容旧版聚合布局：catalog 顶层文件（app-meta/sync/app_groups.sync.json、
+    // 旧 app 根路径）无法归因到具体组，必须按"影响全部"处理。
     None
 }
