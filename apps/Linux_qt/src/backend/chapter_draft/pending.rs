@@ -143,6 +143,18 @@ pub(crate) fn spool_failed_input(
     Ok(())
 }
 
+/// pending-inputs 目录里的文件数（不解析内容）；用于“存在但读坏”时仍报有待处理。
+pub(super) fn pending_input_file_count(chapter_dir: &Path) -> usize {
+    let dir = chapter_dir.join(PENDING_INPUTS_DIR);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .count()
+}
+
 fn pending_input_path(dir: &Path, event_id: &str) -> std::path::PathBuf {
     let safe: String = event_id
         .chars()

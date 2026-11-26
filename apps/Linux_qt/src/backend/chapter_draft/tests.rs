@@ -544,3 +544,75 @@ fn first_fact_writes_meta_header_and_stays_discoverable() {
     let plan = restore_plan(root, "p1", "c1").expect("restore plan after restart");
     assert_eq!(plan.event_end_revision, 2);
 }
+
+#[test]
+fn pending_only_draft_is_listed_after_restart() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    // 首次编辑：只有 write-ahead spool 与 meta 事务头，facts/text 还没写出。
+    spool_failed_input(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g1",
+        2,
+        "e1",
+        r#"{"eventId":"e1","newRevision":2}"#,
+        ("g1", 1, "base-sha"),
+    )
+    .expect("spool input");
+    forget_for_test(root, "p1", "c1");
+
+    let listed = list_project_drafts(root, "p1");
+    let draft = listed
+        .iter()
+        .find(|draft| draft.chapter_id == "c1")
+        .expect("pending-only draft must be listed after restart");
+    assert_eq!(draft.fact_count, 0);
+    assert!(!draft.text_present);
+    assert_eq!(draft.pending_input_count, 1);
+    assert!(draft.pending_input_error.is_none());
+    // 事务头必须持久化原始 base，恢复不依赖内存状态。
+    assert_eq!(draft.base_generation, "g1");
+    assert_eq!(draft.base_revision, 1);
+    assert_eq!(draft.base_sha256, "base-sha");
+}
+
+#[test]
+fn corrupt_pending_only_draft_is_counted_and_reported() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    spool_failed_input(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g1",
+        2,
+        "e1",
+        r#"{"eventId":"e1","newRevision":2}"#,
+        ("g1", 1, "base-sha"),
+    )
+    .expect("spool input");
+    let pending = pending_inputs(root, "p1", "c1").expect("read spool");
+    std::fs::write(&pending[0].path, "{ broken").expect("corrupt spool");
+    forget_for_test(root, "p1", "c1");
+
+    let listed = list_project_drafts(root, "p1");
+    let draft = listed
+        .iter()
+        .find(|draft| draft.chapter_id == "c1")
+        .expect("corrupt pending-only draft must not disappear");
+    assert!(draft.pending_input_count >= 1);
+    assert!(
+        draft
+            .pending_input_error
+            .as_deref()
+            .is_some_and(|error| error.contains("corrupted")),
+        "summary must surface the spool error: {:?}",
+        draft.pending_input_error
+    );
+}

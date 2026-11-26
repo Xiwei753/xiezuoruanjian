@@ -57,7 +57,9 @@ pub(crate) fn list_project_drafts(projects_root: &Path, project_id: &str) -> Vec
             {
                 continue;
             }
-            if let Some(summary) = store::read_summary_from_dir(&path, project_id, chapter_id) {
+            if let Some(summary) =
+                store::read_summary_from_dir(projects_root, &path, project_id, chapter_id)
+            {
                 drafts.push(summary);
             }
             continue;

@@ -513,6 +513,7 @@ pub(super) fn migrate_legacy(location: &DraftLocation) -> Option<DraftState> {
 
 /// 章节草稿摘要（列表用；不读正文与 projection）。
 pub(super) fn read_summary_from_dir(
+    projects_root: &Path,
     dir: &Path,
     project_id: &str,
     chapter_id: &str,
@@ -520,6 +521,17 @@ pub(super) fn read_summary_from_dir(
     let meta = read_meta(dir, project_id, chapter_id)?;
     let file_count = list_fact_files(dir).map_or(0, |files| files.len());
     let fact_count = meta.index().len().max(file_count);
+    // 只有 pending-input 的草稿也要被发现；spool 读坏时仍按“有待处理”计入，
+    // 并把错误留给恢复 actor 显式报告（不能当成空目录）。
+    let (pending_input_count, pending_input_error) =
+        match super::pending::pending_inputs(projects_root, project_id, chapter_id) {
+            Ok(inputs) if inputs.is_empty() => (0usize, None),
+            Ok(inputs) => (inputs.len(), None),
+            Err(error) => (
+                super::pending::pending_input_file_count(dir).max(1),
+                Some(error),
+            ),
+        };
     Some(super::ChapterDraft {
         volume_id: meta.volume_id,
         chapter_id: chapter_id.to_string(),
@@ -530,6 +542,8 @@ pub(super) fn read_summary_from_dir(
         text_revision: meta.text_revision,
         text_sha256: meta.text_sha256,
         fact_count,
+        pending_input_count,
+        pending_input_error,
         session_id: meta.session_id,
         generation: meta.generation,
         updated_at_ms: meta.updated_at_ms,

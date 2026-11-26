@@ -103,9 +103,16 @@ pub(crate) fn enqueue_restore_project(command: ChapterRestoreCommand) -> usize {
         Path::new(&command.context.projects_root),
         &command.project_id,
     );
+    // pending-inputs 也是未提交事件：只有 spool、尚无 facts/text 的草稿
+    // （首次事件在投影/正文写出前崩溃）同样必须进入恢复队列。
     let count = drafts
         .iter()
-        .filter(|draft| draft.fact_count > 0 || draft.text_present)
+        .filter(|draft| {
+            draft.fact_count > 0
+                || draft.text_present
+                || draft.pending_input_count > 0
+                || draft.pending_input_error.is_some()
+        })
         .count();
     if count == 0 {
         return 0;
@@ -430,20 +437,55 @@ pub(super) fn handle_restore_project(
             ));
             continue;
         }
-        if draft.fact_count == 0 && !draft.text_present {
-            super::super::chapter_draft::remove(&projects_root, &command.project_id, &chapter_id);
-            continue;
-        }
-        let Some(plan) = super::super::chapter_draft::restore_plan(
+        // Issue #1062 复审 P0：重试可能刚刚写出事实文件，不能用重试前的
+        // draft.fact_count 判断清理；必须重新读取磁盘/内存状态。
+        let pending_after = match super::super::chapter_draft::pending_inputs(
             &projects_root,
             &command.project_id,
             &chapter_id,
-        ) else {
-            failed += 1;
-            messages.push(format!(
-                "{chapter_id}: draft_unreadable kept ({})",
-                draft.diagnostic_summary()
-            ));
+        ) {
+            Ok(inputs) => inputs,
+            Err(error) => {
+                failed += 1;
+                kept += 1;
+                messages.push(format!(
+                    "{chapter_id}: pending_inputs_unreadable kept: {error}"
+                ));
+                continue;
+            }
+        };
+        let current =
+            super::super::chapter_draft::snapshot(&projects_root, &command.project_id, &chapter_id);
+        let facts_present = current
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.fact_count > 0);
+        let text_present = current
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.text.is_some());
+        let plan = super::super::chapter_draft::restore_plan(
+            &projects_root,
+            &command.project_id,
+            &chapter_id,
+        );
+        let Some(plan) = plan else {
+            if draft_dir_is_empty(pending_after.len(), facts_present, text_present) {
+                // 只有 meta 事务头的空壳草稿：无 pending、无事实、无正文。
+                super::super::chapter_draft::remove(
+                    &projects_root,
+                    &command.project_id,
+                    &chapter_id,
+                );
+            } else {
+                failed += 1;
+                kept += 1;
+                messages.push(format!(
+                    "{chapter_id}: draft_unreadable kept (pending={} facts={} text={}) ({})",
+                    pending_after.len(),
+                    facts_present,
+                    text_present,
+                    draft.diagnostic_summary()
+                ));
+            }
             continue;
         };
         let opened = match api.open_chapter(&command.project_id, &plan.volume_id, &plan.chapter_id)
@@ -675,6 +717,12 @@ pub(super) fn handle_restore_project(
     }
 }
 
+/// 草稿目录只允许在“无 pending 原始事件、无已提交待清理事实、无未提交正文”
+/// 时删除；损坏的 spool 会以 pending>0 保留。
+fn draft_dir_is_empty(pending_inputs: usize, facts_present: bool, text_present: bool) -> bool {
+    pending_inputs == 0 && !facts_present && !text_present
+}
+
 #[cfg(test)]
 mod tests {
     use super::restore_commit_revision;
@@ -706,6 +754,16 @@ mod tests {
             generation: "g1".to_string(),
             mixed_sessions: false,
         }
+    }
+
+    #[test]
+    fn empty_draft_cleanup_requires_no_pending_facts_or_text() {
+        use super::draft_dir_is_empty;
+        assert!(draft_dir_is_empty(0, false, false));
+        // 首次事件只有 spool、facts/text 尚未写出：绝不能按旧摘要删除。
+        assert!(!draft_dir_is_empty(1, false, false));
+        assert!(!draft_dir_is_empty(0, true, false));
+        assert!(!draft_dir_is_empty(0, false, true));
     }
 
     #[test]

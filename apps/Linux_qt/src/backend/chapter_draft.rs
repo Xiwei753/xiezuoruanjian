@@ -96,6 +96,13 @@ pub(crate) struct ChapterDraft {
     pub text_revision: u64,
     pub text_sha256: String,
     pub fact_count: usize,
+    /// 尚未构造出证明投影的原始事件数（pending-inputs/）。
+    ///
+    /// Issue #1062 复审：只有 pending-input 的草稿（首次事件在 facts/text 之前
+    /// 崩溃）也必须进入恢复队列，否则 write-ahead spool 永远无人重试。
+    pub pending_input_count: usize,
+    /// pending-inputs 读取失败时的诊断；有错误时仍视为“有待处理”，不能当空。
+    pub pending_input_error: Option<String>,
     pub session_id: u64,
     pub generation: String,
     pub updated_at_ms: i64,
@@ -274,6 +281,8 @@ impl DraftState {
             text_revision: self.text_revision,
             text_sha256: self.text_sha256.clone(),
             fact_count: self.facts.len(),
+            pending_input_count: self.failed_inputs.len(),
+            pending_input_error: None,
             session_id: self.session_id,
             generation: self.generation.clone(),
             updated_at_ms: self.updated_at_ms,
