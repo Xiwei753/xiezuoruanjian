@@ -16,8 +16,7 @@ impl StarMapStore {
     /// `starmaps/<id>/links/*.json`；`GraphMeta.link_ids` 只是派生缓存。
     pub fn list_links_with_diagnostics(&mut self) -> Result<ListWithDiagnostics<StarMapLink>> {
         self.reload_graph_meta_if_stale()?;
-        self.load_canvas_links()?;
-        self.reconcile_graph_meta_link_indexes();
+        self.reload_canvas_links_with_version()?;
         let mut items: Vec<StarMapLink> = self.links.values().cloned().collect();
         items.sort_by(|left, right| left.link_id.cmp(&right.link_id));
         Ok(ListWithDiagnostics {
@@ -90,7 +89,7 @@ impl StarMapStore {
         }
 
         // 链接索引从注解仓库投影构建，不读包内链接文件。
-        self.load_canvas_links()?;
+        self.reload_canvas_links_with_version()?;
         let mut projected_links: Vec<&StarMapLink> = self.links.values().collect();
         projected_links.sort_by(|left, right| left.link_id.cmp(&right.link_id));
         let link_relation_index: Vec<LinkRelationIndex> = projected_links
@@ -293,8 +292,7 @@ impl StarMapStore {
             }
         }
         // 链接已由注解仓库投影承担；这里只确认投影与仓库一致。
-        self.load_canvas_links()?;
-        self.reconcile_graph_meta_link_indexes();
+        self.reload_canvas_links_with_version()?;
         Ok(())
     }
 

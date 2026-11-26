@@ -101,7 +101,7 @@ impl super::super::WriterCore {
         let store = stores
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_fully_loaded()?;
+        self.ensure_starmap_loaded(store)?;
         Ok((store.to_starmap_graph(), store.package_revision()))
     }
 
@@ -176,7 +176,7 @@ impl super::super::WriterCore {
             let store = stores
                 .entry(starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
         }
 
         // 先把 default_x/default_y 合进 node.position，再用同一个 node 做校验和写入。
@@ -298,7 +298,7 @@ impl super::super::WriterCore {
         let needs_index_invalidation = if needs_structural_check {
             {
                 let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
-                store.ensure_fully_loaded()?;
+                self.ensure_starmap_loaded(store)?;
             }
             let candidate = {
                 let store = Self::get_store_or_err(&stores, starmap_id)?;
@@ -339,21 +339,15 @@ impl super::super::WriterCore {
             false
         };
 
-        // 混合编辑：先按各自权威记录的 current revision 校验，再落盘，避免半提交。
-        if definition_patch.is_empty() {
-            if let Some(expected) = expected_definition_revision {
-                let current = {
-                    let store = Self::get_store_or_err(&stores, starmap_id)?;
-                    store.get_node(node_id).map(|n| n.definition_revision)
-                };
-                if let Some(current) = current {
-                    if current != expected {
-                        return Err(crate::error::Error::Other(format!(
-                            "definition revision conflict for '{node_id}': expected {expected}, actual {current}"
-                        )));
-                    }
-                }
-            }
+        // 混合编辑：两个 expected revision 都在写盘前核对（定义读本体文件，
+        // 实例以磁盘持久 revision 为准），任何一项不匹配都不会留下半提交。
+        {
+            let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
+            store.check_node_write_revisions(
+                node_id,
+                expected_definition_revision,
+                expected_instance_revision,
+            )?;
         }
 
         let mut result = {
@@ -405,7 +399,11 @@ impl super::super::WriterCore {
         Ok(result)
     }
 
-    pub fn delete_starmap_node(&self, starmap_id: &str, node_id: &str) -> Result<()> {
+    pub fn delete_starmap_node(
+        &self,
+        starmap_id: &str,
+        node_id: &str,
+    ) -> Result<crate::starmap::store::DeletedStarmapObjects> {
         self.delete_starmap_object(
             starmap_id,
             crate::starmap::store::CascadeOrigin::Node(node_id.to_string()),
@@ -425,7 +423,7 @@ impl super::super::WriterCore {
             let store = stores
                 .entry(starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
         }
 
         let candidate = {
@@ -488,7 +486,7 @@ impl super::super::WriterCore {
             let store = stores
                 .entry(starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
             store.ensure_edge_loaded(edge_id)?;
         }
 
@@ -555,7 +553,7 @@ impl super::super::WriterCore {
         let store = stores
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_fully_loaded()?;
+        self.ensure_starmap_loaded(store)?;
         store.ensure_edge_loaded(edge_id)?;
         store.delete_edge(edge_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
@@ -590,7 +588,7 @@ impl super::super::WriterCore {
             let store = stores
                 .entry(starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
         }
 
         let candidate = {
@@ -690,7 +688,7 @@ impl super::super::WriterCore {
             let store = stores
                 .entry(meta.starmap_id.clone())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, &meta.starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
             if store
                 .to_starmap_graph()
                 .embeds
@@ -718,7 +716,7 @@ impl super::super::WriterCore {
             let store = stores
                 .entry(starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
             store.ensure_embed_loaded(instance_id)?;
         }
 
@@ -768,11 +766,49 @@ impl super::super::WriterCore {
         Ok(result)
     }
 
-    pub fn delete_starmap_embed(&self, starmap_id: &str, instance_id: &str) -> Result<()> {
+    pub fn delete_starmap_embed(
+        &self,
+        starmap_id: &str,
+        instance_id: &str,
+    ) -> Result<crate::starmap::store::DeletedStarmapObjects> {
         self.delete_starmap_object(
             starmap_id,
             crate::starmap::store::CascadeOrigin::Embed(instance_id.to_string()),
         )
+    }
+
+    /// 删除前预览会真正删除的对象集合（含传递级联与链接墓碑）。
+    ///
+    /// 调用方在删除前用它登记回滚路径与变更事实：链接墓碑在 store 删除时
+    /// 立即写 annotations 仓库，因此必须在执行前拿到链接路径并登记。
+    pub fn preview_starmap_deletion(
+        &self,
+        starmap_id: &str,
+        origin: crate::starmap::store::CascadeOrigin,
+    ) -> Result<crate::starmap::store::DeletedStarmapObjects> {
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        {
+            let store = stores
+                .entry(starmap_id.to_string())
+                .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
+            self.ensure_starmap_loaded(store)?;
+            match &origin {
+                crate::starmap::store::CascadeOrigin::Node(node_id) => {
+                    store.ensure_object_loaded(node_id)?;
+                }
+                crate::starmap::store::CascadeOrigin::Embed(instance_id) => {
+                    store.ensure_embed_loaded(instance_id)?;
+                }
+            }
+        }
+        let store = Self::get_store_or_err(&stores, starmap_id)?;
+        let cascade = store.cascade_closure_plan(&origin);
+        Ok(crate::starmap::store::DeletedStarmapObjects::from_cascade(
+            &origin, &cascade,
+        ))
     }
 
     /// 统一删除流程：先得到完整删除集合，再做一次依赖检查，最后执行同一份删除计划。
@@ -792,7 +828,7 @@ impl super::super::WriterCore {
         &self,
         starmap_id: &str,
         origin: crate::starmap::store::CascadeOrigin,
-    ) -> Result<()> {
+    ) -> Result<crate::starmap::store::DeletedStarmapObjects> {
         use crate::starmap::store::CascadeOrigin;
 
         let mut stores = self
@@ -804,7 +840,7 @@ impl super::super::WriterCore {
                 .entry(starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
             // 级联删除需要完整加载，否则会漏掉跨对象的引用关系。
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
             match &origin {
                 CascadeOrigin::Node(node_id) => store.ensure_object_loaded(node_id)?,
                 CascadeOrigin::Embed(instance_id) => store.ensure_embed_loaded(instance_id)?,
@@ -835,17 +871,18 @@ impl super::super::WriterCore {
         )?;
 
         // 执行删除。store.delete_node/delete_embed 内部复用同一 cascade_closure_plan，
-        // 保证与 candidate 模拟产生相同的最终对象集合。
+        // 保证与 candidate 模拟产生相同的最终对象集合；返回真正删除的对象
+        // 集合（含级联 edge/embed 与已写 tombstone 的链接），供调用方登记
+        // 同一份变更事实与写事务。
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
-        match &origin {
+        let deleted = match &origin {
             CascadeOrigin::Node(node_id) => {
-                store.delete_node(node_id)?;
+                let deleted = store.delete_node(node_id)?;
                 store.enqueue_save(SaveQueueEntry::DeleteNode);
+                deleted
             }
-            CascadeOrigin::Embed(instance_id) => {
-                store.delete_embed(instance_id)?;
-            }
-        }
+            CascadeOrigin::Embed(instance_id) => store.delete_embed(instance_id)?,
+        };
         store.enqueue_save(SaveQueueEntry::DeleteEmbed);
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
         // 级联删除的链接已在 store.delete_node/delete_embed 内直接写
@@ -903,7 +940,7 @@ impl super::super::WriterCore {
                 lid,
             );
         }
-        Ok(())
+        Ok(deleted)
     }
 
     pub fn add_starmap_link(
@@ -919,7 +956,7 @@ impl super::super::WriterCore {
             let store = stores
                 .entry(starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
         }
 
         let candidate = {
@@ -981,7 +1018,7 @@ impl super::super::WriterCore {
             let store = stores
                 .entry(starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
             store.ensure_link_loaded(link_id)?;
         }
 
@@ -1048,7 +1085,7 @@ impl super::super::WriterCore {
         let store = stores
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_fully_loaded()?;
+        self.ensure_starmap_loaded(store)?;
         store.ensure_link_loaded(link_id)?;
         // delete_link 已写 annotations tombstone；没有包内链接文件需要删除。
         store.delete_link(link_id)?;
@@ -1082,7 +1119,7 @@ impl super::super::WriterCore {
         let store = stores
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_fully_loaded()?;
+        self.ensure_starmap_loaded(store)?;
         store.list_links_with_diagnostics()
     }
 
@@ -1098,6 +1135,11 @@ impl super::super::WriterCore {
         let store = stores
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
+        // 分阶段快照不走全量加载，但链接投影仍须按仓库版本刷新，
+        // 避免返回旧链接/已删除端点。
+        if store.refresh_link_projection()? {
+            self.invalidate_path_dependency_index();
+        }
         store.get_phased_snapshot(request)
     }
 
@@ -1312,7 +1354,7 @@ impl super::super::WriterCore {
             let store = stores
                 .entry(root_starmap_id.clone())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, &root_starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
         }
 
         let context = self.build_resolver_context(&stores);
@@ -1333,7 +1375,7 @@ impl super::super::WriterCore {
             let store = stores
                 .entry(owner_starmap_id.clone())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, &owner_starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
         }
 
         // 2. 构造完整 StarMapEdge。

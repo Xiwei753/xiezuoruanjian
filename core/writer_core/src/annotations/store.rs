@@ -567,6 +567,49 @@ impl AnnotationStore {
         self.read_collection("links")
     }
 
+    /// Directory that holds this store's link records.
+    pub fn links_dir(&self) -> PathBuf {
+        self.project_root.join("annotations").join("links")
+    }
+
+    /// Lightweight version fingerprint of the link collection: file name,
+    /// modification time in nanoseconds, and file length.
+    ///
+    /// Canvas link projections use this to notice writes made by another
+    /// process (MCP, sync, a second instance) without re-reading every record
+    /// on each access. A missing directory is an empty fingerprint.
+    pub fn links_fingerprint(&self) -> crate::Result<Vec<(String, u64, u64)>> {
+        let dir = self.links_dir();
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut fingerprint = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_file()
+                || entry.path().extension().and_then(|ext| ext.to_str()) != Some("json")
+            {
+                continue;
+            }
+            let metadata = entry.metadata()?;
+            let modified_nanos = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos().min(u128::from(u64::MAX)) as u64)
+                .unwrap_or(0);
+            fingerprint.push((
+                entry.file_name().to_string_lossy().to_string(),
+                modified_nanos,
+                metadata.len(),
+            ));
+        }
+        fingerprint.sort();
+        Ok(fingerprint)
+    }
+
     pub fn list_links_for_source(&self, source: &ObjectRef) -> crate::Result<Vec<ObjectLink>> {
         Ok(self
             .list_links()?

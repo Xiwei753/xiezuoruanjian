@@ -55,7 +55,7 @@ impl super::WriterCore {
         let Some(store) = stores.get_mut(starmap_id) else {
             return Ok(None);
         };
-        store.ensure_fully_loaded()?;
+        self.ensure_starmap_loaded(store)?;
         Ok(Some(store.to_starmap_graph()))
     }
 
@@ -341,7 +341,7 @@ impl super::WriterCore {
             let store = stores
                 .entry(root_starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, root_starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
         }
 
         let context = self.build_resolver_context(&stores);
@@ -382,7 +382,7 @@ impl super::WriterCore {
             let store = stores
                 .entry(from.starmap_id.clone())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, &from.starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
         }
 
         let context = self.build_resolver_context(&stores);
@@ -416,6 +416,19 @@ impl super::WriterCore {
             app_data_root: self.app_data_root.clone(),
             overlays,
         }
+    }
+
+    /// 确保画布完成全量加载，并在 annotations 链接仓库版本变化时重建读投影。
+    ///
+    /// 链接的唯一持久化所有者是 annotations 仓库；MCP、同步或另一个实例写入
+    /// 后，已加载画布必须在下一次对外读取或结构变更前看到新事实。派生路径依赖
+    /// 索引随投影重建而失效，下次查询从真实数据重建——派生刷新不计用户修改。
+    pub(crate) fn ensure_starmap_loaded(&self, store: &mut StarMapStore) -> Result<()> {
+        store.ensure_fully_loaded()?;
+        if store.take_link_projection_rebuilt() {
+            self.invalidate_path_dependency_index();
+        }
+        Ok(())
     }
 
     /// 构建 candidate 校验用的 `GraphResolverContext`：在通用 overlays 之上
@@ -558,7 +571,7 @@ impl super::WriterCore {
             let store = stores
                 .entry(root_starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, root_starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
         }
         let context = self.build_resolver_context(&stores);
         let index_guard = self.get_or_init_path_dependency_index(&stores)?;
@@ -590,7 +603,7 @@ impl super::WriterCore {
             let store = stores
                 .entry(root_starmap_id.to_string())
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, root_starmap_id));
-            store.ensure_fully_loaded()?;
+            self.ensure_starmap_loaded(store)?;
         }
         let context = self.build_resolver_context(&stores);
         let index_guard = self.get_or_init_path_dependency_index(&stores)?;

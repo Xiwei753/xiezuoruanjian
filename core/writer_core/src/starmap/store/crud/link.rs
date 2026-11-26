@@ -38,6 +38,9 @@ impl StarMapStore {
     }
 
     pub fn add_link(&mut self, link: StarMapLink) -> Result<StarMapLink> {
+        // 仓库可能已被 MCP/同步/另一个实例改写：先按版本刷新投影，
+        // 避免用过期投影判定重复或漏掉外部新增。
+        self.refresh_link_projection()?;
         if self.links.contains_key(&link.link_id) {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -56,10 +59,13 @@ impl StarMapStore {
             .insert(projected.link_id.clone(), projected.clone());
         self.deleted_link_ids.remove(&projected.link_id);
         self.dirty_graph_meta = true;
+        // 本地写入已进入投影；失效版本，下一次读取仍以仓库为准重建。
+        self.invalidate_link_projection_version();
         Ok(projected)
     }
 
     pub fn update_link(&mut self, link_id: &str, patch: &StarMapLinkPatch) -> Result<StarMapLink> {
+        self.refresh_link_projection()?;
         if !self.links.contains_key(link_id) {
             self.ensure_link_loaded(link_id)?;
         }
@@ -92,10 +98,19 @@ impl StarMapStore {
             .insert(projected.link_id.clone(), projected.clone());
         self.deleted_link_ids.remove(&projected.link_id);
         self.dirty_graph_meta = true;
+        self.invalidate_link_projection_version();
         Ok(projected)
     }
 
     pub fn delete_link(&mut self, link_id: &str) -> Result<()> {
+        self.refresh_link_projection()?;
+        let result = self.delete_link_projected(link_id);
+        self.invalidate_link_projection_version();
+        result
+    }
+
+    /// 级联删除内部入口：调用方已刷新投影，批量删除后统一失效版本。
+    pub(in crate::starmap::store) fn delete_link_projected(&mut self, link_id: &str) -> Result<()> {
         if !self.links.contains_key(link_id) {
             self.ensure_link_loaded(link_id)?;
         }
@@ -104,14 +119,18 @@ impl StarMapStore {
             .get(link_id)
             .cloned()
             .ok_or_else(link_not_found)?;
+        let store = self.annotation_store_for_canvas()?;
         match self.star_map_link_to_object_link(&link) {
             Ok(object_link) => {
-                let store = self.annotation_store_for_canvas()?;
                 store.detach_link(&object_link.source, &object_link.target, now_millis())?;
             }
             Err(_) => {
-                // 源不属于本画布的链接只可能来自旧的脏投影：注解仓库里没有
-                // 它的记录，删除只需清掉投影。合法投影的源一定归本画布所有。
+                // 链接源属于其它画布（本画布节点可能是它的目标侧）：投影里的
+                // 路径无法重建对象身份，直接以仓库记录的真实 source/target 写
+                // tombstone，避免目标对象删除后留下悬空链接。
+                if let Some(record) = store.get_link(link_id)? {
+                    store.detach_link(&record.source, &record.target, now_millis())?;
+                }
             }
         }
         self.links.remove(link_id);

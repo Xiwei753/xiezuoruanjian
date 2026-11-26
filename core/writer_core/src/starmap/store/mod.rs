@@ -54,6 +54,45 @@ pub use relation_index::{
 pub use snapshot::{PhasedSnapshotRequest, StarMapPhasedSnapshot};
 pub use types::*;
 
+/// 一次删除实际移除的对象集合（含传递级联对象与链接墓碑）。
+///
+/// 删除的事实来源是 store 的删除计划，而不是调用方按请求参数猜的路径：
+/// 级联删掉的 edge/embed/link 必须与节点删除进入同一份变更事实与写事务。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeletedStarmapObjects {
+    pub nodes: Vec<String>,
+    pub edges: Vec<String>,
+    pub embeds: Vec<String>,
+    /// 已写 annotations 仓库 tombstone 的导航链接 ID。
+    pub links: Vec<String>,
+}
+
+impl DeletedStarmapObjects {
+    /// 由被点中的 origin 与级联计划构造删除事实。
+    pub fn from_cascade(origin: &CascadeOrigin, cascade: &CascadeIds) -> Self {
+        let mut deleted = Self {
+            edges: cascade.edge_ids.clone(),
+            embeds: cascade.embed_ids.clone(),
+            links: cascade.link_ids.clone(),
+            ..Self::default()
+        };
+        match origin {
+            CascadeOrigin::Node(node_id) => deleted.nodes.push(node_id.clone()),
+            CascadeOrigin::Embed(instance_id) => deleted.embeds.push(instance_id.clone()),
+        }
+        deleted.embeds.sort();
+        deleted.embeds.dedup();
+        deleted
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+            && self.edges.is_empty()
+            && self.embeds.is_empty()
+            && self.links.is_empty()
+    }
+}
+
 pub struct StarMapStore {
     pub(super) app_data_root: PathBuf,
     pub(super) starmap_id: String,
@@ -67,6 +106,10 @@ pub struct StarMapStore {
     /// 链接读投影：唯一持久化所有者是 annotations 仓库，见
     /// [`link_repository`]。
     pub(super) links: HashMap<String, StarMapLink>,
+    /// annotations 链接集合的版本指纹；变化时重建读投影。
+    pub(super) link_projection_version: Option<link_repository::LinkProjectionVersion>,
+    /// 最近一次加载/刷新是否重建了链接投影，供 facade 失效派生索引。
+    pub(super) link_projection_rebuilt: bool,
     pub(super) graph_meta: Option<GraphMeta>,
     pub(super) dirty_nodes: HashSet<String>,
     pub(super) dirty_edges: HashSet<String>,
@@ -93,6 +136,8 @@ impl StarMapStore {
             edges: HashMap::new(),
             embeds: HashMap::new(),
             links: HashMap::new(),
+            link_projection_version: None,
+            link_projection_rebuilt: false,
             graph_meta: None,
             dirty_nodes: HashSet::new(),
             dirty_edges: HashSet::new(),

@@ -98,10 +98,11 @@ impl super::super::WriterCore {
         is_embed: bool,
     ) -> Result<()> {
         if is_embed {
-            self.delete_starmap_embed(starmap_id, instance_id)
+            self.delete_starmap_embed(starmap_id, instance_id)?;
         } else {
-            self.delete_starmap_node(starmap_id, instance_id)
+            self.delete_starmap_node(starmap_id, instance_id)?;
         }
+        Ok(())
     }
 
     /// 查询素材在全部作品/画布中的引用位置。
@@ -220,18 +221,18 @@ impl super::super::WriterCore {
                         &asset_id,
                     ),
                     crate::starmap::library::library_index_abs_path(&self.app_data_root),
+                    crate::starmap::library::library_entries_dir(&self.app_data_root),
                     self.app_data_root.join("app-meta/sync/state.local.json"),
                 ])?;
                 crate::starmap::library::save_node_definition(&self.app_data_root, &copied)?;
-                let mut index = crate::starmap::library::ensure_library_index(&self.app_data_root)?;
-                crate::starmap::library::ensure_library_entry(
-                    &mut index,
+                // 归属条目是独立对象文件；索引只是重建缓存。
+                crate::starmap::library::ensure_library_entry_persisted(
+                    &self.app_data_root,
                     scope,
                     crate::starmap::types::StarMapAssetRef::node(asset_id.clone()),
                     None,
                     crate::starmap::now_epoch(),
-                );
-                crate::starmap::library::save_library_index(&self.app_data_root, &index)?;
+                )?;
                 Ok(StarMapAssetCopyResult::Node {
                     asset: crate::starmap::types::StarMapAssetRef::node(asset_id),
                     definition: copied,

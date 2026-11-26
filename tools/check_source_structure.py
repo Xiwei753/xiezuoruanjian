@@ -278,10 +278,20 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     (Path("core/writer_core/src/starmap/store/relation_index.rs"), "god-file"):
         "星图关系索引：边/嵌入/路径依赖共享同一重建入口；#1060 移除链接索引所有权；"
         "TODO(#1060) 后续按 index 种类拆分",
+    (Path("core/writer_core/src/starmap/library.rs"), "god-file"):
+        "素材库聚合根：共享本体、归属条目/文件夹、派生引用索引共用同一目录与迁移入口；"
+        "#1060 把 folder/entry 拆为独立对象文件后跨过上限；"
+        "TODO(#1060) 后续按 definition/entry/reference 拆分",
     (Path("core/writer_core/src/sync/staging/starmap_merge.rs"), "god-file"):
         "星图三方合并：对象/成员/身份事实共享同一合并决策表；"
         "#1060 移除链接成员合并（链接由 annotations Metadata 同步承担）；"
         "TODO(#1060) 后续按 graph/object/identity 拆分",
+    (Path("core/writer_core/src/sync/staging/run.rs"), "god-file"):
+        "星图 staging 合并调度：路径分类、对象合并与冲突计划共享同一提交计划；"
+        "#1060 把库归属条目/文件夹并入对象级三方合并；"
+        "TODO(#1060) 后续按 graph/object/library 拆分",
+    (Path("core/writer_core/src/sync/staging/run.rs"), "production-test-bloat"):
+        "既有 staging 计划测试，验证对象/成员/冲突决策；待拆分到独立 _tests.rs",
     (Path("apps/sujian_mcp/src/tools.rs"), "god-file"):
         "MCP 工具聚合：工具 schema、授权与 Core 调用共享同一会话上下文；"
         "#1060 节点标签改为显式关系命令、节点编辑拆 definition/move；"

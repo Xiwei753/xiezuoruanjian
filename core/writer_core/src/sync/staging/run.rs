@@ -293,9 +293,10 @@ impl StagingRun {
             ContentClass, LwwWinner, ThreeWayResult,
         };
         use crate::sync::staging::starmap_merge::{
-            is_starmap_graph_meta_path, is_starmap_index_path, is_starmap_library_index_path,
+            is_starmap_graph_meta_path, is_starmap_index_path, is_starmap_library_entry_path,
+            is_starmap_library_folder_path, is_starmap_library_index_path,
             is_starmap_library_node_path, is_starmap_meta_path, is_starmap_object_file_path,
-            merge_starmap_graph_with_object_versions,
+            merge_starmap_graph_with_object_versions, merge_starmap_library_index,
             merge_starmap_object_with_versions, parse_object_path, ObjectMergeDecision,
             StarmapMergeResult,
         };
@@ -575,8 +576,7 @@ impl StagingRun {
                         });
                     }
                     (Some(local_bytes), Some(remote_bytes)) => {
-                        let merged =
-                            crate::sync::lww::merge_stats_jsonl(local_bytes, remote_bytes);
+                        let merged = crate::sync::lww::merge_stats_jsonl(local_bytes, remote_bytes);
                         if merged.is_empty() {
                             plan.noop.push(rel);
                         } else if merged == local_bytes {
@@ -637,11 +637,28 @@ impl StagingRun {
                 // 决策，导致删除-修改冲突的星图从全局索引消失。
                 continue;
             } else if is_starmap_library_index_path(&rel_str) {
-                // 素材库索引：推迟到所有星图合并后按条目 ID 三方合并。
-                continue;
-            } else if is_starmap_library_node_path(&rel_str) {
-                // 共享节点本体：按对象 ID 做三方合并，保留双端独立新增，
-                // 内容冲突再用 manifest 的更新时间事实决胜。
+                // 素材库索引是派生缓存：归属事实在 entries/、folders/ 对象文件
+                // 中合并；索引本地存在时保留，缺失时才接收远端重建结果。
+                match merge_starmap_library_index(None, local.as_deref(), incoming.as_deref())? {
+                    StarmapMergeResult::KeepLocal => plan.keep_local.push(rel),
+                    StarmapMergeResult::ApplyIncoming(content) => {
+                        plan.content_actions.push(CommitAction::Apply {
+                            rel_path: rel,
+                            content,
+                        });
+                    }
+                    StarmapMergeResult::NoOp => plan.noop.push(rel),
+                    StarmapMergeResult::ApplyMerged(_) | StarmapMergeResult::Delete => {
+                        // 派生缓存策略不会产生这两个变体。
+                        plan.keep_local.push(rel);
+                    }
+                }
+            } else if is_starmap_library_node_path(&rel_str)
+                || is_starmap_library_entry_path(&rel_str)
+                || is_starmap_library_folder_path(&rel_str)
+            {
+                // 共享节点本体 / 素材归属 / 库目录：按对象文件内容做三方合并，
+                // 保留双端独立新增；tombstone 也是文件内容，不按删除处理。
                 let local_record = build_local_lww_record_with_manifest(
                     live_root,
                     &rel,
@@ -677,7 +694,8 @@ impl StagingRun {
                     }
                     ObjectMergeDecision::Delete => {
                         if local.is_some() {
-                            plan.content_actions.push(CommitAction::Delete { rel_path: rel });
+                            plan.content_actions
+                                .push(CommitAction::Delete { rel_path: rel });
                         } else {
                             plan.noop.push(rel);
                         }
@@ -1147,48 +1165,6 @@ impl StagingRun {
                         // index.json 不会走整图删除路径（Delete 变体仅用于
                         // graph.json 的整图删除）。此处兜底处理，避免漏分支。
                         plan.noop.push(index_rel);
-                    }
-                }
-            }
-        }
-
-        // --- 处理素材库索引 index.json ---
-        // 条目、文件夹和节点实例按稳定 ID 合并；跨库移动只改归属记录。
-        {
-            use crate::sync::staging::starmap_merge::{
-                merge_starmap_library_index, StarmapMergeResult,
-            };
-            let library_index_rel = PathBuf::from("starmaps/library/index.json");
-            let index_local = read_opt_bytes(&live_root.join(&library_index_rel))?;
-            let index_incoming = read_opt_bytes(&staging_root.join(&library_index_rel))?;
-            let index_base = select_baseline_bytes(
-                live_known_files,
-                &library_index_rel,
-                index_local.as_deref(),
-                index_incoming.as_deref(),
-            );
-
-            if index_base.is_some() || index_local.is_some() || index_incoming.is_some() {
-                match merge_starmap_library_index(
-                    index_base.as_deref(),
-                    index_local.as_deref(),
-                    index_incoming.as_deref(),
-                )? {
-                    StarmapMergeResult::NoOp => {
-                        plan.noop.push(library_index_rel);
-                    }
-                    StarmapMergeResult::KeepLocal => {
-                        plan.keep_local.push(library_index_rel);
-                    }
-                    StarmapMergeResult::ApplyIncoming(content)
-                    | StarmapMergeResult::ApplyMerged(content) => {
-                        plan.content_actions.push(CommitAction::Apply {
-                            rel_path: library_index_rel,
-                            content,
-                        });
-                    }
-                    StarmapMergeResult::Delete => {
-                        plan.noop.push(library_index_rel);
                     }
                 }
             }
@@ -2028,12 +2004,7 @@ mod tests {
     fn write_known_files(live_root: &Path, entries: &[(&str, &[u8])]) {
         let known_files = entries
             .iter()
-            .map(|(path, content)| {
-                (
-                    (*path).to_string(),
-                    crate::sync::hash::content_md5(content),
-                )
-            })
+            .map(|(path, content)| ((*path).to_string(), crate::sync::hash::content_md5(content)))
             .collect();
         let state = crate::sync::types::SyncState {
             known_files,

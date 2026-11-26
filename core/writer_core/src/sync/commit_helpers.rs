@@ -540,12 +540,15 @@ fn refresh_starmap_references_after_commit(
             crate::sync::staging::CommitAction::Apply { rel_path, .. }
             | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
         };
-        is_starmap_node_instance_path(rel)
+        is_starmap_node_instance_path(rel) || is_starmap_library_object_path(rel)
     });
-    if !touched || !live_root.join("starmaps/library/index.json").is_file() {
+    if !touched {
         return Ok(());
     }
-    crate::starmap::library::rebuild_reference_index(live_root)?;
+    crate::starmap::library::refresh_library_index_cache(live_root)?;
+    if crate::starmap::library::library_entries_dir(live_root).is_dir() {
+        crate::starmap::library::rebuild_reference_index(live_root)?;
+    }
     Ok(())
 }
 
@@ -970,6 +973,42 @@ fn build_sync_commit_receipt(
     }
 }
 
+fn chapter_project_root(root: &Path, key: &crate::chapter::ChapterKey) -> PathBuf {
+    let candidate = root.join("projects").join(&key.project_id);
+    if candidate.is_dir() {
+        candidate
+    } else {
+        root.to_path_buf()
+    }
+}
+
+fn chapter_target_rel_path(
+    target_root: &Path,
+    key: &crate::chapter::ChapterKey,
+    meta: bool,
+) -> PathBuf {
+    let relative = if meta {
+        PathBuf::from("volumes")
+            .join(&key.volume_id)
+            .join("chapters")
+            .join(&key.chapter_id)
+            .join("chapter.meta.json")
+    } else {
+        PathBuf::from("volumes")
+            .join(&key.volume_id)
+            .join("chapters")
+            .join(&key.chapter_id)
+            .join("chapter.md")
+    };
+    if target_root.join("projects").is_dir() {
+        PathBuf::from("projects")
+            .join(&key.project_id)
+            .join(relative)
+    } else {
+        relative
+    }
+}
+
 /// 先通过章节协调器提交现有章节正文，返回已处理的 target-relative 路径。
 ///
 /// 章节正文与 `chapter.meta.json` 不能继续由通用 SaveTransaction 直接写：
@@ -1009,16 +1048,19 @@ fn commit_synced_chapter_bodies(
 
     let result: crate::error::Result<()> = (|| {
         for change in plan_synced_chapter_mutations(&project_id, content_actions)? {
-            let body_rel = chapter_body_rel_path(&change.key);
-            let meta_rel = chapter_meta_rel_path(&change.key);
+            let chapter_root = chapter_project_root(live_root, &change.key);
+            let base_chapter_root = chapter_project_root(base_root, &change.key);
+            let body_rel = chapter_target_rel_path(live_root, &change.key, false);
+            let meta_rel = chapter_target_rel_path(live_root, &change.key, true);
+            let _ = (chapter_body_rel_path, chapter_meta_rel_path);
             if change.mutation == SyncedChapterMutation::Delete {
                 let base = crate::chapter::commit::read_chapter_state(
-                    base_root,
+                    &base_chapter_root,
                     &change.key.volume_id,
                     &change.key.chapter_id,
                 );
                 let live = crate::chapter::commit::read_chapter_state_recovering(
-                    live_root,
+                    &chapter_root,
                     guard,
                     &change.key.volume_id,
                     &change.key.chapter_id,
@@ -1088,7 +1130,7 @@ fn commit_synced_chapter_bodies(
                             });
                         let receipt_fact = request.sync_proof_facts.first().cloned();
                         match crate::chapter::commit::commit_chapter_with_guard(
-                            live_root,
+                            &chapter_root,
                             Some(guard),
                             request,
                         )? {
@@ -1124,7 +1166,7 @@ fn commit_synced_chapter_bodies(
             }
 
             let current = crate::chapter::commit::read_chapter_state_recovering(
-                live_root,
+                &chapter_root,
                 guard,
                 &change.key.volume_id,
                 &change.key.chapter_id,
@@ -1217,7 +1259,7 @@ fn commit_synced_chapter_bodies(
 
             let receipt_fact = request.sync_proof_facts.first().cloned();
             match crate::chapter::commit::commit_chapter_with_guard(
-                live_root,
+                &chapter_root,
                 Some(guard),
                 request,
             )? {

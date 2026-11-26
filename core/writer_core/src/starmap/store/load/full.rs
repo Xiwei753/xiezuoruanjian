@@ -78,8 +78,7 @@ impl StarMapStore {
 
         // 链接唯一持久化在 annotations 仓库：集合以仓库为准全量重建投影，
         // 不再逐个读 `links/` 文件。`GraphMeta.link_ids` 只是派生缓存。
-        self.load_canvas_links()?;
-        self.reconcile_graph_meta_link_indexes();
+        self.reload_canvas_links_with_version()?;
 
         // 收死最终成员集合：非 dirty 的内存对象如果不在 GraphMeta 成员列表里，
         // 视为 orphan（partial cache 残留或磁盘 revision 切换留下的旧对象），移除。

@@ -207,8 +207,7 @@ impl StarMapStore {
         // 不再逐个读 `links/` 文件；`GraphMeta.link_ids` 只作派生缓存，
         // 与仓库不一致时以仓库重建并标脏。新画布没有 graph.json 也要加载
         // 仓库里已存在的链接（例如从另一设备同步来的注解记录）。
-        self.load_canvas_links()?;
-        self.reconcile_graph_meta_link_indexes();
+        self.reload_canvas_links_with_version()?;
         Ok(())
     }
 }

@@ -101,6 +101,94 @@ impl StarMapStore {
         self.current_node_view(instance_id)
     }
 
+    /// 提交前把实例刷新为磁盘上的持久版本，并检测外部更新。
+    ///
+    /// 同步或另一个进程可能已经改过坐标：
+    /// - 未 dirty 的实例直接以磁盘记录替换缓存，后续 expected 校验读到的就是
+    ///   持久 revision，而不是缓存里的旧值；
+    /// - dirty 的实例保留内存版本，但磁盘 revision 更新时返回显式冲突，
+    ///   绝不能让下一次 flush 静默覆盖外部已落盘的坐标。
+    /// 新对象尚未落盘时没有持久 revision，不构成冲突。
+    fn refresh_instance_for_write(&mut self, instance_id: &str) -> Result<()> {
+        let instance_rel =
+            crate::starmap::package_storage::node_rel_path(&self.starmap_id, instance_id);
+        if !self.app_data_root.join(&instance_rel).is_file() {
+            // 新对象尚未落盘：没有持久 revision 可冲突。
+            return Ok(());
+        }
+        let current_revision = self.nodes.get(instance_id).map(|node| node.updated_at);
+        match self.try_load_node(instance_id) {
+            Ok(persisted) => {
+                if self.dirty_nodes.contains(instance_id) {
+                    let current = current_revision.unwrap_or(0);
+                    if persisted.updated_at > current {
+                        return Err(revision_conflict(
+                            "instance",
+                            instance_id,
+                            current,
+                            persisted.updated_at,
+                        ));
+                    }
+                } else {
+                    self.nodes.insert(instance_id.to_string(), persisted);
+                }
+                Ok(())
+            }
+            Err(crate::error::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// 落盘前校验对象写入的两个 expected revision。
+    ///
+    /// 定义 revision 直接读素材本体文件；实例 revision 以磁盘实例文件为准
+    /// （未 dirty 时先刷新缓存）。任何一项不匹配都在写盘前返回冲突，避免
+    /// 定义已写入、实例校验才失败的半提交。
+    pub fn check_node_write_revisions(
+        &mut self,
+        instance_id: &str,
+        expected_definition_revision: Option<u64>,
+        expected_instance_revision: Option<u64>,
+    ) -> Result<()> {
+        if !self.nodes.contains_key(instance_id) {
+            self.ensure_object_loaded(instance_id)?;
+        }
+        self.refresh_instance_for_write(instance_id)?;
+        if let Some(expected) = expected_definition_revision {
+            let asset_id = self.asset_id_for_node(instance_id);
+            let current =
+                crate::starmap::library::load_node_definition(&self.app_data_root, &asset_id)?
+                    .map(|definition| definition.revision())
+                    .unwrap_or(0);
+            if current != expected {
+                return Err(revision_conflict(
+                    "definition",
+                    &asset_id,
+                    expected,
+                    current,
+                ));
+            }
+        }
+        if let Some(expected) = expected_instance_revision {
+            let current = self
+                .nodes
+                .get(instance_id)
+                .ok_or_else(node_not_found)?
+                .updated_at;
+            if current != expected {
+                return Err(revision_conflict(
+                    "instance",
+                    instance_id,
+                    expected,
+                    current,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// 应用实例补丁：只改实例事实，并单调推进实例 revision。
     pub fn update_node_instance(
         &mut self,
@@ -114,6 +202,9 @@ impl StarMapStore {
         if !self.nodes.contains_key(instance_id) {
             self.ensure_object_loaded(instance_id)?;
         }
+        // 未 dirty 的实例以磁盘持久 revision 为准，不能拿缓存里的旧版本
+        // 通过 expected 校验后覆盖外部已落盘的新坐标。
+        self.refresh_instance_for_write(instance_id)?;
         let node = self.nodes.get_mut(instance_id).ok_or_else(node_not_found)?;
         if let Some(expected) = expected_instance_revision {
             if node.updated_at != expected {
@@ -183,7 +274,10 @@ impl StarMapStore {
         )
     }
 
-    pub fn delete_node(&mut self, node_id: &str) -> Result<()> {
+    pub fn delete_node(
+        &mut self,
+        node_id: &str,
+    ) -> Result<crate::starmap::store::DeletedStarmapObjects> {
         if !self.nodes.contains_key(node_id) {
             self.ensure_object_loaded(node_id)?;
         }
@@ -194,13 +288,18 @@ impl StarMapStore {
             )));
         }
 
+        // 级联闭包依赖链接投影：先按仓库版本刷新，避免用过期投影漏删/误删。
+        self.refresh_link_projection()?;
+
         // 统一级联闭包规划：循环扩展被删 Embed 的下一层级联，直到不动点。
         // 旧实现只做一次级联（node_cascade_ids），会遗漏传递级联——
         // 删 node n 级联删 embed e，但 e 的删除又应级联删以其为第一段
         // EnterEmbed 的其他 embed/edge，旧实现不会继续扩展。
         // 级联 ID 计算复用 `cascade_closure_plan` 纯函数，candidate 模拟删除
         // 也用同一函数，避免两套逻辑漂移。
-        let cascade = self.cascade_closure_plan(&CascadeOrigin::Node(node_id.to_string()));
+        let origin = CascadeOrigin::Node(node_id.to_string());
+        let cascade = self.cascade_closure_plan(&origin);
+        let deleted = crate::starmap::store::DeletedStarmapObjects::from_cascade(&origin, &cascade);
 
         self.remove_node(node_id);
 
@@ -216,10 +315,12 @@ impl StarMapStore {
         // 不能只从投影移除，否则仓库里的活动链接会在下次加载时复活。
         let link_ids: Vec<String> = cascade.link_ids.clone();
         for lid in &link_ids {
-            self.delete_link(lid)?;
+            self.delete_link_projected(lid)?;
         }
+        // 本批 tombstone 已写仓库：失效版本，下一次读取按仓库重建投影。
+        self.invalidate_link_projection_version();
 
-        Ok(())
+        Ok(deleted)
     }
 }
 

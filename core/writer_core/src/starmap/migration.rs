@@ -361,6 +361,9 @@ pub(crate) fn migrate_all_starmap_graphs(app_data_root: &Path) -> Result<()> {
         let starmap_id = entry.file_name().to_string_lossy().to_string();
         migrate_one_starmap_graph(app_data_root, &starmap_id)?;
     }
+    // Issue #1060：画布循环只覆盖被引用的素材；素材库里尚未放到任何画布上的
+    // 旧节点定义也要迁移标签，否则这些标签会从界面消失。
+    tags::migrate_library_node_tags(app_data_root)?;
     Ok(())
 }
 

@@ -97,6 +97,9 @@ pub struct StarMapNodeInstance {
 }
 
 /// 库目录中的一条归属记录。
+///
+/// 每条记录独立持久化为 `starmaps/library/entries/<entry_id>.json`；
+/// `index.json` 只是由这些文件聚合出的缓存。`updated_at` 是该对象的 revision。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapLibraryEntry {
@@ -107,8 +110,12 @@ pub struct StarMapLibraryEntry {
     pub target: StarMapAssetRef,
     #[serde(default)]
     pub created_at: u64,
+    /// 该对象的 revision。
     #[serde(default)]
     pub updated_at: u64,
+    /// 删除标记；`Some` 表示已 tombstone，`updated_at` 仍记录最后 revision。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -121,8 +128,12 @@ pub struct StarMapLibraryFolder {
     pub name: String,
     #[serde(default)]
     pub created_at: u64,
+    /// 该对象的 revision。
     #[serde(default)]
     pub updated_at: u64,
+    /// 删除标记；`Some` 表示已 tombstone，`updated_at` 仍记录最后 revision。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -322,12 +333,35 @@ mod tests {
             target: StarMapAssetRef::node("n1"),
             created_at: 1,
             updated_at: 1,
+            deleted_at: None,
         };
         let mut moved = entry.clone();
         moved.scope = StarMapAssetScope::Project {
             project_id: "p1".to_string(),
         };
         assert_eq!(moved.target.asset_id, entry.target.asset_id);
+    }
+
+    #[test]
+    fn tombstone_flag_round_trips_and_is_omitted_when_none() {
+        let entry = StarMapLibraryEntry {
+            entry_id: "le_1".to_string(),
+            parent_folder_id: None,
+            scope: StarMapAssetScope::Global,
+            target: StarMapAssetRef::node("n1"),
+            created_at: 1,
+            updated_at: 2,
+            deleted_at: None,
+        };
+        let alive = serde_json::to_string(&entry).unwrap();
+        assert!(!alive.contains("deletedAt"));
+
+        let mut tombstoned = entry;
+        tombstoned.deleted_at = Some(7);
+        let json = serde_json::to_string(&tombstoned).unwrap();
+        assert!(json.contains("\"deletedAt\":7"));
+        let parsed: StarMapLibraryEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.deleted_at, Some(7));
     }
 
     #[test]

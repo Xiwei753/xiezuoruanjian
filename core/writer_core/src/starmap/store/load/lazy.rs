@@ -6,6 +6,8 @@ use super::super::StarMapStore;
 impl StarMapStore {
     pub fn ensure_loaded(&mut self) -> Result<()> {
         if self.current_load_phase >= Some(LoadPhase::PrefetchNearbyObjects) {
+            // 已加载：链接仓库可能被 MCP/同步/另一个实例改写，按版本刷新投影。
+            self.refresh_link_projection()?;
             return Ok(());
         }
         self.load_phased(LoadPhase::PrefetchNearbyObjects)?;
@@ -14,6 +16,8 @@ impl StarMapStore {
 
     pub fn ensure_fully_loaded(&mut self) -> Result<()> {
         if self.current_load_phase >= Some(LoadPhase::BackgroundFullLoad) {
+            // 已加载：链接仓库可能被 MCP/同步/另一个实例改写，按版本刷新投影。
+            self.refresh_link_projection()?;
             return Ok(());
         }
         self.load_full()?;

@@ -1,13 +1,20 @@
 //! 全局/作品素材库目录、共享节点头与画布实例反向索引。
 //!
-//! - `starmaps/library/index.json` 只保存归属/分类（entries、folders）。
+//! - `starmaps/library/entries/<entry_id>.json` 是素材归属的唯一事实来源。
+//! - `starmaps/library/folders/<folder_id>.json` 是库目录的唯一事实来源。
+//! - `starmaps/library/index.json` 是由独立对象文件重建的派生缓存，不是事实来源。
 //! - `starmaps/library/nodes/<bucket>/<asset_id>.json` 保存唯一可写内容本体。
 //! - `starmaps/library/references.json` 是可重建的派生反向索引，不保存位置。
 //! - 画布节点文件只保存 `StarMapNodeInstance`，位置属于各自画布。
+//!
+//! 删除以对象文件内的 `deletedAt` tombstone 表达；加载时过滤 tombstone，
+//! 不把记录从独立文件中直接移除，避免同步无法区分删除与未同步的新增。
 
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use serde::de::DeserializeOwned;
 
 use crate::error::{Error, Result};
 use crate::starmap::types::*;
@@ -23,6 +30,36 @@ pub(crate) fn library_index_rel_path() -> PathBuf {
 
 pub(crate) fn library_index_abs_path(app_data_root: &Path) -> PathBuf {
     app_data_root.join(library_index_rel_path())
+}
+
+pub(crate) fn library_entries_dir(app_data_root: &Path) -> PathBuf {
+    library_dir(app_data_root).join("entries")
+}
+
+pub(crate) fn library_folders_dir(app_data_root: &Path) -> PathBuf {
+    library_dir(app_data_root).join("folders")
+}
+
+pub(crate) fn library_entry_rel_path(entry_id: &str) -> PathBuf {
+    PathBuf::from("starmaps")
+        .join("library")
+        .join("entries")
+        .join(format!("{entry_id}.json"))
+}
+
+pub(crate) fn library_entry_abs_path(app_data_root: &Path, entry_id: &str) -> PathBuf {
+    app_data_root.join(library_entry_rel_path(entry_id))
+}
+
+pub(crate) fn library_folder_rel_path(folder_id: &str) -> PathBuf {
+    PathBuf::from("starmaps")
+        .join("library")
+        .join("folders")
+        .join(format!("{folder_id}.json"))
+}
+
+pub(crate) fn library_folder_abs_path(app_data_root: &Path, folder_id: &str) -> PathBuf {
+    app_data_root.join(library_folder_rel_path(folder_id))
 }
 
 pub(crate) fn reference_index_rel_path() -> PathBuf {
@@ -47,21 +84,28 @@ pub(crate) fn node_definition_abs_path(app_data_root: &Path, asset_id: &str) -> 
     app_data_root.join(node_definition_rel_path(asset_id))
 }
 
+/// 读取聚合库索引。
+///
+/// 存在独立对象目录时以 `entries/*.json`、`folders/*.json` 为唯一事实来源；
+/// 只有旧 `index.json` 时执行一次性拆分（不覆盖已有对象文件），此后
+/// `index.json` 仍作为派生缓存保留。
 pub fn load_library_index(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
-    let path = library_index_abs_path(app_data_root);
-    if !path.exists() {
-        return Ok(StarMapLibraryIndex::default());
+    let has_objects =
+        library_entries_dir(app_data_root).exists() || library_folders_dir(app_data_root).exists();
+    if has_objects {
+        return load_library_objects(app_data_root);
     }
-    let content = fs::read_to_string(&path)?;
-    let index: StarMapLibraryIndex = serde_json::from_str(&content)?;
-    if index.schema_version != CURRENT_LIBRARY_SCHEMA_VERSION {
-        return Err(Error::UnsupportedVersion {
-            version: index.schema_version.to_string(),
-        });
+    if library_index_abs_path(app_data_root).exists() {
+        migrate_legacy_library_index(app_data_root)?;
+        return load_library_objects(app_data_root);
     }
-    Ok(index)
+    Ok(StarMapLibraryIndex::default())
 }
 
+/// 写入聚合缓存 `index.json`。
+///
+/// 这是由独立对象文件聚合出的派生缓存，不是事实来源；任何写路径都必须先写
+/// `entries/`、`folders/` 对象文件。
 pub fn save_library_index(app_data_root: &Path, index: &StarMapLibraryIndex) -> Result<()> {
     fs::create_dir_all(library_dir(app_data_root))?;
     let mut index = index.clone();
@@ -69,6 +113,98 @@ pub fn save_library_index(app_data_root: &Path, index: &StarMapLibraryIndex) -> 
     index.updated_at = crate::starmap::now_epoch();
     let content = serde_json::to_string_pretty(&index)?;
     atomic_write_string(&library_index_abs_path(app_data_root), &content)
+}
+
+/// 从两个独立对象目录读取聚合索引。
+fn load_library_objects(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
+    let entries = read_library_records::<StarMapLibraryEntry>(&library_entries_dir(app_data_root))?;
+    let folders =
+        read_library_records::<StarMapLibraryFolder>(&library_folders_dir(app_data_root))?;
+    Ok(aggregate_library_objects(entries, folders))
+}
+
+/// 读取目录下全部 `*.json` 对象；目录不存在视为空，单个坏文件返回错误。
+fn read_library_records<T: DeserializeOwned>(dir: &Path) -> Result<Vec<T>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|value| value.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    let mut records = Vec::with_capacity(paths.len());
+    for path in paths {
+        let content = fs::read_to_string(&path)?;
+        let record = serde_json::from_str::<T>(&content).map_err(|error| {
+            Error::Other(format!(
+                "invalid library object {}: {error}",
+                path.display()
+            ))
+        })?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+/// 过滤 tombstone、修复悬空父目录并按稳定 ID 排序。
+fn aggregate_library_objects(
+    mut entries: Vec<StarMapLibraryEntry>,
+    mut folders: Vec<StarMapLibraryFolder>,
+) -> StarMapLibraryIndex {
+    folders.retain(|folder| folder.deleted_at.is_none());
+    entries.retain(|entry| entry.deleted_at.is_none());
+    let folder_ids: HashSet<&str> = folders
+        .iter()
+        .map(|folder| folder.folder_id.as_str())
+        .collect();
+    for entry in &mut entries {
+        if entry
+            .parent_folder_id
+            .as_deref()
+            .is_some_and(|parent| !folder_ids.contains(parent))
+        {
+            entry.parent_folder_id = None;
+        }
+    }
+    entries.sort_by(|left, right| left.entry_id.cmp(&right.entry_id));
+    folders.sort_by(|left, right| left.folder_id.cmp(&right.folder_id));
+    let updated_at = entries
+        .iter()
+        .map(|entry| entry.updated_at)
+        .chain(folders.iter().map(|folder| folder.updated_at))
+        .max()
+        .unwrap_or(0);
+    StarMapLibraryIndex {
+        schema_version: CURRENT_LIBRARY_SCHEMA_VERSION,
+        entries,
+        folders,
+        updated_at,
+    }
+}
+
+/// 把旧 `index.json` 中的归属记录逐条写成独立对象文件；已有文件不覆盖。
+fn migrate_legacy_library_index(app_data_root: &Path) -> Result<()> {
+    let path = library_index_abs_path(app_data_root);
+    let content = fs::read_to_string(&path)?;
+    let legacy: StarMapLibraryIndex = serde_json::from_str(&content)?;
+    fs::create_dir_all(library_entries_dir(app_data_root))?;
+    fs::create_dir_all(library_folders_dir(app_data_root))?;
+    for folder in &legacy.folders {
+        if !library_folder_abs_path(app_data_root, &folder.folder_id).exists() {
+            save_library_folder(app_data_root, folder)?;
+        }
+    }
+    for entry in &legacy.entries {
+        if !library_entry_abs_path(app_data_root, &entry.entry_id).exists() {
+            save_library_entry(app_data_root, entry)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn load_reference_index(app_data_root: &Path) -> Result<StarMapReferenceIndex> {
@@ -95,30 +231,29 @@ pub fn save_reference_index(app_data_root: &Path, index: &StarMapReferenceIndex)
     atomic_write_string(&reference_index_abs_path(app_data_root), &content)
 }
 
-/// 确保库索引存在并完成旧数据拆分；反向索引缺失时从画布实例文件重建。
+/// 确保库目录已初始化；反向索引缺失时从画布实例文件重建。
+///
+/// 首次进入（既没有独立对象文件也没有旧索引）时执行旧数据拆分，保证旧画布/
+/// 星图对象转换成独立归属文件。
 pub fn ensure_library_index(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
-    let path = library_index_abs_path(app_data_root);
-    if path.exists() {
-        let content = fs::read_to_string(&path)?;
-        let value: serde_json::Value = serde_json::from_str(&content)?;
-        let version = value
-            .get("schemaVersion")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
-        if version == CURRENT_LIBRARY_SCHEMA_VERSION {
-            let index: StarMapLibraryIndex = serde_json::from_value(value)?;
-            if !reference_index_abs_path(app_data_root).exists() {
-                rebuild_reference_index(app_data_root)?;
-            }
-            return Ok(index);
-        }
+    let initialized = library_entries_dir(app_data_root).exists()
+        || library_folders_dir(app_data_root).exists()
+        || library_index_abs_path(app_data_root).exists();
+    if !initialized {
+        return migrate_library(app_data_root);
     }
-    migrate_library(app_data_root)
+    let index = load_library_index(app_data_root)?;
+    if !reference_index_abs_path(app_data_root).exists() {
+        rebuild_reference_index(app_data_root)?;
+    }
+    Ok(index)
 }
 
 /// 旧数据迁移：每个旧节点的 `id` 成为共享本体 ID，画布文件改写为实例文件。
 ///
-/// 只执行一次；保留已有库目录归属/folder 和旧版 `nodeInstances` 映射。
+/// 旧 `index.json` 中的 entries/folders 先由 [`load_library_index`] 拆成独立
+/// 对象文件（保留原 ID/时间戳/scope/target/parent），再为旧图对象补齐缺失
+/// 的归属文件。幂等：已有独立文件不覆盖。
 pub fn migrate_library(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
     // 先把旧图对象存储迁移到当前 schema，再拆分本体/实例；否则旧的完整
     // 节点文件会先被改写成实例文件，导致图迁移缺少 position 源数据。
@@ -126,39 +261,30 @@ pub fn migrate_library(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
     let starmaps_dir = app_data_root.join("starmaps");
     if !starmaps_dir.exists() {
         let index = StarMapLibraryIndex::default();
+        fs::create_dir_all(library_entries_dir(app_data_root))?;
+        fs::create_dir_all(library_folders_dir(app_data_root))?;
         save_library_index(app_data_root, &index)?;
         save_reference_index(app_data_root, &StarMapReferenceIndex::default())?;
         return Ok(index);
     }
 
     let now = crate::starmap::now_epoch();
-    let mut index = StarMapLibraryIndex::default();
+    let mut index = load_library_index(app_data_root)?;
     index.updated_at = now;
     let mut refs = StarMapReferenceIndex::default();
     refs.updated_at = now;
 
     let mut legacy_instances: Vec<StarMapNodeInstance> = Vec::new();
-    let mut seen_assets = HashSet::new();
-    let mut seen_folders = HashSet::new();
-    let mut seen_entries = HashSet::new();
+    let mut seen_assets: HashSet<String> = index
+        .entries
+        .iter()
+        .map(|entry| asset_key(&entry.target))
+        .collect();
 
     let index_path = library_index_abs_path(app_data_root);
     if index_path.exists() {
         let content = fs::read_to_string(&index_path)?;
         let value: serde_json::Value = serde_json::from_str(&content)?;
-        if let Ok(legacy) = serde_json::from_value::<StarMapLibraryIndex>(value.clone()) {
-            for folder in legacy.folders {
-                if seen_folders.insert(folder.folder_id.clone()) {
-                    index.folders.push(folder);
-                }
-            }
-            for entry in legacy.entries {
-                if seen_entries.insert(entry.entry_id.clone()) {
-                    seen_assets.insert(asset_key(&entry.target));
-                    index.entries.push(entry);
-                }
-            }
-        }
         if let Some(instances) = value.get("nodeInstances") {
             legacy_instances = serde_json::from_value(instances.clone()).unwrap_or_default();
         }
@@ -201,6 +327,7 @@ pub fn migrate_library(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
                 target,
                 created_at: meta.created_at,
                 updated_at: now,
+                deleted_at: None,
             });
         }
 
@@ -269,15 +396,37 @@ pub fn migrate_library(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
                     target,
                     created_at: definition.created_at,
                     updated_at: now,
+                    deleted_at: None,
                 });
             }
             push_reference(&mut refs, &instance);
         }
     }
 
+    persist_missing_library_objects(app_data_root, &index)?;
     save_library_index(app_data_root, &index)?;
     save_reference_index(app_data_root, &refs)?;
     Ok(index)
+}
+
+/// 把聚合索引里尚未落到独立文件的记录补齐；已有文件不覆盖。
+fn persist_missing_library_objects(
+    app_data_root: &Path,
+    index: &StarMapLibraryIndex,
+) -> Result<()> {
+    fs::create_dir_all(library_entries_dir(app_data_root))?;
+    fs::create_dir_all(library_folders_dir(app_data_root))?;
+    for folder in &index.folders {
+        if !library_folder_abs_path(app_data_root, &folder.folder_id).exists() {
+            save_library_folder(app_data_root, folder)?;
+        }
+    }
+    for entry in &index.entries {
+        if !library_entry_abs_path(app_data_root, &entry.entry_id).exists() {
+            save_library_entry(app_data_root, entry)?;
+        }
+    }
+    Ok(())
 }
 
 fn asset_key(target: &StarMapAssetRef) -> String {
@@ -402,6 +551,103 @@ pub(crate) fn new_folder_id() -> String {
     format!("lf_{}", uuid::Uuid::new_v4())
 }
 
+/// 原子写入单条素材归属对象，返回相对路径。
+pub(crate) fn save_library_entry(
+    app_data_root: &Path,
+    entry: &StarMapLibraryEntry,
+) -> Result<PathBuf> {
+    let rel_path = library_entry_rel_path(&entry.entry_id);
+    let path = app_data_root.join(&rel_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(entry)?;
+    atomic_write_string(&path, &content)?;
+    Ok(rel_path)
+}
+
+fn read_library_entry(app_data_root: &Path, entry_id: &str) -> Result<Option<StarMapLibraryEntry>> {
+    let path = library_entry_abs_path(app_data_root, entry_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)?;
+    Ok(Some(serde_json::from_str(&content)?))
+}
+
+/// 原子写入单个库目录对象，返回相对路径。
+pub(crate) fn save_library_folder(
+    app_data_root: &Path,
+    folder: &StarMapLibraryFolder,
+) -> Result<PathBuf> {
+    let rel_path = library_folder_rel_path(&folder.folder_id);
+    let path = app_data_root.join(&rel_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(folder)?;
+    atomic_write_string(&path, &content)?;
+    Ok(rel_path)
+}
+
+fn read_library_folder(
+    app_data_root: &Path,
+    folder_id: &str,
+) -> Result<Option<StarMapLibraryFolder>> {
+    let path = library_folder_abs_path(app_data_root, folder_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)?;
+    Ok(Some(serde_json::from_str(&content)?))
+}
+
+/// 把 entry 标记为 tombstone 并写回；不存在时返回 `Ok(None)`。
+pub(crate) fn tombstone_library_entry(
+    app_data_root: &Path,
+    entry_id: &str,
+    now: u64,
+) -> Result<Option<PathBuf>> {
+    let Some(mut entry) = read_library_entry(app_data_root, entry_id)? else {
+        return Ok(None);
+    };
+    entry.deleted_at = Some(now);
+    entry.updated_at = now.max(entry.updated_at.saturating_add(1));
+    Ok(Some(save_library_entry(app_data_root, &entry)?))
+}
+
+/// 把 folder 标记为 tombstone 并写回；不存在时返回 `Ok(None)`。
+pub fn tombstone_library_folder(
+    app_data_root: &Path,
+    folder_id: &str,
+    now: u64,
+) -> Result<Option<PathBuf>> {
+    let Some(mut folder) = read_library_folder(app_data_root, folder_id)? else {
+        return Ok(None);
+    };
+    folder.deleted_at = Some(now);
+    folder.updated_at = now.max(folder.updated_at.saturating_add(1));
+    Ok(Some(save_library_folder(app_data_root, &folder)?))
+}
+
+/// 从独立对象文件重建并写出 `index.json` 派生缓存。
+///
+/// 没有任何对象文件时保持无操作；旧布局存在 `index.json` 时先完成一次拆分，
+/// 避免用空聚合覆盖旧缓存。
+pub(crate) fn refresh_library_index_cache(app_data_root: &Path) -> Result<()> {
+    let has_objects =
+        library_entries_dir(app_data_root).exists() || library_folders_dir(app_data_root).exists();
+    if !has_objects {
+        if library_index_abs_path(app_data_root).exists() {
+            migrate_legacy_library_index(app_data_root)?;
+        } else {
+            return Ok(());
+        }
+    }
+    let index = load_library_objects(app_data_root)?;
+    save_library_index(app_data_root, &index)
+}
+
 pub fn ensure_library_entry(
     index: &mut StarMapLibraryIndex,
     scope: &StarMapAssetScope,
@@ -424,15 +670,40 @@ pub fn ensure_library_entry(
         target,
         created_at: timestamp,
         updated_at: timestamp,
+        deleted_at: None,
     };
     index.entries.push(entry.clone());
     entry
 }
 
+/// 纯内存 [`ensure_library_entry`] 的持久化版本：新 entry 写独立对象文件并
+/// 刷新聚合缓存，已有 entry 不重写。
+pub(crate) fn ensure_library_entry_persisted(
+    app_data_root: &Path,
+    scope: &StarMapAssetScope,
+    target: StarMapAssetRef,
+    parent_folder_id: Option<String>,
+    timestamp: u64,
+) -> Result<StarMapLibraryEntry> {
+    let mut index = ensure_library_index(app_data_root)?;
+    if let Some(existing) = index
+        .entries
+        .iter()
+        .find(|entry| entry.target == target)
+        .cloned()
+    {
+        return Ok(existing);
+    }
+    let entry = ensure_library_entry(&mut index, scope, target, parent_folder_id, timestamp);
+    save_library_entry(app_data_root, &entry)?;
+    refresh_library_index_cache(app_data_root)?;
+    Ok(entry)
+}
+
 /// 创建共享素材本体与库归属；不登记画布引用，也不写实例记录。
 ///
 /// Issue #1060：普通编辑不写库索引。本函数只在**首次创建素材**（新建节点、
-/// 复制素材）时调用；已有素材直接返回，不重写 index.json。
+/// 复制素材）时调用；已有素材直接返回，不写独立归属文件、不刷新缓存。
 pub fn create_node_asset(
     app_data_root: &Path,
     project_id: Option<&str>,
@@ -443,19 +714,14 @@ pub fn create_node_asset(
     if !definition_path.exists() {
         save_node_definition(app_data_root, definition)?;
     }
-    let mut index = ensure_library_index(app_data_root)?;
     let scope = StarMapAssetScope::from_project_id(project_id);
-    let before = index.entries.len();
-    ensure_library_entry(
-        &mut index,
+    ensure_library_entry_persisted(
+        app_data_root,
         &scope,
         StarMapAssetRef::node(asset_id),
         None,
         crate::starmap::now_epoch(),
-    );
-    if index.entries.len() != before {
-        save_library_index(app_data_root, &index)?;
-    }
+    )?;
     Ok(())
 }
 
@@ -497,23 +763,19 @@ pub fn ensure_starmap_asset(
     app_data_root: &Path,
     meta: &crate::starmap::StarMapMeta,
 ) -> Result<StarMapLibraryEntry> {
-    let mut index = ensure_library_index(app_data_root)?;
     let scope = StarMapAssetScope::from_project_id(meta.project_id.as_deref());
-    let before = index.entries.len();
-    let entry = ensure_library_entry(
-        &mut index,
+    ensure_library_entry_persisted(
+        app_data_root,
         &scope,
         StarMapAssetRef::starmap(meta.starmap_id.clone()),
         None,
         crate::starmap::now_epoch(),
-    );
-    if index.entries.len() != before {
-        save_library_index(app_data_root, &index)?;
-    }
-    Ok(entry)
+    )
 }
 
 /// 把已有或新建的素材 entry 放到指定 scope/文件夹；只改归属，不改本体 ID。
+///
+/// 已 tombstone 的 entry 不在聚合索引里，不能被移动或复用。
 pub fn assign_entry_scope(
     app_data_root: &Path,
     target: StarMapAssetRef,
@@ -539,11 +801,13 @@ pub fn assign_entry_scope(
             target,
             created_at: timestamp,
             updated_at: timestamp,
+            deleted_at: None,
         };
         index.entries.push(entry.clone());
         entry
     };
-    save_library_index(app_data_root, &index)?;
+    save_library_entry(app_data_root, &entry)?;
+    refresh_library_index_cache(app_data_root)?;
     Ok(entry)
 }
 
@@ -699,13 +963,27 @@ pub fn list_library(
     Ok((entries, folders))
 }
 
+/// 按素材查找库归属条目（跨 scope）。
+///
+/// 写入方在创建素材后用它把独立 entry 文件登记进同一份变更事实；
+/// tombstone 条目已被 `load_library_index` 过滤，不会返回。
+pub fn find_library_entry(
+    app_data_root: &Path,
+    target: &StarMapAssetRef,
+) -> Result<Option<StarMapLibraryEntry>> {
+    Ok(load_library_index(app_data_root)?
+        .entries
+        .into_iter()
+        .find(|entry| &entry.target == target))
+}
+
 pub fn create_folder(
     app_data_root: &Path,
     scope: &StarMapAssetScope,
     parent_folder_id: Option<String>,
     name: &str,
 ) -> Result<StarMapLibraryFolder> {
-    let mut index = ensure_library_index(app_data_root)?;
+    let index = ensure_library_index(app_data_root)?;
     if let Some(parent_id) = parent_folder_id.as_deref() {
         let parent = index
             .folders
@@ -726,9 +1004,10 @@ pub fn create_folder(
         name: name.to_string(),
         created_at: now,
         updated_at: now,
+        deleted_at: None,
     };
-    index.folders.push(folder.clone());
-    save_library_index(app_data_root, &index)?;
+    save_library_folder(app_data_root, &folder)?;
+    refresh_library_index_cache(app_data_root)?;
     Ok(folder)
 }
 
@@ -760,16 +1039,23 @@ pub fn move_entry(
     entry.parent_folder_id = parent_folder_id;
     entry.updated_at = crate::starmap::now_epoch();
     let result = entry.clone();
-    save_library_index(app_data_root, &index)?;
+    save_library_entry(app_data_root, &result)?;
+    refresh_library_index_cache(app_data_root)?;
     Ok(result)
 }
 
+/// 对匹配素材的全部 active entry 写 tombstone，再刷新派生缓存。
 pub fn remove_entries_for_asset(app_data_root: &Path, target: &StarMapAssetRef) -> Result<()> {
-    let mut index = ensure_library_index(app_data_root)?;
-    let before = index.entries.len();
-    index.entries.retain(|entry| &entry.target != target);
-    if index.entries.len() != before {
-        save_library_index(app_data_root, &index)?;
+    let index = ensure_library_index(app_data_root)?;
+    let now = crate::starmap::now_epoch();
+    let mut changed = false;
+    for entry in index.entries.iter().filter(|entry| &entry.target == target) {
+        if tombstone_library_entry(app_data_root, &entry.entry_id, now)?.is_some() {
+            changed = true;
+        }
+    }
+    if changed {
+        refresh_library_index_cache(app_data_root)?;
     }
     Ok(())
 }
@@ -790,29 +1076,100 @@ pub fn asset_title(app_data_root: &Path, target: &StarMapAssetRef) -> Result<Opt
 mod tests {
     use super::*;
 
+    fn temp_root() -> PathBuf {
+        std::env::temp_dir().join(format!("starmap-library-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn entry(entry_id: &str, asset_id: &str) -> StarMapLibraryEntry {
+        StarMapLibraryEntry {
+            entry_id: entry_id.into(),
+            parent_folder_id: None,
+            scope: StarMapAssetScope::Global,
+            target: StarMapAssetRef::node(asset_id),
+            created_at: 1,
+            updated_at: 2,
+            deleted_at: None,
+        }
+    }
+
+    fn folder(folder_id: &str) -> StarMapLibraryFolder {
+        StarMapLibraryFolder {
+            folder_id: folder_id.into(),
+            parent_folder_id: None,
+            scope: StarMapAssetScope::Global,
+            name: "folder".into(),
+            created_at: 1,
+            updated_at: 2,
+            deleted_at: None,
+        }
+    }
+
     #[test]
-    fn moving_entry_does_not_change_target() {
-        let root =
-            std::env::temp_dir().join(format!("starmap-library-test-{}", uuid::Uuid::new_v4()));
-        let mut index = StarMapLibraryIndex::default();
-        let entry = ensure_library_entry(
-            &mut index,
-            &StarMapAssetScope::Global,
-            StarMapAssetRef::node("n1"),
-            None,
-            1,
-        );
-        save_library_index(&root, &index).unwrap();
-        let moved = move_entry(
+    fn entry_files_are_fact_source_and_tombstones_are_hidden() {
+        let root = temp_root();
+        let mut dead = folder("lf_dead");
+        dead.deleted_at = Some(5);
+        save_library_folder(&root, &dead).unwrap();
+        let mut first = entry("le_1", "n1");
+        first.parent_folder_id = Some("lf_dead".into());
+        save_library_entry(&root, &first).unwrap();
+        save_library_entry(&root, &entry("le_2", "n2")).unwrap();
+        move_entry(
             &root,
-            &entry.entry_id,
+            "le_1",
             &StarMapAssetScope::Project {
-                project_id: "p1".to_string(),
+                project_id: "p1".into(),
             },
             None,
         )
         .unwrap();
-        assert_eq!(moved.target.asset_id, "n1");
+        let loaded = load_library_index(&root).unwrap();
+        assert!(loaded.folders.is_empty());
+        assert_eq!(loaded.entries.len(), 2);
+        assert_eq!(loaded.entries[0].parent_folder_id, None);
+        assert_eq!(loaded.entries[0].scope.project_id(), Some("p1"));
+
+        remove_entries_for_asset(&root, &StarMapAssetRef::node("n1")).unwrap();
+        assert_eq!(load_library_index(&root).unwrap().entries.len(), 1);
+        let raw: StarMapLibraryEntry = serde_json::from_str(
+            &std::fs::read_to_string(library_entry_abs_path(&root, "le_1")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(raw.deleted_at, Some(raw.updated_at));
+        let cached: StarMapLibraryIndex =
+            serde_json::from_str(&std::fs::read_to_string(library_index_abs_path(&root)).unwrap())
+                .unwrap();
+        assert_eq!(cached.entries.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_index_migrates_to_independent_files_once() {
+        let root = temp_root();
+        let legacy_dir = root.join("starmaps/library");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        let legacy = StarMapLibraryIndex {
+            schema_version: CURRENT_LIBRARY_SCHEMA_VERSION,
+            entries: vec![entry("le_legacy", "n_legacy")],
+            folders: vec![folder("lf_legacy")],
+            updated_at: 3,
+        };
+        std::fs::write(
+            legacy_dir.join("index.json"),
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(load_library_index(&root).unwrap().entries[0].created_at, 1);
+        assert!(library_entry_abs_path(&root, "le_legacy").is_file());
+        assert!(library_folder_abs_path(&root, "lf_legacy").is_file());
+        assert_eq!(load_library_index(&root).unwrap().entries.len(), 1);
+        assert_eq!(
+            std::fs::read_dir(library_entries_dir(&root))
+                .unwrap()
+                .count(),
+            1
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -569,8 +569,6 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
-        // 删除最后一个入口可能改写根身份 index；先登记备份，再修改图与 index。
-        contribution_txn.prepare_paths(&[self.app_data_root.join("starmaps/index.json")])?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -594,31 +592,63 @@ impl WriterCoreApi {
                 .find(|embed| embed.instance_id == instance_id)
                 .map(|embed| embed.target_starmap_id.clone())
         });
-        self.core_write()
-            .delete_starmap_embed(starmap_id, instance_id)?;
+        // 删除事实先预览：级联链接墓碑在删除时立即写 annotations 仓库，
+        // 必须在执行前登记回滚路径。
+        let preview = self
+            .core_write()
+            .preview_starmap_deletion(
+                starmap_id,
+                crate::starmap::store::CascadeOrigin::Embed(instance_id.to_string()),
+            )
+            .map_err(WriterError::from)?;
+        let preview_paths = self.deleted_starmap_object_rel_paths(starmap_id, &preview)?;
+        contribution_txn.prepare_paths(&self.starmap_deletion_rollback_paths(
+            starmap_id,
+            &preview_paths.0,
+            &preview_paths.1,
+        ))?;
+        let deleted = self
+            .core_write()
+            .delete_starmap_embed(starmap_id, instance_id)
+            .map_err(WriterError::from)?;
+        let deleted_paths = self.deleted_starmap_object_rel_paths(starmap_id, &deleted)?;
+        if deleted_paths != preview_paths {
+            log::warn!(
+                "delete_starmap_embed: preview and actual deletion differ for {starmap_id}/{instance_id}"
+            );
+        }
         if let Some(target_starmap_id) = embedded_target {
             // 在内存态上检查剩余入口；真正 flush 交给来源事务统一完成。
             self.core_write()
                 .restore_root_starmap_if_unembedded(&target_starmap_id)?;
         }
-        self.record_starmap_object(
+        self.record_starmap_deletion_facts(
+            &mut contribution_txn,
             project_id.as_deref(),
             starmap_id,
-            crate::writing_stats::ContributionObjectType::StarMapEmbed,
-            instance_id,
-            crate::writing_stats::ContributionOperation::Delete,
+            &deleted,
             before.as_ref(),
-            None,
         )?;
-        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
-            action: crate::search::SearchIndexAction::Delete,
-            object_id: format!("starmap_embed:{}:{}", starmap_id, instance_id),
-            scope: crate::search::SearchScope::All,
-            title: String::new(),
-            body: String::new(),
-            target: None,
-        });
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
+        let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
+        for path in deleted_paths.0 {
+            change_set = change_set.add_delete(path);
+        }
+        // 链接墓碑写的是 annotations 记录（文件仍在），按 upsert 登记。
+        for path in deleted_paths.1 {
+            change_set = change_set.add_upsert(path);
+        }
+        let change_set = change_set
+            .add_upsert(crate::starmap::package_storage::graph_meta_rel_path(
+                starmap_id,
+            ))
+            .add_upsert(crate::starmap::library::reference_index_rel_path())
+            .add_upsert(std::path::PathBuf::from("starmaps/index.json"));
+        if let Err(error) =
+            self.record_workspace_change_set_history(&change_set, "delete_starmap_embed")
+        {
+            log::warn!("delete_starmap_embed history failed: {error}");
+        }
         if let Err(error) = crate::storage::workspace_events::append_structure_event(
             &self.app_data_root,
             starmap_id,
@@ -638,6 +668,9 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
+        // 链接记录由 annotations 仓库唯一持有：写入前登记回滚路径。
+        let link_rel = self.starmap_link_rel_path(starmap_id, &link.link_id)?;
+        contribution_txn.prepare_paths(&[self.app_data_root.join(&link_rel)])?;
         let result = self
             .core_write()
             .add_starmap_link(starmap_id, link.try_into().map_err(WriterError::from)?)
@@ -692,6 +725,8 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
+        let link_rel = self.starmap_link_rel_path(starmap_id, link_id)?;
+        contribution_txn.prepare_paths(&[self.app_data_root.join(&link_rel)])?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -754,6 +789,8 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
+        let link_rel = self.starmap_link_rel_path(starmap_id, link_id)?;
+        contribution_txn.prepare_paths(&[self.app_data_root.join(&link_rel)])?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -880,6 +917,9 @@ impl WriterCoreApi {
         let mut paths = vec![
             crate::starmap::library::library_index_abs_path(&self.app_data_root),
             crate::starmap::library::reference_index_abs_path(&self.app_data_root),
+            // 归属条目/文件夹是独立对象文件：整目录登记回滚，避免新文件残留。
+            crate::starmap::library::library_entries_dir(&self.app_data_root),
+            crate::starmap::library::library_folders_dir(&self.app_data_root),
         ];
         if include_definitions {
             paths.push(crate::starmap::library::library_dir(&self.app_data_root).join("nodes"));
@@ -928,6 +968,9 @@ impl WriterCoreApi {
             .create_starmap_library_folder(&scope, parent_folder_id, name)
             .map_err(WriterError::from)?;
         let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(crate::starmap::library::library_folder_rel_path(
+                &folder.folder_id,
+            ))
             .add_upsert(crate::starmap::library::library_index_rel_path());
         self.commit_library_transaction(
             &mut contribution_txn,
@@ -953,6 +996,9 @@ impl WriterCoreApi {
             .move_starmap_library_entry(entry_id, &scope, parent_folder_id)
             .map_err(WriterError::from)?;
         let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(crate::starmap::library::library_entry_rel_path(
+                &entry.entry_id,
+            ))
             .add_upsert(crate::starmap::library::library_index_rel_path());
         self.commit_library_transaction(
             &mut contribution_txn,
@@ -1175,11 +1221,20 @@ impl WriterCoreApi {
                     Some(delta),
                 )?;
                 self.commit_contribution_batch(&mut copy_batch)?;
-                let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+                let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
                     .add_upsert(crate::starmap::library::node_definition_rel_path(
                         &asset.asset_id,
                     ))
                     .add_upsert(crate::starmap::library::library_index_rel_path());
+                // 归属条目是独立对象文件：拿到 entry_id 后登记同一份变更事实。
+                if let Some(entry) =
+                    crate::starmap::library::find_library_entry(&self.app_data_root, &asset)
+                        .map_err(WriterError::from)?
+                {
+                    change_set = change_set.add_upsert(
+                        crate::starmap::library::library_entry_rel_path(&entry.entry_id),
+                    );
+                }
                 self.commit_library_transaction(
                     &mut contribution_txn,
                     &change_set,
@@ -1567,7 +1622,7 @@ impl WriterCoreApi {
             after.as_ref(),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
-        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
             .add_upsert(crate::starmap::package_storage::node_rel_path(
                 starmap_id, &result.id,
             ))
@@ -1577,8 +1632,19 @@ impl WriterCoreApi {
             .add_upsert(crate::starmap::library::library_index_rel_path())
             .add_upsert(crate::starmap::library::reference_index_rel_path())
             .add_upsert(crate::starmap::library::node_definition_rel_path(
-                &result.id,
+                &result.asset_id,
             ));
+        // 新素材的归属条目是独立对象文件；已有素材不重复登记。
+        if let Some(entry) = crate::starmap::library::find_library_entry(
+            &self.app_data_root,
+            &crate::starmap::types::StarMapAssetRef::node(&result.asset_id),
+        )
+        .map_err(WriterError::from)?
+        {
+            change_set = change_set.add_upsert(crate::starmap::library::library_entry_rel_path(
+                &entry.entry_id,
+            ));
+        }
         if let Err(error) =
             self.record_workspace_change_set_history(&change_set, "add_starmap_node")
         {
@@ -2520,6 +2586,125 @@ impl WriterCoreApi {
         Ok(result.into())
     }
 
+    /// 删除事实对应的 workspace 相对路径。
+    ///
+    /// 返回 `(对象文件, 链接记录)`：对象文件是真正的删除；链接记录写的是
+    /// tombstone（文件仍存在），变更事实按 upsert 登记。
+    fn deleted_starmap_object_rel_paths(
+        &self,
+        starmap_id: &str,
+        deleted: &crate::starmap::store::DeletedStarmapObjects,
+    ) -> ApiResult<(Vec<std::path::PathBuf>, Vec<std::path::PathBuf>)> {
+        let mut objects = Vec::new();
+        for node_id in &deleted.nodes {
+            objects.push(crate::starmap::package_storage::node_rel_path(
+                starmap_id, node_id,
+            ));
+        }
+        for edge_id in &deleted.edges {
+            objects.push(crate::starmap::package_storage::edge_rel_path(
+                starmap_id, edge_id,
+            ));
+        }
+        for instance_id in &deleted.embeds {
+            objects.push(crate::starmap::package_storage::embed_rel_path(
+                starmap_id,
+                instance_id,
+            ));
+        }
+        let mut links = Vec::new();
+        for link_id in &deleted.links {
+            links.push(
+                crate::starmap::store::link_repository::annotation_link_rel_path(
+                    &self.app_data_root,
+                    starmap_id,
+                    link_id,
+                )
+                .map_err(WriterError::from)?,
+            );
+        }
+        Ok((objects, links))
+    }
+
+    /// 删除写事务的回滚路径：对象文件 + 链接记录 + graph meta + 派生索引 + 星图根索引。
+    fn starmap_deletion_rollback_paths(
+        &self,
+        starmap_id: &str,
+        object_paths: &[std::path::PathBuf],
+        link_paths: &[std::path::PathBuf],
+    ) -> Vec<std::path::PathBuf> {
+        let mut paths: Vec<std::path::PathBuf> = object_paths
+            .iter()
+            .chain(link_paths.iter())
+            .map(|path| self.app_data_root.join(path))
+            .collect();
+        paths.push(
+            self.app_data_root
+                .join(crate::starmap::package_storage::graph_meta_rel_path(
+                    starmap_id,
+                )),
+        );
+        paths.push(crate::starmap::library::reference_index_abs_path(
+            &self.app_data_root,
+        ));
+        paths.push(self.app_data_root.join("starmaps/index.json"));
+        paths
+    }
+
+    /// 把一次删除真正移除的对象全部登记为同一份贡献/搜索/变更事实。
+    ///
+    /// 级联删除的边、嵌入与链接墓碑都必须记录，不能只记被点中的对象：
+    /// 否则实际业务文件已删除，历史与搜索却仍指向它们。
+    fn record_starmap_deletion_facts(
+        &self,
+        contribution_txn: &mut StarmapStoreTransaction<'_>,
+        project_id: Option<&str>,
+        starmap_id: &str,
+        deleted: &crate::starmap::store::DeletedStarmapObjects,
+        before: Option<&crate::starmap::types::StarMapGraph>,
+    ) -> ApiResult<()> {
+        use crate::writing_stats::{ContributionObjectType, ContributionOperation};
+
+        let mut record = |object_type, object_id: &str, prefix: &str| -> ApiResult<()> {
+            self.record_starmap_object(
+                project_id,
+                starmap_id,
+                object_type,
+                object_id,
+                ContributionOperation::Delete,
+                before,
+                None,
+            )?;
+            contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Delete,
+                object_id: format!("{prefix}:{starmap_id}:{object_id}"),
+                scope: crate::search::SearchScope::All,
+                title: String::new(),
+                body: String::new(),
+                target: None,
+            });
+            Ok(())
+        };
+
+        for node_id in &deleted.nodes {
+            record(ContributionObjectType::StarMapNode, node_id, "starmap_node")?;
+        }
+        for edge_id in &deleted.edges {
+            record(ContributionObjectType::StarMapEdge, edge_id, "starmap_edge")?;
+        }
+        for instance_id in &deleted.embeds {
+            record(
+                ContributionObjectType::StarMapEmbed,
+                instance_id,
+                "starmap_embed",
+            )?;
+        }
+        for link_id in &deleted.links {
+            record(ContributionObjectType::StarMapLink, link_id, "starmap_link")?;
+        }
+        Ok(())
+    }
+
     pub fn delete_starmap_node(&self, starmap_id: &str, node_id: &str) -> ApiResult<bool> {
         self.delete_starmap_node_expected(starmap_id, node_id, None)
     }
@@ -2533,9 +2718,6 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
-        contribution_txn.prepare_paths(&[crate::starmap::library::reference_index_abs_path(
-            &self.app_data_root,
-        )])?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
         ensure_starmap_revision(
             before
@@ -2547,29 +2729,48 @@ impl WriterCoreApi {
             node_id,
         )?;
         let project_id = get_starmap_project_id(self, starmap_id);
-        self.core_write().delete_starmap_node(starmap_id, node_id)?;
-        contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
-            action: crate::search::SearchIndexAction::Delete,
-            object_id: format!("starmap_node:{}:{}", starmap_id, node_id),
-            scope: crate::search::SearchScope::All,
-            title: String::new(),
-            body: String::new(),
-            target: None,
-        });
-        self.record_starmap_object(
+        // 删除事实先预览：级联链接墓碑在删除时立即写 annotations 仓库，
+        // 必须在执行前登记回滚路径，否则失败回滚无法恢复活动链接。
+        let preview = self
+            .core_write()
+            .preview_starmap_deletion(
+                starmap_id,
+                crate::starmap::store::CascadeOrigin::Node(node_id.to_string()),
+            )
+            .map_err(WriterError::from)?;
+        let preview_paths = self.deleted_starmap_object_rel_paths(starmap_id, &preview)?;
+        contribution_txn.prepare_paths(&self.starmap_deletion_rollback_paths(
+            starmap_id,
+            &preview_paths.0,
+            &preview_paths.1,
+        ))?;
+        let deleted = self
+            .core_write()
+            .delete_starmap_node(starmap_id, node_id)
+            .map_err(WriterError::from)?;
+        let deleted_paths = self.deleted_starmap_object_rel_paths(starmap_id, &deleted)?;
+        if deleted_paths != preview_paths {
+            log::warn!(
+                "delete_starmap_node: preview and actual deletion differ for {starmap_id}/{node_id}"
+            );
+        }
+        self.record_starmap_deletion_facts(
+            &mut contribution_txn,
             project_id.as_deref(),
             starmap_id,
-            crate::writing_stats::ContributionObjectType::StarMapNode,
-            node_id,
-            crate::writing_stats::ContributionOperation::Delete,
+            &deleted,
             before.as_ref(),
-            None,
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
-        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
-            .add_delete(crate::starmap::package_storage::node_rel_path(
-                starmap_id, node_id,
-            ))
+        let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
+        for path in deleted_paths.0 {
+            change_set = change_set.add_delete(path);
+        }
+        // 链接墓碑写的是 annotations 记录（文件仍在），按 upsert 登记。
+        for path in deleted_paths.1 {
+            change_set = change_set.add_upsert(path);
+        }
+        let change_set = change_set
             .add_upsert(crate::starmap::package_storage::graph_meta_rel_path(
                 starmap_id,
             ))
@@ -2824,7 +3025,7 @@ impl WriterCoreApi {
                 .or_insert_with(|| {
                     crate::starmap::store::StarMapStore::new(&core.app_data_root, root_starmap_id)
                 });
-            store.ensure_fully_loaded().map_err(|e| {
+            core.ensure_starmap_loaded(store).map_err(|e| {
                 WriterError::Other(format!(
                     "build_resolver_context: ensure_fully_loaded failed: {e:?}"
                 ))
@@ -3265,7 +3466,9 @@ impl WriterCoreApi {
             return Ok(graph);
         }
         let mut store = crate::starmap::store::StarMapStore::new(&self.app_data_root, starmap_id);
-        store.ensure_fully_loaded().map_err(WriterError::from)?;
+        self.core_write()
+            .ensure_starmap_loaded(&mut store)
+            .map_err(WriterError::from)?;
         Ok(store.to_starmap_graph())
     }
 
@@ -3403,13 +3606,30 @@ impl WriterCoreApi {
 
     /// 链接写入落在 annotations 仓库：把注解链接记录路径登记进本地 history，
     /// 不再登记已废弃的 `starmaps/<id>/links/*.json`。
-    fn record_starmap_link_path(&self, starmap_id: &str, link_id: &str, operation: &str) {
-        match crate::starmap::store::link_repository::annotation_link_rel_path(
+    /// 链接记录在 annotations 仓库中的 workspace 相对路径。
+    fn starmap_link_rel_path(
+        &self,
+        starmap_id: &str,
+        link_id: &str,
+    ) -> ApiResult<std::path::PathBuf> {
+        crate::starmap::store::link_repository::annotation_link_rel_path(
             &self.app_data_root,
             starmap_id,
             link_id,
-        ) {
-            Ok(path) => self.record_workspace_paths_history(&[path], operation),
+        )
+        .map_err(WriterError::from)
+    }
+
+    fn record_starmap_link_path(&self, starmap_id: &str, link_id: &str, operation: &str) {
+        match self.starmap_link_rel_path(starmap_id, link_id) {
+            Ok(path) => {
+                let change_set =
+                    crate::storage::workspace_git::WorkspaceChangeSet::new().add_upsert(path);
+                if let Err(error) = self.record_workspace_change_set_history(&change_set, operation)
+                {
+                    log::warn!("{operation}: record link history failed: {error}");
+                }
+            }
             Err(error) => {
                 log::warn!("{operation}: resolve annotation link path failed: {error}");
             }

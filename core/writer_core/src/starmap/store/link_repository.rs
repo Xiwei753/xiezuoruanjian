@@ -26,6 +26,16 @@ use super::StarMapStore;
 /// 画布 link 源不属于本画布时的统一错误信息。
 const SOURCE_NOT_OWNED: &str = "link source is not owned by this canvas";
 
+/// annotations 链接仓库的轻量版本：记录目录 + 每个记录文件的指纹。
+///
+/// 只用于判断“是否需要重建读投影”，不参与持久化；目录本身也进入版本，
+/// 画布改绑作品域/全局域后不会误用旧指纹。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LinkProjectionVersion {
+    repo_dir: PathBuf,
+    files: Vec<(String, u64, u64)>,
+}
+
 fn now_millis() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -290,6 +300,53 @@ impl StarMapStore {
             }
         }
         Ok(self.links.len())
+    }
+
+    fn current_link_projection_version(&self) -> Result<LinkProjectionVersion> {
+        let store = self.annotation_store_for_canvas()?;
+        Ok(LinkProjectionVersion {
+            repo_dir: store.links_dir(),
+            files: store.links_fingerprint()?,
+        })
+    }
+
+    /// 仓库版本变化时重建当前画布的链接读投影与 GraphMeta 派生缓存。
+    ///
+    /// 本进程之外的写入（MCP、同步、另一个实例）通过版本指纹被观察到；
+    /// 没有变化时只做一次目录扫描，不重读全部记录。派生重建不算用户修改。
+    pub(crate) fn refresh_link_projection(&mut self) -> Result<bool> {
+        let version = self.current_link_projection_version()?;
+        if self.link_projection_version.as_ref() == Some(&version) {
+            return Ok(false);
+        }
+        self.load_canvas_links()?;
+        self.reconcile_graph_meta_link_indexes();
+        self.link_projection_version = Some(version);
+        self.link_projection_rebuilt = true;
+        Ok(true)
+    }
+
+    /// 完整/分阶段加载后重建投影，并记录“加载开始时”的仓库版本。
+    ///
+    /// 先取版本再读记录：加载期间发生的外部写入会让版本在下次刷新时仍判定
+    /// 为变化，不会被误当成已是最新。
+    pub(in crate::starmap::store) fn reload_canvas_links_with_version(&mut self) -> Result<usize> {
+        let version = self.current_link_projection_version()?;
+        let count = self.load_canvas_links()?;
+        self.reconcile_graph_meta_link_indexes();
+        self.link_projection_version = Some(version);
+        self.link_projection_rebuilt = true;
+        Ok(count)
+    }
+
+    /// 本地写入链接后失效版本：下一次对外读取按仓库重建，避免旧投影覆盖新事实。
+    pub(in crate::starmap::store) fn invalidate_link_projection_version(&mut self) {
+        self.link_projection_version = None;
+    }
+
+    /// 取出一次性“投影已重建”标记，供 facade 失效路径依赖索引。
+    pub(crate) fn take_link_projection_rebuilt(&mut self) -> bool {
+        std::mem::take(&mut self.link_projection_rebuilt)
     }
 
     /// 用投影重建 `GraphMeta` 的链接派生缓存；不一致时标记 GraphMeta dirty。

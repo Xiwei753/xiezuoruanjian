@@ -78,7 +78,10 @@ impl StarMapStore {
         )
     }
 
-    pub fn delete_embed(&mut self, instance_id: &str) -> Result<()> {
+    pub fn delete_embed(
+        &mut self,
+        instance_id: &str,
+    ) -> Result<crate::starmap::store::DeletedStarmapObjects> {
         if !self.embeds.contains_key(instance_id) {
             self.ensure_embed_loaded(instance_id)?;
         }
@@ -89,13 +92,18 @@ impl StarMapStore {
             )));
         }
 
+        // 级联闭包依赖链接投影：先按仓库版本刷新，避免用过期投影漏删/误删。
+        self.refresh_link_projection()?;
+
         // 统一级联闭包规划：循环扩展被删 Embed 的下一层级联，直到不动点。
         // 旧实现只做一次级联（embed_cascade_ids），会遗漏传递级联——
         // 删 embed e 级联删 embed e2，但 e2 的删除又应级联删以其为第一段
         // EnterEmbed 的其他 embed/edge，旧实现不会继续扩展。
         // 级联 ID 计算复用 `cascade_closure_plan` 纯函数，candidate 模拟删除
         // 也用同一函数，避免两套逻辑漂移。
-        let cascade = self.cascade_closure_plan(&CascadeOrigin::Embed(instance_id.to_string()));
+        let origin = CascadeOrigin::Embed(instance_id.to_string());
+        let cascade = self.cascade_closure_plan(&origin);
+        let deleted = crate::starmap::store::DeletedStarmapObjects::from_cascade(&origin, &cascade);
 
         self.remove_embed(instance_id);
 
@@ -111,9 +119,11 @@ impl StarMapStore {
         // 不能只从投影移除，否则仓库里的活动链接会在下次加载时复活。
         let link_ids: Vec<String> = cascade.link_ids.clone();
         for lid in &link_ids {
-            self.delete_link(lid)?;
+            self.delete_link_projected(lid)?;
         }
+        // 本批 tombstone 已写仓库：失效版本，下一次读取按仓库重建投影。
+        self.invalidate_link_projection_version();
 
-        Ok(())
+        Ok(deleted)
     }
 }

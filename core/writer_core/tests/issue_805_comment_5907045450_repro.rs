@@ -29,12 +29,64 @@ use tempfile::TempDir;
 use writer_core::starmap;
 use writer_core::starmap::semantic::{StarMapNodeContent, StarMapProvenance};
 use writer_core::starmap::store::StarMapStore;
-use writer_core::starmap::types::{StarMapNode, StarMapNodeKind};
+use writer_core::starmap::types::{StarMapNode, StarMapNodeDefinition, StarMapNodeKind};
 use writer_core::sync::{SyncScope, SyncService, SyncState};
 
 // ---------------------------------------------------------------------------
 // 辅助
 // ---------------------------------------------------------------------------
+
+/// 实例文件必须对应可加载的共享素材本体（Issue #1060：本体/实例分离）。
+fn persist_node_definition(dir: &TempDir, node: &StarMapNode) {
+    let asset_id = node.resolved_asset_id().to_string();
+    let definition = StarMapNodeDefinition::from_node(asset_id.clone(), node);
+    writer_core::starmap::library::create_node_asset(dir.path(), None, &asset_id, &definition)
+        .unwrap();
+}
+
+/// 汇总所有同步状态文件里的 tombstone 路径。
+///
+/// App scope 的星图删除按数据分组写 tombstone（`app-meta/sync/...`），
+/// 不再只写扁平 `state.json`；断言时取全部分组的并集。
+fn collect_tombstone_paths(root: &Path) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut stack = vec![root.join("app-meta/sync")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+                continue;
+            };
+            if let Some(tombstones) = value.get("tombstones").and_then(|v| v.as_array()) {
+                paths.extend(
+                    tombstones
+                        .iter()
+                        .filter_map(|tombstone| {
+                            tombstone
+                                .get("original_path")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string)
+                        })
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+    }
+    paths
+}
 
 /// 构造一个最小可用的 StarMapNode（与 starmap/store/tests/mod.rs::make_test_node 同构）。
 fn make_node(id: &str, title: &str) -> StarMapNode {
@@ -116,7 +168,9 @@ fn verify_issue_805_delete_starmap_tombstone_present_sync_ok() {
     let starmap_id = meta.starmap_id.clone();
 
     let mut store = StarMapStore::new(&app_data_root, &starmap_id);
-    store.upsert_node(make_node("n1", "节点1"));
+    let node = make_node("n1", "节点1");
+    persist_node_definition(&tmp, &node);
+    store.upsert_node(node);
     store.flush().unwrap();
 
     // 收集星图相关文件相对路径（meta + 对象文件）。
@@ -167,15 +221,10 @@ fn verify_issue_805_delete_starmap_tombstone_present_sync_ok() {
 
     // ── 4. 断言 SyncState.tombstones 包含所有星图文件记录（修复证据） ──
     //    修复前这里缺失（bug 根因）。修复后 plan/apply 事务补齐 tombstone。
-    let state_after_delete = SyncService::load_sync_state(&app_data_root).unwrap();
+    let tombstone_paths = collect_tombstone_paths(&app_data_root);
     let missing_tombstones: Vec<_> = starmap_files
         .iter()
-        .filter(|rel| {
-            !state_after_delete
-                .tombstones
-                .iter()
-                .any(|t| t.original_path == **rel)
-        })
+        .filter(|rel| !tombstone_paths.iter().any(|path| path == *rel))
         .collect();
     assert!(
         missing_tombstones.is_empty(),
@@ -185,7 +234,7 @@ fn verify_issue_805_delete_starmap_tombstone_present_sync_ok() {
          tombstones: {:?}",
         missing_tombstones,
         starmap_files,
-        state_after_delete.tombstones
+        tombstone_paths
     );
 
     // ── 5. 触发同步（build_sync_plan → snapshot_local_records_read_only） ──
@@ -218,7 +267,9 @@ fn verify_issue_805_delete_starmap_with_changes_tombstone_present_sync_ok() {
     let starmap_id = meta.starmap_id.clone();
 
     let mut store = StarMapStore::new(&app_data_root, &starmap_id);
-    store.upsert_node(make_node("n2", "节点2"));
+    let node = make_node("n2", "节点2");
+    persist_node_definition(&tmp, &node);
+    store.upsert_node(node);
     store.flush().unwrap();
 
     let starmap_files = collect_starmap_sync_files(&app_data_root, &starmap_id);
@@ -249,22 +300,17 @@ fn verify_issue_805_delete_starmap_with_changes_tombstone_present_sync_ok() {
     api.delete_starmap(&starmap_id).unwrap();
 
     // tombstone 应全部补齐。
-    let state_after = SyncService::load_sync_state(&app_data_root).unwrap();
+    let tombstone_paths = collect_tombstone_paths(&app_data_root);
     let missing: Vec<_> = starmap_files
         .iter()
-        .filter(|rel| {
-            !state_after
-                .tombstones
-                .iter()
-                .any(|t| t.original_path == **rel)
-        })
+        .filter(|rel| !tombstone_paths.iter().any(|path| path == *rel))
         .collect();
     assert!(
         missing.is_empty(),
         "验证 #805 修复（with_changes）：tombstone 应全部补齐，仍缺失: {:?}\n\
          tombstones: {:?}",
         missing,
-        state_after.tombstones
+        tombstone_paths
     );
 
     // 同步应成功。
