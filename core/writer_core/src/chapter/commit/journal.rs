@@ -596,6 +596,7 @@ pub(crate) fn commit_chapter_with_guard(
             word_count: meta.word_count,
             written_files: Vec::new(),
             pending_projections: Vec::new(),
+            commit_sequence: 0,
         }));
     }
 
@@ -825,6 +826,7 @@ pub(crate) fn commit_chapter_with_guard(
         word_count,
         written_files,
         pending_projections: pending,
+        commit_sequence: manifest.commit_sequence,
     }))
 }
 

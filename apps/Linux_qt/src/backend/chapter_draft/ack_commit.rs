@@ -33,6 +33,7 @@ pub(crate) fn mark_committed(
         base_revision,
         base_sha256,
         None,
+        0,
     )
 }
 
@@ -51,13 +52,19 @@ pub(crate) fn mark_committed_with_settlement(
     base_revision: u64,
     base_sha256: &str,
     settlement: Option<&TextSettlement>,
+    commit_sequence: u64,
 ) -> Result<bool, String> {
     let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
         return Ok(false);
     };
     match ensure_state_result(&location) {
         Ok(true) => {}
-        Ok(false) => return Ok(false),
+        Ok(false) => {
+            // Issue #1062 评论 7194373427 第 4 项：terminal tombstone 已经是
+            // durable 决议，目录只是等待回收；重放同一事务必须幂等成功，
+            // 否则 Core journal 的 ack 会被永久扣下。
+            return Ok(store::is_terminal(&location));
+        }
         Err(error) => return Err(error),
     }
     let acknowledged_set: HashSet<&str> = acknowledged.iter().map(String::as_str).collect();
@@ -111,11 +118,13 @@ pub(crate) fn mark_committed_with_settlement(
             acked_event_ids: state.acked_event_ids.clone(),
             acked_through_revision: state.acked_through_revision,
             applied_transactions: state.applied_transactions.clone(),
+            applied_commit_sequence: state.applied_commit_sequence,
             text: state.text.clone(),
             text_revision: state.text_revision,
             text_sha256: state.text_sha256.clone(),
             persisted_text_revision: state.persisted_text_revision,
             persisted_text_sha256: state.persisted_text_sha256.clone(),
+            persisted_text_blob: state.persisted_text_blob.clone(),
             text_dirty: state.text_dirty,
             committed_text_revision: state.committed_text_revision,
             committed_text_sha256: state.committed_text_sha256.clone(),
@@ -137,11 +146,15 @@ pub(crate) fn mark_committed_with_settlement(
         state.acked_through_revision = state.acked_through_revision.max(base_revision);
         // Issue #1062 评论 7191076411 第 1 项：多笔 ack 只允许同一对象
         // generation 的递增 revision；旧事务重放幂等，不得把 base 降回去。
-        let replayed = !transaction_id.is_empty()
+        // Issue #1062 评论 7194373427 第 3 项：同一事务 ID 或已应用过的
+        // commit_sequence 都视为重放；ordering 由项目级序号决定，generation
+        // 字符串不参与顺序判断。
+        let replayed = (!transaction_id.is_empty()
             && state
                 .applied_transactions
                 .iter()
-                .any(|applied| applied == transaction_id);
+                .any(|applied| applied == transaction_id))
+            || (commit_sequence != 0 && commit_sequence <= state.applied_commit_sequence);
         let same_object = state.base_generation.is_empty()
             || base_generation.is_empty()
             || state.base_generation == base_generation;
@@ -155,6 +168,9 @@ pub(crate) fn mark_committed_with_settlement(
             state.base_generation = base_generation.to_string();
             state.base_revision = base_revision;
             state.base_sha256 = base_sha256.to_string();
+        }
+        if commit_sequence > state.applied_commit_sequence {
+            state.applied_commit_sequence = commit_sequence;
         }
         if !transaction_id.is_empty() && !replayed {
             state.applied_transactions.push(transaction_id.to_string());
@@ -186,6 +202,9 @@ pub(crate) fn mark_committed_with_settlement(
             // 缺失/残留的 text.txt 当作已提交内容，而不是损坏草稿。
             state.persisted_text_revision = settlement.snapshot_revision;
             state.persisted_text_sha256 = settlement.snapshot_digest.clone();
+            // tombstone：不再引用任何正文 blob；旧的未确认 blob 在 meta 写成功
+            // 后统一回收。
+            state.persisted_text_blob = String::new();
             state.committed_text_revision = settlement.snapshot_revision;
             state.committed_text_sha256 = settlement.snapshot_digest.clone();
         }
@@ -198,20 +217,21 @@ pub(crate) fn mark_committed_with_settlement(
             && state.failed_facts.is_empty()
             && state.failed_inputs.is_empty()
             && state.text.is_none();
-        let meta = (!empty).then(|| {
+        // Issue #1062 评论 7194373427 第 4 项：即使结算后为空，也先写 terminal
+        // tombstone；目录回收是独立、可重试的 GC，不能反过来决定事务是否成立。
+        let meta = Some(if empty {
+            store::terminal_meta(&location, state)
+        } else {
             store::meta_from_state(
                 &location,
                 state,
                 state.persisted_text_revision,
                 &state.persisted_text_sha256,
+                &state.persisted_text_blob,
             )
         });
         (empty, meta, previous, settle_text)
     };
-    if empty {
-        drop_registry_and_storage(&location);
-        return Ok(true);
-    }
     if let Some(meta) = meta {
         match store::write_meta(&location.dir, &meta) {
             Ok(()) => {
@@ -229,11 +249,13 @@ pub(crate) fn mark_committed_with_settlement(
                     state.acked_event_ids = previous.acked_event_ids;
                     state.acked_through_revision = previous.acked_through_revision;
                     state.applied_transactions = previous.applied_transactions;
+                    state.applied_commit_sequence = previous.applied_commit_sequence;
                     state.text = previous.text;
                     state.text_revision = previous.text_revision;
                     state.text_sha256 = previous.text_sha256;
                     state.persisted_text_revision = previous.persisted_text_revision;
                     state.persisted_text_sha256 = previous.persisted_text_sha256;
+                    state.persisted_text_blob = previous.persisted_text_blob;
                     state.text_dirty = previous.text_dirty;
                     state.committed_text_revision = previous.committed_text_revision;
                     state.committed_text_sha256 = previous.committed_text_sha256;
@@ -246,17 +268,22 @@ pub(crate) fn mark_committed_with_settlement(
             }
         }
     }
+    if empty {
+        lock_registry().remove(&location.key);
+        if let Err(error) = store::remove_settled_storage(&location) {
+            // 决议已 durable；目录回收失败只延迟空间释放，不能扣下 Core ack。
+            log::warn!(
+                "settled chapter draft gc deferred: project={project_id} chapter={chapter_id}: {error}"
+            );
+        }
+        return Ok(true);
+    }
     if settle_text {
-        let path = location.dir.join(store::TEXT_FILE);
-        if let Err(error) = std::fs::remove_file(&path) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                // meta 已写 tombstone：残留 text.txt 会在读取时按已确认快照
-                // 丢弃，不会当成新编辑。
-                log::warn!(
-                    "remove committed chapter draft text {}: {error}",
-                    path.display()
-                );
-            }
+        // meta 已写 tombstone：回收所有未引用正文 blob 与旧 text.txt。
+        if let Err(error) = store::gc_text_blobs(&location.dir, None) {
+            log::warn!(
+                "gc committed chapter draft text deferred: project={project_id} chapter={chapter_id}: {error}"
+            );
         }
     }
     // ack 决议已持久化，现在才回收已确认前缀文件。删除失败只会留下孤儿
@@ -280,11 +307,13 @@ struct PersistedDraftHead {
     acked_event_ids: Vec<String>,
     acked_through_revision: u64,
     applied_transactions: Vec<String>,
+    applied_commit_sequence: u64,
     text: Option<String>,
     text_revision: u64,
     text_sha256: String,
     persisted_text_revision: u64,
     persisted_text_sha256: String,
+    persisted_text_blob: String,
     text_dirty: bool,
     committed_text_revision: u64,
     committed_text_sha256: String,

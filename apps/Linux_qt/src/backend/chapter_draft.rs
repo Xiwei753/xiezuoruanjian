@@ -9,9 +9,13 @@
 // 存储布局（app-meta 是 LocalOnly，不同步）：
 //
 //   <projects_root>/<project_id>/app-meta/chapter-drafts/<chapter_id>/
-//     meta.json                 索引、基线、正文摘要；不含 projection 正文
-//     text.txt                  整章正文（原子写，2s 节流；force 立即）
+//     meta.json                 索引、基线、正文摘要/blob 引用；不含 projection 正文
+//     texts/<rev>-<digest>.txt  不可变正文快照（先写 blob 再原子切换 meta 引用）
 //     facts/<seq:08>-<id>.json  一条事实一个文件
+//     pending-acks/<tx>.json    Core 已确认、本地尚未重放的提交
+//
+//   保留草稿归档（恢复失败时不再自动恢复）：
+//     app-meta/chapter-draft-kept/<chapter_id>/<stamp>/
 //
 // 本文件做类型、内存 registry 与冻结/恢复/提交决议；磁盘布局、编解码与
 // 状态加载在 `chapter_draft::store`。
@@ -236,6 +240,8 @@ struct DraftState {
     text_sha256: String,
     persisted_text_revision: u64,
     persisted_text_sha256: String,
+    /// meta 当前引用的不可变正文 blob（空串=旧 text.txt 或没有正文）。
+    persisted_text_blob: String,
     text_dirty: bool,
     facts: Vec<DraftFactIndex>,
     next_seq: u64,
@@ -250,6 +256,9 @@ struct DraftState {
     acked_through_revision: u64,
     /// 已应用过的 Core journal transaction ID（幂等重放不回退 base）。
     applied_transactions: Vec<String>,
+    /// 已应用的最高项目 journal commit_sequence；跨对象 generation 的 ack
+    /// 顺序以它为准（Issue #1062 评论 7194373427 第 3 项）。
+    applied_commit_sequence: u64,
     /// 本次文档加载时的编辑器 revision（与章节持久化 revision 不同坐标系）。
     editor_base_revision: u64,
     /// 文档加载基线的正文摘要；只有 revision == editor_base_revision 的首个
@@ -284,6 +293,7 @@ impl DraftState {
             text_sha256: String::new(),
             persisted_text_revision: 0,
             persisted_text_sha256: String::new(),
+            persisted_text_blob: String::new(),
             text_dirty: false,
             facts: Vec::new(),
             next_seq: 1,
@@ -292,6 +302,7 @@ impl DraftState {
             acked_event_ids: Vec::new(),
             acked_through_revision: 0,
             applied_transactions: Vec::new(),
+            applied_commit_sequence: 0,
             editor_base_revision: 0,
             editor_base_sha256: String::new(),
             editor_base_session: 0,
@@ -478,6 +489,7 @@ pub(super) fn ensure_meta_header(
             state,
             state.persisted_text_revision,
             &state.persisted_text_sha256,
+            &state.persisted_text_blob,
         )
     };
     store::write_meta(&location.dir, &meta)
@@ -622,25 +634,40 @@ pub(crate) fn persist_current(
         }
         let written_revision = state.text_revision;
         let written_sha256 = state.text_sha256.clone();
-        let (meta_revision, meta_sha256) = if write_text {
-            (written_revision, written_sha256.clone())
+        let (meta_revision, meta_sha256, meta_blob) = if write_text {
+            (
+                written_revision,
+                written_sha256.clone(),
+                store::blob_name(written_revision, &written_sha256),
+            )
         } else {
             (
                 state.persisted_text_revision,
                 state.persisted_text_sha256.clone(),
+                state.persisted_text_blob.clone(),
             )
         };
         PersistPlan {
             text: write_text.then(|| state.text.clone().unwrap_or_default()),
             written_revision,
-            written_sha256,
-            meta: write_meta
-                .then(|| store::meta_from_state(&location, state, meta_revision, &meta_sha256)),
+            written_sha256: written_sha256.clone(),
+            written_blob: store::blob_name(written_revision, &written_sha256),
+            meta: write_meta.then(|| {
+                store::meta_from_state(&location, state, meta_revision, &meta_sha256, &meta_blob)
+            }),
             write_text,
         }
     };
+    // Issue #1062 评论 7194373427 第 2 项：先 durable 写出不可变 blob，再把
+    // `textBlob` 原子安装进 meta。两步之间崩溃时 meta 仍指旧正文，新 blob 只是
+    // 孤儿；绝不会出现“旧 meta 摘要校验新正文”的版本对。
     if let Some(text) = plan.text.as_deref() {
-        store::write_text(&location.dir, text)?;
+        store::write_text_blob(
+            &location.dir,
+            plan.written_revision,
+            &plan.written_sha256,
+            text,
+        )?;
     }
     if let Some(meta) = plan.meta.as_ref() {
         store::write_meta(&location.dir, meta)?;
@@ -649,6 +676,7 @@ pub(crate) fn persist_current(
         if plan.write_text {
             state.persisted_text_revision = plan.written_revision;
             state.persisted_text_sha256 = plan.written_sha256.clone();
+            state.persisted_text_blob = plan.written_blob.clone();
             if state.text_revision == plan.written_revision
                 && state.text_sha256 == plan.written_sha256
             {
@@ -658,15 +686,132 @@ pub(crate) fn persist_current(
         state.meta_dirty = false;
         state.last_persist = Some(now);
     }
+    // 引用切换成功后才回收旧 blob 与旧 text.txt；失败只留下孤儿文件，读取端
+    // 永远只认 meta 引用的那一份。
+    if plan.write_text {
+        if let Err(error) = store::gc_text_blobs(&location.dir, Some(&plan.written_blob)) {
+            log::warn!(
+                "gc chapter draft text blobs deferred: project={} chapter={}: {error}",
+                location.project_id,
+                location.chapter_id
+            );
+        }
+    }
     Ok(())
 }
 
 /// 草稿被 journal 完全确认后删除（目录 + 旧格式文件 + 内存）。
+///
+/// Issue #1062 评论 7194373427 第 4 项：先落 terminal tombstone，再做目录
+/// 回收；回收失败只延迟空间释放，下次加载会继续重试，不能把删除错误当成
+/// 结算错误（调用方的 durable 决议此时已经成立）。
 pub(crate) fn remove(projects_root: &Path, project_id: &str, chapter_id: &str) {
     let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
         return;
     };
-    drop_registry_and_storage(&location);
+    if let Ok(mut meta) =
+        store::read_meta_checked(&location.dir, &location.project_id, &location.chapter_id)
+    {
+        meta.terminal = true;
+        meta.facts.clear();
+        if let Err(error) = store::write_meta(&location.dir, &meta) {
+            log::warn!(
+                "write settled chapter draft tombstone failed: project={} chapter={}: {error}",
+                location.project_id,
+                location.chapter_id
+            );
+        }
+    }
+    if let Err(error) = store::remove_settled_storage(&location) {
+        log::warn!(
+            "settled chapter draft gc deferred: project={} chapter={}: {error}",
+            location.project_id,
+            location.chapter_id
+        );
+    }
+    lock_registry().remove(&location.key);
+}
+
+// ── 保留草稿归档（Issue #1062 评论 7194373427 第 1 项）────────────────────
+
+/// 把恢复失败、被保留（kept）的草稿目录搬进独立归档区。
+///
+/// 归档后 `chapter-drafts/<chapter_id>/` 不再存在，编辑器随后打开同一章时
+/// `note_text` 会创建全新会话目录，不会覆盖旧草稿正文/状态。返回
+/// `Ok(Some(path))` 表示已归档；`Ok(None)` 表示没有可归档内容（不创建归档
+/// 目录）；`Err` 表示搬移失败，原目录必须保持原样，调用方不能当成“已保留”。
+pub(crate) fn quarantine(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> Result<Option<String>, String> {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+        return Ok(None);
+    };
+    if !location.dir.is_dir() || !store::draft_dir_has_content(&location.dir) {
+        return Ok(None);
+    }
+    let meta = store::read_meta_checked(&location.dir, project_id, chapter_id).ok();
+    let stamp = quarantine_stamp(meta.as_ref());
+    let chapter_root = store::kept_root(projects_root, project_id).join(chapter_id);
+    let mut target = chapter_root.join(&stamp);
+    // 同一毫秒重复归档同一章时追加 -1、-2…，绝不覆盖已有归档。
+    let mut attempt = 1u32;
+    while target.exists() {
+        if attempt > 999 {
+            return Err(format!(
+                "quarantine chapter draft: no free stamp for project={project_id} chapter={chapter_id} stamp={stamp}"
+            ));
+        }
+        target = chapter_root.join(format!("{stamp}-{attempt}"));
+        attempt = attempt.saturating_add(1);
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "create chapter draft quarantine dir {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    // 只搬移目录，不复制不删除：rename 失败时原目录必须原封不动，恢复链
+    // 下次仍然看得到它。
+    std::fs::rename(&location.dir, &target).map_err(|error| {
+        format!(
+            "move chapter draft to quarantine {} -> {}: {error}",
+            location.dir.display(),
+            target.display()
+        )
+    })?;
+    // 搬移成功后才丢弃内存状态；失败路径不能动 registry。
+    lock_registry().remove(&location.key);
+    log::info!(
+        "quarantined chapter draft: project={project_id} chapter={chapter_id} target={}",
+        target.display()
+    );
+    Ok(Some(target.to_string_lossy().into_owned()))
+}
+
+/// 归档目录名：`<now_ms>-s<session>-<generation>`，只允许 ASCII 字母数字与
+/// `-`；generation 为空时不留空段。meta 不可读时退化成只有时间与会话。
+fn quarantine_stamp(meta: Option<&store::MetaData>) -> String {
+    let session = meta.map_or(0, |meta| meta.session_id);
+    let generation: String = meta.map_or_else(String::new, |meta| {
+        meta.generation
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
+            .collect()
+    });
+    if generation.is_empty() {
+        format!("{}-s{session}", now_ms())
+    } else {
+        format!("{}-s{session}-{generation}", now_ms())
+    }
+}
+
+/// 当前已归档（不可写）的保留草稿章节 id；QML 诊断用。
+pub(crate) fn kept_drafts(projects_root: &Path, project_id: &str) -> Vec<String> {
+    store::list_kept_chapter_ids(projects_root, project_id)
 }
 
 /// 测试专用：移除指定章节的进程内 registry 条目，模拟重启后从磁盘加载。
@@ -740,38 +885,12 @@ fn ensure_state(location: &DraftLocation) -> bool {
     true
 }
 
-fn drop_registry_and_storage(location: &DraftLocation) {
-    lock_registry().remove(&location.key);
-    if location.dir.exists() {
-        if let Err(error) = std::fs::remove_dir_all(&location.dir) {
-            log::warn!(
-                "remove chapter draft dir failed: project={} chapter={} path={}: {error}",
-                location.project_id,
-                location.chapter_id,
-                location.dir.display()
-            );
-        }
-    }
-    let legacy = location.legacy_path();
-    if legacy.exists() {
-        if let Err(error) = std::fs::remove_file(&legacy) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                log::warn!(
-                    "remove legacy chapter draft failed: project={} chapter={} path={}: {error}",
-                    location.project_id,
-                    location.chapter_id,
-                    legacy.display()
-                );
-            }
-        }
-    }
-}
-
 /// `persist_current` 在锁外执行 I/O 所需的不可变快照。
 struct PersistPlan {
     text: Option<String>,
     written_revision: u64,
     written_sha256: String,
+    written_blob: String,
     meta: Option<store::MetaData>,
     write_text: bool,
 }

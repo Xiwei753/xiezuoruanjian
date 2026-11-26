@@ -1,4 +1,4 @@
-use super::store::{drafts_root, fact_file_path, META_FILE, TEXT_FILE};
+use super::store::{current_text, current_text_path, drafts_root, fact_file_path, META_FILE};
 use super::*;
 
 fn temp_workspace() -> tempfile::TempDir {
@@ -164,7 +164,7 @@ fn mark_committed_removes_only_the_acknowledged_prefix() {
         "base-3"
     )
     .expect("ack cleanup"));
-    assert!(location.dir.join(TEXT_FILE).exists());
+    assert!(current_text_path(&location).is_some());
 }
 
 /// Issue #1062 评论 7191076411 第 1 项：多笔 ack 只允许同一对象 generation
@@ -343,7 +343,7 @@ fn restore_plan_rejects_corrupt_text_and_keeps_files() {
 
     assert!(restore_plan(root, "p1", "c1").is_none());
     let location = draft_location(root);
-    assert!(location.dir.join(TEXT_FILE).exists());
+    assert!(current_text_path(&location).is_some());
     assert!(location.dir.join(META_FILE).exists());
     assert!(fact_file_path(&location.dir, 1, "e1").exists());
 }
@@ -807,6 +807,7 @@ fn settlement_meta_failure_keeps_text_and_ack_responsibility() {
             snapshot_revision: 1,
             snapshot_digest: digest.clone(),
         }),
+        0,
     )
     .expect_err("meta write failure must keep the ack decision pending");
     assert!(error.contains("persist draft ack meta failed"), "{error}");
@@ -816,8 +817,8 @@ fn settlement_meta_failure_keeps_text_and_ack_responsibility() {
     )
     .expect("restore draft dir permissions");
 
-    // meta 未 durable：text.txt 与事实都还在，重放仍能作出同一决议。
-    assert!(location.dir.join(TEXT_FILE).exists());
+    // meta 未 durable：正文 blob 与事实都还在，重放仍能作出同一决议。
+    assert!(current_text_path(&location).is_some());
     let plan = restore_plan(root, "p1", "c1").expect("plan after failed settle");
     assert_eq!(plan.text.as_deref(), Some(text));
     assert_eq!(plan.fact_count, 2);
@@ -837,11 +838,12 @@ fn settlement_meta_failure_keeps_text_and_ack_responsibility() {
                 snapshot_revision: 1,
                 snapshot_digest: digest,
             }),
+            0,
         )
         .expect("retry after meta becomes writable"),
         "还有未确认事实：目录不能删除"
     );
-    assert!(!location.dir.join(TEXT_FILE).exists(), "已确认正文已收口");
+    assert!(current_text_path(&location).is_none(), "已确认正文已收口");
     let plan = restore_plan(root, "p1", "c1").expect("plan after settled ack");
     assert_eq!(plan.text, None);
     assert_eq!(plan.fact_count, 1);
@@ -868,6 +870,7 @@ fn pending_ack_replay_advances_base_and_removes_confirmed_prefix() {
             editor_session_id: 0,
             snapshot_revision: 0,
             snapshot_digest: String::new(),
+            commit_sequence: 0,
             reconciled: false,
         },
     )
@@ -919,6 +922,7 @@ fn pending_ack_replay_failure_keeps_files_and_blocks_freeze() {
             editor_session_id: 0,
             snapshot_revision: 0,
             snapshot_digest: String::new(),
+            commit_sequence: 0,
             reconciled: false,
         },
     )
@@ -1077,17 +1081,14 @@ fn text_is_persisted_only_after_fact_covers_it() {
     // 还没有覆盖编辑器 revision 2 的事实：正文候选只留在内存里。
     persist_current(root, "p1", "c1", true).expect("persist candidate meta");
     let location = draft_location(root);
-    assert!(!location.dir.join(TEXT_FILE).exists());
+    assert!(current_text_path(&location).is_none());
     assert!(!text_ready_for_commit(root, "p1", "c1"));
 
     // 证明事实覆盖 revision 2 之后才允许发布整章正文。
     note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e2", 2, 7)).expect("fact");
     assert!(text_ready_for_commit(root, "p1", "c1"));
     persist_current(root, "p1", "c1", true).expect("persist text");
-    assert_eq!(
-        std::fs::read_to_string(location.dir.join(TEXT_FILE)).expect("text file"),
-        text
-    );
+    assert_eq!(current_text(&location).expect("text file"), text);
 }
 
 #[test]
@@ -1111,7 +1112,7 @@ fn mark_committed_keeps_text_only_draft() {
     );
     persist_current(root, "p1", "c1", true).expect("persist text");
     let location = draft_location(root);
-    assert!(location.dir.join(TEXT_FILE).exists());
+    assert!(current_text_path(&location).is_some());
 
     // 空证明批次的保存回执只推进 base：草稿里仍有正文时不能删除目录，
     // 否则正在继续输入的新版本会随旧保存回执一起消失。
@@ -1119,7 +1120,7 @@ fn mark_committed_keeps_text_only_draft() {
         !mark_committed(root, "p1", "c1", "tx-2", &[], "g1", 2, "base-2")
             .expect("ack without facts")
     );
-    assert!(location.dir.join(TEXT_FILE).exists());
+    assert!(current_text_path(&location).is_some());
     let plan = restore_plan(root, "p1", "c1").expect("draft kept");
     assert_eq!(plan.text.as_deref(), Some(text));
     assert_eq!(plan.base_revision, 2);
@@ -1175,7 +1176,122 @@ fn snapshot_without_covering_fact_is_not_published_even_if_watermark_is_higher()
     persist_current(root, "p1", "c1", true).expect("persist");
     let location = draft_location(root);
     assert!(
-        !location.dir.join(TEXT_FILE).exists(),
+        current_text_path(&location).is_none(),
         "没有覆盖该 revision 的事实摘要时不得发布正文"
     );
+}
+
+mod draft_blob_and_sequence_tests {
+    //! Issue #1062 评论 7194373427 第 2/3 项：正文不可变 blob 的原子切换，
+    //! 以及跨 generation ack 以 Core 的 `commit_sequence` 为唯一排序依据。
+
+    use super::super::store::{read_meta_checked, read_new_state};
+    use super::*;
+
+    fn meta_blob(root: &Path) -> String {
+        let location = draft_location(root);
+        read_meta_checked(&location.dir, "p1", "c1")
+            .expect("meta")
+            .text_blob
+    }
+
+    fn blob_path(root: &Path, name: &str) -> std::path::PathBuf {
+        draft_location(root).dir.join("texts").join(name)
+    }
+
+    #[test]
+    fn persist_installs_blob_before_meta_and_recycles_previous_blob() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 2, 7)).expect("fact");
+        store_text(root, "第一版正文", 2);
+        persist_current(root, "p1", "c1", true).expect("persist v1");
+
+        let first = meta_blob(root);
+        assert!(!first.is_empty(), "meta 必须引用不可变正文 blob");
+        assert!(
+            blob_path(root, &first).is_file(),
+            "blob 必须先 durable 写出"
+        );
+        let location = draft_location(root);
+        assert!(
+            !location.dir.join("text.txt").exists(),
+            "新格式不再写可变的 text.txt"
+        );
+
+        note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e2", 3, 7)).expect("fact");
+        store_text(root, "第二版正文", 3);
+        persist_current(root, "p1", "c1", true).expect("persist v2");
+
+        let second = meta_blob(root);
+        assert_ne!(first, second, "引用切换后 meta 指向新的不可变 blob");
+        assert!(blob_path(root, &second).is_file());
+        assert!(
+            !blob_path(root, &first).exists(),
+            "旧 blob 只在 meta 切换成功后才回收"
+        );
+        let state = read_new_state(&location, false)
+            .expect("state")
+            .expect("some");
+        assert_eq!(state.persisted_text_blob, second);
+    }
+
+    #[test]
+    fn pending_acks_apply_in_commit_sequence_order_and_skip_replays() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        for (event_id, revision) in [("e1", 5u64), ("e2", 3u64), ("e9", 9u64)] {
+            note_fact(root, "p1", "c1", "v1", 7, "g1", fact(event_id, revision, 7)).expect("fact");
+        }
+        // 文件名/事务 ID 的字典序与真实提交顺序相反：只按 commit_sequence 排序。
+        let older = PendingAck {
+            transaction_id: "zzz-older".to_string(),
+            event_ids: vec!["e1".to_string()],
+            base_generation: "gen-B".to_string(),
+            base_revision: 7,
+            base_sha256: "sha-B".to_string(),
+            editor_session_id: 0,
+            snapshot_revision: 0,
+            snapshot_digest: String::new(),
+            commit_sequence: 1,
+            reconciled: false,
+        };
+        let newer = PendingAck {
+            transaction_id: "aaa-newer".to_string(),
+            event_ids: vec!["e2".to_string()],
+            base_generation: "gen-A".to_string(),
+            base_revision: 3,
+            base_sha256: "sha-A".to_string(),
+            editor_session_id: 0,
+            snapshot_revision: 0,
+            snapshot_digest: String::new(),
+            commit_sequence: 2,
+            reconciled: false,
+        };
+        record_pending_ack(root, "p1", "c1", &older).expect("record older ack");
+        record_pending_ack(root, "p1", "c1", &newer).expect("record newer ack");
+
+        assert_eq!(replay_pending_acks(root, "p1", "c1").expect("replay"), 2);
+        let location = draft_location(root);
+        let state = read_new_state(&location, false)
+            .expect("state")
+            .expect("draft retained by unacked fact");
+        assert_eq!(
+            state.base_generation, "gen-A",
+            "跨 generation 时后一个 commit_sequence 才是最终 base"
+        );
+        assert_eq!(state.base_revision, 3);
+        assert_eq!(state.applied_commit_sequence, 2);
+
+        // 同一批 ack 再重放：旧 sequence 幂等跳过，不把 base 推回去。
+        assert_eq!(
+            replay_pending_acks(root, "p1", "c1").expect("replay again"),
+            2
+        );
+        let state = read_new_state(&location, false)
+            .expect("state")
+            .expect("draft retained");
+        assert_eq!(state.base_generation, "gen-A");
+        assert_eq!(state.applied_commit_sequence, 2);
+    }
 }

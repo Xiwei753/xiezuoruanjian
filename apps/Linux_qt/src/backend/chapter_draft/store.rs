@@ -4,7 +4,12 @@
 //
 // 目录（app-meta 是 LocalOnly，不同步）：
 //   <projects_root>/<project_id>/app-meta/chapter-drafts/<chapter_id>/
-//     meta.json   text.txt   facts/<seq:08>-<id>.json
+//     meta.json   texts/<revision>-<digest>.txt   facts/<seq:08>-<id>.json
+//
+// Issue #1062 评论 7194373427 第 2 项：正文快照按 revision+digest 内容寻址
+// 成不可变 blob，先写出 blob，再把 `textBlob` 原子安装进 meta；旧 blob 只在
+// 引用切换成功后才回收。这样杀进程不会留下“旧 meta 指向新正文”的版本对。
+// 旧格式的 text.txt 仍然只读兼容，下一次持久化时迁成 blob 并删除。
 //
 // 所有写入走 `writer_core::storage::atomic_write_string`；本模块只做磁盘 I/O
 // 与编解码，不在 registry 锁内运行。meta 索引允许滞后（每 2s 才写），读取
@@ -16,8 +21,18 @@ use std::path::{Path, PathBuf};
 use super::{DraftFactIndex, DraftState, DRAFT_SCHEMA_VERSION, MAX_MEMORY_FACT_INDEX};
 
 pub(super) const META_FILE: &str = "meta.json";
+/// 旧格式整章正文；只读兼容，迁移后删除。
 pub(super) const TEXT_FILE: &str = "text.txt";
+const TEXTS_DIR: &str = "texts";
 const FACTS_DIR: &str = "facts";
+
+mod kept;
+mod text;
+
+pub(super) use kept::{kept_root, list_kept_chapter_ids};
+pub(super) use text::{blob_name, blob_path, gc_text_blobs, read_referenced_text, write_text_blob};
+#[cfg(test)]
+pub(super) use text::{current_text, current_text_path};
 
 pub(super) fn is_safe_id(value: &str) -> bool {
     !value.is_empty()
@@ -102,6 +117,14 @@ pub(super) struct MetaData {
     pub(super) base_sha256: String,
     pub(super) text_revision: u64,
     pub(super) text_sha256: String,
+    /// Issue #1062 评论 7194373427 第 2 项：正文快照的不可变 blob 文件名
+    /// （`texts/` 下）。空串表示只有旧格式 `text.txt` 或没有正文。
+    pub(super) text_blob: String,
+    /// Issue #1062 评论 7194373427 第 4 项：结算 Tombstone。
+    ///
+    /// 为 true 时表示这一章的事实/正文都已经写进 durable 决议，目录只是等待
+    /// 回收；读取端不得再把它当成待恢复草稿，也不再写入。
+    pub(super) terminal: bool,
     pub(super) updated_at_ms: i64,
     pub(super) facts: Vec<DraftFactIndex>,
     /// Issue #1062 复审：已随 durable receipt 确认、随后才删除事实文件的
@@ -112,6 +135,8 @@ pub(super) struct MetaData {
     pub(super) acked_through_revision: u64,
     /// 已应用过的 Core journal transaction ID：重放同一事务幂等，不回退 base。
     pub(super) applied_transactions: Vec<String>,
+    /// 已应用的最高项目 journal commit_sequence（跨 generation 的 ack 顺序）。
+    pub(super) applied_commit_sequence: u64,
     /// 本次文档加载时的编辑器 revision / 基线摘要（编辑器坐标，见 #1062 复审）。
     pub(super) editor_base_revision: u64,
     pub(super) editor_base_sha256: String,
@@ -187,6 +212,7 @@ pub(super) fn meta_from_state(
     state: &DraftState,
     text_revision: u64,
     text_sha256: &str,
+    text_blob: &str,
 ) -> MetaData {
     MetaData {
         schema_version: DRAFT_SCHEMA_VERSION,
@@ -201,17 +227,71 @@ pub(super) fn meta_from_state(
         base_sha256: state.base_sha256.clone(),
         text_revision,
         text_sha256: text_sha256.to_string(),
+        text_blob: text_blob.to_string(),
+        terminal: false,
         updated_at_ms: state.updated_at_ms,
         facts: state.facts.clone(),
         acked_event_ids: state.acked_event_ids.clone(),
         acked_through_revision: state.acked_through_revision,
         applied_transactions: state.applied_transactions.clone(),
+        applied_commit_sequence: state.applied_commit_sequence,
         editor_base_revision: state.editor_base_revision,
         editor_base_sha256: state.editor_base_sha256.clone(),
         editor_base_session: state.editor_base_session,
         committed_text_revision: state.committed_text_revision,
         committed_text_sha256: state.committed_text_sha256.clone(),
     }
+}
+
+// ── 结算 tombstone ────────────────────────────────────────────────────────
+
+/// 结算决议的终态 meta：事实/正文都已确认，只保留身份与已提交快照。
+///
+/// Issue #1062 评论 7194373427 第 4 项：目录回收可能失败，但这份 meta 一旦
+/// durable，章节草稿就已经结算完成；读取端不得再把它当成待恢复草稿。
+pub(super) fn terminal_meta(location: &DraftLocation, state: &DraftState) -> MetaData {
+    let mut meta = meta_from_state(
+        location,
+        state,
+        state.persisted_text_revision,
+        &state.persisted_text_sha256,
+        "",
+    );
+    meta.facts.clear();
+    meta.acked_event_ids.clear();
+    meta.terminal = true;
+    meta
+}
+
+/// 该目录是否已经写下 terminal 决议（只读 meta，不改状态）。
+pub(super) fn is_terminal(location: &DraftLocation) -> bool {
+    read_meta_checked(&location.dir, &location.project_id, &location.chapter_id)
+        .is_ok_and(|meta| meta.terminal)
+}
+
+/// 删除已经结算的目录与旧格式文件。
+///
+/// 失败必须返回 Err：调用方记录后按“目录待回收”处理，但**不能**把它当成
+/// 事务结算失败，也不能据此扣下已经 durable 的 Core ack。
+pub(super) fn remove_settled_storage(location: &DraftLocation) -> Result<(), String> {
+    if location.dir.exists() {
+        std::fs::remove_dir_all(&location.dir).map_err(|error| {
+            format!(
+                "remove settled chapter draft dir {}: {error}",
+                location.dir.display()
+            )
+        })?;
+    }
+    let legacy = location.legacy_path();
+    if legacy.exists() {
+        std::fs::remove_file(&legacy).map_err(|error| {
+            format!(
+                "remove settled legacy chapter draft {}: {error}",
+                legacy.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 // ── facts/<seq>-<id>.json ─────────────────────────────────────────────────
@@ -379,30 +459,6 @@ pub(super) fn merge_index(
     Ok(facts)
 }
 
-// ── text.txt ──────────────────────────────────────────────────────────────
-
-pub(super) fn read_text(location: &DraftLocation) -> Option<String> {
-    let path = location.dir.join(TEXT_FILE);
-    match std::fs::read_to_string(&path) {
-        Ok(text) => Some(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            log::warn!(
-                "read chapter draft text failed: project={} chapter={} path={}: {error}",
-                location.project_id,
-                location.chapter_id,
-                path.display()
-            );
-            None
-        }
-    }
-}
-
-pub(super) fn write_text(dir: &Path, text: &str) -> Result<(), String> {
-    writer_core::storage::atomic_write_string(&dir.join(TEXT_FILE), text)
-        .map_err(|error| format!("write chapter draft text {}: {error}", dir.display()))
-}
-
 // ── 状态加载与旧格式迁移 ──────────────────────────────────────────────────
 
 /// 读取新格式草稿。
@@ -419,6 +475,23 @@ pub(super) fn read_new_state(
         Err(error) if error.is_empty() => return Ok(None),
         Err(error) => return Err(error),
     };
+    if meta.terminal {
+        // 决议已经 durable，只差目录回收；回收失败不影响“没有草稿”的结论。
+        if let Err(error) = remove_settled_storage(location) {
+            log::warn!(
+                "settled chapter draft gc deferred: project={} chapter={}: {error}",
+                location.project_id,
+                location.chapter_id
+            );
+        }
+        return Ok(None);
+    }
+    let text = read_referenced_text(location, &meta).map_err(|error| {
+        format!(
+            "chapter draft text unreadable (kept): project={} chapter={}: {error}",
+            location.project_id, location.chapter_id
+        )
+    })?;
     let acked: HashSet<String> = meta.acked_event_ids.iter().cloned().collect();
     let mut facts = merge_index(&location.dir, &meta.index(), &acked).map_err(|error| {
         format!(
@@ -455,11 +528,12 @@ pub(super) fn read_new_state(
         base_generation: meta.base_generation,
         base_revision: meta.base_revision,
         base_sha256: meta.base_sha256,
-        text: read_text(location),
+        text,
         text_revision: meta.text_revision,
         text_sha256: meta.text_sha256.clone(),
         persisted_text_revision: meta.text_revision,
         persisted_text_sha256: meta.text_sha256,
+        persisted_text_blob: meta.text_blob,
         text_dirty: false,
         facts,
         next_seq,
@@ -468,6 +542,7 @@ pub(super) fn read_new_state(
         acked_event_ids: meta.acked_event_ids,
         acked_through_revision: meta.acked_through_revision,
         applied_transactions: meta.applied_transactions,
+        applied_commit_sequence: meta.applied_commit_sequence,
         editor_base_revision: meta.editor_base_revision,
         editor_base_sha256: meta.editor_base_sha256,
         editor_base_session: meta.editor_base_session,
@@ -492,7 +567,7 @@ pub(super) fn load_state(location: &DraftLocation) -> Result<Option<DraftState>,
 pub(super) fn migrate_legacy(location: &DraftLocation) -> Option<DraftState> {
     let legacy_path = location.legacy_path();
     let legacy = read_legacy(&legacy_path, &location.project_id, &location.chapter_id)?;
-    let (state, projections) = legacy_state(location, legacy);
+    let (mut state, projections) = legacy_state(location, legacy);
     if location.dir.exists() {
         // 没有 meta.json 的目录只可能是上一次迁移中断的产物，旧文件才是事实来源。
         if let Err(error) = std::fs::remove_dir_all(&location.dir) {
@@ -521,17 +596,28 @@ pub(super) fn migrate_legacy(location: &DraftLocation) -> Option<DraftState> {
             return None;
         }
     }
+    let mut text_blob = String::new();
     if let Some(text) = state.text.as_deref() {
-        if let Err(error) = write_text(&location.dir, text) {
-            log::warn!(
-                "migrate legacy chapter draft text failed: project={} chapter={}: {error}",
-                location.project_id,
-                location.chapter_id
-            );
-            return None;
+        match write_text_blob(&location.dir, state.text_revision, &state.text_sha256, text) {
+            Ok(name) => text_blob = name,
+            Err(error) => {
+                log::warn!(
+                    "migrate legacy chapter draft text failed: project={} chapter={}: {error}",
+                    location.project_id,
+                    location.chapter_id
+                );
+                return None;
+            }
         }
     }
-    let meta = meta_from_state(location, &state, state.text_revision, &state.text_sha256);
+    state.persisted_text_blob = text_blob.clone();
+    let meta = meta_from_state(
+        location,
+        &state,
+        state.text_revision,
+        &state.text_sha256,
+        &text_blob,
+    );
     if let Err(error) = write_meta(&location.dir, &meta) {
         log::warn!(
             "migrate legacy chapter draft meta failed: project={} chapter={}: {error}",
@@ -569,8 +655,25 @@ pub(super) fn read_summary_from_dir(
         Err(error) if error.is_empty() => return Ok(None),
         Err(error) => return Err(error),
     };
+    if meta.terminal {
+        if let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) {
+            if let Err(error) = remove_settled_storage(&location) {
+                log::warn!(
+                    "settled chapter draft gc deferred: project={} chapter={}: {error}",
+                    project_id,
+                    chapter_id
+                );
+            }
+        }
+        return Ok(None);
+    }
     let file_count = list_fact_files(dir).map_or(0, |files| files.len());
     let fact_count = meta.index().len().max(file_count);
+    let text_present = if meta.text_blob.is_empty() {
+        dir.join(TEXT_FILE).is_file()
+    } else {
+        blob_path(dir, &meta.text_blob).is_file()
+    };
     // 只有 pending-input 的草稿也要被发现；spool 读坏时仍按“有待处理”计入，
     // 并把错误留给恢复 actor 显式报告（不能当成空目录）。
     let (pending_input_count, pending_input_error) =
@@ -588,7 +691,7 @@ pub(super) fn read_summary_from_dir(
         base_generation: meta.base_generation,
         base_revision: meta.base_revision,
         base_sha256: meta.base_sha256,
-        text_present: dir.join(TEXT_FILE).is_file(),
+        text_present,
         text_revision: meta.text_revision,
         text_sha256: meta.text_sha256,
         fact_count,
@@ -604,6 +707,7 @@ pub(super) fn read_summary_from_dir(
 /// 草稿目录里是否还有需要恢复的磁盘内容（meta 缺失时也据此发现草稿）。
 pub(super) fn draft_dir_has_content(dir: &Path) -> bool {
     dir.join(TEXT_FILE).is_file()
+        || dir.join(TEXTS_DIR).is_dir()
         || dir.join(FACTS_DIR).is_dir()
         || dir.join(super::PENDING_INPUTS_DIR).is_dir()
         || dir.join(super::ack::ACK_DIR).is_dir()
@@ -623,7 +727,7 @@ pub(super) fn unreadable_summary(
         base_generation: String::new(),
         base_revision: 0,
         base_sha256: String::new(),
-        text_present: dir.join(TEXT_FILE).is_file(),
+        text_present: dir.join(TEXT_FILE).is_file() || dir.join(TEXTS_DIR).is_dir(),
         text_revision: 0,
         text_sha256: String::new(),
         fact_count,
@@ -760,6 +864,7 @@ pub(super) fn legacy_state(
         text_sha256: legacy.text_sha256.clone(),
         persisted_text_revision: legacy.text_revision,
         persisted_text_sha256: legacy.text_sha256,
+        persisted_text_blob: String::new(),
         text_dirty: false,
         facts,
         next_seq,
@@ -767,6 +872,7 @@ pub(super) fn legacy_state(
         failed_inputs: Vec::new(),
         acked_event_ids: Vec::new(),
         applied_transactions: Vec::new(),
+        applied_commit_sequence: 0,
         editor_base_revision: 0,
         editor_base_sha256: String::new(),
         editor_base_session: 0,

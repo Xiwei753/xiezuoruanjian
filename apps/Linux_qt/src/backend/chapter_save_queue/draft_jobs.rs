@@ -70,6 +70,11 @@ pub(crate) struct ChapterDraftRestoreStatus {
     pub restored: usize,
     pub failed: usize,
     pub kept: usize,
+    /// 已搬进独立归档区（`chapter-draft-kept/`）的保留草稿章节 id。
+    ///
+    /// Issue #1062 评论 7194373427 第 1 项：这些章节本次不自动恢复，编辑器
+    /// 新会话会使用全新目录，不再覆盖旧草稿。
+    pub kept_chapters: Vec<String>,
     pub message: String,
 }
 

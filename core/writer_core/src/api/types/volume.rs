@@ -154,6 +154,11 @@ pub struct ChapterSaveReceiptDto {
     pub transaction_id: String,
     /// 尚未确认的投影 ID（本批证明事件）。
     pub pending_projections: Vec<String>,
+    /// 本次 durable 提交在项目 journal 中的序号；no-op/旧记录为 0。
+    ///
+    /// 平台草稿 ack 必须按它（而不是 generation 字符串或随机 ID）重放，
+    /// 跨对象 generation 的提交顺序也由项目级 commit_sequence 决定。
+    pub commit_sequence: u64,
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -169,6 +174,7 @@ impl From<crate::chapter::ChapterSaveReceipt> for ChapterSaveReceiptDto {
             version: r.version.into(),
             transaction_id: r.transaction_id,
             pending_projections: r.pending_projections,
+            commit_sequence: r.commit_sequence,
         }
     }
 }
@@ -211,11 +217,7 @@ pub struct EditorConflictMaterialRequestDto {
 impl EditorConflictMaterialRequestDto {
     pub fn into_core(self) -> crate::chapter::commit::EditorConflictMaterialRequest {
         crate::chapter::commit::EditorConflictMaterialRequest {
-            key: crate::chapter::ChapterKey::new(
-                self.project_id,
-                self.volume_id,
-                self.chapter_id,
-            ),
+            key: crate::chapter::ChapterKey::new(self.project_id, self.volume_id, self.chapter_id),
             base_content: self.base_content,
             core_content: self.core_content,
             native_content: self.native_content,

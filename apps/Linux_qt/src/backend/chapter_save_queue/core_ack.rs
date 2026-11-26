@@ -143,6 +143,7 @@ pub(super) fn reconcile_core_acks(
             editor_session_id: 0,
             snapshot_revision: 0,
             snapshot_digest: String::new(),
+            commit_sequence: ack.commit_sequence,
             reconciled: false,
         };
         match chapter_draft::record_pending_ack(root, project_id, &ack.chapter_id, &pending) {

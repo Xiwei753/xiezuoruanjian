@@ -98,6 +98,9 @@ pub struct ChapterSaveReceipt {
     pub transaction_id: String,
     /// journal 中尚未确认的投影 ID（例如编辑事件）。
     pub pending_projections: Vec<String>,
+    /// 本次 durable 提交在项目 journal 中的序号；no-op/无 journal 时为 0。
+    #[serde(default)]
+    pub commit_sequence: u64,
 }
 
 /// 列出项目下所有有效的章节 ID（跨卷扫描）。

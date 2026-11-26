@@ -381,6 +381,29 @@ mod restore_contract_tests {
             .join(chapter_id)
     }
 
+    /// 归档区（`chapter-draft-kept/<chapter>/<stamp>/`）里最近一次归档的正文。
+    ///
+    /// Issue #1062 评论 7194373427 第 1 项：kept 草稿搬出可写槽位后，正文必须
+    /// 仍能在归档区读到。
+    fn kept_draft_text(
+        projects_root: &std::path::Path,
+        project_id: &str,
+        chapter_id: &str,
+    ) -> Option<String> {
+        let chapter_root = projects_root
+            .join(project_id)
+            .join("app-meta/chapter-draft-kept")
+            .join(chapter_id);
+        let entries = std::fs::read_dir(chapter_root).ok()?;
+        for entry in entries.flatten() {
+            let text_path = entry.path().join("text.txt");
+            if text_path.is_file() {
+                return std::fs::read_to_string(text_path).ok();
+            }
+        }
+        None
+    }
+
     /// 模拟旧版本已经写盘的“未证明新正文”草稿：章节持久 revision=30，
     /// 编辑器本次从 0 打开后 revision=1，且没有逐字事实。
     #[allow(clippy::too_many_arguments)]
@@ -478,13 +501,21 @@ mod restore_contract_tests {
             "Core 正文不能被未证明草稿覆盖"
         );
         assert!(
-            draft_dir(&projects_root, &project_id, &chapter_id)
-                .join("text.txt")
-                .exists(),
-            "未证明正文必须保留在草稿里等待事实落盘"
+            !draft_dir(&projects_root, &project_id, &chapter_id).exists(),
+            "保留草稿必须搬出可写槽位，编辑器新会话不能复用"
+        );
+        assert_eq!(
+            kept_draft_text(&projects_root, &project_id, &chapter_id).as_deref(),
+            Some("未证明新正文"),
+            "归档区必须保留原草稿正文"
+        );
+        assert!(
+            chapter_draft::kept_drafts(&projects_root, &project_id).contains(&chapter_id),
+            "归档区必须能列出该章节"
         );
         let status = draft_restore_status(&project_id);
         assert_eq!(status.kept, 1);
+        assert_eq!(status.kept_chapters, vec![chapter_id.clone()]);
         assert!(
             status.message.contains("draft_text_without_proof"),
             "unexpected restore message: {}",
@@ -593,6 +624,7 @@ mod restore_contract_tests {
                     snapshot_revision: 1,
                     snapshot_digest: digest.clone(),
                 }),
+                1,
             )
             .unwrap(),
             "正文已收口且事实全部 ack：整章草稿应删除"
@@ -652,6 +684,7 @@ mod restore_contract_tests {
                 snapshot_revision: 1,
                 snapshot_digest: digest_a.clone(),
             }),
+            1,
         )
         .expect("ack"));
         let snapshot = chapter_draft::snapshot(root, &project_id, &chapter_id).unwrap();

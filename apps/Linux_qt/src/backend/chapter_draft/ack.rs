@@ -26,6 +26,9 @@ pub(crate) struct PendingAck {
     pub editor_session_id: u64,
     pub snapshot_revision: u64,
     pub snapshot_digest: String,
+    /// Core journal 的项目级提交序号；重放顺序的唯一依据。
+    #[serde(default)]
+    pub commit_sequence: u64,
     /// 本地草稿已完成 ack（mark_committed 成功），但 Core journal 的
     /// 草稿确认尚未回写。只有回写成功后才删除文件。
     #[serde(default)]
@@ -150,15 +153,17 @@ pub(crate) fn replay_pending_acks(
         }
         acks.push((ack, path));
     }
-    // 同一对象 generation + 递增 revision；generation 不同按事务 ID 稳定排序。
+    // Issue #1062 评论 7194373427 第 3 项：重放顺序以 Core journal 的项目级
+    // commit_sequence 为第一依据（缺失/旧文件为 0，排在最前），generation
+    // 是 UUID，绝不能当排序键；同一序号再按 base revision 与事务 ID 稳定化。
     acks.sort_by(|(left, _), (right, _)| {
         (
-            &left.base_generation,
+            left.commit_sequence,
             left.base_revision,
             &left.transaction_id,
         )
             .cmp(&(
-                &right.base_generation,
+                right.commit_sequence,
                 right.base_revision,
                 &right.transaction_id,
             ))
@@ -185,6 +190,7 @@ pub(crate) fn replay_pending_acks(
             ack.base_revision,
             &ack.base_sha256,
             settlement.as_ref(),
+            ack.commit_sequence,
         )
         .map_err(|error| {
             format!(
@@ -237,7 +243,7 @@ pub(crate) fn reconciled_ack(
     }
 }
 
-/// 本地已完成、等待回写 Core journal 的 ack（按 base_revision 递增）。
+/// 本地已完成、等待回写 Core journal 的 ack（按 commit_sequence 递增）。
 pub(crate) fn reconciled_acks(
     projects_root: &Path,
     project_id: &str,
@@ -271,8 +277,16 @@ pub(crate) fn reconciled_acks(
         }
     }
     acks.sort_by(|(left, _), (right, _)| {
-        (left.base_revision, &left.transaction_id)
-            .cmp(&(right.base_revision, &right.transaction_id))
+        (
+            left.commit_sequence,
+            left.base_revision,
+            &left.transaction_id,
+        )
+            .cmp(&(
+                right.commit_sequence,
+                right.base_revision,
+                &right.transaction_id,
+            ))
     });
     Ok(acks)
 }

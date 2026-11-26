@@ -149,6 +149,8 @@ pub(super) fn handle_restore_project(
     let mut restored = 0usize;
     let mut failed = 0usize;
     let mut kept = 0usize;
+    // Issue #1062 评论 7194373427 第 1 项：已搬进独立归档区的章节 id。
+    let mut kept_chapters: Vec<String> = Vec::new();
     let api = state.api_for(&command.context);
     for draft in drafts {
         let chapter_id = draft.chapter_id.clone();
@@ -210,6 +212,16 @@ pub(super) fn handle_restore_project(
                     failed += 1;
                     kept += 1;
                     messages.push(format!("{chapter_id}: draft_unreadable kept: {error}"));
+                    quarantine_kept_draft(
+                        &projects_root,
+                        &command.project_id,
+                        &chapter_id,
+                        true,
+                        &mut kept,
+                        &mut failed,
+                        &mut kept_chapters,
+                        &mut messages,
+                    );
                 }
                 continue;
             }
@@ -217,6 +229,16 @@ pub(super) fn handle_restore_project(
                 failed += 1;
                 kept += 1;
                 messages.push(format!("{chapter_id}: draft_unreadable kept: {error}"));
+                quarantine_kept_draft(
+                    &projects_root,
+                    &command.project_id,
+                    &chapter_id,
+                    true,
+                    &mut kept,
+                    &mut failed,
+                    &mut kept_chapters,
+                    &mut messages,
+                );
                 continue;
             }
         };
@@ -281,6 +303,16 @@ pub(super) fn handle_restore_project(
                 version_display(&opened.version),
                 plan.session_summary()
             ));
+            quarantine_kept_draft(
+                &projects_root,
+                &command.project_id,
+                &plan.chapter_id,
+                false,
+                &mut kept,
+                &mut failed,
+                &mut kept_chapters,
+                &mut messages,
+            );
             continue;
         }
         // 草稿没有记录可校验的 base：沿用既有行为，不 replay、不保存。
@@ -293,6 +325,16 @@ pub(super) fn handle_restore_project(
                 version_display(&opened.version),
                 plan.session_summary()
             ));
+            quarantine_kept_draft(
+                &projects_root,
+                &command.project_id,
+                &plan.chapter_id,
+                false,
+                &mut kept,
+                &mut failed,
+                &mut kept_chapters,
+                &mut messages,
+            );
             continue;
         }
         // 外部同步/MCP 改过正文：用事件链第一条事实携带的原始基线 replay 出
@@ -310,6 +352,16 @@ pub(super) fn handle_restore_project(
                         version_display(&draft_base),
                         version_display(&opened.version)
                     ));
+                    quarantine_kept_draft(
+                        &projects_root,
+                        &command.project_id,
+                        &plan.chapter_id,
+                        false,
+                        &mut kept,
+                        &mut failed,
+                        &mut kept_chapters,
+                        &mut messages,
+                    );
                     continue;
                 }
             };
@@ -364,6 +416,16 @@ pub(super) fn handle_restore_project(
                 incoming.len(),
                 plan.session_summary()
             ));
+            quarantine_kept_draft(
+                &projects_root,
+                &command.project_id,
+                &plan.chapter_id,
+                false,
+                &mut kept,
+                &mut failed,
+                &mut kept_chapters,
+                &mut messages,
+            );
             continue;
         }
         // Issue #1062 复审第 1 项：事实落盘与正文草稿落盘是两条独立节流，
@@ -412,6 +474,16 @@ pub(super) fn handle_restore_project(
                     "{}: external_change_without_proof kept (textRevision={} editorBase={})",
                     plan.chapter_id, plan.text_revision, plan.editor_base_revision
                 ));
+                quarantine_kept_draft(
+                    &projects_root,
+                    &command.project_id,
+                    &plan.chapter_id,
+                    true,
+                    &mut kept,
+                    &mut failed,
+                    &mut kept_chapters,
+                    &mut messages,
+                );
                 continue;
             }
             failed += 1;
@@ -420,6 +492,16 @@ pub(super) fn handle_restore_project(
                 "{}: draft_text_without_proof kept (textRevision={} editorBase={} textSha={})",
                 plan.chapter_id, plan.text_revision, plan.editor_base_revision, plan.text_sha256
             ));
+            quarantine_kept_draft(
+                &projects_root,
+                &command.project_id,
+                &plan.chapter_id,
+                true,
+                &mut kept,
+                &mut failed,
+                &mut kept_chapters,
+                &mut messages,
+            );
             continue;
         } else {
             if plan.text_revision > plan.event_end_revision {
@@ -448,6 +530,16 @@ pub(super) fn handle_restore_project(
                                 plan.text_revision,
                                 plan.facts.first().map_or(0, |fact| fact.revision)
                             ));
+                            quarantine_kept_draft(
+                                &projects_root,
+                                &command.project_id,
+                                &plan.chapter_id,
+                                true,
+                                &mut kept,
+                                &mut failed,
+                                &mut kept_chapters,
+                                &mut messages,
+                            );
                             continue;
                         }
                         Err(error) => {
@@ -457,6 +549,16 @@ pub(super) fn handle_restore_project(
                                 "{}: draft_prefix_encode_failed kept: {error}",
                                 plan.chapter_id
                             ));
+                            quarantine_kept_draft(
+                                &projects_root,
+                                &command.project_id,
+                                &plan.chapter_id,
+                                true,
+                                &mut kept,
+                                &mut failed,
+                                &mut kept_chapters,
+                                &mut messages,
+                            );
                             continue;
                         }
                     };
@@ -470,6 +572,16 @@ pub(super) fn handle_restore_project(
                                 "{}: draft_text_mismatch_at_revision kept (textRevision={})",
                                 plan.chapter_id, plan.text_revision
                             ));
+                            quarantine_kept_draft(
+                                &projects_root,
+                                &command.project_id,
+                                &plan.chapter_id,
+                                true,
+                                &mut kept,
+                                &mut failed,
+                                &mut kept_chapters,
+                                &mut messages,
+                            );
                             continue;
                         }
                         Err(error) => {
@@ -498,6 +610,16 @@ pub(super) fn handle_restore_project(
                                     text.len(),
                                     draft_text.len()
                                 ));
+                                quarantine_kept_draft(
+                                    &projects_root,
+                                    &command.project_id,
+                                    &plan.chapter_id,
+                                    true,
+                                    &mut kept,
+                                    &mut failed,
+                                    &mut kept_chapters,
+                                    &mut messages,
+                                );
                                 continue;
                             }
                         }
@@ -554,9 +676,48 @@ pub(super) fn handle_restore_project(
                 restored,
                 failed,
                 kept,
+                kept_chapters,
                 message: messages.join("; "),
             },
         );
+    }
+}
+
+/// 把“保留但不会再自动恢复”的草稿搬进独立归档区。
+///
+/// Issue #1062 评论 7194373427 第 1 项：kept 草稿如果继续留在
+/// `chapter-drafts/<chapter_id>/`，编辑器随后打开同一章的新会话会复用同一
+/// 槽位，覆盖旧正文/状态。归档成功后章节 id 记入 `kept_chapters`，供 QML
+/// 提示用户草稿已隔离保留。
+#[allow(clippy::too_many_arguments)]
+fn quarantine_kept_draft(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+    already_failed: bool,
+    kept: &mut usize,
+    failed: &mut usize,
+    kept_chapters: &mut Vec<String>,
+    messages: &mut Vec<String>,
+) {
+    match super::super::chapter_draft::quarantine(projects_root, project_id, chapter_id) {
+        Ok(Some(path)) => {
+            kept_chapters.push(chapter_id.to_string());
+            log::info!(
+                "kept chapter draft archived: project={project_id} chapter={chapter_id} path={path}"
+            );
+        }
+        // 没有可归档内容：按普通 kept 记录即可，不创建归档目录。
+        Ok(None) => {}
+        Err(error) => {
+            // 归档失败时原目录仍在可写槽位，新会话可能覆盖它，不能当成
+            // “已保留”：把该章的 kept 退回并记 failed，错误原样上报。
+            *kept = kept.saturating_sub(1);
+            if !already_failed {
+                *failed += 1;
+            }
+            messages.push(format!("{chapter_id}: quarantine failed: {error}"));
+        }
     }
 }
 

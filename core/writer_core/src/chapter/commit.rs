@@ -248,6 +248,9 @@ pub struct ChapterCommitReceipt {
     pub written_files: Vec<String>,
     /// 尚未完成的投影 ID；空表示 journal 已可以清理。
     pub pending_projections: Vec<String>,
+    /// 本次 durable 提交的项目级序号；平台 ack 重放顺序的唯一依据。
+    #[serde(default)]
+    pub commit_sequence: u64,
 }
 
 impl ChapterCommitReceipt {
@@ -263,6 +266,7 @@ impl ChapterCommitReceipt {
             version: self.after,
             transaction_id: self.transaction_id,
             pending_projections: self.pending_projections,
+            commit_sequence: self.commit_sequence,
         }
     }
 }
@@ -366,6 +370,7 @@ mod journal;
 mod publish;
 pub(crate) use journal::commit_chapter_with_guard;
 pub(crate) use journal::read_chapter_state;
+pub(crate) use journal::write_editor_conflict_material;
 pub use journal::{
     mark_chapter_commit_draft_ack, mark_chapter_commit_projection, pending_chapter_draft_acks,
     pending_chapter_proof_events, pending_chapter_proof_transactions,
@@ -373,6 +378,5 @@ pub use journal::{
     read_chapter_state_recovering, read_chapter_version, read_chapter_version_recovering,
     recover_pending_chapter_commits,
 };
-pub(crate) use journal::write_editor_conflict_material;
 #[cfg(test)]
 mod tests;

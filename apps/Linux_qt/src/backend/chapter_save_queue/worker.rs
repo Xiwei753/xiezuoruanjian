@@ -418,6 +418,7 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                     editor_session_id: request.identity.session_id,
                     snapshot_revision: request.identity.snapshot_revision,
                     snapshot_digest: request.identity.snapshot_sha256.clone(),
+                    commit_sequence: receipt.commit_sequence,
                     reconciled: false,
                 };
                 match crate::backend::chapter_draft::record_pending_ack(
@@ -448,6 +449,7 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                     snapshot_revision: request.identity.snapshot_revision,
                     snapshot_digest: request.identity.snapshot_sha256.clone(),
                 }),
+                receipt.commit_sequence,
             ) {
                 Ok(removed) => {
                     // Issue #1062 评论 7193847871 第 2 项：正文收口已并入

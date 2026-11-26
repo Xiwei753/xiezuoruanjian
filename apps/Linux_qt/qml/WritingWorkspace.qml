@@ -485,6 +485,9 @@ Rectangle {
     // 否则每 100ms 轮询 chapter_draft_restore_status().pending 直到结束。
     property string draftRestoreProjectId: ""
     property var draftRestoreCallback: null
+    // Issue #1062 评论 7194373427 第 1 项：本次恢复中搬进独立归档区、不再
+    // 参与编辑器新会话的保留草稿章节 id。
+    property var draftKeptChapters: []
 
     Timer {
         id: draftRestorePollTimer
@@ -543,6 +546,15 @@ Rectangle {
         var ready = root.draftRestoreCallback
         root.draftRestoreCallback = null
         root.draftRestoreProjectId = ""
+        // Issue #1062 评论 7194373427 第 1 项：无法自动恢复的草稿已搬进
+        // 独立归档区；这里只做提示，打开章节仍走正常的新草稿槽位。
+        var keptChapters = (status && status.keptChapters) ? status.keptChapters : []
+        root.draftKeptChapters = keptChapters
+        if (keptChapters.length > 0) {
+            console.warn("chapter draft kept in quarantine (new session uses a fresh draft slot): "
+                         + keptChapters.join(", "))
+            console.log("draft.kept", JSON.stringify(keptChapters))
+        }
         if (status) {
             var restored = Number(status.restored || 0)
             var failed = Number(status.failed || 0)
