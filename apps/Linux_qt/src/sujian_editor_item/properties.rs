@@ -65,9 +65,11 @@ impl SujianEditorItem {
         self.set_plain_text_from_qml(text);
     }
 
+    /// Issue #1063 复审：打开/重载正文不得静默归一化原文，comparison/load 全部
+    /// 基于 QML 传入的原文逐字节保真；只有真实插入/导入命令边界才归一化。
     pub(crate) fn set_plain_text_from_qml(&mut self, text: QString) {
-        let normalized = normalize_plain_text(&text.to_string());
-        if self.pipeline.committed_text() == normalized {
+        let raw = text.to_string();
+        if self.pipeline.committed_text() == raw {
             return;
         }
         // Issue #919 复核（comment 6229842948）：统一为 Load 路线（与
@@ -80,7 +82,7 @@ impl SujianEditorItem {
         // 这里直接 `load_text` + `set_text_revision(mirror.revision)` 让
         // `text_revision` 与真实 Core revision 一致，后续真实编辑严格递增。
         self.reset_document_visual_state();
-        self.pipeline.load_text(normalized, 0);
+        self.pipeline.load_text(raw, 0);
         self.pipeline
             .set_text_revision(self.pipeline.mirror().revision());
         self.pipeline.composition_mut().clear();
@@ -96,11 +98,10 @@ impl SujianEditorItem {
     /// equal to the currently displayed chapter. Chapter identity is tracked by
     /// QML project/volume/chapter ids; text equality is not document identity.
     pub(crate) fn load_document_text(&mut self, text: QString) {
-        let normalized = normalize_plain_text(&text.to_string());
         // Reset before loading so no frame or pending transition from the previous
         // document can become the source for this chapter's canonical layout.
         self.reset_document_visual_state();
-        let _ = self.pipeline.load_text(normalized, 0);
+        let _ = self.pipeline.load_text(text.to_string(), 0);
         // Issue #901 第六轮阻塞1: load_document_text 不走 record_transaction，
         // 必须在此显式把 pipeline.text_revision 绑定到新文档的 Core revision
         //（load_text 已把 mirror.revision 同步到 kernel.revision）。
@@ -120,8 +121,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn reload_plain_text(&mut self, text: QString) {
-        let normalized = normalize_plain_text(&text.to_string());
-        if self.pipeline.committed_text() == normalized {
+        let raw = text.to_string();
+        if self.pipeline.committed_text() == raw {
             return;
         }
         let old_cursor = self.pipeline.cursor();
@@ -139,7 +140,7 @@ impl SujianEditorItem {
         // 本身保留，无需额外 SetSelection。版本绑定放在恢复选区之后，保持与 Core
         // mirror 的最终版本一致。
         self.reset_document_visual_state();
-        self.pipeline.load_text(normalized.clone(), old_cursor);
+        self.pipeline.load_text(raw, old_cursor);
         let text = self.pipeline.mirror().text();
         let new_anchor = clamp_to_char_boundary(text, old_anchor);
         let new_cursor = clamp_to_char_boundary(text, old_cursor);
@@ -931,3 +932,9 @@ impl SujianEditorItem {
         self.request_static_repaint();
     }
 }
+
+// Issue #1063 复审：开章/重载逐字节保真测试。内嵌测试会超过生产文件结构上限，
+// 测试拆到 `properties/raw_text_load_tests.rs`；本模块仍在 `properties` 内部，
+// 可直接访问私有条目。
+#[cfg(test)]
+mod raw_text_load_tests;

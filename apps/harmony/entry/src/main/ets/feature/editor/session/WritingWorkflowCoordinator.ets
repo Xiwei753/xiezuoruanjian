@@ -28,6 +28,7 @@ import { NavigationTransactionCoordinator } from '../../../app/navigation/Naviga
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { Routes, WritingRouteParams } from '../../../app/navigation/Routes'
 import { ActiveWritingSession, SyncBarrierBeginResult } from './ActiveWritingSessionRegistry'
+import { ImeSettlementError } from '../input/ime_settlement_barrier'
 
 // 协调器需要页面展示的文案键（翻译成资源字符串由页面负责，协调器不 import UI 上下文）。
 export enum WritingTextKey {
@@ -127,6 +128,15 @@ interface SaveQueueEntry {
   request: SaveRequest
   promise: Promise<boolean>
   resolve: (ok: boolean) => void
+}
+
+// Issue #1063 复审评论第 2 条：原生编辑屏障的失败结果。
+// 普通保存（committed revision）与退出/同步屏障（真实 IME 结算）都返回这种明确失败，
+// 不再用同一个 resolve 表示「可关闭/可继续」。
+interface EditorBarrierFailure {
+  readonly stage: string
+  readonly errorCode: string
+  readonly detail: string
 }
 
 export class WritingWorkflowCoordinator implements ActiveWritingSession {
@@ -347,44 +357,50 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   }
 
   // Issue #1053 评论 7098652618：屏障结果决定保存/同步/关闭能否继续。
-  // 原生正文、本地镜像与 Core 正文未对齐时 bridge 会 reject，这里必须返回 false，
+  // 原生正文、本地镜像与 Core 正文未对齐时 bridge 会 reject，这里必须返回明确失败，
   // 不能把「回调已调用」当成「正文已结算」继续落盘旧 Core 正文。
-  private async awaitBridgeIdle(): Promise<boolean> {
+  // Issue #1063 复审评论第 2 条：返回带错误码的失败而不是布尔，普通保存与退出/同步
+  // 屏障分别由各自调用点复用既有失败状态（lastSaveFailed/saveMessage、sync ok:false、
+  // 离开被拒绝），不新增第二套保存流程。
+  private async awaitBridgeIdle(): Promise<EditorBarrierFailure | null> {
     const bridgeWhenIdle = this.bridgeWhenIdle
     if (bridgeWhenIdle === null) {
-      return true
+      return null
     }
     try {
       await bridgeWhenIdle()
-      return true
+      return null
     } catch (err) {
-      this.reportBridgeAlignmentFailure('idle', err)
-      return false
+      return this.barrierFailure('idle', err)
     }
   }
 
-  private async awaitBridgeFinishEditing(): Promise<boolean> {
+  private async awaitBridgeFinishEditing(): Promise<EditorBarrierFailure | null> {
     const bridgeFinishEditingAndWhenIdle = this.bridgeFinishEditingAndWhenIdle
     if (bridgeFinishEditingAndWhenIdle === null) {
-      return true
+      return null
     }
     try {
       await bridgeFinishEditingAndWhenIdle()
-      return true
+      return null
     } catch (err) {
-      this.reportBridgeAlignmentFailure('finishEditing', err)
-      return false
+      return this.barrierFailure('finishEditing', err)
     }
   }
 
-  private reportBridgeAlignmentFailure(phase: string, err: Object): void {
+  private barrierFailure(stage: string, err: Object): EditorBarrierFailure {
     const detail = err instanceof Error ? err.message : String(err)
+    const errorCode = err instanceof ImeSettlementError ? err.errorCode : 'EDITOR_BARRIER_FAILED'
     hilog.error(0x0000, 'WritingWorkflowCoordinator',
-      `editor barrier failed phase=${phase}: ${detail}`)
+      `editor barrier failed stage=${stage} code=${errorCode}: ${detail}`)
+    return { stage: stage, errorCode: errorCode, detail: detail }
   }
 
   // 编辑屏障失败：保留原生编辑状态，返回保存失败（不落盘旧 Core 正文）。
-  private failSaveAfterBarrierFailure(): boolean {
+  // 会话、正文、pendingEdits 由 NativeRichEditorBridge 保留，这里只更新既有保存状态。
+  private failSaveAfterBarrierFailure(failure: EditorBarrierFailure): boolean {
+    hilog.error(0x0000, 'WritingWorkflowCoordinator',
+      `save blocked by editor barrier failure stage=${failure.stage} code=${failure.errorCode}`)
     this.lastSaveFailed = true
     this.saveMessage = this.textProvider(WritingTextKey.SaveFailed)
     this.emit(null, null)
@@ -575,8 +591,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #629 评论 5308748920 问题3：手动/自动保存入口。
   // 先取得稳定 snapshot（flush + whenIdle），再调 ensureSnapshotSaved 精确保存这份文本。
   async saveChapter(isAutoSave: boolean = false): Promise<boolean> {
-    if (!await this.awaitBridgeIdle()) {
-      return this.failSaveAfterBarrierFailure()
+    const idleFailure = await this.awaitBridgeIdle()
+    if (idleFailure !== null) {
+      return this.failSaveAfterBarrierFailure(idleFailure)
     }
     await this.editorCoordinator.whenIdle()
     const snap = this.editorCoordinator.getSnapshot()
@@ -879,8 +896,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #927：返回真实成功/失败结果（只开一次保存事务），失败时保留 hasUnsavedChanges，
   // 调用方不得把「回调已调用」当成「已经落盘」。
   async performBackgroundSave(): Promise<boolean> {
-    if (!await this.awaitBridgeIdle()) {
-      return this.failSaveAfterBarrierFailure()
+    const idleFailure = await this.awaitBridgeIdle()
+    if (idleFailure !== null) {
+      return this.failSaveAfterBarrierFailure(idleFailure)
     }
     await this.editorCoordinator.whenIdle()
     // 无待保存变化：本次后台事务直接成功，不产生多余 Core 写入。
@@ -910,9 +928,12 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     try {
       // 同一会话边界：先提交 IME composition，再等输入队列空闲，再取稳定 snapshot。
       const finishResult = await this.finishActiveComposition()
-      const bridgeSettled: boolean = await this.awaitBridgeFinishEditing()
-      if (!bridgeSettled) {
-        // 原生正文与 Core 未对齐：不放行同步，避免把旧 Core 正文同步出去。
+      const finishFailure = await this.awaitBridgeFinishEditing()
+      if (finishFailure !== null) {
+        // 原生正文与 Core 未对齐/IME 未真实结算：不放行同步，也不从 Core 覆盖原生正文。
+        // 会话、正文与 pendingEdits 仍保留在 bridge，调用方可重试。
+        hilog.error(0x0000, 'WritingWorkflowCoordinator',
+          `sync blocked by editor barrier failure stage=${finishFailure.stage} code=${finishFailure.errorCode}`)
         this.endSyncBarrier()
         return { ok: false }
       }
@@ -977,7 +998,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     // 同步前冻结的保存请求与回执只能失败，不能把同步后的版本当成旧请求的新 base。
     const reconcileEpoch: number = this.beginSessionBoundary()
     // 磁盘已变化：确认没有仍在排队的编辑命令，再决定能否回填。
-    if (!await this.awaitBridgeIdle()) {
+    const idleFailure = await this.awaitBridgeIdle()
+    if (idleFailure !== null) {
       // 原生编辑事实未能结算：不放行回填，交由上层按冲突处理。
       return false
     }
@@ -1047,8 +1069,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   async clearDocument(): Promise<void> {
     this.isSaving = true
     this.emit(null, null)
-    const bridgeSettled: boolean = await this.awaitBridgeFinishEditing()
-    if (!bridgeSettled) {
+    const finishFailure = await this.awaitBridgeFinishEditing()
+    if (finishFailure !== null) {
+      // 原生预编辑没有真实结算：保留会话与正文，按既有清空失败状态收尾。
       this.isSaving = false
       this.lastSaveFailed = true
       this.saveMessage = this.textProvider(WritingTextKey.ClearFailed)
@@ -1141,9 +1164,13 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     try {
       // 1. finish 当前 composition：最后的中文 preedit 提交进 committed 正文。
       const finishResult = await this.finishActiveComposition()
-      // 2. 等 coordinator 命令队列空闲（snapshot 已包含最后输入）
-      if (!await this.awaitBridgeFinishEditing()) {
+      // 2. 等真实 IME commit/cancel 与输入队列稳定；失败保留会话，不 close、不覆盖原生正文。
+      const finishFailure = await this.awaitBridgeFinishEditing()
+      if (finishFailure !== null) {
         // 原生正文未能与 Core 对齐：保留原生编辑状态，拒绝关闭。
+        hilog.error(0x0000, 'WritingWorkflowCoordinator',
+          `close blocked by editor barrier failure stage=${finishFailure.stage}`
+            + ` code=${finishFailure.errorCode}`)
         return false
       }
       await this.editorCoordinator.whenIdle()

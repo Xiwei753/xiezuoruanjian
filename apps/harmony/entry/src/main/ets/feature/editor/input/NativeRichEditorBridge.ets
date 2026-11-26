@@ -19,8 +19,9 @@
 // - controller.onContentChanged.onWillChange → 记录同一笔原生变更事实（范围 + 替换文本）。
 // - onContentChanged.onDidChange → 从前后文本差量重建编辑事实并串行提交 Core。
 // - IME 预编辑（previewText）期间只更新本地镜像，结算后按基线差量提交一次。
-// - whenIdle 为保存屏障：等已提交队列稳定，并校验原生全文、镜像与 Core 正文一致。
-// - finishEditingAndWhenIdle 为退出/同步屏障：先 stopEditing() 结束预编辑，再等队列稳定。
+// - whenIdle 为普通保存屏障：只等已提交 Core revision，预编辑保留在原生未提交层。
+// - finishEditingAndWhenIdle 为退出/同步屏障：stopEditing() 后等真实 commit/cancel 信号；
+//   没有确定结算就超时 reject，绝不把候选预编辑当正文或把超时当成功。
 // - syncFromCore/loadInitialText 通过统一程序性入口 setStyledString，保留正文样式由组件构建。
 // - 切章时以 sessionId 隔离旧回调，旧队列不可触碰新章节 UI。
 //
@@ -31,11 +32,34 @@
 //     snapshot 与原生实际全文计算可验证 rebase，由原串行 editQueue 提交；期间 idle waiters
 //     保持挂起，syncFromCore 不回写覆盖原生正文。
 //   - conflict：保留原生正文和全部未确认事件，不调用 syncFromCore 覆盖；waiters 立即以
-//     明确原因 reject，诊断字段 nativeCoreDiverged 同步置 true；只有 beginSession 复位。
+//     明确原因 reject，诊断字段 nativeCoreDiverged 同步置 true。
+//   - 复审评论第 2 条：conflict 不是终态。retryReconcile() 在当前会话内把状态切回
+//     reconciling，基于当前 Core snapshot 重新做可验证 rebase；成功恢复 healthy，
+//     失败保持 conflict 且一条事件不丢。beginSession 仍是会话替换语义，但不是唯一解锁路径。
 //   - 失败不再用单一 idleError 锁死编辑：错误详情写在 conflictDetail（只读 getter 供诊断）。
 
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import { computeMinimalTextDiff } from '../session/editor_patch_logic'
+import {
+  EditorSessionHealth,
+  ReconcileSessionState,
+  attemptFrozenRebase,
+  mapEditRangeToBaseline,
+  FrozenRebaseAttempt,
+  EditRangeMap
+} from '../session/editor_reconcile_logic'
+import {
+  ImeSettlementBarrier,
+  ImeBarrierMode,
+  ImeBarrierWaiter,
+  ImeAlignmentFacts,
+  ImeStateFacts,
+  PreviewTextState,
+  isBarrierWaiterSatisfied,
+  IME_SETTLEMENT_SESSION_CHANGED,
+  IME_SETTLEMENT_CANCELLED,
+  IME_SETTLEMENT_CONFLICT
+} from './ime_settlement_barrier'
 import { TextOffsetMapper } from './TextOffsetMapper'
 import { insertedParagraphStarts as computeInsertedParagraphStarts } from './text_document_rules'
 import { EditorViewportState } from '../render/EditorViewportState'
@@ -55,8 +79,9 @@ const BRIDGE_LOG_DOMAIN = 0x0000
 const BRIDGE_LOG_TAG = 'NativeRichEditorBridge'
 // 可验证 rebase 的最大尝试次数（Core 基线在映射期间被外部命令推进时重读再映射）。
 const BRIDGE_RECONCILE_MAX_ATTEMPTS = 3
-// 退出屏障等待 IME 结算回调的上限：超时后按“已提交 Core revision”结算（预编辑仍留在
-// 原生未提交层，不写 Core），保证每个 idle waiter 都有确定结果，不会永久悬挂。
+// 退出屏障等待真实 IME commit/cancel 与 Core 应用回执的上限。
+// Issue #1063 复审评论第 2 条：超时 reject IME_SETTLEMENT_TIMEOUT，不把退出 waiter 当成功，
+// 也不按已提交 revision 冒充结算；每个 waiter 各自计时。
 const BRIDGE_IME_SETTLEMENT_TIMEOUT_MS = 1200
 // 接续恢复滚动：scrollToVisible 自 API 26 起可用；低版本按注释降级，不做假回写。
 const BRIDGE_VIEWPORT_SCROLL_TO_VISIBLE_MIN_API = 26
@@ -108,15 +133,20 @@ export interface EmptyDocumentIntent {
   revision: number
 }
 
+// Issue #1063 复审评论第 2 条：会话内冲突重试结果。
+// recovered=false 时会话仍保持 conflict（或保持 reconciling 等真实结算），
+// errorCode 给出 NOT_IN_CONFLICT / RECONCILE_DEFERRED / IME_SETTLEMENT_CONFLICT /
+// IME_SETTLEMENT_SESSION_CHANGED 等明确原因。
+export interface ConflictRecoveryResult {
+  readonly recovered: boolean
+  readonly errorCode: string
+  readonly detail: string
+}
+
 interface TextDiff {
   start: number
   end: number
   replacement: string
-}
-
-interface EditRangeMap {
-  startUtf16: number
-  endUtf16: number
 }
 
 interface NativeSelectionState {
@@ -143,22 +173,8 @@ interface PendingNativeChange {
   changeSequence: number
 }
 
-// Issue #1063：冻结 pendingEdits 在 Core 当前正文上的模拟应用结果。
-// reason 非空表示无法安全 rebase（调用方直接进入 conflict，不覆盖原生正文）。
-interface FrozenEditSimulation {
-  text: string
-  reason: string
-}
-
-/**
- * Issue #1063 评论第 4 条：会话健康状态。
- * - healthy：正常消费 pendingEdits，三方（原生全文/镜像/Core）可校验。
- * - reconciling：发生映射或事务失败，消费游标冻结，正在从 Core 与原生全文计算可验证 rebase；
- *   idle waiters 保持挂起（不 reject）。
- * - conflict：无法安全 rebase。保留原生正文与全部未确认事件，不覆盖原生文本；
- *   idle waiters 以冲突原因 reject，诊断 nativeCoreDiverged 置 true。
- */
-export type EditorSessionHealth = 'healthy' | 'reconciling' | 'conflict'
+// Issue #1063：冻结 pendingEdits 在 Core 当前正文上的模拟应用结果由
+// session/editor_reconcile_logic.ts 的 attemptFrozenRebase 计算（纯逻辑，可单测）。
 
 // 记录一次原生文本操作所需的字段（补 hash/会话事实后落到快照）。
 interface NativeOperationFacts {
@@ -184,6 +200,9 @@ interface NativeOperationFacts {
 interface PendingEdit {
   sessionId: number
   localSequence: number
+  // Issue #1063 复审评论第 2 条：在串行消费队列里的全局序号（跨 beginSession 重置）。
+  // 屏障 waiter 绑定它，只有这笔事务真正进入 Core 后才允许放行退出屏障。
+  queueSequence: number
   baseRevision: number
   beforeText: string
   startUtf16: number
@@ -193,16 +212,8 @@ interface PendingEdit {
   cause: EditorTransactionCause
 }
 
-interface IdleWaiter {
-  sessionId: number
-  // 创建时冻结的屏障 revision：只有 lastAppliedRevision >= barrierRevision 且三方一致才放行。
-  barrierRevision: number
-  // true：退出/同步屏障，必须等 IME 预编辑真正结算；false：普通保存屏障，
-  // IME 预编辑保留在独立未提交层，可先保存已提交 Core revision。
-  waitForImeSettlement: boolean
-  resolve: () => void
-  reject: (e: Error) => void
-}
+// 屏障 waiter 的生命周期（timer/结算/会话终止）在 input/ime_settlement_barrier.ts，
+// 本文件只提供 checkIdle 时的三方事实与结算条件。
 
 interface SelectionIntent {
   localSessionToken: number
@@ -230,22 +241,24 @@ export class NativeRichEditorBridge {
   private drainRunning: boolean = false
   private sessionId: number = 0
   private localSequence: number = 0
+  // Issue #1063 复审评论第 2 条：串行编辑队列的会话内序号。
+  // nextEditSequence 在 enqueuePendingEdit 时分配，beginSession 时随会话重置；
+  // appliedEditSequence 只在该笔事务真正应用进 Core（或 reconcile 确认已被 Core 覆盖）后推进。
+  // 屏障 waiter 绑定「已入队到哪个序号」，而不是等下一次任意 onDidChange。
+  private nextEditSequence: number = 0
+  private appliedEditSequence: number = -1
   private confirmedText: string = ''
   private confirmedRevision: number = -1
   // Issue #1063：显式会话状态机（替代只由 beginSession 重置的 idleError）。
-  private sessionHealth: EditorSessionHealth = 'healthy'
-  private conflictDetail: string | null = null
-  // reconciling 期间的原因（诊断用；进入 conflict 时写进 conflictDetail）。
-  private reconcileReason: string = ''
+  // 复审评论第 2 条：conflict 不再是只能 beginSession 解锁的终态，retryReconcile 可在
+  // 当前会话内重新 reconcile；状态机纯逻辑在 session/editor_reconcile_logic.ts。
+  private sessionState: ReconcileSessionState = new ReconcileSessionState()
   private reconcileScheduled: boolean = false
-  // 退出屏障等待 IME 结算回调（原生真正结束/取消预编辑时 resolve）。
-  private imeSettlementWaiters: (() => void)[] = []
-  // 退出屏障的 IME 结算回调是否超时：超时后按已提交 Core revision 放行。
-  private imeSettlementTimedOut: boolean = false
+  // 屏障 waiter（timer/结算/会话终止）全部在该账本里；每个 waiter 独立 deadline。
+  private imeBarrier: ImeSettlementBarrier = new ImeSettlementBarrier(BRIDGE_IME_SETTLEMENT_TIMEOUT_MS)
   // 接续恢复滚动的重试句柄（beginSession/切章时取消）。
   private viewportRestoreTimerId: number = -1
   private viewportRestoreAttempts: number = 0
-  private idleWaiters: IdleWaiter[] = []
   // 选区 latest-wins 合并上报
   private pendingSelectionIntent: SelectionIntent | null = null
   private selectionFlushTimerId: number = -1
@@ -316,12 +329,90 @@ export class NativeRichEditorBridge {
 
   // Issue #1063：会话健康状态（诊断只读）。
   getSessionHealth(): EditorSessionHealth {
-    return this.sessionHealth
+    return this.sessionState.getHealth()
   }
 
-  // Issue #1063：conflict 的明确原因（healthy/reconciling 时为 null）。
+  // Issue #1063：conflict 的明确原因（healthy / 自动 reconciling 时为 null；
+  // 手动 retryReconcile 进行中保留原冲突原因，直到本次重试给出结论）。
   getConflictDetail(): string | null {
-    return this.conflictDetail
+    return this.sessionState.getConflictDetail()
+  }
+
+  // Issue #1063 复审评论第 2 条：会话内冲突重试入口。
+  // 保留原生正文、原 base snapshot 与全部 pendingEdits；只有可验证 rebase 成功并写进
+  // Core 后才恢复 healthy，失败仍保持 conflict 且事件一条不丢。
+  async retryReconcile(): Promise<ConflictRecoveryResult> {
+    if (!this.sessionState.isConflict()) {
+      const health = this.sessionState.getHealth()
+      return {
+        recovered: health === 'healthy',
+        errorCode: 'NOT_IN_CONFLICT',
+        detail: `session is ${health}, nothing to retry`
+      }
+    }
+    const sessionAtEntry = this.sessionId
+    return new Promise<ConflictRecoveryResult>((resolve: (result: ConflictRecoveryResult) => void): void => {
+      const task: Promise<void> = this.editQueue.then(async (): Promise<void> => {
+        if (sessionAtEntry !== this.sessionId) {
+          resolve({
+            recovered: false,
+            errorCode: IME_SETTLEMENT_SESSION_CHANGED,
+            detail: 'session changed before manual conflict retry started'
+          })
+          return
+        }
+        if (!this.sessionState.beginManualRetry('manual conflict retry')) {
+          resolve({
+            recovered: this.sessionState.getHealth() === 'healthy',
+            errorCode: 'NOT_IN_CONFLICT',
+            detail: `session is ${this.sessionState.getHealth()}`
+          })
+          return
+        }
+        this.reconcileScheduled = false
+        let deferred: boolean = false
+        try {
+          deferred = await this.reconcileSession()
+        } catch (e) {
+          this.enterConflict(`manual conflict retry error: ${JSON.stringify(e)}`)
+        }
+        if (sessionAtEntry !== this.sessionId) {
+          resolve({
+            recovered: false,
+            errorCode: IME_SETTLEMENT_SESSION_CHANGED,
+            detail: 'session changed during manual conflict retry'
+          })
+          return
+        }
+        if (deferred) {
+          // 预编辑/原生变更尚未结算：保持 reconciling，等真实结算回调继续驱动；
+          // 不在这里谎报恢复，也不丢弃 pendingEdits。
+          this.scheduleReconcile()
+          resolve({
+            recovered: false,
+            errorCode: 'RECONCILE_DEFERRED',
+            detail: 'native change or IME composition still in flight'
+          })
+          return
+        }
+        const recovered: boolean = this.sessionState.getHealth() === 'healthy'
+        resolve({
+          recovered: recovered,
+          errorCode: recovered ? '' : IME_SETTLEMENT_CONFLICT,
+          detail: recovered ? '' : (this.sessionState.getConflictDetail() ?? 'reconcile did not converge')
+        })
+        this.checkIdle()
+      }).catch((e: Object): void => {
+        this.enterConflict(`manual conflict retry rejected: ${JSON.stringify(e)}`)
+        resolve({
+          recovered: false,
+          errorCode: IME_SETTLEMENT_CONFLICT,
+          detail: `manual conflict retry rejected: ${JSON.stringify(e)}`
+        })
+        this.checkIdle()
+      })
+      this.editQueue = task
+    })
   }
 
   isImeComposing(): boolean {
@@ -383,24 +474,23 @@ export class NativeRichEditorBridge {
     return this.nativeCoreDiverged
   }
 
-  // 普通保存屏障（自动保存）：只等已提交 Core revision，不调用 stopEditing()。
-  // Issue #1063：IME 预编辑保留在独立未提交层，waitForImeSettlement=false，
-  // 因此预编辑不会让普通保存长期悬挂。
+  // 普通保存屏障（自动保存/退后台）：只等已提交 Core revision，不调用 stopEditing()。
+  // Issue #1063 复审评论第 2 条：预编辑保留在独立未提交层，本屏障不检查 preview、
+  // 不重置任何退出屏障的超时状态，因此用户停在拼音输入中也能保存已提交正文。
   whenIdle(): Promise<void> {
     this.barrierStage = 'save-when-idle'
-    this.imeSettlementTimedOut = false
-    // 组件已无预览文本时先结算；仍有预编辑则保留在原生未提交层，不写 Core。
-    this.settleImeComposition(false)
     this.requestSelectionFlush()
-    return this.pushIdleWaiter(false)
+    return this.pushIdleWaiter('committed-revision', false)
   }
 
-  // 退出章节/同步屏障：先 stopEditing() 结束预编辑，再等队列稳定。
-  // Issue #1063：结算与 checkIdle 绑定为队列尾部的一步，不依赖下一次任意 onDidChange；
-  // 若此时仍有预编辑，等这次真正的结算回调（有上限），不会永久挂起。
+  // 退出章节/同步屏障：stopEditing() 后只等待真实 IME commit/cancel 信号。
+  // Issue #1063 复审评论第 2 条：
+  // - 不调用 settleImeComposition(force) 强制提交候选文本；
+  // - 每个 waiter 绑定 sessionId + 屏障 revision + 当前队列序号，各自独立超时；
+  // - 超时 reject IME_SETTLEMENT_TIMEOUT，保留会话/正文/pendingEdits，由调用方失败收尾；
+  // - 没有真实信号且 preview 仍非空时，绝不按已提交 revision 冒充成功。
   finishEditingAndWhenIdle(): Promise<void> {
     this.barrierStage = 'exit-finish-editing'
-    this.imeSettlementTimedOut = false
     if (this.richEditorController !== null) {
       try {
         this.richEditorController.stopEditing()
@@ -408,51 +498,27 @@ export class NativeRichEditorBridge {
         hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `stopEditing failed: ${JSON.stringify(e)}`)
       }
     }
-    // stopEditing() 之后仍可能残留预编辑镜像，强制按基线结算。
-    this.settleImeComposition(true)
+    // stopEditing() 可能在同步回调里结算预编辑；以调用后的真实状态为准。
+    // - 仍在 composing，或 preview 明确存在/读取失败：必须等真实 commit/cancel 信号；
+    // - composing 已结束且 preview 明确为空：队列排空 + 同 revision 三方一致即可放行。
+    const previewAfter: PreviewTextState = this.readPreviewTextState()
+    const requireImeSignal: boolean = this.richEditorController !== null &&
+      (this.imeComposing || previewAfter !== 'empty')
     this.requestSelectionFlush()
-    const waiterPromise = this.pushIdleWaiter(true)
-    const sessionToken = this.sessionId
-    this.editQueue = this.editQueue.then(async (): Promise<void> => {
-      if (sessionToken !== this.sessionId) {
-        return
-      }
-      const settled = await this.awaitImeSettlement()
-      if (sessionToken !== this.sessionId) {
-        return
-      }
-      if (settled) {
-        this.settleImeComposition(true)
-      } else {
-        // 结算回调没按时到达：不把未提交的预编辑文本写进 Core，
-        // 只按已提交 Core revision 放行屏障（见 resolveCommittedWaiters）。
-        this.imeSettlementTimedOut = true
-        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
-          `IME settlement did not arrive within ${BRIDGE_IME_SETTLEMENT_TIMEOUT_MS}ms;`
-            + ' resolving idle barrier with committed core revision')
-        this.settleImeComposition(false)
-      }
-      this.checkIdle()
-    }).catch((e: Object): void => {
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `ime settlement step error: ${JSON.stringify(e)}`)
-      this.checkIdle()
-    })
+    const waiterPromise: Promise<void> = this.pushIdleWaiter('ime-settlement', requireImeSignal)
     this.checkIdle()
     return waiterPromise
   }
 
-  // Issue #1063：退出/切章时给所有 idle waiter 一个确定结果（不伪造空闲）。
+  // Issue #1063：退出/切章/页面销毁时给所有 waiter 一个确定失败（不伪造空闲）。
+  // 每个 waiter 的 timer/回调在账本里立即移除；调用方保留原会话与正文自行失败收尾。
   cancelIdleWaiters(reason: string): void {
-    if (this.idleWaiters.length === 0) {
+    if (this.imeBarrier.pendingCount() === 0) {
       return
     }
-    hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `cancel idle waiters: ${reason}`)
-    const waiters = this.idleWaiters
-    this.idleWaiters = []
-    const error = new Error(reason)
-    for (const w of waiters) {
-      w.reject(error)
-    }
+    hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+      `cancel idle waiters: ${reason} count=${this.imeBarrier.pendingCount()}`)
+    this.imeBarrier.rejectAll(IME_SETTLEMENT_CANCELLED, reason)
   }
 
   // ── Issue #1063：会话健康状态机 ────────────────────────────────
@@ -460,16 +526,13 @@ export class NativeRichEditorBridge {
   /**
    * 进入 reconciling：本次会话的消费游标冻结（drain 不再取新 edit），保留全部 pendingEdits
    * 与失败发生前的 base snapshot（每条 edit 自带 beforeText）；由原串行 editQueue 提交
-   * 可验证 rebase。reconciling 期间 idle waiters 保持挂起，不 reject。
+   * 可验证 rebase。reconciling 期间普通 waiter 按已提交 revision 放行，退出 waiter 等结算。
    */
   private enterReconciling(reason: string): void {
-    if (this.sessionHealth === 'conflict') {
-      // conflict 是终态：不降级，保留原冲突原因（只有 beginSession 重新开始）。
+    if (!this.sessionState.enterReconciling(reason)) {
+      // conflict 是确定结果：自动错误不降级，保留原冲突原因；只有 retryReconcile 能重试。
       return
     }
-    this.sessionHealth = 'reconciling'
-    this.reconcileReason = reason
-    this.conflictDetail = null
     hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
       `session entered reconciling: ${reason} pendingEdits=${this.pendingEdits.length}`)
     this.scheduleReconcile()
@@ -481,9 +544,7 @@ export class NativeRichEditorBridge {
    * 阻止 refreshNativeMirrorFromCore/syncFromCore 覆盖仍在原生编辑器里的正文。
    */
   private enterConflict(reason: string): void {
-    this.sessionHealth = 'conflict'
-    this.conflictDetail = reason
-    this.reconcileReason = ''
+    this.sessionState.enterConflict(reason)
     this.nativeCoreDiverged = true
     this.nativeCoreDivergedSessionId = this.coordinator.getSessionId()
     hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
@@ -493,21 +554,17 @@ export class NativeRichEditorBridge {
   }
 
   private rejectWaitersForConflict(): void {
-    if (this.idleWaiters.length === 0) {
+    if (this.imeBarrier.pendingCount() === 0) {
       return
     }
-    const message = `Native/core session conflict: ${this.conflictDetail !== null ? this.conflictDetail : 'unknown'}`
-    const waiters = this.idleWaiters
-    this.idleWaiters = []
-    const error = new Error(message)
-    for (const w of waiters) {
-      w.reject(error)
-    }
+    const detail = this.sessionState.getConflictDetail()
+    const message = `Native/core session conflict: ${detail !== null ? detail : 'unknown'}`
+    this.imeBarrier.rejectAll(IME_SETTLEMENT_CONFLICT, message)
   }
 
   // 把 reconcile 排到原串行 editQueue 尾部，保证不与 drain/选区事务并发。
   private scheduleReconcile(): void {
-    if (this.sessionHealth !== 'reconciling' || this.reconcileScheduled) {
+    if (this.sessionState.getHealth() !== 'reconciling' || this.reconcileScheduled) {
       return
     }
     this.reconcileScheduled = true
@@ -517,7 +574,7 @@ export class NativeRichEditorBridge {
       if (sessionToken !== this.sessionId) {
         return
       }
-      if (this.sessionHealth !== 'reconciling') {
+      if (this.sessionState.getHealth() !== 'reconciling') {
         this.checkIdle()
         return
       }
@@ -557,7 +614,7 @@ export class NativeRichEditorBridge {
    *          立即重排，等结算回调再驱动），false 表示已给出确定结论（healthy 或 conflict）。
    */
   private async reconcileSession(): Promise<boolean> {
-    if (this.sessionHealth !== 'reconciling') {
+    if (this.sessionState.getHealth() !== 'reconciling') {
       return false
     }
     if (this.pendingNativeChange !== null || this.imeComposing) {
@@ -601,16 +658,16 @@ export class NativeRichEditorBridge {
       }
       if (nativeText === snap.text) {
         // 原生全文与 Core 快照逐字相等：直接收敛，不提交任何 rebase 事务。
+        this.dropFrozenEdits(frozen, frozenCount)
         this.confirmRebaseConverged(snap.text, snap.revision)
-        this.pendingEdits = this.pendingEdits.slice(frozenCount)
         hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
           `reconcile converged without rebase: coreRevision=${snap.revision} droppedEdits=${frozenCount}`)
         this.refreshSelectionAfterConvergence()
         this.wakeDrain()
         return false
       }
-      const simulated: FrozenEditSimulation = this.simulateFrozenEdits(frozen, snap.text)
-      if (simulated.reason !== '') {
+      const simulated: FrozenRebaseAttempt = attemptFrozenRebase(frozen, snap.text)
+      if (!simulated.recovered) {
         this.enterConflict(simulated.reason)
         return false
       }
@@ -632,8 +689,8 @@ export class NativeRichEditorBridge {
       if (result.success && result.data !== undefined) {
         const after = this.coordinator.getSnapshot()
         if (after !== null && after.text === nativeText && after.revision === result.data.newRevision) {
+          this.dropFrozenEdits(frozen, frozenCount)
           this.confirmRebaseConverged(after.text, after.revision)
-          this.pendingEdits = this.pendingEdits.slice(frozenCount)
           hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
             `reconcile committed rebase revision=${snap.revision}->${after.revision}`
               + ` diff=[${diff.start}, ${diff.end}) insertedUtf16=${diff.replacement.length}`
@@ -660,6 +717,17 @@ export class NativeRichEditorBridge {
     return false
   }
 
+  // 只有可验证 rebase 成功（或原生已与 Core 逐字一致）才丢弃冻结前缀；
+  // 同时推进队列序号，退出屏障据此确认「提交的事务已进入 Core」。
+  private dropFrozenEdits(frozen: PendingEdit[], frozenCount: number): void {
+    for (let i = 0; i < frozenCount; i++) {
+      if (frozen[i].queueSequence > this.appliedEditSequence) {
+        this.appliedEditSequence = frozen[i].queueSequence
+      }
+    }
+    this.pendingEdits = this.pendingEdits.slice(frozenCount)
+  }
+
   // rebase 收敛：三方状态、revision 与 confirmed 基线一起对齐后恢复 healthy。
   private confirmRebaseConverged(text: string, revision: number): void {
     this.lastAppliedRevision = revision
@@ -668,137 +736,135 @@ export class NativeRichEditorBridge {
     this.coreNewlineCount = countNewlines(text)
     this.nativeCoreDiverged = false
     this.nativeCoreDivergedSessionId = null
-    this.sessionHealth = 'healthy'
-    this.conflictDetail = null
-    this.reconcileReason = ''
+    this.sessionState.confirmHealthy()
   }
 
-  // 按 edit 原始顺序把冻结 edit 映射到 Core 当前正文并模拟应用；失败返回非空 reason。
-  private simulateFrozenEdits(frozen: PendingEdit[], coreText: string): FrozenEditSimulation {
-    let simulated: string = coreText
-    for (let i = 0; i < frozen.length; i++) {
-      const edit: PendingEdit = frozen[i]
-      const mapped: EditRangeMap | null = this.mapEditToBaseline(edit, simulated)
-      if (mapped === null) {
-        return {
-          text: simulated,
-          reason: `cannot map frozen edit #${edit.localSequence} at offset ${edit.startUtf16}: overlapping diff`
-        }
-      }
-      const slice: string = simulated.substring(mapped.startUtf16, mapped.endUtf16)
-      if (slice !== edit.oldText) {
-        return {
-          text: simulated,
-          reason: `cannot map frozen edit #${edit.localSequence}: oldText mismatch`
-            + ` expectedLen=${edit.oldText.length} actualLen=${slice.length}`
-        }
-      }
-      simulated = simulated.substring(0, mapped.startUtf16) + edit.insertedText
-        + simulated.substring(mapped.endUtf16)
-    }
-    return { text: simulated, reason: '' }
+  // 普通保存屏障只冻结已提交 Core revision：预编辑留在原生未提交层。
+  // 每次都从 Core snapshot 现算 committedStable，不读共享超时布尔。
+  // previewState 传 'present' 表示「按 IME 结算未完成处理」：普通 waiter 走已提交 revision，
+  // 退出 waiter 继续等待，不会被这里的放行逻辑误结算。
+  private settleCommittedRevisionWaiters(): void {
+    this.settleWaiters(this.buildCoreOnlyAlignmentFacts(), 'present', true)
   }
 
-  // 普通保存/超时屏障：冻结并保存已提交 Core revision。
-  // committedStable 要求 Core 快照与确认基线一致；预编辑文本留在原生未提交层。
-  private resolveCommittedWaiters(includeImeWaiters: boolean): void {
+  // 没有原生全文读取的需求时（普通保存 + 预编辑中），只需 Core revision/文本与 confirmed 基线。
+  private buildCoreOnlyAlignmentFacts(): ImeAlignmentFacts {
     const snap = this.coordinator.getSnapshot()
-    const committedStable: boolean = snap !== null &&
-      snap.revision === this.lastAppliedRevision && snap.text === this.confirmedText
-    if (!committedStable) {
-      return
+    return {
+      coreAvailable: snap !== null,
+      nativeEditorAvailable: this.richEditorController !== null && this.nativeTextReady,
+      aligned: false,
+      coreRevision: snap !== null ? snap.revision : -1,
+      appliedRevision: this.lastAppliedRevision,
+      coreText: snap !== null ? snap.text : '',
+      confirmedText: this.confirmedText
     }
-    const remaining: IdleWaiter[] = []
-    const resolved: IdleWaiter[] = []
-    for (const w of this.idleWaiters) {
-      const eligible: boolean = w.sessionId === this.sessionId &&
-        this.lastAppliedRevision >= w.barrierRevision &&
-        (!w.waitForImeSettlement || includeImeWaiters)
-      if (eligible) {
-        resolved.push(w)
-      } else {
-        remaining.push(w)
+  }
+
+  private buildAlignmentFacts(alignment: NativeCoreAlignmentResult): ImeAlignmentFacts {
+    const snap = this.coordinator.getSnapshot()
+    return {
+      coreAvailable: alignment.coreAvailable,
+      nativeEditorAvailable: this.richEditorController !== null && this.nativeTextReady,
+      aligned: alignment.matched,
+      coreRevision: alignment.coreRevision,
+      appliedRevision: alignment.appliedRevision,
+      coreText: snap !== null ? snap.text : '',
+      confirmedText: this.confirmedText
+    }
+  }
+
+  // 按纯逻辑判定结算所有满足条件的 waiter。返回本轮结算数量。
+  // imeSettlementPending 由调用方给出：true 时普通屏障只冻已提交 revision，退出屏障等待。
+  private settleWaiters(alignment: ImeAlignmentFacts, previewState: PreviewTextState,
+    imeSettlementPending: boolean): number {
+    const waiters: ImeBarrierWaiter[] = this.imeBarrier.waiters()
+    const state: ImeStateFacts = {
+      imeComposing: imeSettlementPending,
+      previewState: previewState
+    }
+    let settled: number = 0
+    for (const waiter of waiters) {
+      if (waiter.sessionId !== this.sessionId) {
+        continue
+      }
+      if (!isBarrierWaiterSatisfied(waiter, alignment, state, this.appliedEditSequence)) {
+        continue
+      }
+      if (this.imeBarrier.settle(waiter.id)) {
+        settled++
       }
     }
-    if (resolved.length === 0) {
-      return
-    }
-    this.idleWaiters = remaining
-    for (const w of resolved) {
-      w.resolve()
-    }
+    return settled
   }
 
-  private pushIdleWaiter(waitForImeSettlement: boolean): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      this.idleWaiters.push({
-        sessionId: this.sessionId,
-        barrierRevision: this.lastAppliedRevision,
-        waitForImeSettlement: waitForImeSettlement,
-        resolve: resolve,
-        reject: reject
-      })
-      this.checkIdle()
-    })
+  private pushIdleWaiter(mode: ImeBarrierMode, requireImeSignal: boolean): Promise<void> {
+    const registration = this.imeBarrier.register(
+      this.sessionId, this.lastAppliedRevision, this.nextEditSequence - 1, mode, requireImeSignal)
+    this.checkIdle()
+    return registration.promise
   }
 
-  // 等真正的 IME 结算回调（原生结束/取消预编辑）；返回 false 表示超时未结算。
-  private awaitImeSettlement(): Promise<boolean> {
+  // 真实 IME commit（有正文差量）绑定到队列序号；cancel/空提交只清除信号标记。
+  // 结算动作本身由 checkIdle 在 Core 应用并三方对齐后完成。
+  private notifyImeSettled(kind: string, queueSequence: number): void {
+    if (kind === 'commit' && queueSequence >= 0) {
+      this.imeBarrier.bindImeCommitSequence(this.sessionId, queueSequence)
+    } else {
+      this.imeBarrier.clearImeSignal(this.sessionId)
+    }
+    this.checkIdle()
+  }
+
+  // 预编辑已明确取消且正文未变：结束 composition，但不产生 Core 事务。
+  // 只在 previewText 成功读到空、且基线到当前镜像没有差量时调用。
+  private trySettleCancelledImeComposition(): void {
     if (!this.imeComposing) {
-      return Promise.resolve(true)
+      return
     }
-    return new Promise<boolean>((resolve) => {
-      let finished: boolean = false
-      const finish = (settled: boolean): void => {
-        if (finished) {
-          return
-        }
-        finished = true
-        resolve(settled)
-      }
-      this.imeSettlementWaiters.push((): void => {
-        finish(true)
-      })
-      setTimeout((): void => {
-        finish(!this.imeComposing)
-      }, BRIDGE_IME_SETTLEMENT_TIMEOUT_MS)
-    })
+    if (this.readPreviewTextState() !== 'empty') {
+      return
+    }
+    const diff = this.computeDiff(this.imeComposingStartText, this.currentText)
+    if (diff.start < diff.end || diff.replacement.length > 0) {
+      // 正文已有差量：这可能是尚未到达的 commit 回调，等真实信号，绝不在这里提交。
+      return
+    }
+    this.commitImeCompositionFromBaseline('ime-cancel')
   }
 
-  private notifyImeSettled(): void {
-    const waiters = this.imeSettlementWaiters
-    this.imeSettlementWaiters = []
-    for (const w of waiters) {
-      w()
-    }
-  }
-
-  // 事件驱动检查：先看会话状态机，再等 editQueue tail，条件不满足时等待状态变化通知。
+  // 事件驱动检查：先按会话状态机处理确定结果，再等 editQueue tail 读取三方事实。
   private checkIdle(): void {
-    if (this.sessionHealth === 'reconciling') {
-      // reconciling：waiters 保持挂起（不 reject）；即使暂无 waiter 也要推进 reconcile，
+    const health: EditorSessionHealth = this.sessionState.getHealth()
+    if (health === 'reconciling') {
+      // reconciling：退出 waiter 保持挂起（不 reject）；即使暂无 waiter 也要推进 reconcile，
       // 否则冻结的 pendingEdits 与消费游标会永远停住。
       this.scheduleReconcile()
       if (this.imeComposing) {
         // 预编辑使 reconcile 暂时无法收敛：普通保存屏障按已提交 Core revision 放行，
-        // 不把自动保存挂在用户拼音输入时长上；退出屏障仍等结算回调/超时。
-        this.resolveCommittedWaiters(false)
+        // 不把自动保存挂在用户拼音输入时长上；退出屏障继续等真实结算。
+        this.settleCommittedRevisionWaiters()
       }
       return
     }
-    if (this.idleWaiters.length === 0) {
+    if (this.imeBarrier.pendingCount() === 0) {
       return
     }
 
-    if (this.sessionHealth === 'conflict') {
+    if (health === 'conflict') {
       // conflict 是确定结果：waiters 立刻拿到明确原因，不伪装空闲。
       this.rejectWaitersForConflict()
       return
     }
 
+    // 退出屏障：preview 已明确取消且正文未变时结束 composition（不提交候选正文）。
+    if (this.imeBarrier.hasImeSettlementWaiter(this.sessionId)) {
+      this.trySettleCancelledImeComposition()
+    }
+
     const currentTail = this.editQueue
     currentTail.then(() => {
-      if (this.idleWaiters.length === 0) {
+      if (this.imeBarrier.pendingCount() === 0) {
         return
       }
 
@@ -807,14 +873,15 @@ export class NativeRichEditorBridge {
         return
       }
 
-      if (this.sessionHealth === 'conflict') {
+      const currentHealth: EditorSessionHealth = this.sessionState.getHealth()
+      if (currentHealth === 'conflict') {
         this.rejectWaitersForConflict()
         return
       }
-      if (this.sessionHealth === 'reconciling') {
+      if (currentHealth === 'reconciling') {
         this.scheduleReconcile()
         if (this.imeComposing) {
-          this.resolveCommittedWaiters(false)
+          this.settleCommittedRevisionWaiters()
         }
         return
       }
@@ -824,9 +891,12 @@ export class NativeRichEditorBridge {
       }
 
       if (this.imeComposing) {
-        // 普通保存屏障可先保存已提交 Core revision；退出屏障等预编辑真正结算，
-        // 结算回调超时后同样按已提交 revision 放行（预编辑文本不写 Core）。
-        this.resolveCommittedWaiters(this.imeSettlementTimedOut)
+        // 普通保存屏障可先保存已提交 Core revision；退出屏障等真实 commit/cancel。
+        // 这里不再读取任何共享超时布尔，也不把退出 waiter 当成功。
+        this.settleCommittedRevisionWaiters()
+        if (this.imeBarrier.hasImeSettlementWaiter(this.sessionId)) {
+          this.trySettleCancelledImeComposition()
+        }
         return
       }
 
@@ -846,39 +916,32 @@ export class NativeRichEditorBridge {
         }
       }
 
-      const currentSession = this.sessionId
-      const currentWaiters: IdleWaiter[] = []
-      const remaining: IdleWaiter[] = []
-      for (const w of this.idleWaiters) {
-        if (w.sessionId === currentSession) {
-          currentWaiters.push(w)
-        } else {
-          remaining.push(w)
-        }
+      // 三方事实只读一次：普通保存要 native/mirror/core 一致；退出屏障还要求
+      // preview 明确为空且 Core revision 等于已应用 revision。
+      const alignment = this.validateNativeCoreAlignment(this.barrierStage)
+      if (alignment.matched) {
+        // 三方已一致：解除阻止 Core → 原生回写的分歧标记。
+        this.nativeCoreDiverged = false
+        this.nativeCoreDivergedSessionId = null
       }
-      if (currentWaiters.length === 0) {
-        this.idleWaiters = remaining
+      const previewState: PreviewTextState = this.readPreviewTextState()
+      const hasExitWaiter: boolean = this.imeBarrier.hasImeSettlementWaiter(this.sessionId)
+      // preview 明确存在时按「IME 结算未完成」处理；读取失败（unknown）只在退出屏障
+      // 需要严格结算时阻塞普通收敛，避免无预编辑的普通保存因一次读取失败改变行为。
+      const imeSettlementPending: boolean = this.imeComposing ||
+        previewState === 'present' || (previewState === 'unknown' && hasExitWaiter)
+      this.settleWaiters(this.buildAlignmentFacts(alignment), previewState, imeSettlementPending)
+      if (this.imeBarrier.pendingCount() === 0) {
         return
       }
 
-      // 只有原生全文、本地镜像、Core 正文三方一致才放行。
-      const alignment = this.validateNativeCoreAlignment(this.barrierStage)
       const nativeEditorLoaded = this.richEditorController !== null && this.nativeTextReady
       if (alignment.matched || !alignment.coreAvailable || !nativeEditorLoaded) {
-        // 屏障 revision 已推进到当前 confirmed revision 的 waiter 才放行。
-        const stillPending: IdleWaiter[] = []
-        const resolved: IdleWaiter[] = []
-        for (const w of currentWaiters) {
-          if (this.lastAppliedRevision >= w.barrierRevision) {
-            resolved.push(w)
-          } else {
-            stillPending.push(w)
-          }
-        }
-        this.idleWaiters = remaining.concat(stillPending)
-        for (const w of resolved) {
-          w.resolve()
-        }
+        return
+      }
+
+      // preview 读取失败或仍有预编辑：不能把原生候选当正文收敛进 Core。
+      if (imeSettlementPending) {
         return
       }
 
@@ -886,7 +949,6 @@ export class NativeRichEditorBridge {
         hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
           `core text advanced beyond native mirror: appliedRevision=${alignment.appliedRevision}`
             + ` coreRevision=${alignment.coreRevision}`)
-        this.idleWaiters = remaining.concat(currentWaiters)
         if (this.nativeCoreRefreshRunning) {
           return
         }
@@ -896,7 +958,6 @@ export class NativeRichEditorBridge {
       }
 
       // 未对齐：等待者保持挂起，先用原生全文收敛 Core；收敛失败才向等待者返回真实错误。
-      this.idleWaiters = remaining.concat(currentWaiters)
       if (this.nativeCoreConvergenceRunning) {
         return
       }
@@ -918,9 +979,9 @@ export class NativeRichEditorBridge {
   // Core 先行推进时刷新原生正文，刷新后由 checkIdle 重新做三方校验。
   // Issue #1063：只有 healthy 才允许 Core → 原生回写；reconciling/conflict 时绝不能覆盖原生正文。
   private async refreshNativeMirrorFromCore(): Promise<void> {
-    if (this.sessionHealth !== 'healthy') {
+    if (this.sessionState.getHealth() !== 'healthy') {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
-        `refreshNativeMirrorFromCore refused: session is ${this.sessionHealth}`)
+        `refreshNativeMirrorFromCore refused: session is ${this.sessionState.getHealth()}`)
       return
     }
     const sessionAtEntry = this.sessionId
@@ -1068,25 +1129,16 @@ export class NativeRichEditorBridge {
     const oldSession = this.sessionId
     this.sessionId++
 
-    const error = new Error(`Session ${oldSession} cancelled by beginSession`)
-    const remaining: IdleWaiter[] = []
-    for (const w of this.idleWaiters) {
-      if (w.sessionId === oldSession) {
-        w.reject(error)
-      } else {
-        remaining.push(w)
-      }
-    }
-    this.idleWaiters = remaining
+    // Issue #1063 复审评论第 2 条：会话结束立即移除旧 waiter 的回调与 timer。
+    this.imeBarrier.rejectSession(oldSession, IME_SETTLEMENT_SESSION_CHANGED,
+      `Session ${oldSession} cancelled by beginSession`)
 
     this.pendingEdits = []
-    // Issue #1063：会话终止复位状态机（conflict 只在这里解除）。
-    this.sessionHealth = 'healthy'
-    this.conflictDetail = null
-    this.reconcileReason = ''
+    // Issue #1063：会话替换语义复位状态机（conflict 的另一条解锁路径是 retryReconcile）。
+    this.sessionState.reset()
     this.reconcileScheduled = false
-    this.imeSettlementWaiters = []
-    this.imeSettlementTimedOut = false
+    this.nextEditSequence = 0
+    this.appliedEditSequence = -1
     this.cancelViewportRestore()
     this.imeComposing = false
     this.imeComposingStartText = ''
@@ -1256,6 +1308,16 @@ export class NativeRichEditorBridge {
     }
 
     if (this.imeComposing) {
+      if (pending === null) {
+        // 缺少同一笔 onWillChange 事实：不能证明 preview 已结束，绝不按镜像差量提交。
+        // 只更新镜像并等下一次真实 commit/cancel 信号（退出屏障由各自 timer 兜底）。
+        this.reportNativeFactError('onContentDidChange',
+          'ime composition ended without will-change facts; refusing to commit mirror diff')
+        this.notifyStateListener('native-change', paragraphsChanged,
+          this.insertedParagraphStarts(insertedText, startUtf16), becameNonEmpty)
+        this.checkIdle()
+        return
+      }
       // 预编辑结束：从预编辑基线到当前镜像提交一笔 TypingCommit，不提交中间态。
       this.commitImeCompositionFromBaseline('ime-commit')
       this.notifyStateListener('ime-commit', paragraphsChanged)
@@ -1316,6 +1378,8 @@ export class NativeRichEditorBridge {
     const pendingEdit: PendingEdit = {
       sessionId: this.sessionId,
       localSequence: this.localSequence++,
+      // enqueuePendingEdit 统一分配全局队列序号。
+      queueSequence: -1,
       baseRevision: this.lastAppliedRevision,
       beforeText: previousText,
       startUtf16: startUtf16,
@@ -1329,30 +1393,30 @@ export class NativeRichEditorBridge {
       this.insertedParagraphStarts(insertedText, startUtf16), becameNonEmpty)
   }
 
-  // 预编辑结算：从冻结基线到当前镜像只提交一笔差量。
-  // 组件不支持 onDidIMEInput，因此保存/退出屏障会主动结算仍在进行的预编辑。
-  private settleImeComposition(force: boolean): void {
-    if (!this.imeComposing) {
-      return
-    }
-    if (!force && this.readPreviewTextLength() > 0) {
-      // 预上屏文本仍在：不是已提交正文，普通保存屏障保留在原生未提交层；
-      // 退出屏障另有 stopEditing() + 结算回调/超时路径，不会永久挂起。
-      return
-    }
-    this.commitImeCompositionFromBaseline('ime-commit')
-  }
-
-  private readPreviewTextLength(): number {
+  // previewText 读取：null 表示读取失败/接口不可用（unknown），绝不能当成 0。
+  // controller 未绑定代表没有原生编辑器可读取，此时没有预上屏，返回 0 是已知事实。
+  private readPreviewTextLength(): number | null {
     if (this.richEditorController === null) {
       return 0
     }
     try {
       const previewText = this.richEditorController.getPreviewText()
-      return previewText !== undefined && previewText !== null ? previewText.value.length : 0
+      if (previewText === undefined || previewText === null) {
+        return null
+      }
+      return previewText.value.length
     } catch (e) {
-      return 0
+      hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `readPreviewTextLength error: ${JSON.stringify(e)}`)
+      return null
     }
+  }
+
+  private readPreviewTextState(): PreviewTextState {
+    const length = this.readPreviewTextLength()
+    if (length === null) {
+      return 'unknown'
+    }
+    return length > 0 ? 'present' : 'empty'
   }
 
   private commitImeCompositionFromBaseline(kind: string): void {
@@ -1362,7 +1426,6 @@ export class NativeRichEditorBridge {
     const baselineText: string = this.imeComposingStartText
     const baselineNewlines: number = this.imeComposingStartNewlineCount
     this.imeComposing = false
-    this.imeSettlementTimedOut = false
     // 预编辑期间镜像按中间态增量维护；以基线差量重算，避免中间态计数叠加。
     const diff = this.computeDiff(baselineText, this.currentText)
     this.nativeNewlineCount = Math.max(0,
@@ -1387,8 +1450,8 @@ export class NativeRichEditorBridge {
         programmatic: false,
         factError: false
       })
-      // 预编辑已结束（无正文变化）：唤醒退出屏障的结算等待。
-      this.notifyImeSettled()
+      // 预编辑取消/空提交：正文未变，不产生 Core 事务，只清除退出屏障的信号等待。
+      this.notifyImeSettled('cancel', -1)
       return
     }
     const oldText: string = baselineText.substring(diff.start, diff.end)
@@ -1414,6 +1477,8 @@ export class NativeRichEditorBridge {
     const pendingEdit: PendingEdit = {
       sessionId: this.sessionId,
       localSequence: this.localSequence++,
+      // enqueuePendingEdit 统一分配全局队列序号。
+      queueSequence: -1,
       baseRevision: this.lastAppliedRevision,
       beforeText: baselineText,
       startUtf16: diff.start,
@@ -1423,8 +1488,9 @@ export class NativeRichEditorBridge {
       cause: EditorTransactionCause.TypingCommit
     }
     this.enqueuePendingEdit(pendingEdit)
-    // 预编辑已结算并已入队：唤醒退出屏障的结算等待（真正的消费仍由串行 drain 完成）。
-    this.notifyImeSettled()
+    // 真实 commit 回调：把退出屏障绑定到这笔提交的队列序号；真正放行仍要等
+    // Core 应用完成且 native/mirror/core 同 revision 一致。
+    this.notifyImeSettled('commit', pendingEdit.queueSequence)
   }
 
   // RichEditor onSelectionChange 回调：用 latest-wins 合并上报，防抖 30ms。
@@ -1491,7 +1557,7 @@ export class NativeRichEditorBridge {
         return
       }
       // Issue #1063：reconciling/conflict 时不提交选区事务（会话身份/正文基线都在变动）。
-      if (this.sessionHealth !== 'healthy') {
+      if (this.sessionState.getHealth() !== 'healthy') {
         return
       }
 
@@ -1646,13 +1712,16 @@ export class NativeRichEditorBridge {
   }
 
   private enqueuePendingEdit(pendingEdit: PendingEdit): void {
+    // 队列序号在这里统一分配：调用方只准备编辑事实，屏障序号与入队顺序严格一致。
+    pendingEdit.queueSequence = this.nextEditSequence
+    this.nextEditSequence++
     this.pendingEdits.push(pendingEdit)
-    if (this.sessionHealth === 'healthy') {
+    if (this.sessionState.getHealth() === 'healthy') {
       this.wakeDrain()
       return
     }
     // reconciling：冻结消费，保留全部未确认事件，并推进 reconcile；conflict 保留原状态。
-    if (this.sessionHealth === 'reconciling') {
+    if (this.sessionState.getHealth() === 'reconciling') {
       this.scheduleReconcile()
     }
     this.checkIdle()
@@ -1691,7 +1760,7 @@ export class NativeRichEditorBridge {
   private async drainPendingEdits(): Promise<void> {
     while (this.pendingEdits.length > 0) {
       // Issue #1063：reconciling/conflict 时冻结消费（pendingEdits 全部保留）。
-      if (this.sessionHealth !== 'healthy') {
+      if (this.sessionState.getHealth() !== 'healthy') {
         return
       }
 
@@ -1715,7 +1784,7 @@ export class NativeRichEditorBridge {
         mappedStart = edit.startUtf16
         mappedEnd = edit.endUtf16
       } else {
-        const mapped = this.mapEditToBaseline(edit, baselineText)
+        const mapped: EditRangeMap | null = mapEditRangeToBaseline(edit, baselineText)
         if (mapped === null) {
           // 映射失败：不在这里丢事件，交给 reconcile 判定可验证 rebase 或 conflict。
           this.enterReconciling(`cannot map pending edit at offset ${edit.startUtf16}: overlapping diff`)
@@ -1761,6 +1830,10 @@ export class NativeRichEditorBridge {
       }
 
       this.pendingEdits.shift()
+      // 这笔事务已经应用到 Core：推进全局队列序号，退出屏障据此判断 commit 已进入 Core。
+      if (edit.queueSequence > this.appliedEditSequence) {
+        this.appliedEditSequence = edit.queueSequence
+      }
 
       const newSnap = this.coordinator.getSnapshot()
       if (newSnap !== null && edit.sessionId === this.sessionId) {
@@ -1823,25 +1896,6 @@ export class NativeRichEditorBridge {
 
   private computeDiff(oldText: string, newText: string): TextDiff {
     return computeMinimalTextDiff(oldText, newText)
-  }
-
-  private mapEditToBaseline(edit: PendingEdit, baselineText: string): EditRangeMap | null {
-    if (baselineText === edit.beforeText) {
-      return { startUtf16: edit.startUtf16, endUtf16: edit.endUtf16 }
-    }
-
-    const diff = this.computeDiff(edit.beforeText, baselineText)
-    const diffLenDelta = diff.replacement.length - (diff.end - diff.start)
-
-    if (diff.end <= edit.startUtf16) {
-      return { startUtf16: edit.startUtf16 + diffLenDelta, endUtf16: edit.endUtf16 + diffLenDelta }
-    }
-
-    if (diff.start >= edit.endUtf16) {
-      return { startUtf16: edit.startUtf16, endUtf16: edit.endUtf16 }
-    }
-
-    return null
   }
 
   // ── 原生编辑事实与运行时诊断（不含正文原文） ─────────────────────
@@ -2128,9 +2182,9 @@ export class NativeRichEditorBridge {
       return
     }
 
-    if (this.sessionHealth !== 'healthy') {
+    if (this.sessionState.getHealth() !== 'healthy') {
       hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
-        `syncFromCore: deferred because session is ${this.sessionHealth}`)
+        `syncFromCore: deferred because session is ${this.sessionState.getHealth()}`)
       return
     }
 

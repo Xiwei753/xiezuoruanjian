@@ -8,15 +8,28 @@
 //   出参保持 0/nullptr；调用方必须显式返回 INVALID_ARGUMENT 错误 JSON，
 //   不能把未初始化的 buffer 或 0 当成合法值继续调用 Rust C ABI。
 // - 字符串出参成功时为 new[] 分配的 NUL 结尾 UTF-8 副本，调用方用 delete[] 释放。
+// - 字符串按 CStr 传给 Rust，因此**不支持内嵌 U+0000**：含 NUL 的 ArkTS 字符串
+//   判为非法参数（返回 false，由调用方转 INVALID_ARGUMENT），不能静默截断。
+//   若未来确实需要传递含 NUL 的原始文本，必须改用显式长度 ABI 或 JSON 转义，
+//   不能继续走 CStr。
+// - sessionId / revision / composition_* 等 u64 参数和 byte offset 等 u32 参数
+//   必须落在 JS 安全整数范围内（Number.MAX_SAFE_INTEGER = 2^53 - 1），因为
+//   ArkTS number 只在安全整数内精确；超出后 double 已经舍入，不能再当成 ID 使用。
+//   ID/revision 不接受 2^53 及以上的值，也不接受 NaN/Infinity/负数/小数。
 
 #ifndef NAPI_EDITOR_ARGS_H
 #define NAPI_EDITOR_ARGS_H
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <new>
 
 #include <napi/native_api.h>
+
+// JS 安全整数上界：Number.MAX_SAFE_INTEGER == 2^53 - 1 == 9007199254740991，
+// 该值在 double 中精确可表示；2^53 本身已超出安全整数范围。
+static constexpr double kNapiArgMaxSafeInteger = 9007199254740991.0;
 
 // 编辑 session 参数非法时的统一 ResultEnvelope 错误字面量。
 // 字段与 Core ffi/mod.rs 的 err_json（success/errorCode/userMessage）以及
@@ -30,10 +43,15 @@ static const char* napi_editor_invalid_arg_json() {
 
 // napi_arg_get_string: 读取必填字符串参数并复制为 NUL 结尾的 UTF-8 C 字符串。
 //   1. 校验 napi_typeof == napi_string；
-//   2. 第一次 napi_get_value_string_utf8 只查询字节长度并检查 status；
-//   3. 分配 length + 1 字节；
+//   2. 第一次 napi_get_value_string_utf8 只查询字节长度并检查 status；长度为
+//      SIZE_MAX 时 len + 1 会溢出，直接失败；
+//   3. 用 nothrow new[] 分配 length + 1 字节，分配失败返回 false；
 //   4. 第二次复制检查 status，且实际写入量不得超过查询长度；
-//   5. 任何失败都释放 buffer、保持 *out = nullptr 并返回 false。
+//   5. 显式写 buffer[written] = '\0'，不依赖 Node-API 是否补终止符；
+//   6. 在写入的 written 字节内用 memchr 检查内嵌 NUL：C ABI 只能传 NUL 结尾
+//      字符串，内嵌 U+0000 会截断正文，故判为非法参数（见文件头约定）；
+//   7. 任何失败都 delete[] buffer、保持 *out = nullptr 并返回 false，
+//      不会把未初始化或已释放的指针交给调用方。
 static bool napi_arg_get_string(napi_env env, napi_value value, char** out) {
     if (out == nullptr) {
         return false;
@@ -50,6 +68,10 @@ static bool napi_arg_get_string(napi_env env, napi_value value, char** out) {
     if (napi_get_value_string_utf8(env, value, nullptr, 0, &length) != napi_ok) {
         return false;
     }
+    if (length == SIZE_MAX) {
+        // length + 1 溢出，无法分配终止符。
+        return false;
+    }
 
     char* buffer = new (std::nothrow) char[length + 1];
     if (buffer == nullptr) {
@@ -62,16 +84,24 @@ static bool napi_arg_get_string(napi_env env, napi_value value, char** out) {
         delete[] buffer;
         return false;
     }
-    // buffer 足够时 Node-API 已写入终止符；这里再显式补一次，避免把未初始化字节
-    // 当成字符串内容交给 Rust。
+    // 显式补终止符，避免把未初始化字节当成字符串内容交给 Rust。
     buffer[written] = '\0';
+
+    // written 字节内出现 NUL 说明原字符串包含 U+0000，CStr 无法无损表示。
+    if (std::memchr(buffer, '\0', written) != nullptr) {
+        delete[] buffer;
+        *out = nullptr;
+        return false;
+    }
+
     *out = buffer;
     return true;
 }
 
 // napi_arg_get_u64: 读取必填 uint64 参数（ArkTS number → int64 → uint64）。
-//   ArkTS 的 sessionId/revision 用 number 表示：这里拒绝负数、非整数、NaN/Infinity
-//   以及超出 int64 上界（2^63）的值，避免把非数字静默当成 0。
+//   ArkTS 的 sessionId/revision 用 number 表示：先要求有限、整数、非负且
+//   <= Number.MAX_SAFE_INTEGER（2^53 - 1），再用 napi_get_value_int64 复核
+//   数值相等后输出。2^53 及以上的 double 已经丢失整数精度，不能舍入后当 ID。
 static bool napi_arg_get_u64(napi_env env, napi_value value, uint64_t* out) {
     if (out == nullptr) {
         return false;
@@ -87,14 +117,15 @@ static bool napi_arg_get_u64(napi_env env, napi_value value, uint64_t* out) {
     if (napi_get_value_double(env, value, &as_double) != napi_ok) {
         return false;
     }
-    // 9223372036854775808.0 == 2^63，double 可精确表示 int64 的上界。
-    if (!std::isfinite(as_double) || std::floor(as_double) != as_double
-        || as_double < 0 || as_double >= 9223372036854775808.0) {
+    if (!std::isfinite(as_double) || std::trunc(as_double) != as_double
+        || as_double < 0 || as_double > kNapiArgMaxSafeInteger) {
         return false;
     }
 
+    // int64 复核：值必须与 double 完全一致，避免任何隐式截断/回绕。
     int64_t as_int64 = 0;
-    if (napi_get_value_int64(env, value, &as_int64) != napi_ok || as_int64 < 0) {
+    if (napi_get_value_int64(env, value, &as_int64) != napi_ok
+        || as_int64 < 0 || static_cast<double>(as_int64) != as_double) {
         return false;
     }
     *out = static_cast<uint64_t>(as_int64);
@@ -102,8 +133,9 @@ static bool napi_arg_get_u64(napi_env env, napi_value value, uint64_t* out) {
 }
 
 // napi_arg_get_u32: 读取必填 uint32 参数（byte offset 等）。
-//   先用 double 校验非负、有限、整数且在 [0, UINT32_MAX]，再用 int64 做范围复核，
-//   不依赖 napi_get_value_uint32 对负数/小数的隐式截断与回绕。
+//   先按 u64 的同一套规则校验非负、有限、整数且 <= MAX_SAFE_INTEGER，
+//   再额外要求 <= UINT32_MAX；最后用 int64 做范围与数值相等复核，
+//   不依赖 napi_get_value_uint32 对负数/小数/超界值的隐式截断与回绕。
 static bool napi_arg_get_u32(napi_env env, napi_value value, uint32_t* out) {
     if (out == nullptr) {
         return false;
@@ -119,14 +151,16 @@ static bool napi_arg_get_u32(napi_env env, napi_value value, uint32_t* out) {
     if (napi_get_value_double(env, value, &as_double) != napi_ok) {
         return false;
     }
-    if (!std::isfinite(as_double) || std::floor(as_double) != as_double
-        || as_double < 0 || as_double > static_cast<double>(UINT32_MAX)) {
+    if (!std::isfinite(as_double) || std::trunc(as_double) != as_double
+        || as_double < 0 || as_double > kNapiArgMaxSafeInteger
+        || as_double > static_cast<double>(UINT32_MAX)) {
         return false;
     }
 
     int64_t as_int64 = 0;
     if (napi_get_value_int64(env, value, &as_int64) != napi_ok
-        || as_int64 < 0 || static_cast<uint64_t>(as_int64) > static_cast<uint64_t>(UINT32_MAX)) {
+        || as_int64 < 0 || static_cast<uint64_t>(as_int64) > static_cast<uint64_t>(UINT32_MAX)
+        || static_cast<double>(as_int64) != as_double) {
         return false;
     }
     *out = static_cast<uint32_t>(as_int64);

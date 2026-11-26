@@ -6,9 +6,10 @@
 
 use super::*;
 // Issue #901 第五轮阻塞2: 简化 paragraph_layout_store 全路径引用。
+// Issue #1063: 段落切分与坐标推进统一用真实分隔符长度（`\n`/`CRLF`/`U+2029`）。
 use super::super::super::paragraph_layout_store::{
-    ends_with_paragraph_separator, split_paragraphs_inclusive, ParagraphLayoutStore, ParagraphSpan,
-    ParagraphSpliceRanges,
+    ends_with_paragraph_separator, split_paragraphs_inclusive, split_paragraphs_with_separator,
+    ParagraphLayoutStore, ParagraphSpan, ParagraphSpliceRanges,
 };
 // Issue #901 第三十四轮缺口2: ChunkedSlotMap 替代 HashMap<ParagraphId, usize>。
 use super::super::super::chunked_vec::{ChunkedSlotMap, PersistentChunkedVec};
@@ -29,29 +30,74 @@ use std::sync::Arc;
 fn build_offset_index_from_text(text: &str) -> ParagraphOffsetIndex {
     // Issue #901 第二十四轮问题1: 用统一 Core 段落规则切分，
     // 为尾空段也生成长度 0 的 offset entry，与 canonical/store/line-count/height 段数一致。
-    let ranges = writer_core::editor::text_document_rules::paragraph_byte_ranges(text);
-    let mut byte_lengths = Vec::with_capacity(ranges.len());
-    let mut qchar_lengths = Vec::with_capacity(ranges.len());
-    if ranges.is_empty() {
+    let spans = writer_core::editor::text_document_rules::paragraph_byte_spans(text);
+    if spans.is_empty() {
         // 空正文：store/canonical 仍有一个空段。
-        byte_lengths.push(0);
-        qchar_lengths.push(0);
+        let mut idx = ParagraphOffsetIndex::new();
+        idx.rebuild(vec![0], vec![0]);
+        return idx;
     }
-    for (index, &(start, _end)) in ranges.iter().enumerate() {
-        // 段落总长度 = 正文 + 紧随其后的分隔符；最后一段到文末。
-        let span_end = if index + 1 < ranges.len() {
-            ranges[index + 1].0
-        } else {
-            text.len()
-        };
-        byte_lengths.push(span_end - start);
+    let mut byte_lengths = Vec::with_capacity(spans.len());
+    let mut qchar_lengths = Vec::with_capacity(spans.len());
+    for span in &spans {
+        let (start, end) = span.span();
+        byte_lengths.push(span.byte_len());
+        // qchar 不能拿 byte 长度代替：CRLF 是 2 byte / 2 unit，U+2029 是 3 byte / 1 unit。
         qchar_lengths.push(writer_core::editor::text_coordinates::utf16_len(
-            &text[start..span_end],
+            &text[start..end],
         ));
     }
     let mut idx = ParagraphOffsetIndex::new();
     idx.rebuild(byte_lengths, qchar_lengths);
     idx
+}
+
+/// Issue #1063: 全文切分为 `ParagraphSpan`（含尾空段）。
+///
+/// 与 [`split_paragraphs_with_separator`] 同源（Core 段落规则），额外保留分隔符
+/// 切片，供增量路径按 `utf16_len(content) + utf16_len(separator)` 推进 qchar 坐标。
+fn split_full_paragraph_spans(text: &str) -> Vec<ParagraphSpan<'_>> {
+    let mut offset = 0usize;
+    split_paragraphs_with_separator(text)
+        .into_iter()
+        .map(|(content, separator_len)| {
+            let separator_start = offset + content.len();
+            let separator_end = separator_start + separator_len;
+            offset = separator_end;
+            ParagraphSpan {
+                content,
+                separator: &text[separator_start..separator_end],
+            }
+        })
+        .collect()
+}
+
+/// Issue #1063: 按已知正文/分隔符长度从 `text` 中切出段落 span。
+///
+/// 用于增量路径的防御性回退（`ParasSource::get_para` 返回 `None`）。越界或不是
+/// UTF-8 char boundary 时返回空 span，避免切片 panic；不伪造分隔符长度。
+fn paragraph_span_at(
+    text: &str,
+    start: usize,
+    content_len: usize,
+    separator_len: usize,
+) -> ParagraphSpan<'_> {
+    let content_end = start.saturating_add(content_len);
+    let separator_end = content_end.saturating_add(separator_len);
+    if separator_end > text.len()
+        || !text.is_char_boundary(start)
+        || !text.is_char_boundary(content_end)
+        || !text.is_char_boundary(separator_end)
+    {
+        return ParagraphSpan {
+            content: "",
+            separator: "",
+        };
+    }
+    ParagraphSpan {
+        content: &text[start..content_end],
+        separator: &text[content_end..separator_end],
+    }
 }
 
 /// Issue #901 第十四轮问题1: 从视觉行数组构建段落高度索引。
@@ -570,39 +616,90 @@ fn extract_affected_height_updates(
     updates
 }
 
-/// Issue #901 第三轮复核问题 4 + 第二十三轮问题2: 检查 previous_snapshot 的段落结构
-/// 是否与 new text 完全一致（含 hard_break）。
+/// Issue #901 第三轮复核问题 4 + Issue #1063: 检查 previous_snapshot 的段落结构
+/// 是否与 new text 完全一致（含真实分隔符长度）。
 ///
-/// 用 `split_paragraphs_with_hard_break(text)` 切分新文本，与 prev 的段落结构
-///（`paragraphs[i].paragraph_text` + 从 `visual_lines` 获取的 `hard_break`）逐段比较。
-/// 段落数、每段 content 和 hard_break 都相同才返回 true。
+/// 用 [`split_paragraphs_with_separator`] 切分新文本，与 prev 的段落结构
+///（`paragraphs[i].paragraph_text` + `paragraph_offset_index` 中记录的真实分隔符长度）
+/// 逐段比较。段落数、每段正文和分隔符长度（`LF`/`CRLF`/`U+2029`）都相同才返回 true。
 /// O(n) 但只在 `no_affected_range` 边界情况调用，不影响常规编辑性能。
 fn prev_snapshot_text_matches(prev: &CanonicalDocumentVisualSnapshot, text: &str) -> bool {
-    let new_paras =
-        super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text);
+    let new_paras = split_paragraphs_with_separator(text);
     let prev_para_count = prev.paragraphs.len();
     if new_paras.len() != prev_para_count {
         return false;
     }
     for i in 0..prev_para_count {
         let prev_content = &prev.paragraphs[i].paragraph_text;
-        let (new_content, new_hard_break) = new_paras[i];
+        let (new_content, new_separator_len) = new_paras[i];
         if prev_content.as_str() != new_content {
             return false;
         }
-        // 从 visual_lines 获取 prev 段 i 最后一行的 hard_break。
-        // paragraph_line_count_index 的行范围基于段内行数前缀和，不依赖 logical_slot。
-        let (line_start, line_end) = prev.paragraph_line_count_index.paragraph_line_range(i);
-        let prev_hard_break = if line_start < line_end && line_end <= prev.visual_lines.len() {
-            prev.visual_lines[line_end - 1].hard_break
-        } else {
-            false
-        };
-        if prev_hard_break != new_hard_break {
+        // 从 paragraph_offset_index 读取 prev 段的真实分隔符长度：
+        // byte_length = 正文 + 分隔符，不能把有分隔符一律当成 1 byte。
+        let prev_separator_len = prev
+            .paragraph_offset_index
+            .byte_length_at(i)
+            .saturating_sub(prev_content.len());
+        if prev_separator_len != new_separator_len {
             return false;
         }
     }
     true
+}
+
+/// Issue #1063: 增量维护段落 byte/qchar 前缀索引。
+///
+/// - 段落数变化时按段落 splice；段落数不变时只更新受影响段。
+/// - byte 长度 = `content_len + separator_len`（`\n`=1、`CRLF`=2、`U+2029`=3）。
+/// - qchar 长度 = `utf16_len(content) + utf16_len(separator)`
+///  （CRLF 是 2 byte / 2 unit、U+2029 是 3 byte / 1 unit，不能拿 byte 长度代替）。
+fn update_offset_index_incremental(
+    mut idx: Arc<ParagraphOffsetIndex>,
+    curr_count: usize,
+    prev_count: usize,
+    old_splice_start: usize,
+    old_splice_end: usize,
+    new_layout_start: usize,
+    new_layout_end: usize,
+    affected_paras: &[ParagraphSpan<'_>],
+    paras_source: &ParasSource<'_>,
+) -> Arc<ParagraphOffsetIndex> {
+    if curr_count != prev_count {
+        let mut new_byte_lengths = Vec::with_capacity(affected_paras.len());
+        let mut new_qchar_lengths = Vec::with_capacity(affected_paras.len());
+        for span in affected_paras {
+            new_byte_lengths.push(span.byte_len());
+            new_qchar_lengths.push(span.qchar_len());
+        }
+        let idx = Arc::make_mut(&mut idx);
+        idx.splice(
+            old_splice_start,
+            old_splice_end,
+            new_byte_lengths,
+            new_qchar_lengths,
+        );
+    } else {
+        let idx = Arc::make_mut(&mut idx);
+        for para_idx in new_layout_start..new_layout_end {
+            if let Some(span) = paras_source.get_para(para_idx, new_layout_start) {
+                idx.update_paragraph_length(para_idx, span.byte_len(), span.qchar_len());
+            }
+        }
+    }
+    idx
+}
+
+/// Issue #1063: 比较增量维护的 offset 索引与从全文重建的结果（byte + qchar 逐段）。
+fn offset_index_matches_rebuild(idx: &ParagraphOffsetIndex, text: &str) -> bool {
+    let rebuilt = build_offset_index_from_text(text);
+    if idx.len() != rebuilt.len() {
+        return false;
+    }
+    (0..idx.len()).all(|i| {
+        idx.byte_length_at(i) == rebuilt.byte_length_at(i)
+            && idx.qchar_length_at(i) == rebuilt.qchar_length_at(i)
+    })
 }
 
 /// Issue #901: 增量排版实现 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
@@ -640,7 +737,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     affected_byte_start: usize,
     affected_byte_end: usize,
     // Issue #901 第二十六轮复核缺口4: Core 提供的受影响文本字节范围，
-    // 用于增量拼接 new_paras，避免每笔 split_paragraphs_with_hard_break 全文切分。
+    // 用于增量拼接 new_paras，避免每笔 split_paragraphs_with_separator 全文切分。
     // None 或范围不合理时回退到全文切分。
     affected_text_range: Option<(usize, usize)>,
     // Issue #901 问题5: 接收 previous_snapshot 的所有权，使函数内部能 move
@@ -825,20 +922,18 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Arc + mem::take + Arc::make_mut（O(1) COW），消除了每笔 O(段落数) 深拷。
     // split_inclusive 的 O(全文 byte) 常数小（单字节 memchr），且局部化需协调
     // 多处 new_paras 使用点，正确性风险高于性能收益，保留标注。
-    // Issue #901 第二十三轮问题1+2: 用统一切分器生成 (content, hard_break) 序列，
-    // 包括末尾换行产生的尾空段。段落比较保留 hard_break，避免仅插入/删除末尾回车时
-    // 按去掉 \n 后的段落正文比较误判"无变化"。
-    // Issue #901 第二十三轮问题1+2: 用统一切分器生成 (content, hard_break) 序列，
-    // 包括末尾换行产生的尾空段。段落比较保留 hard_break，避免仅插入/删除末尾回车时
-    // 按去掉 \n 后的段落正文比较误判"无变化"。
+    // Issue #901 第二十三轮问题1+2 + Issue #1063: 用统一切分器生成
+    // (content, 真实分隔符长度) 序列，包括末尾分隔符产生的尾空段。
+    // 段落比较保留真实分隔符长度（LF/CRLF/U+2029 互不相同），
+    // 避免仅插入/删除末尾分隔符、或只改分隔符类型时误判"无变化"。
     // Issue #901 第二十六轮复核缺口4 + 第二十七轮复核问题1+4: 当有 Core 提供的
     // 受影响范围（affected_text_range）且 paragraph_store 非空时，用增量拼接构建
     // new_paras，避免每笔全文切分：
     // - 受影响范围扩展到完整段落边界，之前的未改段（前缀段）从 entries 累计长度
     //   定位切片获取（不重新切分，不依赖可能过时的 document_byte_start）
-    // - 扩展后的完整段落区域按真实换行边界切分（第二十八轮复核问题1修复：
-    //   不再调用 split_paragraphs_with_hard_break，避免局部切片以 \n 结尾时
-    //   产生不存在的尾空段；只有 expanded_end == text_len 时才产生尾空段）
+    // - 扩展后的完整段落区域按 Core 段落规则切分（第二十八轮复核问题1修复：
+    //   不再无条件产生尾空段，只有 expanded_end == text_len 时才产生尾空段；
+    //   Issue #1063: 分隔符按真实长度保留，不只看 `\n`）
     // - 扩展区域之后的未改段（后缀段）从 entries 累计长度 + delta 定位切片获取
     // 当 affected_text_range 不存在、范围不合理或边界检查失败时，回退全文切分。
     // Issue #901 第二十八轮复核问题4: build_new_paras_from_affected_range 额外返回
@@ -866,21 +961,13 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                         suffix_count: sc,
                         affected,
                     },
-                    None => ParasSource::Full(
-                        super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text),
-                    ),
+                    None => ParasSource::Full(split_full_paragraph_spans(text)),
                 }
             } else {
-                ParasSource::Full(
-                    super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(
-                        text,
-                    ),
-                )
+                ParasSource::Full(split_full_paragraph_spans(text))
             }
         } else {
-            ParasSource::Full(
-                super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text),
-            )
+            ParasSource::Full(split_full_paragraph_spans(text))
         }
     };
     let new_para_count = paras_source.para_count();
@@ -892,9 +979,11 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // - old_splice_start..old_splice_end：在旧段数组中删除的范围
     // - new_layout_start..new_layout_end：在新段数组中建立（重排版）的范围
     //
-    // Issue #901 第二十三轮问题2: 段落身份比较包含 hard_break。
-    // new_paras 已含 hard_break（来自 split_paragraphs_with_hard_break）。
-    // old_paras 从 prev.paragraphs 获取 content，从 prev.visual_lines 获取 hard_break。
+    // Issue #1063: 段落身份比较使用 (content, separator_len)，
+    // 真实分隔符长度区分 LF/CRLF/U+2029。
+    // new_paras 已含真实分隔符（来自 Core 段落规则）。
+    // old_paras 从 prev.paragraphs 获取 content、从 prev.paragraph_offset_index 获取
+    // 真实分隔符长度（byte_length - content_len）。
     // Issue #901 第三十轮问题4: 不构造整章 new_para_texts。增量路径只含受影响段文本。
     let splice_info = paras_source.splice_info();
 
@@ -924,24 +1013,27 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         // 回退到全篇比较：构造 old_paras 并用 compute_old_new_paragraph_ranges。
         // Issue #901 第三十轮问题4: Full 路径才有整章 new_paras；Incremental 路径
         // 走 splice_info 分支，不会到达这里。如果到达这里（理论上不应发生），
-        // 从 store entries 构造 old_paras，new_paras 从 text 全文切分。
-        let old_paras: Vec<(&str, bool)> = (0..prev_para_count)
+        // 从 prev 的段落正文 + 偏移索引构造 old_paras，new_paras 从 text 全文切分。
+        // Issue #1063: 分隔符长度取真实 byte 数（`byte_length - content_len`）。
+        let old_paras: Vec<(&str, usize)> = (0..prev_para_count)
             .map(|i| {
                 let content = prev.paragraphs[i].paragraph_text.as_str();
-                let (line_start, line_end) =
-                    prev.paragraph_line_count_index.paragraph_line_range(i);
-                let hard_break = if line_start < line_end && line_end <= prev.visual_lines.len() {
-                    prev.visual_lines[line_end - 1].hard_break
-                } else {
-                    false
-                };
-                (content, hard_break)
+                let separator_len = prev
+                    .paragraph_offset_index
+                    .byte_length_at(i)
+                    .saturating_sub(content.len());
+                (content, separator_len)
             })
             .collect();
-        let new_paras_full: Vec<(&str, bool)> =
-            paras_source.full_paras().cloned().unwrap_or_else(|| {
-                super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text)
-            });
+        let new_paras_full: Vec<(&str, usize)> = paras_source
+            .full_paras()
+            .map(|spans| {
+                spans
+                    .iter()
+                    .map(|span| (span.content, span.separator.len()))
+                    .collect()
+            })
+            .unwrap_or_else(|| split_paragraphs_with_separator(text));
         ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old_paras, &new_paras_full)
     };
 
@@ -951,13 +1043,17 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let new_layout_start = splice_ranges.new_layout_start;
     let new_layout_end = splice_ranges.new_layout_end;
 
-    // Issue #901 第三十轮问题4: 只构造受影响段文本（不构造整章 new_para_texts）。
+    // Issue #901 第三十轮问题4: 只构造受影响段（不构造整章 new_para_texts）。
     // update_affected_paragraph_texts 只访问 new_layout_start..new_layout_end 范围。
-    // affected_paras_list 含 (text, hard_break)，供 splice_affected_entries 和
-    // offset_index splice 使用。
-    let affected_paras_list: Vec<(&str, bool)> =
+    // Issue #1063: affected_spans 带正文 + 真实分隔符切片，供 byte/qchar 推进；
+    // affected_paras_for_store 带 (正文, 分隔符 byte 长度)，供 store 的
+    // splice_affected_entries / update_affected_paragraph_texts 使用。
+    let affected_spans: Vec<ParagraphSpan<'_>> =
         paras_source.affected_paras(new_layout_start, new_layout_end);
-    let new_para_texts: Vec<&str> = affected_paras_list.iter().map(|(p, _)| *p).collect();
+    let affected_paras_list: Vec<(&str, usize)> = affected_spans
+        .iter()
+        .map(|span| (span.content, span.separator.len()))
+        .collect();
 
     // Issue #901 第二十四轮问题4: 提前计算 vl_start_idx/vl_end_idx，
     // 在 store 更新之前取走并 drop prev.paragraph_line_count_index，
@@ -1046,9 +1142,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             }
         } else {
             // Issue #901 第五轮阻塞2: 用新段范围更新 store，不用 affected byte range。
-            // Issue #901 第三十轮问题4: new_para_texts 只含受影响段文本（从 new_layout_start 起）。
+            // Issue #901 第三十轮问题4: affected_paras_list 只含受影响段（从 new_layout_start 起）。
+            // Issue #1063: 每段携带真实分隔符 byte 长度，entry 与 byte 偏移索引同步更新。
             paragraph_store.update_affected_paragraph_texts(
-                &new_para_texts,
+                &affected_paras_list,
                 new_layout_start,
                 new_layout_end,
                 font_size,
@@ -1104,14 +1201,15 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 更前面的段若文本相同且都以 \n 结尾，hard_break 不变。
     // 该行位于 visual_lines[vl_start_idx - 1]，不在 splice 范围
     // [vl_start_idx, vl_end_idx) 内，可安全就地更新。
-    // Issue #901 第三十轮问题4: 从 paras_source 获取前缀段末段 hard_break。
+    // Issue #901 第三十轮问题4 + Issue #1063: 从 paras_source 获取前缀段末段
+    // 是否有段落分隔符（`separator_len > 0`）。
     // Incremental 路径前缀段不在 affected 中，从 store entry 获取（store 已更新）；
     // Full 路径从整章 Vec 获取。
     if new_layout_start > 0 && vl_start_idx > 0 && new_layout_start <= new_para_count {
         let prev_seg_idx = new_layout_start - 1;
         let new_hard_break = paras_source
             .get_para(prev_seg_idx, new_layout_start)
-            .map(|(_, hb)| hb)
+            .map(|span| span.hard_break())
             .unwrap_or_else(|| {
                 // Incremental 路径前缀段不在 affected 中，从 store entry 获取。
                 paragraph_store
@@ -1163,9 +1261,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let mut paragraph_top_y: f64 = y_start;
 
     // Issue #901 第五轮阻塞2: 用新段范围 new_layout_start..new_layout_end 建立新段
-    // Issue #901 第三十轮问题4: 从 paras_source 获取受影响段，不索引整章 new_paras。
+    // Issue #901 第三十轮问题4 + Issue #1063: 从 paras_source 获取受影响段
+    // （正文 + 真实分隔符切片），不索引整章 new_paras。
     for para_idx in new_layout_start..new_layout_end {
-        let (paragraph_text, hard_break) = match paras_source.get_para(para_idx, new_layout_start) {
+        let span: ParagraphSpan<'_> = match paras_source.get_para(para_idx, new_layout_start) {
             Some(para) => para,
             None => {
                 // 防御性：get_para 返回 None 时从 store entry 获取文本。
@@ -1174,18 +1273,19 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                     Some(e) => e,
                     None => break,
                 };
-                let seg_start = paragraph_start;
-                let seg_end = seg_start + entry.paragraph_text_len;
-                let text_ref = if seg_start <= seg_end && seg_end <= text.len() {
-                    // SAFETY: seg_start/seg_end 来自 store entry 的累计偏移，
-                    // 上一轮排版时已验证为 UTF-8 边界。
-                    &text[seg_start..seg_end]
-                } else {
-                    ""
-                };
-                (text_ref, entry.hard_break)
+                paragraph_span_at(
+                    text,
+                    paragraph_start,
+                    entry.paragraph_text_len,
+                    entry.separator_len,
+                )
             }
         };
+        let paragraph_text = span.content;
+        let hard_break = span.hard_break();
+        // qchar 不能用分隔符 byte 长度代替：CRLF 是 2 byte / 2 unit，
+        // U+2029 是 3 byte / 1 unit。
+        let separator_qchar_len = writer_core::editor::text_coordinates::utf16_len(span.separator);
 
         // Issue #901 第十四轮问题1: 每段开始时记录段顶 y。
         paragraph_top_y = y;
@@ -1251,9 +1351,11 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             // 不分配物理槽（cache_slot 保持 -1）。
             paragraph_store.update_layout_result(para_idx, generation, -1, line_height, 1);
 
-            paragraph_start += paragraph_text.len() + if hard_break { 1 } else { 0 };
-            paragraph_qchar_start += paragraph_text.chars().map(|c| c.len_utf16()).sum::<usize>()
-                + if hard_break { 1 } else { 0 };
+            // Issue #1063: byte/qchar 推进都用正文 + 真实分隔符长度。
+            paragraph_start += span.byte_len();
+            paragraph_qchar_start +=
+                writer_core::editor::text_coordinates::utf16_len(paragraph_text)
+                    + separator_qchar_len;
             paragraph_idx += 1;
             continue;
         }
@@ -1353,9 +1455,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             line_count,
         );
 
-        paragraph_start += paragraph_text.len() + if hard_break { 1 } else { 0 };
-        paragraph_qchar_start += paragraph_text.chars().map(|c| c.len_utf16()).sum::<usize>()
-            + if hard_break { 1 } else { 0 };
+        // Issue #1063: byte/qchar 推进都用正文 + 真实分隔符长度。
+        paragraph_start += span.byte_len();
+        paragraph_qchar_start +=
+            writer_core::editor::text_coordinates::utf16_len(paragraph_text) + separator_qchar_len;
 
         new_paragraphs.push(canonical);
         paragraph_idx += 1;
@@ -1403,7 +1506,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 
     // Issue #901 第二十四轮问题2: 删除循环外的空文本处理分支和尾部换行处理分支。
     // 主重排循环 `for para_idx in new_layout_start..new_layout_end` 已用 new_paras
-    //（来自 split_paragraphs_with_hard_break，含尾空段和空文本段）统一处理所有段。
+    //（Core 段落规则切分，含尾空段和空文本段）统一处理所有段。
     // 循环外的两个独立追加分支会重复创建尾空段/空文本段：
     // - 旧文 甲\n乙\n，开头新插回车变成 \n甲\n乙\n。后缀复用旧尾空段（logical_slot=2），
     //   新 canonical 有 4 段，检查 2 == 4-1 得 false，错误追加第 5 段。
@@ -1415,50 +1518,30 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 第二十一轮问题5: 用 Arc 共享 + Arc::make_mut COW。
     // prev 是 move 进来的，prev.paragraph_offset_index 用 mem::take 取出（refcount==1），
     // Arc::make_mut 原地改（O(1)），不深拷 Fenwick 底层数组。
-    // 段落数变化时用局部 splice（O(k) 数据准备 + O(n) Fenwick 重建），
-    // 段落数不变时用 update_paragraph_length（O(k log n)）。
-    // Issue #901 第三十轮问题4: 段落数变化时不再遍历整章 new_paras 构造全量
-    // byte_lengths/qchar_lengths，改为只构造受影响段数据 + splice。
+    // 段落数变化时用局部 splice（O(k) 数据准备），段落数不变时用 update_paragraph_length。
+    // Issue #1063: byte/qchar 长度都用真实分隔符计算，见 helper。
     let paragraph_offset_index = {
-        let mut idx_arc = std::mem::take(&mut prev.paragraph_offset_index);
-        let curr_count = paragraphs.len();
-        if curr_count != prev_para_count {
-            // 段落数变化（Enter 拆段/Backspace 合段），局部 splice 偏移索引。
-            // 只构造受影响段的 byte/qchar lengths，前缀/后缀段从旧索引保留。
-            // Issue #901 第三十轮问题4: 复用已构造的 affected_paras_list。
-            let mut new_byte_lengths = Vec::with_capacity(affected_paras_list.len());
-            let mut new_qchar_lengths = Vec::with_capacity(affected_paras_list.len());
-            for (para_text, hard_break) in &affected_paras_list {
-                new_byte_lengths.push(para_text.len() + if *hard_break { 1 } else { 0 });
-                new_qchar_lengths.push(
-                    para_text.chars().map(|c| c.len_utf16()).sum::<usize>()
-                        + if *hard_break { 1 } else { 0 },
-                );
-            }
-            let idx = Arc::make_mut(&mut idx_arc);
-            // splice: 删除旧 [old_splice_start, old_splice_end)，插入新段。
-            idx.splice(
-                old_splice_start,
-                old_splice_end,
-                new_byte_lengths,
-                new_qchar_lengths,
-            );
-            idx_arc
-        } else {
-            // 段落数不变，COW 增量更新受影响段落的长度（O(k log n)）
-            let idx = Arc::make_mut(&mut idx_arc);
-            for para_idx in new_layout_start..new_layout_end {
-                if let Some((para, hard_break)) = paras_source.get_para(para_idx, new_layout_start)
-                {
-                    let byte_len = para.len() + if hard_break { 1 } else { 0 };
-                    let qchar_len = para.chars().map(|c| c.len_utf16()).sum::<usize>()
-                        + if hard_break { 1 } else { 0 };
-                    idx.update_paragraph_length(para_idx, byte_len, qchar_len);
-                }
-            }
-            idx_arc
-        }
+        let idx_arc = std::mem::take(&mut prev.paragraph_offset_index);
+        update_offset_index_incremental(
+            idx_arc,
+            paragraphs.len(),
+            prev_para_count,
+            old_splice_start,
+            old_splice_end,
+            new_layout_start,
+            new_layout_end,
+            &affected_spans,
+            &paras_source,
+        )
     };
+
+    // Issue #1063: 增量维护的 offset 索引必须与从新全文重建的结果完全一致
+    //（byte 与 qchar 都逐段比较），否则命中/光标会按错误的分隔符长度定位。
+    debug_assert!(
+        offset_index_matches_rebuild(&paragraph_offset_index, text),
+        "增量 offset 索引与全文重建不一致: text_len={}",
+        text.len()
+    );
 
     // Issue #901 第十五轮问题2: 先完成本次受影响段落的新高度计算并更新/重建
     // height_index，再构造 canonical snapshot，把同一份已更新的高度索引交给 snapshot。
@@ -1629,13 +1712,17 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 ///   `new_para_count = prefix_count + affected.len() + suffix_count`。
 ///   前缀/后缀段由调用方从 prev 的 VisualLine/store entry 复用。
 /// - `Full`：整章切分（回退路径，边界情况，不频繁）。
+///
+/// Issue #1063: 每段是 [`ParagraphSpan`]（正文 + 真实分隔符切片），
+/// byte 推进用 `byte_len()`，qchar 推进用 `qchar_len()`，
+/// 不再用 `(text, hard_break)` 把分隔符当成 1 byte。
 enum ParasSource<'a> {
     Incremental {
         prefix_count: usize,
         suffix_count: usize,
-        affected: Vec<(&'a str, bool)>,
+        affected: Vec<ParagraphSpan<'a>>,
     },
-    Full(Vec<(&'a str, bool)>),
+    Full(Vec<ParagraphSpan<'a>>),
 }
 
 impl<'a> ParasSource<'a> {
@@ -1664,25 +1751,11 @@ impl<'a> ParasSource<'a> {
         }
     }
 
-    /// 获取受影响段文本切片，用于 `update_affected_paragraph_texts`。
-    /// Incremental 路径返回 `affected` 的文本（只含受影响段）；
-    /// Full 路径返回 `paras[new_layout_start..new_layout_end]` 的文本。
-    fn affected_texts(&self, new_layout_start: usize, new_layout_end: usize) -> Vec<&str> {
-        match self {
-            ParasSource::Incremental { affected, .. } => affected.iter().map(|(p, _)| *p).collect(),
-            ParasSource::Full(paras) => {
-                let start = new_layout_start.min(paras.len());
-                let end = new_layout_end.min(paras.len());
-                paras[start..end].iter().map(|(p, _)| *p).collect()
-            }
-        }
-    }
-
-    /// 获取段 `para_idx` 的 `(text, hard_break)`。
+    /// 获取段 `para_idx` 的正文 + 真实分隔符。
     /// Incremental 路径：受影响段从 `affected` 获取（用 local index），
     ///   前缀/后缀段返回 None（调用方应从 store entry 获取）。
     /// Full 路径：直接从整章 Vec 获取。
-    fn get_para(&self, para_idx: usize, new_layout_start: usize) -> Option<(&str, bool)> {
+    fn get_para(&self, para_idx: usize, new_layout_start: usize) -> Option<ParagraphSpan<'a>> {
         match self {
             ParasSource::Incremental { affected, .. } => {
                 let local_idx = para_idx.checked_sub(new_layout_start)?;
@@ -1694,16 +1767,20 @@ impl<'a> ParasSource<'a> {
 
     /// 获取整章段落引用（仅 Full 路径有）。
     /// Incremental 路径返回 None（不构造整章 Vec）。
-    fn full_paras(&self) -> Option<&Vec<(&str, bool)>> {
+    fn full_paras(&self) -> Option<&Vec<ParagraphSpan<'a>>> {
         match self {
             ParasSource::Incremental { .. } => None,
             ParasSource::Full(paras) => Some(paras),
         }
     }
 
-    /// 获取受影响段的 `(text, hard_break)` 列表。
+    /// 获取受影响段的正文 + 真实分隔符列表。
     /// Incremental 路径返回 `affected`；Full 路径返回 `paras[new_layout_start..new_layout_end]`。
-    fn affected_paras(&self, new_layout_start: usize, new_layout_end: usize) -> Vec<(&str, bool)> {
+    fn affected_paras(
+        &self,
+        new_layout_start: usize,
+        new_layout_end: usize,
+    ) -> Vec<ParagraphSpan<'a>> {
         match self {
             ParasSource::Incremental { affected, .. } => affected.clone(),
             ParasSource::Full(paras) => {
@@ -1737,7 +1814,7 @@ impl<'a> ParasSource<'a> {
 ///
 /// 旧 entries 的 `document_byte_start` 在增量路径中不随前文编辑平移
 ///（`shift_suffix_document_byte_starts` 未被调用），可能过时。本函数改用旧 entries
-/// 的**累计长度**（`paragraph_text_len + hard_break`）定位段在新文本中的位置，
+/// 的**累计长度**（`entry.byte_len()` = 正文 + 真实分隔符长度）定位段在新文本中的位置，
 /// 不依赖 `document_byte_start`，天然规避问题3。
 ///
 /// # 问题4 减少全篇扫描
@@ -1749,10 +1826,10 @@ impl<'a> ParasSource<'a> {
 ///
 /// # 第二十八轮复核问题1+4 修复
 ///
-/// **Bug 1a（尾空段）**：步骤3不再调用 `split_paragraphs_with_hard_break`（它会在
-/// 输入以 `\n` 结尾时无条件产生尾空段 `("", false)`）。局部切片 `expanded_start..expanded_end`
-/// 以 `\n` 结尾但后面还有正文时，尾空段应由后缀段处理，不应在此产生。改为直接按真实
-/// 换行边界切分，只有 `expanded_end == text_len`（全文末尾）时才产生尾空段。
+/// **Bug 1a（尾空段）**：步骤3不再无条件切出尾空段（输入以分隔符结尾时
+/// `paragraph_byte_spans` 会无条件产生尾空段）。局部切片 `expanded_start..expanded_end`
+/// 以分隔符结尾但后面还有正文时，尾空段应由后缀段处理，不应在此产生。改为按 Core
+/// 段落规则切分并跳过这种情况，只有 `expanded_end == text_len`（全文末尾）时才产生尾空段。
 ///
 /// **Bug 1b（前缀循环条件）**：前缀段条件从 `seg_end_cumulative <= expanded_start` 改为
 /// `cumulative < expanded_start && seg_end_cumulative <= expanded_start`。旧条件在
@@ -1788,7 +1865,7 @@ fn build_new_paras_from_affected_range<'a>(
     offset_index: &super::super::super::paragraph_height_index::ParagraphOffsetIndex,
     aff_start: usize,
     aff_end: usize,
-) -> Option<(usize, usize, Vec<(&'a str, bool)>)> {
+) -> Option<(usize, usize, Vec<ParagraphSpan<'a>>)> {
     let text_len = text.len();
     let n = store.paragraph_count();
 
@@ -1799,8 +1876,8 @@ fn build_new_paras_from_affected_range<'a>(
 
     // Issue #901 第二十九轮复核阻塞4: 用 offset_index 的 O(1) total_byte_length
     // 获取旧文总长度，不再遍历全体 entries 累加。
-    // offset_index 维护的 byte_lengths[i] = paragraph_text_len[i] + hard_break[i]，
-    // 与 store entries 的累计长度一致（两者都是上一轮编辑后的旧状态）。
+    // Issue #1063: offset_index 维护的 byte_lengths[i] 含真实分隔符长度
+    //（`content_len + separator_len`），与 store entries 的累计长度一致。
     // 当 offset_index 为空或长度不匹配时回退到线性扫描。
     let old_text_len = if !offset_index.is_empty() && offset_index.len() == n {
         offset_index.total_byte_length()
@@ -1808,7 +1885,7 @@ fn build_new_paras_from_affected_range<'a>(
         let mut len = 0usize;
         for i in 0..n {
             let entry = store.entry(i)?;
-            len += entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
+            len += entry.byte_len();
         }
         len
     };
@@ -1816,31 +1893,17 @@ fn build_new_paras_from_affected_range<'a>(
     let delta: i64 = text_len as i64 - old_text_len as i64;
 
     // 1. 扩展 aff_start..aff_end 到新文本中的完整段落边界 expanded_start..expanded_end。
-    //    expanded_start: 从 aff_start 向前找上一个 '\n' 之后的位置（或文档开头 0）。
-    //    expanded_end:   从 aff_end 向后找下一个 '\n' 的位置（含该 '\n'，或文档末尾）。
-    //    '\n' 是单字节 ASCII，不切割多字节字符，故 expanded_start/expanded_end 是 UTF-8 边界。
-    let expanded_start = if aff_start == 0 {
-        0
-    } else {
-        match text[..aff_start].rfind('\n') {
-            Some(pos) => pos + 1,
-            None => 0,
-        }
-    };
-    let expanded_end = if aff_end >= text_len {
-        text_len
-    } else {
-        match text[aff_end..].find('\n') {
-            Some(pos) => aff_end + pos + 1,
-            None => text_len,
-        }
-    };
+    //    Issue #1063: 段落边界由 Core 规则识别（`\n`/`CRLF`/`U+2029`），不再只找 '\n'。
+    //    expanded_start: aff_start 所在段落的起点；expanded_end: aff_end 所在段落的结束
+    //    （含该段的分隔符，或文档末尾）。落在分隔符内部/非 char boundary 由 Core 处理。
+    let expanded_start =
+        writer_core::editor::text_document_rules::paragraph_start_before(text, aff_start);
+    let expanded_end = writer_core::editor::text_document_rules::paragraph_end_after(text, aff_end);
 
     // Issue #901 第三十轮问题4: 只收集受影响段，前缀/后缀段只计数不复制。
     // 前缀/后缀段内容不变，调用方（full.rs）直接从 prev 的 VisualLine/store entry
     // 复用未改段，不拼出另一份整章 new_paras。仍做 UTF-8 边界检查（防御性），
     // 失败返回 None 回退全文切分。
-    let mut affected_paras: Vec<(&str, bool)> = Vec::new();
 
     // Issue #901 第二十九轮复核阻塞4: 当 offset_index 非空且长度匹配 store 时，
     // 用 O(log n) 二分查找定位前缀/后缀段，避免 O(n) 线性扫描。
@@ -1851,7 +1914,7 @@ fn build_new_paras_from_affected_range<'a>(
     //    Issue #901 第三十轮问题4: 只计数不复制。前缀段文本由调用方从 prev 复用。
     //    Issue #901 第二十八轮复核问题1: 条件改为 cumulative < expanded_start（严格小于）
     //    且 seg_end_cumulative <= expanded_start。旧条件 seg_end_cumulative <= expanded_start
-    //    在 cumulative == expanded_start（空段，paragraph_text_len==0 && !hard_break）时
+    //    在 cumulative == expanded_start（空段，content_len==0 && !has_separator()）时
     //    仍成立，导致空段被误当前缀段（反例2：旧文 a\n，末尾空段输入 X）。
     //    Issue #901 第二十九轮复核阻塞4: 用 offset_index.byte_to_paragraph() O(log n)
     //    二分查找定位前缀段数量，不再从 i=0 线性扫描。
@@ -1886,8 +1949,8 @@ fn build_new_paras_from_affected_range<'a>(
         let mut cumulative = 0usize;
         for i in 0..n {
             let entry = store.entry(i)?;
-            let seg_len_with_break =
-                entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
+            // Issue #1063: 段末累计 = 正文 + 真实分隔符长度。
+            let seg_len_with_break = entry.byte_len();
             let seg_end_cumulative = cumulative + seg_len_with_break;
             if cumulative < expanded_start && seg_end_cumulative <= expanded_start {
                 let seg_start = cumulative;
@@ -1906,36 +1969,31 @@ fn build_new_paras_from_affected_range<'a>(
         }
     }
 
-    // 3. 受影响段：从新文本 expanded_start..expanded_end 按真实换行边界切分。
-    //    expanded_start/expanded_end 是 '\n' 边界或文档边界，是有效 UTF-8 边界。
-    //    Issue #901 第二十八轮复核问题1: 不使用 split_paragraphs_with_hard_break，
-    //    因为它会在输入以 \n 结尾时无条件产生尾空段 ("", false)。局部切片以 \n 结尾
-    //    但后面还有正文时，尾空段应由后缀段处理，不应在此产生。
+    // 3. 受影响段：从新文本 expanded_start..expanded_end 按 Core 段落规则切分。
+    //    expanded_start/expanded_end 是段落边界或文档边界，是有效 UTF-8 边界。
+    //    Issue #901 第二十八轮复核问题1: 局部切片以分隔符结尾但后面还有正文时，
+    //    尾空段应由后缀段处理，不应在此产生；只有 expanded_end == text_len 时才产生尾空段。
     //    反例1：旧文 a\nb，第一段插入 X → 新文 aX\nb，切片 aX\n 不应产生尾空段。
-    //    只有 expanded_end == text_len（全文末尾）时才产生尾空段。
-    let mut affected_paras: Vec<(&str, bool)> = Vec::new();
-    let mut seg_start = expanded_start;
-    let affected_bytes = &text.as_bytes()[expanded_start..expanded_end];
-    for (i, &b) in affected_bytes.iter().enumerate() {
-        if b == b'\n' {
-            let seg_end = expanded_start + i;
-            // SAFETY: '\n' 是单字节 ASCII，seg_start..seg_end 是有效 UTF-8 边界
-            //（不会切割多字节字符）。seg_start 是 expanded_start 或某个 \n+1，都是边界。
-            affected_paras.push((&text[seg_start..seg_end], true));
-            seg_start = seg_end + 1;
+    //    Issue #1063: 分隔符可以是 CRLF/U+2029，按真实长度保留，不再只认 '\n'。
+    let mut affected_paras: Vec<ParagraphSpan<'_>> = Vec::new();
+    let local = &text[expanded_start..expanded_end];
+    let local_spans = writer_core::editor::text_document_rules::paragraph_byte_spans(local);
+    let local_span_count = local_spans.len();
+    for (i, span) in local_spans.into_iter().enumerate() {
+        // 局部切片以分隔符结尾且后面还有正文：丢弃尾空段。
+        if i + 1 == local_span_count
+            && span.content_len() == 0
+            && !span.has_separator()
+            && expanded_end < text_len
+        {
+            continue;
         }
+        affected_paras.push(ParagraphSpan {
+            content: &local[span.content.0..span.content.1],
+            separator: &local[span.separator.0..span.separator.1],
+        });
     }
-    // 最后一段处理
-    if seg_start < expanded_end {
-        // 有剩余内容（不以 \n 结尾）
-        // SAFETY: seg_start 是 expanded_start 或某个 \n+1，expanded_end 是 UTF-8 边界。
-        affected_paras.push((&text[seg_start..expanded_end], false));
-    } else if expanded_end == text_len {
-        // 以 \n 结尾且是全文末尾 → 产生尾空段
-        // SAFETY: seg_start == expanded_end == text_len, 空字符串切片。
-        affected_paras.push((&text[seg_start..expanded_end], false));
-    }
-    // 如果 seg_start == expanded_end 且 expanded_end < text_len，
+    // 如果最后一段结束于 expanded_end 且 expanded_end < text_len，
     // 不产生尾空段（后面还有正文，尾空段由后缀段处理）。
     // Issue #901 第三十轮问题4: affected_paras 只含受影响段，不 extend 到 new_paras。
 
@@ -1977,8 +2035,8 @@ fn build_new_paras_from_affected_range<'a>(
         for i in suffix_start..n {
             let entry = store.entry(i)?;
             let cumulative = offset_index.paragraph_byte_start(i);
-            let seg_len_with_break =
-                entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
+            // Issue #1063: 段末累计 = 正文 + 真实分隔符长度。
+            let seg_len_with_break = entry.byte_len();
             let new_seg_start_i64 = cumulative as i64 + delta;
             let new_seg_end_with_break_i64 = new_seg_start_i64 + seg_len_with_break as i64;
             if new_seg_end_with_break_i64 > expanded_end as i64 && new_seg_start_i64 >= 0 {
@@ -1999,12 +2057,12 @@ fn build_new_paras_from_affected_range<'a>(
         let mut cumulative = 0usize;
         for i in 0..prefix_count {
             let entry = store.entry(i)?;
-            cumulative += entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
+            // Issue #1063: 段末累计 = 正文 + 真实分隔符长度。
+            cumulative += entry.byte_len();
         }
         for i in prefix_count..n {
             let entry = store.entry(i)?;
-            let seg_len_with_break =
-                entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
+            let seg_len_with_break = entry.byte_len();
             let new_seg_start_i64 = cumulative as i64 + delta;
             let new_seg_end_with_break_i64 = new_seg_start_i64 + seg_len_with_break as i64;
             if new_seg_end_with_break_i64 > expanded_end as i64 && new_seg_start_i64 >= 0 {
@@ -2548,3 +2606,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         paragraph_line_count_index,
     }
 }
+
+/// Issue #1063: 段落 offset 索引（byte + qchar）按真实分隔符长度维护的测试。
+#[cfg(test)]
+mod separator_tests;

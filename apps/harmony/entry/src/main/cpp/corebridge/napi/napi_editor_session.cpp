@@ -2,11 +2,14 @@
 // Included by napi_init.cpp — expects ReturnJsonString, ThrowNapiStringError and
 // writer_core_bridge.h to be available. 与 Android TextEditSessionBridge 职责对齐。
 //
-// 参数约定（Issue #1063 评论 5）：
+// 参数约定（Issue #1063 评论 3/5）：
 // - 参数读取统一走 napi_editor_args.h：字符串校验 napi_typeof、两次
-//   napi_get_value_string_utf8 的 status 与写入量；uint64
-//   （session_id / expected_revision / composition_*）拒绝负数/非整数/越界；
-//   uint32（byte offset 等）拒绝负数与超出 UINT32_MAX 的值。
+//   napi_get_value_string_utf8 的 status 与写入量，并拒绝内嵌 U+0000
+//   （正文/预输入/原因等以 CStr 传给 Rust，含 NUL 无法无损表示）；
+//   uint64（session_id / expected_revision / composition_*）与 uint32
+//   （byte offset 等）只接受 JS 安全整数范围（<= Number.MAX_SAFE_INTEGER =
+//   2^53 - 1）内的非负整数，拒绝负数/小数/NaN/Infinity 以及 2^53 以上的
+//   已舍入值。
 // - 参数个数不足或类型/范围非法时不调用 Rust，直接返回
 //   INVALID_ARGUMENT ResultEnvelope JSON；任何失败路径都不会把 nullptr 或
 //   未初始化 buffer 交给 C ABI。

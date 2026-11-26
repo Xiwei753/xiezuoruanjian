@@ -742,7 +742,7 @@ impl SujianEditorItem {
         // 检查 store 段落数是否与 committed_text 段落数匹配。匹配则跳过 rebuild
         //（store 已通过增量排版同步，ID 序列有效），不匹配才 rebuild。
         // Issue #1063：段落数按 Core 段落规则统计（`\n`/`CRLF`/`U+2029`），
-        // 与 `split_paragraphs_with_hard_break` 的 store 段数一致；空正文仍算 1 段。
+        // 与 `split_paragraphs_with_separator` 的 store 段数一致；空正文仍算 1 段。
         let committed_para_count =
             writer_core::editor::text_document_rules::paragraph_byte_ranges(committed_text)
                 .len()

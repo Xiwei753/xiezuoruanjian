@@ -55,7 +55,7 @@ pub struct ParagraphLayoutCacheKey {
 impl ParagraphLayoutCacheKey {
     /// 从段落文本和排版参数构建缓存 key。
     ///
-    /// `paragraph_text` 不含尾部 `'\n'`。
+    /// `paragraph_text` 不含段落分隔符（`\n`/`CRLF`/`U+2029`）。
     /// 浮点参数用 `f64::to_bits()` 转为可 `==` 比较的整数，
     /// 避免浮点容差问题 —— 排版参数变化时 key 必然不同。
     pub fn build(
@@ -125,17 +125,24 @@ pub struct ParagraphLayoutEntry {
     pub layout_epoch: u64,
     /// 段落文档 byte 起始偏移（随编辑移动，**不作为 identity**）。
     pub document_byte_start: usize,
-    /// 段落文本长度（UTF-8 byte，不含尾部 `'\n'`）。
+    /// 段落文本长度（UTF-8 byte，不含段落分隔符）。
     pub paragraph_text_len: usize,
+    /// Issue #1063: 段落分隔符的 UTF-8 byte 长度（`\n`=1、`CRLF`=2、`U+2029`=3、无=0）。
+    ///
+    /// 段落 byte 坐标推进一律用 [`Self::byte_len`]（正文 + 真实分隔符），
+    /// 不能再假设「有硬换行就多 1 byte」。该字段参与增量路径的段落变化比较
+    ///（区分 `LF`/`CRLF`/`U+2029`）和 byte 偏移前缀索引维护。
+    pub separator_len: usize,
     /// 段落总高度（所有视觉行高度之和）。
     pub height: f64,
     /// 段落内视觉行数。
     pub visual_line_count: usize,
-    /// Issue #901 第二十三轮问题1: 该段落是否以硬换行（`'\n'`）结尾。
+    /// Issue #901 第二十三轮问题1: 该段落是否以段落分隔符结尾。
     ///
-    /// `甲\n` 切分为 `[("甲", true), ("", false)]`，第一段 `hard_break=true`，
+    /// `甲\n` 切分为 `[("甲", 1), ("", 0)]`，第一段 `hard_break=true`，
     /// 尾空段 `hard_break=false`。`甲`（无换行）只有一段 `hard_break=false`。
-    /// 用于段落身份比较（问题2）和尾空段结构对齐（问题1）。
+    /// Issue #1063: 仅作绘制/身份标志，必须与 `separator_len > 0` 一致，
+    /// 坐标推进不再使用它（`CRLF`/`U+2029` 不是 1 byte）。
     pub hard_break: bool,
     /// Issue #901 第三十轮问题2: 该段落是否是"已排版的空段"。
     ///
@@ -174,6 +181,14 @@ impl ParagraphLayoutEntry {
     pub fn is_laid_out(&self) -> bool {
         self.is_empty_laid_out || (self.layout_generation != 0 && self.cache_slot >= 0)
     }
+
+    /// Issue #1063: 该段落在文档中占用的 UTF-8 byte 长度（正文 + 真实分隔符）。
+    ///
+    /// 所有段落级 byte 坐标推进（offset 前缀和、受影响段定位、文档起点）都必须
+    /// 使用本方法，不能用 `paragraph_text_len + 1` 假设分隔符只有 1 byte。
+    pub fn byte_len(&self) -> usize {
+        self.paragraph_text_len + self.separator_len
+    }
 }
 
 // ── Issue #901 第二十三轮问题1 / Issue #1063 第 6 项: 统一段落切分 ──
@@ -208,11 +223,13 @@ impl ParagraphSpan<'_> {
     }
 }
 
-/// 统一段落切分：生成 `(content, hard_break)` 序列，包括末尾换行产生的尾空段。
+/// 统一段落切分：生成 `(content, separator_len)` 序列，包括末尾分隔符产生的尾空段。
 ///
-/// 段落规则由 Core [`text_document_rules::paragraph_byte_ranges`] 唯一决定：
+/// 段落规则由 Core [`text_document_rules::paragraph_byte_spans`] 唯一决定：
 /// `CRLF` 是一个段落边界（不是 `\r` + `\n` 两个字符）、`\n` 与 `U+2029` 同样是
-/// 段落边界，孤立 `CR` 不是。
+/// 段落边界，孤立 `CR` 不是。`separator_len` 是分隔符的**真实 UTF-8 byte 长度**
+///（`\n`=1、`CRLF`=2、`U+2029`=3、无=0），坐标推进一律用
+/// `content.len() + separator_len`。
 ///
 /// 与 `str::split_inclusive('\n')` 的区别：`split_inclusive` 对 `甲\n` 只产生
 /// `["甲\n"]`（一个条目），不产生尾空段；本函数产生尾空段，使 store entries、
@@ -220,25 +237,20 @@ impl ParagraphSpan<'_> {
 ///
 /// # 规则
 ///
-/// - `甲\n` → `[("甲", true), ("", false)]`
-/// - `甲` → `[("甲", false)]`
-/// - `甲\n乙` → `[("甲", true), ("乙", false)]`
-/// - `甲\n乙\n` → `[("甲", true), ("乙", true), ("", false)]`
-/// - `甲\r\n乙` → `[("甲", true), ("乙", false)]`
-/// - `` → `[("", false)]`
-///
-/// `content` 是去掉段落分隔符的段落正文；`hard_break` 表示该段后是否有分隔符。
-/// 尾空段（末尾分隔符后的空段）`hard_break=false`，因为没有后续分隔符。
-pub fn split_paragraphs_with_hard_break(text: &str) -> Vec<(&str, bool)> {
+/// - `甲\n` → `[("甲", 1), ("", 0)]`
+/// - `甲` → `[("甲", 0)]`
+/// - `甲\n乙` → `[("甲", 1), ("乙", 0)]`
+/// - `甲\n乙\n` → `[("甲", 1), ("乙", 1), ("", 0)]`
+/// - `甲\r\n乙` → `[("甲", 2), ("乙", 0)]`
+/// - `甲\u{2029}乙` → `[("甲", 3), ("乙", 0)]`
+/// - `` → `[("", 0)]`
+pub fn split_paragraphs_with_separator(text: &str) -> Vec<(&str, usize)> {
     if text.is_empty() {
-        return vec![("", false)];
+        return vec![("", 0)];
     }
-    let ranges = text_document_rules::paragraph_byte_ranges(text);
-    let range_count = ranges.len();
-    ranges
+    text_document_rules::paragraph_byte_spans(text)
         .into_iter()
-        .enumerate()
-        .map(|(index, (start, end))| (&text[start..end], index + 1 < range_count))
+        .map(|span| (&text[span.content.0..span.content.1], span.separator_len()))
         .collect()
 }
 
@@ -391,14 +403,14 @@ pub struct ParagraphLayoutStore {
     line_count_index: Arc<ParagraphLineCountIndex>,
     /// Issue #901 第三十二轮问题4: 段落 byte 偏移前缀索引（Fenwick 树）。
     ///
-    /// 维护每段 byte 长度（含尾部 `'\n'`）的前缀和，供
+    /// 维护每段 byte 长度（正文 + 真实段落分隔符长度）的前缀和，供
     /// [`compute_document_byte_start`] 以 O(log n) 查询段落文档 byte 起始偏移，
     /// 替代旧 O(index) 逐段累加。
     ///
     /// # qchar 占位说明
     ///
     /// `ParagraphOffsetIndex` 同时维护 byte 和 qchar (UTF-16) 前缀和，但 store
-    /// 的 entries 只存 `paragraph_text_len`（byte 长度），不存 qchar 长度。
+    /// 的 entries 只存 byte 长度（`paragraph_text_len + separator_len`），不存 qchar 长度。
     /// 此处 qchar_lengths 用 byte_lengths 同值占位填充（**不保证 qchar 正确**）。
     /// `compute_document_byte_start` 只查 byte 前缀和，不受占位影响。
     /// 完整的 byte+qchar 索引由 snapshot 的 `paragraph_offset_index` 维护
@@ -620,20 +632,23 @@ impl ParagraphLayoutStore {
         padding: f64,
         width: f64,
     ) {
-        // Issue #901 第二十三轮问题1: 用统一切分器生成 (content, hard_break) 序列，
-        // 包括末尾换行产生的尾空段。store entries、canonical paragraphs、VisualLine、
-        // ParagraphId 逐段一一对应。尾空段是结构事实，不是游离视觉行。
-        let paragraphs = split_paragraphs_with_hard_break(text);
+        // Issue #1063: 用统一切分器生成 (content, separator_len) 序列，
+        // 包括末尾分隔符产生的尾空段。store entries、canonical paragraphs、VisualLine、
+        // ParagraphId 逐段一一对应。separator_len 是真实分隔符 byte 长度
+        //（`\n`=1、`CRLF`=2、`U+2029`=3、无=0），不再按 hard_break 只加 1。
+        let paragraphs = split_paragraphs_with_separator(text);
         let new_count = paragraphs.len();
         let old_count = self.entries.len();
 
         // Issue #901 第十六轮问题1: 计算新段 cache_key 和 text_hash，
-        // 用 (text_hash, hard_break) 做前缀+后缀内容匹配（text_hash 冲突概率极低，可接受）。
-        // Issue #901 第二十三轮问题2: hard_break 是段落身份的一部分，
-        // (content, hard_break) 不同则视为不同段，不继承 Id。
+        // 用 text_hash 做前缀+后缀内容匹配（text_hash 冲突概率极低，可接受）。
+        // Issue #1063: 段落 Id 继承仍只看正文（与旧行为一致，避免仅增删末尾分隔符
+        // 就让段落换 Id）；separator_len 是真实分隔符 byte 长度，逐段从新文本赋值，
+        // 不会被写回成 1。分隔符类型（LF/CRLF/U+2029）的变化由增量路径的
+        // compute_old_new_paragraph_ranges 检测（(content, separator_len) 比较）。
         let mut new_keys: Vec<ParagraphLayoutCacheKey> = Vec::with_capacity(new_count);
         let mut new_text_hashes: Vec<u64> = Vec::with_capacity(new_count);
-        for (paragraph_text, _hard_break) in &paragraphs {
+        for (paragraph_text, _separator_len) in &paragraphs {
             let cache_key = ParagraphLayoutCacheKey::build(
                 paragraph_text,
                 font_size,
@@ -647,8 +662,9 @@ impl ParagraphLayoutStore {
             new_keys.push(cache_key);
         }
 
-        // 旧段的 text_hash（不含 hard_break — rebuild_from_text 的 Id 继承
-        // 只看内容是否相同，hard_break 不影响排版结果/cache_key）
+        // 旧段的 text_hash（只看正文 — rebuild_from_text 的 Id 继承与排版结果复用
+        // 只看内容是否相同；separator_len 不参与这里的身份匹配，新 entry 直接取
+        // 新文本的真实分隔符长度）。
         let old_text_hashes: Vec<u64> = self
             .entries
             .iter()
@@ -692,7 +708,7 @@ impl ParagraphLayoutStore {
         let mut inherited_handles: std::collections::HashSet<(u64, i32)> =
             std::collections::HashSet::new();
 
-        for (i, (paragraph_text, hard_break)) in paragraphs.iter().enumerate() {
+        for (i, (paragraph_text, separator_len)) in paragraphs.iter().enumerate() {
             let cache_key = new_keys[i].clone();
 
             // Issue #901 第十六轮问题1: 按前缀/后缀/中间段分别处理 Id 继承。
@@ -784,15 +800,17 @@ impl ParagraphLayoutStore {
                 layout_epoch,
                 document_byte_start: byte_offset,
                 paragraph_text_len: paragraph_text.len(),
+                separator_len: *separator_len,
                 height,
                 visual_line_count,
-                hard_break: *hard_break,
+                // Issue #1063: hard_break 仅作绘制/身份标志，与真实分隔符长度一致。
+                hard_break: *separator_len > 0,
                 is_empty_laid_out,
                 relative_lines,
             });
 
-            // byte_offset 推进：content 长度 + '\n' 长度（如果 hard_break）
-            byte_offset += paragraph_text.len() + if *hard_break { 1 } else { 0 };
+            // byte_offset 推进：正文长度 + 真实分隔符长度（`\n`=1、`CRLF`=2、`U+2029`=3）。
+            byte_offset += paragraph_text.len() + *separator_len;
         }
 
         // Issue #901 第二十六轮复核缺口1: 回收未被新 entries 继承的旧 Qt 槽。
@@ -834,7 +852,8 @@ impl ParagraphLayoutStore {
         let counts: Vec<usize> = self.entries.iter().map(|e| e.visual_line_count).collect();
         Arc::make_mut(&mut self.line_count_index).rebuild(counts);
         // Issue #901 第三十二轮问题4: 全量重建 byte 偏移前缀索引。
-        // byte_lengths = paragraph_text_len + hard_break(1/0)，qchar 用 byte 占位。
+        // byte_lengths = paragraph_text_len + separator_len（真实分隔符长度），
+        // qchar 用 byte 占位（store 不存 qchar 长度，compute_document_byte_start 只查 byte）。
         self.rebuild_byte_offset_index();
         // Issue #901 第二十八轮复核问题2: next_physical_slot 已移除，槽号复用完全由
         // C++ LayoutGeneration 的 freelist 管理，无需在此同步高水位。
@@ -851,8 +870,9 @@ impl ParagraphLayoutStore {
     ///
     /// - `old_splice_start..old_splice_end`：旧 entries 中要删除的范围。
     /// - `new_layout_start..new_layout_end`：新段中受影响的范围（用于验证）。
-    /// - `affected_paras`：受影响段的 `(text, hard_break)` 列表，长度 =
-    ///   `new_layout_end - new_layout_start`。
+    /// - `affected_paras`：受影响段的 `(text, separator_len)` 列表，长度 =
+    ///   `new_layout_end - new_layout_start`。`separator_len` 是真实分隔符 byte 长度
+    ///   （`\n`=1、`CRLF`=2、`U+2029`=3、无=0）。
     ///
     /// # 返回
     ///
@@ -871,7 +891,7 @@ impl ParagraphLayoutStore {
         old_splice_end: usize,
         new_layout_start: usize,
         new_layout_end: usize,
-        affected_paras: &[(&str, bool)],
+        affected_paras: &[(&str, usize)],
         font_size: f64,
         font_family: &str,
         line_spacing: f64,
@@ -926,7 +946,7 @@ impl ParagraphLayoutStore {
         // 异常状态（index 为空或段落数不一致）回退到 O(index) 逐段累加。
         // byte_offset 保持 mut：后续循环会按新段长度累加更新。
         let mut byte_offset = self.compute_document_byte_start(old_splice_start);
-        for (para_text, hard_break) in affected_paras {
+        for (para_text, separator_len) in affected_paras {
             let cache_key = ParagraphLayoutCacheKey::build(
                 para_text,
                 font_size,
@@ -945,13 +965,15 @@ impl ParagraphLayoutStore {
                 layout_epoch: 0,
                 document_byte_start: byte_offset,
                 paragraph_text_len: para_text.len(),
+                separator_len: *separator_len,
                 height: 0.0,
                 visual_line_count: 0,
-                hard_break: *hard_break,
+                // Issue #1063: hard_break 与真实分隔符长度保持一致。
+                hard_break: *separator_len > 0,
                 is_empty_laid_out: false,
                 relative_lines: Vec::new(),
             });
-            byte_offset += para_text.len() + if *hard_break { 1 } else { 0 };
+            byte_offset += para_text.len() + *separator_len;
         }
 
         // 3. splice self.entries：删除 [old_splice_start, old_splice_end)，插入新 entries。
@@ -1004,13 +1026,13 @@ impl ParagraphLayoutStore {
         // 7. Issue #901 第三十二轮问题4: 增量更新 byte_offset_index。
         //    删除旧 [old_splice_start, old_splice_end) 的 byte/qchar 长度，
         //    插入新段的 byte/qchar 长度。前缀/后缀段保留。
-        //    byte_len = para_text.len() + hard_break(1/0)，qchar 用 byte 占位。
+        //    byte_len = para_text.len() + separator_len（真实分隔符长度），qchar 用 byte 占位。
         {
             let idx = Arc::make_mut(&mut self.byte_offset_index);
             let mut new_byte_lengths = Vec::with_capacity(new_affected_count);
             let mut new_qchar_lengths = Vec::with_capacity(new_affected_count);
-            for (para_text, hard_break) in affected_paras {
-                let byte_len = para_text.len() + if *hard_break { 1 } else { 0 };
+            for (para_text, separator_len) in affected_paras {
+                let byte_len = para_text.len() + *separator_len;
                 new_byte_lengths.push(byte_len);
                 // qchar 占位：用 byte_len 同值（store 不存 qchar，见字段注释）。
                 new_qchar_lengths.push(byte_len);
@@ -1102,15 +1124,11 @@ impl ParagraphLayoutStore {
 
     /// Issue #901 第三十二轮问题4: 内部方法 — 从 `entries` 全量重建 `byte_offset_index`。
     ///
-    /// `byte_lengths[i] = entries[i].paragraph_text_len + hard_break(1/0)`。
+    /// `byte_lengths[i] = entries[i].byte_len()`（正文 + 真实分隔符长度）。
     /// `qchar_lengths` 用 `byte_lengths` 同值占位（store 不存 qchar 长度，
     /// `compute_document_byte_start` 只查 byte 前缀和，不受占位影响）。
     fn rebuild_byte_offset_index(&mut self) {
-        let byte_lengths: Vec<usize> = self
-            .entries
-            .iter()
-            .map(|e| e.paragraph_text_len + if e.hard_break { 1 } else { 0 })
-            .collect();
+        let byte_lengths: Vec<usize> = self.entries.iter().map(|e| e.byte_len()).collect();
         // qchar 占位：用 byte_lengths 同值。ParagraphOffsetIndex 的 rebuild 要求
         // 两个数组长度一致（debug_assert），但不要求 qchar 值正确。
         // compute_document_byte_start 只查 paragraph_byte_start（byte_bit），不查 qchar。
@@ -1143,18 +1161,21 @@ impl ParagraphLayoutStore {
 
     // ── 增量更新：换行拆段 ──
 
-    /// 换行拆段 — 在段落 `index` 的 `split_byte_offset` 处插入 `'\n'`。
+    /// 换行拆段 — 在段落 `index` 的 `split_byte_offset` 处插入段落分隔符。
     ///
     /// 原段保留 `ParagraphId`，在 `index + 1` 处插入新段（分配新 Id）。
     /// 两段的 `cache_key` 都需要重新计算（内容变了）。
     ///
-    /// `split_byte_offset` 是相对于段落文本开头的 byte offset（不含 `'\n'`）。
+    /// `split_byte_offset` 是相对于段落文本开头的 byte offset（不含插入的分隔符）。
+    /// `inserted_separator_len` 是插入分隔符的真实 byte 长度（`\n`=1、`CRLF`=2、
+    /// `U+2029`=3）；原段以该分隔符结尾，新段保留原段原有的尾部分隔符。
     ///
     /// 返回 `(原段索引, 新段索引)`，失败返回 `None`。
     pub fn split_paragraph(
         &mut self,
         index: usize,
         split_byte_offset: usize,
+        inserted_separator_len: usize,
         font_size: f64,
         font_family: &str,
         line_spacing: f64,
@@ -1173,6 +1194,8 @@ impl ParagraphLayoutStore {
 
         // 更新原段（split 点之前的部分）
         let original_doc_start = original_entry.document_byte_start;
+        // 原段尾部分隔符随 split 点之后的内容一起移到新段。
+        let original_separator_len = original_entry.separator_len;
         // Issue #901 第二十五轮复核问题1: 收集原段旧 (generation, slot) 供后续释放。
         let old_gen = original_entry.layout_generation;
         let old_slot = original_entry.cache_slot;
@@ -1192,13 +1215,16 @@ impl ParagraphLayoutStore {
         original_entry.layout_epoch = 0;
         original_entry.is_empty_laid_out = false;
         original_entry.paragraph_text_len = original_text_before_split.len();
+        original_entry.separator_len = inserted_separator_len;
+        original_entry.hard_break = inserted_separator_len > 0;
         original_entry.height = 0.0;
         original_entry.visual_line_count = 0;
 
         // 新段（split 点之后的部分）
         // Issue #901 第二十一轮问题1: cache_slot = -1 表示未分配 physical_slot，
         // 后续 update_layout_result / sync_from_visual_lines_incremental 会分配新槽。
-        let new_doc_start = original_doc_start + split_byte_offset + 1; // +1 for '\n'
+        // Issue #1063: 新段起点 = 原段起点 + split 偏移 + 插入分隔符的真实 byte 长度。
+        let new_doc_start = original_doc_start + split_byte_offset + inserted_separator_len;
         let new_entry = ParagraphLayoutEntry {
             id: new_id,
             cache_key: ParagraphLayoutCacheKey::build(
@@ -1215,13 +1241,11 @@ impl ParagraphLayoutStore {
             layout_epoch: 0,
             document_byte_start: new_doc_start,
             paragraph_text_len: original_text_after_split.len(),
+            // Issue #1063: 新段继承原段移过来的尾部分隔符，不再默认 0。
+            separator_len: original_separator_len,
             height: 0.0,
             visual_line_count: 0,
-            // Issue #901 第二十三轮问题1: split 产生的新段后是否有 '\n' 取决于
-            // 原段 split 点之后的内容。调用方通过 rebuild_from_text 统一切分时
-            // 会正确设置；此处 split_paragraph 增量路径中新段 hard_break 未知，
-            // 默认 false，由后续 sync 同步。
-            hard_break: false,
+            hard_break: original_separator_len > 0,
             is_empty_laid_out: false,
             relative_lines: Vec::new(),
         };
@@ -1239,20 +1263,15 @@ impl ParagraphLayoutStore {
         // Issue #901 第二十一轮问题2: 同步插入行数索引槽位（初始行数 0）。
         Arc::make_mut(&mut self.line_count_index).insert(index + 1, 0);
         // Issue #901 第三十二轮问题4: 同步更新 byte 偏移前缀索引。
-        // 原段 byte_len 变化（text 变为 before_split），新段插入在 index+1。
+        // 原段 byte_len 变化（text 变为 before_split，尾分隔符换成插入分隔符），
+        // 新段插入在 index+1。
         {
             let idx = Arc::make_mut(&mut self.byte_offset_index);
-            // 新段 byte_len = after_split.len() + hard_break(默认 false → 0)。
-            let new_byte_len = self.entries[index + 1].paragraph_text_len
-                + if self.entries[index + 1].hard_break {
-                    1
-                } else {
-                    0
-                };
+            // 新段 byte_len = after_split 正文 + 继承的原段尾分隔符。
+            let new_byte_len = self.entries[index + 1].byte_len();
             idx.insert(index + 1, new_byte_len, new_byte_len);
-            // 原段 byte_len 更新（text 变为 before_split，hard_break 保持原值）。
-            let orig_byte_len = self.entries[index].paragraph_text_len
-                + if self.entries[index].hard_break { 1 } else { 0 };
+            // 原段 byte_len 更新（正文变为 before_split，尾分隔符为插入分隔符）。
+            let orig_byte_len = self.entries[index].byte_len();
             idx.update_paragraph_length(index, orig_byte_len, orig_byte_len);
         }
         Some((index, index + 1))
@@ -1260,11 +1279,12 @@ impl ParagraphLayoutStore {
 
     // ── 增量更新：删回车合段 ──
 
-    /// 删回车合段 — 删除段落 `index` 和 `index + 1` 之间的 `'\n'`，
+    /// 删回车合段 — 删除段落 `index` 和 `index + 1` 之间的分隔符，
     /// 将 `index + 1` 的内容并入 `index`。
     ///
     /// 保留段落 `index` 的 `ParagraphId`，丢弃段落 `index + 1` 的 Id。
-    /// 合并后段落的 `cache_key` 需要重新计算。
+    /// 合并后段落的 `cache_key` 需要重新计算；尾部分隔符取被合并段的
+    /// （原段的分隔符随这次删除消失），长度按真实 byte 数（`\n`/`CRLF`/`U+2029`）。
     ///
     /// 返回合并后的段落索引，失败返回 `None`。
     pub fn merge_paragraphs(
@@ -1313,6 +1333,13 @@ impl ParagraphLayoutStore {
         // Issue #901 第二十八轮复核问题2: 被合并段的 physical_slot 通过 retired_slots
         // 回收到 C++ LayoutGeneration 的 freelist 供后续复用，不再单调增长。
         let removed_entry = self.entries.remove(index + 1);
+        // Issue #1063: 合并后段落继承被合并段的尾部分隔符（原段分隔符已删除）。
+        // 不能保留原段的分隔符长度，否则 `a\nbc` 合段后仍按 1 byte 推进，坐标漂移。
+        {
+            let entry = &mut self.entries[index];
+            entry.separator_len = removed_entry.separator_len;
+            entry.hard_break = removed_entry.separator_len > 0;
+        }
         // Issue #901 第二十五轮复核问题1: 原段和被合并段的旧 QTextLayout 进入 retired 集合，
         // 后续 release_retired_layouts 释放，避免内存随合段次数持续增长。
         // Issue #901 第二十八轮复核问题3: 携带 epoch 供 release_layout_ref 校验。
@@ -1336,9 +1363,8 @@ impl ParagraphLayoutStore {
         {
             let idx = Arc::make_mut(&mut self.byte_offset_index);
             idx.remove(index + 1);
-            // 合并后段 byte_len = merged_text.len() + hard_break。
-            let merged_byte_len = self.entries[index].paragraph_text_len
-                + if self.entries[index].hard_break { 1 } else { 0 };
+            // 合并后段 byte_len = merged_text.len() + 被合并段的真实分隔符长度。
+            let merged_byte_len = self.entries[index].byte_len();
             idx.update_paragraph_length(index, merged_byte_len, merged_byte_len);
         }
         Some(index)
@@ -1346,14 +1372,21 @@ impl ParagraphLayoutStore {
 
     // ── 增量更新：普通编辑 ──
 
-    /// 普通编辑 — 更新段落 `index` 的文本内容（不涉及 `'\n'`）。
+    /// 普通编辑 — 更新段落 `index` 的文本内容（不涉及换行拆/合段）。
     ///
     /// 只变更该段的 `cache_key`，其他段落不变。
     /// 段落 `ParagraphId` 不变。
+    ///
+    /// `separator_len` 是该段当前真实的尾部分隔符 byte 长度（`\n`=1、`CRLF`=2、
+    /// `U+2029`=3、无=0）。即使只改正文，也要同步该字段并更新 byte 偏移索引，
+    /// 不能用「有硬换行就 +1」推进坐标。
+    ///
+    /// 返回 `true` 表示正文或分隔符长度发生了变化（需要更新偏移索引）。
     pub fn update_paragraph_text(
         &mut self,
         index: usize,
         new_text: &str,
+        separator_len: usize,
         font_size: f64,
         font_family: &str,
         line_spacing: f64,
@@ -1373,12 +1406,18 @@ impl ParagraphLayoutStore {
         // Issue #901 第二十五轮复核问题1: 先在 entry 借用块内读出旧 layout 信息，
         // 块结束后再 push 到 retired_slots，避免同时 &mut self.entries 和
         // &mut self.retired_slots 的借用冲突。
-        let (changed, old_gen, old_slot, old_epoch) = {
+        let (changed, separator_changed, old_gen, old_slot, old_epoch) = {
             let Some(entry) = self.entries.get_mut(index) else {
                 return false;
             };
             let changed = entry.cache_key != new_key;
+            // Issue #1063: separator_len 参与比较，LF/CRLF/U+2029 互相转换时
+            // 即使正文没变也要更新 byte 偏移索引。
+            let separator_changed = entry.separator_len != separator_len;
             entry.cache_key = new_key;
+            entry.paragraph_text_len = new_text.len();
+            entry.separator_len = separator_len;
+            entry.hard_break = separator_len > 0;
             if changed {
                 let old_gen = entry.layout_generation;
                 let old_slot = entry.cache_slot;
@@ -1388,12 +1427,11 @@ impl ParagraphLayoutStore {
                 entry.cache_slot = -1;
                 entry.layout_epoch = 0;
                 entry.is_empty_laid_out = false;
-                entry.paragraph_text_len = new_text.len();
                 entry.height = 0.0;
                 entry.visual_line_count = 0;
-                (true, old_gen, old_slot, old_epoch)
+                (true, separator_changed, old_gen, old_slot, old_epoch)
             } else {
-                (false, 0u64, -1i32, 0u64)
+                (false, separator_changed, 0u64, -1i32, 0u64)
             }
         };
         // 旧 QTextLayout 进入 retired 集合，后续 release_retired_layouts 释放，
@@ -1402,16 +1440,15 @@ impl ParagraphLayoutStore {
         if changed && old_slot >= 0 && old_gen != 0 {
             self.retired_slots.push((old_gen, old_slot, old_epoch));
         }
-        // Issue #901 第三十二轮问题4: 普通编辑改变段落文本长度，
+        // Issue #901 第三十二轮问题4: 普通编辑改变段落文本/分隔符长度，
         // 同步更新 byte 偏移前缀索引（O(log n) 单点更新）。
-        // hard_break 不变（普通编辑不涉及 '\n'），byte_len = text_len + hard_break。
-        if changed {
-            let byte_len = self.entries[index].paragraph_text_len
-                + if self.entries[index].hard_break { 1 } else { 0 };
+        // Issue #1063: byte_len = 正文长度 + 真实分隔符长度。
+        if changed || separator_changed {
+            let byte_len = self.entries[index].byte_len();
             Arc::make_mut(&mut self.byte_offset_index)
                 .update_paragraph_length(index, byte_len, byte_len);
         }
-        changed
+        changed || separator_changed
     }
 
     /// 更新段落 `index` 的文档 byte 起始偏移。
@@ -1429,10 +1466,14 @@ impl ParagraphLayoutStore {
     // ── 增量更新：段落插入/删除 ──
 
     /// 在 `index` 处插入新段落（分配新 Id）。
+    ///
+    /// `separator_len` 是新段落尾部的真实分隔符 byte 长度（无分隔符为 0），
+    /// 与 [`Self::split_paragraphs_with_separator`] 的结果保持一致。
     pub fn insert_paragraph(
         &mut self,
         index: usize,
         text: &str,
+        separator_len: usize,
         document_byte_start: usize,
         font_size: f64,
         font_family: &str,
@@ -1458,11 +1499,11 @@ impl ParagraphLayoutStore {
             layout_epoch: 0,
             document_byte_start,
             paragraph_text_len: text.len(),
+            separator_len,
             height: 0.0,
             visual_line_count: 0,
-            // Issue #901 第二十三轮问题1: insert_paragraph 增量路径中新段
-            // hard_break 未知，默认 false，由后续 sync 同步。
-            hard_break: false,
+            // Issue #1063: hard_break 仅作绘制/身份标志，与真实分隔符长度一致。
+            hard_break: separator_len > 0,
             is_empty_laid_out: false,
             relative_lines: Vec::new(),
         };
@@ -1474,12 +1515,7 @@ impl ParagraphLayoutStore {
         Arc::make_mut(&mut self.line_count_index).insert(insert_idx, 0);
         // Issue #901 第三十二轮问题4: 同步插入 byte 偏移前缀索引槽位。
         {
-            let byte_len = self.entries[insert_idx].paragraph_text_len
-                + if self.entries[insert_idx].hard_break {
-                    1
-                } else {
-                    0
-                };
+            let byte_len = self.entries[insert_idx].byte_len();
             Arc::make_mut(&mut self.byte_offset_index).insert(insert_idx, byte_len, byte_len);
         }
     }
@@ -1631,7 +1667,8 @@ impl ParagraphLayoutStore {
     /// # 算法
     ///
     /// 1. 将 `old_text` 和 `new_text` 按 Core 段落规则分段。
-    /// 2. 逐段比较文本内容，内容不同的段落标记为受影响。
+    /// 2. 逐段比较正文内容和真实分隔符长度（`LF`/`CRLF`/`U+2029` 互不相同），
+    ///    任一不同即标记为受影响。
     /// 3. 段落数量变化（换行拆段/删回车合段）时，从第一个变化点起所有后续段落
     ///    都标记为受影响（因为 byte offset 全部漂移）。
     ///
@@ -1649,10 +1686,13 @@ impl ParagraphLayoutStore {
         let mut affected: Vec<usize> = Vec::new();
         let min_len = old_paras.len().min(new_paras.len());
 
-        // 逐段比较段落文本内容（分隔符已由 Core 规则剥离）
+        // 逐段比较正文内容和真实分隔符（分隔符已由 Core 规则从正文剥离）。
+        // Issue #1063: `\n`→`CRLF` 这类只改分隔符的编辑也必须判为变化。
         let mut first_diff: Option<usize> = None;
         for i in 0..min_len {
-            if old_paras[i].content != new_paras[i].content {
+            if old_paras[i].content != new_paras[i].content
+                || old_paras[i].separator != new_paras[i].separator
+            {
                 first_diff = Some(i);
                 break;
             }
@@ -1699,10 +1739,10 @@ impl ParagraphLayoutStore {
     ///
     /// # 与 ParagraphId / Core patch 的关系
     ///
-    /// 本方法按"去掉 `'\n'` 后文本相同即视为同一段"判断公共段，这与
-    /// [`rebuild_from_text`] 的 ParagraphId 保留策略（内容相同保留原 Id）
-    /// 语义一致：内容相同的段复用 prev 排版，仅 hard_break 可能因前后有无
-    /// `'\n'` 而变化（由 full.rs 增量路径同步重建）。
+    /// 本方法按「正文相同且真实分隔符长度相同即视为同一段」判断公共段，这与
+    /// [`rebuild_from_text`] 的 ParagraphId 保留策略（内容 + 分隔符长度相同才保留原 Id）
+    /// 语义一致：相同的段复用 prev 排版。分隔符长度区分 `LF`/`CRLF`/`U+2029`，
+    /// 仅替换行尾分隔符时也不会误判为「无变化」。
     ///
     /// 当前 Core 仅提供 `affected_byte_start/end`（字节级 patch），不提供段落级
     /// 结构化 patch（哪些段被拆/合/改）。在 Core 提供段落级 patch 前，文本比较
@@ -1714,17 +1754,17 @@ impl ParagraphLayoutStore {
     ///
     /// O(n)（n 为段落数），但只在段落数变化或内容变化时调用，
     /// 段落数远小于行数，可接受。
-    /// Issue #901 第二十三轮问题2: 段落身份比较包含 hard_break。
-    /// `(content, hard_break)` 完全相同才视为同一段，避免仅插入/删除末尾回车时
-    /// 按去掉 `\n` 后的段落正文比较误判"无变化"。
+    /// Issue #1063: 段落身份比较使用 `(content, separator_len)`。
+    /// `separator_len` 是真实分隔符 byte 长度（`\n`=1、`CRLF`=2、`U+2029`=3、无=0），
+    /// 仅插入/删除末尾分隔符、或行尾分隔符类型变化时都会被视为不同段。
     pub fn compute_old_new_paragraph_ranges(
-        old_paras: &[(&str, bool)],
-        new_paras: &[(&str, bool)],
+        old_paras: &[(&str, usize)],
+        new_paras: &[(&str, usize)],
     ) -> ParagraphSpliceRanges {
         let old_count = old_paras.len();
         let new_count = new_paras.len();
 
-        // 找前缀公共段：(content, hard_break) 完全相同
+        // 找前缀公共段：(content, separator_len) 完全相同
         let mut prefix_common = 0usize;
         let min_len = old_count.min(new_count);
         for i in 0..min_len {
@@ -1762,14 +1802,15 @@ impl ParagraphLayoutStore {
     /// 不用 `rebuild_from_text` 全局重建。保留旧段 Id 和排版结果。
     ///
     /// 用于 `prepare_incremental_visual_snapshot_impl` 中段落数不变但内容变化的场景。
-    /// 对 `new_layout_start..new_layout_end` 范围内的段落调用 `update_paragraph_text`，
+    /// 对 `new_layout_start..new_layout_end` 范围内的段落调用 [`Self::update_paragraph_text`]，
     /// 其他段落不变。
     ///
-    /// Issue #901 第三十轮问题4: `new_para_texts` 只含受影响段文本（从 new_layout_start 起），
+    /// Issue #901 第三十轮问题4: `new_para_spans` 只含受影响段（从 new_layout_start 起），
     /// 用 `local_i = i - new_layout_start` 索引，不再用 `i` 直接索引整章数组。
+    /// Issue #1063: 每段携带真实分隔符 byte 长度，同步写入 entry 与 byte 偏移索引。
     pub fn update_affected_paragraph_texts(
         &mut self,
-        new_para_texts: &[&str],
+        new_para_spans: &[(&str, usize)],
         new_layout_start: usize,
         new_layout_end: usize,
         font_size: f64,
@@ -1779,14 +1820,16 @@ impl ParagraphLayoutStore {
         padding: f64,
         width: f64,
     ) {
-        for local_i in 0..new_para_texts.len() {
+        for local_i in 0..new_para_spans.len() {
             let i = new_layout_start + local_i;
             if i >= new_layout_end || i >= self.entries.len() {
                 break;
             }
+            let (text, separator_len) = new_para_spans[local_i];
             self.update_paragraph_text(
                 i,
-                new_para_texts[local_i],
+                text,
+                separator_len,
                 font_size,
                 font_family,
                 line_spacing,
@@ -1946,19 +1989,21 @@ impl ParagraphLayoutStore {
         // Issue #901 第三十二轮问题3: 用 running offset 累加段落长度计算 document_byte_start，
         // 不读 entry.document_byte_start 字段（splice 后后缀该字段可能过时）。
         // O(n) 单次遍历，同时找 start 和 end。
+        // Issue #1063: 段落占用范围包含真实分隔符（`content_len + separator_len`），
+        // 与 `compute_affected_paragraphs_via_index` 的字节语义一致。
         let mut start = None;
         let mut end = None;
         let mut offset = 0usize;
         for (i, e) in self.entries.iter().enumerate() {
             let seg_start = offset;
-            let seg_end = offset + e.paragraph_text_len;
+            let seg_end = offset + e.byte_len();
             if seg_end > affected_byte_start && seg_start < affected_byte_end {
                 if start.is_none() {
                     start = Some(i);
                 }
                 end = Some(i + 1);
             }
-            offset += e.paragraph_text_len + if e.hard_break { 1 } else { 0 };
+            offset += e.byte_len();
         }
 
         let start = start.unwrap_or(0);
@@ -1974,15 +2019,13 @@ impl ParagraphLayoutStore {
     /// 计算受影响段落范围 — O(log n) 索引路径。
     ///
     /// Issue #901 第三十二轮问题3: [`compute_affected_paragraphs`] 用 `for` 全文遍历
-    /// 定位受影响段，O(全章段落数)；且只用段落**正文**范围 `[offset, offset+text_len)`
-    /// 判断相交，把 `hard_break` 所占 1 字节排除在外，导致仅改变换行（如在末尾空行
-    /// 再输入 `\n`）时没有任何非空段正文与插入范围相交，`start=None/end=None`，
-    /// 默认返回全章重排。
+    /// 定位受影响段，O(全章段落数)（现已改为按含分隔符的完整 byte 范围判断相交）。
     ///
     /// 本方法用 [`ParagraphOffsetIndex::byte_to_paragraph`] 的 Fenwick 前缀和二分
-    /// （O(log n)）定位受影响段。`ParagraphOffsetIndex` 的 `byte_lengths[i]` 含尾部
-    /// `'\n'`，因此 `byte_to_paragraph` 返回的段落范围**包含** `hard_break` 字节
-    /// 边界与尾空段正式结构边界，换行编辑不再误判为全章重排。
+    /// （O(log n)）定位受影响段。`ParagraphOffsetIndex` 的 `byte_lengths[i]` 含
+    /// **真实尾部段落分隔符**（`\n`=1、`CRLF`=2、`U+2029`=3），因此
+    /// `byte_to_paragraph` 返回的段落范围包含分隔符字节与尾空段结构边界，
+    /// 换行编辑不再误判为全章重排。
     ///
     /// # 参数
     ///
@@ -2061,10 +2104,11 @@ impl ParagraphLayoutStore {
             return idx.paragraph_byte_start(index);
         }
         // Fallback: O(index) 逐段累加（不依赖 byte_offset_index 的正确性）。
+        // Issue #1063: 每段按正文 + 真实分隔符长度推进。
         let end = index.min(self.entries.len());
         let mut offset = 0usize;
         for e in self.entries.iter().take(end) {
-            offset += e.paragraph_text_len + if e.hard_break { 1 } else { 0 };
+            offset += e.byte_len();
         }
         offset
     }
@@ -2245,7 +2289,7 @@ impl ParagraphLayoutStore {
     ///
     /// O(段落数) — 遍历 `snapshot.paragraphs` 构造 entries，每段 O(1) 从索引
     /// 查询 `visual_line_count`/`height`/`cache_slot`/`layout_epoch`/`paragraph_id`，
-    /// 不遍历全文 text（省去 `split_paragraphs_with_hard_break` 的 O(文本长度)），
+    /// 不遍历全文 text（省去 `split_paragraphs_with_separator` 的 O(文本长度)），
     /// 不复制全部 VisualLine（省去 `to_vec()` 的 O(视觉行数) 深拷贝），
     /// 不扫描全部视觉行（省去 `sync_from_visual_lines` 的 O(视觉行数) 分组统计）。
     ///
@@ -2309,10 +2353,12 @@ impl ParagraphLayoutStore {
             // height 从 height_index 查询（O(1)）。
             let height = snapshot.height_index.height_at(i);
 
-            // hard_break 从 paragraph_offset_index 的 byte_length 推断。
-            // byte_length 含尾部 '\n'，paragraph_text_len 不含。
+            // Issue #1063: 真实分隔符长度从 paragraph_offset_index 的 byte_length 推断。
+            // byte_length = 正文 + 真实分隔符（`\n`/`CRLF`/`U+2029` 的长度），
+            // paragraph_text_len 只含正文。不能把有分隔符一律当成 1 byte。
             let byte_length = snapshot.paragraph_offset_index.byte_length_at(i);
-            let hard_break = byte_length > paragraph_text_len;
+            let separator_len = byte_length.saturating_sub(paragraph_text_len);
+            let hard_break = separator_len > 0;
 
             // 从 visual_lines 首行提取 cache_slot/layout_epoch/paragraph_id（O(1)）。
             // 同一段所有行的 cache_slot/layout_epoch/paragraph_id 相同，
@@ -2384,6 +2430,7 @@ impl ParagraphLayoutStore {
                 layout_epoch,
                 document_byte_start,
                 paragraph_text_len,
+                separator_len,
                 height,
                 visual_line_count,
                 hard_break,
@@ -2516,8 +2563,8 @@ mod tests {
         assert_ne!(id1, ParagraphId::INVALID);
         assert_ne!(id0, id1);
 
-        // 普通编辑不改 Id
-        store.update_paragraph_text(0, "hi", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        // 普通编辑不改 Id（separator_len 沿用当前段的真实分隔符长度 1）
+        store.update_paragraph_text(0, "hi", 1, 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
         assert_eq!(store.paragraph_id_at(0), Some(id0));
         assert_eq!(store.paragraph_id_at(1), Some(id1));
     }
@@ -2529,12 +2576,20 @@ mod tests {
         let original_id = store.paragraph_id_at(0).unwrap();
 
         let (orig_idx, new_idx) = store
-            .split_paragraph(0, 5, 16.0, "Sans", 1.2, 0.0, 0.0, 600.0, "hello", "world")
+            .split_paragraph(
+                0, 5, 1, 16.0, "Sans", 1.2, 0.0, 0.0, 600.0, "hello", "world",
+            )
             .unwrap();
 
         assert_eq!(orig_idx, 0);
         assert_eq!(new_idx, 1);
         assert_eq!(store.paragraph_count(), 2);
+        // 原段以插入的 '\n'（1 byte）结尾，新段无尾部分隔符。
+        assert_eq!(store.entry(0).unwrap().separator_len, 1);
+        assert_eq!(store.entry(0).unwrap().hard_break, true);
+        assert_eq!(store.entry(1).unwrap().separator_len, 0);
+        // 新段起点 = 原段起点 + split 偏移 + 插入分隔符长度。
+        assert_eq!(store.entry(1).unwrap().document_byte_start, 6);
         // 原段保留 Id
         assert_eq!(store.paragraph_id_at(0), Some(original_id));
         // 新段分配新 Id
@@ -2609,7 +2664,7 @@ mod tests {
         store.rebuild_from_text("hello", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
 
         let original_key = store.entry(0).unwrap().cache_key.clone();
-        let changed = store.update_paragraph_text(0, "hi", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let changed = store.update_paragraph_text(0, "hi", 1, 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
         assert!(changed);
 
         let new_key = store.entry(0).unwrap().cache_key.clone();
@@ -2621,7 +2676,8 @@ mod tests {
         let mut store = ParagraphLayoutStore::new();
         store.rebuild_from_text("hello", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
 
-        let changed = store.update_paragraph_text(0, "hello", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let changed =
+            store.update_paragraph_text(0, "hello", 0, 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
         assert!(!changed);
     }
 
@@ -2773,7 +2829,7 @@ mod tests {
         store.rebuild_from_text("aaa\nccc", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
         assert_eq!(store.paragraph_count(), 2);
 
-        store.insert_paragraph(1, "bbb", 4, 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        store.insert_paragraph(1, "bbb", 0, 4, 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
         assert_eq!(store.paragraph_count(), 3);
 
         let removed = store.remove_paragraph(1);
@@ -2822,16 +2878,17 @@ mod tests {
     fn affected_paragraphs_add_paragraph() {
         // 末尾新增段落
         let affected = ParagraphLayoutStore::affected_paragraphs("aaa\nbbb", "aaa\nbbb\nccc");
-        // 前两段相同，新增第三段
-        assert_eq!(affected, vec![2]);
+        // Issue #1063: 第二段尾部分隔符 0→1（后面新增了分隔符），该段与新增第三段
+        // 都需要重排（分隔符长度参与段落变化比较）。
+        assert_eq!(affected, vec![1, 2]);
     }
 
     #[test]
     fn affected_paragraphs_remove_paragraph() {
         // 末尾删除段落
         let affected = ParagraphLayoutStore::affected_paragraphs("aaa\nbbb\nccc", "aaa\nbbb");
-        // 段落数量减少，旧多出的段落已不存在
-        assert!(affected.is_empty());
+        // Issue #1063: 第二段尾部分隔符 1→0，需要重排；旧多出的第三段已不存在。
+        assert_eq!(affected, vec![1]);
     }
 
     #[test]
@@ -2924,14 +2981,14 @@ mod tests {
         assert_eq!(entry0.layout_generation, 0);
     }
 
-    // ── Issue #901 第五轮阻塞2 + 第二十三轮问题2: compute_old_new_paragraph_ranges 测试 ──
-    // 段落身份比较包含 hard_break，(content, hard_break) 完全相同才视为同一段。
+    // ── Issue #901 第五轮阻塞2 + Issue #1063: compute_old_new_paragraph_ranges 测试 ──
+    // 段落身份比较使用 (content, separator_len)，完全相同才视为同一段。
 
     #[test]
     fn compute_old_new_ranges_enter_split() {
         // Enter 拆段：旧 1 段 "helloworld" → 新 2 段 "hello" + "world"
-        let old: Vec<(&str, bool)> = vec![("helloworld", false)];
-        let new: Vec<(&str, bool)> = vec![("hello", true), ("world", false)];
+        let old: Vec<(&str, usize)> = vec![("helloworld", 0)];
+        let new: Vec<(&str, usize)> = vec![("hello", 1), ("world", 0)];
         let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
         // 旧删 1 段 [0,1)，新建 2 段 [0,2)
         assert_eq!(ranges.old_splice_start, 0);
@@ -2943,8 +3000,8 @@ mod tests {
     #[test]
     fn compute_old_new_ranges_backspace_merge() {
         // Backspace 合段：旧 2 段 "hello" + "world" → 新 1 段 "helloworld"
-        let old: Vec<(&str, bool)> = vec![("hello", true), ("world", false)];
-        let new: Vec<(&str, bool)> = vec![("helloworld", false)];
+        let old: Vec<(&str, usize)> = vec![("hello", 1), ("world", 0)];
+        let new: Vec<(&str, usize)> = vec![("helloworld", 0)];
         let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
         // 旧删 2 段 [0,2)，新建 1 段 [0,1)
         assert_eq!(ranges.old_splice_start, 0);
@@ -2956,8 +3013,8 @@ mod tests {
     #[test]
     fn compute_old_new_ranges_edit_middle() {
         // 普通编辑中间段：段落数不变
-        let old: Vec<(&str, bool)> = vec![("aaa", true), ("bbb", true), ("ccc", false)];
-        let new: Vec<(&str, bool)> = vec![("aaa", true), ("BBB", true), ("ccc", false)];
+        let old: Vec<(&str, usize)> = vec![("aaa", 1), ("bbb", 1), ("ccc", 0)];
+        let new: Vec<(&str, usize)> = vec![("aaa", 1), ("BBB", 1), ("ccc", 0)];
         let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
         // 前缀公共 1 段，后缀公共 1 段
         // 旧删 [1,2)，新建 [1,2)
@@ -2970,12 +3027,12 @@ mod tests {
     #[test]
     fn compute_old_new_ranges_add_trailing() {
         // 末尾新增段落：old "aaa\nbbb" → new "aaa\nbbb\nccc"
-        // Issue #901 第二十三轮问题2: "bbb" 的 hard_break 从 false→true（后面新增了换行），
+        // Issue #1063: "bbb" 的 separator_len 从 0→1（后面新增了分隔符），
         // 这是结构变化，应被检测为不同段。前缀公共 1 段，后缀 0 段。
-        let old: Vec<(&str, bool)> = vec![("aaa", true), ("bbb", false)];
-        let new: Vec<(&str, bool)> = vec![("aaa", true), ("bbb", true), ("ccc", false)];
+        let old: Vec<(&str, usize)> = vec![("aaa", 1), ("bbb", 0)];
+        let new: Vec<(&str, usize)> = vec![("aaa", 1), ("bbb", 1), ("ccc", 0)];
         let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
-        // 前缀公共 1 段（"bbb" hard_break 变化），后缀 0 段
+        // 前缀公共 1 段（"bbb" 分隔符长度变化），后缀 0 段
         // 旧删 [1,2)，新建 [1,3)
         assert_eq!(ranges.old_splice_start, 1);
         assert_eq!(ranges.old_splice_end, 2);
@@ -2986,12 +3043,12 @@ mod tests {
     #[test]
     fn compute_old_new_ranges_remove_trailing() {
         // 末尾删除段落：old "aaa\nbbb\nccc" → new "aaa\nbbb"
-        // Issue #901 第二十三轮问题2: "bbb" 的 hard_break 从 true→false（后面删了换行），
+        // Issue #1063: "bbb" 的 separator_len 从 1→0（后面删了分隔符），
         // 这是结构变化，应被检测为不同段。前缀公共 1 段，后缀 0 段。
-        let old: Vec<(&str, bool)> = vec![("aaa", true), ("bbb", true), ("ccc", false)];
-        let new: Vec<(&str, bool)> = vec![("aaa", true), ("bbb", false)];
+        let old: Vec<(&str, usize)> = vec![("aaa", 1), ("bbb", 1), ("ccc", 0)];
+        let new: Vec<(&str, usize)> = vec![("aaa", 1), ("bbb", 0)];
         let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
-        // 前缀公共 1 段（"bbb" hard_break 变化），后缀 0 段
+        // 前缀公共 1 段（"bbb" 分隔符长度变化），后缀 0 段
         // 旧删 [1,3)，新建 [1,2)
         assert_eq!(ranges.old_splice_start, 1);
         assert_eq!(ranges.old_splice_end, 3);
@@ -3001,9 +3058,9 @@ mod tests {
 
     #[test]
     fn compute_old_new_ranges_no_change() {
-        // 无变化：old "aaa\nbbb" → new "aaa\nbbb"，hard_break 完全一致
-        let old: Vec<(&str, bool)> = vec![("aaa", true), ("bbb", false)];
-        let new: Vec<(&str, bool)> = vec![("aaa", true), ("bbb", false)];
+        // 无变化：old "aaa\nbbb" → new "aaa\nbbb"，分隔符长度完全一致
+        let old: Vec<(&str, usize)> = vec![("aaa", 1), ("bbb", 0)];
+        let new: Vec<(&str, usize)> = vec![("aaa", 1), ("bbb", 0)];
         let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
         // 全部是前缀公共，旧删和新建都是空范围
         assert_eq!(ranges.old_splice_start, 2);
@@ -3015,8 +3072,8 @@ mod tests {
     #[test]
     fn compute_old_new_ranges_insert_newline_between() {
         // 在第一、二段之间新插空行：old "aaa\nbbb\nccc" → new "aaa\n\nbbb\nccc"
-        let old: Vec<(&str, bool)> = vec![("aaa", true), ("bbb", true), ("ccc", false)];
-        let new: Vec<(&str, bool)> = vec![("aaa", true), ("", true), ("bbb", true), ("ccc", false)];
+        let old: Vec<(&str, usize)> = vec![("aaa", 1), ("bbb", 1), ("ccc", 0)];
+        let new: Vec<(&str, usize)> = vec![("aaa", 1), ("", 1), ("bbb", 1), ("ccc", 0)];
         let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
         // 前缀公共 1 段（"aaa"），后缀公共 2 段（"bbb","ccc"）
         // 旧删 [1,1)（空），新建 [1,2)（空行）
@@ -3026,13 +3083,11 @@ mod tests {
         assert_eq!(ranges.new_layout_end, 2);
     }
 
-    /// Issue #901 第二十三轮问题2: 验证仅插入末尾回车（甲 → 甲\n）被检测为有变化。
-    /// old "甲"（1段 hb=false）→ new "甲\n"（2段 hb=[true,false]）。
-    /// "甲" 的 hard_break 从 false→true，前缀 0，后缀 0，旧删 [0,1)，新建 [0,2)。
+    /// Issue #1063: 验证仅插入末尾分隔符（甲 → 甲\n）被检测为有变化。
     #[test]
     fn compute_old_new_ranges_insert_trailing_newline() {
-        let old: Vec<(&str, bool)> = vec![("甲", false)];
-        let new: Vec<(&str, bool)> = vec![("甲", true), ("", false)];
+        let old: Vec<(&str, usize)> = vec![("甲", 0)];
+        let new: Vec<(&str, usize)> = vec![("甲", 1), ("", 0)];
         let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
         assert_eq!(ranges.old_splice_start, 0);
         assert_eq!(ranges.old_splice_end, 1);
@@ -3040,14 +3095,26 @@ mod tests {
         assert_eq!(ranges.new_layout_end, 2);
     }
 
-    /// Issue #901 第二十三轮问题2: 验证仅删除末尾回车（甲\n → 甲）被检测为有变化。
+    /// Issue #1063: 验证仅删除末尾分隔符（甲\n → 甲）被检测为有变化。
     #[test]
     fn compute_old_new_ranges_delete_trailing_newline() {
-        let old: Vec<(&str, bool)> = vec![("甲", true), ("", false)];
-        let new: Vec<(&str, bool)> = vec![("甲", false)];
+        let old: Vec<(&str, usize)> = vec![("甲", 1), ("", 0)];
+        let new: Vec<(&str, usize)> = vec![("甲", 0)];
         let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
         assert_eq!(ranges.old_splice_start, 0);
         assert_eq!(ranges.old_splice_end, 2);
+        assert_eq!(ranges.new_layout_start, 0);
+        assert_eq!(ranges.new_layout_end, 1);
+    }
+
+    /// Issue #1063: 仅行尾分隔符类型变化（`\n` → `CRLF`）也视为不同段。
+    #[test]
+    fn compute_old_new_ranges_separator_kind_change() {
+        let old: Vec<(&str, usize)> = vec![("甲", 1)];
+        let new: Vec<(&str, usize)> = vec![("甲", 2)];
+        let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
+        assert_eq!(ranges.old_splice_start, 0);
+        assert_eq!(ranges.old_splice_end, 1);
         assert_eq!(ranges.new_layout_start, 0);
         assert_eq!(ranges.new_layout_end, 1);
     }
@@ -3060,3 +3127,7 @@ impl ParagraphLayoutEntry {
         !self.is_laid_out()
     }
 }
+
+/// Issue #1063: 真实段落分隔符长度（`\n`/`CRLF`/`U+2029`）的坐标测试。
+#[cfg(test)]
+mod separator_tests;

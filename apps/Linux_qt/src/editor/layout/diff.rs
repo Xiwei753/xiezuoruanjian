@@ -1,5 +1,7 @@
 // ── Qt 文本布局模块：affected paragraph ranges ──
 
+use writer_core::editor::text_document_rules;
+
 /// Issue #710 评论 5731145076 症状四/五: 根据 old/new text 和改动位置计算
 /// affected paragraph ranges。
 ///
@@ -41,14 +43,18 @@ pub fn compute_affected_paragraph_ranges(
 
 /// 将 byte range 扩展到包含它的完整段落边界。
 ///
-/// 段落以 '\n' 分隔。返回的 range 包含从 edit_start 所在段落的起始
-/// 到 edit_end 所在段落的结束（含 '\n'）。
+/// 段落边界由 Core 段落规则决定（`\n`、`CRLF`、`U+2029`）。返回的 range 包含从
+/// edit_start 所在段落的起始到 edit_end 所在段落的结束（含真实分隔符）。
 ///
 /// Issue #710 评论 5732160521 问题 1: 切片前必须保证 byte offset 是该字符串
 /// 自己的 UTF-8 char boundary。之前直接 `text[e..]` 在 byte offset 落在多字节
 /// UTF-8 字符内部时 panic（如 "甲"[1..]）。现在用 `floor_char_boundary` 把
-/// offset 调整到最近的 char boundary，再切片。`str::floor_char_boundary`
-/// 自 Rust 1.73 起稳定。
+/// offset 调整到最近的 char boundary，再交给 Core 定位段落边界。
+/// `str::floor_char_boundary` 自 Rust 1.73 起稳定。
+///
+/// Issue #1063: 定位改由 Core [`text_document_rules::paragraph_start_before`] /
+/// [`text_document_rules::paragraph_end_after`] 完成，不再只找 `'\n'` ——
+/// `CRLF` 占 2 byte、`U+2029` 占 3 byte，且落在分隔符内部的 offset 由 Core 处理。
 fn expand_to_paragraph_boundaries(text: &str, start: usize, end: usize) -> (usize, usize) {
     // 先把 start/end 钳到 [0, text.len()]，再调整到 char boundary。
     // floor_char_boundary(0) == 0，floor_char_boundary(len) == len，边界安全。
@@ -57,23 +63,8 @@ fn expand_to_paragraph_boundaries(text: &str, start: usize, end: usize) -> (usiz
     if s > e {
         return (e, s);
     }
-    // 找 start 所在段落的起始：往前找第一个 '\n' 的下一个位置
-    let para_start = if s == 0 {
-        0
-    } else {
-        // 在 text[..s] 中找最后一个 '\n'，段落起始是它后面
-        text[..s].rfind('\n').map(|p| p + 1).unwrap_or(0)
-    };
-    // 找 end 所在段落的结束：往后找第一个 '\n'（含）
-    let para_end = if e >= text.len() {
-        text.len()
-    } else {
-        // 在 text[e..] 中找第一个 '\n'，段落结束是它后面（含 '\n'）
-        text[e..]
-            .find('\n')
-            .map(|p| e + p + 1)
-            .unwrap_or(text.len())
-    };
+    let para_start = text_document_rules::paragraph_start_before(text, s);
+    let para_end = text_document_rules::paragraph_end_after(text, e);
     (para_start, para_end)
 }
 
@@ -219,3 +210,7 @@ mod issue_710_comment_5732160521_repro {
         assert_eq!((new_s, new_e), (0, 6));
     }
 }
+
+/// Issue #1063: `CRLF` / `U+2029` 段落边界的扩展测试。
+#[cfg(test)]
+mod separator_tests;

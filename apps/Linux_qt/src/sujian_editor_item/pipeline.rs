@@ -5,7 +5,7 @@ use super::edit_snapshot::EditorSnapshot;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, PreparedLineSnapshot};
 use super::text_motion::TextMotion;
-use super::text_utils::{clamp_to_char_boundary, normalize_plain_text};
+use super::text_utils::clamp_to_char_boundary;
 use super::texture_cache::{LineSnapshotId, TextureCache};
 use super::PreeditAttribute;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
@@ -1062,10 +1062,14 @@ impl LinuxEditorPipeline {
         }
     }
 
+    /// Issue #1063 复审：打开/重载正文直接装载原文，不做任何归一化。
+    ///
+    /// 归一化只属于真实插入/导入命令边界（`editing.rs`）；这里若改写原文，
+    /// CRLF / U+2029 / 控制字符会在打开章节时被静默替换，破坏逐字节保真
+    /// 与磁盘正文一致。cursor 仍按原文 clamp 到 char boundary。
     pub fn load_text(&mut self, text: String, cursor: usize) -> bool {
-        let normalized = normalize_plain_text(&text);
-        let clamped_cursor = clamp_to_char_boundary(&normalized, cursor);
-        match EditorKernel::with_text(normalized.clone(), clamped_cursor) {
+        let clamped_cursor = clamp_to_char_boundary(&text, cursor);
+        match EditorKernel::with_text(text, clamped_cursor) {
             Ok(kernel) => {
                 self.kernel = kernel;
                 self.mirror.load_from_snapshot(
