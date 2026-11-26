@@ -20,8 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::sync::local_mutations;
 use crate::sync::types::{
-    AppDataGroup, ManifestFileRecord, SyncManifest, SyncScope, SyncStatus, SyncTarget,
-    TargetSyncResult,
+    AppDataGroup, SyncManifest, SyncScope, SyncTarget, TargetSyncResult,
 };
 
 /// 单个 target 的对象版本。
@@ -70,20 +69,6 @@ pub(crate) struct LocalVersionSnapshot {
     /// 存在待完成的删除/远端清理事务。此时不能走"无变化快速路径"：
     /// 这些收口动作不在任何 target 的对象版本里，跳过它们会丢掉远端删除。
     pub lifecycle_pending: bool,
-}
-
-impl LocalVersionSnapshot {
-    /// 与 checkpoint 中记录的版本比较，得到一个 target 是否真的变了。
-    pub(crate) fn changed_since(
-        &self,
-        key: &str,
-        checkpoint: &BTreeMap<String, LocalTargetVersion>,
-    ) -> bool {
-        match (checkpoint.get(key), self.targets.get(key)) {
-            (Some(previous), Some(current)) => !current.matches(previous),
-            _ => true,
-        }
-    }
 }
 
 pub(crate) fn app_target_key(group: &AppDataGroup) -> String {
@@ -301,6 +286,14 @@ pub(crate) fn collect(
         ));
     }
 
+    // 不能走增量的 target 与原因要留在诊断里：运行时表现为"这一轮又全量核对"，
+    // 没有这行日志就无法区分是基线缺失、旧版布局、冲突还是读盘错误。
+    for (key, version) in &targets {
+        if let Some(reason) = &version.ineligible_reason {
+            log::debug!("[sync] checkpoint target {key} ineligible: {reason}");
+        }
+    }
+
     Ok(LocalVersionSnapshot {
         targets,
         no_change_targets,
@@ -333,12 +326,4 @@ pub(crate) fn target_key_for_remote_path(
         }
     }
     None
-}
-
-/// 判定整体状态是否属于"整轮收敛"（可以推进 checkpoint）。
-pub(crate) fn status_converged(status: &SyncStatus) -> bool {
-    matches!(
-        status,
-        SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
-    )
 }
