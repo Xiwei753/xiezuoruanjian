@@ -282,6 +282,17 @@ impl SyncRunMode {
     }
 }
 
+/// 一轮编排的实际产出。
+///
+/// 只返回 `FullSyncResultDto` 会让"本轮到底推送了哪个提交"丢失在内部函数里，
+/// 外层只能靠重新读 HEAD 猜测（Issue #1065 复审 #1）。远端发布事实必须和
+/// 结果一起返回：checkpoint 用真实推送回执推进，而不是前后 HEAD 相等。
+struct RoundOutcome {
+    result: FullSyncResultDto,
+    /// 本轮实际创建的远端提交（未发布时为 None）。
+    published_revision: Option<String>,
+}
+
 fn add_fingerprint_field(hasher: &mut Sha256, key: &str, value: &[u8]) {
     hasher.update((key.len() as u64).to_le_bytes());
     hasher.update(key.as_bytes());
@@ -1442,10 +1453,6 @@ impl WriterCoreApi {
                 _ => None,
             };
 
-        // 本轮实际发布的远端提交（仅当 flush 真正创建了 commit）。checkpoint 用它
-        // 记录"自己成功推送后的 HEAD"，不再要求前后 HEAD 相等。
-        let mut published_revision: Option<String> = None;
-
         // Issue #1012: create the one-round buffer before bootstrap so the
         // first catalog write is part of the same final commit.
         let round = crate::sync::provider::round::RoundProvider::new(
@@ -1804,7 +1811,10 @@ impl WriterCoreApi {
         // perform_generation_gc_maintenance 异步调用（独立 maintenance token，
         // 不复用用户同步 token），避免 GC detached thread 和下一轮用户同步同时写
         // 同一 branch 导致 PreconditionFailed。
-        let result = self.perform_full_sync_with_provider_for_run(
+        let RoundOutcome {
+            result,
+            published_revision,
+        } = self.perform_full_sync_with_provider_for_run(
             provider.as_ref(),
             &round,
             &plan,
@@ -1918,6 +1928,7 @@ impl WriterCoreApi {
             &operation_id,
             None,
         )
+        .map(|outcome| outcome.result)
     }
 
     #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
@@ -1932,7 +1943,7 @@ impl WriterCoreApi {
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
         diagnostic_operation_id: &str,
         remote_revision: Option<&str>,
-    ) -> ApiResult<FullSyncResultDto> {
+    ) -> ApiResult<RoundOutcome> {
         struct PendingTargetCommit {
             target_index: usize,
             prepared_failure: bool,
@@ -1944,6 +1955,9 @@ impl WriterCoreApi {
             started_at: Instant,
         }
 
+        // 本轮实际发布的远端提交（仅当 flush 真正创建了 commit）。checkpoint 用它
+        // 记录"自己成功推送后的 HEAD"，不再要求前后 HEAD 相等。
+        let mut published_revision: Option<String> = None;
         let mut all_targets: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut all_committed_paths: Vec<std::path::PathBuf> = Vec::new();
         let mut chapter_changes: Vec<crate::chapter::ChapterChangeReceipt> = Vec::new();
@@ -2137,7 +2151,10 @@ impl WriterCoreApi {
                 "[sync] perform_full_sync: cancellation requested after per-target loop — discarding buffered remote writes"
             );
             self.core_write().persist_full_sync_cancelled();
-            return Ok(Self::full_sync_noop_result());
+            return Ok(RoundOutcome {
+                result: Self::full_sync_noop_result(),
+                published_revision: None,
+            });
         }
         // 有 target 失败时仍然先提交已下载/已合并的内容到 live：单侧下载和
         // 合并结果不要求远端写成功才能落盘。只是不发布不完整的 tree。
@@ -2412,7 +2429,10 @@ impl WriterCoreApi {
                 "[sync] perform_full_sync: cancellation requested after per-target loop — persisting cancelled state"
             );
             self.core_write().persist_full_sync_cancelled();
-            return Ok(Self::full_sync_noop_result());
+            return Ok(RoundOutcome {
+                result: Self::full_sync_noop_result(),
+                published_revision: None,
+            });
         }
 
         // Issue #763 评论 5831610228：finalize 前用 set_global_phase("commit") 清掉
@@ -2451,7 +2471,10 @@ impl WriterCoreApi {
         let mut result: FullSyncResultDto = result.into();
         result.local_content_changed = local_content_changed;
         result.chapter_changes = chapter_changes.into_iter().map(Into::into).collect();
-        Ok(result)
+        Ok(RoundOutcome {
+            result,
+            published_revision,
+        })
     }
 
     /// 取消令牌是否已请求取消。`None`（未提供令牌）永远不取消。
