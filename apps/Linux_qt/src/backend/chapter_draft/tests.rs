@@ -458,17 +458,89 @@ fn pending_fact_inputs_round_trip() {
         2,
         "e1",
         r#"{"eventId":"e1","newRevision":2}"#,
+        ("g1", 1, "base-sha"),
     )
     .expect("spool input");
-    let pending = pending_inputs(root, "p1", "c1");
+    let pending = pending_inputs(root, "p1", "c1").expect("read spool");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].event_id, "e1");
     assert_eq!(pending[0].revision, 2);
+    assert_eq!(pending[0].base_revision, 1);
     assert!(pending[0].input_json.contains("newRevision"));
     // 未重试成功前，该 revision 的正文快照不可提交。
     let error = freeze_batch_for(root, "p1", "c1", 7, "g1", 2).expect_err("pending input blocks");
     assert!(error.contains("persistence failed"), "{error}");
     clear_pending_input(root, "p1", "c1", "e1");
-    assert!(pending_inputs(root, "p1", "c1").is_empty());
+    assert!(pending_inputs(root, "p1", "c1")
+        .expect("read spool")
+        .is_empty());
     assert!(freeze_batch_for(root, "p1", "c1", 7, "g1", 2).is_ok());
+}
+
+#[test]
+fn corrupt_pending_input_blocks_saves_across_restart() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    note_text(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g1",
+        "正文".to_string(),
+        2,
+        &writer_core::writing_stats::proof::content_digest_of_text("正文"),
+        ("g1", 1, "base-sha"),
+    );
+    spool_failed_input(
+        root,
+        "p1",
+        "c1",
+        "v1",
+        7,
+        "g1",
+        2,
+        "e1",
+        r#"{"eventId":"e1","newRevision":2}"#,
+        ("g1", 1, "base-sha"),
+    )
+    .expect("spool input");
+    let pending = pending_inputs(root, "p1", "c1").expect("read spool");
+    let path = pending[0].path.clone();
+    std::fs::write(&path, "{ not valid json").expect("corrupt spool");
+    // 模拟重启：内存失败集合清空，只剩磁盘事实。
+    forget_for_test(root, "p1", "c1");
+    let error = pending_inputs(root, "p1", "c1").expect_err("corrupt spool must be reported");
+    assert!(error.contains("corrupted"), "{error}");
+    let error = freeze_batch_for(root, "p1", "c1", 7, "g1", 2)
+        .expect_err("corrupt spool must block the snapshot");
+    assert!(error.contains("corrupted"), "{error}");
+    std::fs::remove_file(&path).expect("remove spool");
+    forget_for_test(root, "p1", "c1");
+    assert!(freeze_batch_for(root, "p1", "c1", 7, "g1", 2).is_ok());
+}
+
+#[test]
+fn first_fact_writes_meta_header_and_stays_discoverable() {
+    let workspace = temp_workspace();
+    let root = workspace.path();
+    // 首次事件：此前没有 note_text / meta.json。
+    note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 2, 7)).expect("first fact");
+    let location = draft_location(root);
+    assert!(
+        location.dir.join(META_FILE).exists(),
+        "首次事实前必须写出 meta 事务头"
+    );
+    // 模拟进程崩溃后重启：恢复列表与恢复计划都必须发现这批事件。
+    forget_for_test(root, "p1", "c1");
+    let listed = list_project_drafts(root, "p1");
+    assert!(
+        listed
+            .iter()
+            .any(|draft| draft.chapter_id == "c1" && draft.fact_count == 1),
+        "meta 事务头必须让恢复列表发现草稿"
+    );
+    let plan = restore_plan(root, "p1", "c1").expect("restore plan after restart");
+    assert_eq!(plan.event_end_revision, 2);
 }

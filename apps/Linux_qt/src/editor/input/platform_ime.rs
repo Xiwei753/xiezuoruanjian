@@ -13,7 +13,8 @@
 //! 从 SujianEditorItem 内部状态读取，等价于 CursorAnchorAdapter 数据源。
 //!
 //! Issue #701 评论 5699569220: 所有 UTF-16/QChar offset → UTF-8 byte offset/range
-//! 只在此文件（和 utf16_converter.rs）转换一次。`sujian_ime_replace_and_commit`
+//! 只在此文件转换一次，换算函数统一委托 Core `text_coordinates`。
+//! `sujian_ime_replace_and_commit`
 //! 结合当前 CompositionSession 把 Qt replacement 解析成最终 committed byte range，
 //! 构造归一化的 `ImeReplaceEvent` 后交给 controller。进入 editor pipeline 后
 //! 禁止继续携带 replacementStart/replacementLength 这种 Qt 坐标。
@@ -33,12 +34,12 @@ use super::events::{decode_utf16_ptr, ImeReplaceEvent};
 use crate::editor::paragraph_index_map::{
     utf16_code_unit_range_to_utf8_byte_range, utf16_code_unit_to_utf8_byte,
 };
-use crate::platform::linux_qt::utf16_converter::{
-    utf16_backward_from_byte, utf16_forward_from_byte,
-};
 use crate::sujian_editor_item::SujianEditorItem;
 use std::cell::RefCell;
 use std::ffi::c_void;
+use writer_core::editor::text_coordinates::{
+    clamp_to_char_boundary, utf16_len, utf16_to_utf8_clamped, utf8_to_utf16_clamped,
+};
 
 // ── Issue #1052：IME composition session 身份（generation / base_revision） ──
 //
@@ -346,10 +347,10 @@ impl<'a> BaseText<'a> {
     /// 从 committed 正文和要删除的 selection 范围构造虚拟正文。
     ///
     /// selection 端点 clamp 到 `[0, len]` 并对齐到字符起始边界，与
-    /// `utf16_converter` 的 char boundary 校验一致，避免切片 panic。
+    /// Core `text_coordinates` 的 char boundary 规则一致，避免切片 panic。
     fn new(committed: &'a str, selection_start: usize, selection_end: usize) -> Self {
-        let start = char_boundary_floor(committed, selection_start);
-        let end = char_boundary_floor(committed, selection_end).max(start);
+        let start = clamp_to_char_boundary(committed, selection_start);
+        let end = clamp_to_char_boundary(committed, selection_end).max(start);
         Self {
             prefix: &committed[..start],
             suffix: &committed[end..],
@@ -359,79 +360,47 @@ impl<'a> BaseText<'a> {
     /// 把 base_text byte offset 对齐到字符起始边界。
     fn align(&self, byte_offset: usize) -> usize {
         if byte_offset <= self.prefix.len() {
-            char_boundary_floor(self.prefix, byte_offset)
+            clamp_to_char_boundary(self.prefix, byte_offset)
         } else {
-            self.prefix.len() + char_boundary_floor(self.suffix, byte_offset - self.prefix.len())
+            self.prefix.len() + clamp_to_char_boundary(self.suffix, byte_offset - self.prefix.len())
+        }
+    }
+
+    /// base_text 已对齐 byte offset → base_text UTF-16 code unit offset。
+    fn byte_to_utf16(&self, byte_offset: usize) -> usize {
+        if byte_offset <= self.prefix.len() {
+            utf8_to_utf16_clamped(self.prefix, byte_offset)
+        } else {
+            utf16_len(self.prefix)
+                + utf8_to_utf16_clamped(self.suffix, byte_offset - self.prefix.len())
+        }
+    }
+
+    /// base_text UTF-16 code unit offset → base_text byte offset。
+    ///
+    /// 落在代理对中间时由 Core 映射到该码点起始；越界钳到 base_text 末尾。
+    fn utf16_to_byte(&self, utf16_offset: usize) -> usize {
+        let prefix_utf16 = utf16_len(self.prefix);
+        if utf16_offset <= prefix_utf16 {
+            utf16_to_utf8_clamped(self.prefix, utf16_offset)
+        } else {
+            self.prefix.len() + utf16_to_utf8_clamped(self.suffix, utf16_offset - prefix_utf16)
         }
     }
 
     /// 从 base_text 的 `byte_start` 向前走 `utf16_count` 个 UTF-16 code unit。
     fn utf16_forward_from(&self, byte_start: usize, utf16_count: usize) -> usize {
         let start = self.align(byte_start);
-        if utf16_count == 0 {
-            return start;
-        }
-        if start >= self.prefix.len() {
-            // 起点已在 suffix：只遍历 suffix。
-            let suffix_start = start - self.prefix.len();
-            let suffix_end = utf16_forward_from_byte(self.suffix, suffix_start, utf16_count);
-            return self.prefix.len() + suffix_end;
-        }
-        // 起点在 prefix：先只看 prefix 这一段能走多远。
-        let prefix_end = utf16_forward_from_byte(self.prefix, start, utf16_count);
-        if prefix_end < self.prefix.len() {
-            return prefix_end;
-        }
-        // 走满 prefix 仍未耗尽：用 prefix 尾段的 UTF-16 长度换算剩余步数，
-        // 再进入 suffix（base_text 坐标 = prefix.len() + suffix 内偏移）。
-        let consumed = utf16_len(&self.prefix[start..]);
-        if utf16_count <= consumed {
-            return self.prefix.len();
-        }
-        self.prefix.len() + utf16_forward_from_byte(self.suffix, 0, utf16_count - consumed)
+        let start_utf16 = self.byte_to_utf16(start);
+        self.utf16_to_byte(start_utf16.saturating_add(utf16_count))
     }
 
     /// 从 base_text 的 `byte_start` 向后走 `utf16_count` 个 UTF-16 code unit。
     fn utf16_backward_from(&self, byte_start: usize, utf16_count: usize) -> usize {
         let start = self.align(byte_start);
-        if utf16_count == 0 || start == 0 {
-            return start;
-        }
-        if start <= self.prefix.len() {
-            // 起点在 prefix：只遍历 prefix。
-            return utf16_backward_from_byte(self.prefix, start, utf16_count);
-        }
-        // 起点在 suffix：先只看 suffix 这一段能退多远。
-        let suffix_offset = start - self.prefix.len();
-        let suffix_pos = utf16_backward_from_byte(self.suffix, suffix_offset, utf16_count);
-        if suffix_pos > 0 {
-            return self.prefix.len() + suffix_pos;
-        }
-        // 退到 suffix 起点仍未耗尽：用 suffix 头段的 UTF-16 长度换算剩余步数，
-        // 再回到 prefix 末尾继续。
-        let consumed = utf16_len(&self.suffix[..suffix_offset]);
-        if utf16_count <= consumed {
-            return self.prefix.len();
-        }
-        utf16_backward_from_byte(self.prefix, self.prefix.len(), utf16_count - consumed)
+        let start_utf16 = self.byte_to_utf16(start);
+        self.utf16_to_byte(start_utf16.saturating_sub(utf16_count))
     }
-}
-
-/// 把 byte offset clamp 到 `[0, text.len()]` 并对齐到最近的字符起始边界。
-fn char_boundary_floor(text: &str, byte_offset: usize) -> usize {
-    if byte_offset >= text.len() {
-        return text.len();
-    }
-    let mut clamped = byte_offset;
-    while clamped > 0 && !text.is_char_boundary(clamped) {
-        clamped -= 1;
-    }
-    clamped
-}
-
-/// 一段 UTF-8 切片的 UTF-16 code unit 长度（代理对按 2 计）。
-fn utf16_len(text: &str) -> usize {
-    text.encode_utf16().count()
 }
 
 /// 把 Qt `QInputMethodEvent` 的 replacementStart/replacementLength（UTF-16

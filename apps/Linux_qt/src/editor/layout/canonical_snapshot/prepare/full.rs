@@ -6,7 +6,10 @@
 
 use super::*;
 // Issue #901 第五轮阻塞2: 简化 paragraph_layout_store 全路径引用。
-use super::super::super::paragraph_layout_store::{ParagraphLayoutStore, ParagraphSpliceRanges};
+use super::super::super::paragraph_layout_store::{
+    ends_with_paragraph_separator, split_paragraphs_inclusive, ParagraphLayoutStore, ParagraphSpan,
+    ParagraphSpliceRanges,
+};
 // Issue #901 第三十四轮缺口2: ChunkedSlotMap 替代 HashMap<ParagraphId, usize>。
 use super::super::super::chunked_vec::{ChunkedSlotMap, PersistentChunkedVec};
 // Issue #901 第十三轮问题1+2+6: 引入 ParagraphOffsetIndex 作为段首坐标权威来源。
@@ -20,19 +23,31 @@ use std::sync::Arc;
 
 /// Issue #901 第十三轮问题1+2+6: 从全文文本构建段落前缀偏移索引。
 ///
-/// 每段 byte/qchar 长度含尾部 `'\n'`。段首绝对坐标由前缀和按需计算，
+/// 每段 byte/qchar 长度含真实段落分隔符（`\n`、`CRLF`、`U+2029`；Issue #1063
+/// 由 Core 段落规则唯一识别）。段首绝对坐标由前缀和按需计算，
 /// 不逐段存储 `document_byte_start`，也不再用 SuffixTransform 记录平移量。
 fn build_offset_index_from_text(text: &str) -> ParagraphOffsetIndex {
-    // Issue #901 第二十四轮问题1: 用统一切分器生成段落序列，
+    // Issue #901 第二十四轮问题1: 用统一 Core 段落规则切分，
     // 为尾空段也生成长度 0 的 offset entry，与 canonical/store/line-count/height 段数一致。
-    let paras = super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text);
-    let mut byte_lengths = Vec::with_capacity(paras.len());
-    let mut qchar_lengths = Vec::with_capacity(paras.len());
-    for (content, hard_break) in &paras {
-        byte_lengths.push(content.len() + if *hard_break { 1 } else { 0 });
-        qchar_lengths.push(
-            content.chars().map(|c| c.len_utf16()).sum::<usize>() + if *hard_break { 1 } else { 0 },
-        );
+    let ranges = writer_core::editor::text_document_rules::paragraph_byte_ranges(text);
+    let mut byte_lengths = Vec::with_capacity(ranges.len());
+    let mut qchar_lengths = Vec::with_capacity(ranges.len());
+    if ranges.is_empty() {
+        // 空正文：store/canonical 仍有一个空段。
+        byte_lengths.push(0);
+        qchar_lengths.push(0);
+    }
+    for (index, &(start, _end)) in ranges.iter().enumerate() {
+        // 段落总长度 = 正文 + 紧随其后的分隔符；最后一段到文末。
+        let span_end = if index + 1 < ranges.len() {
+            ranges[index + 1].0
+        } else {
+            text.len()
+        };
+        byte_lengths.push(span_end - start);
+        qchar_lengths.push(writer_core::editor::text_coordinates::utf16_len(
+            &text[start..span_end],
+        ));
     }
     let mut idx = ParagraphOffsetIndex::new();
     idx.rebuild(byte_lengths, qchar_lengths);
@@ -185,9 +200,11 @@ pub(super) fn prepare_document_visual_snapshot_impl(
     // Issue #901 第十四轮问题1: 段内相对存储 — 追踪段顶 y 用于计算相对 y。
     let mut paragraph_top_y: f64 = padding;
 
-    for paragraph in text.split_inclusive('\n') {
-        let hard_break = paragraph.ends_with('\n');
-        let paragraph_text = paragraph.trim_end_matches('\n');
+    for paragraph in split_paragraphs_inclusive(text) {
+        // Issue #1063：段落分隔符由 Core 规则识别（`\n`/`CRLF`/`U+2029` 各算
+        // 一个边界），正文与分隔符长度都来自切分结果，不再按 `'\n'` 裁剪。
+        let hard_break = paragraph.hard_break();
+        let paragraph_text = paragraph.content;
 
         // Issue #901 第十四轮问题1: 每段开始时记录段顶 y。
         paragraph_top_y = y;
@@ -249,8 +266,8 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                 index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", 0),
             });
 
-            paragraph_start += paragraph.len();
-            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+            paragraph_start += paragraph.byte_len();
+            paragraph_qchar_start += paragraph.qchar_len();
             paragraph_idx += 1;
             continue;
         }
@@ -277,7 +294,7 @@ pub(super) fn prepare_document_visual_snapshot_impl(
             // Issue #658 评论 5623746506 问题 2a: scoped_animation 时只对受影响段落
             // 生成 QImage/glyph/cluster；其他段落只做基础排版。
             if scoped_animation {
-                let para_end = paragraph_start + paragraph.len();
+                let para_end = paragraph_start + paragraph.byte_len();
                 paragraph_start < affected_byte_end && para_end > affected_byte_start
             } else {
                 generate_animation_visuals
@@ -342,8 +359,8 @@ pub(super) fn prepare_document_visual_snapshot_impl(
             y += actual_line_h;
         }
 
-        paragraph_start += paragraph.len();
-        paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+        paragraph_start += paragraph.byte_len();
+        paragraph_qchar_start += paragraph.qchar_len();
 
         paragraphs.push(canonical);
     }
@@ -400,7 +417,7 @@ pub(super) fn prepare_document_visual_snapshot_impl(
         });
     }
 
-    if text.ends_with('\n') {
+    if ends_with_paragraph_separator(text) {
         // Issue #901 第十四轮问题1: 段内相对存储 — 尾部换行空段的段顶 y。
         paragraph_top_y = y;
         // Issue #901 第三十轮问题2: 尾空段不分配 QTextLayout physical_slot。
@@ -2050,11 +2067,13 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
     let available = (width - padding * 2.0).max(font_size);
 
     let mut affected_para_indices: Vec<usize> = Vec::new();
-    let paragraphs_split: Vec<&str> = text.split_inclusive('\n').collect();
+    // Issue #1063：段落边界由 Core 规则识别（`\n`/`CRLF`/`U+2029`），
+    // 每段 byte 长度含真实分隔符长度。
+    let paragraphs_split: Vec<ParagraphSpan<'_>> = split_paragraphs_inclusive(text);
     let total_paras = paragraphs_split.len();
     let mut para_start: usize = 0;
     for (para_idx, paragraph) in paragraphs_split.iter().enumerate() {
-        let para_end = para_start + paragraph.len();
+        let para_end = para_start + paragraph.byte_len();
         if para_start < affected_byte_end && para_end > affected_byte_start {
             if !affected_para_indices.contains(&para_idx) {
                 affected_para_indices.push(para_idx);
@@ -2081,9 +2100,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
     let mut line_id: usize = 0;
     let mut current_para_idx: usize = 0;
 
-    for paragraph in text.split_inclusive('\n') {
-        let hard_break = paragraph.ends_with('\n');
-        let paragraph_text = paragraph.trim_end_matches('\n');
+    for paragraph in split_paragraphs_inclusive(text) {
+        let hard_break = paragraph.hard_break();
+        let paragraph_text = paragraph.content;
 
         let is_affected = affected_para_indices.contains(&current_para_idx);
 
@@ -2313,8 +2332,8 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 }
             }
 
-            paragraph_start += paragraph.len();
-            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+            paragraph_start += paragraph.byte_len();
+            paragraph_qchar_start += paragraph.qchar_len();
             current_para_idx += 1;
             continue;
         }
@@ -2371,8 +2390,8 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 ),
             });
 
-            paragraph_start += paragraph.len();
-            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+            paragraph_start += paragraph.byte_len();
+            paragraph_qchar_start += paragraph.qchar_len();
             current_para_idx += 1;
             continue;
         }
@@ -2442,14 +2461,14 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             y += actual_line_h;
         }
 
-        paragraph_start += paragraph.len();
-        paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+        paragraph_start += paragraph.byte_len();
+        paragraph_qchar_start += paragraph.qchar_len();
 
         paragraphs.push(canonical);
         current_para_idx += 1;
     }
 
-    if text.ends_with('\n') {
+    if ends_with_paragraph_separator(text) {
         let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
         // Issue #658: 尾部换行产生的空段也占 null slot。
         let _empty_canonical = prepare_paragraph_visual_snapshot(

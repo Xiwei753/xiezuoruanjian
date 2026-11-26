@@ -4,6 +4,7 @@ mod apply;
 mod composition;
 mod content_digest;
 mod history;
+mod patch_batch;
 mod replace;
 pub mod result;
 mod rope_tests;
@@ -191,77 +192,163 @@ impl EditorKernel {
         (self.selection_anchor.value(), self.cursor.value())
     }
 
-    /// #606: 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    /// #606 / #1063: 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界
+    /// （UTF-8 byte offset）。
     ///
-    /// 从光标附近 RopeSlice 迭代 — 取 `[0, offset)` slice 的最后一个
-    /// grapheme（`next_back()`），不再从全文开头 `grapheme_indices(true)` 扫到光标。
+    /// Issue #1063：旧实现只把 `[0, offset)` 前缀当独立字符串做 `next_back()`，
+    /// 切断了 UAX #29 需要的**前导上下文**（emoji ZWJ 序列、RI 旗帜奇偶对、
+    /// 组合音标），会把 `👨‍👩` 的簇内 byte offset 4 当成簇边界。
     ///
-    /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
-    /// 不再依赖 ICU BreakIterator。
+    /// 现在用 [`unicode_segmentation::GraphemeCursor`] 在完整文档上后退：窗口不足时
+    /// 按 `GraphemeIncomplete::PreContext` / `PrevChunk` 向前提供真实上下文，
+    /// 直到落在一个**整个文档**的 UAX #29 扩展字素边界上。
+    ///
+    /// 输入若落在簇内（含多字节字符中间），返回该位置所在字素簇的起始边界
+    /// （文档真实边界集合中的值，不跳过所在簇）；`byte_offset` 越界时返回文末。
+    ///
+    /// 平台端 Backspace/Delete/方向键的 grapheme 边界计算由 Core 唯一决定，
+    /// 不再依赖 ICU BreakIterator 或平台自己的 char 迭代。
     #[allow(clippy::cast_possible_truncation)]
     pub fn previous_grapheme_boundary(&self, byte_offset: u32) -> u32 {
-        let offset = byte_offset as usize;
+        use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
+
         let len = self.text.byte_len();
+        // 越界输入沿用既有契约：返回文末（文末也是合法边界）。
+        if byte_offset as usize > len {
+            return len as u32;
+        }
+        let offset = byte_offset as usize;
+        // 落在多字节字符中间时，先前进到该字符之后的边界再后退：
+        // 这样返回的是「所在字素簇的起始边界」，既在文档 UAX #29 边界集合中，
+        // 也不会跳过包含该位置的簇（例如 "a😀b" offset=2 → 1，而不是 0）。
+        let offset = if self.text.is_char_boundary(offset) {
+            offset
+        } else {
+            let mut forward = offset.saturating_add(1);
+            while forward < len && !self.text.is_char_boundary(forward) {
+                forward += 1;
+            }
+            forward.min(len)
+        };
         if offset == 0 {
             return 0;
         }
-        if offset > len {
-            return len as u32;
-        }
-        let prefix = self.text.byte_slice(0..offset);
-        match prefix.graphemes().next_back() {
-            Some(g) => (offset - g.len()) as u32,
-            None => 0,
+
+        let mut cursor = GraphemeCursor::new(offset, len, true);
+        let mut chunk_end = offset;
+        loop {
+            let chunk_start = Self::grapheme_chunk_start(&self.text, chunk_end);
+            if chunk_start == chunk_end {
+                return 0;
+            }
+            let chunk = Self::grapheme_chunk(&self.text, chunk_start, chunk_end);
+            match cursor.prev_boundary(&chunk, chunk_start) {
+                Ok(Some(boundary)) => return boundary as u32,
+                Ok(None) => return 0,
+                Err(GraphemeIncomplete::PreContext(context_end)) => {
+                    let context_start = Self::grapheme_chunk_start(&self.text, context_end);
+                    let context = Self::grapheme_chunk(&self.text, context_start, context_end);
+                    cursor.provide_context(&context, context_start);
+                    // 同一个 chunk 重试；上下文已补上。
+                }
+                Err(GraphemeIncomplete::PrevChunk) => {
+                    chunk_end = chunk_start;
+                }
+                Err(_) => return 0,
+            }
         }
     }
 
-    /// #606: 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    /// #606 / #1063: 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界
+    /// （UTF-8 byte offset）。
     ///
-    /// 从光标附近 RopeSlice 迭代 — 只取光标后一个小窗口（每次最多
-    /// 64 个 Unicode scalar）用标准分段规则求第一个 cluster 边界；若 cluster 延伸
-    /// 出窗口则自动向后扩展。不从全文开头 `grapheme_indices(true)` 扫描，也不依赖
-    /// crop 前向 grapheme 迭代（crop 0.4.3 前向迭代不合并 regional-indicator 对）。
+    /// 用 [`unicode_segmentation::GraphemeCursor`] 在完整文档上前进：窗口不足时
+    /// 按 `NextChunk` 向后扩展，`PreContext` 时向前提供真实上下文。RI 奇偶配对、
+    /// Extend/ZWJ、组合音标、CRLF 都按 UAX #29 扩展字素规则处理。
     ///
-    /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
-    /// 不再依赖 ICU BreakIterator。
+    /// 输入若落在簇内（含多字节字符中间），先左对齐到字符起始再求所在簇的结束，
+    /// 结果仍是文档真实边界；`byte_offset` 越界时返回文末。
+    ///
+    /// 平台端 Backspace/Delete/方向键的 grapheme 边界计算由 Core 唯一决定，
+    /// 不再依赖 ICU BreakIterator 或平台自己的 char 迭代。
     #[allow(clippy::cast_possible_truncation)]
-    #[allow(clippy::too_many_lines, clippy::excessive_nesting)]
     pub fn next_grapheme_boundary(&self, byte_offset: u32) -> u32 {
-        use unicode_segmentation::UnicodeSegmentation;
+        use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
 
-        let offset = byte_offset as usize;
         let len = self.text.byte_len();
+        let offset = (byte_offset as usize).min(len);
+        let offset =
+            crate::editor::text_coordinates::rope_clamp_to_char_boundary(&self.text, offset);
         if offset >= len {
             return len as u32;
         }
 
-        // 向后扩展窗口（每次 64 个 Unicode scalar 边界），直到窗口内能确定
-        // 从 offset 开始（或包含 offset）的第一个完整 grapheme 的结束位置。
-        const WINDOW_CHARS: usize = 64;
-        let mut window_end = offset;
+        let mut cursor = GraphemeCursor::new(offset, len, true);
+        let mut chunk_start = offset;
         loop {
-            // 从 window_end 向后取最多 WINDOW_CHARS 个 char 边界。
-            let mut chars_taken = 0usize;
-            let slice = self.text.byte_slice(window_end..len);
-            let mut char_end = window_end;
-            for ch in slice.chars() {
-                char_end += ch.len_utf8();
-                chars_taken += 1;
-                if chars_taken >= WINDOW_CHARS {
-                    break;
+            let chunk_end = Self::grapheme_chunk_end(&self.text, chunk_start, len);
+            if chunk_end <= chunk_start {
+                return len as u32;
+            }
+            let chunk = Self::grapheme_chunk(&self.text, chunk_start, chunk_end);
+            match cursor.next_boundary(&chunk, chunk_start) {
+                Ok(Some(boundary)) => return boundary as u32,
+                Ok(None) => return len as u32,
+                Err(GraphemeIncomplete::NextChunk) => {
+                    chunk_start = chunk_end;
                 }
+                Err(GraphemeIncomplete::PreContext(context_end)) => {
+                    let context_start = Self::grapheme_chunk_start(&self.text, context_end);
+                    let context = Self::grapheme_chunk(&self.text, context_start, context_end);
+                    cursor.provide_context(&context, context_start);
+                }
+                Err(_) => return len as u32,
             }
-            window_end = char_end;
-            let window = self.text.byte_slice(offset..window_end).to_string();
-            // 窗口内第一个 grapheme 的结束（相对窗口起点）。
-            let first_end = window
-                .grapheme_indices(true)
-                .next()
-                .map_or(window.len(), |(_, g)| g.len());
-            if first_end < window.len() || window_end == len {
-                return (offset + first_end) as u32;
-            }
-            // cluster 延伸出窗口：继续向后扩展。
         }
+    }
+
+    /// #1063: 把任意 byte offset 吸附到所在的 UAX #29 扩展字素边界。
+    ///
+    /// 已经是字素边界时原样返回；落在簇内时返回该簇的起始边界（例如点击
+    /// 组合音标/emoji 簇中间，逻辑光标停在整簇起点）。越界钳到文末。
+    ///
+    /// 平台端点击命中、拖动选区、IME 提交后的逻辑 cursor 统一用它吸附，
+    /// 避免「光标停在簇内、删除/方向键却按整簇移动」的分歧。
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn snap_to_grapheme_boundary(&self, byte_offset: u32) -> u32 {
+        let len = self.text.byte_len();
+        let offset = (byte_offset as usize).min(len);
+        if offset == 0 || offset >= len {
+            return offset as u32;
+        }
+        let previous = self.previous_grapheme_boundary(offset as u32);
+        if usize::try_from(self.next_grapheme_boundary(previous)).unwrap_or(len) == offset {
+            offset as u32
+        } else {
+            previous
+        }
+    }
+
+    /// grapheme 迭代窗口上限：一次最多取 256 byte 的真实文档上下文。    ///
+    /// 256 byte 远大于单个 Unicode 标量（≤4 byte），保证窗口内一定能推进；
+    /// 超出窗口需要的上下文由 `GraphemeCursor` 的 PreContext/PrevChunk/NextChunk
+    /// 逐段补齐，而不是把整章正文复制成 String。
+    const GRAPHEME_WINDOW_BYTES: usize = 256;
+
+    /// 以 `end` 结尾、最长 [`Self::GRAPHEME_WINDOW_BYTES`] 的窗口起点（char boundary）。
+    fn grapheme_chunk_start(text: &crop::Rope, end: usize) -> usize {
+        let start = end.saturating_sub(Self::GRAPHEME_WINDOW_BYTES);
+        crate::editor::text_coordinates::rope_clamp_to_char_boundary(text, start)
+    }
+
+    /// 从 `start` 开始、最长 [`Self::GRAPHEME_WINDOW_BYTES`] 的窗口终点（char boundary）。
+    fn grapheme_chunk_end(text: &crop::Rope, start: usize, len: usize) -> usize {
+        let end = (start + Self::GRAPHEME_WINDOW_BYTES).min(len);
+        crate::editor::text_coordinates::rope_clamp_to_char_boundary(text, end)
+    }
+
+    /// 取窗口文本。窗口 ≤256 byte，只复制这一小段；不退化成全文 materialize。
+    fn grapheme_chunk(text: &crop::Rope, start: usize, end: usize) -> String {
+        text.byte_slice(start..end).to_string()
     }
 }

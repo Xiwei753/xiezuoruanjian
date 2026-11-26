@@ -53,6 +53,19 @@ pub(crate) fn freeze_batch_for(
             "proof fact persistence failed at revision {revision}: project={project_id} chapter={chapter_id}"
         ));
     }
+    // 磁盘上的 pending-inputs 与进程内 failed_facts 一样是“未转换的原始
+    // 事件”：重启后内存失败列表为空，但 spool 文件仍在。任何 revision 不晚于
+    // 本次快照的待转换事件都必须阻断保存，不能当作“本来没有证明”。
+    let pending_inputs = pending::pending_inputs(projects_root, project_id, chapter_id)?;
+    if let Some(input) = pending_inputs
+        .iter()
+        .find(|input| input.revision <= snapshot_revision)
+    {
+        return Err(format!(
+            "pending proof event not projected: event={} revision={} path={} project={project_id} chapter={chapter_id}",
+            input.event_id, input.revision, input.path
+        ));
+    }
     let merged = store::merge_index(&location.dir, &index, &acked)?;
     let selected = select_prefix(
         &merged,

@@ -345,7 +345,8 @@ QtObject {
                     newSelectionAnchor, newSelectionHead,
                     controller.proofBaselineSent ? "" : controller.proofBaselineText,
                     beforeTextSha256, afterTextSha256,
-                    Number(controller.chapterSaveSession), controller.committedChapterGeneration);
+                    Number(controller.chapterSaveSession), controller.committedChapterGeneration,
+                    Number(controller.committedChapterRevision), controller.committedChapterSha256);
                 if (changesJson && changesJson !== "[]") {
                     controller.proofBaselineSent = true;
                 }

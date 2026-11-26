@@ -177,8 +177,8 @@ pub(crate) struct ChapterDraftRestorePlan {
     pub facts: Vec<LoadedFact>,
     /// 事件链最后一条事实的 revision；0 表示没有事实。
     pub event_end_revision: u64,
-    session_id: u64,
-    generation: String,
+    pub(crate) session_id: u64,
+    pub(crate) generation: String,
     pub mixed_sessions: bool,
 }
 
@@ -344,6 +344,54 @@ pub(crate) fn note_text(
     state.meta_dirty = true;
 }
 
+/// 确保本章草稿已有 meta 事务头（write-ahead）。
+///
+/// Issue #1062 复审第 3 项：首次事实写入前必须先落事务头。否则事实文件
+/// 已经在 facts/ 里、meta 还没有时崩溃，`read_new_state` 会返回 None，
+/// 恢复列表完全看不到这批事件。已有 meta 时只做存在性检查，不重写。
+pub(super) fn ensure_meta_header(
+    location: &DraftLocation,
+    volume_id: &str,
+    base: Option<(&str, u64, &str)>,
+) -> Result<(), String> {
+    if location.dir.join(store::META_FILE).exists() {
+        return Ok(());
+    }
+    if !ensure_state_or_new(location, volume_id) {
+        return Err(format!(
+            "chapter draft state unavailable: {}/{}",
+            location.project_id, location.chapter_id
+        ));
+    }
+    let meta = {
+        let mut drafts = lock_registry();
+        let Some(state) = drafts.get_mut(&location.key) else {
+            return Err(format!(
+                "chapter draft state unavailable: {}/{}",
+                location.project_id, location.chapter_id
+            ));
+        };
+        state.volume_id = volume_id.to_string();
+        if let Some((generation, revision, sha256)) = base {
+            if state.base_generation.is_empty()
+                && state.base_revision == 0
+                && (!generation.is_empty() || revision > 0)
+            {
+                state.base_generation = generation.to_string();
+                state.base_revision = revision;
+                state.base_sha256 = sha256.to_string();
+            }
+        }
+        store::meta_from_state(
+            location,
+            state,
+            state.persisted_text_revision,
+            &state.persisted_text_sha256,
+        )
+    };
+    store::write_meta(&location.dir, &meta)
+}
+
 /// 记录一条原始证明事实：事实文件立即落盘，meta 索引按节流稍后写。
 ///
 /// Issue #1062 复审第 3 项：写盘失败不能静默丢弃。失败的事件保留在内存
@@ -367,6 +415,8 @@ pub(crate) fn note_fact(
             "chapter draft state unavailable: {project_id}/{chapter_id}"
         ));
     }
+    // 先写事务头，再写第一条事实；失败按事实写盘失败处理（fail-closed）。
+    ensure_meta_header(&location, volume_id, None)?;
     let seq = {
         let mut drafts = lock_registry();
         let Some(state) = drafts.get_mut(&location.key) else {

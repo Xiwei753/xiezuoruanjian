@@ -1,5 +1,6 @@
+use super::patch_batch::{build_display_patches, PatchBatchItem};
 use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
-use super::types::{DisplayPatch, EditorOperationKind};
+use super::types::EditorOperationKind;
 use super::{EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
@@ -115,24 +116,23 @@ impl EditorKernel {
         let new_revision = self.revision;
 
         // 一个 EditorEditResult 是一个原子 patch batch — 每条 delta 一条
-        // 局部 DisplayPatch（base 文档坐标，inserted_text 只含本次替换文本）。
-        // 不再合成覆盖 [outer_start, outer_end) 的单条外层 patch：旧实现的
-        // `saturating_sub` 总长度差在替换变长时变成 0，从新 Rope 截出错误 retained
-        // （aXbXc 做 X→YY 时 Android 变成 aYYbc）；相距很远的两个匹配还会复制中间
-        // 整段保留正文。batch 内所有 patch 携带同一组 base/new revision（版本边界）。
-        let display_patches: Vec<DisplayPatch> = edits
-            .iter()
-            .map(|d| DisplayPatch {
-                base_revision,
-                new_revision,
-                replace_byte_range: d.old_range,
-                inserted_byte_range: d.new_range,
-                inserted_text: d.inserted_text.clone(),
-                resulting_selection_byte_range: EditorEditResult::selection_byte_range(
-                    new_selection,
-                ),
-            })
-            .collect();
+        // 局部 patch（base 文档坐标，inserted_text 只含本次替换文本）。
+        // edits 按匹配位置从左到右记录，替换在正文上从右到左执行；给视图的
+        // batch 降序、同起点合并与 inserted_byte_range 推导统一交给 patch_batch。
+        let display_patches = build_display_patches(
+            base_revision,
+            new_revision,
+            new_selection,
+            old_text.len(),
+            edits
+                .iter()
+                .map(|delta| PatchBatchItem {
+                    replace_range: delta.old_range,
+                    deleted_len: delta.deleted_text.len(),
+                    inserted_text: &delta.inserted_text,
+                })
+                .collect(),
+        );
 
         self.undo_stack.push(UndoEntry {
             edits,
@@ -150,8 +150,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::Format,
             changes: Vec::new(),
-        before_text_sha256: String::new(),
-        after_text_sha256: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Format,
             // 从 delta 直接构造 offset map，不再全文 diff。
             offset_map: Some(OffsetMap::from_edits(old_text.len(), &offset_pairs)),

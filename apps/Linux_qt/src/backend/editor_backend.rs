@@ -216,6 +216,8 @@ pub struct EditorBackend {
             after_text_sha256: QString,
             editor_session_id: u64,
             base_generation: QString,
+            base_chapter_revision: u64,
+            base_chapter_sha256: QString,
         ) -> QString
     ),
     /// Issue #1062 1.3：编辑器正文变化交给章节 actor 更新可恢复草稿。
@@ -937,6 +939,8 @@ impl EditorBackend {
         after_text_sha256: QString,
         editor_session_id: u64,
         base_generation: QString,
+        base_chapter_revision: u64,
+        base_chapter_sha256: QString,
     ) -> QString {
         let parsed_cause = match cause.to_string().as_str() {
             "Typing" => writer_core::editor::EditorTransactionCause::Typing,
@@ -1006,6 +1010,8 @@ impl EditorBackend {
                 before_text_sha256,
                 after_text_sha256,
                 base_generation,
+                base_chapter_revision,
+                base_chapter_sha256,
             )
         }) {
             Ok(event_id) => event_id,

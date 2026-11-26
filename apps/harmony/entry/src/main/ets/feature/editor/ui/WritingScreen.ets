@@ -219,7 +219,10 @@ export struct WritingScreen {
   // Issue #829：手稿把最右 ToolRail 固定成“星图 / AI”。
   @State selectedToolKey: string = 'starmap'
   // 当前 UI 滚动位置（viewport），接续恢复时只设 UI，不写 Core。
+  // Issue #1063 评论第 6 条：由 SujianEditor 的真实视口回调持续更新。
   @State currentViewport: EditorViewportState | null = null
+  // 视口变化写接续 payload 的节流句柄（避免每次 200ms 采样都整章算 hash）。
+  private viewportContinuationTimer: number = -1
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination。
   @State useHdsNav: boolean = false
   // Issue #784 评论5857397503 第4点 / Issue #825 复核第2项：headerActions 由 WritingScreen
@@ -560,6 +563,12 @@ export struct WritingScreen {
     // 清除协调器监听器（避免 close 后回调）。
     this.writingWorkflow.dispose()
     this.correctionCoordinator.dispose()
+    // Issue #1063：页面退出时给所有 idle waiter 确定结果（不悬挂保存/退出屏障）。
+    this.richEditorBridge.cancelIdleWaiters('writing screen disposed')
+    if (this.viewportContinuationTimer !== -1) {
+      clearTimeout(this.viewportContinuationTimer)
+      this.viewportContinuationTimer = -1
+    }
 
     // Issue #629 评论 5 第 7 节：页面离开时 stop 碰一碰/隔空传送（成对，不留监听）。
     this.stopShareLifecycle()
@@ -734,6 +743,12 @@ export struct WritingScreen {
           }
         }
       }
+      // Issue #1063 评论第 6 条：按源设备真实视口（Core UTF-8 byte 锚点）恢复滚动。
+      // 章节布局完成（lineCount>0）后由 bridge 重试滚动；有正文搜索命中时以搜索定位优先。
+      if (params.viewport !== undefined && params.viewport.topVisibleByteOffset >= 0 &&
+          !(params.searchField === 'body' && params.searchByteStart !== undefined)) {
+        this.richEditorBridge.restoreViewport(params.viewport)
+      }
     }
 
     // Issue #982：全局搜索正文命中直接使用 Core 的原文 UTF-8 byte 范围。
@@ -760,6 +775,23 @@ export struct WritingScreen {
     }
 
     this.updateContinuationState()
+  }
+
+  // Issue #1063 评论第 6 条：编辑器上报的真实视口 → 更新接续状态。
+  // 视口采样约 200ms 一次，这里先更新内存态，再节流写接续 payload（payload 会整章算 snapshotHash）。
+  private handleEditorViewportChanged(viewport: EditorViewportState): void {
+    const previous = this.currentViewport
+    if (previous !== null && previous.equals(viewport)) {
+      return
+    }
+    this.currentViewport = viewport
+    if (this.viewportContinuationTimer !== -1) {
+      return
+    }
+    this.viewportContinuationTimer = setTimeout((): void => {
+      this.viewportContinuationTimer = -1
+      this.updateContinuationState()
+    }, 400)
   }
 
   // 持续写入当前接续状态。每次章节打开、选区变化、正文编辑、viewport 变化后调用。
@@ -1124,6 +1156,8 @@ export struct WritingScreen {
 
   // Issue #629 评论14 第1项：宽屏左侧切章节，流程在协调器里（先关闭当前会话再安全 replace）。
   private switchChapter(chapterId: string, chapterTitle: string, volumeId: string): void {
+    // Issue #1063：切章前给旧章节的 idle waiter 确定结果，不让保存屏障挂在已关闭的会话上。
+    this.richEditorBridge.cancelIdleWaiters('chapter switch')
     this.annotationEditQueue.then(() => this.writingWorkflow.switchChapter(chapterId, chapterTitle, volumeId))
       .catch(() => {})
   }
@@ -1745,6 +1779,10 @@ export struct WritingScreen {
           SujianEditor({
             editorCoordinator: this.editorCoordinator,
             richEditorBridge: this.richEditorBridge,
+            // Issue #1063 评论第 6 条：真实视口回调（滚动/布局/输入，约 200ms 节流）。
+            onViewportChange: (viewport: EditorViewportState): void => {
+              this.handleEditorViewportChanged(viewport)
+            },
             hasHyperlinkAt: (utf16Offset: number, revision: number, text: string): boolean =>
               this.hasHyperlinkAt(utf16Offset, revision, text),
             onHyperlinkTap: (utf16Offset: number, revision: number, text: string): boolean => {

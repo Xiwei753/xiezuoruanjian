@@ -30,6 +30,10 @@ pub(crate) struct ChapterFactCommand {
     pub session_id: String,
     /// 当前对象 generation；草稿 generation 为空时冻结视为任意 generation。
     pub generation: String,
+    /// 编辑器本次载入的持久化章节版本（事件 spool 的 base，供重启恢复校验）。
+    pub base_generation: String,
+    pub base_revision: u64,
+    pub base_sha256: String,
     pub input: writer_core::api::EditorChangeStatsInputDto,
 }
 
@@ -134,77 +138,93 @@ pub(crate) fn enqueue_restore_project(command: ChapterRestoreCommand) -> usize {
     count
 }
 
-/// 记录一条编辑事实：构造原始证明投影并写进可恢复草稿。
+/// 记录一条编辑事实：先持久化原始命令（accepted），再构造证明投影。
+///
+/// Issue #1062 复审第 3 项：原始命令必须在构造投影前落盘，并先写出 meta
+/// 事务头；这样首次事件在 meta 写出前崩溃、投影构造失败或事实文件写盘失败
+/// 都能在重启后按 spool 恢复，不会退化成“没有待提交证明”。
 pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: ChapterFactCommand) {
     let event_id = command.input.event_id.clone();
     let revision = command.input.new_revision;
     let session_id = command.session_id.parse::<u64>().unwrap_or(0);
+    let projects_root = PathBuf::from(&command.context.projects_root);
+    let input_json = match serde_json::to_string(&command.input) {
+        Ok(json) => json,
+        Err(error) => {
+            crate::backend::app_backend::debug_error_static(
+                "chapter_draft",
+                "record_editor_proof_fact_encode_failed",
+                &format!(
+                    "project={} chapter={} event={event_id}: {error}",
+                    command.project_id, command.chapter_id
+                ),
+            );
+            return;
+        }
+    };
+    let base = (
+        command.base_generation.as_str(),
+        command.base_revision,
+        command.base_sha256.as_str(),
+    );
+    if let Err(error) = super::super::chapter_draft::spool_failed_input(
+        &projects_root,
+        &command.project_id,
+        &command.chapter_id,
+        &command.volume_id,
+        session_id,
+        &command.generation,
+        revision,
+        &event_id,
+        &input_json,
+        base,
+    ) {
+        // spool 失败时仍尝试投影 + 事实文件；真正写盘失败会进入内存失败集合
+        // 并阻塞冻结，不会静默通过保存。
+        crate::backend::app_backend::debug_error_static(
+            "chapter_draft",
+            "record_editor_proof_fact_spool_failed",
+            &format!(
+                "project={} chapter={} event={event_id}: {error}",
+                command.project_id, command.chapter_id
+            ),
+        );
+    }
     let api = state.api_for(&command.context);
-    // Issue #1062 复审第 3 项：Core 投影构造失败也要保留完整原始 command 的
-    // 重试责任——把它持久化到草稿目录，并让该 revision 之前的快照不可提交；
-    // 下一次保存/恢复时用同一 event ID 重试，绝不静默丢掉这次真实编辑。
-    let input_snapshot = command.input.clone();
     let projection_json = match api.record_editor_proof_fact(command.input) {
         Ok(json) => json,
         Err(error) => {
-            let input_json = match serde_json::to_string(&input_snapshot) {
-                Ok(json) => json,
-                Err(encode_error) => {
-                    crate::backend::app_backend::debug_error_static(
-                        "chapter_draft",
-                        "record_editor_proof_fact_encode_failed",
-                        &format!(
-                            "project={} chapter={} event={event_id}: {encode_error}",
-                            command.project_id, command.chapter_id
-                        ),
-                    );
-                    return;
-                }
-            };
-            if let Err(spool_error) = super::super::chapter_draft::spool_failed_input(
-                Path::new(&command.context.projects_root),
-                &command.project_id,
-                &command.chapter_id,
-                &command.volume_id,
-                session_id,
-                &command.generation,
-                revision,
-                &event_id,
-                &input_json,
-            ) {
-                crate::backend::app_backend::debug_error_static(
-                    "chapter_draft",
-                    "record_editor_proof_fact_spool_failed",
-                    &format!(
-                        "project={} chapter={} event={event_id}: api={error}; spool={spool_error}",
-                        command.project_id, command.chapter_id
-                    ),
-                );
-            } else {
-                crate::backend::app_backend::debug_error_static(
-                    "chapter_draft",
-                    "record_editor_proof_fact_deferred",
-                    &format!(
-                        "project={} chapter={} event={event_id} revision={revision}: {error}",
-                        command.project_id, command.chapter_id
-                    ),
-                );
-            }
+            crate::backend::app_backend::debug_error_static(
+                "chapter_draft",
+                "record_editor_proof_fact_deferred",
+                &format!(
+                    "project={} chapter={} event={event_id} revision={revision}: {error}",
+                    command.project_id, command.chapter_id
+                ),
+            );
             return;
         }
     };
     if projection_json.is_empty() {
+        // 合法无证明事件（例如 Load/Format 不产生逐字证明）：清除 spool，
+        // 但仍先确保 meta 事务头存在，便于恢复列表发现草稿。
+        super::super::chapter_draft::clear_pending_input(
+            &projects_root,
+            &command.project_id,
+            &command.chapter_id,
+            &event_id,
+        );
         return;
     }
     if let Err(error) = super::super::chapter_draft::note_fact(
-        Path::new(&command.context.projects_root),
+        &projects_root,
         &command.project_id,
         &command.chapter_id,
         &command.volume_id,
         session_id,
         &command.generation,
         super::super::chapter_draft::DraftFact {
-            event_id,
+            event_id: event_id.clone(),
             revision,
             session_id,
             projection_json,
@@ -214,13 +234,22 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
             "chapter_draft",
             "note_fact_failed",
             &format!(
-                "project={} chapter={}: {error}",
+                "project={} chapter={} event={event_id}: {error}; spool kept",
                 command.project_id, command.chapter_id
             ),
         );
+        return;
     }
+    // 事实文件与索引都成功后才确认 accepted；崩溃留下的 spool 会按同一
+    // event ID 幂等重放（Core 用 event_id 判重，note_fact 也按 ID 去重）。
+    super::super::chapter_draft::clear_pending_input(
+        &projects_root,
+        &command.project_id,
+        &command.chapter_id,
+        &event_id,
+    );
     if let Err(error) = super::super::chapter_draft::persist_current(
-        Path::new(&command.context.projects_root),
+        &projects_root,
         &command.project_id,
         &command.chapter_id,
         false,
@@ -236,7 +265,7 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
     }
 }
 
-/// 用同一 event ID 重试所有 Core 投影构造失败的原始命令。
+/// 用同一 event ID 重试所有 Core 投影构造失败的原始命令。/// 用同一 event ID 重试所有 Core 投影构造失败的原始命令。
 ///
 /// 成功一条就写进草稿并删除 spool 文件；任何一条失败立即返回 Err，
 /// 由调用方拒绝越过该 revision 的保存/恢复（Issue #1062 复审第 3 项）。
@@ -250,7 +279,7 @@ pub(super) fn retry_pending_inputs(
     generation: &str,
 ) -> Result<usize, String> {
     let mut retried = 0usize;
-    for input in super::super::chapter_draft::pending_inputs(projects_root, project_id, chapter_id)
+    for input in super::super::chapter_draft::pending_inputs(projects_root, project_id, chapter_id)?
     {
         let dto: writer_core::api::EditorChangeStatsInputDto =
             serde_json::from_str(&input.input_json).map_err(|error| {
@@ -329,6 +358,19 @@ fn version_display(version: &ChapterVersionDto) -> String {
         "{}@{} sha={}",
         version.object_generation, version.revision, version.content_sha256
     )
+}
+
+/// 恢复提交使用的 proof snapshot revision：有事实时是事件终态 revision，
+/// 否则是草稿正文 revision。
+///
+/// Issue #1062 复审：replay 成功后的正文是事件终态，继续传 text.txt 的旧
+/// revision 会让 Core 判成 `new_revision > snapshot_revision`。
+fn restore_commit_revision(plan: &super::super::chapter_draft::ChapterDraftRestorePlan) -> u64 {
+    if plan.fact_count > 0 {
+        plan.event_end_revision
+    } else {
+        plan.text_revision
+    }
 }
 
 /// 事件链中 revision <= 上限的投影 JSON 数组；为空返回空串。
@@ -523,6 +565,10 @@ pub(super) fn handle_restore_project(
                 }
             }
         };
+        // Issue #1062 复审：全链 replay 成功后提交的正文是事件终态，proof
+        // snapshot revision 必须跟着到 event_end_revision；继续用 text.txt
+        // 的旧 revision 会被 Core 判成 new_revision > snapshot_revision。
+        let commit_revision = restore_commit_revision(&plan);
         let draft_base = ChapterVersionDto {
             object_generation: plan.base_generation.clone(),
             revision: plan.base_revision,
@@ -541,7 +587,7 @@ pub(super) fn handle_restore_project(
                 &content,
                 Some(opened.version),
                 Some(opened.content),
-                plan.text_revision,
+                commit_revision,
                 &plan.batch_json,
                 true,
             );
@@ -575,7 +621,7 @@ pub(super) fn handle_restore_project(
                 &content,
                 Some(draft_base.clone()),
                 Some(opened.content),
-                plan.text_revision,
+                commit_revision,
                 &plan.batch_json,
                 true,
             );
@@ -626,5 +672,47 @@ pub(super) fn handle_restore_project(
                 message: messages.join("; "),
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restore_commit_revision;
+    use crate::backend::chapter_draft::{ChapterDraftRestorePlan, LoadedFact};
+
+    fn plan(fact_count: usize, text_revision: u64, event_end: u64) -> ChapterDraftRestorePlan {
+        ChapterDraftRestorePlan {
+            volume_id: "v1".to_string(),
+            chapter_id: "c1".to_string(),
+            base_generation: "g1".to_string(),
+            base_revision: 1,
+            base_sha256: "sha".to_string(),
+            text: None,
+            text_revision,
+            text_sha256: String::new(),
+            fact_count,
+            batch_json: "[]".to_string(),
+            facts: if fact_count > 0 {
+                vec![LoadedFact {
+                    event_id: "e1".to_string(),
+                    revision: event_end,
+                    projection_json: "{}".to_string(),
+                }]
+            } else {
+                Vec::new()
+            },
+            event_end_revision: event_end,
+            session_id: 7,
+            generation: "g1".to_string(),
+            mixed_sessions: false,
+        }
+    }
+
+    #[test]
+    fn replay_terminal_text_commits_at_event_end_revision() {
+        // text.txt 落后一个事件（revision 4），事件链到 5：提交必须用 5。
+        assert_eq!(restore_commit_revision(&plan(2, 4, 5)), 5);
+        // 没有事实时仍用正文 revision。
+        assert_eq!(restore_commit_revision(&plan(0, 4, 0)), 4);
     }
 }

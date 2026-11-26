@@ -1,5 +1,6 @@
+use super::patch_batch::{build_display_patches, PatchBatchItem};
 use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
-use super::types::{DisplayPatch, EditorOperationKind};
+use super::types::EditorOperationKind;
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
@@ -84,21 +85,24 @@ impl EditorKernel {
         let new_selection = entry.old_selection;
 
         // DisplayPatch 从 inverse delta 生成：undo 前文本（new 坐标）中被替换区域。
-        // 列表顺序 = undo_order（new_range 降序）— Android 稳定降序排序后同一批顺序，
-        // 紧邻同起点时 after（右侧）先应用，与顺序应用语义一致。
-        let patches: Vec<DisplayPatch> = undo_order
+        // 事务 edits 的执行顺序在 entry.edits；给视图的 patch batch 由 patch_batch
+        // 按 base 坐标降序输出。同起点多项按**执行顺序**给出：patch_batch 会逆序
+        // 拼接，使后应用的插入落在最终正文更前面，恢复的才是 base 文本顺序。
+        let patch_items: Vec<PatchBatchItem<'_>> = undo_order
             .iter()
-            .map(|d| DisplayPatch {
-                base_revision,
-                new_revision,
-                replace_byte_range: d.new_range,
-                inserted_byte_range: d.old_range,
-                inserted_text: d.deleted_text.clone(),
-                resulting_selection_byte_range: EditorEditResult::selection_byte_range(
-                    new_selection,
-                ),
+            .map(|delta| PatchBatchItem {
+                replace_range: delta.new_range,
+                deleted_len: delta.inserted_text.len(),
+                inserted_text: &delta.deleted_text,
             })
             .collect();
+        let patches = build_display_patches(
+            base_revision,
+            new_revision,
+            new_selection,
+            old_len_before_undo,
+            patch_items,
+        );
 
         // OffsetMap：old=undo 前文本 → new=undo 后文本，从 inverse delta 构造。
         let inverse_pairs: Vec<(usize, usize, usize, usize)> = entry
@@ -135,8 +139,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::Undo,
             changes: Vec::new(),
-        before_text_sha256: String::new(),
-        after_text_sha256: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Replace,
             offset_map: Some(offset_map),
             content_delta,
@@ -206,21 +210,25 @@ impl EditorKernel {
         let new_selection = entry.new_selection;
 
         // DisplayPatch 从 forward delta 生成：redo 前文本（old 坐标）中被替换区域。
-        let mut patches: Vec<DisplayPatch> = entry
+        // 给视图的 patch batch 顺序与同起点合并由 patch_batch 统一决定；同起点
+        // 组内保持 entry.edits 的执行顺序，patch_batch 逆序拼接后的文本顺序与
+        // redo 实际应用结果一致。
+        let patch_items: Vec<PatchBatchItem<'_>> = entry
             .edits
             .iter()
-            .map(|d| DisplayPatch {
-                base_revision,
-                new_revision,
-                replace_byte_range: d.old_range,
-                inserted_byte_range: d.new_range,
-                inserted_text: d.inserted_text.clone(),
-                resulting_selection_byte_range: EditorEditResult::selection_byte_range(
-                    new_selection,
-                ),
+            .map(|delta| PatchBatchItem {
+                replace_range: delta.old_range,
+                deleted_len: delta.deleted_text.len(),
+                inserted_text: &delta.inserted_text,
             })
             .collect();
-        patches.sort_by_key(|p| p.replace_byte_range.start().value());
+        let patches = build_display_patches(
+            base_revision,
+            new_revision,
+            new_selection,
+            old_len_before_redo,
+            patch_items,
+        );
 
         // OffsetMap：old=redo 前文本 → new=redo 后文本，从 forward delta 构造。
         let forward_pairs: Vec<(usize, usize, usize, usize)> = entry
@@ -256,8 +264,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::Redo,
             changes: Vec::new(),
-        before_text_sha256: String::new(),
-        after_text_sha256: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Replace,
             offset_map: Some(offset_map),
             content_delta,

@@ -394,6 +394,16 @@ pub(super) fn read_new_state(location: &DraftLocation, trim: bool) -> Option<Dra
     if trim && facts.len() > MAX_MEMORY_FACT_INDEX {
         facts.drain(0..facts.len() - MAX_MEMORY_FACT_INDEX);
     }
+    // 重启后从磁盘 spool 重建待转换事件，不能只依赖进程内 failed_inputs。
+    let failed_inputs = super::pending::pending_inputs(
+        &location.projects_root,
+        &location.project_id,
+        &location.chapter_id,
+    )
+    .unwrap_or_default()
+    .into_iter()
+    .map(|input| (input.event_id, input.revision))
+    .collect();
     Some(DraftState {
         project_id: location.project_id.clone(),
         volume_id: meta.volume_id,
@@ -417,7 +427,7 @@ pub(super) fn read_new_state(location: &DraftLocation, trim: bool) -> Option<Dra
         facts,
         next_seq,
         failed_facts: Vec::new(),
-        failed_inputs: Vec::new(),
+        failed_inputs,
         acked_event_ids: meta.acked_event_ids,
         acked_through_revision: meta.acked_through_revision,
         projects_root: location.projects_root.clone(),

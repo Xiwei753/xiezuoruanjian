@@ -23,10 +23,22 @@
 // - finishEditingAndWhenIdle 为退出/同步屏障：先 stopEditing() 结束预编辑，再等队列稳定。
 // - syncFromCore/loadInitialText 通过统一程序性入口 setStyledString，保留正文样式由组件构建。
 // - 切章时以 sessionId 隔离旧回调，旧队列不可触碰新章节 UI。
+//
+// Issue #1063 评论第 4 条：会话健康状态机（替代只由 beginSession 重置的 idleError）
+//   healthy ──映射/事务失败──▶ reconciling ──可验证 rebase 成功──▶ healthy
+//                                   └──映射失败/重叠/文本不一致──▶ conflict
+//   - reconciling：冻结 pendingEdits（含每条 edit 的 beforeText 基线），从 Core 当前
+//     snapshot 与原生实际全文计算可验证 rebase，由原串行 editQueue 提交；期间 idle waiters
+//     保持挂起，syncFromCore 不回写覆盖原生正文。
+//   - conflict：保留原生正文和全部未确认事件，不调用 syncFromCore 覆盖；waiters 立即以
+//     明确原因 reject，诊断字段 nativeCoreDiverged 同步置 true；只有 beginSession 复位。
+//   - 失败不再用单一 idleError 锁死编辑：错误详情写在 conflictDetail（只读 getter 供诊断）。
 
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import { computeMinimalTextDiff } from '../session/editor_patch_logic'
 import { TextOffsetMapper } from './TextOffsetMapper'
+import { EditorViewportState } from '../render/EditorViewportState'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { EditorTransactionCause, EditorEditResult, EditorSessionSnapshot, EditorEditOutcome } from '../../../corebridge/dto/EditorDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import {
@@ -40,6 +52,16 @@ import hilog from '@ohos.hilog'
 
 const BRIDGE_LOG_DOMAIN = 0x0000
 const BRIDGE_LOG_TAG = 'NativeRichEditorBridge'
+// 可验证 rebase 的最大尝试次数（Core 基线在映射期间被外部命令推进时重读再映射）。
+const BRIDGE_RECONCILE_MAX_ATTEMPTS = 3
+// 退出屏障等待 IME 结算回调的上限：超时后按“已提交 Core revision”结算（预编辑仍留在
+// 原生未提交层，不写 Core），保证每个 idle waiter 都有确定结果，不会永久悬挂。
+const BRIDGE_IME_SETTLEMENT_TIMEOUT_MS = 1200
+// 接续恢复滚动：scrollToVisible 自 API 26 起可用；低版本按注释降级，不做假回写。
+const BRIDGE_VIEWPORT_SCROLL_TO_VISIBLE_MIN_API = 26
+// 章节布局完成（lineCount>0）前恢复视口会滚错位置，按帧重试到上限即放弃（约 2s）。
+const BRIDGE_VIEWPORT_RESTORE_MAX_ATTEMPTS = 40
+const BRIDGE_VIEWPORT_RESTORE_RETRY_MS = 50
 
 // Issue #1054 复审：原生编辑器状态事件。
 // paragraphsChanged 只在段落结构真正变化时置 true；newParagraphStarts 给出本次
@@ -120,6 +142,23 @@ interface PendingNativeChange {
   changeSequence: number
 }
 
+// Issue #1063：冻结 pendingEdits 在 Core 当前正文上的模拟应用结果。
+// reason 非空表示无法安全 rebase（调用方直接进入 conflict，不覆盖原生正文）。
+interface FrozenEditSimulation {
+  text: string
+  reason: string
+}
+
+/**
+ * Issue #1063 评论第 4 条：会话健康状态。
+ * - healthy：正常消费 pendingEdits，三方（原生全文/镜像/Core）可校验。
+ * - reconciling：发生映射或事务失败，消费游标冻结，正在从 Core 与原生全文计算可验证 rebase；
+ *   idle waiters 保持挂起（不 reject）。
+ * - conflict：无法安全 rebase。保留原生正文与全部未确认事件，不覆盖原生文本；
+ *   idle waiters 以冲突原因 reject，诊断 nativeCoreDiverged 置 true。
+ */
+export type EditorSessionHealth = 'healthy' | 'reconciling' | 'conflict'
+
 // 记录一次原生文本操作所需的字段（补 hash/会话事实后落到快照）。
 interface NativeOperationFacts {
   kind: string
@@ -155,6 +194,11 @@ interface PendingEdit {
 
 interface IdleWaiter {
   sessionId: number
+  // 创建时冻结的屏障 revision：只有 lastAppliedRevision >= barrierRevision 且三方一致才放行。
+  barrierRevision: number
+  // true：退出/同步屏障，必须等 IME 预编辑真正结算；false：普通保存屏障，
+  // IME 预编辑保留在独立未提交层，可先保存已提交 Core revision。
+  waitForImeSettlement: boolean
   resolve: () => void
   reject: (e: Error) => void
 }
@@ -187,7 +231,19 @@ export class NativeRichEditorBridge {
   private localSequence: number = 0
   private confirmedText: string = ''
   private confirmedRevision: number = -1
-  private idleError: string | null = null
+  // Issue #1063：显式会话状态机（替代只由 beginSession 重置的 idleError）。
+  private sessionHealth: EditorSessionHealth = 'healthy'
+  private conflictDetail: string | null = null
+  // reconciling 期间的原因（诊断用；进入 conflict 时写进 conflictDetail）。
+  private reconcileReason: string = ''
+  private reconcileScheduled: boolean = false
+  // 退出屏障等待 IME 结算回调（原生真正结束/取消预编辑时 resolve）。
+  private imeSettlementWaiters: (() => void)[] = []
+  // 退出屏障的 IME 结算回调是否超时：超时后按已提交 Core revision 放行。
+  private imeSettlementTimedOut: boolean = false
+  // 接续恢复滚动的重试句柄（beginSession/切章时取消）。
+  private viewportRestoreTimerId: number = -1
+  private viewportRestoreAttempts: number = 0
   private idleWaiters: IdleWaiter[] = []
   // 选区 latest-wins 合并上报
   private pendingSelectionIntent: SelectionIntent | null = null
@@ -257,6 +313,16 @@ export class NativeRichEditorBridge {
     return this.lastAppliedRevision
   }
 
+  // Issue #1063：会话健康状态（诊断只读）。
+  getSessionHealth(): EditorSessionHealth {
+    return this.sessionHealth
+  }
+
+  // Issue #1063：conflict 的明确原因（healthy/reconciling 时为 null）。
+  getConflictDetail(): string | null {
+    return this.conflictDetail
+  }
+
   isImeComposing(): boolean {
     return this.imeComposing
   }
@@ -316,21 +382,24 @@ export class NativeRichEditorBridge {
     return this.nativeCoreDiverged
   }
 
-  // 普通保存屏障：只等已提交队列事务，不调用 stopEditing()。
+  // 普通保存屏障（自动保存）：只等已提交 Core revision，不调用 stopEditing()。
+  // Issue #1063：IME 预编辑保留在独立未提交层，waitForImeSettlement=false，
+  // 因此预编辑不会让普通保存长期悬挂。
   whenIdle(): Promise<void> {
     this.barrierStage = 'save-when-idle'
-    // 普通保存不强制结束预编辑：只有组件已无预览文本时结算，否则等待用户完成输入。
+    this.imeSettlementTimedOut = false
+    // 组件已无预览文本时先结算；仍有预编辑则保留在原生未提交层，不写 Core。
     this.settleImeComposition(false)
     this.requestSelectionFlush()
-    return new Promise<void>((resolve, reject) => {
-      this.idleWaiters.push({ sessionId: this.sessionId, resolve: resolve, reject: reject })
-      this.checkIdle()
-    })
+    return this.pushIdleWaiter(false)
   }
 
   // 退出章节/同步屏障：先 stopEditing() 结束预编辑，再等队列稳定。
+  // Issue #1063：结算与 checkIdle 绑定为队列尾部的一步，不依赖下一次任意 onDidChange；
+  // 若此时仍有预编辑，等这次真正的结算回调（有上限），不会永久挂起。
   finishEditingAndWhenIdle(): Promise<void> {
     this.barrierStage = 'exit-finish-editing'
+    this.imeSettlementTimedOut = false
     if (this.richEditorController !== null) {
       try {
         this.richEditorController.stopEditing()
@@ -341,25 +410,388 @@ export class NativeRichEditorBridge {
     // stopEditing() 之后仍可能残留预编辑镜像，强制按基线结算。
     this.settleImeComposition(true)
     this.requestSelectionFlush()
-    return new Promise<void>((resolve, reject) => {
-      this.idleWaiters.push({ sessionId: this.sessionId, resolve: resolve, reject: reject })
+    const waiterPromise = this.pushIdleWaiter(true)
+    const sessionToken = this.sessionId
+    this.editQueue = this.editQueue.then(async (): Promise<void> => {
+      if (sessionToken !== this.sessionId) {
+        return
+      }
+      const settled = await this.awaitImeSettlement()
+      if (sessionToken !== this.sessionId) {
+        return
+      }
+      if (settled) {
+        this.settleImeComposition(true)
+      } else {
+        // 结算回调没按时到达：不把未提交的预编辑文本写进 Core，
+        // 只按已提交 Core revision 放行屏障（见 resolveCommittedWaiters）。
+        this.imeSettlementTimedOut = true
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+          `IME settlement did not arrive within ${BRIDGE_IME_SETTLEMENT_TIMEOUT_MS}ms;`
+            + ' resolving idle barrier with committed core revision')
+        this.settleImeComposition(false)
+      }
+      this.checkIdle()
+    }).catch((e: Object): void => {
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `ime settlement step error: ${JSON.stringify(e)}`)
+      this.checkIdle()
+    })
+    this.checkIdle()
+    return waiterPromise
+  }
+
+  // Issue #1063：退出/切章时给所有 idle waiter 一个确定结果（不伪造空闲）。
+  cancelIdleWaiters(reason: string): void {
+    if (this.idleWaiters.length === 0) {
+      return
+    }
+    hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `cancel idle waiters: ${reason}`)
+    const waiters = this.idleWaiters
+    this.idleWaiters = []
+    const error = new Error(reason)
+    for (const w of waiters) {
+      w.reject(error)
+    }
+  }
+
+  // ── Issue #1063：会话健康状态机 ────────────────────────────────
+
+  /**
+   * 进入 reconciling：本次会话的消费游标冻结（drain 不再取新 edit），保留全部 pendingEdits
+   * 与失败发生前的 base snapshot（每条 edit 自带 beforeText）；由原串行 editQueue 提交
+   * 可验证 rebase。reconciling 期间 idle waiters 保持挂起，不 reject。
+   */
+  private enterReconciling(reason: string): void {
+    if (this.sessionHealth === 'conflict') {
+      // conflict 是终态：不降级，保留原冲突原因（只有 beginSession 重新开始）。
+      return
+    }
+    this.sessionHealth = 'reconciling'
+    this.reconcileReason = reason
+    this.conflictDetail = null
+    hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+      `session entered reconciling: ${reason} pendingEdits=${this.pendingEdits.length}`)
+    this.scheduleReconcile()
+  }
+
+  /**
+   * 进入 conflict：保留原生正文与全部未确认事件，不调用 syncFromCore 回写覆盖原生文本；
+   * 所有 idle waiters 以明确原因 reject。诊断字段 nativeCoreDiverged 与状态机保持一致，
+   * 阻止 refreshNativeMirrorFromCore/syncFromCore 覆盖仍在原生编辑器里的正文。
+   */
+  private enterConflict(reason: string): void {
+    this.sessionHealth = 'conflict'
+    this.conflictDetail = reason
+    this.reconcileReason = ''
+    this.nativeCoreDiverged = true
+    this.nativeCoreDivergedSessionId = this.coordinator.getSessionId()
+    hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+      `session conflict: ${reason} pendingEdits=${this.pendingEdits.length}`
+        + ` nativeLen=${this.currentText.length}`)
+    this.rejectWaitersForConflict()
+  }
+
+  private rejectWaitersForConflict(): void {
+    if (this.idleWaiters.length === 0) {
+      return
+    }
+    const message = `Native/core session conflict: ${this.conflictDetail !== null ? this.conflictDetail : 'unknown'}`
+    const waiters = this.idleWaiters
+    this.idleWaiters = []
+    const error = new Error(message)
+    for (const w of waiters) {
+      w.reject(error)
+    }
+  }
+
+  // 把 reconcile 排到原串行 editQueue 尾部，保证不与 drain/选区事务并发。
+  private scheduleReconcile(): void {
+    if (this.sessionHealth !== 'reconciling' || this.reconcileScheduled) {
+      return
+    }
+    this.reconcileScheduled = true
+    const sessionToken = this.sessionId
+    this.editQueue = this.editQueue.then(async (): Promise<void> => {
+      this.reconcileScheduled = false
+      if (sessionToken !== this.sessionId) {
+        return
+      }
+      if (this.sessionHealth !== 'reconciling') {
+        this.checkIdle()
+        return
+      }
+      let deferred: boolean = false
+      try {
+        deferred = await this.reconcileSession()
+      } catch (e) {
+        this.enterConflict(`reconcile error: ${JSON.stringify(e)}`)
+      }
+      if (deferred) {
+        // 等原生变更/预编辑的结算回调再次驱动 reconcile，不在微任务链上自旋重排。
+        return
+      }
+      this.checkIdle()
+    }).catch((e: Object): void => {
+      this.reconcileScheduled = false
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `reconcile step error: ${JSON.stringify(e)}`)
+      if (sessionToken === this.sessionId) {
+        this.enterConflict(`reconcile step error: ${JSON.stringify(e)}`)
+      }
       this.checkIdle()
     })
   }
 
-  // 事件驱动检查：先查 idleError，再等 editQueue tail，条件不满足时等待状态变化通知。
+  /**
+   * 从 Core 当前 snapshot 与原生实际全文计算可验证 rebase。
+   *
+   * 判定顺序：
+   *   1. 原生全文 === Core 快照 → 直接收敛 healthy（丢弃已确认的冻结 edit，恢复消费）；
+   *   2. 否则按 edit 原始顺序把冻结 pendingEdits 映射到 Core 当前正文，逐笔校验 oldText，
+   *      模拟结果必须与原生全文完全一致；全部通过才提交一笔 Programmatic replaceSlice；
+   *   3. 提交后再次校验 Core 快照文本 === 原生全文、revision === lastAppliedRevision，
+   *      才恢复 healthy 并清空已确认的 pendingEdits；
+   *   4. 任一映射失败/重叠/文本不一致/事务失败 → conflict（保留原生正文与未确认事件）。
+   *
+   * @returns true 表示本轮因预编辑/原生变更未结算而推迟（调用方不要在同一条微任务链上
+   *          立即重排，等结算回调再驱动），false 表示已给出确定结论（healthy 或 conflict）。
+   */
+  private async reconcileSession(): Promise<boolean> {
+    if (this.sessionHealth !== 'reconciling') {
+      return false
+    }
+    if (this.pendingNativeChange !== null || this.imeComposing) {
+      // 预编辑/原生变更未结算：镜像与 Core 都还不是稳定基线，等结算回调后再 rebase
+      // （commitImeCompositionFromBaseline / onContentDidChange 会再次触发）。
+      // 返回 true ≠ 已收敛：调用方不能在同一条微任务链上立即重排，否则会形成忙等循环。
+      hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+        'reconcile deferred: native change or IME composition still in flight')
+      return true
+    }
+    const sessionAtEntry = this.sessionId
+    // 冻结这一批 edit：drain 在 reconciling 期间不消费，新 edit 排在它们之后。
+    const frozen: PendingEdit[] = this.pendingEdits.slice()
+    const frozenCount: number = frozen.length
+    let attempts: number = 0
+    while (attempts < BRIDGE_RECONCILE_MAX_ATTEMPTS) {
+      attempts++
+      // 每轮重读 Core 会话/快照：会话在 reconcile 期间可能被替换（重开章节），
+      // 不能沿用上一轮的 sessionId，否则会一直 SESSION_CHANGED。
+      const coreSessionId = this.coordinator.getSessionId()
+      if (coreSessionId === null) {
+        this.enterConflict('no active core session during reconcile')
+        return false
+      }
+      const snap = this.coordinator.getSnapshot()
+      if (snap === null) {
+        this.enterConflict('core snapshot unavailable during reconcile')
+        return false
+      }
+      const nativeText = this.readNativeFullText()
+      if (nativeText === null) {
+        this.enterConflict('native full text unavailable during reconcile')
+        return false
+      }
+      if (nativeText !== this.currentText) {
+        // 镜像落后：以原生实际全文为真相，只更新本地镜像，不改 Core。
+        this.reportNativeFactError('reconcile',
+          `mirror behind native text firstMismatch=${firstMismatchUtf16(this.currentText, nativeText)}`)
+        this.currentText = nativeText
+        this.nativeNewlineCount = countNewlines(nativeText)
+      }
+      if (nativeText === snap.text) {
+        // 原生全文与 Core 快照逐字相等：直接收敛，不提交任何 rebase 事务。
+        this.confirmRebaseConverged(snap.text, snap.revision)
+        this.pendingEdits = this.pendingEdits.slice(frozenCount)
+        hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+          `reconcile converged without rebase: coreRevision=${snap.revision} droppedEdits=${frozenCount}`)
+        this.refreshSelectionAfterConvergence()
+        this.wakeDrain()
+        return false
+      }
+      const simulated: FrozenEditSimulation = this.simulateFrozenEdits(frozen, snap.text)
+      if (simulated.reason !== '') {
+        this.enterConflict(simulated.reason)
+        return false
+      }
+      if (simulated.text !== nativeText) {
+        this.enterConflict(
+          `frozen edits do not reproduce native text`
+            + ` firstMismatch=${firstMismatchUtf16(simulated.text, nativeText)}`
+            + ` simulatedLen=${simulated.text.length} nativeLen=${nativeText.length}`)
+        return false
+      }
+      // diff 只用于诊断：真正提交的是「Core 当前正文 → 原生全文」的最小差量，
+      // replaceSliceIfUnchanged 会在 Core 侧再算一次并核对 expectedText。
+      const diff = this.computeDiff(snap.text, nativeText)
+      const result = await this.coordinator.replaceSliceIfUnchanged(
+        coreSessionId, snap.revision, snap.text, nativeText, EditorTransactionCause.Programmatic)
+      if (sessionAtEntry !== this.sessionId) {
+        return false
+      }
+      if (result.success && result.data !== undefined) {
+        const after = this.coordinator.getSnapshot()
+        if (after !== null && after.text === nativeText && after.revision === result.data.newRevision) {
+          this.confirmRebaseConverged(after.text, after.revision)
+          this.pendingEdits = this.pendingEdits.slice(frozenCount)
+          hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+            `reconcile committed rebase revision=${snap.revision}->${after.revision}`
+              + ` diff=[${diff.start}, ${diff.end}) insertedUtf16=${diff.replacement.length}`
+              + ` confirmedEdits=${frozenCount}`)
+          this.refreshSelectionAfterConvergence()
+          this.wakeDrain()
+          return false
+        }
+        // Core 回流与原生全文不一致：重读基线再试。
+        continue
+      }
+      if (result.errorCode === 'SESSION_CHANGED') {
+        // Core 会话在 reconcile 期间被替换：重读会话/基线再判定（次数有上限）。
+        continue
+      }
+      if (result.errorCode === 'STALE_BASELINE' && attempts < BRIDGE_RECONCILE_MAX_ATTEMPTS) {
+        // Core 正文在映射期间被推进：重读基线重算映射。
+        continue
+      }
+      this.enterConflict(`reconcile transaction failed: ${result.errorCode !== undefined ? result.errorCode : 'UNKNOWN'}`)
+      return false
+    }
+    this.enterConflict(`reconcile did not converge after ${attempts} attempt(s)`)
+    return false
+  }
+
+  // rebase 收敛：三方状态、revision 与 confirmed 基线一起对齐后恢复 healthy。
+  private confirmRebaseConverged(text: string, revision: number): void {
+    this.lastAppliedRevision = revision
+    this.confirmedText = text
+    this.confirmedRevision = revision
+    this.coreNewlineCount = countNewlines(text)
+    this.nativeCoreDiverged = false
+    this.nativeCoreDivergedSessionId = null
+    this.sessionHealth = 'healthy'
+    this.conflictDetail = null
+    this.reconcileReason = ''
+  }
+
+  // 按 edit 原始顺序把冻结 edit 映射到 Core 当前正文并模拟应用；失败返回非空 reason。
+  private simulateFrozenEdits(frozen: PendingEdit[], coreText: string): FrozenEditSimulation {
+    let simulated: string = coreText
+    for (let i = 0; i < frozen.length; i++) {
+      const edit: PendingEdit = frozen[i]
+      const mapped: EditRangeMap | null = this.mapEditToBaseline(edit, simulated)
+      if (mapped === null) {
+        return {
+          text: simulated,
+          reason: `cannot map frozen edit #${edit.localSequence} at offset ${edit.startUtf16}: overlapping diff`
+        }
+      }
+      const slice: string = simulated.substring(mapped.startUtf16, mapped.endUtf16)
+      if (slice !== edit.oldText) {
+        return {
+          text: simulated,
+          reason: `cannot map frozen edit #${edit.localSequence}: oldText mismatch`
+            + ` expectedLen=${edit.oldText.length} actualLen=${slice.length}`
+        }
+      }
+      simulated = simulated.substring(0, mapped.startUtf16) + edit.insertedText
+        + simulated.substring(mapped.endUtf16)
+    }
+    return { text: simulated, reason: '' }
+  }
+
+  // 普通保存/超时屏障：冻结并保存已提交 Core revision。
+  // committedStable 要求 Core 快照与确认基线一致；预编辑文本留在原生未提交层。
+  private resolveCommittedWaiters(includeImeWaiters: boolean): void {
+    const snap = this.coordinator.getSnapshot()
+    const committedStable: boolean = snap !== null &&
+      snap.revision === this.lastAppliedRevision && snap.text === this.confirmedText
+    if (!committedStable) {
+      return
+    }
+    const remaining: IdleWaiter[] = []
+    const resolved: IdleWaiter[] = []
+    for (const w of this.idleWaiters) {
+      const eligible: boolean = w.sessionId === this.sessionId &&
+        this.lastAppliedRevision >= w.barrierRevision &&
+        (!w.waitForImeSettlement || includeImeWaiters)
+      if (eligible) {
+        resolved.push(w)
+      } else {
+        remaining.push(w)
+      }
+    }
+    if (resolved.length === 0) {
+      return
+    }
+    this.idleWaiters = remaining
+    for (const w of resolved) {
+      w.resolve()
+    }
+  }
+
+  private pushIdleWaiter(waitForImeSettlement: boolean): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this.idleWaiters.push({
+        sessionId: this.sessionId,
+        barrierRevision: this.lastAppliedRevision,
+        waitForImeSettlement: waitForImeSettlement,
+        resolve: resolve,
+        reject: reject
+      })
+      this.checkIdle()
+    })
+  }
+
+  // 等真正的 IME 结算回调（原生结束/取消预编辑）；返回 false 表示超时未结算。
+  private awaitImeSettlement(): Promise<boolean> {
+    if (!this.imeComposing) {
+      return Promise.resolve(true)
+    }
+    return new Promise<boolean>((resolve) => {
+      let finished: boolean = false
+      const finish = (settled: boolean): void => {
+        if (finished) {
+          return
+        }
+        finished = true
+        resolve(settled)
+      }
+      this.imeSettlementWaiters.push((): void => {
+        finish(true)
+      })
+      setTimeout((): void => {
+        finish(!this.imeComposing)
+      }, BRIDGE_IME_SETTLEMENT_TIMEOUT_MS)
+    })
+  }
+
+  private notifyImeSettled(): void {
+    const waiters = this.imeSettlementWaiters
+    this.imeSettlementWaiters = []
+    for (const w of waiters) {
+      w()
+    }
+  }
+
+  // 事件驱动检查：先看会话状态机，再等 editQueue tail，条件不满足时等待状态变化通知。
   private checkIdle(): void {
+    if (this.sessionHealth === 'reconciling') {
+      // reconciling：waiters 保持挂起（不 reject）；即使暂无 waiter 也要推进 reconcile，
+      // 否则冻结的 pendingEdits 与消费游标会永远停住。
+      this.scheduleReconcile()
+      if (this.imeComposing) {
+        // 预编辑使 reconcile 暂时无法收敛：普通保存屏障按已提交 Core revision 放行，
+        // 不把自动保存挂在用户拼音输入时长上；退出屏障仍等结算回调/超时。
+        this.resolveCommittedWaiters(false)
+      }
+      return
+    }
     if (this.idleWaiters.length === 0) {
       return
     }
 
-    if (this.idleError !== null) {
-      const error = new Error(this.idleError)
-      const waiters = this.idleWaiters
-      this.idleWaiters = []
-      for (const w of waiters) {
-        w.reject(error)
-      }
+    if (this.sessionHealth === 'conflict') {
+      // conflict 是确定结果：waiters 立刻拿到明确原因，不伪装空闲。
+      this.rejectWaitersForConflict()
       return
     }
 
@@ -374,12 +806,14 @@ export class NativeRichEditorBridge {
         return
       }
 
-      if (this.idleError !== null) {
-        const error = new Error(this.idleError)
-        const waiters = this.idleWaiters
-        this.idleWaiters = []
-        for (const w of waiters) {
-          w.reject(error)
+      if (this.sessionHealth === 'conflict') {
+        this.rejectWaitersForConflict()
+        return
+      }
+      if (this.sessionHealth === 'reconciling') {
+        this.scheduleReconcile()
+        if (this.imeComposing) {
+          this.resolveCommittedWaiters(false)
         }
         return
       }
@@ -389,7 +823,9 @@ export class NativeRichEditorBridge {
       }
 
       if (this.imeComposing) {
-        // 预编辑尚未结算：等 onDidChange/stopEditing 或下一次屏障再次唤醒。
+        // 普通保存屏障可先保存已提交 Core revision；退出屏障等预编辑真正结算，
+        // 结算回调超时后同样按已提交 revision 放行（预编辑文本不写 Core）。
+        this.resolveCommittedWaiters(this.imeSettlementTimedOut)
         return
       }
 
@@ -428,8 +864,18 @@ export class NativeRichEditorBridge {
       const alignment = this.validateNativeCoreAlignment(this.barrierStage)
       const nativeEditorLoaded = this.richEditorController !== null && this.nativeTextReady
       if (alignment.matched || !alignment.coreAvailable || !nativeEditorLoaded) {
-        this.idleWaiters = remaining
+        // 屏障 revision 已推进到当前 confirmed revision 的 waiter 才放行。
+        const stillPending: IdleWaiter[] = []
+        const resolved: IdleWaiter[] = []
         for (const w of currentWaiters) {
+          if (this.lastAppliedRevision >= w.barrierRevision) {
+            resolved.push(w)
+          } else {
+            stillPending.push(w)
+          }
+        }
+        this.idleWaiters = remaining.concat(stillPending)
+        for (const w of resolved) {
           w.resolve()
         }
         return
@@ -469,7 +915,13 @@ export class NativeRichEditorBridge {
   }
 
   // Core 先行推进时刷新原生正文，刷新后由 checkIdle 重新做三方校验。
+  // Issue #1063：只有 healthy 才允许 Core → 原生回写；reconciling/conflict 时绝不能覆盖原生正文。
   private async refreshNativeMirrorFromCore(): Promise<void> {
+    if (this.sessionHealth !== 'healthy') {
+      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+        `refreshNativeMirrorFromCore refused: session is ${this.sessionHealth}`)
+      return
+    }
     const sessionAtEntry = this.sessionId
     try {
       this.nativeCoreDiverged = false
@@ -599,30 +1051,18 @@ export class NativeRichEditorBridge {
     }
   }
 
+  // 无法把原生全文与 Core 收敛：进入 conflict（保留原生正文与未确认事件），
+  // 并按会话 reject 所有 idle waiters；错误信息含明确原因。
   private failNativeCoreAlignment(detail: string): void {
     const message = `Native/core text alignment failed stage=${this.barrierStage}: ${detail}`
-    hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, message)
-    const rejected: IdleWaiter[] = []
-    const remaining: IdleWaiter[] = []
-    for (const w of this.idleWaiters) {
-      if (w.sessionId === this.sessionId) {
-        rejected.push(w)
-      } else {
-        remaining.push(w)
-      }
-    }
-    this.idleWaiters = remaining
-    const error = new Error(message)
-    for (const w of rejected) {
-      w.reject(error)
-    }
+    this.enterConflict(message)
   }
 
   setPendingPaste(): void {
     this.pendingPaste = true
   }
 
-  // 切章时调用：增加 sessionId 隔离旧回调，reject 旧 session 等待者，清空队列和错误状态。
+  // 切章时调用：增加 sessionId 隔离旧回调，reject 旧 session 等待者，清空队列并复位状态机。
   beginSession(): void {
     const oldSession = this.sessionId
     this.sessionId++
@@ -639,7 +1079,14 @@ export class NativeRichEditorBridge {
     this.idleWaiters = remaining
 
     this.pendingEdits = []
-    this.idleError = null
+    // Issue #1063：会话终止复位状态机（conflict 只在这里解除）。
+    this.sessionHealth = 'healthy'
+    this.conflictDetail = null
+    this.reconcileReason = ''
+    this.reconcileScheduled = false
+    this.imeSettlementWaiters = []
+    this.imeSettlementTimedOut = false
+    this.cancelViewportRestore()
     this.imeComposing = false
     this.imeComposingStartText = ''
     this.imeComposingStartNewlineCount = 0
@@ -750,8 +1197,8 @@ export class NativeRichEditorBridge {
       const nativeFullText = this.readNativeFullText()
       if (nativeFullText === null) {
         this.reportNativeFactError('onContentDidChange', 'native full text unavailable')
-        this.idleError = 'Native text fact mismatch and native full text unavailable'
-        this.rejectAllWaiters()
+        // 原生事实不可用：冻结消费并交由 reconcile 给出确定结果（可 rebase → healthy，否则 conflict）。
+        this.enterReconciling('native text fact mismatch and native full text unavailable')
         return
       }
       const recovered = this.computeDiff(previousText, nativeFullText)
@@ -802,6 +1249,8 @@ export class NativeRichEditorBridge {
       })
       this.notifyStateListener('native-change', paragraphsChanged,
         this.insertedParagraphStarts(insertedText, startUtf16), becameNonEmpty)
+      // 预编辑态也可能有待收敛的状态机：给 checkIdle 一次事件机会（无 waiter 时立即返回）。
+      this.checkIdle()
       return
     }
 
@@ -835,6 +1284,7 @@ export class NativeRichEditorBridge {
       })
       this.notifyStateListener('native-change', paragraphsChanged,
         this.insertedParagraphStarts(insertedText, startUtf16), becameNonEmpty)
+      this.checkIdle()
       return
     }
 
@@ -885,7 +1335,8 @@ export class NativeRichEditorBridge {
       return
     }
     if (!force && this.readPreviewTextLength() > 0) {
-      // 预上屏文本仍在：不是已提交正文，保存屏障继续等待 onDidChange/stopEditing 结算。
+      // 预上屏文本仍在：不是已提交正文，普通保存屏障保留在原生未提交层；
+      // 退出屏障另有 stopEditing() + 结算回调/超时路径，不会永久挂起。
       return
     }
     this.commitImeCompositionFromBaseline('ime-commit')
@@ -910,6 +1361,7 @@ export class NativeRichEditorBridge {
     const baselineText: string = this.imeComposingStartText
     const baselineNewlines: number = this.imeComposingStartNewlineCount
     this.imeComposing = false
+    this.imeSettlementTimedOut = false
     // 预编辑期间镜像按中间态增量维护；以基线差量重算，避免中间态计数叠加。
     const diff = this.computeDiff(baselineText, this.currentText)
     this.nativeNewlineCount = Math.max(0,
@@ -934,6 +1386,8 @@ export class NativeRichEditorBridge {
         programmatic: false,
         factError: false
       })
+      // 预编辑已结束（无正文变化）：唤醒退出屏障的结算等待。
+      this.notifyImeSettled()
       return
     }
     const oldText: string = baselineText.substring(diff.start, diff.end)
@@ -968,6 +1422,8 @@ export class NativeRichEditorBridge {
       cause: EditorTransactionCause.TypingCommit
     }
     this.enqueuePendingEdit(pendingEdit)
+    // 预编辑已结算并已入队：唤醒退出屏障的结算等待（真正的消费仍由串行 drain 完成）。
+    this.notifyImeSettled()
   }
 
   // RichEditor onSelectionChange 回调：用 latest-wins 合并上报，防抖 30ms。
@@ -1011,7 +1467,7 @@ export class NativeRichEditorBridge {
       } catch (e) {
         hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `drainSelectionIntent error: ${JSON.stringify(e)}`)
         if (sessionToken === this.sessionId) {
-          this.idleError = `Selection drain error: ${JSON.stringify(e)}`
+          this.enterReconciling(`selection drain error: ${JSON.stringify(e)}`)
         }
       }
       if (sessionToken === this.sessionId) {
@@ -1022,7 +1478,7 @@ export class NativeRichEditorBridge {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `requestSelectionFlush error: ${JSON.stringify(e)}`)
       if (sessionToken === this.sessionId) {
         this.selectionDrainRunning = false
-        this.idleError = `Selection flush error: ${JSON.stringify(e)}`
+        this.enterReconciling(`selection flush error: ${JSON.stringify(e)}`)
       }
       this.checkIdle()
     })
@@ -1031,6 +1487,10 @@ export class NativeRichEditorBridge {
   private async drainSelectionIntent(sessionToken: number): Promise<void> {
     while (true) {
       if (sessionToken !== this.sessionId) {
+        return
+      }
+      // Issue #1063：reconciling/conflict 时不提交选区事务（会话身份/正文基线都在变动）。
+      if (this.sessionHealth !== 'healthy') {
         return
       }
 
@@ -1075,9 +1535,9 @@ export class NativeRichEditorBridge {
       const byteAnchor = TextOffsetMapper.utf16ToUtf8Checked(intent.textForConversion, intent.startUtf16)
       const byteHead = TextOffsetMapper.utf16ToUtf8Checked(intent.textForConversion, intent.endUtf16)
       if (byteAnchor === null || byteHead === null) {
-        this.idleError = `Invalid selection offset: anchor=${intent.startUtf16}, head=${intent.endUtf16}, textLen=${intent.textForConversion.length}`
-        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-        this.rejectAllWaiters()
+        // 选区落点拆开了代理对等非法位置：本笔选区无法安全提交，进入 conflict。
+        this.enterConflict(`invalid selection offset: anchor=${intent.startUtf16}, head=${intent.endUtf16},`
+          + ` textLen=${intent.textForConversion.length}`)
         return
       }
 
@@ -1097,9 +1557,7 @@ export class NativeRichEditorBridge {
         if (this.pendingSelectionIntent !== intent) {
           continue
         }
-        this.idleError = `Selection transaction failed: ${result.errorCode ?? 'UNKNOWN'}`
-        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-        this.rejectAllWaiters()
+        this.enterReconciling(`selection transaction failed: ${result.errorCode !== undefined ? result.errorCode : 'UNKNOWN'}`)
         return
       }
 
@@ -1121,9 +1579,8 @@ export class NativeRichEditorBridge {
         const currentRevision = newSnap !== null ? newSnap.revision : null
         if (this.pendingSelectionIntent === intent) {
           if (currentRevision !== null && intent.retriedAtRevision === currentRevision) {
-            this.idleError = 'StaleRevision: same revision retry failed, Core snapshot recovery may have failed'
-            hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-            this.rejectAllWaiters()
+            // 同一 revision 重试仍 StaleRevision：Core 快照恢复无法自愈，进入 conflict。
+            this.enterConflict('staleRevision: same revision retry failed, core snapshot recovery may have failed')
             return
           }
           this.pendingSelectionIntent = null
@@ -1139,9 +1596,8 @@ export class NativeRichEditorBridge {
         this.pendingSelectionIntent = null
         this.captureCurrentNativeSelection()
         if (this.isSameSelectionPosition(this.pendingSelectionIntent, intent)) {
-          this.idleError = `${outcome === EditorEditOutcome.InvalidOffset ? 'InvalidOffset' : 'InvalidRange'}: selection cannot be corrected`
-          hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-          this.rejectAllWaiters()
+          this.enterConflict(`${outcome === EditorEditOutcome.InvalidOffset ? 'invalidOffset' : 'invalidRange'}:`
+            + ' selection cannot be corrected')
           return
         }
         continue
@@ -1150,9 +1606,7 @@ export class NativeRichEditorBridge {
       if (this.pendingSelectionIntent !== intent) {
         continue
       }
-      this.idleError = `Unknown selection outcome: ${outcome}`
-      hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
-      this.rejectAllWaiters()
+      this.enterConflict(`unknown selection outcome: ${outcome}`)
       return
     }
   }
@@ -1164,15 +1618,6 @@ export class NativeRichEditorBridge {
     return a.startUtf16 === b.startUtf16 &&
            a.endUtf16 === b.endUtf16 &&
            a.textForConversion === b.textForConversion
-  }
-
-  private rejectAllWaiters(): void {
-    const error = new Error(this.idleError ?? 'Unknown error')
-    const waiters = this.idleWaiters
-    this.idleWaiters = []
-    for (const w of waiters) {
-      w.reject(error)
-    }
   }
 
   private captureCurrentNativeSelection(retriedAtRevision: number | null = null): void {
@@ -1201,7 +1646,15 @@ export class NativeRichEditorBridge {
 
   private enqueuePendingEdit(pendingEdit: PendingEdit): void {
     this.pendingEdits.push(pendingEdit)
-    this.wakeDrain()
+    if (this.sessionHealth === 'healthy') {
+      this.wakeDrain()
+      return
+    }
+    // reconciling：冻结消费，保留全部未确认事件，并推进 reconcile；conflict 保留原状态。
+    if (this.sessionHealth === 'reconciling') {
+      this.scheduleReconcile()
+    }
+    this.checkIdle()
   }
 
   private wakeDrain(): void {
@@ -1216,7 +1669,7 @@ export class NativeRichEditorBridge {
       } catch (e) {
         hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `drainPendingEdits error: ${JSON.stringify(e)}`)
         if (sessionToken === this.sessionId) {
-          this.idleError = `Unexpected error in drainPendingEdits: ${JSON.stringify(e)}`
+          this.enterReconciling(`unexpected error in drainPendingEdits: ${JSON.stringify(e)}`)
         }
       }
       if (sessionToken === this.sessionId) {
@@ -1227,7 +1680,7 @@ export class NativeRichEditorBridge {
       hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `wakeDrain error: ${JSON.stringify(e)}`)
       if (sessionToken === this.sessionId) {
         this.drainRunning = false
-        this.idleError = `Unexpected error in wakeDrain: ${JSON.stringify(e)}`
+        this.enterReconciling(`unexpected error in wakeDrain: ${JSON.stringify(e)}`)
       }
       this.checkIdle()
     })
@@ -1236,7 +1689,8 @@ export class NativeRichEditorBridge {
   // 唯一消费者协程：从队首处理，单笔事务确定 Applied 后才取下一笔。
   private async drainPendingEdits(): Promise<void> {
     while (this.pendingEdits.length > 0) {
-      if (this.idleError !== null) {
+      // Issue #1063：reconciling/conflict 时冻结消费（pendingEdits 全部保留）。
+      if (this.sessionHealth !== 'healthy') {
         return
       }
 
@@ -1248,8 +1702,7 @@ export class NativeRichEditorBridge {
 
       const snap = this.coordinator.getSnapshot()
       if (snap === null) {
-        this.idleError = 'No active session'
-        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+        this.enterConflict('no active core session during pending edit drain')
         return
       }
 
@@ -1263,14 +1716,13 @@ export class NativeRichEditorBridge {
       } else {
         const mapped = this.mapEditToBaseline(edit, baselineText)
         if (mapped === null) {
-          this.idleError = `Cannot map pending edit at offset ${edit.startUtf16}: overlapping diff`
-          hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+          // 映射失败：不在这里丢事件，交给 reconcile 判定可验证 rebase 或 conflict。
+          this.enterReconciling(`cannot map pending edit at offset ${edit.startUtf16}: overlapping diff`)
           return
         }
         const currentSlice = baselineText.substring(mapped.startUtf16, mapped.endUtf16)
         if (currentSlice !== edit.oldText) {
-          this.idleError = `Cannot map pending edit at offset ${edit.startUtf16}: text mismatch`
-          hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+          this.enterReconciling(`cannot map pending edit at offset ${edit.startUtf16}: text mismatch`)
           return
         }
         mappedStart = mapped.startUtf16
@@ -1280,8 +1732,8 @@ export class NativeRichEditorBridge {
       const byteStart = TextOffsetMapper.utf16ToUtf8Checked(baselineText, mappedStart)
       const byteEnd = TextOffsetMapper.utf16ToUtf8Checked(baselineText, mappedEnd)
       if (byteStart === null || byteEnd === null) {
-        this.idleError = `Invalid edit offset: start=${mappedStart}, end=${mappedEnd}, textLen=${baselineText.length}`
-        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+        this.enterReconciling(`invalid edit offset: start=${mappedStart}, end=${mappedEnd},`
+          + ` textLen=${baselineText.length}`)
         return
       }
 
@@ -1302,8 +1754,8 @@ export class NativeRichEditorBridge {
           (result.data.outcome !== EditorEditOutcome.Applied &&
            result.data.outcome !== EditorEditOutcome.AppliedWithAdjustedSelection &&
            result.data.outcome !== EditorEditOutcome.NoChange)) {
-        this.idleError = `Transaction failed for edit at offset ${edit.startUtf16}`
-        hilog.error(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, this.idleError)
+        // 事务失败：冻结游标，保留该 edit 与 base snapshot，进入可验证 rebase。
+        this.enterReconciling(`transaction failed for edit at offset ${edit.startUtf16}`)
         return
       }
 
@@ -1669,7 +2121,8 @@ export class NativeRichEditorBridge {
   }
 
   // 程序回放：从 Core snapshot 同步正文到 RichEditor。
-  // 有 pendingEdits/imeComposing/idleError 时不覆盖 RichEditor，保留用户可见正文。
+  // Issue #1063：reconciling/conflict 或还有 pendingEdits/IME 预编辑时不覆盖 RichEditor，
+  // 保留用户可见正文（与状态机一致，不再读已删除的 idleError）。
   async syncFromCore(): Promise<void> {
     const sessionAtEntry = this.sessionId
     await this.editQueue
@@ -1678,8 +2131,14 @@ export class NativeRichEditorBridge {
       return
     }
 
-    if (this.pendingEdits.length > 0 || this.imeComposing || this.idleError !== null) {
-      hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'syncFromCore: deferred due to pending edits/IME/error')
+    if (this.sessionHealth !== 'healthy') {
+      hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+        `syncFromCore: deferred because session is ${this.sessionHealth}`)
+      return
+    }
+
+    if (this.pendingEdits.length > 0 || this.imeComposing) {
+      hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, 'syncFromCore: deferred due to pending edits/IME')
       return
     }
 
@@ -1876,5 +2335,97 @@ export class NativeRichEditorBridge {
     this.nativeTextReady = true
     this.notifyStateListener('initial-load', true)
     this.validateNativeCoreAlignment('initial-load')
+  }
+
+  // ── Issue #1063 评论第 6 条：接续恢复滚动位置 ─────────────────────
+
+  // 取消未完成的视口恢复重试（切章/会话终止/重新打开时成对清理）。
+  private cancelViewportRestore(): void {
+    if (this.viewportRestoreTimerId !== -1) {
+      clearTimeout(this.viewportRestoreTimerId)
+      this.viewportRestoreTimerId = -1
+    }
+    this.viewportRestoreAttempts = 0
+  }
+
+  /**
+   * 接续恢复：把视口左上角的 Core UTF-8 byte offset 转成 UTF-16，滚到该字符可见。
+   *
+   * 约束：
+   *   - 只有正文已加载（nativeTextReady）且章节布局完成（LayoutManager.lineCount > 0）才执行；
+   *     布局未就绪按 BRIDGE_VIEWPORT_RESTORE_RETRY_MS 重试，上限 BRIDGE_VIEWPORT_RESTORE_MAX_ATTEMPTS。
+   *   - byte offset 先 clamp 到当前正文 byte 长度，再转 UTF-16，并保证不落在代理对中间；
+   *     topVisibleByteOffset < 0（未知）直接不动。
+   *   - API >= 26 用 richEditorController.scrollToVisible({ start, end })，低版本按注释降级：
+   *     不伪造 scrollTop 回写，保持原生当前位置。
+   */
+  restoreViewport(viewport: EditorViewportState): void {
+    if (viewport.topVisibleByteOffset < 0) {
+      return
+    }
+    this.cancelViewportRestore()
+    const sessionAtEntry = this.sessionId
+    const attemptRestore = (): void => {
+      this.viewportRestoreTimerId = -1
+      if (sessionAtEntry !== this.sessionId) {
+        return
+      }
+      if (!this.nativeTextReady || this.richEditorController === null) {
+        this.retryViewportRestore(sessionAtEntry, attemptRestore)
+        return
+      }
+      let lineCount: number = 0
+      try {
+        const layoutManager = this.richEditorController.getLayoutManager()
+        if (layoutManager === undefined || layoutManager === null) {
+          this.retryViewportRestore(sessionAtEntry, attemptRestore)
+          return
+        }
+        lineCount = layoutManager.getLineCount()
+      } catch (e) {
+        lineCount = -1
+      }
+      if (lineCount <= 0) {
+        // 章节布局还没完成：滚到旧/空布局会落到错误位置，重试而不是假回写。
+        this.retryViewportRestore(sessionAtEntry, attemptRestore)
+        return
+      }
+      const text: string = this.currentText
+      const textByteLength: number = TextOffsetMapper.utf16ToUtf8(text, text.length)
+      const clampedByte: number = Math.max(0, Math.min(viewport.topVisibleByteOffset, textByteLength))
+      let utf16Offset: number = TextOffsetMapper.utf8ToUtf16(text, clampedByte)
+      // 保证不落在完整代理对中间（utf8ToUtf16 已左对齐，这里再按严格口径核对一次）。
+      if (TextOffsetMapper.utf16ToUtf8Checked(text, utf16Offset) === null && utf16Offset > 0) {
+        utf16Offset -= 1
+      }
+      const start: number = Math.max(0, Math.min(utf16Offset, text.length))
+      const end: number = Math.min(text.length, start + 1)
+      if (!PlatformApiResolver.getInstance().isApiAtLeast(BRIDGE_VIEWPORT_SCROLL_TO_VISIBLE_MIN_API)) {
+        // 低版本降级：scrollToVisible 自 API 26 起可用；不做像素假回写，保持原生位置。
+        hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+          `restoreViewport skipped: scrollToVisible requires API ${BRIDGE_VIEWPORT_SCROLL_TO_VISIBLE_MIN_API}`
+            + ` byteOffset=${clampedByte}`)
+        return
+      }
+      try {
+        this.richEditorController.scrollToVisible({ start: start, end: end })
+        hilog.info(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG,
+          `restoreViewport applied byteOffset=${clampedByte} utf16=${start} lineCount=${lineCount}`)
+      } catch (e) {
+        hilog.warn(BRIDGE_LOG_DOMAIN, BRIDGE_LOG_TAG, `restoreViewport failed: ${JSON.stringify(e)}`)
+      }
+    }
+    attemptRestore()
+  }
+
+  private retryViewportRestore(sessionToken: number, attemptRestore: () => void): void {
+    if (sessionToken !== this.sessionId ||
+        this.viewportRestoreAttempts >= BRIDGE_VIEWPORT_RESTORE_MAX_ATTEMPTS) {
+      return
+    }
+    this.viewportRestoreAttempts++
+    this.viewportRestoreTimerId = setTimeout((): void => {
+      attemptRestore()
+    }, BRIDGE_VIEWPORT_RESTORE_RETRY_MS)
   }
 }

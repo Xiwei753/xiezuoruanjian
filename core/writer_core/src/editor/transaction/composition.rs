@@ -141,15 +141,17 @@ impl OffsetMap {
         OffsetMap { entries }
     }
 
-    /// 多次编辑（replace-all / delete-surrounding / undo 多 delta）的偏移映射。
+    /// 多次编辑（replace-all / delete-surrounding / ime-commit / undo 多 delta）的偏移映射。
     ///
     /// `edits` 为 `(old_start, old_end, new_start, new_end)` 元组列表（无需预排序，
-    /// 内部按 `old_start` 升序处理；各编辑的 old range 必须互不重叠）。
+    /// 内部按 `(old_start, old_end)` 升序处理；各编辑的 old range 必须互不重叠）。
+    /// 同起点的零长编辑（如 IME commit 在选区起点插入）必须排在非零长区间之前，
+    /// 否则后一个区间会以 `old_start < old_pos` 违反「旧坐标单调不减」不变量。
     /// 静态区域（未编辑部分）生成 Identity/Shifted 映射；编辑区域无映射。
     #[allow(clippy::excessive_nesting)]
     pub fn from_edits(old_len: usize, edits: &[(usize, usize, usize, usize)]) -> Self {
         let mut sorted: Vec<(usize, usize, usize, usize)> = edits.to_vec();
-        sorted.sort_by_key(|e| e.0);
+        sorted.sort_by_key(|e| (e.0, e.1));
         let mut entries = Vec::new();
         let mut old_pos = 0usize;
         let mut new_pos = 0usize;

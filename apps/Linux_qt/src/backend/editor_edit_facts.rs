@@ -31,6 +31,8 @@ impl AppBackend {
         before_text_sha256: QString,
         after_text_sha256: QString,
         base_generation: QString,
+        base_chapter_revision: u64,
+        base_chapter_sha256: QString,
     ) -> QString {
         // Issue #1062 1.1：编辑事实首次上报就固定稳定身份与发生时间，
         // 统计 writer 与章节 actor 共用同一个 event_id。
@@ -59,6 +61,8 @@ impl AppBackend {
             new_selection_head,
             (&baseline_text, &before_text_sha256, &after_text_sha256),
             &base_generation,
+            base_chapter_revision,
+            &base_chapter_sha256,
             &event_id,
             occurred_at_ms,
         );
@@ -121,6 +125,8 @@ impl AppBackend {
         new_selection_head: u64,
         digests: (&QString, &QString, &QString),
         generation: &QString,
+        chapter_base_revision: u64,
+        chapter_base_sha256: &QString,
         event_id: &str,
         occurred_at_ms: i64,
     ) {
@@ -194,6 +200,9 @@ impl AppBackend {
             chapter_id: chapter,
             session_id: session_id.to_string(),
             generation: generation.to_string(),
+            base_generation: generation.to_string(),
+            base_revision: chapter_base_revision,
+            base_sha256: chapter_base_sha256.to_string(),
             input,
         };
         if let Err(error) = crate::backend::chapter_save_queue::enqueue_fact(command) {
