@@ -1983,13 +1983,16 @@ impl CorrectionStore {
             &lexicon_identity,
             &rules_identity,
         );
+        // 只有模型 bundle 实际可用时才算 model 模式；路径配置了但文件缺失
+        // 的规则降级不能被 restore-only/缓存当作模型覆盖。
+        let model_mode_available = model_path.is_some() && model_identity != "model:missing";
         Ok(ScannerSyncedIdentity {
             fingerprint: parts_fingerprint(&parts),
             scanner_stable,
             model_identity,
             lexicon_identity,
             rules_identity,
-            configured_mode: if model_path.is_some() {
+            configured_mode: if model_mode_available {
                 synced_results::MODE_MODEL
             } else {
                 synced_results::MODE_RULES
