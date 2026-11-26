@@ -328,7 +328,8 @@ QtObject {
                     baseRevision, newRevision, oldSelectionAnchor, oldSelectionHead,
                     newSelectionAnchor, newSelectionHead,
                     controller.proofBaselineSent ? "" : controller.proofBaselineText,
-                    beforeTextSha256, afterTextSha256);
+                    beforeTextSha256, afterTextSha256,
+                    Number(controller.chapterSaveSession), controller.committedChapterGeneration);
                 if (changesJson && changesJson !== "[]") {
                     controller.proofBaselineSent = true;
                 }
@@ -1940,7 +1941,7 @@ QtObject {
         if (!projectId || !chapterId) return false;
         if (loadedEditorDocumentIdentity() !== editorDocumentIdentity()) return false;
         editorBackendRef.update_chapter_draft_text(
-            projectId, volumeId, chapterId,
+            projectId, volumeId, chapterId, Number(chapterSaveSession),
             snapshot.text, Number(snapshot.revision), String(snapshot.contentSha256 || ""),
             committedChapterGeneration, Number(committedChapterRevision), committedChapterSha256,
             force === true);
@@ -1977,7 +1978,8 @@ QtObject {
             return false;
         }
         editorBackendRef.update_chapter_draft_text(
-            projectId, volumeId, chapterId, cachedDraftText, Number(cachedDraftRevision),
+            projectId, volumeId, chapterId, Number(chapterSaveSession),
+            cachedDraftText, Number(cachedDraftRevision),
             cachedDraftSha256, committedChapterGeneration,
             Number(committedChapterRevision), committedChapterSha256, true);
         return true;

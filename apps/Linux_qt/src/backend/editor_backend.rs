@@ -214,6 +214,8 @@ pub struct EditorBackend {
             baseline_text: QString,
             before_text_sha256: QString,
             after_text_sha256: QString,
+            editor_session_id: u64,
+            base_generation: QString,
         ) -> QString
     ),
     /// Issue #1062 1.3：编辑器正文变化交给章节 actor 更新可恢复草稿。
@@ -224,6 +226,7 @@ pub struct EditorBackend {
             project_id: QString,
             volume_id: QString,
             chapter_id: QString,
+            session_id: u64,
             text: QString,
             revision: u64,
             sha256: QString,
@@ -932,6 +935,8 @@ impl EditorBackend {
         baseline_text: QString,
         before_text_sha256: QString,
         after_text_sha256: QString,
+        editor_session_id: u64,
+        base_generation: QString,
     ) -> QString {
         let parsed_cause = match cause.to_string().as_str() {
             "Typing" => writer_core::editor::EditorTransactionCause::Typing,
@@ -975,7 +980,13 @@ impl EditorBackend {
             });
         }
         match self.with_app(|app| {
-            let session_id = app.current_writing_session_id();
+            // 编辑事实的真实会话是编辑器文档会话（切章/重开即重建），
+            // 不是写作统计的活动会话；QML 传 0 时退回统计会话。
+            let session_id = if editor_session_id > 0 {
+                editor_session_id.to_string()
+            } else {
+                app.current_writing_session_id()
+            };
             app.record_editor_change_stats(
                 project_id,
                 volume_id,
@@ -994,6 +1005,7 @@ impl EditorBackend {
                 baseline_text,
                 before_text_sha256,
                 after_text_sha256,
+                base_generation,
             )
         }) {
             Ok(event_id) => event_id,
@@ -1015,6 +1027,7 @@ impl EditorBackend {
         project_id: QString,
         volume_id: QString,
         chapter_id: QString,
+        session_id: u64,
         text: QString,
         revision: u64,
         sha256: QString,
@@ -1037,6 +1050,7 @@ impl EditorBackend {
                 &project,
                 &volume,
                 &chapter,
+                session_id,
                 &text,
                 revision,
                 &sha,

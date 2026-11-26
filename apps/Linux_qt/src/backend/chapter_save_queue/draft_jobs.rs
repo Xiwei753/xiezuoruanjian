@@ -7,12 +7,15 @@
 // 顺序串行执行，因此保存看到的事实顺序与编辑器产生顺序一致。
 //
 // 这里不保存业务状态：事实的最终校验由 Core 的显式批次 replay 完成，
-// 本模块只负责把平台冻结的原始投影写进可恢复草稿（chapter_draft）。
+// 本模块只负责把平台冻结的原始投影写进可恢复草稿（chapter_draft），并在
+// 恢复时用**草稿记录的原始 base**校验，绝不拿刚读到的磁盘版本覆盖外部更新。
 // =============================================================================
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+
+use writer_core::api::types::ChapterVersionDto;
 
 use super::{worker_sender, ChapterSaveContext, ChapterSaveJob, ChapterSaveWorkerState};
 
@@ -22,6 +25,10 @@ pub(crate) struct ChapterFactCommand {
     pub project_id: String,
     pub volume_id: String,
     pub chapter_id: String,
+    /// 编辑器会话（十进制字符串；解析失败按 0 处理，不阻断保存）。
+    pub session_id: String,
+    /// 当前对象 generation；草稿 generation 为空时冻结视为任意 generation。
+    pub generation: String,
     pub input: writer_core::api::EditorChangeStatsInputDto,
 }
 
@@ -31,6 +38,9 @@ pub(crate) struct ChapterDraftTextCommand {
     pub project_id: String,
     pub volume_id: String,
     pub chapter_id: String,
+    pub session_id: u64,
+    /// 对象 generation（草稿侧过滤用；与 base_generation 分开）。
+    pub generation: String,
     pub text: Arc<str>,
     pub revision: u64,
     pub sha256: String,
@@ -93,11 +103,10 @@ pub(crate) fn enqueue_restore_project(command: ChapterRestoreCommand) -> usize {
         Path::new(&command.context.projects_root),
         &command.project_id,
     );
-    let needing: Vec<&super::super::chapter_draft::ChapterDraft> = drafts
+    let count = drafts
         .iter()
-        .filter(|draft| !draft.facts.is_empty() || draft.text.is_some())
-        .collect();
-    let count = needing.len();
+        .filter(|draft| draft.fact_count > 0 || draft.text_present)
+        .count();
     if count == 0 {
         return 0;
     }
@@ -133,6 +142,7 @@ pub(crate) fn enqueue_restore_project(command: ChapterRestoreCommand) -> usize {
 pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: ChapterFactCommand) {
     let event_id = command.input.event_id.clone();
     let revision = command.input.new_revision;
+    let session_id = command.session_id.parse::<u64>().unwrap_or(0);
     let api = state.api_for(&command.context);
     let projection_json = match api.record_editor_proof_fact(command.input) {
         Ok(json) => json,
@@ -152,12 +162,16 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
         return;
     }
     super::super::chapter_draft::note_fact(
+        Path::new(&command.context.projects_root),
         &command.project_id,
         &command.chapter_id,
         &command.volume_id,
+        session_id,
+        &command.generation,
         super::super::chapter_draft::DraftFact {
             event_id,
             revision,
+            session_id,
             projection_json,
         },
     );
@@ -181,9 +195,12 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
 /// 更新草稿正文；`force` 时立即写整章。
 pub(super) fn handle_draft_text(command: ChapterDraftTextCommand) {
     super::super::chapter_draft::note_text(
+        Path::new(&command.context.projects_root),
         &command.project_id,
         &command.chapter_id,
         &command.volume_id,
+        command.session_id,
+        &command.generation,
         command.text.to_string(),
         command.revision,
         &command.sha256,
@@ -210,11 +227,21 @@ pub(super) fn handle_draft_text(command: ChapterDraftTextCommand) {
     }
 }
 
+fn version_display(version: &ChapterVersionDto) -> String {
+    format!(
+        "{}@{} sha={}",
+        version.object_generation, version.revision, version.content_sha256
+    )
+}
+
 /// 项目进入时按同一批次协议重放未完成草稿。
 ///
-/// 先读当前已提交正文作为基线，用原始事实 replay 出最终正文，再以
-/// “显式批次 + 当前版本 CAS”提交；失败（外部删除、版本冲突、链不一致）
-/// 只保留草稿，不删除任何用户数据。
+/// 四种出口：
+/// - 基线一致：用草稿事实 replay（或草稿正文）作为内容提交，成功才删草稿；
+/// - 基线不一致（外部同步/MCP 改过、generation 变了、混合会话）：不覆盖，
+///   用草稿 base 作 expected 调一次保存让 Core 落冲突材料，然后保留草稿；
+/// - base 为空不可校验：直接保留，不调用保存；
+/// - 无事实且无正文：直接删除。
 pub(super) fn handle_restore_project(
     state: &mut ChapterSaveWorkerState,
     command: ChapterRestoreCommand,
@@ -228,11 +255,21 @@ pub(super) fn handle_restore_project(
     let mut messages: Vec<String> = Vec::new();
     let api = state.api_for(&command.context);
     for draft in drafts {
+        let chapter_id = draft.chapter_id.clone();
+        if draft.fact_count == 0 && !draft.text_present {
+            super::super::chapter_draft::remove(&projects_root, &command.project_id, &chapter_id);
+            continue;
+        }
         let Some(plan) = super::super::chapter_draft::restore_plan(
             &projects_root,
             &command.project_id,
-            &draft.chapter_id,
+            &chapter_id,
         ) else {
+            failed += 1;
+            messages.push(format!(
+                "{chapter_id}: draft_unreadable kept ({})",
+                draft.diagnostic_summary()
+            ));
             continue;
         };
         let opened = match api.open_chapter(&command.project_id, &plan.volume_id, &plan.chapter_id)
@@ -248,57 +285,136 @@ pub(super) fn handle_restore_project(
                 continue;
             }
         };
-        let committed = opened.content;
-        let (content, batch_json) = if plan.fact_count > 0 {
-            match api.replay_editor_proof_batch(&plan.chapter_id, &committed, &plan.batch_json) {
-                Ok(replayed) => (replayed, plan.batch_json),
+        let replayed = if plan.fact_count > 0 {
+            match api.replay_editor_proof_batch(&plan.chapter_id, &opened.content, &plan.batch_json)
+            {
+                Ok(text) => Some(text),
                 Err(error) => {
                     failed += 1;
                     kept += 1;
-                    messages.push(format!("{}: replay failed: {error}", plan.chapter_id));
+                    messages.push(format!("{}: replay_failed kept: {error}", plan.chapter_id));
                     continue;
                 }
             }
         } else {
-            match plan.text {
-                Some(text) => (text, String::new()),
-                None => continue,
-            }
+            None
         };
-        if content == committed && batch_json.is_empty() {
-            super::super::chapter_draft::remove(
-                &projects_root,
-                &command.project_id,
-                &plan.chapter_id,
-            );
-            continue;
+        if let (Some(replayed_text), Some(draft_text)) = (replayed.as_ref(), plan.text.as_ref()) {
+            if replayed_text != draft_text {
+                failed += 1;
+                kept += 1;
+                messages.push(format!(
+                    "{}: replay_text_mismatch failed kept (replayed_len={} draft_len={})",
+                    plan.chapter_id,
+                    replayed_text.len(),
+                    draft_text.len()
+                ));
+                continue;
+            }
         }
-        let result = api.save_chapter_content_versioned_with_proof_batch(
-            &command.project_id,
-            &plan.volume_id,
-            &plan.chapter_id,
-            &content,
-            Some(opened.version),
-            Some(committed),
-            0,
-            &batch_json,
-            true,
-        );
-        match result {
-            Ok(_receipt) => {
+        let content = match (replayed, plan.text.clone()) {
+            (Some(replayed_text), _) => replayed_text,
+            (None, Some(draft_text)) => draft_text,
+            (None, None) => {
                 super::super::chapter_draft::remove(
                     &projects_root,
                     &command.project_id,
                     &plan.chapter_id,
                 );
-                restored += 1;
+                continue;
             }
-            Err(error) => {
-                failed += 1;
-                kept += 1;
-                messages.push(format!("{}: save draft failed: {error}", plan.chapter_id));
+        };
+        let draft_base = ChapterVersionDto {
+            object_generation: plan.base_generation.clone(),
+            revision: plan.base_revision,
+            content_sha256: plan.base_sha256.clone(),
+        };
+        let base_known = !plan.base_generation.is_empty() || plan.base_revision > 0;
+        let base_matches = base_known
+            && plan.base_generation == opened.version.object_generation
+            && plan.base_revision == opened.version.revision
+            && plan.base_sha256 == opened.version.content_sha256;
+        if base_matches && !plan.mixed_sessions {
+            let result = api.save_chapter_content_versioned_with_proof_batch(
+                &command.project_id,
+                &plan.volume_id,
+                &plan.chapter_id,
+                &content,
+                Some(opened.version),
+                Some(opened.content),
+                plan.text_revision,
+                &plan.batch_json,
+                true,
+            );
+            match result {
+                Ok(_receipt) => {
+                    super::super::chapter_draft::remove(
+                        &projects_root,
+                        &command.project_id,
+                        &plan.chapter_id,
+                    );
+                    restored += 1;
+                }
+                Err(error) => {
+                    failed += 1;
+                    kept += 1;
+                    messages.push(format!(
+                        "{}: save_draft_failed kept: {error}",
+                        plan.chapter_id
+                    ));
+                }
+            }
+            continue;
+        }
+        if base_known && !base_matches {
+            // 不覆盖外部更新：用草稿记录的原始 base 作 expected，让 Core
+            // 写出冲突材料（预期 CHAPTER_VERSION_CONFLICT），草稿原样保留。
+            let result = api.save_chapter_content_versioned_with_proof_batch(
+                &command.project_id,
+                &plan.volume_id,
+                &plan.chapter_id,
+                &content,
+                Some(draft_base.clone()),
+                Some(opened.content),
+                plan.text_revision,
+                &plan.batch_json,
+                true,
+            );
+            match result {
+                Ok(_receipt) => crate::backend::app_backend::debug_error_static(
+                    "chapter_draft",
+                    "restore_conflict_save_unexpected_ok",
+                    &format!(
+                        "project={} chapter={}: draft base was unexpectedly accepted",
+                        command.project_id, plan.chapter_id
+                    ),
+                ),
+                Err(error) if error.code() == "CHAPTER_VERSION_CONFLICT" => {}
+                Err(error) => crate::backend::app_backend::debug_error_static(
+                    "chapter_draft",
+                    "restore_conflict_save_failed",
+                    &format!(
+                        "project={} chapter={}: {error}",
+                        command.project_id, plan.chapter_id
+                    ),
+                ),
             }
         }
+        let reason = if !base_known {
+            "base_unverifiable"
+        } else if plan.mixed_sessions {
+            "mixed_sessions"
+        } else {
+            "external_change"
+        };
+        kept += 1;
+        messages.push(format!(
+            "{}: external_change_kept ({reason}) draft_base={} disk_version={} {}",
+            plan.chapter_id,
+            version_display(&draft_base),
+            version_display(&opened.version),
+            plan.session_summary()
+        ));
     }
     if let Ok(mut states) = draft_restore_state().lock() {
         states.insert(

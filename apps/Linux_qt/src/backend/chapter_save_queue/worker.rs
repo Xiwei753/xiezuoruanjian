@@ -1,0 +1,353 @@
+// =============================================================================
+// chapter_save_queue/worker.rs — 唯一的章节保存 worker
+// =============================================================================
+//
+// 只执行成功从 store.mailbox 原子认领（Pending → Started）的请求；已被同会话
+// 更高 revision 接替（Superseded）的旧快照在这里拿不到请求，直接丢弃。
+// 同一 worker 还负责编辑事实、草稿正文与项目草稿恢复（draft_jobs）。
+
+use super::draft_jobs;
+use super::*;
+
+pub(super) struct ChapterSaveChain {
+    /// 本链第一条请求的 base 版本；队列里多份从同一版本入队的快照
+    /// 都以它为锚点，不能因为前一请求推进了 expected 就把后续请求判成冲突。
+    anchor: Option<ChapterVersionDto>,
+    /// 最近一次请求实际使用的 base 版本（成功/失败都记录）。
+    expected: Option<ChapterVersionDto>,
+    /// 最近一次成功写入后的版本，用来推进后续请求的 base。
+    receipt: Option<ChapterVersionDto>,
+    /// 与 receipt 对应的正文，作为冲突材料的 base。
+    text: Arc<str>,
+    /// 已排队/完成请求中最大的编辑器快照 revision。旧快照不得借用新版本。
+    snapshot_revision: u64,
+    /// 链上出现失败/外部更新后失效，后续请求只能重新对齐磁盘版本。
+    invalid: bool,
+    last_used: Instant,
+}
+
+pub(crate) struct ChapterSaveWorkerState {
+    apis: HashMap<String, WriterCoreApi>,
+    chains: HashMap<String, ChapterSaveChain>,
+}
+
+impl ChapterSaveWorkerState {
+    fn new() -> Self {
+        Self {
+            apis: HashMap::new(),
+            chains: HashMap::new(),
+        }
+    }
+
+    pub(super) fn api_for(&mut self, context: &ChapterSaveContext) -> &WriterCoreApi {
+        let key = context.key();
+        self.apis.entry(key).or_insert_with(|| {
+            crate::backend::app_backend::with_layout_core_api(
+                &context.data_root,
+                &context.projects_root,
+                &context.layout(),
+            )
+        })
+    }
+
+    fn prune_chains(&mut self, keep_key: &str) {
+        if self.chains.len() <= MAX_CHAPTER_CHAINS {
+            return;
+        }
+        let mut candidates: Vec<(Instant, String)> = self
+            .chains
+            .iter()
+            .filter(|(key, _)| key.as_str() != keep_key)
+            .map(|(key, chain)| (chain.last_used, key.clone()))
+            .collect();
+        candidates.sort_by_key(|(last_used, _)| *last_used);
+        for (_, key) in candidates {
+            if self.chains.len() <= MAX_CHAPTER_CHAINS {
+                break;
+            }
+            self.chains.remove(&key);
+        }
+    }
+}
+
+fn chapter_chain_key(request: &ChapterSaveRequest) -> String {
+    // 卷 ID 不进入链身份：Issue #1051 允许当前章节跨卷移动，而 object_generation
+    // / revision 随章节留在原地；用项目 + 章节才能在移动后继续用前一回执推进 base。
+    format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        request.context.key(),
+        request.identity.project_id,
+        request.identity.chapter_id,
+        request.identity.session_id
+    )
+}
+
+fn resolve_chain_base(
+    chain: Option<&ChapterSaveChain>,
+    expected: &Option<ChapterVersionDto>,
+    base_content: &Option<String>,
+    snapshot_revision: u64,
+) -> (Option<ChapterVersionDto>, Option<String>, bool) {
+    let mut effective = expected.clone();
+    let mut effective_base = base_content.clone();
+    let mut chained = false;
+    if let Some(chain) = chain {
+        if chain.invalid {
+            return (effective, effective_base, false);
+        }
+        if let (Some(request_base), Some(receipt)) = (expected.as_ref(), chain.receipt.as_ref()) {
+            // 请求 base 要么是链当前 expected（QML 已用上一回执推进），
+            // 要么仍是链锚点（多份快照在队列积压时都从 V0 入队）。两种
+            // 情况都允许接到直接前序回执；但快照必须严格晚于链上已见快照。
+            let matches_expected = chain.expected.as_ref().is_some_and(|chain_base| {
+                chain_base.object_generation == request_base.object_generation
+                    && chain_base.revision == request_base.revision
+                    && chain_base.content_sha256 == request_base.content_sha256
+            });
+            let matches_anchor = chain.anchor.as_ref().is_some_and(|anchor| {
+                anchor.object_generation == request_base.object_generation
+                    && anchor.revision == request_base.revision
+                    && anchor.content_sha256 == request_base.content_sha256
+            });
+            if (matches_expected || matches_anchor)
+                && snapshot_revision > chain.snapshot_revision
+                && request_base.object_generation == receipt.object_generation
+                && receipt.revision > request_base.revision
+            {
+                effective = Some(receipt.clone());
+                effective_base = Some(chain.text.to_string());
+                chained = true;
+            }
+        }
+    }
+    (effective, effective_base, chained)
+}
+
+pub(super) fn chapter_save_worker_loop(receiver: mpsc::Receiver<ChapterSaveJob>) {
+    let mut state = ChapterSaveWorkerState::new();
+    while let Ok(job) = receiver.recv() {
+        match job {
+            ChapterSaveJob::Save(request_id) => handle_chapter_save(&mut state, request_id),
+            ChapterSaveJob::RecordFact(command) => {
+                draft_jobs::handle_record_fact(&mut state, command);
+            }
+            ChapterSaveJob::DraftText(command) => draft_jobs::handle_draft_text(command),
+            ChapterSaveJob::RestoreProject(command) => {
+                draft_jobs::handle_restore_project(&mut state, command);
+            }
+            ChapterSaveJob::Drain(ack) => {
+                let _ = ack.send(());
+            }
+        }
+    }
+}
+
+fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
+    // 只有成功把 Pending 原子转成 Started 的请求才允许执行；已被更高
+    // revision 接替（Superseded）的旧快照在这里直接丢弃，绝不能覆盖终态。
+    let Some(request) = claim_save(request_id) else {
+        return;
+    };
+    let chain_key = chapter_chain_key(&request);
+    let (effective_expected, effective_base, chained) = {
+        let chain = state.chains.get(&chain_key);
+        resolve_chain_base(
+            chain,
+            &request.expected,
+            &request.base_content,
+            request.identity.snapshot_revision,
+        )
+    };
+    if let Some(chain) = state.chains.get_mut(&chain_key) {
+        chain.expected = effective_expected.clone();
+        chain.last_used = Instant::now();
+    } else {
+        state.chains.insert(
+            chain_key.clone(),
+            ChapterSaveChain {
+                anchor: effective_expected.clone(),
+                expected: effective_expected.clone(),
+                receipt: None,
+                text: Arc::from(""),
+                snapshot_revision: request.identity.snapshot_revision,
+                invalid: false,
+                last_used: Instant::now(),
+            },
+        );
+    }
+    state.prune_chains(&chain_key);
+
+    let api = state.api_for(&request.context);
+    let projects_root = PathBuf::from(&request.context.projects_root);
+    // Issue #1062 1.1：证明批次由 actor 从自己的编辑事实草稿里冻结，不再用
+    // QML 传来的 event ID 去 Core 全局 pending map 猜批次。快照 revision 之前
+    // 的连续事实前缀随正文一起提交；之后的事实留给下一次保存。
+    let base_generation = request
+        .expected
+        .as_ref()
+        .map_or("", |version| version.object_generation.as_str());
+    let frozen_facts = match crate::backend::chapter_draft::freeze_batch_for(
+        &projects_root,
+        &request.identity.project_id,
+        &request.identity.chapter_id,
+        request.identity.session_id,
+        base_generation,
+        request.identity.snapshot_revision,
+    ) {
+        Ok(facts) => facts,
+        Err(error) => {
+            // 冻结失败不能退化成“无证明保存”：否则这批事实的 before 链会
+            // 与之后提交的正文基线脱节，后续保存永久 PROOF_BATCH_MISMATCH。
+            crate::backend::app_backend::debug_error_static(
+                "chapter_save_queue",
+                "freeze_proof_batch_failed",
+                &format!(
+                    "request_id={} project={} chapter={}: {error}",
+                    request_id, request.identity.project_id, request.identity.chapter_id
+                ),
+            );
+            complete_error(
+                request_id,
+                ChapterSaveError {
+                    code: "PROOF_BATCH_FREEZE_FAILED".to_string(),
+                    message_key: "error.proof_batch_freeze_failed".to_string(),
+                    message_args: serde_json::json!({ "detail": error }),
+                    raw_error: error,
+                    conflict: false,
+                },
+                chained,
+                String::new(),
+            );
+            return;
+        }
+    };
+    let frozen_event_ids: Vec<String> = frozen_facts
+        .iter()
+        .map(|fact| fact.event_id.clone())
+        .collect();
+    let proof_batch_json = match frozen_facts
+        .iter()
+        .map(|fact| {
+            serde_json::from_str::<serde_json::Value>(&fact.projection_json)
+                .map_err(|error| format!("event={} projection 无法解析: {error}", fact.event_id))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .and_then(|values| {
+            serde_json::to_string(&values).map_err(|error| format!("批次序列化失败: {error}"))
+        }) {
+        Ok(json) => json,
+        Err(error) => {
+            crate::backend::app_backend::debug_error_static(
+                "chapter_save_queue",
+                "freeze_proof_batch_failed",
+                &format!(
+                    "request_id={} project={} chapter={}: {error}",
+                    request_id, request.identity.project_id, request.identity.chapter_id
+                ),
+            );
+            complete_error(
+                request_id,
+                ChapterSaveError {
+                    code: "PROOF_BATCH_FREEZE_FAILED".to_string(),
+                    message_key: "error.proof_batch_freeze_failed".to_string(),
+                    message_args: serde_json::json!({ "detail": error }),
+                    raw_error: error,
+                    conflict: false,
+                },
+                chained,
+                String::new(),
+            );
+            return;
+        }
+    };
+    let save_result = api.save_chapter_content_versioned_with_proof_batch(
+        &request.identity.project_id,
+        &request.identity.volume_id,
+        &request.identity.chapter_id,
+        &request.content,
+        effective_expected,
+        effective_base,
+        request.identity.snapshot_revision,
+        &proof_batch_json,
+        request.allow_empty_overwrite,
+    );
+
+    match save_result {
+        Ok(receipt) => {
+            // journal 已确认：只 ack 本批包含的事件，快照之后的编辑事实留在
+            // 草稿里等下一次保存；没有剩余事实时删除草稿。
+            if !frozen_event_ids.is_empty() {
+                // 以 journal 回执确认的 event IDs 为准（Core 只回本批进入
+                // durable journal 的投影）；回执缺失时才退回冻结批次。
+                let acknowledged = if receipt.pending_projections.is_empty() {
+                    frozen_event_ids.clone()
+                } else {
+                    receipt.pending_projections.clone()
+                };
+                crate::backend::chapter_draft::mark_committed(
+                    &projects_root,
+                    &request.identity.project_id,
+                    &request.identity.chapter_id,
+                    &acknowledged,
+                    &receipt.version.object_generation,
+                    receipt.version.revision,
+                    &receipt.version.content_sha256,
+                );
+            } else {
+                crate::backend::chapter_draft::remove(
+                    &projects_root,
+                    &request.identity.project_id,
+                    &request.identity.chapter_id,
+                );
+            }
+            if let Some(chain) = state.chains.get_mut(&chain_key) {
+                chain.receipt = Some(receipt.version.clone());
+                chain.text = Arc::clone(&request.content);
+                chain.snapshot_revision = chain
+                    .snapshot_revision
+                    .max(request.identity.snapshot_revision);
+                chain.invalid = false;
+                chain.last_used = Instant::now();
+            }
+            complete_ok(request_id, receipt, chained);
+        }
+        Err(error) => {
+            if let Some(chain) = state.chains.get_mut(&chain_key) {
+                // 失败后链不能再把后续快照接到旧回执上；下一请求必须
+                // 重新读取磁盘版本或显式冲突。
+                chain.invalid = true;
+                chain.last_used = Instant::now();
+            }
+            let code = error.code().to_string();
+            let conflict = code == "CHAPTER_VERSION_CONFLICT";
+            let conflict_draft_path = if conflict {
+                // 只读定位：Core 在返回冲突前已写好本次快照的 incoming.md，
+                // 这里把目录回给 QML 便于提示/排查，不复制正文、不改状态。
+                find_conflict_material(&request)
+            } else {
+                String::new()
+            };
+            crate::backend::app_backend::debug_error_static(
+                "chapter_save_queue",
+                "chapter_save_failed",
+                &format!(
+                    "request_id={} code={} chained={} conflict_dir={}",
+                    request_id, code, chained, conflict_draft_path
+                ),
+            );
+            complete_error(
+                request_id,
+                ChapterSaveError {
+                    code,
+                    message_key: error.message_key().to_string(),
+                    message_args: serde_json::to_value(error.params())
+                        .unwrap_or_else(|_| serde_json::json!({})),
+                    raw_error: error.to_string(),
+                    conflict,
+                },
+                chained,
+                conflict_draft_path,
+            );
+        }
+    }
+}

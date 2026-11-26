@@ -32,9 +32,13 @@ use writer_core::api::WriterCoreApi;
 use writer_core::storage::git_repo_layout::GitRepoLayout;
 
 use conflict_material::find_conflict_material;
+use worker::chapter_save_worker_loop;
+use worker::ChapterSaveWorkerState;
 
 mod conflict_material;
 mod draft_jobs;
+mod tests;
+mod worker;
 
 pub(crate) use draft_jobs::{
     draft_restore_status, enqueue_draft_text, enqueue_fact, enqueue_restore_project,
@@ -189,10 +193,8 @@ struct ChapterSaveEntry {
     outcome: ChapterSaveOutcome,
     chained: bool,
     conflict_draft_path: String,
-    terminal: bool,
+    state: ChapterSaveState,
     delivered: bool,
-    /// worker 是否已经开始执行；已开始的请求不能再用新快照合并。
-    started: bool,
 }
 
 /// GUI 线程读到的结果视图。
@@ -222,23 +224,38 @@ const MAX_CHAPTER_CHAINS: usize = 64;
 /// 冲突材料定位的时间窗口：只看本轮保存刚写入的材料目录。
 pub(super) const CONFLICT_MATERIAL_WINDOW: Duration = Duration::from_secs(120);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChapterSaveState {
+    /// 已入队、正文在 mailbox，等待 worker 认领；可被同会话更高 revision 接替。
+    Pending,
+    /// worker 已原子认领并执行；不再可合并，channel 里只有 id。
+    Started,
+    /// 已有终态回执（Ok / Error / Superseded）。
+    Terminal,
+}
+
 #[derive(Default)]
 struct ChapterSaveStore {
     entries: HashMap<u32, ChapterSaveEntry>,
     order: VecDeque<u32>,
+    /// 待执行请求：只在 Pending 状态持有完整快照；worker 认领时 move 走，
+    /// channel 里只传 request id，正文不留在无界 mpsc 队列里。
+    mailbox: HashMap<u32, ChapterSaveRequest>,
+    /// 合并索引：workspace + 对象 generation + 真实会话 -> 最近的 Pending 请求。
+    latest_pending: HashMap<String, u32>,
 }
 
 /// 保存队列占用快照（Issue #1062 3.4：保存/证明队列字节数）。
 ///
-/// 只统计仍在结果表里的请求：终态且已交付的正文在交付后即释放，
+/// 只统计仍在结果表/mailbox 里的请求：终态且已交付的正文在交付后即释放，
 /// 这里反映的是“真正还占着内存”的部分，不用历史累计值。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ChapterSaveQueueMetrics {
-    /// 尚未终态的请求数（等待 worker 写盘）。
+    /// 尚未终态的请求数（等待或正在写盘）。
     pub pending_requests: usize,
     /// 结果表保留的记录数（含已交付但未淘汰的回执）。
     pub retained_results: usize,
-    /// 结果表仍持有的正文快照字节数。
+    /// 仍在内存里的正文快照字节数。
     pub content_bytes: usize,
 }
 
@@ -253,7 +270,7 @@ pub(crate) fn queue_metrics() -> ChapterSaveQueueMetrics {
         ..ChapterSaveQueueMetrics::default()
     };
     for entry in store.entries.values() {
-        if !entry.terminal {
+        if entry.state != ChapterSaveState::Terminal {
             metrics.pending_requests += 1;
         }
         metrics.content_bytes = metrics.content_bytes.saturating_add(entry.content.len());
@@ -265,40 +282,21 @@ static CHAPTER_SAVE_RESULTS: OnceLock<(Mutex<ChapterSaveStore>, Condvar)> = Once
 static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 static CHAPTER_SAVE_WORKER: OnceLock<mpsc::Sender<ChapterSaveJob>> = OnceLock::new();
 
-/// 同一（项目, 卷, 章节, 会话）最近一次入队的保存 id。
-static LATEST_PENDING_SAVES: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
-/// 已被更新快照取代、尚未执行的保存：旧 id -> 接替者 id。
-static SUPERSEDED_SAVES: OnceLock<Mutex<HashMap<u32, u32>>> = OnceLock::new();
-
-fn latest_pending_saves() -> &'static Mutex<HashMap<String, u32>> {
-    LATEST_PENDING_SAVES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn superseded_saves() -> &'static Mutex<HashMap<u32, u32>> {
-    SUPERSEDED_SAVES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// 请求是否已被 worker 取走执行（或已终态）。
-fn entry_started(request_id: u32) -> bool {
-    let (mutex, _) = results();
-    let Ok(store) = mutex.lock() else {
-        return true;
-    };
-    store
-        .entries
-        .get(&request_id)
-        .is_some_and(|entry| entry.started || entry.terminal)
-}
-
-fn take_superseded(request_id: u32) -> Option<u32> {
-    superseded_saves()
-        .lock()
-        .ok()
-        .and_then(|mut map| map.remove(&request_id))
-}
-
 fn results() -> &'static (Mutex<ChapterSaveStore>, Condvar) {
     CHAPTER_SAVE_RESULTS.get_or_init(|| (Mutex::new(ChapterSaveStore::default()), Condvar::new()))
+}
+
+fn lock_store() -> std::sync::MutexGuard<'static, ChapterSaveStore> {
+    let (mutex, _) = results();
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn clear_pending_index(store: &mut ChapterSaveStore, request_id: u32) {
+    store
+        .latest_pending
+        .retain(|_, pending_id| *pending_id != request_id);
 }
 
 /// 全进程单调 request id；0 保留给“入队失败”。
@@ -319,7 +317,7 @@ fn prune_store(store: &mut ChapterSaveStore) {
         let evict = store
             .entries
             .get(&oldest)
-            .map(|entry| entry.terminal && entry.delivered)
+            .map(|entry| entry.state == ChapterSaveState::Terminal && entry.delivered)
             .unwrap_or(true);
         if evict {
             store.entries.remove(&oldest);
@@ -331,26 +329,25 @@ fn prune_store(store: &mut ChapterSaveStore) {
     }
 }
 
-fn register_entry(identity: ChapterSaveIdentity, content: Arc<str>) {
-    let (mutex, _) = results();
-    let mut store = mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    prune_store(&mut store);
-    store.order.push_back(identity.request_id);
+/// 登记一条 Pending 请求（正文同时进入 mailbox；channel 只传 id）。
+fn register_pending_entry(store: &mut ChapterSaveStore, request: ChapterSaveRequest) -> u32 {
+    let request_id = request.identity.request_id;
+    prune_store(store);
+    store.order.push_back(request_id);
     store.entries.insert(
-        identity.request_id,
+        request_id,
         ChapterSaveEntry {
-            identity,
-            content,
+            identity: request.identity.clone(),
+            content: Arc::clone(&request.content),
             outcome: ChapterSaveOutcome::Pending,
             chained: false,
             conflict_draft_path: String::new(),
-            terminal: false,
+            state: ChapterSaveState::Pending,
             delivered: false,
-            started: false,
         },
     );
+    store.mailbox.insert(request_id, request);
+    request_id
 }
 
 /// 记录一个在入队前就确定失败的结果（Core 未初始化 / worker 已退出）。
@@ -360,23 +357,36 @@ pub(crate) fn fail_before_enqueue(
     error: ChapterSaveError,
 ) {
     let request_id = identity.request_id;
-    register_entry(identity, content);
+    {
+        let mut store = lock_store();
+        prune_store(&mut store);
+        store.order.push_back(request_id);
+        store.entries.insert(
+            request_id,
+            ChapterSaveEntry {
+                identity,
+                content,
+                outcome: ChapterSaveOutcome::Pending,
+                chained: false,
+                conflict_draft_path: String::new(),
+                state: ChapterSaveState::Pending,
+                delivered: false,
+            },
+        );
+    }
     complete_error(request_id, error, false, String::new());
 }
 
 pub(crate) fn complete_ok(request_id: u32, receipt: ChapterSaveReceiptDto, chained: bool) {
-    let (mutex, condvar) = results();
-    let mut store = mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_, condvar) = results();
+    let mut store = lock_store();
     if let Some(entry) = store.entries.get_mut(&request_id) {
         entry.outcome = ChapterSaveOutcome::Ok(receipt);
         entry.chained = chained;
-        entry.terminal = true;
+        entry.state = ChapterSaveState::Terminal;
     }
-    if let Ok(mut superseded) = superseded_saves().lock() {
-        superseded.remove(&request_id);
-    }
+    store.mailbox.remove(&request_id);
+    clear_pending_index(&mut store, request_id);
     condvar.notify_all();
 }
 
@@ -386,50 +396,76 @@ pub(crate) fn complete_error(
     chained: bool,
     conflict_draft_path: String,
 ) {
-    let (mutex, condvar) = results();
-    let mut store = mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (_, condvar) = results();
+    let mut store = lock_store();
     if let Some(entry) = store.entries.get_mut(&request_id) {
         entry.outcome = ChapterSaveOutcome::Error(error);
         entry.chained = chained;
         entry.conflict_draft_path = conflict_draft_path;
-        entry.terminal = true;
+        entry.state = ChapterSaveState::Terminal;
     }
-    if let Ok(mut superseded) = superseded_saves().lock() {
-        superseded.remove(&request_id);
-    }
+    store.mailbox.remove(&request_id);
+    clear_pending_index(&mut store, request_id);
     condvar.notify_all();
 }
 
-/// 标记请求已被 worker 取走：此后入队的新快照不能再合并它。
-fn mark_entry_started(request_id: u32) {
-    let (mutex, _) = results();
-    let Ok(mut store) = mutex.lock() else {
-        return;
-    };
-    if let Some(entry) = store.entries.get_mut(&request_id) {
-        entry.started = true;
+/// 原子认领：同一把锁里完成 Pending -> Started 与 mailbox 取出。
+///
+/// 返回 `None` 表示请求已被同会话更高 revision 接替（Superseded）或已被
+/// 淘汰，worker 必须直接丢弃，不能再执行旧快照。
+fn claim_save(request_id: u32) -> Option<ChapterSaveRequest> {
+    let mut store = lock_store();
+    let pending = store
+        .entries
+        .get(&request_id)
+        .is_some_and(|entry| entry.state == ChapterSaveState::Pending);
+    if !pending {
+        store.mailbox.remove(&request_id);
+        return None;
     }
+    let request = store.mailbox.remove(&request_id);
+    if request.is_none() {
+        if let Some(entry) = store.entries.get_mut(&request_id) {
+            entry.outcome = ChapterSaveOutcome::Error(ChapterSaveError {
+                code: "SAVE_MAILBOX_MISSING".to_string(),
+                message_key: "error.save_mailbox_missing".to_string(),
+                message_args: serde_json::json!({}),
+                raw_error: format!("request {request_id} pending without mailbox body"),
+                conflict: false,
+            });
+            entry.state = ChapterSaveState::Terminal;
+        }
+        clear_pending_index(&mut store, request_id);
+        return None;
+    }
+    if let Some(entry) = store.entries.get_mut(&request_id) {
+        entry.state = ChapterSaveState::Started;
+    }
+    request
 }
 
-/// 被更新快照取代的请求：立刻终态，不再写盘；等待方由 QML 续接到 `by`。
-///
-/// 在 `enqueue` 里同步调用（worker 还没轮到它），worker 随后只会丢弃该任务。
-fn complete_superseded(request_id: u32, superseded_by: u32) {
-    let (mutex, condvar) = results();
-    let mut store = mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(entry) = store.entries.get_mut(&request_id) {
-        entry.outcome = ChapterSaveOutcome::Superseded { by: superseded_by };
-        entry.terminal = true;
+/// 同会话更高 revision 的快照接替旧 Pending 请求（同一把锁内完成状态转换）。
+fn supersede_pending(
+    store: &mut ChapterSaveStore,
+    previous: u32,
+    successor: u32,
+    successor_revision: u64,
+) -> bool {
+    let replaceable = store.entries.get(&previous).is_some_and(|entry| {
+        entry.state == ChapterSaveState::Pending
+            && successor_revision > entry.identity.snapshot_revision
+    });
+    if !replaceable {
+        return false;
+    }
+    store.mailbox.remove(&previous);
+    if let Some(entry) = store.entries.get_mut(&previous) {
+        entry.outcome = ChapterSaveOutcome::Superseded { by: successor };
+        entry.state = ChapterSaveState::Terminal;
         entry.content = Arc::from("");
     }
-    if let Ok(mut superseded) = superseded_saves().lock() {
-        superseded.remove(&request_id);
-    }
-    condvar.notify_all();
+    clear_pending_index(store, previous);
+    true
 }
 
 fn snapshot_entry(entry: &mut ChapterSaveEntry, delivered_now: bool) -> ChapterSaveSnapshot {
@@ -439,10 +475,11 @@ fn snapshot_entry(entry: &mut ChapterSaveEntry, delivered_now: bool) -> ChapterS
         outcome: entry.outcome.clone(),
         chained: entry.chained,
         conflict_draft_path: entry.conflict_draft_path.clone(),
-        terminal: entry.terminal,
+        terminal: entry.state == ChapterSaveState::Terminal,
         delivered_now,
     };
-    if delivered_now && entry.terminal {
+    let terminal = entry.state == ChapterSaveState::Terminal;
+    if delivered_now && terminal {
         // 终态首次交付后不再需要正文副本：调用方只在 delivered_now 时应用
         // 保存副作用，保留整章正文只会让结果表随历史回执持续增长
         // （Issue #1062 第 1.3 项：清理已完成回执和历史快照引用）。
@@ -459,7 +496,7 @@ pub(crate) fn poll(request_id: u32) -> Option<ChapterSaveSnapshot> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let entry = store.entries.get_mut(&request_id)?;
-    let delivered_now = entry.terminal && !entry.delivered;
+    let delivered_now = entry.state == ChapterSaveState::Terminal && !entry.delivered;
     if delivered_now {
         entry.delivered = true;
     }
@@ -478,7 +515,7 @@ pub(crate) fn wait(request_id: u32, timeout: Duration) -> ChapterSaveWait {
         let Some(entry) = store.entries.get_mut(&request_id) else {
             return ChapterSaveWait::Unknown;
         };
-        if entry.terminal {
+        if entry.state == ChapterSaveState::Terminal {
             let delivered_now = !entry.delivered;
             entry.delivered = true;
             return ChapterSaveWait::Found(snapshot_entry(entry, delivered_now));
@@ -494,7 +531,8 @@ pub(crate) fn wait(request_id: u32, timeout: Duration) -> ChapterSaveWait {
 }
 
 enum ChapterSaveJob {
-    Save(ChapterSaveRequest),
+    /// 只传 request id；完整快照在 store.mailbox，worker 认领时原子取走。
+    Save(u32),
     /// 一条编辑事实：actor 构造原始证明投影并持久化为可恢复草稿
     /// （Issue #1062 1.1：编辑事实与保存命令同一 actor）。
     RecordFact(ChapterFactCommand),
@@ -535,370 +573,61 @@ fn worker_sender() -> &'static mpsc::Sender<ChapterSaveJob> {
 /// UI 线程调用：登记 pending 结果并按入队顺序交给唯一 worker，立刻返回。
 pub(crate) fn enqueue(request: ChapterSaveRequest) -> Result<(), String> {
     let request_id = request.identity.request_id;
-    let session_key = format!(
-        "{}\x1f{}\x1f{}\x1f{}",
-        request.identity.project_id,
-        request.identity.volume_id,
-        request.identity.chapter_id,
-        request.identity.session_id,
-    );
-    register_entry(request.identity.clone(), Arc::clone(&request.content));
-    // Issue #1062 1.1：合并同一会话尚未执行的保存快照。编辑事实已经随
-    // 每次编辑进入 actor 草稿，替换正文快照不会丢证明事件序列；被取代的
-    // 请求立刻返回 Superseded，等待方续接到接替者。
-    if let Ok(mut latest) = latest_pending_saves().lock() {
-        if let Some(previous) = latest.insert(session_key, request_id) {
-            if previous != request_id && !entry_started(previous) {
-                if let Ok(mut superseded) = superseded_saves().lock() {
-                    superseded.insert(previous, request_id);
-                }
-                // 立即给出终态：被取代的请求不会执行，QML 无需等 worker
-                // 走到它才把等待方续接到接替者。
-                complete_superseded(previous, request_id);
-            }
-        }
-    }
-    worker_sender()
-        .send(ChapterSaveJob::Save(request))
-        .map_err(|_| format!("chapter save queue worker has exited (request_id={request_id})"))
-}
-
-// ── worker ────────────────────────────────────────────────────────────────
-
-struct ChapterSaveChain {
-    /// 本链第一条请求的 base 版本；队列里多份从同一版本入队的快照
-    /// 都以它为锚点，不能因为前一请求推进了 expected 就把后续请求判成冲突。
-    anchor: Option<ChapterVersionDto>,
-    /// 最近一次请求实际使用的 base 版本（成功/失败都记录）。
-    expected: Option<ChapterVersionDto>,
-    /// 最近一次成功写入后的版本，用来推进后续请求的 base。
-    receipt: Option<ChapterVersionDto>,
-    /// 与 receipt 对应的正文，作为冲突材料的 base。
-    text: Arc<str>,
-    /// 已排队/完成请求中最大的编辑器快照 revision。旧快照不得借用新版本。
-    snapshot_revision: u64,
-    /// 链上出现失败/外部更新后失效，后续请求只能重新对齐磁盘版本。
-    invalid: bool,
-    last_used: Instant,
-}
-
-struct ChapterSaveWorkerState {
-    apis: HashMap<String, WriterCoreApi>,
-    chains: HashMap<String, ChapterSaveChain>,
-}
-
-impl ChapterSaveWorkerState {
-    fn new() -> Self {
-        Self {
-            apis: HashMap::new(),
-            chains: HashMap::new(),
-        }
-    }
-
-    fn api_for(&mut self, context: &ChapterSaveContext) -> &WriterCoreApi {
-        let key = context.key();
-        self.apis.entry(key).or_insert_with(|| {
-            crate::backend::app_backend::with_layout_core_api(
-                &context.data_root,
-                &context.projects_root,
-                &context.layout(),
-            )
-        })
-    }
-
-    fn prune_chains(&mut self, keep_key: &str) {
-        if self.chains.len() <= MAX_CHAPTER_CHAINS {
-            return;
-        }
-        let mut candidates: Vec<(Instant, String)> = self
-            .chains
-            .iter()
-            .filter(|(key, _)| key.as_str() != keep_key)
-            .map(|(key, chain)| (chain.last_used, key.clone()))
-            .collect();
-        candidates.sort_by_key(|(last_used, _)| *last_used);
-        for (_, key) in candidates {
-            if self.chains.len() <= MAX_CHAPTER_CHAINS {
-                break;
-            }
-            self.chains.remove(&key);
-        }
-    }
-}
-
-fn chapter_chain_key(request: &ChapterSaveRequest) -> String {
-    // 卷 ID 不进入链身份：Issue #1051 允许当前章节跨卷移动，而 object_generation
-    // / revision 随章节留在原地；用项目 + 章节才能在移动后继续用前一回执推进 base。
-    format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
-        request.context.key(),
-        request.identity.project_id,
-        request.identity.chapter_id,
-        request.identity.session_id
-    )
-}
-
-fn resolve_chain_base(
-    chain: Option<&ChapterSaveChain>,
-    expected: &Option<ChapterVersionDto>,
-    base_content: &Option<String>,
-    snapshot_revision: u64,
-) -> (Option<ChapterVersionDto>, Option<String>, bool) {
-    let mut effective = expected.clone();
-    let mut effective_base = base_content.clone();
-    let mut chained = false;
-    if let Some(chain) = chain {
-        if chain.invalid {
-            return (effective, effective_base, false);
-        }
-        if let (Some(request_base), Some(receipt)) = (expected.as_ref(), chain.receipt.as_ref()) {
-            // 请求 base 要么是链当前 expected（QML 已用上一回执推进），
-            // 要么仍是链锚点（多份快照在队列积压时都从 V0 入队）。两种
-            // 情况都允许接到直接前序回执；但快照必须严格晚于链上已见快照。
-            let matches_expected = chain.expected.as_ref().is_some_and(|chain_base| {
-                chain_base.object_generation == request_base.object_generation
-                    && chain_base.revision == request_base.revision
-                    && chain_base.content_sha256 == request_base.content_sha256
-            });
-            let matches_anchor = chain.anchor.as_ref().is_some_and(|anchor| {
-                anchor.object_generation == request_base.object_generation
-                    && anchor.revision == request_base.revision
-                    && anchor.content_sha256 == request_base.content_sha256
-            });
-            if (matches_expected || matches_anchor)
-                && snapshot_revision > chain.snapshot_revision
-                && request_base.object_generation == receipt.object_generation
-                && receipt.revision > request_base.revision
+    let merge_key = save_merge_key(&request);
+    let snapshot_revision = request.identity.snapshot_revision;
+    {
+        let (_, condvar) = results();
+        let mut store = lock_store();
+        register_pending_entry(&mut store, request);
+        if let Some(previous) = store.latest_pending.get(&merge_key).copied() {
+            if previous != request_id
+                && supersede_pending(&mut store, previous, request_id, snapshot_revision)
             {
-                effective = Some(receipt.clone());
-                effective_base = Some(chain.text.to_string());
-                chained = true;
+                // 被取代的请求立刻终态：等待方续接到接替者，worker 之后
+                // 收到它的 id 时只会认领失败并丢弃。
+                condvar.notify_all();
             }
         }
+        store.latest_pending.insert(merge_key, request_id);
     }
-    (effective, effective_base, chained)
-}
-
-fn chapter_save_worker_loop(receiver: mpsc::Receiver<ChapterSaveJob>) {
-    let mut state = ChapterSaveWorkerState::new();
-    while let Ok(job) = receiver.recv() {
-        match job {
-            ChapterSaveJob::Save(request) => handle_chapter_save(&mut state, request),
-            ChapterSaveJob::RecordFact(command) => {
-                draft_jobs::handle_record_fact(&mut state, command);
-            }
-            ChapterSaveJob::DraftText(command) => draft_jobs::handle_draft_text(command),
-            ChapterSaveJob::RestoreProject(command) => {
-                draft_jobs::handle_restore_project(&mut state, command);
-            }
-            ChapterSaveJob::Drain(ack) => {
-                let _ = ack.send(());
-            }
-        }
-    }
-}
-
-fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request: ChapterSaveRequest) {
-    let request_id = request.identity.request_id;
-    if take_superseded(request_id).is_some() {
-        // 入队时已经被更新快照取代并给出过 Superseded 终态，这里只丢弃任务。
-        return;
-    }
-    mark_entry_started(request_id);
-    let chain_key = chapter_chain_key(&request);
-    let (effective_expected, effective_base, chained) = {
-        let chain = state.chains.get(&chain_key);
-        resolve_chain_base(
-            chain,
-            &request.expected,
-            &request.base_content,
-            request.identity.snapshot_revision,
-        )
-    };
-    if let Some(chain) = state.chains.get_mut(&chain_key) {
-        chain.expected = effective_expected.clone();
-        chain.last_used = Instant::now();
-    } else {
-        state.chains.insert(
-            chain_key.clone(),
-            ChapterSaveChain {
-                anchor: effective_expected.clone(),
-                expected: effective_expected.clone(),
-                receipt: None,
-                text: Arc::from(""),
-                snapshot_revision: request.identity.snapshot_revision,
-                invalid: false,
-                last_used: Instant::now(),
+    let sent = worker_sender().send(ChapterSaveJob::Save(request_id));
+    if sent.is_err() {
+        let mut store = lock_store();
+        store.mailbox.remove(&request_id);
+        clear_pending_index(&mut store, request_id);
+        drop(store);
+        complete_error(
+            request_id,
+            ChapterSaveError {
+                code: "SAVE_QUEUE_UNAVAILABLE".to_string(),
+                message_key: "error.save_queue_unavailable".to_string(),
+                message_args: serde_json::json!({}),
+                raw_error: "chapter save queue worker has exited".to_string(),
+                conflict: false,
             },
+            false,
+            String::new(),
         );
+        return Err(format!(
+            "chapter save queue worker has exited (request_id={request_id})"
+        ));
     }
-    state.prune_chains(&chain_key);
+    Ok(())
+}
 
-    let api = state.api_for(&request.context);
-    let projects_root = PathBuf::from(&request.context.projects_root);
-    // Issue #1062 1.1：证明批次由 actor 从自己的编辑事实草稿里冻结，不再用
-    // QML 传来的 event ID 去 Core 全局 pending map 猜批次。快照 revision 之前
-    // 的连续事实前缀随正文一起提交；之后的事实留给下一次保存。
-    let frozen_facts = match super::chapter_draft::freeze_batch_for(
-        &projects_root,
-        &request.identity.project_id,
-        &request.identity.chapter_id,
-        request.identity.snapshot_revision,
-    ) {
-        Ok(facts) => facts,
-        Err(error) => {
-            // 冻结失败不能退化成“无证明保存”：否则这批事实的 before 链会
-            // 与之后提交的正文基线脱节，后续保存永久 PROOF_BATCH_MISMATCH。
-            crate::backend::app_backend::debug_error_static(
-                "chapter_save_queue",
-                "freeze_proof_batch_failed",
-                &format!(
-                    "request_id={} project={} chapter={}: {error}",
-                    request_id, request.identity.project_id, request.identity.chapter_id
-                ),
-            );
-            complete_error(
-                request_id,
-                ChapterSaveError {
-                    code: "PROOF_BATCH_FREEZE_FAILED".to_string(),
-                    message_key: "error.proof_batch_freeze_failed".to_string(),
-                    message_args: serde_json::json!({ "detail": error }),
-                    raw_error: error,
-                    conflict: false,
-                },
-                chained,
-                String::new(),
-            );
-            return;
-        }
-    };
-    let frozen_event_ids: Vec<String> = frozen_facts
-        .iter()
-        .map(|fact| fact.event_id.clone())
-        .collect();
-    let proof_batch_json = match frozen_facts
-        .iter()
-        .map(|fact| {
-            serde_json::from_str::<serde_json::Value>(&fact.projection_json)
-                .map_err(|error| format!("event={} projection 无法解析: {error}", fact.event_id))
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .and_then(|values| {
-            serde_json::to_string(&values).map_err(|error| format!("批次序列化失败: {error}"))
-        }) {
-        Ok(json) => json,
-        Err(error) => {
-            crate::backend::app_backend::debug_error_static(
-                "chapter_save_queue",
-                "freeze_proof_batch_failed",
-                &format!(
-                    "request_id={} project={} chapter={}: {error}",
-                    request_id, request.identity.project_id, request.identity.chapter_id
-                ),
-            );
-            complete_error(
-                request_id,
-                ChapterSaveError {
-                    code: "PROOF_BATCH_FREEZE_FAILED".to_string(),
-                    message_key: "error.proof_batch_freeze_failed".to_string(),
-                    message_args: serde_json::json!({ "detail": error }),
-                    raw_error: error,
-                    conflict: false,
-                },
-                chained,
-                String::new(),
-            );
-            return;
-        }
-    };
-    let save_result = api.save_chapter_content_versioned_with_proof_batch(
-        &request.identity.project_id,
-        &request.identity.volume_id,
-        &request.identity.chapter_id,
-        &request.content,
-        effective_expected,
-        effective_base,
-        request.identity.snapshot_revision,
-        &proof_batch_json,
-        request.allow_empty_overwrite,
-    );
-
-    match save_result {
-        Ok(receipt) => {
-            // journal 已确认：只 ack 本批包含的事件，快照之后的编辑事实留在
-            // 草稿里等下一次保存；没有剩余事实时删除草稿。
-            if !frozen_event_ids.is_empty() {
-                // 以 journal 回执确认的 event IDs 为准（Core 只回本批进入
-                // durable journal 的投影）；回执缺失时才退回冻结批次。
-                let acknowledged = if receipt.pending_projections.is_empty() {
-                    frozen_event_ids.clone()
-                } else {
-                    receipt.pending_projections.clone()
-                };
-                super::chapter_draft::mark_committed(
-                    &projects_root,
-                    &request.identity.project_id,
-                    &request.identity.chapter_id,
-                    &acknowledged,
-                    &receipt.version.object_generation,
-                    receipt.version.revision,
-                    &receipt.version.content_sha256,
-                );
-            } else {
-                super::chapter_draft::remove(
-                    &projects_root,
-                    &request.identity.project_id,
-                    &request.identity.chapter_id,
-                );
-            }
-            if let Some(chain) = state.chains.get_mut(&chain_key) {
-                chain.receipt = Some(receipt.version.clone());
-                chain.text = Arc::clone(&request.content);
-                chain.snapshot_revision = chain
-                    .snapshot_revision
-                    .max(request.identity.snapshot_revision);
-                chain.invalid = false;
-                chain.last_used = Instant::now();
-            }
-            complete_ok(request_id, receipt, chained);
-        }
-        Err(error) => {
-            if let Some(chain) = state.chains.get_mut(&chain_key) {
-                // 失败后链不能再把后续快照接到旧回执上；下一请求必须
-                // 重新读取磁盘版本或显式冲突。
-                chain.invalid = true;
-                chain.last_used = Instant::now();
-            }
-            let code = error.code().to_string();
-            let conflict = code == "CHAPTER_VERSION_CONFLICT";
-            let conflict_draft_path = if conflict {
-                // 只读定位：Core 在返回冲突前已写好本次快照的 incoming.md，
-                // 这里把目录回给 QML 便于提示/排查，不复制正文、不改状态。
-                find_conflict_material(&request)
-            } else {
-                String::new()
-            };
-            crate::backend::app_backend::debug_error_static(
-                "chapter_save_queue",
-                "chapter_save_failed",
-                &format!(
-                    "request_id={} code={} chained={} conflict_dir={}",
-                    request_id, code, chained, conflict_draft_path
-                ),
-            );
-            complete_error(
-                request_id,
-                ChapterSaveError {
-                    code,
-                    message_key: error.message_key().to_string(),
-                    message_args: serde_json::to_value(error.params())
-                        .unwrap_or_else(|_| serde_json::json!({})),
-                    raw_error: error.to_string(),
-                    conflict,
-                },
-                chained,
-                conflict_draft_path,
-            );
-        }
-    }
+/// 合并 key：workspace + 对象 generation + 真实会话。
+///
+/// 同会话内只有更高 revision 的快照可以接替（见 [`supersede_pending`]）；
+/// generation 变化（外部重建/迁移）或会话变化都不合并。
+fn save_merge_key(request: &ChapterSaveRequest) -> String {
+    let generation = request
+        .expected
+        .as_ref()
+        .map_or("", |version| version.object_generation.as_str());
+    format!(
+        "{}\x1f{}\x1f{}",
+        request.context.key(),
+        generation,
+        request.identity.session_id,
+    )
 }
