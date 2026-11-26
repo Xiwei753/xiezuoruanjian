@@ -1155,6 +1155,29 @@ impl WriterCoreApi {
                     }
                 }
             }
+            // 已经与远端一致的 pending 事实（编辑后又还原、旧账本遗留）不需要
+            // 发布就能确认：用提交后的 known_files 证明远端基线已是同一内容。
+            // 删除仍然只认推送回执，不能用"known_files 里没有"推断（复审 #3）。
+            if let Ok(state) =
+                crate::sync::SyncService::load_sync_state_for_target(&sync_root, &sync_target)
+            {
+                for (path, record) in pending {
+                    if !record.is_upsert() {
+                        continue;
+                    }
+                    if published.iter().any(|entry| entry.path == *path) {
+                        continue;
+                    }
+                    if state.known_files.get(path) == Some(&record.content_hash) {
+                        published.push(crate::sync::local_mutations::PublishedMutation {
+                            path: path.clone(),
+                            op: "upsert".to_string(),
+                            content_hash: record.content_hash.clone(),
+                            seq: record.seq,
+                        });
+                    }
+                }
+            }
             if published.is_empty() {
                 continue;
             }

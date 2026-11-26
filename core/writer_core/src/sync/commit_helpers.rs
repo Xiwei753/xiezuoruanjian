@@ -1284,6 +1284,7 @@ fn apply_commit_plan_with_optional_merge(
     content_actions: &[crate::sync::staging::CommitAction],
     backup_mode: bool,
     proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
+    published_candidates: &[String],
     mut chapter_receipts: Option<&mut Vec<crate::chapter::ChapterSyncCommitReceipt>>,
 ) -> std::result::Result<
     (
@@ -1386,8 +1387,19 @@ fn apply_commit_plan_with_optional_merge(
             } else {
                 crate::sync::types::SyncScope::Project
             };
-            let deferred = crate::sync::local_mutations::pending_records(live_root, scope, app_group)
-                .unwrap_or_default();
+            // 只推迟"本轮要发布、但还没确认"的事实：已经与远端一致的 pending
+            // （编辑后又还原、旧版账本遗留）保留 merge 结果，推送确认后再压缩。
+            let deferred: Vec<String> = crate::sync::local_mutations::pending_records(
+                live_root, scope, app_group,
+            )
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(path, record)| {
+                published_candidates.iter().any(|candidate| candidate == path)
+                    || record.is_delete()
+            })
+            .map(|(path, _)| path)
+            .collect();
             if !deferred.is_empty() {
                 let base_state = match app_group {
                     Some(group) => {
@@ -1399,7 +1411,7 @@ fn apply_commit_plan_with_optional_merge(
                 };
                 match base_state {
                     Ok(base_state) => {
-                        for path in deferred.keys() {
+                        for path in &deferred {
                             match base_state.known_files.get(path) {
                                 Some(hash) => {
                                     merged_state.known_files.insert(path.clone(), hash.clone());
@@ -1910,6 +1922,7 @@ pub(crate) fn apply_staging_commits_for_targets(
                     &plan.content_actions,
                     false,
                     &[],
+                    &[],
                     None,
                 ) {
                     Ok((tx, _)) => tx,
@@ -2020,6 +2033,7 @@ pub(crate) fn apply_staging_commits_for_targets(
                     &plan,
                     &safe_content_actions,
                     false,
+                    &[],
                     &[],
                     None,
                 ) {
@@ -2342,6 +2356,11 @@ pub(crate) fn commit_single_target_staging(
                 None => Vec::new(),
             };
 
+            // 本轮真正要发布的候选路径：上传 + 远端删除。只对这些推迟
+            // known_files；已经与远端一致的 pending 事实保持 merge 结果。
+            let mut published_candidates: Vec<String> =
+                target.result.uploaded_files.clone();
+            published_candidates.extend(target.result.local_deletes.iter().cloned());
             let mut tx = match apply_commit_plan_with_optional_merge(
                 run,
                 live_root,
@@ -2349,6 +2368,7 @@ pub(crate) fn commit_single_target_staging(
                 &plan.content_actions,
                 false,
                 &proof_recovery_records,
+                &published_candidates,
                 Some(&mut *chapter_receipts),
             ) {
                 Ok((tx, _)) => tx,

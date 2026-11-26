@@ -99,6 +99,30 @@ pub(crate) fn load_records(
     Ok(records)
 }
 
+/// 旧版账本（没有序号的事实）迁移：按文件顺序补齐 1..n 并原子重写。
+///
+/// 序号是确认与压缩的唯一依据；seq==0 的事实无法被推送回执确认，会永久留在
+/// 待同步集合里。迁移只在检测到 0 时发生一次。
+fn ensure_sequences(
+    sync_root: &Path,
+    records: &mut [LocalMutationRecord],
+) -> crate::error::Result<bool> {
+    if records.iter().all(|record| record.seq != 0) {
+        return Ok(false);
+    }
+    for (index, record) in records.iter_mut().enumerate() {
+        record.seq = u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1);
+    }
+    let mut output = String::new();
+    for record in records.iter() {
+        output.push_str(&serde_json::to_string(record)?);
+        output.push('\n');
+    }
+    crate::storage::atomic_write_string(&ledger_path(sync_root), &output)?;
+    log::info!("[sync] local mutation ledger migrated to sequential seq");
+    Ok(true)
+}
+
 /// 账本是否已损坏（只读检查，不修复）。
 ///
 /// 同步调度用它把 target 判为 `ledger_corrupt`：这一轮必须完整核对，
@@ -167,7 +191,8 @@ pub(crate) fn append_batch(
     }
     // 账本损坏时先归档重建：写入路径不能因为历史损坏而拒绝记录新的业务事实。
     repair_corrupt_ledger(sync_root)?;
-    let existing = load_records(sync_root)?;
+    let mut existing = load_records(sync_root)?;
+    ensure_sequences(sync_root, &mut existing)?;
     let mut next_seq = existing.iter().map(|record| record.seq).max().unwrap_or(0) + 1;
     let mut latest: HashMap<String, LocalMutationRecord> = HashMap::new();
     for record in existing {
@@ -296,8 +321,14 @@ pub(crate) fn pending_records(
             .map(|state| state.confirmed_mutation_seq)
             .unwrap_or_default(),
     };
+    let mut records = load_records(sync_root)?;
+    ensure_sequences(sync_root, &mut records)?;
+    let mut latest: HashMap<String, LocalMutationRecord> = HashMap::new();
+    for record in records {
+        latest.insert(record.path.clone(), record);
+    }
     let mut pending = BTreeMap::new();
-    for (path, record) in load_latest(sync_root)? {
+    for (path, record) in latest {
         if !is_sync_business_path(&path, scope) {
             continue;
         }
@@ -306,7 +337,8 @@ pub(crate) fn pending_records(
                 continue;
             }
         }
-        if record.seq <= confirmed_seq.get(&path).copied().unwrap_or(0) {
+        // seq == 0 是旧版本账本（尚未分配序号）写入的事实，永远不能被判为已确认。
+        if record.seq != 0 && record.seq <= confirmed_seq.get(&path).copied().unwrap_or(0) {
             continue;
         }
         pending.insert(path, record);
