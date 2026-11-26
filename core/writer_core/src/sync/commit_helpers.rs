@@ -307,11 +307,10 @@ fn partial_committed_paths(
 /// without an incoming record for that anchor. The rebased anchor files join
 /// the same SaveTransaction as the body so a crash cannot leave new text with
 /// stale offsets. Ambiguous, missing, or invalid UTF-8 inputs are left alone.
-fn stage_rebased_chapter_anchors(
+fn rebase_chapter_anchors(
     live_root: &Path,
     content_actions: &[crate::sync::staging::CommitAction],
-    tx: &mut crate::storage::transaction::SaveTransaction,
-) -> crate::error::Result<()> {
+) -> crate::error::Result<Vec<crate::sync::staging::CommitAction>> {
     use crate::sync::staging::CommitAction;
     use std::collections::HashSet;
 
@@ -379,15 +378,32 @@ fn stage_rebased_chapter_anchors(
             rebased_anchors.push((project_namespace.join(&anchor_relative), rebased));
         }
     }
-    if !rebased_anchors.is_empty() {
-        let updated_at_ms = chrono::Utc::now()
-            .timestamp_millis()
-            .max(newest_existing_version.saturating_add(1));
-        for (target_relative, mut anchor) in rebased_anchors {
-            anchor.updated_at_ms = updated_at_ms;
-            let serialized = serde_json::to_vec_pretty(&anchor)?;
-            let target_relative = target_relative.to_string_lossy();
-            tx.add_bytes(&target_relative, &serialized)?;
+    if rebased_anchors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let updated_at_ms = chrono::Utc::now()
+        .timestamp_millis()
+        .max(newest_existing_version.saturating_add(1));
+    let mut actions = Vec::with_capacity(rebased_anchors.len());
+    for (rel_path, mut anchor) in rebased_anchors {
+        anchor.updated_at_ms = updated_at_ms;
+        actions.push(CommitAction::Apply {
+            rel_path,
+            content: serde_json::to_vec_pretty(&anchor)?,
+        });
+    }
+    Ok(actions)
+}
+
+fn stage_rebased_chapter_anchors(
+    live_root: &Path,
+    content_actions: &[crate::sync::staging::CommitAction],
+    tx: &mut crate::storage::transaction::SaveTransaction,
+) -> crate::error::Result<()> {
+    use crate::sync::staging::CommitAction;
+    for action in rebase_chapter_anchors(live_root, content_actions)? {
+        if let CommitAction::Apply { rel_path, content } = action {
+            tx.add_bytes(&rel_path.to_string_lossy(), &content)?;
         }
     }
     Ok(())
@@ -1143,6 +1159,13 @@ fn apply_commit_plan_with_optional_merge(
     if let Err(error) = chapter_result {
         return Err((error, handled_chapters));
     }
+    // 正文 action 会从 SaveTransaction 中过滤，但本地标注仍需按同一 incoming
+    // 正文重定位。先基于完整 content_actions 生成 anchor action，再随过滤后的
+    // transaction 一起提交，避免把正文过滤后丢失 anchor rebase。
+    let mut rebased_anchor_actions = match rebase_chapter_anchors(live_root, &content_actions) {
+        Ok(actions) => actions,
+        Err(error) => return Err((error, handled_chapters)),
+    };
     let apply_result: crate::error::Result<crate::storage::transaction::SaveTransaction> = (|| {
         if !handled_chapters.is_empty() {
             content_actions.retain(|action| {
@@ -1152,6 +1175,7 @@ fn apply_commit_plan_with_optional_merge(
                 };
                 !handled_chapters.contains(rel)
             });
+            content_actions.append(&mut rebased_anchor_actions);
         }
         let mut engine_state_actions = plan.engine_state_actions.clone();
         let mut committed_state: Option<crate::sync::types::SyncState> = None;
