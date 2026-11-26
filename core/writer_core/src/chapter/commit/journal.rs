@@ -791,6 +791,54 @@ pub(crate) fn commit_chapter_with_guard(
         write_manifest(&tx_dir, &manifest)?;
     }
 
+    // 5) 把本次已 durable 提交的对象投影成待同步事实（Issue #1065 复审 #4）。
+    //    与 journal 同一决议顺序：正文/元数据/附加文件已落盘，删除已进 trash。
+    //    账本只是调度索引：投影失败只警告，下一次本地路径指纹仍能发现变化。
+    let committed_upserts = if deleting {
+        Vec::new()
+    } else {
+        let mut files = Vec::new();
+        if content_changed || request.mutation == ChapterMutationKind::Create {
+            files.push(chapter_relative_path(&key));
+        }
+        if content_changed || meta_changed || request.mutation == ChapterMutationKind::Create {
+            files.push(format!(
+                "volumes/{}/chapters/{}/{}",
+                key.volume_id, key.chapter_id, META_FILE
+            ));
+        }
+        for plan in &manifest.additional_files {
+            files.push(plan.target_relative.clone());
+        }
+        files
+    };
+    let committed_deletes = if deleting {
+        vec![
+            chapter_relative_path(&key),
+            format!("volumes/{}/chapters/{}/{}", key.volume_id, key.chapter_id, META_FILE),
+        ]
+    } else {
+        Vec::new()
+    };
+    let device_id = crate::sync::SyncService::load_sync_state_read_only(project_root, None)
+        .map(|state| state.device_id)
+        .unwrap_or_default();
+    let mutations = crate::sync::local_mutations::records_for_committed_paths(
+        project_root,
+        &transaction_id,
+        &device_id,
+        &committed_upserts,
+        &committed_deletes,
+        Utc::now().timestamp_millis(),
+    );
+    if let Err(error) =
+        crate::sync::local_mutations::append_batch(project_root, &mutations)
+    {
+        log::warn!(
+            "chapter commit mutation projection failed (sync will fall back to local scan): {error}"
+        );
+    }
+
     let written_files = {
         let mut files = Vec::new();
         if content_changed || request.mutation == ChapterMutationKind::Create {

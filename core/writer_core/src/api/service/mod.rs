@@ -203,6 +203,101 @@ impl WriterCoreApi {
         }
     }
 
+    /// 把一次已 durable 写事务的变更集投影成待同步 mutation 事实。
+    ///
+    /// 所有业务写路径（章节/卷/作品/星图/标签/设置）都在
+    /// `record_workspace_change_set_history` 收口，因此这里直接复用已有事务的
+    /// 真实变更集，不再引入第二套业务事务系统（Issue #1065 复审 #4）。
+    /// 同步自身的提交不投影，避免把刚拉下来的内容又标成本地待上传。
+    fn record_sync_mutations_for_change_set(
+        &self,
+        layout: &crate::storage::git_repo_layout::GitRepoLayout,
+        change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
+        message: &str,
+    ) {
+        use crate::storage::workspace_git::WorkspaceHistoryChange;
+        if message == "remote_lifecycle_delete" || change_set.is_empty() {
+            return;
+        }
+        // sync_root → (target, [(相对路径, 是否删除)])
+        let mut per_target: std::collections::BTreeMap<
+            std::path::PathBuf,
+            (crate::sync::types::SyncTarget, Vec<(String, bool)>),
+        > = std::collections::BTreeMap::new();
+        for change in &change_set.changes {
+            let (path, deleting) = match change {
+                WorkspaceHistoryChange::Upsert(path) => (path, false),
+                WorkspaceHistoryChange::Delete(path) => (path, true),
+                // 子树删除（作品删除）由 target lifecycle 收口，不在这里逐文件展开。
+                WorkspaceHistoryChange::DeleteTree(_) => continue,
+            };
+            let Some(rel) = path.to_str() else {
+                continue;
+            };
+            let rel = rel.replace('\\', "/");
+            let (sync_root, target, sub) = if let Some(rest) = rel.strip_prefix("projects/") {
+                let Some((project_id, sub)) = rest.split_once('/') else {
+                    continue;
+                };
+                (
+                    layout.worktree_root.join("projects").join(project_id),
+                    crate::sync::types::SyncTarget::project(project_id),
+                    sub.to_string(),
+                )
+            } else {
+                let Some(group) = crate::sync::config_store::app_data_group_for_path(&rel) else {
+                    continue;
+                };
+                (
+                    layout.worktree_root.clone(),
+                    crate::sync::types::SyncTarget::app_data_group(group),
+                    rel.clone(),
+                )
+            };
+            if !crate::sync::SyncService::is_whitelisted_target_path(&sub, &target) {
+                continue;
+            }
+            per_target
+                .entry(sync_root)
+                .or_insert_with(|| (target, Vec::new()))
+                .1
+                .push((sub, deleting));
+        }
+        for (sync_root, (target, entries)) in per_target {
+            let device_id =
+                crate::sync::SyncService::load_sync_state_for_target(&sync_root, &target)
+                    .map(|state| state.device_id)
+                    .unwrap_or_default();
+            let upserted: Vec<String> = entries
+                .iter()
+                .filter(|(_, deleting)| !deleting)
+                .map(|(path, _)| path.clone())
+                .collect();
+            let deleted: Vec<String> = entries
+                .iter()
+                .filter(|(_, deleting)| *deleting)
+                .map(|(path, _)| path.clone())
+                .collect();
+            let records = crate::sync::local_mutations::records_for_committed_paths(
+                &sync_root,
+                message,
+                &device_id,
+                &upserted,
+                &deleted,
+                chrono::Utc::now().timestamp_millis(),
+            );
+            if records.is_empty() {
+                continue;
+            }
+            if let Err(error) = crate::sync::local_mutations::append_batch(&sync_root, &records) {
+                log::warn!(
+                    "[sync] change-set mutation projection failed for {}: {error}",
+                    sync_root.display()
+                );
+            }
+        }
+    }
+
     /// 在写事务完成后记录本地历史（变更集）。
     ///
     /// 按 [`WorkspaceChangeSet`] 中的 change 类型分别处理 Upsert/Delete/DeleteTree。
@@ -224,6 +319,8 @@ impl WriterCoreApi {
                 )));
             }
         };
+        // 这次写事务已经 durable：把变更集投影成同步调度用的 mutation 事实。
+        self.record_sync_mutations_for_change_set(&layout_guard, change_set, message);
         match crate::storage::workspace_git::record_workspace_change_set(
             &layout_guard,
             change_set,

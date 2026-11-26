@@ -521,7 +521,46 @@ pub fn load_syncable_settings(config_dir: &Path) -> Result<SyncableSettings> {
 pub fn save_syncable_settings(config_dir: &Path, settings: &SyncableSettings) -> Result<()> {
     let path = config_dir.join("settings.sync.json");
     let content = serde_json::to_string_pretty(settings)?;
-    crate::storage::atomic_write_string(&path, &content)
+    crate::storage::atomic_write_string(&path, &content)?;
+    // 落盘成功后投影成待同步事实（Issue #1065 复审 #4）：设置是应用级 Global
+    // 组的同步对象，事务顺序仍是"先落盘、再记账"，账本只是调度索引，
+    // 记账失败只警告，本地路径指纹仍能在下一轮发现变化。
+    record_settings_mutation(config_dir);
+    Ok(())
+}
+
+/// 把已落盘的 settings.sync.json 记进 Global 组的 mutation 账本。
+fn record_settings_mutation(config_dir: &Path) {
+    use crate::sync::types::{AppDataGroup, SyncScope};
+    let group = AppDataGroup::Global;
+    let device_id = crate::sync::SyncService::load_sync_state_read_only_for_group(
+        config_dir,
+        &group,
+        None,
+    )
+    .map(|state| state.device_id)
+    .unwrap_or_default();
+    let upserted = vec!["settings.sync.json".to_string()];
+    let mutations = crate::sync::local_mutations::records_for_committed_paths(
+        config_dir,
+        &uuid::Uuid::new_v4().to_string(),
+        &device_id,
+        &upserted,
+        &[],
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .into_iter()
+    .filter(|record| {
+        crate::sync::local_mutations::is_sync_business_path(&record.path, SyncScope::App)
+            && group.owns_path(&record.path)
+    })
+    .collect::<Vec<_>>();
+    if mutations.is_empty() {
+        return;
+    }
+    if let Err(error) = crate::sync::local_mutations::append_batch(config_dir, &mutations) {
+        log::warn!("[sync] settings mutation projection failed: {error}");
+    }
 }
 
 // ──   settings 的 *_with_changes 入口 ──

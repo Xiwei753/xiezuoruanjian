@@ -207,6 +207,70 @@ pub(crate) fn append_batch(
     Ok(())
 }
 
+/// 从一次已 durable 提交投影出待同步事实。
+///
+/// 业务事务（章节提交、设置、星图、校对结果）只把"已落盘的文件"和"已确认的
+/// 删除事实"交给这里，不引入第二套事务系统：内容哈希取落盘后的真实文件，
+/// 删除必须由调用方显式声明。序号由 [`append_batch`] 统一分配。
+pub(crate) fn records_for_committed_paths(
+    sync_root: &Path,
+    transaction_id: &str,
+    device_id: &str,
+    upserted: &[String],
+    deleted: &[String],
+    now_ms: i64,
+) -> Vec<LocalMutationRecord> {
+    let sync_root_text = sync_root.to_string_lossy().into_owned();
+    let mut records = Vec::new();
+    for rel_path in upserted {
+        let path = sync_root.join(rel_path);
+        let Ok(content) = fs::read(&path) else {
+            log::warn!(
+                "[sync] committed object missing after commit; skip mutation: {}",
+                path.display()
+            );
+            continue;
+        };
+        let (object_type, object_id) = object_identity(rel_path);
+        records.push(LocalMutationRecord {
+            schema_version: 1,
+            transaction_id: transaction_id.to_string(),
+            sync_root: sync_root_text.clone(),
+            path: rel_path.clone(),
+            object_type,
+            object_id,
+            op: "upsert".to_string(),
+            base_hash: None,
+            content_hash: crate::sync::hash::content_md5(&content),
+            updated_at_ms: now_ms,
+            deleted_at_ms: None,
+            device_id: device_id.to_string(),
+            object_revision: object_revision(&path),
+            seq: 0,
+        });
+    }
+    for rel_path in deleted {
+        let (object_type, object_id) = object_identity(rel_path);
+        records.push(LocalMutationRecord {
+            schema_version: 1,
+            transaction_id: transaction_id.to_string(),
+            sync_root: sync_root_text.clone(),
+            path: rel_path.clone(),
+            object_type,
+            object_id,
+            op: "delete".to_string(),
+            base_hash: None,
+            content_hash: String::new(),
+            updated_at_ms: now_ms,
+            deleted_at_ms: Some(now_ms),
+            device_id: device_id.to_string(),
+            object_revision: None,
+            seq: 0,
+        });
+    }
+    records
+}
+
 /// 当前同步根下尚未被确认的本地业务变更事实（按 path 取最后一条）。
 ///
 /// 这是同步调度的持久化脏对象索引：调度只读这份索引，不再为"有没有本地修改"
