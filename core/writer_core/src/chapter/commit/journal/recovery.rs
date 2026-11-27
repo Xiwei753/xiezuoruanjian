@@ -302,9 +302,9 @@ pub fn replay_pending_sync_mutations(project_root: &Path) -> Result<usize> {
         if manifest.sync_projection_done {
             continue;
         }
-        if manifest.phase != ChapterCommitPhase::Applied
-            && manifest.phase != ChapterCommitPhase::Decided
-        {
+        // 只重放已发布（Applied）的决议；Decided 还没碰 live，由章节恢复
+        // 自己发布后再投影，不能提前把不存在的对象记成事实。
+        if manifest.phase != ChapterCommitPhase::Applied {
             continue;
         }
         match project_manifest_sync_mutations(project_root, &tx_dir, &mut manifest)? {
