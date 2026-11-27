@@ -223,7 +223,16 @@ fn build_local_snapshot(
 
     // Core 成功事务留下的对象级变更事实。账本只在本机有效；当前真实 hash
     // 与事实一致时才采用其提交时间/设备，避免外部手工改文件后冒用旧时间。
-    let local_mutations = crate::sync::local_mutations::load_latest(sync_root)?;
+    // 稀疏模式：对象版本事实来自本轮固定输入（短事务锁内取得的 mutation
+    // 集合），不再读取 staging 目录里的账本副本——那不是不可变快照。
+    let local_mutations = match sparse {
+        Some(plan) => plan
+            .mutations()
+            .iter()
+            .map(|(path, record)| (path.clone(), record.clone()))
+            .collect(),
+        None => crate::sync::local_mutations::load_latest(sync_root)?,
+    };
 
     // 3. scan 当前文件。
     let local_entries = match app_group {

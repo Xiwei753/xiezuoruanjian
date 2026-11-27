@@ -2330,7 +2330,10 @@ impl WriterCoreApi {
                             .map(|stored| stored.remote_revision.clone()),
                         pending_paths,
                         remote_paths,
-                    );
+                    )
+                    // 短事务锁内已经取到的不可变事实：seq/op/base hash/content
+                    // hash/业务时间/删除时间；本轮后续编辑不改这份输入。
+                    .with_mutations(pending.cloned().unwrap_or_default());
                     plans.insert(key, plan);
                 }
                 }

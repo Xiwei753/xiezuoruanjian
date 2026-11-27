@@ -51,6 +51,11 @@ pub struct SparseObjectPlan {
     states: BTreeMap<String, ObjectState>,
     /// 对象依赖闭包（例如星图 graph.json ↔ 对象文件、章节正文 ↔ meta）。
     dependencies: BTreeMap<String, BTreeSet<String>>,
+    /// 本轮固定输入：短事务锁内取得的未确认 mutation 事实（含 seq/op/base
+    /// hash/content hash/业务时间/删除时间）。它不是 live 账文的副本，而是
+    /// 本轮唯一允许使用的对象版本集合；后续编辑产生下一版本，不改变本轮输入。
+    #[serde(default)]
+    mutations: BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
 }
 
 impl SparseObjectPlan {
@@ -95,7 +100,35 @@ impl SparseObjectPlan {
             affected,
             states: BTreeMap::new(),
             dependencies: BTreeMap::new(),
+            mutations: BTreeMap::new(),
         }
+    }
+
+    /// 用本轮固定的未确认 mutation 事实填充计划（同时进入 affected set）。
+    pub(crate) fn with_mutations(
+        mut self,
+        mutations: BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
+    ) -> Self {
+        for (path, record) in &mutations {
+            self.affected.insert(path.clone());
+            let state = if record.is_delete() {
+                ObjectState::Deleted {
+                    reason: DeleteEvidence::LocalTransaction,
+                }
+            } else {
+                ObjectState::Present {
+                    hash: record.content_hash.clone(),
+                }
+            };
+            self.states.insert(path.clone(), state);
+        }
+        self.mutations = mutations;
+        self
+    }
+
+    /// 本轮的未确认 mutation 事实（path → 最新事实）。
+    pub(crate) fn mutations(&self) -> &BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord> {
+        &self.mutations
     }
 
     /// 是否处于"对象级增量"模式；没有固定基线（首次同步/迁移）时只能完整核对。
