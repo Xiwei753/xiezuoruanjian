@@ -622,6 +622,7 @@ pub(super) fn model_lifetime_metrics() -> ModelLifetimeMetrics {
 pub fn model_lifetime_snapshot() -> serde_json::Value {
     let metrics = model_lifetime_metrics();
     let (synced_indexes, synced_bytes) = synced_index_metrics();
+    let (chapter_slots, chapter_bytes) = chapter_cache_metrics();
     serde_json::json!({
         "cached": metrics.cached,
         "engine_refs": metrics.engine_refs,
@@ -631,7 +632,35 @@ pub fn model_lifetime_snapshot() -> serde_json::Value {
         "model_configured": model_path_configured(),
         "synced_result_indexes": synced_indexes,
         "synced_result_bytes": synced_bytes,
+        "chapter_cache_slots": chapter_slots,
+        "chapter_cache_bytes": chapter_bytes,
     })
+}
+
+/// 章节校对结果缓存的真实占用估算：只统计仍被编辑/扫描持有的弱引用目标。
+fn chapter_cache_metrics() -> (usize, usize) {
+    let Some(stores) = STORE_REGISTRY.get() else {
+        return (0, 0);
+    };
+    let Ok(stores) = stores.lock() else {
+        return (0, 0);
+    };
+    let mut count = 0usize;
+    let mut bytes = 0usize;
+    for inner in stores.values() {
+        let Ok(caches) = inner.result_caches.lock() else {
+            continue;
+        };
+        for entry in caches.values() {
+            if let Some(slot) = entry.upgrade() {
+                if let Ok(state) = slot.state.lock() {
+                    count = count.saturating_add(1);
+                    bytes = bytes.saturating_add(state.estimated_bytes());
+                }
+            }
+        }
+    }
+    (count, bytes)
 }
 
 /// 同步结果索引的“实际占用”估算：只统计仍被使用方持有的弱引用目标。

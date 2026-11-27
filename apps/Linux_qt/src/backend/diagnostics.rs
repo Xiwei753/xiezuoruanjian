@@ -383,6 +383,8 @@ fn insert_model_lifetime_fields(fields: &mut BTreeMap<String, serde_json::Value>
         ("generation", "model_generation"),
         ("synced_result_indexes", "correction_synced_indexes"),
         ("synced_result_bytes", "correction_synced_bytes"),
+        ("chapter_cache_slots", "correction_chapter_slots"),
+        ("chapter_cache_bytes", "correction_chapter_bytes"),
     ] {
         if let Some(value) = snapshot.get(key).and_then(serde_json::Value::as_u64) {
             fields.insert(field.to_string(), serde_json::Value::from(value));

@@ -197,6 +197,32 @@ pub(crate) struct ChapterCorrectionSlot {
     pub(crate) condvar: Condvar,
 }
 
+impl ChapterCorrectionCacheState {
+    /// 章节缓存当前内容的字节估算（指纹 + 建议字符串），用于诊断区分
+    /// “几个章节槽”和“实际占多少内存”；不是序列化大小，也不包含容量冗余。
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        let mut bytes = self.scanner_fingerprint.len() + self.checked_mode.len();
+        for segment in &self.segments {
+            bytes = bytes
+                .saturating_add(segment.text_fingerprint.len())
+                .saturating_add(segment.context_fingerprint.len())
+                .saturating_add(segment.synced_record_key.as_deref().map_or(0, str::len));
+            if let Some(suggestions) = &segment.checked {
+                for suggestion in suggestions {
+                    bytes = bytes
+                        .saturating_add(suggestion.original.len())
+                        .saturating_add(suggestion.replacement.len())
+                        .saturating_add(suggestion.source.len())
+                        .saturating_add(suggestion.rule_id.len())
+                        .saturating_add(suggestion.severity.len())
+                        .saturating_add(32);
+                }
+            }
+        }
+        bytes
+    }
+}
+
 impl ChapterCorrectionSlot {
     pub(crate) fn new(state: ChapterCorrectionCacheState) -> Self {
         Self {
