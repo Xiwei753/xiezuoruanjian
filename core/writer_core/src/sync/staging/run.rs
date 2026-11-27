@@ -145,7 +145,9 @@ impl StagingRun {
             // 文件，避免 App 组每轮再把整组内容复制一遍。所有对 base 的写入都
             // 走 unlink/rename（write_seed_file、atomic_write_*），不会改到 live
             // inode（Issue #1065 复审 #5）。
-            if fs::hard_link(&live_path, &base_path).is_ok() {
+            if !snapshot_must_copy_bytes(&live_path)
+                && fs::hard_link(&live_path, &base_path).is_ok()
+            {
                 continue;
             }
             self.copy_live_snapshot_file(&live_path, &base_path)?;
@@ -212,11 +214,7 @@ impl StagingRun {
         live_root: &Path,
         plan: &crate::sync::sparse_plan::SparseObjectPlan,
     ) -> Result<()> {
-        let mut rel_paths: Vec<PathBuf> = plan
-            .affected_paths()
-            .iter()
-            .map(PathBuf::from)
-            .collect();
+        let mut rel_paths: Vec<PathBuf> = plan.affected_paths().iter().map(PathBuf::from).collect();
         if let Some(group) = &self.app_group {
             let legacy_manifest = PathBuf::from("app-meta/sync/manifest.sync.json");
             if live_root.join(&legacy_manifest).is_file() {
@@ -325,7 +323,10 @@ impl StagingRun {
     /// live inode。遵守这个前提时 App 组也不必每轮复制整组内容；一旦有就地
     /// 写入路径出现，会表现为 live 被改写，必须在评审中拦下。
     fn copy_live_snapshot_file(&self, live_path: &Path, snapshot_path: &Path) -> Result<()> {
-        if fs::hard_link(live_path, snapshot_path).is_ok() {
+        // mutation 账本是就地 append + sync_data 的增量文件（评审 #7213916283）：
+        // 硬链接快照会随后续编辑一起变化，甚至读到追加中的半行，因此一律按
+        // 字节复制成不可变快照；序号文件同理。
+        if !snapshot_must_copy_bytes(live_path) && fs::hard_link(live_path, snapshot_path).is_ok() {
             return Ok(());
         }
         fs::copy(live_path, snapshot_path)?;
@@ -1907,6 +1908,16 @@ fn apply_meta_lifecycle_decision(
 ///
 /// 跳过 `.git/`、`full-sync-staging/`（避免递归复制 staging 自身）、
 /// `app-meta/transactions/`（事务暂存目录）。
+/// 该 live 文件是否必须按字节复制进本轮快照（不能硬链接）。
+///
+/// mutation 账本与序号文件会被就地追加/覆盖；硬链接会让"本轮固定输入"
+/// 随 live 后续编辑变化（评审 #7213916283）。
+fn snapshot_must_copy_bytes(live_path: &Path) -> bool {
+    let rel = live_path.to_string_lossy().replace('\\', "/");
+    rel.ends_with(crate::sync::local_mutations::LOCAL_MUTATIONS_PATH)
+        || rel.ends_with("/sync/mutation-seq.json")
+}
+
 fn list_live_file_paths(live_root: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     if !live_root.exists() {

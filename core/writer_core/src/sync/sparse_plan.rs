@@ -39,9 +39,7 @@ pub enum DeleteEvidence {
 }
 
 /// 本轮的稀疏对象计划。
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SparseObjectPlan {
     /// 计划所基于的远端提交（固定 HEAD）；空表示首次同步/迁移。
     base_head: Option<String>,
@@ -73,8 +71,30 @@ impl SparseObjectPlan {
     }
 
     pub(crate) fn load(root: &std::path::Path) -> Option<Self> {
-        let text = std::fs::read_to_string(root.join(Self::FILE_NAME)).ok()?;
-        serde_json::from_str(&text).ok()
+        Self::load_checked(root).ok().flatten()
+    }
+
+    /// 严格加载：计划文件不存在表示本阶段没有稀疏输入（None）；存在但读不到
+    /// 或解析失败必须报错，不能被调用方静默降级成"全量模式"（评审 #7214314073）。
+    pub(crate) fn load_checked(root: &std::path::Path) -> crate::error::Result<Option<Self>> {
+        let path = root.join(Self::FILE_NAME);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(crate::error::Error::Io(std::io::Error::new(
+                    error.kind(),
+                    format!("read sparse object plan at {}: {error}", path.display()),
+                )))
+            }
+        };
+        let plan = serde_json::from_str(&text).map_err(|error| {
+            crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("parse sparse object plan at {}: {error}", path.display()),
+            ))
+        })?;
+        Ok(Some(plan))
     }
 
     pub(crate) fn remove(root: &std::path::Path) {
@@ -127,7 +147,9 @@ impl SparseObjectPlan {
     }
 
     /// 本轮的未确认 mutation 事实（path → 最新事实）。
-    pub(crate) fn mutations(&self) -> &BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord> {
+    pub(crate) fn mutations(
+        &self,
+    ) -> &BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord> {
         &self.mutations
     }
 
@@ -161,12 +183,8 @@ impl SparseObjectPlan {
     pub(crate) fn mark_present(&mut self, path: impl Into<String>, hash: impl Into<String>) {
         let path = path.into();
         self.affected.insert(path.clone());
-        self.states.insert(
-            path,
-            ObjectState::Present {
-                hash: hash.into(),
-            },
-        );
+        self.states
+            .insert(path, ObjectState::Present { hash: hash.into() });
     }
 
     /// 登记一个有明确证据的删除。调用方必须给出证据；没有证据时不要调用。

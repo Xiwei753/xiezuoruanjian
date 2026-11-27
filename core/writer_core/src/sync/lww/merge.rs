@@ -308,7 +308,9 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     let sparse = match sparse {
         Some(plan) => Some(plan),
         None => {
-            sparse_owned = crate::sync::sparse_plan::SparseObjectPlan::load(sync_root);
+            // 计划文件存在但损坏时直接失败：静默退回全量会把“读不到输入”
+            // 当成“所有对象都需要完整核对”。
+            sparse_owned = crate::sync::sparse_plan::SparseObjectPlan::load_checked(sync_root)?;
             sparse_owned.as_ref()
         }
     };
@@ -834,7 +836,8 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
                     .map(|s| s.as_str())
                     .unwrap_or("");
                 let is_document = is_document_content_path(&path);
-                let resolution = resolve_path_decision(local_rec, remote_rec, base_hash, is_document);
+                let resolution =
+                    resolve_path_decision(local_rec, remote_rec, base_hash, is_document);
 
                 if resolution.overwritten {
                     overwritten_files.push(path.clone());
@@ -968,16 +971,18 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     if scope == SyncScope::App {
         let settings_rel = "settings.sync.json";
         let settings_path = sync_root.join(settings_rel);
-        if let Some(normalized) =
-            crate::settings::normalize_syncable_settings_file(&settings_path)?
+        if let Some(normalized) = crate::settings::normalize_syncable_settings_file(&settings_path)?
         {
             let canonical_hash = crate::sync::hash::content_md5(&normalized);
             if let Some(record) = merged_manifest_files.get_mut(settings_rel) {
                 record.content_hash = canonical_hash.clone();
-                state.known_files.insert(settings_rel.to_string(), canonical_hash);
                 state
-                    .known_files_updated_at
-                    .insert(settings_rel.to_string(), chrono::Utc::now().timestamp_millis());
+                    .known_files
+                    .insert(settings_rel.to_string(), canonical_hash);
+                state.known_files_updated_at.insert(
+                    settings_rel.to_string(),
+                    chrono::Utc::now().timestamp_millis(),
+                );
                 if !to_upload.iter().any(|p| p == settings_rel) {
                     to_upload.push(settings_rel.to_string());
                 }
