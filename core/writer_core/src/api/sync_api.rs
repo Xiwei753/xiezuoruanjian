@@ -383,7 +383,13 @@ type PendingMutationMap = std::collections::BTreeMap<
     std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
 >;
 
-fn collect_preflight_pending(plan: &crate::sync::full_sync::FullSyncPlan) -> PendingMutationMap {
+fn collect_preflight_pending(
+    app_data_root: &std::path::Path,
+    plan: &crate::sync::full_sync::FullSyncPlan,
+) -> crate::error::Result<PendingMutationMap> {
+    // Issue #1065 复审 #7214314073 第 3 项：未确认事实的读取必须与写事务
+    // 互斥；读失败也不能悄悄省略 target，否则本轮会把它当成“没有待上传”。
+    let _workspace_lock = crate::storage::WorkspaceWriteLock::acquire(app_data_root)?;
     let mut pending = PendingMutationMap::new();
     for planned in &plan.targets {
         let Some(key) = crate::sync::full_sync::sync_target_checkpoint_key(planned) else {
@@ -394,20 +400,14 @@ fn collect_preflight_pending(plan: &crate::sync::full_sync::FullSyncPlan) -> Pen
         } else {
             crate::sync::types::SyncScope::Project
         };
-        match crate::sync::local_mutations::pending_records(
+        let records = crate::sync::local_mutations::pending_records(
             &planned.target_live_root,
             scope,
             planned.target.app_group.as_ref(),
-        ) {
-            Ok(records) => {
-                pending.insert(key, records);
-            }
-            Err(error) => {
-                log::warn!("[sync] cannot read pending mutations for plan target: {error}");
-            }
-        }
+        )?;
+        pending.insert(key, records);
     }
-    pending
+    Ok(pending)
 }
 
 fn repository_identity(config: &crate::sync::SyncConfig) -> Option<String> {
@@ -2242,7 +2242,23 @@ impl WriterCoreApi {
         // 在 seed 之前固定各 target 的未确认事实：seed 复制的是这一刻的 live
         // 内容，推送成功后只按这份快照的序号确认；seed 之后写入的更新事实
         // 序号更大，保留为下一轮 outbox（Issue #1065 复审 #3）。
-        let preflight_pending = collect_preflight_pending(&plan);
+        let preflight_pending = match collect_preflight_pending(&self.app_data_root, &plan) {
+            Ok(pending) => pending,
+            Err(error) => {
+                let msg = format!("collect preflight pending mutations failed: {error}");
+                log::warn!("[sync] prepare: {msg}");
+                let status = crate::sync::full_sync::error_to_persist_status(&error);
+                let error_category = core_sync_category(&error);
+                let _ = self.record_full_sync_preflight_failure_typed(
+                    sync_status_to_wire(&status),
+                    "preflight_pending".to_string(),
+                    error_category,
+                    "preflight_pending".to_string(),
+                    msg,
+                );
+                return Err(crate::api::error::WriterError::from(error));
+            }
+        };
         let staging_phase = SyncDiagnosticPhase::start_with_provider(
             diagnostic_operation_id,
             "staging",

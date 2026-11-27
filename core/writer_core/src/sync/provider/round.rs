@@ -419,7 +419,18 @@ impl<'a> RoundProvider<'a> {
                 continue;
             }
             match decision.op {
-                DecisionOp::Delete => {}
+                DecisionOp::Delete => {
+                    // 显式删除必须覆盖 transfer 阶段可能生成的旧 Put 条目，
+                    // 否则旧内容仍会随本轮发布（评审 #7214314073 第 2 项）。
+                    let had_content = state
+                        .entries
+                        .get(remote_path)
+                        .is_some_and(|entry| entry.is_some());
+                    if had_content {
+                        outcome.rewritten += 1;
+                    }
+                    state.entries.insert(remote_path.clone(), None);
+                }
                 DecisionOp::Upsert => {
                     let Some(content) = decision.content.as_ref() else {
                         outcome.missing += 1;
