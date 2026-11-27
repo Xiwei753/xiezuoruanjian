@@ -270,6 +270,13 @@ impl super::WriterAppService {
         self.api.load_full_sync_state()
     }
 
+    /// 是否还有未确认的本地业务变更（只读 mutation 账本）。
+    ///
+    /// Issue #1065：平台端用它区分"空闲只做轻量探测"和"有待上传需要先保存"。
+    pub fn sync_has_pending_mutations(&self) -> bool {
+        self.api.sync_has_pending_mutations()
+    }
+
     /// 读取当前工作区最近一次成功完成 generation GC 的时间。
     pub fn load_generation_gc_maintenance_last_success_at(
         &self,

@@ -141,6 +141,13 @@ impl StagingRun {
             if let Some(parent) = base_path.parent() {
                 fs::create_dir_all(parent)?;
             }
+            // base 快照在本轮只读（三方比较的 "base" 一列）：直接硬链接 live
+            // 文件，避免 App 组每轮再把整组内容复制一遍。所有对 base 的写入都
+            // 走 unlink/rename（write_seed_file、atomic_write_*），不会改到 live
+            // inode（Issue #1065 复审 #5）。
+            if fs::hard_link(&live_path, &base_path).is_ok() {
+                continue;
+            }
             self.copy_live_snapshot_file(&live_path, &base_path)?;
         }
         Ok(())

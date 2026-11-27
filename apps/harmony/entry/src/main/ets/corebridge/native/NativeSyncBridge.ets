@@ -1,7 +1,7 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
 import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncSecrets, SyncState, FullSyncState, FullSyncReport, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult, decodeSyncSecrets, decodeFullSyncState, decodeFullSyncReport, decodeAllSyncConflictEntry, decodeSyncConflictPreview, decodeArray } from '../codec/CoreWireDecoders'
+import { DecodeResult, decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult, decodeSyncSecrets, decodeFullSyncState, decodeFullSyncReport, decodeAllSyncConflictEntry, decodeSyncConflictPreview, decodeArray } from '../codec/CoreWireDecoders'
 
 /**
  * 构造 NATIVE_ERROR 信封，仅用于真正的 JS 异常（如 native 模块不存在）。
@@ -126,6 +126,26 @@ export class NativeSyncBridge {
    * `data` 为 null 表示 Core 尚未写入任何同步结果（从未成功同步），是合法状态，
    * 不是错误；成功与否由 success 区分，`last_success_time` 为 Unix 秒。
    */
+  /**
+   * 是否还有未确认的本地业务变更（Issue #1065）。
+   *
+   * 只读 Core mutation 账本：平台端用它决定本轮是"只做轻量远端探测"还是
+   * "先保存再发布"。Core 读不到账本时返回 true（按有变更处理）。
+   */
+  async hasPendingMutations(): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = await (this.core.getNativeModule().nativeSyncHasPendingMutations() as Promise<string>)
+      return this.core.decodeEnvelope<boolean>(jsonStr, (data: Object): DecodeResult<boolean> => {
+        if (typeof data !== 'boolean') {
+          return { ok: false, error: 'expected boolean' }
+        }
+        return { ok: true, value: data as boolean }
+      })
+    } catch (e) {
+      return nativeError<boolean>(e)
+    }
+  }
+
   async loadFullSyncState(): Promise<ResultEnvelope<FullSyncState | null>> {
     try {
       const jsonStr: string = await (this.core.getNativeModule().nativeLoadFullSyncState() as Promise<string>)

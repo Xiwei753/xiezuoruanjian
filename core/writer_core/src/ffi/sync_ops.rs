@@ -679,6 +679,22 @@ pub unsafe extern "C" fn writer_core_load_full_sync_state() -> *mut c_char {
     }
 }
 
+/// 是否还有尚未随远端提交确认的本地业务变更（Issue #1065）。
+///
+/// 只读 mutation 账本，不触网、不扫描磁盘：平台端用它把"空闲只做轻量探测"
+/// 与"有待上传，需要先保存再发布"区分开。读不到时按 `true` 返回，避免把
+/// 未知当成没有变更。
+///
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_sync_has_pending_mutations() -> *mut c_char {
+    match with_app_service(|svc| Ok(svc.sync_has_pending_mutations())) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_STATE_ERROR", &e),
+    }
+}
+
 /// 加载最近一次完整同步报告（失败组、路径、阶段和脱敏后的类型化原因）。
 ///
 /// Core 尚未持久化报告时 `data` 为 `null`，不是查询失败。
