@@ -17,7 +17,7 @@ use super::{DraftFactIndex, DraftLocation};
 /// Issue #1062 评论 #7213284979 第 2 项：目标活动目录里的任何真实内容都
 /// 不能先 `remove_dir_all`（那里可能已有独立未提交事实、spool 或 pending
 /// ack）。迁移失败必须返回 Err，旧单文件与新目录原始字节都保留。
-pub(super) fn migrate_legacy(location: &DraftLocation) -> Result<Option<DraftState>, String> {
+pub(crate) fn migrate_legacy(location: &DraftLocation) -> Result<Option<DraftState>, String> {
     let legacy_path = location.legacy_path();
     let Some(legacy) =
         read_legacy_checked(&legacy_path, &location.project_id, &location.chapter_id)?
@@ -248,20 +248,20 @@ struct LegacyFact {
     projection: serde_json::Value,
 }
 
-pub(super) struct LegacyData {
-    pub(super) volume_id: String,
-    pub(super) base_generation: String,
-    pub(super) base_revision: u64,
-    pub(super) base_sha256: String,
-    pub(super) text: Option<String>,
-    pub(super) text_revision: u64,
-    pub(super) text_sha256: String,
-    pub(super) updated_at_ms: i64,
+pub(crate) struct LegacyData {
+    pub(crate) volume_id: String,
+    pub(crate) base_generation: String,
+    pub(crate) base_revision: u64,
+    pub(crate) base_sha256: String,
+    pub(crate) text: Option<String>,
+    pub(crate) text_revision: u64,
+    pub(crate) text_sha256: String,
+    pub(crate) updated_at_ms: i64,
     /// (索引, projection JSON)
-    pub(super) facts: Vec<(DraftFactIndex, String)>,
+    pub(crate) facts: Vec<(DraftFactIndex, String)>,
 }
 
-pub(super) fn read_legacy(path: &Path, project_id: &str, chapter_id: &str) -> Option<LegacyData> {
+pub(crate) fn read_legacy(path: &Path, project_id: &str, chapter_id: &str) -> Option<LegacyData> {
     match read_legacy_checked(path, project_id, chapter_id) {
         Ok(legacy) => legacy,
         Err(error) => {
@@ -272,7 +272,7 @@ pub(super) fn read_legacy(path: &Path, project_id: &str, chapter_id: &str) -> Op
 }
 
 /// 严格读取旧格式单文件：区分“不存在”与“存在但读不出/身份不符”。
-pub(super) fn read_legacy_checked(
+pub(crate) fn read_legacy_checked(
     path: &Path,
     project_id: &str,
     chapter_id: &str,
@@ -368,7 +368,7 @@ pub(super) fn read_legacy_checked(
 }
 
 /// 旧格式只读解码结果（快照/列表用，不写盘）。
-pub(super) fn legacy_state(
+pub(crate) fn legacy_state(
     location: &DraftLocation,
     legacy: LegacyData,
 ) -> (DraftState, Vec<String>) {

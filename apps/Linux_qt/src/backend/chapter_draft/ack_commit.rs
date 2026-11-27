@@ -4,6 +4,8 @@
 
 use super::*;
 
+use std::collections::HashSet;
+
 /// 本次 Core 回执对应的编辑器快照；只有正文仍是这份快照时才收口。
 #[derive(Clone, Debug)]
 pub(crate) struct TextSettlement {

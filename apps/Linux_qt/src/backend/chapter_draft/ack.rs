@@ -282,7 +282,8 @@ pub(crate) fn reconciled_ack_transactions(
     };
     let mut transactions = Vec::new();
     for chapter in chapters.flatten() {
-        let Some(chapter_id) = chapter.file_name().and_then(|name| name.to_str()) else {
+        let chapter_name = chapter.file_name();
+        let Some(chapter_id) = chapter_name.to_str() else {
             continue;
         };
         if let Some(filter) = chapter_filter {

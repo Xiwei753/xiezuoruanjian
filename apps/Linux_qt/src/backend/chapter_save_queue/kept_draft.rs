@@ -12,6 +12,7 @@
 use std::path::Path;
 
 use super::ChapterDraftRestoreStatus;
+use crate::backend::chapter_draft;
 
 /// 一章草稿离开可写槽位后的去向。
 pub(super) enum KeptDisposition {
@@ -70,7 +71,6 @@ impl RestoreCounters {
         chapter_id: &str,
         disposition: KeptDisposition,
     ) {
-        let chapter_draft = crate::backend::chapter_draft;
         // Issue #1062 评论 #7210360212 第 2 项：先写“是否要自动重试”的意图，
         // 再让 quarantine 把意图与草稿原件一起 rename；外部索引在 rename 之后
         // 才写，崩溃也不会丢掉自动恢复引用。人工归档前先清掉遗留意图。
@@ -142,7 +142,7 @@ impl RestoreCounters {
                             project_id,
                             chapter_id,
                             &volume_id,
-                            &archived,
+                            std::path::Path::new(&archived),
                             &reason,
                             attempts,
                         ) {

@@ -33,16 +33,16 @@ fn digest_file_part(digest: &str) -> String {
 }
 
 /// 正文 blob 的稳定文件名：同一 revision+摘要永远映射到同一文件。
-pub(super) fn blob_name(revision: u64, digest: &str) -> String {
+pub(crate) fn blob_name(revision: u64, digest: &str) -> String {
     format!("{revision:016}-{}.txt", digest_file_part(digest))
 }
 
-pub(super) fn blob_path(dir: &Path, name: &str) -> PathBuf {
+pub(crate) fn blob_path(dir: &Path, name: &str) -> PathBuf {
     texts_dir(dir).join(name)
 }
 
 /// 先写不可变正文 blob，返回文件名；meta 安装成功前它只是孤儿文件。
-pub(super) fn write_text_blob(
+pub(crate) fn write_text_blob(
     dir: &Path,
     revision: u64,
     digest: &str,
@@ -87,7 +87,7 @@ fn read_legacy_text(location: &DraftLocation) -> Option<String> {
 /// meta 当前引用的正文：不可变 blob 优先，其次旧格式 `text.txt`。
 ///
 /// meta 指向的 blob 缺失是未决损坏，必须报错保留目录，不能降级成“没有正文”。
-pub(super) fn read_referenced_text(
+pub(crate) fn read_referenced_text(
     location: &DraftLocation,
     meta: &MetaData,
 ) -> Result<Option<String>, String> {
@@ -105,7 +105,7 @@ pub(super) fn read_referenced_text(
 
 /// 回收未被 meta 引用的正文 blob；旧格式 `text.txt` 在 meta 已指向 blob 后
 /// 同样视为过期。
-pub(super) fn gc_text_blobs(dir: &Path, keep: Option<&str>) -> Result<usize, String> {
+pub(crate) fn gc_text_blobs(dir: &Path, keep: Option<&str>) -> Result<usize, String> {
     let mut removed = 0usize;
     let texts = texts_dir(dir);
     match std::fs::read_dir(&texts) {
@@ -155,7 +155,7 @@ pub(super) fn gc_text_blobs(dir: &Path, keep: Option<&str>) -> Result<usize, Str
 
 /// 当前草稿指向的正文内容（测试/诊断用；不改变磁盘）。
 #[cfg(test)]
-pub(super) fn current_text(location: &DraftLocation) -> Option<String> {
+pub(crate) fn current_text(location: &DraftLocation) -> Option<String> {
     let meta =
         super::read_meta_checked(&location.dir, &location.project_id, &location.chapter_id).ok()?;
     read_referenced_text(location, &meta).ok().flatten()
@@ -163,7 +163,7 @@ pub(super) fn current_text(location: &DraftLocation) -> Option<String> {
 
 /// 当前草稿正文所在文件（测试/诊断用）：blob 或旧 `text.txt`。
 #[cfg(test)]
-pub(super) fn current_text_path(location: &DraftLocation) -> Option<PathBuf> {
+pub(crate) fn current_text_path(location: &DraftLocation) -> Option<PathBuf> {
     let meta =
         super::read_meta_checked(&location.dir, &location.project_id, &location.chapter_id).ok()?;
     if meta.text_blob.is_empty() {

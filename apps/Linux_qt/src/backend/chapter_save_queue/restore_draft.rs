@@ -208,7 +208,7 @@ pub(super) fn handle_restore_project(
             .map(|discovery| discovery.drafts.len() + discovery.unreadable.len())
             .unwrap_or_default();
     let max_rounds = frozen_candidates.saturating_add(2);
-    let mut round = 0u32;
+    let mut round = 0usize;
     loop {
         round = round.saturating_add(1);
         if round > max_rounds {

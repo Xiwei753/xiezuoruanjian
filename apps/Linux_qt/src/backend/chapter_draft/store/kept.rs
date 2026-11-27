@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use super::{is_safe_id, FACTS_DIR, META_FILE, TEXTS_DIR, TEXT_FILE};
 
 /// 被保留（kept）草稿的独立归档根。
-pub(super) fn kept_root(projects_root: &Path, project_id: &str) -> PathBuf {
+pub(crate) fn kept_root(projects_root: &Path, project_id: &str) -> PathBuf {
     projects_root
         .join(project_id)
         .join("app-meta")
@@ -24,7 +24,7 @@ pub(super) fn kept_root(projects_root: &Path, project_id: &str) -> PathBuf {
 /// 列出已归档的保留草稿章节 id：`kept_root` 下的一级子目录（章节 id）中，
 /// 存在草稿内容标记的才算。归档布局是 `<chapter_id>/<stamp>/`，所以标记既
 /// 可能直接落在章节目录，也可能落在某个 stamp 子目录。排序去重。
-pub(super) fn list_kept_chapter_ids(projects_root: &Path, project_id: &str) -> Vec<String> {
+pub(crate) fn list_kept_chapter_ids(projects_root: &Path, project_id: &str) -> Vec<String> {
     if !is_safe_id(project_id) {
         return Vec::new();
     }

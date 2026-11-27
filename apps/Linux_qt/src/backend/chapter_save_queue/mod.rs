@@ -41,6 +41,7 @@ mod draft_jobs;
 mod kept_draft;
 mod restore_coordinator;
 mod restore_draft;
+#[cfg(test)]
 mod tests;
 mod worker;
 

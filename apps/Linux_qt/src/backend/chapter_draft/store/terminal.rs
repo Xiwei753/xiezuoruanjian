@@ -15,7 +15,7 @@ use super::{meta_from_state, read_meta_checked, DraftLocation, MetaData};
 ///
 /// Issue #1062 评论 7194373427 第 4 项：目录回收可能失败，但这份 meta 一旦
 /// durable，章节草稿就已经结算完成；读取端不得再把它当成待恢复草稿。
-pub(super) fn terminal_meta(location: &DraftLocation, state: &DraftState) -> MetaData {
+pub(crate) fn terminal_meta(location: &DraftLocation, state: &DraftState) -> MetaData {
     let mut meta = meta_from_state(
         location,
         state,
@@ -30,7 +30,7 @@ pub(super) fn terminal_meta(location: &DraftLocation, state: &DraftState) -> Met
 }
 
 /// 该目录是否已经写下 terminal 决议（只读 meta，不改状态）。
-pub(super) fn is_terminal(location: &DraftLocation) -> bool {
+pub(crate) fn is_terminal(location: &DraftLocation) -> bool {
     read_meta_checked(&location.dir, &location.project_id, &location.chapter_id)
         .is_ok_and(|meta| meta.terminal)
 }
@@ -39,7 +39,7 @@ pub(super) fn is_terminal(location: &DraftLocation) -> bool {
 ///
 /// 失败必须返回 Err：调用方记录后按“目录待回收”处理，但**不能**把它当成
 /// 事务结算失败，也不能据此扣下已经 durable 的 Core ack。
-pub(super) fn remove_settled_storage(location: &DraftLocation) -> Result<(), String> {
+pub(crate) fn remove_settled_storage(location: &DraftLocation) -> Result<(), String> {
     if location.dir.exists() {
         std::fs::remove_dir_all(&location.dir).map_err(|error| {
             format!(

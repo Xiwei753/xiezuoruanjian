@@ -222,7 +222,8 @@ fn scan_intents(projects_root: &Path, project_id: &str, scan: &mut RetryScan) {
                 continue;
             }
         };
-        let Some(chapter_id) = chapter.file_name().and_then(|name| name.to_str()) else {
+        let chapter_name = chapter.file_name();
+        let Some(chapter_id) = chapter_name.to_str() else {
             continue;
         };
         if !store::is_safe_id(chapter_id) {
@@ -348,6 +349,37 @@ fn scan_index(projects_root: &Path, project_id: &str, scan: &mut RetryScan) {
             }
         }
     }
+}
+
+/// 读取一条 retry 标记（索引 JSON 或归档目录里的意图文件）。
+fn read_marker(path: &std::path::Path) -> Result<DraftRetryMarker, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("read retry marker {}: {error}", path.display()))?;
+    serde_json::from_str(&text)
+        .map_err(|error| format!("parse retry marker {}: {error}", path.display()))
+}
+
+/// 某个索引目录下的全部可读标记；读坏的标记只记录日志（严格扫描另行报告）。
+fn markers_in(dir: &std::path::Path) -> Vec<RetryCandidate> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for entry in entries.flatten() {
+        let marker_path = entry.path();
+        if marker_path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        match read_marker(&marker_path) {
+            Ok(marker) => candidates.push(RetryCandidate {
+                marker,
+                marker_path,
+                intent_backed: false,
+            }),
+            Err(error) => log::warn!("{error}"),
+        }
+    }
+    candidates
 }
 
 /// 区分“不是目录/不存在”和“stat 失败”：后者留下不确定性，严格扫描据此
@@ -662,7 +694,8 @@ pub(crate) fn unreadable_retry_chapters(projects_root: &Path, project_id: &str) 
     let kept = super::store::kept_root(projects_root, project_id);
     if let Ok(kept_chapters) = std::fs::read_dir(&kept) {
         for chapter in kept_chapters.flatten() {
-            let Some(chapter_id) = chapter.file_name().and_then(|name| name.to_str()) else {
+            let chapter_name = chapter.file_name();
+            let Some(chapter_id) = chapter_name.to_str() else {
                 continue;
             };
             if !store::is_safe_id(chapter_id) {
