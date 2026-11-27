@@ -9,9 +9,9 @@
 //! 才可触发 GitHub API 后备；证书验证失败、认证、权限和 non-fast-forward
 //! 保留准确错误，不会被 `Http`/`Ssl` 或泛型 class 中的握手关键词误报为网络。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use git2::{
     AutotagOption, Commit, DiffOptions, Direction, ErrorClass, ErrorCode, FetchOptions, Index,
@@ -293,8 +293,7 @@ pub(crate) fn fetch_snapshot(
         .tree()
         .map_err(|err| map_git_error(err, "read_fetched_tree"))?;
 
-    let mut blobs = HashMap::new();
-    flatten_tree(repo, &tree, "", &mut blobs)?;
+    let blobs = flatten_tree_cached(repo, &tree)?;
 
     Ok(Snapshot {
         head: Some(head),
@@ -441,6 +440,36 @@ fn build_index(
     Ok((index, written_blobs))
 }
 
+/// 已展开 tree 的进程内缓存（tree OID → path→blob 映射）。
+///
+/// 同一批对象在"push 成功 → 重新读取 commit"或重复读取同一 HEAD 时，
+/// 不必再把整棵 tree 递归展开一遍；只保留最近几棵树，内存有界。
+const FLAT_TREE_CACHE_CAPACITY: usize = 4;
+
+fn flat_tree_cache() -> &'static Mutex<VecDeque<(Oid, Arc<HashMap<String, Oid>>)>> {
+    static CACHE: OnceLock<Mutex<VecDeque<(Oid, Arc<HashMap<String, Oid>>)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+fn flatten_tree_cached(repo: &Repository, tree: &Tree<'_>) -> Result<HashMap<String, Oid>, ProviderError> {
+    let key = tree.id();
+    if let Ok(cache) = flat_tree_cache().lock() {
+        if let Some((_, cached)) = cache.iter().find(|(oid, _)| *oid == key) {
+            return Ok((**cached).clone());
+        }
+    }
+    let mut blobs = HashMap::new();
+    flatten_tree(repo, tree, "", &mut blobs)?;
+    if let Ok(mut cache) = flat_tree_cache().lock() {
+        cache.retain(|(oid, _)| *oid != key);
+        cache.push_front((key, Arc::new(blobs.clone())));
+        while cache.len() > FLAT_TREE_CACHE_CAPACITY {
+            cache.pop_back();
+        }
+    }
+    Ok(blobs)
+}
+
 /// 从本地已创建的 commit 重建快照，不访问网络。
 ///
 /// 只用于把本 provider 自己成功 push 的提交推进为下一轮基线；远端是否变化
@@ -455,8 +484,7 @@ pub(crate) fn snapshot_from_commit(
     let tree = commit
         .tree()
         .map_err(|err| map_git_error(err, "read_committed_tree"))?;
-    let mut blobs = HashMap::new();
-    flatten_tree(repo, &tree, "", &mut blobs)?;
+    let blobs = flatten_tree_cached(repo, &tree)?;
     Ok(Snapshot {
         head: Some(commit_oid),
         blobs,
