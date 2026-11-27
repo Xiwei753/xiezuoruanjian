@@ -486,6 +486,24 @@ fn should_retry_full_sync_via_github_api(config: &crate::sync::SyncConfig) -> bo
 /// 一个全局 `SyncConfig` + 一份全局凭据，`perform_full_sync` 内部按 `SyncTarget`
 /// 把不同本地根映射到同一个远端仓库的不同前缀。
 /// 旧的"作品同步 + 应用数据同步"两套用户配置 API 已删除。
+/// 一次同步前恢复的结构化结果（评审 #7218195841 第 2 项）。
+///
+/// 存在未结算业务事务时，空闲快路径与“无变化”结论都必须让位给明确的
+/// 待处理状态，不能只 warn。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RecoveryOutcome {
+    completed: usize,
+    failed: usize,
+    deferred: usize,
+    generation: u64,
+}
+
+impl RecoveryOutcome {
+    fn settled(&self) -> bool {
+        self.failed == 0 && self.deferred == 0
+    }
+}
+
 impl WriterCoreApi {
     /// 旧→新同步 profile 一次性迁移（  / D）。
     ///
@@ -900,7 +918,16 @@ impl WriterCoreApi {
         drop(_recovery_workspace_lock);
         // 所有 durable 未投影 / 未结算事实必须在任何 fast path、target 过滤之前
         // 恢复：账本重建与补号、待确认 ack、章节 journal 的同步投影（复审 #4）。
-        self.recover_sync_state_before_preflight();
+        let recovery_outcome = self.recover_sync_state_before_preflight();
+        if !recovery_outcome.settled() {
+            log::warn!(
+                "[sync] recovery has unsettled work: completed={} failed={} deferred={} generation={}",
+                recovery_outcome.completed,
+                recovery_outcome.failed,
+                recovery_outcome.deferred,
+                recovery_outcome.generation
+            );
+        }
         // 平台触发原因只决定"是否绕过周期间隔"（force_sync），以及是否走显式
         // 重建；它不再影响本地/远端版本比对，也不影响冲突裁决。
         let trigger_label = progress_sink
@@ -1238,35 +1265,37 @@ impl WriterCoreApi {
     /// 只做幂等重放：损坏账本归档重建并补号、待确认 ack 应用、章节 journal 的
     /// 同步投影重放。失败保留 durable 事实并在本轮继续，不会因"快照没变化"
     /// 而永远跳过（复审 #4）。
-    fn recover_sync_state_before_preflight(&self) {
+    fn recover_sync_state_before_preflight(&self) -> RecoveryOutcome {
         let (app_data_root, projects_root) = {
             let core = self.core_read();
             (core.app_data_root.clone(), core.projects_root.clone())
         };
-        // 校对待发布事务独立于正文与 scanner 代际：在任何 fast path 之前
-        // 遍历实际待办目录重放，不能等用户重新打开失败章节。
-        match crate::correction::retry_pending_publications(&app_data_root, &projects_root) {
-            Ok(0) => {}
-            Ok(published) => log::info!(
-                "[correction] published {published} pending correction results before sync"
-            ),
+        let mut outcome = RecoveryOutcome::default();
+        // 恢复要清除索引责任并写 journal/校对目录：整段在同一 workspace
+        // 事务锁内完成，结算与索引更新不再分裂成两个锁窗口（评审 #7218195841 第 3 项）。
+        let _lock = match crate::storage::WorkspaceWriteLock::acquire(&app_data_root) {
+            Ok(lock) => lock,
             Err(error) => {
-                log::warn!("[correction] retry pending correction publications failed: {error}")
+                log::warn!("[sync] recovery workspace lock failed: {error}");
+                outcome.failed = outcome.failed.saturating_add(1);
+                return outcome;
             }
-        }
-        // 持久 dirty/recovery 索引：正常同步只重放登记过的 (root, tx)，不再
-        // 每轮枚举全部作品与恢复目录（评审 #7215361837 第 2 项）。索引缺失/
-        // schema 不符/损坏时才回落到完整枚举（升级或显式重建路径）。
-        let index = crate::sync::dirty_index::load(&app_data_root);
-        let index_usable = index
+        };
+        // 只有“schema 当前 + 恢复目录已完整校准”的索引才能按 ID 恢复；
+        // 旧索引经普通写入提升 schema 不算升级完成（评审 #7218195841 第 1 项）。
+        let index = crate::sync::dirty_index::load_usable(&app_data_root);
+        let index_usable = index.is_some();
+        outcome.generation = index
             .as_ref()
-            .is_some_and(|index| index.schema_version == crate::sync::dirty_index::SCHEMA_VERSION);
+            .map(|index| index.recovery_generation)
+            .unwrap_or(0);
         let obligations: Vec<crate::sync::dirty_index::RecoveryObligation> = index
             .as_ref()
             .map(|index| index.obligations.values().cloned().collect())
             .unwrap_or_default();
 
         if index_usable {
+            // 按冻结的 (kind, root, tx) 逐笔恢复，不再全目录扫描。
             for obligation in &obligations {
                 let root = std::path::PathBuf::from(&obligation.root);
                 match obligation.kind.as_str() {
@@ -1276,51 +1305,77 @@ impl WriterCoreApi {
                             .split('\u{1f}')
                             .next()
                             .unwrap_or_default();
-                        if let Err(error) =
-                            crate::sync::local_mutations::replay_pending_acks_for_round(
-                                &root, round,
-                            )
-                        {
-                            log::warn!(
-                                "[sync] replay pending ack {} failed at {}: {error}",
-                                round,
-                                root.display()
-                            );
+                        match crate::sync::local_mutations::replay_pending_acks_for_round(
+                            &root, round,
+                        ) {
+                            Ok(_) => {
+                                let prefix = format!("{round}\u{1f}");
+                                let _ = crate::sync::dirty_index::clear_obligations_matching(
+                                    &app_data_root,
+                                    "mutation_ack",
+                                    &root,
+                                    &prefix,
+                                );
+                                outcome.completed = outcome.completed.saturating_add(1);
+                            }
+                            Err(error) => {
+                                log::warn!(
+                                    "[sync] replay pending ack {} failed at {}: {error}",
+                                    round,
+                                    root.display()
+                                );
+                                outcome.failed = outcome.failed.saturating_add(1);
+                            }
                         }
                     }
                     "chapter_projections" => {
-                        if let Err(error) = crate::chapter::commit::replay_pending_sync_mutation(
+                        match crate::chapter::commit::replay_pending_sync_mutation(
                             &root,
                             &obligation.transaction_id,
                         ) {
-                            log::warn!(
-                                "[sync] replay chapter projection {} failed at {}: {error}",
-                                obligation.transaction_id,
-                                root.display()
-                            );
+                            Ok(_) => outcome.completed = outcome.completed.saturating_add(1),
+                            Err(error) => {
+                                log::warn!(
+                                    "[sync] replay chapter projection {} failed at {}: {error}",
+                                    obligation.transaction_id,
+                                    root.display()
+                                );
+                                outcome.failed = outcome.failed.saturating_add(1);
+                            }
                         }
                     }
                     "correction_publication" => {
                         let mut parts = obligation.transaction_id.split('\u{1f}');
                         let project_id = parts.next().unwrap_or_default();
                         let chapter_id = parts.next().unwrap_or_default();
-                        if let Err(error) = crate::correction::publish_pending_chapter(
+                        match crate::correction::publish_pending_chapter(
                             &app_data_root,
                             &projects_root,
                             &root,
                             project_id,
                             chapter_id,
                         ) {
-                            log::warn!(
-                                "[correction] publish pending {}:{} failed: {error}",
-                                project_id,
-                                chapter_id
-                            );
+                            Ok(_) => outcome.completed = outcome.completed.saturating_add(1),
+                            Err(error) => {
+                                log::warn!(
+                                    "[correction] publish pending {}:{} failed: {error}",
+                                    project_id,
+                                    chapter_id
+                                );
+                                outcome.failed = outcome.failed.saturating_add(1);
+                            }
                         }
                     }
-                    "ledger_rebuild" => {
-                        let _ = crate::sync::local_mutations::recover_ledger(&root);
-                    }
+                    "ledger_rebuild" => match crate::sync::local_mutations::recover_ledger(&root) {
+                        Ok(_) => outcome.completed = outcome.completed.saturating_add(1),
+                        Err(error) => {
+                            log::warn!(
+                                "[sync] ledger recovery failed at {}: {error}",
+                                root.display()
+                            );
+                            outcome.failed = outcome.failed.saturating_add(1);
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -1330,13 +1385,21 @@ impl WriterCoreApi {
                 log::info!("[correction] published {drained} in-memory correction result(s)");
             }
         } else {
+            // 唯一完整恢复重建入口：完整校对发现 + 全项目枚举 + 全 root 账本/ack/journal。
+            // 重建失败保持“未校准”，下一轮继续走这里，不会伪装成已升级的空索引。
             match crate::correction::retry_pending_publications(&app_data_root, &projects_root) {
                 Ok(0) => {}
-                Ok(published) => log::info!(
-                    "[correction] published {published} pending correction results before sync"
-                ),
+                Ok(published) => {
+                    log::info!(
+                        "[correction] published {published} pending correction results before sync"
+                    );
+                    outcome.completed = outcome.completed.saturating_add(1);
+                }
                 Err(error) => {
-                    log::warn!("[correction] retry pending correction publications failed: {error}")
+                    log::warn!(
+                        "[correction] retry pending correction publications failed: {error}"
+                    );
+                    outcome.failed = outcome.failed.saturating_add(1);
                 }
             }
         }
@@ -1364,17 +1427,15 @@ impl WriterCoreApi {
                 }
                 Err(error) => {
                     log::warn!("[sync] list projects for recovery failed: {error}");
+                    outcome.failed = outcome.failed.saturating_add(1);
                 }
             }
         }
+
         for root in &roots {
             let mut recovery_error: Option<String> = None;
-            // 读标记放在账本恢复之后：恢复本身可能产生新的恢复责任，提前读会
-            // 漏掉这一次（复审 #7213115893 第 4 项）。
             let start_generation = crate::sync::local_mutations::recovery_pending_generation(root);
             let had_marker = start_generation.is_some();
-            // 正常空闲轮不读整份账本：只有存在未完成恢复标记时才做显式恢复。
-            // 损坏账本由写入路径（append_batch）归档重建，读路径如实报错。
             let needs_ledger_recovery =
                 had_marker || crate::sync::local_mutations::needs_ledger_recovery(root);
             if needs_ledger_recovery {
@@ -1392,40 +1453,42 @@ impl WriterCoreApi {
                     }
                 }
             }
-            if recovery_error.is_none() {
-                match crate::sync::local_mutations::replay_pending_acks(root) {
-                    Ok(0) => {}
-                    Ok(applied) => log::info!(
-                        "[sync] replayed {applied} pending mutation acks at {}",
-                        root.display()
-                    ),
-                    Err(error) => {
-                        log::warn!(
-                            "[sync] replay pending mutation acks failed at {}: {error}",
+            // 索引可用时，ack 与 journal 已经按 obligation 的 ID 精确重放过；
+            // 这里再全目录扫描会把要省的枚举重新做一遍（评审 #7218195841 第 3 项）。
+            if !index_usable {
+                if recovery_error.is_none() {
+                    match crate::sync::local_mutations::replay_pending_acks(root) {
+                        Ok(0) => {}
+                        Ok(applied) => log::info!(
+                            "[sync] replayed {applied} pending mutation acks at {}",
                             root.display()
-                        );
-                        recovery_error = Some(format!("acks: {error}"));
+                        ),
+                        Err(error) => {
+                            log::warn!(
+                                "[sync] replay pending mutation acks failed at {}: {error}",
+                                root.display()
+                            );
+                            recovery_error = Some(format!("acks: {error}"));
+                        }
+                    }
+                }
+                if recovery_error.is_none() && *root != app_data_root {
+                    match crate::chapter::commit::replay_pending_sync_mutations(root) {
+                        Ok(0) => {}
+                        Ok(replayed) => log::info!(
+                            "[sync] replayed {replayed} chapter mutation projection outboxes at {}",
+                            root.display()
+                        ),
+                        Err(error) => {
+                            log::warn!(
+                                "[sync] replay chapter mutation projections failed at {}: {error}",
+                                root.display()
+                            );
+                            recovery_error = Some(format!("journal: {error}"));
+                        }
                     }
                 }
             }
-            if recovery_error.is_none() && *root != app_data_root {
-                match crate::chapter::commit::replay_pending_sync_mutations(root) {
-                    Ok(0) => {}
-                    Ok(replayed) => log::info!(
-                        "[sync] replayed {replayed} chapter mutation projection outboxes at {}",
-                        root.display()
-                    ),
-                    Err(error) => {
-                        log::warn!(
-                            "[sync] replay chapter mutation projections failed at {}: {error}",
-                            root.display()
-                        );
-                        recovery_error = Some(format!("journal: {error}"));
-                    }
-                }
-            }
-            // 有未完成责任时才做显式磁盘重建；正常空闲轮不扫描目录。账本恢复
-            // 本身也可能产生新责任（归档重建），所以这里重新看一次标记。
             let needs_rescan = had_marker || crate::sync::local_mutations::recovery_pending(root);
             if needs_rescan && recovery_error.is_none() {
                 let rescan: crate::Result<usize> = if *root == app_data_root {
@@ -1462,16 +1525,37 @@ impl WriterCoreApi {
                     }
                 }
             }
+            // 索引可用时 recovery 标记由各义务结算负责，不能因为“本轮没看到
+            // 目录”就清掉（seed_clean 同理）。
             match recovery_error {
-                // 恢复没做完：整个根在下一轮之前都不可走无变化快速路径。
-                Some(reason) => crate::sync::local_mutations::mark_recovery_pending(root, &reason),
-                // 只清自己开始时那一代责任：恢复过程中又产生的新责任保留。
-                None => crate::sync::local_mutations::clear_recovery_pending_if_generation(
-                    root,
-                    start_generation,
-                ),
+                Some(reason) => {
+                    outcome.failed = outcome.failed.saturating_add(1);
+                    crate::sync::local_mutations::mark_recovery_pending(root, &reason);
+                }
+                None => {
+                    crate::sync::local_mutations::clear_recovery_pending_if_generation(
+                        root,
+                        start_generation,
+                    );
+                }
             }
         }
+
+        if !index_usable && outcome.failed == 0 {
+            match crate::sync::dirty_index::mark_recovery_calibrated(&app_data_root) {
+                Ok(generation) => {
+                    log::info!("[sync] recovery obligations calibrated (generation {generation})");
+                    outcome.generation = generation;
+                }
+                Err(error) => {
+                    log::warn!("[sync] mark recovery calibrated failed: {error}");
+                    outcome.failed = outcome.failed.saturating_add(1);
+                }
+            }
+        }
+        // 仍未结算的责任保持待处理：调用方不得据此宣称收敛或 no_changes。
+        outcome.deferred = crate::sync::dirty_index::obligations(&app_data_root).len();
+        outcome
     }
 
     /// 按推送回执确认本轮实际发布的对象事实（Issue #1065 复审 #3）。

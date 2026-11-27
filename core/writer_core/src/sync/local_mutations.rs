@@ -133,15 +133,29 @@ fn project_into_dirty_index<F>(sync_root: &Path, update: F)
 where
     F: FnOnce(&Path, &Path) -> crate::error::Result<()>,
 {
-    let Some(app_root) = crate::storage::WorkspaceWriteLock::current_root() else {
-        return;
-    };
-    if let Err(error) = update(&app_root, sync_root) {
+    if let Err(error) = project_into_dirty_index_strict(sync_root, update) {
         log::warn!(
             "[sync] workspace dirty index projection failed for {}: {error}",
             sync_root.display()
         );
     }
+}
+
+/// 严格版索引投影：无法确定 workspace 根或写索引失败都返回 Err。
+///
+/// 恢复责任登记必须用这个版本——不能让一次 best-effort 写决定 durable
+/// 事务是否会被恢复入口发现。
+fn project_into_dirty_index_strict<F>(sync_root: &Path, update: F) -> crate::error::Result<()>
+where
+    F: FnOnce(&Path, &Path) -> crate::error::Result<()>,
+{
+    let app_root = crate::storage::WorkspaceWriteLock::current_root().ok_or_else(|| {
+        crate::Error::Other(format!(
+            "workspace write lock is not held while projecting recovery intent for {}",
+            sync_root.display()
+        ))
+    })?;
+    update(&app_root, sync_root)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -790,22 +804,20 @@ fn push_pending_ack(
         revision: revision.map(str::to_string),
         published: published.to_vec(),
     });
+    // 恢复责任先落盘：崩溃窗口里“ack 文件已写、索引未登记”的二次写不能
+    // 决定一笔业务事实是否被发现（评审 #7218195841 第 3 项）。登记失败时
+    // 不写 ack，直接返回错误，由调用方保持未结算。
+    let obligation = crate::sync::dirty_index::RecoveryObligation {
+        kind: "mutation_ack".to_string(),
+        root: crate::sync::dirty_index::root_key(sync_root),
+        transaction_id: format!("{round_id}\u{1f}{kind}\u{1f}{id}"),
+        detail: Some(id.clone()),
+    };
+    project_into_dirty_index_strict(sync_root, |app_root, _root| {
+        crate::sync::dirty_index::record_obligation(app_root, obligation)
+    })?;
     let text = serde_json::to_string(&acks)?;
-    let written = crate::storage::atomic_write_string(&pending_ack_path(sync_root), &text);
-    if written.is_ok() {
-        // 恢复责任：推送已成功但本地确认未落盘时，崩溃后的恢复入口要能按这一笔
-        // ack 精确重放，而不是全 workspace 扫描（评审 #7215361837 第 2 项）。
-        let obligation = crate::sync::dirty_index::RecoveryObligation {
-            kind: "mutation_ack".to_string(),
-            root: crate::sync::dirty_index::root_key(sync_root),
-            transaction_id: format!("{round_id}\u{1f}{kind}\u{1f}{id}"),
-            detail: Some(id.clone()),
-        };
-        project_into_dirty_index(sync_root, |app_root, _root| {
-            crate::sync::dirty_index::record_obligation(app_root, obligation)
-        });
-    }
-    written
+    crate::storage::atomic_write_string(&pending_ack_path(sync_root), &text)
 }
 
 /// 从确认意图文件里移除一条已经结算成功的意图（按 target + round 精确匹配）。

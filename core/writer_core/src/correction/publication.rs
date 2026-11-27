@@ -219,6 +219,9 @@ pub(crate) fn write_pending(
         return Err(invalid_record(project_id, chapter_id, "chapter id"));
     };
     fs::create_dir_all(&dir)?;
+    // durable 意图先登记：登记失败时不写待发布文件，避免出现“有文件、索引
+    // 不知道”的不可发现状态（评审 #7218195841 第 3 项）。
+    record_publication_obligation(project_root, project_id, chapter_id)?;
     for record in records {
         let key = record_key_for(project_id, chapter_id, record)?;
         let path = dir.join(format!("{key}.json"));
@@ -231,14 +234,23 @@ pub(crate) fn write_pending(
         }
         crate::storage::atomic_write_string(&path, &json)?;
     }
-    record_publication_obligation(project_root, project_id, chapter_id);
     Ok(())
 }
 
 /// 登记“本章还有待发布校对结果”的恢复责任（评审 #7215361837 第 2 项）。
-fn record_publication_obligation(project_root: &Path, project_id: &str, chapter_id: &str) {
+///
+/// 返回 Err 表示索引投影失败：调用方不得把待发布文件当作可发现事实。
+fn record_publication_obligation(
+    project_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> crate::Result<()> {
     let Some(app_root) = crate::storage::WorkspaceWriteLock::current_root() else {
-        return;
+        return Err(invalid_record(
+            project_id,
+            chapter_id,
+            "workspace write lock not held",
+        ));
     };
     let obligation = crate::sync::dirty_index::RecoveryObligation {
         kind: "correction_publication".to_string(),
@@ -248,7 +260,10 @@ fn record_publication_obligation(project_root: &Path, project_id: &str, chapter_
     };
     if let Err(error) = crate::sync::dirty_index::record_obligation(&app_root, obligation) {
         log::warn!("[sync] cannot record correction publication obligation: {error}");
+        let _ = crate::sync::dirty_index::invalidate_recovery_calibration(&app_root);
+        return Err(error);
     }
+    Ok(())
 }
 
 fn clear_publication_obligation(project_root: &Path, project_id: &str, chapter_id: &str) {

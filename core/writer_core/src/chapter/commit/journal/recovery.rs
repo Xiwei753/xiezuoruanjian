@@ -335,10 +335,7 @@ pub fn replay_pending_sync_mutations(project_root: &Path) -> Result<usize> {
 /// 按事务 ID 重放单笔 journal 的同步投影（dirty index 定位，不扫描全目录）。
 ///
 /// 返回是否重放了投影；事务不存在/已完成时返回 `Ok(false)`（幂等）。
-pub fn replay_pending_sync_mutation(
-    project_root: &Path,
-    transaction_id: &str,
-) -> Result<bool> {
+pub fn replay_pending_sync_mutation(project_root: &Path, transaction_id: &str) -> Result<bool> {
     if transaction_id.is_empty() || transaction_id.contains(['/', '\\']) {
         return Err(crate::error::Error::Other(format!(
             "invalid chapter commit transaction id: {transaction_id}"
@@ -347,6 +344,8 @@ pub fn replay_pending_sync_mutation(
     let tx_dir = journal_root(project_root).join(transaction_id);
     let manifest_path = tx_dir.join("manifest.json");
     if !manifest_path.exists() {
+        // 意图已登记但 journal 没有落盘（写失败窗口）：清掉这一笔悬空责任。
+        super::clear_projection_obligation(project_root, transaction_id);
         return Ok(false);
     }
     let mut manifest: ChapterCommitManifest =

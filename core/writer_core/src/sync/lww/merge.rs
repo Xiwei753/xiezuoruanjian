@@ -1024,6 +1024,12 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     manifest_files_vec.retain(|rec| rec.op != "delete" || lww_record_time(rec) > purge_time);
     manifest_files_vec.sort_by(|a, b| a.path.cmp(&b.path));
 
+    // 对象级基线增量：只把本轮真正变化的记录并入 known_files，未涉及对象
+    // 保留原基线，不再扫描整棵目录重建（评审 #7218195841 第 4 项）。
+    let manifest_delta = crate::sync::manifest_delta::ManifestDelta::from_records(
+        manifest_files_vec.iter(),
+        &state.known_files,
+    );
     let sync_manifest = SyncManifest {
         files: manifest_files_vec,
     };
@@ -1057,9 +1063,6 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         ))
     };
 
-    let post_local_entries =
-        crate::sync::scanner::scan_for_sync_group(sync_root, scope, app_group)?;
-
     // ── 同步后重建 known_files ──
     // 稀疏模式：本轮未加载的对象不在扫描结果里，它们的已确认基线必须原样保留，
     // 不能被"清空重建"抹掉（复审 #7213234617 第 2 项）。
@@ -1090,32 +1093,12 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         .filter_map(|p| state.known_files_updated_at.get(p).map(|v| (p.clone(), *v)))
         .collect();
 
-    state.known_files.clear();
-    state.known_files_updated_at.clear();
-    for entry in post_local_entries {
-        if entry.sync_kind == SyncKind::Upload && entry.relative_path != SYNC_MANIFEST_PATH {
-            if state.conflicted_files.contains(&entry.relative_path) {
-                continue;
-            }
-
-            state
-                .known_files
-                .insert(entry.relative_path.clone(), entry.file_hash.clone());
-
-            let matched_rec = merged_manifest_files.get(&entry.relative_path);
-            let t = matched_rec.map(|r| r.updated_at_ms).unwrap_or_else(|| {
-                std::fs::metadata(sync_root.join(&entry.relative_path))
-                    .and_then(|m| m.modified())
-                    .and_then(|time| {
-                        time.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                            .map_err(std::io::Error::other)
-                    })
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(now_ms)
-            });
-            state.known_files_updated_at.insert(entry.relative_path, t);
-        }
-    }
+    manifest_delta.apply_to(&mut state.known_files, &mut state.known_files_updated_at);
+    log::debug!(
+        "[sync] manifest delta applied: upserts={} deletes={}",
+        manifest_delta.upserts.len(),
+        manifest_delta.deletes.len()
+    );
 
     for (path, hash, updated) in unloaded_known_files {
         state.known_files.entry(path.clone()).or_insert(hash);
@@ -1376,36 +1359,16 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
         .filter_map(|p| state.known_files_updated_at.get(p).map(|v| (p.clone(), *v)))
         .collect();
 
-    state.known_files.clear();
-    state.known_files_updated_at.clear();
-
-    let post_local_entries = scan_for_sync(sync_root, scope)?;
-    for entry in &post_local_entries {
-        if entry.sync_kind == SyncKind::Upload && entry.relative_path != SYNC_MANIFEST_PATH {
-            if state.conflicted_files.contains(&entry.relative_path) {
-                continue;
-            }
-            state
-                .known_files
-                .insert(entry.relative_path.clone(), entry.file_hash.clone());
-
-            // 用 manifest record 的 updated_at_ms（若匹配），否则读文件 mtime，最后回退 now_ms。
-            let matched_rec = local_records.get(&entry.relative_path);
-            let t = matched_rec.map(|r| r.updated_at_ms).unwrap_or_else(|| {
-                std::fs::metadata(sync_root.join(&entry.relative_path))
-                    .and_then(|m| m.modified())
-                    .and_then(|time| {
-                        time.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                            .map_err(std::io::Error::other)
-                    })
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(now_ms)
-            });
-            state
-                .known_files_updated_at
-                .insert(entry.relative_path.clone(), t);
-        }
-    }
+    let manifest_delta = crate::sync::manifest_delta::ManifestDelta::from_records(
+        sync_manifest.files.iter(),
+        &state.known_files,
+    );
+    manifest_delta.apply_to(&mut state.known_files, &mut state.known_files_updated_at);
+    log::debug!(
+        "[sync] empty-remote manifest delta applied: upserts={} deletes={}",
+        manifest_delta.upserts.len(),
+        manifest_delta.deletes.len()
+    );
 
     for (path, hash) in conflicted_known_files {
         state.known_files.insert(path, hash);

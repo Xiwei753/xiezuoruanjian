@@ -816,10 +816,13 @@ pub(crate) fn commit_chapter_with_guard(
         pending.sort();
         pending.dedup();
         manifest.pending_projections = pending.clone();
-        write_manifest(&tx_dir, &manifest)?;
-        // journal 仍是唯一的重放来源：在 workspace dirty index 里登记这一笔
-        // 待重放事务，正常同步入口据此按 ID 恢复（评审 #7215361837 第 2 项）。
+        // 先登记恢复意图、再写 journal：崩溃在两次写之间时恢复入口仍能找到
+        // 这笔事务；意图写失败会让索引回到未校准状态，由完整发现兜底。
         record_projection_obligation(project_root, &manifest.transaction_id);
+        if let Err(error) = write_manifest(&tx_dir, &manifest) {
+            clear_projection_obligation(project_root, &manifest.transaction_id);
+            return Err(error);
+        }
     }
 
     let written_files = {
@@ -954,6 +957,9 @@ pub(crate) fn record_projection_obligation(project_root: &Path, transaction_id: 
     };
     if let Err(error) = crate::sync::dirty_index::record_obligation(&app_root, obligation) {
         log::warn!("[sync] cannot record chapter projection obligation: {error}");
+        if let Err(error) = crate::sync::dirty_index::invalidate_recovery_calibration(&app_root) {
+            log::warn!("[sync] cannot invalidate recovery calibration: {error}");
+        }
     }
 }
 
@@ -969,5 +975,8 @@ pub(crate) fn clear_projection_obligation(project_root: &Path, transaction_id: &
         transaction_id,
     ) {
         log::warn!("[sync] cannot clear chapter projection obligation: {error}");
+        if let Err(error) = crate::sync::dirty_index::invalidate_recovery_calibration(&app_root) {
+            log::warn!("[sync] cannot invalidate recovery calibration: {error}");
+        }
     }
 }

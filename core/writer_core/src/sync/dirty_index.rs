@@ -96,6 +96,19 @@ pub(crate) struct WorkspaceDirtyIndex {
     /// 未结算的恢复责任（按 `RecoveryObligation::id` 键控）。
     #[serde(default)]
     pub obligations: BTreeMap<String, RecoveryObligation>,
+    /// 恢复责任目录是否完成过一次**全量校准**（评审 #7218195841 第 1 项）。
+    ///
+    /// schema 升级或普通业务写入只追加自己的事实，不能宣布历史磁盘材料
+    /// 已全部登记；只有完整恢复发现事务（枚举全部未决 journal/ack/校对文件
+    /// 并完成对账）成功提交后才能置位。
+    #[serde(default)]
+    pub recovery_calibrated: bool,
+    /// 已提交的校准代次（每次全量校准 +1，用于诊断与重放判定）。
+    #[serde(default)]
+    pub recovery_generation: u64,
+    /// 校准完成时间（业务时间毫秒）。
+    #[serde(default)]
+    pub recovery_calibrated_at_ms: i64,
 }
 
 impl Default for WorkspaceDirtyIndex {
@@ -104,6 +117,9 @@ impl Default for WorkspaceDirtyIndex {
             schema_version: SCHEMA_VERSION,
             targets: BTreeMap::new(),
             obligations: BTreeMap::new(),
+            recovery_calibrated: false,
+            recovery_generation: 0,
+            recovery_calibrated_at_ms: 0,
         }
     }
 }
@@ -129,6 +145,39 @@ fn ledger_bytes(sync_root: &Path) -> u64 {
 pub(crate) fn load(app_data_root: &Path) -> Option<WorkspaceDirtyIndex> {
     let text = std::fs::read_to_string(index_path(app_data_root)).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// 读取一份**可用于按 ID 恢复**的索引：schema 必须是当前版本，并且恢复
+/// 责任目录已完成全量校准。只校验 schema 会让旧索引经一次普通写入“冒充升级”。
+pub(crate) fn load_usable(app_data_root: &Path) -> Option<WorkspaceDirtyIndex> {
+    let index = load(app_data_root)?;
+    if index.schema_version != SCHEMA_VERSION || !index.recovery_calibrated {
+        return None;
+    }
+    Some(index)
+}
+
+/// 索引投影失败时撤销“已校准”结论：下一次同步入口必须重新做完整恢复
+/// 发现，而不是信任一份缺项索引（评审 #7218195841 第 3 项）。
+pub(crate) fn invalidate_recovery_calibration(app_data_root: &Path) -> crate::error::Result<()> {
+    let mut index = load(app_data_root).unwrap_or_default();
+    if !index.recovery_calibrated {
+        return Ok(());
+    }
+    index.recovery_calibrated = false;
+    index.schema_version = SCHEMA_VERSION;
+    save(app_data_root, &index)
+}
+
+/// 全量恢复发现成功提交后校准索引（同一次持久写里推进代次）。
+pub(crate) fn mark_recovery_calibrated(app_data_root: &Path) -> crate::error::Result<u64> {
+    let mut index = load(app_data_root).unwrap_or_default();
+    index.schema_version = SCHEMA_VERSION;
+    index.recovery_calibrated = true;
+    index.recovery_generation = index.recovery_generation.saturating_add(1);
+    index.recovery_calibrated_at_ms = chrono::Utc::now().timestamp_millis();
+    save(app_data_root, &index)?;
+    Ok(index.recovery_generation)
 }
 
 fn save(app_data_root: &Path, index: &WorkspaceDirtyIndex) -> crate::error::Result<()> {
@@ -228,6 +277,29 @@ pub(crate) fn clear_obligation(
     save(app_data_root, &index)
 }
 
+/// 按 kind + root + 事务前缀清除一批已结算责任（例如某一轮的多笔 ack）。
+pub(crate) fn clear_obligations_matching(
+    app_data_root: &Path,
+    kind: &str,
+    root: &Path,
+    transaction_prefix: &str,
+) -> crate::error::Result<usize> {
+    let mut index = load(app_data_root).unwrap_or_default();
+    index.schema_version = SCHEMA_VERSION;
+    let root = root_key(root);
+    let before = index.obligations.len();
+    index.obligations.retain(|_, obligation| {
+        !(obligation.kind == kind
+            && obligation.root == root
+            && obligation.transaction_id.starts_with(transaction_prefix))
+    });
+    let removed = before - index.obligations.len();
+    if removed > 0 {
+        save(app_data_root, &index)?;
+    }
+    Ok(removed)
+}
+
 /// 当前全部未结算恢复责任。
 pub(crate) fn obligations(app_data_root: &Path) -> Vec<RecoveryObligation> {
     load(app_data_root)
@@ -238,6 +310,7 @@ pub(crate) fn obligations(app_data_root: &Path) -> Vec<RecoveryObligation> {
 /// 索引是否完整到足以跳过完整恢复枚举（没有 obligation 且所有条目都已校准）。
 pub(crate) fn recovery_is_idle(index: &WorkspaceDirtyIndex) -> bool {
     index.schema_version == SCHEMA_VERSION
+        && index.recovery_calibrated
         && index.obligations.is_empty()
         && index
             .targets
@@ -269,7 +342,8 @@ pub(crate) fn seed_clean(
     for (_, sync_root) in expected {
         let entry = index.targets.entry(root_key(sync_root)).or_default();
         entry.pending.clear();
-        entry.recovery = false;
+        // 独立恢复责任（账本损坏/远端对象待清理/未结算业务事务）只能由
+        // 真实恢复结算清除；一次 all_match 校准对象账本不代表它已完成。
         entry.complete = true;
         entry.ledger_bytes = ledger_bytes(sync_root);
     }
@@ -285,7 +359,10 @@ pub(crate) fn is_clean_for_checkpoint(
     index: &WorkspaceDirtyIndex,
     expected: &[(String, PathBuf)],
 ) -> bool {
-    if index.schema_version != SCHEMA_VERSION {
+    if index.schema_version != SCHEMA_VERSION || !index.recovery_calibrated {
+        return false;
+    }
+    if !index.obligations.is_empty() {
         return false;
     }
     let mut known_roots: BTreeSet<String> = BTreeSet::new();
@@ -352,6 +429,7 @@ mod tests {
         let expected = vec![("project:p".to_string(), project.path().to_path_buf())];
         touch_ledger(project.path(), "");
         seed_clean(app.path(), &expected).unwrap();
+        mark_recovery_calibrated(app.path()).unwrap();
         assert!(is_clean_for_checkpoint(
             &load(app.path()).unwrap(),
             &expected
@@ -389,6 +467,7 @@ mod tests {
         record_appended(app.path(), project.path(), &[record("a", 1)]).unwrap();
         // 手工 seed 后账本又被未登记的追加改变：长度不一致必须判脏。
         seed_clean(app.path(), &expected).unwrap();
+        mark_recovery_calibrated(app.path()).unwrap();
         touch_ledger(project.path(), "abcdefgh\n");
         assert!(!is_clean_for_checkpoint(
             &load(app.path()).unwrap(),
@@ -404,9 +483,76 @@ mod tests {
         let expected = vec![("project:p".to_string(), project.path().to_path_buf())];
         touch_ledger(project.path(), "");
         seed_clean(app.path(), &expected).unwrap();
+        mark_recovery_calibrated(app.path()).unwrap();
         // 索引里登记了 checkpoint 之外、但目录仍存在的 root：可能是新建作品。
         record_appended(app.path(), new_project.path(), &[record("chapter.md", 1)]).unwrap();
         assert!(!is_clean_for_checkpoint(
+            &load(app.path()).unwrap(),
+            &expected
+        ));
+    }
+
+    #[test]
+    fn schema_write_does_not_pretend_recovery_is_calibrated() {
+        let app = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        let expected = vec![("project:p".to_string(), project.path().to_path_buf())];
+        touch_ledger(project.path(), "{}\n");
+        // 普通业务写入只追加自己的事实，不能宣布历史恢复目录已索引。
+        record_appended(app.path(), project.path(), &[record("a", 1)]).unwrap();
+        let index = load(app.path()).unwrap();
+        assert_eq!(index.schema_version, SCHEMA_VERSION);
+        assert!(!index.recovery_calibrated);
+        assert!(load_usable(app.path()).is_none());
+        assert!(!is_clean_for_checkpoint(&index, &expected));
+    }
+
+    #[test]
+    fn obligations_block_clean_until_settled() {
+        let app = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        let expected = vec![("project:p".to_string(), project.path().to_path_buf())];
+        touch_ledger(project.path(), "");
+        seed_clean(app.path(), &expected).unwrap();
+        mark_recovery_calibrated(app.path()).unwrap();
+        record_obligation(
+            app.path(),
+            RecoveryObligation {
+                kind: "mutation_ack".to_string(),
+                root: root_key(project.path()),
+                transaction_id: "round-1\u{1f}project\u{1f}p".to_string(),
+                detail: Some("p".to_string()),
+            },
+        )
+        .unwrap();
+        assert!(!is_clean_for_checkpoint(
+            &load(app.path()).unwrap(),
+            &expected
+        ));
+        clear_obligations_matching(app.path(), "mutation_ack", project.path(), "round-1\u{1f}")
+            .unwrap();
+        assert!(is_clean_for_checkpoint(
+            &load(app.path()).unwrap(),
+            &expected
+        ));
+    }
+
+    #[test]
+    fn seed_clean_keeps_independent_recovery_responsibility() {
+        let app = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        let expected = vec![("project:p".to_string(), project.path().to_path_buf())];
+        touch_ledger(project.path(), "");
+        mark_recovery_calibrated(app.path()).unwrap();
+        set_recovery(app.path(), project.path(), true).unwrap();
+        seed_clean(app.path(), &expected).unwrap();
+        assert!(load(app.path()).unwrap().targets[&root_key(project.path())].recovery);
+        assert!(!is_clean_for_checkpoint(
+            &load(app.path()).unwrap(),
+            &expected
+        ));
+        set_recovery(app.path(), project.path(), false).unwrap();
+        assert!(is_clean_for_checkpoint(
             &load(app.path()).unwrap(),
             &expected
         ));

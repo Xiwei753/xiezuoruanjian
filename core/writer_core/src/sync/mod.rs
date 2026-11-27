@@ -34,13 +34,13 @@ pub mod app_data_group_catalog;
 pub mod cancellation_token;
 pub(crate) mod chapter_mutation_plan;
 pub(crate) mod commit_helpers;
-pub(crate) mod decision;
-pub(crate) mod dirty_index;
 pub mod config_store;
 pub mod conflict;
 /// 纯内容分类/三方比较（始终可用，不依赖 feature gate）。
 pub mod content_class;
+pub(crate) mod decision;
 pub mod diagnostics;
+pub(crate) mod dirty_index;
 pub mod full_sync;
 pub mod full_sync_state;
 pub(crate) mod full_sync_utils;
@@ -51,6 +51,7 @@ pub(crate) mod hash;
 /// 成功 Core 事务留下的本地对象变更事实（同步版本投影的提交时间/设备来源）。
 pub(crate) mod local_mutations;
 pub mod lww;
+pub(crate) mod manifest_delta;
 ///   待删除同步 target 的持久化（provider-neutral）。
 pub mod path;
 pub mod pending_deleted;
@@ -61,9 +62,9 @@ pub(crate) mod proof_intent;
 pub mod provider;
 pub mod scanner;
 pub mod service;
-pub mod staging;
 /// 跨 WriterCoreApi 实例串行化同一 sync root 的 state/conflict mutation（Issue #762 评论 5834136935）。
 pub(crate) mod sparse_plan;
+pub mod staging;
 pub(crate) mod state_lock;
 ///   target 生命周期 catalog（远端持久、provider-neutral）。
 pub mod target_lifecycle;
