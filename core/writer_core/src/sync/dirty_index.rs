@@ -57,6 +57,32 @@ pub(crate) struct DirtyTargetEntry {
     pub pending: BTreeMap<String, DirtyFact>,
 }
 
+/// 尚未结算的恢复责任（评审 #7215361837 第 2 项）。
+///
+/// 与 `recovery: bool` 的粗标记不同，这里记录**具体事务类型 + 同步根 +
+/// 事务 ID + 必要子路径**，正常同步入口据此只重放列出的对象，不再全 workspace
+/// 枚举。索引仍是可重建投影：损坏/升级时回落完整枚举。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RecoveryObligation {
+    /// `chapter_projections` / `mutation_ack` / `correction_publication` /
+    /// `delete_target` / `remote_cleanup` / `ledger_rebuild`。
+    pub kind: String,
+    /// 归属同步根（canonical）。
+    pub root: String,
+    /// 业务事务身份（journal transaction id / round id / journal token /
+    /// remote prefix / chapter id）。
+    pub transaction_id: String,
+    /// 恢复所需的额外身份（project id、chapter id 等）。
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+impl RecoveryObligation {
+    pub(crate) fn id(&self) -> String {
+        format!("{}\u{1f}{}\u{1f}{}", self.kind, self.root, self.transaction_id)
+    }
+}
+
 /// 整个 workspace 的 dirty 索引。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct WorkspaceDirtyIndex {
@@ -64,6 +90,9 @@ pub(crate) struct WorkspaceDirtyIndex {
     pub schema_version: u32,
     #[serde(default)]
     pub targets: BTreeMap<String, DirtyTargetEntry>,
+    /// 未结算的恢复责任（按 `RecoveryObligation::id` 键控）。
+    #[serde(default)]
+    pub obligations: BTreeMap<String, RecoveryObligation>,
 }
 
 impl Default for WorkspaceDirtyIndex {
@@ -71,6 +100,7 @@ impl Default for WorkspaceDirtyIndex {
         Self {
             schema_version: SCHEMA_VERSION,
             targets: BTreeMap::new(),
+            obligations: BTreeMap::new(),
         }
     }
 }
@@ -168,6 +198,47 @@ pub(crate) fn set_recovery(
     entry.recovery = recovery;
     entry.ledger_bytes = ledger_bytes(sync_root);
     save(app_data_root, &index)
+}
+
+/// 登记一条恢复责任；同一事务重复登记幂等。
+pub(crate) fn record_obligation(
+    app_data_root: &Path,
+    obligation: RecoveryObligation,
+) -> crate::error::Result<()> {
+    let mut index = load(app_data_root).unwrap_or_default();
+    index.schema_version = SCHEMA_VERSION;
+    index
+        .obligations
+        .insert(obligation.id(), obligation);
+    save(app_data_root, &index)
+}
+
+/// 恢复责任结算后按原事务身份删除。
+pub(crate) fn clear_obligation(
+    app_data_root: &Path,
+    kind: &str,
+    root: &Path,
+    transaction_id: &str,
+) -> crate::error::Result<()> {
+    let mut index = load(app_data_root).unwrap_or_default();
+    index.schema_version = SCHEMA_VERSION;
+    let id = format!("{kind}\u{1f}{}\u{1f}{transaction_id}", root_key(root));
+    index.obligations.remove(&id);
+    save(app_data_root, &index)
+}
+
+/// 当前全部未结算恢复责任。
+pub(crate) fn obligations(app_data_root: &Path) -> Vec<RecoveryObligation> {
+    load(app_data_root)
+        .map(|index| index.obligations.into_values().collect())
+        .unwrap_or_default()
+}
+
+/// 索引是否完整到足以跳过完整恢复枚举（没有 obligation 且所有条目都已校准）。
+pub(crate) fn recovery_is_idle(index: &WorkspaceDirtyIndex) -> bool {
+    index.schema_version == SCHEMA_VERSION
+        && index.obligations.is_empty()
+        && index.targets.values().all(|entry| entry.complete && !entry.recovery)
 }
 
 /// 账本恢复/重建后条目的 pending 列表不再可信：置为不可信，等下一次完整

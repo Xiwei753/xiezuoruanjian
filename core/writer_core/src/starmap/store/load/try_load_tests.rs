@@ -159,7 +159,7 @@ fn conflicting_reference_is_preserved_and_reported() {
         .expect_err("conflicting reference binding must fail closed");
     let message = error.to_string();
     assert!(
-        message.contains("starmap node identity conflict"),
+        message.contains("starmap node instance identity conflict"),
         "{message}"
     );
     assert!(message.contains("instance_asset_id=asset_new"), "{message}");

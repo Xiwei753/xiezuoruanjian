@@ -552,9 +552,17 @@ pub(crate) fn materialize_retry(
     if DraftLocation::new(projects_root, project_id, chapter_id).is_none() {
         return Ok(RetryMaterialize::NoMarker);
     }
-    let Some(candidate) =
-        oldest_marker_in(&retry_chapter_dir(projects_root, project_id, chapter_id))
-    else {
+    // 外部索引只是可重建投影：索引丢失时归档目录内的 retry-intent 仍是
+    // 唯一 durable 引用，必须一起参与选择（评审 #7210360212 第 2 项）。
+    let mut candidates: Vec<RetryCandidate> = list_retries(projects_root, project_id)
+        .into_iter()
+        .filter(|candidate| candidate.marker.chapter_id == chapter_id)
+        .collect();
+    candidates.sort_by(|left, right| {
+        (left.marker.updated_at_ms, &left.marker.stamp)
+            .cmp(&(right.marker.updated_at_ms, &right.marker.stamp))
+    });
+    let Some(candidate) = candidates.into_iter().next() else {
         return Ok(RetryMaterialize::NoMarker);
     };
     materialize_retry_candidate(projects_root, project_id, chapter_id, &candidate)

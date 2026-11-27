@@ -300,17 +300,28 @@ pub(super) fn handle_restore_project(
             if !reported_unreadable.insert(key) {
                 continue;
             }
-            counters.failed = counters.failed.saturating_add(1);
-            counters.kept = counters.kept.saturating_add(1);
-            counters.block(&unreadable.chapter_id);
-            give_up.insert(unreadable.chapter_id.clone());
             counters.note(
                 &unreadable.chapter_id,
                 format!(
-                    "draft unreadable kept: {} path={}",
+                    "draft unreadable: {} path={}",
                     unreadable.error, unreadable.path
                 ),
             );
+            // 读不出来也只是“未决”，不是阻断：先把它搬出可写槽位；只有隔离
+            // 失败（原目录仍可能被新会话覆写）才阻断该章。
+            counters.keep(
+                &projects_root,
+                &command.project_id,
+                &unreadable.chapter_id,
+                super::kept_draft::KeptDisposition::Archive,
+            );
+            if counters
+                .blocked_chapters
+                .iter()
+                .any(|id| id == &unreadable.chapter_id)
+            {
+                give_up.insert(unreadable.chapter_id.clone());
+            }
         }
         let drafts: Vec<super::super::chapter_draft::ChapterDraft> = discovery
             .drafts

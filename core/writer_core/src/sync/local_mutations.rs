@@ -784,17 +784,44 @@ fn push_pending_ack(
     let (kind, id) = pending_ack_identity(target);
     let mut acks = load_pending_acks(sync_root)?;
     acks.entries.push(PendingAckEntry {
-        target_kind: kind,
-        target_id: id,
+        target_kind: kind.clone(),
+        target_id: id.clone(),
         round_id: round_id.to_string(),
         revision: revision.map(str::to_string),
         published: published.to_vec(),
     });
     let text = serde_json::to_string(&acks)?;
-    crate::storage::atomic_write_string(&pending_ack_path(sync_root), &text)
+    let written = crate::storage::atomic_write_string(&pending_ack_path(sync_root), &text);
+    if written.is_ok() {
+        // 恢复责任：推送已成功但本地确认未落盘时，崩溃后的恢复入口要能按这一笔
+        // ack 精确重放，而不是全 workspace 扫描（评审 #7215361837 第 2 项）。
+        let obligation = crate::sync::dirty_index::RecoveryObligation {
+            kind: "mutation_ack".to_string(),
+            root: crate::sync::dirty_index::root_key(sync_root),
+            transaction_id: format!("{round_id}\u{1f}{kind}\u{1f}{id}"),
+            detail: Some(id.clone()),
+        };
+        project_into_dirty_index(sync_root, |app_root, _root| {
+            crate::sync::dirty_index::record_obligation(app_root, obligation)
+        });
+    }
+    written
 }
 
 /// 从确认意图文件里移除一条已经结算成功的意图（按 target + round 精确匹配）。
+/// 清除某一笔 mutation ack 的恢复责任（按 round + target 精确匹配）。
+fn clear_mutation_ack_obligation(
+    sync_root: &Path,
+    round_id: &str,
+    target_kind: &str,
+    target_id: &str,
+) {
+    let transaction_id = format!("{round_id}\u{1f}{target_kind}\u{1f}{target_id}");
+    project_into_dirty_index(sync_root, |app_root, root| {
+        crate::sync::dirty_index::clear_obligation(app_root, "mutation_ack", root, &transaction_id)
+    });
+}
+
 fn remove_pending_ack(
     sync_root: &Path,
     target: &crate::sync::types::SyncTarget,
@@ -818,10 +845,15 @@ fn remove_pending_ack(
                 Err(error)
             }
         })?;
+        clear_mutation_ack_obligation(sync_root, round_id, &kind, &id);
         return Ok(());
     }
     let text = serde_json::to_string(&acks)?;
-    crate::storage::atomic_write_string(&path, &text)
+    let written = crate::storage::atomic_write_string(&path, &text);
+    if written.is_ok() {
+        clear_mutation_ack_obligation(sync_root, round_id, &kind, &id);
+    }
+    written
 }
 
 /// 重放"已推送但未结算"的确认意图。
@@ -852,7 +884,15 @@ pub(crate) fn replay_pending_acks(sync_root: &Path) -> crate::error::Result<usiz
             crate::sync::types::SyncTarget::project(&entry.target_id)
         };
         match apply_published(sync_root, &target, &entry.published) {
-            Ok(count) => applied += count,
+            Ok(count) => {
+                applied += count;
+                clear_mutation_ack_obligation(
+                    sync_root,
+                    &entry.round_id,
+                    &entry.target_kind,
+                    &entry.target_id,
+                );
+            }
             Err(error) => {
                 log::warn!(
                     "[sync] pending mutation ack replay failed for {}:{} (kept): {error}",

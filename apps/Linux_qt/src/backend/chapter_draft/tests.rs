@@ -22,6 +22,21 @@ fn fact(event_id: &str, revision: u64, session_id: u64) -> DraftFact {
     }
 }
 
+fn pending_ack(transaction_id: &str, event_ids: &[&str]) -> PendingAck {
+    PendingAck {
+        transaction_id: transaction_id.to_string(),
+        event_ids: event_ids.iter().map(|id| id.to_string()).collect(),
+        base_generation: String::new(),
+        base_revision: 0,
+        base_sha256: String::new(),
+        editor_session_id: 0,
+        snapshot_revision: 0,
+        snapshot_digest: String::new(),
+        commit_sequence: 0,
+        reconciled: false,
+    }
+}
+
 fn ids(facts: &[LoadedFact]) -> Vec<&str> {
     facts.iter().map(|fact| fact.event_id.as_str()).collect()
 }
@@ -1513,7 +1528,7 @@ mod ack_strictness_tests {
         );
         assert!(list_retries(root, "p1").is_empty());
         assert!(
-            !archived.exists(),
+            !std::path::Path::new(&archived).exists(),
             "archived copy moved back to active slot"
         );
     }
@@ -1598,10 +1613,19 @@ mod ack_strictness_tests {
         let archived = quarantine(root, "p1", "c1")
             .expect("quarantine")
             .expect("archived");
-        record_retry(root, "p1", "c1", "v1", &archived, "unit", 0).expect("retry");
+        record_retry(
+            root,
+            "p1",
+            "c1",
+            "v1",
+            std::path::Path::new(&archived),
+            "unit",
+            0,
+        )
+        .expect("retry");
         assert_eq!(
             archived_draft_ownership(root, "p1", "c1", &["e1".to_string()]).expect("owner"),
-            Some(archived.to_string_lossy().into_owned())
+            Some(archived.clone())
         );
         assert_eq!(
             archived_draft_ownership(root, "p1", "c1", &["other".to_string()]).expect("owner"),
