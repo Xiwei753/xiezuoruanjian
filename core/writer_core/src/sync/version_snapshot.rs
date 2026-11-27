@@ -258,12 +258,14 @@ pub(crate) fn project_version(project_root: &std::path::Path) -> crate::Result<L
     if !state.pending_take_remote.is_empty() {
         return Ok(LocalTargetVersion::ineligible("pending_take_remote"));
     }
+    // 读取路径不修复账本：恢复由同步入口的显式 recover_ledger 完成，
+    // 这里只把 target 判为不可增量（复审 #3）。
+    if local_mutations::recovery_pending(project_root) {
+        return Ok(LocalTargetVersion::ineligible("recovery_pending"));
+    }
     let ledger = match local_mutations::latest_ledger(project_root) {
         Ok(ledger) => ledger,
-        Err(_) => {
-            let _ = local_mutations::repair_corrupt_ledger(project_root);
-            return Ok(LocalTargetVersion::ineligible("ledger_corrupt"));
-        }
+        Err(_) => return Ok(LocalTargetVersion::ineligible("ledger_corrupt")),
     };
     let manifest = read_manifest(project_root, crate::sync::lww::SYNC_MANIFEST_PATH)?;
     let pending =
@@ -328,18 +330,17 @@ pub(crate) fn collect(
     let mut no_change_targets = Vec::new();
     // App 数据组共享同一份 mutation 账本：整轮读一次，再按 group 的 owns_path
     // 过滤，不在每个 group 上重复加载同一个 JSONL（复审 #5）。
-    let app_ledger = match local_mutations::latest_ledger(app_data_root) {
-        Ok(ledger) => Some(ledger),
-        Err(_) => {
-            // 损坏索引归档重建一次；本轮所有 App 组都不能在空索引上判定"无变化"。
-            let _ = local_mutations::repair_corrupt_ledger(app_data_root);
-            None
-        }
-    };
+    // App 根还有未完成的持久恢复（投影/确认重放失败）：所有 App 组都不能走增量。
+    let app_recovery_pending = local_mutations::recovery_pending(app_data_root);
+    // 只读不修复：恢复统一由同步入口的显式 recover_ledger 负责；这里损坏时
+    // 所有 App 组都判为不可增量，回到完整核对。
+    let app_ledger = local_mutations::latest_ledger(app_data_root).ok();
 
     for group in crate::sync::app_data_group_catalog::discover_local_app_data_groups(app_data_root)?
     {
-        let version = if let Some(ledger) = app_ledger.as_ref() {
+        let version = if app_recovery_pending {
+            LocalTargetVersion::ineligible("recovery_pending")
+        } else if let Some(ledger) = app_ledger.as_ref() {
             app_group_version(app_data_root, &group, legacy_layout, ledger)?
         } else {
             // 账本损坏/读失败：本组不能走增量，明确判为不可增量并重建基线。

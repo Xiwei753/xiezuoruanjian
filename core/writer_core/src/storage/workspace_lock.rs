@@ -31,6 +31,23 @@ pub struct WorkspaceWriteLock {
 }
 
 impl WorkspaceWriteLock {
+    /// 本 guard 对应的应用数据根（最外层 lock 的真实根）。
+    ///
+    /// 同步账本的写入锁必须用显式 app 数据根，不能从作品目录名反推。
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+
+    /// 当前线程已持有的工作区锁根；没有持锁时返回 `None`。
+    ///
+    /// 账本写入用它复用外层事务的同一把锁，而不是按目录名猜根。
+    pub fn current_root() -> Option<PathBuf> {
+        if DEPTH.with(Cell::get) == 0 {
+            return None;
+        }
+        LOCK_ROOT.with(|root| root.borrow().clone())
+    }
+
     /// 获取工作区写锁，不做任何目录扫描或事务恢复。
     ///
     /// 恢复只在工作区启动/打开时显式执行一次（[`Self::acquire_and_recover`]），

@@ -22,7 +22,7 @@ pub(crate) use manifest::{AdditionalFilePlan, ChapterCommitManifest, ChapterComm
 pub use recovery::{
     pending_chapter_draft_acks, pending_chapter_proof_events, pending_chapter_proof_transactions,
     pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
-    recover_pending_chapter_commits,
+    recover_pending_chapter_commits, replay_pending_sync_mutations,
 };
 
 /// journal 阶段。

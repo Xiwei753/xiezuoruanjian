@@ -839,6 +839,9 @@ impl WriterCoreApi {
         }
         drop(core);
         drop(_recovery_workspace_lock);
+        // 所有 durable 未投影 / 未结算事实必须在任何 fast path、target 过滤之前
+        // 恢复：账本重建与补号、待确认 ack、章节 journal 的同步投影（复审 #4）。
+        self.recover_sync_state_before_preflight();
         // 平台触发原因只决定"是否绕过周期间隔"（force_sync），以及是否走显式
         // 重建；它不再影响本地/远端版本比对，也不影响冲突裁决。
         let trigger_label = progress_sink
@@ -1145,21 +1148,105 @@ impl WriterCoreApi {
         }
     }
 
+    /// 同步入口的持久恢复：在任何 fast path / target 过滤之前对所有 root 执行。
+    ///
+    /// 只做幂等重放：损坏账本归档重建并补号、待确认 ack 应用、章节 journal 的
+    /// 同步投影重放。失败保留 durable 事实并在本轮继续，不会因"快照没变化"
+    /// 而永远跳过（复审 #4）。
+    fn recover_sync_state_before_preflight(&self) {
+        let (app_data_root, projects_root) = {
+            let core = self.core_read();
+            (core.app_data_root.clone(), core.projects_root.clone())
+        };
+        let mut roots: Vec<std::path::PathBuf> = vec![app_data_root.clone()];
+        match crate::project::list_projects(&projects_root) {
+            Ok(projects) => {
+                for project in projects {
+                    roots.push(projects_root.join(project.id));
+                }
+            }
+            Err(error) => {
+                log::warn!("[sync] list projects for recovery failed: {error}");
+            }
+        }
+        for root in &roots {
+            let mut recovery_error: Option<String> = None;
+            match crate::sync::local_mutations::recover_ledger(root) {
+                Ok(true) => log::warn!(
+                    "[sync] local mutation ledger rebuilt at {}",
+                    root.display()
+                ),
+                Ok(false) => {}
+                Err(error) => {
+                    log::warn!(
+                        "[sync] local mutation ledger recovery failed at {}: {error}",
+                        root.display()
+                    );
+                    recovery_error = Some(format!("ledger: {error}"));
+                }
+            }
+            if recovery_error.is_none() {
+                match crate::sync::local_mutations::replay_pending_acks(root) {
+                    Ok(0) => {}
+                    Ok(applied) => log::info!(
+                        "[sync] replayed {applied} pending mutation acks at {}",
+                        root.display()
+                    ),
+                    Err(error) => {
+                        log::warn!(
+                            "[sync] replay pending mutation acks failed at {}: {error}",
+                            root.display()
+                        );
+                        recovery_error = Some(format!("acks: {error}"));
+                    }
+                }
+            }
+            if recovery_error.is_none() && *root != app_data_root {
+                match crate::chapter::commit::replay_pending_sync_mutations(root) {
+                    Ok(0) => {}
+                    Ok(replayed) => log::info!(
+                        "[sync] replayed {replayed} chapter mutation projection outboxes at {}",
+                        root.display()
+                    ),
+                    Err(error) => {
+                        log::warn!(
+                            "[sync] replay chapter mutation projections failed at {}: {error}",
+                            root.display()
+                        );
+                        recovery_error = Some(format!("journal: {error}"));
+                    }
+                }
+            }
+            match recovery_error {
+                // 恢复没做完：整个根在下一轮之前都不可走无变化快速路径。
+                Some(reason) => {
+                    crate::sync::local_mutations::mark_recovery_pending(root, &reason)
+                }
+                None => crate::sync::local_mutations::clear_recovery_pending(root),
+            }
+        }
+    }
+
     /// 按推送回执确认本轮实际发布的对象事实（Issue #1065 复审 #3）。
     ///
     /// 只确认 preflight 快照里存在、且本轮确实随提交发布的 mutation：推进
     /// known_files、记录确认序号、按序号压缩账本历史前缀。同步期间新写入的
     /// 更新事实序号更大，保留到下一轮；失败/跳过的发布不确认任何事实。
+    /// 返回未能结算的 target 数：>0 表示已推送成功但本地确认没有落盘，
+    /// 调用方必须把本轮标成明确的未结算状态（不能只 warn 后报成功）。
     fn confirm_published_targets(
         &self,
         preflight_pending: &PendingMutationMap,
         targets: &[crate::sync::types::TargetSyncResult],
         receipts: &[crate::sync::provider::round::PublishReceipt],
-    ) {
+        round_id: &str,
+        published_revision: Option<&str>,
+    ) -> usize {
         let (app_data_root, projects_root) = {
             let core = self.core_read();
             (core.app_data_root.clone(), core.projects_root.clone())
         };
+        let mut unsettled = 0usize;
         for target in targets {
             let key = match (&target.group_id, &target.project_id) {
                 (Some(group_id), _) => format!("app:{group_id}"),
@@ -1271,12 +1358,21 @@ impl WriterCoreApi {
             if published.is_empty() {
                 continue;
             }
-            if let Err(error) =
-                crate::sync::local_mutations::mark_confirmed(&sync_root, &sync_target, &published)
-            {
-                log::warn!("[sync] confirm published mutations failed for {key}: {error}");
+            match crate::sync::local_mutations::mark_confirmed(
+                &sync_root,
+                &sync_target,
+                &published,
+                round_id,
+                published_revision,
+            ) {
+                Ok(_) => {}
+                Err(error) => {
+                    log::warn!("[sync] confirm published mutations failed for {key}: {error}");
+                    unsettled += 1;
+                }
             }
         }
+        unsettled
     }
 
     #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
@@ -2028,29 +2124,6 @@ impl WriterCoreApi {
                 return Err(crate::api::error::WriterError::from(e));
             }
         }
-        // 上一轮推送成功但本地结算失败（崩溃/写盘失败）：先重放确认意图，
-        // 否则账本事实会一直留着被反复重推（复审 #3）。
-        let mut ack_roots: Vec<std::path::PathBuf> = vec![plan.app_data_root.clone()];
-        ack_roots.extend(
-            plan.targets
-                .iter()
-                .filter_map(|planned| planned.project_id.as_deref())
-                .map(|project_id| projects_root.join(project_id)),
-        );
-        for sync_root in &ack_roots {
-            if let Err(error) = crate::sync::local_mutations::replay_staged_mutations(sync_root) {
-                log::warn!(
-                    "[sync] replay staged mutations failed at {}: {error}",
-                    sync_root.display()
-                );
-            }
-            if let Err(error) = crate::sync::local_mutations::replay_pending_acks(sync_root) {
-                log::warn!(
-                    "[sync] replay pending mutation acks failed at {}: {error}",
-                    sync_root.display()
-                );
-            }
-        }
         // 在 seed 之前固定各 target 的未确认事实：seed 复制的是这一刻的 live
         // 内容，推送成功后只按这份快照的序号确认；seed 之后写入的更新事实
         // 序号更大，保留为下一轮 outbox（Issue #1065 复审 #3）。
@@ -2709,6 +2782,7 @@ impl WriterCoreApi {
         let mut publish_succeeded = false;
         let mut publish_error: Option<String> = None;
         let mut publish_error_category: Option<String> = None;
+        let mut publish_ack_unsettled = 0usize;
         if !publish_blocked {
             // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
             // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
@@ -2743,10 +2817,12 @@ impl WriterCoreApi {
                     publish_phase.finish_with_provider(outcome, provider);
                     // 远端提交成功：按回执确认本轮实际发布的对象事实，推进
                     // known_files 并按序号压缩账本历史前缀。失败/跳过不确认。
-                    self.confirm_published_targets(
+                    publish_ack_unsettled = self.confirm_published_targets(
                         preflight_pending,
                         &all_targets,
                         &publish_receipts,
+                        diagnostic_operation_id,
+                        published_revision.as_deref(),
                     );
                 }
                 Err(error) => {
@@ -2804,7 +2880,17 @@ impl WriterCoreApi {
         // Phase 5: 聚合 + lifecycle 处理 + FullSyncState 持久化（短写锁）。
         // Issue #779 评论 5853718466：传 None — GC 失败不影响同步终态。
         // 阶段失败（发布失败 / 取消）必须在 finalize 之前汇入持久终态。
-        let round_phase_failure = if let Some(message) = publish_error.clone() {
+        let round_phase_failure = if publish_ack_unsettled > 0 && publish_error.is_none() {
+            // 推送成功但确认没有落盘：明确回报未结算，已推送的事实由账本与
+            // pending-acks 保留，下一轮重放后再确认（复审 #3）。
+            Some(crate::facade::RoundPhaseFailure {
+                category: "mutation_ack_unsettled".to_string(),
+                message: format!(
+                    "remote publish succeeded but {publish_ack_unsettled} target(s) could not be confirmed locally"
+                ),
+                message_key: None,
+            })
+        } else if let Some(message) = publish_error.clone() {
             let category = publish_error_category.as_deref().unwrap_or("remote_publish_failed");
             Some(crate::facade::RoundPhaseFailure {
                 category: category.to_string(),

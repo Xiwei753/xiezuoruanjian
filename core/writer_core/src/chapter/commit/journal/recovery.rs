@@ -199,10 +199,10 @@ pub fn pending_chapter_sync_proof_fact_ids(
 ///
 /// 投影在章节提交返回前进行；写盘失败或进程崩溃时事务目录里的 outbox 是
 /// 唯一可重放来源，成功追加后才删除。失败保留文件等下一次恢复。
-fn replay_sync_mutation_outbox(project_root: &Path, tx_dir: &Path) {
+fn replay_sync_mutation_outbox(project_root: &Path, tx_dir: &Path) -> bool {
     let outbox = tx_dir.join("sync-mutations.json");
     let Ok(text) = fs::read_to_string(&outbox) else {
-        return;
+        return false;
     };
     let Ok(records) =
         serde_json::from_str::<Vec<crate::sync::local_mutations::LocalMutationRecord>>(&text)
@@ -211,16 +211,45 @@ fn replay_sync_mutation_outbox(project_root: &Path, tx_dir: &Path) {
             "chapter commit mutation outbox unreadable, keeping for diagnosis: {}",
             outbox.display()
         );
-        return;
+        return false;
     };
     match crate::sync::local_mutations::append_batch(project_root, &records) {
         Ok(()) => {
             let _ = fs::remove_file(&outbox);
+            true
         }
-        Err(error) => log::warn!(
-            "chapter commit mutation outbox replay failed (will retry): {error}"
-        ),
+        Err(error) => {
+            log::warn!(
+                "chapter commit mutation outbox replay failed (will retry): {error}"
+            );
+            false
+        }
     }
+}
+
+/// 重放所有事务目录里残留的待同步 mutation（同步入口在任何 fast path 之前调用）。
+///
+/// 返回成功重放的事务数；失败的事务保留 outbox 并计入"未恢复"，调用方据此
+/// 保持对应 target 为待处理，不能当成本轮已收敛（复审 #4）。
+pub fn replay_pending_sync_mutations(project_root: &Path) -> Result<usize> {
+    let root = journal_root(project_root);
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut replayed = 0usize;
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        if entry.file_name().to_string_lossy() == CONFLICT_DIR {
+            continue;
+        }
+        if replay_sync_mutation_outbox(project_root, &entry.path()) {
+            replayed += 1;
+        }
+    }
+    Ok(replayed)
 }
 
 pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<ChapterCommitRecovery>> {

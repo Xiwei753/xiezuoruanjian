@@ -116,31 +116,13 @@ fn reserve_sequences(sync_root: &Path, count: usize) -> crate::error::Result<Vec
 
 /// 账本的写入串行化：Append/Ack/压缩都在同一把工作区写锁内完成。
 ///
-/// 项目 target 的同步根是 `<app>/projects/<id>`，锁仍取 App 数据根，避免
-/// 每个项目各拿一把锁导致确认与并发 append 交错。
-fn ledger_write_lock(sync_root: &Path) -> Option<crate::storage::WorkspaceWriteLock> {
-    let app_root = ledger_app_root(sync_root);
-    match crate::storage::WorkspaceWriteLock::acquire(&app_root) {
-        Ok(lock) => Some(lock),
-        Err(error) => {
-            log::warn!(
-                "[sync] local mutation ledger lock unavailable for {}: {error}",
-                sync_root.display()
-            );
-            None
-        }
-    }
-}
-
-fn ledger_app_root(sync_root: &Path) -> PathBuf {
-    if let Some(parent) = sync_root.parent() {
-        if parent.file_name().and_then(|name| name.to_str()) == Some("projects") {
-            if let Some(root) = parent.parent() {
-                return root.to_path_buf();
-            }
-        }
-    }
-    sync_root.to_path_buf()
+/// 业务事务本身已经持有工作区写锁时，这里复用它（同一根，嵌套获取是空操作），
+/// 保证"确认"和并发 append 不会落在两把不同的锁上；没有外层事务时才用账本
+/// 自己的同步根取锁。拿不到锁一律失败，不降级写（复审 #3）。
+fn ledger_write_lock(sync_root: &Path) -> crate::error::Result<crate::storage::WorkspaceWriteLock> {
+    let root = crate::storage::WorkspaceWriteLock::current_root()
+        .unwrap_or_else(|| sync_root.to_path_buf());
+    crate::storage::WorkspaceWriteLock::acquire(&root)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -284,6 +266,55 @@ pub(crate) fn repair_corrupt_ledger(sync_root: &Path) -> crate::error::Result<bo
     Ok(true)
 }
 
+/// 恢复未完成的持久标记：目标在下一轮必须完整核对，不能走无变化快速路径。
+const RECOVERY_PENDING_PATH: &str = "app-meta/sync/recovery-pending.json";
+
+/// 记录"这个同步根还有未完成的恢复"（投影/确认重放失败）。
+pub(crate) fn mark_recovery_pending(sync_root: &Path, reason: &str) {
+    let path = sync_root.join(RECOVERY_PENDING_PATH);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let payload = serde_json::json!({ "reason": reason });
+    if let Err(error) = crate::storage::atomic_write_string(&path, &payload.to_string()) {
+        log::warn!(
+            "[sync] cannot persist recovery-pending marker at {}: {error}",
+            path.display()
+        );
+    }
+}
+
+/// 清除恢复标记（本轮所有重放都成功）。
+pub(crate) fn clear_recovery_pending(sync_root: &Path) {
+    let path = sync_root.join(RECOVERY_PENDING_PATH);
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => log::warn!(
+            "[sync] cannot clear recovery-pending marker at {}: {error}",
+            path.display()
+        ),
+    }
+}
+
+/// 是否存在未完成的恢复；有则 target 不可增量。
+pub(crate) fn recovery_pending(sync_root: &Path) -> bool {
+    sync_root.join(RECOVERY_PENDING_PATH).exists()
+}
+
+/// 显式恢复入口：归档损坏账本、补齐旧账本序号。
+///
+/// 只在同步入口（任何 fast path / target 过滤之前）调用，并且持账本写锁；
+/// 普通读取查询一律不做恢复。返回是否发生了重建，调用方据此把相关 target
+/// 当作"需要完整核对"。
+pub(crate) fn recover_ledger(sync_root: &Path) -> crate::error::Result<bool> {
+    let _lock = ledger_write_lock(sync_root)?;
+    let rebuilt = repair_corrupt_ledger(sync_root)?;
+    let mut records = load_records(sync_root)?;
+    ensure_sequences(sync_root, &mut records)?;
+    Ok(rebuilt)
+}
+
 /// 读取账本最新事实（按 path 取最后一条）。
 ///
 /// 调用方包含 manifest 投影等必须能继续工作的路径：损坏行先归档重建再按空
@@ -306,33 +337,6 @@ pub(crate) fn load_latest(
     Ok(latest)
 }
 
-/// 追加失败时暂存的 mutation 事实；下一轮同步或下一次 append 先重放。
-const STAGED_MUTATIONS_PATH: &str = "app-meta/sync/pending-mutations.jsonl";
-
-/// 重放上次写盘失败的 mutation 事实（幂等：重复内容由 append 去重）。
-pub(crate) fn replay_staged_mutations(sync_root: &Path) -> crate::error::Result<()> {
-    let path = sync_root.join(STAGED_MUTATIONS_PATH);
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-    let mut records = Vec::new();
-    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        match serde_json::from_str::<LocalMutationRecord>(line) {
-            Ok(record) => records.push(record),
-            Err(error) => log::warn!("[sync] staged mutation line unreadable: {error}"),
-        }
-    }
-    if records.is_empty() {
-        let _ = fs::remove_file(&path);
-        return Ok(());
-    }
-    append_batch(sync_root, &records)?;
-    let _ = fs::remove_file(&path);
-    Ok(())
-}
-
 pub(crate) fn append_batch(
     sync_root: &Path,
     records: &[LocalMutationRecord],
@@ -341,8 +345,8 @@ pub(crate) fn append_batch(
         return Ok(());
     }
     // Append 与确认/压缩共用同一把工作区写锁：并发 MCP/编辑写入不能把刚确认
-    // 的历史又写回去，序号分配也不能与压缩交错（复审 #2）。
-    let _lock = ledger_write_lock(sync_root);
+    // 的历史又写回去，序号分配也不能与压缩交错。拿不到锁直接失败，不降级写。
+    let _lock = ledger_write_lock(sync_root)?;
     // 账本损坏时先归档重建：写入路径不能因为历史损坏而拒绝记录新的业务事实。
     repair_corrupt_ledger(sync_root)?;
     let mut existing = load_records(sync_root)?;
@@ -386,22 +390,11 @@ pub(crate) fn append_batch(
         lines.push_str(&serde_json::to_string(record)?);
         lines.push('\n');
     }
-    let write_result = (|| -> crate::error::Result<()> {
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-        file.write_all(lines.as_bytes())?;
-        file.sync_data()?;
-        Ok(())
-    })();
-    if let Err(error) = write_result {
-        // 账本写不进去（磁盘满/权限/崩溃前）：把事实暂存为可重放 outbox，
-        // 不能让它们随内存一起消失（复审 #2、#5）。
-        let staged = sync_root.join(STAGED_MUTATIONS_PATH);
-        if let Some(parent) = staged.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let _ = crate::storage::atomic_write_string(&staged, &lines);
-        return Err(error);
-    }
+    // 写不进去就如实返回错误：调用方的 durable 事务决议仍持有这批事实，
+    // 由既有 journal 重放投影，不再维护第二份账本补丁（复审 #3）。
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    file.write_all(lines.as_bytes())?;
+    file.sync_data()?;
     Ok(())
 }
 
@@ -479,19 +472,9 @@ pub(crate) fn pending_records(
     scope: SyncScope,
     app_group: Option<&AppDataGroup>,
 ) -> crate::error::Result<BTreeMap<String, LocalMutationRecord>> {
-    let ledger = match latest_ledger(sync_root) {
-        Ok(ledger) => ledger,
-        Err(error) => {
-            // 写入/提交路径（账本结算与 defer 判定）需要可用索引：损坏时在这里
-            // 归档重建一次。只读查询（版本快照/待上传判定）仍保持严格报错。
-            log::warn!(
-                "[sync] local mutation ledger corrupt ({}), rebuilding for commit path",
-                error
-            );
-            repair_corrupt_ledger(sync_root)?;
-            latest_ledger(sync_root)?
-        }
-    };
+    // 不在这里修复：恢复统一由同步入口的显式 [`recover_ledger`] 完成，避免
+    // 读取路径悄悄重写账本、也避免拿空索引当作"没有待同步事实"（复审 #3）。
+    let ledger = latest_ledger(sync_root)?;
     pending_records_in(&ledger, sync_root, scope, app_group)
 }
 
@@ -502,11 +485,15 @@ pub(crate) fn pending_records(
 pub(crate) fn latest_ledger(
     sync_root: &Path,
 ) -> crate::error::Result<HashMap<String, LocalMutationRecord>> {
-    // 读取查询不修复、不重写账本：损坏时如实返回错误，由调用方把该 target
-    // 判为 ledger_corrupt 并回到完整核对；归档重建只发生在真正的写入路径
-    // （append / 确认）里（复审 #2）。
-    let mut records = load_records(sync_root)?;
-    ensure_sequences(sync_root, &mut records)?;
+    // 读取查询不修复、不重写账本，也不迁移序号：损坏或待迁移时如实返回错误，
+    // 由调用方把 target 判为不可增量；归档重建与补号由显式加锁的
+    // [`recover_ledger`] 完成（复审 #3）。
+    let records = load_records(sync_root)?;
+    if records.iter().any(|record| record.seq == 0) {
+        return Err(crate::Error::Other(
+            "local mutation ledger needs sequence migration".to_string(),
+        ));
+    }
     let mut latest: HashMap<String, LocalMutationRecord> = HashMap::new();
     for record in records {
         latest.insert(record.path.clone(), record);
@@ -610,6 +597,12 @@ struct PendingAckEntry {
     target_kind: String,
     /// App 数据组 id 或作品 id。
     target_id: String,
+    /// 产生这条确认意图的同步轮次；用于日志与去重，不参与排序。
+    #[serde(default)]
+    round_id: String,
+    /// 推送成功后固定的远端 revision（结果未知时用来核对固定 tree）。
+    #[serde(default)]
+    revision: Option<String>,
     published: Vec<PublishedMutation>,
 }
 
@@ -617,62 +610,91 @@ fn pending_ack_path(sync_root: &Path) -> PathBuf {
     sync_root.join(PENDING_ACK_PATH)
 }
 
-fn stage_pending_ack(
+/// 追加一条确认意图（不覆盖其它轮次/其它 target 的旧意图）。
+///
+/// 必须在持有账本写锁时调用：读、改、写不能与并发 append 交错。
+fn push_pending_ack(
     sync_root: &Path,
     target: &crate::sync::types::SyncTarget,
     published: &[PublishedMutation],
+    round_id: &str,
+    revision: Option<&str>,
 ) -> crate::error::Result<()> {
     let (kind, id) = pending_ack_identity(target);
-    let mut acks = load_pending_acks(sync_root);
-    acks.entries.retain(|entry| {
-        !(entry.target_kind == kind && entry.target_id == id)
-    });
+    let mut acks = load_pending_acks(sync_root)?;
     acks.entries.push(PendingAckEntry {
         target_kind: kind,
         target_id: id,
+        round_id: round_id.to_string(),
+        revision: revision.map(str::to_string),
         published: published.to_vec(),
     });
     let text = serde_json::to_string(&acks)?;
     crate::storage::atomic_write_string(&pending_ack_path(sync_root), &text)
 }
 
-fn load_pending_acks(sync_root: &Path) -> PendingAcks {
-    match fs::read_to_string(pending_ack_path(sync_root)) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-        Err(_) => PendingAcks::default(),
+/// 从确认意图文件里移除一条已经结算成功的意图（按 target + round 精确匹配）。
+fn remove_pending_ack(
+    sync_root: &Path,
+    target: &crate::sync::types::SyncTarget,
+    round_id: &str,
+) -> crate::error::Result<()> {
+    let (kind, id) = pending_ack_identity(target);
+    let mut acks = load_pending_acks(sync_root)?;
+    let before = acks.entries.len();
+    acks.entries.retain(|entry| {
+        !(entry.target_kind == kind && entry.target_id == id && entry.round_id == round_id)
+    });
+    if acks.entries.len() == before {
+        return Ok(());
     }
+    let path = pending_ack_path(sync_root);
+    if acks.entries.is_empty() {
+        fs::remove_file(path).or_else(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })?;
+        return Ok(());
+    }
+    let text = serde_json::to_string(&acks)?;
+    crate::storage::atomic_write_string(&path, &text)
 }
 
 /// 重放"已推送但未结算"的确认意图。
 ///
-/// 推送成功与本地状态落盘之间崩溃时，账本事实必须保留并且下一轮能重新结算，
-/// 不能只 warn 一句就默认成功（复审 #3）。
-pub(crate) fn replay_pending_acks(sync_root: &Path) -> crate::error::Result<()> {
-    let mut acks = load_pending_acks(sync_root);
+/// 读取、应用、清理都在同一把账本写锁内：否则并发 append 会在"读旧账本 →
+/// 写回压缩结果"之间被覆盖（复审 #3）。
+pub(crate) fn replay_pending_acks(sync_root: &Path) -> crate::error::Result<usize> {
+    let _lock = ledger_write_lock(sync_root)?;
+    let mut acks = load_pending_acks(sync_root)?;
     if acks.entries.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
-    let _lock = ledger_write_lock(sync_root);
     let mut remaining: Vec<PendingAckEntry> = Vec::new();
+    let mut applied = 0usize;
     for entry in std::mem::take(&mut acks.entries) {
         let target = if entry.target_kind == "app" {
             match crate::sync::types::AppDataGroup::from_id(&entry.target_id) {
                 Ok(group) => crate::sync::types::SyncTarget::app_data_group(group),
-                Err(_) => continue,
+                Err(_) => {
+                    log::warn!(
+                        "[sync] dropping pending ack for unknown app group {}",
+                        entry.target_id
+                    );
+                    continue;
+                }
             }
         } else {
             crate::sync::types::SyncTarget::project(&entry.target_id)
         };
         match apply_published(sync_root, &target, &entry.published) {
-            Ok(()) => log::info!(
-                "[sync] replayed pending mutation ack for {}:{} ({} facts)",
-                entry.target_kind,
-                entry.target_id,
-                entry.published.len()
-            ),
+            Ok(count) => applied += count,
             Err(error) => {
                 log::warn!(
-                    "[sync] pending mutation ack replay failed for {}:{}: {error}",
+                    "[sync] pending mutation ack replay failed for {}:{} (kept): {error}",
                     entry.target_kind,
                     entry.target_id
                 );
@@ -684,32 +706,34 @@ pub(crate) fn replay_pending_acks(sync_root: &Path) -> crate::error::Result<()> 
     let path = pending_ack_path(sync_root);
     if acks.entries.is_empty() {
         let _ = fs::remove_file(path);
-        return Ok(());
+    } else {
+        let text = serde_json::to_string(&acks)?;
+        crate::storage::atomic_write_string(&path, &text)?;
     }
-    let text = serde_json::to_string(&acks)?;
-    crate::storage::atomic_write_string(&path, &text)
+    Ok(applied)
 }
 
 /// 远端提交成功后按回执确认 mutation：推进 known_files、记录确认序号、压缩历史前缀。
 ///
-/// `published` 必须来自本轮真正成功的远端提交；确认只覆盖 seq 及其之前的历史，
-/// 同步期间新写入的并发事实（更大的 seq）保留为下一轮的 outbox。
+/// `published` 必须来自本轮真正成功的远端提交（或经固定远端 tree 证实已一致），
+/// 且每条的 seq/hash 与账本事实完全一致。确认意图先落盘，读取、应用、清理都在
+/// 同一把账本写锁内；任何一步失败都返回错误并保留 durable 未结算状态，由下一轮
+/// 重放（复审 #3）。
 pub(crate) fn mark_confirmed(
     sync_root: &Path,
     target: &crate::sync::types::SyncTarget,
     published: &[PublishedMutation],
-) -> crate::error::Result<()> {
+    round_id: &str,
+    revision: Option<&str>,
+) -> crate::error::Result<usize> {
     if published.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
-    // 先持久化确认意图：推送已经成功，本地结算失败时下一轮必须能重放，
-    // 不能只 warn 就当作已确认（复审 #3）。
-    stage_pending_ack(sync_root, target, published)?;
-    // 确认属于写事务：与并发 append 互斥，避免"读到旧账本→写回压缩结果"覆盖
-    // 同步期间新产生的业务事实（复审 #2）。
-    let _lock = ledger_write_lock(sync_root);
-    apply_published(sync_root, target, published)?;
-    clear_pending_ack(sync_root, target)
+    let _lock = ledger_write_lock(sync_root)?;
+    push_pending_ack(sync_root, target, published, round_id, revision)?;
+    let count = apply_published(sync_root, target, published)?;
+    remove_pending_ack(sync_root, target, round_id)?;
+    Ok(count)
 }
 
 fn pending_ack_identity(target: &crate::sync::types::SyncTarget) -> (String, String) {
@@ -722,40 +746,46 @@ fn pending_ack_identity(target: &crate::sync::types::SyncTarget) -> (String, Str
     }
 }
 
-fn clear_pending_ack(
-    sync_root: &Path,
-    target: &crate::sync::types::SyncTarget,
-) -> crate::error::Result<()> {
-    let (kind, id) = pending_ack_identity(target);
-    let mut acks = load_pending_acks(sync_root);
-    let before = acks.entries.len();
-    acks.entries
-        .retain(|entry| !(entry.target_kind == kind && entry.target_id == id));
-    if acks.entries.len() == before {
-        return Ok(());
-    }
-    let path = pending_ack_path(sync_root);
-    if acks.entries.is_empty() {
-        let _ = fs::remove_file(path);
-        return Ok(());
-    }
-    let text = serde_json::to_string(&acks)?;
-    crate::storage::atomic_write_string(&path, &text)
-}
-
+/// 应用一条确认：推进 known_files / 墓碑 / 确认序号并压缩历史前缀。
+///
+/// 返回实际应用的条数。任何 known_files/墓碑修改之前先拒绝"已确认或被更新
+/// 基线超越"的旧 ack：旧事务重放不能覆盖更新事实（复审 #3）。
 fn apply_published(
     sync_root: &Path,
     target: &crate::sync::types::SyncTarget,
     published: &[PublishedMutation],
-) -> crate::error::Result<()> {
+) -> crate::error::Result<usize> {
     let mut state = crate::sync::SyncService::load_sync_state_for_target(sync_root, target)?;
+    let mut applied: Vec<PublishedMutation> = Vec::new();
     for entry in published {
+        let confirmed = state
+            .confirmed_mutation_seq
+            .get(&entry.path)
+            .copied()
+            .unwrap_or(0);
+        if entry.seq != 0 && entry.seq <= confirmed {
+            // 已经确认过：幂等跳过。
+            continue;
+        }
+        if entry.seq != 0
+            && state
+                .known_files_updated_at
+                .get(&entry.path)
+                .is_some_and(|now| *now > entry.updated_at_ms)
+        {
+            // 已有更新的事实覆盖了这条旧 ack：不能把基线改回旧内容。
+            log::info!(
+                "[sync] skip stale mutation ack for {} (seq {}, business time {})",
+                entry.path,
+                entry.seq,
+                entry.updated_at_ms
+            );
+            continue;
+        }
         match entry.op.as_str() {
             "delete" => {
                 state.known_files.remove(&entry.path);
                 state.known_files_updated_at.remove(&entry.path);
-                // 只清掉本次发布对应的墓碑；同步期间新产生的删除（更晚时间）
-                // 必须保留给下一轮（复审 #3）。
                 let published_at = entry.deleted_at_ms.map(|ms| ms / 1000);
                 state.tombstones.retain(|tombstone| {
                     if tombstone.original_path != entry.path {
@@ -763,7 +793,6 @@ fn apply_published(
                     }
                     match published_at {
                         Some(published_at) => tombstone.deleted_at > published_at,
-                        // 没有删除时间就无法证明这条墓碑更晚：保守保留。
                         None => true,
                     }
                 });
@@ -773,8 +802,7 @@ fn apply_published(
                 state
                     .known_files
                     .insert(entry.path.clone(), entry.content_hash.clone());
-                // 记录业务修改时间，不用确认时刻冒充（否则三路 LWW 会拿
-                // "现在"去赢远端更新的内容）。
+                // 业务修改时间，不用确认时刻冒充。
                 state
                     .known_files_updated_at
                     .insert(entry.path.clone(), entry.updated_at_ms);
@@ -788,9 +816,14 @@ fn apply_published(
         if entry.seq > current {
             state.confirmed_mutation_seq.insert(entry.path.clone(), entry.seq);
         }
+        applied.push(entry.clone());
+    }
+    if applied.is_empty() {
+        return Ok(0);
     }
     crate::sync::SyncService::save_sync_state_for_target(sync_root, target, &state)?;
-    compact_confirmed_prefix(sync_root, published)
+    compact_confirmed_prefix(sync_root, &applied)?;
+    Ok(applied.len())
 }
 
 /// 按已确认序号压缩账本历史前缀。
