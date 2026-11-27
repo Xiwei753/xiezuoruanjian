@@ -705,6 +705,10 @@ impl CorrectionScanner {
             metrics.result = "stale";
             return self.unfinished_snapshot();
         }
+        let missing_synced_keys = guard
+            .segments
+            .iter()
+            .any(|segment| segment.checked.is_some() && segment.synced_record_key.is_none());
         self.prepare_state(
             &mut guard,
             text,
@@ -717,7 +721,9 @@ impl CorrectionScanner {
         // 一次性迁移到独立 publication 文件；此后 cache 不再承担待发布事务。
         let had_legacy_pending = guard.legacy_publication_pending;
         let legacy_records: Vec<SyncedCorrectionRecord> =
-            if had_legacy_pending {
+            if had_legacy_pending || missing_synced_keys {
+                // 旧 cache 已有 checked 但没有同步记录键：按当前仍可验证的
+                // segment 内容构造一次强摘要记录，交给独立 publication 迁移。
                 guard
                     .segments
                     .iter()
