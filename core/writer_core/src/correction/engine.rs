@@ -147,12 +147,12 @@ impl CorrectionScanner {
         session_id: u64,
         text_revision: u64,
     ) -> Result<Self, WriterError> {
+        // 待发布事务独立于模型/身份准备：即使后续加载失败也先重放。
+        store.retry_publications(&project_id, &chapter_id);
         // Bracket resource loading with the fingerprint so the captured
         // generation always describes the exact lexicon/model the engine was
         // built from, even if a dictionary or settings change races setup.
         let identity_before = store.scanner_identity(&project_id)?;
-        // 待发布事务独立于模型准备：即使模型加载失败也先重放，避免永久滞留。
-        store.retry_publications(&project_id, &chapter_id);
         let scanner_fingerprint_before = identity_before.fingerprint.clone();
         let (lexicon_version, lexicon) = store.lexicon_snapshot_for_project(&project_id)?;
         let model_load_started_at = Instant::now();
@@ -296,9 +296,9 @@ impl CorrectionScanner {
         session_id: u64,
         text_revision: u64,
     ) -> Result<Self, WriterError> {
+        store.retry_publications(&project_id, &chapter_id);
         let identity = store.scanner_identity(&project_id)?;
         let record_mode = identity.configured_mode;
-        store.retry_publications(&project_id, &chapter_id);
         let sync_index = store.synced_records_for_chapter(
             &project_id,
             &chapter_id,
