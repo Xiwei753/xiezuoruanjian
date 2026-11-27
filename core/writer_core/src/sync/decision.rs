@@ -5,53 +5,6 @@
 //! 预先生成的缓冲"或"回读 live 猜"构造批次，manifest 也从同一批决议对应的
 //! 已落盘 manifest 取字节，保证请求体内的对象与描述互相一致。
 
-use std::path::PathBuf;
-
-/// 单个对象在本轮的处置。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PublishDisposition {
-    /// 需要把本地最终版本上传（内容从 `live_path` 的已落盘字节读取）。
-    Upload,
-    /// 远端内容已经被本地消费/本轮让位于远端：不能再上传本地旧内容。
-    Consumed,
-    /// 本地版本与远端/依赖冲突尚未解决：本轮不发布，留给下一轮。
-    Conflict,
-}
-
-/// 一条发布决议：远端路径 + 本地已落盘路径（仅 `Upload` 需要）。
-#[derive(Debug, Clone)]
-pub(crate) struct PublishDecision {
-    pub remote_path: String,
-    pub live_path: Option<PathBuf>,
-    pub disposition: PublishDisposition,
-}
-
-impl PublishDecision {
-    pub(crate) fn upload(remote_path: String, live_path: PathBuf) -> Self {
-        Self {
-            remote_path,
-            live_path: Some(live_path),
-            disposition: PublishDisposition::Upload,
-        }
-    }
-
-    pub(crate) fn consume(remote_path: String) -> Self {
-        Self {
-            remote_path,
-            live_path: None,
-            disposition: PublishDisposition::Consumed,
-        }
-    }
-
-    pub(crate) fn conflict(remote_path: String) -> Self {
-        Self {
-            remote_path,
-            live_path: None,
-            disposition: PublishDisposition::Conflict,
-        }
-    }
-}
-
 /// 应用决议的结果。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DecisionApplyOutcome {
@@ -65,8 +18,7 @@ pub(crate) struct DecisionApplyOutcome {
 
 /// 本地业务提交的不变对象决议（复审 #7213791503/#7214105551 第 2 项）。
 ///
-/// 与 [`PublishDecision`] 的区别：这里的内容在**持锁的业务提交阶段**就已冻结，
-/// 之后不再回读 live；`transaction_id`/`mutation_seq`/`base_hash` 来自真实
+/// 内容在**持锁的业务提交阶段**就已冻结，之后不再回读 live；`transaction_id`/`mutation_seq`/`base_hash` 来自真实
 /// durable 事实，`origin` 说明它是本地改动、真实合并还是纯远端消费。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DecisionOp {

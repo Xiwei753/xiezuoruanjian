@@ -3092,10 +3092,11 @@ impl WriterCoreApi {
             );
             let pending_paths = round.pending_len();
             let publish_started_at = Instant::now();
-            // 先固化"本轮将要写出去的对象事实"，用于发布成功后的精确结算。
-            let publish_receipts = round.pending_publish_receipts();
             match round.flush() {
                 Ok(outcome) => {
+                    // 结算只认 flush 实际放进远端提交的对象事实（评审 #7214314073
+                    // 第 2 项），不再用提交前从缓冲推测的 pending 回执。
+                    let publish_receipts = outcome.receipts;
                     publish_succeeded = true;
                     if outcome.committed {
                         published_revision = Some(outcome.result.revision.0.clone());

@@ -48,6 +48,11 @@ pub struct RoundFlushOutcome {
     /// Whether a commit/tree change was actually published.
     pub committed: bool,
     pub result: BatchCommitResult,
+    /// 本轮真正进入远端提交的对象事实（评审 #7214314073 第 2 项）。
+    ///
+    /// 由 `flush` 在过滤空 mutation、校验前置条件之后生成，而不是提交前按
+    /// 缓冲推测；调用方结算 local mutation 时只认这份回执。
+    pub receipts: Vec<PublishReceipt>,
 }
 
 /// 本轮即将写入远端的一条对象事实（发布回执的输入）。
@@ -393,37 +398,6 @@ impl<'a> RoundProvider<'a> {
             .unwrap_or(0)
     }
 
-    /// 本轮缓冲里**实际待写**的对象事实（回执口径）。
-    ///
-    /// 发布成功后只能用这份事实结算 mutation：它是本轮真正写出去的路径与
-    /// 内容摘要，而不是"计划要写什么"（复审 #3）。
-    pub fn pending_publish_receipts(&self) -> Vec<PublishReceipt> {
-        let Ok(state) = self.state.lock() else {
-            return Vec::new();
-        };
-        state
-            .entries
-            .iter()
-            .map(|(path, entry)| match entry {
-                Some(BufferedValue::Content(content)) => PublishReceipt {
-                    path: path.clone(),
-                    op: "upsert".to_string(),
-                    content_digest: Some(crate::sync::hash::content_md5(content)),
-                },
-                Some(BufferedValue::Version(version)) => PublishReceipt {
-                    path: path.clone(),
-                    op: "upsert".to_string(),
-                    content_digest: Some(version.as_str().to_string()),
-                },
-                None => PublishReceipt {
-                    path: path.clone(),
-                    op: "delete".to_string(),
-                    content_digest: None,
-                },
-            })
-            .collect()
-    }
-
     /// 按本地提交产出的不可变决议重建本轮发布批次（复审 #7214105551 第 2 项）。
     ///
     /// `decisions` 里的内容在提交阶段已冻结：这里只做"用决议内容替换缓冲"，
@@ -509,6 +483,7 @@ impl<'a> RoundProvider<'a> {
                         .unwrap_or_else(|| RemoteVersion::new("")),
                     touched_paths: Vec::new(),
                 },
+                receipts: Vec::new(),
             });
         }
 
@@ -580,6 +555,30 @@ impl<'a> RoundProvider<'a> {
             });
         }
 
+        // 只把真正进入提交的 Put/ReuseVersion/Delete 变成回执；CheckObject/
+        // CheckPrefix 不是对象事实。空内容过滤后没有事实就不确认。
+        let receipts: Vec<PublishReceipt> = mutations
+            .iter()
+            .filter_map(|mutation| match mutation {
+                BatchMutation::Put { path, content } => Some(PublishReceipt {
+                    path: path.clone(),
+                    op: "upsert".to_string(),
+                    content_digest: Some(crate::sync::hash::content_md5(content)),
+                }),
+                BatchMutation::ReuseVersion { path, version } => Some(PublishReceipt {
+                    path: path.clone(),
+                    op: "upsert".to_string(),
+                    content_digest: Some(version.as_str().to_string()),
+                }),
+                BatchMutation::Delete { path } => Some(PublishReceipt {
+                    path: path.clone(),
+                    op: "delete".to_string(),
+                    content_digest: None,
+                }),
+                _ => None,
+            })
+            .collect();
+
         // 过滤后可能只剩"什么也不用写"：不再发起一次空提交。
         if mutations.is_empty() {
             return Ok(RoundFlushOutcome {
@@ -591,6 +590,7 @@ impl<'a> RoundProvider<'a> {
                         .unwrap_or_else(|| RemoteVersion::new("")),
                     touched_paths: Vec::new(),
                 },
+                receipts: Vec::new(),
             });
         }
 
@@ -601,7 +601,11 @@ impl<'a> RoundProvider<'a> {
                 &format!("sujian: sync round ({} mutations)", mutations.len()),
             )?;
             let committed = Some(&result.revision) != self.base_revision.as_ref();
-            return Ok(RoundFlushOutcome { committed, result });
+            return Ok(RoundFlushOutcome {
+                committed,
+                result,
+                receipts,
+            });
         }
 
         // Non-batch fallback: run baseline checks first, then apply mutations
@@ -661,12 +665,17 @@ impl<'a> RoundProvider<'a> {
             }
         }
         let committed = !touched_paths.is_empty();
+        let receipts = receipts
+            .into_iter()
+            .filter(|receipt| touched_paths.iter().any(|path| path == &receipt.path))
+            .collect();
         Ok(RoundFlushOutcome {
             committed,
             result: BatchCommitResult {
                 revision: RemoteVersion::new("round"),
                 touched_paths,
             },
+            receipts,
         })
     }
 }
