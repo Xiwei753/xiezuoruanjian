@@ -202,62 +202,6 @@ impl StagingRun {
         Ok(())
     }
 
-    /// 增量 seed：只为给定对象路径（远端变化 + 本地待上传）以及 target 自己的
-    /// 元数据建不可变快照，不再枚举整棵 live 树（Issue #1065 复审 #5）。
-    ///
-    /// 未被 seed 的路径在本轮两侧都没有变化：base/staging 都没有条目，三方比较
-    /// 的路径集合也就不包含它们，不会被误判成删除；它们的"已确认版本"由
-    /// manifest/known_files 承担，不需要每轮复制字节。
-    pub fn seed_from_live_paths(&self, live_root: &Path, rel_paths: &[PathBuf]) -> Result<()> {
-        let mut rel_paths: Vec<PathBuf> = rel_paths.to_vec();
-        if let Some(group) = &self.app_group {
-            let legacy_manifest = PathBuf::from("app-meta/sync/manifest.sync.json");
-            if live_root.join(&legacy_manifest).is_file() {
-                rel_paths.push(legacy_manifest);
-            }
-            for metadata_path in [
-                group.local_manifest_path(),
-                group.local_state_path(),
-                group.local_conflicts_path(),
-            ] {
-                let path = PathBuf::from(metadata_path);
-                if live_root.join(&path).is_file() {
-                    rel_paths.push(path);
-                }
-            }
-        } else {
-            for metadata_path in [
-                crate::sync::lww::SYNC_MANIFEST_PATH.to_string(),
-                "app-meta/sync/state.local.json".to_string(),
-            ] {
-                let path = PathBuf::from(metadata_path);
-                if live_root.join(&path).is_file() {
-                    rel_paths.push(path);
-                }
-            }
-        }
-        rel_paths.sort();
-        rel_paths.dedup();
-        self.build_base_snapshot_from_live(live_root, &rel_paths)?;
-        for rel in &rel_paths {
-            let live_path = live_root.join(rel);
-            // 远端删除/本地已删除的路径没有 live 文件：base/staging 都不建条目，
-            // 三方比较里它就是"两边都不存在"。
-            if !live_path.exists() {
-                continue;
-            }
-            let staging_path = self.staging_root().join(rel);
-            if let Some(parent) = staging_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            self.copy_live_snapshot_file(&live_path, &staging_path)?;
-        }
-        if let Some(group) = &self.app_group {
-            self.seed_legacy_group_state(live_root, group)?;
-        }
-        Ok(())
-    }
-
     /// Materialize a filtered view of legacy App state in this run only. This keeps
     /// group transfer's existing migration reads available without copying or
     /// committing the aggregate state into another group's staging tree.
@@ -1547,7 +1491,6 @@ fn write_starmap_delete_records_to_manifest(
 /// 成功后 `plan.targets[*].staging_root` 被填充为对应 staging 目录。
 pub fn prepare_staging_runs(
     plan: &mut crate::sync::full_sync::FullSyncPlan,
-    seed_paths: &std::collections::HashMap<String, Vec<PathBuf>>,
 ) -> crate::error::Result<Vec<StagingRun>> {
     let mut staging_runs: Vec<StagingRun> = Vec::new();
 
@@ -1571,14 +1514,11 @@ pub fn prepare_staging_runs(
             // 只枚举远端删除）。创建空 staging run 保持索引对齐，commit 阶段
             // compute_commit_plan 会发现 staging 为空，自然 Skip。
             // seed 失败必须传播，不能继续拿半成品 staging。
-            // 有明确的受影响对象清单时只 seed 这些对象；只有清单不可用
-            // （首次同步/迁移/显式修复）才退化为整树 seed。
-            match seed_paths.get(&crate::sync::full_sync::sync_target_checkpoint_key(
-                &planned.target,
-            )) {
-                Some(paths) => run.seed_from_live_paths(&planned.target_live_root, paths)?,
-                None => run.seed_from_live(&planned.target_live_root)?,
-            }
+            // 三方比较引擎以"base=准备时 live、staging=合并结果"的全集为前提：
+            // 只 seed 受影响路径会让未 materialize 的对象被当成 missing，从而
+            // 误判删除/误重建基线（复审 #7213115893 第 2 项）。对象级快照必须
+            // 先有 SparseObjectPlan 的三态语义，在那之前保持整树 seed。
+            run.seed_from_live(&planned.target_live_root)?;
         }
         planned.staging_root = Some(run.staging_root());
         staging_runs.push(run);

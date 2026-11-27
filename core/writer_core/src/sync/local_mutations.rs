@@ -302,6 +302,13 @@ pub(crate) fn recovery_pending(sync_root: &Path) -> bool {
     sync_root.join(RECOVERY_PENDING_PATH).exists()
 }
 
+/// 是否需要一次显式账本恢复（旧账本还没补序号/高水位）。
+///
+/// 只做两次 stat，供同步入口在空闲轮快速判定，不必读取整份账本。
+pub(crate) fn needs_ledger_recovery(sync_root: &Path) -> bool {
+    ledger_path(sync_root).exists() && !seq_state_path(sync_root).exists()
+}
+
 /// 显式恢复入口：归档损坏账本、补齐旧账本序号。
 ///
 /// 只在同步入口（任何 fast path / target 过滤之前）调用，并且持账本写锁；
@@ -471,31 +478,33 @@ pub(crate) fn records_for_committed_paths(
     records
 }
 
-/// 显式修复：扫描磁盘并与已确认基线比对，把差异补成待同步事实。
+/// 显式修复：把"已落盘但没有进账本"的**内容变化**补成待同步事实。
 ///
-/// 只在恢复入口（`recovery-pending` 标记存在）或初始化/迁移时调用：正常增量
-/// 路径由业务事务投影驱动，不扫描目录、不看 mtime（复审 #5）。
+/// 只在恢复入口（持久 recovery 标记存在）或初始化/迁移时调用，正常增量路径
+/// 由业务事务投影驱动，不扫描目录。
+///
+/// 只补 upsert：`known_files` 里有、磁盘上找不到的路径**不能**推断成用户删除
+/// —— 那可能是下载不完整/手工清理/索引损坏；真实删除必须来自 durable 删除
+/// 事务或显式 tombstone（复审 #7213115893 第 4 项）。业务时间取文件真实
+/// 修改时间，不用"恢复时刻"制造一次普通编辑。
 pub(crate) fn rebuild_pending_from_disk(
     sync_root: &Path,
     scope: SyncScope,
     app_group: Option<&crate::sync::types::AppDataGroup>,
 ) -> crate::error::Result<usize> {
     let state = match app_group {
-        Some(group) => {
-            crate::sync::SyncService::load_sync_state_read_only_for_group(sync_root, group)?
-        }
+        Some(group) => crate::sync::SyncService::load_sync_state_read_only_for_group(
+            sync_root, group, None,
+        )?,
         None => crate::sync::SyncService::load_sync_state_read_only(sync_root, None)?,
     };
     let entries = crate::sync::scanner::scan_for_sync_group(sync_root, scope, app_group)?;
-    let now_ms = chrono::Utc::now().timestamp_millis();
     let sync_root_text = sync_root.to_string_lossy().into_owned();
     let mut records = Vec::new();
-    let mut seen = std::collections::HashSet::new();
     for entry in entries {
-        if !is_sync_business_path(&entry.relative_path) || entry.file_hash.is_empty() {
+        if !is_sync_business_path(&entry.relative_path, scope) || entry.file_hash.is_empty() {
             continue;
         }
-        seen.insert(entry.relative_path.clone());
         if state
             .known_files
             .get(&entry.relative_path)
@@ -504,9 +513,16 @@ pub(crate) fn rebuild_pending_from_disk(
             continue;
         }
         let (object_type, object_id) = object_identity(&entry.relative_path);
+        // 业务时间用文件真实修改时间；读不到才退化为条目时间。
+        let updated_at_ms = std::fs::metadata(sync_root.join(&entry.relative_path))
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+            .unwrap_or(entry.modified_time);
         records.push(LocalMutationRecord {
             schema_version: 1,
-            transaction_id: format!("recovery-scan-{now_ms}"),
+            transaction_id: format!("recovery-scan-{updated_at_ms}"),
             sync_root: sync_root_text.clone(),
             path: entry.relative_path.clone(),
             object_type,
@@ -514,36 +530,10 @@ pub(crate) fn rebuild_pending_from_disk(
             op: "upsert".to_string(),
             base_hash: state.known_files.get(&entry.relative_path).cloned(),
             content_hash: entry.file_hash,
-            updated_at_ms: now_ms,
+            updated_at_ms,
             deleted_at_ms: None,
             device_id: state.device_id.clone(),
             object_revision: object_revision(&sync_root.join(&entry.relative_path)),
-            seq: 0,
-        });
-    }
-    for path in state.known_files.keys() {
-        if seen.contains(path) || !is_sync_business_path(path) {
-            continue;
-        }
-        if sync_root.join(path).exists() {
-            // 路径存在但扫描没收录（被白名单/布局规则忽略）：不能当作删除。
-            continue;
-        }
-        let (object_type, object_id) = object_identity(path);
-        records.push(LocalMutationRecord {
-            schema_version: 1,
-            transaction_id: format!("recovery-scan-{now_ms}"),
-            sync_root: sync_root_text.clone(),
-            path: path.clone(),
-            object_type,
-            object_id,
-            op: "delete".to_string(),
-            base_hash: state.known_files.get(path).cloned(),
-            content_hash: String::new(),
-            updated_at_ms: now_ms,
-            deleted_at_ms: Some(now_ms),
-            device_id: state.device_id.clone(),
-            object_revision: None,
             seq: 0,
         });
     }
@@ -794,11 +784,19 @@ pub(crate) fn replay_pending_acks(sync_root: &Path) -> crate::error::Result<usiz
     }
     acks.entries = remaining;
     let path = pending_ack_path(sync_root);
+    let unsettled = acks.entries.len();
     if acks.entries.is_empty() {
         let _ = fs::remove_file(path);
     } else {
         let text = serde_json::to_string(&acks)?;
         crate::storage::atomic_write_string(&path, &text)?;
+    }
+    if unsettled > 0 {
+        // 还有未结算的确认意图：调用方必须把它当作"恢复未完成"，不能因为
+        // 其余条目成功就当整轮恢复成功（复审 #7213115893 第 4 项）。
+        return Err(crate::error::Error::Other(format!(
+            "mutation ack replay incomplete: {unsettled} target(s) unsettled"
+        )));
     }
     Ok(applied)
 }
