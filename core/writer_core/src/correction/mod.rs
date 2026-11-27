@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -23,18 +23,14 @@ use crate::api::{
 };
 
 mod engine;
-mod result_cache;
 mod publication;
+mod result_cache;
 mod scan_metrics;
 mod synced_results;
 
 /// 同步 durable commit 涉及某章 `correction/results/<chapter>/` 后显式失效
 /// 该章的不可变结果索引；查询本身仍只做目录 mtime 的 O(1) 检查。
-pub(crate) fn invalidate_synced_results(
-    app_data_root: &Path,
-    project_id: &str,
-    chapter_id: &str,
-) {
+pub(crate) fn invalidate_synced_results(app_data_root: &Path, project_id: &str, chapter_id: &str) {
     let Some(stores) = STORE_REGISTRY.get() else {
         return;
     };
@@ -46,9 +42,7 @@ pub(crate) fn invalidate_synced_results(
             continue;
         }
         if let Ok(mut cache) = inner.synced_records.lock() {
-            cache.retain(|key, _| {
-                key.project_id != project_id || key.chapter_id != chapter_id
-            });
+            cache.retain(|key, _| key.project_id != project_id || key.chapter_id != chapter_id);
         }
     }
 }
@@ -79,9 +73,9 @@ pub(crate) fn retry_pending_publications(
             }
             settled = settled.saturating_add(store.retry_memory_publications());
         }
-        Err(error) => log::warn!(
-            "[correction] open store for memory publication retry failed: {error}"
-        ),
+        Err(error) => {
+            log::warn!("[correction] open store for memory publication retry failed: {error}")
+        }
     }
     match disk_error {
         Some(error) => Err(WriterError::from(error)),
@@ -90,12 +84,12 @@ pub(crate) fn retry_pending_publications(
 }
 
 pub(crate) use engine::CorrectionScanner;
-pub(crate) use synced_results::is_synced_result_path;
 pub(crate) use result_cache::EditRange;
 use result_cache::{
     apply_edits_light, cache_file_name, mark_unseen_segments_in_edit_windows, modified_stamp,
     parts_fingerprint, ChapterCorrectionCacheState, ChapterCorrectionSlot,
 };
+pub(crate) use synced_results::is_synced_result_path;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -147,12 +141,10 @@ struct PersistedCorrectionPreferences {
     projects: BTreeMap<String, ProjectCorrectionPreferences>,
 }
 
-type ChapterResultCacheRegistry = HashMap<(String, String), Arc<ChapterCorrectionSlot>>;
-
-/// Bound for in-memory chapter correction caches. Idle slots are cheap to
-/// reload from disk when a chapter is reopened; keeping every visited chapter
-/// for the process lifetime is not (Issue #1061).
-const CHAPTER_RESULT_CACHE_LIMIT: usize = 16;
+/// Issue #1062 评论 #7213696214 第 2 项：注册表只持弱引用，真正使用中的
+/// 章节/扫描任务自己持有 `Arc`；没有持有者的槽位随最后一个引用自然释放，
+/// 靠磁盘缓存按需重建，不用固定条数当淘汰策略。
+type ChapterResultCacheRegistry = HashMap<(String, String), Weak<ChapterCorrectionSlot>>;
 
 /// One project's published annotation entries plus the source directory
 /// version they were read from. External sync/MCP writers touch the same
@@ -182,7 +174,8 @@ struct CorrectionStoreInner {
     /// 章节同步结果索引：按目录修改时间增量刷新，restore 的 slot 锁内只查内存。
     synced_records: Mutex<HashMap<SyncedRecordCacheKey, CachedSyncedRecords>>,
     /// 待发布事实（完整 record）在内存中的失败回退；durable 文件在 publication 模块。
-    pending_publications: Mutex<HashMap<(String, String), Vec<synced_results::SyncedCorrectionRecord>>>,
+    pending_publications:
+        Mutex<HashMap<(String, String), Vec<synced_results::SyncedCorrectionRecord>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -197,7 +190,8 @@ struct CachedSyncedRecords {
     /// 目录 mtime 只做一次低成本 stat；记录是不可变 key，实际新增/远端变更
     /// 由发布成功或 sync durable commit 显式失效，不逐文件遍历历史记录。
     dir_signature: Option<SystemTime>,
-    index: Arc<synced_results::SyncedResultIndex>,
+    /// 同步结果索引只读可重建：注册表持弱引用，使用方按需升级。
+    index: Weak<synced_results::SyncedResultIndex>,
 }
 
 struct ActiveCorrectionProject {
@@ -627,6 +621,7 @@ pub(super) fn model_lifetime_metrics() -> ModelLifetimeMetrics {
 /// 不改变缓存；注册表未初始化时按“未配置”返回。
 pub fn model_lifetime_snapshot() -> serde_json::Value {
     let metrics = model_lifetime_metrics();
+    let (synced_indexes, synced_bytes) = synced_index_metrics();
     serde_json::json!({
         "cached": metrics.cached,
         "engine_refs": metrics.engine_refs,
@@ -634,7 +629,33 @@ pub fn model_lifetime_snapshot() -> serde_json::Value {
         "retired_engines": metrics.retired_engines,
         "generation": metrics.generation,
         "model_configured": model_path_configured(),
+        "synced_result_indexes": synced_indexes,
+        "synced_result_bytes": synced_bytes,
     })
+}
+
+/// 同步结果索引的“实际占用”估算：只统计仍被使用方持有的弱引用目标。
+fn synced_index_metrics() -> (usize, usize) {
+    let Some(stores) = STORE_REGISTRY.get() else {
+        return (0, 0);
+    };
+    let Ok(stores) = stores.lock() else {
+        return (0, 0);
+    };
+    let mut count = 0usize;
+    let mut bytes = 0usize;
+    for inner in stores.values() {
+        let Ok(cache) = inner.synced_records.lock() else {
+            continue;
+        };
+        for entry in cache.values() {
+            if let Some(index) = entry.index.upgrade() {
+                count = count.saturating_add(1);
+                bytes = bytes.saturating_add(index.estimated_bytes());
+            }
+        }
+    }
+    (count, bytes)
 }
 
 /// 是否有任一已打开的 `CorrectionStore` 配置了模型路径。
@@ -896,6 +917,10 @@ struct ModelManagerWake {
 static RETIRED_MODEL_RESOURCES: OnceLock<Mutex<Vec<RetiredModelResources>>> = OnceLock::new();
 static MODEL_MANAGER_WAKE: OnceLock<ModelManagerWake> = OnceLock::new();
 static MODEL_MANAGER_READY: OnceLock<bool> = OnceLock::new();
+/// Issue #1062 评论 #7213696214 第 2 项：显式“离开文档”租约结束信号。
+/// 置位后生命周期线程会立即收敛所有已无扫描/引擎引用的模型，而不是等
+/// 固定 120 秒空闲窗口；仍在使用中的 session 由 `Arc` 引用计数保护。
+static MODEL_RELEASE_IMMEDIATE: AtomicBool = AtomicBool::new(false);
 
 fn retired_model_resources() -> &'static Mutex<Vec<RetiredModelResources>> {
     RETIRED_MODEL_RESOURCES.get_or_init(|| Mutex::new(Vec::new()))
@@ -941,8 +966,9 @@ fn model_lifecycle_loop(wake: &'static ModelManagerWake) {
             .wait_timeout(guard, Duration::from_secs(15))
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         drop(guard);
+        let immediate = MODEL_RELEASE_IMMEDIATE.swap(false, Ordering::SeqCst);
         release_retired_model_resources("correction-model-lifecycle");
-        if let Some(resources) = collect_idle_model_resources() {
+        if let Some(resources) = collect_idle_model_resources(immediate) {
             release_model_resources(resources, "correction-model-lifecycle");
         }
     }
@@ -1042,7 +1068,7 @@ fn retire_model_resources(resources: RetiredModelResources) {
 /// Collect idle Ready sessions and their idle engine-cache entries. Active
 /// scanner/engine leases are left in place; the model slot keeps its `Arc`
 /// until the scanner naturally finishes and the next manager pass runs.
-fn collect_idle_model_resources() -> Option<RetiredModelResources> {
+fn collect_idle_model_resources(immediate: bool) -> Option<RetiredModelResources> {
     let slots = model_cache().lock().ok()?;
     let now = Instant::now();
     let expired_paths: HashSet<PathBuf> = slots
@@ -1051,7 +1077,8 @@ fn collect_idle_model_resources() -> Option<RetiredModelResources> {
             let state = slot.state.lock().ok()?;
             match &*state {
                 ModelLoadState::Ready { last_used, .. }
-                    if now.saturating_duration_since(*last_used) >= IDLE_MODEL_GRACE =>
+                    if immediate
+                        || now.saturating_duration_since(*last_used) >= IDLE_MODEL_GRACE =>
                 {
                     Some(path.clone())
                 }
@@ -1116,7 +1143,10 @@ fn collect_idle_model_resources() -> Option<RetiredModelResources> {
             continue;
         };
         let idle = last_used.elapsed();
-        if idle < IDLE_MODEL_GRACE || active_paths.contains(path) || Arc::strong_count(model) != 1 {
+        if (!immediate && idle < IDLE_MODEL_GRACE)
+            || active_paths.contains(path)
+            || Arc::strong_count(model) != 1
+        {
             continue;
         }
         let previous = std::mem::replace(&mut *state, ModelLoadState::Empty);
@@ -1236,14 +1266,18 @@ impl CorrectionStore {
             mode: mode.to_string(),
             scanner_stable: scanner_stable.to_string(),
         };
-        let signature = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
+        let signature = std::fs::metadata(&dir)
+            .and_then(|meta| meta.modified())
+            .ok();
         {
             let cache = self.inner.synced_records.lock().map_err(|_| {
                 WriterError::Other("correction synced record cache lock poisoned".into())
             })?;
             if let Some(entry) = cache.get(&key) {
                 if entry.dir_signature == signature {
-                    return Ok(Arc::clone(&entry.index));
+                    if let Some(index) = entry.index.upgrade() {
+                        return Ok(index);
+                    }
                 }
             }
         }
@@ -1255,7 +1289,9 @@ impl CorrectionStore {
             mode,
             scanner_stable,
         );
-        let after = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
+        let after = std::fs::metadata(&dir)
+            .and_then(|meta| meta.modified())
+            .ok();
         if after != signature {
             records = synced_results::load_records(
                 &project_root,
@@ -1271,7 +1307,9 @@ impl CorrectionStore {
         })?;
         if let Some(existing) = cache.get(&key) {
             if existing.dir_signature == after {
-                return Ok(Arc::clone(&existing.index));
+                if let Some(existing_index) = existing.index.upgrade() {
+                    return Ok(existing_index);
+                }
             }
         }
         // 同一章的旧 scanner/mode 代际直接释放；总条目受既有章节缓存上限约束。
@@ -1280,17 +1318,13 @@ impl CorrectionStore {
                 || candidate.chapter_id != key.chapter_id
                 || (candidate.mode == key.mode && candidate.scanner_stable == key.scanner_stable)
         });
-        while cache.len() >= CHAPTER_RESULT_CACHE_LIMIT {
-            let Some(oldest) = cache.keys().next().cloned() else {
-                break;
-            };
-            cache.remove(&oldest);
-        }
+        // 没被使用方持有的旧索引直接清掉；不靠固定条数限制驻留。
+        cache.retain(|_, entry| entry.index.strong_count() > 0);
         cache.insert(
             key,
             CachedSyncedRecords {
                 dir_signature: after,
-                index: Arc::clone(&index),
+                index: Arc::downgrade(&index),
             },
         );
         Ok(index)
@@ -1397,19 +1431,11 @@ impl CorrectionStore {
             .pending_publications
             .lock()
             .ok()
-            .and_then(|mut memory| {
-                memory
-                    .remove(&(project_id.to_string(), chapter_id.to_string()))
-            })
+            .and_then(|mut memory| memory.remove(&(project_id.to_string(), chapter_id.to_string())))
             .unwrap_or_default();
         if !memory_records.is_empty()
-            && publication::write_pending(
-                &project_root,
-                project_id,
-                chapter_id,
-                &memory_records,
-            )
-            .is_err()
+            && publication::write_pending(&project_root, project_id, chapter_id, &memory_records)
+                .is_err()
         {
             // 仍无法 durable 写回：把内存待办放回去，等下一次请求。
             self.remember_publication(project_id, chapter_id, &memory_records);
@@ -1467,15 +1493,9 @@ impl CorrectionStore {
     }
 
     /// 本地发布某章结果后显式释放该章的不可变索引；其余章节保持命中。
-    pub(crate) fn invalidate_chapter_synced_results(
-        &self,
-        project_id: &str,
-        chapter_id: &str,
-    ) {
+    pub(crate) fn invalidate_chapter_synced_results(&self, project_id: &str, chapter_id: &str) {
         if let Ok(mut cache) = self.inner.synced_records.lock() {
-            cache.retain(|key, _| {
-                key.project_id != project_id || key.chapter_id != chapter_id
-            });
+            cache.retain(|key, _| key.project_id != project_id || key.chapter_id != chapter_id);
         }
     }
 
@@ -1598,6 +1618,9 @@ impl CorrectionStore {
     }
 
     pub fn note_correction_session_left(&self) {
+        // 离开章节/文档 = 本轮租约结束：让生命周期线程立即检查可释放资源，
+        // 但仍以真实 `Arc` 引用为准，正在扫描的 session 不会被抢释放。
+        MODEL_RELEASE_IMMEDIATE.store(true, Ordering::SeqCst);
         let mut fields = BTreeMap::new();
         fields.insert(
             "model_generation".to_string(),
@@ -2082,8 +2105,8 @@ impl CorrectionStore {
         let mut caches = self.inner.result_caches.lock().map_err(|_| {
             WriterError::Other("correction result cache registry lock poisoned".into())
         })?;
-        if let Some(existing) = caches.get(&key) {
-            return Ok(Arc::clone(existing));
+        if let Some(existing) = caches.get(&key).and_then(Weak::upgrade) {
+            return Ok(existing);
         }
         let path = self
             .result_cache_dir()
@@ -2091,43 +2114,10 @@ impl CorrectionStore {
         let state = Arc::new(ChapterCorrectionSlot::new(
             ChapterCorrectionCacheState::load(path),
         ));
-        caches.insert(key.clone(), Arc::clone(&state));
-        // Evict idle chapter slots beyond the limit. A slot still owned by a
-        // scanner/request has strong_count > 1 and is left untouched; evicted
-        // slots reload from their disk cache on the next open.
-        if caches.len() > CHAPTER_RESULT_CACHE_LIMIT {
-            let mut idle: Vec<(String, String)> = caches
-                .iter()
-                .filter(|(cached_key, slot)| **cached_key != key && Arc::strong_count(slot) == 1)
-                .map(|(cached_key, _)| cached_key.clone())
-                .collect();
-            idle.sort();
-            let excess = caches.len().saturating_sub(CHAPTER_RESULT_CACHE_LIMIT);
-            let evicted = idle.len().min(excess);
-            for cached_key in idle.into_iter().take(evicted) {
-                caches.remove(&cached_key);
-            }
-            if evicted > 0 {
-                let mut fields = BTreeMap::new();
-                fields.insert("evicted".to_string(), serde_json::json!(evicted));
-                fields.insert("remaining".to_string(), serde_json::json!(caches.len()));
-                fields.insert(
-                    "limit".to_string(),
-                    serde_json::json!(CHAPTER_RESULT_CACHE_LIMIT),
-                );
-                writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
-                    timestamp_ms: chrono::Utc::now().timestamp_millis(),
-                    sequence: 0,
-                    session_id: String::new(),
-                    level: writer_diagnostics::DiagnosticLevel::Info,
-                    origin: writer_diagnostics::DiagnosticOrigin::App,
-                    event: "correction.cache.evicted".to_string(),
-                    target: "correction.cache".to_string(),
-                    message: None,
-                    fields,
-                });
-            }
-        }
+        caches.insert(key.clone(), Arc::downgrade(&state));
+        // 注册表里已经没人持有的槽位只是内存地址记录，清掉即可；使用中的
+        // 槽位由扫描/请求自己的 `Arc` 保活，不做“固定条数淘汰”。
+        caches.retain(|_, slot| slot.strong_count() > 0);
         Ok(state)
     }
 
@@ -2144,7 +2134,7 @@ impl CorrectionStore {
         let caches = self.inner.result_caches.lock().map_err(|_| {
             WriterError::Other("correction result cache registry lock poisoned".into())
         })?;
-        let Some(slot) = caches.get(&key) else {
+        let Some(slot) = caches.get(&key).and_then(Weak::upgrade) else {
             return Ok(None);
         };
         let guard = slot

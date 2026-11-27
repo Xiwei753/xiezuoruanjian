@@ -19,10 +19,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::storage::transaction::SaveTransaction;
 use crate::sync::hash::content_md5;
 use crate::sync::local_mutations::{self, LocalMutationRecord};
 use crate::sync::SyncService;
-use crate::storage::transaction::SaveTransaction;
 
 use super::result_cache::CachedSuggestion;
 
@@ -258,14 +258,15 @@ pub(crate) fn write_record(
     let record = normalize(record);
     let path = dir.join(format!("{}.json", record.record_key()));
     if let Ok(existing) = std::fs::read_to_string(&path) {
-        if serde_json::from_str::<SyncedCorrectionRecord>(&existing).is_ok_and(|existing| {
-            existing.schema_version == SCHEMA_VERSION && existing == record
-        }) {
+        if serde_json::from_str::<SyncedCorrectionRecord>(&existing)
+            .is_ok_and(|existing| existing.schema_version == SCHEMA_VERSION && existing == record)
+        {
             return Ok(false);
         }
     }
-    let json = serde_json::to_string(&record)
-        .map_err(|error| crate::Error::Other(format!("correction result encode failed: {error}")))?;
+    let json = serde_json::to_string(&record).map_err(|error| {
+        crate::Error::Other(format!("correction result encode failed: {error}"))
+    })?;
     crate::storage::atomic_write_string(&path, &json)?;
     Ok(true)
 }
@@ -388,12 +389,18 @@ pub(crate) fn publish_records(
 /// 全部历史建议或重建/排序 HashMap。
 #[derive(Debug, Default)]
 pub(crate) struct SyncedResultIndex {
-    by_content:
-        std::collections::HashMap<String, std::collections::HashMap<String, Vec<(String, Vec<CachedSuggestion>)>>>,
+    by_content: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, Vec<(String, Vec<CachedSuggestion>)>>,
+    >,
+    /// 已加载索引的实际内容占用估算（键 + 建议字符串字节），供诊断区分
+    /// “有几个索引”和“占多少字节”。
+    estimated_bytes: usize,
 }
 
 impl SyncedResultIndex {
     pub(crate) fn build(records: &[SyncedCorrectionRecord]) -> Self {
+        let mut estimated_bytes = 0usize;
         let mut by_content: std::collections::HashMap<
             String,
             std::collections::HashMap<String, Vec<(String, Vec<CachedSuggestion>)>>,
@@ -406,16 +413,37 @@ impl SyncedResultIndex {
                 .or_default()
                 .push((record.record_key(), record.suggestions.clone()));
         }
-        for contexts in by_content.values_mut() {
-            for candidates in contexts.values_mut() {
+        for (text_sha256, contexts) in by_content.iter_mut() {
+            estimated_bytes = estimated_bytes.saturating_add(text_sha256.len());
+            for (context_sha256, candidates) in contexts.iter_mut() {
+                estimated_bytes = estimated_bytes.saturating_add(context_sha256.len());
                 candidates.sort_by(|left, right| left.0.cmp(&right.0));
+                for (record_key, suggestions) in candidates.iter() {
+                    estimated_bytes = estimated_bytes.saturating_add(record_key.len());
+                    for suggestion in suggestions {
+                        estimated_bytes = estimated_bytes
+                            .saturating_add(suggestion.original.len())
+                            .saturating_add(suggestion.replacement.len())
+                            .saturating_add(suggestion.source.len())
+                            .saturating_add(suggestion.rule_id.len())
+                            .saturating_add(suggestion.severity.len())
+                            .saturating_add(32);
+                    }
+                }
             }
         }
-        Self { by_content }
+        Self {
+            by_content,
+            estimated_bytes,
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.by_content.is_empty()
+    }
+
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        self.estimated_bytes
     }
 
     pub(crate) fn candidates(
@@ -450,7 +478,10 @@ pub(crate) fn load_records(
     let mut paths = entries
         .filter_map(std::result::Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .collect::<Vec<_>>();
     paths.sort();
     let mut records = Vec::new();

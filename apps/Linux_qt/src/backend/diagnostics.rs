@@ -381,6 +381,8 @@ fn insert_model_lifetime_fields(fields: &mut BTreeMap<String, serde_json::Value>
         ("retired_models", "model_retired_models"),
         ("retired_engines", "model_retired_engines"),
         ("generation", "model_generation"),
+        ("synced_result_indexes", "correction_synced_indexes"),
+        ("synced_result_bytes", "correction_synced_bytes"),
     ] {
         if let Some(value) = snapshot.get(key).and_then(serde_json::Value::as_u64) {
             fields.insert(field.to_string(), serde_json::Value::from(value));
