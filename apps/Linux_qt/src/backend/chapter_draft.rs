@@ -52,8 +52,8 @@ mod tests;
 #[cfg(test)]
 pub(crate) use ack::pending_ack_count;
 pub(crate) use ack::{
-    complete_pending_ack, reconciled_ack, reconciled_acks, record_pending_ack, replay_pending_acks,
-    PendingAck,
+    complete_pending_ack, reconciled_ack, reconciled_ack_transactions, reconciled_acks,
+    record_pending_ack, replay_pending_acks, PendingAck,
 };
 pub(crate) use ack_commit::{
     mark_committed, mark_committed_with_settlement, text_ready_for_commit, TextSettlement,
@@ -63,9 +63,9 @@ pub(crate) use ownership::{archived_draft_ownership, draft_event_ownership, Draf
 pub(crate) use pending::{clear_pending_input, pending_inputs, spool_failed_input};
 pub(crate) use restore::{list_project_drafts, restore_plan, restore_plan_strict, snapshot};
 pub(crate) use retry::{
-    clear_retry_intent, list_retries, materialize_retry, materialize_retry_candidate, record_retry,
-    remove_marker, retry_chapters, unreadable_retry_chapters, write_retry_intent, RetryCandidate,
-    RetryMaterialize,
+    clear_retry_intent, list_retries, list_retries_strict, materialize_retry,
+    materialize_retry_candidate, record_retry, remove_marker, retry_chapters,
+    unreadable_retry_chapters, write_retry_intent, RetryCandidate, RetryMaterialize,
 };
 pub(crate) use scheduler::{draft_metrics, flush_due, next_persist_deadline};
 

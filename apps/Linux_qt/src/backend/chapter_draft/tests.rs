@@ -1519,6 +1519,58 @@ mod ack_strictness_tests {
     }
 
     #[test]
+    fn intent_recovery_does_not_require_index_dir() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("fact");
+        persist_current(root, "p1", "c1", true).expect("persist");
+        write_retry_intent(root, "p1", "c1", "v1", "unit retry", 0).expect("intent");
+        quarantine(root, "p1", "c1")
+            .expect("quarantine")
+            .expect("archived");
+        // 索引根目录完全不存在（rename 后、写索引前崩溃）。
+        assert!(!retry_root(root, "p1").exists());
+        let listed = list_retries(root, "p1");
+        assert_eq!(listed.len(), 1, "archived intent still discovered");
+        assert!(listed[0].intent_backed);
+        assert!(list_retries_strict(root, "p1").is_ok());
+    }
+
+    #[test]
+    fn strict_scan_rejects_corrupt_intent() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let archived = kept_root(root, "p1").join("c1").join("stamp-bad");
+        std::fs::create_dir_all(&archived).expect("archived dir");
+        std::fs::write(archived.join("retry-intent.json"), b"{ not-json").expect("corrupt intent");
+        assert!(list_retries(root, "p1").is_empty());
+        assert!(
+            list_retries_strict(root, "p1").is_err(),
+            "unknown archive state must keep Core journal"
+        );
+        assert!(archived_draft_ownership(root, "p1", "c1", &["e1".to_string()]).is_err());
+    }
+
+    #[test]
+    fn orphan_reconciled_ack_is_replayable_and_cleanable() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        record_pending_ack(root, "p1", "c1", &pending_ack("tx-1", &["e1"])).expect("record ack");
+        // 只剩 ack 文件（无 meta/正文/事实）：NoDraft 不再被自己挡住。
+        assert_eq!(replay_pending_acks(root, "p1", "c1").expect("replay"), 1);
+        let acks = reconciled_acks(root, "p1", "c1").expect("reconciled");
+        assert_eq!(acks.len(), 1);
+        assert_eq!(
+            reconciled_ack_transactions(root, "p1", None),
+            vec![("c1".to_string(), "tx-1".to_string())]
+        );
+        complete_pending_ack(root, "p1", "c1", "tx-1");
+        assert!(reconciled_acks(root, "p1", "c1")
+            .expect("reconciled")
+            .is_empty());
+    }
+
+    #[test]
     fn archived_ownership_matches_only_owning_transaction() {
         let workspace = temp_workspace();
         let root = workspace.path();

@@ -1121,6 +1121,31 @@ mod restore_isolation_tests {
         );
     }
 
+    /// 评论 #7213128711 第 2 项：意图写不进草稿目录时不得先归档，章节进入
+    /// 阻断集合，草稿仍留在活动槽位等待下一次恢复。
+    #[test]
+    fn keep_retry_without_writable_draft_blocks_chapter() {
+        let (temp, _api, project_id, _volume_id, _chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        let mut counters = super::super::kept_draft::RestoreCounters::default();
+        counters.keep(
+            &projects_root,
+            &project_id,
+            "c9",
+            super::super::kept_draft::KeptDisposition::Retry {
+                volume_id: "v1".to_string(),
+                reason: "unit".to_string(),
+                attempts: 0,
+            },
+        );
+        assert!(counters.blocked_chapters.contains(&"c9".to_string()));
+        assert!(counters.retry_chapters.is_empty());
+        assert!(!projects_root
+            .join(&project_id)
+            .join("app-meta/chapter-draft-kept/c9")
+            .exists());
+    }
+
     /// 评论 #7210360212 第 2 项：重试意图先写进草稿目录再 rename；外部索引
     /// 丢失（rename 后崩溃）也能从归档目录里的意图重建并继续自动重试。
     #[test]

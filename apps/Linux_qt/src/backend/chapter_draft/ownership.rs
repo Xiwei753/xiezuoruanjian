@@ -92,8 +92,14 @@ pub(crate) fn archived_draft_ownership(
     if event_ids.is_empty() {
         return Ok(None);
     }
+    // 严格扫描：索引/意图读坏时不能判断“不属于归档事务”，必须让调用方
+    // 保留 Core journal（评论 #7213128711 第 1 项）。
     let mut unreadable: Option<String> = None;
-    for candidate in super::list_retries(projects_root, project_id) {
+    let candidates = match super::list_retries_strict(projects_root, project_id) {
+        Ok(candidates) => candidates,
+        Err(error) => return Err(error),
+    };
+    for candidate in candidates {
         if candidate.marker.chapter_id != chapter_id {
             continue;
         }

@@ -129,6 +129,9 @@ pub(super) fn reconcile_core_acks(
     // 有 ack 写盘失败或重放失败的章节：整章不再 replay/放行，避免只结算
     // 一部分就进入保存。
     let mut blocked: BTreeSet<String> = BTreeSet::new();
+    // 本次 Core journal 仍保留的事务；用于识别本地已确认的孤儿 ack。
+    let core_transactions: BTreeSet<String> =
+        acks.iter().map(|ack| ack.transaction_id.clone()).collect();
     // Issue #1062 评论 #7210360212 第 1 项：不能按章阻断——同章可以同时有
     // 已搬回活动的 A 与仍在归档区的 B。每笔 ack 都按自己的事件归属判定：
     // 活动草稿 Owns 就应用；只有明确属于归档事务时才延后这一笔。
@@ -274,6 +277,20 @@ pub(super) fn reconcile_core_acks(
                 });
             }
         }
+    }
+    // Issue #1062 评论 #7213128711 第 3 项：Core 已不再列出、但本地仍是
+    // reconciled 的 ack（已确认成功但删文件前崩溃/删除失败）按已确认决议
+    // 幂等清理，避免只剩 ack 的槽位永远无法收口。
+    for (chapter, transaction_id) in
+        chapter_draft::reconciled_ack_transactions(root, project_id, chapter_id)
+    {
+        if core_transactions.contains(&transaction_id) {
+            continue;
+        }
+        chapter_draft::complete_pending_ack(root, project_id, &chapter, &transaction_id);
+        log::info!(
+            "reconciled orphan draft ack removed: project={project_id} chapter={chapter} transaction={transaction_id}"
+        );
     }
     for (chapter, volume_id) in chapters {
         if blocked.contains(&chapter) {

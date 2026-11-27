@@ -168,26 +168,65 @@ fn read_intent(dir: &Path) -> Result<RetryIntent, String> {
         .map_err(|error| format!("retry intent corrupted (kept): {}: {error}", path.display()))
 }
 
-/// 从归档目录内部意图重建候选（外部索引缺失时的唯一恢复入口）。
-fn intent_candidates(projects_root: &Path, project_id: &str) -> Vec<RetryCandidate> {
+/// 扫描结果：候选 + 第一处读取/解析错误（严格路径据此保留 Core journal）。
+#[derive(Default)]
+struct RetryScan {
+    candidates: Vec<RetryCandidate>,
+    error: Option<String>,
+}
+
+impl RetryScan {
+    fn fail(&mut self, message: String) {
+        log::warn!("{message}");
+        if self.error.is_none() {
+            self.error = Some(message);
+        }
+    }
+}
+
+/// 先读归档目录内部意图，再读外部索引；两者任何一处读坏都记录错误。
+///
+/// Issue #1062 评论 #7213128711 第 1 项：索引根目录不存在只代表“索引为空”，
+/// 绝不能因此跳过归档里的 durable 意图。
+fn scan_retries(projects_root: &Path, project_id: &str) -> RetryScan {
+    let mut scan = RetryScan::default();
+    if !store::is_safe_id(project_id) {
+        return scan;
+    }
+    scan_intents(projects_root, project_id, &mut scan);
+    scan_index(projects_root, project_id, &mut scan);
+    scan
+}
+
+fn scan_intents(projects_root: &Path, project_id: &str, scan: &mut RetryScan) {
     let kept = super::store::kept_root(projects_root, project_id);
-    let Ok(chapters) = std::fs::read_dir(&kept) else {
-        return Vec::new();
+    let chapters = match std::fs::read_dir(&kept) {
+        Ok(chapters) => chapters,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            scan.fail(format!(
+                "read chapter draft kept dir {}: {error}",
+                kept.display()
+            ));
+            return;
+        }
     };
-    let mut candidates = Vec::new();
     for chapter in chapters.flatten() {
-        let chapter_id = chapter
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(str::to_string);
-        let Some(chapter_id) = chapter_id else {
+        let Some(chapter_id) = chapter.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if !store::is_safe_id(&chapter_id) {
+        if !store::is_safe_id(chapter_id) {
             continue;
         }
-        let Ok(stamps) = std::fs::read_dir(chapter.path()) else {
-            continue;
+        let stamps = match std::fs::read_dir(chapter.path()) {
+            Ok(stamps) => stamps,
+            Err(error) => {
+                scan.fail(format!(
+                    "read chapter draft kept chapter {}: {error}",
+                    chapter.path().display()
+                ));
+                continue;
+            }
         };
         for stamp in stamps.flatten() {
             let path = stamp.path();
@@ -197,7 +236,7 @@ fn intent_candidates(projects_root: &Path, project_id: &str) -> Vec<RetryCandida
             let intent = match read_intent(&path) {
                 Ok(intent) => intent,
                 Err(error) => {
-                    log::warn!("{error}");
+                    scan.fail(error);
                     continue;
                 }
             };
@@ -206,10 +245,10 @@ fn intent_candidates(projects_root: &Path, project_id: &str) -> Vec<RetryCandida
                 .and_then(|name| name.to_str())
                 .unwrap_or_default()
                 .to_string();
-            candidates.push(RetryCandidate {
+            scan.candidates.push(RetryCandidate {
                 marker: DraftRetryMarker {
                     schema_version: RETRY_SCHEMA_VERSION,
-                    chapter_id: chapter_id.clone(),
+                    chapter_id: chapter_id.to_string(),
                     volume_id: intent.volume_id,
                     archived_path: path.to_string_lossy().into_owned(),
                     stamp: stamp_name,
@@ -222,7 +261,95 @@ fn intent_candidates(projects_root: &Path, project_id: &str) -> Vec<RetryCandida
             });
         }
     }
-    candidates
+}
+
+fn scan_index(projects_root: &Path, project_id: &str, scan: &mut RetryScan) {
+    let root = retry_root(projects_root, project_id);
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            scan.fail(format!("read retry index dir {}: {error}", root.display()));
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let files = match std::fs::read_dir(&path) {
+            Ok(files) => files,
+            Err(error) => {
+                scan.fail(format!("read retry index {}: {error}", path.display()));
+                continue;
+            }
+        };
+        for file in files.flatten() {
+            let marker_path = file.path();
+            if marker_path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            match read_marker(&marker_path) {
+                Ok(marker) => scan.candidates.push(RetryCandidate {
+                    marker,
+                    marker_path,
+                    intent_backed: false,
+                }),
+                Err(error) => scan.fail(error),
+            }
+        }
+    }
+}
+
+fn finalize_retries(mut candidates: Vec<RetryCandidate>) -> Vec<RetryCandidate> {
+    // 同一归档副本可能同时有意图与索引（或崩溃留下重复记录）：按
+    // archived_path 只保留最新一条，避免同一次重试被搬两遍。
+    candidates.sort_by(|left, right| {
+        (
+            &left.marker.chapter_id,
+            &left.marker.archived_path,
+            left.marker.updated_at_ms,
+            &left.marker.stamp,
+        )
+            .cmp(&(
+                &right.marker.chapter_id,
+                &right.marker.archived_path,
+                right.marker.updated_at_ms,
+                &right.marker.stamp,
+            ))
+    });
+    let mut deduped: Vec<RetryCandidate> = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        match deduped.last_mut() {
+            Some(last)
+                if last.marker.chapter_id == candidate.marker.chapter_id
+                    && last.marker.archived_path == candidate.marker.archived_path =>
+            {
+                // 同时间戳优先显式索引（含最新 attempts/reason）。
+                let newer = candidate.marker.updated_at_ms > last.marker.updated_at_ms
+                    || (candidate.marker.updated_at_ms == last.marker.updated_at_ms
+                        && !candidate.intent_backed);
+                if newer {
+                    *last = candidate;
+                }
+            }
+            _ => deduped.push(candidate),
+        }
+    }
+    deduped.sort_by(|left, right| {
+        (
+            &left.marker.chapter_id,
+            left.marker.updated_at_ms,
+            &left.marker.stamp,
+        )
+            .cmp(&(
+                &right.marker.chapter_id,
+                right.marker.updated_at_ms,
+                &right.marker.stamp,
+            ))
+    });
+    deduped
 }
 
 /// 登记一条可自动重试的事务：归档副本路径 + 原始失败原因。
@@ -272,106 +399,22 @@ pub(crate) fn record_retry(
 
 /// 项目下所有可自动重试的事务（每份归档副本一条，按章与生成时间排序）。
 pub(crate) fn list_retries(projects_root: &Path, project_id: &str) -> Vec<RetryCandidate> {
-    if !store::is_safe_id(project_id) {
-        return Vec::new();
-    }
-    let root = retry_root(projects_root, project_id);
-    let Ok(entries) = std::fs::read_dir(&root) else {
-        return Vec::new();
-    };
-    let mut candidates = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        candidates.extend(markers_in(&path));
-    }
-    // 索引缺失（rename 后、写索引前崩溃）时，从归档目录内部意图重建队列。
-    candidates.extend(intent_candidates(projects_root, project_id));
-    // 同一归档副本可能因崩溃留下同名的重复记录：按 archived_path 只保留最新
-    // 一条，避免同一次重试被搬两遍。
-    candidates.sort_by(|left, right| {
-        (
-            &left.marker.chapter_id,
-            &left.marker.archived_path,
-            left.marker.updated_at_ms,
-            &left.marker.stamp,
-        )
-            .cmp(&(
-                &right.marker.chapter_id,
-                &right.marker.archived_path,
-                right.marker.updated_at_ms,
-                &right.marker.stamp,
-            ))
-    });
-    let mut deduped: Vec<RetryCandidate> = Vec::with_capacity(candidates.len());
-    for candidate in candidates {
-        match deduped.last_mut() {
-            Some(last)
-                if last.marker.chapter_id == candidate.marker.chapter_id
-                    && last.marker.archived_path == candidate.marker.archived_path =>
-            {
-                // 同时间戳优先显式索引（含最新 attempts/reason）。
-                let newer = candidate.marker.updated_at_ms > last.marker.updated_at_ms
-                    || (candidate.marker.updated_at_ms == last.marker.updated_at_ms
-                        && !candidate.intent_backed);
-                if newer {
-                    *last = candidate;
-                }
-            }
-            _ => deduped.push(candidate),
-        }
-    }
-    deduped.sort_by(|left, right| {
-        (
-            &left.marker.chapter_id,
-            left.marker.updated_at_ms,
-            &left.marker.stamp,
-        )
-            .cmp(&(
-                &right.marker.chapter_id,
-                right.marker.updated_at_ms,
-                &right.marker.stamp,
-            ))
-    });
-    deduped
+    finalize_retries(scan_retries(projects_root, project_id).candidates)
 }
 
-fn read_marker(path: &Path) -> Result<DraftRetryMarker, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|error| format!("read retry marker {}: {error}", path.display()))?;
-    let marker: DraftRetryMarker = serde_json::from_str(&content)
-        .map_err(|error| format!("retry marker corrupted (kept): {}: {error}", path.display()))?;
-    if marker.chapter_id.is_empty() || marker.archived_path.is_empty() {
-        return Err(format!(
-            "retry marker incomplete (kept): {}",
-            path.display()
-        ));
+/// 严格扫描：索引或意图有任何读取/解析失败都返回 Err。
+///
+/// 对账用它判断“这笔 ack 是否属于归档事务”；材料不确定时必须保留 journal，
+/// 不能当成 NoDraft 提前确认。
+pub(crate) fn list_retries_strict(
+    projects_root: &Path,
+    project_id: &str,
+) -> Result<Vec<RetryCandidate>, String> {
+    let scan = scan_retries(projects_root, project_id);
+    match scan.error {
+        Some(error) => Err(error),
+        None => Ok(finalize_retries(scan.candidates)),
     }
-    Ok(marker)
-}
-
-fn markers_in(dir: &Path) -> Vec<RetryCandidate> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut candidates = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        match read_marker(&path) {
-            Ok(marker) => candidates.push(RetryCandidate {
-                marker,
-                marker_path: path,
-                intent_backed: false,
-            }),
-            Err(error) => log::warn!("{error}"),
-        }
-    }
-    candidates
 }
 
 /// 取某章最早登记的重试事务（同章多份时按事务逐次 materialize）。
@@ -543,6 +586,28 @@ pub(crate) fn unreadable_retry_chapters(projects_root: &Path, project_id: &str) 
         }
         if unreadable {
             chapters.push(chapter_id.to_string());
+        }
+    }
+    // 归档目录内部意图读坏同样要显式报告：外部索引正常时也发现不了它。
+    let kept = super::store::kept_root(projects_root, project_id);
+    if let Ok(kept_chapters) = std::fs::read_dir(&kept) {
+        for chapter in kept_chapters.flatten() {
+            let Some(chapter_id) = chapter.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !store::is_safe_id(chapter_id) {
+                continue;
+            }
+            let Ok(stamps) = std::fs::read_dir(chapter.path()) else {
+                continue;
+            };
+            for stamp in stamps.flatten() {
+                let path = stamp.path();
+                if path.join(RETRY_INTENT_FILE).is_file() && read_intent(&path).is_err() {
+                    chapters.push(chapter_id.to_string());
+                    break;
+                }
+            }
         }
     }
     chapters.sort();

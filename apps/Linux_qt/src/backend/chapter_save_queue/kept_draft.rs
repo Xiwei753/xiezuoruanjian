@@ -51,6 +51,12 @@ impl RestoreCounters {
             .push(format!("{chapter_id}: {}", message.as_ref()));
     }
 
+    fn block(&mut self, chapter_id: &str) {
+        if !self.blocked_chapters.iter().any(|id| id == chapter_id) {
+            self.blocked_chapters.push(chapter_id.to_string());
+        }
+    }
+
     /// 统一收口：把本轮的 kept 草稿搬出可写槽位。
     ///
     /// - 归档成功：记录归档/重试身份；
@@ -68,12 +74,23 @@ impl RestoreCounters {
         // Issue #1062 评论 #7210360212 第 2 项：先写“是否要自动重试”的意图，
         // 再让 quarantine 把意图与草稿原件一起 rename；外部索引在 rename 之后
         // 才写，崩溃也不会丢掉自动恢复引用。人工归档前先清掉遗留意图。
+        //
+        // Issue #1062 评论 #7213128711 第 2 项：持久意图是归档的前置决议——
+        // 写入/清除失败时保持草稿在活动槽位并阻断该章，不能先搬进只读归档
+        // 再丢恢复指针。
         match &disposition {
             KeptDisposition::Archive => {
                 if let Err(error) =
                     chapter_draft::clear_retry_intent(projects_root, project_id, chapter_id)
                 {
-                    self.note(chapter_id, format!("clear retry intent failed: {error}"));
+                    self.failed += 1;
+                    self.kept += 1;
+                    self.block(chapter_id);
+                    self.note(
+                        chapter_id,
+                        format!("clear retry intent failed, chapter blocked: {error}"),
+                    );
+                    return;
                 }
             }
             KeptDisposition::Retry {
@@ -89,7 +106,14 @@ impl RestoreCounters {
                     reason,
                     *attempts,
                 ) {
-                    self.note(chapter_id, format!("write retry intent failed: {error}"));
+                    self.failed += 1;
+                    self.kept += 1;
+                    self.block(chapter_id);
+                    self.note(
+                        chapter_id,
+                        format!("write retry intent failed, chapter blocked: {error}"),
+                    );
+                    return;
                 }
             }
         }

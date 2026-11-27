@@ -202,11 +202,15 @@ pub(crate) fn replay_pending_acks(
         // （Applied/Terminal）才允许标 reconciled。NoDraft 只有在目录确实
         // 没有可恢复事务内容时才算“明确终结”；若还有 meta/facts/正文/
         // pending 输入，说明事务没被应用，绝不能把 ack 当作已完成。
+        //
+        // Issue #1062 评论 #7213128711 第 3 项：pending-ack 文件本身是确认
+        // 协调材料，不是“未完成草稿”；只用事务本体谓词判断，否则已确认的
+        // 孤儿 ack 会把自己永久挡住。
         if !decision.settled() {
             let location = DraftLocation::new(projects_root, project_id, chapter_id);
-            let has_transaction = location
-                .as_ref()
-                .is_some_and(|location| super::store::draft_dir_has_content(&location.dir));
+            let has_transaction = location.as_ref().is_some_and(|location| {
+                super::store::draft_dir_has_transaction_content(&location.dir)
+            });
             if has_transaction {
                 return Err(format!(
                     "pending ack {} has no local draft to apply (kept)",
@@ -229,6 +233,52 @@ pub(crate) fn replay_pending_acks(
         replayed = replayed.saturating_add(1);
     }
     Ok(replayed)
+}
+
+/// 项目内本地已确认（reconciled）的 ack 事务，按章节列出。
+///
+/// 对账用它清理 Core journal 已不再列出的孤儿 ack：本地 mark 已经应用过，
+/// Core 也已确认或事务已不存在，文件只是确认协调材料的残留。
+pub(crate) fn reconciled_ack_transactions(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_filter: Option<&str>,
+) -> Vec<(String, String)> {
+    let root = super::store::drafts_root(projects_root, project_id);
+    let Ok(chapters) = std::fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut transactions = Vec::new();
+    for chapter in chapters.flatten() {
+        let Some(chapter_id) = chapter.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if let Some(filter) = chapter_filter {
+            if chapter_id != filter {
+                continue;
+            }
+        }
+        let dir = chapter.path().join(ACK_DIR);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(ack) = serde_json::from_str::<PendingAck>(&content) else {
+                continue;
+            };
+            if ack.reconciled && !ack.transaction_id.is_empty() {
+                transactions.push((chapter_id.to_string(), ack.transaction_id));
+            }
+        }
+    }
+    transactions
 }
 
 /// 把某笔 ack 标为已本地完成（mark_committed 成功后由 worker 调用）。
