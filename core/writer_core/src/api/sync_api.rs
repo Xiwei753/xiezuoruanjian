@@ -1152,6 +1152,17 @@ impl WriterCoreApi {
             let core = self.core_read();
             (core.app_data_root.clone(), core.projects_root.clone())
         };
+        // 校对待发布事务独立于正文与 scanner 代际：在任何 fast path 之前
+        // 遍历实际待办目录重放，不能等用户重新打开失败章节。
+        match crate::correction::retry_pending_publications(&app_data_root, &projects_root) {
+            Ok(0) => {}
+            Ok(published) => log::info!(
+                "[correction] published {published} pending correction results before sync"
+            ),
+            Err(error) => {
+                log::warn!("[correction] retry pending correction publications failed: {error}")
+            }
+        }
         let mut roots: Vec<std::path::PathBuf> = vec![app_data_root.clone()];
         match crate::project::list_projects(&projects_root) {
             Ok(projects) => {

@@ -28,6 +28,17 @@ mod publication;
 mod scan_metrics;
 mod synced_results;
 
+/// Core 同步前恢复入口：重放所有作品的独立校对待发布文件。
+///
+/// 由同步恢复路径在 fast path 之前调用；失败保留原件，不阻断其它作品。
+pub(crate) fn retry_pending_publications(
+    app_data_root: &Path,
+    projects_root: &Path,
+) -> Result<usize, WriterError> {
+    publication::retry_all_pending(app_data_root, projects_root)
+        .map_err(WriterError::from)
+}
+
 pub(crate) use engine::CorrectionScanner;
 pub(crate) use synced_results::is_synced_result_path;
 pub(crate) use result_cache::EditRange;
@@ -133,8 +144,28 @@ struct SyncedRecordCacheKey {
 }
 
 struct CachedSyncedRecords {
-    dir_signature: Option<SystemTime>,
+    dir_signature: Option<String>,
     index: Arc<synced_results::SyncedResultIndex>,
+}
+
+/// 校对结果目录的对象签名：文件名、长度与修改时间。目录 mtime 在同步
+/// 写入/同一时间粒度下可能不变，文件集合签名能覆盖远端对象变更。
+fn synced_result_dir_signature(dir: &Path) -> Option<String> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut parts = Vec::new();
+    for entry in entries {
+        let entry = entry.ok()?;
+        let metadata = entry.metadata().ok()?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let modified = metadata.modified().ok()?;
+        let nanos = modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        parts.push(format!("{name}:{}:{nanos}", metadata.len()));
+    }
+    parts.sort();
+    Some(parts.join("|"))
 }
 
 struct ActiveCorrectionProject {
@@ -1173,7 +1204,7 @@ impl CorrectionStore {
             mode: mode.to_string(),
             scanner_stable: scanner_stable.to_string(),
         };
-        let signature = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
+        let signature = synced_result_dir_signature(&dir);
         {
             let cache = self.inner.synced_records.lock().map_err(|_| {
                 WriterError::Other("correction synced record cache lock poisoned".into())
@@ -1192,7 +1223,7 @@ impl CorrectionStore {
             mode,
             scanner_stable,
         );
-        let after = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
+        let after = synced_result_dir_signature(&dir);
         if after != signature {
             records = synced_results::load_records(
                 &project_root,
@@ -1235,6 +1266,32 @@ impl CorrectionStore {
 
     /// 扫描完成先把完整结果写进独立待发布文件；只有 durable 成功才返回 true。
     /// 首次写盘失败时保留内存副本，后续请求继续重试，不依赖 result cache。
+    fn remember_publication(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+        records: &[synced_results::SyncedCorrectionRecord],
+    ) {
+        let Ok(mut memory) = self.inner.pending_publications.lock() else {
+            return;
+        };
+        let entry = memory
+            .entry((project_id.to_string(), chapter_id.to_string()))
+            .or_default();
+        for record in records {
+            if !entry
+                .iter()
+                .any(|existing| existing.record_key() == record.record_key())
+            {
+                entry.push(record.clone());
+            }
+        }
+    }
+
+    fn workspace_root(&self) -> Option<PathBuf> {
+        self.inner.path.parent().map(Path::to_path_buf)
+    }
+
     pub(super) fn enqueue_publication(
         &self,
         project_id: &str,
@@ -1248,7 +1305,26 @@ impl CorrectionStore {
             // 未绑定作品根：只有本地 corpus，不存在同步待发布责任。
             return true;
         };
-        match publication::write_pending(&project_root, project_id, chapter_id, records) {
+        let Some(app_data_root) = self.workspace_root() else {
+            self.remember_publication(project_id, chapter_id, records);
+            return false;
+        };
+        // Issue #1065：待发布写入与同步 mutation 投影共用工作区事务锁。
+        let workspace_lock = match crate::storage::WorkspaceWriteLock::acquire(&app_data_root) {
+            Ok(lock) => lock,
+            Err(error) => {
+                log::warn!(
+                    "[correction] pending publication lock failed chapter_digest={} error={}",
+                    content_fingerprint(chapter_id),
+                    error
+                );
+                self.remember_publication(project_id, chapter_id, records);
+                return false;
+            }
+        };
+        let result = publication::write_pending(&project_root, project_id, chapter_id, records);
+        drop(workspace_lock);
+        match result {
             Ok(()) => true,
             Err(error) => {
                 log::warn!(
@@ -1256,27 +1332,33 @@ impl CorrectionStore {
                     content_fingerprint(chapter_id),
                     error
                 );
-                if let Ok(mut memory) = self.inner.pending_publications.lock() {
-                    let entry = memory
-                        .entry((project_id.to_string(), chapter_id.to_string()))
-                        .or_default();
-                    for record in records {
-                        if !entry.iter().any(|existing| {
-                            existing.record_key() == record.record_key()
-                        }) {
-                            entry.push(record.clone());
-                        }
-                    }
-                }
+                self.remember_publication(project_id, chapter_id, records);
                 false
             }
         }
     }
 
     /// 发布独立待发布事实；可在章节 slot 锁外、与当前正文/revision 无关地调用。
+    ///
+    /// 返回 true 仅表示本轮确实发布了至少一条新记录；没有待办时必须是无操作，
+    /// 不能顺手清掉该章同步索引。
     pub(super) fn retry_publications(&self, project_id: &str, chapter_id: &str) -> bool {
         let Some(project_root) = self.project_root(project_id) else {
             return false;
+        };
+        let Some(app_data_root) = self.workspace_root() else {
+            return false;
+        };
+        let _workspace_lock = match crate::storage::WorkspaceWriteLock::acquire(&app_data_root) {
+            Ok(lock) => lock,
+            Err(error) => {
+                log::warn!(
+                    "[correction] pending publication retry lock failed chapter_digest={} error={}",
+                    content_fingerprint(chapter_id),
+                    error
+                );
+                return false;
+            }
         };
         let memory_records = self
             .inner
@@ -1298,18 +1380,16 @@ impl CorrectionStore {
             .is_err()
         {
             // 仍无法 durable 写回：把内存待办放回去，等下一次请求。
-            if let Ok(mut memory) = self.inner.pending_publications.lock() {
-                memory
-                    .entry((project_id.to_string(), chapter_id.to_string()))
-                    .or_default()
-                    .extend(memory_records);
-            }
+            self.remember_publication(project_id, chapter_id, &memory_records);
             return false;
         }
         match publication::publish_pending(&project_root, project_id, chapter_id) {
-            Ok(_) => {
-                // 新记录文件可能与已缓存的目录 mtime 落在同一时间粒度；发布后
-                // 显式释放该章的索引，下一次构造必然重新读取新文件。
+            Ok(published) => {
+                if published == 0 {
+                    return false;
+                }
+                // 新记录文件可能与已缓存的目录 mtime 落在同一时间粒度；仅在有
+                // 实际发布时释放该章索引，下一次构造必然重新读取新文件。
                 if let Ok(mut cache) = self.inner.synced_records.lock() {
                     cache.retain(|key, _| {
                         key.project_id != project_id || key.chapter_id != chapter_id
