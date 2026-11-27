@@ -629,11 +629,13 @@ impl CorrectionScanner {
             // 没有可发布记录（例如 segment 已越界）时可直接投影；这不会留下
             // 未完成的同步事务。
             for (index, suggestions, record) in &frozen {
+                let Some(record) = record.as_ref() else {
+                    continue;
+                };
                 if let Some(segment) = guard.segments.get_mut(*index) {
                     segment.checked = Some(suggestions.clone());
                     segment.dirty = false;
-                    segment.synced_record_key =
-                        record.as_ref().map(SyncedCorrectionRecord::record_key);
+                    segment.synced_record_key = Some(record.record_key());
                 }
             }
             guard.semantic_dirty |= changed;
@@ -678,11 +680,13 @@ impl CorrectionScanner {
         // durable 后重新核对 session/revision/scanner 才允许投影。冻结结果
         // 到这里才写入 checked/dirty/record_key。
         for (index, suggestions, record) in frozen {
+            let Some(record) = record else {
+                continue;
+            };
             if let Some(segment) = guard.segments.get_mut(index) {
                 segment.checked = Some(suggestions);
                 segment.dirty = false;
-                segment.synced_record_key =
-                    record.as_ref().map(SyncedCorrectionRecord::record_key);
+                segment.synced_record_key = Some(record.record_key());
             }
         }
         guard.semantic_dirty = true;
@@ -1072,6 +1076,9 @@ impl CorrectionScanner {
         let segment_text = text.get(start..end)?;
         let (context_start, context_end) = context_range(text, start, end);
         let context_text = text.get(context_start..context_end)?;
+        if !suggestions_match(text, start, end, suggestions) {
+            return None;
+        }
         Some(SyncedCorrectionRecord {
             schema_version: synced_results::SCHEMA_VERSION,
             project_id: self.project_id.clone(),
