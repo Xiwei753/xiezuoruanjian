@@ -39,6 +39,13 @@ pub(crate) struct DirtyFact {
 /// 单个同步根的待办/恢复责任。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DirtyTargetEntry {
+    /// 条目是否由一次完整本地快照校准过（pending 列表可信）。
+    ///
+    /// 只有 `seed_clean` 在一次 `all_match`（所有 target pending_objects=0）
+    /// 后置位。账本追加/确认只做增量投影，不知道历史遗留待办，因此新条目默认
+    /// 不可信；不可信条目一律让空闲判据回落到完整路径。
+    #[serde(default)]
+    pub complete: bool,
     /// 登记时该 root 账本的字节长度，用于识别未登记的追加/压缩。
     #[serde(default)]
     pub ledger_bytes: u64,
@@ -163,6 +170,37 @@ pub(crate) fn set_recovery(
     save(app_data_root, &index)
 }
 
+/// 账本恢复/重建后条目的 pending 列表不再可信：置为不可信，等下一次完整
+/// 快照重新校准。恢复期间仍保留 recovery 责任直到调用方清除。
+pub(crate) fn invalidate(app_data_root: &Path, sync_root: &Path) -> crate::error::Result<()> {
+    let mut index = load(app_data_root).unwrap_or_default();
+    index.schema_version = SCHEMA_VERSION;
+    let entry = index.targets.entry(root_key(sync_root)).or_default();
+    entry.complete = false;
+    entry.ledger_bytes = ledger_bytes(sync_root);
+    save(app_data_root, &index)
+}
+
+/// 一次完整本地快照已证明所有 target 没有未确认事实后，把索引校准为干净。
+///
+/// 只在该轮 `all_match`（每个 target 的 pending_objects 都是 0、无收口清单）时
+/// 调用；它补齐缺失条目并记录当前账本长度，让下一次空闲可以用索引快路径。
+pub(crate) fn seed_clean(
+    app_data_root: &Path,
+    expected: &[(String, PathBuf)],
+) -> crate::error::Result<()> {
+    let mut index = load(app_data_root).unwrap_or_default();
+    index.schema_version = SCHEMA_VERSION;
+    for (_, sync_root) in expected {
+        let entry = index.targets.entry(root_key(sync_root)).or_default();
+        entry.pending.clear();
+        entry.recovery = false;
+        entry.complete = true;
+        entry.ledger_bytes = ledger_bytes(sync_root);
+    }
+    save(app_data_root, &index)
+}
+
 /// 索引与该轮 checkpoint 完全一致且没有待办/恢复责任时，才允许走空闲快路径。
 ///
 /// `expected` 是 checkpoint 里的 target key 与其同步根的对应关系。
@@ -182,7 +220,8 @@ pub(crate) fn is_clean_for_checkpoint(
         let Some(entry) = index.targets.get(&key) else {
             return false;
         };
-        if entry.recovery
+        if !entry.complete
+            || entry.recovery
             || !entry.pending.is_empty()
             || entry.ledger_bytes != ledger_bytes(sync_root)
         {

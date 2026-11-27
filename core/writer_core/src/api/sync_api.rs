@@ -1854,6 +1854,15 @@ impl WriterCoreApi {
                     log::info!(
                         "[sync] full-sync checkpoint matched; returning no_changes without fetch or transfers"
                     );
+                    // 完整快照已证明所有 target 无未确认事实：校准持久 dirty
+                    // 索引，使后续空闲轮不必再枚举作品/解析 manifest。
+                    let expected =
+                        checkpoint_expected_roots(&app_data_root, &projects_root, checkpoint);
+                    if let Err(error) =
+                        crate::sync::dirty_index::seed_clean(&app_data_root, &expected)
+                    {
+                        log::warn!("[sync] cannot seed workspace dirty index: {error}");
+                    }
                     let mut fields =
                         sync_diagnostic_fields(diagnostic_operation_id, "checkpoint_match", None);
                     fields.insert(

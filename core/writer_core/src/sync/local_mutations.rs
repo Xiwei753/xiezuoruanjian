@@ -329,7 +329,9 @@ pub(crate) fn clear_recovery_pending(sync_root: &Path) {
         ),
     }
     project_into_dirty_index(sync_root, |app_root, root| {
-        crate::sync::dirty_index::set_recovery(app_root, root, false)
+        crate::sync::dirty_index::set_recovery(app_root, root, false)?;
+        // 恢复过程可能重建/改写了账本：条目在下次完整快照前不可信。
+        crate::sync::dirty_index::invalidate(app_root, root)
     });
 }
 
