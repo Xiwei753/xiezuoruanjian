@@ -424,28 +424,6 @@ impl<'a> RoundProvider<'a> {
             .collect()
     }
 
-    /// 缓冲里待发布的 Put 内容摘要（remote_path → md5）。
-    ///
-    /// 本地 commit 之后用它核对"要推送的字节是否仍是 live 的版本"：
-    /// 三路合并可能把正文改成与 staging 不同的版本，发布旧字节会把更旧的
-    /// 内容推回远端（Issue #1065 复审 #2）。
-    pub fn buffered_put_digests(&self) -> Vec<(String, String)> {
-        let Ok(state) = self.state.lock() else {
-            return Vec::new();
-        };
-        state
-            .entries
-            .iter()
-            .filter_map(|(path, entry)| match entry {
-                Some(BufferedValue::Content(content)) => Some((
-                    path.clone(),
-                    crate::sync::hash::content_md5(content),
-                )),
-                _ => None,
-            })
-            .collect()
-    }
-
     /// Drop every buffered write and check, leaving the remote untouched.
     pub fn discard(&self) {
         if let Ok(mut state) = self.state.lock() {
