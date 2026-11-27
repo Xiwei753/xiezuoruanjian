@@ -35,6 +35,7 @@ pub mod cancellation_token;
 pub(crate) mod chapter_mutation_plan;
 pub(crate) mod commit_helpers;
 pub(crate) mod decision;
+pub(crate) mod dirty_index;
 pub mod config_store;
 pub mod conflict;
 /// 纯内容分类/三方比较（始终可用，不依赖 feature gate）。

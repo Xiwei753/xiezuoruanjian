@@ -383,6 +383,28 @@ type PendingMutationMap = std::collections::BTreeMap<
     std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
 >;
 
+/// checkpoint 里的 target key → 同步根，用于校验 dirty 索引。
+///
+/// 只遍历 checkpoint 自己记录的 target，不枚举作品目录；索引里出现未知但仍
+/// 存在的 root 时由 `is_clean_for_checkpoint` 判脏。
+fn checkpoint_expected_roots(
+    app_data_root: &std::path::Path,
+    projects_root: &std::path::Path,
+    checkpoint: &crate::sync::full_sync_state::FullSyncCheckpoint,
+) -> Vec<(String, std::path::PathBuf)> {
+    checkpoint
+        .target_versions
+        .keys()
+        .map(|key| {
+            let root = key
+                .strip_prefix("project:")
+                .map(|project_id| projects_root.join(project_id))
+                .unwrap_or_else(|| app_data_root.to_path_buf());
+            (key.clone(), root)
+        })
+        .collect()
+}
+
 fn collect_preflight_pending(
     app_data_root: &std::path::Path,
     plan: &crate::sync::full_sync::FullSyncPlan,
@@ -1692,6 +1714,69 @@ impl WriterCoreApi {
             }
         };
         revision_phase.finish_with_provider("success", provider.as_ref());
+
+        // 空闲快路径只查持久 dirty/recovery 索引 + 固定远端 HEAD（评审
+        // #7214314073 第 3/4 项）：索引干净且账本字节数与登记一致时，不再
+        // 枚举作品、解析 manifest 或扫描恢复目录。索引缺失/不一致/有恢复
+        // 责任一律回落到下面的完整本地快照，绝不把“不知道”当“没有变化”。
+        if run_mode == SyncRunMode::Incremental && checkpoint_applicable {
+            if let Some(checkpoint) = checkpoint.as_ref() {
+                if probed_revision.as_deref() == Some(checkpoint.remote_revision.as_str()) {
+                    let expected =
+                        checkpoint_expected_roots(&app_data_root, &projects_root, checkpoint);
+                    let lifecycle_pending_cheap = match (
+                        crate::sync::pending_deleted::load_pending_deleted_targets(&app_data_root),
+                        crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(
+                            &app_data_root,
+                        ),
+                    ) {
+                        (Ok(deleted), Ok(cleanups)) => !deleted.is_empty() || !cleanups.is_empty(),
+                        // 读不到收口清单：必须完整核对，不能跳过远端删除。
+                        _ => true,
+                    };
+                    if !lifecycle_pending_cheap {
+                        let index_clean = crate::sync::dirty_index::load(&app_data_root)
+                            .is_some_and(|index| {
+                                crate::sync::dirty_index::is_clean_for_checkpoint(&index, &expected)
+                            });
+                        if index_clean {
+                            log::info!(
+                                "[sync] workspace dirty index clean; returning no_changes without local snapshot"
+                            );
+                            let mut fields = sync_diagnostic_fields(
+                                diagnostic_operation_id,
+                                "dirty_index_match",
+                                None,
+                            );
+                            fields.insert(
+                                "skipped_targets".to_string(),
+                                serde_json::Value::Number(serde_json::Number::from(
+                                    u64::try_from(expected.len()).unwrap_or(u64::MAX),
+                                )),
+                            );
+                            record_sync_diagnostic("sync.checkpoint.skip", "sync.run", fields);
+                            // 只带了 index/HEAD 证据，没有新的对象快照：保留上一轮
+                            // checkpoint 的 target_versions，不伪造版本推进。
+                            self.persist_checkpoint(
+                                &app_data_root,
+                                repo_identity.as_deref(),
+                                Some(checkpoint),
+                                None,
+                                None,
+                                probed_revision.as_deref(),
+                                None,
+                                true,
+                                diagnostic_operation_id,
+                            );
+                            let (mut result, _, _) =
+                                self.core_write().finalize_full_sync(Vec::new(), None, None);
+                            result.targets.clear();
+                            return Ok(result.into());
+                        }
+                    }
+                }
+            }
+        }
 
         let local_snapshot_phase = SyncDiagnosticPhase::start_with_provider(
             diagnostic_operation_id,

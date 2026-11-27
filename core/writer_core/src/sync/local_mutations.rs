@@ -125,6 +125,25 @@ fn ledger_write_lock(sync_root: &Path) -> crate::error::Result<crate::storage::W
     crate::storage::WorkspaceWriteLock::acquire(&root)
 }
 
+/// 把本次 durable 账本变化投影到 workspace dirty 索引。
+///
+/// 只在能确定 workspace 根时登记；登记失败不阻断业务写入——索引缺失/长度
+/// 不一致会让空闲判据回落到完整路径，不会误报“无待办”。
+fn project_into_dirty_index<F>(sync_root: &Path, update: F)
+where
+    F: FnOnce(&Path, &Path) -> crate::error::Result<()>,
+{
+    let Some(app_root) = crate::storage::WorkspaceWriteLock::current_root() else {
+        return;
+    };
+    if let Err(error) = update(&app_root, sync_root) {
+        log::warn!(
+            "[sync] workspace dirty index projection failed for {}: {error}",
+            sync_root.display()
+        );
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct LocalMutationRecord {
     #[serde(default = "schema_version")]
@@ -178,9 +197,7 @@ pub(crate) fn ledger_path(sync_root: &Path) -> PathBuf {
 /// 账本现在是增量调度的唯一依据：损坏行不能再被静默跳过，否则那条业务事实
 /// 会永久漏同步。损坏由 [`repair_corrupt_ledger`] 显式归档并重建基线，
 /// 这里只负责如实报错（Issue #1065 复审 #4）。
-pub(crate) fn load_records(
-    sync_root: &Path,
-) -> crate::error::Result<Vec<LocalMutationRecord>> {
+pub(crate) fn load_records(sync_root: &Path) -> crate::error::Result<Vec<LocalMutationRecord>> {
     let path = ledger_path(sync_root);
     let content = match fs::read_to_string(&path) {
         Ok(content) => content,
@@ -258,10 +275,8 @@ pub(crate) fn repair_corrupt_ledger(sync_root: &Path) -> crate::error::Result<bo
         }
     }
     if path.exists() {
-        let archived = path.with_extension(format!(
-            "corrupt-{}.jsonl",
-            chrono::Utc::now().timestamp()
-        ));
+        let archived =
+            path.with_extension(format!("corrupt-{}.jsonl", chrono::Utc::now().timestamp()));
         // 归档失败必须保留原文件并如实报错：删掉损坏账本会同时丢掉唯一能把
         // 重建基线关联到历史事实的线索。
         fs::rename(&path, &archived).map_err(|error| {
@@ -297,6 +312,9 @@ pub(crate) fn mark_recovery_pending(sync_root: &Path, reason: &str) {
             path.display()
         );
     }
+    project_into_dirty_index(sync_root, |app_root, root| {
+        crate::sync::dirty_index::set_recovery(app_root, root, true)
+    });
 }
 
 /// 清除恢复标记（本轮所有重放都成功）。
@@ -310,6 +328,9 @@ pub(crate) fn clear_recovery_pending(sync_root: &Path) {
             path.display()
         ),
     }
+    project_into_dirty_index(sync_root, |app_root, root| {
+        crate::sync::dirty_index::set_recovery(app_root, root, false)
+    });
 }
 
 /// 当前恢复责任的代次；没有责任时返回 `None`。
@@ -446,6 +467,11 @@ pub(crate) fn append_batch(
     let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
     file.write_all(lines.as_bytes())?;
     file.sync_data()?;
+    // 账本落盘后再登记索引：投影失败只会让空闲判据变保守。
+    let appended = fresh.clone();
+    project_into_dirty_index(sync_root, |app_root, root| {
+        crate::sync::dirty_index::record_appended(app_root, root, &appended)
+    });
     Ok(())
 }
 
@@ -532,9 +558,9 @@ pub(crate) fn rebuild_pending_from_disk(
     // （复审 #7213234617 第 3 项）。append_batch 内部嵌套取同一把锁是空操作。
     let _lock = ledger_write_lock(sync_root)?;
     let state = match app_group {
-        Some(group) => crate::sync::SyncService::load_sync_state_read_only_for_group(
-            sync_root, group, None,
-        )?,
+        Some(group) => {
+            crate::sync::SyncService::load_sync_state_read_only_for_group(sync_root, group, None)?
+        }
         None => crate::sync::SyncService::load_sync_state_read_only(sync_root, None)?,
     };
     let entries = crate::sync::scanner::scan_for_sync_group(sync_root, scope, app_group)?;
@@ -874,6 +900,10 @@ pub(crate) fn mark_confirmed(
     push_pending_ack(sync_root, target, published, round_id, revision)?;
     let count = apply_published(sync_root, target, published)?;
     remove_pending_ack(sync_root, target, round_id)?;
+    let confirmed = published.to_vec();
+    project_into_dirty_index(sync_root, |app_root, root| {
+        crate::sync::dirty_index::record_confirmed(app_root, root, &confirmed)
+    });
     Ok(count)
 }
 
@@ -932,7 +962,9 @@ fn apply_published(
                     .copied()
                     .unwrap_or(0);
                 if entry.seq > current {
-                    state.confirmed_mutation_seq.insert(entry.path.clone(), entry.seq);
+                    state
+                        .confirmed_mutation_seq
+                        .insert(entry.path.clone(), entry.seq);
                 }
                 applied.push(entry.clone());
                 log::info!(
@@ -983,7 +1015,9 @@ fn apply_published(
             .copied()
             .unwrap_or(0);
         if entry.seq > current {
-            state.confirmed_mutation_seq.insert(entry.path.clone(), entry.seq);
+            state
+                .confirmed_mutation_seq
+                .insert(entry.path.clone(), entry.seq);
         }
         applied.push(entry.clone());
     }
