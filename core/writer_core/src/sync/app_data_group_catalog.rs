@@ -77,7 +77,7 @@ pub struct RemoteAppDataGroupCatalogSnapshot {
     transitional_stable_groups: std::collections::BTreeSet<String>,
     /// Version of the transitional sidecar, used to delete it once every group
     /// has a schema-3 stable-tree record.
-    transitional_layout_version: Option<RemoteVersion>,
+    pub(crate) transitional_layout_version: Option<RemoteVersion>,
 }
 
 impl RemoteAppDataGroupCatalogSnapshot {

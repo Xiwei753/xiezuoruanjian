@@ -1347,7 +1347,7 @@ impl CorrectionStore {
             Err(error) => {
                 log::warn!(
                     "[correction] pending publication lock failed chapter_digest={} error={}",
-                    content_fingerprint(chapter_id),
+                    crate::correction::result_cache::content_fingerprint(chapter_id),
                     error
                 );
                 self.remember_publication(project_id, chapter_id, records);
@@ -1361,7 +1361,7 @@ impl CorrectionStore {
             Err(error) => {
                 log::warn!(
                     "[correction] durable pending publication write failed chapter_digest={} error={}",
-                    content_fingerprint(chapter_id),
+                    crate::correction::result_cache::content_fingerprint(chapter_id),
                     error
                 );
                 self.remember_publication(project_id, chapter_id, records);
@@ -1386,7 +1386,7 @@ impl CorrectionStore {
             Err(error) => {
                 log::warn!(
                     "[correction] pending publication retry lock failed chapter_digest={} error={}",
-                    content_fingerprint(chapter_id),
+                    crate::correction::result_cache::content_fingerprint(chapter_id),
                     error
                 );
                 return false;
@@ -1432,7 +1432,7 @@ impl CorrectionStore {
             Err(error) => {
                 log::warn!(
                     "[correction] pending publication retry failed chapter_digest={} error={}",
-                    content_fingerprint(chapter_id),
+                    crate::correction::result_cache::content_fingerprint(chapter_id),
                     error
                 );
                 false

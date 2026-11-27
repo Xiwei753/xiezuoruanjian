@@ -31,7 +31,7 @@ pub(crate) struct ChapterSyncMutationPlan {
     pub(crate) content_hash: String,
     /// 目标对象的业务版本（meta 的 revision/updatedAt）；delete 为空。
     #[serde(default)]
-    pub(crate) object_revision: Option<String>,
+    pub(crate) object_revision: Option<u64>,
     pub(crate) updated_at_ms: i64,
     #[serde(default)]
     pub(crate) deleted_at_ms: Option<i64>,

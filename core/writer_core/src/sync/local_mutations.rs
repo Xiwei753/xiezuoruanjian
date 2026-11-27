@@ -725,6 +725,20 @@ struct PendingAckEntry {
     published: Vec<PublishedMutation>,
 }
 
+fn load_pending_acks(sync_root: &Path) -> crate::error::Result<PendingAcks> {
+    let path = pending_ack_path(sync_root);
+    match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).map_err(|error| {
+            crate::Error::Other(format!(
+                "pending mutation acks corrupt at {}: {error}",
+                path.display()
+            ))
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(PendingAcks::default()),
+        Err(error) => Err(crate::Error::Io(error)),
+    }
+}
+
 fn pending_ack_path(sync_root: &Path) -> PathBuf {
     sync_root.join(PENDING_ACK_PATH)
 }
@@ -868,7 +882,12 @@ fn pending_ack_identity(target: &crate::sync::types::SyncTarget) -> (String, Str
         Some(group) => ("app".to_string(), group.id()),
         None => (
             "project".to_string(),
-            target.project_id.clone().unwrap_or_default(),
+            target
+                .remote_prefix
+                .strip_prefix("projects/")
+                .unwrap_or(target.remote_prefix.as_str())
+                .trim_end_matches('/')
+                .to_string(),
         ),
     }
 }

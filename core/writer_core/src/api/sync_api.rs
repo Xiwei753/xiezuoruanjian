@@ -331,6 +331,23 @@ fn to_checkpoint_version(
 ///
 /// 返回 `None` 表示不能把本轮当空闲：有恢复责任，或有根读不到水位。
 /// 这是空闲轮唯一的本地读取（每个根一个很小的 JSON），不碰 manifest/账本正文。
+/// 从结果 DTO 取 checkpoint 键：作品看 project_id，App 组按远端前缀里的
+/// storage key 反查组 id（DTO 不携带组 id）。
+fn dto_target_checkpoint_key(
+    target: &crate::api::types::TargetSyncResultDto,
+    app_groups: &[crate::sync::types::AppDataGroup],
+) -> Option<String> {
+    if let Some(project_id) = target.project_id.as_deref() {
+        return Some(format!("project:{project_id}"));
+    }
+    let prefix = target.remote_prefix.trim_end_matches('/');
+    let storage_key = prefix.strip_prefix("app/__groups__/")?;
+    app_groups
+        .iter()
+        .find(|group| group.storage_key() == storage_key)
+        .map(|group| format!("app:{}", group.id()))
+}
+
 fn collect_idle_watermarks(
     app_data_root: &std::path::Path,
     projects_root: &std::path::Path,
@@ -2348,6 +2365,9 @@ impl WriterCoreApi {
         // mutation 不在快照里，下一轮 pending 代次不同，自然重新处理。
         // 失败 target 不推进（保留旧条目 → 下一轮重试该 target）；成功 target
         // 的远端版本用本轮实际发布的提交，而不是"前后 HEAD 相等"。
+        let app_groups =
+            crate::sync::app_data_group_catalog::discover_local_app_data_groups(&app_data_root)
+                .unwrap_or_default();
         if let Some(snapshot) =
             local_sync_version_snapshot(&app_data_root, &projects_root).ok()
         {
@@ -2360,11 +2380,7 @@ impl WriterCoreApi {
                         "success" | "no_changes" | "latest_wins_applied"
                     )
                 })
-                .filter_map(|target| match (&target.group_id, &target.project_id) {
-                    (Some(group_id), _) => Some(format!("app:{group_id}")),
-                    (None, Some(project_id)) => Some(format!("project:{project_id}")),
-                    _ => None,
-                })
+                .filter_map(|target| dto_target_checkpoint_key(target, &app_groups))
                 .collect();
             self.persist_checkpoint(
                 &app_data_root,

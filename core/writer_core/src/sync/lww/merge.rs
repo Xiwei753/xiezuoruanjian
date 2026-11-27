@@ -1003,10 +1003,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     };
 
     let manifest_json = sync_manifest.canonical_json()?;
-    let manifest_unchanged = match remote_manifest_baseline.as_ref() {
-        Some(remote) => remote.semantically_equals(&sync_manifest),
-        None => false,
-    };
+    let manifest_unchanged = remote_manifest_baseline.semantically_equals(&sync_manifest);
 
     // 在内存中收集冲突到 state.conflicts 和 conflicts_json，
     // 不再逐条调用 record_sync_conflict（每次内部写盘）。
@@ -1290,7 +1287,7 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
     //    #931：已知文件缺失且无墓碑时不再整体 Err。缺失路径单独收集，向上层
     //    显式报告 local_missing_without_tombstone；不允许伪造删除记录。
     let local_snapshot =
-        snapshot_local_records_for_merge(sync_root, scope, preferred_device_id, None, sparse)?;
+        snapshot_local_records_for_merge(sync_root, scope, preferred_device_id, None, None)?;
     let local_records = local_snapshot.records;
     let unresolved_missing_paths: Vec<String> = local_snapshot
         .missing_without_delete_fact

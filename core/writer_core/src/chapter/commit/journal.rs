@@ -904,7 +904,7 @@ fn build_chapter_sync_mutations(
             path: body_path,
             op: "upsert".to_string(),
             content_hash: crate::sync::hash::content_md5(request.content.as_bytes()),
-            object_revision: Some(after.revision.to_string()),
+            object_revision: Some(after.revision),
             updated_at_ms: occurred_at_ms,
             deleted_at_ms: None,
             device_id: device_id.to_string(),
@@ -917,7 +917,7 @@ fn build_chapter_sync_mutations(
             // meta JSON 由发布路径按 live 当前值构造，摘要由投影时读取已落盘
             // 文件得到；决议里固定的是对象与业务版本。
             content_hash: String::new(),
-            object_revision: Some(after.revision.to_string()),
+            object_revision: Some(after.revision),
             updated_at_ms: occurred_at_ms,
             deleted_at_ms: None,
             device_id: device_id.to_string(),
