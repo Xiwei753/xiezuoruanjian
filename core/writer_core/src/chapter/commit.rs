@@ -376,7 +376,7 @@ pub use journal::{
     pending_chapter_proof_events, pending_chapter_proof_transactions,
     pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
     read_chapter_state_recovering, read_chapter_version, read_chapter_version_recovering,
-    recover_pending_chapter_commits, replay_pending_sync_mutations,
+    recover_pending_chapter_commits, replay_pending_sync_mutation, replay_pending_sync_mutations,
 };
 #[cfg(test)]
 mod tests;

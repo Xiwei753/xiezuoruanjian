@@ -216,8 +216,7 @@ pub(super) fn project_manifest_sync_mutations(
     }
     let mut records = Vec::with_capacity(manifest.sync_mutations.len());
     for plan in &manifest.sync_mutations {
-        let (object_type, object_id) =
-            crate::sync::local_mutations::object_identity(&plan.path);
+        let (object_type, object_id) = crate::sync::local_mutations::object_identity(&plan.path);
         let content_hash = if plan.op == "upsert" {
             match fs::read(project_root.join(&plan.path)) {
                 Ok(bytes) => crate::sync::hash::content_md5(&bytes),
@@ -288,18 +287,23 @@ pub fn replay_pending_sync_mutations(project_root: &Path) -> Result<usize> {
         if !manifest_path.exists() {
             continue;
         }
-        let mut manifest = match serde_json::from_str::<ChapterCommitManifest>(
-            &fs::read_to_string(&manifest_path)?,
-        ) {
+        let mut manifest = match serde_json::from_str::<ChapterCommitManifest>(&fs::read_to_string(
+            &manifest_path,
+        )?) {
             Ok(manifest) => manifest,
             Err(error) => {
                 // 决议读不出来就无法判定投影是否完成：保留目录并报错，
                 // 不能当成本轮已收敛。
-                failures.push(format!("{}: manifest unreadable: {error}", tx_dir.display()));
+                failures.push(format!(
+                    "{}: manifest unreadable: {error}",
+                    tx_dir.display()
+                ));
                 continue;
             }
         };
         if manifest.sync_projection_done {
+            // 投影已完成但目录还在：恢复责任可以结算，残留目录由后续清理处理。
+            super::clear_projection_obligation(project_root, &manifest.transaction_id);
             continue;
         }
         // 只重放已发布（Applied）的决议；Decided 还没碰 live，由章节恢复
@@ -308,7 +312,10 @@ pub fn replay_pending_sync_mutations(project_root: &Path) -> Result<usize> {
             continue;
         }
         match project_manifest_sync_mutations(project_root, &tx_dir, &mut manifest)? {
-            true => replayed += 1,
+            true => {
+                replayed += 1;
+                super::clear_projection_obligation(project_root, &manifest.transaction_id);
+            }
             false => failures.push(format!(
                 "{}: sync projection not durable",
                 manifest.transaction_id
@@ -323,6 +330,36 @@ pub fn replay_pending_sync_mutations(project_root: &Path) -> Result<usize> {
             failures.join("; ")
         )))
     }
+}
+
+/// 按事务 ID 重放单笔 journal 的同步投影（dirty index 定位，不扫描全目录）。
+///
+/// 返回是否重放了投影；事务不存在/已完成时返回 `Ok(false)`（幂等）。
+pub fn replay_pending_sync_mutation(
+    project_root: &Path,
+    transaction_id: &str,
+) -> Result<bool> {
+    if transaction_id.is_empty() || transaction_id.contains(['/', '\\']) {
+        return Err(crate::error::Error::Other(format!(
+            "invalid chapter commit transaction id: {transaction_id}"
+        )));
+    }
+    let tx_dir = journal_root(project_root).join(transaction_id);
+    let manifest_path = tx_dir.join("manifest.json");
+    if !manifest_path.exists() {
+        return Ok(false);
+    }
+    let mut manifest: ChapterCommitManifest =
+        serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    if manifest.sync_projection_done || manifest.phase != ChapterCommitPhase::Applied {
+        super::clear_projection_obligation(project_root, &manifest.transaction_id);
+        return Ok(false);
+    }
+    let projected = project_manifest_sync_mutations(project_root, &tx_dir, &mut manifest)?;
+    if projected {
+        super::clear_projection_obligation(project_root, &manifest.transaction_id);
+    }
+    Ok(projected)
 }
 
 pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<ChapterCommitRecovery>> {

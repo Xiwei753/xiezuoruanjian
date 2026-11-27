@@ -66,21 +66,53 @@ pub(crate) fn retry_pending_publications(
     }
     // 首次 pending 写盘失败只留在内存；同步入口也要排空它，否则切章后
     // 永远等不到同章 scanner/retry。
-    match CorrectionStore::open_with_projects_root(app_data_root, projects_root) {
-        Ok(store) => {
-            for (project_id, chapter_id) in &disk_published {
-                store.invalidate_chapter_synced_results(project_id, chapter_id);
-            }
-            settled = settled.saturating_add(store.retry_memory_publications());
-        }
-        Err(error) => {
-            log::warn!("[correction] open store for memory publication retry failed: {error}")
-        }
-    }
+    settled = settled.saturating_add(settle_store_publications(
+        app_data_root,
+        projects_root,
+        &disk_published,
+    ));
     match disk_error {
         Some(error) => Err(WriterError::from(error)),
         None => Ok(settled),
     }
+}
+
+/// 只排空内存中尚未落盘的待发布结果（不扫描磁盘目录）。
+pub(crate) fn drain_memory_publications(app_data_root: &Path, projects_root: &Path) -> usize {
+    settle_store_publications(app_data_root, projects_root, &[])
+}
+
+fn settle_store_publications(
+    app_data_root: &Path,
+    projects_root: &Path,
+    disk_published: &[(String, String)],
+) -> usize {
+    match CorrectionStore::open_with_projects_root(app_data_root, projects_root) {
+        Ok(store) => {
+            for (project_id, chapter_id) in disk_published {
+                store.invalidate_chapter_synced_results(project_id, chapter_id);
+            }
+            store.retry_memory_publications()
+        }
+        Err(error) => {
+            log::warn!("[correction] open store for memory publication retry failed: {error}");
+            0
+        }
+    }
+}
+
+/// 按 dirty index 的单章定位发布（不遍历 projects 根）。
+pub(crate) fn publish_pending_chapter(
+    app_data_root: &Path,
+    projects_root: &Path,
+    project_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> Result<usize, WriterError> {
+    let written = publication::publish_pending(project_root, project_id, chapter_id)?;
+    let published = vec![(project_id.to_string(), chapter_id.to_string())];
+    settle_store_publications(app_data_root, projects_root, &published);
+    Ok(written)
 }
 
 pub(crate) use engine::CorrectionScanner;

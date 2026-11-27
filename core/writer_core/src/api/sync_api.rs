@@ -1254,15 +1254,117 @@ impl WriterCoreApi {
                 log::warn!("[correction] retry pending correction publications failed: {error}")
             }
         }
-        let mut roots: Vec<std::path::PathBuf> = vec![app_data_root.clone()];
-        match crate::project::list_projects(&projects_root) {
-            Ok(projects) => {
-                for project in projects {
-                    roots.push(projects_root.join(project.id));
+        // 持久 dirty/recovery 索引：正常同步只重放登记过的 (root, tx)，不再
+        // 每轮枚举全部作品与恢复目录（评审 #7215361837 第 2 项）。索引缺失/
+        // schema 不符/损坏时才回落到完整枚举（升级或显式重建路径）。
+        let index = crate::sync::dirty_index::load(&app_data_root);
+        let index_usable = index
+            .as_ref()
+            .is_some_and(|index| index.schema_version == crate::sync::dirty_index::SCHEMA_VERSION);
+        let obligations: Vec<crate::sync::dirty_index::RecoveryObligation> = index
+            .as_ref()
+            .map(|index| index.obligations.values().cloned().collect())
+            .unwrap_or_default();
+
+        if index_usable {
+            for obligation in &obligations {
+                let root = std::path::PathBuf::from(&obligation.root);
+                match obligation.kind.as_str() {
+                    "mutation_ack" => {
+                        let round = obligation
+                            .transaction_id
+                            .split('\u{1f}')
+                            .next()
+                            .unwrap_or_default();
+                        if let Err(error) =
+                            crate::sync::local_mutations::replay_pending_acks_for_round(
+                                &root, round,
+                            )
+                        {
+                            log::warn!(
+                                "[sync] replay pending ack {} failed at {}: {error}",
+                                round,
+                                root.display()
+                            );
+                        }
+                    }
+                    "chapter_projections" => {
+                        if let Err(error) = crate::chapter::commit::replay_pending_sync_mutation(
+                            &root,
+                            &obligation.transaction_id,
+                        ) {
+                            log::warn!(
+                                "[sync] replay chapter projection {} failed at {}: {error}",
+                                obligation.transaction_id,
+                                root.display()
+                            );
+                        }
+                    }
+                    "correction_publication" => {
+                        let mut parts = obligation.transaction_id.split('\u{1f}');
+                        let project_id = parts.next().unwrap_or_default();
+                        let chapter_id = parts.next().unwrap_or_default();
+                        if let Err(error) = crate::correction::publish_pending_chapter(
+                            &app_data_root,
+                            &projects_root,
+                            &root,
+                            project_id,
+                            chapter_id,
+                        ) {
+                            log::warn!(
+                                "[correction] publish pending {}:{} failed: {error}",
+                                project_id,
+                                chapter_id
+                            );
+                        }
+                    }
+                    "ledger_rebuild" => {
+                        let _ = crate::sync::local_mutations::recover_ledger(&root);
+                    }
+                    _ => {}
                 }
             }
-            Err(error) => {
-                log::warn!("[sync] list projects for recovery failed: {error}");
+            let drained =
+                crate::correction::drain_memory_publications(&app_data_root, &projects_root);
+            if drained > 0 {
+                log::info!("[correction] published {drained} in-memory correction result(s)");
+            }
+        } else {
+            match crate::correction::retry_pending_publications(&app_data_root, &projects_root) {
+                Ok(0) => {}
+                Ok(published) => log::info!(
+                    "[correction] published {published} pending correction results before sync"
+                ),
+                Err(error) => {
+                    log::warn!("[correction] retry pending correction publications failed: {error}")
+                }
+            }
+        }
+
+        let mut roots: Vec<std::path::PathBuf> = vec![app_data_root.clone()];
+        if index_usable {
+            if let Some(index) = index.as_ref() {
+                for obligation in &obligations {
+                    roots.push(std::path::PathBuf::from(&obligation.root));
+                }
+                for (root_key, entry) in &index.targets {
+                    if entry.recovery {
+                        roots.push(std::path::PathBuf::from(root_key));
+                    }
+                }
+            }
+            roots.sort();
+            roots.dedup();
+        } else {
+            match crate::project::list_projects(&projects_root) {
+                Ok(projects) => {
+                    for project in projects {
+                        roots.push(projects_root.join(project.id));
+                    }
+                }
+                Err(error) => {
+                    log::warn!("[sync] list projects for recovery failed: {error}");
+                }
             }
         }
         for root in &roots {

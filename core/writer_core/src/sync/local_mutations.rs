@@ -861,6 +861,21 @@ fn remove_pending_ack(
 /// 读取、应用、清理都在同一把账本写锁内：否则并发 append 会在"读旧账本 →
 /// 写回压缩结果"之间被覆盖（复审 #3）。
 pub(crate) fn replay_pending_acks(sync_root: &Path) -> crate::error::Result<usize> {
+    replay_pending_acks_filtered(sync_root, None)
+}
+
+/// 只重放指定 round 的确认意图（dirty index 精确定位，不用扫描全部作品）。
+pub(crate) fn replay_pending_acks_for_round(
+    sync_root: &Path,
+    round_id: &str,
+) -> crate::error::Result<usize> {
+    replay_pending_acks_filtered(sync_root, Some(round_id))
+}
+
+fn replay_pending_acks_filtered(
+    sync_root: &Path,
+    round_filter: Option<&str>,
+) -> crate::error::Result<usize> {
     let _lock = ledger_write_lock(sync_root)?;
     let mut acks = load_pending_acks(sync_root)?;
     if acks.entries.is_empty() {
@@ -869,6 +884,10 @@ pub(crate) fn replay_pending_acks(sync_root: &Path) -> crate::error::Result<usiz
     let mut remaining: Vec<PendingAckEntry> = Vec::new();
     let mut applied = 0usize;
     for entry in std::mem::take(&mut acks.entries) {
+        if round_filter.is_some_and(|round| entry.round_id != round) {
+            remaining.push(entry);
+            continue;
+        }
         let target = if entry.target_kind == "app" {
             match crate::sync::types::AppDataGroup::from_id(&entry.target_id) {
                 Ok(group) => crate::sync::types::SyncTarget::app_data_group(group),

@@ -21,12 +21,12 @@ mod recovery;
 pub(crate) use manifest::{
     AdditionalFilePlan, ChapterCommitManifest, ChapterCommitRecovery, ChapterSyncMutationPlan,
 };
+use recovery::project_manifest_sync_mutations;
 pub use recovery::{
     pending_chapter_draft_acks, pending_chapter_proof_events, pending_chapter_proof_transactions,
     pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
-    recover_pending_chapter_commits, replay_pending_sync_mutations,
+    recover_pending_chapter_commits, replay_pending_sync_mutation, replay_pending_sync_mutations,
 };
-use recovery::project_manifest_sync_mutations;
 
 /// journal 阶段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -808,6 +808,7 @@ pub(crate) fn commit_chapter_with_guard(
     if sync_projected && pending.is_empty() && manifest.draft_ack_projections.is_empty() {
         manifest.phase = ChapterCommitPhase::Finished;
         write_manifest(&tx_dir, &manifest)?;
+        clear_projection_obligation(project_root, &manifest.transaction_id);
         let _ = remove_transaction_dir(&tx_dir);
         clear_pending_if_idle(project_root)?;
     } else {
@@ -816,6 +817,9 @@ pub(crate) fn commit_chapter_with_guard(
         pending.dedup();
         manifest.pending_projections = pending.clone();
         write_manifest(&tx_dir, &manifest)?;
+        // journal 仍是唯一的重放来源：在 workspace dirty index 里登记这一笔
+        // 待重放事务，正常同步入口据此按 ID 恢复（评审 #7215361837 第 2 项）。
+        record_projection_obligation(project_root, &manifest.transaction_id);
     }
 
     let written_files = {
@@ -935,4 +939,35 @@ fn build_chapter_sync_mutations(
         });
     }
     plans
+}
+
+/// 登记“这笔 journal 还有未完成同步投影”的恢复责任。
+pub(crate) fn record_projection_obligation(project_root: &Path, transaction_id: &str) {
+    let Some(app_root) = crate::storage::WorkspaceWriteLock::current_root() else {
+        return;
+    };
+    let obligation = crate::sync::dirty_index::RecoveryObligation {
+        kind: "chapter_projections".to_string(),
+        root: crate::sync::dirty_index::root_key(project_root),
+        transaction_id: transaction_id.to_string(),
+        detail: None,
+    };
+    if let Err(error) = crate::sync::dirty_index::record_obligation(&app_root, obligation) {
+        log::warn!("[sync] cannot record chapter projection obligation: {error}");
+    }
+}
+
+/// 投影/事务完成后按原事务身份结算恢复责任。
+pub(crate) fn clear_projection_obligation(project_root: &Path, transaction_id: &str) {
+    let Some(app_root) = crate::storage::WorkspaceWriteLock::current_root() else {
+        return;
+    };
+    if let Err(error) = crate::sync::dirty_index::clear_obligation(
+        &app_root,
+        "chapter_projections",
+        project_root,
+        transaction_id,
+    ) {
+        log::warn!("[sync] cannot clear chapter projection obligation: {error}");
+    }
 }

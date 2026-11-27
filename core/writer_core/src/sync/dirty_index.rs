@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 /// 索引文件相对 app data 根的位置。
 pub(crate) const DIRTY_INDEX_PATH: &str = "app-meta/sync/dirty-index.json";
 
-const SCHEMA_VERSION: u32 = 1;
+pub(crate) const SCHEMA_VERSION: u32 = 2;
 
 /// 单个对象的未确认事实（与账本记录同源）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -79,7 +79,10 @@ pub(crate) struct RecoveryObligation {
 
 impl RecoveryObligation {
     pub(crate) fn id(&self) -> String {
-        format!("{}\u{1f}{}\u{1f}{}", self.kind, self.root, self.transaction_id)
+        format!(
+            "{}\u{1f}{}\u{1f}{}",
+            self.kind, self.root, self.transaction_id
+        )
     }
 }
 
@@ -207,9 +210,7 @@ pub(crate) fn record_obligation(
 ) -> crate::error::Result<()> {
     let mut index = load(app_data_root).unwrap_or_default();
     index.schema_version = SCHEMA_VERSION;
-    index
-        .obligations
-        .insert(obligation.id(), obligation);
+    index.obligations.insert(obligation.id(), obligation);
     save(app_data_root, &index)
 }
 
@@ -238,7 +239,10 @@ pub(crate) fn obligations(app_data_root: &Path) -> Vec<RecoveryObligation> {
 pub(crate) fn recovery_is_idle(index: &WorkspaceDirtyIndex) -> bool {
     index.schema_version == SCHEMA_VERSION
         && index.obligations.is_empty()
-        && index.targets.values().all(|entry| entry.complete && !entry.recovery)
+        && index
+            .targets
+            .values()
+            .all(|entry| entry.complete && !entry.recovery)
 }
 
 /// 账本恢复/重建后条目的 pending 列表不再可信：置为不可信，等下一次完整
