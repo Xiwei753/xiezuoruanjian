@@ -28,6 +28,31 @@ mod publication;
 mod scan_metrics;
 mod synced_results;
 
+/// 同步 durable commit 涉及某章 `correction/results/<chapter>/` 后显式失效
+/// 该章的不可变结果索引；查询本身仍只做目录 mtime 的 O(1) 检查。
+pub(crate) fn invalidate_synced_results(
+    app_data_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) {
+    let Some(stores) = STORE_REGISTRY.get() else {
+        return;
+    };
+    let Ok(stores) = stores.lock() else {
+        return;
+    };
+    for (root, inner) in stores.iter() {
+        if root != app_data_root {
+            continue;
+        }
+        if let Ok(mut cache) = inner.synced_records.lock() {
+            cache.retain(|key, _| {
+                key.project_id != project_id || key.chapter_id != chapter_id
+            });
+        }
+    }
+}
+
 /// Core 同步前恢复入口：重放所有作品的独立校对待发布文件。
 ///
 /// 由同步恢复路径在 fast path 之前调用；失败保留原件，不阻断其它作品。
@@ -36,15 +61,24 @@ pub(crate) fn retry_pending_publications(
     projects_root: &Path,
 ) -> Result<usize, WriterError> {
     let mut settled = 0usize;
+    let mut disk_published = 0usize;
     let mut disk_error: Option<crate::Error> = None;
     match publication::retry_all_pending(app_data_root, projects_root) {
-        Ok(count) => settled = settled.saturating_add(count),
+        Ok(count) => {
+            disk_published = count;
+            settled = settled.saturating_add(count);
+        }
         Err(error) => disk_error = Some(error),
     }
     // 首次 pending 写盘失败只留在内存；同步入口也要排空它，否则切章后
     // 永远等不到同章 scanner/retry。
     match CorrectionStore::open_with_projects_root(app_data_root, projects_root) {
-        Ok(store) => settled = settled.saturating_add(store.retry_memory_publications()),
+        Ok(store) => {
+            if disk_published > 0 {
+                store.invalidate_all_synced_results();
+            }
+            settled = settled.saturating_add(store.retry_memory_publications());
+        }
         Err(error) => log::warn!(
             "[correction] open store for memory publication retry failed: {error}"
         ),
@@ -160,28 +194,10 @@ struct SyncedRecordCacheKey {
 }
 
 struct CachedSyncedRecords {
-    dir_signature: Option<String>,
+    /// 目录 mtime 只做一次低成本 stat；记录是不可变 key，实际新增/远端变更
+    /// 由发布成功或 sync durable commit 显式失效，不逐文件遍历历史记录。
+    dir_signature: Option<SystemTime>,
     index: Arc<synced_results::SyncedResultIndex>,
-}
-
-/// 校对结果目录的对象签名：文件名、长度与修改时间。目录 mtime 在同步
-/// 写入/同一时间粒度下可能不变，文件集合签名能覆盖远端对象变更。
-fn synced_result_dir_signature(dir: &Path) -> Option<String> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut parts = Vec::new();
-    for entry in entries {
-        let entry = entry.ok()?;
-        let metadata = entry.metadata().ok()?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let modified = metadata.modified().ok()?;
-        let nanos = modified
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_nanos();
-        parts.push(format!("{name}:{}:{nanos}", metadata.len()));
-    }
-    parts.sort();
-    Some(parts.join("|"))
 }
 
 struct ActiveCorrectionProject {
@@ -1220,7 +1236,7 @@ impl CorrectionStore {
             mode: mode.to_string(),
             scanner_stable: scanner_stable.to_string(),
         };
-        let signature = synced_result_dir_signature(&dir);
+        let signature = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
         {
             let cache = self.inner.synced_records.lock().map_err(|_| {
                 WriterError::Other("correction synced record cache lock poisoned".into())
@@ -1239,7 +1255,7 @@ impl CorrectionStore {
             mode,
             scanner_stable,
         );
-        let after = synced_result_dir_signature(&dir);
+        let after = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
         if after != signature {
             records = synced_results::load_records(
                 &project_root,
@@ -1448,6 +1464,14 @@ impl CorrectionStore {
             }
         }
         settled
+    }
+
+    /// 同步入口发布了磁盘 pending 后清理所有章节索引；pending 发布是低频
+    /// 恢复路径，之后首次查询会按新目录 mtime 重建。
+    pub(crate) fn invalidate_all_synced_results(&self) {
+        if let Ok(mut cache) = self.inner.synced_records.lock() {
+            cache.clear();
+        }
     }
 
     fn update_preferences<F, R>(&self, update: F) -> Result<R, WriterError>

@@ -17,6 +17,53 @@ fn to_workspace_rel_path(target_kind: &str, project_id: Option<&str>, rel_path: 
     PathBuf::from(rel_path)
 }
 
+/// 同步 durable commit 实际写入 `correction/results/<chapter>/` 后，显式失效
+/// 该章的校对结果索引；目录只读路径仍走 O(1) mtime 检查，不逐文件探测。
+fn invalidate_correction_result_caches(
+    app_data_root: &Path,
+    live_root: &Path,
+    project_id: Option<&str>,
+    actions: &[crate::sync::staging::CommitAction],
+) {
+    let project_id = project_id
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            live_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+        });
+    let Some(project_id) = project_id else {
+        return;
+    };
+    let mut chapters = std::collections::HashSet::new();
+    for action in actions {
+        let rel_path = match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, .. } => rel_path,
+            crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
+        };
+        let normalized = rel_path.to_string_lossy().replace('\\', "/");
+        let Some(rest) = normalized.strip_prefix("correction/results/") else {
+            continue;
+        };
+        let Some(chapter_id) = rest.split('/').next() else {
+            continue;
+        };
+        if chapter_id.is_empty()
+            || chapter_id == "."
+            || chapter_id == ".."
+            || chapter_id.contains('\\')
+        {
+            continue;
+        }
+        chapters.insert(chapter_id.to_string());
+    }
+    for chapter_id in chapters {
+        crate::correction::invalidate_synced_results(app_data_root, &project_id, &chapter_id);
+    }
+}
+
 /// 章节正文在 commit 前的真实快照。同步证明必须用这个快照作为 before，
 /// 不能等应用后再从 live 倒推，也不能把“文件不存在”当成空正文。
 #[derive(Debug, Clone)]
@@ -1948,6 +1995,12 @@ pub(crate) fn apply_staging_commits_for_targets(
                             .get(idx)
                             .map(|t| (t.target_kind.as_str(), t.project_id.as_deref()))
                             .unwrap_or(("", None));
+                        invalidate_correction_result_caches(
+                            run.app_data_root(),
+                            live_root,
+                            pid,
+                            &plan.content_actions,
+                        );
                         collect_action_paths(
                             kind,
                             pid,
@@ -2055,6 +2108,12 @@ pub(crate) fn apply_staging_commits_for_targets(
                     .get(idx)
                     .map(|t| (t.target_kind.as_str(), t.project_id.as_deref()))
                     .unwrap_or(("", None));
+                invalidate_correction_result_caches(
+                    run.app_data_root(),
+                    live_root,
+                    pid,
+                    &safe_content_actions,
+                );
                 collect_action_paths(kind, pid, &safe_content_actions, &[], &mut committed_paths);
                 collect_rebased_anchor_paths(
                     &tx,
@@ -2189,6 +2248,12 @@ pub(crate) fn apply_staging_commits_for_targets(
                             .get(idx)
                             .map(|t| (t.target_kind.as_str(), t.project_id.as_deref()))
                             .unwrap_or(("", None));
+                        invalidate_correction_result_caches(
+                            run.app_data_root(),
+                            live_root,
+                            pid,
+                            &plan.content_actions,
+                        );
                         collect_action_paths(
                             kind,
                             pid,
@@ -2383,6 +2448,12 @@ pub(crate) fn commit_single_target_staging(
 
             match tx.finish() {
                 Ok(()) => {
+                    invalidate_correction_result_caches(
+                        run.app_data_root(),
+                        live_root,
+                        target.project_id.as_deref(),
+                        &plan.content_actions,
+                    );
                     let mut committed_paths = Vec::new();
                     collect_action_paths(
                         target.target_kind.as_str(),
@@ -2629,6 +2700,12 @@ pub(crate) fn commit_single_target_staging(
 
             match tx.finish() {
                 Ok(()) => {
+                    invalidate_correction_result_caches(
+                        run.app_data_root(),
+                        live_root,
+                        target.project_id.as_deref(),
+                        &plan.content_actions,
+                    );
                     let mut committed_paths = Vec::new();
                     collect_action_paths(
                         target.target_kind.as_str(),
