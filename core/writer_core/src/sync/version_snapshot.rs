@@ -122,51 +122,11 @@ fn read_manifest(sync_root: &std::path::Path, relative: &str) -> crate::Result<O
     Ok(Some(manifest))
 }
 
-/// 事务驱动的 target 版本输入。
+/// target 的稳定对象版本：只由业务决议产生的事实组成（复审 #5）。
 ///
-/// 变化来源只有三处，全部由已落盘的事务产生：
-/// 1. mutation 账本（append 推进序号高水位，账本文件变大）；
-/// 2. manifest（同步提交/合并结果）；
-/// 3. target state（known_files / 墓碑 / 确认游标）。
-///
-/// 不再遍历目录或读文件 mtime：那会让每次轮询都扫描整个作品/数据组，且把
-/// "业务事务"换成"文件系统时间"，与同步事实来源冲突（Issue #1065 复审 #5）。
-fn transaction_fingerprint(
-    sync_root: &std::path::Path,
-    app_group: Option<&AppDataGroup>,
-) -> String {
-    let manifest_path = match app_group {
-        Some(group) => group.local_manifest_path(),
-        None => crate::sync::lww::SYNC_MANIFEST_PATH.to_string(),
-    };
-    let state_path = match app_group {
-        Some(group) => group.local_state_path(),
-        None => "app-meta/sync/state.local.json".to_string(),
-    };
-    let mut hasher = Sha256::new();
-    for (label, rel) in [
-        ("manifest", manifest_path.as_str()),
-        ("state", state_path.as_str()),
-    ] {
-        hasher.update(label.as_bytes());
-        hasher.update(b"\0");
-        if let Ok(metadata) = std::fs::metadata(sync_root.join(rel)) {
-            hasher.update(metadata.len().to_le_bytes());
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
-                    hasher.update(duration.as_nanos().to_le_bytes());
-                }
-            }
-        }
-        hasher.update(b"|");
-    }
-    let ledger = local_mutations::ledger_path(sync_root);
-    if let Ok(metadata) = std::fs::metadata(&ledger) {
-        hasher.update(metadata.len().to_le_bytes());
-    }
-    hasher.update(local_mutations::seq_high_watermark(sync_root).to_le_bytes());
-    format!("{:x}", hasher.finalize())
-}
+/// manifest 里的对象版本/hash + 该 target 未确认的 mutation；不读 mtime、
+/// 不看文件长度、不混入共享账本的全局序号——否则任何统计事件都会让所有
+/// App 组变 dirty，空闲轮询也就退化成全量扫描。
 
 /// 从一个已加载的 manifest 与账本事实计算 target 版本。
 fn build_version(
@@ -174,7 +134,6 @@ fn build_version(
     pending: BTreeMap<String, local_mutations::LocalMutationRecord>,
     known_files: usize,
     group: Option<&AppDataGroup>,
-    path_fingerprint: String,
 ) -> LocalTargetVersion {
     // 没有 manifest 却有基线（known_files 非空）：说明本地索引不可信（旧版布局、
     // 手工删除、迁移中断），必须完整扫描重建，不能靠增量比对宣布无变化。
@@ -188,14 +147,10 @@ fn build_version(
     }
     let empty = SyncManifest::default();
     let manifest = manifest.unwrap_or(&empty);
-    // 对象指纹 = manifest/账本投影 + 本 target 拥有的本地路径元数据。
-    // 后者是未接入 mutation 账本的写入路径的安全网：任何文件增删改都会改变
-    // 指纹并让该 target 走完整核对，不会因为账本没有记录而漏同步
-    // （Issue #1065 复审 #4）。
+    // 对象指纹 = manifest 里的对象版本/hash + 本 target 未确认的 mutation。
+    // 写入路径未接入账本时不在指纹里猜：对应 target 由显式恢复重建基线。
     let mut hasher = Sha256::new();
     hasher.update(fingerprint_objects(manifest, &pending, group).as_bytes());
-    hasher.update(b"|");
-    hasher.update(path_fingerprint.as_bytes());
     LocalTargetVersion {
         object_fingerprint: format!("{:x}", hasher.finalize()),
         pending_fingerprint: local_mutations::pending_digest(&pending),
@@ -236,13 +191,11 @@ pub(crate) fn app_group_version(
     let manifest = read_manifest(app_data_root, &group.local_manifest_path())?;
     let pending =
         local_mutations::pending_records_in(ledger, app_data_root, SyncScope::App, Some(group))?;
-    let path_fingerprint = transaction_fingerprint(app_data_root, Some(group));
     Ok(build_version(
         manifest.as_ref(),
         pending,
         state.known_files.len(),
         Some(group),
-        path_fingerprint,
     ))
 }
 
@@ -270,13 +223,11 @@ pub(crate) fn project_version(project_root: &std::path::Path) -> crate::Result<L
     let manifest = read_manifest(project_root, crate::sync::lww::SYNC_MANIFEST_PATH)?;
     let pending =
         local_mutations::pending_records_in(&ledger, project_root, SyncScope::Project, None)?;
-    let path_fingerprint = transaction_fingerprint(project_root, None);
     Ok(build_version(
         manifest.as_ref(),
         pending,
         state.known_files.len(),
         None,
-        path_fingerprint,
     ))
 }
 

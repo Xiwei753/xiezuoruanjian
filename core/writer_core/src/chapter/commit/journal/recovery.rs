@@ -195,48 +195,86 @@ pub fn pending_chapter_sync_proof_fact_ids(
 }
 /// 扫描并恢复未完成 journal。按 commit sequence 顺序处理；只处理未完成事务，
 /// 不遍历作品正文。调用方应持有工作区写锁（或传入 app_data_root）。
-/// 重放事务目录里记录的待同步 mutation 事实。
+/// 按 durable 决议把章节提交要投影的同步对象写进账本（复审 #1）。
 ///
-/// 投影在章节提交返回前进行；写盘失败或进程崩溃时事务目录里的 outbox 是
-/// 唯一可重放来源，成功追加后才删除。失败保留文件等下一次恢复。
-fn replay_sync_mutation_outbox(project_root: &Path, tx_dir: &Path) -> bool {
-    let outbox = tx_dir.join("sync-mutations.json");
-    let Ok(text) = fs::read_to_string(&outbox) else {
-        return false;
-    };
-    let Ok(records) =
-        serde_json::from_str::<Vec<crate::sync::local_mutations::LocalMutationRecord>>(&text)
-    else {
-        log::warn!(
-            "chapter commit mutation outbox unreadable, keeping for diagnosis: {}",
-            outbox.display()
-        );
-        return false;
-    };
+/// 对象集合/op/业务版本来自 manifest 的 `sync_mutations`（Decided 之前就已
+/// 落盘），发布后的真实字节摘要在这里从目标文件读取。成功后把
+/// `sync_projection_done` 写回同一份 manifest，进程在下一次恢复时据此幂等
+/// 重放；失败时保持 false 并保留事务目录，绝不当作已收敛。
+pub(super) fn project_manifest_sync_mutations(
+    project_root: &Path,
+    tx_dir: &Path,
+    manifest: &mut ChapterCommitManifest,
+) -> Result<bool> {
+    if manifest.sync_projection_done {
+        return Ok(true);
+    }
+    if manifest.sync_mutations.is_empty() {
+        manifest.sync_projection_done = true;
+        write_manifest(tx_dir, manifest)?;
+        return Ok(true);
+    }
+    let mut records = Vec::with_capacity(manifest.sync_mutations.len());
+    for plan in &manifest.sync_mutations {
+        let (object_type, object_id) =
+            crate::sync::local_mutations::object_identity(&plan.path);
+        let content_hash = if plan.op == "upsert" {
+            match fs::read(project_root.join(&plan.path)) {
+                Ok(bytes) => crate::sync::hash::content_md5(&bytes),
+                Err(error) => {
+                    log::warn!(
+                        "chapter sync projection target unreadable, keeping journal: {}: {error}",
+                        plan.path
+                    );
+                    return Ok(false);
+                }
+            }
+        } else {
+            String::new()
+        };
+        records.push(crate::sync::local_mutations::LocalMutationRecord {
+            schema_version: 1,
+            transaction_id: manifest.transaction_id.clone(),
+            sync_root: project_root.to_string_lossy().into_owned(),
+            path: plan.path.clone(),
+            object_type,
+            object_id,
+            op: plan.op.clone(),
+            base_hash: None,
+            content_hash,
+            updated_at_ms: plan.updated_at_ms,
+            deleted_at_ms: plan.deleted_at_ms,
+            device_id: plan.device_id.clone(),
+            object_revision: plan.object_revision.clone(),
+            seq: 0,
+        });
+    }
     match crate::sync::local_mutations::append_batch(project_root, &records) {
         Ok(()) => {
-            let _ = fs::remove_file(&outbox);
-            true
+            manifest.sync_projection_done = true;
+            write_manifest(tx_dir, manifest)?;
+            Ok(true)
         }
         Err(error) => {
             log::warn!(
-                "chapter commit mutation outbox replay failed (will retry): {error}"
+                "chapter sync projection failed, keeping durable decision for replay: tx={}: {error}",
+                manifest.transaction_id
             );
-            false
+            Ok(false)
         }
     }
 }
 
-/// 重放所有事务目录里残留的待同步 mutation（同步入口在任何 fast path 之前调用）。
-///
-/// 返回成功重放的事务数；失败的事务保留 outbox 并计入"未恢复"，调用方据此
-/// 保持对应 target 为待处理，不能当成本轮已收敛（复审 #4）。
+/// 重放所有事务目录里尚未 durable 投影的同步事实（同步入口在任何 fast path
+/// 之前调用）。返回成功投影的事务数；仍有未完成事务时返回错误，调用方据此
+/// 保持对应 target 为待处理（复审 #3、#4）。
 pub fn replay_pending_sync_mutations(project_root: &Path) -> Result<usize> {
     let root = journal_root(project_root);
     if !root.exists() {
         return Ok(0);
     }
     let mut replayed = 0usize;
+    let mut failures: Vec<String> = Vec::new();
     for entry in fs::read_dir(&root)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -245,11 +283,46 @@ pub fn replay_pending_sync_mutations(project_root: &Path) -> Result<usize> {
         if entry.file_name().to_string_lossy() == CONFLICT_DIR {
             continue;
         }
-        if replay_sync_mutation_outbox(project_root, &entry.path()) {
-            replayed += 1;
+        let tx_dir = entry.path();
+        let manifest_path = tx_dir.join("manifest.json");
+        if !manifest_path.exists() {
+            continue;
+        }
+        let mut manifest = match serde_json::from_str::<ChapterCommitManifest>(
+            &fs::read_to_string(&manifest_path)?,
+        ) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                // 决议读不出来就无法判定投影是否完成：保留目录并报错，
+                // 不能当成本轮已收敛。
+                failures.push(format!("{}: manifest unreadable: {error}", tx_dir.display()));
+                continue;
+            }
+        };
+        if manifest.sync_projection_done {
+            continue;
+        }
+        if manifest.phase != ChapterCommitPhase::Applied
+            && manifest.phase != ChapterCommitPhase::Decided
+        {
+            continue;
+        }
+        match project_manifest_sync_mutations(project_root, &tx_dir, &mut manifest)? {
+            true => replayed += 1,
+            false => failures.push(format!(
+                "{}: sync projection not durable",
+                manifest.transaction_id
+            )),
         }
     }
-    Ok(replayed)
+    if failures.is_empty() {
+        Ok(replayed)
+    } else {
+        Err(crate::error::Error::Other(format!(
+            "chapter sync projection replay incomplete: {}",
+            failures.join("; ")
+        )))
+    }
 }
 
 pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<ChapterCommitRecovery>> {
@@ -267,9 +340,6 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
         if dir.file_name().and_then(|name| name.to_str()) == Some(CONFLICT_DIR) {
             continue;
         }
-        // 上次提交已 durable 但 mutation 投影失败的残留：先重放到账本再继续，
-        // 成功后才删除 outbox（复审 #5）。
-        replay_sync_mutation_outbox(project_root, &dir);
         let manifest_path = dir.join("manifest.json");
         if !manifest_path.exists() {
             // 材料都还没落盘完的目录：没有决议，删除自己的未发布材料。
@@ -327,6 +397,19 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
             }
         }
 
+        // 同步投影必须 durable 之后才允许 Finished/清理目录（复审 #1）。
+        if !project_manifest_sync_mutations(project_root, &tx_dir, &mut manifest)? {
+            recovered.push(ChapterCommitRecovery {
+                transaction_id: manifest.transaction_id.clone(),
+                key: manifest.key.clone(),
+                after: manifest.after.clone(),
+                pending_projections: manifest.pending_projections.clone(),
+                draft_ack_projections: manifest.draft_ack_projections.clone(),
+                superseded: false,
+                conflict_dir: None,
+            });
+            continue;
+        }
         if manifest.pending_projections.is_empty() && manifest.draft_ack_projections.is_empty() {
             manifest.phase = ChapterCommitPhase::Finished;
             write_manifest(&tx_dir, &manifest)?;

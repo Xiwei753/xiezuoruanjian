@@ -317,19 +317,12 @@ pub(crate) fn recover_ledger(sync_root: &Path) -> crate::error::Result<bool> {
 
 /// 读取账本最新事实（按 path 取最后一条）。
 ///
-/// 调用方包含 manifest 投影等必须能继续工作的路径：损坏行先归档重建再按空
-/// 索引继续，具体 target 的"必须完整核对"由 `version_snapshot` 负责标记。
+/// 只读：损坏如实返回错误，由调用方决定是"该 target 不可增量"还是"写路径
+/// 继续但记录恢复待办"，绝不在这里悄悄重建（复审 #3）。
 pub(crate) fn load_latest(
     sync_root: &Path,
 ) -> crate::error::Result<HashMap<String, LocalMutationRecord>> {
-    let records = match load_records(sync_root) {
-        Ok(records) => records,
-        Err(error) => {
-            log::warn!("[sync] local mutation ledger corrupt; rebuilding: {error}");
-            repair_corrupt_ledger(sync_root)?;
-            Vec::new()
-        }
-    };
+    let records = load_records(sync_root)?;
     let mut latest = HashMap::new();
     for record in records {
         latest.insert(record.path.clone(), record);
@@ -360,13 +353,29 @@ pub(crate) fn append_batch(
     // 业务变更，不追加记录，也不产生新的待同步代次。
     let mut fresh: Vec<LocalMutationRecord> = Vec::new();
     for record in records {
-        let unchanged = latest.get(&record.path).is_some_and(|previous| {
+        let previous = latest.get(&record.path);
+        let unchanged = previous.is_some_and(|previous| {
             previous.op == record.op
                 && previous.content_hash == record.content_hash
                 && previous.object_revision == record.object_revision
         });
         if unchanged {
             continue;
+        }
+        // 旧事务迟到的重放不能覆盖更新的业务事实：按真实业务时间比较，
+        // 落后于账本最后一条就直接丢弃，不分配新序号（复审 #1）。
+        if let Some(previous) = previous {
+            let previous_time = previous.deleted_at_ms.unwrap_or(previous.updated_at_ms);
+            let incoming_time = record.deleted_at_ms.unwrap_or(record.updated_at_ms);
+            if incoming_time < previous_time {
+                log::info!(
+                    "[sync] drop stale mutation replay: path={} incoming={}ms latest={}ms",
+                    record.path,
+                    incoming_time,
+                    previous_time
+                );
+                continue;
+            }
         }
         let mut record = record.clone();
         record.seq = 0;
@@ -460,6 +469,87 @@ pub(crate) fn records_for_committed_paths(
         });
     }
     records
+}
+
+/// 显式修复：扫描磁盘并与已确认基线比对，把差异补成待同步事实。
+///
+/// 只在恢复入口（`recovery-pending` 标记存在）或初始化/迁移时调用：正常增量
+/// 路径由业务事务投影驱动，不扫描目录、不看 mtime（复审 #5）。
+pub(crate) fn rebuild_pending_from_disk(
+    sync_root: &Path,
+    scope: SyncScope,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
+) -> crate::error::Result<usize> {
+    let state = match app_group {
+        Some(group) => {
+            crate::sync::SyncService::load_sync_state_read_only_for_group(sync_root, group)?
+        }
+        None => crate::sync::SyncService::load_sync_state_read_only(sync_root, None)?,
+    };
+    let entries = crate::sync::scanner::scan_for_sync_group(sync_root, scope, app_group)?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let sync_root_text = sync_root.to_string_lossy().into_owned();
+    let mut records = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for entry in entries {
+        if !is_sync_business_path(&entry.relative_path) || entry.file_hash.is_empty() {
+            continue;
+        }
+        seen.insert(entry.relative_path.clone());
+        if state
+            .known_files
+            .get(&entry.relative_path)
+            .is_some_and(|known| known == &entry.file_hash)
+        {
+            continue;
+        }
+        let (object_type, object_id) = object_identity(&entry.relative_path);
+        records.push(LocalMutationRecord {
+            schema_version: 1,
+            transaction_id: format!("recovery-scan-{now_ms}"),
+            sync_root: sync_root_text.clone(),
+            path: entry.relative_path.clone(),
+            object_type,
+            object_id,
+            op: "upsert".to_string(),
+            base_hash: state.known_files.get(&entry.relative_path).cloned(),
+            content_hash: entry.file_hash,
+            updated_at_ms: now_ms,
+            deleted_at_ms: None,
+            device_id: state.device_id.clone(),
+            object_revision: object_revision(&sync_root.join(&entry.relative_path)),
+            seq: 0,
+        });
+    }
+    for path in state.known_files.keys() {
+        if seen.contains(path) || !is_sync_business_path(path) {
+            continue;
+        }
+        if sync_root.join(path).exists() {
+            // 路径存在但扫描没收录（被白名单/布局规则忽略）：不能当作删除。
+            continue;
+        }
+        let (object_type, object_id) = object_identity(path);
+        records.push(LocalMutationRecord {
+            schema_version: 1,
+            transaction_id: format!("recovery-scan-{now_ms}"),
+            sync_root: sync_root_text.clone(),
+            path: path.clone(),
+            object_type,
+            object_id,
+            op: "delete".to_string(),
+            base_hash: state.known_files.get(path).cloned(),
+            content_hash: String::new(),
+            updated_at_ms: now_ms,
+            deleted_at_ms: Some(now_ms),
+            device_id: state.device_id.clone(),
+            object_revision: None,
+            seq: 0,
+        });
+    }
+    let count = records.len();
+    append_batch(sync_root, &records)?;
+    Ok(count)
 }
 
 /// 当前同步根下尚未被确认的本地业务变更事实（按 path 取最后一条）。

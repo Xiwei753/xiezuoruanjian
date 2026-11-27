@@ -175,6 +175,8 @@ fn recovery_applies_decided_body_but_never_overwrites_newer_content() {
         app_data_root: None,
         trash_path: None,
         superseded_reason: None,
+        sync_mutations: Vec::new(),
+        sync_projection_done: true,
     };
     write_manifest(&tx_dir, &manifest).unwrap();
     recover_pending_chapter_commits(root).unwrap();

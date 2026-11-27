@@ -424,6 +424,64 @@ impl<'a> RoundProvider<'a> {
             .collect()
     }
 
+    /// 把待发布内容冻结为"刚提交到 live 的对象字节"（Issue #1065 复审 #2）。
+    ///
+    /// `facts` 来自 commit 阶段已经 durable 的本地决议（远端路径 + live 路径 +
+    /// 是否删除）。命中 fact 的缓冲内容一律用 live 当前字节覆盖，live 已经不
+    /// 存在则丢弃该条（说明对象在决议之后又被删除，不能拿旧 staging 内容推
+    /// 上去）。返回 (refrozen, dropped)；未被任何 fact 覆盖的元数据写入
+    /// （manifest/catalog/generation）保留本轮合并决议内容。
+    pub fn freeze_from_durable(
+        &self,
+        facts: &[(String, std::path::PathBuf, bool)],
+    ) -> (usize, usize) {
+        let Ok(mut state) = self.state.lock() else {
+            return (0, 0);
+        };
+        let mut refrozen = 0usize;
+        let mut dropped = 0usize;
+        for (remote_path, live_path, deleted) in facts {
+            if *deleted || !state.entries.contains_key(remote_path) {
+                continue;
+            }
+            match std::fs::read(live_path) {
+                Ok(bytes) => {
+                    let unchanged = state
+                        .entries
+                        .get(remote_path)
+                        .and_then(|entry| entry.as_ref())
+                        .is_some_and(|entry| {
+                            matches!(entry, BufferedValue::Content(current) if current == &bytes)
+                        });
+                    if unchanged {
+                        continue;
+                    }
+                    state
+                        .entries
+                        .insert(remote_path.clone(), Some(BufferedValue::Content(bytes)));
+                    refrozen += 1;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    // 决议之后对象又消失了：不发布旧内容，也不能冒充删除。
+                    log::warn!(
+                        "[sync] committed object vanished before publish; dropping buffered write: {} ({})",
+                        remote_path,
+                        live_path.display()
+                    );
+                    state.entries.remove(remote_path);
+                    dropped += 1;
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[sync] cannot re-read committed object for publish: {}: {error}",
+                        live_path.display()
+                    );
+                }
+            }
+        }
+        (refrozen, dropped)
+    }
+
     /// Drop every buffered write and check, leaving the remote untouched.
     pub fn discard(&self) {
         if let Ok(mut state) = self.state.lock() {

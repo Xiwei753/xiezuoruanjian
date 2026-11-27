@@ -18,12 +18,15 @@ use super::publish::{publish_decided, publish_deleted};
 
 mod manifest;
 mod recovery;
-pub(crate) use manifest::{AdditionalFilePlan, ChapterCommitManifest, ChapterCommitRecovery};
+pub(crate) use manifest::{
+    AdditionalFilePlan, ChapterCommitManifest, ChapterCommitRecovery, ChapterSyncMutationPlan,
+};
 pub use recovery::{
     pending_chapter_draft_acks, pending_chapter_proof_events, pending_chapter_proof_transactions,
     pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
     recover_pending_chapter_commits, replay_pending_sync_mutations,
 };
+use recovery::project_manifest_sync_mutations;
 
 /// journal 阶段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -715,6 +718,24 @@ pub(crate) fn commit_chapter_with_guard(
             pending_projections.push(fact.event_id.clone());
         }
     }
+    // Issue #1065 复审 #1：同步投影材料与提交决议同时形成（Decided 之前）。
+    // 只记录对象路径/op/业务版本/事务 ID；发布字节的摘要由投影时读取已落盘
+    // 的目标文件得到（那正是本次决议发布的内容），不另起第二份 outbox 文件。
+    let device_id = crate::sync::SyncService::load_sync_state_read_only(project_root, None)
+        .map(|state| state.device_id)
+        .unwrap_or_default();
+    let occurred_at_ms = Utc::now().timestamp_millis();
+    let sync_mutations = build_chapter_sync_mutations(
+        &key,
+        &request,
+        &after,
+        &additional_plans,
+        deleting,
+        content_changed,
+        meta_changed,
+        occurred_at_ms,
+        &device_id,
+    );
     let mut manifest = ChapterCommitManifest {
         schema_version: 1,
         transaction_id: transaction_id.clone(),
@@ -722,8 +743,8 @@ pub(crate) fn commit_chapter_with_guard(
         key: key.clone(),
         mutation: request.mutation,
         source: request.source,
-        created_at_ms: Utc::now().timestamp_millis(),
-        occurred_at_ms: Utc::now().timestamp_millis(),
+        created_at_ms: occurred_at_ms,
+        occurred_at_ms,
         commit_sequence,
         event_ids: request.event_ids.clone(),
         proof_events: request.proof_events.clone(),
@@ -750,6 +771,8 @@ pub(crate) fn commit_chapter_with_guard(
             .map(|path| path.to_string_lossy().into_owned()),
         trash_path,
         superseded_reason: None,
+        sync_mutations,
+        sync_projection_done: false,
     };
     write_manifest(&tx_dir, &manifest)?;
 
@@ -775,10 +798,14 @@ pub(crate) fn commit_chapter_with_guard(
         }));
     }
 
-    // 4) 无滞后投影（Core 统计投影 + 平台草稿 ack）时立即清理；否则保留
+    // 4) 先把同步投影按同一决议落进账本；投影未 durable 时 journal 保持
+    //    Applied 且不删除，恢复入口用同一份 manifest.sync_mutations 重放。
+    let sync_projected = project_manifest_sync_mutations(project_root, &tx_dir, &mut manifest)?;
+
+    // 5) 无滞后投影（Core 统计投影 + 平台草稿 ack）时立即清理；否则保留
     // journal，由调用方逐条确认后清除。
     let mut pending = manifest.pending_projections.clone();
-    if pending.is_empty() && manifest.draft_ack_projections.is_empty() {
+    if sync_projected && pending.is_empty() && manifest.draft_ack_projections.is_empty() {
         manifest.phase = ChapterCommitPhase::Finished;
         write_manifest(&tx_dir, &manifest)?;
         let _ = remove_transaction_dir(&tx_dir);
@@ -789,75 +816,6 @@ pub(crate) fn commit_chapter_with_guard(
         pending.dedup();
         manifest.pending_projections = pending.clone();
         write_manifest(&tx_dir, &manifest)?;
-    }
-
-    // 5) 把本次已 durable 提交的对象投影成待同步事实（Issue #1065 复审 #4）。
-    //    与 journal 同一决议顺序：正文/元数据/附加文件已落盘，删除已进 trash。
-    //    账本只是调度索引：投影失败只警告，下一次本地路径指纹仍能发现变化。
-    //    同步自身的提交（ChapterCommitSource::Sync）不投影：那是远端内容的落地，
-    //    不是本地业务变更；把它标成待上传会把刚拉下来的内容又回推远端。
-    let skip_mutation_projection =
-        deleting || request.source == crate::chapter::ChapterCommitSource::Sync;
-    let committed_upserts = if skip_mutation_projection {
-        Vec::new()
-    } else {
-        let mut files = Vec::new();
-        if content_changed || request.mutation == ChapterMutationKind::Create {
-            files.push(chapter_relative_path(&key));
-        }
-        if content_changed || meta_changed || request.mutation == ChapterMutationKind::Create {
-            files.push(format!(
-                "volumes/{}/chapters/{}/{}",
-                key.volume_id, key.chapter_id, META_FILE
-            ));
-        }
-        for plan in &manifest.additional_files {
-            files.push(plan.target_relative.clone());
-        }
-        files
-    };
-    let committed_deletes = if deleting {
-        vec![
-            chapter_relative_path(&key),
-            format!("volumes/{}/chapters/{}/{}", key.volume_id, key.chapter_id, META_FILE),
-        ]
-    } else {
-        Vec::new()
-    };
-    let device_id = crate::sync::SyncService::load_sync_state_read_only(project_root, None)
-        .map(|state| state.device_id)
-        .unwrap_or_default();
-    let mutations = crate::sync::local_mutations::records_for_committed_paths(
-        project_root,
-        &transaction_id,
-        &device_id,
-        &committed_upserts,
-        &committed_deletes,
-        Utc::now().timestamp_millis(),
-    );
-    if !mutations.is_empty() {
-        // 先把投影事实写进事务目录：append 失败（写盘错误/崩溃）时由 journal
-        // 恢复重放，不再只是 warn 一句就依赖全盘扫描兜底（复审 #5）。
-        let outbox = tx_dir.join("sync-mutations.json");
-        let staged = serde_json::to_string(&mutations)
-            .ok()
-            .map(|text| crate::storage::atomic_write_string(&outbox, &text));
-        if let Some(Err(error)) = staged {
-            log::warn!(
-                "chapter commit mutation outbox write failed for {}: {error}",
-                outbox.display()
-            );
-        }
-        match crate::sync::local_mutations::append_batch(project_root, &mutations) {
-            Ok(()) => {
-                let _ = fs::remove_file(&outbox);
-            }
-            Err(error) => {
-                log::warn!(
-                    "chapter commit mutation projection failed; journal will replay it: {error}"
-                );
-            }
-        }
     }
 
     let written_files = {
@@ -901,3 +859,80 @@ pub(crate) fn commit_chapter_with_guard(
 
 mod ack;
 pub use ack::{mark_chapter_commit_draft_ack, mark_chapter_commit_projection};
+
+/// 把一次提交决议要投影的同步对象整理成 durable 材料（复审 #1）。
+///
+/// 远程同步提交（`ChapterCommitSource::Sync`）是远端内容在本地落地，不是本地
+/// 业务变更，不产生任何待上传事实；纯远端删除同理，不再生成 committed deletes。
+fn build_chapter_sync_mutations(
+    key: &ChapterKey,
+    request: &ChapterCommitRequest,
+    after: &ChapterVersion,
+    additional: &[AdditionalFilePlan],
+    deleting: bool,
+    content_changed: bool,
+    meta_changed: bool,
+    occurred_at_ms: i64,
+    device_id: &str,
+) -> Vec<ChapterSyncMutationPlan> {
+    if request.source == crate::chapter::ChapterCommitSource::Sync {
+        return Vec::new();
+    }
+    let mut plans = Vec::new();
+    let body_path = chapter_relative_path(key);
+    let meta_path = format!(
+        "volumes/{}/chapters/{}/{}",
+        key.volume_id, key.chapter_id, META_FILE
+    );
+    if deleting {
+        for path in [body_path, meta_path] {
+            plans.push(ChapterSyncMutationPlan {
+                path,
+                op: "delete".to_string(),
+                content_hash: String::new(),
+                object_revision: None,
+                updated_at_ms: occurred_at_ms,
+                deleted_at_ms: Some(occurred_at_ms),
+                device_id: device_id.to_string(),
+            });
+        }
+        return plans;
+    }
+    let created = request.mutation == ChapterMutationKind::Create;
+    if content_changed || created {
+        plans.push(ChapterSyncMutationPlan {
+            path: body_path,
+            op: "upsert".to_string(),
+            content_hash: crate::sync::hash::content_md5(request.content.as_bytes()),
+            object_revision: Some(after.revision.to_string()),
+            updated_at_ms: occurred_at_ms,
+            deleted_at_ms: None,
+            device_id: device_id.to_string(),
+        });
+    }
+    if content_changed || meta_changed || created {
+        plans.push(ChapterSyncMutationPlan {
+            path: meta_path,
+            op: "upsert".to_string(),
+            // meta JSON 由发布路径按 live 当前值构造，摘要由投影时读取已落盘
+            // 文件得到；决议里固定的是对象与业务版本。
+            content_hash: String::new(),
+            object_revision: Some(after.revision.to_string()),
+            updated_at_ms: occurred_at_ms,
+            deleted_at_ms: None,
+            device_id: device_id.to_string(),
+        });
+    }
+    for plan in additional {
+        plans.push(ChapterSyncMutationPlan {
+            path: plan.target_relative.clone(),
+            op: "upsert".to_string(),
+            content_hash: String::new(),
+            object_revision: None,
+            updated_at_ms: occurred_at_ms,
+            deleted_at_ms: None,
+            device_id: device_id.to_string(),
+        });
+    }
+    plans
+}

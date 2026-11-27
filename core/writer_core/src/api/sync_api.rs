@@ -1171,6 +1171,9 @@ impl WriterCoreApi {
         }
         for root in &roots {
             let mut recovery_error: Option<String> = None;
+            // 上一轮有未完成的投影/确认：本轮先做一次显式磁盘重建，把
+            // 已落盘但没进账本的事实补回来（只有恢复路径允许扫描目录）。
+            let needs_rescan = crate::sync::local_mutations::recovery_pending(root);
             match crate::sync::local_mutations::recover_ledger(root) {
                 Ok(true) => log::warn!(
                     "[sync] local mutation ledger rebuilt at {}",
@@ -1214,6 +1217,41 @@ impl WriterCoreApi {
                             root.display()
                         );
                         recovery_error = Some(format!("journal: {error}"));
+                    }
+                }
+            }
+            if needs_rescan && recovery_error.is_none() {
+                let rescan: crate::Result<usize> = if *root == app_data_root {
+                    crate::sync::app_data_group_catalog::discover_local_app_data_groups(root)
+                        .and_then(|groups| {
+                            let mut total = 0usize;
+                            for group in groups {
+                                total += crate::sync::local_mutations::rebuild_pending_from_disk(
+                                    root,
+                                    crate::sync::types::SyncScope::App,
+                                    Some(&group),
+                                )?;
+                            }
+                            Ok(total)
+                        })
+                } else {
+                    crate::sync::local_mutations::rebuild_pending_from_disk(
+                        root,
+                        crate::sync::types::SyncScope::Project,
+                        None,
+                    )
+                };
+                match rescan {
+                    Ok(count) => log::info!(
+                        "[sync] rebuilt {count} pending mutations from disk at {}",
+                        root.display()
+                    ),
+                    Err(error) => {
+                        log::warn!(
+                            "[sync] rebuild pending mutations failed at {}: {error}",
+                            root.display()
+                        );
+                        recovery_error = Some(format!("rescan: {error}"));
                     }
                 }
             }
@@ -2575,6 +2613,9 @@ impl WriterCoreApi {
                     )),
                 };
             drop(_proof_recovery_workspace_lock);
+            // 本轮已经 durable 落进 live 的对象事实：发布前用它把待发布内容
+            // 冻结成刚提交的字节，杜绝推送旧 staging（复审 #2）。
+            let mut publish_facts: Vec<(String, std::path::PathBuf, bool)> = Vec::new();
             for pending in pending_commits {
                 let PendingTargetCommit {
                     target_index,
@@ -2614,6 +2655,35 @@ impl WriterCoreApi {
                 let commit_outcome =
                     crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
                 commit_phase.finish_with_provider(&commit_outcome, provider);
+                // committed.path 是 workspace 相对：作品目标是
+                // `projects/<id>/<rel>`，App 目标是 `<rel>`。
+                let remote_prefix = planned.target.remote_prefix.trim_end_matches('/');
+                let project_prefix = planned
+                    .project_id
+                    .as_ref()
+                    .map(|id| format!("projects/{id}/"));
+                for committed in &target_committed_paths {
+                    let workspace_rel = committed.path.to_string_lossy().replace('\\', "/");
+                    let relative = match project_prefix.as_deref() {
+                        Some(prefix) => match workspace_rel.strip_prefix(prefix) {
+                            Some(rest) => rest.to_string(),
+                            None => continue,
+                        },
+                        None => workspace_rel.clone(),
+                    };
+                    if relative.is_empty() {
+                        continue;
+                    }
+                    let remote_path = match project_prefix.as_deref() {
+                        Some(_) => workspace_rel,
+                        None => format!("{remote_prefix}/{relative}"),
+                    };
+                    publish_facts.push((
+                        remote_path,
+                        planned.target.live_root.join(&relative),
+                        committed.deleted,
+                    ));
+                }
 
                 if let Some(ref sink) = progress_sink {
                     let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
@@ -2794,6 +2864,16 @@ impl WriterCoreApi {
                 provider,
             );
             let pending_paths = round.pending_len();
+            let (refrozen, vanished) = round.freeze_from_durable(&publish_facts);
+            if refrozen > 0 || vanished > 0 {
+                log::info!(
+                    "[sync] publish frozen from durable local objects: refrozen={} vanished={}",
+                    refrozen,
+                    vanished
+                );
+            }
+            // 决议之后消失的对象已从缓冲里丢弃：其余对象照常发布，未发布的
+            // mutation 留待下一轮（不因单个对象阻塞独立对象）。
             let publish_started_at = Instant::now();
             // 先固化"本轮将要写出去的对象事实"，用于发布成功后的精确结算。
             let publish_receipts = round.pending_publish_receipts();

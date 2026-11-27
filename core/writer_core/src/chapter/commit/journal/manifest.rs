@@ -14,6 +14,31 @@ pub(crate) struct AdditionalFilePlan {
     pub(crate) sha256: String,
 }
 
+/// 与提交决议同一 durable 事实的同步投影材料（Issue #1065 复审 #1）。
+///
+/// 对象路径、op、前后字节摘要、业务时间与事务 ID 在 Decided 之前就写进
+/// manifest；Applied 之后只按它幂等投影，崩溃恢复也从同一决议重放，不再
+/// 依赖提交后才落盘的第二份 outbox 文件。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChapterSyncMutationPlan {
+    /// 项目根相对的同步对象路径。
+    pub(crate) path: String,
+    /// `upsert` 或 `delete`。
+    pub(crate) op: String,
+    /// upsert 为发布后目标字节的 md5；delete 为空。
+    #[serde(default)]
+    pub(crate) content_hash: String,
+    /// 目标对象的业务版本（meta 的 revision/updatedAt）；delete 为空。
+    #[serde(default)]
+    pub(crate) object_revision: Option<String>,
+    pub(crate) updated_at_ms: i64,
+    #[serde(default)]
+    pub(crate) deleted_at_ms: Option<i64>,
+    #[serde(default)]
+    pub(crate) device_id: String,
+}
+
 /// durable commit decision。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +100,12 @@ pub(crate) struct ChapterCommitManifest {
     /// 恢复时发现当前正文既不是 before 也不是 after，记录原因。
     #[serde(default)]
     pub(crate) superseded_reason: Option<String>,
+    /// 本次决议要投影到同步账本的对象事实；远程同步提交为空。
+    #[serde(default)]
+    pub(crate) sync_mutations: Vec<ChapterSyncMutationPlan>,
+    /// 同步投影是否已经 durable 落进账本；false 时 journal 不能进 Finished。
+    #[serde(default)]
+    pub(crate) sync_projection_done: bool,
 }
 
 /// 一次待恢复 journal 的可读结果。
