@@ -117,6 +117,21 @@ struct CorrectionStoreInner {
     lexicons: Mutex<HashMap<String, CachedLexicon>>,
     engines: Mutex<HashMap<String, CachedCorrectionEngine>>,
     result_caches: Mutex<ChapterResultCacheRegistry>,
+    /// 章节同步结果索引：按目录修改时间增量刷新，restore 的 slot 锁内只查内存。
+    synced_records: Mutex<HashMap<SyncedRecordCacheKey, CachedSyncedRecords>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct SyncedRecordCacheKey {
+    project_id: String,
+    chapter_id: String,
+    mode: String,
+    scanner_stable: String,
+}
+
+struct CachedSyncedRecords {
+    dir_signature: Option<SystemTime>,
+    records: Arc<Vec<synced_results::SyncedCorrectionRecord>>,
 }
 
 struct ActiveCorrectionProject {
@@ -1107,6 +1122,7 @@ impl CorrectionStore {
                 lexicons: Mutex::new(HashMap::new()),
                 engines: Mutex::new(HashMap::new()),
                 result_caches: Mutex::new(HashMap::new()),
+                synced_records: Mutex::new(HashMap::new()),
             });
             stores.insert(key.clone(), Arc::clone(&inner));
             inner
@@ -1128,6 +1144,68 @@ impl CorrectionStore {
     pub(super) fn project_root(&self, project_id: &str) -> Option<PathBuf> {
         let root = self.inner.projects_root.lock().ok()?;
         root.as_ref().map(|root| root.join(project_id))
+    }
+
+    /// 本章同步结果索引：按目录修改时间增量刷新。
+    ///
+    /// 返回的 Arc 供 scanner 在构造时（章节 cache slot 锁之外）加载；restore
+    /// 路径只做内容键查询，不再在 slot 锁内遍历/反序列化整章历史文件。
+    pub(super) fn synced_records_for_chapter(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+        mode: &str,
+        scanner_stable: &str,
+    ) -> Result<Arc<Vec<synced_results::SyncedCorrectionRecord>>, WriterError> {
+        let Some(project_root) = self.project_root(project_id) else {
+            return Ok(Arc::new(Vec::new()));
+        };
+        let Some(dir) = synced_results::chapter_records_dir(&project_root, chapter_id) else {
+            return Ok(Arc::new(Vec::new()));
+        };
+        let key = SyncedRecordCacheKey {
+            project_id: project_id.to_string(),
+            chapter_id: chapter_id.to_string(),
+            mode: mode.to_string(),
+            scanner_stable: scanner_stable.to_string(),
+        };
+        let signature = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
+        let mut cache = self.inner.synced_records.lock().map_err(|_| {
+            WriterError::Other("correction synced record cache lock poisoned".into())
+        })?;
+        if let Some(entry) = cache.get(&key) {
+            if entry.dir_signature == signature {
+                return Ok(Arc::clone(&entry.records));
+            }
+        }
+        let mut records = synced_results::load_records(
+            &project_root,
+            project_id,
+            chapter_id,
+            mode,
+            scanner_stable,
+        );
+        // 读取期间目录可能被同步/发布追加；修改时间变化时重读一次，避免把
+        // 半个目录版本缓存成稳定索引。
+        let after = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
+        if after != signature {
+            records = synced_results::load_records(
+                &project_root,
+                project_id,
+                chapter_id,
+                mode,
+                scanner_stable,
+            );
+        }
+        let records = Arc::new(records);
+        cache.insert(
+            key,
+            CachedSyncedRecords {
+                dir_signature: after,
+                records: Arc::clone(&records),
+            },
+        );
+        Ok(records)
     }
 
     fn update_preferences<F, R>(&self, update: F) -> Result<R, WriterError>

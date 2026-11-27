@@ -88,6 +88,8 @@ pub(crate) struct CorrectionScanner {
     model_identity: String,
     lexicon_identity: String,
     rules_identity: String,
+    /// 本章当前同步结果索引，构造 scanner 时在章节 slot 锁外加载。
+    synced_records: Arc<Vec<synced_results::SyncedCorrectionRecord>>,
 }
 
 /// What a check request is allowed to recompute.
@@ -250,6 +252,12 @@ impl CorrectionScanner {
         } else {
             synced_results::MODE_RULES
         };
+        let synced_records = store.synced_records_for_chapter(
+            &project_id,
+            &chapter_id,
+            record_mode,
+            &identity_before.scanner_stable,
+        )?;
         Ok(Self {
             store,
             project_id,
@@ -266,6 +274,7 @@ impl CorrectionScanner {
             model_identity: identity_before.model_identity,
             lexicon_identity: identity_before.lexicon_identity,
             rules_identity: identity_before.rules_identity,
+            synced_records,
         })
     }
 
@@ -286,6 +295,13 @@ impl CorrectionScanner {
         text_revision: u64,
     ) -> Result<Self, WriterError> {
         let identity = store.scanner_identity(&project_id)?;
+        let record_mode = identity.configured_mode;
+        let synced_records = store.synced_records_for_chapter(
+            &project_id,
+            &chapter_id,
+            record_mode,
+            &identity.scanner_stable,
+        )?;
         Ok(Self {
             store,
             project_id,
@@ -300,10 +316,11 @@ impl CorrectionScanner {
             scanner_stable: identity.scanner_stable,
             // Restore-only 不构建引擎；恢复记录按当前配置模式读取（有模型配置
             // 读 model 记录，否则读 rules 记录）。
-            record_mode: identity.configured_mode,
+            record_mode,
             model_identity: identity.model_identity,
             lexicon_identity: identity.lexicon_identity,
             rules_identity: identity.rules_identity,
+            synced_records,
         })
     }
 
@@ -470,8 +487,18 @@ impl CorrectionScanner {
         metrics.rescanned_segments = dirty.len();
         if dirty.is_empty() {
             metrics.cache_hit = metrics.cache_valid_segments > 0;
+            let pending_records = if guard.publication_pending {
+                self.pending_publication_records(&guard, text)
+            } else {
+                Vec::new()
+            };
+            let snapshot = self.assemble_snapshot(&guard)?;
             guard.save()?;
-            return self.assemble_snapshot(&guard);
+            drop(guard);
+            if !pending_records.is_empty() {
+                self.publish_pending_publication(&slot, pending_records);
+            }
+            return Ok(snapshot);
         }
 
         // The model scan runs outside the cache lock. Competing edit and
@@ -590,6 +617,9 @@ impl CorrectionScanner {
                 }
                 // 空 suggestions 也要写：它表示「已检查无建议」。
                 if let Some(record) = self.synced_record_for_segment(&guard, *index, text) {
+                    if let Some(segment) = guard.segments.get_mut(*index) {
+                        segment.synced_record_key = Some(record.record_key());
+                    }
                     synced_records.push(record);
                 }
             }
@@ -600,11 +630,33 @@ impl CorrectionScanner {
         // A rescan that produces the same suggestions and only shifted offsets
         // does not need to rewrite the chapter cache file.
         guard.semantic_dirty |= changed;
+        if !synced_records.is_empty() {
+            // 先把待发布意图随本地 cache durable 保存，再确认本地覆盖；
+            // 首次文件/账本写入失败时，恢复路径可按 cache 的 checked 内容重放。
+            guard.publication_pending = true;
+            guard.semantic_dirty = true;
+        }
         guard.save()?;
         let snapshot = self.assemble_snapshot(&guard)?;
         drop(guard);
-        // 同步记录是派生结果：写失败只告警，不影响本次扫描结果与快照。
-        self.persist_synced_records(synced_records);
+        // 同步记录是派生结果：发布成功才清除 pending；失败保留由恢复重试。
+        if !synced_records.is_empty() && self.persist_synced_records(synced_records) {
+            if let Ok(mut guard) = lock_slot(&slot) {
+                if guard.last_session_id == self.session_id
+                    && guard.last_revision == self.text_revision
+                {
+                    guard.publication_pending = false;
+                    guard.semantic_dirty = true;
+                    if let Err(error) = guard.save() {
+                        log::warn!(
+                            "[correction] clear publication pending failed chapter_digest={} error={}",
+                            content_fingerprint(&self.chapter_id),
+                            error
+                        );
+                    }
+                }
+            }
+        }
         Ok(snapshot)
     }
 
@@ -664,9 +716,20 @@ impl CorrectionScanner {
         )?;
         metrics.observe_cache(&guard);
         metrics.cache_hit = metrics.cache_valid_segments > 0;
+        let pending_records = if guard.publication_pending {
+            self.pending_publication_records(&guard, text)
+        } else {
+            Vec::new()
+        };
         // Restoring is a read-only display refresh: never save here, even when
         // the in-memory offset index had to be rebuilt.
-        self.assemble_snapshot(&guard)
+        let snapshot = self.assemble_snapshot(&guard)?;
+        drop(guard);
+        // 上一次发布失败时在 slot 锁外用当前 checked 内容重放，不重跑模型。
+        if !pending_records.is_empty() {
+            self.publish_pending_publication(slot, pending_records);
+        }
+        Ok(snapshot)
     }
 
     fn is_stale(&self, guard: &ChapterCorrectionCacheState) -> bool {
@@ -692,6 +755,7 @@ impl CorrectionScanner {
             guard.segments.clear();
             guard.scanner_fingerprint = scanner_fingerprint.to_string();
             guard.checked_mode = self.record_mode.to_string();
+            guard.publication_pending = false;
             guard.needs_reconcile = true;
             guard.semantic_dirty = true;
             guard.last_session_id = 0;
@@ -706,6 +770,7 @@ impl CorrectionScanner {
                 segment.dirty = true;
             }
             guard.checked_mode = self.record_mode.to_string();
+            guard.publication_pending = false;
             guard.needs_reconcile = true;
             guard.semantic_dirty = true;
         }
@@ -772,52 +837,46 @@ impl CorrectionScanner {
         Ok(())
     }
 
-    /// 用同步记录回填未检查 segment。同输入身份多条记录按文件键排序取首条
-    /// （确定性赢家）；同文本重复段都用 get 回填，不消费唯一记录。
+    /// 用同步结果索引投影段：补未检查段，并对已有 checked 段重新选择
+    /// 确定性赢家（同输入身份的不同 payload 按 record_key 字典序取最小）。
+    /// 记录已在 scanner 构造时（章节 slot 锁外）按目录版本加载，本函数不读盘。
     fn restore_synced_records(&self, guard: &mut ChapterCorrectionCacheState, text: &str) {
-        let Some(project_root) = self.store.project_root(&self.project_id) else {
-            return;
-        };
-        let records = synced_results::load_records(
-            &project_root,
-            &self.project_id,
-            &self.chapter_id,
-            self.record_mode,
-            &self.scanner_stable,
-        );
-        if records.is_empty() {
-            return;
-        }
-        // 文件已存在但 mutation 账本缺失（上次发布失败）时在这里补账本；
-        // 只读本章记录，不重新扫描作品，也不加载模型。
-        if let Err(error) = synced_results::publish_records(&project_root, &records) {
-            log::warn!(
-                "[correction] synced result publication retry failed chapter_digest={} error={}",
-                content_fingerprint(&self.chapter_id),
-                error
-            );
-        }
-        if !guard
+        let needs_migration = guard
             .segments
             .iter()
-            .any(|segment| segment.checked.is_none())
-        {
+            .any(|segment| segment.checked.is_some() && segment.synced_record_key.is_none());
+        if self.synced_records.is_empty() && !needs_migration {
             return;
         }
-        let mut by_segment: std::collections::HashMap<(String, String), Vec<CachedSuggestion>> =
-            std::collections::HashMap::new();
-        for record in records {
+        let mut by_segment: std::collections::HashMap<
+            (String, String),
+            Vec<(String, Vec<CachedSuggestion>)>,
+        > = std::collections::HashMap::new();
+        for record in self.synced_records.iter() {
             by_segment
-                .entry((record.text_sha256, record.context_sha256))
-                .or_insert(record.suggestions);
+                .entry((record.text_sha256.clone(), record.context_sha256.clone()))
+                .or_default()
+                .push((record.record_key(), record.suggestions.clone()));
         }
-        let mut hydrated = false;
-        for segment in &mut guard.segments {
-            if segment.checked.is_some() {
-                continue;
-            }
-            let start = segment.start_byte as usize;
-            let end = segment.end_byte as usize;
+        for candidates in by_segment.values_mut() {
+            candidates.sort_by(|left, right| left.0.cmp(&right.0));
+        }
+        let indexed_keys: std::collections::HashSet<String> = by_segment
+            .values()
+            .flat_map(|candidates| candidates.iter().map(|(key, _)| key.clone()))
+            .collect();
+        let mut changed = false;
+        let mut migrate_pending = false;
+        for index in 0..guard.segments.len() {
+            let (start, end, current_checked, current_key) = {
+                let segment = &guard.segments[index];
+                (
+                    segment.start_byte as usize,
+                    segment.end_byte as usize,
+                    segment.checked.clone(),
+                    segment.synced_record_key.clone(),
+                )
+            };
             if start >= end || end > text.len() {
                 continue;
             }
@@ -828,23 +887,65 @@ impl CorrectionScanner {
             let Some(context_text) = text.get(context_start..context_end) else {
                 continue;
             };
-            let key = (
+            let content_key = (
                 synced_results::text_sha256(segment_text),
                 synced_results::text_sha256(context_text),
             );
-            let Some(suggestions) = by_segment.get(&key).cloned() else {
+            let candidates = by_segment.get(&content_key);
+            // 本地已检查结果的记录键也要参与确定性比较；旧缓存无键时按当前
+            // segment 内容重建强摘要键，避免本地结果永远压过远端并集。
+            let local_candidate = match (&current_checked, &current_key) {
+                (Some(suggestions), Some(key)) => {
+                    Some((key.clone(), suggestions.clone()))
+                }
+                (Some(suggestions), None) => self
+                    .synced_record_for_segment(guard, index, text)
+                    .map(|record| {
+                        let key = record.record_key();
+                        if !indexed_keys.contains(&key) {
+                            // 旧版本本地缓存已检查、但同步目录没有对应记录：
+                            // 标记一次迁移发布，publish 会按 confirmed/latest 去重。
+                            migrate_pending = true;
+                        }
+                        (key, suggestions.clone())
+                    }),
+                _ => None,
+            };
+            let mut winner: Option<(String, Vec<CachedSuggestion>)> = local_candidate
+                .filter(|(_, suggestions)| suggestions_match(text, start, end, suggestions));
+            if let Some(candidates) = candidates {
+                for (key, suggestions) in candidates {
+                    if !suggestions_match(text, start, end, suggestions) {
+                        continue;
+                    }
+                    if winner
+                        .as_ref()
+                        .map_or(true, |(winner_key, _)| key < winner_key)
+                    {
+                        winner = Some((key.clone(), suggestions.clone()));
+                    }
+                }
+            }
+            let Some((winner_key, suggestions)) = winner else {
                 continue;
             };
-            if !suggestions_match(text, start, end, &suggestions) {
+            let same = guard.segments.get(index).is_some_and(|segment| {
+                segment.synced_record_key.as_deref() == Some(winner_key.as_str())
+                    && segment.checked.as_ref() == Some(&suggestions)
+            });
+            if same {
                 continue;
             }
-            segment.checked = Some(suggestions);
-            segment.dirty = false;
-            hydrated = true;
+            if let Some(segment) = guard.segments.get_mut(index) {
+                segment.checked = Some(suggestions);
+                segment.dirty = false;
+                segment.synced_record_key = Some(winner_key);
+                changed = true;
+            }
         }
-        // 恢复确实新增了 checked，按既有语义标记本地 cache 需要写回。
-        // Restore-only 从不保存，因此不会因此重写整章 cache。
-        guard.semantic_dirty |= hydrated;
+        // 投影变化必须写回持久 cache，重启后仍保持同一确定性赢家。
+        guard.semantic_dirty |= changed;
+        guard.publication_pending |= migrate_pending;
     }
 
     /// 为本次成功写入的 segment 构造同步记录（只含派生结果，不含正文）。
@@ -876,14 +977,50 @@ impl CorrectionScanner {
         })
     }
 
-    /// 用 Core 业务对象持久事务发布本批记录并追加 mutation 事实；
-    /// 失败只记日志，记录保留在磁盘，下一次恢复时补发布。
-    fn persist_synced_records(&self, records: Vec<SyncedCorrectionRecord>) {
-        if records.is_empty() {
+    /// 从当前 checked segments 重建待发布记录（不读同步目录、不跑模型）。
+    fn pending_publication_records(
+        &self,
+        guard: &ChapterCorrectionCacheState,
+        text: &str,
+    ) -> Vec<SyncedCorrectionRecord> {
+        guard
+            .segments
+            .iter()
+            .enumerate()
+            .filter_map(|(index, _)| self.synced_record_for_segment(guard, index, text))
+            .collect()
+    }
+
+    /// 恢复路径发现未完成发布时，在章节 slot 锁外重放；成功后清 pending 标志。
+    fn publish_pending_publication(&self, slot: &ChapterCorrectionSlot, records: Vec<SyncedCorrectionRecord>) {
+        if records.is_empty() || !self.persist_synced_records(records) {
             return;
         }
-        let Some(project_root) = self.store.project_root(&self.project_id) else {
+        let Ok(mut guard) = lock_slot(slot) else {
             return;
+        };
+        if guard.last_session_id != self.session_id || guard.last_revision != self.text_revision {
+            return;
+        }
+        guard.publication_pending = false;
+        guard.semantic_dirty = true;
+        if let Err(error) = guard.save() {
+            log::warn!(
+                "[correction] clear publication pending failed chapter_digest={} error={}",
+                content_fingerprint(&self.chapter_id),
+                error
+            );
+        }
+    }
+
+    /// 用 Core 业务对象持久事务发布本批记录并追加 mutation 事实。
+    /// 成功返回 true；失败保留 cache 的 publication_pending，由恢复路径重放。
+    fn persist_synced_records(&self, records: Vec<SyncedCorrectionRecord>) -> bool {
+        if records.is_empty() {
+            return true;
+        }
+        let Some(project_root) = self.store.project_root(&self.project_id) else {
+            return true;
         };
         match synced_results::publish_records(&project_root, &records) {
             Ok((written, mutated)) => {
@@ -895,6 +1032,7 @@ impl CorrectionScanner {
                         mutated
                     );
                 }
+                true
             }
             Err(error) => {
                 log::warn!(
@@ -902,6 +1040,7 @@ impl CorrectionScanner {
                     content_fingerprint(&self.chapter_id),
                     error
                 );
+                false
             }
         }
     }

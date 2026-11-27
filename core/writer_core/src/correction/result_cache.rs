@@ -123,6 +123,9 @@ pub(crate) struct CachedSegment {
     pub(crate) end_byte: u32,
     pub(crate) text_fingerprint: String,
     pub(crate) context_fingerprint: String,
+    /// 当前 checked 采用的同步记录键；None 表示尚未持久化/旧缓存。
+    #[serde(skip)]
+    pub(crate) synced_record_key: Option<String>,
     /// `Some` means checked. An empty vector means "checked, no suggestion".
     #[serde(skip)]
     pub(crate) checked: Option<Vec<CachedSuggestion>>,
@@ -138,6 +141,8 @@ struct PersistedSegment {
     text_fingerprint: String,
     context_fingerprint: String,
     #[serde(default)]
+    synced_record_key: Option<String>,
+    #[serde(default)]
     suggestions: Vec<CachedSuggestion>,
 }
 
@@ -151,6 +156,9 @@ struct ChapterCorrectionCache {
     /// 这些 checked 结果实际来自哪种扫描模式；旧缓存缺省时不能冒充模型覆盖。
     #[serde(default)]
     checked_mode: String,
+    /// 已有 checked 结果尚未成功发布到同步 mutation/outbox。
+    #[serde(default)]
+    publication_pending: bool,
     #[serde(default)]
     segments: Vec<PersistedSegment>,
 }
@@ -160,6 +168,8 @@ pub(crate) struct ChapterCorrectionCacheState {
     pub(crate) scanner_fingerprint: String,
     /// 当前 checked 结果实际来自的扫描模式（model/rules）；空表示未知旧缓存。
     pub(crate) checked_mode: String,
+    /// 本地已检查结果尚未成功发布；持久化后由下一次恢复重试，不重跑模型。
+    pub(crate) publication_pending: bool,
     /// Offset-ordered segments covering the current text in memory.
     pub(crate) segments: Vec<CachedSegment>,
     /// True when the on-disk representation no longer matches memory.
@@ -212,6 +222,7 @@ impl ChapterCorrectionCacheState {
         let mut state = Self {
             scanner_fingerprint: String::new(),
             checked_mode: String::new(),
+            publication_pending: false,
             segments: Vec::new(),
             semantic_dirty: false,
             scanning: false,
@@ -245,6 +256,7 @@ impl ChapterCorrectionCacheState {
         }
         state.scanner_fingerprint = cache.scanner_fingerprint;
         state.checked_mode = cache.checked_mode;
+        state.publication_pending = cache.publication_pending;
         // 旧缓存没有记录实际扫描模式：不能把规则结果当成模型覆盖继承下来；
         // 清空 checked 后由下一次真实扫描重新建立覆盖（正文/建议不写回）。
         if state.checked_mode.is_empty() {
@@ -259,6 +271,7 @@ impl ChapterCorrectionCacheState {
                 end_byte: 0,
                 text_fingerprint: segment.text_fingerprint,
                 context_fingerprint: segment.context_fingerprint,
+                synced_record_key: segment.synced_record_key,
                 checked: Some(segment.suggestions),
                 dirty: false,
             })
@@ -283,6 +296,7 @@ impl ChapterCorrectionCacheState {
                     .map(|suggestions| PersistedSegment {
                         text_fingerprint: segment.text_fingerprint.clone(),
                         context_fingerprint: segment.context_fingerprint.clone(),
+                        synced_record_key: segment.synced_record_key.clone(),
                         suggestions: suggestions.clone(),
                     })
             })
@@ -291,6 +305,7 @@ impl ChapterCorrectionCacheState {
             schema_version: SCHEMA_VERSION,
             scanner_fingerprint: self.scanner_fingerprint.clone(),
             checked_mode: self.checked_mode.clone(),
+            publication_pending: self.publication_pending,
             segments,
         };
         let json =
@@ -588,6 +603,7 @@ pub(crate) fn reconcile_full(text: &str, state: &mut ChapterCorrectionCacheState
             end_byte: end as u32,
             text_fingerprint,
             context_fingerprint,
+            synced_record_key: None,
             checked,
             dirty: false,
         });
@@ -867,6 +883,7 @@ pub(crate) fn apply_pending_windows(
                 end_byte: to_u32(end)?,
                 text_fingerprint,
                 context_fingerprint,
+                synced_record_key: None,
                 checked: None,
                 dirty: true,
             });
@@ -1054,6 +1071,7 @@ pub(crate) fn reconcile_edits(
                 end_byte: to_u32(end)?,
                 text_fingerprint,
                 context_fingerprint,
+                synced_record_key: None,
                 checked: None,
                 dirty: true,
             });

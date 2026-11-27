@@ -204,7 +204,7 @@ fn is_valid_path_segment(value: &str) -> bool {
         && !value.contains('\\')
 }
 
-fn chapter_records_dir(project_root: &Path, chapter_id: &str) -> Option<PathBuf> {
+pub(crate) fn chapter_records_dir(project_root: &Path, chapter_id: &str) -> Option<PathBuf> {
     if !is_valid_path_segment(chapter_id) {
         return None;
     }
@@ -328,9 +328,16 @@ pub(crate) fn publish_records(
         if file_needs_write {
             files.insert(rel_path.clone(), json);
         }
-        let mutation_needed = latest.get(&rel_path).map_or(true, |previous| {
-            !previous.is_upsert() || previous.content_hash != content_hash
-        });
+        // 已由同步基线确认（known_files 同 hash）或账本已有同内容未确认
+        // 事实时不再登记本地 mutation：恢复/下载显示不能制造新的本地业务变更。
+        let confirmed = state
+            .as_ref()
+            .and_then(|state| state.known_files.get(&rel_path))
+            .is_some_and(|known_hash| known_hash == &content_hash);
+        let mutation_needed = !confirmed
+            && latest.get(&rel_path).map_or(true, |previous| {
+                !previous.is_upsert() || previous.content_hash != content_hash
+            });
         if mutation_needed && mutation_paths.insert(rel_path.clone()) {
             let (object_type, object_id) = local_mutations::object_identity(&rel_path);
             mutations.push(LocalMutationRecord {

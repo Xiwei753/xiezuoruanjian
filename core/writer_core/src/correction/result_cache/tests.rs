@@ -9,6 +9,7 @@ fn checked_segment(start: usize, end: usize, text: &str) -> CachedSegment {
         end_byte: end as u32,
         text_fingerprint: content_fingerprint(&text[start..end]),
         context_fingerprint: content_fingerprint(&text[context_start..context_end]),
+        synced_record_key: None,
         checked: Some(Vec::new()),
         dirty: false,
     }
@@ -18,6 +19,7 @@ fn empty_state(text: &str) -> ChapterCorrectionCacheState {
     ChapterCorrectionCacheState {
         scanner_fingerprint: "scanner".to_string(),
         checked_mode: "model".to_string(),
+        publication_pending: false,
         segments: canonical_segments(text)
             .into_iter()
             .map(|(start, end)| checked_segment(start, end, text))
