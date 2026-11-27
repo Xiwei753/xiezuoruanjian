@@ -2791,9 +2791,10 @@ impl WriterCoreApi {
             drop(_proof_recovery_workspace_lock);
             // 本轮已经 durable 落进 live 的对象事实：发布前用它把待发布内容
             // 冻结成刚提交的字节，杜绝推送旧 staging（复审 #2）。
-            let mut publish_decisions: Vec<crate::sync::decision::PublishDecision> = Vec::new();
-            // (目标远端前缀, 该 target 已落盘的 manifest 路径)
-            let mut manifest_decisions: Vec<(String, std::path::PathBuf)> = Vec::new();
+            let mut publish_decisions: Vec<(
+                String,
+                crate::sync::decision::DurableObjectDecision,
+            )> = Vec::new();
             // 被远端消费的本地事实（target key → target 相对路径），用于确认。
             let mut consumed_by_target: std::collections::BTreeMap<
                 String,
@@ -2838,74 +2839,75 @@ impl WriterCoreApi {
                 let commit_outcome =
                     crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
                 commit_phase.finish_with_provider(&commit_outcome, provider);
-                // 本地事务产出的对象决议：workspace 相对路径 → 远端路径 + live 路径。
-                // manifest 也在这里按 target 处理：发布时用已落盘的 manifest 字节，
-                // 保证请求体里的对象与描述互相一致（复审 #7213234617 第 1 项）。
+                // 本地提交产出的不可变对象决议：内容已在提交阶段冻结，这里只做
+                // identity → 远端路径映射并收集，发布时不再回读 live。
                 let remote_prefix = planned.target.remote_prefix.trim_end_matches('/');
-                let project_prefix = planned
-                    .project_id
+                let decision_key =
+                    crate::sync::full_sync::sync_target_checkpoint_key(planned);
+                let facts = decision_key
                     .as_ref()
-                    .map(|id| format!("projects/{id}/"));
-                let target_decision_prefix = remote_prefix.to_string();
-                for committed in &target_committed_paths {
-                    let workspace_rel = committed.path.to_string_lossy().replace('\\', "/");
-                    let relative = match project_prefix.as_deref() {
-                        Some(prefix) => match workspace_rel.strip_prefix(prefix) {
-                            Some(rest) => rest.to_string(),
-                            None => continue,
+                    .and_then(|key| preflight_pending.get(key));
+                let empty_facts = std::collections::BTreeMap::new();
+                let target_decisions =
+                    crate::sync::commit_helpers::durable_decisions_for_target(
+                        &planned.target_live_root,
+                        planned.project_id.as_deref(),
+                        &target_with_conflicts.result,
+                        &target_committed_paths,
+                        facts.unwrap_or(&empty_facts),
+                    );
+                for decision in &target_decisions {
+                    let remote_path = match planned.project_id.as_deref() {
+                        Some(project_id) => {
+                            format!("projects/{project_id}/{}", decision.identity)
+                        }
+                        None => format!("{remote_prefix}/{}", decision.identity),
+                    };
+                    publish_decisions.push((remote_path, decision.clone()));
+                }
+                if let Some(key) = decision_key.as_ref() {
+                    let consumed: std::collections::BTreeSet<String> = target_with_conflicts
+                        .result
+                        .overwritten_files
+                        .iter()
+                        .chain(target_with_conflicts.result.remote_deletes.iter())
+                        .cloned()
+                        .collect();
+                    consumed_by_target.insert(key.clone(), consumed);
+                }
+                // manifest 与对象同源：提交后立即读取已落盘的那一份并冻结成决议。
+                let manifest_live = match planned.target.app_group.as_ref() {
+                    Some(group) => planned.target_live_root.join(group.local_manifest_path()),
+                    None => planned
+                        .target_live_root
+                        .join(crate::sync::lww::SYNC_MANIFEST_PATH),
+                };
+                if let Ok(bytes) = std::fs::read(&manifest_live) {
+                    let bytes = serde_json::from_slice::<crate::sync::types::SyncManifest>(&bytes)
+                        .ok()
+                        .and_then(|manifest| manifest.canonical_json().ok())
+                        .map(String::into_bytes)
+                        .unwrap_or(bytes);
+                    let manifest_remote = match planned.target.app_group.as_ref() {
+                        Some(_) => format!("{remote_prefix}/{}", crate::sync::lww::SYNC_MANIFEST_PATH),
+                        None => format!("projects/{}/{}", planned.project_id.as_deref().unwrap_or_default(), crate::sync::lww::SYNC_MANIFEST_PATH),
+                    };
+                    publish_decisions.push((
+                        manifest_remote,
+                        crate::sync::decision::DurableObjectDecision {
+                            transaction_id: diagnostic_operation_id.to_string(),
+                            identity: crate::sync::lww::SYNC_MANIFEST_PATH.to_string(),
+                            op: crate::sync::decision::DecisionOp::Upsert,
+                            base_hash: None,
+                            final_hash: crate::sync::hash::content_md5(&bytes),
+                            final_version: None,
+                            mutation_seq: 0,
+                            origin: crate::sync::decision::DecisionOrigin::Local,
+                            content: Some(bytes),
+                            dependencies: Vec::new(),
                         },
-                        None => workspace_rel.clone(),
-                    };
-                    if relative.is_empty() {
-                        continue;
-                    }
-                    if committed.deleted {
-                        // 删除由缓冲里的 Delete 条目表达；这里只需要在决议里
-                        // 标记为已发布内容，不能再上传旧字节。
-                        continue;
-                    }
-                    let remote_path = match project_prefix.as_deref() {
-                        Some(_) => workspace_rel,
-                        None => format!("{remote_prefix}/{relative}"),
-                    };
-                    publish_decisions.push(crate::sync::decision::PublishDecision::upload(
-                        remote_path,
-                        planned.target_live_root.join(&relative),
                     ));
                 }
-                // 被远端消费/让位的本地版本：本轮不再上传（不是"猜"确认，而是
-                // 提交阶段已经决定本地这份内容不再作为本次发布内容）。
-                let decision_key = crate::sync::full_sync::sync_target_checkpoint_key(planned);
-                for path in target_with_conflicts
-                    .result
-                    .overwritten_files
-                    .iter()
-                    .chain(target_with_conflicts.result.remote_deletes.iter())
-                {
-                    publish_decisions.push(crate::sync::decision::PublishDecision::consume(
-                        format!("{target_decision_prefix}/{path}"),
-                    ));
-                    if let Some(key) = decision_key.as_ref() {
-                        consumed_by_target
-                            .entry(key.clone())
-                            .or_default()
-                            .insert(path.clone());
-                    }
-                }
-                for conflict in &target_with_conflicts.result.conflicts {
-                    publish_decisions.push(crate::sync::decision::PublishDecision::conflict(
-                        format!("{target_decision_prefix}/{}", conflict.local_path),
-                    ));
-                }
-                manifest_decisions.push((
-                    target_decision_prefix.clone(),
-                    match planned.target.app_group.as_ref() {
-                        Some(group) => planned.target_live_root.join(group.local_manifest_path()),
-                        None => planned
-                            .target_live_root
-                            .join(crate::sync::lww::SYNC_MANIFEST_PATH),
-                    },
-                ));
                 if let Some(ref sink) = progress_sink {
                     let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
                     sink.update_target_finish(
@@ -3074,29 +3076,21 @@ impl WriterCoreApi {
         let mut publish_error: Option<String> = None;
         let mut publish_error_category: Option<String> = None;
         let mut publish_ack_unsettled = 0usize;
-        // 按本地决议重建本轮发布内容：对象用已落盘字节、消费/冲突条目移除，
-        // manifest 用该 target 已落盘的字节，三者来自同一份本地事务结果。
-        let decision_outcome = round.apply_publish_decisions(&publish_decisions);
-        let mut manifest_rewritten = 0usize;
-        for (prefix, live_manifest) in &manifest_decisions {
-            manifest_rewritten += round.apply_manifest_decision(prefix, live_manifest);
-        }
+        // 按不可变决议重建本轮发布批次：内容取自提交阶段冻结的字节，
+        // 纯远端消费的条目移除；不再回读 live、不再二次覆盖 manifest。
+        let decision_outcome = round.apply_durable_decisions(&publish_decisions);
         if decision_outcome.rewritten > 0
             || decision_outcome.withheld > 0
             || decision_outcome.missing > 0
-            || manifest_rewritten > 0
         {
             log::info!(
-                "[sync] publish batch rebuilt from local decisions: rewritten={} withheld={} missing={} manifest={}",
+                "[sync] publish batch rebuilt from durable decisions: rewritten={} withheld={} missing={}",
                 decision_outcome.rewritten,
                 decision_outcome.withheld,
-                decision_outcome.missing,
-                manifest_rewritten
+                decision_outcome.missing
             );
         }
         if decision_outcome.missing > 0 {
-            // 决议要求上传但对象已不存在：这一条不发布（不能拿旧内容顶替），
-            // 其余独立对象照常发布。
             log::warn!(
                 "[sync] {} decided object(s) missing before publish; they stay unconfirmed",
                 decision_outcome.missing

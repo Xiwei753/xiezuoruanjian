@@ -62,3 +62,55 @@ pub(crate) struct DecisionApplyOutcome {
     /// 决议要求上传但本地文件已不存在的条数（不能发布旧内容）。
     pub missing: usize,
 }
+
+/// 本地业务提交的不变对象决议（复审 #7213791503/#7214105551 第 2 项）。
+///
+/// 与 [`PublishDecision`] 的区别：这里的内容在**持锁的业务提交阶段**就已冻结，
+/// 之后不再回读 live；`transaction_id`/`mutation_seq`/`base_hash` 来自真实
+/// durable 事实，`origin` 说明它是本地改动、真实合并还是纯远端消费。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DecisionOp {
+    Upsert,
+    Delete,
+}
+
+/// 决议来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DecisionOrigin {
+    /// 本地业务事务产生（章节提交、设置保存、变更集投影）。
+    Local,
+    /// 本地与远端真实合并后的结果。
+    Merged,
+    /// 纯远端落盘：本地只消费，不再上传。
+    RemoteConsumed,
+}
+
+/// 单个对象的不可变决议。
+#[derive(Debug, Clone)]
+pub(crate) struct DurableObjectDecision {
+    /// 业务事务 ID（章节 journal / 变更集 message / 同步轮次）。
+    pub(crate) transaction_id: String,
+    /// 对象在 target 内的相对路径（identity）。
+    pub(crate) identity: String,
+    pub(crate) op: DecisionOp,
+    /// 提交前的已确认基线摘要（没有基线时为 None）。
+    pub(crate) base_hash: Option<String>,
+    /// 提交后的内容摘要；delete 时为空。
+    pub(crate) final_hash: String,
+    /// 对象业务版本（meta revision 等）。
+    pub(crate) final_version: Option<u64>,
+    /// 对应 mutation 的账本序号（0 表示尚未投影）。
+    pub(crate) mutation_seq: u64,
+    pub(crate) origin: DecisionOrigin,
+    /// 冻结的最终内容；delete 时为 None。
+    pub(crate) content: Option<Vec<u8>>,
+    /// 依赖对象（同一事务集合内必须一起发布的 identity）。
+    pub(crate) dependencies: Vec<String>,
+}
+
+impl DurableObjectDecision {
+    /// 本轮是否允许把该对象写进远端批次。
+    pub(crate) fn is_publishable(&self) -> bool {
+        !matches!(self.origin, DecisionOrigin::RemoteConsumed)
+    }
+}

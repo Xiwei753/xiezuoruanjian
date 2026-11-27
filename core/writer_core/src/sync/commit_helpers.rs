@@ -2341,6 +2341,88 @@ fn proof_actions_without_chapter_bodies(
     clippy::too_many_lines,
     clippy::cognitive_complexity
 )]
+/// 从本轮已落盘的提交结果构造不可变对象决议（复审 #7214105551 第 2 项）。
+///
+/// 必须在提交刚完成、尚未释放本轮上下文时调用：内容在这里读取一次即冻结，
+/// 后续发布只使用决议里的字节，不再回读可变 live。
+pub(crate) fn durable_decisions_for_target(
+    live_root: &std::path::Path,
+    project_id: Option<&str>,
+    result: &crate::sync::types::SyncResult,
+    committed: &[CommittedPath],
+    facts: &std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
+) -> Vec<crate::sync::decision::DurableObjectDecision> {
+    use crate::sync::decision::{
+        DecisionOp, DecisionOrigin, DurableObjectDecision,
+    };
+    let project_prefix = project_id.map(|id| format!("projects/{id}/"));
+    let mut decisions = Vec::new();
+    for entry in committed {
+        let workspace_rel = entry.path.to_string_lossy().replace('\\', "/");
+        let identity = match project_prefix.as_deref() {
+            Some(prefix) => match workspace_rel.strip_prefix(prefix) {
+                Some(rest) => rest.to_string(),
+                None => continue,
+            },
+            None => workspace_rel.clone(),
+        };
+        if identity.is_empty() {
+            continue;
+        }
+        let fact = facts.get(&identity);
+        let base_hash = fact
+            .and_then(|record| record.base_hash.clone())
+            .or_else(|| {
+                crate::sync::SyncService::load_sync_state_read_only(live_root, project_id)
+                .ok()
+                .and_then(|state| state.known_files.get(&identity).cloned())
+            });
+        let consumed = result.overwritten_files.iter().any(|path| path == &identity)
+            || result.remote_deletes.iter().any(|path| path == &identity);
+        let downloaded = result.downloaded_files.iter().any(|path| path == &identity);
+        let origin = if consumed {
+            DecisionOrigin::RemoteConsumed
+        } else if downloaded {
+            DecisionOrigin::Merged
+        } else {
+            DecisionOrigin::Local
+        };
+        let (op, content, final_hash) = if entry.deleted {
+            (DecisionOp::Delete, None, String::new())
+        } else {
+            let path = live_root.join(&identity);
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    let hash = crate::sync::hash::content_md5(&bytes);
+                    (DecisionOp::Upsert, Some(bytes), hash)
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[sync] committed object unreadable while freezing decision: {}: {error}",
+                        path.display()
+                    );
+                    continue;
+                }
+            }
+        };
+        decisions.push(DurableObjectDecision {
+            transaction_id: fact
+                .map(|record| record.transaction_id.clone())
+                .unwrap_or_default(),
+            identity,
+            op,
+            base_hash,
+            final_hash,
+            final_version: fact.and_then(|record| record.object_revision),
+            mutation_seq: fact.map(|record| record.seq).unwrap_or(0),
+            origin,
+            content,
+            dependencies: Vec::new(),
+        });
+    }
+    decisions
+}
+
 pub(crate) fn commit_single_target_staging(
     run: &crate::sync::staging::StagingRun,
     target: &crate::sync::types::TargetSyncResult,
