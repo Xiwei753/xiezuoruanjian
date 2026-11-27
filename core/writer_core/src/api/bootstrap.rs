@@ -905,6 +905,12 @@ fn recover_local_applied_phase(
                 transaction_id: rec.transaction_id.clone(),
                 history_recorded_at: None,
             };
+            // journal 重放只补 history，这里的写入事实还没进同步账本：标一次
+            // 显式恢复，下一次同步按磁盘与已确认基线重建，不会漏同步（复审 #1）。
+            crate::sync::local_mutations::mark_recovery_pending(
+                app_data_root,
+                "workspace_change_journal_replay",
+            );
             if let Err(e) = journal.mark_history_recorded(app_data_root) {
                 log::warn!(
                     "recover_workspace_change_transactions: mark_history_recorded failed \

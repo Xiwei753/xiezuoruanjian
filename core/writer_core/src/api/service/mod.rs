@@ -320,6 +320,10 @@ impl WriterCoreApi {
                 continue;
             }
             if let Err(error) = crate::sync::local_mutations::append_batch(&sync_root, &records) {
+                crate::sync::local_mutations::mark_recovery_pending(
+                    &sync_root,
+                    "change_set_projection_failed",
+                );
                 log::warn!(
                     "[sync] change-set mutation projection failed for {}: {error}",
                     sync_root.display()

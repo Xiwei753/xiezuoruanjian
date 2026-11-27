@@ -559,6 +559,12 @@ fn record_settings_mutation(config_dir: &Path) {
         return;
     }
     if let Err(error) = crate::sync::local_mutations::append_batch(config_dir, &mutations) {
+        // 文件已经落盘、账本没记上：标一次显式恢复，下一次同步按磁盘重建，
+        // 不能让这次设置变更静默漏同步（复审 #1）。
+        crate::sync::local_mutations::mark_recovery_pending(
+            config_dir,
+            "settings_projection_failed",
+        );
         log::warn!("[sync] settings mutation projection failed: {error}");
     }
 }
