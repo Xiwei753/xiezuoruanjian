@@ -328,13 +328,7 @@ fn to_checkpoint_version(
 }
 
 fn sync_target_checkpoint_key(target: &crate::sync::full_sync::PlannedTarget) -> Option<String> {
-    if let Some(group) = target.target.app_group.as_ref() {
-        return Some(format!("app:{}", group.id()));
-    }
-    target
-        .project_id
-        .as_ref()
-        .map(|project_id| format!("project:{project_id}"))
+    crate::sync::full_sync::sync_target_checkpoint_key(target)
 }
 
 /// 本轮开始前各 target 的未确认 mutation 快照（path → op/hash/seq）。
@@ -1765,6 +1759,15 @@ impl WriterCoreApi {
         };
         revision_phase.finish_with_provider("success", provider.as_ref());
 
+        // 每个受影响 target 实际变化的远端路径（strip 掉 target 前缀），用于把
+        // staging seed 限制到这些对象 + 本地待上传对象（复审 #5）。
+        let mut remote_changed_paths: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeSet<std::path::PathBuf>,
+        > = std::collections::BTreeMap::new();
+        // 归因到 target 但剥不出对象相对路径的远端变化：该 target 不做裁剪。
+        let mut remote_unmapped_keys: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
         // 远端差异 → 受影响 target。只有 checkpoint 可比较且 Provider 能给出
         // tree diff 时才做增量选择；基线缺失/迁移/无法给出差异一律完整核对。
         let affected_targets: Option<std::collections::BTreeSet<String>> =
@@ -1799,6 +1802,37 @@ impl WriterCoreApi {
                                         &project_ids,
                                     ) {
                                         Some(key) => {
+                                            let relative = if let Some(project_id) =
+                                                key.strip_prefix("project:")
+                                            {
+                                                path.strip_prefix(&format!(
+                                                    "projects/{project_id}/"
+                                                ))
+                                                .map(std::path::PathBuf::from)
+                                            } else if let Some(group_id) =
+                                                key.strip_prefix("app:")
+                                            {
+                                                app_groups
+                                                    .iter()
+                                                    .find(|group| group.id() == group_id)
+                                                    .and_then(|group| {
+                                                        path.strip_prefix(&format!(
+                                                            "app/__groups__/{}/",
+                                                            group.storage_key()
+                                                        ))
+                                                        .map(std::path::PathBuf::from)
+                                                    })
+                                            } else {
+                                                None
+                                            };
+                                            if let Some(relative) = relative {
+                                                remote_changed_paths
+                                                    .entry(key.clone())
+                                                    .or_default()
+                                                    .insert(relative);
+                                            } else {
+                                                remote_unmapped_keys.insert(key.clone());
+                                            }
                                             remote_keys.insert(key);
                                         }
                                         None => {
@@ -2172,7 +2206,55 @@ impl WriterCoreApi {
             None,
             provider.as_ref(),
         );
-        let staging_runs = match crate::sync::staging::prepare_staging_runs(&mut plan) {
+        // 正常增量路径：只为远端变化对象 + 本地待上传对象建小型不可变快照。
+        // 只要某一 target 还有无法归因到 mutation 的本地脏事实，就不裁剪它，
+        // 继续整树 seed（完整扫描只保留给初始化/迁移/显式修复）。
+        let staging_seed_paths: std::collections::HashMap<String, Vec<std::path::PathBuf>> = {
+            let mut map = std::collections::HashMap::new();
+            if let (Some(_), Some(snapshot)) = (affected_targets.as_ref(), preflight_snapshot.as_ref()) {
+                for planned in &plan.targets {
+                    let Some(key) = sync_target_checkpoint_key(planned) else {
+                        continue;
+                    };
+                    if remote_unmapped_keys.contains(&key) {
+                        continue;
+                    }
+                    let Some(version) = snapshot.targets.get(&key) else {
+                        continue;
+                    };
+                    let pending = preflight_pending.get(&key);
+                    let pending_count = pending.map_or(0, std::collections::BTreeMap::len);
+                    let locally_changed = checkpoint.as_ref().is_some_and(|stored| {
+                        !stored.target_versions.get(&key).is_some_and(|entry| {
+                            entry.matches(&to_checkpoint_version(version))
+                        })
+                    });
+                    // 只有"本地脏事实全部来自未确认 mutation"时才允许裁剪：
+                    // 任何无法归因的本地变化都要整树 seed 才能被三方比较看到。
+                    let pending_complete = pending_count == version.pending_objects;
+                    let remote_paths = remote_changed_paths.get(&key);
+                    if remote_paths.is_none() && !pending_complete {
+                        continue;
+                    }
+                    if remote_paths.is_none() && pending_count == 0 {
+                        continue;
+                    }
+                    if remote_paths.is_some() && locally_changed && !pending_complete {
+                        continue;
+                    }
+                    let mut seed: Vec<std::path::PathBuf> =
+                        remote_paths.into_iter().flatten().cloned().collect();
+                    if let Some(pending) = pending {
+                        seed.extend(pending.keys().map(std::path::PathBuf::from));
+                    }
+                    seed.sort();
+                    seed.dedup();
+                    map.insert(key, seed);
+                }
+            }
+            map
+        };
+        let staging_runs = match crate::sync::staging::prepare_staging_runs(&mut plan, &staging_seed_paths) {
             Ok(runs) => runs,
             Err(err) => {
                 staging_phase.finish_with_provider("error", provider.as_ref());

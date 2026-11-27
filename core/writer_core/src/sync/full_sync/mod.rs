@@ -105,6 +105,17 @@ pub struct LiveTargetLww {
     pub device_id: String,
 }
 
+/// target 在 checkpoint/dirty 索引里的稳定键（App 组按组 id，作品按作品 id）。
+pub(crate) fn sync_target_checkpoint_key(target: &PlannedTarget) -> Option<String> {
+    if let Some(group) = target.target.app_group.as_ref() {
+        return Some(format!("app:{}", group.id()));
+    }
+    target
+        .project_id
+        .as_ref()
+        .map(|project_id| format!("project:{project_id}"))
+}
+
 impl PlannedTarget {
     /// 是否为待删除 target（pending delete target）。
     pub fn is_deleted_target(&self) -> bool {
