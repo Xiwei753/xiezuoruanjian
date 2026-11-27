@@ -424,62 +424,134 @@ impl<'a> RoundProvider<'a> {
             .collect()
     }
 
-    /// 把待发布内容冻结为"刚提交到 live 的对象字节"（Issue #1065 复审 #2）。
+    /// 按本地事务产出的对象决议应用本轮发布内容（复审 #7213234617 第 1 项）。
     ///
-    /// `facts` 来自 commit 阶段已经 durable 的本地决议（远端路径 + live 路径 +
-    /// 是否删除）。命中 fact 的缓冲内容一律用 live 当前字节覆盖，live 已经不
-    /// 存在则丢弃该条（说明对象在决议之后又被删除，不能拿旧 staging 内容推
-    /// 上去）。返回 (refrozen, dropped)；未被任何 fact 覆盖的元数据写入
-    /// （manifest/catalog/generation）保留本轮合并决议内容。
-    pub fn freeze_from_durable(
+    /// - `Upload`：用该对象在 live 的最终字节替换缓冲内容（没有缓冲就补一条），
+    ///   保证请求体来自已落盘决议而不是 transfer 阶段的历史缓冲；
+    /// - `Consumed`/`Conflict`：从本轮批次移除，绝不能把本地旧版本或冲突版本推回。
+    ///
+    /// 返回替换/保留/缺失的条数。缺失表示决议要求上传但文件已不存在：这一条
+    /// 直接不发布，调用方不得把旧内容顶上去。
+    pub fn apply_publish_decisions(
         &self,
-        facts: &[(String, std::path::PathBuf, bool)],
-    ) -> (usize, usize) {
+        decisions: &[crate::sync::decision::PublishDecision],
+    ) -> crate::sync::decision::DecisionApplyOutcome {
+        use crate::sync::decision::{DecisionApplyOutcome, PublishDisposition};
         let Ok(mut state) = self.state.lock() else {
-            return (0, 0);
+            return DecisionApplyOutcome::default();
         };
-        let mut refrozen = 0usize;
-        let mut dropped = 0usize;
-        for (remote_path, live_path, deleted) in facts {
-            if *deleted || !state.entries.contains_key(remote_path) {
-                continue;
-            }
-            match std::fs::read(live_path) {
-                Ok(bytes) => {
-                    let unchanged = state
-                        .entries
-                        .get(remote_path)
-                        .and_then(|entry| entry.as_ref())
-                        .is_some_and(|entry| {
-                            matches!(entry, BufferedValue::Content(current) if current == &bytes)
-                        });
-                    if unchanged {
-                        continue;
+        let mut outcome = DecisionApplyOutcome::default();
+        for decision in decisions {
+            match decision.disposition {
+                PublishDisposition::Consumed | PublishDisposition::Conflict => {
+                    if state.entries.remove(&decision.remote_path).is_some() {
+                        outcome.withheld += 1;
                     }
-                    state
-                        .entries
-                        .insert(remote_path.clone(), Some(BufferedValue::Content(bytes)));
-                    refrozen += 1;
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    // 决议之后对象又消失了：不发布旧内容，也不能冒充删除。
-                    log::warn!(
-                        "[sync] committed object vanished before publish; dropping buffered write: {} ({})",
-                        remote_path,
-                        live_path.display()
-                    );
-                    state.entries.remove(remote_path);
-                    dropped += 1;
-                }
-                Err(error) => {
-                    log::warn!(
-                        "[sync] cannot re-read committed object for publish: {}: {error}",
-                        live_path.display()
-                    );
+                PublishDisposition::Upload => {
+                    let Some(live_path) = decision.live_path.as_ref() else {
+                        continue;
+                    };
+                    match std::fs::read(live_path) {
+                        Ok(bytes) => {
+                            let same = state
+                                .entries
+                                .get(&decision.remote_path)
+                                .and_then(|entry| entry.as_ref())
+                                .is_some_and(|entry| {
+                                    matches!(entry, BufferedValue::Content(current) if current == &bytes)
+                                });
+                            if same {
+                                continue;
+                            }
+                            state.entries.insert(
+                                decision.remote_path.clone(),
+                                Some(BufferedValue::Content(bytes)),
+                            );
+                            outcome.rewritten += 1;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            // 决议之后对象又被删除：不发布旧内容，也不冒充删除。
+                            state.entries.remove(&decision.remote_path);
+                            outcome.missing += 1;
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "[sync] cannot read decided object for publish: {}: {error}",
+                                live_path.display()
+                            );
+                            state.entries.remove(&decision.remote_path);
+                            outcome.missing += 1;
+                        }
+                    }
                 }
             }
         }
-        (refrozen, dropped)
+        outcome
+    }
+
+    /// 用该 target 已落盘的 manifest 字节替换本轮缓冲里的 manifest 写入。
+    ///
+    /// transfer 阶段预先生成的 manifest 描述的是当时的对象；本地提交之后
+    /// 只有已落盘的那份才是真实决议。远端路径形如
+    /// `<prefix>/app-meta/sync/manifest.sync.json`（App 根也可直接是该相对路径）。
+    /// 落盘 manifest 不存在时直接移除缓冲条目，不发布过期描述。
+    pub fn apply_manifest_decision(
+        &self,
+        prefix: &str,
+        live_manifest: &std::path::Path,
+    ) -> usize {
+        let Ok(mut state) = self.state.lock() else {
+            return 0;
+        };
+        let suffix = format!("/{}", crate::sync::lww::SYNC_MANIFEST_PATH);
+        let matches = |path: &str| {
+            (path == crate::sync::lww::SYNC_MANIFEST_PATH || path.ends_with(&suffix))
+                && (prefix.is_empty() || path.starts_with(prefix))
+        };
+        let bytes = match std::fs::read(live_manifest) {
+            Ok(bytes) => match serde_json::from_slice::<crate::sync::types::SyncManifest>(&bytes) {
+                Ok(manifest) => manifest
+                    .canonical_json()
+                    .map(|text| text.into_bytes())
+                    .unwrap_or(bytes),
+                Err(_) => bytes,
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let keys: Vec<String> = state
+                    .entries
+                    .keys()
+                    .filter(|path| matches(path))
+                    .cloned()
+                    .collect();
+                for key in keys {
+                    state.entries.remove(&key);
+                }
+                return 0;
+            }
+            Err(error) => {
+                log::warn!(
+                    "[sync] cannot read local manifest for publish: {}: {error}",
+                    live_manifest.display()
+                );
+                return 0;
+            }
+        };
+        let mut rewritten = 0usize;
+        for (path, entry) in state.entries.iter_mut() {
+            if !matches(path) {
+                continue;
+            }
+            let same = entry
+                .as_ref()
+                .is_some_and(|value| matches!(value, BufferedValue::Content(current) if current == &bytes));
+            if same {
+                continue;
+            }
+            *entry = Some(BufferedValue::Content(bytes.clone()));
+            rewritten += 1;
+        }
+        rewritten
     }
 
     /// Drop every buffered write and check, leaving the remote untouched.

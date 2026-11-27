@@ -1294,6 +1294,7 @@ impl WriterCoreApi {
         preflight_pending: &PendingMutationMap,
         targets: &[crate::sync::types::TargetSyncResult],
         receipts: &[crate::sync::provider::round::PublishReceipt],
+        consumed: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
         round_id: &str,
         published_revision: Option<&str>,
     ) -> usize {
@@ -1389,12 +1390,9 @@ impl WriterCoreApi {
             }
             // 远端胜出的事实不再作为本地编辑回推：overwritten/远端删除说明
             // 本地这次修改已被合并决议放弃，直接标记 superseded（复审 #3）。
-            for path in target
-                .result
-                .overwritten_files
-                .iter()
-                .chain(target.result.remote_deletes.iter())
-            {
+            // 被远端消费/让位的路径来自提交阶段的对象决议，不再拿 transfer
+            // 的 overwritten_files/remote_deletes 反推（复审 #7213234617 第 1 项）。
+            for path in consumed.get(&key).into_iter().flatten() {
                 let Some(record) = pending.get(path) else {
                     continue;
                 };
@@ -2633,7 +2631,14 @@ impl WriterCoreApi {
             drop(_proof_recovery_workspace_lock);
             // 本轮已经 durable 落进 live 的对象事实：发布前用它把待发布内容
             // 冻结成刚提交的字节，杜绝推送旧 staging（复审 #2）。
-            let mut publish_facts: Vec<(String, std::path::PathBuf, bool)> = Vec::new();
+            let mut publish_decisions: Vec<crate::sync::decision::PublishDecision> = Vec::new();
+            // (目标远端前缀, 该 target 已落盘的 manifest 路径)
+            let mut manifest_decisions: Vec<(String, std::path::PathBuf)> = Vec::new();
+            // 被远端消费的本地事实（target key → target 相对路径），用于确认。
+            let mut consumed_by_target: std::collections::BTreeMap<
+                String,
+                std::collections::BTreeSet<String>,
+            > = std::collections::BTreeMap::new();
             for pending in pending_commits {
                 let PendingTargetCommit {
                     target_index,
@@ -2673,13 +2678,15 @@ impl WriterCoreApi {
                 let commit_outcome =
                     crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
                 commit_phase.finish_with_provider(&commit_outcome, provider);
-                // committed.path 是 workspace 相对：作品目标是
-                // `projects/<id>/<rel>`，App 目标是 `<rel>`。
+                // 本地事务产出的对象决议：workspace 相对路径 → 远端路径 + live 路径。
+                // manifest 也在这里按 target 处理：发布时用已落盘的 manifest 字节，
+                // 保证请求体里的对象与描述互相一致（复审 #7213234617 第 1 项）。
                 let remote_prefix = planned.target.remote_prefix.trim_end_matches('/');
                 let project_prefix = planned
                     .project_id
                     .as_ref()
                     .map(|id| format!("projects/{id}/"));
+                let target_decision_prefix = remote_prefix.to_string();
                 for committed in &target_committed_paths {
                     let workspace_rel = committed.path.to_string_lossy().replace('\\', "/");
                     let relative = match project_prefix.as_deref() {
@@ -2692,17 +2699,53 @@ impl WriterCoreApi {
                     if relative.is_empty() {
                         continue;
                     }
+                    if committed.deleted {
+                        // 删除由缓冲里的 Delete 条目表达；这里只需要在决议里
+                        // 标记为已发布内容，不能再上传旧字节。
+                        continue;
+                    }
                     let remote_path = match project_prefix.as_deref() {
                         Some(_) => workspace_rel,
                         None => format!("{remote_prefix}/{relative}"),
                     };
-                    publish_facts.push((
+                    publish_decisions.push(crate::sync::decision::PublishDecision::upload(
                         remote_path,
                         planned.target_live_root.join(&relative),
-                        committed.deleted,
                     ));
                 }
-
+                // 被远端消费/让位的本地版本：本轮不再上传（不是"猜"确认，而是
+                // 提交阶段已经决定本地这份内容不再作为本次发布内容）。
+                let decision_key = crate::sync::full_sync::sync_target_checkpoint_key(planned);
+                for path in target_with_conflicts
+                    .result
+                    .overwritten_files
+                    .iter()
+                    .chain(target_with_conflicts.result.remote_deletes.iter())
+                {
+                    publish_decisions.push(crate::sync::decision::PublishDecision::consume(
+                        format!("{target_decision_prefix}/{path}"),
+                    ));
+                    if let Some(key) = decision_key.as_ref() {
+                        consumed_by_target
+                            .entry(key.clone())
+                            .or_default()
+                            .insert(path.clone());
+                    }
+                }
+                for conflict in &target_with_conflicts.result.conflicts {
+                    publish_decisions.push(crate::sync::decision::PublishDecision::conflict(
+                        format!("{target_decision_prefix}/{}", conflict.local_path),
+                    ));
+                }
+                manifest_decisions.push((
+                    target_decision_prefix.clone(),
+                    match planned.target.app_group.as_ref() {
+                        Some(group) => planned.target_live_root.join(group.local_manifest_path()),
+                        None => planned
+                            .target_live_root
+                            .join(crate::sync::lww::SYNC_MANIFEST_PATH),
+                    },
+                ));
                 if let Some(ref sink) = progress_sink {
                     let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
                     sink.update_target_finish(
@@ -2871,18 +2914,33 @@ impl WriterCoreApi {
         let mut publish_error: Option<String> = None;
         let mut publish_error_category: Option<String> = None;
         let mut publish_ack_unsettled = 0usize;
-        // 本 batch 的 manifest 是 transfer 阶段按旧字节生成的；提交后的对象字节
-        // 与它不一致时整批发布会造成"正文 B + 描述 A"。先冻结核对，不一致就
-        // 作废本轮发布，mutation 保持未确认，下一轮从 live 重新规划。
-        let (refrozen, vanished) = round.freeze_from_durable(&publish_facts);
-        if refrozen > 0 || vanished > 0 {
-            log::warn!(
-                "[sync] publish deferred: committed objects differ from the planned batch (refrozen={} vanished={})",
-                refrozen,
-                vanished
+        // 按本地决议重建本轮发布内容：对象用已落盘字节、消费/冲突条目移除，
+        // manifest 用该 target 已落盘的字节，三者来自同一份本地事务结果。
+        let decision_outcome = round.apply_publish_decisions(&publish_decisions);
+        let mut manifest_rewritten = 0usize;
+        for (prefix, live_manifest) in &manifest_decisions {
+            manifest_rewritten += round.apply_manifest_decision(prefix, live_manifest);
+        }
+        if decision_outcome.rewritten > 0
+            || decision_outcome.withheld > 0
+            || decision_outcome.missing > 0
+            || manifest_rewritten > 0
+        {
+            log::info!(
+                "[sync] publish batch rebuilt from local decisions: rewritten={} withheld={} missing={} manifest={}",
+                decision_outcome.rewritten,
+                decision_outcome.withheld,
+                decision_outcome.missing,
+                manifest_rewritten
             );
-            round.discard();
-            publish_blocked = true;
+        }
+        if decision_outcome.missing > 0 {
+            // 决议要求上传但对象已不存在：这一条不发布（不能拿旧内容顶替），
+            // 其余独立对象照常发布。
+            log::warn!(
+                "[sync] {} decided object(s) missing before publish; they stay unconfirmed",
+                decision_outcome.missing
+            );
         }
         if !publish_blocked {
             // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
@@ -2922,6 +2980,7 @@ impl WriterCoreApi {
                         preflight_pending,
                         &all_targets,
                         &publish_receipts,
+                        &consumed_by_target,
                         diagnostic_operation_id,
                         published_revision.as_deref(),
                     );
