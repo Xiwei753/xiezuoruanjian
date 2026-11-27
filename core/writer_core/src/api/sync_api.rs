@@ -3189,8 +3189,9 @@ impl WriterCoreApi {
         // 它们不是对象决议；这类轮次不做对象过滤，避免漏删远端项目。
         let lifecycle_batch = plan.targets.iter().any(|planned| {
             !matches!(
-                planned.target.local_lifecycle_action,
-                crate::sync::types::LocalLifecycleCommitAction::None
+                planned.target_kind,
+                crate::sync::types::PlannedTargetKind::App
+                    | crate::sync::types::PlannedTargetKind::LiveProject
             )
         })
             || !crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&app_data_root)
