@@ -2038,6 +2038,12 @@ impl WriterCoreApi {
                 .map(|project_id| projects_root.join(project_id)),
         );
         for sync_root in &ack_roots {
+            if let Err(error) = crate::sync::local_mutations::replay_staged_mutations(sync_root) {
+                log::warn!(
+                    "[sync] replay staged mutations failed at {}: {error}",
+                    sync_root.display()
+                );
+            }
             if let Err(error) = crate::sync::local_mutations::replay_pending_acks(sync_root) {
                 log::warn!(
                     "[sync] replay pending mutation acks failed at {}: {error}",
@@ -2702,6 +2708,7 @@ impl WriterCoreApi {
 
         let mut publish_succeeded = false;
         let mut publish_error: Option<String> = None;
+        let mut publish_error_category: Option<String> = None;
         if !publish_blocked {
             // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
             // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
@@ -2756,6 +2763,21 @@ impl WriterCoreApi {
                     // 本地 commit 已经落盘：远端发布失败不回滚、也不提前返回，
                     // 仍然走 finalize/history/索引失效，让平台看到实际变更与
                     // 明确的失败终态（复审 #2、#3）。
+                    // 保留 provider 的真实失败类别：前置条件失败要按"远端已变、
+                    // 需要重新拉取差异再推"处理，不能一律丢成通用网络失败。
+                    publish_error_category = Some(match &error {
+                        crate::sync::provider::ProviderError::PreconditionFailed { .. } => {
+                            "remote_precondition_failed".to_string()
+                        }
+                        crate::sync::provider::ProviderError::RateLimited { .. } => {
+                            "remote_rate_limited".to_string()
+                        }
+                        crate::sync::provider::ProviderError::AuthFailed { .. }
+                        | crate::sync::provider::ProviderError::PermissionDenied { .. } => {
+                            "remote_auth_failed".to_string()
+                        }
+                        _ => "remote_publish_failed".to_string(),
+                    });
                     publish_error = Some(format!("remote_publish_failed: {error}"));
                 }
             }
@@ -2783,10 +2805,16 @@ impl WriterCoreApi {
         // Issue #779 评论 5853718466：传 None — GC 失败不影响同步终态。
         // 阶段失败（发布失败 / 取消）必须在 finalize 之前汇入持久终态。
         let round_phase_failure = if let Some(message) = publish_error.clone() {
+            let category = publish_error_category.as_deref().unwrap_or("remote_publish_failed");
             Some(crate::facade::RoundPhaseFailure {
-                category: "remote_publish_failed".to_string(),
+                category: category.to_string(),
                 message,
-                message_key: Some("sync.result.network_failed".to_string()),
+                // 前置条件失败不是网络问题：不套 network_failed 文案。
+                message_key: if category == "remote_precondition_failed" {
+                    None
+                } else {
+                    Some("sync.result.network_failed".to_string())
+                },
             })
         } else if cancelled_after_commit {
             Some(crate::facade::RoundPhaseFailure {

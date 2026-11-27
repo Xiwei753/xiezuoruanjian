@@ -195,6 +195,34 @@ pub fn pending_chapter_sync_proof_fact_ids(
 }
 /// 扫描并恢复未完成 journal。按 commit sequence 顺序处理；只处理未完成事务，
 /// 不遍历作品正文。调用方应持有工作区写锁（或传入 app_data_root）。
+/// 重放事务目录里记录的待同步 mutation 事实。
+///
+/// 投影在章节提交返回前进行；写盘失败或进程崩溃时事务目录里的 outbox 是
+/// 唯一可重放来源，成功追加后才删除。失败保留文件等下一次恢复。
+fn replay_sync_mutation_outbox(project_root: &Path, tx_dir: &Path) {
+    let outbox = tx_dir.join("sync-mutations.json");
+    let Ok(text) = fs::read_to_string(&outbox) else {
+        return;
+    };
+    let Ok(records) =
+        serde_json::from_str::<Vec<crate::sync::local_mutations::LocalMutationRecord>>(&text)
+    else {
+        log::warn!(
+            "chapter commit mutation outbox unreadable, keeping for diagnosis: {}",
+            outbox.display()
+        );
+        return;
+    };
+    match crate::sync::local_mutations::append_batch(project_root, &records) {
+        Ok(()) => {
+            let _ = fs::remove_file(&outbox);
+        }
+        Err(error) => log::warn!(
+            "chapter commit mutation outbox replay failed (will retry): {error}"
+        ),
+    }
+}
+
 pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<ChapterCommitRecovery>> {
     let root = journal_root(project_root);
     if !root.exists() {
@@ -210,6 +238,9 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
         if dir.file_name().and_then(|name| name.to_str()) == Some(CONFLICT_DIR) {
             continue;
         }
+        // 上次提交已 durable 但 mutation 投影失败的残留：先重放到账本再继续，
+        // 成功后才删除 outbox（复审 #5）。
+        replay_sync_mutation_outbox(project_root, &dir);
         let manifest_path = dir.join("manifest.json");
         if !manifest_path.exists() {
             // 材料都还没落盘完的目录：没有决议，删除自己的未发布材料。

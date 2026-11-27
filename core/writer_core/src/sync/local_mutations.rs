@@ -306,6 +306,33 @@ pub(crate) fn load_latest(
     Ok(latest)
 }
 
+/// 追加失败时暂存的 mutation 事实；下一轮同步或下一次 append 先重放。
+const STAGED_MUTATIONS_PATH: &str = "app-meta/sync/pending-mutations.jsonl";
+
+/// 重放上次写盘失败的 mutation 事实（幂等：重复内容由 append 去重）。
+pub(crate) fn replay_staged_mutations(sync_root: &Path) -> crate::error::Result<()> {
+    let path = sync_root.join(STAGED_MUTATIONS_PATH);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut records = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        match serde_json::from_str::<LocalMutationRecord>(line) {
+            Ok(record) => records.push(record),
+            Err(error) => log::warn!("[sync] staged mutation line unreadable: {error}"),
+        }
+    }
+    if records.is_empty() {
+        let _ = fs::remove_file(&path);
+        return Ok(());
+    }
+    append_batch(sync_root, &records)?;
+    let _ = fs::remove_file(&path);
+    Ok(())
+}
+
 pub(crate) fn append_batch(
     sync_root: &Path,
     records: &[LocalMutationRecord],
@@ -354,11 +381,27 @@ pub(crate) fn append_batch(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    for record in fresh {
-        writeln!(file, "{}", serde_json::to_string(&record)?)?;
+    let mut lines = String::new();
+    for record in &fresh {
+        lines.push_str(&serde_json::to_string(record)?);
+        lines.push('\n');
     }
-    file.sync_data()?;
+    let write_result = (|| -> crate::error::Result<()> {
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        file.write_all(lines.as_bytes())?;
+        file.sync_data()?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        // 账本写不进去（磁盘满/权限/崩溃前）：把事实暂存为可重放 outbox，
+        // 不能让它们随内存一起消失（复审 #2、#5）。
+        let staged = sync_root.join(STAGED_MUTATIONS_PATH);
+        if let Some(parent) = staged.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = crate::storage::atomic_write_string(&staged, &lines);
+        return Err(error);
+    }
     Ok(())
 }
 

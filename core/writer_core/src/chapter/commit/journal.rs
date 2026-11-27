@@ -835,12 +835,29 @@ pub(crate) fn commit_chapter_with_guard(
         &committed_deletes,
         Utc::now().timestamp_millis(),
     );
-    if let Err(error) =
-        crate::sync::local_mutations::append_batch(project_root, &mutations)
-    {
-        log::warn!(
-            "chapter commit mutation projection failed (sync will fall back to local scan): {error}"
-        );
+    if !mutations.is_empty() {
+        // 先把投影事实写进事务目录：append 失败（写盘错误/崩溃）时由 journal
+        // 恢复重放，不再只是 warn 一句就依赖全盘扫描兜底（复审 #5）。
+        let outbox = tx_dir.join("sync-mutations.json");
+        let staged = serde_json::to_string(&mutations)
+            .ok()
+            .map(|text| crate::storage::atomic_write_string(&outbox, &text));
+        if let Some(Err(error)) = staged {
+            log::warn!(
+                "chapter commit mutation outbox write failed for {}: {error}",
+                outbox.display()
+            );
+        }
+        match crate::sync::local_mutations::append_batch(project_root, &mutations) {
+            Ok(()) => {
+                let _ = fs::remove_file(&outbox);
+            }
+            Err(error) => {
+                log::warn!(
+                    "chapter commit mutation projection failed; journal will replay it: {error}"
+                );
+            }
+        }
     }
 
     let written_files = {
