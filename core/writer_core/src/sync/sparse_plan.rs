@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// 单个对象在本轮已知的状态。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) enum ObjectState {
+pub enum ObjectState {
     /// 未加载：本轮不读字节、不改写、不参与删除判定。
     Unloaded,
     /// 已加载：带有本轮确定的字节摘要（MD5）。
@@ -29,7 +29,7 @@ pub(crate) enum ObjectState {
 
 /// 删除证据来源。没有证据的"文件不见了"不能构造 [`ObjectState::Deleted`]。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) enum DeleteEvidence {
+pub enum DeleteEvidence {
     /// 本地 durable 删除事务（章节删除、作品生命周期删除）。
     LocalTransaction,
     /// 已持久化的 tombstone。
@@ -42,7 +42,7 @@ pub(crate) enum DeleteEvidence {
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
 )]
-pub(crate) struct SparseObjectPlan {
+pub struct SparseObjectPlan {
     /// 计划所基于的远端提交（固定 HEAD）；空表示首次同步/迁移。
     base_head: Option<String>,
     /// affected set：只有这里的对象允许被读取、合并、发布或删除。
@@ -78,7 +78,7 @@ impl SparseObjectPlan {
 }
 
 /// 计划文件相对工作根的路径；staging 扫描必须跳过它。
-pub(crate) const PLAN_FILE_NAME: &str = "app-meta/sync/sparse-plan.json";
+pub const PLAN_FILE_NAME: &str = "app-meta/sync/sparse-plan.json";
 
 impl SparseObjectPlan {
     /// 用本轮三类输入构造计划：未确认 mutation、远端 tree diff、必需依赖。
