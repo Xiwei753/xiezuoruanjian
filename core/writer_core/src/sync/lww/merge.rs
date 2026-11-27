@@ -215,6 +215,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
     source_remote_prefix: &str,
     scope: SyncScope,
     state: &mut SyncState,
+    sparse: Option<&crate::sync::sparse_plan::SparseObjectPlan>,
 ) -> crate::error::Result<LwwMergeOutcome> {
     merge_remote_into_local_snapshot_with_diagnostics(
         sync_root,
@@ -225,6 +226,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
         state,
         None,
         "unknown",
+        sparse,
     )
 }
 
@@ -242,6 +244,7 @@ pub(crate) fn merge_remote_into_local_snapshot_with_diagnostics(
     state: &mut SyncState,
     operation_id: Option<&str>,
     write_location: &str,
+    sparse: Option<&crate::sync::sparse_plan::SparseObjectPlan>,
 ) -> crate::error::Result<LwwMergeOutcome> {
     merge_remote_into_local_snapshot_with_group_and_diagnostics(
         sync_root,
@@ -253,6 +256,7 @@ pub(crate) fn merge_remote_into_local_snapshot_with_diagnostics(
         state,
         operation_id,
         write_location,
+        sparse,
     )
 }
 
@@ -274,6 +278,7 @@ pub(crate) fn merge_remote_into_local_app_group(
         state,
         None,
         "unknown",
+        None,
     )
 }
 
@@ -295,6 +300,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     state: &mut SyncState,
     operation_id: Option<&str>,
     write_location: &str,
+    sparse: Option<&crate::sync::sparse_plan::SparseObjectPlan>,
 ) -> crate::error::Result<LwwMergeOutcome> {
     log::debug!(
         "[sync] merge_remote_into_local_snapshot: source_remote_prefix={}",
@@ -311,7 +317,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     // 宽松投影：known file 缺失且无 tombstone 时不整体 Err，而是先尝试从远端
     // blob 恢复；无法恢复的路径显式报 local_missing_without_tombstone（见下方）。
     let local_snapshot =
-        snapshot_local_records_for_merge(sync_root, scope, &state.device_id, app_group, None)?;
+        snapshot_local_records_for_merge(sync_root, scope, &state.device_id, app_group, sparse)?;
     let local_records = local_snapshot.records;
     let remote_records = build_remote_records(
         remote_manifest,
@@ -1022,6 +1028,24 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         crate::sync::scanner::scan_for_sync_group(sync_root, scope, app_group)?;
 
     // ── 同步后重建 known_files ──
+    // 稀疏模式：本轮未加载的对象不在扫描结果里，它们的已确认基线必须原样保留，
+    // 不能被"清空重建"抹掉（复审 #7213234617 第 2 项）。
+    let unloaded_known_files: Vec<(String, String, i64)> = match sparse {
+        Some(plan) => state
+            .known_files
+            .iter()
+            .filter(|(path, _)| !plan.contains(path))
+            .map(|(path, hash)| {
+                let updated = state
+                    .known_files_updated_at
+                    .get(path)
+                    .copied()
+                    .unwrap_or_default();
+                (path.clone(), hash.clone(), updated)
+            })
+            .collect(),
+        None => Vec::new(),
+    };
     let conflicted_known_files: std::collections::HashMap<String, String> = state
         .conflicted_files
         .iter()
@@ -1060,6 +1084,10 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         }
     }
 
+    for (path, hash, updated) in unloaded_known_files {
+        state.known_files.entry(path.clone()).or_insert(hash);
+        state.known_files_updated_at.entry(path).or_insert(updated);
+    }
     for (path, hash) in conflicted_known_files {
         state.known_files.insert(path, hash);
     }
@@ -1252,7 +1280,7 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
     //    #931：已知文件缺失且无墓碑时不再整体 Err。缺失路径单独收集，向上层
     //    显式报告 local_missing_without_tombstone；不允许伪造删除记录。
     let local_snapshot =
-        snapshot_local_records_for_merge(sync_root, scope, preferred_device_id, None, None)?;
+        snapshot_local_records_for_merge(sync_root, scope, preferred_device_id, None, sparse)?;
     let local_records = local_snapshot.records;
     let unresolved_missing_paths: Vec<String> = local_snapshot
         .missing_without_delete_fact

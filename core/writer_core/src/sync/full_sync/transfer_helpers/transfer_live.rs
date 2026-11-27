@@ -140,6 +140,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 &mut merge_state,
                                 diagnostic_operation_id,
                                 write_location,
+                                None,
                             )?;
                         // 落盘 staging state（含稳定 device_id + merge 结果），
                         // 供 Commit 阶段 merge_sync_state_three_way 三方合并读取。

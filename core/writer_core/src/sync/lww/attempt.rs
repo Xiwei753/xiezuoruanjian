@@ -98,7 +98,7 @@ pub(crate) fn execute_lww_sync_attempt(
         Some(group) => {
             merge_remote_into_local_app_group(sync_root, provider, remote_prefix, group, state)?
         }
-        None => merge_remote_into_local_snapshot(sync_root, provider, remote_prefix, scope, state)?,
+        None => merge_remote_into_local_snapshot(sync_root, provider, remote_prefix, scope, state, None)?,
     };
 
     // Issue #729 评论 5765306162 问题4：merge 后检查取消令牌。

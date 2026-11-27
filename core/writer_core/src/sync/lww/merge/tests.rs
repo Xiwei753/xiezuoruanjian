@@ -86,6 +86,7 @@ fn issue_931_recovers_missing_known_file_from_remote_blob() {
         "projects/p1",
         SyncScope::Project,
         &mut state,
+        None,
     )
     .unwrap();
 
@@ -146,6 +147,7 @@ fn issue_931_missing_without_remote_blob_is_unresolved_not_deleted() {
         "projects/p1",
         SyncScope::Project,
         &mut state,
+        None,
     )
     .unwrap();
 
@@ -229,6 +231,7 @@ fn issue_931_missing_local_file_with_remote_tombstone_converges_to_delete() {
         "projects/p1",
         SyncScope::Project,
         &mut state,
+        None,
     )
     .unwrap();
 
@@ -302,6 +305,7 @@ fn correction_result_remote_delete_keeps_local_record() {
         "projects/p1",
         SyncScope::Project,
         &mut state,
+        None,
     )
     .unwrap();
 
