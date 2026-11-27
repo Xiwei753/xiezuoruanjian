@@ -290,6 +290,7 @@ impl SyncProvider for MemoryProvider {
         Ok(BatchCommitResult {
             revision: txn_revision,
             touched_paths: touched,
+            path_versions: std::collections::BTreeMap::new(),
         })
     }
 }

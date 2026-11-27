@@ -161,4 +161,8 @@ impl BatchMutation {
 pub struct BatchCommitResult {
     pub revision: RemoteVersion,
     pub touched_paths: Vec<String>,
+    /// 本批次真正写入的对象的远端版本（Git 为 blob OID）。provider 能证明
+    /// 实际 tree 时填入，供调用方核对“提交结果 == 决议内容”（评审 #7214314073）。
+    #[serde(default)]
+    pub path_versions: std::collections::BTreeMap<String, RemoteVersion>,
 }

@@ -118,6 +118,20 @@ impl GitHttpsProvider {
             message,
             &self.network_accounting,
         )?;
+        // 用提交后的实际 tree 证明每个对象写成了什么：Git OID 与决议内容
+        // 不一致时调用方可以据此拒绝确认（评审 #7214314073）。
+        let path_versions: std::collections::BTreeMap<String, RemoteVersion> = mutations
+            .iter()
+            .filter_map(|mutation| match mutation {
+                BatchMutation::Put { path, .. } | BatchMutation::ReuseVersion { path, .. } => {
+                    committed_snapshot
+                        .blobs
+                        .get(path)
+                        .map(|oid| (path.clone(), RemoteVersion::new(oid.to_string())))
+                }
+                _ => None,
+            })
+            .collect();
         self.advance_snapshot(&planned, committed_snapshot);
         Ok(BatchCommitResult {
             revision: RemoteVersion::new(commit_oid.to_string()),
@@ -131,6 +145,7 @@ impl GitHttpsProvider {
                 })
                 .map(|mutation| mutation.path().to_string())
                 .collect(),
+            path_versions,
         })
     }
 }

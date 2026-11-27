@@ -64,6 +64,8 @@ pub struct PublishReceipt {
     pub op: String,
     /// upsert 的实际内容摘要（MD5）；`ReuseVersion` 时为复用的远端版本串。
     pub content_digest: Option<String>,
+    /// provider 用提交后 tree 证明的实际远端版本（Git blob OID）；拿不到时为空。
+    pub remote_version: Option<String>,
 }
 
 /// Provider wrapper that defers all mutations until [`Self::flush`].
@@ -495,6 +497,7 @@ impl<'a> RoundProvider<'a> {
                         .clone()
                         .unwrap_or_else(|| RemoteVersion::new("")),
                     touched_paths: Vec::new(),
+                    path_versions: std::collections::BTreeMap::new(),
                 },
                 receipts: Vec::new(),
             });
@@ -577,6 +580,7 @@ impl<'a> RoundProvider<'a> {
                     path: path.clone(),
                     op: "upsert".to_string(),
                     content_digest: Some(crate::sync::hash::content_md5(content)),
+                    remote_version: None,
                 }),
                 BatchMutation::ReuseVersion { path, version } => Some(PublishReceipt {
                     path: path.clone(),
@@ -585,11 +589,13 @@ impl<'a> RoundProvider<'a> {
                     // 提交后的 known_files 一致性确认。
                     op: "reuse".to_string(),
                     content_digest: Some(version.as_str().to_string()),
+                    remote_version: None,
                 }),
                 BatchMutation::Delete { path } => Some(PublishReceipt {
                     path: path.clone(),
                     op: "delete".to_string(),
                     content_digest: None,
+                    remote_version: None,
                 }),
                 _ => None,
             })
@@ -605,6 +611,7 @@ impl<'a> RoundProvider<'a> {
                         .clone()
                         .unwrap_or_else(|| RemoteVersion::new("")),
                     touched_paths: Vec::new(),
+                    path_versions: std::collections::BTreeMap::new(),
                 },
                 receipts: Vec::new(),
             });
@@ -617,6 +624,12 @@ impl<'a> RoundProvider<'a> {
                 &format!("sujian: sync round ({} mutations)", mutations.len()),
             )?;
             let committed = Some(&result.revision) != self.base_revision.as_ref();
+            let mut receipts = receipts;
+            for receipt in &mut receipts {
+                if let Some(version) = result.path_versions.get(&receipt.path) {
+                    receipt.remote_version = Some(version.as_str().to_string());
+                }
+            }
             return Ok(RoundFlushOutcome {
                 committed,
                 result,
@@ -690,6 +703,7 @@ impl<'a> RoundProvider<'a> {
             result: BatchCommitResult {
                 revision: RemoteVersion::new("round"),
                 touched_paths,
+                path_versions: std::collections::BTreeMap::new(),
             },
             receipts,
         })
@@ -802,6 +816,7 @@ impl SyncProvider for RoundProvider<'_> {
                 })
                 .map(|mutation| mutation.path().to_string())
                 .collect(),
+            path_versions: std::collections::BTreeMap::new(),
         })
     }
 

@@ -373,6 +373,7 @@ pub(crate) fn commit_batch_via_git_database_at(
         return Ok(BatchCommitResult {
             revision: RemoteVersion(head_sha),
             touched_paths: Vec::new(),
+            path_versions: std::collections::BTreeMap::new(),
         });
     }
 
@@ -433,6 +434,7 @@ pub(crate) fn commit_batch_via_git_database_at(
     Ok(BatchCommitResult {
         revision: RemoteVersion(new_commit_sha),
         touched_paths,
+        path_versions: std::collections::BTreeMap::new(),
     })
 }
 
