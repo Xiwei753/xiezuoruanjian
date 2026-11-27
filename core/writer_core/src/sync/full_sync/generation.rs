@@ -554,10 +554,18 @@ fn upload_complete_tree_snapshot(
 }
 
 /// 把单个远端对象内容写入 staging（创建父目录 + 写文件）。
+///
+/// staging 条目可能与 live 共享 inode（seed 用硬链接），因此必须先 unlink
+/// 再新建：就地截断会把 live 内容一起改掉。
 pub(super) fn write_staging_file(staging: &Path, rel: &str, content: &[u8]) -> std::io::Result<()> {
     let dest = staging.join(rel);
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::symlink_metadata(&dest) {
+        Ok(_) => std::fs::remove_file(&dest)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
     std::fs::write(&dest, content)
 }

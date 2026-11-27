@@ -255,11 +255,15 @@ impl StagingRun {
         Ok(())
     }
 
-    /// Copy selected live files into a run snapshot. App group base/staging files
-    /// must never share live inodes: Transfer and legacy-state seeding can rewrite
-    /// them before Commit. Project retains the previous hard-link fast path.
+    /// Copy selected live files into a run snapshot.
+    ///
+    /// 优先硬链接，失败再复制：seed 只在目标不存在时创建条目，之后 staging 的
+    /// 所有写入都必须走 `unlink` + 新建或原子 `rename`（[`Self::write_seed_file`]、
+    /// `atomic_write_bytes`、`atomic_write_string`），不能就地截断，否则会改到
+    /// live inode。遵守这个前提时 App 组也不必每轮复制整组内容；一旦有就地
+    /// 写入路径出现，会表现为 live 被改写，必须在评审中拦下。
     fn copy_live_snapshot_file(&self, live_path: &Path, snapshot_path: &Path) -> Result<()> {
-        if self.app_group.is_none() && fs::hard_link(live_path, snapshot_path).is_ok() {
+        if fs::hard_link(live_path, snapshot_path).is_ok() {
             return Ok(());
         }
         fs::copy(live_path, snapshot_path)?;
