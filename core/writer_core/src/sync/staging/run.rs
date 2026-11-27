@@ -201,6 +201,35 @@ impl StagingRun {
         if let Some(group) = &self.app_group {
             self.seed_legacy_group_state(live_root, group)?;
         }
+        self.materialize_manifest_snapshot(live_root)?;
+        Ok(())
+    }
+
+    /// 把分片清单物化成 staging/base 里的 `manifest.sync.json` 只读视图。
+    ///
+    /// 权威清单已经是分片目录；prepare 之后的 transfer/publish/三方合并
+    /// 仍按"每个 target 一份清单文件"读取，因此在快照目录里生成一次
+    /// canonical JSON 即可，不回写 live。
+    fn materialize_manifest_snapshot(&self, live_root: &Path) -> Result<()> {
+        let mut rel_paths = vec![crate::sync::lww::SYNC_MANIFEST_PATH.to_string()];
+        if let Some(group) = &self.app_group {
+            rel_paths.push(group.local_manifest_path());
+        }
+        for rel in rel_paths {
+            let Ok(Some(manifest)) =
+                crate::sync::lww::load_manifest_shards(live_root, &rel)
+            else {
+                continue;
+            };
+            let json = manifest.canonical_json()?;
+            for root in [self.base_root(), self.staging_root()] {
+                let path = root.join(&rel);
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(path, json.as_bytes())?;
+            }
+        }
         Ok(())
     }
 
@@ -258,6 +287,7 @@ impl StagingRun {
         if let Some(group) = &self.app_group {
             self.seed_legacy_group_state(live_root, group)?;
         }
+        self.materialize_manifest_snapshot(live_root)?;
         plan.save(&self.staging_root())?;
         Ok(())
     }

@@ -159,9 +159,10 @@ fn validate_group_conflict_path(
 
 /// 一次事务写入 `manifest.sync.json` + `state.local.json` + `conflicts.json`。
 ///
-/// 用于 LWW merge 完成后原子提交三个文件，避免分多次独立写入中间崩溃
-/// 导致 manifest / state / conflicts 不一致。清单只在本轮语义真的变化时
-/// 重新序列化并写入：未涉及的合并轮次不再重写整份 JSON（#1062 评论 #7218195841）。
+/// 用于 LWW merge 完成后原子提交三个决议，避免分多次独立写入中间崩溃
+/// 导致 manifest / state / conflicts 不一致。清单按对象命名空间分片落盘：
+/// 只有内容真的变化的分片进入事务，其余分片保持原字节
+/// （#1062 评论 #7218195841 第 4 项）。
 pub(crate) fn persist_sync_merge_result(
     sync_root: &Path,
     manifest_path: &str,
@@ -195,34 +196,19 @@ pub(crate) fn persist_sync_merge_result_at_paths(
     let conflicts_json = serde_json::to_string_pretty(conflicts)
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
+    let plan =
+        crate::sync::lww::plan_manifest_persist(sync_root, manifest_path, manifest)?;
     let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
-    if manifest_needs_rewrite(sync_root, manifest_path, manifest) {
-        let manifest_json = manifest.canonical_json()?;
-        tx.add_bytes(manifest_path, manifest_json.as_bytes())?;
+    for (rel, bytes) in &plan.writes {
+        tx.add_bytes(rel, bytes)?;
+    }
+    for rel in &plan.deletes {
+        tx.add_delete(rel)?;
     }
     tx.add_bytes(state_path, state_json.as_bytes())?;
     tx.add_bytes(conflicts_path, conflicts_json.as_bytes())?;
     tx.commit()?;
     Ok(())
-}
-
-/// 磁盘上的清单是否已经与本次合并结果语义一致。
-///
-/// 一致时整份清单不需要重新序列化/写入；文件缺失或无法解析时必须重写，
-/// 不能把"读不出来"当成"没有变化"。
-fn manifest_needs_rewrite(
-    sync_root: &Path,
-    manifest_path: &str,
-    manifest: &crate::sync::types::SyncManifest,
-) -> bool {
-    let path = sync_root.join(manifest_path);
-    let Ok(bytes) = std::fs::read(&path) else {
-        return true;
-    };
-    match serde_json::from_slice::<crate::sync::types::SyncManifest>(&bytes) {
-        Ok(existing) => !existing.semantically_equals(manifest),
-        Err(_) => true,
-    }
 }
 
 /// 按 `local_path` 去重/替换加入冲突。
@@ -2748,30 +2734,36 @@ mod persist_manifest_tests {
         let manifest = SyncManifest {
             files: vec![record("volumes/a.json", "h1")],
         };
-        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
-        std::fs::write(
-            dir.path().join(MANIFEST),
-            manifest.canonical_json().unwrap(),
-        )
-        .unwrap();
         let state = crate::sync::types::SyncState::default();
         persist_sync_merge_result(dir.path(), MANIFEST, &manifest, &state, &[]).unwrap();
-        // 语义一致时文件保持原字节：不会被重新序列化覆盖。
-        let before = std::fs::read(dir.path().join(MANIFEST)).unwrap();
+        let shard = dir
+            .path()
+            .join("app-meta/sync/manifest-shards/volumes.json");
+        let before = std::fs::read(&shard).unwrap();
         persist_sync_merge_result(dir.path(), MANIFEST, &manifest, &state, &[]).unwrap();
-        assert_eq!(std::fs::read(dir.path().join(MANIFEST)).unwrap(), before);
+        assert_eq!(std::fs::read(&shard).unwrap(), before);
     }
 
     #[test]
-    fn changed_manifest_is_rewritten() {
+    fn changed_manifest_rewrites_only_affected_shard() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
         let old = SyncManifest {
-            files: vec![record("volumes/a.json", "h1")],
+            files: vec![record("volumes/a.json", "h1"), record("project.json", "p1")],
         };
-        std::fs::write(dir.path().join(MANIFEST), old.canonical_json().unwrap()).unwrap();
+        persist_sync_merge_result(
+            dir.path(),
+            MANIFEST,
+            &old,
+            &crate::sync::types::SyncState::default(),
+            &[],
+        )
+        .unwrap();
+        let root_shard = dir
+            .path()
+            .join("app-meta/sync/manifest-shards/_root.json");
+        let root_before = std::fs::read(&root_shard).unwrap();
         let new = SyncManifest {
-            files: vec![record("volumes/a.json", "h2")],
+            files: vec![record("volumes/a.json", "h2"), record("project.json", "p1")],
         };
         persist_sync_merge_result(
             dir.path(),
@@ -2781,8 +2773,13 @@ mod persist_manifest_tests {
             &[],
         )
         .unwrap();
-        let written: SyncManifest =
-            serde_json::from_slice(&std::fs::read(dir.path().join(MANIFEST)).unwrap()).unwrap();
-        assert_eq!(written.files[0].content_hash, "h2");
+        assert_eq!(std::fs::read(&root_shard).unwrap(), root_before);
+        let written = crate::sync::lww::load_sharded_manifest(dir.path(), MANIFEST).unwrap();
+        let volumes = written
+            .files
+            .iter()
+            .find(|r| r.path == "volumes/a.json")
+            .unwrap();
+        assert_eq!(volumes.content_hash, "h2");
     }
 }

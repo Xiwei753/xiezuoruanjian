@@ -68,3 +68,10 @@ pub(crate) use merge::{
 // re-export SYNC_MANIFEST_PATH，
 // 供 `full_sync.rs` upload_merged_outcome_to_generation 构造 manifest 远端路径。
 pub(crate) use manifest::SYNC_MANIFEST_PATH;
+
+// re-export 清单分片存储入口：读取端（版本快照、决议冻结、commit 写回）
+// 统一走分片优先/旧文件回退，不再各读各的单文件。
+pub(crate) use manifest::{
+    is_manifest_storage_path, load_manifest_shards, load_sharded_manifest,
+    plan_manifest_persist,
+};

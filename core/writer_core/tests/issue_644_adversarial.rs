@@ -578,11 +578,20 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
     // 对抗式：Success → Full，content 和 engine_state 都写回 live
     let live_project = fs::read_to_string(project_live.join(project_json)).unwrap();
     assert_eq!(live_project, "incoming-content");
-    let live_manifest = fs::read_to_string(project_live.join(manifest)).unwrap();
-    assert_eq!(
-        live_manifest, incoming_manifest,
-        "对抗式失败：Success → engine_state 应写回 incoming manifest"
+    // 清单权威存储已改为按命名空间分片：project.json 落入 _root 分片，
+    // 旧单文件不再写回。
+    let shard_path = project_live.join("app-meta/sync/manifest-shards/_root.json");
+    let shard_raw = fs::read_to_string(&shard_path).unwrap();
+    let shard_manifest: writer_core::sync::types::SyncManifest =
+        serde_json::from_str(&shard_raw).unwrap();
+    assert!(
+        shard_manifest
+            .files
+            .iter()
+            .any(|record| record.path == "project.json"),
+        "对抗式失败：Success → engine_state 应写回 incoming manifest 的对象记录"
     );
+    assert!(!project_live.join(manifest).exists());
 }
 
 /// 对抗式：PartialConflict 时 transfer_result.conflicts 里的路径不写回 live

@@ -107,6 +107,10 @@ fn fingerprint_objects(
 }
 
 fn read_manifest(sync_root: &std::path::Path, relative: &str) -> crate::Result<Option<SyncManifest>> {
+    // 权威清单是分片目录；旧单文件只作为迁移前的回退。
+    if let Some(manifest) = crate::sync::lww::load_manifest_shards(sync_root, relative)? {
+        return Ok(Some(manifest));
+    }
     let path = sync_root.join(relative);
     let content = match std::fs::read(&path) {
         Ok(content) => content,

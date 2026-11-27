@@ -4007,8 +4007,11 @@ mod tests {
         assert!(local_file_path.exists());
         let local_content = std::fs::read_to_string(local_file_path).unwrap();
         assert_eq!(local_content, "remote content");
-        // engine 同步后会写本地 manifest。
-        assert!(dir.path().join("app-meta/sync/manifest.sync.json").exists());
+        // engine 同步后把本地清单写成按命名空间分片的权威存储。
+        assert!(dir
+            .path()
+            .join("app-meta/sync/manifest-shards")
+            .is_dir());
     }
 
     #[test]

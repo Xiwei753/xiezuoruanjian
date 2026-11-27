@@ -21,8 +21,19 @@ use crate::sync::SyncService;
 use std::collections::HashMap;
 use std::path::Path;
 
+mod shards;
+
+pub(crate) use shards::{
+    is_manifest_storage_path, load_manifest as load_sharded_manifest,
+    load_sharded as load_manifest_shards, plan_persist as plan_manifest_persist,
+};
+
 /// 同步清单文件路径——记录本地所有文件的哈希、操作类型和时间戳。
 /// 这是 LWW 同步的唯一事实来源：三路比较的 base_hash 即从此文件读取。
+///
+/// #1062 评论 #7218195841 第 4 项起，权威存储改为同目录的
+/// `manifest-shards/*.json`（见 [`shards`]）；本路径保留为旧格式迁移来源，
+/// 读取端统一走 [`shards::load_manifest`]。
 pub const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
 
 /// 获取 LWW 比较时间戳。
@@ -178,40 +189,51 @@ fn build_local_snapshot(
     let manifest_rel_path = app_group
         .map(crate::sync::types::AppDataGroup::local_manifest_path)
         .unwrap_or_else(|| SYNC_MANIFEST_PATH.to_string());
-    let manifest_path = sync_root.join(&manifest_rel_path);
-    let legacy_manifest_path = sync_root.join(SYNC_MANIFEST_PATH);
-    let source_manifest_path = if manifest_path.exists() {
-        manifest_path.as_path()
-    } else if app_group.is_some() && legacy_manifest_path.exists() {
-        // Local v1 state is read-only migration input. The first successful group
-        // merge writes its own manifest and leaves the aggregate manifest intact.
-        legacy_manifest_path.as_path()
-    } else {
-        manifest_path.as_path()
-    };
-    let old_manifest_records: HashMap<String, ManifestFileRecord> = if source_manifest_path.exists()
-    {
-        let content = std::fs::read(source_manifest_path).map_err(|e| {
+    // 权威清单是分片目录；旧单文件只在尚未迁移时只读回退（App group 还会
+    // 回退聚合清单作为 v1 迁移输入）。损坏必须返回 Err，不能当作"没有清单"。
+    let old_manifest = match crate::sync::lww::load_manifest_shards(sync_root, &manifest_rel_path)
+        .map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "snapshot_local_records_read_only: manifest read failed at {}: {e}",
-                source_manifest_path.display()
+                "snapshot_local_records_read_only: manifest read failed for {manifest_rel_path}: {e}"
             )))
-        })?;
-        serde_json::from_slice::<SyncManifest>(&content)
-            .map_err(|e| {
-                crate::Error::Io(std::io::Error::other(format!(
-                    "snapshot_local_records_read_only: manifest corrupt at {}: {e}",
-                    source_manifest_path.display()
-                )))
-            })?
-            .files
-            .into_iter()
-            .filter(|record| app_group.map_or(true, |group| group.owns_path(&record.path)))
-            .map(|r| (r.path.clone(), r))
-            .collect()
-    } else {
-        HashMap::new()
+        })? {
+        Some(manifest) => Some(manifest),
+        None => {
+            // 尚未迁移的单文件清单：项目清单或 App group 的聚合清单，只读读取。
+            let mut candidates = vec![sync_root.join(&manifest_rel_path)];
+            if app_group.is_some() {
+                candidates.push(sync_root.join(SYNC_MANIFEST_PATH));
+            }
+            let source = candidates.into_iter().find(|path| path.exists());
+            match source {
+                Some(path) => {
+                    let content = std::fs::read(&path).map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "snapshot_local_records_read_only: manifest read failed at {}: {e}",
+                            path.display()
+                        )))
+                    })?;
+                    Some(serde_json::from_slice::<SyncManifest>(&content).map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "snapshot_local_records_read_only: manifest corrupt at {}: {e}",
+                            path.display()
+                        )))
+                    })?)
+                }
+                None => None,
+            }
+        }
     };
+    let old_manifest_records: HashMap<String, ManifestFileRecord> = old_manifest
+        .map(|manifest| {
+            manifest
+                .files
+                .into_iter()
+                .filter(|record| app_group.map_or(true, |group| group.owns_path(&record.path)))
+                .map(|r| (r.path.clone(), r))
+                .collect()
+        })
+        .unwrap_or_default();
 
     // 2. 读 SyncState（read-only，不写文件）。
     let preferred = if preferred_device_id.is_empty() {

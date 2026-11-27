@@ -91,6 +91,11 @@ impl crate::sync::SyncService {
         if rel_path.ends_with(".tmp") || rel_path.ends_with(".lock") {
             return true;
         }
+        // 清单分片是同步自身的权威存储，不是业务对象；不能进入扫描结果或
+        // 再次被写进清单，否则清单会包含自身的分片而形成递归。
+        if crate::sync::lww::is_manifest_storage_path(&rel_path) {
+            return true;
+        }
 
         match scope {
             SyncScope::Project => Self::is_project_blacklisted_path(&rel_path),

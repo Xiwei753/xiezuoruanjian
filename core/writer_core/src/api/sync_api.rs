@@ -4012,17 +4012,23 @@ impl WriterCoreApi {
             );
             // manifest 与对象同源：本次持锁提交刚写回的 manifest 在同一快照里
             // 冻结成决议，发布路径不再在锁外回读。
-            let manifest_live = match target_with_conflicts
+            let manifest_rel = match target_with_conflicts
                 .group_id
                 .as_deref()
                 .and_then(|group_id| crate::sync::types::AppDataGroup::from_id(group_id).ok())
             {
-                Some(group) => run.target_live_root().join(group.local_manifest_path()),
-                None => run
-                    .target_live_root()
-                    .join(crate::sync::lww::SYNC_MANIFEST_PATH),
+                Some(group) => group.local_manifest_path(),
+                None => crate::sync::lww::SYNC_MANIFEST_PATH.to_string(),
             };
-            if let Ok(bytes) = std::fs::read(&manifest_live) {
+            let manifest_bytes = crate::sync::lww::load_sharded_manifest(
+                run.target_live_root(),
+                &manifest_rel,
+            )
+            .ok()
+            .and_then(|manifest| manifest.canonical_json().ok())
+            .map(String::into_bytes)
+            .or_else(|| std::fs::read(run.target_live_root().join(&manifest_rel)).ok());
+            if let Some(bytes) = manifest_bytes {
                 let bytes = serde_json::from_slice::<crate::sync::types::SyncManifest>(&bytes)
                     .ok()
                     .and_then(|manifest| manifest.canonical_json().ok())

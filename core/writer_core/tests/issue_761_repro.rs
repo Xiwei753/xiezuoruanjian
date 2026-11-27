@@ -1079,11 +1079,13 @@ fn regression_issue_761_real_first_sync_no_manifest_device_id_consistent() {
     );
     let batch = &batches[0];
 
-    // 8. staging 已生成 manifest（materialize_local_snapshot_for_empty_remote 写入）。
-    let staging_manifest_after = staging_run.staging_root().join(SYNC_MANIFEST_PATH);
+    // 8. staging 已生成清单分片（materialize_local_snapshot_for_empty_remote 写入）。
+    let staging_manifest_after = staging_run
+        .staging_root()
+        .join("app-meta/sync/manifest-shards");
     assert!(
-        staging_manifest_after.exists(),
-        "修复后 staging 应已生成 manifest.sync.json"
+        staging_manifest_after.is_dir(),
+        "修复后 staging 应已生成 manifest-shards/ 权威清单"
     );
 
     // 9. staging SyncState 的 known_files 已包含正文/元数据。

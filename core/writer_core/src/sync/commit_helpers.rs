@@ -599,6 +599,50 @@ fn refresh_starmap_references_after_commit(
     Ok(())
 }
 
+/// 清单文件路径（项目清单或 App group 清单）。
+fn is_manifest_rel_path(rel: &str) -> bool {
+    rel == crate::sync::lww::SYNC_MANIFEST_PATH || rel.ends_with("/manifest.sync.json")
+}
+
+/// 引擎状态写回：普通状态文件直接写；清单则落成分片。
+///
+/// staging commit 的清单动作来自三方合并后的完整清单字节。这里把它转成
+/// 分片增量（只写变化分片、回收陈旧分片），并删除旧单文件——同步流程里
+/// 不再有"整份清单文件"这个权威容器（#1062 评论 #7218195841 第 4 项）。
+fn stage_engine_state_write(
+    tx: &mut crate::storage::transaction::SaveTransaction,
+    live_root: &Path,
+    rel_path: &Path,
+    content: &[u8],
+) -> crate::error::Result<()> {
+    let rel_str = rel_path.to_string_lossy();
+    if !is_manifest_rel_path(&rel_str) {
+        tx.add_bytes(&rel_str, content)?;
+        return Ok(());
+    }
+    let manifest: crate::sync::types::SyncManifest =
+        serde_json::from_slice(content).map_err(|e| {
+            crate::Error::Other(format!(
+                "commit manifest {rel_str} is unreadable while staging shards: {e}"
+            ))
+        })?;
+    let plan = crate::sync::lww::plan_manifest_persist(
+        live_root,
+        &rel_str,
+        &manifest,
+    )?;
+    for (rel, bytes) in plan.writes {
+        tx.add_bytes(&rel, &bytes)?;
+    }
+    for rel in plan.deletes {
+        tx.add_delete(&rel)?;
+    }
+    if live_root.join(&*rel_str).exists() {
+        tx.add_delete(&rel_str)?;
+    }
+    Ok(())
+}
+
 /// 将 commit plan 中的 Apply/Delete 变更通过 SaveTransaction 写回 live root。
 ///
 /// 删除 `git_finalize_recovery` 参数。
@@ -623,8 +667,7 @@ pub(crate) fn apply_commit_plan_to_live(
     for action in engine_state_actions {
         match action {
             crate::sync::staging::CommitAction::Apply { rel_path, content } => {
-                let rel_str = rel_path.to_string_lossy();
-                tx.add_bytes(&rel_str, content)?;
+                stage_engine_state_write(&mut tx, live_root, rel_path, content)?;
             }
             crate::sync::staging::CommitAction::Delete { rel_path } => {
                 let rel_str = rel_path.to_string_lossy();
@@ -709,8 +752,7 @@ fn apply_commit_plan_with_sync_state_merge_for_group(
     for action in engine_state_actions {
         match action {
             crate::sync::staging::CommitAction::Apply { rel_path, content } => {
-                let rel_str = rel_path.to_string_lossy();
-                tx.add_bytes(&rel_str, content)?;
+                stage_engine_state_write(&mut tx, live_root, rel_path, content)?;
             }
             crate::sync::staging::CommitAction::Delete { rel_path } => {
                 let rel_str = rel_path.to_string_lossy();
