@@ -327,10 +327,25 @@ fn to_checkpoint_version(
     }
 }
 
-/// 各同步根的账本序号高水位 + 是否存在未完成恢复。
-///
-/// 返回 `None` 表示不能把本轮当空闲：有恢复责任，或有根读不到水位。
-/// 这是空闲轮唯一的本地读取（每个根一个很小的 JSON），不碰 manifest/账本正文。
+/// 远端路径 → target 相对路径（`projects/<id>/...` 与
+/// `app/__groups__/<storage_key>/...` 两种前缀）。
+fn target_relative_remote_path(
+    remote_path: &str,
+    key: &str,
+    app_groups: &[crate::sync::types::AppDataGroup],
+) -> Option<String> {
+    let path = remote_path.replace('\\', "/");
+    if let Some(project_id) = key.strip_prefix("project:") {
+        return path
+            .strip_prefix(&format!("projects/{project_id}/"))
+            .map(str::to_string);
+    }
+    let group_id = key.strip_prefix("app:")?;
+    let group = app_groups.iter().find(|group| group.id() == group_id)?;
+    path.strip_prefix(&format!("app/__groups__/{}/", group.storage_key()))
+        .map(str::to_string)
+}
+
 /// 从结果 DTO 取 checkpoint 键：作品看 project_id，App 组按远端前缀里的
 /// storage key 反查组 id（DTO 不携带组 id）。
 fn dto_target_checkpoint_key(
@@ -1872,6 +1887,14 @@ impl WriterCoreApi {
         revision_phase.finish_with_provider("success", provider.as_ref());
 
 
+        // 每个受影响 target 的远端变化相对路径（strip 掉 target 前缀），用于
+        // 构造对象级增量计划（复审 #7213234617 第 2 项）。
+        let mut remote_changed_paths: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeSet<String>,
+        > = std::collections::BTreeMap::new();
+        let mut remote_unmapped_keys: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
         // 远端差异 → 受影响 target。只有 checkpoint 可比较且 Provider 能给出
         // tree diff 时才做增量选择；基线缺失/迁移/无法给出差异一律完整核对。
         let affected_targets: Option<std::collections::BTreeSet<String>> =
@@ -1906,6 +1929,16 @@ impl WriterCoreApi {
                                         &project_ids,
                                     ) {
                                         Some(key) => {
+                                            if let Some(relative) =
+                                                target_relative_remote_path(&path, &key, &app_groups)
+                                            {
+                                                remote_changed_paths
+                                                    .entry(key.clone())
+                                                    .or_default()
+                                                    .insert(relative);
+                                            } else {
+                                                remote_unmapped_keys.insert(key.clone());
+                                            }
                                             remote_keys.insert(key);
                                         }
                                         None => {
@@ -2279,7 +2312,78 @@ impl WriterCoreApi {
             None,
             provider.as_ref(),
         );
-        let staging_runs = match crate::sync::staging::prepare_staging_runs(&mut plan) {
+        // 对象级增量计划：只为"远端确实变了 + 本地确有未确认事实"的 target
+        // 裁剪 staging。条件全部满足才裁剪，否则整树 seed（完整核对）。
+        let sparse_plans: std::collections::HashMap<
+            String,
+            crate::sync::sparse_plan::SparseObjectPlan,
+        > = {
+            let mut plans = std::collections::HashMap::new();
+            if let Some(snapshot) = preflight_snapshot.as_ref() {
+                for planned in &plan.targets {
+                    let Some(key) = crate::sync::full_sync::sync_target_checkpoint_key(planned)
+                    else {
+                        continue;
+                    };
+                    if remote_unmapped_keys.contains(&key) {
+                        continue;
+                    }
+                    let Some(version) = snapshot.targets.get(&key) else {
+                        continue;
+                    };
+                    if !version.eligible {
+                        continue;
+                    }
+                    // 星图组的 graph↔对象依赖闭包必须先显式建模，暂不裁剪。
+                    if matches!(
+                        planned.target.app_group.as_ref(),
+                        Some(crate::sync::types::AppDataGroup::Starmap(_))
+                            | Some(crate::sync::types::AppDataGroup::StarmapIndex)
+                    ) {
+                        continue;
+                    }
+                    let pending = preflight_pending.get(&key);
+                    let pending_count = pending.map_or(0, std::collections::BTreeMap::len);
+                    // 本地脏事实必须全部来自未确认 mutation，否则整树核对。
+                    if pending_count != version.pending_objects {
+                        continue;
+                    }
+                    let mut remote_paths: Vec<String> = remote_changed_paths
+                        .get(&key)
+                        .map(|paths| paths.iter().cloned().collect())
+                        .unwrap_or_default();
+                    let mut pending_paths: Vec<String> = pending
+                        .map(|records| records.keys().cloned().collect())
+                        .unwrap_or_default();
+                    if remote_paths.is_empty() && pending_paths.is_empty() {
+                        continue;
+                    }
+                    remote_paths.sort();
+                    remote_paths.dedup();
+                    pending_paths.sort();
+                    pending_paths.dedup();
+                    let plan = crate::sync::sparse_plan::SparseObjectPlan::new(
+                        checkpoint
+                            .as_ref()
+                            .map(|stored| stored.remote_revision.clone()),
+                        pending_paths,
+                        remote_paths,
+                    );
+                    plans.insert(key, plan);
+                }
+            }
+            plans
+        };
+        if !sparse_plans.is_empty() {
+            log::info!(
+                "[sync] object-level incremental plan: {} target(s)",
+                sparse_plans.len()
+            );
+        }
+        let staging_runs = match crate::sync::staging::prepare_staging_runs(
+            &mut plan,
+            &sparse_plans,
+        ) {
             Ok(runs) => runs,
             Err(err) => {
                 staging_phase.finish_with_provider("error", provider.as_ref());

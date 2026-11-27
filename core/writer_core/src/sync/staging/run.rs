@@ -202,6 +202,68 @@ impl StagingRun {
         Ok(())
     }
 
+    /// 稀疏 seed：只为计划里的对象和 target 自己的元数据建快照。
+    ///
+    /// 三方比较引擎通过 [`crate::sync::sparse_plan::SparseObjectPlan`] 识别
+    /// "本轮未加载"（沿用已确认基线），因此这里不再需要复制整棵树；
+    /// 计划同时写进本 run 的工作根，供 merge/commit 阶段读取同一份事实。
+    pub fn seed_with_plan(
+        &self,
+        live_root: &Path,
+        plan: &crate::sync::sparse_plan::SparseObjectPlan,
+    ) -> Result<()> {
+        let mut rel_paths: Vec<PathBuf> = plan
+            .affected_paths()
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        if let Some(group) = &self.app_group {
+            let legacy_manifest = PathBuf::from("app-meta/sync/manifest.sync.json");
+            if live_root.join(&legacy_manifest).is_file() {
+                rel_paths.push(legacy_manifest);
+            }
+            for metadata_path in [
+                group.local_manifest_path(),
+                group.local_state_path(),
+                group.local_conflicts_path(),
+            ] {
+                let path = PathBuf::from(metadata_path);
+                if live_root.join(&path).is_file() {
+                    rel_paths.push(path);
+                }
+            }
+        } else {
+            for metadata_path in [
+                crate::sync::lww::SYNC_MANIFEST_PATH.to_string(),
+                "app-meta/sync/state.local.json".to_string(),
+            ] {
+                let path = PathBuf::from(metadata_path);
+                if live_root.join(&path).is_file() {
+                    rel_paths.push(path);
+                }
+            }
+        }
+        rel_paths.sort();
+        rel_paths.dedup();
+        self.build_base_snapshot_from_live(live_root, &rel_paths)?;
+        for rel in &rel_paths {
+            let live_path = live_root.join(rel);
+            if !live_path.exists() {
+                continue;
+            }
+            let staging_path = self.staging_root().join(rel);
+            if let Some(parent) = staging_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            self.copy_live_snapshot_file(&live_path, &staging_path)?;
+        }
+        if let Some(group) = &self.app_group {
+            self.seed_legacy_group_state(live_root, group)?;
+        }
+        plan.save(&self.staging_root())?;
+        Ok(())
+    }
+
     /// Materialize a filtered view of legacy App state in this run only. This keeps
     /// group transfer's existing migration reads available without copying or
     /// committing the aggregate state into another group's staging tree.
@@ -1491,6 +1553,7 @@ fn write_starmap_delete_records_to_manifest(
 /// 成功后 `plan.targets[*].staging_root` 被填充为对应 staging 目录。
 pub fn prepare_staging_runs(
     plan: &mut crate::sync::full_sync::FullSyncPlan,
+    sparse_plans: &std::collections::HashMap<String, crate::sync::sparse_plan::SparseObjectPlan>,
 ) -> crate::error::Result<Vec<StagingRun>> {
     let mut staging_runs: Vec<StagingRun> = Vec::new();
 
@@ -1514,11 +1577,14 @@ pub fn prepare_staging_runs(
             // 只枚举远端删除）。创建空 staging run 保持索引对齐，commit 阶段
             // compute_commit_plan 会发现 staging 为空，自然 Skip。
             // seed 失败必须传播，不能继续拿半成品 staging。
-            // 三方比较引擎以"base=准备时 live、staging=合并结果"的全集为前提：
-            // 只 seed 受影响路径会让未 materialize 的对象被当成 missing，从而
-            // 误判删除/误重建基线（复审 #7213115893 第 2 项）。对象级快照必须
-            // 先有 SparseObjectPlan 的三态语义，在那之前保持整树 seed。
-            run.seed_from_live(&planned.target_live_root)?;
+            // 有对象级计划时只物化计划内的对象；计划外的对象由
+            // SparseObjectPlan::Unloaded 语义沿用已确认基线（复审 #7213234617 第 2 项）。
+            match crate::sync::full_sync::sync_target_checkpoint_key(planned)
+                .and_then(|key| sparse_plans.get(&key))
+            {
+                Some(sparse) => run.seed_with_plan(&planned.target_live_root, sparse)?,
+                None => run.seed_from_live(&planned.target_live_root)?,
+            }
         }
         planned.staging_root = Some(run.staging_root());
         staging_runs.push(run);
@@ -1935,6 +2001,11 @@ pub(crate) fn walk_commit_candidates(
         let path = entry.path();
         if let Ok(rel) = path.strip_prefix(root) {
             if is_workspace_internal_path(rel) {
+                continue;
+            }
+            // 对象级增量计划是本轮运行的输入，不是业务文件：不进入三方比较，
+            // 也不提交进 live。
+            if rel == Path::new(crate::sync::sparse_plan::PLAN_FILE_NAME) {
                 continue;
             }
         }

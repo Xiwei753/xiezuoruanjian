@@ -77,6 +77,9 @@ impl SparseObjectPlan {
     }
 }
 
+/// 计划文件相对工作根的路径；staging 扫描必须跳过它。
+pub(crate) const PLAN_FILE_NAME: &str = "app-meta/sync/sparse-plan.json";
+
 impl SparseObjectPlan {
     /// 用本轮三类输入构造计划：未确认 mutation、远端 tree diff、必需依赖。
     pub(crate) fn new(

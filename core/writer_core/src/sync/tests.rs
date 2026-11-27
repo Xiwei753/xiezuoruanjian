@@ -891,6 +891,7 @@ mod tests {
             known_files_updated_at: std::collections::HashMap::new(),
             conflicted_files: std::collections::HashSet::new(),
             pending_take_remote: std::collections::HashSet::new(),
+            confirmed_mutation_seq: std::collections::BTreeMap::new(),
         };
         crate::sync::SyncService::save_sync_state(sync_root, &state).unwrap();
 

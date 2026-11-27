@@ -729,7 +729,7 @@ fn prepare_staging_runs_migrates_local_stats_group_before_seed() {
         remote_catalog_snapshot: crate::sync::full_sync::tests::test_empty_catalog_snapshot(),
     };
 
-    let runs = prepare_staging_runs(&mut plan).unwrap();
+    let runs = prepare_staging_runs(&mut plan, &std::collections::HashMap::new()).unwrap();
     assert_eq!(runs.len(), 1);
     assert!(runs[0].prepare_error().is_none());
     // 新契约：已封口业务日以 zstd 归档段持久化
@@ -793,7 +793,7 @@ fn prepare_staging_runs_records_stats_migration_failure_per_group() {
         remote_catalog_snapshot: crate::sync::full_sync::tests::test_empty_catalog_snapshot(),
     };
 
-    let runs = prepare_staging_runs(&mut plan).unwrap();
+    let runs = prepare_staging_runs(&mut plan, &std::collections::HashMap::new()).unwrap();
     assert_eq!(runs.len(), 2);
     let error = runs[0]
         .prepare_error()
