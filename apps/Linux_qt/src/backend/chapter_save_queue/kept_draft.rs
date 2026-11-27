@@ -42,9 +42,6 @@ pub(super) struct RestoreCounters {
     pub(super) retry_chapters: Vec<String>,
     /// 归档失败/活动槽位冲突：原目录仍可能被新会话覆写，必须按章节阻断。
     pub(super) blocked_chapters: Vec<String>,
-    /// 本章已有被延后的重试副本（活动槽位有新草稿，原件留在归档区）：
-    /// 处理活动草稿时不能顺手清掉旧事务的重试标记。
-    pub(super) deferred_retry: std::collections::BTreeSet<String>,
     pub(super) messages: Vec<String>,
 }
 
@@ -78,18 +75,9 @@ impl RestoreCounters {
                 );
                 match disposition {
                     KeptDisposition::Archive => {
-                        // 延后的重试标记属于归档区里的旧事务，不是当前活动
-                        // 草稿；归档当前草稿时不能把它清掉。
-                        if !self.deferred_retry.contains(chapter_id) {
-                            if let Err(error) =
-                                chapter_draft::clear_retry(projects_root, project_id, chapter_id)
-                            {
-                                self.note(
-                                    chapter_id,
-                                    format!("clear retry marker failed: {error}"),
-                                );
-                            }
-                        }
+                        // Issue #1062 评论 #7210163429 第 1 项：归档**当前**草稿
+                        // 与同章其它归档事务的重试标记无关；这里不再按
+                        // chapter_id 清理任何标记。
                         self.archived_chapters.push(chapter_id.to_string());
                     }
                     KeptDisposition::Retry {
@@ -136,6 +124,10 @@ impl RestoreCounters {
 
     /// terminal 决议落盘后收敛草稿；tombstone 写失败说明目录仍在活动槽位，
     /// 必须立即归档，不能让新会话与旧事务混写。
+    ///
+    /// Issue #1062 评论 #7210163429 第 1 项：结算当前草稿只删除它自己的活动
+    /// 目录；同章其它归档事务（含延后重试的 A）的标记必须原样保留，下一次
+    /// 进入项目时继续 materialize。
     pub(super) fn settle_removed(
         &mut self,
         projects_root: &Path,
@@ -143,16 +135,7 @@ impl RestoreCounters {
         chapter_id: &str,
     ) -> bool {
         match crate::backend::chapter_draft::remove(projects_root, project_id, chapter_id) {
-            Ok(()) => {
-                if let Err(error) = crate::backend::chapter_draft::clear_retry(
-                    projects_root,
-                    project_id,
-                    chapter_id,
-                ) {
-                    self.note(chapter_id, format!("clear retry marker failed: {error}"));
-                }
-                true
-            }
+            Ok(()) => true,
             Err(error) => {
                 self.failed += 1;
                 self.kept += 1;

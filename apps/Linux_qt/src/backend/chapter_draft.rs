@@ -63,8 +63,8 @@ pub(crate) use ownership::{draft_event_ownership, DraftEventOwnership};
 pub(crate) use pending::{clear_pending_input, pending_inputs, spool_failed_input};
 pub(crate) use restore::{list_project_drafts, restore_plan, restore_plan_strict, snapshot};
 pub(crate) use retry::{
-    clear_retry, list_retries, materialize_retry, record_retry, retry_chapters,
-    unreadable_retry_chapters, RetryMaterialize,
+    list_retries, materialize_retry, materialize_retry_candidate, record_retry, remove_marker,
+    retry_chapters, unreadable_retry_chapters, RetryCandidate, RetryMaterialize,
 };
 pub(crate) use scheduler::{draft_metrics, flush_due, next_persist_deadline};
 

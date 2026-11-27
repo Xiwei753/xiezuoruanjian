@@ -121,8 +121,11 @@ pub(super) fn handle_restore_project(
     let mut counters = RestoreCounters::default();
     // Issue #1062 评论 7195690539 第 1 项：可自动重试的事务平时停在不可写归档
     // 区，进入项目时先搬回活动槽位；活动槽位已有新会话草稿时绝不覆盖，保留
-    // 归档并按章阻断。
-    let mut retry_conflicts: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // 归档。
+    //
+    // Issue #1062 评论 #7210163429 第 1/2 项：重试账本按归档事务记账，同章可
+    // 以同时挂起多份旧草稿；这里逐份 materialize，一次只把一份放进活动槽位，
+    // 其余继续等下一次入口。清理只针对被搬走/归档丢失的那一条标记。
     // Issue #1062 评论 #7209683560 第 3 项：有标记文件但解析失败的章节保留
     // 历史归档、显式报告，本轮不能冒充活动草稿。
     for chapter_id in
@@ -131,44 +134,47 @@ pub(super) fn handle_restore_project(
         counters.failed += 1;
         counters.note(&chapter_id, "retry marker unreadable kept");
     }
+    for candidate in super::super::chapter_draft::list_retries(&projects_root, &command.project_id)
     {
-        let retries =
-            super::super::chapter_draft::list_retries(&projects_root, &command.project_id);
-        for candidate in retries {
-            let chapter_id = candidate.marker.chapter_id.clone();
-            match super::super::chapter_draft::materialize_retry(
-                &projects_root,
-                &command.project_id,
-                &chapter_id,
-            ) {
-                Ok(super::super::chapter_draft::RetryMaterialize::Moved) => {
-                    counters.note(&chapter_id, "retry slot materialized");
-                }
-                Ok(super::super::chapter_draft::RetryMaterialize::ActiveDraftExists) => {
-                    // 活动槽位已有本轮会处理的草稿：不覆盖重试副本，交给
-                    // 正常分支决议；本轮结束后再收敛过期标记（避免误删本轮
-                    // 刚刚重新登记的重试）。
-                    retry_conflicts.insert(chapter_id.clone());
-                    counters.note(
-                        &chapter_id,
-                        "retry deferred by newer active draft (old copy kept)",
-                    );
-                }
-                Ok(super::super::chapter_draft::RetryMaterialize::ArchivedMissing) => {
-                    counters.note(&chapter_id, "retry archived copy missing (marker cleared)");
-                }
-                Ok(super::super::chapter_draft::RetryMaterialize::NoMarker) => {}
-                Err(error) => {
-                    counters.failed += 1;
-                    counters.note(
-                        &chapter_id,
-                        format!("retry materialize failed kept: {error}"),
-                    );
-                }
+        let chapter_id = candidate.marker.chapter_id.clone();
+        match super::super::chapter_draft::materialize_retry_candidate(
+            &projects_root,
+            &command.project_id,
+            &chapter_id,
+            &candidate,
+        ) {
+            Ok(super::super::chapter_draft::RetryMaterialize::Moved) => {
+                counters.note(&chapter_id, "retry slot materialized");
+            }
+            Ok(super::super::chapter_draft::RetryMaterialize::ActiveDraftExists) => {
+                // 活动槽位已有新会话草稿（B）：不覆盖，A 的标记原样保留，
+                // 等 B 结算后的下一次入口再搬回。
+                counters.note(
+                    &chapter_id,
+                    "retry deferred by newer active draft (old copy kept)",
+                );
+            }
+            Ok(super::super::chapter_draft::RetryMaterialize::AckOnlyPending) => {
+                // 活动槽位只剩真实 pending-ack：交给下面的对账精确消费，
+                // 本轮不搬回、不回收。
+                counters.note(
+                    &chapter_id,
+                    "retry deferred by pending draft ack (old copy kept)",
+                );
+            }
+            Ok(super::super::chapter_draft::RetryMaterialize::ArchivedMissing) => {
+                counters.note(&chapter_id, "retry archived copy missing (marker cleared)");
+            }
+            Ok(super::super::chapter_draft::RetryMaterialize::NoMarker) => {}
+            Err(error) => {
+                counters.failed += 1;
+                counters.note(
+                    &chapter_id,
+                    format!("retry materialize failed kept: {error}"),
+                );
             }
         }
     }
-    counters.deferred_retry = retry_conflicts.clone();
 
     // Issue #1062 评论 7191076411 第 1 项（平台侧）：Core durable journal 是
     // 草稿 ack 的唯一事实源；进入项目时按 Core 记录对账。
@@ -801,30 +807,9 @@ pub(super) fn handle_restore_project(
         }
         continue;
     }
-    // 活动槽位已处理完的章节，旧重试标记要么已被本轮重新登记（保留），
-    // 要么已经过期（清理），绝不能让下一次入口把过期副本搬回覆盖新正文。
-    if !retry_conflicts.is_empty() {
-        let registered: std::collections::BTreeSet<String> =
-            super::super::chapter_draft::list_retries(&projects_root, &command.project_id)
-                .into_iter()
-                .map(|candidate| candidate.marker.chapter_id)
-                .collect();
-        for chapter_id in retry_conflicts {
-            if registered.contains(&chapter_id) {
-                continue;
-            }
-            if let Err(error) = super::super::chapter_draft::clear_retry(
-                &projects_root,
-                &command.project_id,
-                &chapter_id,
-            ) {
-                counters.note(
-                    &chapter_id,
-                    format!("clear stale retry marker failed: {error}"),
-                );
-            }
-        }
-    }
+    // Issue #1062 评论 #7210163429 第 1/2 项：重试标记按归档事务记账，这里
+    // 不再按 chapter_id 收敛“同章过期标记”——那会把别的事务的恢复指针一起
+    // 删除。每条标记只会被自己的 materialize/归档丢失路径精确清理。
     if let Ok(mut states) = draft_restore_state().lock() {
         states.insert(command.project_id, counters.status());
     }

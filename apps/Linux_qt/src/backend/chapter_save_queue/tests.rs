@@ -1120,4 +1120,48 @@ mod restore_isolation_tests {
             vec![chapter_id]
         );
     }
+
+    /// 评论 #7210163429 第 1 项：新草稿 B 结算成功，不能连带删除旧草稿 A 的
+    /// 重试标记；下一次进入项目仍应从 A 的标记 materialize。
+    #[test]
+    fn settling_new_draft_keeps_older_transaction_retry_marker() {
+        let (temp, _api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        let archived_a = projects_root
+            .join(&project_id)
+            .join("app-meta/chapter-draft-kept")
+            .join(&chapter_id)
+            .join("stamp-a");
+        std::fs::create_dir_all(&archived_a).unwrap();
+        std::fs::write(archived_a.join("text.txt"), "旧草稿 A").unwrap();
+        chapter_draft::record_retry(
+            &projects_root,
+            &project_id,
+            &chapter_id,
+            &volume_id,
+            &archived_a,
+            "first",
+            0,
+        )
+        .unwrap();
+        write_verified_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            "新正文 B",
+        );
+
+        let mut counters = super::super::kept_draft::RestoreCounters::default();
+        assert!(counters.settle_removed(&projects_root, &project_id, &chapter_id));
+        assert!(!draft_dir(&projects_root, &project_id, &chapter_id).exists());
+        assert_eq!(
+            chapter_draft::retry_chapters(&projects_root, &project_id),
+            vec![chapter_id.clone()]
+        );
+        assert_eq!(
+            chapter_draft::list_retries(&projects_root, &project_id).len(),
+            1
+        );
+    }
 }

@@ -697,18 +697,36 @@ pub(super) fn read_summary_from_dir(
 /// meta 存在、JSON 或字段损坏的目录必须先被识别成恢复候选，否则
 /// `quarantine` 会误判“目录没有内容”而把损坏事务留在新会话的可写槽位。
 pub(super) fn draft_dir_has_content(dir: &Path) -> bool {
+    draft_dir_has_transaction_content(dir) || draft_dir_has_ack_files(dir)
+}
+
+/// 草稿事务本体的真实内容：meta、正文或事实/待转换输入。
+pub(super) fn draft_dir_has_transaction_content(dir: &Path) -> bool {
     if dir.join(META_FILE).is_file() || dir.join(TEXT_FILE).is_file() {
         return true;
     }
-    // Issue #1062 评论 #7209683560 第 1 项：只有空目录（例如上一版遗留的
-    // `pending-acks/` 空壳）不算活动事务；必须看到真实文件才能阻止重试
-    // materialize / 触发“损坏草稿”归档。
     for name in [TEXTS_DIR, FACTS_DIR, super::PENDING_INPUTS_DIR] {
         if dir_has_any_entry(&dir.join(name)) {
             return true;
         }
     }
     false
+}
+
+/// `pending-acks/` 下的真实 JSON 文件：空目录不算，非空 ack 不能当空壳回收。
+///
+/// Issue #1062 评论 #7210163429 第 3 项：ack 在 Core durable 与本地 meta 之间
+/// 承担事务坐标，只能由对账精确消费，不能被 materialize 的空壳 GC 删掉。
+pub(super) fn draft_dir_has_ack_files(dir: &Path) -> bool {
+    let ack_dir = dir.join(super::ack::ACK_DIR);
+    std::fs::read_dir(ack_dir).is_ok_and(|mut entries| {
+        entries.any(|entry| {
+            entry.is_ok_and(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_file())
+                    && entry.path().extension().and_then(|ext| ext.to_str()) == Some("json")
+            })
+        })
+    })
 }
 
 fn dir_has_any_entry(dir: &Path) -> bool {

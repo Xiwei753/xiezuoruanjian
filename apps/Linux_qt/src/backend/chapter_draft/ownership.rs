@@ -41,9 +41,9 @@ pub(crate) fn draft_event_ownership(
         if store::is_terminal(&location) {
             return Ok(DraftEventOwnership::NoDraft);
         }
-        // 有真实文件却没有可读 meta：这是一份未决草稿，不能当成“本地没有
-        // 草稿”去确认 Core ack（那样会丢掉尚未应用的事务内容）。
-        if store::draft_dir_has_content(&location.dir) {
+        // 只有事务本体还在时才算“未决草稿”；只剩真实 pending-ack 的槽位
+        // 没有可应用的正文/事实，对账会把它精确消费到 Core journal。
+        if store::draft_dir_has_transaction_content(&location.dir) {
             return Err(format!(
                 "chapter draft meta unreadable (kept): project={project_id} chapter={chapter_id}"
             ));

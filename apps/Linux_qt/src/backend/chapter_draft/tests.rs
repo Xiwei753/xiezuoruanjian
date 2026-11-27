@@ -1372,6 +1372,27 @@ mod ack_strictness_tests {
             draft_event_ownership(root, "p1", "c1", &["foreign".to_string()]).expect("ownership"),
             DraftEventOwnership::Foreign
         );
+        // 只剩真实 pending-ack 的槽位没有可应用正文/事实：交给对账消费，
+        // 不能按“未决草稿”永久阻断。
+        let ack_only = super::super::store::DraftLocation::new(root, "p1", "c2")
+            .expect("location")
+            .dir;
+        std::fs::create_dir_all(ack_only.join("pending-acks")).expect("ack dir");
+        std::fs::write(ack_only.join("pending-acks/tx-9.json"), b"{}").expect("ack");
+        assert_eq!(
+            draft_event_ownership(root, "p1", "c2", &["e1".to_string()]).expect("ownership"),
+            DraftEventOwnership::NoDraft
+        );
+        // 事务本体还在（facts/ 有文件、meta 缺失）：必须报错保留，不能确认 Core。
+        let broken = super::super::store::DraftLocation::new(root, "p1", "c3")
+            .expect("location")
+            .dir;
+        std::fs::create_dir_all(broken.join("facts")).expect("facts dir");
+        std::fs::write(broken.join("facts/00000001-e1.json"), b"{}").expect("fact file");
+        assert!(
+            draft_event_ownership(root, "p1", "c3", &["e1".to_string()]).is_err(),
+            "unreadable transaction must stay kept"
+        );
     }
 
     #[test]
@@ -1418,5 +1439,67 @@ mod ack_strictness_tests {
             materialize_retry(root, "p1", "c1").expect("materialize"),
             RetryMaterialize::NoMarker
         );
+    }
+
+    #[test]
+    fn retry_markers_are_per_transaction_and_not_pruned_by_chapter() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let archived_a = kept_root(root, "p1").join("c1").join("stamp-a");
+        let archived_b = kept_root(root, "p1").join("c1").join("stamp-b");
+        std::fs::create_dir_all(&archived_a).expect("archived a");
+        std::fs::create_dir_all(&archived_b).expect("archived b");
+        std::fs::write(archived_a.join("text.txt"), "draft a").expect("text a");
+        std::fs::write(archived_b.join("text.txt"), "draft b").expect("text b");
+        record_retry(root, "p1", "c1", "v1", &archived_a, "first", 0).expect("retry a");
+        record_retry(root, "p1", "c1", "v1", &archived_b, "second", 0).expect("retry b");
+        // 第二条标记不得删除第一条：同章两份未完成事务都要在账本里。
+        let listed = list_retries(root, "p1");
+        assert_eq!(listed.len(), 2, "both archived transactions stay retriable");
+        assert_eq!(retry_chapters(root, "p1"), vec!["c1".to_string()]);
+        remove_marker(&listed[0].marker_path).expect("remove one marker");
+        assert_eq!(list_retries(root, "p1").len(), 1, "other marker untouched");
+    }
+
+    #[test]
+    fn settling_active_draft_keeps_older_retry_marker() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let archived_a = kept_root(root, "p1").join("c1").join("stamp-a");
+        std::fs::create_dir_all(&archived_a).expect("archived a");
+        std::fs::write(archived_a.join("text.txt"), "draft a").expect("text a");
+        record_retry(root, "p1", "c1", "v1", &archived_a, "first", 0).expect("retry a");
+        // 新会话草稿 B 写入活动槽位，随后被结算删除。
+        note_fact(root, "p1", "c1", "v1", 9, "g2", fact("e1", 1, 9)).expect("fact b");
+        persist_current(root, "p1", "c1", true).expect("persist b");
+        remove(root, "p1", "c1").expect("settle b");
+        assert!(!draft_location(root).dir.exists(), "active slot settled");
+        // B 的结算不能连带删除 A 的重试指针。
+        let listed = list_retries(root, "p1");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].marker.archived_path, archived_a.to_string_lossy());
+        assert_eq!(retry_chapters(root, "p1"), vec!["c1".to_string()]);
+    }
+
+    #[test]
+    fn ack_only_slot_is_not_collected_by_materialize() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let archived = kept_root(root, "p1").join("c1").join("stamp-a");
+        std::fs::create_dir_all(&archived).expect("archived dir");
+        std::fs::write(archived.join("text.txt"), "draft a").expect("text");
+        record_retry(root, "p1", "c1", "v1", &archived, "first", 0).expect("retry");
+        let location = draft_location(root);
+        let ack_dir = location.dir.join("pending-acks");
+        std::fs::create_dir_all(&ack_dir).expect("ack dir");
+        std::fs::write(ack_dir.join("tx-1.json"), b"{}").expect("ack file");
+
+        // 真实 ack 不是空壳：不得回收，等 Core 对账精确消费。
+        assert_eq!(
+            materialize_retry(root, "p1", "c1").expect("materialize"),
+            RetryMaterialize::AckOnlyPending
+        );
+        assert!(ack_dir.join("tx-1.json").is_file(), "pending ack kept");
+        assert!(list_retries(root, "p1").len() == 1, "retry marker kept");
     }
 }

@@ -12,7 +12,12 @@
 // `app-meta/chapter-draft-retry/<chapter_id>/<stamp>.json` 留一条重试标记。
 // 下一次进入作品时，恢复 actor 先按标记把归档目录原子 rename 回活动槽位再
 // 重试；重试期间编辑器尚未打开，不会与新会话并发。若活动槽位已有新会话草稿，
-// 绝不覆盖：旧副本继续留在归档区，过期标记在本轮结束时收敛。
+// 绝不覆盖：旧副本继续留在归档区。
+//
+// Issue #1062 评论 #7210163429 第 1/2 项：重试账本按**归档事务**记账，同一章
+// 可以同时挂起多份旧草稿（A、B…），每条标记绑定自己的 `archived_path`；
+// 登记/删除/搬回都只作用于该事务，绝不按 chapter_id 连带清理别的事务的标记。
+// 同章活动槽位一次只装入一份，其余归档等下一次进入再处理。
 
 use std::path::{Path, PathBuf};
 
@@ -50,7 +55,7 @@ impl Default for DraftRetryMarker {
     }
 }
 
-/// 列出并加载某章的当前重试标记。
+/// 一份归档副本的重试标记（同章可以有多份，各自独立恢复）。
 #[derive(Debug, Clone)]
 pub(crate) struct RetryCandidate {
     pub marker: DraftRetryMarker,
@@ -74,8 +79,9 @@ pub(crate) fn retry_chapter_dir(
 
 /// 登记一条可自动重试的事务：归档副本路径 + 原始失败原因。
 ///
-/// 同一章只保留最新一条标记（旧标记先删除），避免多次失败堆积出互相矛盾的
-/// 重试目标。
+/// 标记文件名由归档事务的目录名（`stamp`）决定：一次归档一条标记，重复登记
+/// 同一副本只更新自己那一条。Issue #1062 评论 #7210163429 第 2 项：这里不再
+/// 删除同章其它 JSON，否则更新的事务会把旧事务的恢复指针一起抹掉。
 pub(crate) fn record_retry(
     projects_root: &Path,
     project_id: &str,
@@ -108,41 +114,15 @@ pub(crate) fn record_retry(
         attempts: previous_attempts.saturating_add(1),
         updated_at_ms: super::now_ms(),
     };
-    // Issue #1062 评论 #7209683560 第 3 项：先把新标记 durable 写出，再删除
-    // 旧标记。写失败/崩溃时旧标记仍然有效，历史归档不会失去自动恢复引用。
-    let mut path = dir.join(format!("{stamp}.json"));
-    let mut attempt = 1u32;
-    while path.exists() {
-        if attempt > 999 {
-            return Err(format!(
-                "record retry: no free marker name project={project_id} chapter={chapter_id} stamp={stamp}"
-            ));
-        }
-        path = dir.join(format!("{stamp}-r{attempt}.json"));
-        attempt = attempt.saturating_add(1);
-    }
+    let path = dir.join(format!("{stamp}.json"));
     let json = serde_json::to_string_pretty(&marker)
         .map_err(|error| format!("encode retry marker: {error}"))?;
     writer_core::storage::atomic_write_string(&path, &json)
         .map_err(|error| format!("write retry marker {}: {error}", path.display()))?;
-    // 新标记已 durable，现在才回收同章的其它标记文件。
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let stale = entry.path();
-            if stale == path || stale.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            if let Err(error) = std::fs::remove_file(&stale) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    log::warn!("remove old retry marker {}: {error}", stale.display());
-                }
-            }
-        }
-    }
     Ok(marker)
 }
 
-/// 项目下所有可自动重试的章节（每章最新一条标记）。
+/// 项目下所有可自动重试的事务（每份归档副本一条，按章与生成时间排序）。
 pub(crate) fn list_retries(projects_root: &Path, project_id: &str) -> Vec<RetryCandidate> {
     if !store::is_safe_id(project_id) {
         return Vec::new();
@@ -157,53 +137,92 @@ pub(crate) fn list_retries(projects_root: &Path, project_id: &str) -> Vec<RetryC
         if !path.is_dir() {
             continue;
         }
-        let Some(latest) = latest_marker_in(&path) else {
-            continue;
-        };
-        candidates.push(latest);
+        candidates.extend(markers_in(&path));
     }
-    candidates.sort_by(|left, right| left.marker.chapter_id.cmp(&right.marker.chapter_id));
-    candidates
+    // 同一归档副本可能因崩溃留下同名的重复记录：按 archived_path 只保留最新
+    // 一条，避免同一次重试被搬两遍。
+    candidates.sort_by(|left, right| {
+        (
+            &left.marker.chapter_id,
+            &left.marker.archived_path,
+            left.marker.updated_at_ms,
+            &left.marker.stamp,
+        )
+            .cmp(&(
+                &right.marker.chapter_id,
+                &right.marker.archived_path,
+                right.marker.updated_at_ms,
+                &right.marker.stamp,
+            ))
+    });
+    let mut deduped: Vec<RetryCandidate> = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        match deduped.last_mut() {
+            Some(last)
+                if last.marker.chapter_id == candidate.marker.chapter_id
+                    && last.marker.archived_path == candidate.marker.archived_path =>
+            {
+                *last = candidate;
+            }
+            _ => deduped.push(candidate),
+        }
+    }
+    deduped.sort_by(|left, right| {
+        (
+            &left.marker.chapter_id,
+            left.marker.updated_at_ms,
+            &left.marker.stamp,
+        )
+            .cmp(&(
+                &right.marker.chapter_id,
+                right.marker.updated_at_ms,
+                &right.marker.stamp,
+            ))
+    });
+    deduped
 }
 
-fn latest_marker_in(dir: &Path) -> Option<RetryCandidate> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut best: Option<RetryCandidate> = None;
+fn read_marker(path: &Path) -> Result<DraftRetryMarker, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|error| format!("read retry marker {}: {error}", path.display()))?;
+    let marker: DraftRetryMarker = serde_json::from_str(&content)
+        .map_err(|error| format!("retry marker corrupted (kept): {}: {error}", path.display()))?;
+    if marker.chapter_id.is_empty() || marker.archived_path.is_empty() {
+        return Err(format!(
+            "retry marker incomplete (kept): {}",
+            path.display()
+        ));
+    }
+    Ok(marker)
+}
+
+fn markers_in(dir: &Path) -> Vec<RetryCandidate> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        let content = match std::fs::read_to_string(&path) {
-            Ok(content) => content,
-            Err(error) => {
-                log::warn!("read retry marker {}: {error}", path.display());
-                continue;
-            }
-        };
-        let marker: DraftRetryMarker = match serde_json::from_str(&content) {
-            Ok(marker) => marker,
-            Err(error) => {
-                log::warn!("retry marker corrupted (kept): {}: {error}", path.display());
-                continue;
-            }
-        };
-        if marker.chapter_id.is_empty() || marker.archived_path.is_empty() {
-            log::warn!("retry marker incomplete (kept): {}", path.display());
-            continue;
-        }
-        let replace = best.as_ref().is_none_or(|current| {
-            (marker.updated_at_ms, &marker.stamp)
-                > (current.marker.updated_at_ms, &current.marker.stamp)
-        });
-        if replace {
-            best = Some(RetryCandidate {
+        match read_marker(&path) {
+            Ok(marker) => candidates.push(RetryCandidate {
                 marker,
                 marker_path: path,
-            });
+            }),
+            Err(error) => log::warn!("{error}"),
         }
     }
-    best
+    candidates
+}
+
+/// 取某章最早登记的重试事务（同章多份时按事务逐次 materialize）。
+fn oldest_marker_in(dir: &Path) -> Option<RetryCandidate> {
+    markers_in(dir).into_iter().min_by(|left, right| {
+        (left.marker.updated_at_ms, &left.marker.stamp)
+            .cmp(&(right.marker.updated_at_ms, &right.marker.stamp))
+    })
 }
 
 /// 把可重试事务的归档目录搬回活动槽位，供恢复 actor 再次尝试。
@@ -214,9 +233,12 @@ pub(crate) enum RetryMaterialize {
     /// 已搬回活动槽位，本轮可以正常重试。
     Moved,
     /// 活动槽位已有新会话草稿：绝不覆盖，保留归档，交给本轮正常恢复分支
-    /// 处理活动草稿后再收敛过期标记。
+    /// 处理活动草稿后再处理这条事务。
     ActiveDraftExists,
-    /// 归档目录已不存在（被人工清理）：标记已删除，按已处理收敛。
+    /// 活动槽位只剩真实 pending-ack 文件（meta/正文/事实都已结算）：ack 还
+    /// 承担事务坐标，必须先由 Core journal 对账消费，不能当空壳回收。
+    AckOnlyPending,
+    /// 归档目录已不存在（被人工清理）：该事务的标记已删除。
     ArchivedMissing,
 }
 
@@ -225,26 +247,45 @@ pub(crate) fn materialize_retry(
     project_id: &str,
     chapter_id: &str,
 ) -> Result<RetryMaterialize, String> {
-    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+    if DraftLocation::new(projects_root, project_id, chapter_id).is_none() {
+        return Ok(RetryMaterialize::NoMarker);
+    }
+    let Some(candidate) =
+        oldest_marker_in(&retry_chapter_dir(projects_root, project_id, chapter_id))
+    else {
         return Ok(RetryMaterialize::NoMarker);
     };
-    let Some(candidate) =
-        latest_marker_in(&retry_chapter_dir(projects_root, project_id, chapter_id))
-    else {
+    materialize_retry_candidate(projects_root, project_id, chapter_id, &candidate)
+}
+
+/// 按具体归档事务（标记文件）搬回活动槽位。
+pub(crate) fn materialize_retry_candidate(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+    candidate: &RetryCandidate,
+) -> Result<RetryMaterialize, String> {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
         return Ok(RetryMaterialize::NoMarker);
     };
     let archived = PathBuf::from(&candidate.marker.archived_path);
     if !archived.is_dir() {
-        clear_retry(projects_root, project_id, chapter_id)?;
+        remove_marker(&candidate.marker_path)?;
+        remove_retry_chapter_dir_if_empty(projects_root, project_id, chapter_id);
         return Ok(RetryMaterialize::ArchivedMissing);
     }
     if location.dir.exists() {
-        if !store::is_terminal(&location) && store::draft_dir_has_content(&location.dir) {
-            return Ok(RetryMaterialize::ActiveDraftExists);
+        if !store::is_terminal(&location) {
+            if store::draft_dir_has_transaction_content(&location.dir) {
+                return Ok(RetryMaterialize::ActiveDraftExists);
+            }
+            if store::draft_dir_has_ack_files(&location.dir) {
+                // Issue #1062 评论 #7210163429 第 3 项：真实 pending-ack 不是
+                // 空壳文件，先让对账把它消费到 Core journal，再决定槽位。
+                return Ok(RetryMaterialize::AckOnlyPending);
+            }
         }
-        // Issue #1062 评论 #7209683560 第 1 项：只有空目录/残留 ack 缓存/
-        // 已 terminal 待回收的“幽灵槽位”不是活动草稿；先回收它，重试副本
-        // 才能搬回。
+        // 已 terminal 或确实为空（可能残留空目录）：先回收，重试副本才能搬回。
         store::remove_settled_storage(&location).map_err(|error| {
             format!(
                 "remove ghost draft slot {}: {error}",
@@ -263,16 +304,13 @@ pub(crate) fn materialize_retry(
             location.dir.display()
         )
     })?;
-    // 只删除被搬走的那条标记；同章旧标记在 record_retry 时已清理，这里再
-    // 兜底收敛一次空目录。
-    if let Err(error) = std::fs::remove_file(&candidate.marker_path) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            log::warn!(
-                "remove materialized retry marker {}: {error}",
-                candidate.marker_path.display()
-            );
-        }
-    }
+    // 只删除被搬走的这一条事务标记；同章其它归档副本的标记原样保留。
+    remove_marker(&candidate.marker_path)?;
+    remove_retry_chapter_dir_if_empty(projects_root, project_id, chapter_id);
+    Ok(RetryMaterialize::Moved)
+}
+
+fn remove_retry_chapter_dir_if_empty(projects_root: &Path, project_id: &str, chapter_id: &str) {
     let chapter_dir = retry_chapter_dir(projects_root, project_id, chapter_id);
     match std::fs::remove_dir(&chapter_dir) {
         Ok(()) => {}
@@ -283,32 +321,26 @@ pub(crate) fn materialize_retry(
             chapter_dir.display()
         ),
     }
-    Ok(RetryMaterialize::Moved)
 }
 
-/// 删除某章的重试标记（恢复成功、已永久归档、或归档丢失时调用）。
-pub(crate) fn clear_retry(
-    projects_root: &Path,
-    project_id: &str,
-    chapter_id: &str,
-) -> Result<(), String> {
-    if !store::is_safe_id(project_id) || !store::is_safe_id(chapter_id) {
-        return Ok(());
-    }
-    let dir = retry_chapter_dir(projects_root, project_id, chapter_id);
-    match std::fs::remove_dir_all(&dir) {
+/// 精确删除一条事务标记（搬运成功、归档丢失或事务已终结时调用）。
+pub(crate) fn remove_marker(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("remove retry markers {}: {error}", dir.display())),
+        Err(error) => Err(format!("remove retry marker {}: {error}", path.display())),
     }
 }
 
-/// 项目下待自动重试的章节 id（QML 状态与诊断用）。
+/// 项目下待自动重试的章节 id（QML 状态与诊断用；同章多份事务只列一次）。
 pub(crate) fn retry_chapters(projects_root: &Path, project_id: &str) -> Vec<String> {
-    list_retries(projects_root, project_id)
+    let mut chapters: Vec<String> = list_retries(projects_root, project_id)
         .into_iter()
         .map(|candidate| candidate.marker.chapter_id)
-        .collect()
+        .collect();
+    chapters.sort();
+    chapters.dedup();
+    chapters
 }
 
 /// 有标记文件但无法解析的章节：历史归档保留，但本轮不能冒充活动草稿。
@@ -334,14 +366,21 @@ pub(crate) fn unreadable_retry_chapters(projects_root: &Path, project_id: &str) 
         if !store::is_safe_id(chapter_id) {
             continue;
         }
-        let has_marker_files = std::fs::read_dir(&path).is_ok_and(|mut entries| {
-            entries.any(|entry| {
-                entry.is_ok_and(|entry| {
-                    entry.path().extension().and_then(|ext| ext.to_str()) == Some("json")
-                })
-            })
-        });
-        if has_marker_files && latest_marker_in(&path).is_none() {
+        let Ok(marker_files) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        let mut unreadable = false;
+        for marker_entry in marker_files.flatten() {
+            let marker_path = marker_entry.path();
+            if marker_path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            if let Err(error) = read_marker(&marker_path) {
+                log::warn!("{error}");
+                unreadable = true;
+            }
+        }
+        if unreadable {
             chapters.push(chapter_id.to_string());
         }
     }
