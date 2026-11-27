@@ -734,8 +734,17 @@ impl CorrectionScanner {
         } else {
             Vec::new()
         };
-        // Restoring is a read-only display refresh: never save here, even when
-        // the in-memory offset index had to be rebuilt.
+        // 投影到不同的确定性赢家/迁移记录键时必须写回持久 cache，重启后
+        // 不再反复重选；纯 offset 重建仍不写。
+        if guard.semantic_dirty {
+            if let Err(error) = guard.save() {
+                log::warn!(
+                    "[correction] restore projection cache save failed chapter_digest={} error={}",
+                    content_fingerprint(&self.chapter_id),
+                    error
+                );
+            }
+        }
         let snapshot = self.assemble_snapshot(&guard)?;
         drop(guard);
         // 上一次发布失败时在 slot 锁外用当前 checked 内容重放，不重跑模型。
