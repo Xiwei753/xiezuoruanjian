@@ -19,7 +19,7 @@ fn empty_state(text: &str) -> ChapterCorrectionCacheState {
     ChapterCorrectionCacheState {
         scanner_fingerprint: "scanner".to_string(),
         checked_mode: "model".to_string(),
-        publication_pending: false,
+        legacy_publication_pending: false,
         segments: canonical_segments(text)
             .into_iter()
             .map(|(start, end)| checked_segment(start, end, text))

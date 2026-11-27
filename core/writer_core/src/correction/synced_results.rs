@@ -382,6 +382,54 @@ pub(crate) fn publish_records(
     Ok((files.len(), mutations.len()))
 }
 
+/// 本章同步结果的不可变索引：按 (text_sha256, context_sha256) 预排序。
+///
+/// 由 scanner 在章节 slot 锁外构建，restore 只做内容键查找，不再每次复制
+/// 全部历史建议或重建/排序 HashMap。
+#[derive(Debug, Default)]
+pub(crate) struct SyncedResultIndex {
+    by_content:
+        std::collections::HashMap<String, std::collections::HashMap<String, Vec<(String, Vec<CachedSuggestion>)>>>,
+}
+
+impl SyncedResultIndex {
+    pub(crate) fn build(records: &[SyncedCorrectionRecord]) -> Self {
+        let mut by_content: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, Vec<(String, Vec<CachedSuggestion>)>>,
+        > = std::collections::HashMap::new();
+        for record in records {
+            by_content
+                .entry(record.text_sha256.clone())
+                .or_default()
+                .entry(record.context_sha256.clone())
+                .or_default()
+                .push((record.record_key(), record.suggestions.clone()));
+        }
+        for contexts in by_content.values_mut() {
+            for candidates in contexts.values_mut() {
+                candidates.sort_by(|left, right| left.0.cmp(&right.0));
+            }
+        }
+        Self { by_content }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.by_content.is_empty()
+    }
+
+    pub(crate) fn candidates(
+        &self,
+        text_sha256: &str,
+        context_sha256: &str,
+    ) -> Option<&[(String, Vec<CachedSuggestion>)]> {
+        self.by_content
+            .get(text_sha256)
+            .and_then(|contexts| contexts.get(context_sha256))
+            .map(Vec::as_slice)
+    }
+}
+
 /// 加载一个章节在当前 mode + scanner 稳定身份下的全部记录。
 ///
 /// 目录或文件缺失、JSON 损坏、版本不符、身份不匹配都跳过；本函数不返回错误，

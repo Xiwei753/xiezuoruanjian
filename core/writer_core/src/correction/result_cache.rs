@@ -156,9 +156,9 @@ struct ChapterCorrectionCache {
     /// 这些 checked 结果实际来自哪种扫描模式；旧缓存缺省时不能冒充模型覆盖。
     #[serde(default)]
     checked_mode: String,
-    /// 已有 checked 结果尚未成功发布到同步 mutation/outbox。
-    #[serde(default)]
-    publication_pending: bool,
+    /// 旧版本 cache 的布尔待发布标记；只用于一次性迁移，新 cache 不再写入。
+    #[serde(default, rename = "publicationPending")]
+    legacy_publication_pending: bool,
     #[serde(default)]
     segments: Vec<PersistedSegment>,
 }
@@ -168,8 +168,8 @@ pub(crate) struct ChapterCorrectionCacheState {
     pub(crate) scanner_fingerprint: String,
     /// 当前 checked 结果实际来自的扫描模式（model/rules）；空表示未知旧缓存。
     pub(crate) checked_mode: String,
-    /// 本地已检查结果尚未成功发布；持久化后由下一次恢复重试，不重跑模型。
-    pub(crate) publication_pending: bool,
+    /// 旧版本 publicationPending 的一次性内存标记，不随新 cache 持久化。
+    pub(crate) legacy_publication_pending: bool,
     /// Offset-ordered segments covering the current text in memory.
     pub(crate) segments: Vec<CachedSegment>,
     /// True when the on-disk representation no longer matches memory.
@@ -222,7 +222,7 @@ impl ChapterCorrectionCacheState {
         let mut state = Self {
             scanner_fingerprint: String::new(),
             checked_mode: String::new(),
-            publication_pending: false,
+            legacy_publication_pending: false,
             segments: Vec::new(),
             semantic_dirty: false,
             scanning: false,
@@ -256,7 +256,7 @@ impl ChapterCorrectionCacheState {
         }
         state.scanner_fingerprint = cache.scanner_fingerprint;
         state.checked_mode = cache.checked_mode;
-        state.publication_pending = cache.publication_pending;
+        state.legacy_publication_pending = cache.legacy_publication_pending;
         // 旧缓存没有记录实际扫描模式：不能把规则结果当成模型覆盖继承下来；
         // 清空 checked 后由下一次真实扫描重新建立覆盖（正文/建议不写回）。
         if state.checked_mode.is_empty() {
@@ -305,7 +305,7 @@ impl ChapterCorrectionCacheState {
             schema_version: SCHEMA_VERSION,
             scanner_fingerprint: self.scanner_fingerprint.clone(),
             checked_mode: self.checked_mode.clone(),
-            publication_pending: self.publication_pending,
+            legacy_publication_pending: false,
             segments,
         };
         let json =
@@ -586,24 +586,26 @@ pub(crate) fn reconcile_full(text: &str, state: &mut ChapterCorrectionCacheState
         let context_fingerprint = content_fingerprint(&text[context_start..context_end]);
         let key = segment_key(&text_fingerprint, &context_fingerprint);
         let cached = by_key.get_mut(&key).and_then(VecDeque::pop_front);
-        let checked = match cached {
+        let (checked, synced_record_key) = match cached {
             Some(cached) => {
+                let synced_record_key = cached.synced_record_key.clone();
                 let suggestions = cached.checked.unwrap_or_default();
                 if suggestions_match(text, start, end, &suggestions) {
-                    Some(suggestions)
+                    // 内容键未变就保留刚持久化的同步记录键，避免冷启动误走迁移。
+                    (Some(suggestions), synced_record_key)
                 } else {
                     dropped = true;
-                    None
+                    (None, None)
                 }
             }
-            None => None,
+            None => (None, None),
         };
         segments.push(CachedSegment {
             start_byte: start as u32,
             end_byte: end as u32,
             text_fingerprint,
             context_fingerprint,
-            synced_record_key: None,
+            synced_record_key,
             checked,
             dirty: false,
         });

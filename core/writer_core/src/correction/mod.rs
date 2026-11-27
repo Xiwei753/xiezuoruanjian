@@ -24,6 +24,7 @@ use crate::api::{
 
 mod engine;
 mod result_cache;
+mod publication;
 mod scan_metrics;
 mod synced_results;
 
@@ -119,6 +120,8 @@ struct CorrectionStoreInner {
     result_caches: Mutex<ChapterResultCacheRegistry>,
     /// 章节同步结果索引：按目录修改时间增量刷新，restore 的 slot 锁内只查内存。
     synced_records: Mutex<HashMap<SyncedRecordCacheKey, CachedSyncedRecords>>,
+    /// 待发布事实（完整 record）在内存中的失败回退；durable 文件在 publication 模块。
+    pending_publications: Mutex<HashMap<(String, String), Vec<synced_results::SyncedCorrectionRecord>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -131,7 +134,7 @@ struct SyncedRecordCacheKey {
 
 struct CachedSyncedRecords {
     dir_signature: Option<SystemTime>,
-    records: Arc<Vec<synced_results::SyncedCorrectionRecord>>,
+    index: Arc<synced_results::SyncedResultIndex>,
 }
 
 struct ActiveCorrectionProject {
@@ -1123,6 +1126,7 @@ impl CorrectionStore {
                 engines: Mutex::new(HashMap::new()),
                 result_caches: Mutex::new(HashMap::new()),
                 synced_records: Mutex::new(HashMap::new()),
+                pending_publications: Mutex::new(HashMap::new()),
             });
             stores.insert(key.clone(), Arc::clone(&inner));
             inner
@@ -1148,20 +1152,20 @@ impl CorrectionStore {
 
     /// 本章同步结果索引：按目录修改时间增量刷新。
     ///
-    /// 返回的 Arc 供 scanner 在构造时（章节 cache slot 锁之外）加载；restore
-    /// 路径只做内容键查询，不再在 slot 锁内遍历/反序列化整章历史文件。
+    /// 目录读取与索引构建都在全局/章节锁之外；缓存只保存不可变索引，且并入
+    /// 既有章节缓存上限（同章旧 scanner 代际在替换时淘汰）。
     pub(super) fn synced_records_for_chapter(
         &self,
         project_id: &str,
         chapter_id: &str,
         mode: &str,
         scanner_stable: &str,
-    ) -> Result<Arc<Vec<synced_results::SyncedCorrectionRecord>>, WriterError> {
+    ) -> Result<Arc<synced_results::SyncedResultIndex>, WriterError> {
         let Some(project_root) = self.project_root(project_id) else {
-            return Ok(Arc::new(Vec::new()));
+            return Ok(Arc::new(synced_results::SyncedResultIndex::default()));
         };
         let Some(dir) = synced_results::chapter_records_dir(&project_root, chapter_id) else {
-            return Ok(Arc::new(Vec::new()));
+            return Ok(Arc::new(synced_results::SyncedResultIndex::default()));
         };
         let key = SyncedRecordCacheKey {
             project_id: project_id.to_string(),
@@ -1170,14 +1174,17 @@ impl CorrectionStore {
             scanner_stable: scanner_stable.to_string(),
         };
         let signature = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
-        let mut cache = self.inner.synced_records.lock().map_err(|_| {
-            WriterError::Other("correction synced record cache lock poisoned".into())
-        })?;
-        if let Some(entry) = cache.get(&key) {
-            if entry.dir_signature == signature {
-                return Ok(Arc::clone(&entry.records));
+        {
+            let cache = self.inner.synced_records.lock().map_err(|_| {
+                WriterError::Other("correction synced record cache lock poisoned".into())
+            })?;
+            if let Some(entry) = cache.get(&key) {
+                if entry.dir_signature == signature {
+                    return Ok(Arc::clone(&entry.index));
+                }
             }
         }
+        // 读目录/反序列化不持有全局索引锁，restore 的章节 slot 锁也不在此处。
         let mut records = synced_results::load_records(
             &project_root,
             project_id,
@@ -1185,8 +1192,6 @@ impl CorrectionStore {
             mode,
             scanner_stable,
         );
-        // 读取期间目录可能被同步/发布追加；修改时间变化时重读一次，避免把
-        // 半个目录版本缓存成稳定索引。
         let after = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
         if after != signature {
             records = synced_results::load_records(
@@ -1197,15 +1202,121 @@ impl CorrectionStore {
                 scanner_stable,
             );
         }
-        let records = Arc::new(records);
+        let index = Arc::new(synced_results::SyncedResultIndex::build(&records));
+        let mut cache = self.inner.synced_records.lock().map_err(|_| {
+            WriterError::Other("correction synced record cache lock poisoned".into())
+        })?;
+        if let Some(existing) = cache.get(&key) {
+            if existing.dir_signature == after {
+                return Ok(Arc::clone(&existing.index));
+            }
+        }
+        // 同一章的旧 scanner/mode 代际直接释放；总条目受既有章节缓存上限约束。
+        cache.retain(|candidate, _| {
+            candidate.project_id != key.project_id
+                || candidate.chapter_id != key.chapter_id
+                || (candidate.mode == key.mode && candidate.scanner_stable == key.scanner_stable)
+        });
+        while cache.len() >= CHAPTER_RESULT_CACHE_LIMIT {
+            let Some(oldest) = cache.keys().next().cloned() else {
+                break;
+            };
+            cache.remove(&oldest);
+        }
         cache.insert(
             key,
             CachedSyncedRecords {
                 dir_signature: after,
-                records: Arc::clone(&records),
+                index: Arc::clone(&index),
             },
         );
-        Ok(records)
+        Ok(index)
+    }
+
+    /// 扫描完成先把完整结果写进独立待发布文件；只有 durable 成功才返回 true。
+    /// 首次写盘失败时保留内存副本，后续请求继续重试，不依赖 result cache。
+    pub(super) fn enqueue_publication(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+        records: &[synced_results::SyncedCorrectionRecord],
+    ) -> bool {
+        if records.is_empty() {
+            return true;
+        }
+        let Some(project_root) = self.project_root(project_id) else {
+            // 未绑定作品根：只有本地 corpus，不存在同步待发布责任。
+            return true;
+        };
+        match publication::write_pending(&project_root, project_id, chapter_id, records) {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!(
+                    "[correction] durable pending publication write failed chapter_digest={} error={}",
+                    content_fingerprint(chapter_id),
+                    error
+                );
+                if let Ok(mut memory) = self.inner.pending_publications.lock() {
+                    let entry = memory
+                        .entry((project_id.to_string(), chapter_id.to_string()))
+                        .or_default();
+                    for record in records {
+                        if !entry.iter().any(|existing| {
+                            existing.record_key() == record.record_key()
+                        }) {
+                            entry.push(record.clone());
+                        }
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    /// 发布独立待发布事实；可在章节 slot 锁外、与当前正文/revision 无关地调用。
+    pub(super) fn retry_publications(&self, project_id: &str, chapter_id: &str) -> bool {
+        let Some(project_root) = self.project_root(project_id) else {
+            return false;
+        };
+        let memory_records = self
+            .inner
+            .pending_publications
+            .lock()
+            .ok()
+            .and_then(|mut memory| {
+                memory
+                    .remove(&(project_id.to_string(), chapter_id.to_string()))
+            })
+            .unwrap_or_default();
+        if !memory_records.is_empty()
+            && publication::write_pending(
+                &project_root,
+                project_id,
+                chapter_id,
+                &memory_records,
+            )
+            .is_err()
+        {
+            // 仍无法 durable 写回：把内存待办放回去，等下一次请求。
+            if let Ok(mut memory) = self.inner.pending_publications.lock() {
+                memory
+                    .entry((project_id.to_string(), chapter_id.to_string()))
+                    .or_default()
+                    .extend(memory_records);
+            }
+            return false;
+        }
+        match publication::publish_pending(&project_root, project_id, chapter_id) {
+            Ok(_) => true,
+            Err(error) => {
+                log::warn!(
+                    "[correction] pending publication retry failed chapter_digest={} error={}",
+                    content_fingerprint(chapter_id),
+                    error
+                );
+                false
+            }
+        }
     }
 
     fn update_preferences<F, R>(&self, update: F) -> Result<R, WriterError>
