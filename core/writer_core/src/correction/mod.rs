@@ -1307,7 +1307,16 @@ impl CorrectionStore {
             return false;
         }
         match publication::publish_pending(&project_root, project_id, chapter_id) {
-            Ok(_) => true,
+            Ok(_) => {
+                // 新记录文件可能与已缓存的目录 mtime 落在同一时间粒度；发布后
+                // 显式释放该章的索引，下一次构造必然重新读取新文件。
+                if let Ok(mut cache) = self.inner.synced_records.lock() {
+                    cache.retain(|key, _| {
+                        key.project_id != project_id || key.chapter_id != chapter_id
+                    });
+                }
+                true
+            }
             Err(error) => {
                 log::warn!(
                     "[correction] pending publication retry failed chapter_digest={} error={}",

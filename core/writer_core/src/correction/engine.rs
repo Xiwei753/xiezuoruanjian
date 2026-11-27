@@ -709,6 +709,7 @@ impl CorrectionScanner {
             .segments
             .iter()
             .any(|segment| segment.checked.is_some() && segment.synced_record_key.is_none());
+        let had_legacy_pending = guard.legacy_publication_pending;
         self.prepare_state(
             &mut guard,
             text,
@@ -719,7 +720,6 @@ impl CorrectionScanner {
         metrics.cache_hit = metrics.cache_valid_segments > 0;
         // 旧版本 cache 的 publicationPending 只在当前 checked 内容仍可验证时
         // 一次性迁移到独立 publication 文件；此后 cache 不再承担待发布事务。
-        let had_legacy_pending = guard.legacy_publication_pending;
         let legacy_records: Vec<SyncedCorrectionRecord> =
             if had_legacy_pending || missing_synced_keys {
                 // 旧 cache 已有 checked 但没有同步记录键：按当前仍可验证的
@@ -921,6 +921,12 @@ impl CorrectionScanner {
                     continue;
                 };
                 if !suggestions_match(text, start, end, &suggestions) {
+                    if let Some(segment) = guard.segments.get_mut(index) {
+                        segment.checked = None;
+                        segment.dirty = true;
+                        segment.synced_record_key = None;
+                        changed = true;
+                    }
                     continue;
                 }
                 if current_key.is_none() {
@@ -933,6 +939,12 @@ impl CorrectionScanner {
             }
             let mut winner: Option<(String, Vec<CachedSuggestion>)> = local_candidate
                 .filter(|(_, suggestions)| suggestions_match(text, start, end, suggestions));
+            // 本地 checked 与当前 segment 内容不再匹配时必须显式失效；否则
+            // 会一直保留旧 key/建议，永远等不到有效的同步赢家。
+            let local_invalid = current_checked.is_some()
+                && !winner.as_ref().is_some_and(|(_, suggestions)| {
+                    suggestions_match(text, start, end, suggestions)
+                });
             for (key, suggestions) in candidates.unwrap_or(&[]) {
                 if !suggestions_match(text, start, end, suggestions) {
                     continue;
@@ -945,6 +957,14 @@ impl CorrectionScanner {
                 }
             }
             let Some((winner_key, suggestions)) = winner else {
+                if local_invalid {
+                    if let Some(segment) = guard.segments.get_mut(index) {
+                        segment.checked = None;
+                        segment.dirty = true;
+                        segment.synced_record_key = None;
+                        changed = true;
+                    }
+                }
                 continue;
             };
             let same = guard.segments.get(index).is_some_and(|segment| {
