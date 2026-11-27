@@ -472,7 +472,7 @@ pub(crate) fn commit_and_push(
     message: &str,
     accounting: &Arc<ProviderNetworkAccounting>,
 ) -> Result<(Oid, Snapshot), ProviderError> {
-    let (mut index, _) = build_index(repo, snapshot, mutations)?;
+    let (mut index, written_blobs) = build_index(repo, snapshot, mutations)?;
     let tree_oid = index
         .write_tree_to(repo)
         .map_err(|err| map_git_error(err, "write_tree"))?;
@@ -522,7 +522,31 @@ pub(crate) fn commit_and_push(
         .map_err(|err| map_git_error(err, "update_local_branch"))?;
 
     push_branch(repo, config, &local_ref, &commit_oid, accounting)?;
-    let committed_snapshot = snapshot_from_commit(repo, commit_oid)?;
+    // 新基线按差量构造：提交内容就是 base blobs 应用本 batch 的结果，不必
+    // 再把整棵新 tree 摊平成 path→OID（Issue #1065 复审 #5）。
+    let mut committed_blobs = snapshot.blobs.clone();
+    for mutation in mutations {
+        match mutation {
+            BatchMutation::Put { path, .. } => {
+                if let Some(oid) = written_blobs.get(path) {
+                    committed_blobs.insert(path.clone(), *oid);
+                }
+            }
+            BatchMutation::ReuseVersion { path, version } => {
+                if let Ok(oid) = Oid::from_str(version.as_str()) {
+                    committed_blobs.insert(path.clone(), oid);
+                }
+            }
+            BatchMutation::Delete { path } | BatchMutation::DeleteIfMatch { path, .. } => {
+                committed_blobs.remove(path);
+            }
+            BatchMutation::CheckObject { .. } | BatchMutation::CheckPrefix { .. } => {}
+        }
+    }
+    let committed_snapshot = Snapshot {
+        head: Some(commit_oid),
+        blobs: committed_blobs,
+    };
     Ok((commit_oid, committed_snapshot))
 }
 

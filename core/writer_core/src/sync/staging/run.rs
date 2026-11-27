@@ -241,6 +241,11 @@ impl StagingRun {
         self.build_base_snapshot_from_live(live_root, &rel_paths)?;
         for rel in &rel_paths {
             let live_path = live_root.join(rel);
+            // 远端删除/本地已删除的路径没有 live 文件：base/staging 都不建条目，
+            // 三方比较里它就是"两边都不存在"。
+            if !live_path.exists() {
+                continue;
+            }
             let staging_path = self.staging_root().join(rel);
             if let Some(parent) = staging_path.parent() {
                 fs::create_dir_all(parent)?;
