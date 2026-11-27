@@ -311,7 +311,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     // 宽松投影：known file 缺失且无 tombstone 时不整体 Err，而是先尝试从远端
     // blob 恢复；无法恢复的路径显式报 local_missing_without_tombstone（见下方）。
     let local_snapshot =
-        snapshot_local_records_for_merge(sync_root, scope, &state.device_id, app_group)?;
+        snapshot_local_records_for_merge(sync_root, scope, &state.device_id, app_group, None)?;
     let local_records = local_snapshot.records;
     let remote_records = build_remote_records(
         remote_manifest,
@@ -1252,7 +1252,7 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
     //    #931：已知文件缺失且无墓碑时不再整体 Err。缺失路径单独收集，向上层
     //    显式报告 local_missing_without_tombstone；不允许伪造删除记录。
     let local_snapshot =
-        snapshot_local_records_for_merge(sync_root, scope, preferred_device_id, None)?;
+        snapshot_local_records_for_merge(sync_root, scope, preferred_device_id, None, None)?;
     let local_records = local_snapshot.records;
     let unresolved_missing_paths: Vec<String> = local_snapshot
         .missing_without_delete_fact

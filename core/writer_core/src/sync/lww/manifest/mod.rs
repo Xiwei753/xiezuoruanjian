@@ -84,8 +84,9 @@ pub(crate) fn snapshot_local_records_for_merge(
     scope: SyncScope,
     preferred_device_id: &str,
     app_group: Option<&crate::sync::types::AppDataGroup>,
+    sparse: Option<&crate::sync::sparse_plan::SparseObjectPlan>,
 ) -> crate::error::Result<LocalSnapshot> {
-    build_local_snapshot(sync_root, scope, preferred_device_id, app_group)
+    build_local_snapshot(sync_root, scope, preferred_device_id, app_group, sparse)
 }
 
 ///   真正的只读 local record 投影 helper（严格版）。
@@ -114,7 +115,7 @@ pub fn snapshot_local_records_read_only(
     scope: SyncScope,
     preferred_device_id: &str,
 ) -> crate::error::Result<HashMap<String, ManifestFileRecord>> {
-    let snapshot = build_local_snapshot(sync_root, scope, preferred_device_id, None)?;
+    let snapshot = build_local_snapshot(sync_root, scope, preferred_device_id, None, None)?;
     if let Some(missing) = snapshot.missing_without_delete_fact.first() {
         let message = match missing.cause {
             MissingCause::KnownFile => format!(
@@ -141,7 +142,7 @@ pub fn snapshot_app_group_records_read_only(
     preferred_device_id: &str,
 ) -> crate::error::Result<HashMap<String, ManifestFileRecord>> {
     let snapshot =
-        build_local_snapshot(sync_root, SyncScope::App, preferred_device_id, Some(group))?;
+        build_local_snapshot(sync_root, SyncScope::App, preferred_device_id, Some(group), None)?;
     if let Some(missing) = snapshot.missing_without_delete_fact.first() {
         return Err(crate::Error::Io(std::io::Error::other(format!(
             "snapshot_app_group_records_read_only: local file {} missing without tombstone",
@@ -162,6 +163,7 @@ fn build_local_snapshot(
     scope: SyncScope,
     preferred_device_id: &str,
     app_group: Option<&crate::sync::types::AppDataGroup>,
+    sparse: Option<&crate::sync::sparse_plan::SparseObjectPlan>,
 ) -> crate::error::Result<LocalSnapshot> {
     // 1. 读 old manifest（manifest.sync.json）→ HashMap<path, ManifestFileRecord>。
     //   manifest 存在但损坏 → 返回 Err（不静默 fallback）。
@@ -351,6 +353,14 @@ fn build_local_snapshot(
         if records.contains_key(path) {
             continue;
         }
+        // 稀疏模式下"本轮没有加载"不等于"缺失"：沿用已确认的 manifest 事实，
+        // 既不报缺失也不伪造删除（SparseObjectPlan::Unloaded）。
+        if sparse.is_some_and(|plan| !plan.contains(path)) {
+            if let Some(record) = old_manifest_records.get(path) {
+                records.insert(path.clone(), record.clone());
+            }
+            continue;
+        }
         if !SyncService::is_whitelisted_path(path, scope)
             || SyncService::is_blacklisted_path(path, scope)
         {
@@ -421,6 +431,11 @@ fn build_local_snapshot(
     //    - 文件不存在 + 无 tombstone → 返回 Err（不能伪造当前本地事实）。
     for (path, old_rec) in &old_manifest_records {
         if records.contains_key(path) {
+            continue;
+        }
+        // 稀疏模式下未加载的对象不是"旧 upsert 缺文件"：保留原记录继续沿用。
+        if sparse.is_some_and(|plan| !plan.contains(path)) {
+            records.insert(path.clone(), old_rec.clone());
             continue;
         }
         // A committed manifest delete is a durable local delete fact even when
