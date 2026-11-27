@@ -175,8 +175,9 @@ pub(crate) fn load_pending(
                         path.display()
                     ))
                 })?;
-                if file.schema_version != 0
-                    && (file.project_id != project_id || file.chapter_id != chapter_id)
+                if file.schema_version != 1
+                    || file.project_id != project_id
+                    || file.chapter_id != chapter_id
                 {
                     return Err(crate::Error::Other(format!(
                         "legacy correction pending identity mismatch at {}: project={} chapter={}",
