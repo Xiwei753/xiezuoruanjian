@@ -27,7 +27,7 @@
 //! `error_category` / `message_key` 从与总体同优先级的第一个 dominant target 取得，
 //! 避免"总体是认证失败、文案却拿到前一个网络错误"的错位。
 
-mod commit;
+pub(crate) mod commit;
 mod dry_run;
 mod prepare;
 

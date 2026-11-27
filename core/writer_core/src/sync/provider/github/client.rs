@@ -319,6 +319,9 @@ pub(crate) fn get_ref_revision(
         })
 }
 
+/// GitHub compare API 单次返回的文件上限；达到上限即视为不完整。
+const COMPARE_FILES_LIMIT: usize = 300;
+
 /// 比较两个提交之间变化的文件路径（Issue #1065 复审 #5）。
 ///
 /// 只读取 `compare` 的 `files[].filename`，不下载内容；`base` 不在远端或
@@ -348,13 +351,31 @@ pub(crate) fn compare_changed_paths(
             reason: format!("invalid compare json: {error}"),
         })?;
     let Some(files) = json["files"].as_array() else {
-        // 超过 300 个文件时部分字段可能被省略；没有 files 数组视为不可靠差异。
+        // 没有 files 数组（纯 fast-forward 但无文件差异时也可能缺省）：不可靠。
         return Ok(None);
     };
-    let mut paths: Vec<String> = files
-        .iter()
-        .filter_map(|file| file["filename"].as_str().map(str::to_string))
-        .collect();
+    // GitHub compare 单次最多返回 300 个文件，达到上限时数组并不完整；分叉
+    // 历史还会用 merge-base 计算差异。两种情况都不能当成完整差异（复审 #6）。
+    if files.len() >= COMPARE_FILES_LIMIT {
+        log::info!(
+            "[sync] GitHub compare returned {COMPARE_FILES_LIMIT}+ files; falling back to full scan"
+        );
+        return Ok(None);
+    }
+    let mut paths: Vec<String> = Vec::new();
+    for file in files {
+        if let Some(name) = file["filename"].as_str() {
+            paths.push(name.to_string());
+        }
+        // rename 会有旧路径消失 + 新路径出现，两个路径都受影响。
+        if let Some(previous) = file["previous_filename"].as_str() {
+            paths.push(previous.to_string());
+        }
+        if file["filename"].as_str().is_none() {
+            // 缺字段说明响应被裁剪，不能作为完整差异。
+            return Ok(None);
+        }
+    }
     paths.sort();
     paths.dedup();
     Ok(Some(paths))

@@ -94,70 +94,6 @@ fn writer_error_is_retryable_network(error: &crate::api::error::WriterError) -> 
 /// Whether a target failure means the round's merged tree is incomplete and
 /// must not be published.  Isolated `migration` failures (for example one
 /// stats partition) do not invalidate the other groups.
-/// commit 之后核对缓冲里待发布的字节是否仍是 live 的版本。
-///
-/// 三方合并可能因为同步期间的并发编辑把正文写成与 staging 不同的版本；
-/// 此时继续发布 staging 旧字节会把更旧的版本推回远端。这里只**检测**并返回
-/// 不一致的远端路径：本轮整轮不发布（丢弃缓冲），账本里更新的 mutation 仍在，
-/// 下一轮基于新的 live 内容重新构建批次。不能单条丢弃——generation 的
-/// manifest 仍引用该路径，缺内容发布出去会得到不完整的树。
-fn stale_buffered_writes(
-    round: &crate::sync::provider::round::RoundProvider<'_>,
-    live_root: &std::path::Path,
-    remote_prefix: &str,
-    project_id: Option<&str>,
-    committed_paths: &[crate::sync::commit_helpers::CommittedPath],
-) -> usize {
-    let buffered = round.buffered_put_digests();
-    if buffered.is_empty() {
-        return 0;
-    }
-    let project_prefix = project_id.map(|id| format!("projects/{id}/"));
-    let mut stale: Vec<String> = Vec::new();
-    for committed in committed_paths {
-        if committed.deleted {
-            continue;
-        }
-        let Some(raw) = committed.path.to_str() else {
-            continue;
-        };
-        let raw = raw.replace('\\', "/");
-        // 作品 target 的 committed path 是 workspace-relative（projects/<id>/...），
-        // live root 已经指向作品目录；App target 的路径本来就是 app 根相对路径。
-        let rel = match project_prefix.as_deref() {
-            Some(prefix) => match raw.strip_prefix(prefix) {
-                Some(rel) => rel.to_string(),
-                None => continue,
-            },
-            None => raw.clone(),
-        };
-        // 同步元数据（manifest/state/conflicts/账本）在三方合并里会被重写，
-        // 其字节本来就不等于传输期缓冲的版本；它们不是业务对象内容，不能因此
-        // 把整轮发布判成"内容过期"（会 livelock 在永远不发布）。
-        if rel.starts_with("app-meta/sync/") {
-            continue;
-        }
-        let live_path = live_root.join(&rel);
-        let Ok(content) = std::fs::read(&live_path) else {
-            continue;
-        };
-        let live_digest = crate::sync::hash::content_md5(&content);
-        let suffix = format!("/{rel}");
-        for (remote_path, buffered_digest) in &buffered {
-            if !remote_path.starts_with(remote_prefix) {
-                continue;
-            }
-            if (remote_path == &rel || remote_path.ends_with(&suffix))
-                && buffered_digest != &live_digest
-                && !stale.contains(remote_path)
-            {
-                stale.push(remote_path.clone());
-            }
-        }
-    }
-    stale
-}
-
 fn target_blocks_round_publish(target: &crate::sync::types::TargetSyncResult) -> bool {
     if target.failure_phase.as_deref() == Some("migration") {
         return false;
@@ -1140,11 +1076,9 @@ impl WriterCoreApi {
             }
         } else {
             next.record_failure(now);
-            // 失败不清空已消费的远端版本：这一轮的合并确实基于它，下一轮
-            // 不必重新 fetch 同一 HEAD；未确认的本地事实由账本保留（复审 #3）。
-            if let Some(revision) = consumed_remote_revision {
-                next.remote_revision = revision.to_string();
-            }
+            // 失败不推进远端消费游标：只有真正落盘的 target 才能宣称消费了
+            // 那个 HEAD，否则下一轮会把没处理的远端变化当成已处理（复审 #4）。
+            // 已确认的本地事实由账本保留，重试时重新计算差异即可。
             log::info!(
                 "[sync] operation {} failed; next auto retry at {} (consecutive={})",
                 operation_id,
@@ -1220,6 +1154,7 @@ impl WriterCoreApi {
         &self,
         preflight_pending: &PendingMutationMap,
         targets: &[crate::sync::types::TargetSyncResult],
+        receipts: &[crate::sync::provider::round::PublishReceipt],
     ) {
         let (app_data_root, projects_root) = {
             let core = self.core_read();
@@ -1249,28 +1184,40 @@ impl WriterCoreApi {
                 _ => continue,
             };
             let mut published = Vec::new();
-            for path in &target.result.uploaded_files {
-                if let Some(record) = pending.get(path) {
-                    if record.is_upsert() {
-                        published.push(crate::sync::local_mutations::PublishedMutation {
-                            path: path.clone(),
-                            op: "upsert".to_string(),
-                            content_hash: record.content_hash.clone(),
-                            seq: record.seq,
-                        });
+            // 只认 flush 真实写出去的路径 + 内容摘要：计划里的 uploaded_files
+            // 可能与实际发布的对象不一致（回执口径，复审 #3）。
+            let prefix = format!("{}/", target.remote_prefix.trim_end_matches('/'));
+            for receipt in receipts {
+                let Some(rel) = receipt.path.strip_prefix(prefix.as_str()) else {
+                    continue;
+                };
+                let Some(record) = pending.get(rel) else {
+                    continue;
+                };
+                match receipt.op.as_str() {
+                    "upsert" if record.is_upsert() => {
+                        if receipt.content_digest.as_deref() == Some(record.content_hash.as_str()) {
+                            published.push(crate::sync::local_mutations::PublishedMutation {
+                                path: rel.to_string(),
+                                op: "upsert".to_string(),
+                                content_hash: record.content_hash.clone(),
+                                seq: record.seq,
+                                updated_at_ms: record.updated_at_ms,
+                                deleted_at_ms: record.deleted_at_ms,
+                            });
+                        }
                     }
-                }
-            }
-            for path in &target.result.local_deletes {
-                if let Some(record) = pending.get(path) {
-                    if record.is_delete() {
+                    "delete" if record.is_delete() => {
                         published.push(crate::sync::local_mutations::PublishedMutation {
-                            path: path.clone(),
+                            path: rel.to_string(),
                             op: "delete".to_string(),
                             content_hash: record.content_hash.clone(),
                             seq: record.seq,
+                            updated_at_ms: record.updated_at_ms,
+                            deleted_at_ms: record.deleted_at_ms,
                         });
                     }
+                    _ => {}
                 }
             }
             // 已经与远端一致的 pending 事实（编辑后又还原、旧账本遗留）不需要
@@ -1292,9 +1239,34 @@ impl WriterCoreApi {
                             op: "upsert".to_string(),
                             content_hash: record.content_hash.clone(),
                             seq: record.seq,
+                            updated_at_ms: record.updated_at_ms,
+                            deleted_at_ms: record.deleted_at_ms,
                         });
                     }
                 }
+            }
+            // 远端胜出的事实不再作为本地编辑回推：overwritten/远端删除说明
+            // 本地这次修改已被合并决议放弃，直接标记 superseded（复审 #3）。
+            for path in target
+                .result
+                .overwritten_files
+                .iter()
+                .chain(target.result.remote_deletes.iter())
+            {
+                let Some(record) = pending.get(path) else {
+                    continue;
+                };
+                if published.iter().any(|entry| entry.path == *path) {
+                    continue;
+                }
+                published.push(crate::sync::local_mutations::PublishedMutation {
+                    path: path.clone(),
+                    op: "superseded".to_string(),
+                    content_hash: record.content_hash.clone(),
+                    seq: record.seq,
+                    updated_at_ms: record.updated_at_ms,
+                    deleted_at_ms: record.deleted_at_ms,
+                });
             }
             if published.is_empty() {
                 continue;
@@ -1606,7 +1578,7 @@ impl WriterCoreApi {
                     );
                     let (mut result, _, _) = self
                         .core_write()
-                        .finalize_full_sync(snapshot.no_change_targets.clone(), None);
+                        .finalize_full_sync(snapshot.no_change_targets.clone(), None, None);
                     // The target results were persisted by finalize_full_sync. Returning
                     // an empty list lets the platform distinguish this checkpoint no-op
                     // and avoid launching generation GC on every polling interval.
@@ -1777,7 +1749,7 @@ impl WriterCoreApi {
                         "target_catalog".to_string(),
                         msg,
                     );
-                    persist_failure_checkpoint(remote_revision_before.as_deref());
+                    persist_failure_checkpoint(None);
                     return Err(crate::api::error::WriterError::from(e));
                 }
             };
@@ -1832,7 +1804,7 @@ impl WriterCoreApi {
                             "target_catalog".to_string(),
                             msg,
                         );
-                        persist_failure_checkpoint(remote_revision_before.as_deref());
+                        persist_failure_checkpoint(None);
                         return Err(crate::api::error::WriterError::from(e));
                     }
                 }
@@ -1976,13 +1948,13 @@ impl WriterCoreApi {
                     );
                     let (mut result, _, _) = self
                         .core_write()
-                        .finalize_full_sync(snapshot.no_change_targets.clone(), None);
+                        .finalize_full_sync(snapshot.no_change_targets.clone(), None, None);
                     result.targets.clear();
                     return Ok(result.into());
                 }
                 let (mut result, _, _) = self
                     .core_write()
-                    .finalize_full_sync(Vec::new(), None);
+                    .finalize_full_sync(Vec::new(), None, None);
                 result.targets.clear();
                 return Ok(result.into());
             }
@@ -2054,6 +2026,23 @@ impl WriterCoreApi {
                     msg,
                 );
                 return Err(crate::api::error::WriterError::from(e));
+            }
+        }
+        // 上一轮推送成功但本地结算失败（崩溃/写盘失败）：先重放确认意图，
+        // 否则账本事实会一直留着被反复重推（复审 #3）。
+        let mut ack_roots: Vec<std::path::PathBuf> = vec![plan.app_data_root.clone()];
+        ack_roots.extend(
+            plan.targets
+                .iter()
+                .filter_map(|planned| planned.project_id.as_deref())
+                .map(|project_id| projects_root.join(project_id)),
+        );
+        for sync_root in &ack_roots {
+            if let Err(error) = crate::sync::local_mutations::replay_pending_acks(sync_root) {
+                log::warn!(
+                    "[sync] replay pending mutation acks failed at {}: {error}",
+                    sync_root.display()
+                );
             }
         }
         // 在 seed 之前固定各 target 的未确认事实：seed 复制的是这一刻的 live
@@ -2499,8 +2488,6 @@ impl WriterCoreApi {
                 crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root).map_err(
                     |error| crate::api::error::WriterError::from(crate::error::Error::from(error)),
                 )?;
-            // commit 之后与 live 不一致的缓冲字节数量（本轮不发布）。
-            let mut stale_publish_paths: usize = 0;
             let mut proof_recovery_state =
                 match self.core_write().recover_pending_sync_proof_state() {
                     Ok(state) => state,
@@ -2548,21 +2535,6 @@ impl WriterCoreApi {
                 let commit_outcome =
                     crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
                 commit_phase.finish_with_provider(&commit_outcome, provider);
-                // 只发布与已落盘内容一致的字节（Issue #1065 复审 #2）。
-                let stale_paths = stale_buffered_writes(
-                    round,
-                    &planned.target_live_root,
-                    &planned.target.remote_prefix,
-                    planned.project_id.as_deref(),
-                    &target_committed_paths,
-                );
-                if !stale_paths.is_empty() {
-                    stale_publish_paths += stale_paths.len();
-                    log::warn!(
-                        "[sync] {} buffered writes changed on disk during commit; remote publish blocked for this round",
-                        stale_paths.len()
-                    );
-                }
 
                 if let Some(ref sink) = progress_sink {
                     let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
@@ -2707,8 +2679,7 @@ impl WriterCoreApi {
         // PartialConflict）是成功落盘的终态，冲突路径由 generation 复用远端
         // blob、LWW 排除上传处理，不能因此冻结其它独立对象的发布
         // （Issue #1065 复审 #2、#4）。
-        let commit_blocked =
-            stale_publish_paths > 0 || all_targets.iter().any(target_blocks_round_publish);
+        let commit_blocked = all_targets.iter().any(target_blocks_round_publish);
         if commit_blocked {
             round.discard();
             publish_blocked = true;
@@ -2743,6 +2714,8 @@ impl WriterCoreApi {
             );
             let pending_paths = round.pending_len();
             let publish_started_at = Instant::now();
+            // 先固化"本轮将要写出去的对象事实"，用于发布成功后的精确结算。
+            let publish_receipts = round.pending_publish_receipts();
             match round.flush() {
                 Ok(outcome) => {
                     publish_succeeded = true;
@@ -2763,7 +2736,11 @@ impl WriterCoreApi {
                     publish_phase.finish_with_provider(outcome, provider);
                     // 远端提交成功：按回执确认本轮实际发布的对象事实，推进
                     // known_files 并按序号压缩账本历史前缀。失败/跳过不确认。
-                    self.confirm_published_targets(preflight_pending, &all_targets);
+                    self.confirm_published_targets(
+                        preflight_pending,
+                        &all_targets,
+                        &publish_receipts,
+                    );
                 }
                 Err(error) => {
                     log::warn!(
@@ -2804,9 +2781,25 @@ impl WriterCoreApi {
 
         // Phase 5: 聚合 + lifecycle 处理 + FullSyncState 持久化（短写锁）。
         // Issue #779 评论 5853718466：传 None — GC 失败不影响同步终态。
+        // 阶段失败（发布失败 / 取消）必须在 finalize 之前汇入持久终态。
+        let round_phase_failure = if let Some(message) = publish_error.clone() {
+            Some(crate::facade::RoundPhaseFailure {
+                category: "remote_publish_failed".to_string(),
+                message,
+                message_key: Some("sync.result.network_failed".to_string()),
+            })
+        } else if cancelled_after_commit {
+            Some(crate::facade::RoundPhaseFailure {
+                category: "cancelled".to_string(),
+                message: "sync cancelled after local commit; remote publish skipped".to_string(),
+                message_key: None,
+            })
+        } else {
+            None
+        };
         let (result, committed_paths, lifecycle_receipts) = {
             let core = self.core_write();
-            core.finalize_full_sync(all_targets, None)
+            core.finalize_full_sync(all_targets, None, round_phase_failure)
         };
 
         // 合并 per-target committed_paths 与 finalize 阶段返回的 committed_paths。
@@ -2831,37 +2824,8 @@ impl WriterCoreApi {
 
         // 远端发布失败：把失败注入终态，平台与 checkpoint 都按失败处理，
         // 但已提交的本地结果、history 与索引失效照常收口（复审 #2、#3）。
-        let mut result = result;
-        if cancelled_after_commit {
-            if matches!(
-                result.overall_status,
-                crate::sync::SyncStatus::Success
-                    | crate::sync::SyncStatus::NoChanges
-                    | crate::sync::SyncStatus::LatestWinsApplied
-            ) {
-                result.overall_status = crate::sync::SyncStatus::Error("cancelled".to_string());
-                result.error = Some(
-                    "sync cancelled after local commit; remote publish skipped".to_string(),
-                );
-                result.error_category = Some("cancelled".to_string());
-            }
-            self.core_write().persist_full_sync_cancelled();
-        }
-        if let Some(message) = publish_error {
-            if matches!(
-                result.overall_status,
-                crate::sync::SyncStatus::Success
-                    | crate::sync::SyncStatus::NoChanges
-                    | crate::sync::SyncStatus::LatestWinsApplied
-            ) {
-                result.overall_status = crate::sync::SyncStatus::RecoverableError(
-                    "remote_publish_failed".to_string(),
-                );
-                result.error = Some(message);
-                result.error_category = Some("remote_publish_failed".to_string());
-                result.message_key = Some("sync.result.network_failed".to_string());
-            }
-        }
+        // 阶段失败已在 finalize 前汇入持久终态（复审 #4）：这里只做 DTO 转换，
+        // 不能再事后改内存结果，否则 Core 的 last_success 与 UI 不一致。
         let mut result: FullSyncResultDto = result.into();
         result.local_content_changed = local_content_changed;
         result.chapter_changes = chapter_changes.into_iter().map(Into::into).collect();

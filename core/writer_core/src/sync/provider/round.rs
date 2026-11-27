@@ -50,6 +50,17 @@ pub struct RoundFlushOutcome {
     pub result: BatchCommitResult,
 }
 
+/// 本轮即将写入远端的一条对象事实（发布回执的输入）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishReceipt {
+    /// 远端绝对路径（含 target 前缀）。
+    pub path: String,
+    /// `upsert` 或 `delete`。
+    pub op: String,
+    /// upsert 的实际内容摘要（MD5）；`ReuseVersion` 时为复用的远端版本串。
+    pub content_digest: Option<String>,
+}
+
 /// Provider wrapper that defers all mutations until [`Self::flush`].
 pub struct RoundProvider<'a> {
     inner: &'a dyn SyncProvider,
@@ -380,6 +391,37 @@ impl<'a> RoundProvider<'a> {
             .lock()
             .map(|state| state.entries.len())
             .unwrap_or(0)
+    }
+
+    /// 本轮缓冲里**实际待写**的对象事实（回执口径）。
+    ///
+    /// 发布成功后只能用这份事实结算 mutation：它是本轮真正写出去的路径与
+    /// 内容摘要，而不是"计划要写什么"（复审 #3）。
+    pub fn pending_publish_receipts(&self) -> Vec<PublishReceipt> {
+        let Ok(state) = self.state.lock() else {
+            return Vec::new();
+        };
+        state
+            .entries
+            .iter()
+            .map(|(path, entry)| match entry {
+                Some(BufferedValue::Content(content)) => PublishReceipt {
+                    path: path.clone(),
+                    op: "upsert".to_string(),
+                    content_digest: Some(crate::sync::hash::content_md5(content)),
+                },
+                Some(BufferedValue::Version(version)) => PublishReceipt {
+                    path: path.clone(),
+                    op: "upsert".to_string(),
+                    content_digest: Some(version.as_str().to_string()),
+                },
+                None => PublishReceipt {
+                    path: path.clone(),
+                    op: "delete".to_string(),
+                    content_digest: None,
+                },
+            })
+            .collect()
     }
 
     /// 缓冲里待发布的 Put 内容摘要（remote_path → md5）。

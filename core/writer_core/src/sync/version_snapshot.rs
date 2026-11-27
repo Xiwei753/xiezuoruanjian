@@ -122,80 +122,50 @@ fn read_manifest(sync_root: &std::path::Path, relative: &str) -> crate::Result<O
     Ok(Some(manifest))
 }
 
-/// 本 target 拥有的同步对象路径指纹（路径 + 大小 + mtime 纳秒）。
+/// 事务驱动的 target 版本输入。
 ///
-/// 只读目录元数据，不读文件内容：它用来发现"还没接入 mutation 账本"的写入
-/// 路径造成的本地变化，保证增量调度不会漏同步；具体差异仍由随后的完整核对
-/// （LWW + commit）处理。
-fn local_paths_fingerprint(
+/// 变化来源只有三处，全部由已落盘的事务产生：
+/// 1. mutation 账本（append 推进序号高水位，账本文件变大）；
+/// 2. manifest（同步提交/合并结果）；
+/// 3. target state（known_files / 墓碑 / 确认游标）。
+///
+/// 不再遍历目录或读文件 mtime：那会让每次轮询都扫描整个作品/数据组，且把
+/// "业务事务"换成"文件系统时间"，与同步事实来源冲突（Issue #1065 复审 #5）。
+fn transaction_fingerprint(
     sync_root: &std::path::Path,
-    scope: SyncScope,
     app_group: Option<&AppDataGroup>,
-) -> (String, usize) {
-    let walk_roots = app_group
-        .map(AppDataGroup::local_walk_roots)
-        .unwrap_or_default();
-    let keep_dir = |rel: &str| -> bool {
-        if walk_roots.is_empty() {
-            return true;
-        }
-        walk_roots
-            .iter()
-            .any(|root| root == rel || root.starts_with(&format!("{rel}/")))
+) -> String {
+    let manifest_path = match app_group {
+        Some(group) => group.local_manifest_path(),
+        None => crate::sync::lww::SYNC_MANIFEST_PATH.to_string(),
     };
-    let walker = walkdir::WalkDir::new(sync_root)
-        .into_iter()
-        .filter_entry(|item| {
-            if item.depth() == 0 || !item.file_type().is_dir() {
-                return true;
-            }
-            let Ok(rel) = item.path().strip_prefix(sync_root) else {
-                return true;
-            };
-            keep_dir(&rel.to_string_lossy().replace('\\', "/"))
-        });
-    let mut entries: Vec<(String, u64, u128)> = Vec::new();
-    for item in walker {
-        let Ok(entry) = item else {
-            continue;
-        };
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let Ok(rel) = entry.path().strip_prefix(sync_root) else {
-            continue;
-        };
-        let rel = rel.to_string_lossy().replace('\\', "/");
-        if rel.starts_with(".git/") || rel == ".git" {
-            continue;
-        }
-        if !crate::sync::SyncService::is_whitelisted_path(&rel, scope) {
-            continue;
-        }
-        if let Some(group) = app_group {
-            if !crate::sync::SyncService::is_whitelisted_app_group_path(&rel, group) {
-                continue;
-            }
-        }
-        let metadata = entry.metadata().ok();
-        let size = metadata.as_ref().map(std::fs::Metadata::len).unwrap_or(0);
-        let mtime_nanos = metadata
-            .and_then(|metadata| metadata.modified().ok())
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        entries.push((rel, size, mtime_nanos));
-    }
-    entries.sort();
-    let file_count = entries.len();
+    let state_path = match app_group {
+        Some(group) => group.local_state_path(),
+        None => "app-meta/sync/state.local.json".to_string(),
+    };
     let mut hasher = Sha256::new();
-    for (path, size, mtime_nanos) in entries {
-        hasher.update(path.as_bytes());
+    for (label, rel) in [
+        ("manifest", manifest_path.as_str()),
+        ("state", state_path.as_str()),
+    ] {
+        hasher.update(label.as_bytes());
         hasher.update(b"\0");
-        hasher.update(size.to_le_bytes());
-        hasher.update(mtime_nanos.to_le_bytes());
+        if let Ok(metadata) = std::fs::metadata(sync_root.join(rel)) {
+            hasher.update(metadata.len().to_le_bytes());
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                    hasher.update(duration.as_nanos().to_le_bytes());
+                }
+            }
+        }
+        hasher.update(b"|");
     }
-    (format!("{:x}", hasher.finalize()), file_count)
+    let ledger = local_mutations::ledger_path(sync_root);
+    if let Ok(metadata) = std::fs::metadata(&ledger) {
+        hasher.update(metadata.len().to_le_bytes());
+    }
+    hasher.update(local_mutations::seq_high_watermark(sync_root).to_le_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// 从一个已加载的 manifest 与账本事实计算 target 版本。
@@ -205,16 +175,15 @@ fn build_version(
     known_files: usize,
     group: Option<&AppDataGroup>,
     path_fingerprint: String,
-    local_file_count: usize,
 ) -> LocalTargetVersion {
     // 没有 manifest 却有基线（known_files 非空）：说明本地索引不可信（旧版布局、
     // 手工删除、迁移中断），必须完整扫描重建，不能靠增量比对宣布无变化。
     if manifest.is_none() && known_files > 0 {
         return LocalTargetVersion::ineligible("missing_baseline");
     }
-    // 有数据但还没有 manifest：本 target 从未建立过基线，必须走完整同步把
-    // manifest 落下来，不能直接进入"无变化"快速路径（复审 #4）。
-    if manifest.is_none() && local_file_count > 0 {
+    // 还没有 manifest：本 target 从未建立过基线，必须走完整同步把 manifest
+    // 落下来，不能直接进入"无变化"快速路径（复审 #4）。
+    if manifest.is_none() {
         return LocalTargetVersion::ineligible("missing_manifest");
     }
     let empty = SyncManifest::default();
@@ -267,15 +236,13 @@ pub(crate) fn app_group_version(
     let manifest = read_manifest(app_data_root, &group.local_manifest_path())?;
     let pending =
         local_mutations::pending_records_in(ledger, app_data_root, SyncScope::App, Some(group))?;
-    let (path_fingerprint, local_file_count) =
-        local_paths_fingerprint(app_data_root, SyncScope::App, Some(group));
+    let path_fingerprint = transaction_fingerprint(app_data_root, Some(group));
     Ok(build_version(
         manifest.as_ref(),
         pending,
         state.known_files.len(),
         Some(group),
         path_fingerprint,
-        local_file_count,
     ))
 }
 
@@ -301,15 +268,13 @@ pub(crate) fn project_version(project_root: &std::path::Path) -> crate::Result<L
     let manifest = read_manifest(project_root, crate::sync::lww::SYNC_MANIFEST_PATH)?;
     let pending =
         local_mutations::pending_records_in(&ledger, project_root, SyncScope::Project, None)?;
-    let (path_fingerprint, local_file_count) =
-        local_paths_fingerprint(project_root, SyncScope::Project, None);
+    let path_fingerprint = transaction_fingerprint(project_root, None);
     Ok(build_version(
         manifest.as_ref(),
         pending,
         state.known_files.len(),
         None,
         path_fingerprint,
-        local_file_count,
     ))
 }
 

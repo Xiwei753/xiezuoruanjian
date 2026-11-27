@@ -1,5 +1,15 @@
 use crate::sync::full_sync_utils::now_epoch_seconds;
 
+/// 本轮级别的阶段失败，需要和 target 结果一起进入持久终态。
+#[derive(Debug, Clone)]
+pub struct RoundPhaseFailure {
+    /// `remote_publish_failed` / `cancelled`。
+    pub category: String,
+    pub message: String,
+    /// 平台展示用的消息 key（可选）。
+    pub message_key: Option<String>,
+}
+
 impl crate::facade::WriterCore {
     /// 聚合收口 — 新编排入口（Issue #762 评论 5828791004）。
     ///
@@ -19,6 +29,7 @@ impl crate::facade::WriterCore {
         &self,
         mut targets: Vec<crate::sync::types::TargetSyncResult>,
         generation_gc_result: Option<Result<(), String>>,
+        round_phase_failure: Option<RoundPhaseFailure>,
     ) -> (
         crate::sync::types::FullSyncResult,
         Vec<std::path::PathBuf>,
@@ -46,6 +57,26 @@ impl crate::facade::WriterCore {
                 result.overall_status =
                     crate::sync::SyncStatus::RecoverableError("generation_gc_failed".to_string());
                 result.error = Some(gc_msg);
+            }
+        }
+
+        // 本轮级别的阶段失败（远端发布失败 / 取消）必须在**持久化终态之前**
+        // 汇入结果：先 finalize 写成功、再把内存 DTO 改成失败会让 Core 的
+        // last_success_time 与 UI 永久不一致（复审 #4）。
+        if let Some(failure) = round_phase_failure {
+            if matches!(
+                result.overall_status,
+                crate::sync::SyncStatus::Success
+                    | crate::sync::SyncStatus::NoChanges
+                    | crate::sync::SyncStatus::LatestWinsApplied
+            ) {
+                result.overall_status =
+                    crate::sync::SyncStatus::RecoverableError(failure.category.clone());
+                result.error = Some(failure.message);
+                result.error_category = Some(failure.category);
+                if failure.message_key.is_some() {
+                    result.message_key = failure.message_key;
+                }
             }
         }
 

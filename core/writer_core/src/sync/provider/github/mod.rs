@@ -44,6 +44,9 @@ pub struct GitHubProvider {
     config: GitHubRuntimeConfig,
     transport: Arc<dyn SyncTransport>,
     network_accounting: Arc<ProviderNetworkAccounting>,
+    /// 本轮固定使用的远端提交：首次读取后冻结，list/read/compare 都用它，
+    /// 避免"比较的是 A、消费的是 B"（Issue #1065 复审 #6）。
+    frozen_revision: std::sync::Mutex<Option<String>>,
 }
 
 impl GitHubProvider {
@@ -61,6 +64,25 @@ impl GitHubProvider {
             config,
             transport,
             network_accounting,
+            frozen_revision: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// 本轮固定提交；没有固定值（极早期失败/诊断）时回退到分支名。
+    fn effective_ref(&self) -> String {
+        self.frozen_revision
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .unwrap_or_else(|| self.config.branch.clone())
+    }
+
+    /// 冻结本轮远端提交（幂等）。
+    fn freeze_revision(&self, revision: &str) {
+        if let Ok(mut guard) = self.frozen_revision.lock() {
+            if guard.is_none() {
+                *guard = Some(revision.to_string());
+            }
         }
     }
 
@@ -83,17 +105,34 @@ impl SyncProvider for GitHubProvider {
     }
 
     fn remote_revision(&self) -> Result<Option<String>, ProviderError> {
+        if let Ok(guard) = self.frozen_revision.lock() {
+            if let Some(revision) = guard.as_ref() {
+                return Ok(Some(revision.clone()));
+            }
+        }
+        let revision = client::get_ref_revision(
+            self.transport(),
+            &self.config.api_base_url,
+            &self.config.token,
+            &self.config.branch,
+        )?;
+        if let Some(revision) = revision.as_ref() {
+            self.freeze_revision(revision);
+        }
+        Ok(revision)
+    }
+
+    /// REST 的 ref 查询本身就是轻量 HEAD 探测，不产生内容传输。
+    ///
+    /// 探测必须永远读真实 ref，不能返回本轮冻结值，否则"远端是否变化"永远
+    /// 是同一个答案。
+    fn probe_remote_revision(&self) -> Result<Option<String>, ProviderError> {
         client::get_ref_revision(
             self.transport(),
             &self.config.api_base_url,
             &self.config.token,
             &self.config.branch,
         )
-    }
-
-    /// REST 的 ref 查询本身就是轻量 HEAD 探测，不产生内容传输。
-    fn probe_remote_revision(&self) -> Result<Option<String>, ProviderError> {
-        self.remote_revision()
     }
 
     /// 用 compare API 取 base..HEAD 的变化路径（Issue #1065 复审 #5）：
@@ -118,7 +157,9 @@ impl SyncProvider for GitHubProvider {
         let transport = self.transport();
         let api_base = &self.config.api_base_url;
         let token = &self.config.token;
-        let branch = &self.config.branch;
+        // 目录读取同样固定本轮快照，避免与 compare 的版本错位。
+        let reference = self.effective_ref();
+        let branch = &reference;
 
         let resp = client::get_tree_recursive(transport, api_base, token, branch)?;
         let status = resp.status;
@@ -176,11 +217,13 @@ impl SyncProvider for GitHubProvider {
 
     fn read(&self, path: &str) -> Result<Option<RemoteObject>, ProviderError> {
         let transport = self.transport();
+        // 读取固定本轮快照：与 list / compare 使用同一个提交。
+        let reference = self.effective_ref();
         let result = client::get_content(
             transport,
             &self.config.api_base_url,
             &self.config.token,
-            &self.config.branch,
+            &reference,
             path,
         )?;
         match result {
