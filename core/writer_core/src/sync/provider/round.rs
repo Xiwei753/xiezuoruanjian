@@ -580,7 +580,10 @@ impl<'a> RoundProvider<'a> {
                 }),
                 BatchMutation::ReuseVersion { path, version } => Some(PublishReceipt {
                     path: path.clone(),
-                    op: "upsert".to_string(),
+                    // 复用远端版本不是新的内容上传：回执里不能把它伪装成
+                    // upsert+内容摘要（MD5 与 Git OID 不可比），调用方应按
+                    // 提交后的 known_files 一致性确认。
+                    op: "reuse".to_string(),
                     content_digest: Some(version.as_str().to_string()),
                 }),
                 BatchMutation::Delete { path } => Some(PublishReceipt {
