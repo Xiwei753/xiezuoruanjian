@@ -2868,12 +2868,14 @@ impl WriterCoreApi {
                 publish_decisions.push((remote_path, decision.clone()));
             }
             if let Some(key) = decision_key.as_ref() {
-                let consumed: std::collections::BTreeSet<String> = target_with_conflicts
-                    .result
-                    .overwritten_files
+                // 被远端消费的本地事实只认提交阶段冻结的决议（origin =
+                // RemoteConsumed），不再从 transfer 结果列表推测（评审 #7214314073）。
+                let consumed: std::collections::BTreeSet<String> = target_decisions
                     .iter()
-                    .chain(target_with_conflicts.result.remote_deletes.iter())
-                    .cloned()
+                    .filter(|decision| {
+                        decision.origin == crate::sync::decision::DecisionOrigin::RemoteConsumed
+                    })
+                    .map(|decision| decision.identity.clone())
                     .collect();
                 consumed_by_target.insert(key.clone(), consumed);
             }
@@ -3041,7 +3043,13 @@ impl WriterCoreApi {
         let mut publish_ack_unsettled = 0usize;
         // 按不可变决议重建本轮发布批次：内容取自提交阶段冻结的字节，
         // 纯远端消费的条目移除；不再回读 live、不再二次覆盖 manifest。
-        let decision_outcome = round.apply_durable_decisions(&publish_decisions);
+        // 本轮已决定不发布（冲突/失败）时不再改写缓冲：没有 flush，改写只会
+        // 留下口惠而实不至的"决议已应用"。
+        let decision_outcome = if publish_blocked {
+            crate::sync::decision::DecisionApplyOutcome::default()
+        } else {
+            round.apply_durable_decisions(&publish_decisions)
+        };
         if decision_outcome.rewritten > 0
             || decision_outcome.withheld > 0
             || decision_outcome.missing > 0
