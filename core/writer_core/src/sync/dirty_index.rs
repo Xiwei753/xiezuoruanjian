@@ -239,3 +239,101 @@ pub(crate) fn is_clean_for_checkpoint(
     }
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn touch_ledger(root: &Path, lines: &str) {
+        let path = root.join(crate::sync::local_mutations::LOCAL_MUTATIONS_PATH);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, lines).unwrap();
+    }
+
+    fn record(path: &str, seq: u64) -> crate::sync::local_mutations::LocalMutationRecord {
+        crate::sync::local_mutations::LocalMutationRecord {
+            schema_version: 1,
+            transaction_id: format!("tx-{seq}"),
+            sync_root: String::new(),
+            path: path.to_string(),
+            object_type: None,
+            object_id: None,
+            op: "upsert".to_string(),
+            content_hash: format!("hash-{seq}"),
+            updated_at_ms: 1_000 + seq as i64,
+            deleted_at_ms: None,
+            device_id: "device".to_string(),
+            seq,
+            object_revision: Some(seq),
+            base_hash: None,
+        }
+    }
+
+    #[test]
+    fn seed_then_append_makes_checkpoint_dirty_until_confirmed() {
+        let app = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        let expected = vec![("project:p".to_string(), project.path().to_path_buf())];
+        touch_ledger(project.path(), "");
+        seed_clean(app.path(), &expected).unwrap();
+        assert!(is_clean_for_checkpoint(
+            &load(app.path()).unwrap(),
+            &expected
+        ));
+
+        let facts = record("volumes/v/chapters/c/chapter.md", 1);
+        touch_ledger(project.path(), "{}\n");
+        record_appended(app.path(), project.path(), &[facts.clone()]).unwrap();
+        assert!(!is_clean_for_checkpoint(
+            &load(app.path()).unwrap(),
+            &expected
+        ));
+
+        let published = vec![crate::sync::local_mutations::PublishedMutation {
+            path: facts.path.clone(),
+            op: "upsert".to_string(),
+            content_hash: facts.content_hash.clone(),
+            seq: facts.seq,
+            updated_at_ms: facts.updated_at_ms,
+            deleted_at_ms: None,
+        }];
+        record_confirmed(app.path(), project.path(), &published).unwrap();
+        assert!(is_clean_for_checkpoint(
+            &load(app.path()).unwrap(),
+            &expected
+        ));
+    }
+
+    #[test]
+    fn ledger_length_change_invalidates_clean_entry() {
+        let app = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        let expected = vec![("project:p".to_string(), project.path().to_path_buf())];
+        touch_ledger(project.path(), "");
+        record_appended(app.path(), project.path(), &[record("a", 1)]).unwrap();
+        // 手工 seed 后账本又被未登记的追加改变：长度不一致必须判脏。
+        seed_clean(app.path(), &expected).unwrap();
+        touch_ledger(project.path(), "abcdefgh\n");
+        assert!(!is_clean_for_checkpoint(
+            &load(app.path()).unwrap(),
+            &expected
+        ));
+    }
+
+    #[test]
+    fn unknown_existing_root_forces_slow_path() {
+        let app = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        let new_project = TempDir::new().unwrap();
+        let expected = vec![("project:p".to_string(), project.path().to_path_buf())];
+        touch_ledger(project.path(), "");
+        seed_clean(app.path(), &expected).unwrap();
+        // 索引里登记了 checkpoint 之外、但目录仍存在的 root：可能是新建作品。
+        record_appended(app.path(), new_project.path(), &[record("chapter.md", 1)]).unwrap();
+        assert!(!is_clean_for_checkpoint(
+            &load(app.path()).unwrap(),
+            &expected
+        ));
+    }
+}
