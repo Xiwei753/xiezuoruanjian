@@ -840,7 +840,8 @@ fn settlement_meta_failure_keeps_text_and_ack_responsibility() {
             }),
             0,
         )
-        .expect("retry after meta becomes writable"),
+        .expect("retry after meta becomes writable")
+        .removed(),
         "还有未确认事实：目录不能删除"
     );
     assert!(current_text_path(&location).is_none(), "已确认正文已收口");
@@ -1293,5 +1294,129 @@ mod draft_blob_and_sequence_tests {
             .expect("draft retained");
         assert_eq!(state.base_generation, "gen-A");
         assert_eq!(state.applied_commit_sequence, 2);
+    }
+}
+
+mod ack_strictness_tests {
+    //! Issue #1062 评论 #7209683560：ack 归属、pending spool 损坏与 retry 槽位。
+
+    use super::super::retry::retry_root;
+    use super::super::store::{kept_root, read_meta_checked};
+    use super::PENDING_INPUTS_DIR;
+    use super::*;
+
+    fn pending_ack(tx: &str, events: &[&str]) -> PendingAck {
+        PendingAck {
+            transaction_id: tx.to_string(),
+            event_ids: events.iter().map(|id| (*id).to_string()).collect(),
+            base_generation: "g1".to_string(),
+            base_revision: 1,
+            base_sha256: "sha".to_string(),
+            editor_session_id: 0,
+            snapshot_revision: 0,
+            snapshot_digest: String::new(),
+            commit_sequence: 0,
+            reconciled: false,
+        }
+    }
+
+    #[test]
+    fn pending_input_corruption_blocks_ack_and_terminal() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("fact");
+        persist_current(root, "p1", "c1", true).expect("persist");
+        let location = draft_location(root);
+        let spool = location.dir.join(PENDING_INPUTS_DIR);
+        std::fs::create_dir_all(&spool).expect("spool dir");
+        std::fs::write(spool.join("bad-input.json"), b"{ not-json").expect("corrupt spool");
+        // 模拟进程重启：必须从磁盘重新加载，不能命中内存 registry。
+        forget_for_test(root, "p1", "c1");
+
+        let error = mark_committed_with_settlement(
+            root,
+            "p1",
+            "c1",
+            "tx-1",
+            &["e1".to_string()],
+            "g1",
+            2,
+            "sha",
+            None,
+            0,
+        )
+        .expect_err("spool 损坏时不能推进 ack");
+        assert!(
+            error.contains(PENDING_INPUTS_UNREADABLE),
+            "unexpected error: {error}"
+        );
+        assert!(location.dir.exists(), "原始草稿目录必须保留");
+        let meta = read_meta_checked(&location.dir, "p1", "c1").expect("meta");
+        assert!(!meta.terminal, "损坏 spool 不能被写成 terminal 决议");
+    }
+
+    #[test]
+    fn draft_event_ownership_distinguishes_missing_owned_foreign() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        assert_eq!(
+            draft_event_ownership(root, "p1", "c1", &["e1".to_string()]).expect("ownership"),
+            DraftEventOwnership::NoDraft
+        );
+        note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("fact");
+        assert_eq!(
+            draft_event_ownership(root, "p1", "c1", &["e1".to_string()]).expect("ownership"),
+            DraftEventOwnership::Owns
+        );
+        assert_eq!(
+            draft_event_ownership(root, "p1", "c1", &["foreign".to_string()]).expect("ownership"),
+            DraftEventOwnership::Foreign
+        );
+    }
+
+    #[test]
+    fn replay_without_local_draft_is_explicitly_finished() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        record_pending_ack(root, "p1", "c1", &pending_ack("tx-1", &["e1"])).expect("record ack");
+        assert_eq!(replay_pending_acks(root, "p1", "c1").expect("replay"), 1);
+    }
+
+    #[test]
+    fn ghost_empty_slot_does_not_block_retry_materialize() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let archived = kept_root(root, "p1").join("c1").join("stamp-1");
+        std::fs::create_dir_all(&archived).expect("archived dir");
+        std::fs::write(archived.join("text.txt"), "old draft").expect("archived text");
+        record_retry(root, "p1", "c1", "v1", &archived, "unit", 0).expect("record retry");
+        // 上一版遗留的幽灵槽位：只有空目录，没有 meta/正文/事实。
+        let ghost = draft_location(root).dir;
+        std::fs::create_dir_all(ghost.join("pending-acks")).expect("ghost dir");
+
+        assert_eq!(
+            materialize_retry(root, "p1", "c1").expect("materialize"),
+            RetryMaterialize::Moved
+        );
+        assert!(ghost.join("text.txt").is_file());
+        assert!(retry_chapters(root, "p1").is_empty());
+    }
+
+    #[test]
+    fn unreadable_retry_marker_is_reported_and_not_retried() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let dir = retry_root(root, "p1").join("c1");
+        std::fs::create_dir_all(&dir).expect("retry dir");
+        std::fs::write(dir.join("broken.json"), b"{ not-json").expect("broken marker");
+        assert_eq!(
+            unreadable_retry_chapters(root, "p1"),
+            vec!["c1".to_string()]
+        );
+        assert!(list_retries(root, "p1").is_empty());
+        assert_eq!(
+            materialize_retry(root, "p1", "c1").expect("materialize"),
+            RetryMaterialize::NoMarker
+        );
     }
 }

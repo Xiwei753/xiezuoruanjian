@@ -451,16 +451,16 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                 }),
                 receipt.commit_sequence,
             ) {
-                Ok(removed) => {
+                Ok(decision) => {
                     // Issue #1062 评论 7193847871 第 2 项：正文收口已并入
                     // mark_committed 的同一 meta 决议；只有它返回 Ok（meta 已
                     // durable）才会回写 Core journal 的 draft ack。
                     //
-                    // Issue #1062 评论 7191076411 第 1 项（平台侧）：本地
-                    // mark_committed 成功后要把这次提交的精确 ack 回写 Core
-                    // journal。回写失败时 pending-ack 文件保留，下一次进入
-                    // 作品/保存前由 reconcile_core_acks 重试，不能提前删。
-                    if pending_ack_recorded {
+                    // Issue #1062 评论 #7209683560 第 1 项：决议是强类型；
+                    // NoDraft 表示本地没有可应用的草稿，不能在这里把 Core
+                    // ack 标成完成——留给下一次对账按归属重新判定。
+                    let removed = decision.removed();
+                    if pending_ack_recorded && decision.settled() {
                         super::core_ack::acknowledge_core_transaction(
                             api,
                             request.context.projects_root(),

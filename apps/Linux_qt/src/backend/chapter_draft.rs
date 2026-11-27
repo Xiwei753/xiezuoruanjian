@@ -30,7 +30,7 @@
 // - session/generation 参与冻结，跨会话事实不会被静默丢弃；
 // - 旧格式单文件 `<chapter_id>.json` 首次读取时迁移到新目录，迁移失败保留旧文件。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
@@ -40,6 +40,7 @@ use store::DraftLocation;
 mod ack;
 mod ack_commit;
 mod freeze;
+mod ownership;
 mod pending;
 mod restore;
 mod retry;
@@ -58,10 +59,12 @@ pub(crate) use ack_commit::{
     mark_committed, mark_committed_with_settlement, text_ready_for_commit, TextSettlement,
 };
 pub(crate) use freeze::freeze_batch_for;
+pub(crate) use ownership::{draft_event_ownership, DraftEventOwnership};
 pub(crate) use pending::{clear_pending_input, pending_inputs, spool_failed_input};
 pub(crate) use restore::{list_project_drafts, restore_plan, restore_plan_strict, snapshot};
 pub(crate) use retry::{
-    clear_retry, list_retries, materialize_retry, record_retry, retry_chapters, RetryMaterialize,
+    clear_retry, list_retries, materialize_retry, record_retry, retry_chapters,
+    unreadable_retry_chapters, RetryMaterialize,
 };
 pub(crate) use scheduler::{draft_metrics, flush_due, next_persist_deadline};
 
@@ -73,6 +76,12 @@ const DRAFT_PERSIST_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_MEMORY_FACT_INDEX: usize = 4096;
 /// Core 投影构造失败的原始命令 spool 目录（与 facts/ 分开，恢复重试时用）。
 pub(super) const PENDING_INPUTS_DIR: &str = "pending-inputs";
+/// pending-inputs spool 不可读/损坏的错误前缀。
+///
+/// Issue #1062 评论 #7209683560 第 2 项：spool 里仍有未转换的原始编辑事实，
+/// 事务加载必须原样失败（不能吞成空草稿），恢复链据此把它归为“可重试保留”
+/// 而不是永久归档。
+pub(crate) const PENDING_INPUTS_UNREADABLE: &str = "chapter draft pending inputs unreadable (kept)";
 pub(super) const MIXED_SESSION_ERROR: &str =
     "draft has uncommitted facts from another session/generation; restore first";
 

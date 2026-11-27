@@ -119,38 +119,18 @@ pub(super) fn handle_restore_project(
 ) {
     let projects_root = PathBuf::from(&command.context.projects_root);
     let mut counters = RestoreCounters::default();
-    // Issue #1062 评论 7191076411 第 1 项（平台侧）：Core durable journal 是
-    // 草稿 ack 的唯一事实源；进入项目时先按 Core 记录对账，即使本地没有
-    // 草稿也要把 Core 未确认的提交补写成本地 ack 并重放。
-    // Issue #1062 评论 7192111899 第 2 项：对账失败必须阻止对应章节的旧事实
-    // replay/提交；Core journal 仍保留原始证明事件，下一次入口重新对账。
-    let mut blocked_chapters: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
-    let mut reconcile_failed_all = false;
-    {
-        let api = state.api_for(&command.context);
-        if let Err(error) = super::core_ack::reconcile_core_acks(
-            api,
-            command.context.projects_root(),
-            &command.project_id,
-            None,
-        ) {
-            if error.failures().is_empty() {
-                reconcile_failed_all = true;
-            } else {
-                for failure in error.failures() {
-                    blocked_chapters.insert(failure.chapter_id.clone());
-                }
-            }
-            counters
-                .messages
-                .push(format!("core_draft_ack_reconcile_failed: {error}"));
-        }
-    }
     // Issue #1062 评论 7195690539 第 1 项：可自动重试的事务平时停在不可写归档
     // 区，进入项目时先搬回活动槽位；活动槽位已有新会话草稿时绝不覆盖，保留
     // 归档并按章阻断。
     let mut retry_conflicts: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // Issue #1062 评论 #7209683560 第 3 项：有标记文件但解析失败的章节保留
+    // 历史归档、显式报告，本轮不能冒充活动草稿。
+    for chapter_id in
+        super::super::chapter_draft::unreadable_retry_chapters(&projects_root, &command.project_id)
+    {
+        counters.failed += 1;
+        counters.note(&chapter_id, "retry marker unreadable kept");
+    }
     {
         let retries =
             super::super::chapter_draft::list_retries(&projects_root, &command.project_id);
@@ -185,6 +165,48 @@ pub(super) fn handle_restore_project(
                         format!("retry materialize failed kept: {error}"),
                     );
                 }
+            }
+        }
+    }
+    counters.deferred_retry = retry_conflicts.clone();
+
+    // Issue #1062 评论 7191076411 第 1 项（平台侧）：Core durable journal 是
+    // 草稿 ack 的唯一事实源；进入项目时按 Core 记录对账。
+    // Issue #1062 评论 #7209683560 第 1 项：对账必须在 retry 副本搬回活动
+    // 槽位之后执行，否则 Core ack 会在空槽位伪造 pending-ack。
+    // Issue #1062 评论 7192111899 第 2 项：对账失败必须阻止对应章节的旧事实
+    // replay/提交；Core journal 仍保留原始证明事件，下一次入口重新对账。
+    let mut blocked_chapters: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    let mut reconcile_failed_all = false;
+    {
+        let api = state.api_for(&command.context);
+        match super::core_ack::reconcile_core_acks(
+            api,
+            command.context.projects_root(),
+            &command.project_id,
+            None,
+        ) {
+            Ok(outcome) => {
+                // 延后的 ack 只记录，不阻塞当前编辑；Core journal 原样保留。
+                for skipped in outcome.skipped {
+                    counters.note(
+                        &skipped.chapter_id,
+                        format!("core_draft_ack_deferred: {}", skipped.reason),
+                    );
+                }
+            }
+            Err(error) => {
+                if error.failures().is_empty() {
+                    reconcile_failed_all = true;
+                } else {
+                    for failure in error.failures() {
+                        blocked_chapters.insert(failure.chapter_id.clone());
+                    }
+                }
+                counters
+                    .messages
+                    .push(format!("core_draft_ack_reconcile_failed: {error}"));
             }
         }
     }
@@ -296,12 +318,32 @@ pub(super) fn handle_restore_project(
             Err(error) => {
                 counters.failed += 1;
                 counters.kept += 1;
-                counters.note(&chapter_id, format!("draft_unreadable kept: {error}"));
+                // Issue #1062 评论 #7209683560 第 2 项：pending-inputs spool
+                // 损坏仍然代表未转换的原始编辑事实，必须保留原件等待重试，
+                // 不能按“永久不可恢复”归档。
+                let pending_retry =
+                    error.contains(super::super::chapter_draft::PENDING_INPUTS_UNREADABLE);
+                counters.note(
+                    &chapter_id,
+                    if pending_retry {
+                        format!("pending_inputs_unreadable kept (retryable): {error}")
+                    } else {
+                        format!("draft_unreadable kept: {error}")
+                    },
+                );
                 counters.keep(
                     &projects_root,
                     &command.project_id,
                     &chapter_id,
-                    KeptDisposition::Archive,
+                    if pending_retry {
+                        KeptDisposition::Retry {
+                            volume_id: draft.volume_id.clone(),
+                            reason: "pending_inputs_unreadable".to_string(),
+                            attempts: 0,
+                        }
+                    } else {
+                        KeptDisposition::Archive
+                    },
                 );
                 continue;
             }

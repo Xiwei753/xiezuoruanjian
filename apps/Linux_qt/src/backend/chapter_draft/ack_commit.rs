@@ -12,6 +12,33 @@ pub(crate) struct TextSettlement {
     pub snapshot_digest: String,
 }
 
+/// 本地草稿对 Core 草稿 ack 的最终决议。
+///
+/// Issue #1062 评论 #7209683560 第 1 项：不能让调用方用 bool 猜“成功/没草稿/
+/// 已终结”。只有 [`DraftAckDecision::settled`] 为真的决议才允许把 Core ack
+/// 标成 reconciled 并回写 Core journal。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DraftAckDecision {
+    /// 本地持久决议已写；`removed` 表示整章草稿已结算删除。
+    Applied { removed: bool },
+    /// 本地没有草稿（目录不存在，或没有可恢复事务内容）。
+    NoDraft,
+    /// terminal tombstone 已确认：重放同一事务幂等。
+    Terminal,
+}
+
+impl DraftAckDecision {
+    /// 本地已有明确终结/已应用的 durable 决议。
+    pub(crate) fn settled(self) -> bool {
+        !matches!(self, Self::NoDraft)
+    }
+
+    /// 整章草稿目录是否已结算删除。
+    pub(crate) fn removed(self) -> bool {
+        matches!(self, Self::Applied { removed: true })
+    }
+}
+
 /// 只结算事实与 base；正文收口由 [`mark_committed_with_settlement`] 承担。
 pub(crate) fn mark_committed(
     projects_root: &Path,
@@ -35,6 +62,7 @@ pub(crate) fn mark_committed(
         None,
         0,
     )
+    .map(DraftAckDecision::removed)
 }
 
 /// 同一 meta durable 决议：事实 ack + base 推进 + 精确正文收口（tombstone）。
@@ -53,9 +81,9 @@ pub(crate) fn mark_committed_with_settlement(
     base_sha256: &str,
     settlement: Option<&TextSettlement>,
     commit_sequence: u64,
-) -> Result<bool, String> {
+) -> Result<DraftAckDecision, String> {
     let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
-        return Ok(false);
+        return Ok(DraftAckDecision::NoDraft);
     };
     match ensure_state_result(&location) {
         Ok(true) => {}
@@ -63,7 +91,11 @@ pub(crate) fn mark_committed_with_settlement(
             // Issue #1062 评论 7194373427 第 4 项：terminal tombstone 已经是
             // durable 决议，目录只是等待回收；重放同一事务必须幂等成功，
             // 否则 Core journal 的 ack 会被永久扣下。
-            return Ok(store::is_terminal(&location));
+            return Ok(if store::is_terminal(&location) {
+                DraftAckDecision::Terminal
+            } else {
+                DraftAckDecision::NoDraft
+            });
         }
         Err(error) => return Err(error),
     }
@@ -73,7 +105,7 @@ pub(crate) fn mark_committed_with_settlement(
     let (index, acked) = {
         let drafts = lock_registry();
         let Some(state) = drafts.get(&location.key) else {
-            return Ok(false);
+            return Ok(DraftAckDecision::NoDraft);
         };
         (
             state.facts.clone(),
@@ -108,7 +140,7 @@ pub(crate) fn mark_committed_with_settlement(
     let (empty, meta, previous, settle_text) = {
         let mut drafts = lock_registry();
         let Some(state) = drafts.get_mut(&location.key) else {
-            return Ok(false);
+            return Ok(DraftAckDecision::NoDraft);
         };
         let previous = PersistedDraftHead {
             facts: state.facts.clone(),
@@ -276,7 +308,7 @@ pub(crate) fn mark_committed_with_settlement(
                 "settled chapter draft gc deferred: project={project_id} chapter={chapter_id}: {error}"
             );
         }
-        return Ok(true);
+        return Ok(DraftAckDecision::Applied { removed: true });
     }
     if settle_text {
         // meta 已写 tombstone：回收所有未引用正文 blob 与旧 text.txt。
@@ -295,7 +327,7 @@ pub(crate) fn mark_committed_with_settlement(
             }
         }
     }
-    Ok(false)
+    Ok(DraftAckDecision::Applied { removed: false })
 }
 
 /// mark_committed 写 meta 失败时要恢复的草稿头（索引/基线/ack 记录）。

@@ -42,6 +42,9 @@ pub(super) struct RestoreCounters {
     pub(super) retry_chapters: Vec<String>,
     /// 归档失败/活动槽位冲突：原目录仍可能被新会话覆写，必须按章节阻断。
     pub(super) blocked_chapters: Vec<String>,
+    /// 本章已有被延后的重试副本（活动槽位有新草稿，原件留在归档区）：
+    /// 处理活动草稿时不能顺手清掉旧事务的重试标记。
+    pub(super) deferred_retry: std::collections::BTreeSet<String>,
     pub(super) messages: Vec<String>,
 }
 
@@ -75,10 +78,17 @@ impl RestoreCounters {
                 );
                 match disposition {
                     KeptDisposition::Archive => {
-                        if let Err(error) =
-                            chapter_draft::clear_retry(projects_root, project_id, chapter_id)
-                        {
-                            self.note(chapter_id, format!("clear retry marker failed: {error}"));
+                        // 延后的重试标记属于归档区里的旧事务，不是当前活动
+                        // 草稿；归档当前草稿时不能把它清掉。
+                        if !self.deferred_retry.contains(chapter_id) {
+                            if let Err(error) =
+                                chapter_draft::clear_retry(projects_root, project_id, chapter_id)
+                            {
+                                self.note(
+                                    chapter_id,
+                                    format!("clear retry marker failed: {error}"),
+                                );
+                            }
                         }
                         self.archived_chapters.push(chapter_id.to_string());
                     }

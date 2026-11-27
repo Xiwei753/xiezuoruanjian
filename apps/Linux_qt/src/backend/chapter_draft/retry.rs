@@ -93,15 +93,6 @@ pub(crate) fn record_retry(
     let dir = retry_chapter_dir(projects_root, project_id, chapter_id);
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("create retry dir {}: {error}", dir.display()))?;
-    for entry in std::fs::read_dir(&dir)
-        .map_err(|error| format!("read retry dir {}: {error}", dir.display()))?
-        .flatten()
-    {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
     let stamp = archived
         .file_name()
         .and_then(|name| name.to_str())
@@ -117,11 +108,37 @@ pub(crate) fn record_retry(
         attempts: previous_attempts.saturating_add(1),
         updated_at_ms: super::now_ms(),
     };
-    let path = dir.join(format!("{stamp}.json"));
+    // Issue #1062 评论 #7209683560 第 3 项：先把新标记 durable 写出，再删除
+    // 旧标记。写失败/崩溃时旧标记仍然有效，历史归档不会失去自动恢复引用。
+    let mut path = dir.join(format!("{stamp}.json"));
+    let mut attempt = 1u32;
+    while path.exists() {
+        if attempt > 999 {
+            return Err(format!(
+                "record retry: no free marker name project={project_id} chapter={chapter_id} stamp={stamp}"
+            ));
+        }
+        path = dir.join(format!("{stamp}-r{attempt}.json"));
+        attempt = attempt.saturating_add(1);
+    }
     let json = serde_json::to_string_pretty(&marker)
         .map_err(|error| format!("encode retry marker: {error}"))?;
     writer_core::storage::atomic_write_string(&path, &json)
         .map_err(|error| format!("write retry marker {}: {error}", path.display()))?;
+    // 新标记已 durable，现在才回收同章的其它标记文件。
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let stale = entry.path();
+            if stale == path || stale.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            if let Err(error) = std::fs::remove_file(&stale) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    log::warn!("remove old retry marker {}: {error}", stale.display());
+                }
+            }
+        }
+    }
     Ok(marker)
 }
 
@@ -221,8 +238,19 @@ pub(crate) fn materialize_retry(
         clear_retry(projects_root, project_id, chapter_id)?;
         return Ok(RetryMaterialize::ArchivedMissing);
     }
-    if location.dir.exists() && store::draft_dir_has_content(&location.dir) {
-        return Ok(RetryMaterialize::ActiveDraftExists);
+    if location.dir.exists() {
+        if !store::is_terminal(&location) && store::draft_dir_has_content(&location.dir) {
+            return Ok(RetryMaterialize::ActiveDraftExists);
+        }
+        // Issue #1062 评论 #7209683560 第 1 项：只有空目录/残留 ack 缓存/
+        // 已 terminal 待回收的“幽灵槽位”不是活动草稿；先回收它，重试副本
+        // 才能搬回。
+        store::remove_settled_storage(&location).map_err(|error| {
+            format!(
+                "remove ghost draft slot {}: {error}",
+                location.dir.display()
+            )
+        })?;
     }
     if let Some(parent) = location.dir.parent() {
         std::fs::create_dir_all(parent)
@@ -281,4 +309,43 @@ pub(crate) fn retry_chapters(projects_root: &Path, project_id: &str) -> Vec<Stri
         .into_iter()
         .map(|candidate| candidate.marker.chapter_id)
         .collect()
+}
+
+/// 有标记文件但无法解析的章节：历史归档保留，但本轮不能冒充活动草稿。
+///
+/// Issue #1062 评论 #7209683560 第 3 项要求扫描时显式报告无效标记。
+pub(crate) fn unreadable_retry_chapters(projects_root: &Path, project_id: &str) -> Vec<String> {
+    if !store::is_safe_id(project_id) {
+        return Vec::new();
+    }
+    let root = retry_root(projects_root, project_id);
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut chapters = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(chapter_id) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !store::is_safe_id(chapter_id) {
+            continue;
+        }
+        let has_marker_files = std::fs::read_dir(&path).is_ok_and(|mut entries| {
+            entries.any(|entry| {
+                entry.is_ok_and(|entry| {
+                    entry.path().extension().and_then(|ext| ext.to_str()) == Some("json")
+                })
+            })
+        });
+        if has_marker_files && latest_marker_in(&path).is_none() {
+            chapters.push(chapter_id.to_string());
+        }
+    }
+    chapters.sort();
+    chapters.dedup();
+    chapters
 }

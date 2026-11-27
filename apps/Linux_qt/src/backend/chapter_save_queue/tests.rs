@@ -626,7 +626,8 @@ mod restore_contract_tests {
                 }),
                 1,
             )
-            .unwrap(),
+            .unwrap()
+            .removed(),
             "正文已收口且事实全部 ack：整章草稿应删除"
         );
         assert!(
@@ -686,7 +687,8 @@ mod restore_contract_tests {
             }),
             1,
         )
-        .expect("ack"));
+        .expect("ack")
+        .removed());
         let snapshot = chapter_draft::snapshot(root, &project_id, &chapter_id).unwrap();
         assert_eq!(snapshot.text.as_deref(), Some("B"));
         assert_eq!(snapshot.text_revision, 2);
@@ -1003,6 +1005,51 @@ mod restore_isolation_tests {
         assert!(status.blocked_chapters.contains(&chapter_id));
         assert!(status.kept_chapters.is_empty());
         assert!(status.archived_chapters.is_empty());
+    }
+
+    /// 损坏的 pending-inputs spool 代表未转换的原始编辑事实：必须保留重试，
+    /// 不能被当成空草稿结算删除（评论 #7209683560 第 2 项）。
+    #[test]
+    fn corrupt_pending_spool_is_kept_for_retry() {
+        let (temp, api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        write_verified_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            "带 spool 的正文",
+        );
+        let dir = draft_dir(&projects_root, &project_id, &chapter_id);
+        let spool = dir.join("pending-inputs");
+        std::fs::create_dir_all(&spool).unwrap();
+        std::fs::write(spool.join("bad-input.json"), b"{ not-json").unwrap();
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project_id.clone(),
+            },
+        );
+
+        assert!(!dir.exists(), "损坏 spool 的草稿必须离开可写槽位");
+        let status = draft_restore_status(&project_id);
+        assert!(status.retry_chapters.contains(&chapter_id));
+        assert!(status.archived_chapters.is_empty());
+        // 归档副本里必须仍然保留原始 spool 文件，等待修复后重试。
+        let kept = projects_root
+            .join(&project_id)
+            .join("app-meta/chapter-draft-kept")
+            .join(&chapter_id);
+        let mut found = false;
+        for entry in std::fs::read_dir(&kept).unwrap().flatten() {
+            if entry.path().join("pending-inputs/bad-input.json").is_file() {
+                found = true;
+            }
+        }
+        assert!(found, "归档副本必须保留损坏的原始 spool");
     }
 
     /// 可自动重试事务的独立槽位：归档 + 标记，再搬回活动槽位重试。

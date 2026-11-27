@@ -180,7 +180,7 @@ pub(crate) fn replay_pending_acks(
                     snapshot_digest: ack.snapshot_digest.clone(),
                 }
             });
-        super::mark_committed_with_settlement(
+        let decision = super::mark_committed_with_settlement(
             projects_root,
             project_id,
             chapter_id,
@@ -198,6 +198,22 @@ pub(crate) fn replay_pending_acks(
                 ack.transaction_id
             )
         })?;
+        // Issue #1062 评论 #7209683560 第 1 项：只有本地已有 durable 决议
+        // （Applied/Terminal）才允许标 reconciled。NoDraft 只有在目录确实
+        // 没有可恢复事务内容时才算“明确终结”；若还有 meta/facts/正文/
+        // pending 输入，说明事务没被应用，绝不能把 ack 当作已完成。
+        if !decision.settled() {
+            let location = DraftLocation::new(projects_root, project_id, chapter_id);
+            let has_transaction = location
+                .as_ref()
+                .is_some_and(|location| super::store::draft_dir_has_content(&location.dir));
+            if has_transaction {
+                return Err(format!(
+                    "pending ack {} has no local draft to apply (kept)",
+                    ack.transaction_id
+                ));
+            }
+        }
         if !ack.reconciled {
             ack.reconciled = true;
             let json = serde_json::to_string(&ack).map_err(|error| {

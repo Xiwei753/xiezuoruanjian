@@ -27,9 +27,11 @@ const TEXTS_DIR: &str = "texts";
 const FACTS_DIR: &str = "facts";
 
 mod kept;
+mod terminal;
 mod text;
 
 pub(super) use kept::{kept_root, list_kept_chapter_ids};
+pub(super) use terminal::{is_terminal, remove_settled_storage, terminal_meta};
 pub(super) use text::{blob_name, blob_path, gc_text_blobs, read_referenced_text, write_text_blob};
 #[cfg(test)]
 pub(super) use text::{current_text, current_text_path};
@@ -243,57 +245,6 @@ pub(super) fn meta_from_state(
     }
 }
 
-// ── 结算 tombstone ────────────────────────────────────────────────────────
-
-/// 结算决议的终态 meta：事实/正文都已确认，只保留身份与已提交快照。
-///
-/// Issue #1062 评论 7194373427 第 4 项：目录回收可能失败，但这份 meta 一旦
-/// durable，章节草稿就已经结算完成；读取端不得再把它当成待恢复草稿。
-pub(super) fn terminal_meta(location: &DraftLocation, state: &DraftState) -> MetaData {
-    let mut meta = meta_from_state(
-        location,
-        state,
-        state.persisted_text_revision,
-        &state.persisted_text_sha256,
-        "",
-    );
-    meta.facts.clear();
-    meta.acked_event_ids.clear();
-    meta.terminal = true;
-    meta
-}
-
-/// 该目录是否已经写下 terminal 决议（只读 meta，不改状态）。
-pub(super) fn is_terminal(location: &DraftLocation) -> bool {
-    read_meta_checked(&location.dir, &location.project_id, &location.chapter_id)
-        .is_ok_and(|meta| meta.terminal)
-}
-
-/// 删除已经结算的目录与旧格式文件。
-///
-/// 失败必须返回 Err：调用方记录后按“目录待回收”处理，但**不能**把它当成
-/// 事务结算失败，也不能据此扣下已经 durable 的 Core ack。
-pub(super) fn remove_settled_storage(location: &DraftLocation) -> Result<(), String> {
-    if location.dir.exists() {
-        std::fs::remove_dir_all(&location.dir).map_err(|error| {
-            format!(
-                "remove settled chapter draft dir {}: {error}",
-                location.dir.display()
-            )
-        })?;
-    }
-    let legacy = location.legacy_path();
-    if legacy.exists() {
-        std::fs::remove_file(&legacy).map_err(|error| {
-            format!(
-                "remove settled legacy chapter draft {}: {error}",
-                legacy.display()
-            )
-        })?;
-    }
-    Ok(())
-}
-
 // ── facts/<seq>-<id>.json ─────────────────────────────────────────────────
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -505,12 +456,22 @@ pub(super) fn read_new_state(
         facts.drain(0..facts.len() - MAX_MEMORY_FACT_INDEX);
     }
     // 重启后从磁盘 spool 重建待转换事件，不能只依赖进程内 failed_inputs。
+    // Issue #1062 评论 #7209683560 第 2 项：spool 读坏表示仍存在未转换、未提交
+    // 的原始编辑事实，必须让事务加载整体失败（恢复链保留原件重试），绝不能
+    // 吞成空 failed_inputs 后让 ack 把它当成空草稿终结并删目录。
     let failed_inputs = super::pending::pending_inputs(
         &location.projects_root,
         &location.project_id,
         &location.chapter_id,
     )
-    .unwrap_or_default()
+    .map_err(|error| {
+        format!(
+            "{}: project={} chapter={}: {error}",
+            super::PENDING_INPUTS_UNREADABLE,
+            location.project_id,
+            location.chapter_id
+        )
+    })?
     .into_iter()
     .map(|input| (input.event_id, input.revision))
     .collect();
@@ -736,12 +697,22 @@ pub(super) fn read_summary_from_dir(
 /// meta 存在、JSON 或字段损坏的目录必须先被识别成恢复候选，否则
 /// `quarantine` 会误判“目录没有内容”而把损坏事务留在新会话的可写槽位。
 pub(super) fn draft_dir_has_content(dir: &Path) -> bool {
-    dir.join(META_FILE).is_file()
-        || dir.join(TEXT_FILE).is_file()
-        || dir.join(TEXTS_DIR).is_dir()
-        || dir.join(FACTS_DIR).is_dir()
-        || dir.join(super::PENDING_INPUTS_DIR).is_dir()
-        || dir.join(super::ack::ACK_DIR).is_dir()
+    if dir.join(META_FILE).is_file() || dir.join(TEXT_FILE).is_file() {
+        return true;
+    }
+    // Issue #1062 评论 #7209683560 第 1 项：只有空目录（例如上一版遗留的
+    // `pending-acks/` 空壳）不算活动事务；必须看到真实文件才能阻止重试
+    // materialize / 触发“损坏草稿”归档。
+    for name in [TEXTS_DIR, FACTS_DIR, super::PENDING_INPUTS_DIR] {
+        if dir_has_any_entry(&dir.join(name)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn dir_has_any_entry(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
 }
 
 /// 为“meta 不可读/缺失但有磁盘内容”的目录合成恢复候选，保留 path 与错误。
