@@ -35,6 +35,8 @@ pub(crate) enum DecisionOrigin {
     Merged,
     /// 纯远端落盘：本地只消费，不再上传。
     RemoteConsumed,
+    /// 本地与远端都改过且未决：本轮不得发布旧本地版本（只能沿用固定远端基线）。
+    Conflict,
 }
 
 /// 单个对象的不可变决议。
@@ -63,6 +65,6 @@ pub(crate) struct DurableObjectDecision {
 impl DurableObjectDecision {
     /// 本轮是否允许把该对象写进远端批次。
     pub(crate) fn is_publishable(&self) -> bool {
-        !matches!(self.origin, DecisionOrigin::RemoteConsumed)
+        matches!(self.origin, DecisionOrigin::Local | DecisionOrigin::Merged)
     }
 }

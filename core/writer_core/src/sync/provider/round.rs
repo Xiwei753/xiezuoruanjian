@@ -406,13 +406,15 @@ impl<'a> RoundProvider<'a> {
         &self,
         decisions: &[(String, crate::sync::decision::DurableObjectDecision)],
     ) -> crate::sync::decision::DecisionApplyOutcome {
-        use crate::sync::decision::{DecisionApplyOutcome, DecisionOp, DecisionOrigin};
+        use crate::sync::decision::{DecisionApplyOutcome, DecisionOp};
         let Ok(mut state) = self.state.lock() else {
             return DecisionApplyOutcome::default();
         };
         let mut outcome = DecisionApplyOutcome::default();
         for (remote_path, decision) in decisions {
-            if decision.origin == DecisionOrigin::RemoteConsumed {
+            if !decision.is_publishable() {
+                // 纯远端消费/未决冲突：都不允许把 transfer 预生成的本地旧内容
+                // 再推回去，必须沿用固定远端基线。
                 if state.entries.remove(remote_path).is_some() {
                     outcome.withheld += 1;
                 }

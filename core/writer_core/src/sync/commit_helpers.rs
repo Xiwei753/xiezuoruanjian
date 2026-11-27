@@ -1436,24 +1436,23 @@ fn apply_commit_plan_with_optional_merge(
             };
             // 只推迟"本轮要发布、但还没确认"的事实：已经与远端一致的 pending
             // （编辑后又还原、旧版账本遗留）保留 merge 结果，推送确认后再压缩。
-            let deferred: Vec<String> = crate::sync::local_mutations::pending_records(
-                live_root, scope, app_group,
-            )
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(path, record)| {
-                published_candidates.iter().any(|candidate| candidate == path)
-                    || record.is_delete()
-            })
-            .map(|(path, _)| path)
-            .collect();
+            let deferred: Vec<String> =
+                crate::sync::local_mutations::pending_records(live_root, scope, app_group)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|(path, record)| {
+                        published_candidates
+                            .iter()
+                            .any(|candidate| candidate == path)
+                            || record.is_delete()
+                    })
+                    .map(|(path, _)| path)
+                    .collect();
             if !deferred.is_empty() {
                 let base_state = match app_group {
-                    Some(group) => {
-                        crate::sync::SyncService::load_sync_state_read_only_for_group(
-                            &base_root, group, None,
-                        )
-                    }
+                    Some(group) => crate::sync::SyncService::load_sync_state_read_only_for_group(
+                        &base_root, group, None,
+                    ),
                     None => crate::sync::SyncService::load_sync_state_read_only(&base_root, None),
                 };
                 match base_state {
@@ -2352,9 +2351,7 @@ pub(crate) fn durable_decisions_for_target(
     committed: &[CommittedPath],
     facts: &std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
 ) -> Vec<crate::sync::decision::DurableObjectDecision> {
-    use crate::sync::decision::{
-        DecisionOp, DecisionOrigin, DurableObjectDecision,
-    };
+    use crate::sync::decision::{DecisionOp, DecisionOrigin, DurableObjectDecision};
     let project_prefix = project_id.map(|id| format!("projects/{id}/"));
     let mut decisions = Vec::new();
     for entry in committed {
@@ -2374,10 +2371,13 @@ pub(crate) fn durable_decisions_for_target(
             .and_then(|record| record.base_hash.clone())
             .or_else(|| {
                 crate::sync::SyncService::load_sync_state_read_only(live_root, project_id)
-                .ok()
-                .and_then(|state| state.known_files.get(&identity).cloned())
+                    .ok()
+                    .and_then(|state| state.known_files.get(&identity).cloned())
             });
-        let consumed = result.overwritten_files.iter().any(|path| path == &identity)
+        let consumed = result
+            .overwritten_files
+            .iter()
+            .any(|path| path == &identity)
             || result.remote_deletes.iter().any(|path| path == &identity);
         let downloaded = result.downloaded_files.iter().any(|path| path == &identity);
         let origin = if consumed {
@@ -2417,6 +2417,37 @@ pub(crate) fn durable_decisions_for_target(
             mutation_seq: fact.map(|record| record.seq).unwrap_or(0),
             origin,
             content,
+            dependencies: Vec::new(),
+        });
+    }
+    // 未决冲突：本轮不发布本地旧版本，决议显式标记为 Conflict，避免发布路径
+    // 只按文件清单把冲突路径上传（评审 #7214314073 第 2 项）。
+    let covered: std::collections::BTreeSet<String> = decisions
+        .iter()
+        .map(|decision| decision.identity.clone())
+        .collect();
+    for conflict in &result.conflicts {
+        let workspace_rel = conflict.local_path.replace('\\', "/");
+        let identity = match project_prefix.as_deref() {
+            Some(prefix) => match workspace_rel.strip_prefix(prefix) {
+                Some(rest) => rest.to_string(),
+                None => continue,
+            },
+            None => workspace_rel.clone(),
+        };
+        if identity.is_empty() || covered.contains(&identity) {
+            continue;
+        }
+        decisions.push(DurableObjectDecision {
+            transaction_id: String::new(),
+            identity,
+            op: DecisionOp::Upsert,
+            base_hash: Some(conflict.base_hash.clone()),
+            final_hash: conflict.local_hash.clone(),
+            final_version: None,
+            mutation_seq: 0,
+            origin: DecisionOrigin::Conflict,
+            content: None,
             dependencies: Vec::new(),
         });
     }
@@ -2505,8 +2536,7 @@ pub(crate) fn commit_single_target_staging(
 
             // 本轮真正要发布的候选路径：上传 + 远端删除。只对这些推迟
             // known_files；已经与远端一致的 pending 事实保持 merge 结果。
-            let mut published_candidates: Vec<String> =
-                target.result.uploaded_files.clone();
+            let mut published_candidates: Vec<String> = target.result.uploaded_files.clone();
             published_candidates.extend(target.result.local_deletes.iter().cloned());
             let mut tx = match apply_commit_plan_with_optional_merge(
                 run,
