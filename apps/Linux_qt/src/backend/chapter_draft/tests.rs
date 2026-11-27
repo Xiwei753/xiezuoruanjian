@@ -1769,6 +1769,30 @@ mod migration_and_ack_strictness_tests {
     }
 
     #[test]
+    fn discovery_reports_corrupt_legacy_as_unreadable_and_pending() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let drafts = drafts_root(root, "p1");
+        std::fs::create_dir_all(&drafts).expect("drafts root");
+        std::fs::write(drafts.join("c1.json"), b"{ not-json").expect("broken legacy");
+
+        let discovery = discover_project_drafts(root, "p1").expect("discovery");
+        assert_eq!(discovery.unreadable.len(), 1);
+        let unreadable = &discovery.unreadable[0];
+        assert_eq!(unreadable.chapter_id, "c1");
+        assert!(unreadable.path.contains("c1.json"));
+        assert!(
+            discovery
+                .drafts
+                .iter()
+                .any(|draft| draft.chapter_id == "c1"),
+            "损坏原件必须产生未决候选，不能表现为没有草稿"
+        );
+        // 原始文件保留，等待人工/后续修复。
+        assert!(drafts.join("c1.json").is_file());
+    }
+
+    #[test]
     fn corrupt_existing_ack_is_not_overwritten() {
         let workspace = temp_workspace();
         let root = workspace.path();

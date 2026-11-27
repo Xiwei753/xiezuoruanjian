@@ -32,7 +32,7 @@ mod terminal;
 mod text;
 
 pub(super) use kept::{kept_root, list_kept_chapter_ids};
-pub(super) use migrate::{legacy_state, migrate_legacy, read_legacy};
+pub(super) use migrate::{legacy_state, migrate_legacy, read_legacy, read_legacy_checked};
 pub(super) use terminal::{is_terminal, remove_settled_storage, terminal_meta};
 pub(super) use text::{blob_name, blob_path, gc_text_blobs, read_referenced_text, write_text_blob};
 #[cfg(test)]

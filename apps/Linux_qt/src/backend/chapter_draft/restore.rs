@@ -28,44 +28,102 @@ pub(crate) fn snapshot(
             return None;
         }
     }
-    let legacy = store::read_legacy(&location.legacy_path(), project_id, chapter_id)?;
-    Some(ChapterDraftSnapshot::from_state(
-        &store::legacy_state(&location, legacy).0,
-    ))
+    match store::read_legacy_checked(&location.legacy_path(), project_id, chapter_id) {
+        Ok(Some(legacy)) => Some(ChapterDraftSnapshot::from_state(
+            &store::legacy_state(&location, legacy).0,
+        )),
+        Ok(None) => None,
+        Err(error) => {
+            log::warn!(
+                "legacy chapter draft unreadable (kept): project={project_id} chapter={chapter_id}: {error}"
+            );
+            None
+        }
+    }
 }
 
-/// 列出项目内所有需要恢复的草稿（有事实或有正文）。
-pub(crate) fn list_project_drafts(projects_root: &Path, project_id: &str) -> Vec<ChapterDraft> {
+/// 一份“不可读/未决”的恢复候选：保留路径与错误，章节进入未决状态。
+#[derive(Debug, Clone)]
+pub(crate) struct UnreadableDraft {
+    pub chapter_id: String,
+    pub path: String,
+    pub error: String,
+}
+
+/// 项目恢复发现结果：草稿候选 + 无法读取的原件 + 扫描错误。
+///
+/// Issue #1062 评论 #7213634487 第 A 项：UI 等待数与恢复 actor 必须使用同一份
+/// 严格清单；损坏的旧格式文件不能被当成“没有草稿”。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DraftDiscovery {
+    /// 可恢复候选（含读不出来的草稿摘要，用于让该章保持未决）。
+    pub drafts: Vec<ChapterDraft>,
+    /// 有原件但读不出来：保留路径与错误，章节不得被判成已完成。
+    pub unreadable: Vec<UnreadableDraft>,
+    /// 目录迭代错误等扫描级问题（仍返回已发现部分，由调用方决定阻断）。
+    pub scan_errors: Vec<String>,
+}
+
+/// 严格发现项目内需要恢复的草稿。
+pub(crate) fn discover_project_drafts(
+    projects_root: &Path,
+    project_id: &str,
+) -> Result<DraftDiscovery, String> {
+    let mut discovery = DraftDiscovery::default();
     if !store::is_safe_id(project_id) {
-        return Vec::new();
+        return Ok(discovery);
     }
     let workspace = store::workspace_key_of(projects_root);
     let root = store::drafts_root(projects_root, project_id);
-    let mut drafts: Vec<ChapterDraft> = {
+    {
         let registry = lock_registry();
-        registry
+        discovery.drafts = registry
             .values()
             .filter(|state| state.project_id == project_id && state.workspace_key == workspace)
             .map(DraftState::summary)
-            .collect()
+            .collect();
+    }
+    discovery
+        .drafts
+        .sort_by(|left, right| left.chapter_id.cmp(&right.chapter_id));
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(discovery);
+        }
+        Err(error) => {
+            return Err(format!(
+                "read chapter drafts dir {}: {error}",
+                root.display()
+            ))
+        }
     };
-    drafts.sort_by(|left, right| left.chapter_id.cmp(&right.chapter_id));
-    let Ok(entries) = std::fs::read_dir(&root) else {
-        return drafts;
-    };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                discovery.scan_errors.push(format!(
+                    "read chapter drafts entry {}: {error}",
+                    root.display()
+                ));
+                continue;
+            }
+        };
         let path = entry.path();
         if path.is_dir() {
             let Some(chapter_id) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
             if !store::is_safe_id(chapter_id)
-                || drafts.iter().any(|draft| draft.chapter_id == chapter_id)
+                || discovery
+                    .drafts
+                    .iter()
+                    .any(|draft| draft.chapter_id == chapter_id)
             {
                 continue;
             }
             match store::read_summary_from_dir(projects_root, &path, project_id, chapter_id) {
-                Ok(Some(summary)) => drafts.push(summary),
+                Ok(Some(summary)) => discovery.drafts.push(summary),
                 Ok(None) => {
                     // Issue #1062 评论 7195690539 第 3 项：已写 terminal 决议、
                     // 只差目录回收的目录不是“损坏草稿”，不能又被当成恢复候选
@@ -74,22 +132,41 @@ pub(crate) fn list_project_drafts(projects_root: &Path, project_id: &str) -> Vec
                         store::DraftLocation::new(projects_root, project_id, chapter_id)
                     {
                         if store::is_terminal(&location) {
-                            let _ = store::remove_settled_storage(&location);
+                            if let Err(error) = store::remove_settled_storage(&location) {
+                                log::warn!(
+                                    "settled chapter draft gc deferred: project={project_id} chapter={chapter_id}: {error}"
+                                );
+                            }
                             continue;
                         }
                     }
                     if store::draft_dir_has_content(&path) {
-                        drafts.push(store::unreadable_summary(
+                        discovery.drafts.push(store::unreadable_summary(
                             &path,
                             project_id,
                             chapter_id,
                             String::new(),
                         ));
+                        discovery.unreadable.push(UnreadableDraft {
+                            chapter_id: chapter_id.to_string(),
+                            path: path.display().to_string(),
+                            error: "chapter draft meta missing (kept)".to_string(),
+                        });
                     }
                 }
-                Err(error) => drafts.push(store::unreadable_summary(
-                    &path, project_id, chapter_id, error,
-                )),
+                Err(error) => {
+                    discovery.drafts.push(store::unreadable_summary(
+                        &path,
+                        project_id,
+                        chapter_id,
+                        error.clone(),
+                    ));
+                    discovery.unreadable.push(UnreadableDraft {
+                        chapter_id: chapter_id.to_string(),
+                        path: path.display().to_string(),
+                        error,
+                    });
+                }
             }
             continue;
         }
@@ -100,18 +177,60 @@ pub(crate) fn list_project_drafts(projects_root: &Path, project_id: &str) -> Vec
             continue;
         };
         if !store::is_safe_id(chapter_id)
-            || drafts.iter().any(|draft| draft.chapter_id == chapter_id)
+            || discovery
+                .drafts
+                .iter()
+                .any(|draft| draft.chapter_id == chapter_id)
         {
             continue;
         }
-        if let Some(legacy) = store::read_legacy(&path, project_id, chapter_id) {
-            let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
-                continue;
-            };
-            drafts.push(store::legacy_state(&location, legacy).0.summary());
+        match store::read_legacy_checked(&path, project_id, chapter_id) {
+            Ok(Some(legacy)) => {
+                let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id)
+                else {
+                    continue;
+                };
+                discovery
+                    .drafts
+                    .push(store::legacy_state(&location, legacy).0.summary());
+            }
+            Ok(None) => {}
+            Err(error) => {
+                // 损坏/身份不符的旧格式原件必须保持未决：产生候选并保留路径。
+                discovery.drafts.push(store::unreadable_summary(
+                    &path,
+                    project_id,
+                    chapter_id,
+                    error.clone(),
+                ));
+                discovery.unreadable.push(UnreadableDraft {
+                    chapter_id: chapter_id.to_string(),
+                    path: path.display().to_string(),
+                    error,
+                });
+            }
         }
     }
-    drafts
+    discovery
+        .drafts
+        .sort_by(|left, right| left.chapter_id.cmp(&right.chapter_id));
+    Ok(discovery)
+}
+
+/// 兼容 UI 的宽松入口：扫描失败只记日志，语义由 `discover_project_drafts` 决定。
+pub(crate) fn list_project_drafts(projects_root: &Path, project_id: &str) -> Vec<ChapterDraft> {
+    match discover_project_drafts(projects_root, project_id) {
+        Ok(discovery) => {
+            for error in discovery.scan_errors {
+                log::warn!("chapter draft discovery: {error}");
+            }
+            discovery.drafts
+        }
+        Err(error) => {
+            log::warn!("chapter draft discovery failed: {error}");
+            Vec::new()
+        }
+    }
 }
 
 /// 读取草稿的恢复计划；任何文件缺失/损坏/正文摘要不一致都返回 Err，

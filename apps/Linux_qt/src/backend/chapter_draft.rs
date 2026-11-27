@@ -61,7 +61,10 @@ pub(crate) use ack_commit::{
 pub(crate) use freeze::freeze_batch_for;
 pub(crate) use ownership::{archived_draft_ownership, draft_event_ownership, DraftEventOwnership};
 pub(crate) use pending::{clear_pending_input, pending_inputs, spool_failed_input};
-pub(crate) use restore::{list_project_drafts, restore_plan, restore_plan_strict, snapshot};
+pub(crate) use restore::{
+    discover_project_drafts, list_project_drafts, restore_plan, restore_plan_strict, snapshot,
+    DraftDiscovery, UnreadableDraft,
+};
 pub(crate) use retry::{
     clear_retry_intent, list_retries, list_retries_strict, materialize_retry,
     materialize_retry_candidate, record_retry, remove_marker, retry_chapters,
@@ -85,6 +88,16 @@ pub(super) const PENDING_INPUTS_DIR: &str = "pending-inputs";
 pub(crate) const PENDING_INPUTS_UNREADABLE: &str = "chapter draft pending inputs unreadable (kept)";
 pub(super) const MIXED_SESSION_ERROR: &str =
     "draft has uncommitted facts from another session/generation; restore first";
+
+/// 活动草稿目录是否仍然存在（恢复协调器判断“本入口是否已处理完该章”）。
+pub(crate) fn draft_active_dir_exists(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> bool {
+    store::DraftLocation::new(projects_root, project_id, chapter_id)
+        .is_some_and(|location| location.dir.exists())
+}
 
 /// 一条尚未随正文 durable 的原始证明事实。
 #[derive(Clone, Debug)]

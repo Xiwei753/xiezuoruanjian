@@ -51,7 +51,7 @@ impl RestoreCounters {
             .push(format!("{chapter_id}: {}", message.as_ref()));
     }
 
-    fn block(&mut self, chapter_id: &str) {
+    pub(super) fn block(&mut self, chapter_id: &str) {
         if !self.blocked_chapters.iter().any(|id| id == chapter_id) {
             self.blocked_chapters.push(chapter_id.to_string());
         }
@@ -203,8 +203,17 @@ impl RestoreCounters {
         }
     }
 
-    pub(super) fn status(&self) -> ChapterDraftRestoreStatus {
+    /// 带磁盘剩余事务计数的状态：`pending=false` 只代表本轮结束。
+    pub(super) fn status_with(
+        &self,
+        remaining: usize,
+        deferred: usize,
+    ) -> ChapterDraftRestoreStatus {
         ChapterDraftRestoreStatus {
+            running: false,
+            remaining,
+            deferred,
+            conflicted: self.blocked_chapters.len(),
             pending: false,
             restored: self.restored,
             failed: self.failed,

@@ -39,6 +39,7 @@ mod conflict_material;
 mod core_ack;
 mod draft_jobs;
 mod kept_draft;
+mod restore_coordinator;
 mod restore_draft;
 mod tests;
 mod worker;

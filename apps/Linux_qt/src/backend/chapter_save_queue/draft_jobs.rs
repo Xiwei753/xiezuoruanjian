@@ -66,6 +66,14 @@ pub(crate) struct ChapterRestoreCommand {
 /// 草稿恢复的进程内状态，供 QML 轮询（不跨线程调用 QObject）。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ChapterDraftRestoreStatus {
+    /// actor 是否仍在执行本轮恢复；与 `pending` 一起区分“进行中/已结束”。
+    pub running: bool,
+    /// 本轮结束后磁盘上仍未决的恢复候选数（活动草稿 + 不可读原件）。
+    pub remaining: usize,
+    /// 仍在归档区等待下次自动重试的事务数。
+    pub deferred: usize,
+    /// 明确冲突/无法隔离、需要人工处理的章节数。
+    pub conflicted: usize,
     pub pending: bool,
     pub restored: usize,
     pub failed: usize,
@@ -114,22 +122,31 @@ pub(crate) fn enqueue_fact(command: ChapterFactCommand) -> Result<(), String> {
 /// 必须入队一次 RestoreProject，让 worker 对账 Core journal 里未确认的草稿
 /// ack；`pending` 标志只在确实有草稿/待处理内容时置 true，避免 QML 无谓等待。
 pub(crate) fn enqueue_restore_project(command: ChapterRestoreCommand) -> usize {
-    let drafts = super::super::chapter_draft::list_project_drafts(
+    // Issue #1062 评论 #7213634487 第 A 项：UI 等待数与恢复 actor 用同一份
+    // 严格发现结果；损坏的旧格式原件也计入待处理，不能被当成“没有草稿”。
+    let (draft_count, discovery_failed) = match super::super::chapter_draft::discover_project_drafts(
         Path::new(&command.context.projects_root),
         &command.project_id,
-    );
+    ) {
+        Ok(discovery) => (discovery.drafts.len() + discovery.unreadable.len(), 0),
+        Err(error) => {
+            log::warn!("chapter draft discovery failed: {error}");
+            (0, 1)
+        }
+    };
     // Issue #1062 评论 7195690539 第 2 项：发现到的每个草稿目录都必须等
     // 恢复 actor 给出“恢复/归档”决议后才允许编辑器打开，不能因为摘要里
     // fact/text 都为空（空事务头、缺失 blob 的候选）就放行。pending-inputs
     // 同样计入。
-    let count = drafts.len()
+    let count = draft_count
         // Issue #1062 评论 7195690539 第 1 项：可自动重试的事务在进入项目时
         // 必须先搬回活动槽位再重试，同样要等待恢复 actor 完成决议。
         + super::super::chapter_draft::retry_chapters(
             Path::new(&command.context.projects_root),
             &command.project_id,
         )
-        .len();
+        .len()
+        + discovery_failed;
     if count > 0 {
         if let Ok(mut states) = draft_restore_state().lock() {
             states.insert(

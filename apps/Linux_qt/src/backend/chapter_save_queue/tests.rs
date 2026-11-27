@@ -1121,6 +1121,66 @@ mod restore_isolation_tests {
         );
     }
 
+    /// 评论 #7213634487 第 B 项：同章多份归档事务按队列逐份搬回，一份结算
+    /// 后立即接下一份，而不是每次进入作品只处理第一份。
+    #[test]
+    fn coordinator_moves_one_archived_transaction_per_round() {
+        let (temp, _api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        let mut archived = Vec::new();
+        for text in ["第一份重试正文", "第二份重试正文"] {
+            write_verified_draft(&projects_root, &project_id, &volume_id, &chapter_id, text);
+            let path = chapter_draft::quarantine(&projects_root, &project_id, &chapter_id)
+                .expect("quarantine")
+                .expect("archived");
+            chapter_draft::record_retry(
+                &projects_root,
+                &project_id,
+                &chapter_id,
+                &volume_id,
+                std::path::Path::new(&path),
+                "unit",
+                0,
+            )
+            .expect("record retry");
+            archived.push(path);
+        }
+        assert_eq!(
+            chapter_draft::retry_chapters(&projects_root, &project_id).len(),
+            1
+        );
+
+        let mut counters = super::super::kept_draft::RestoreCounters::default();
+        let mut noted = std::collections::BTreeSet::new();
+        super::super::restore_coordinator::materialize_pending_retries(
+            &projects_root,
+            &project_id,
+            &std::collections::BTreeSet::new(),
+            &mut noted,
+            &mut counters,
+        );
+        let dir = draft_dir(&projects_root, &project_id, &chapter_id);
+        assert!(dir.exists(), "第一份事务搬回活动槽位");
+        assert_eq!(
+            chapter_draft::list_retries(&projects_root, &project_id).len(),
+            1,
+            "第二份仍在归档区等待本轮后续"
+        );
+        chapter_draft::remove(&projects_root, &project_id, &chapter_id).expect("settle first");
+        assert!(!dir.exists());
+
+        super::super::restore_coordinator::materialize_pending_retries(
+            &projects_root,
+            &project_id,
+            &std::collections::BTreeSet::new(),
+            &mut noted,
+            &mut counters,
+        );
+        assert!(dir.exists(), "结算后同一轮继续搬回第二份");
+        assert!(chapter_draft::retry_chapters(&projects_root, &project_id).is_empty());
+        assert_eq!(archived.len(), 2);
+    }
+
     /// 评论 #7213128711 第 2 项：意图写不进草稿目录时不得先归档，章节进入
     /// 阻断集合，草稿仍留在活动槽位等待下一次恢复。
     #[test]

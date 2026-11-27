@@ -591,11 +591,25 @@ Rectangle {
             var restored = Number(status.restored || 0)
             var failed = Number(status.failed || 0)
             var kept = Number(status.kept || 0)
+            // Issue #1062 评论 #7213634487 第 B 项：pending=false 只代表本轮
+            // 结束；磁盘上可能仍有未决草稿等待下次入口，不能当成全部恢复完。
+            var remaining = Number(status.remaining || 0)
+            var deferred = Number(status.deferred || 0)
+            var conflicted = Number(status.conflicted || 0)
             console.info("chapter draft restore finished: restored=" + restored
                          + ", failed=" + failed + ", kept=" + kept
                          + ", archived=" + archivedChapters.length
                          + ", retry=" + retryChapters.length
-                         + ", blocked=" + blockedChapters.length)
+                         + ", blocked=" + blockedChapters.length
+                         + ", remaining=" + remaining + ", deferred=" + deferred
+                         + ", conflicted=" + conflicted)
+            if (remaining > 0 || deferred > 0 || conflicted > 0) {
+                root.logWriterWarning("chapter_draft_restore_incomplete",
+                    "remaining=" + remaining + ", deferred=" + deferred
+                    + ", conflicted=" + conflicted)
+                if (root.editorBackendRef)
+                    root.editorBackendRef.save_status = qsTr("仍有未提交草稿待恢复；本次只处理完当前可恢复的一部分")
+            }
             if (failed > 0) {
                 root.logWriterWarning("chapter_draft_restore_failed",
                     "restored=" + restored + ", failed=" + failed + ", kept=" + kept
