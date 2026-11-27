@@ -422,6 +422,29 @@ impl WriterCoreApi {
         text_revision: u64,
         text: String,
     ) -> ApiResult<CorrectionChapterSnapshotDto> {
+        let scanned = self.scan_correction_pending_inner(
+            project_id.clone(),
+            chapter_id.clone(),
+            session_id,
+            text_revision,
+            text,
+        );
+        // Issue #1062 评论 #7214283385 第 2 项：一次 pending 扫描结束（成功或
+        // 失败）= 本轮活动文档租约结束。失败不保留强引用，下一轮编辑会重建。
+        if let Ok(store) = self.correction_store() {
+            store.release_chapter_lease(&project_id, &chapter_id);
+        }
+        scanned
+    }
+
+    fn scan_correction_pending_inner(
+        &self,
+        project_id: String,
+        chapter_id: String,
+        session_id: u64,
+        text_revision: u64,
+        text: String,
+    ) -> ApiResult<CorrectionChapterSnapshotDto> {
         // Issue #1064 复审 #7196305554：先做 restore-only 覆盖检查，已有同步/
         // 本地覆盖且无未检查段时直接返回，不加载模型、不跑重扫描。
         let restored = self

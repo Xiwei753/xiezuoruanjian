@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -171,6 +171,10 @@ struct CorrectionStoreInner {
     lexicons: Mutex<HashMap<String, CachedLexicon>>,
     engines: Mutex<HashMap<String, CachedCorrectionEngine>>,
     result_caches: Mutex<ChapterResultCacheRegistry>,
+    /// Issue #1062 评论 #7214283385 第 2 项：活动文档租约。编辑事务写入的
+    /// 增量窗口与水位必须跨 Core 调用存续，直到该章的 pending 扫描结束或
+    /// 文档离开；`result_caches` 仍只持弱引用，可重建的历史章节缓存不变。
+    active_chapters: Mutex<HashMap<(String, String), Arc<ChapterCorrectionSlot>>>,
     /// 章节同步结果索引：按目录修改时间增量刷新，restore 的 slot 锁内只查内存。
     synced_records: Mutex<HashMap<SyncedRecordCacheKey, CachedSyncedRecords>>,
     /// 待发布事实（完整 record）在内存中的失败回退；durable 文件在 publication 模块。
@@ -623,6 +627,7 @@ pub fn model_lifetime_snapshot() -> serde_json::Value {
     let metrics = model_lifetime_metrics();
     let (synced_indexes, synced_bytes) = synced_index_metrics();
     let (chapter_slots, chapter_bytes) = chapter_cache_metrics();
+    let active_chapter_leases = active_chapter_lease_metrics();
     serde_json::json!({
         "cached": metrics.cached,
         "engine_refs": metrics.engine_refs,
@@ -634,7 +639,27 @@ pub fn model_lifetime_snapshot() -> serde_json::Value {
         "synced_result_bytes": synced_bytes,
         "chapter_cache_slots": chapter_slots,
         "chapter_cache_bytes": chapter_bytes,
+        "active_chapter_leases": active_chapter_leases,
     })
+}
+
+/// 活动文档租约的真实条数（Issue #1062 评论 #7214283385 第 2 项）。诊断只
+/// 报计数，不设阈值也不触发清理；租约由编辑/扫描/离开文档显式建立与释放。
+fn active_chapter_lease_metrics() -> usize {
+    let Some(stores) = STORE_REGISTRY.get() else {
+        return 0;
+    };
+    let Ok(stores) = stores.lock() else {
+        return 0;
+    };
+    let mut count = 0usize;
+    for inner in stores.values() {
+        let Ok(leases) = inner.active_chapters.lock() else {
+            continue;
+        };
+        count = count.saturating_add(leases.len());
+    }
+    count
 }
 
 /// 章节校对结果缓存的真实占用估算：只统计仍被编辑/扫描持有的弱引用目标。
@@ -1247,6 +1272,7 @@ impl CorrectionStore {
                 lexicons: Mutex::new(HashMap::new()),
                 engines: Mutex::new(HashMap::new()),
                 result_caches: Mutex::new(HashMap::new()),
+                active_chapters: Mutex::new(HashMap::new()),
                 synced_records: Mutex::new(HashMap::new()),
                 pending_publications: Mutex::new(HashMap::new()),
             });
@@ -1649,6 +1675,7 @@ impl CorrectionStore {
     pub fn note_correction_session_left(&self) {
         // 离开章节/文档 = 本轮租约结束：让生命周期线程立即检查可释放资源，
         // 但仍以真实 `Arc` 引用为准，正在扫描的 session 不会被抢释放。
+        self.release_all_chapter_leases();
         MODEL_RELEASE_IMMEDIATE.store(true, Ordering::SeqCst);
         let mut fields = BTreeMap::new();
         fields.insert(
@@ -2131,6 +2158,17 @@ impl CorrectionStore {
         chapter_id: &str,
     ) -> Result<Arc<ChapterCorrectionSlot>, WriterError> {
         let key = (project_id.to_string(), chapter_id.to_string());
+        // 活动租约优先：同一章节同一时刻只有一个强持有槽位，编辑后的增量
+        // 状态不会因为局部 `Arc` 归零而被磁盘旧缓存顶掉。租约锁只做查找，
+        // 不跨到注册表锁，避免与切项目的清理路径形成锁序环。
+        {
+            let leases = self.inner.active_chapters.lock().map_err(|_| {
+                WriterError::Other("correction active chapter lease lock poisoned".into())
+            })?;
+            if let Some(existing) = leases.get(&key) {
+                return Ok(Arc::clone(existing));
+            }
+        }
         let mut caches = self.inner.result_caches.lock().map_err(|_| {
             WriterError::Other("correction result cache registry lock poisoned".into())
         })?;
@@ -2160,11 +2198,25 @@ impl CorrectionStore {
         chapter_id: &str,
     ) -> Result<Option<(u64, u64)>, WriterError> {
         let key = (project_id.to_string(), chapter_id.to_string());
-        let caches = self.inner.result_caches.lock().map_err(|_| {
-            WriterError::Other("correction result cache registry lock poisoned".into())
-        })?;
-        let Some(slot) = caches.get(&key).and_then(Weak::upgrade) else {
-            return Ok(None);
+        // Issue #1062 评论 #7214283385 第 2 项：先看活动租约。编辑后只有租约
+        // 持有槽位时，Weak 注册表升级会失败；此时在途扫描仍必须看到最新
+        // `(session, revision)` 才能提前收手。
+        let leased = {
+            let leases = self.inner.active_chapters.lock().map_err(|_| {
+                WriterError::Other("correction active chapter lease lock poisoned".into())
+            })?;
+            leases.get(&key).map(Arc::clone)
+        };
+        let slot = if let Some(slot) = leased {
+            slot
+        } else {
+            let caches = self.inner.result_caches.lock().map_err(|_| {
+                WriterError::Other("correction result cache registry lock poisoned".into())
+            })?;
+            let Some(slot) = caches.get(&key).and_then(Weak::upgrade) else {
+                return Ok(None);
+            };
+            slot
         };
         let guard = slot
             .state
@@ -2193,6 +2245,31 @@ impl CorrectionStore {
             ));
         }
         let slot = self.chapter_result_cache(project_id, chapter_id)?;
+        Self::apply_edits_to_slot(&slot, session_id, text_revision, base_revision, edits)?;
+        // Issue #1062 评论 #7214283385 第 2 项：编辑成功（含同 revision 提前
+        // 返回的分支）后把该槽位登记为活动租约，同 key 覆盖为最新。此时状态
+        // 锁已释放，租约锁不与槽位状态锁同时持有。
+        {
+            let mut leases = self.inner.active_chapters.lock().map_err(|_| {
+                WriterError::Other("correction active chapter lease lock poisoned".into())
+            })?;
+            leases.insert(
+                (project_id.to_string(), chapter_id.to_string()),
+                Arc::clone(&slot),
+            );
+        }
+        Ok(())
+    }
+
+    /// 把一次编辑事务写入槽位状态；所有成功分支（含同 revision 提前返回）
+    /// 都表示该槽位已是当前文档的增量状态，调用方随后登记活动租约。
+    fn apply_edits_to_slot(
+        slot: &ChapterCorrectionSlot,
+        session_id: u64,
+        text_revision: u64,
+        base_revision: u64,
+        edits: &[EditRange],
+    ) -> Result<(), WriterError> {
         let mut guard = slot
             .state
             .lock()
@@ -2218,6 +2295,25 @@ impl CorrectionStore {
         guard.last_session_id = session_id;
         guard.last_revision = text_revision;
         Ok(())
+    }
+
+    /// Issue #1062 评论 #7214283385 第 2 项：结束某章的活动租约。pending
+    /// 扫描结束或失败后调用；槽位不再有强持有者，下一次编辑会从磁盘缓存
+    /// 重建，不把编辑后的增量状态泄漏成常驻内存。
+    pub(crate) fn release_chapter_lease(&self, project_id: &str, chapter_id: &str) {
+        let Ok(mut leases) = self.inner.active_chapters.lock() else {
+            return;
+        };
+        leases.remove(&(project_id.to_string(), chapter_id.to_string()));
+    }
+
+    /// 文档离开 = 该文档所有章节的编辑租约结束；切项目时同样清空，避免旧
+    /// 项目的槽位常驻。
+    fn release_all_chapter_leases(&self) {
+        let Ok(mut leases) = self.inner.active_chapters.lock() else {
+            return;
+        };
+        leases.clear();
     }
 
     /// Stable identity of everything that changes scan results except the text
@@ -2672,6 +2768,15 @@ impl CorrectionStore {
         lexicons.clear();
         engines.clear();
         result_caches.retain(|(cached_project, _), _| cached_project.as_str() == project_id);
+        // Issue #1062 评论 #7214283385 第 2 项：切项目后旧项目的活动租约
+        // 不再代表当前文档，必须一起清掉，否则旧槽位会被强引用常驻。
+        // 先放注册表锁再取租约锁，与 `chapter_result_cache` 的“先租约、
+        // 后注册表”错开，二者不会同时持有。
+        drop(result_caches);
+        let mut active_chapters = self.inner.active_chapters.lock().map_err(|_| {
+            WriterError::Other("correction active chapter lease lock poisoned".into())
+        })?;
+        active_chapters.retain(|(cached_project, _), _| cached_project.as_str() == project_id);
         active_project.project_id = Some(project_id.to_string());
         active_project.generation = generation;
         Ok(generation)
@@ -3142,5 +3247,118 @@ fn optional_lexicon_file(
             },
         )),
         Err(error) => Err(WriterError::Io(error.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod chapter_lease_tests {
+    use super::*;
+
+    fn test_store(name: &str) -> CorrectionStore {
+        let root = std::env::temp_dir().join(format!(
+            "sujian-correction-lease-{}-{name}",
+            std::process::id()
+        ));
+        CorrectionStore::open(&root).expect("correction store")
+    }
+
+    /// Issue #1062 评论 #7214283385 第 2 项：两次编辑之间不扫描，第二次编辑
+    /// 的水位必须仍可见，且两次拿到同一槽位（租约保活，不被磁盘旧缓存顶掉）。
+    #[test]
+    fn edits_between_scans_stay_visible_through_the_active_lease() {
+        let store = test_store("edits");
+        let project = "project-lease-edits";
+        let chapter = "chapter-lease-edits";
+
+        store
+            .apply_correction_edits(project, chapter, 7, 10, 0, &[])
+            .expect("first edit");
+        let first = store
+            .chapter_result_cache(project, chapter)
+            .expect("first slot");
+
+        store
+            .apply_correction_edits(project, chapter, 7, 11, 10, &[])
+            .expect("second edit");
+        assert_eq!(
+            store
+                .chapter_revision_progress(project, chapter)
+                .expect("progress"),
+            Some((7, 11))
+        );
+
+        let second = store
+            .chapter_result_cache(project, chapter)
+            .expect("second slot");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "active lease must keep the same slot for one chapter"
+        );
+        let leases = store.inner.active_chapters.lock().expect("lease registry");
+        assert_eq!(leases.len(), 1);
+        let leased = leases
+            .get(&(project.to_string(), chapter.to_string()))
+            .expect("leased slot");
+        assert!(Arc::ptr_eq(leased, &second));
+    }
+
+    /// 释放租约后槽位没有强持有者，进度必须回到 `None`（Weak 注册表不再
+    /// 能伪造“章节仍可见”）。
+    #[test]
+    fn released_lease_leaves_no_strong_holder_for_the_slot() {
+        let store = test_store("release");
+        let project = "project-lease-release";
+        let chapter = "chapter-lease-release";
+
+        store
+            .apply_correction_edits(project, chapter, 3, 5, 0, &[])
+            .expect("edit");
+        assert_eq!(
+            store
+                .chapter_revision_progress(project, chapter)
+                .expect("progress"),
+            Some((3, 5))
+        );
+
+        store.release_chapter_lease(project, chapter);
+        assert!(store
+            .inner
+            .active_chapters
+            .lock()
+            .expect("leases")
+            .is_empty());
+        assert_eq!(
+            store
+                .chapter_revision_progress(project, chapter)
+                .expect("progress"),
+            None
+        );
+    }
+
+    /// 文档离开 = 全部租约结束。
+    #[test]
+    fn leaving_the_document_drops_every_lease() {
+        let store = test_store("left");
+        let project = "project-lease-left";
+        let chapter = "chapter-lease-left";
+
+        store
+            .apply_correction_edits(project, chapter, 4, 6, 0, &[])
+            .expect("edit");
+        assert_eq!(store.inner.active_chapters.lock().expect("leases").len(), 1);
+
+        store.note_correction_session_left();
+        assert!(store
+            .inner
+            .active_chapters
+            .lock()
+            .expect("leases")
+            .is_empty());
+        assert_eq!(
+            store
+                .chapter_revision_progress(project, chapter)
+                .expect("progress"),
+            None
+        );
     }
 }
