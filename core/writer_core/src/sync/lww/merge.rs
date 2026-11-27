@@ -302,6 +302,16 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     write_location: &str,
     sparse: Option<&crate::sync::sparse_plan::SparseObjectPlan>,
 ) -> crate::error::Result<LwwMergeOutcome> {
+    // 稀疏计划随 staging run 落盘：调用方没有显式传入时，从本阶段的工作根读取。
+    // 没有计划（首次同步/迁移/完整核对）时行为与原先完全一致。
+    let sparse_owned;
+    let sparse = match sparse {
+        Some(plan) => Some(plan),
+        None => {
+            sparse_owned = crate::sync::sparse_plan::SparseObjectPlan::load(sync_root);
+            sparse_owned.as_ref()
+        }
+    };
     log::debug!(
         "[sync] merge_remote_into_local_snapshot: source_remote_prefix={}",
         source_remote_prefix

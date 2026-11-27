@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 单个对象在本轮已知的状态。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum ObjectState {
     /// 未加载：本轮不读字节、不改写、不参与删除判定。
     Unloaded,
@@ -28,7 +28,7 @@ pub(crate) enum ObjectState {
 }
 
 /// 删除证据来源。没有证据的"文件不见了"不能构造 [`ObjectState::Deleted`]。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum DeleteEvidence {
     /// 本地 durable 删除事务（章节删除、作品生命周期删除）。
     LocalTransaction,
@@ -39,7 +39,9 @@ pub(crate) enum DeleteEvidence {
 }
 
 /// 本轮的稀疏对象计划。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub(crate) struct SparseObjectPlan {
     /// 计划所基于的远端提交（固定 HEAD）；空表示首次同步/迁移。
     base_head: Option<String>,
@@ -49,6 +51,30 @@ pub(crate) struct SparseObjectPlan {
     states: BTreeMap<String, ObjectState>,
     /// 对象依赖闭包（例如星图 graph.json ↔ 对象文件、章节正文 ↔ meta）。
     dependencies: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl SparseObjectPlan {
+    /// 计划随 staging run 一起落盘，merge/commit 在各自阶段按同一份计划工作，
+    /// 不需要把计划塞进每个调用签名。
+    const FILE_NAME: &'static str = "app-meta/sync/sparse-plan.json";
+
+    pub(crate) fn save(&self, root: &std::path::Path) -> crate::error::Result<()> {
+        let path = root.join(Self::FILE_NAME);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = serde_json::to_string(self)?;
+        crate::storage::atomic_write_string(&path, &text)
+    }
+
+    pub(crate) fn load(root: &std::path::Path) -> Option<Self> {
+        let text = std::fs::read_to_string(root.join(Self::FILE_NAME)).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    pub(crate) fn remove(root: &std::path::Path) {
+        let _ = std::fs::remove_file(root.join(Self::FILE_NAME));
+    }
 }
 
 impl SparseObjectPlan {
