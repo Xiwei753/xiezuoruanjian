@@ -715,8 +715,9 @@ impl CorrectionScanner {
         metrics.cache_hit = metrics.cache_valid_segments > 0;
         // 旧版本 cache 的 publicationPending 只在当前 checked 内容仍可验证时
         // 一次性迁移到独立 publication 文件；此后 cache 不再承担待发布事务。
+        let had_legacy_pending = guard.legacy_publication_pending;
         let legacy_records: Vec<SyncedCorrectionRecord> =
-            if guard.legacy_publication_pending {
+            if had_legacy_pending {
                 guard
                     .segments
                     .iter()
@@ -729,6 +730,7 @@ impl CorrectionScanner {
                 Vec::new()
             };
         guard.legacy_publication_pending = false;
+        guard.semantic_dirty |= had_legacy_pending;
         // 投影到不同的确定性赢家/迁移记录键时必须写回持久 cache，重启后
         // 不再反复重选；纯 offset 重建仍不写。
         if guard.semantic_dirty {
