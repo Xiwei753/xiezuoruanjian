@@ -269,6 +269,9 @@ export class HarmonyAutoSyncScheduler {
     if (this.uploadWakePending) {
       // 回前台后重新按间隔安排合并上传（后台期间到达的 durable 提交）。
       this.scheduleUploadWake()
+    } else {
+      // 本进程没有收到 durable 事件时，用 Core 账本补一次跨进程发现。
+      this.refreshPendingUploadFromCore()
     }
     if (trigger !== null) {
       this.requestHandoffSync(trigger)
@@ -312,6 +315,11 @@ export class HarmonyAutoSyncScheduler {
       hilog.info(DOMAIN, TAG, 'onBackgroundSaved: auto sync inactive, skip handoff sync')
       return
     }
+    if (!this.uploadWakePending && await this.coreHasPendingMutations()) {
+      // 跨进程（MCP/邻设备入口）写入的业务变更不会触发本进程的 durable 事件：
+      // 退后台前用 Core 账本再确认一次（Issue #1065 复审 #5/#6）。
+      this.uploadWakePending = true
+    }
     if (!this.uploadWakePending) {
       // 没有已落盘的业务变更就没有上传内容：退后台保存结束不做空闲交接，
       // 远端变化交给前台的轻量探测（Issue #1065 复审 #6）。
@@ -321,6 +329,38 @@ export class HarmonyAutoSyncScheduler {
     hilog.info(DOMAIN, TAG, 'onBackgroundSaved: background save finished, starting handoff sync')
     const generation: number = this.nextHandoffGeneration()
     await this.performHandoffSync('background_handoff', generation)
+  }
+
+  /** 前台发现跨进程写入：有已落盘事实就按用户间隔安排一次合并上传。 */
+  private refreshPendingUploadFromCore(): void {
+    this.coreHasPendingMutations().then((pending: boolean): void => {
+      if (!pending || this.uploadWakePending) {
+        return
+      }
+      this.uploadWakePending = true
+      this.scheduleUploadWake()
+    }).catch((): void => {})
+  }
+
+  /**
+   * 只读 Core mutation 账本：是否还有待上传事实（跨进程可见）。
+   *
+   * 与 Qt 的 has_pending_sync_mutations 使用同一份账本索引，不触网、不扫盘。
+   * 读取失败按 true 处理，避免把"不知道"当成"没有变更"。
+   */
+  private async coreHasPendingMutations(): Promise<boolean> {
+    if (!this.coreReady) {
+      return false
+    }
+    try {
+      const result: ResultEnvelope<boolean> = await this.bridge.hasPendingMutations()
+      if (!result.success) {
+        return true
+      }
+      return result.data === true
+    } catch (e) {
+      return true
+    }
   }
 
   /** 网络恢复：必要时重试读取配置；优先重试未完成的交接，否则仍立即做一次到期判断。 */
