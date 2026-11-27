@@ -271,34 +271,33 @@ fn publish_snapshot_batch(
         }
     }
 
-    // manifest.sync.json 作为 Put 放进同一 batch。序列化固定为"按 path 排序 +
-    // compact"，语义不变的 manifest 得到逐字节一致的结果；远端字节已经能解析成
-    // 同一份语义快照时保留远端字节，不再因为格式/顺序差异制造一次提交。
-    let manifest_remote_path = format!(
-        "{generation_prefix}/{}",
-        crate::sync::lww::SYNC_MANIFEST_PATH
-    );
-    let manifest_json = match manifest.canonical_json() {
-        Ok(s) => s,
-        Err(e) => {
-            return super::transfer_helpers::sync_result_from_error(e);
+    // 清单按命名空间分片发布：每片是独立对象，只上传内容变化的分片。
+    // 旧单文件 manifest.sync.json 不再进入期望树，本轮会由下面的删除循环
+    // 从远端回收（迁移完成后读端只认分片）。
+    let shard_files = match crate::sync::lww::split_into_manifest_shards(
+        crate::sync::lww::SYNC_MANIFEST_PATH,
+        &manifest,
+    ) {
+        Ok(files) => files,
+        Err(e) => return super::transfer_helpers::sync_result_from_error(e),
+    };
+    let mut shard_remote_paths = Vec::with_capacity(shard_files.len());
+    for (rel, bytes) in shard_files {
+        let remote_path = format!("{generation_prefix}/{rel}");
+        let unchanged = match provider.read(&remote_path) {
+            Ok(Some(object)) => object.content == bytes,
+            Ok(None) => false,
+            Err(error) => {
+                return super::transfer_helpers::sync_result_from_provider_error(error);
+            }
+        };
+        if !unchanged {
+            mutations.push(BatchMutation::Put {
+                path: remote_path.clone(),
+                content: bytes,
+            });
         }
-    };
-    let remote_manifest_unchanged = match provider.read(&manifest_remote_path) {
-        Ok(Some(object)) => match serde_json::from_slice::<crate::sync::types::SyncManifest>(
-            &object.content,
-        ) {
-            Ok(remote_manifest) => remote_manifest.semantically_equals(&manifest),
-            Err(_) => false,
-        },
-        Ok(None) => false,
-        Err(error) => return super::transfer_helpers::sync_result_from_provider_error(error),
-    };
-    if !remote_manifest_unchanged {
-        mutations.push(BatchMutation::Put {
-            path: manifest_remote_path.clone(),
-            content: manifest_json.into_bytes(),
-        });
+        shard_remote_paths.push(remote_path);
     }
 
     // Remove paths that existed in the previous stable tree but are absent
@@ -312,7 +311,7 @@ fn publish_snapshot_batch(
         .filter(|record| record.op != "delete")
         .map(|record| format!("{generation_prefix}/{}", record.path))
         .collect();
-    desired.insert(manifest_remote_path.clone());
+    desired.extend(shard_remote_paths);
     for path in existing.keys() {
         if !desired.contains(path) {
             mutations.push(BatchMutation::Delete { path: path.clone() });
@@ -514,22 +513,24 @@ fn upload_complete_tree_snapshot(
         }
     }
 
-    // 上传 manifest 到 generation prefix。
-    let manifest_remote_path = format!(
-        "{generation_prefix}/{}",
-        crate::sync::lww::SYNC_MANIFEST_PATH
-    );
-    let manifest_json = serde_json::to_string(merged_manifest).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "upload_complete_tree_snapshot: serialize manifest: {e}"
-        )))
-    })?;
-    let manifest_precondition = WritePrecondition::Unconditional;
-    provider.write(
-        &manifest_remote_path,
-        manifest_json.as_bytes(),
-        manifest_precondition,
+    // 清单按命名空间分片上传；内容未变的分片跳过写入。
+    let shards = crate::sync::lww::split_into_manifest_shards(
+        crate::sync::lww::SYNC_MANIFEST_PATH,
+        merged_manifest,
     )?;
+    let mut shard_remote_paths = Vec::with_capacity(shards.len());
+    for (rel, bytes) in shards {
+        let remote_path = format!("{generation_prefix}/{rel}");
+        let unchanged = match provider.read(&remote_path) {
+            Ok(Some(object)) => object.content == bytes,
+            Ok(None) => false,
+            Err(error) => return Err(error.into()),
+        };
+        if !unchanged {
+            provider.write(&remote_path, &bytes, WritePrecondition::Unconditional)?;
+        }
+        shard_remote_paths.push(remote_path);
+    }
 
     {
         let mut desired: std::collections::HashSet<String> = merged_manifest
@@ -538,7 +539,7 @@ fn upload_complete_tree_snapshot(
             .filter(|record| record.op == "upsert")
             .map(|record| format!("{generation_prefix}/{}", record.path))
             .collect();
-        desired.insert(manifest_remote_path);
+        desired.extend(shard_remote_paths);
         for entry in provider.list(generation_prefix)? {
             let path = format!("{generation_prefix}/{}", entry.path);
             if !desired.contains(&path) {

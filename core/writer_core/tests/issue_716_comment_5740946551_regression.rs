@@ -1416,10 +1416,11 @@ fn regression_scenario_11_tombstone_publishes_new_generation_and_reports_local_d
         record.active_generation
     );
     assert_ne!(record.active_generation.as_deref(), Some(GEN_EXISTING));
+    // #1062 评论 #7218195841：清单按命名空间分片发布，顶层对象在 _root 分片。
     let manifest_obj = provider
-        .read("projects/p1/app-meta/sync/manifest.sync.json")
+        .read("projects/p1/app-meta/sync/manifest-shards/_root.json")
         .unwrap()
-        .expect("稳定树应包含 manifest.sync.json");
+        .expect("稳定树应包含清单根分片");
     let manifest: SyncManifest = serde_json::from_slice(&manifest_obj.content).unwrap();
     let record = manifest
         .files
@@ -1660,11 +1661,12 @@ fn regression_scenario_13_conflict_with_remote_delete_paths_still_publishes() {
         record.active_generation
     );
     assert_ne!(record.active_generation.as_deref(), Some(GEN_EXISTING));
-    let generation_manifest_path = "projects/p1/app-meta/sync/manifest.sync.json";
+    // 章节正文落在 volumes 命名空间分片。
+    let generation_manifest_path = "projects/p1/app-meta/sync/manifest-shards/volumes.json";
     let manifest_obj = provider
         .read(generation_manifest_path)
         .unwrap()
-        .expect("稳定树应包含 manifest.sync.json");
+        .expect("稳定树应包含清单 volumes 分片");
     let manifest: SyncManifest = serde_json::from_slice(&manifest_obj.content).unwrap();
     let chapter = manifest
         .files

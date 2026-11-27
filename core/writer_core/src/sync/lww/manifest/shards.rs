@@ -209,6 +209,44 @@ pub(crate) fn write_full(
     Ok(())
 }
 
+/// 是否是清单文件（项目清单或 App group 清单）。
+pub(crate) fn is_manifest_rel_path(rel: &str) -> bool {
+    rel == crate::sync::lww::SYNC_MANIFEST_PATH || rel.ends_with("/manifest.sync.json")
+}
+
+/// 把完整清单在内存中拆成"分片路径 → canonical 字节"，不落盘。
+///
+/// 发布端按这份映射逐个对象比较远端已有分片，只上传内容变化的分片。
+pub(crate) fn split_into_shards(
+    manifest_rel_path: &str,
+    manifest: &SyncManifest,
+) -> crate::Result<BTreeMap<String, Vec<u8>>> {
+    let mut grouped: BTreeMap<String, Vec<ManifestFileRecord>> = BTreeMap::new();
+    for record in &manifest.files {
+        grouped
+            .entry(shard_key(&record.path))
+            .or_default()
+            .push(record.clone());
+    }
+    let mut out = BTreeMap::new();
+    for (key, files) in grouped {
+        let target = SyncManifest { files };
+        out.insert(
+            shard_rel_path(manifest_rel_path, &key),
+            target.canonical_json()?.into_bytes(),
+        );
+    }
+    if out.is_empty() {
+        // 空清单也必须发布一个稳定的根分片：远端"没有清单"与"清单为空"
+        // 是两种不同状态，发布端需要一次真实对象写入来承载本次业务提交。
+        out.insert(
+            shard_rel_path(manifest_rel_path, ROOT_SHARD),
+            SyncManifest::default().canonical_json()?.into_bytes(),
+        );
+    }
+    Ok(out)
+}
+
 /// 一次持久化计划的产物：只包含内容真的变化的分片写入与需要回收的旧分片。
 #[derive(Debug, Default)]
 pub(crate) struct ShardPlan {

@@ -599,11 +599,6 @@ fn refresh_starmap_references_after_commit(
     Ok(())
 }
 
-/// 清单文件路径（项目清单或 App group 清单）。
-fn is_manifest_rel_path(rel: &str) -> bool {
-    rel == crate::sync::lww::SYNC_MANIFEST_PATH || rel.ends_with("/manifest.sync.json")
-}
-
 /// 引擎状态写回：普通状态文件直接写；清单则落成分片。
 ///
 /// staging commit 的清单动作来自三方合并后的完整清单字节。这里把它转成
@@ -616,7 +611,7 @@ fn stage_engine_state_write(
     content: &[u8],
 ) -> crate::error::Result<()> {
     let rel_str = rel_path.to_string_lossy();
-    if !is_manifest_rel_path(&rel_str) {
+    if !crate::sync::lww::is_manifest_rel_path(&rel_str) {
         tx.add_bytes(&rel_str, content)?;
         return Ok(());
     }

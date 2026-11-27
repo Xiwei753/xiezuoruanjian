@@ -358,6 +358,28 @@ fn build_plan(
 /// #1012：发布目标是稳定树 `projects/p1`，同一批里还可能带删除 legacy
 /// `__generations__/...` 旧对象的 mutation，因此必须按完整稳定树路径精确匹配，
 /// 不能用「后缀相同」过滤。
+/// 汇总 batch 中全部清单分片，重建本批次的完整 manifest。
+///
+/// #1062 评论 #7218195841：远端清单按命名空间分片发布，不再有单文件
+/// `manifest.sync.json`；同一个 batch 里可能同时出现多个分片 Put。
+fn batch_manifest(batch: &RecordedBatch) -> SyncManifest {
+    let needle = format!("{PROJECT_PREFIX}/app-meta/sync/manifest-shards/");
+    let mut files = Vec::new();
+    let mut shards = 0usize;
+    for mutation in &batch.mutations {
+        if let BatchMutation::Put { path, content } = mutation {
+            if path.starts_with(&needle) {
+                let shard: SyncManifest = serde_json::from_slice(content).unwrap();
+                files.extend(shard.files);
+                shards += 1;
+            }
+        }
+    }
+    assert!(shards > 0, "batch 应包含至少一个清单分片 Put");
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    SyncManifest { files }
+}
+
 fn mutation_for<'a>(batch: &'a RecordedBatch, path_suffix: &str) -> &'a BatchMutation {
     let needle = format!("{PROJECT_PREFIX}/{path_suffix}");
     let matched: Vec<&BatchMutation> = batch
@@ -478,17 +500,14 @@ fn regression_issue_761_conflict_reuses_remote_blob_in_single_atomic_batch() {
         other => panic!("安全文件必须是 Put，实际 {other:?}"),
     }
 
-    // ── manifest 同一批提交，且是 merged manifest（两个文件都在） ──
-    match mutation_for(batch, SYNC_MANIFEST_PATH) {
-        BatchMutation::Put { content, .. } => {
-            let manifest: SyncManifest = serde_json::from_slice(content).unwrap();
-            let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
-            assert!(
-                paths.contains(&CONFLICT_PATH) && paths.contains(&SAFE_PATH),
-                "merged manifest 应同时包含冲突路径与安全路径，实际 {paths:?}"
-            );
-        }
-        other => panic!("manifest 必须是 Put，实际 {other:?}"),
+    // ── manifest 分片同一批提交，且是 merged manifest（两个文件都在） ──
+    {
+        let manifest = batch_manifest(batch);
+        let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            paths.contains(&CONFLICT_PATH) && paths.contains(&SAFE_PATH),
+            "merged manifest 应同时包含冲突路径与安全路径，实际 {paths:?}"
+        );
     }
 
     // ── #1012：不再有 generation.meta.json / 新 generation prefix ──
@@ -834,17 +853,14 @@ fn regression_issue_761_first_sync_empty_remote_uses_batch_without_file_writes()
         "首次同步没有旧 blob 可复用，不应出现 ReuseVersion"
     );
 
-    // ── #1012：manifest 与内容同一批提交，不再有 generation.meta.json ──
-    match mutation_for(batch, SYNC_MANIFEST_PATH) {
-        BatchMutation::Put { content, .. } => {
-            let manifest: SyncManifest = serde_json::from_slice(content).unwrap();
-            let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
-            assert!(
-                paths.contains(&utf8_path) && paths.contains(&SAFE_PATH),
-                "首次同步 manifest 应包含全部 upsert 路径，实际 {paths:?}"
-            );
-        }
-        other => panic!("manifest 必须是 Put，实际 {other:?}"),
+    // ── #1012：manifest 分片与内容同一批提交，不再有 generation.meta.json ──
+    {
+        let manifest = batch_manifest(batch);
+        let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            paths.contains(&utf8_path) && paths.contains(&SAFE_PATH),
+            "首次同步 manifest 应包含全部 upsert 路径，实际 {paths:?}"
+        );
     }
     assert_no_generation_meta(batch);
 
@@ -1123,10 +1139,10 @@ fn regression_issue_761_real_first_sync_no_manifest_device_id_consistent() {
         other => panic!("真实首次同步正文路径应是 Put，实际 {other:?}"),
     }
 
-    // 11. manifest 同一批提交，且包含正文路径。
-    match mutation_for(batch, SYNC_MANIFEST_PATH) {
-        BatchMutation::Put { content, .. } => {
-            let manifest: SyncManifest = serde_json::from_slice(content).unwrap();
+    // 11. manifest 分片同一批提交，且包含正文路径。
+    {
+        let manifest = batch_manifest(batch);
+        {
             let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
             assert!(
                 paths.contains(&chapter_rel),
@@ -1146,7 +1162,6 @@ fn regression_issue_761_real_first_sync_no_manifest_device_id_consistent() {
                 }
             }
         }
-        other => panic!("manifest 必须是 Put，实际 {other:?}"),
     }
 
     // 12. #1012：不再有 generation.meta.json，稳定树就是远端快照。

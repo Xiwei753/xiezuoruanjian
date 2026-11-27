@@ -190,7 +190,7 @@ pub(crate) fn execute_lww_sync_attempt(
         upload_manifest(
             provider,
             &outcome.remote_manifest_path,
-            &outcome.manifest_json,
+            &outcome.merged_manifest,
             &outcome.remote_tree_files,
             cancellation_token,
         )?;

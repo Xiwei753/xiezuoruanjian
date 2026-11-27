@@ -24,8 +24,9 @@ use std::path::Path;
 mod shards;
 
 pub(crate) use shards::{
-    is_manifest_storage_path, load_manifest as load_sharded_manifest,
+    is_manifest_rel_path, is_manifest_storage_path, load_manifest as load_sharded_manifest,
     load_sharded as load_manifest_shards, plan_persist as plan_manifest_persist,
+    split_into_shards,
 };
 
 /// 同步清单文件路径——记录本地所有文件的哈希、操作类型和时间戳。
@@ -35,6 +36,9 @@ pub(crate) use shards::{
 /// `manifest-shards/*.json`（见 [`shards`]）；本路径保留为旧格式迁移来源，
 /// 读取端统一走 [`shards::load_manifest`]。
 pub const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
+
+/// 清单分片目录（相对同步根）。
+pub const SYNC_MANIFEST_SHARDS_DIR: &str = "app-meta/sync/manifest-shards";
 
 /// 获取 LWW 比较时间戳。
 ///

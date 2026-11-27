@@ -119,6 +119,44 @@ pub(super) fn fetch_remote_manifest(
     remote_tree_files: &HashMap<String, String>,
 ) -> crate::Result<SyncManifest> {
     let sync_manifest_path = super::manifest::SYNC_MANIFEST_PATH;
+    // 权威清单是分片对象：合并全部命名空间分片；旧单文件只在尚未迁移的
+    // 远端 tree 上回退读取。
+    let shard_dir = format!("{}/", super::manifest::SYNC_MANIFEST_SHARDS_DIR);
+    let mut shard_paths: Vec<&String> = remote_tree_files
+        .keys()
+        .filter(|path| path.starts_with(&shard_dir))
+        .collect();
+    if !shard_paths.is_empty() {
+        shard_paths.sort();
+        let mut by_path: std::collections::BTreeMap<String, crate::sync::types::ManifestFileRecord> =
+            std::collections::BTreeMap::new();
+        for rel in shard_paths {
+            let remote_path = format!("{remote_prefix}/{rel}");
+            let object = provider.read(&remote_path)?.ok_or_else(|| {
+                crate::Error::SyncRemoteError {
+                    category: "api_error".to_string(),
+                    context: format!("remote manifest shard missing: {remote_path}"),
+                    status: 0,
+                    body_preview: String::new(),
+                }
+            })?;
+            let shard = serde_json::from_slice::<SyncManifest>(&object.content).map_err(|e| {
+                crate::Error::SyncRemoteError {
+                    category: "api_error".to_string(),
+                    context: format!("invalid remote manifest shard {remote_path}: {e}"),
+                    status: 0,
+                    body_preview: String::new(),
+                }
+            })?;
+            for record in shard.files {
+                by_path.insert(record.path.clone(), record);
+            }
+        }
+        return Ok(SyncManifest {
+            files: by_path.into_values().collect(),
+        });
+    }
+
     let remote_manifest_path = format!("{}/{}", remote_prefix, sync_manifest_path);
     let mut remote_manifest = SyncManifest::default();
     if remote_tree_files.contains_key(sync_manifest_path) {
@@ -344,7 +382,7 @@ pub(super) fn delete_remote_files(
 pub(super) fn upload_manifest(
     provider: &dyn SyncProvider,
     remote_manifest_path: &str,
-    manifest_json: &str,
+    manifest: &SyncManifest,
     remote_tree_files: &HashMap<String, String>,
     cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::Result<()> {
@@ -361,14 +399,37 @@ pub(super) fn upload_manifest(
     }
     let sync_manifest_path = super::manifest::SYNC_MANIFEST_PATH;
     let caps = provider.capabilities();
-    let precondition = if caps.conditional_write {
-        match remote_tree_files.get(sync_manifest_path) {
-            Some(sha) => WritePrecondition::IfMatch(RemoteVersion(sha.clone())),
-            None => WritePrecondition::CreateNew,
+    let base_prefix = remote_manifest_path
+        .strip_suffix(sync_manifest_path)
+        .unwrap_or(remote_manifest_path);
+    let shards = super::manifest::split_into_shards(sync_manifest_path, manifest)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+    for (rel, bytes) in &shards {
+        // 远端同路径分片字节完全一致时跳过：只有受影响命名空间会重新写。
+        let unchanged = match provider.read(&format!("{base_prefix}{rel}")) {
+            Ok(Some(object)) => object.content == *bytes,
+            Ok(None) => false,
+            Err(error) => return Err(error.into()),
+        };
+        if unchanged {
+            continue;
         }
-    } else {
-        WritePrecondition::Unconditional
-    };
-    provider.write(remote_manifest_path, manifest_json.as_bytes(), precondition)?;
+        let precondition = if caps.conditional_write {
+            match remote_tree_files.get(rel) {
+                Some(sha) => WritePrecondition::IfMatch(RemoteVersion(sha.clone())),
+                None => WritePrecondition::CreateNew,
+            }
+        } else {
+            WritePrecondition::Unconditional
+        };
+        provider.write(&format!("{base_prefix}{rel}"), bytes, precondition)?;
+    }
+    // 迁移完成后远端只保留分片；旧单文件由本路径显式回收。
+    if let Some(sha) = remote_tree_files.get(sync_manifest_path) {
+        provider.delete(
+            remote_manifest_path,
+            DeletePrecondition::IfMatch(RemoteVersion(sha.clone())),
+        )?;
+    }
     Ok(())
 }
