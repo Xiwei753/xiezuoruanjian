@@ -1165,6 +1165,30 @@ impl WriterCoreApi {
             let core = self.core_read();
             (core.app_data_root.clone(), core.projects_root.clone())
         };
+        // 持久 dirty/recovery 索引干净且账本未被未登记追加时，直接回答“没有
+        // 待上传”，不再枚举全部作品（Qt/鸿蒙都走这一个 Core 接口）。
+        if let Some(checkpoint) =
+            crate::sync::full_sync_state::FullSyncCheckpoint::load(&app_data_root)
+                .ok()
+                .flatten()
+        {
+            let expected = checkpoint_expected_roots(&app_data_root, &projects_root, &checkpoint);
+            let index_clean = crate::sync::dirty_index::load(&app_data_root).is_some_and(|index| {
+                crate::sync::dirty_index::is_clean_for_checkpoint(&index, &expected)
+            });
+            let lifecycle_clear =
+                crate::sync::pending_deleted::load_pending_deleted_targets(&app_data_root)
+                    .map(|targets| targets.is_empty())
+                    .unwrap_or(false)
+                    && crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(
+                        &app_data_root,
+                    )
+                    .map(|cleanups| cleanups.is_empty())
+                    .unwrap_or(false);
+            if index_clean && lifecycle_clear {
+                return false;
+            }
+        }
         // App 组共享同一份账本：只读一次，再按 group 过滤。
         let ledger = match crate::sync::local_mutations::latest_ledger(&app_data_root) {
             Ok(ledger) => ledger,
