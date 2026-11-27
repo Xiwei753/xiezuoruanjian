@@ -1552,6 +1552,25 @@ mod ack_strictness_tests {
     }
 
     #[test]
+    fn strict_scan_reports_unreadable_retry_entries() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        // 归档章节路径不是目录：无法列举归档意图，严格扫描必须报错。
+        let kept_chapter = kept_root(root, "p1").join("c1");
+        std::fs::create_dir_all(kept_chapter.parent().unwrap()).expect("kept root");
+        std::fs::write(&kept_chapter, b"not a dir").expect("kept chapter file");
+        // 索引章节目录无法列举（自指符号链接 → ELOOP）。
+        let index_chapter = retry_root(root, "p1").join("c1");
+        std::fs::create_dir_all(index_chapter.parent().unwrap()).expect("retry root");
+        std::os::unix::fs::symlink("c1", &index_chapter).expect("self symlink");
+        assert!(list_retries(root, "p1").is_empty());
+        assert!(
+            list_retries_strict(root, "p1").is_err(),
+            "unreadable archive entries must keep Core journal"
+        );
+    }
+
+    #[test]
     fn orphan_reconciled_ack_is_replayable_and_cleanable() {
         let workspace = temp_workspace();
         let root = workspace.path();
@@ -1610,5 +1629,134 @@ mod ack_strictness_tests {
         );
         assert!(ack_dir.join("tx-1.json").is_file(), "pending ack kept");
         assert!(list_retries(root, "p1").len() == 1, "retry marker kept");
+    }
+}
+
+mod migration_and_ack_strictness_tests {
+    //! Issue #1062 评论 #7213284979：迁移不能丢原始字节，ack 不能静默覆盖。
+
+    use super::super::store::kept_root;
+    use super::*;
+
+    fn legacy_json(project_id: &str, chapter_id: &str, text: &str) -> serde_json::Value {
+        let sha256 = writer_core::writing_stats::proof::content_digest_of_text(text);
+        serde_json::json!({
+            "schemaVersion": 1,
+            "projectId": project_id,
+            "volumeId": "v1",
+            "chapterId": chapter_id,
+            "baseGeneration": "legacy-generation",
+            "baseRevision": 4,
+            "baseSha256": "legacy-sha",
+            "textRevision": 5,
+            "textSha256": sha256,
+            "text": text,
+            "facts": [{
+                "eventId": "legacy-event",
+                "revision": 5,
+                "projection": { "eventId": "legacy-event" }
+            }],
+            "updatedAtMs": 1,
+        })
+    }
+
+    fn write_legacy(root: &Path, legacy: &serde_json::Value) -> std::path::PathBuf {
+        let drafts = drafts_root(root, "p1");
+        std::fs::create_dir_all(&drafts).expect("drafts root");
+        let path = drafts.join("c1.json");
+        std::fs::write(&path, legacy.to_string()).expect("write legacy");
+        path
+    }
+
+    #[test]
+    fn legacy_migration_archives_existing_dir_instead_of_deleting() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let legacy_path = write_legacy(root, &legacy_json("p1", "c1", "旧草稿正文"));
+        let location = draft_location(root);
+        let ack = location.dir.join("pending-acks/tx-old.json");
+        std::fs::create_dir_all(ack.parent().unwrap()).expect("ack dir");
+        std::fs::write(&ack, b"{\"old\":1}").expect("old ack");
+        std::fs::create_dir_all(location.dir.join("facts")).expect("facts dir");
+        std::fs::write(location.dir.join("facts/00000001-old.json"), b"{}").expect("old fact");
+
+        let state = super::super::store::migrate_legacy(&location)
+            .expect("migrate")
+            .expect("migrated state");
+        assert_eq!(state.facts.len(), 1);
+        assert!(!legacy_path.exists(), "旧文件在安装确认后删除");
+        assert!(location.dir.join("meta.json").is_file());
+        // 旧目录里的原始 ack/fact 必须整体保留在归档区，不能被 remove_dir_all。
+        let kept = kept_root(root, "p1").join("c1");
+        let archived: Vec<_> = std::fs::read_dir(&kept)
+            .expect("kept dir")
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        assert_eq!(
+            archived.len(),
+            1,
+            "existing dir archived as one transaction"
+        );
+        assert!(archived[0].join("pending-acks/tx-old.json").is_file());
+        assert!(archived[0].join("facts/00000001-old.json").is_file());
+    }
+
+    #[test]
+    fn legacy_migration_failure_keeps_legacy_file_and_dir() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let drafts = drafts_root(root, "p1");
+        std::fs::create_dir_all(&drafts).expect("drafts root");
+        let legacy_path = drafts.join("c1.json");
+        std::fs::write(&legacy_path, b"{ not-json").expect("broken legacy");
+        let location = draft_location(root);
+        std::fs::create_dir_all(&location.dir).expect("active dir");
+        std::fs::write(location.dir.join("keep-me.json"), b"keep").expect("keep file");
+
+        assert!(super::super::store::migrate_legacy(&location).is_err());
+        assert!(legacy_path.exists(), "旧文件必须保留");
+        assert!(location.dir.join("keep-me.json").is_file(), "现有目录不动");
+    }
+
+    #[test]
+    fn corrupt_existing_ack_is_not_overwritten() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let ack_dir = draft_location(root).dir.join("pending-acks");
+        std::fs::create_dir_all(&ack_dir).expect("ack dir");
+        let path = ack_dir.join("tx-1.json");
+        std::fs::write(&path, b"{ corrupt").expect("corrupt ack");
+
+        assert!(record_pending_ack(root, "p1", "c1", &pending_ack("tx-1", &["e1"])).is_err());
+        assert_eq!(std::fs::read(&path).expect("kept file"), b"{ corrupt");
+    }
+
+    #[test]
+    fn existing_ack_snapshot_is_inherited() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let mut ack = pending_ack("tx-1", &["e1"]);
+        ack.commit_sequence = 5;
+        ack.editor_session_id = 3;
+        ack.snapshot_revision = 7;
+        ack.snapshot_digest = "digest-7".to_string();
+        record_pending_ack(root, "p1", "c1", &ack).expect("record first");
+        record_pending_ack(root, "p1", "c1", &pending_ack("tx-1", &["e1"])).expect("record again");
+        let path = draft_location(root).dir.join("pending-acks/tx-1.json");
+        let stored: PendingAck =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+        assert_eq!(stored.snapshot_revision, 7);
+        assert_eq!(stored.snapshot_digest, "digest-7");
+        assert_eq!(stored.commit_sequence, 5);
+        assert!(!stored.reconciled);
+    }
+
+    #[test]
+    fn ack_event_mismatch_is_rejected() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        record_pending_ack(root, "p1", "c1", &pending_ack("tx-1", &["e1"])).expect("record");
+        assert!(record_pending_ack(root, "p1", "c1", &pending_ack("tx-1", &["e2"])).is_err());
     }
 }

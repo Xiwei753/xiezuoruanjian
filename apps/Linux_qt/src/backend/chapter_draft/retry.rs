@@ -211,7 +211,17 @@ fn scan_intents(projects_root: &Path, project_id: &str, scan: &mut RetryScan) {
             return;
         }
     };
-    for chapter in chapters.flatten() {
+    for chapter in chapters {
+        let chapter = match chapter {
+            Ok(chapter) => chapter,
+            Err(error) => {
+                scan.fail(format!(
+                    "read chapter draft kept entry {}: {error}",
+                    kept.display()
+                ));
+                continue;
+            }
+        };
         let Some(chapter_id) = chapter.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
@@ -228,10 +238,28 @@ fn scan_intents(projects_root: &Path, project_id: &str, scan: &mut RetryScan) {
                 continue;
             }
         };
-        for stamp in stamps.flatten() {
+        for stamp in stamps {
+            let stamp = match stamp {
+                Ok(stamp) => stamp,
+                Err(error) => {
+                    scan.fail(format!(
+                        "read chapter draft kept entry {}: {error}",
+                        chapter.path().display()
+                    ));
+                    continue;
+                }
+            };
             let path = stamp.path();
-            if !path.is_dir() || !path.join(RETRY_INTENT_FILE).is_file() {
+            if !scan_is_dir(scan, &path) {
                 continue;
+            }
+            match intent_presence(&path.join(RETRY_INTENT_FILE)) {
+                Ok(false) => continue,
+                Ok(true) => {}
+                Err(error) => {
+                    scan.fail(error);
+                    continue;
+                }
             }
             let intent = match read_intent(&path) {
                 Ok(intent) => intent,
@@ -273,9 +301,19 @@ fn scan_index(projects_root: &Path, project_id: &str, scan: &mut RetryScan) {
             return;
         }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                scan.fail(format!(
+                    "read retry index entry {}: {error}",
+                    root.display()
+                ));
+                continue;
+            }
+        };
         let path = entry.path();
-        if !path.is_dir() {
+        if !scan_is_dir(scan, &path) {
             continue;
         }
         let files = match std::fs::read_dir(&path) {
@@ -285,7 +323,17 @@ fn scan_index(projects_root: &Path, project_id: &str, scan: &mut RetryScan) {
                 continue;
             }
         };
-        for file in files.flatten() {
+        for file in files {
+            let file = match file {
+                Ok(file) => file,
+                Err(error) => {
+                    scan.fail(format!(
+                        "read retry index entry {}: {error}",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
             let marker_path = file.path();
             if marker_path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
@@ -299,6 +347,28 @@ fn scan_index(projects_root: &Path, project_id: &str, scan: &mut RetryScan) {
                 Err(error) => scan.fail(error),
             }
         }
+    }
+}
+
+/// 区分“不是目录/不存在”和“stat 失败”：后者留下不确定性，严格扫描据此
+/// 保留 Core journal。
+fn scan_is_dir(scan: &mut RetryScan, path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(meta) => meta.is_dir(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            scan.fail(format!("stat retry path {}: {error}", path.display()));
+            false
+        }
+    }
+}
+
+/// 意图文件是否存在；无法 stat 时返回 Err（不能把 I/O 错误当“没有意图”）。
+fn intent_presence(path: &Path) -> Result<bool, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("stat retry intent {}: {error}", path.display())),
     }
 }
 

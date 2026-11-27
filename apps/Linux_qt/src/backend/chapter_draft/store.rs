@@ -27,10 +27,12 @@ const TEXTS_DIR: &str = "texts";
 const FACTS_DIR: &str = "facts";
 
 mod kept;
+mod migrate;
 mod terminal;
 mod text;
 
 pub(super) use kept::{kept_root, list_kept_chapter_ids};
+pub(super) use migrate::{legacy_state, migrate_legacy, read_legacy};
 pub(super) use terminal::{is_terminal, remove_settled_storage, terminal_meta};
 pub(super) use text::{blob_name, blob_path, gc_text_blobs, read_referenced_text, write_text_blob};
 #[cfg(test)]
@@ -520,91 +522,11 @@ pub(super) fn read_new_state(
 pub(super) fn load_state(location: &DraftLocation) -> Result<Option<DraftState>, String> {
     match read_new_state(location, true)? {
         Some(state) => Ok(Some(state)),
-        None => Ok(migrate_legacy(location)),
+        None => migrate_legacy(location),
     }
 }
 
-/// 旧格式单文件迁移：写 facts/ + text.txt + meta.json，全部成功后才删除旧文件。
-pub(super) fn migrate_legacy(location: &DraftLocation) -> Option<DraftState> {
-    let legacy_path = location.legacy_path();
-    let legacy = read_legacy(&legacy_path, &location.project_id, &location.chapter_id)?;
-    let (mut state, projections) = legacy_state(location, legacy);
-    if location.dir.exists() {
-        // 没有 meta.json 的目录只可能是上一次迁移中断的产物，旧文件才是事实来源。
-        if let Err(error) = std::fs::remove_dir_all(&location.dir) {
-            log::warn!(
-                "clear partial chapter draft dir failed: project={} chapter={}: {error}",
-                location.project_id,
-                location.chapter_id
-            );
-        }
-    }
-    for (fact, projection) in state.facts.iter().zip(projections.iter()) {
-        if let Err(error) = write_fact_file(
-            &location.dir,
-            fact.seq,
-            &fact.event_id,
-            fact.revision,
-            fact.session_id,
-            projection,
-        ) {
-            log::warn!(
-                "migrate legacy chapter draft fact failed: project={} chapter={} event={}: {error}",
-                location.project_id,
-                location.chapter_id,
-                fact.event_id
-            );
-            return None;
-        }
-    }
-    let mut text_blob = String::new();
-    if let Some(text) = state.text.as_deref() {
-        match write_text_blob(&location.dir, state.text_revision, &state.text_sha256, text) {
-            Ok(name) => text_blob = name,
-            Err(error) => {
-                log::warn!(
-                    "migrate legacy chapter draft text failed: project={} chapter={}: {error}",
-                    location.project_id,
-                    location.chapter_id
-                );
-                return None;
-            }
-        }
-    }
-    state.persisted_text_blob = text_blob.clone();
-    let meta = meta_from_state(
-        location,
-        &state,
-        state.text_revision,
-        &state.text_sha256,
-        &text_blob,
-    );
-    if let Err(error) = write_meta(&location.dir, &meta) {
-        log::warn!(
-            "migrate legacy chapter draft meta failed: project={} chapter={}: {error}",
-            location.project_id,
-            location.chapter_id
-        );
-        return None;
-    }
-    if let Err(error) = std::fs::remove_file(&legacy_path) {
-        log::warn!(
-            "remove migrated legacy chapter draft failed: project={} chapter={} path={}: {error}",
-            location.project_id,
-            location.chapter_id,
-            legacy_path.display()
-        );
-    }
-    log::info!(
-        "migrated legacy chapter draft: project={} chapter={} facts={}",
-        location.project_id,
-        location.chapter_id,
-        state.facts.len()
-    );
-    Some(state)
-}
-
-/// 章节草稿摘要（列表用；不读正文与 projection）。
+/// 章节草稿摘要（列表用；不读正文与 projection）。/// 章节草稿摘要（列表用；不读正文与 projection）。
 pub(super) fn read_summary_from_dir(
     projects_root: &Path,
     dir: &Path,
@@ -765,144 +687,4 @@ pub(super) fn unreadable_summary(
         generation: String::new(),
         updated_at_ms: 0,
     }
-}
-
-// ── 旧格式 <chapter_id>.json ──────────────────────────────────────────────
-
-#[derive(Default, serde::Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-struct LegacyFile {
-    project_id: String,
-    volume_id: String,
-    chapter_id: String,
-    base_generation: String,
-    base_revision: u64,
-    base_sha256: String,
-    text: Option<String>,
-    text_revision: u64,
-    text_sha256: String,
-    updated_at_ms: i64,
-    facts: Vec<LegacyFact>,
-}
-
-#[derive(Default, serde::Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-struct LegacyFact {
-    event_id: String,
-    revision: u64,
-    projection: serde_json::Value,
-}
-
-pub(super) struct LegacyData {
-    pub(super) volume_id: String,
-    pub(super) base_generation: String,
-    pub(super) base_revision: u64,
-    pub(super) base_sha256: String,
-    pub(super) text: Option<String>,
-    pub(super) text_revision: u64,
-    pub(super) text_sha256: String,
-    pub(super) updated_at_ms: i64,
-    /// (索引, projection JSON)
-    pub(super) facts: Vec<(DraftFactIndex, String)>,
-}
-
-pub(super) fn read_legacy(path: &Path, project_id: &str, chapter_id: &str) -> Option<LegacyData> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let file: LegacyFile = match serde_json::from_str(&content) {
-        Ok(file) => file,
-        Err(error) => {
-            log::warn!(
-                "legacy chapter draft invalid: path={}: {error}",
-                path.display()
-            );
-            return None;
-        }
-    };
-    if file.project_id != project_id || file.chapter_id != chapter_id {
-        log::warn!(
-            "legacy chapter draft identity mismatch, keep file: project={project_id} chapter={chapter_id} path={}",
-            path.display()
-        );
-        return None;
-    }
-    let mut facts = Vec::with_capacity(file.facts.len());
-    for item in file.facts {
-        if item.event_id.is_empty() || item.projection.is_null() {
-            continue;
-        }
-        let seq = u64::try_from(facts.len()).unwrap_or(0).saturating_add(1);
-        facts.push((
-            DraftFactIndex {
-                event_id: item.event_id,
-                revision: item.revision,
-                session_id: 0,
-                after_text_sha256: super::projection_after_text_sha256(
-                    &item.projection.to_string(),
-                ),
-                seq,
-            },
-            item.projection.to_string(),
-        ));
-    }
-    Some(LegacyData {
-        volume_id: file.volume_id,
-        base_generation: file.base_generation,
-        base_revision: file.base_revision,
-        base_sha256: file.base_sha256,
-        text: file.text,
-        text_revision: file.text_revision,
-        text_sha256: file.text_sha256,
-        updated_at_ms: file.updated_at_ms,
-        facts,
-    })
-}
-
-/// 旧格式只读解码结果（快照/列表用，不写盘）。
-pub(super) fn legacy_state(
-    location: &DraftLocation,
-    legacy: LegacyData,
-) -> (DraftState, Vec<String>) {
-    let mut facts = Vec::with_capacity(legacy.facts.len());
-    let mut projections = Vec::with_capacity(legacy.facts.len());
-    for (fact, projection) in legacy.facts {
-        facts.push(fact);
-        projections.push(projection);
-    }
-    let next_seq = facts.last().map_or(1, |fact| fact.seq.saturating_add(1));
-    let state = DraftState {
-        project_id: location.project_id.clone(),
-        volume_id: legacy.volume_id,
-        chapter_id: location.chapter_id.clone(),
-        workspace_key: location.workspace_key.clone(),
-        generation: String::new(),
-        session_id: 0,
-        base_generation: legacy.base_generation,
-        base_revision: legacy.base_revision,
-        base_sha256: legacy.base_sha256,
-        text: legacy.text,
-        text_revision: legacy.text_revision,
-        text_sha256: legacy.text_sha256.clone(),
-        persisted_text_revision: legacy.text_revision,
-        persisted_text_sha256: legacy.text_sha256,
-        persisted_text_blob: String::new(),
-        text_dirty: false,
-        facts,
-        next_seq,
-        failed_facts: Vec::new(),
-        failed_inputs: Vec::new(),
-        acked_event_ids: Vec::new(),
-        applied_transactions: Vec::new(),
-        applied_commit_sequence: 0,
-        editor_base_revision: 0,
-        editor_base_sha256: String::new(),
-        editor_base_session: 0,
-        committed_text_revision: 0,
-        committed_text_sha256: String::new(),
-        acked_through_revision: 0,
-        projects_root: location.projects_root.clone(),
-        updated_at_ms: legacy.updated_at_ms,
-        meta_dirty: false,
-        last_persist: None,
-    };
-    (state, projections)
 }

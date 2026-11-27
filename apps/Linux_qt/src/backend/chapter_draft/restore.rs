@@ -130,7 +130,9 @@ pub(crate) fn restore_plan_strict(
     super::replay_pending_acks(projects_root, project_id, chapter_id)?;
     let mut state = match store::read_new_state(&location, false)? {
         Some(state) => state,
-        None => match store::migrate_legacy(&location) {
+        // 迁移失败必须作为 Err 上报（保留旧文件与新目录原件），不能降级成
+        // “没有草稿”被恢复链当成空草稿清理。
+        None => match store::migrate_legacy(&location)? {
             Some(state) => state,
             None => return Ok(None),
         },

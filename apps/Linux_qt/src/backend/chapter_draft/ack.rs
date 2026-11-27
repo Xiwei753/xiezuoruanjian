@@ -72,21 +72,53 @@ pub(crate) fn record_pending_ack(
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("create pending ack dir {}: {error}", dir.display()))?;
     let path = ack_path(&location, &ack.transaction_id);
-    // 同一 transaction 已存在本地 ack 时保留它携带的编辑器快照坐标与
-    // reconciled 决议：Core journal 对账写回的 ack 只有章节版本坐标，直接
-    // 覆盖会丢失“精确收口已提交正文”的能力（Issue #1062 评论 7193847871）。
+    // 同一 transaction 已存在本地 ack 时，保留它携带的编辑器快照坐标与
+    // reconciled 决议。
+    //
+    // Issue #1062 评论 #7213284979 第 3 项：已有文件读不出/解析失败时必须
+    // 返回 Err 并原样保留，不能把它当成“文件不存在”后静默覆盖——那会永久
+    // 丢掉旧文件里的快照坐标与事故材料。
     let mut ack = ack.clone();
-    if let Ok(existing) = std::fs::read_to_string(&path) {
-        if let Ok(existing) = serde_json::from_str::<PendingAck>(&existing) {
+    match std::fs::read_to_string(&path) {
+        Ok(existing) => {
+            let existing: PendingAck = serde_json::from_str(&existing).map_err(|error| {
+                format!(
+                    "pending ack corrupted (kept): tx={} path={}: {error}",
+                    ack.transaction_id,
+                    path.display()
+                )
+            })?;
+            if existing.event_ids != ack.event_ids {
+                return Err(format!(
+                    "pending ack event ids mismatch (kept): tx={} path={}",
+                    ack.transaction_id,
+                    path.display()
+                ));
+            }
+            if ack.commit_sequence == 0 {
+                ack.commit_sequence = existing.commit_sequence;
+            } else if existing.commit_sequence != 0
+                && existing.commit_sequence != ack.commit_sequence
+            {
+                return Err(format!(
+                    "pending ack commit sequence mismatch (kept): tx={} path={} existing={} incoming={}",
+                    ack.transaction_id,
+                    path.display(),
+                    existing.commit_sequence,
+                    ack.commit_sequence
+                ));
+            }
             if ack.snapshot_digest.is_empty() && !existing.snapshot_digest.is_empty() {
                 ack.editor_session_id = existing.editor_session_id;
                 ack.snapshot_revision = existing.snapshot_revision;
                 ack.snapshot_digest = existing.snapshot_digest;
             }
-            if existing.reconciled && existing.event_ids == ack.event_ids {
+            if existing.reconciled {
                 ack.reconciled = true;
             }
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("read pending ack {}: {error}", path.display())),
     }
     let json = serde_json::to_string(&ack)
         .map_err(|error| format!("encode pending ack {}: {error}", ack.transaction_id))?;
