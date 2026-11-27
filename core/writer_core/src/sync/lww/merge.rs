@@ -729,6 +729,27 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         .collect();
 
     for path in all_paths {
+        // 对象级增量（评审 #7214105551 第 3/4 项）：不在 affected set 的对象本轮
+        // 没有加载字节，不代表删除，直接沿用固定远端基线的记录；affected 但
+        // Unloaded 的对象同样按“未读取、未改变”处理，不进入 LWW/删除判定。
+        if let Some(plan) = sparse {
+            let unloaded = matches!(
+                plan.state_of(&path),
+                crate::sync::sparse_plan::ObjectState::Unloaded
+            );
+            if !plan.contains(&path) || unloaded {
+                if let Some(record) = remote_records
+                    .get(&path)
+                    .or_else(|| local_records.get(&path))
+                    .cloned()
+                {
+                    merged_manifest_files.insert(path.clone(), record);
+                }
+                // 未涉及对象不是“被忽略的变更”，不进结果列表（否则整棵远端树
+                // 都会被当成 ignored 回传）。
+                continue;
+            }
+        }
         if recovered_missing_files.contains(&path) {
             // 本轮刚从远端 blob 恢复的文件：按远端真实记录进入 merged manifest，
             // 文件内容已写回磁盘，后续 scan 会重建 known_files。

@@ -141,8 +141,13 @@ pub fn snapshot_app_group_records_read_only(
     group: &crate::sync::types::AppDataGroup,
     preferred_device_id: &str,
 ) -> crate::error::Result<HashMap<String, ManifestFileRecord>> {
-    let snapshot =
-        build_local_snapshot(sync_root, SyncScope::App, preferred_device_id, Some(group), None)?;
+    let snapshot = build_local_snapshot(
+        sync_root,
+        SyncScope::App,
+        preferred_device_id,
+        Some(group),
+        None,
+    )?;
     if let Some(missing) = snapshot.missing_without_delete_fact.first() {
         return Err(crate::Error::Io(std::io::Error::other(format!(
             "snapshot_app_group_records_read_only: local file {} missing without tombstone",
@@ -415,6 +420,11 @@ fn build_local_snapshot(
                     },
                 );
             } else {
+                // 稀疏计划里未加载的对象（不在 affected set）本轮本来就没有字节：
+                // “不在 staging”不等于本地删除，跳过缺失收集，由 merge 沿用基线。
+                if sparse.is_some_and(|plan| !plan.contains(path)) {
+                    continue;
+                }
                 // 无 tombstone → 收集缺失事实（不伪造 delete record）。
                 // 本地 known_files 中记录了此文件但磁盘上不存在，且没有 tombstone
                 // 证明它被合法删除。可能是未下载完整、工作区损坏、人工移动。
@@ -505,6 +515,9 @@ fn build_local_snapshot(
                 },
             );
         } else {
+            if sparse.is_some_and(|plan| !plan.contains(path)) {
+                continue;
+            }
             // 无 tombstone → 收集缺失事实（不能把旧 upsert 冒充当前本地事实）。
             if missing_without_delete_fact.iter().any(|m| m.path == *path) {
                 continue;
