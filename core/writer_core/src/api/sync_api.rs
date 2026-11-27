@@ -327,23 +327,15 @@ fn to_checkpoint_version(
     }
 }
 
-/// 远端路径 → target 相对路径（`projects/<id>/...` 与
-/// `app/__groups__/<storage_key>/...` 两种前缀）。
-fn target_relative_remote_path(
-    remote_path: &str,
-    key: &str,
-    app_groups: &[crate::sync::types::AppDataGroup],
-) -> Option<String> {
-    let path = remote_path.replace('\\', "/");
-    if let Some(project_id) = key.strip_prefix("project:") {
-        return path
-            .strip_prefix(&format!("projects/{project_id}/"))
-            .map(str::to_string);
+/// 章节正文与 meta 是同一业务对象的两个文件：给出另一个的路径。
+fn chapter_sibling_path(path: &str) -> Option<String> {
+    if let Some(prefix) = path.strip_suffix("/chapter.md") {
+        return Some(format!("{prefix}/chapter.meta.json"));
     }
-    let group_id = key.strip_prefix("app:")?;
-    let group = app_groups.iter().find(|group| group.id() == group_id)?;
-    path.strip_prefix(&format!("app/__groups__/{}/", group.storage_key()))
-        .map(str::to_string)
+    if let Some(prefix) = path.strip_suffix("/chapter.meta.json") {
+        return Some(format!("{prefix}/chapter.md"));
+    }
+    None
 }
 
 /// 从结果 DTO 取 checkpoint 键：作品看 project_id，App 组按远端前缀里的
@@ -363,26 +355,23 @@ fn dto_target_checkpoint_key(
         .map(|group| format!("app:{}", group.id()))
 }
 
-fn collect_idle_watermarks(
-    app_data_root: &std::path::Path,
-    projects_root: &std::path::Path,
-) -> Option<std::collections::BTreeMap<String, u64>> {
-    let mut watermarks = std::collections::BTreeMap::new();
-    let mut add = |key: String, root: &std::path::Path| -> Option<()> {
-        if crate::sync::local_mutations::recovery_pending(root) {
-            return None;
-        }
-        watermarks.insert(key, crate::sync::local_mutations::seq_high_watermark(root));
-        Some(())
-    };
-    add("app".to_string(), app_data_root)?;
-    for project in crate::project::list_projects(projects_root).ok()? {
-        add(
-            format!("project:{}", project.id),
-            &projects_root.join(&project.id),
-        )?;
+/// 远端路径 → target 相对路径（`projects/<id>/...` 与
+/// `app/__groups__/<storage_key>/...` 两种前缀）。
+fn target_relative_remote_path(
+    remote_path: &str,
+    key: &str,
+    app_groups: &[crate::sync::types::AppDataGroup],
+) -> Option<String> {
+    let path = remote_path.replace('\\', "/");
+    if let Some(project_id) = key.strip_prefix("project:") {
+        return path
+            .strip_prefix(&format!("projects/{project_id}/"))
+            .map(str::to_string);
     }
-    Some(watermarks)
+    let group_id = key.strip_prefix("app:")?;
+    let group = app_groups.iter().find(|group| group.id() == group_id)?;
+    path.strip_prefix(&format!("app/__groups__/{}/", group.storage_key()))
+        .map(str::to_string)
 }
 
 /// 本轮开始前各 target 的未确认 mutation 快照（path → op/hash/seq）。
@@ -1088,19 +1077,11 @@ impl WriterCoreApi {
                 last_attempt_at: 0,
                 next_retry_at: 0,
                 consecutive_failures: 0,
-                ledger_watermarks: std::collections::BTreeMap::new(),
             });
         next.repository_identity = repository_identity.to_string();
         next.record_attempt(now);
         if success {
             next.record_success(now);
-            // 记录本次成功后各根的账本高水位：下一次空闲轮只比较它 + 远端 HEAD。
-            if let Some(watermarks) = collect_idle_watermarks(
-                app_data_root,
-                &self.core_read().projects_root,
-            ) {
-                next.ledger_watermarks = watermarks;
-            }
             if let Some(snapshot) = snapshot {
                 if let Some(succeeded) = succeeded {
                     let mut versions = std::collections::BTreeMap::new();
@@ -1720,46 +1701,6 @@ impl WriterCoreApi {
         };
         revision_phase.finish_with_provider("success", provider.as_ref());
 
-        // A'. 真正索引驱动的空闲判定：远端 HEAD 与上次一致，且各根账本高水位
-        // 都没变、没有未完成恢复 —— 本轮不读 manifest/账本正文、不建 plan、
-        // 不 staging、不发布（复审 #7213234617 第 4 项）。
-        if run_mode == SyncRunMode::Incremental && checkpoint_applicable && !force_sync {
-            if let Some(stored) = checkpoint.as_ref() {
-                let same_remote =
-                    probed_revision.as_deref() == Some(stored.remote_revision.as_str());
-                if same_remote && !stored.ledger_watermarks.is_empty() {
-                    if let Some(watermarks) =
-                        collect_idle_watermarks(&app_data_root, &projects_root)
-                    {
-                        if watermarks == stored.ledger_watermarks {
-                            log::info!(
-                                "[sync] idle: remote head and ledger watermarks unchanged (roots={})",
-                                watermarks.len()
-                            );
-                            self.persist_checkpoint(
-                                &app_data_root,
-                                repo_identity.as_deref(),
-                                Some(stored),
-                                None,
-                                None,
-                                probed_revision.as_deref(),
-                                None,
-                                true,
-                                diagnostic_operation_id,
-                            );
-                            let (mut result, _, _) = self.core_write().finalize_full_sync(
-                                Vec::new(),
-                                None,
-                                None,
-                            );
-                            result.targets.clear();
-                            return Ok(result.into());
-                        }
-                    }
-                }
-            }
-        }
-
         let local_snapshot_phase = SyncDiagnosticPhase::start_with_provider(
             diagnostic_operation_id,
             "local_snapshot",
@@ -2319,7 +2260,13 @@ impl WriterCoreApi {
             crate::sync::sparse_plan::SparseObjectPlan,
         > = {
             let mut plans = std::collections::HashMap::new();
-            if let Some(snapshot) = preflight_snapshot.as_ref() {
+            // 只有在"真增量"模式下、且远端 diff 完整可归因时才允许裁剪；
+            // 显式重建/迁移与 diff 未知一律完整核对。
+            let incremental_inputs_ready = run_mode == SyncRunMode::Incremental
+                && checkpoint_applicable
+                && affected_targets.is_some();
+            if incremental_inputs_ready {
+                if let Some(snapshot) = preflight_snapshot.as_ref() {
                 for planned in &plan.targets {
                     let Some(key) = crate::sync::full_sync::sync_target_checkpoint_key(planned)
                     else {
@@ -2362,6 +2309,21 @@ impl WriterCoreApi {
                     remote_paths.dedup();
                     pending_paths.sort();
                     pending_paths.dedup();
+                    // 业务对象依赖：章节正文与 meta 属于同一对象，必须同时加载，
+                    // 否则三方比较会把同一个章节的另一半当成未加载而沿用旧事实。
+                    let mut expanded: Vec<String> = remote_paths
+                        .iter()
+                        .chain(pending_paths.iter())
+                        .cloned()
+                        .collect();
+                    for path in &expanded {
+                        if let Some(sibling) = chapter_sibling_path(path) {
+                            pending_paths.push(sibling);
+                        }
+                    }
+                    expanded.clear();
+                    pending_paths.sort();
+                    pending_paths.dedup();
                     let plan = crate::sync::sparse_plan::SparseObjectPlan::new(
                         checkpoint
                             .as_ref()
@@ -2370,6 +2332,7 @@ impl WriterCoreApi {
                         remote_paths,
                     );
                     plans.insert(key, plan);
+                }
                 }
             }
             plans

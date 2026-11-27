@@ -243,6 +243,17 @@ impl StagingRun {
                 }
             }
         }
+        // 账本与序号高水位也是本轮合并的输入事实：带上它们，manifest 投影
+        // 才能用到真实提交时间/删除证据/base hash，而不是回退到 mtime。
+        for ledger_path in [
+            "app-meta/sync/local-mutations.jsonl".to_string(),
+            "app-meta/sync/mutation-seq.json".to_string(),
+        ] {
+            let path = PathBuf::from(ledger_path);
+            if live_root.join(&path).is_file() {
+                rel_paths.push(path);
+            }
+        }
         rel_paths.sort();
         rel_paths.dedup();
         self.build_base_snapshot_from_live(live_root, &rel_paths)?;
@@ -2006,6 +2017,13 @@ pub(crate) fn walk_commit_candidates(
             // 对象级增量计划是本轮运行的输入，不是业务文件：不进入三方比较，
             // 也不提交进 live。
             if rel == Path::new(crate::sync::sparse_plan::PLAN_FILE_NAME) {
+                continue;
+            }
+            // 账本/序号高水位是合并输入，不是业务对象：不进入 commit 候选，
+            // 也不能被本轮的 staging 副本覆盖 live 的并发事实。
+            if rel == Path::new("app-meta/sync/local-mutations.jsonl")
+                || rel == Path::new("app-meta/sync/mutation-seq.json")
+            {
                 continue;
             }
         }

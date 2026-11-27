@@ -74,12 +74,6 @@ pub struct FullSyncCheckpoint {
     pub next_retry_at: i64,
     #[serde(default)]
     pub consecutive_failures: u32,
-    /// 各同步根（App 根 / 作品根）的账本序号高水位快照。
-    ///
-    /// 空闲轮只比较这个持久计数器 + 远端 HEAD：高水位没变说明没有任何新的
-    /// 业务事务投影，不需要读 manifest、账本或扫描目录（复审 #7213234617 第 4 项）。
-    #[serde(default)]
-    pub ledger_watermarks: std::collections::BTreeMap<String, u64>,
 }
 
 impl FullSyncCheckpoint {
