@@ -3,6 +3,7 @@ use std::path::Path;
 use serde::de::DeserializeOwned;
 
 use crate::error::{Error, Result};
+use crate::starmap::migration::nodes::{NodeObjectBindings, ReferenceBindingState};
 use crate::starmap::package_storage;
 use crate::starmap::types::*;
 
@@ -95,14 +96,14 @@ impl StarMapStore {
     ///
     /// 解码期间借用它，调用方必须把同一个视图放回
     /// `self.node_object_bindings`，同一 store 生命周期内只读一次索引。
-    fn take_node_object_bindings(
-        &mut self,
-    ) -> Result<crate::starmap::migration::nodes::NodeObjectBindings> {
+    /// 索引整体缺失/损坏时先按已确认实例批量重建一次：正常加载只需要补自己
+    /// 缺的那一条，不能因为派生索引不可用就逐节点反复重写全量索引。
+    fn take_node_object_bindings(&mut self) -> Result<NodeObjectBindings> {
         match self.node_object_bindings.take() {
             Some(bindings) => Ok(bindings),
-            None => crate::starmap::migration::nodes::NodeObjectBindings::load_reference_bindings(
-                &self.app_data_root,
-            ),
+            None => Ok(NodeObjectBindings::from_reference_index(
+                crate::starmap::library::load_or_rebuild_reference_index(&self.app_data_root)?,
+            )),
         }
     }
 
@@ -141,7 +142,7 @@ impl StarMapStore {
             )));
         }
         let bytes = std::fs::read(&node_path)?;
-        let bindings = match self.take_node_object_bindings() {
+        let mut bindings = match self.take_node_object_bindings() {
             Ok(bindings) => bindings,
             Err(error) => {
                 self.recovery_log.push(LoadDiagnostic {
@@ -166,8 +167,6 @@ impl StarMapStore {
             &bytes,
             Some(&bindings),
         );
-        // 放回缓存：同一 store 后续加载的节点复用同一份反向绑定视图。
-        self.node_object_bindings = Some(bindings);
         let plan = match decoded {
             Ok(plan) => plan,
             Err(error) => {
@@ -189,6 +188,34 @@ impl StarMapStore {
                 )));
             }
         };
+        // Issue #1062 评论 #7213634487 第 C 项：解析出的规范实例与
+        // `references.json` 的绑定必须完整一致。缺失/`projectId` 落后是派生
+        // 索引待修复（只补引用，不改写已合法的节点文件）；同一实例绑定到别的
+        // 资产身份是身份冲突，保留原始材料和既有绑定并明确报错。
+        let reference_state = bindings.reference_binding_state(&plan.instance);
+        if let ReferenceBindingState::Conflict { reference_asset_id } = &reference_state {
+            self.recovery_log.push(LoadDiagnostic {
+                kind: LoadDiagnosticKind::Corrupt,
+                object_type: "node instance".to_string(),
+                object_id: node_id.to_string(),
+                detail: format!(
+                    "node reference conflict: path={} starmap_id={} instance_asset_id={} \
+                     reference_asset_id={reference_asset_id}",
+                    node_path.display(),
+                    self.starmap_id,
+                    plan.instance.asset_id
+                ),
+            });
+            return Err(Error::Other(format!(
+                "starmap node identity conflict: path={} object_type=node object_id={} \
+                 starmap_id={} instance_asset_id={} reference_asset_id={reference_asset_id} \
+                 conflict_fields=assetId; preserve original node bytes and existing reference",
+                node_path.display(),
+                node_id,
+                self.starmap_id,
+                plan.instance.asset_id
+            )));
+        }
         if plan.wrote_definition || plan.rewrite_instance {
             crate::starmap::migration::nodes::persist_node_object_plan(
                 &self.app_data_root,
@@ -204,7 +231,34 @@ impl StarMapStore {
                     self.starmap_id
                 ))
             })?;
+        } else if reference_state != ReferenceBindingState::Consistent {
+            // 崩溃重入：实例文件已是合法新格式，迁移 flag 全为 false，
+            // 但派生反向索引缺这一条（或 projectId 落后）；只补索引。
+            crate::starmap::library::record_node_reference(
+                &self.app_data_root,
+                &self.starmap_id,
+                plan.instance.project_id.as_deref(),
+                &plan.instance.instance_id,
+                &plan.instance.asset_id,
+            )
+            .map_err(|error| {
+                Error::Other(format!(
+                    "node '{}' reference index repair failed: path={} starmap_id={}: {error}",
+                    node_id,
+                    node_path.display(),
+                    self.starmap_id
+                ))
+            })?;
         }
+        // 同一 store 后续加载的节点复用同一份反向绑定视图；这里同步本次加载
+        // 已确认（或被补写）的绑定，避免后续节点基于旧状态判断。
+        bindings.remember_reference(StarMapNodeReference {
+            asset_id: plan.instance.asset_id.clone(),
+            starmap_id: self.starmap_id.clone(),
+            instance_id: plan.instance.instance_id.clone(),
+            project_id: plan.instance.project_id.clone(),
+        });
+        self.node_object_bindings = Some(bindings);
 
         let instance = plan.instance;
         let asset_id = instance.asset_id.clone();

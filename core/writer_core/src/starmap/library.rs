@@ -231,10 +231,13 @@ pub fn save_reference_index(app_data_root: &Path, index: &StarMapReferenceIndex)
     atomic_write_string(&reference_index_abs_path(app_data_root), &content)
 }
 
-/// 确保库目录已初始化；反向索引缺失时从画布实例文件重建。
+/// 确保库目录已初始化，并把反向引用索引收敛为可从实例补全的派生视图。
 ///
 /// 首次进入（既没有独立对象文件也没有旧索引）时执行旧数据拆分，保证旧画布/
-/// 星图对象转换成独立归属文件。
+/// 星图对象转换成独立归属文件。已初始化时由
+/// [`reconcile_reference_index`] 一次性补回缺失引用与落后的 `projectId`；
+/// 已有绑定与实例资产身份冲突时保留原绑定并返回错误，不静默覆盖身份冲突
+/// 材料。批量收敛只写一次索引，不逐节点重复读写全量索引。
 pub fn ensure_library_index(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
     let initialized = library_entries_dir(app_data_root).exists()
         || library_folders_dir(app_data_root).exists()
@@ -243,8 +246,14 @@ pub fn ensure_library_index(app_data_root: &Path) -> Result<StarMapLibraryIndex>
         return migrate_library(app_data_root);
     }
     let index = load_library_index(app_data_root)?;
-    if !reference_index_abs_path(app_data_root).exists() {
-        rebuild_reference_index(app_data_root)?;
+    let reconciliation = reconcile_reference_index(app_data_root)?;
+    if let Some(conflict) = reconciliation.conflicts.first() {
+        return Err(Error::Other(format!(
+            "starmap reference index conflict: {} binding(s) disagree with confirmed node \
+             instances; first: {}; preserve existing references and node bytes",
+            reconciliation.conflicts.len(),
+            conflict.describe()
+        )));
     }
     Ok(index)
 }
@@ -437,6 +446,9 @@ fn asset_key(target: &StarMapAssetRef) -> String {
 }
 
 fn push_reference(index: &mut StarMapReferenceIndex, instance: &StarMapNodeInstance) {
+    if instance.asset_id.trim().is_empty() || instance.instance_id.is_empty() {
+        return;
+    }
     if index.nodes.iter().any(|record| {
         record.starmap_id == instance.starmap_id && record.instance_id == instance.instance_id
     }) {
@@ -464,47 +476,273 @@ fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// 从全部画布的实例文件重建反向引用索引。位置不进入索引。
-pub fn rebuild_reference_index(app_data_root: &Path) -> Result<StarMapReferenceIndex> {
-    let starmaps_dir = app_data_root.join("starmaps");
-    let mut refs = StarMapReferenceIndex::default();
-    if !starmaps_dir.exists() {
-        save_reference_index(app_data_root, &refs)?;
-        return Ok(refs);
+/// 一次反向引用索引收敛的统计。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct ReferenceIndexReconciliation {
+    /// 从已确认画布实例补回的缺失引用数。
+    pub added: usize,
+    /// 按实例事实补齐 `projectId` 的记录数。
+    pub updated: usize,
+    /// 既有绑定与实例资产身份冲突、为保留材料而未覆盖的记录。
+    pub conflicts: Vec<ReferenceIndexConflict>,
+}
+
+impl ReferenceIndexReconciliation {
+    fn is_empty(&self) -> bool {
+        self.added == 0 && self.updated == 0
     }
-    let mut starmaps = Vec::new();
+}
+
+/// 反向引用索引与已确认实例的资产身份冲突。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReferenceIndexConflict {
+    pub starmap_id: String,
+    pub instance_id: String,
+    /// 画布实例文件里的资产身份（事实）。
+    pub instance_asset_id: String,
+    /// `references.json` 既有记录里的资产身份（保留不覆盖）。
+    pub reference_asset_id: String,
+}
+
+impl ReferenceIndexConflict {
+    fn describe(&self) -> String {
+        format!(
+            "starmap_id={} instance_id={} instance_asset_id={} reference_asset_id={}",
+            self.starmap_id, self.instance_id, self.instance_asset_id, self.reference_asset_id
+        )
+    }
+}
+
+/// 扫描全部画布实例文件，返回可确认的实例事实。
+///
+/// 已确认 = 文件名与 `instanceId` 一致、`starmapId` 与所在画布一致（旧端缺
+/// `starmapId` 时按所在画布补全）、`assetId` 非空。旧格式完整节点、损坏文件
+/// 都不是已确认实例，不参与派生视图，也不据此删除既有引用材料。
+fn confirmed_node_instances(app_data_root: &Path) -> Result<Vec<StarMapNodeInstance>> {
+    let starmaps_dir = app_data_root.join("starmaps");
+    let mut instances = Vec::new();
+    if !starmaps_dir.exists() {
+        return Ok(instances);
+    }
+    let mut starmap_ids = Vec::new();
     for entry in fs::read_dir(&starmaps_dir)? {
         let entry = entry?;
         let path = entry.path();
         if !path.is_dir() {
             continue;
         }
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
         if name == "library" {
             continue;
         }
-        starmaps.push(name.to_string());
+        starmap_ids.push(name.to_string());
     }
-    for starmap_id in starmaps {
+    starmap_ids.sort();
+    for starmap_id in starmap_ids {
         let nodes_dir = starmaps_dir.join(&starmap_id).join("nodes");
         let mut node_paths = Vec::new();
         collect_json_files(&nodes_dir, &mut node_paths);
+        node_paths.sort();
         for node_path in node_paths {
             let Ok(content) = fs::read_to_string(&node_path) else {
                 continue;
             };
-            let Ok(instance) = serde_json::from_str::<StarMapNodeInstance>(&content) else {
+            let Ok(mut instance) = serde_json::from_str::<StarMapNodeInstance>(&content) else {
                 continue;
             };
-            if instance.starmap_id == starmap_id {
-                push_reference(&mut refs, &instance);
+            let Some(file_stem) = node_path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if instance.instance_id != file_stem {
+                continue;
             }
+            if instance.starmap_id.is_empty() {
+                instance.starmap_id = starmap_id.clone();
+            } else if instance.starmap_id != starmap_id {
+                continue;
+            }
+            if instance.asset_id.trim().is_empty() {
+                continue;
+            }
+            instances.push(instance);
         }
     }
-    refs.nodes
-        .sort_by(|a, b| (&a.starmap_id, &a.instance_id).cmp(&(&b.starmap_id, &b.instance_id)));
+    Ok(instances)
+}
+
+/// 按已确认实例事实生成一份完整的派生索引（不写盘）。
+fn derive_reference_index_from_instances(app_data_root: &Path) -> Result<StarMapReferenceIndex> {
+    let mut refs = StarMapReferenceIndex::default();
+    for instance in confirmed_node_instances(app_data_root)? {
+        push_reference(&mut refs, &instance);
+    }
+    sort_references(&mut refs.nodes);
+    Ok(refs)
+}
+
+fn sort_references(nodes: &mut [StarMapNodeReference]) {
+    nodes.sort_by(|left, right| {
+        (&left.starmap_id, &left.instance_id).cmp(&(&right.starmap_id, &right.instance_id))
+    });
+}
+
+/// 读取反向索引供收敛比较；文件缺失或损坏时返回 `None`（按实例事实重建），
+/// 版本不支持仍然 fail-closed。
+fn load_reference_index_for_reconcile(
+    app_data_root: &Path,
+) -> Result<Option<StarMapReferenceIndex>> {
+    let path = reference_index_abs_path(app_data_root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    match load_reference_index(app_data_root) {
+        Ok(index) => Ok(Some(index)),
+        Err(Error::UnsupportedVersion { version }) => Err(Error::UnsupportedVersion { version }),
+        Err(error) => {
+            log::warn!(
+                "starmap reference index unreadable at {}, rebuilding from confirmed instances: {error}",
+                path.display()
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// 读取反向索引供写入合并；文件缺失视为空索引，损坏时从已确认实例重建
+/// （不写盘，由调用方合并后一次写入）。
+fn load_reference_index_for_update(app_data_root: &Path) -> Result<StarMapReferenceIndex> {
+    match load_reference_index(app_data_root) {
+        Ok(index) => Ok(index),
+        Err(Error::UnsupportedVersion { version }) => Err(Error::UnsupportedVersion { version }),
+        Err(error) => {
+            log::warn!(
+                "starmap reference index unreadable at {}, rebuilding from confirmed instances: {error}",
+                reference_index_abs_path(app_data_root).display()
+            );
+            derive_reference_index_from_instances(app_data_root)
+        }
+    }
+}
+
+/// 加载反向引用索引；整体缺失或损坏时按已确认实例批量重建一次。
+///
+/// 正常加载只需要补自己缺的那一条；但整个派生索引不可用时必须批量恢复，
+/// 否则逐节点补写会反复重写全量索引。
+pub(crate) fn load_or_rebuild_reference_index(
+    app_data_root: &Path,
+) -> Result<StarMapReferenceIndex> {
+    let path = reference_index_abs_path(app_data_root);
+    if !path.exists() {
+        return rebuild_reference_index(app_data_root);
+    }
+    match load_reference_index(app_data_root) {
+        Ok(index) => Ok(index),
+        Err(Error::UnsupportedVersion { version }) => Err(Error::UnsupportedVersion { version }),
+        Err(error) => {
+            log::warn!(
+                "starmap reference index unreadable at {}, rebuilding from confirmed instances: {error}",
+                path.display()
+            );
+            rebuild_reference_index(app_data_root)
+        }
+    }
+}
+
+/// 从已确认画布实例收敛反向引用索引（派生视图），一次写盘。
+///
+/// - 索引缺失/损坏：按实例事实重建后写回（即使为空也保持文件存在）；
+/// - 索引存在但缺项：只补缺失记录；
+/// - 记录与实例资产一致、`projectId` 落后：按实例事实补齐（实例是归属事实，
+///   索引已有归属不会被实例的空值抹掉）；
+/// - 记录与实例资产冲突：保留既有绑定不覆盖，冲突通过返回值交给调用方；
+/// - 已确认实例覆盖不到的既有记录保留：`record_node_reference` 先于实例
+///   文件落盘，记录可能存在而文件尚未写入，不能据此删除派生材料。
+///
+/// 有冲突时不写盘：既有绑定和实例字节都保持原样。
+pub(crate) fn reconcile_reference_index(
+    app_data_root: &Path,
+) -> Result<ReferenceIndexReconciliation> {
+    let mut facts: std::collections::HashMap<(String, String), StarMapNodeReference> =
+        std::collections::HashMap::new();
+    for instance in confirmed_node_instances(app_data_root)? {
+        facts
+            .entry((instance.starmap_id.clone(), instance.instance_id.clone()))
+            .or_insert_with(|| StarMapNodeReference {
+                asset_id: instance.asset_id.clone(),
+                starmap_id: instance.starmap_id.clone(),
+                instance_id: instance.instance_id.clone(),
+                project_id: instance.project_id.clone(),
+            });
+    }
+
+    let existing = load_reference_index_for_reconcile(app_data_root)?;
+    let force_write = existing.is_none();
+    let existing_records = existing.map(|index| index.nodes).unwrap_or_default();
+
+    let mut reconciliation = ReferenceIndexReconciliation::default();
+    let mut merged: Vec<StarMapNodeReference> = Vec::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    for record in &existing_records {
+        let key = (record.starmap_id.clone(), record.instance_id.clone());
+        if !seen.insert(key.clone()) {
+            // 派生视图不保存重复绑定；既有文件里的重复项按坏数据收敛掉。
+            reconciliation.updated += 1;
+            continue;
+        }
+        let Some(fact) = facts.get(&key) else {
+            merged.push(record.clone());
+            continue;
+        };
+        if record.asset_id != fact.asset_id {
+            reconciliation.conflicts.push(ReferenceIndexConflict {
+                starmap_id: record.starmap_id.clone(),
+                instance_id: record.instance_id.clone(),
+                instance_asset_id: fact.asset_id.clone(),
+                reference_asset_id: record.asset_id.clone(),
+            });
+            continue;
+        }
+        let mut record = record.clone();
+        let next_project_id = fact
+            .project_id
+            .clone()
+            .or_else(|| record.project_id.clone());
+        if record.project_id != next_project_id {
+            record.project_id = next_project_id;
+            reconciliation.updated += 1;
+        }
+        merged.push(record);
+    }
+    for (key, fact) in &facts {
+        if seen.contains(key) {
+            continue;
+        }
+        merged.push(fact.clone());
+        reconciliation.added += 1;
+    }
+
+    if reconciliation.conflicts.is_empty() && (force_write || !reconciliation.is_empty()) {
+        sort_references(&mut merged);
+        let refs = StarMapReferenceIndex {
+            schema_version: CURRENT_LIBRARY_SCHEMA_VERSION,
+            nodes: merged,
+            updated_at: crate::starmap::now_epoch(),
+        };
+        save_reference_index(app_data_root, &refs)?;
+    }
+    Ok(reconciliation)
+}
+
+/// 从全部画布的实例文件重建反向引用索引。位置不进入索引。
+///
+/// 这是显式恢复入口：调用方已判定派生索引不可信（整体缺失、损坏、同步落盘
+/// 后），以实例文件事实为准整体重写。正常加载的缺项补写与冲突保留走
+/// [`reconcile_reference_index`]。
+pub fn rebuild_reference_index(app_data_root: &Path) -> Result<StarMapReferenceIndex> {
+    let mut refs = derive_reference_index_from_instances(app_data_root)?;
+    refs.updated_at = crate::starmap::now_epoch();
     save_reference_index(app_data_root, &refs)?;
     Ok(refs)
 }
@@ -811,6 +1049,13 @@ pub fn assign_entry_scope(
     Ok(entry)
 }
 
+/// 登记一条画布实例到共享本体的反向引用。
+///
+/// - 缺失 → 追加；
+/// - 已存在且 `assetId` 相同 → 只补齐 `projectId`（实例是归属事实；索引里
+///   已有的项目归属不会被空值抹掉）；
+/// - 已存在但指向另一个 `assetId` → 返回错误，保留既有绑定材料，绝不静默
+///   改写身份。
 pub fn record_node_reference(
     app_data_root: &Path,
     starmap_id: &str,
@@ -818,7 +1063,7 @@ pub fn record_node_reference(
     instance_id: &str,
     asset_id: &str,
 ) -> Result<()> {
-    let mut refs = load_reference_index(app_data_root)?;
+    let mut refs = load_reference_index_for_update(app_data_root)?;
     let project_id = project_id.map(ToString::to_string);
     let mut changed = false;
     if let Some(record) = refs
@@ -826,9 +1071,20 @@ pub fn record_node_reference(
         .iter_mut()
         .find(|record| record.starmap_id == starmap_id && record.instance_id == instance_id)
     {
-        if record.asset_id != asset_id || record.project_id != project_id {
-            record.asset_id = asset_id.to_string();
-            record.project_id = project_id;
+        if record.asset_id != asset_id {
+            return Err(Error::Other(format!(
+                "starmap node reference conflict: starmap_id={starmap_id} \
+                 instance_id={instance_id} existing_asset_id={} incoming_asset_id={asset_id}; \
+                 preserve existing reference",
+                record.asset_id
+            )));
+        }
+        let next_project_id = match project_id {
+            Some(project_id) => Some(project_id),
+            None => record.project_id.clone(),
+        };
+        if record.project_id != next_project_id {
+            record.project_id = next_project_id;
             changed = true;
         }
     } else {

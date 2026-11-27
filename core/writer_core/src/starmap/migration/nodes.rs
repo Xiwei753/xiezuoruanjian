@@ -58,7 +58,7 @@ use crate::starmap::semantic::{
 };
 use crate::starmap::types::{
     StarMapNode, StarMapNodeDefinition, StarMapNodeInstance, StarMapNodeKind, StarMapNodeReference,
-    StarMapNodeStyle,
+    StarMapNodeStyle, StarMapReferenceIndex,
 };
 
 /// 旧节点文件里尚未迁移的标签字段名（Issue #1060 已迁到 annotations 关系仓库）。
@@ -84,6 +84,22 @@ impl NodeObjectPlan {
     }
 }
 
+/// `references.json` 对某个实例反向绑定的状态。
+///
+/// `assetId` 是身份事实：不一致是身份冲突。`projectId` 是实例归属的派生
+/// 字段：实例有新值时只是索引待补齐，不当作冲突。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReferenceBindingState {
+    /// 索引里没有该 `(starmap_id, instance_id)` 记录（派生索引待修复）。
+    Missing,
+    /// 记录存在且资产一致，但 `projectId` 与实例不一致（派生字段待补齐）。
+    ProjectStale,
+    /// 记录存在且与实例完整一致。
+    Consistent,
+    /// 同一实例在索引里绑定到了另一个资产身份。
+    Conflict { reference_asset_id: String },
+}
+
 /// 解码时可用的素材库视图。
 ///
 /// 正常加载路径只依赖 `app_data_root`；同步合并需要把 base/staging 里的
@@ -101,21 +117,66 @@ impl NodeObjectBindings {
         Self::default()
     }
 
+    /// 从已读出的反向索引构造视图。
+    pub(crate) fn from_reference_index(index: StarMapReferenceIndex) -> Self {
+        let mut bindings = Self::new();
+        for record in index.nodes {
+            bindings.remember_reference(record);
+        }
+        bindings
+    }
+
     /// 从 `starmaps/library/references.json` 载入实例反向绑定。
     ///
     /// 文件不存在视为空索引；索引损坏/版本不支持返回 `Err`（身份不可靠时
     /// 不静默猜测）。`references.json` 是派生缓存，但它是"已有实例绑定"
     /// 这条身份解析规则的唯一事实来源。
     pub(crate) fn load_reference_bindings(app_data_root: &Path) -> Result<Self> {
-        let index = crate::starmap::library::load_reference_index(app_data_root)?;
-        let mut bindings = Self::new();
-        for record in index.nodes {
-            bindings.instance_references.insert(
-                (record.starmap_id.clone(), record.instance_id.clone()),
-                record,
-            );
+        Ok(Self::from_reference_index(
+            crate::starmap::library::load_reference_index(app_data_root)?,
+        ))
+    }
+
+    /// 记入一条已确认的实例反向绑定，保持本次加载内的视图与磁盘一致。
+    pub(crate) fn remember_reference(&mut self, reference: StarMapNodeReference) {
+        self.instance_references.insert(
+            (reference.starmap_id.clone(), reference.instance_id.clone()),
+            reference,
+        );
+    }
+
+    /// 检查实例与 `references.json` 的绑定是否完整一致。
+    ///
+    /// 缺失/`projectId` 落后是派生索引待修复；资产身份不同是身份冲突，
+    /// 调用方必须保留原始材料，不能静默覆盖既有绑定。
+    pub(crate) fn reference_binding_state(
+        &self,
+        instance: &StarMapNodeInstance,
+    ) -> ReferenceBindingState {
+        let Some(reference) = self
+            .instance_references
+            .get(&(instance.starmap_id.clone(), instance.instance_id.clone()))
+        else {
+            return ReferenceBindingState::Missing;
+        };
+        if reference.asset_id != instance.asset_id {
+            return ReferenceBindingState::Conflict {
+                reference_asset_id: reference.asset_id.clone(),
+            };
         }
-        Ok(bindings)
+        let project_stale = match (&reference.project_id, &instance.project_id) {
+            (Some(reference_project), Some(instance_project)) => {
+                reference_project != instance_project
+            }
+            // 实例没有项目归属时，索引里的归属是唯一来源，必须保留。
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        if project_stale {
+            ReferenceBindingState::ProjectStale
+        } else {
+            ReferenceBindingState::Consistent
+        }
     }
 
     /// 增加一个额外本体根目录（如 full-sync 的 staging/base 根）。
@@ -136,15 +197,12 @@ impl NodeObjectBindings {
         asset_id: &str,
         project_id: Option<&str>,
     ) {
-        self.instance_references.insert(
-            (starmap_id.to_string(), instance_id.to_string()),
-            StarMapNodeReference {
-                asset_id: asset_id.to_string(),
-                starmap_id: starmap_id.to_string(),
-                instance_id: instance_id.to_string(),
-                project_id: project_id.map(str::to_string),
-            },
-        );
+        self.remember_reference(StarMapNodeReference {
+            asset_id: asset_id.to_string(),
+            starmap_id: starmap_id.to_string(),
+            instance_id: instance_id.to_string(),
+            project_id: project_id.map(str::to_string),
+        });
     }
 
     fn instance_asset(&self, starmap_id: &str, instance_id: &str) -> Option<&str> {
@@ -644,6 +702,11 @@ pub(crate) fn placeholder_definition(instance: &StarMapNodeInstance) -> StarMapN
 ///
 /// 幂等：已存在同内容本体/实例时重复调用不改变结果。任何一步失败都返回
 /// `Err`，调用方不得宣告迁移成功（原始字节仍在磁盘上，可安全重试）。
+///
+/// 成功返回的含义包含 `references.json` 已同步完成：
+/// [`crate::starmap::library::record_node_reference`] 幂等补齐缺失项，
+/// 既有绑定指向别的资产身份时返回错误而不是覆盖。因此调用方不能因为实例
+/// 文件已经是合法新格式就跳过本函数——崩溃重入必须靠实例事实补齐派生索引。
 pub(crate) fn persist_node_object_plan(
     app_data_root: &Path,
     starmap_id: &str,

@@ -3,3 +3,6 @@ mod full;
 mod lazy;
 pub(in crate::starmap) mod phased;
 mod try_load;
+
+#[cfg(test)]
+mod try_load_tests;
