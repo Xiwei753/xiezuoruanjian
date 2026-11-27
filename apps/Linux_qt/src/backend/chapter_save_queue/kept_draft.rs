@@ -65,6 +65,34 @@ impl RestoreCounters {
         disposition: KeptDisposition,
     ) {
         let chapter_draft = crate::backend::chapter_draft;
+        // Issue #1062 评论 #7210360212 第 2 项：先写“是否要自动重试”的意图，
+        // 再让 quarantine 把意图与草稿原件一起 rename；外部索引在 rename 之后
+        // 才写，崩溃也不会丢掉自动恢复引用。人工归档前先清掉遗留意图。
+        match &disposition {
+            KeptDisposition::Archive => {
+                if let Err(error) =
+                    chapter_draft::clear_retry_intent(projects_root, project_id, chapter_id)
+                {
+                    self.note(chapter_id, format!("clear retry intent failed: {error}"));
+                }
+            }
+            KeptDisposition::Retry {
+                volume_id,
+                reason,
+                attempts,
+            } => {
+                if let Err(error) = chapter_draft::write_retry_intent(
+                    projects_root,
+                    project_id,
+                    chapter_id,
+                    volume_id,
+                    reason,
+                    *attempts,
+                ) {
+                    self.note(chapter_id, format!("write retry intent failed: {error}"));
+                }
+            }
+        }
         match chapter_draft::quarantine(projects_root, project_id, chapter_id) {
             Ok(Some(archived)) => {
                 if !self.kept_chapters.iter().any(|id| id == chapter_id) {

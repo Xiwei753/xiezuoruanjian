@@ -18,12 +18,19 @@
 // 可以同时挂起多份旧草稿（A、B…），每条标记绑定自己的 `archived_path`；
 // 登记/删除/搬回都只作用于该事务，绝不按 chapter_id 连带清理别的事务的标记。
 // 同章活动槽位一次只装入一份，其余归档等下一次进入再处理。
+//
+// Issue #1062 评论 #7210360212 第 2 项：重试意图先写进草稿目录自己的
+// `retry-intent.json`，再与草稿原件一起 rename 进归档区；外部
+// `chapter-draft-retry/<chapter>/<stamp>.json` 只是可用意图重建的索引。
+// 这样“归档完成、索引未写”之间崩溃也不会把待恢复事务变成仅人工归档。
 
 use std::path::{Path, PathBuf};
 
 use super::store::{self, DraftLocation};
 
 pub(super) const RETRY_DIR: &str = "chapter-draft-retry";
+/// 写在草稿目录内部、随目录一起 rename 的重试意图。
+pub(super) const RETRY_INTENT_FILE: &str = "retry-intent.json";
 const RETRY_SCHEMA_VERSION: u32 = 1;
 
 /// 一条可自动重试的事务标记。
@@ -59,7 +66,35 @@ impl Default for DraftRetryMarker {
 #[derive(Debug, Clone)]
 pub(crate) struct RetryCandidate {
     pub marker: DraftRetryMarker,
+    /// 指向这条候选的 durable 指针：索引 JSON 或归档目录里的意图文件。
     pub marker_path: PathBuf,
+    /// true 表示候选来自归档目录里的意图（索引缺失后重建）。
+    pub intent_backed: bool,
+}
+
+/// 归档目录内部的 retry-intent.json。
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", default)]
+struct RetryIntent {
+    schema_version: u32,
+    chapter_id: String,
+    volume_id: String,
+    reason: String,
+    attempts: u32,
+    updated_at_ms: i64,
+}
+
+impl Default for RetryIntent {
+    fn default() -> Self {
+        Self {
+            schema_version: RETRY_SCHEMA_VERSION,
+            chapter_id: String::new(),
+            volume_id: String::new(),
+            reason: String::new(),
+            attempts: 0,
+            updated_at_ms: 0,
+        }
+    }
 }
 
 pub(crate) fn retry_root(projects_root: &Path, project_id: &str) -> PathBuf {
@@ -75,6 +110,119 @@ pub(crate) fn retry_chapter_dir(
     chapter_id: &str,
 ) -> PathBuf {
     retry_root(projects_root, project_id).join(chapter_id)
+}
+
+/// 把重试意图写进活动草稿目录，随后 `quarantine` 会把它和草稿一起 rename。
+///
+/// Issue #1062 评论 #7210360212 第 2 项：必须在 rename 之前 durable 写出；
+/// 外部索引只是可重建的缓存。
+pub(crate) fn write_retry_intent(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+    volume_id: &str,
+    reason: &str,
+    previous_attempts: u32,
+) -> Result<(), String> {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+        return Err(format!(
+            "write retry intent: invalid identity project={project_id} chapter={chapter_id}"
+        ));
+    };
+    if !location.dir.is_dir() {
+        return Err(format!(
+            "write retry intent: draft dir missing for project={project_id} chapter={chapter_id}"
+        ));
+    }
+    let intent = RetryIntent {
+        schema_version: RETRY_SCHEMA_VERSION,
+        chapter_id: chapter_id.to_string(),
+        volume_id: volume_id.to_string(),
+        reason: reason.to_string(),
+        attempts: previous_attempts.saturating_add(1),
+        updated_at_ms: super::now_ms(),
+    };
+    let json = serde_json::to_string_pretty(&intent)
+        .map_err(|error| format!("encode retry intent: {error}"))?;
+    writer_core::storage::atomic_write_string(&location.dir.join(RETRY_INTENT_FILE), &json)
+        .map_err(|error| format!("write retry intent: {error}"))
+}
+
+/// 删除活动草稿目录里的重试意图（已改为人工归档或已成功恢复时）。
+pub(crate) fn clear_retry_intent(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> Result<(), String> {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+        return Ok(());
+    };
+    remove_marker(&location.dir.join(RETRY_INTENT_FILE))
+}
+
+fn read_intent(dir: &Path) -> Result<RetryIntent, String> {
+    let path = dir.join(RETRY_INTENT_FILE);
+    let content = std::fs::read_to_string(&path)
+        .map_err(|error| format!("read retry intent {}: {error}", path.display()))?;
+    serde_json::from_str(&content)
+        .map_err(|error| format!("retry intent corrupted (kept): {}: {error}", path.display()))
+}
+
+/// 从归档目录内部意图重建候选（外部索引缺失时的唯一恢复入口）。
+fn intent_candidates(projects_root: &Path, project_id: &str) -> Vec<RetryCandidate> {
+    let kept = super::store::kept_root(projects_root, project_id);
+    let Ok(chapters) = std::fs::read_dir(&kept) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for chapter in chapters.flatten() {
+        let chapter_id = chapter
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string);
+        let Some(chapter_id) = chapter_id else {
+            continue;
+        };
+        if !store::is_safe_id(&chapter_id) {
+            continue;
+        }
+        let Ok(stamps) = std::fs::read_dir(chapter.path()) else {
+            continue;
+        };
+        for stamp in stamps.flatten() {
+            let path = stamp.path();
+            if !path.is_dir() || !path.join(RETRY_INTENT_FILE).is_file() {
+                continue;
+            }
+            let intent = match read_intent(&path) {
+                Ok(intent) => intent,
+                Err(error) => {
+                    log::warn!("{error}");
+                    continue;
+                }
+            };
+            let stamp_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            candidates.push(RetryCandidate {
+                marker: DraftRetryMarker {
+                    schema_version: RETRY_SCHEMA_VERSION,
+                    chapter_id: chapter_id.clone(),
+                    volume_id: intent.volume_id,
+                    archived_path: path.to_string_lossy().into_owned(),
+                    stamp: stamp_name,
+                    reason: intent.reason,
+                    attempts: intent.attempts,
+                    updated_at_ms: intent.updated_at_ms,
+                },
+                marker_path: path.join(RETRY_INTENT_FILE),
+                intent_backed: true,
+            });
+        }
+    }
+    candidates
 }
 
 /// 登记一条可自动重试的事务：归档副本路径 + 原始失败原因。
@@ -139,6 +287,8 @@ pub(crate) fn list_retries(projects_root: &Path, project_id: &str) -> Vec<RetryC
         }
         candidates.extend(markers_in(&path));
     }
+    // 索引缺失（rename 后、写索引前崩溃）时，从归档目录内部意图重建队列。
+    candidates.extend(intent_candidates(projects_root, project_id));
     // 同一归档副本可能因崩溃留下同名的重复记录：按 archived_path 只保留最新
     // 一条，避免同一次重试被搬两遍。
     candidates.sort_by(|left, right| {
@@ -162,7 +312,13 @@ pub(crate) fn list_retries(projects_root: &Path, project_id: &str) -> Vec<RetryC
                 if last.marker.chapter_id == candidate.marker.chapter_id
                     && last.marker.archived_path == candidate.marker.archived_path =>
             {
-                *last = candidate;
+                // 同时间戳优先显式索引（含最新 attempts/reason）。
+                let newer = candidate.marker.updated_at_ms > last.marker.updated_at_ms
+                    || (candidate.marker.updated_at_ms == last.marker.updated_at_ms
+                        && !candidate.intent_backed);
+                if newer {
+                    *last = candidate;
+                }
             }
             _ => deduped.push(candidate),
         }
@@ -210,6 +366,7 @@ fn markers_in(dir: &Path) -> Vec<RetryCandidate> {
             Ok(marker) => candidates.push(RetryCandidate {
                 marker,
                 marker_path: path,
+                intent_backed: false,
             }),
             Err(error) => log::warn!("{error}"),
         }
@@ -304,8 +461,12 @@ pub(crate) fn materialize_retry_candidate(
             location.dir.display()
         )
     })?;
-    // 只删除被搬走的这一条事务标记；同章其它归档副本的标记原样保留。
-    remove_marker(&candidate.marker_path)?;
+    // 搬回成功：先清掉随目录搬进活动槽位的重试意图，再只删这一条事务的
+    // 外部索引；同章其它归档副本的标记原样保留。
+    remove_marker(&location.dir.join(RETRY_INTENT_FILE))?;
+    if !candidate.intent_backed {
+        remove_marker(&candidate.marker_path)?;
+    }
     remove_retry_chapter_dir_if_empty(projects_root, project_id, chapter_id);
     Ok(RetryMaterialize::Moved)
 }

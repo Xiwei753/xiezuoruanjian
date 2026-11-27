@@ -8,7 +8,7 @@
 // 副本的重试入口。
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::store::{self, DraftLocation};
 
@@ -76,4 +76,103 @@ pub(crate) fn draft_event_ownership(
     } else {
         DraftEventOwnership::Foreign
     })
+}
+
+/// 归档区某章的事件归属：返回拥有这些 event ID 的归档目录。
+///
+/// Issue #1062 评论 #7210360212 第 1 项：对账不能因为“同章还有别的归档事务”
+/// 就跳过这一章，必须按具体事务判定；只有事件明确属于仍在归档区的某份草稿
+/// 时才延后这一笔 Core ack。材料读坏返回 Err（调用方保留 journal）。
+pub(crate) fn archived_draft_ownership(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+    event_ids: &[String],
+) -> Result<Option<String>, String> {
+    if event_ids.is_empty() {
+        return Ok(None);
+    }
+    let mut unreadable: Option<String> = None;
+    for candidate in super::list_retries(projects_root, project_id) {
+        if candidate.marker.chapter_id != chapter_id {
+            continue;
+        }
+        let dir = PathBuf::from(&candidate.marker.archived_path);
+        match archived_known_event_ids(&dir, project_id, chapter_id) {
+            Ok(known) => {
+                if event_ids.iter().all(|id| known.contains(id.as_str())) {
+                    return Ok(Some(candidate.marker.archived_path));
+                }
+            }
+            Err(error) => {
+                unreadable.get_or_insert(error);
+            }
+        }
+    }
+    match unreadable {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
+}
+
+fn archived_known_event_ids(
+    dir: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> Result<HashSet<String>, String> {
+    let mut known: HashSet<String> = HashSet::new();
+    match store::read_meta_checked(dir, project_id, chapter_id) {
+        Ok(meta) => {
+            for fact in &meta.facts {
+                known.insert(fact.event_id.clone());
+            }
+            known.extend(meta.acked_event_ids.iter().cloned());
+        }
+        Err(error) if error.is_empty() => {}
+        Err(error) => {
+            return Err(format!(
+                "read archived draft meta {}: {error}",
+                dir.display()
+            ))
+        }
+    }
+    for (_, path) in store::list_fact_files(dir)? {
+        known.insert(store::read_fact_file(&path)?.event_id);
+    }
+    known.extend(archived_pending_event_ids(dir)?);
+    Ok(known)
+}
+
+/// 归档目录里 spool 的原始事件 ID（尚未转换成事实的编辑事实）。
+fn archived_pending_event_ids(dir: &Path) -> Result<Vec<String>, String> {
+    let pending = dir.join(super::PENDING_INPUTS_DIR);
+    let entries = match std::fs::read_dir(&pending) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!(
+                "read archived pending inputs {}: {error}",
+                pending.display()
+            ))
+        }
+    };
+    let mut ids = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path)
+            .map_err(|error| format!("read archived pending input {}: {error}", path.display()))?;
+        let value: serde_json::Value = serde_json::from_str(&content).map_err(|error| {
+            format!(
+                "archived pending input corrupted (kept): {}: {error}",
+                path.display()
+            )
+        })?;
+        if let Some(event_id) = value.get("eventId").and_then(|value| value.as_str()) {
+            ids.push(event_id.to_string());
+        }
+    }
+    Ok(ids)
 }

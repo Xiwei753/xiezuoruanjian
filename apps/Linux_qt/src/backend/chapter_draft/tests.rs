@@ -1482,6 +1482,63 @@ mod ack_strictness_tests {
     }
 
     #[test]
+    fn retry_intent_rebuilds_queue_when_external_index_missing() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("fact");
+        persist_current(root, "p1", "c1", true).expect("persist");
+        // 意图先写进草稿目录，再与草稿一起 rename 归档；外部索引故意不写，
+        // 模拟“rename 完成、写索引前崩溃”。
+        write_retry_intent(root, "p1", "c1", "v1", "unit retry", 0).expect("intent");
+        let archived = quarantine(root, "p1", "c1")
+            .expect("quarantine")
+            .expect("archived");
+        let listed = list_retries(root, "p1");
+        assert_eq!(listed.len(), 1);
+        assert!(
+            listed[0].intent_backed,
+            "queue rebuilt from archived intent"
+        );
+        assert_eq!(
+            materialize_retry(root, "p1", "c1").expect("materialize"),
+            RetryMaterialize::Moved
+        );
+        assert!(
+            draft_location(root).dir.is_dir(),
+            "retried draft active again"
+        );
+        assert!(
+            !draft_location(root).dir.join("retry-intent.json").exists(),
+            "intent cleared after successful move"
+        );
+        assert!(list_retries(root, "p1").is_empty());
+        assert!(
+            !archived.exists(),
+            "archived copy moved back to active slot"
+        );
+    }
+
+    #[test]
+    fn archived_ownership_matches_only_owning_transaction() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        note_fact(root, "p1", "c1", "v1", 7, "g1", fact("e1", 1, 7)).expect("fact");
+        persist_current(root, "p1", "c1", true).expect("persist");
+        let archived = quarantine(root, "p1", "c1")
+            .expect("quarantine")
+            .expect("archived");
+        record_retry(root, "p1", "c1", "v1", &archived, "unit", 0).expect("retry");
+        assert_eq!(
+            archived_draft_ownership(root, "p1", "c1", &["e1".to_string()]).expect("owner"),
+            Some(archived.to_string_lossy().into_owned())
+        );
+        assert_eq!(
+            archived_draft_ownership(root, "p1", "c1", &["other".to_string()]).expect("owner"),
+            None
+        );
+    }
+
+    #[test]
     fn ack_only_slot_is_not_collected_by_materialize() {
         let workspace = temp_workspace();
         let root = workspace.path();

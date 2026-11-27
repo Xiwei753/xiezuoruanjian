@@ -129,28 +129,14 @@ pub(super) fn reconcile_core_acks(
     // 有 ack 写盘失败或重放失败的章节：整章不再 replay/放行，避免只结算
     // 一部分就进入保存。
     let mut blocked: BTreeSet<String> = BTreeSet::new();
-    // Issue #1062 评论 #7209683560 第 1 项：有延后重试副本的章节还没有回到
-    // 活动槽位，对账不得在新槽位写 ack，也不得提前确认 Core；等下一次入口
-    // materialize 成功后再处理。
-    let deferred_retry: BTreeSet<String> = chapter_draft::retry_chapters(root, project_id)
-        .into_iter()
-        .collect();
+    // Issue #1062 评论 #7210360212 第 1 项：不能按章阻断——同章可以同时有
+    // 已搬回活动的 A 与仍在归档区的 B。每笔 ack 都按自己的事件归属判定：
+    // 活动草稿 Owns 就应用；只有明确属于归档事务时才延后这一笔。
     for ack in acks {
         if let Some(filter) = chapter_id {
             if ack.chapter_id != filter {
                 continue;
             }
-        }
-        if deferred_retry.contains(&ack.chapter_id) {
-            // 旧事务还在归档区等 materialize；Core journal 保留，下一轮入口
-            // 再应用。不能在这里写本地 ack，也不能阻塞当前编辑。
-            outcome.skipped.push(ReconcileFailure {
-                transaction_id: ack.transaction_id.clone(),
-                volume_id: ack.volume_id.clone(),
-                chapter_id: ack.chapter_id.clone(),
-                reason: "chapter has deferred retry draft (kept)".to_string(),
-            });
-            continue;
         }
         // Issue #1062 评论 #7209683560 第 1 项：ack 必须属于当前活动草稿。
         // 本地完全没有草稿时直接确认 Core（事务已 durable，本地无可应用
@@ -164,6 +150,37 @@ pub(super) fn reconcile_core_acks(
         ) {
             Ok(chapter_draft::DraftEventOwnership::Owns) => {}
             Ok(chapter_draft::DraftEventOwnership::NoDraft) => {
+                // 活动槽位没有草稿：只有当这些事件也不属于任何归档事务时才
+                // 可直接确认 Core；属于归档副本的 ack 必须等它 materialize。
+                match chapter_draft::archived_draft_ownership(
+                    root,
+                    project_id,
+                    &ack.chapter_id,
+                    &ack.event_ids,
+                ) {
+                    Ok(Some(archived)) => {
+                        outcome.skipped.push(ReconcileFailure {
+                            transaction_id: ack.transaction_id.clone(),
+                            volume_id: ack.volume_id.clone(),
+                            chapter_id: ack.chapter_id.clone(),
+                            reason: format!(
+                                "ack belongs to archived retry draft (kept): {archived}"
+                            ),
+                        });
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        // 归属未知/材料损坏：保留 Core journal，等修复后再判定。
+                        outcome.skipped.push(ReconcileFailure {
+                            transaction_id: ack.transaction_id.clone(),
+                            volume_id: ack.volume_id.clone(),
+                            chapter_id: ack.chapter_id.clone(),
+                            reason: format!("archived draft ownership unreadable (kept): {error}"),
+                        });
+                        continue;
+                    }
+                }
                 match acknowledge_one(api, project_id, &ack.transaction_id, &ack.event_ids) {
                     Ok(()) => {
                         // 本地没有草稿可应用：Core 已确认，顺手回收可能残留
@@ -189,13 +206,30 @@ pub(super) fn reconcile_core_acks(
                 continue;
             }
             Ok(chapter_draft::DraftEventOwnership::Foreign) => {
-                // 活动草稿属于别的会话/事务；把旧 ack 应用到这里会改坏新
-                // 基线。Core journal 保留，不写本地 ack、不阻塞当前编辑。
+                // 活动草稿属于别的会话/事务；把旧 ack 应用到这里会改坏新基线。
+                // 只有明确属于归档事务时才可解释为“等恢复”；否则归属未知，
+                // 一律保留 journal。
+                let reason = match chapter_draft::archived_draft_ownership(
+                    root,
+                    project_id,
+                    &ack.chapter_id,
+                    &ack.event_ids,
+                ) {
+                    Ok(Some(archived)) => {
+                        format!("ack belongs to archived retry draft (kept): {archived}")
+                    }
+                    Ok(None) => {
+                        "ack event ids are not owned by active or archived draft (kept)".to_string()
+                    }
+                    Err(error) => {
+                        format!("archived draft ownership unreadable (kept): {error}")
+                    }
+                };
                 outcome.skipped.push(ReconcileFailure {
                     transaction_id: ack.transaction_id.clone(),
                     volume_id: ack.volume_id.clone(),
                     chapter_id: ack.chapter_id.clone(),
-                    reason: "ack event ids are not owned by current local draft (kept)".to_string(),
+                    reason,
                 });
                 continue;
             }

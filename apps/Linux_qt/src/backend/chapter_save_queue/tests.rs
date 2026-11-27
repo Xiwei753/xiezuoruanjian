@@ -1121,6 +1121,48 @@ mod restore_isolation_tests {
         );
     }
 
+    /// 评论 #7210360212 第 2 项：重试意图先写进草稿目录再 rename；外部索引
+    /// 丢失（rename 后崩溃）也能从归档目录里的意图重建并继续自动重试。
+    #[test]
+    fn retry_intent_survives_missing_external_index() {
+        let (temp, _api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        write_verified_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            "待自动重试正文",
+        );
+        let mut counters = super::super::kept_draft::RestoreCounters::default();
+        counters.keep(
+            &projects_root,
+            &project_id,
+            &chapter_id,
+            super::super::kept_draft::KeptDisposition::Retry {
+                volume_id: volume_id.clone(),
+                reason: "unit retry".to_string(),
+                attempts: 0,
+            },
+        );
+        assert!(!draft_dir(&projects_root, &project_id, &chapter_id).exists());
+        // 模拟崩溃窗口：删掉外部索引，只留归档目录内部的 retry-intent.json。
+        for candidate in chapter_draft::list_retries(&projects_root, &project_id) {
+            assert!(!candidate.intent_backed, "index written in normal path");
+            chapter_draft::remove_marker(&candidate.marker_path).unwrap();
+        }
+        let rebuilt = chapter_draft::list_retries(&projects_root, &project_id);
+        assert_eq!(rebuilt.len(), 1, "intent rebuilds the retry queue");
+        assert!(rebuilt[0].intent_backed);
+
+        assert_eq!(
+            chapter_draft::materialize_retry(&projects_root, &project_id, &chapter_id).unwrap(),
+            chapter_draft::RetryMaterialize::Moved
+        );
+        assert!(draft_dir(&projects_root, &project_id, &chapter_id).exists());
+        assert!(chapter_draft::retry_chapters(&projects_root, &project_id).is_empty());
+    }
+
     /// 评论 #7210163429 第 1 项：新草稿 B 结算成功，不能连带删除旧草稿 A 的
     /// 重试标记；下一次进入项目仍应从 A 的标记 materialize。
     #[test]
