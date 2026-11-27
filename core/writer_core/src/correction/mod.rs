@@ -35,8 +35,24 @@ pub(crate) fn retry_pending_publications(
     app_data_root: &Path,
     projects_root: &Path,
 ) -> Result<usize, WriterError> {
-    publication::retry_all_pending(app_data_root, projects_root)
-        .map_err(WriterError::from)
+    let mut settled = 0usize;
+    let mut disk_error: Option<crate::Error> = None;
+    match publication::retry_all_pending(app_data_root, projects_root) {
+        Ok(count) => settled = settled.saturating_add(count),
+        Err(error) => disk_error = Some(error),
+    }
+    // 首次 pending 写盘失败只留在内存；同步入口也要排空它，否则切章后
+    // 永远等不到同章 scanner/retry。
+    match CorrectionStore::open_with_projects_root(app_data_root, projects_root) {
+        Ok(store) => settled = settled.saturating_add(store.retry_memory_publications()),
+        Err(error) => log::warn!(
+            "[correction] open store for memory publication retry failed: {error}"
+        ),
+    }
+    match disk_error {
+        Some(error) => Err(WriterError::from(error)),
+        None => Ok(settled),
+    }
 }
 
 pub(crate) use engine::CorrectionScanner;
@@ -1406,6 +1422,32 @@ impl CorrectionStore {
                 false
             }
         }
+    }
+
+    /// 排空本 workspace 内首次 durable 写失败留下的内存待办。
+    ///
+    /// 逐个章节调用既有 [`Self::retry_publications`]：它按精确 record_key
+    /// 写入独立 pending 文件并只删除成功的 key；失败时内存待办会放回，
+    /// 因此这里重复执行是幂等的，也不会重新加载模型。
+    pub(crate) fn retry_memory_publications(&self) -> usize {
+        let keys = match self.inner.pending_publications.lock() {
+            Ok(memory) => memory.keys().cloned().collect::<Vec<_>>(),
+            Err(_) => return 0,
+        };
+        let mut settled = 0usize;
+        for (project_id, chapter_id) in keys {
+            self.retry_publications(&project_id, &chapter_id);
+            let still_pending = self
+                .inner
+                .pending_publications
+                .lock()
+                .map(|memory| memory.contains_key(&(project_id, chapter_id)))
+                .unwrap_or(true);
+            if !still_pending {
+                settled = settled.saturating_add(1);
+            }
+        }
+        settled
     }
 
     fn update_preferences<F, R>(&self, update: F) -> Result<R, WriterError>

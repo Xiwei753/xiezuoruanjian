@@ -138,6 +138,49 @@ fn lock_slot(
         .map_err(|_| WriterError::Other("correction result cache lock poisoned".into()))
 }
 
+/// 一次扫描从模型执行一直到 pending durable / checked 投影终态都持有
+/// `scanning` 所有权。释放 slot 锁写待发布文件时仍保留 lease，其它扫描在
+/// condvar 上等待；所有成功、失败、stale 出口都统一释放并唤醒。
+struct ScanLease<'a> {
+    slot: &'a ChapterCorrectionSlot,
+    active: bool,
+}
+
+impl<'a> ScanLease<'a> {
+    fn new(slot: &'a ChapterCorrectionSlot) -> Self {
+        Self { slot, active: true }
+    }
+
+    fn release(&mut self, guard: &mut ChapterCorrectionCacheState) {
+        if !self.active {
+            return;
+        }
+        guard.scanning = false;
+        self.slot.condvar.notify_all();
+        self.active = false;
+    }
+
+    fn finish(&mut self) -> Result<(), WriterError> {
+        if !self.active {
+            return Ok(());
+        }
+        let mut guard = lock_slot(self.slot)?;
+        self.release(&mut guard);
+        Ok(())
+    }
+}
+
+impl Drop for ScanLease<'_> {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        if let Ok(mut guard) = lock_slot(self.slot) {
+            self.release(&mut guard);
+        }
+    }
+}
+
 impl CorrectionScanner {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -500,6 +543,7 @@ impl CorrectionScanner {
         // chapter requests wait on the condvar; restore requests keep
         // reading the committed view.
         guard.scanning = true;
+        let mut scan_lease = ScanLease::new(&slot);
         let jobs = dirty
             .iter()
             .filter_map(|index| {
@@ -569,15 +613,15 @@ impl CorrectionScanner {
         }
 
         let mut guard = lock_slot(&slot)?;
-        guard.scanning = false;
-        slot.condvar.notify_all();
         if let Some(window_index) = aborted_at_window {
+            scan_lease.release(&mut guard);
             metrics.result = "stale";
             metrics.dirty_preserved_segments = dirty.len();
             metrics.aborted_at_window = window_index;
             return self.unfinished_snapshot();
         }
         if let Some(error) = scan_error {
+            scan_lease.release(&mut guard);
             metrics.dirty_preserved_segments = dirty.len();
             return Err(error);
         }
@@ -588,13 +632,17 @@ impl CorrectionScanner {
             || guard.last_revision != self.text_revision
             || guard.needs_reconcile
         {
+            scan_lease.release(&mut guard);
             metrics.result = "stale";
             return self.unfinished_snapshot();
         }
         // Never label old-engine results with a newer generation: if the
         // model, dictionary, or disabled-rule set changed while the scan ran,
         // discard these results and let the caller retry on a fresh scanner.
-        self.ensure_scanner_current()?;
+        if let Err(error) = self.ensure_scanner_current() {
+            scan_lease.release(&mut guard);
+            return Err(error);
+        }
         // 先冻结本次模型/规则结果，不提前修改 segment.checked：待发布事实
         // durable 之前缓存仍保持“未确认”，崩溃或写失败时不会伪装成已完成。
         let mut changed = false;
@@ -643,6 +691,7 @@ impl CorrectionScanner {
                 guard.save()?;
             }
             let snapshot = self.assemble_snapshot(&guard)?;
+            scan_lease.release(&mut guard);
             drop(guard);
             return Ok(snapshot);
         }
@@ -659,6 +708,7 @@ impl CorrectionScanner {
             );
             metrics.result = "publication-pending";
             metrics.dirty_preserved_segments = dirty.len();
+            let _ = scan_lease.finish();
             self.store.retry_publications(&self.project_id, &self.chapter_id);
             return self.unfinished_snapshot();
         }
@@ -669,6 +719,7 @@ impl CorrectionScanner {
             || guard.needs_reconcile
             || !scanner_current
         {
+            scan_lease.release(&mut guard);
             drop(guard);
             metrics.result = "stale";
             metrics.dirty_preserved_segments = dirty.len();
@@ -692,6 +743,7 @@ impl CorrectionScanner {
         guard.semantic_dirty = true;
         guard.save()?;
         let snapshot = self.assemble_snapshot(&guard)?;
+        scan_lease.release(&mut guard);
         drop(guard);
         self.store.retry_publications(&self.project_id, &self.chapter_id);
         Ok(snapshot)
