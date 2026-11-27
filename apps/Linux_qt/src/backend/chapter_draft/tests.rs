@@ -1700,6 +1700,55 @@ mod migration_and_ack_strictness_tests {
         );
         assert!(archived[0].join("pending-acks/tx-old.json").is_file());
         assert!(archived[0].join("facts/00000001-old.json").is_file());
+        // 归档必须带 durable 迁移冲突意图，恢复 actor 才能继续按事务重试。
+        let retries = list_retries(root, "p1");
+        assert_eq!(retries.len(), 1, "archived conflict must stay retriable");
+        assert!(retries[0].intent_backed);
+        assert!(
+            retries[0]
+                .marker
+                .reason
+                .contains("legacy_migration_conflict"),
+            "unexpected reason: {}",
+            retries[0].marker.reason
+        );
+        assert!(archived[0].join("retry-intent.json").is_file());
+    }
+
+    #[test]
+    fn legacy_invalid_fact_keeps_source_file() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let mut legacy = legacy_json("p1", "c1", "旧草稿正文");
+        legacy["facts"] = serde_json::json!([{
+            "eventId": "",
+            "revision": 5,
+            "projection": { "eventId": "" }
+        }]);
+        let legacy_path = write_legacy(root, &legacy);
+        let location = draft_location(root);
+        std::fs::create_dir_all(&location.dir).expect("active dir");
+
+        assert!(
+            super::super::store::migrate_legacy(&location).is_err(),
+            "转不出来的旧事实必须报错"
+        );
+        assert!(legacy_path.exists(), "原始单文件必须保留");
+    }
+
+    #[test]
+    fn legacy_projection_identity_mismatch_keeps_source_file() {
+        let workspace = temp_workspace();
+        let root = workspace.path();
+        let mut legacy = legacy_json("p1", "c1", "旧草稿正文");
+        legacy["facts"] = serde_json::json!([{
+            "eventId": "e1",
+            "revision": 5,
+            "projection": { "eventId": "other" }
+        }]);
+        let legacy_path = write_legacy(root, &legacy);
+        assert!(super::super::store::migrate_legacy(&draft_location(root)).is_err());
+        assert!(legacy_path.exists());
     }
 
     #[test]

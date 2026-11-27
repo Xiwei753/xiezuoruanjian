@@ -24,6 +24,11 @@ pub(super) fn migrate_legacy(location: &DraftLocation) -> Result<Option<DraftSta
         return Ok(None);
     };
     let (mut state, projections) = legacy_state(location, legacy);
+    let expected_event_ids: Vec<String> = state
+        .facts
+        .iter()
+        .map(|fact| fact.event_id.clone())
+        .collect();
     let staging = migration_staging_dir(location);
     if let Some(parent) = staging.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
@@ -86,6 +91,15 @@ pub(super) fn migrate_legacy(location: &DraftLocation) -> Result<Option<DraftSta
             location.project_id, location.chapter_id
         )
     })?;
+    // 只有全量事实都已 durable 且能被读回，才允许接下来删除旧单文件。
+    for event_id in &expected_event_ids {
+        if !state.facts.iter().any(|fact| &fact.event_id == event_id) {
+            return Err(format!(
+                "migrated chapter draft lost fact (kept): event={event_id} project={} chapter={}",
+                location.project_id, location.chapter_id
+            ));
+        }
+    }
     if let Err(error) = std::fs::remove_file(&legacy_path) {
         log::warn!(
             "remove migrated legacy chapter draft failed: project={} chapter={} path={}: {error}",
@@ -128,6 +142,31 @@ fn migration_staging_dir(location: &DraftLocation) -> PathBuf {
 fn install_migration(location: &DraftLocation, staging: &Path) -> Result<(), String> {
     if location.dir.exists() {
         if super::dir_has_any_entry(&location.dir) {
+            // Issue #1062 评论 #7213499162 第 1 项：这份新版草稿不能被当成
+            // 无身份的孤儿归档。先写入 durable 迁移冲突意图，随目录一起
+            // rename 进 kept，恢复 actor 才能在之后继续按事务重试它。
+            let volume_id =
+                super::read_meta_checked(&location.dir, &location.project_id, &location.chapter_id)
+                    .map(|meta| meta.volume_id)
+                    .unwrap_or_default();
+            let reason = format!(
+                "legacy_migration_conflict: newer draft archived while migrating legacy file {}",
+                location.legacy_path().display()
+            );
+            super::super::retry::write_retry_intent(
+                &location.projects_root,
+                &location.project_id,
+                &location.chapter_id,
+                &volume_id,
+                &reason,
+                0,
+            )
+            .map_err(|error| {
+                format!(
+                    "write legacy migration conflict intent for project={} chapter={}: {error}",
+                    location.project_id, location.chapter_id
+                )
+            })?;
             let archive = super::kept_root(&location.projects_root, &location.project_id)
                 .join(&location.chapter_id)
                 .join(format!(
@@ -259,11 +298,47 @@ pub(super) fn read_legacy_checked(
             path.display()
         ));
     }
+    // Issue #1062 评论 #7213499162 第 2 项：旧格式事实不能静默过滤。每一条
+    // 都必须可转换（非空事件 ID、对象 projection、projection 身份一致且不
+    // 重复）；任何一条不合法都返回 Err，源文件保留。
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for (index, item) in file.facts.iter().enumerate() {
+        if item.event_id.is_empty() {
+            return Err(format!(
+                "legacy chapter draft fact {index} has empty event id (kept): path={}",
+                path.display()
+            ));
+        }
+        if !item.projection.is_object() {
+            return Err(format!(
+                "legacy chapter draft fact {index} projection invalid (kept): event={} path={}",
+                item.event_id,
+                path.display()
+            ));
+        }
+        if let Some(projection_event_id) = item
+            .projection
+            .get("eventId")
+            .and_then(|value| value.as_str())
+        {
+            if projection_event_id != item.event_id {
+                return Err(format!(
+                    "legacy chapter draft fact {index} identity mismatch (kept): event={} projectionEvent={projection_event_id} path={}",
+                    item.event_id,
+                    path.display()
+                ));
+            }
+        }
+        if !seen.insert(item.event_id.as_str()) {
+            return Err(format!(
+                "legacy chapter draft duplicate event id (kept): event={} path={}",
+                item.event_id,
+                path.display()
+            ));
+        }
+    }
     let mut facts = Vec::with_capacity(file.facts.len());
     for item in file.facts {
-        if item.event_id.is_empty() || item.projection.is_null() {
-            continue;
-        }
         let seq = u64::try_from(facts.len()).unwrap_or(0).saturating_add(1);
         facts.push((
             DraftFactIndex {
