@@ -462,6 +462,29 @@ impl<'a> RoundProvider<'a> {
         outcome
     }
 
+    /// 只保留有 durable 决议或属于生命周期/派生元数据的对象。
+    ///
+    /// transfer 阶段预生成的普通对象条目不能自行进入发布：没有决议的对象
+    /// 保持远端原值（评审 #7214314073 第 2 项）。生命周期的 catalog/
+    /// generation/GC 元数据不是业务对象，由各自流程直接写入。
+    pub fn retain_decided_objects(
+        &self,
+        decisions: &[(String, crate::sync::decision::DurableObjectDecision)],
+    ) -> usize {
+        let covered: std::collections::BTreeSet<&str> = decisions
+            .iter()
+            .map(|(remote_path, _)| remote_path.as_str())
+            .collect();
+        let Ok(mut state) = self.state.lock() else {
+            return 0;
+        };
+        let before = state.entries.len();
+        state
+            .entries
+            .retain(|path, _| covered.contains(path.as_str()) || is_lifecycle_publish_path(path));
+        before.saturating_sub(state.entries.len())
+    }
+
     /// Drop every buffered write and check, leaving the remote untouched.
     pub fn discard(&self) {
         if let Ok(mut state) = self.state.lock() {
@@ -947,4 +970,16 @@ mod tests {
         round.flush().unwrap();
         assert_eq!(inner.read("catalog.json").unwrap().unwrap().content, b"one");
     }
+}
+
+/// 生命周期/派生元数据路径：不是业务对象的发布决议，允许由各自流程直写。
+fn is_lifecycle_publish_path(path: &str) -> bool {
+    path.ends_with("/app-meta/sync/targets.sync.json")
+        || path == crate::sync::target_lifecycle::TARGET_CATALOG_REMOTE_PATH
+        || path == crate::sync::lww::SYNC_MANIFEST_PATH
+        || path.ends_with("/app-meta/sync/manifest.sync.json")
+        || path.contains("/__generations__/")
+        || path.starts_with("__generations__/")
+        || path.contains("/__gc__/")
+        || path.starts_with("__gc__/")
 }

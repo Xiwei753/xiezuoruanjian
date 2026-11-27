@@ -3185,6 +3185,25 @@ impl WriterCoreApi {
                 decision_outcome.missing
             );
         }
+        // 作品删除/替换的生命周期批次由 target_lifecycle 直接生成远端删除，
+        // 它们不是对象决议；这类轮次不做对象过滤，避免漏删远端项目。
+        let lifecycle_batch = plan.targets.iter().any(|planned| {
+            !matches!(
+                planned.target.local_lifecycle_action,
+                crate::sync::types::LocalLifecycleCommitAction::None
+            )
+        })
+            || !crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&app_data_root)
+                .map(|cleanups| cleanups.is_empty())
+                .unwrap_or(false);
+        if !publish_blocked && !lifecycle_batch {
+            // 没有 durable 决议的普通对象不得随 transfer 缓冲自行发布：发布
+            // 批次最终只由决议 + 生命周期元数据组成（评审 #7214314073）。
+            let dropped = round.retain_decided_objects(&publish_decisions);
+            if dropped > 0 {
+                log::info!("[sync] dropped {dropped} undecided buffered object(s) before publish");
+            }
+        }
         if !publish_blocked {
             // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
             // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
