@@ -3194,9 +3194,11 @@ impl WriterCoreApi {
                     | crate::sync::types::PlannedTargetKind::LiveProject
             )
         })
-            || !crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&app_data_root)
-                .map(|cleanups| cleanups.is_empty())
-                .unwrap_or(false);
+            || !crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(
+                &self.app_data_root,
+            )
+            .map(|cleanups| cleanups.is_empty())
+            .unwrap_or(false);
         if !publish_blocked && !lifecycle_batch {
             // 没有 durable 决议的普通对象不得随 transfer 缓冲自行发布：发布
             // 批次最终只由决议 + 生命周期元数据组成（评审 #7214314073）。

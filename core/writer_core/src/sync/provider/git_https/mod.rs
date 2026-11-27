@@ -92,6 +92,7 @@ impl GitHttpsProvider {
             return Ok(BatchCommitResult {
                 revision: RemoteVersion::new(""),
                 touched_paths: Vec::new(),
+                path_versions: std::collections::BTreeMap::new(),
             });
         }
         let planned = self.snapshot()?;
