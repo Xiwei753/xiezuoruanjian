@@ -94,29 +94,31 @@ impl ManifestRecord {
     }
 }
 
-/// 从 staging 的 manifest.sync.json 读取远端 LWW 记录。
+/// 从 staging 的权威清单读取远端 LWW 记录。
 ///
-/// 改为 `Result<Option<...>>`。
-/// - manifest 不存在 → `Ok(None)`（Git backend 不产生 manifest，mtime fallback）。
-/// - manifest 存在且解析成功 → `Ok(Some(map))`。
-/// - manifest 存在但读/解析失败 → `Err`（GithubApi backend 的 manifest 是事实来源，
-///   解析失败不能静默切成另一套决策规则）。
+/// 权威来源是 v2 存储（`manifest/root.json` + 两级索引 + 内容寻址对象，严格校验）；
+/// root 不存在时回退 prepare 物化的旧单文件 `manifest.sync.json`（只读）。
+///
+/// - 既没有 root 也没有旧单文件 → `Ok(None)`（Git backend 不产生 manifest，
+///   mtime fallback）。
+/// - 存在但读/解析/校验失败 → `Err`（GithubApi backend 的 manifest 是事实来源，
+///   损坏不能静默切成另一套决策规则）。
 ///
 /// 调用方根据 `is_github_api` 决定是否允许 `None`（mtime fallback）。
 pub(crate) fn read_staging_manifest(
     staging_root: &Path,
 ) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
-    read_manifest_at(&staging_root.join("app-meta/sync/manifest.sync.json"))
+    read_manifest_at(staging_root, crate::sync::lww::SYNC_MANIFEST_PATH)
 }
 
-/// 读取 live 的持久 manifest，作为本轮比较的本地版本事实。
+/// 读取 live 的权威清单，作为本轮比较的本地版本事实。
 ///
-/// 与 staging manifest 使用同一套解析规则；不存在返回 `Ok(None)`，
-/// 解析失败返回 `Err`，不能静默退回 mtime。
+/// 与 staging manifest 使用同一套解析规则（v2 存储优先，旧单文件只读回退）；
+/// 不存在返回 `Ok(None)`，损坏返回 `Err`，不能静默退回 mtime。
 pub(crate) fn read_live_manifest(
     live_root: &Path,
 ) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
-    read_manifest_at(&live_root.join("app-meta/sync/manifest.sync.json"))
+    read_manifest_at(live_root, crate::sync::lww::SYNC_MANIFEST_PATH)
 }
 
 /// 读取 live 中某个 App group 的持久 manifest，缺少分组 manifest 时
@@ -141,22 +143,49 @@ fn read_manifest_for_group(
     root: &Path,
     group: &crate::sync::types::AppDataGroup,
 ) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
-    let grouped_path = root.join(group.local_manifest_path());
-    let manifest_path = if grouped_path.exists() {
-        grouped_path
-    } else {
-        root.join("app-meta/sync/manifest.sync.json")
-    };
-    let Some(mut records) = read_manifest_at(&manifest_path)? else {
-        return Ok(None);
+    // 分组自己的权威清单（v2 优先，旧单文件只读回退）。
+    if let Some(mut records) = read_manifest_at(root, &group.local_manifest_path())? {
+        records.retain(|path, _| group.owns_path(path));
+        return Ok(Some(records));
+    }
+    // 分组还没有自己的清单时，聚合清单是只读迁移输入：只保留该组拥有的路径。
+    let mut records = match read_manifest_at(root, crate::sync::lww::SYNC_MANIFEST_PATH)? {
+        Some(records) => records,
+        None => return Ok(None),
     };
     records.retain(|path, _| group.owns_path(path));
     Ok(Some(records))
 }
 
+/// 读取 `root` 下的权威清单：v2 存储优先，旧单文件只读回退。
+///
+/// `manifest_rel` 是清单的旧单文件相对路径；v2 存储固定在该路径的父目录下
+/// `manifest/` 里（与 [`crate::sync::lww::ManifestStore`] 一致）。
 fn read_manifest_at(
-    manifest_path: &Path,
+    root: &Path,
+    manifest_rel: &str,
 ) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
+    let store = crate::sync::lww::ManifestStore::new(root, manifest_rel);
+    if let Some(manifest) = store.load_all()? {
+        return Ok(Some(
+            manifest
+                .files
+                .into_iter()
+                .map(|record| {
+                    let records = ManifestRecord {
+                        path: record.path,
+                        content_hash: record.content_hash,
+                        updated_at_ms: record.updated_at_ms,
+                        deleted_at_ms: record.deleted_at_ms,
+                        device_id: record.device_id,
+                        op: record.op,
+                    };
+                    (records.path.clone(), records)
+                })
+                .collect(),
+        ));
+    }
+    let manifest_path = root.join(manifest_rel);
     if !manifest_path.exists() {
         return Ok(None);
     }

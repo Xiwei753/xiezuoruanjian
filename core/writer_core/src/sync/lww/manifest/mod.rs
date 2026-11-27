@@ -16,28 +16,37 @@
 
 use crate::sync::path::ValidatedSyncPath;
 use crate::sync::provider::SyncProvider;
-use crate::sync::types::{ManifestFileRecord, SyncManifest, SyncScope};
+use crate::sync::types::{ManifestFileRecord, SyncFileEntry, SyncManifest, SyncScope};
 use crate::sync::SyncService;
 use std::collections::HashMap;
 use std::path::Path;
 
-mod shards;
+mod index;
+mod objects;
+mod remote;
+mod root;
+mod store;
 
-pub(crate) use shards::{
-    is_manifest_rel_path, is_manifest_storage_path, load_manifest as load_sharded_manifest,
-    load_sharded as load_manifest_shards, plan_persist as plan_manifest_persist,
-    split_into_shards,
+pub(crate) use index::{namespace_for_path, validate_namespace, ManifestIndex};
+pub(crate) use objects::{is_sha256_hex, object_key, sha256_hex, ManifestObject};
+pub(crate) use remote::{
+    fetch_remote_manifest as fetch_remote_manifest_v2, fetch_remote_manifest_at,
+    local_manifest_storage, publish_remote_manifest, remote_rel_for, ManifestStorageKind,
+};
+pub(crate) use root::{ManifestRoot, MANIFEST_SCHEMA_VERSION};
+pub(crate) use store::{
+    is_manifest_rel_path, is_manifest_storage_path, ManifestStore, ManifestWritePlan,
 };
 
-/// 同步清单文件路径——记录本地所有文件的哈希、操作类型和时间戳。
-/// 这是 LWW 同步的唯一事实来源：三路比较的 base_hash 即从此文件读取。
+/// 同步清单文件路径——旧单文件清单（v1）。记录本地所有文件的哈希、操作
+/// 类型和时间戳。
 ///
-/// #1062 评论 #7218195841 第 4 项起，权威存储改为同目录的
-/// `manifest-shards/*.json`（见 [`shards`]）；本路径保留为旧格式迁移来源，
-/// 读取端统一走 [`shards::load_manifest`]。
+/// #1062 评论 #7219676521 第 2 项起，权威存储改为同目录的
+/// `manifest/root.json` + `manifest/index/*.json` + `manifest/objects/*.json`
+/// （见 [`ManifestStore`]）；本路径保留为旧格式迁移来源与扫描排除项。
 pub const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
 
-/// 清单分片目录（相对同步根）。
+/// 清单分片目录（旧 v1 分片格式，相对同步根）。保留常量供旧迁移/排除使用。
 pub const SYNC_MANIFEST_SHARDS_DIR: &str = "app-meta/sync/manifest-shards";
 
 /// 获取 LWW 比较时间戳。
@@ -185,7 +194,7 @@ fn build_local_snapshot(
     app_group: Option<&crate::sync::types::AppDataGroup>,
     sparse: Option<&crate::sync::sparse_plan::SparseObjectPlan>,
 ) -> crate::error::Result<LocalSnapshot> {
-    // 1. 读 old manifest（manifest.sync.json）→ HashMap<path, ManifestFileRecord>。
+    // 1. 读权威清单（root.json + 两级索引）→ HashMap<path, ManifestFileRecord>。
     //   manifest 存在但损坏 → 返回 Err（不静默 fallback）。
     // 调用方（compute_local_project_lifecycle_candidate）据此返回 Retry，
     // 避免在无可靠本地 LWW 证据时做破坏性 DeleteLocalProject 决策。
@@ -193,47 +202,32 @@ fn build_local_snapshot(
     let manifest_rel_path = app_group
         .map(crate::sync::types::AppDataGroup::local_manifest_path)
         .unwrap_or_else(|| SYNC_MANIFEST_PATH.to_string());
-    // 权威清单是分片目录；旧单文件只在尚未迁移时只读回退（App group 还会
-    // 回退聚合清单作为 v1 迁移输入）。损坏必须返回 Err，不能当作"没有清单"。
-    let old_manifest = match crate::sync::lww::load_manifest_shards(sync_root, &manifest_rel_path)
-        .map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "snapshot_local_records_read_only: manifest read failed for {manifest_rel_path}: {e}"
-            )))
-        })? {
-        Some(manifest) => Some(manifest),
-        None => {
-            // 尚未迁移的单文件清单：项目清单或 App group 的聚合清单，只读读取。
-            let mut candidates = vec![sync_root.join(&manifest_rel_path)];
-            if app_group.is_some() {
-                candidates.push(sync_root.join(SYNC_MANIFEST_PATH));
-            }
-            let source = candidates.into_iter().find(|path| path.exists());
-            match source {
-                Some(path) => {
-                    let content = std::fs::read(&path).map_err(|e| {
-                        crate::Error::Io(std::io::Error::other(format!(
-                            "snapshot_local_records_read_only: manifest read failed at {}: {e}",
-                            path.display()
-                        )))
-                    })?;
-                    Some(serde_json::from_slice::<SyncManifest>(&content).map_err(|e| {
-                        crate::Error::Io(std::io::Error::other(format!(
-                            "snapshot_local_records_read_only: manifest corrupt at {}: {e}",
-                            path.display()
-                        )))
-                    })?)
-                }
-                None => None,
-            }
+    // root.json 存在即权威；root 不存在时走一次性迁移（旧单文件 → 旧分片目录）。
+    // App group 还没有自己的旧清单时，仍允许只读回退聚合旧单文件（v1 迁移输入）。
+    // 损坏必须返回 Err，不能当作"没有清单"。
+    let store = crate::sync::lww::ManifestStore::new(sync_root, &manifest_rel_path);
+    let old_manifest = match store.load_root()? {
+        Some(_) => store.load_all()?,
+        None if app_group.is_some() && !store.has_legacy_source() => {
+            read_legacy_single_manifest(&sync_root.join(SYNC_MANIFEST_PATH)).map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "snapshot_local_records_read_only: aggregate manifest read failed: {e}"
+                )))
+            })?
         }
+        None => Some(store.load_or_legacy()?),
     };
     let old_manifest_records: HashMap<String, ManifestFileRecord> = old_manifest
         .map(|manifest| {
             manifest
                 .files
                 .into_iter()
-                .filter(|record| app_group.map_or(true, |group| group.owns_path(&record.path)))
+                // 稀疏模式只保留 affected 路径；未涉及记录的权威来源是 merge
+                // 读取的基线 manifest，不再在这里复制一份完整 HashMap。
+                .filter(|record| {
+                    app_group.map_or(true, |group| group.owns_path(&record.path))
+                        && sparse.map_or(true, |plan| plan.contains(&record.path))
+                })
                 .map(|r| (r.path.clone(), r))
                 .collect()
         })
@@ -265,10 +259,17 @@ fn build_local_snapshot(
         None => crate::sync::local_mutations::load_latest(sync_root)?,
     };
 
-    // 3. scan 当前文件。
-    let local_entries = match app_group {
-        Some(group) => crate::sync::scanner::scan_for_sync_group(sync_root, scope, Some(group))?,
-        None => crate::sync::scanner::scan_for_sync(sync_root, scope)?,
+    // 3. 扫描当前文件。稀疏模式只读取 affected 路径，未涉及路径完全不进入
+    //    records（它们的已确认记录由 merge 的基线 manifest 引用），不再为
+    //    “本轮没加载”的文件付出整树 WalkDir + hash 成本。
+    let local_entries = match sparse {
+        Some(plan) => scan_affected_paths(sync_root, scope, app_group, plan)?,
+        None => match app_group {
+            Some(group) => {
+                crate::sync::scanner::scan_for_sync_group(sync_root, scope, Some(group))?
+            }
+            None => crate::sync::scanner::scan_for_sync(sync_root, scope)?,
+        },
     };
 
     let mut records = HashMap::new();
@@ -390,15 +391,12 @@ fn build_local_snapshot(
     //    只允许明确 tombstone / durable delete fact 产生 op="delete"。
     let mut missing_without_delete_fact: Vec<MissingKnownFile> = Vec::new();
     for path in state.known_files.keys() {
-        if records.contains_key(path) {
+        // 稀疏模式：未涉及对象的“不在 staging”不是缺失事实，也不允许
+        // 进入删除判定；其基线由 merge 直接引用权威 manifest。
+        if sparse.is_some_and(|plan| !plan.contains(path)) {
             continue;
         }
-        // 稀疏模式下"本轮没有加载"不等于"缺失"：沿用已确认的 manifest 事实，
-        // 既不报缺失也不伪造删除（SparseObjectPlan::Unloaded）。
-        if sparse.is_some_and(|plan| !plan.contains(path)) {
-            if let Some(record) = old_manifest_records.get(path) {
-                records.insert(path.clone(), record.clone());
-            }
+        if records.contains_key(path) {
             continue;
         }
         if !SyncService::is_whitelisted_path(path, scope)
@@ -446,11 +444,6 @@ fn build_local_snapshot(
                     },
                 );
             } else {
-                // 稀疏计划里未加载的对象（不在 affected set）本轮本来就没有字节：
-                // “不在 staging”不等于本地删除，跳过缺失收集，由 merge 沿用基线。
-                if sparse.is_some_and(|plan| !plan.contains(path)) {
-                    continue;
-                }
                 // 无 tombstone → 收集缺失事实（不伪造 delete record）。
                 // 本地 known_files 中记录了此文件但磁盘上不存在，且没有 tombstone
                 // 证明它被合法删除。可能是未下载完整、工作区损坏、人工移动。
@@ -475,12 +468,12 @@ fn build_local_snapshot(
     //      和 updated_at_ms，device_id 用 tombstone.deleted_by 或 state.device_id）；
     //    - 文件不存在 + 无 tombstone → 返回 Err（不能伪造当前本地事实）。
     for (path, old_rec) in &old_manifest_records {
-        if records.contains_key(path) {
+        // 稀疏模式：未涉及对象不参与本轮判定，也不因“staging 没有文件”被
+        // 当成删除或缺失；它们在 merge 中直接引用基线记录。
+        if sparse.is_some_and(|plan| !plan.contains(path)) {
             continue;
         }
-        // 稀疏模式下未加载的对象不是"旧 upsert 缺文件"：保留原记录继续沿用。
-        if sparse.is_some_and(|plan| !plan.contains(path)) {
-            records.insert(path.clone(), old_rec.clone());
+        if records.contains_key(path) {
             continue;
         }
         // A committed manifest delete is a durable local delete fact even when
@@ -541,9 +534,6 @@ fn build_local_snapshot(
                 },
             );
         } else {
-            if sparse.is_some_and(|plan| !plan.contains(path)) {
-                continue;
-            }
             // 无 tombstone → 收集缺失事实（不能把旧 upsert 冒充当前本地事实）。
             if missing_without_delete_fact.iter().any(|m| m.path == *path) {
                 continue;
@@ -562,6 +552,79 @@ fn build_local_snapshot(
         records,
         missing_without_delete_fact,
     })
+}
+
+/// 稀疏扫描：只读取 sparse 计划 `affected_paths()` 中的路径。
+///
+/// 与整树 [`crate::sync::scanner::scan_for_sync`] 对同一批路径的结果等价：
+/// 只产出白名单内、当前真实存在的普通文件；路径不存在不是错误（`known_files`
+/// / 旧 manifest 的缺失事实收集会按 affected 范围单独处理）。未涉及路径完全
+/// 不读元数据、不读内容，也不进入 `LocalSnapshot::records`。
+fn scan_affected_paths(
+    sync_root: &Path,
+    scope: SyncScope,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
+    plan: &crate::sync::sparse_plan::SparseObjectPlan,
+) -> crate::error::Result<Vec<SyncFileEntry>> {
+    let mut entries = Vec::with_capacity(plan.affected_paths().len());
+    for path in plan.affected_paths() {
+        let normalized = ValidatedSyncPath::new(path)?.as_str().to_string();
+        if normalized == SYNC_MANIFEST_PATH {
+            continue;
+        }
+        let whitelisted = app_group.map_or_else(
+            || SyncService::is_whitelisted_path(&normalized, scope),
+            |group| SyncService::is_whitelisted_app_group_path(&normalized, group),
+        );
+        if !whitelisted || SyncService::is_blacklisted_path(&normalized, scope) {
+            continue;
+        }
+        let absolute_path = sync_root.join(&normalized);
+        // 与 WalkDir 的 file_type().is_file() 对齐：符号链接本身不作为普通文件
+        // 参与同步（不走 follow-link 语义）。
+        let metadata = match std::fs::symlink_metadata(&absolute_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "scan_affected_paths: metadata failed for {}: {error}",
+                    absolute_path.display()
+                ))))
+            }
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let modified = metadata.modified().map_err(|error| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "scan_affected_paths: mtime failed for {}: {error}",
+                absolute_path.display()
+            )))
+        })?;
+        let modified_time = modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "scan_affected_paths: mtime before epoch for {}: {error}",
+                    absolute_path.display()
+                )))
+            })?
+            .as_secs();
+        let file_hash = crate::sync::hash::content_md5_file(&absolute_path).map_err(|error| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "scan_affected_paths: hash failed for {}: {error}",
+                absolute_path.display()
+            )))
+        })?;
+        entries.push(SyncFileEntry {
+            relative_path: normalized,
+            absolute_path: absolute_path.to_string_lossy().into_owned(),
+            file_hash,
+            modified_time: i64::try_from(modified_time).unwrap_or(i64::MAX),
+            sync_kind: crate::sync::types::SyncKind::Upload,
+        });
+    }
+    Ok(entries)
 }
 
 /// 构建远端文件记录。
@@ -724,6 +787,27 @@ fn read_mtime_ms(sync_root: &Path, path: &str) -> crate::error::Result<i64> {
             )))
         })?;
     Ok(i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// 读取旧单文件清单（只读回退；不存在 → `None`，损坏 → `Err`）。
+fn read_legacy_single_manifest(path: &Path) -> crate::Result<Option<SyncManifest>> {
+    let content = match std::fs::read(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(crate::Error::Io(std::io::Error::new(
+                error.kind(),
+                format!("read legacy manifest {}: {error}", path.display()),
+            )))
+        }
+    };
+    let manifest = serde_json::from_slice::<SyncManifest>(&content).map_err(|error| {
+        crate::Error::Other(format!(
+            "legacy manifest {} is corrupt: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(manifest))
 }
 
 #[cfg(test)]

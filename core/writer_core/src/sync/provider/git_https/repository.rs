@@ -1,21 +1,21 @@
 //! Git Smart HTTP 仓库缓存与提交实现。
 //!
 //! 每轮同步使用一个独立 bare 仓库缓存：fetch 远端分支、按 blob OID 读取对象，
-//! `commit_batch` 在本地构造完整 tree + commit 后执行普通（非强制）push。
-//! 缓存与用户正文目录分离；后续同步只下载新增对象。
+//! `commit_batch` 以固定 base tree OID + 本轮变更只重建受影响目录，再执行普通
+//! （非强制）push。缓存与用户正文目录分离；后续同步只下载新增对象。
 //!
 //! 错误优先识别 TLS 证书校验失败，再按 libgit2 `ErrorCode` 分类、用
 //! `ErrorClass` 兜底：只有明确的 DNS/连接拒绝/超时/重置/EOF 等传输不可达
 //! 才可触发 GitHub API 后备；证书验证失败、认证、权限和 non-fast-forward
 //! 保留准确错误，不会被 `Http`/`Ssl` 或泛型 class 中的握手关键词误报为网络。
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use git2::{
-    AutotagOption, Commit, DiffOptions, Direction, ErrorClass, ErrorCode, FetchOptions, Index,
-    IndexTime, ObjectType, Oid, PushOptions, Repository, Signature, Tree,
+    build::TreeUpdateBuilder, AutotagOption, Commit, DiffOptions, Direction, ErrorClass, ErrorCode,
+    FetchOptions, FileMode, ObjectType, Oid, PushOptions, Repository, Signature, Tree,
 };
 
 use super::config::GitHttpsRuntimeConfig;
@@ -30,11 +30,100 @@ const REMOTE_NAME: &str = "origin";
 const AUTHOR_NAME: &str = "Sujian";
 const AUTHOR_EMAIL: &str = "sync@sujian.invalid";
 
-/// 远端分支快照：commit + 全仓 path→blob OID。
-#[derive(Debug, Clone, Default)]
+/// 远端分支快照：固定 base commit/tree OID + 按需解析的 path→blob 缓存。
+///
+/// 只有真正被查询过的路径才写入 `blobs`；提交后的新快照会预填本批变更路径，
+/// 未涉及路径保持惰性。不再有进程级全树缓存，也不在 fetch 时展开整棵树。
+#[derive(Debug, Default)]
 pub(crate) struct Snapshot {
     pub head: Option<Oid>,
-    pub blobs: HashMap<String, Oid>,
+    pub tree: Option<Oid>,
+    blobs: Mutex<HashMap<String, Oid>>,
+}
+
+impl Clone for Snapshot {
+    fn clone(&self) -> Self {
+        Self {
+            head: self.head,
+            tree: self.tree,
+            blobs: Mutex::new(self.blob_map()),
+        }
+    }
+}
+
+impl Snapshot {
+    fn new(head: Option<Oid>, tree: Option<Oid>) -> Self {
+        Self {
+            head,
+            tree,
+            blobs: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 按路径取 blob OID：先查已解析缓存，未命中沿 tree 分量下钻并写回缓存。
+    pub(crate) fn blob_oid(
+        &self,
+        repo: &Repository,
+        path: &str,
+    ) -> Result<Option<Oid>, ProviderError> {
+        if let Some(oid) = self.blob_map_get(path) {
+            return Ok(Some(oid));
+        }
+        let Some(oid) = lookup_blob(repo, self.tree, path)? else {
+            return Ok(None);
+        };
+        self.blob_map_insert(path, oid);
+        Ok(Some(oid))
+    }
+
+    /// 递归枚举整棵树；只有 `list()` 需要全量视图时调用。
+    pub(crate) fn list_blobs(
+        &self,
+        repo: &Repository,
+    ) -> Result<Vec<(String, Oid)>, ProviderError> {
+        let Some(tree_oid) = self.tree else {
+            return Ok(Vec::new());
+        };
+        let tree = repo
+            .find_tree(tree_oid)
+            .map_err(|err| map_git_error(err, "find_snapshot_tree"))?;
+        let mut blobs = HashMap::new();
+        flatten_tree(repo, &tree, "", &mut blobs)?;
+        Ok(sorted_blobs(blobs))
+    }
+
+    fn blob_map(&self) -> HashMap<String, Oid> {
+        self.blobs
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    fn blob_map_get(&self, path: &str) -> Option<Oid> {
+        self.blobs
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(path)
+            .copied()
+    }
+
+    fn blob_map_insert(&self, path: &str, oid: Oid) {
+        self.blobs
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(path.to_string(), oid);
+    }
+
+    fn overlay_put(&self, path: &str, oid: Oid) {
+        self.blob_map_insert(path, oid);
+    }
+
+    fn overlay_remove(&self, path: &str) {
+        self.blobs
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(path);
+    }
 }
 
 fn log_provider_error(operation: &'static str, error: &ProviderError) {
@@ -65,14 +154,12 @@ pub(crate) fn open_or_init(cache_dir: &Path) -> Result<Repository, ProviderError
 
     match Repository::open(cache_dir) {
         Ok(repo) => Ok(repo),
-        Err(open_error) if open_error.code() != ErrorCode::NotFound => {
-            Err(logged_provider_error(
-                "open_or_init",
-                ProviderError::LocalGitCache {
-                    reason: format!("open git cache failed: {}", open_error.message()),
-                },
-            ))
-        }
+        Err(open_error) if open_error.code() != ErrorCode::NotFound => Err(logged_provider_error(
+            "open_or_init",
+            ProviderError::LocalGitCache {
+                reason: format!("open git cache failed: {}", open_error.message()),
+            },
+        )),
         Err(_) => {
             std::fs::create_dir_all(cache_dir).map_err(|err| {
                 logged_provider_error(
@@ -113,16 +200,16 @@ fn remote<'repo>(
             }
             Ok(remote)
         }
-        Err(err) if err.code() == ErrorCode::NotFound => repo
-            .remote(REMOTE_NAME, &config.remote_url)
-            .map_err(|err| {
+        Err(err) if err.code() == ErrorCode::NotFound => {
+            repo.remote(REMOTE_NAME, &config.remote_url).map_err(|err| {
                 logged_provider_error(
                     "remote",
                     ProviderError::RemoteConfig {
                         reason: format!("configure git remote failed: {}", err.message()),
                     },
                 )
-            }),
+            })
+        }
         Err(err) => Err(logged_provider_error(
             "remote",
             ProviderError::RemoteConfig {
@@ -197,8 +284,7 @@ pub(crate) fn changed_paths_between(
     let Ok(base_oid) = Oid::from_str(base) else {
         return Ok(None);
     };
-    let (Ok(base_commit), Ok(head_commit)) =
-        (repo.find_commit(base_oid), repo.find_commit(head))
+    let (Ok(base_commit), Ok(head_commit)) = (repo.find_commit(base_oid), repo.find_commit(head))
     else {
         return Ok(None);
     };
@@ -289,16 +375,92 @@ pub(crate) fn fetch_snapshot(
     let commit = repo
         .find_commit(head)
         .map_err(|err| map_git_error(err, "find_fetched_commit"))?;
-    let tree = commit
-        .tree()
-        .map_err(|err| map_git_error(err, "read_fetched_tree"))?;
 
-    let blobs = flatten_tree_cached(repo, &tree)?;
+    Ok(Snapshot::new(Some(head), Some(commit.tree_id())))
+}
 
-    Ok(Snapshot {
-        head: Some(head),
-        blobs,
-    })
+/// 按路径分量从 tree 根下钻查询单个 blob；不会展开整棵树。
+fn lookup_blob(
+    repo: &Repository,
+    tree_oid: Option<Oid>,
+    path: &str,
+) -> Result<Option<Oid>, ProviderError> {
+    let Some(tree_oid) = tree_oid else {
+        return Ok(None);
+    };
+    if !is_valid_blob_path(path) {
+        return Ok(None);
+    }
+    let mut components: Vec<&str> = path.split('/').collect();
+    let Some(file_name) = components.pop() else {
+        return Ok(None);
+    };
+    let mut current = repo
+        .find_tree(tree_oid)
+        .map_err(|err| map_git_error(err, "find_snapshot_tree"))?;
+    for component in components {
+        let child_oid = {
+            let Some(entry) = current.get_name(component) else {
+                return Ok(None);
+            };
+            if entry.kind() != Some(ObjectType::Tree) {
+                return Ok(None);
+            }
+            entry.id()
+        };
+        current = repo
+            .find_tree(child_oid)
+            .map_err(|err| map_git_error(err, "read_tree_entry"))?;
+    }
+    let Some(entry) = current.get_name(file_name) else {
+        return Ok(None);
+    };
+    if entry.kind() == Some(ObjectType::Blob) {
+        Ok(Some(entry.id()))
+    } else {
+        Ok(None)
+    }
+}
+
+/// 解析目录前缀对应的子树；缺失或指向 blob 时返回 `None`。
+fn tree_at_path<'repo>(
+    repo: &'repo Repository,
+    root: Option<Oid>,
+    path: &str,
+) -> Result<Option<Tree<'repo>>, ProviderError> {
+    let Some(root_oid) = root else {
+        return Ok(None);
+    };
+    let mut current = repo
+        .find_tree(root_oid)
+        .map_err(|err| map_git_error(err, "find_snapshot_tree"))?;
+    if path.is_empty() {
+        return Ok(Some(current));
+    }
+    if !is_valid_blob_path(path) {
+        return Ok(None);
+    }
+    for component in path.split('/') {
+        let child_oid = {
+            let Some(entry) = current.get_name(component) else {
+                return Ok(None);
+            };
+            if entry.kind() != Some(ObjectType::Tree) {
+                return Ok(None);
+            }
+            entry.id()
+        };
+        current = repo
+            .find_tree(child_oid)
+            .map_err(|err| map_git_error(err, "read_tree_entry"))?;
+    }
+    Ok(Some(current))
+}
+
+fn sorted_blobs(blobs: HashMap<String, Oid>) -> Vec<(String, Oid)> {
+    let mut entries: Vec<(String, Oid)> = blobs.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
 }
 
 fn flatten_tree(
@@ -330,147 +492,32 @@ fn flatten_tree(
     Ok(())
 }
 
-fn index_entry(path: &str, oid: Oid, size: usize) -> Result<git2::IndexEntry, ProviderError> {
-    if path.is_empty()
-        || path.starts_with('/')
-        || path.ends_with('/')
-        || path
+/// 可安全交给 libgit2 tree 更新器的 blob 路径。
+fn is_valid_blob_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.ends_with('/')
+        && !path.as_bytes().contains(&0)
+        && path
             .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..")
-    {
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn validate_blob_path(path: &str) -> Result<(), ProviderError> {
+    if !is_valid_blob_path(path) {
         return Err(ProviderError::Other {
             reason: format!("invalid repository path: {path}"),
         });
     }
-    let path_bytes = path.as_bytes().to_vec();
-    if path_bytes.len() >= 0x0fff {
+    if path.as_bytes().len() >= 0x0fff {
         return Err(ProviderError::Other {
             reason: format!("repository path is too long: {path}"),
         });
     }
-    Ok(git2::IndexEntry {
-        ctime: IndexTime::new(0, 0),
-        mtime: IndexTime::new(0, 0),
-        dev: 0,
-        ino: 0,
-        mode: 0o100_644,
-        uid: 0,
-        gid: 0,
-        file_size: u32::try_from(size).unwrap_or(u32::MAX),
-        id: oid,
-        flags: u16::try_from(path_bytes.len()).unwrap_or(0),
-        flags_extended: 0,
-        path: path_bytes,
-    })
+    Ok(())
 }
 
-fn build_index(
-    repo: &Repository,
-    snapshot: &Snapshot,
-    mutations: &[BatchMutation],
-) -> Result<(Index, HashMap<String, Oid>), ProviderError> {
-    let mut index = Index::new().map_err(|err| map_git_error(err, "create_index"))?;
-    if let Some(head) = snapshot.head {
-        let commit = repo
-            .find_commit(head)
-            .map_err(|err| map_git_error(err, "find_base_commit"))?;
-        let tree = commit
-            .tree()
-            .map_err(|err| map_git_error(err, "read_base_tree"))?;
-        index
-            .read_tree(&tree)
-            .map_err(|err| map_git_error(err, "load_base_tree"))?;
-    }
-
-    let mut written_blobs = HashMap::new();
-    for mutation in mutations {
-        match mutation {
-            BatchMutation::Put { path, content } => {
-                let oid = repo
-                    .blob(content)
-                    .map_err(|err| map_git_error(err, "write_blob"))?;
-                index
-                    .add(&index_entry(path, oid, content.len())?)
-                    .map_err(|err| map_git_error(err, "add_blob"))?;
-                written_blobs.insert(path.clone(), oid);
-            }
-            BatchMutation::ReuseVersion { path, version } => {
-                let oid = Oid::from_str(version.as_str()).map_err(|_| {
-                    ProviderError::PreconditionFailed {
-                        path: path.clone(),
-                        reason: format!("invalid blob version: {version}"),
-                    }
-                })?;
-                if repo.find_blob(oid).is_err() {
-                    return Err(ProviderError::PreconditionFailed {
-                        path: path.clone(),
-                        reason: "reused blob is not available in the local git cache".to_string(),
-                    });
-                }
-                let size = repo
-                    .find_blob(oid)
-                    .map(|blob| blob.content().len())
-                    .unwrap_or(0);
-                index
-                    .add(&index_entry(path, oid, size)?)
-                    .map_err(|err| map_git_error(err, "reuse_blob"))?;
-            }
-            BatchMutation::Delete { path } => {
-                // 删除不存在的路径保持幂等，与 HTTP DELETE 语义一致。
-                let _ = index.remove_path(Path::new(path));
-            }
-            BatchMutation::DeleteIfMatch { path, version } => {
-                check_delete_precondition(
-                    snapshot,
-                    path,
-                    &DeletePrecondition::IfMatch(version.clone()),
-                )?;
-                let _ = index.remove_path(Path::new(path));
-            }
-            BatchMutation::CheckObject {
-                path,
-                expected_version,
-            } => check_object_precondition(snapshot, path, expected_version.as_ref())?,
-            BatchMutation::CheckPrefix {
-                prefix,
-                expected_entries,
-            } => check_prefix_precondition(snapshot, prefix, expected_entries)?,
-        }
-    }
-    Ok((index, written_blobs))
-}
-
-/// 已展开 tree 的进程内缓存（tree OID → path→blob 映射）。
-///
-/// 同一批对象在"push 成功 → 重新读取 commit"或重复读取同一 HEAD 时，
-/// 不必再把整棵 tree 递归展开一遍；只保留最近几棵树，内存有界。
-const FLAT_TREE_CACHE_CAPACITY: usize = 4;
-
-fn flat_tree_cache() -> &'static Mutex<VecDeque<(Oid, Arc<HashMap<String, Oid>>)>> {
-    static CACHE: OnceLock<Mutex<VecDeque<(Oid, Arc<HashMap<String, Oid>>)>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(VecDeque::new()))
-}
-
-fn flatten_tree_cached(repo: &Repository, tree: &Tree<'_>) -> Result<HashMap<String, Oid>, ProviderError> {
-    let key = tree.id();
-    if let Ok(cache) = flat_tree_cache().lock() {
-        if let Some((_, cached)) = cache.iter().find(|(oid, _)| *oid == key) {
-            return Ok((**cached).clone());
-        }
-    }
-    let mut blobs = HashMap::new();
-    flatten_tree(repo, tree, "", &mut blobs)?;
-    if let Ok(mut cache) = flat_tree_cache().lock() {
-        cache.retain(|(oid, _)| *oid != key);
-        cache.push_front((key, Arc::new(blobs.clone())));
-        while cache.len() > FLAT_TREE_CACHE_CAPACITY {
-            cache.pop_back();
-        }
-    }
-    Ok(blobs)
-}
-
-/// 从本地已创建的 commit 重建快照，不访问网络。
+/// 从本地已创建的 commit 重建快照，不访问网络、不展开 tree。
 ///
 /// 只用于把本 provider 自己成功 push 的提交推进为下一轮基线；远端是否变化
 /// 由普通（非强制）push 的 fast-forward 约束决定。
@@ -481,14 +528,7 @@ pub(crate) fn snapshot_from_commit(
     let commit = repo
         .find_commit(commit_oid)
         .map_err(|err| map_git_error(err, "find_committed_commit"))?;
-    let tree = commit
-        .tree()
-        .map_err(|err| map_git_error(err, "read_committed_tree"))?;
-    let blobs = flatten_tree_cached(repo, &tree)?;
-    Ok(Snapshot {
-        head: Some(commit_oid),
-        blobs,
-    })
+    Ok(Snapshot::new(Some(commit_oid), Some(commit.tree_id())))
 }
 
 /// 在当前快照基础上提交一个 commit 并 push。返回新 commit OID 与本提交的本地快照。
@@ -500,22 +540,12 @@ pub(crate) fn commit_and_push(
     message: &str,
     accounting: &Arc<ProviderNetworkAccounting>,
 ) -> Result<(Oid, Snapshot), ProviderError> {
-    let (mut index, written_blobs) = build_index(repo, snapshot, mutations)?;
-    let tree_oid = index
-        .write_tree_to(repo)
-        .map_err(|err| map_git_error(err, "write_tree"))?;
-    let tree = repo
-        .find_tree(tree_oid)
-        .map_err(|err| map_git_error(err, "find_written_tree"))?;
+    let built = build_tree(repo, snapshot, mutations)?;
 
     // No-change rounds must not publish a commit.  Git already has the exact
     // tree; compare the tree OID before creating a commit or pushing.
-    if let Some(head) = snapshot.head {
-        let base_tree = repo
-            .find_commit(head)
-            .and_then(|commit| commit.tree())
-            .map_err(|err| map_git_error(err, "read_base_tree_for_compare"))?;
-        if base_tree.id() == tree_oid {
+    if let (Some(head), Some(base_tree)) = (snapshot.head, built.base_tree) {
+        if base_tree == built.tree {
             return Ok((head, snapshot.clone()));
         }
     }
@@ -529,6 +559,9 @@ pub(crate) fn commit_and_push(
         .transpose()
         .map_err(|err| map_git_error(err, "load_parent_commit"))?;
     let parents: Vec<&Commit<'_>> = parent.iter().collect();
+    let tree = repo
+        .find_tree(built.tree)
+        .map_err(|err| map_git_error(err, "find_written_tree"))?;
     let commit_oid = repo
         .commit(
             None,
@@ -550,32 +583,163 @@ pub(crate) fn commit_and_push(
         .map_err(|err| map_git_error(err, "update_local_branch"))?;
 
     push_branch(repo, config, &local_ref, &commit_oid, accounting)?;
-    // 新基线按差量构造：提交内容就是 base blobs 应用本 batch 的结果，不必
-    // 再把整棵新 tree 摊平成 path→OID（Issue #1065 复审 #5）。
-    let mut committed_blobs = snapshot.blobs.clone();
+    // 新基线按差量构造：快照固定新 commit/tree OID，只预填本批变更路径，
+    // 其余路径继续按需查询（Issue #1065 复审 #5 / Issue #1062）。
+    let committed_snapshot = Snapshot::new(Some(commit_oid), Some(built.tree));
     for mutation in mutations {
         match mutation {
             BatchMutation::Put { path, .. } => {
-                if let Some(oid) = written_blobs.get(path) {
-                    committed_blobs.insert(path.clone(), *oid);
+                if let Some(oid) = built.written_blobs.get(path) {
+                    committed_snapshot.overlay_put(path, *oid);
                 }
             }
             BatchMutation::ReuseVersion { path, version } => {
                 if let Ok(oid) = Oid::from_str(version.as_str()) {
-                    committed_blobs.insert(path.clone(), oid);
+                    committed_snapshot.overlay_put(path, oid);
                 }
             }
             BatchMutation::Delete { path } | BatchMutation::DeleteIfMatch { path, .. } => {
-                committed_blobs.remove(path);
+                committed_snapshot.overlay_remove(path);
             }
             BatchMutation::CheckObject { .. } | BatchMutation::CheckPrefix { .. } => {}
         }
     }
-    let committed_snapshot = Snapshot {
-        head: Some(commit_oid),
-        blobs: committed_blobs,
-    };
     Ok((commit_oid, committed_snapshot))
+}
+
+struct TreeBuild {
+    tree: Oid,
+    base_tree: Option<Oid>,
+    written_blobs: HashMap<String, Oid>,
+}
+
+enum TreeChange {
+    Upsert(Oid),
+    Remove,
+}
+
+/// 用固定 base tree OID + 本批变更直接重建 tree。
+///
+/// 只重建受影响目录，未变子树 OID 原样复用；不再先 `Index::read_tree` 装载
+/// 整棵树，也不再展开整棵树来生成快照。
+fn build_tree(
+    repo: &Repository,
+    snapshot: &Snapshot,
+    mutations: &[BatchMutation],
+) -> Result<TreeBuild, ProviderError> {
+    let base_tree_oid = match snapshot.tree {
+        Some(tree) => Some(tree),
+        None => snapshot
+            .head
+            .map(|head| {
+                repo.find_commit(head)
+                    .map(|commit| commit.tree_id())
+                    .map_err(|err| map_git_error(err, "find_base_commit"))
+            })
+            .transpose()?,
+    };
+
+    // 同一路径在一个 batch 里多次出现时以后出现的动作为准；libgit2 的
+    // tree 更新器不允许重复条目。
+    let mut changes: HashMap<String, TreeChange> = HashMap::new();
+    let mut written_blobs: HashMap<String, Oid> = HashMap::new();
+    for mutation in mutations {
+        match mutation {
+            BatchMutation::Put { path, content } => {
+                validate_blob_path(path)?;
+                let oid = repo
+                    .blob(content)
+                    .map_err(|err| map_git_error(err, "write_blob"))?;
+                changes.insert(path.clone(), TreeChange::Upsert(oid));
+                written_blobs.insert(path.clone(), oid);
+            }
+            BatchMutation::ReuseVersion { path, version } => {
+                validate_blob_path(path)?;
+                let oid = Oid::from_str(version.as_str()).map_err(|_| {
+                    ProviderError::PreconditionFailed {
+                        path: path.clone(),
+                        reason: format!("invalid blob version: {version}"),
+                    }
+                })?;
+                if repo.find_blob(oid).is_err() {
+                    return Err(ProviderError::PreconditionFailed {
+                        path: path.clone(),
+                        reason: "reused blob is not available in the local git cache".to_string(),
+                    });
+                }
+                changes.insert(path.clone(), TreeChange::Upsert(oid));
+            }
+            BatchMutation::Delete { path } => {
+                // 删除不存在的路径保持幂等，与 HTTP DELETE 语义一致；
+                // 构建 tree 时会跳过 base 中不存在的路径。
+                changes.insert(path.clone(), TreeChange::Remove);
+            }
+            BatchMutation::DeleteIfMatch { path, version } => {
+                check_delete_precondition(
+                    repo,
+                    snapshot,
+                    path,
+                    &DeletePrecondition::IfMatch(version.clone()),
+                )?;
+                changes.insert(path.clone(), TreeChange::Remove);
+            }
+            BatchMutation::CheckObject {
+                path,
+                expected_version,
+            } => check_object_precondition(repo, snapshot, path, expected_version.as_ref())?,
+            BatchMutation::CheckPrefix {
+                prefix,
+                expected_entries,
+            } => check_prefix_precondition(repo, snapshot, prefix, expected_entries)?,
+        }
+    }
+
+    let base_tree = resolve_base_tree(repo, base_tree_oid)?;
+    let mut updates = TreeUpdateBuilder::new();
+    for (path, change) in &changes {
+        match change {
+            TreeChange::Upsert(oid) => {
+                updates.upsert(path.as_str(), *oid, FileMode::Blob);
+            }
+            TreeChange::Remove => {
+                // `git_treebuilder_remove` 对不存在的条目报错；幂等删除要求
+                // 先确认 base 中确实存在该路径。
+                if snapshot.blob_oid(repo, path)?.is_some() {
+                    updates.remove(path.as_str());
+                }
+            }
+        }
+    }
+    let tree = updates
+        .create_updated(repo, &base_tree)
+        .map_err(|err| map_git_error(err, "write_tree"))?;
+    Ok(TreeBuild {
+        tree,
+        base_tree: base_tree_oid,
+        written_blobs,
+    })
+}
+
+/// 取 baseline tree；首次提交时以 Git 空 tree 作为基线。
+fn resolve_base_tree<'repo>(
+    repo: &'repo Repository,
+    base_tree: Option<Oid>,
+) -> Result<Tree<'repo>, ProviderError> {
+    match base_tree {
+        Some(oid) => repo
+            .find_tree(oid)
+            .map_err(|err| map_git_error(err, "find_base_tree")),
+        None => {
+            let builder = repo
+                .treebuilder(None)
+                .map_err(|err| map_git_error(err, "create_empty_tree"))?;
+            let empty_oid = builder
+                .write()
+                .map_err(|err| map_git_error(err, "write_empty_tree"))?;
+            repo.find_tree(empty_oid)
+                .map_err(|err| map_git_error(err, "find_empty_tree"))
+        }
+    }
 }
 
 fn push_branch(
@@ -671,12 +835,13 @@ fn is_non_fast_forward_reason(reason: &str) -> bool {
 
 /// 校验写前置条件；调用方已持有最新快照。
 pub(crate) fn check_write_precondition(
+    repo: &Repository,
     snapshot: &Snapshot,
     path: &str,
     precondition: &WritePrecondition,
 ) -> Result<(), ProviderError> {
     match precondition {
-        WritePrecondition::IfMatch(expected) => match snapshot.blobs.get(path) {
+        WritePrecondition::IfMatch(expected) => match snapshot.blob_oid(repo, path)? {
             Some(current) if current.to_string() == expected.as_str() => Ok(()),
             Some(current) => Err(ProviderError::PreconditionFailed {
                 path: path.to_string(),
@@ -687,7 +852,7 @@ pub(crate) fn check_write_precondition(
             }),
         },
         WritePrecondition::CreateNew => {
-            if snapshot.blobs.contains_key(path) {
+            if snapshot.blob_oid(repo, path)?.is_some() {
                 Err(ProviderError::PreconditionFailed {
                     path: path.to_string(),
                     reason: "object already exists".to_string(),
@@ -701,12 +866,13 @@ pub(crate) fn check_write_precondition(
 }
 
 pub(crate) fn check_delete_precondition(
+    repo: &Repository,
     snapshot: &Snapshot,
     path: &str,
     precondition: &DeletePrecondition,
 ) -> Result<(), ProviderError> {
     match precondition {
-        DeletePrecondition::IfMatch(expected) => match snapshot.blobs.get(path) {
+        DeletePrecondition::IfMatch(expected) => match snapshot.blob_oid(repo, path)? {
             Some(current) if current.to_string() == expected.as_str() => Ok(()),
             Some(current) => Err(ProviderError::PreconditionFailed {
                 path: path.to_string(),
@@ -721,11 +887,12 @@ pub(crate) fn check_delete_precondition(
 }
 
 pub(crate) fn check_object_precondition(
+    repo: &Repository,
     snapshot: &Snapshot,
     path: &str,
     expected_version: Option<&RemoteVersion>,
 ) -> Result<(), ProviderError> {
-    let current = blob_version(snapshot, path);
+    let current = blob_version(repo, snapshot, path)?;
     if current.as_ref() == expected_version {
         Ok(())
     } else {
@@ -739,22 +906,24 @@ pub(crate) fn check_object_precondition(
 }
 
 pub(crate) fn check_prefix_precondition(
+    repo: &Repository,
     snapshot: &Snapshot,
     prefix: &str,
     expected_entries: &[RemoteEntry],
 ) -> Result<(), ProviderError> {
-    let prefix_with_slash = format!("{prefix}/");
-    let mut current_entries: Vec<RemoteEntry> = snapshot
-        .blobs
-        .iter()
-        .filter_map(|(path, oid)| {
-            path.strip_prefix(&prefix_with_slash)
-                .map(|relative_path| RemoteEntry {
-                    path: relative_path.to_string(),
-                    version: RemoteVersion::new(oid.to_string()),
-                })
-        })
-        .collect();
+    // 与既有 provider 的 `"{prefix}/"` 过滤语义保持一致：空前缀不匹配任何
+    // 路径，不能把根目录当成"空前缀下的全部对象"。
+    let mut current_entries: Vec<RemoteEntry> = if prefix.is_empty() {
+        Vec::new()
+    } else {
+        list_blobs_under(repo, snapshot.tree, prefix)?
+            .into_iter()
+            .map(|(path, oid)| RemoteEntry {
+                path,
+                version: RemoteVersion::new(oid.to_string()),
+            })
+            .collect()
+    };
     current_entries.sort_by(|a, b| a.path.cmp(&b.path));
 
     let mut expected_entries = expected_entries.to_vec();
@@ -769,11 +938,28 @@ pub(crate) fn check_prefix_precondition(
     }
 }
 
-pub(crate) fn blob_version(snapshot: &Snapshot, path: &str) -> Option<RemoteVersion> {
-    snapshot
-        .blobs
-        .get(path)
-        .map(|oid| RemoteVersion(oid.to_string()))
+/// 枚举目录前缀下的全部 blob（相对前缀的路径），不展开前缀之外的子树。
+fn list_blobs_under(
+    repo: &Repository,
+    tree_oid: Option<Oid>,
+    prefix: &str,
+) -> Result<Vec<(String, Oid)>, ProviderError> {
+    let Some(tree) = tree_at_path(repo, tree_oid, prefix)? else {
+        return Ok(Vec::new());
+    };
+    let mut blobs = HashMap::new();
+    flatten_tree(repo, &tree, "", &mut blobs)?;
+    Ok(sorted_blobs(blobs))
+}
+
+pub(crate) fn blob_version(
+    repo: &Repository,
+    snapshot: &Snapshot,
+    path: &str,
+) -> Result<Option<RemoteVersion>, ProviderError> {
+    Ok(snapshot
+        .blob_oid(repo, path)?
+        .map(|oid| RemoteVersion(oid.to_string())))
 }
 
 pub(crate) fn read_blob(
@@ -781,11 +967,11 @@ pub(crate) fn read_blob(
     snapshot: &Snapshot,
     path: &str,
 ) -> Result<Option<Vec<u8>>, ProviderError> {
-    let Some(oid) = snapshot.blobs.get(path) else {
+    let Some(oid) = snapshot.blob_oid(repo, path)? else {
         return Ok(None);
     };
     let blob = repo
-        .find_blob(*oid)
+        .find_blob(oid)
         .map_err(|err| map_git_error(err, "read_blob"))?;
     Ok(Some(blob.content().to_vec()))
 }
@@ -872,10 +1058,9 @@ fn classify_git_error(
     // `Interrupted system call`/`EINTR` 文本，且限定在网络操作，避免把证书、
     // 认证或本地 Git 读写中断误报为网络故障。`Os` 必须同时具备 SSL/TLS 与
     // socket/system-call failure 语义，普通本地文件 IO 仍走 `Other`。
-    let interrupted_transport_class = matches!(
-        class,
-        ErrorClass::Net | ErrorClass::Ssl | ErrorClass::Http
-    ) || (class == ErrorClass::Os && is_ssl_syscall_failure(raw_message));
+    let interrupted_transport_class =
+        matches!(class, ErrorClass::Net | ErrorClass::Ssl | ErrorClass::Http)
+            || (class == ErrorClass::Os && is_ssl_syscall_failure(raw_message));
     if is_interruptible_network_operation(operation)
         && is_transport_interrupted(raw_message)
         && interrupted_transport_class
@@ -1245,6 +1430,302 @@ fn classify_http_error(message: &str, code: ErrorCode) -> ProviderError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    struct TreeFixture {
+        cache: Repository,
+        config: GitHttpsRuntimeConfig,
+        accounting: Arc<ProviderNetworkAccounting>,
+        origin_path: PathBuf,
+        snapshot: Snapshot,
+        // Keep the temporary directory alive for the whole test; fields drop
+        // top-to-bottom, so the repositories above close before the directory.
+        _dir: tempfile::TempDir,
+    }
+
+    /// 本地 bare origin + 带多层目录的 base commit + fetch 出的惰性快照。
+    fn tree_fixture() -> TreeFixture {
+        let dir = tempfile::tempdir().unwrap();
+        let origin_path = dir.path().join("origin.git");
+        Repository::init_bare(&origin_path).unwrap();
+
+        let seed_dir = dir.path().join("seed");
+        let seed = Repository::init(&seed_dir).unwrap();
+        let base_paths = [
+            ("a/b/unchanged.txt", b"keep".as_slice()),
+            ("a/old.txt", b"old".as_slice()),
+            ("z/untouched/deep.txt", b"deep".as_slice()),
+        ];
+        for (path, content) in base_paths {
+            let full = seed_dir.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+        }
+        let mut index = seed.index().unwrap();
+        for (path, _) in base_paths {
+            index.add_path(Path::new(path)).unwrap();
+        }
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = seed.find_tree(tree_oid).unwrap();
+        let signature = Signature::now(AUTHOR_NAME, AUTHOR_EMAIL).unwrap();
+        seed.commit(
+            Some("refs/heads/main"),
+            &signature,
+            &signature,
+            "base",
+            &tree,
+            &[],
+        )
+        .unwrap();
+
+        let mut remote = seed
+            .remote("origin", origin_path.to_str().unwrap())
+            .unwrap();
+        remote
+            .push(&["refs/heads/main:refs/heads/main"], None)
+            .unwrap();
+        drop(remote);
+        drop(tree);
+        drop(index);
+        drop(seed);
+
+        let cache_dir = dir.path().join("cache");
+        let cache = open_or_init(&cache_dir).unwrap();
+        let config = GitHttpsRuntimeConfig {
+            remote_url: origin_path.to_string_lossy().into_owned(),
+            branch: "main".to_string(),
+            username: String::new(),
+            secret: None,
+        };
+        let accounting = Arc::new(ProviderNetworkAccounting::new("git_https_test"));
+        let snapshot = fetch_snapshot(&cache, &config, &accounting).unwrap();
+
+        TreeFixture {
+            cache,
+            config,
+            accounting,
+            origin_path,
+            snapshot,
+            _dir: dir,
+        }
+    }
+
+    fn entry_oid_at(repo: &Repository, tree_oid: Oid, path: &str) -> Oid {
+        let mut tree = repo.find_tree(tree_oid).unwrap();
+        let mut parts = path.split('/').peekable();
+        while let Some(part) = parts.next() {
+            let (entry_oid, has_more) = {
+                let entry = tree.get_name(part).unwrap();
+                (entry.id(), parts.peek().is_some())
+            };
+            if has_more {
+                tree = repo.find_tree(entry_oid).unwrap();
+            } else {
+                return entry_oid;
+            }
+        }
+        tree.id()
+    }
+
+    #[test]
+    fn batch_rebuilds_affected_subtrees_and_reuses_untouched_ones() {
+        let fixture = tree_fixture();
+        let TreeFixture {
+            cache,
+            config,
+            accounting,
+            origin_path,
+            snapshot,
+            _dir,
+        } = fixture;
+
+        // fetch 只记录 head/tree，不展开整棵树。
+        assert!(snapshot.tree.is_some());
+        assert!(snapshot.blob_map().is_empty());
+
+        let base_head = snapshot.head.unwrap();
+        let base_tree = snapshot.tree.unwrap();
+        let base_unchanged = snapshot
+            .blob_oid(&cache, "a/b/unchanged.txt")
+            .unwrap()
+            .unwrap();
+        let base_deep = snapshot
+            .blob_oid(&cache, "z/untouched/deep.txt")
+            .unwrap()
+            .unwrap();
+
+        let new_content = b"new".as_slice();
+        let new_oid = Oid::hash_object(ObjectType::Blob, new_content).unwrap();
+        let mutations = vec![
+            BatchMutation::Put {
+                path: "a/new/file.txt".to_string(),
+                content: new_content.to_vec(),
+            },
+            BatchMutation::Delete {
+                path: "a/old.txt".to_string(),
+            },
+            BatchMutation::ReuseVersion {
+                path: "a/b/unchanged.txt".to_string(),
+                version: RemoteVersion::new(base_unchanged.to_string()),
+            },
+        ];
+
+        let (commit_oid, committed) = commit_and_push(
+            &cache,
+            &config,
+            &snapshot,
+            &mutations,
+            "test batch",
+            &accounting,
+        )
+        .unwrap();
+
+        assert_ne!(commit_oid, base_head);
+        assert_eq!(committed.head, Some(commit_oid));
+        let new_tree = committed.tree.unwrap();
+        assert_ne!(new_tree, base_tree);
+
+        // 未受影响子树 OID 与 base 完全相同；本轮重建过的 a/b 因内容未变
+        // 也复用同一 OID。
+        assert_eq!(
+            entry_oid_at(&cache, new_tree, "z"),
+            entry_oid_at(&cache, base_tree, "z")
+        );
+        assert_eq!(
+            entry_oid_at(&cache, new_tree, "a/b"),
+            entry_oid_at(&cache, base_tree, "a/b")
+        );
+        assert_eq!(entry_oid_at(&cache, new_tree, "a/new/file.txt"), new_oid);
+
+        let listed: Vec<String> = committed
+            .list_blobs(&cache)
+            .unwrap()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                "a/b/unchanged.txt".to_string(),
+                "a/new/file.txt".to_string(),
+                "z/untouched/deep.txt".to_string(),
+            ]
+        );
+
+        assert_eq!(
+            committed.blob_oid(&cache, "a/new/file.txt").unwrap(),
+            Some(new_oid)
+        );
+        assert_eq!(
+            committed.blob_oid(&cache, "a/b/unchanged.txt").unwrap(),
+            Some(base_unchanged)
+        );
+        assert_eq!(
+            committed.blob_oid(&cache, "z/untouched/deep.txt").unwrap(),
+            Some(base_deep)
+        );
+        assert_eq!(committed.blob_oid(&cache, "a/old.txt").unwrap(), None);
+        assert_eq!(
+            read_blob(&cache, &committed, "a/new/file.txt").unwrap(),
+            Some(new_content.to_vec())
+        );
+
+        let origin = Repository::open(&origin_path).unwrap();
+        assert_eq!(origin.refname_to_id("refs/heads/main").unwrap(), commit_oid);
+        drop(origin);
+
+        // 没有实际变更的 batch 不创建 commit、不 push。
+        let (noop_commit, noop_snapshot) =
+            commit_and_push(&cache, &config, &committed, &[], "noop", &accounting).unwrap();
+        assert_eq!(noop_commit, commit_oid);
+        assert_eq!(noop_snapshot.head, Some(commit_oid));
+        assert_eq!(noop_snapshot.tree, Some(new_tree));
+
+        // 删除不存在路径保持幂等，也不会产生新 commit。
+        let (missing_commit, _) = commit_and_push(
+            &cache,
+            &config,
+            &committed,
+            &[BatchMutation::Delete {
+                path: "a/missing.txt".to_string(),
+            }],
+            "noop delete",
+            &accounting,
+        )
+        .unwrap();
+        assert_eq!(missing_commit, commit_oid);
+
+        let origin = Repository::open(&origin_path).unwrap();
+        assert_eq!(origin.refname_to_id("refs/heads/main").unwrap(), commit_oid);
+    }
+
+    #[test]
+    fn lazy_preconditions_resolve_paths_from_base_tree() {
+        let fixture = tree_fixture();
+        let TreeFixture {
+            cache,
+            snapshot,
+            _dir,
+            ..
+        } = fixture;
+
+        let unchanged = snapshot
+            .blob_oid(&cache, "a/b/unchanged.txt")
+            .unwrap()
+            .unwrap();
+        let old = snapshot.blob_oid(&cache, "a/old.txt").unwrap().unwrap();
+
+        assert!(check_write_precondition(
+            &cache,
+            &snapshot,
+            "a/b/unchanged.txt",
+            &WritePrecondition::IfMatch(RemoteVersion::new(unchanged.to_string())),
+        )
+        .is_ok());
+        assert!(check_write_precondition(
+            &cache,
+            &snapshot,
+            "a/old.txt",
+            &WritePrecondition::CreateNew,
+        )
+        .is_err());
+        assert!(matches!(
+            check_delete_precondition(
+                &cache,
+                &snapshot,
+                "a/old.txt",
+                &DeletePrecondition::IfMatch(RemoteVersion::new(old.to_string())),
+            ),
+            Ok(())
+        ));
+        assert!(check_object_precondition(
+            &cache,
+            &snapshot,
+            "z/untouched/deep.txt",
+            Some(&RemoteVersion::new(
+                snapshot
+                    .blob_oid(&cache, "z/untouched/deep.txt")
+                    .unwrap()
+                    .unwrap()
+                    .to_string(),
+            )),
+        )
+        .is_ok());
+
+        let expected = vec![RemoteEntry {
+            path: "deep.txt".to_string(),
+            version: RemoteVersion::new(
+                snapshot
+                    .blob_oid(&cache, "z/untouched/deep.txt")
+                    .unwrap()
+                    .unwrap()
+                    .to_string(),
+            ),
+        }];
+        assert!(check_prefix_precondition(&cache, &snapshot, "z/untouched", &expected).is_ok());
+        assert!(check_prefix_precondition(&cache, &snapshot, "z/untouched", &[]).is_err());
+    }
 
     #[test]
     fn interrupted_ssl_transport_maps_to_network() {

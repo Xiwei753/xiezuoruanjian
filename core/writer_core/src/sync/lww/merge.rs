@@ -34,19 +34,19 @@ use crate::sync::content_class::{
     decide_correction_result_sync, is_document_content_path, is_synced_result_path,
     CorrectionResultSyncDecision,
 };
+use crate::sync::manifest_delta::ManifestDelta;
 use crate::sync::path::ValidatedSyncPath;
 use crate::sync::provider::SyncProvider;
-use crate::sync::scanner::scan_for_sync;
 use crate::sync::types::{
-    ManifestFileRecord, SyncConflict, SyncConflictKind, SyncKind, SyncManifest, SyncScope,
-    SyncState,
+    ManifestFileRecord, SyncConflict, SyncConflictKind, SyncManifest, SyncScope, SyncState,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use super::compare::{resolve_path_decision, PathDecision};
 use super::manifest::{
-    build_remote_records, lww_record_time, snapshot_local_records_for_merge, SYNC_MANIFEST_PATH,
+    build_remote_records, lww_record_time, snapshot_local_records_for_merge, ManifestStore,
+    SYNC_MANIFEST_PATH,
 };
 use super::transfer::{
     download_pending_take_remote, download_remote_files, fetch_remote_manifest, fetch_remote_tree,
@@ -135,6 +135,90 @@ fn record_sync_object_event(
         message: None,
         fields,
     });
+}
+
+/// 合并结果的记录收集器。
+///
+/// - 全量模式：收集完整清单（未涉及对象也在这里）；
+/// - 稀疏模式：只收集 affected 覆盖（`Some(record)` = 覆盖/新增，
+///   `None` = 从清单移除），未涉及记录由基线 manifest 直接引用。
+struct MergeRecordSink {
+    full: HashMap<String, ManifestFileRecord>,
+    sparse: Option<BTreeMap<String, Option<ManifestFileRecord>>>,
+    /// delete 墓碑清除阈值（毫秒）。全量模式在最终 Vec 上统一 retain；
+    /// 稀疏模式在写入覆盖时判定，避免改动未涉及的基线记录。
+    purge_time: i64,
+}
+
+impl MergeRecordSink {
+    fn new(sparse: bool, purge_time: i64) -> Self {
+        Self {
+            full: HashMap::new(),
+            sparse: sparse.then(BTreeMap::new),
+            purge_time,
+        }
+    }
+
+    fn insert(&mut self, path: String, record: ManifestFileRecord) {
+        if let Some(overrides) = &mut self.sparse {
+            let keep = record.op != "delete" || lww_record_time(&record) > self.purge_time;
+            overrides.insert(path, keep.then_some(record));
+        } else {
+            self.full.insert(path, record);
+        }
+    }
+
+    fn contains_key(&self, path: &str) -> bool {
+        match &self.sparse {
+            Some(overrides) => overrides.contains_key(path),
+            None => self.full.contains_key(path),
+        }
+    }
+
+    fn get_mut(&mut self, path: &str) -> Option<&mut ManifestFileRecord> {
+        match &mut self.sparse {
+            Some(overrides) => overrides.get_mut(path).and_then(Option::as_mut),
+            None => self.full.get_mut(path),
+        }
+    }
+}
+
+/// 把稀疏覆盖应用到已排序的基线清单，产出一份新的有序 Vec。
+///
+/// 基线记录整体移动（不 clone），只有 affected 覆盖记录按需 clone 一次；
+/// `None` 覆盖表示从最终清单移除（过期 delete 墓碑/显式删除）。
+fn apply_affected_to_baseline(
+    baseline: Vec<ManifestFileRecord>,
+    overrides: BTreeMap<String, Option<ManifestFileRecord>>,
+) -> Vec<ManifestFileRecord> {
+    let mut out = Vec::with_capacity(baseline.len() + overrides.len());
+    let mut overrides = overrides.into_iter().peekable();
+    for base_record in baseline {
+        // 先把路径小于当前基线记录的新增/覆盖项输出。
+        while let Some((path, _)) = overrides.peek() {
+            if path.as_str() >= base_record.path.as_str() {
+                break;
+            }
+            if let Some((_, Some(record))) = overrides.next() {
+                out.push(record);
+            }
+        }
+        match overrides.peek() {
+            Some((path, _)) if path.as_str() == base_record.path.as_str() => {
+                if let Some((_, Some(record))) = overrides.next() {
+                    out.push(record);
+                }
+                // None = 从最终清单移除，基线记录随之丢弃。
+            }
+            _ => out.push(base_record),
+        }
+    }
+    for (_, record) in overrides {
+        if let Some(record) = record {
+            out.push(record);
+        }
+    }
+    out
 }
 
 /// LWW merge 核心产出。
@@ -331,14 +415,54 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     let local_snapshot =
         snapshot_local_records_for_merge(sync_root, scope, &state.device_id, app_group, sparse)?;
     let local_records = local_snapshot.records;
-    let remote_records = build_remote_records(
-        remote_manifest,
-        &remote_tree_files,
-        scope,
-        app_group,
-        provider,
-        source_remote_prefix,
-    )?;
+
+    // 稀疏基线：未受影响记录的权威来源。读取一次后只在最终构造清单时使用；
+    // 不在 LWW 循环里逐条 clone/判定。非稀疏路径不需要基线（本轮完整清单
+    // 由 records 直接构造）。
+    let manifest_rel_path = app_group
+        .map(crate::sync::types::AppDataGroup::local_manifest_path)
+        .unwrap_or_else(|| SYNC_MANIFEST_PATH.to_string());
+    let baseline_manifest = match sparse {
+        Some(_) => ManifestStore::new(sync_root, &manifest_rel_path)
+            .load_all()?
+            .unwrap_or_default(),
+        None => SyncManifest::default(),
+    };
+
+    // 远端记录同样只筛 affected：稀疏模式不把整张远端 manifest clone 成
+    // path → record 表，未涉及远端记录由上面的基线 manifest 引用。
+    let remote_records = match sparse {
+        Some(plan) => {
+            let affected_manifest = SyncManifest {
+                files: remote_manifest
+                    .files
+                    .into_iter()
+                    .filter(|record| plan.contains(&record.path))
+                    .collect(),
+            };
+            let affected_tree: HashMap<String, String> = remote_tree_files
+                .iter()
+                .filter(|(path, _)| plan.contains(path))
+                .map(|(path, sha)| (path.clone(), sha.clone()))
+                .collect();
+            build_remote_records(
+                affected_manifest,
+                &affected_tree,
+                scope,
+                app_group,
+                provider,
+                source_remote_prefix,
+            )?
+        }
+        None => build_remote_records(
+            remote_manifest,
+            &remote_tree_files,
+            scope,
+            app_group,
+            provider,
+            source_remote_prefix,
+        )?,
+    };
 
     // ── 已知文件缺失恢复（#931）──
     // missing_without_delete_fact 中的路径磁盘缺失但没有删除事实：
@@ -492,6 +616,8 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         .known_files
         .iter()
         .filter(|(_, h)| crate::sync::hash::is_legacy_git_blob_oid(h))
+        // 稀疏模式只归一化 affected 路径；未涉及对象的基线原样保留。
+        .filter(|(path, _)| sparse.map_or(true, |plan| plan.contains(path)))
         .map(|(p, _)| p.clone())
         .collect();
     for path in legacy_paths {
@@ -711,7 +837,8 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
             .retain(|p| pending_take_remote_failed.contains(p));
     }
 
-    let mut merged_manifest_files = std::collections::HashMap::new();
+    let purge_time = now_ms - 30 * 24 * 3600 * 1000;
+    let mut merged_records = MergeRecordSink::new(sparse.is_some(), purge_time);
     let mut to_download = Vec::new();
     let mut to_upload = Vec::new();
     let mut to_delete_local = Vec::new();
@@ -722,6 +849,8 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     let mut doc_conflicts: Vec<SyncConflict> = Vec::new();
     let mut ignored_files = Vec::new();
 
+    // 稀疏模式下 local_records / remote_records 都已裁剪到 affected；
+    // 未涉及对象完全不进入本循环，由 baseline_manifest 引用。
     let all_paths: std::collections::HashSet<String> = local_records
         .keys()
         .cloned()
@@ -729,32 +858,11 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         .collect();
 
     for path in all_paths {
-        // 对象级增量（评审 #7214105551 第 3/4 项）：不在 affected set 的对象本轮
-        // 没有加载字节，不代表删除，直接沿用固定远端基线的记录；affected 但
-        // Unloaded 的对象同样按“未读取、未改变”处理，不进入 LWW/删除判定。
-        if let Some(plan) = sparse {
-            let unloaded = matches!(
-                plan.state_of(&path),
-                crate::sync::sparse_plan::ObjectState::Unloaded
-            );
-            if !plan.contains(&path) || unloaded {
-                if let Some(record) = remote_records
-                    .get(&path)
-                    .or_else(|| local_records.get(&path))
-                    .cloned()
-                {
-                    merged_manifest_files.insert(path.clone(), record);
-                }
-                // 未涉及对象不是“被忽略的变更”，不进结果列表（否则整棵远端树
-                // 都会被当成 ignored 回传）。
-                continue;
-            }
-        }
         if recovered_missing_files.contains(&path) {
             // 本轮刚从远端 blob 恢复的文件：按远端真实记录进入 merged manifest，
             // 文件内容已写回磁盘，后续 scan 会重建 known_files。
             if let Some(remote_rec) = remote_records.get(&path) {
-                merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                merged_records.insert(path.clone(), remote_rec.clone());
             }
             ignored_files.push(path);
             continue;
@@ -762,14 +870,14 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         if pending_take_remote_all_set.contains(&path) {
             if pending_take_remote_downloaded.contains(&path) {
                 if let Some(remote_rec) = remote_records.get(&path) {
-                    merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                    merged_records.insert(path.clone(), remote_rec.clone());
                 }
                 ignored_files.push(path);
             } else {
                 if let Some(remote_rec) = remote_records.get(&path) {
-                    merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                    merged_records.insert(path.clone(), remote_rec.clone());
                 } else if let Some(local_rec) = local_records.get(&path) {
-                    merged_manifest_files.insert(path.clone(), local_rec.clone());
+                    merged_records.insert(path.clone(), local_rec.clone());
                 }
             }
             continue;
@@ -780,9 +888,9 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
                 path
             );
             if let Some(remote_rec) = remote_records.get(&path) {
-                merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                merged_records.insert(path.clone(), remote_rec.clone());
             } else if let Some(local_rec) = local_records.get(&path) {
-                merged_manifest_files.insert(path.clone(), local_rec.clone());
+                merged_records.insert(path.clone(), local_rec.clone());
             }
             continue;
         }
@@ -802,15 +910,15 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
                     local_rec.content_hash == remote_rec.content_hash,
                 ) {
                     CorrectionResultSyncDecision::NoOp => {
-                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        merged_records.insert(path.clone(), local_rec.clone());
                         ignored_files.push(path);
                     }
                     CorrectionResultSyncDecision::ApplyIncoming => {
-                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        merged_records.insert(path.clone(), remote_rec.clone());
                         to_download.push(path);
                     }
                     CorrectionResultSyncDecision::KeepLocal { resend } => {
-                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        merged_records.insert(path.clone(), local_rec.clone());
                         if resend {
                             // 远端删除/缺失但本地仍有记录：重新发布，别台设备
                             // 仍需要的记录不会被这次删除带走。
@@ -830,13 +938,13 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
 
         match (local_opt, remote_opt) {
             (Some(local_rec), None) => {
-                merged_manifest_files.insert(path.clone(), local_rec.clone());
+                merged_records.insert(path.clone(), local_rec.clone());
                 if local_rec.op == "upsert" {
                     to_upload.push(path);
                 }
             }
             (None, Some(remote_rec)) => {
-                merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                merged_records.insert(path.clone(), remote_rec.clone());
                 if remote_rec.op == "upsert" {
                     to_download.push(path);
                 } else if remote_rec.op == "delete" {
@@ -869,37 +977,37 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
 
                 match resolution.decision {
                     PathDecision::NoOp => {
-                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        merged_records.insert(path.clone(), local_rec.clone());
                         ignored_files.push(path);
                     }
                     PathDecision::UploadLocal => {
-                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        merged_records.insert(path.clone(), local_rec.clone());
                         to_upload.push(path);
                     }
                     PathDecision::DownloadRemote => {
-                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        merged_records.insert(path.clone(), remote_rec.clone());
                         to_download.push(path);
                     }
                     PathDecision::DeleteLocal => {
-                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        merged_records.insert(path.clone(), remote_rec.clone());
                         to_delete_local.push(path.clone());
                         remote_deletes_count.push(path);
                     }
                     PathDecision::LwwRemoteWinsDownload => {
-                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        merged_records.insert(path.clone(), remote_rec.clone());
                         to_download.push(path);
                     }
                     PathDecision::LwwRemoteWinsDelete => {
-                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        merged_records.insert(path.clone(), remote_rec.clone());
                         to_delete_local.push(path.clone());
                         remote_deletes_count.push(path);
                     }
                     PathDecision::LwwLocalWinsUpload => {
-                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        merged_records.insert(path.clone(), local_rec.clone());
                         to_upload.push(path);
                     }
                     PathDecision::LwwLocalWinsDeleteRecord => {
-                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        merged_records.insert(path.clone(), local_rec.clone());
                         local_deletes_count.push(path);
                     }
                     PathDecision::DocumentConflictRemoteDeleted => {
@@ -920,7 +1028,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
                         doc_conflicts.push(conflict.clone());
                         state.conflicted_files.insert(path.clone());
                         state.conflicts.push(conflict);
-                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        merged_records.insert(path.clone(), remote_rec.clone());
                     }
                     PathDecision::DocumentConflictBothChanged => {
                         let local_hash = &local_rec.content_hash;
@@ -960,7 +1068,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
                             state.conflicted_files.insert(path.clone());
                             state.conflicts.push(conflict.clone());
                         }
-                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        merged_records.insert(path.clone(), remote_rec.clone());
                     }
                 }
             }
@@ -974,11 +1082,11 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         if !unresolved_missing_paths.contains(&missing.path) {
             continue;
         }
-        if merged_manifest_files.contains_key(&missing.path) {
+        if merged_records.contains_key(&missing.path) {
             continue;
         }
         if let Some(rec) = &missing.manifest_record {
-            merged_manifest_files.insert(missing.path.clone(), rec.clone());
+            merged_records.insert(missing.path.clone(), rec.clone());
         }
     }
 
@@ -995,7 +1103,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         if let Some(normalized) = crate::settings::normalize_syncable_settings_file(&settings_path)?
         {
             let canonical_hash = crate::sync::hash::content_md5(&normalized);
-            if let Some(record) = merged_manifest_files.get_mut(settings_rel) {
+            if let Some(record) = merged_records.get_mut(settings_rel) {
                 record.content_hash = canonical_hash.clone();
                 state
                     .known_files
@@ -1017,19 +1125,53 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         }
     }
 
-    // 清除超过 30 天的 delete 墓碑记录。
-    let purge_time = now_ms - 30 * 24 * 3600 * 1000;
-    let mut manifest_files_vec: Vec<ManifestFileRecord> =
-        merged_manifest_files.values().cloned().collect();
-    manifest_files_vec.retain(|rec| rec.op != "delete" || lww_record_time(rec) > purge_time);
-    manifest_files_vec.sort_by(|a, b| a.path.cmp(&b.path));
-
-    // 对象级基线增量：只把本轮真正变化的记录并入 known_files，未涉及对象
-    // 保留原基线，不再扫描整棵目录重建（评审 #7218195841 第 4 项）。
-    let manifest_delta = crate::sync::manifest_delta::ManifestDelta::from_records(
-        manifest_files_vec.iter(),
-        &state.known_files,
-    );
+    // 全量/稀疏两条构造路径：
+    // - 稀疏：基线 Vec 直接移动，只把 affected 覆盖合并进去；增量只比较
+    //   affected 范围，未涉及的 objects/index 永远不重写；
+    // - 全量：收集完整记录后清理墓碑、排序，保持原行为。
+    let MergeRecordSink {
+        full,
+        sparse: sparse_overrides,
+        purge_time,
+    } = merged_records;
+    let (manifest_files_vec, manifest_delta) = match (sparse, sparse_overrides) {
+        (Some(plan), Some(overrides)) => {
+            let base_manifest = baseline_manifest;
+            let affected_paths = plan.affected_paths();
+            let base_by_path: BTreeMap<&str, &ManifestFileRecord> = base_manifest
+                .files
+                .iter()
+                .filter(|record| affected_paths.contains(record.path.as_str()))
+                .map(|record| (record.path.as_str(), record))
+                .collect();
+            // 只构造 affected 范围的最终记录用于求增量；未涉及基线不参与比较。
+            let affected_final: Vec<ManifestFileRecord> = affected_paths
+                .iter()
+                .filter_map(|path| match overrides.get(path) {
+                    Some(Some(record)) => Some(record.clone()),
+                    Some(None) => None,
+                    None => base_by_path
+                        .get(path.as_str())
+                        .map(|record| (*record).clone()),
+                })
+                .collect();
+            let delta = ManifestDelta::between(&base_manifest, &affected_final, affected_paths);
+            let files = apply_affected_to_baseline(base_manifest.files, overrides);
+            (files, delta)
+        }
+        (None, None) => {
+            let mut files: Vec<ManifestFileRecord> = full.into_values().collect();
+            files.retain(|rec| rec.op != "delete" || lww_record_time(rec) > purge_time);
+            files.sort_by(|a, b| a.path.cmp(&b.path));
+            let delta = ManifestDelta::from_records(files.iter(), &state.known_files);
+            (files, delta)
+        }
+        _ => {
+            return Err(crate::Error::Other(
+                "merge: sparse manifest overrides without sparse plan".to_string(),
+            ))
+        }
+    };
     let sync_manifest = SyncManifest {
         files: manifest_files_vec,
     };
@@ -1063,33 +1205,20 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         ))
     };
 
-    // ── 同步后重建 known_files ──
-    // 稀疏模式：本轮未加载的对象不在扫描结果里，它们的已确认基线必须原样保留，
-    // 不能被"清空重建"抹掉（复审 #7213234617 第 2 项）。
-    let unloaded_known_files: Vec<(String, String, i64)> = match sparse {
-        Some(plan) => state
-            .known_files
-            .iter()
-            .filter(|(path, _)| !plan.contains(path))
-            .map(|(path, hash)| {
-                let updated = state
-                    .known_files_updated_at
-                    .get(path)
-                    .copied()
-                    .unwrap_or_default();
-                (path.clone(), hash.clone(), updated)
-            })
-            .collect(),
-        None => Vec::new(),
-    };
+    // ── 同步后结算 known_files ──
+    // 以现有 state.known_files 为基线，只对 affected path 做 insert/remove。
+    // 未涉及键保持原值：稀疏模式不再 clear 后整树回填，也不把“未加载”
+    // 当成删除（复审 #7213234617 第 2 项）。
     let conflicted_known_files: std::collections::HashMap<String, String> = state
         .conflicted_files
         .iter()
+        .filter(|p| sparse.map_or(true, |plan| plan.contains(p)))
         .filter_map(|p| state.known_files.get(p).map(|v| (p.clone(), v.clone())))
         .collect();
     let conflicted_known_files_updated_at: std::collections::HashMap<String, i64> = state
         .conflicted_files
         .iter()
+        .filter(|p| sparse.map_or(true, |plan| plan.contains(p)))
         .filter_map(|p| state.known_files_updated_at.get(p).map(|v| (p.clone(), *v)))
         .collect();
 
@@ -1100,10 +1229,6 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         manifest_delta.deletes.len()
     );
 
-    for (path, hash, updated) in unloaded_known_files {
-        state.known_files.entry(path.clone()).or_insert(hash);
-        state.known_files_updated_at.entry(path).or_insert(updated);
-    }
     for (path, hash) in conflicted_known_files {
         state.known_files.insert(path, hash);
     }
@@ -1135,6 +1260,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     // 一次事务原子提交 manifest + state + conflicts.json，
     // 避免分多次独立写入中间崩溃导致三者不一致。
     if let Some(group) = app_group {
+        // App group 的稀疏计划尚未接线；仍按完整清单求存储差，语义等价。
         crate::sync::conflict::persist_sync_merge_result_at_paths(
             sync_root,
             &group.local_manifest_path(),
@@ -1142,6 +1268,16 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
             &group.local_state_path(),
             state,
             &group.local_conflicts_path(),
+            &conflicts_json,
+        )?;
+    } else if sparse.is_some() {
+        // 稀疏路径：只提交 affected 对象的 upsert/delete，未涉及
+        // objects/index 保持原字节；非稀疏路径仍走完整清单入口。
+        crate::sync::conflict::persist_sync_merge_delta(
+            sync_root,
+            SYNC_MANIFEST_PATH,
+            &manifest_delta,
+            state,
             &conflicts_json,
         )?;
     } else {

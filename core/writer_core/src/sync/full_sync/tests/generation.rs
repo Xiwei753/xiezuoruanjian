@@ -222,3 +222,169 @@ fn test_restore_project_downloads_from_generation_prefix() {
         transfer.targets[0].result.status
     );
 }
+
+/// #1062 评论 #7219676521：清单存储与业务对象在同一 batch 提交，root Put 最后。
+///
+/// 期望顺序：业务 Put → 清单内容寻址对象 Put → 清单索引 Put → 根 Put（提交点）。
+#[test]
+fn batch_publishes_business_and_v2_manifest_with_root_last() {
+    use crate::sync::provider::capabilities::SyncCapabilities;
+    use crate::sync::provider::error::ProviderError;
+    use crate::sync::provider::model::{
+        BatchCommitResult, BatchMutation, DeletePrecondition, RemoteEntry, RemoteObject,
+        RemoteVersion, WritePrecondition,
+    };
+    use crate::sync::types::{SyncPolicy, SyncScope, SyncStatus};
+    use std::sync::Mutex;
+
+    /// 记录 `commit_batch` mutations 的 Provider（其余操作透传 MemoryProvider）。
+    struct RecordingBatchProvider {
+        inner: MemoryProvider,
+        mutations: Mutex<Vec<BatchMutation>>,
+    }
+
+    impl RecordingBatchProvider {
+        fn new() -> Self {
+            Self {
+                inner: MemoryProvider::new(),
+                mutations: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn recorded(&self) -> Vec<BatchMutation> {
+            self.mutations
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone()
+        }
+    }
+
+    impl SyncProvider for RecordingBatchProvider {
+        fn capabilities(&self) -> SyncCapabilities {
+            self.inner.capabilities()
+        }
+
+        fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
+            self.inner.list(prefix)
+        }
+
+        fn read(&self, path: &str) -> Result<Option<RemoteObject>, ProviderError> {
+            self.inner.read(path)
+        }
+
+        fn write(
+            &self,
+            path: &str,
+            content: &[u8],
+            precondition: WritePrecondition,
+        ) -> Result<RemoteVersion, ProviderError> {
+            self.inner.write(path, content, precondition)
+        }
+
+        fn delete(
+            &self,
+            path: &str,
+            precondition: DeletePrecondition,
+        ) -> Result<(), ProviderError> {
+            self.inner.delete(path, precondition)
+        }
+
+        fn commit_batch(
+            &self,
+            mutations: &[BatchMutation],
+            message: &str,
+        ) -> Result<BatchCommitResult, ProviderError> {
+            self.mutations
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .extend_from_slice(mutations);
+            self.inner.commit_batch(mutations, message)
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let staging = tmp.path().join("staging");
+    let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+    let chapter_path = staging.join(chapter_rel);
+    std::fs::create_dir_all(chapter_path.parent().unwrap()).unwrap();
+    std::fs::write(&chapter_path, b"chapter content").unwrap();
+
+    let manifest = SyncManifest {
+        files: vec![ManifestFileRecord {
+            path: chapter_rel.to_string(),
+            content_hash: format!("{:x}", md5::compute(b"chapter content")),
+            updated_at_ms: 10_000,
+            deleted_at_ms: None,
+            device_id: "dev-A".to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }],
+    };
+    std::fs::create_dir_all(staging.join("app-meta/sync")).unwrap();
+    std::fs::write(
+        staging.join("app-meta/sync/manifest.sync.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let provider = RecordingBatchProvider::new();
+    let policy = SyncPolicy {
+        enabled: true,
+        auto_sync: false,
+        sync_interval_seconds: 60,
+        has_network_permission: true,
+    };
+    // merge_outcome == None：首次同步，清单来自 staging 的物化视图。
+    let result = super::super::generation::publish_tree_snapshot(
+        &provider,
+        &staging,
+        "projects/p1",
+        SyncScope::Project,
+        None,
+        &policy,
+        true,
+        None,
+        None,
+    );
+    assert!(
+        matches!(&result.status, SyncStatus::Success),
+        "首次发布应为 Success，实际 {:?}（error={:?}）",
+        result.status,
+        result.error
+    );
+
+    let mutations = provider.recorded();
+    let paths: Vec<&str> = mutations.iter().map(BatchMutation::path).collect();
+    let business = paths
+        .iter()
+        .position(|path| *path == "projects/p1/volumes/v1/chapters/c1/chapter.md")
+        .unwrap_or_else(|| panic!("业务对象应与清单在同一 batch，实际 {paths:?}"));
+    let object = paths
+        .iter()
+        .position(|path| path.starts_with("projects/p1/app-meta/sync/manifest/objects/"))
+        .unwrap_or_else(|| panic!("batch 应包含清单内容寻址对象 Put，实际 {paths:?}"));
+    let index = paths
+        .iter()
+        .position(|path| path.starts_with("projects/p1/app-meta/sync/manifest/index/"))
+        .unwrap_or_else(|| panic!("batch 应包含清单索引 Put，实际 {paths:?}"));
+    let root = paths
+        .iter()
+        .position(|path| *path == "projects/p1/app-meta/sync/manifest/root.json")
+        .unwrap_or_else(|| panic!("batch 应包含 v2 清单根 Put，实际 {paths:?}"));
+
+    assert_eq!(
+        root,
+        mutations.len() - 1,
+        "root 的 Put 必须是 mutations 最后一项，实际 {paths:?}"
+    );
+    assert!(
+        matches!(mutations[root], BatchMutation::Put { .. }),
+        "root 必须是 Put"
+    );
+    assert!(
+        business < object,
+        "业务对象应先于清单对象写入，实际 {paths:?}"
+    );
+    assert!(object < index, "清单对象应先于索引写入，实际 {paths:?}");
+    assert!(index < root, "根必须最后写，实际 {paths:?}");
+}

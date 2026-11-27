@@ -479,9 +479,9 @@ impl<'a> RoundProvider<'a> {
             return 0;
         };
         let before = state.entries.len();
-        state
-            .entries
-            .retain(|path, _| covered.contains(path.as_str()) || is_lifecycle_publish_path(path));
+        state.entries.retain(|path, value| {
+            covered.contains(path.as_str()) || is_lifecycle_publish_path(path, value.is_none())
+        });
         before.saturating_sub(state.entries.len())
     }
 
@@ -898,6 +898,92 @@ mod tests {
     }
 
     #[test]
+    fn retain_keeps_manifest_storage_in_same_commit() {
+        use crate::sync::decision::{DecisionOp, DecisionOrigin, DurableObjectDecision};
+
+        let inner = MemoryProvider::new();
+        let round = RoundProvider::new(&inner, None);
+        for (path, bytes) in [
+            (
+                "projects/P/app-meta/sync/manifest/root.json",
+                b"root".as_slice(),
+            ),
+            (
+                "projects/P/app-meta/sync/manifest/objects/abc.json",
+                b"obj".as_slice(),
+            ),
+            (
+                "projects/P/volumes/v1/chapters/c1/chapter.md",
+                b"one".as_slice(),
+            ),
+            (
+                "projects/P/volumes/v1/chapters/c2/chapter.md",
+                b"two".as_slice(),
+            ),
+        ] {
+            round
+                .write(path, bytes, WritePrecondition::CreateNew)
+                .unwrap();
+        }
+        let decision = DurableObjectDecision {
+            transaction_id: "tx".to_string(),
+            identity: "volumes/v1/chapters/c1/chapter.md".to_string(),
+            op: DecisionOp::Upsert,
+            base_hash: None,
+            final_hash: "hash".to_string(),
+            final_version: Some(1),
+            mutation_seq: 1,
+            origin: DecisionOrigin::Local,
+            content: Some(b"one".to_vec()),
+            dependencies: Vec::new(),
+        };
+        // 旧单文件不再能成为发布依据；但迁移清理的 Delete 必须保留。
+        round
+            .write(
+                "projects/P/app-meta/sync/manifest.sync.json",
+                b"legacy".as_slice(),
+                WritePrecondition::CreateNew,
+            )
+            .unwrap();
+        round
+            .delete(
+                "projects/P/app-meta/sync/manifest-shards/volumes.json",
+                DeletePrecondition::Unconditional,
+            )
+            .unwrap();
+        let removed = round.retain_decided_objects(&[(
+            "projects/P/volumes/v1/chapters/c1/chapter.md".to_string(),
+            decision,
+        )]);
+        assert_eq!(removed, 2, "未决议业务对象与旧单文件 Put 必须被过滤");
+        round.flush().unwrap();
+
+        assert!(inner
+            .read("projects/P/app-meta/sync/manifest/root.json")
+            .unwrap()
+            .is_some());
+        assert!(inner
+            .read("projects/P/app-meta/sync/manifest/objects/abc.json")
+            .unwrap()
+            .is_some());
+        assert!(inner
+            .read("projects/P/volumes/v1/chapters/c1/chapter.md")
+            .unwrap()
+            .is_some());
+        assert!(inner
+            .read("projects/P/volumes/v1/chapters/c2/chapter.md")
+            .unwrap()
+            .is_none());
+        assert!(
+            inner
+                .read("projects/P/app-meta/sync/manifest.sync.json")
+                .unwrap()
+                .is_none(),
+            "旧单文件 Put 不得发布"
+        );
+    }
+
+    #[test]
     fn virtual_round_versions_stay_inside_the_overlay() {
         let inner = MemoryProvider::new();
         let round = RoundProvider::new(&inner, None);
@@ -973,13 +1059,34 @@ mod tests {
 }
 
 /// 生命周期/派生元数据路径：不是业务对象的发布决议，允许由各自流程直写。
-fn is_lifecycle_publish_path(path: &str) -> bool {
+///
+/// 同步清单（v2 根/索引/对象，以及迁移期的旧单文件与 namespace 分片）
+/// 与业务对象属于同一次发布提交：根切换必须和本轮对象决议一起落远端，
+/// 因此这些路径不能被决议过滤掉（评论 #7219676521 第一项）。
+fn is_lifecycle_publish_path(path: &str, is_delete: bool) -> bool {
     path.ends_with("/app-meta/sync/targets.sync.json")
         || path == crate::sync::target_lifecycle::TARGET_CATALOG_REMOTE_PATH
-        || path == crate::sync::lww::SYNC_MANIFEST_PATH
-        || path.ends_with("/app-meta/sync/manifest.sync.json")
+        || is_manifest_publish_path(path, is_delete)
         || path.contains("/__generations__/")
         || path.starts_with("__generations__/")
         || path.contains("/__gc__/")
         || path.starts_with("__gc__/")
+}
+
+/// 远端清单存储路径。
+///
+/// v2 `manifest/` 的根/索引/对象是同一 durable 提交的派生路径，允许随业务
+/// 对象一起发布。旧单文件与旧 `manifest-shards/` 只在迁移清理时**删除**，
+/// 不再允许把旧单文件本身当作新的发布依据（评论 #7219676521 第一项）。
+fn is_manifest_publish_path(path: &str, is_delete: bool) -> bool {
+    let v2 =
+        path.contains("/app-meta/sync/manifest/") || path.starts_with("app-meta/sync/manifest/");
+    if v2 {
+        return true;
+    }
+    let legacy = path == crate::sync::lww::SYNC_MANIFEST_PATH
+        || path.ends_with("/app-meta/sync/manifest.sync.json")
+        || path.contains("/app-meta/sync/manifest-shards/")
+        || path.starts_with("app-meta/sync/manifest-shards/");
+    legacy && is_delete
 }

@@ -744,6 +744,66 @@ fn write_remote_generation(
         .unwrap();
 }
 
+/// 读取稳定树 `prefix` 下的 v2 权威清单。
+///
+/// #1062 评论 #7219676521：远端不再发布旧单文件 / 旧分片，权威是
+/// `app-meta/sync/manifest/root.json` 提交点 + 两级索引 + 内容寻址对象。
+/// 这里按根严格重建完整记录集，顺带校验索引/对象的 sha256 文件名。
+fn read_remote_manifest_v2(provider: &dyn SyncProvider, prefix: &str) -> SyncManifest {
+    let base = format!("{prefix}/app-meta/sync/manifest");
+    let root_obj = provider
+        .read(&format!("{base}/root.json"))
+        .unwrap()
+        .expect("稳定树应包含 v2 清单根 root.json");
+    let root: serde_json::Value = serde_json::from_slice(&root_obj.content).unwrap();
+    let mut files = Vec::new();
+    let namespaces = root["namespaces"]
+        .as_object()
+        .expect("v2 清单根缺少 namespaces");
+    for (namespace, index_sha) in namespaces {
+        let index_sha = index_sha.as_str().expect("root 中的索引 sha 应为字符串");
+        let index_path = format!("{base}/index/{namespace}.json");
+        let index_obj = provider
+            .read(&index_path)
+            .unwrap()
+            .unwrap_or_else(|| panic!("v2 清单索引缺失: {index_path}"));
+        assert_eq!(
+            sha256_hex(&index_obj.content),
+            index_sha,
+            "索引内容 sha256 必须等于 root 记录的值"
+        );
+        let index: serde_json::Value = serde_json::from_slice(&index_obj.content).unwrap();
+        for object_sha in index["objects"]
+            .as_object()
+            .expect("v2 索引缺少 objects 映射")
+            .values()
+        {
+            let object_sha = object_sha.as_str().expect("索引中的对象 sha 应为字符串");
+            let object_path = format!("{base}/objects/{object_sha}.json");
+            let object_obj = provider
+                .read(&object_path)
+                .unwrap()
+                .unwrap_or_else(|| panic!("v2 清单对象缺失: {object_path}"));
+            assert_eq!(
+                sha256_hex(&object_obj.content),
+                object_sha,
+                "对象内容 sha256 必须等于其内容寻址文件名"
+            );
+            let object: serde_json::Value = serde_json::from_slice(&object_obj.content).unwrap();
+            let records: Vec<ManifestFileRecord> =
+                serde_json::from_value(object["files"].clone()).unwrap();
+            files.extend(records);
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    SyncManifest { files }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 /// 场景 6（Issue #716 评论 5741695768）：remote Upsert 严格赢 + 本轮 merge 产生 unresolved conflict
 /// → publish_count == 0，PartialConflict，冲突列表非空。
 ///
@@ -1416,17 +1476,14 @@ fn regression_scenario_11_tombstone_publishes_new_generation_and_reports_local_d
         record.active_generation
     );
     assert_ne!(record.active_generation.as_deref(), Some(GEN_EXISTING));
-    // #1062 评论 #7218195841：清单按命名空间分片发布，顶层对象在 _root 分片。
-    let manifest_obj = provider
-        .read("projects/p1/app-meta/sync/manifest-shards/_root.json")
-        .unwrap()
-        .expect("稳定树应包含清单根分片");
-    let manifest: SyncManifest = serde_json::from_slice(&manifest_obj.content).unwrap();
+    // #1062 评论 #7219676521：清单按 v2 根 + 两级索引 + 内容寻址对象发布，
+    // 顶层对象（project.json）的 delete 墓碑记录同样在对象里。
+    let manifest = read_remote_manifest_v2(&provider, "projects/p1");
     let record = manifest
         .files
         .iter()
         .find(|f| f.path == "project.json")
-        .expect("新 generation manifest 应包含 project.json 的 delete 记录");
+        .expect("新稳定树 manifest 应包含 project.json 的 delete 记录");
     assert_eq!(
         record.op, "delete",
         "新 generation manifest 中 project.json 应为 delete 墓碑记录"
@@ -1661,17 +1718,12 @@ fn regression_scenario_13_conflict_with_remote_delete_paths_still_publishes() {
         record.active_generation
     );
     assert_ne!(record.active_generation.as_deref(), Some(GEN_EXISTING));
-    // 章节正文落在 volumes 命名空间分片。
-    let generation_manifest_path = "projects/p1/app-meta/sync/manifest-shards/volumes.json";
-    let manifest_obj = provider
-        .read(generation_manifest_path)
-        .unwrap()
-        .expect("稳定树应包含清单 volumes 分片");
-    let manifest: SyncManifest = serde_json::from_slice(&manifest_obj.content).unwrap();
-    let chapter = manifest
+    // 章节正文记录落在 volumes 命名空间的对象里（#1062：v2 根 + 两级索引）。
+    let generation_manifest = read_remote_manifest_v2(&provider, "projects/p1");
+    let chapter = generation_manifest
         .files
         .iter()
         .find(|f| f.path == "volumes/v1/chapters/chapter.md")
-        .expect("新 generation manifest 应保留 conflict 路径的远端记录");
+        .expect("新稳定树 manifest 应保留 conflict 路径的远端记录");
     assert_eq!(chapter.op, "upsert");
 }

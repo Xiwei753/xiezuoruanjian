@@ -504,8 +504,14 @@ pub(super) fn manifest_target_lww(
 /// `root` 是 staging root（`planned.staging_root`）或 `planned.local_root`。
 /// manifest 不存在或解析失败 → None（调用方返回 RecoverableError，不伪造旧时间）。
 pub(super) fn read_post_transfer_lww(root: &std::path::Path) -> Option<LiveTargetLww> {
-    let manifest_path = root.join("app-meta/sync/manifest.sync.json");
-    let content = std::fs::read(&manifest_path).ok()?;
-    let manifest: crate::sync::types::SyncManifest = serde_json::from_slice(&content).ok()?;
+    // 清单权威在 v2 store；单文件只是迁移前/物化视图，可能过期。
+    let manifest = crate::sync::lww::ManifestStore::new(root, crate::sync::lww::SYNC_MANIFEST_PATH)
+        .load_all()
+        .ok()
+        .flatten()
+        .or_else(|| {
+            let content = std::fs::read(root.join("app-meta/sync/manifest.sync.json")).ok()?;
+            serde_json::from_slice::<crate::sync::types::SyncManifest>(&content).ok()
+        })?;
     manifest_target_lww(&manifest)
 }

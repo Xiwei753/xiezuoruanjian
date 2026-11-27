@@ -578,17 +578,30 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
     // 对抗式：Success → Full，content 和 engine_state 都写回 live
     let live_project = fs::read_to_string(project_live.join(project_json)).unwrap();
     assert_eq!(live_project, "incoming-content");
-    // 清单权威存储已改为按命名空间分片：project.json 落入 _root 分片，
-    // 旧单文件不再写回。
-    let shard_path = project_live.join("app-meta/sync/manifest-shards/_root.json");
-    let shard_raw = fs::read_to_string(&shard_path).unwrap();
-    let shard_manifest: writer_core::sync::types::SyncManifest =
-        serde_json::from_str(&shard_raw).unwrap();
+    // 清单权威存储已改为版本化根 + 内容寻址对象 + 两级索引：
+    // project.json 落入 `_root` 索引的对象文件，旧单文件不再写回。
+    let root_path = project_live.join("app-meta/sync/manifest/root.json");
+    let root_raw = fs::read_to_string(&root_path).unwrap();
+    let root: serde_json::Value = serde_json::from_str(&root_raw).unwrap();
+    assert_eq!(root["schemaVersion"], 2, "v2 根应已生成");
     assert!(
-        shard_manifest
-            .files
-            .iter()
-            .any(|record| record.path == "project.json"),
+        root["namespaces"]["_root"].is_string(),
+        "顶层散文件应落入 _root namespace"
+    );
+    let index_path = project_live.join("app-meta/sync/manifest/index/_root.json");
+    let index_raw = fs::read_to_string(&index_path).unwrap();
+    let index: serde_json::Value = serde_json::from_str(&index_raw).unwrap();
+    let object_sha = index["objects"]["project.json"]
+        .as_str()
+        .expect("project.json 应进入 _root 索引");
+    let object_path =
+        project_live.join(format!("app-meta/sync/manifest/objects/{object_sha}.json"));
+    let object_raw = fs::read_to_string(&object_path).unwrap();
+    let object: serde_json::Value = serde_json::from_str(&object_raw).unwrap();
+    assert!(
+        object["files"]
+            .as_array()
+            .is_some_and(|files| files.iter().any(|record| record["path"] == "project.json")),
         "对抗式失败：Success → engine_state 应写回 incoming manifest 的对象记录"
     );
     assert!(!project_live.join(manifest).exists());

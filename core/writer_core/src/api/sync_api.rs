@@ -4010,43 +4010,6 @@ impl WriterCoreApi {
                 &committed_paths,
                 facts.unwrap_or(&empty_facts),
             );
-            // manifest 与对象同源：本次持锁提交刚写回的 manifest 在同一快照里
-            // 冻结成决议，发布路径不再在锁外回读。
-            let manifest_rel = match target_with_conflicts
-                .group_id
-                .as_deref()
-                .and_then(|group_id| crate::sync::types::AppDataGroup::from_id(group_id).ok())
-            {
-                Some(group) => group.local_manifest_path(),
-                None => crate::sync::lww::SYNC_MANIFEST_PATH.to_string(),
-            };
-            let manifest_bytes = crate::sync::lww::load_sharded_manifest(
-                run.target_live_root(),
-                &manifest_rel,
-            )
-            .ok()
-            .and_then(|manifest| manifest.canonical_json().ok())
-            .map(String::into_bytes)
-            .or_else(|| std::fs::read(run.target_live_root().join(&manifest_rel)).ok());
-            if let Some(bytes) = manifest_bytes {
-                let bytes = serde_json::from_slice::<crate::sync::types::SyncManifest>(&bytes)
-                    .ok()
-                    .and_then(|manifest| manifest.canonical_json().ok())
-                    .map(String::into_bytes)
-                    .unwrap_or(bytes);
-                decisions.push(crate::sync::decision::DurableObjectDecision {
-                    transaction_id: operation_id.to_string(),
-                    identity: crate::sync::lww::SYNC_MANIFEST_PATH.to_string(),
-                    op: crate::sync::decision::DecisionOp::Upsert,
-                    base_hash: None,
-                    final_hash: crate::sync::hash::content_md5(&bytes),
-                    final_version: None,
-                    mutation_seq: 0,
-                    origin: crate::sync::decision::DecisionOrigin::Local,
-                    content: Some(bytes),
-                    dependencies: Vec::new(),
-                });
-            }
             (
                 target_with_conflicts,
                 committed_paths,
@@ -4716,13 +4679,22 @@ fn staging_manifest_device_ids(
     run: &crate::sync::staging::StagingRun,
     default_project_id: Option<&str>,
 ) -> std::collections::HashMap<String, String> {
-    let path = run
-        .staging_root()
-        .join(crate::sync::lww::SYNC_MANIFEST_PATH);
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return std::collections::HashMap::new();
-    };
-    let Ok(manifest) = serde_json::from_str::<crate::sync::types::SyncManifest>(&text) else {
+    // 清单权威在 staging 的 v2 store；单文件只是 prepare 物化视图，合并后
+    // 可能过期。先读 store，没有 root 才回退单文件。
+    let staging_root = run.staging_root();
+    let manifest =
+        crate::sync::lww::ManifestStore::new(&staging_root, crate::sync::lww::SYNC_MANIFEST_PATH)
+            .load_all()
+            .ok()
+            .flatten()
+            .or_else(|| {
+                let text = std::fs::read_to_string(
+                    staging_root.join(crate::sync::lww::SYNC_MANIFEST_PATH),
+                )
+                .ok()?;
+                serde_json::from_str::<crate::sync::types::SyncManifest>(&text).ok()
+            });
+    let Some(manifest) = manifest else {
         return std::collections::HashMap::new();
     };
     let mut out = std::collections::HashMap::new();

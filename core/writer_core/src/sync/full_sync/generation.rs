@@ -83,6 +83,9 @@ pub(super) fn publish_tree_snapshot(
             Err(error) => return super::transfer_helpers::sync_result_from_error(error),
         },
     };
+    // 清单存储（root + 两级索引 + 内容寻址对象）与业务对象一次发布；根字节由
+    // 清单内容派生（见 `local_manifest_storage`），语义未变化时逐字节一致，
+    // 不会因为 generation 串号制造空提交。
     if let Err(error) = upload_complete_tree_snapshot(
         provider,
         sync_root,
@@ -225,8 +228,7 @@ fn publish_snapshot_batch(
                 // 无本地修改，复用旧 visible generation 的 blob → ReuseVersion。
                 // 冲突路径也走这里：用远端 blob SHA，不读本地冲突正文。
                 // 远端该路径已经是同一 blob 时不再重复写入 batch。
-                if existing.get(&remote_path).map(RemoteVersion::as_str)
-                    == Some(blob_sha.as_str())
+                if existing.get(&remote_path).map(RemoteVersion::as_str) == Some(blob_sha.as_str())
                 {
                     continue;
                 }
@@ -271,33 +273,67 @@ fn publish_snapshot_batch(
         }
     }
 
-    // 清单按命名空间分片发布：每片是独立对象，只上传内容变化的分片。
-    // 旧单文件 manifest.sync.json 不再进入期望树，本轮会由下面的删除循环
-    // 从远端回收（迁移完成后读端只认分片）。
-    let shard_files = match crate::sync::lww::split_into_manifest_shards(
-        crate::sync::lww::SYNC_MANIFEST_PATH,
-        &manifest,
-    ) {
-        Ok(files) => files,
-        Err(e) => return super::transfer_helpers::sync_result_from_error(e),
-    };
-    let mut shard_remote_paths = Vec::with_capacity(shard_files.len());
-    for (rel, bytes) in shard_files {
-        let remote_path = format!("{generation_prefix}/{rel}");
-        let unchanged = match provider.read(&remote_path) {
-            Ok(Some(object)) => object.content == bytes,
-            Ok(None) => false,
-            Err(error) => {
-                return super::transfer_helpers::sync_result_from_provider_error(error);
-            }
+    // 清单权威是 v2 存储：内容寻址对象先写，索引次之，根最后（根是提交点）。
+    // 远端语义未变化时不重写清单，避免 generation 串号制造空提交。
+    use crate::sync::lww::{ManifestStorageKind, ManifestStore};
+    let manifest_store = ManifestStore::new(sync_root, &manifest_rel_path(app_group));
+    let manifest_files =
+        match crate::sync::lww::local_manifest_storage(&manifest_store, Some(&manifest)) {
+            Ok(files) => files,
+            Err(error) => return super::transfer_helpers::sync_result_from_error(error),
         };
-        if !unchanged {
-            mutations.push(BatchMutation::Put {
-                path: remote_path.clone(),
-                content: bytes,
-            });
+    let mut manifest_remote_paths: Vec<String> = Vec::with_capacity(manifest_files.len());
+    let mut root_mutation: Option<BatchMutation> = None;
+    for file in &manifest_files {
+        let remote_rel = match crate::sync::lww::remote_rel_for(&manifest_store, &file.rel) {
+            Ok(rel) => rel,
+            Err(error) => return super::transfer_helpers::sync_result_from_error(error),
+        };
+        let remote_path = format!("{generation_prefix}/{remote_rel}");
+        manifest_remote_paths.push(remote_path.clone());
+        match file.kind {
+            // 内容寻址对象：远端已有同名对象直接复用，不再上传正文。
+            ManifestStorageKind::Object => {
+                if existing.contains_key(&remote_path) {
+                    continue;
+                }
+            }
+            // 索引/根：只在远端字节不同时才写；根必须是 mutations 的最后一项。
+            ManifestStorageKind::Index | ManifestStorageKind::Root => {
+                let bytes = match file.read_bytes(sync_root) {
+                    Ok(bytes) => bytes,
+                    Err(error) => return super::transfer_helpers::sync_result_from_error(error),
+                };
+                let unchanged = match provider.read(&remote_path) {
+                    Ok(Some(object)) => object.content == bytes,
+                    Ok(None) => false,
+                    Err(error) => {
+                        return super::transfer_helpers::sync_result_from_provider_error(error)
+                    }
+                };
+                if unchanged {
+                    continue;
+                }
+                let mutation = BatchMutation::Put {
+                    path: remote_path,
+                    content: bytes,
+                };
+                if file.kind == ManifestStorageKind::Root {
+                    root_mutation = Some(mutation);
+                } else {
+                    mutations.push(mutation);
+                }
+                continue;
+            }
         }
-        shard_remote_paths.push(remote_path);
+        let bytes = match file.read_bytes(sync_root) {
+            Ok(bytes) => bytes,
+            Err(error) => return super::transfer_helpers::sync_result_from_error(error),
+        };
+        mutations.push(BatchMutation::Put {
+            path: remote_path,
+            content: bytes,
+        });
     }
 
     // Remove paths that existed in the previous stable tree but are absent
@@ -311,11 +347,15 @@ fn publish_snapshot_batch(
         .filter(|record| record.op != "delete")
         .map(|record| format!("{generation_prefix}/{}", record.path))
         .collect();
-    desired.extend(shard_remote_paths);
+    desired.extend(manifest_remote_paths);
     for path in existing.keys() {
         if !desired.contains(path) {
             mutations.push(BatchMutation::Delete { path: path.clone() });
         }
+    }
+    // 根是提交点：所有业务 Put/Reuse 与旧路径 Delete 之后才写根。
+    if let Some(root) = root_mutation {
+        mutations.push(root);
     }
 
     // 取消令牌检查（commit_batch 前）。
@@ -363,18 +403,28 @@ fn publish_snapshot_batch(
     r
 }
 
-/// 读取 staging 的本地 `manifest.sync.json`（无 merge_outcome 的首次同步用）。
+/// 本地清单相对路径：App group 用自己的分组清单，其它 target 用聚合清单。
+fn manifest_rel_path(app_group: Option<&crate::sync::types::AppDataGroup>) -> String {
+    app_group
+        .map(crate::sync::types::AppDataGroup::local_manifest_path)
+        .unwrap_or_else(|| crate::sync::lww::SYNC_MANIFEST_PATH.to_string())
+}
+
+/// 读取 staging 的本地权威清单（无 merge_outcome 的首次同步用）。
 ///
 /// 首次同步 / 远端无 visible generation 时没有 merge 快照可用，generation 的完整
-/// 文件集合来自 staging 自己的 manifest（prepare 阶段由本地扫描 + tombstone 生成）。
+/// 文件集合来自 staging 自己的清单：优先读 staging 的 v2 存储（root + 两级索引 +
+/// 内容寻址对象，严格校验），root 不存在时回退 prepare 物化的旧单文件只读视图。
 fn read_staging_generation_manifest(
     sync_root: &Path,
     app_group: Option<&crate::sync::types::AppDataGroup>,
 ) -> crate::error::Result<crate::sync::types::SyncManifest> {
-    let manifest_rel_path = app_group
-        .map(crate::sync::types::AppDataGroup::local_manifest_path)
-        .unwrap_or_else(|| crate::sync::lww::SYNC_MANIFEST_PATH.to_string());
-    let manifest_path = sync_root.join(manifest_rel_path);
+    let manifest_rel = manifest_rel_path(app_group);
+    let store = crate::sync::lww::ManifestStore::new(sync_root, &manifest_rel);
+    if let Some(manifest) = store.load_all()? {
+        return Ok(manifest);
+    }
+    let manifest_path = sync_root.join(&manifest_rel);
     let bytes = std::fs::read(&manifest_path).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "publish_snapshot_batch: read local manifest {}: {e}",
@@ -413,22 +463,25 @@ fn build_put_mutation(
     })
 }
 
-/// 把完整 merged manifest 快照上传到新 generation prefix。
+/// 把完整 merged manifest 快照上传到稳定 tree prefix。
 ///
-/// 新 generation 是不可变完整快照。本函数遍历 `merged_manifest.files`，
-/// 对每个 `op=upsert` 的 record：
+/// 本函数遍历 `merged_manifest.files`，对每个 `op=upsert` 的 record：
 /// 1. 路径必须仍在同步白名单（`SyncService::is_whitelisted_path`）。
 /// 2. `staging_root/path` 必须存在。
 /// 3. 重新算 md5 hash，必须 == `record.content_hash`（不一致则 `Err`）。
-/// 4. 上传到新 generation prefix（`CreateNew` 或 `Unconditional`）。
+/// 4. 写到 `generation_prefix`（`Unconditional`；远端已有相同字节时跳过）。
 ///
 /// `op=delete` 的 record 只保留 tombstone（manifest 里有记录），不上传物理文件。
 ///
-/// 上传规则保证新 generation 的 manifest 与实际对象一致：manifest 声称存在的
-/// 文件对象一定已上传到 generation prefix。原先 `upload_merged_outcome_to_generation`
+/// 业务对象写完后发布 v2 清单存储：内容寻址对象 → 变化的索引 → 根，**根最后**
+/// （提交点）。根写失败直接返回错误，远端旧根仍是权威。最后按期望树清理远端
+/// 残留（业务删除、旧 generation 目录、旧单文件 / 旧分片目录）。
+///
+/// 上传规则保证新稳定树的 manifest 与实际对象一致：manifest 声称存在的
+/// 文件对象一定已上传到 tree prefix。原先 `upload_merged_outcome_to_generation`
 /// 只上传 `remote_upload_paths`（delta 动作），NoOp/DownloadRemote/
-/// LwwRemoteWinsDownload/pending_take_remote 成功下载的文件都不会进新 generation，
-/// 导致 catalog 指向一个 manifest 声称文件存在但实际对象不存在的 generation。
+/// LwwRemoteWinsDownload/pending_take_remote 成功下载的文件都不会进新树，
+/// 导致 manifest 声称文件存在但实际对象不存在的快照。
 ///
 /// Issue #761：本函数仅在 `capabilities().batch == false` 时由
 /// [`publish_tree_snapshot`] 调用（降级路径）。`batch == true` 时走
@@ -442,6 +495,7 @@ fn upload_complete_tree_snapshot(
     app_group: Option<&crate::sync::types::AppDataGroup>,
     cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::error::Result<()> {
+    use crate::sync::lww::{ManifestStorageKind, ManifestStore};
     use crate::sync::provider::model::WritePrecondition;
 
     // 遍历 merged_manifest.files，上传所有 upsert 文件到新 generation prefix。
@@ -513,23 +567,43 @@ fn upload_complete_tree_snapshot(
         }
     }
 
-    // 清单按命名空间分片上传；内容未变的分片跳过写入。
-    let shards = crate::sync::lww::split_into_manifest_shards(
-        crate::sync::lww::SYNC_MANIFEST_PATH,
-        merged_manifest,
-    )?;
-    let mut shard_remote_paths = Vec::with_capacity(shards.len());
-    for (rel, bytes) in shards {
-        let remote_path = format!("{generation_prefix}/{rel}");
-        let unchanged = match provider.read(&remote_path) {
-            Ok(Some(object)) => object.content == bytes,
-            Ok(None) => false,
-            Err(error) => return Err(error.into()),
-        };
-        if !unchanged {
-            provider.write(&remote_path, &bytes, WritePrecondition::Unconditional)?;
+    // 清单权威是 v2 存储：对象 → 索引 → 根依次上传，根最后（提交点）。
+    // 根写失败直接返回错误：旧根仍是远端权威，不会出现"根指向不存在对象"。
+    let manifest_store = ManifestStore::new(staging_root, &manifest_rel_path(app_group));
+    let manifest_files =
+        crate::sync::lww::local_manifest_storage(&manifest_store, Some(merged_manifest))?;
+    let mut manifest_remote_paths = Vec::with_capacity(manifest_files.len());
+    for file in &manifest_files {
+        let remote_rel = crate::sync::lww::remote_rel_for(&manifest_store, &file.rel)?;
+        let remote_path = format!("{generation_prefix}/{remote_rel}");
+        manifest_remote_paths.push(remote_path.clone());
+        let bytes = file.read_bytes(staging_root)?;
+        if file.kind == ManifestStorageKind::Object {
+            // 内容寻址对象：远端已有同名对象直接复用。
+            if provider.read(&remote_path)?.is_some() {
+                continue;
+            }
+        } else if let Some(object) = provider.read(&remote_path)? {
+            // 索引/根：字节一致时不重写。
+            if object.content == bytes {
+                continue;
+            }
         }
-        shard_remote_paths.push(remote_path);
+        provider.write(&remote_path, &bytes, WritePrecondition::Unconditional)?;
+
+        // Issue #729：每次 provider.write 返回后检查取消令牌。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] upload_complete_tree_snapshot: cancellation requested after manifest \
+                     write {} — returning cancelled",
+                    file.rel
+                );
+                return Err(crate::Error::Other(
+                    "sync cancelled during generation upload".into(),
+                ));
+            }
+        }
     }
 
     {
@@ -539,7 +613,7 @@ fn upload_complete_tree_snapshot(
             .filter(|record| record.op == "upsert")
             .map(|record| format!("{generation_prefix}/{}", record.path))
             .collect();
-        desired.extend(shard_remote_paths);
+        desired.extend(manifest_remote_paths);
         for entry in provider.list(generation_prefix)? {
             let path = format!("{generation_prefix}/{}", entry.path);
             if !desired.contains(&path) {

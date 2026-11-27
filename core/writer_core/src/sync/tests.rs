@@ -433,9 +433,13 @@ mod tests {
             "correction/other.json",
             crate::sync::SyncScope::Project
         ));
-        // 作品自己的同步元数据
-        assert!(SyncService::is_whitelisted_path(
+        // 作品自己的同步元数据：v2 起清单存储是引擎自身状态，不再作为业务对象。
+        assert!(!SyncService::is_whitelisted_path(
             "app-meta/sync/manifest.sync.json",
+            crate::sync::SyncScope::Project
+        ));
+        assert!(!SyncService::is_whitelisted_path(
+            "app-meta/sync/manifest/root.json",
             crate::sync::SyncScope::Project
         ));
 
@@ -570,15 +574,22 @@ mod tests {
 
     #[test]
     fn test_manifest_still_whitelisted() {
-        // 黑名单扩展不能误伤 manifest.sync.json（作品级与应用级均需保持白名单）。
-        assert!(SyncService::is_whitelisted_path(
+        // #1062 v2：清单存储（新目录 / 旧分片 / 旧单文件）是同步引擎自身状态，
+        // 不再是可同步的业务对象；扫描与白名单统一排除。
+        for path in [
             "app-meta/sync/manifest.sync.json",
-            crate::sync::types::SyncScope::Project
-        ));
-        assert!(SyncService::is_whitelisted_path(
-            "app-meta/sync/manifest.sync.json",
-            crate::sync::types::SyncScope::App
-        ));
+            "app-meta/sync/manifest/root.json",
+            "app-meta/sync/manifest-shards/volumes.json",
+        ] {
+            assert!(!SyncService::is_whitelisted_path(
+                path,
+                crate::sync::types::SyncScope::Project
+            ));
+            assert!(!SyncService::is_whitelisted_path(
+                path,
+                crate::sync::types::SyncScope::App
+            ));
+        }
     }
 
     #[test]
@@ -4007,11 +4018,11 @@ mod tests {
         assert!(local_file_path.exists());
         let local_content = std::fs::read_to_string(local_file_path).unwrap();
         assert_eq!(local_content, "remote content");
-        // engine 同步后把本地清单写成按命名空间分片的权威存储。
+        // engine 同步后把本地清单写成 v2 权威存储（root + 两级索引）。
         assert!(dir
             .path()
-            .join("app-meta/sync/manifest-shards")
-            .is_dir());
+            .join("app-meta/sync/manifest/root.json")
+            .is_file());
     }
 
     #[test]
@@ -4694,5 +4705,423 @@ mod tests {
             !state_after_2.conflicted_files.contains(chapter_rel),
             "conflicted_files must stay cleared — no re-emerging conflict"
         );
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // #1062 评论 #7219676521：远端权威清单 = v2 根 + 两级索引 + 内容寻址对象
+    // ════════════════════════════════════════════════════════════════════════
+    mod remote_manifest_v2 {
+        use std::collections::HashMap;
+        use std::path::Path;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use tempfile::tempdir;
+
+        use crate::sync::lww::{
+            fetch_remote_manifest_at, publish_remote_manifest, ManifestStore, SYNC_MANIFEST_PATH,
+        };
+        use crate::sync::provider::error::ProviderError;
+        use crate::sync::provider::memory::MemoryProvider;
+        use crate::sync::provider::model::{
+            DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion, WritePrecondition,
+        };
+        use crate::sync::provider::{SyncCapabilities, SyncProvider};
+        use crate::sync::types::{ManifestFileRecord, SyncManifest};
+
+        const PREFIX: &str = "projects/p1";
+        const ROOT_REL: &str = "app-meta/sync/manifest/root.json";
+        const INDEX_DIR: &str = "app-meta/sync/manifest/index/";
+        const OBJECT_DIR: &str = "app-meta/sync/manifest/objects/";
+        const SHARDS_PREFIX: &str = "app-meta/sync/manifest-shards/";
+
+        fn record(path: &str, hash: &str) -> ManifestFileRecord {
+            ManifestFileRecord {
+                path: path.to_string(),
+                content_hash: hash.to_string(),
+                updated_at_ms: 10_000,
+                deleted_at_ms: None,
+                device_id: "dev-remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }
+        }
+
+        fn sample_manifest(entries: &[(&str, &str)]) -> SyncManifest {
+            SyncManifest {
+                files: entries
+                    .iter()
+                    .map(|(path, hash)| record(path, hash))
+                    .collect(),
+            }
+        }
+
+        /// 旧单文件 → v2 迁移，把清单写成本地权威存储（与生产链路同一条路径）。
+        fn seed_local_store(root: &Path, manifest: &SyncManifest) -> ManifestStore {
+            let legacy = root.join(SYNC_MANIFEST_PATH);
+            std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+            std::fs::write(&legacy, manifest.canonical_json().unwrap()).unwrap();
+            let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+            assert!(store
+                .load_or_legacy()
+                .unwrap()
+                .semantically_equals(manifest));
+            store
+        }
+
+        fn remote_tree(provider: &dyn SyncProvider) -> HashMap<String, String> {
+            provider
+                .list(PREFIX)
+                .unwrap()
+                .into_iter()
+                .map(|entry| (entry.path, entry.version.0))
+                .collect()
+        }
+
+        fn publish(provider: &dyn SyncProvider, root: &Path) {
+            let tree = remote_tree(provider);
+            publish_remote_manifest(provider, PREFIX, root, SYNC_MANIFEST_PATH, &tree, None)
+                .unwrap();
+        }
+
+        fn fetch(provider: &dyn SyncProvider) -> crate::Result<Option<SyncManifest>> {
+            fetch_remote_manifest_at(provider, PREFIX)
+        }
+
+        fn find_rel(tree: &HashMap<String, String>, dir: &str) -> String {
+            tree.keys()
+                .find(|path| path.starts_with(dir))
+                .cloned()
+                .unwrap_or_else(|| panic!("远端应包含 {dir} 下的清单文件"))
+        }
+
+        /// 根存在时严格读取：对象缺失 / sha256 不符都必须报错，不回退旧格式。
+        #[test]
+        fn fetch_reads_v2_root_and_rejects_missing_or_tampered_objects() {
+            let dir = tempdir().unwrap();
+            let manifest = sample_manifest(&[("volumes/v1/chapters/c1/chapter.md", "hash-c1")]);
+            seed_local_store(dir.path(), &manifest);
+            let provider = MemoryProvider::new();
+            publish(&provider, dir.path());
+
+            let tree = remote_tree(&provider);
+            assert!(tree.contains_key(ROOT_REL), "发布后远端应有 v2 根");
+            assert!(
+                !tree.contains_key(SYNC_MANIFEST_PATH),
+                "根切换成功后旧单文件应被回收"
+            );
+            assert!(
+                !tree.keys().any(|path| path.starts_with(SHARDS_PREFIX)),
+                "不应再写旧分片目录"
+            );
+            let fetched = fetch(&provider).unwrap().expect("v2 根存在应返回清单");
+            assert!(fetched.semantically_equals(&manifest));
+
+            let object_rel = find_rel(&tree, OBJECT_DIR);
+
+            // 对象缺失：根存在 → 明确报错（不静默当成空清单）。
+            provider
+                .delete(
+                    &format!("{PREFIX}/{object_rel}"),
+                    DeletePrecondition::Unconditional,
+                )
+                .unwrap();
+            let err = fetch(&provider).unwrap_err();
+            assert!(
+                format!("{err}").contains("missing"),
+                "缺对象应明确报错，实际 {err}"
+            );
+
+            // 对象内容与 sha256 文件名不符：明确报错。
+            provider
+                .write(
+                    &format!("{PREFIX}/{object_rel}"),
+                    br#"{"schemaVersion":2,"key":"x","files":[]}"#,
+                    WritePrecondition::Unconditional,
+                )
+                .unwrap();
+            let err = fetch(&provider).unwrap_err();
+            assert!(
+                format!("{err}").contains("sha256 mismatch"),
+                "hash 不符应明确报错，实际 {err}"
+            );
+        }
+
+        /// 根列出的索引缺失 / 内容 sha 不符同样必须报错。
+        #[test]
+        fn fetch_rejects_missing_or_tampered_index() {
+            let dir = tempdir().unwrap();
+            let manifest = sample_manifest(&[("volumes/v1/chapters/c1/chapter.md", "hash-c1")]);
+            seed_local_store(dir.path(), &manifest);
+            let provider = MemoryProvider::new();
+            publish(&provider, dir.path());
+
+            let tree = remote_tree(&provider);
+            let index_rel = find_rel(&tree, INDEX_DIR);
+            provider
+                .delete(
+                    &format!("{PREFIX}/{index_rel}"),
+                    DeletePrecondition::Unconditional,
+                )
+                .unwrap();
+            let err = fetch(&provider).unwrap_err();
+            assert!(
+                format!("{err}").contains("missing"),
+                "缺索引应明确报错，实际 {err}"
+            );
+
+            provider
+                .write(
+                    &format!("{PREFIX}/{index_rel}"),
+                    br#"{"schemaVersion":2,"namespace":"volumes","objects":{}}"#,
+                    WritePrecondition::Unconditional,
+                )
+                .unwrap();
+            let err = fetch(&provider).unwrap_err();
+            assert!(
+                format!("{err}").contains("sha256 mismatch"),
+                "索引 hash 不符应明确报错，实际 {err}"
+            );
+        }
+
+        /// 根存在时，旧单文件即使也在远端也不参与读取。
+        #[test]
+        fn fetch_uses_root_only_when_legacy_single_is_also_present() {
+            let dir = tempdir().unwrap();
+            let manifest = sample_manifest(&[("project.json", "hash-v2")]);
+            seed_local_store(dir.path(), &manifest);
+            let provider = MemoryProvider::new();
+            publish(&provider, dir.path());
+
+            let stale = sample_manifest(&[
+                ("project.json", "hash-stale"),
+                ("volumes/v9/stale.md", "hash-stale-2"),
+            ]);
+            provider
+                .write(
+                    &format!("{PREFIX}/{SYNC_MANIFEST_PATH}"),
+                    stale.canonical_json().unwrap().as_bytes(),
+                    WritePrecondition::Unconditional,
+                )
+                .unwrap();
+
+            let fetched = fetch(&provider).unwrap().expect("v2 根仍是权威");
+            assert!(fetched.semantically_equals(&manifest));
+        }
+
+        /// 无根有旧单文件 → 回退读取。
+        #[test]
+        fn fetch_falls_back_to_legacy_single_without_root() {
+            let legacy = sample_manifest(&[("project.json", "hash-legacy")]);
+            let provider = MemoryProvider::with_entries([(
+                format!("{PREFIX}/{SYNC_MANIFEST_PATH}"),
+                legacy.canonical_json().unwrap().into_bytes(),
+            )]);
+            let fetched = fetch(&provider).unwrap().expect("旧单文件应可读");
+            assert!(fetched.semantically_equals(&legacy));
+        }
+
+        /// 无根无单文件但有旧分片目录 → 迁移读取全部 namespace 分片。
+        #[test]
+        fn fetch_migrates_legacy_shards_without_root_or_single() {
+            let root_shard = sample_manifest(&[("project.json", "hash-1")]);
+            let volumes_shard = sample_manifest(&[("volumes/v1/chapters/c1/chapter.md", "hash-2")]);
+            let provider = MemoryProvider::with_entries([
+                (
+                    format!("{PREFIX}/{SHARDS_PREFIX}_root.json"),
+                    root_shard.canonical_json().unwrap().into_bytes(),
+                ),
+                (
+                    format!("{PREFIX}/{SHARDS_PREFIX}volumes.json"),
+                    volumes_shard.canonical_json().unwrap().into_bytes(),
+                ),
+            ]);
+            let fetched = fetch(&provider).unwrap().expect("旧分片目录应可迁移读取");
+            let paths: Vec<&str> = fetched.files.iter().map(|rec| rec.path.as_str()).collect();
+            assert!(paths.contains(&"project.json"));
+            assert!(paths.contains(&"volumes/v1/chapters/c1/chapter.md"));
+        }
+
+        /// 发布在根写入时失败：对象可能已写，但远端旧根不变，fetch 仍返回旧清单；
+        /// 重试成功后旧单文件/旧分片被回收。
+        #[test]
+        fn publish_root_failure_keeps_old_authority_then_retry_cleans_legacy() {
+            let old = sample_manifest(&[("project.json", "hash-old")]);
+            let provider = FailRootOnceProvider::new(MemoryProvider::with_entries([
+                (
+                    format!("{PREFIX}/{SYNC_MANIFEST_PATH}"),
+                    old.canonical_json().unwrap().into_bytes(),
+                ),
+                (
+                    format!("{PREFIX}/{SHARDS_PREFIX}_root.json"),
+                    old.canonical_json().unwrap().into_bytes(),
+                ),
+            ]));
+
+            let dir = tempdir().unwrap();
+            let new = sample_manifest(&[
+                ("project.json", "hash-new"),
+                ("volumes/v1/chapters/c1/chapter.md", "hash-c1"),
+            ]);
+            seed_local_store(dir.path(), &new);
+
+            let tree = remote_tree(&provider);
+            let err = publish_remote_manifest(
+                &provider,
+                PREFIX,
+                dir.path(),
+                SYNC_MANIFEST_PATH,
+                &tree,
+                None,
+            )
+            .unwrap_err();
+            assert!(
+                format!("{err}").contains("simulated root write failure"),
+                "根写失败应向上返回错误，实际 {err}"
+            );
+
+            // 旧根仍是权威：远端没有新根，fetch 仍返回旧单文件清单。
+            let tree_after = remote_tree(&provider);
+            assert!(
+                !tree_after.contains_key(ROOT_REL),
+                "根写失败时远端不能出现新根"
+            );
+            assert!(
+                tree_after.keys().any(|path| path.starts_with(OBJECT_DIR)),
+                "对象先于根写入：失败后可能已留在远端"
+            );
+            let fetched = fetch(&provider).unwrap().expect("旧单文件仍是权威");
+            assert!(fetched.semantically_equals(&old));
+
+            // 重试：根成功切换后才回收旧单文件与旧分片。
+            publish_remote_manifest(
+                &provider,
+                PREFIX,
+                dir.path(),
+                SYNC_MANIFEST_PATH,
+                &tree_after,
+                None,
+            )
+            .unwrap();
+            let tree_ok = remote_tree(&provider);
+            assert!(tree_ok.contains_key(ROOT_REL), "重试后应有 v2 根");
+            assert!(
+                !tree_ok.contains_key(SYNC_MANIFEST_PATH),
+                "根切换成功后旧单文件应被回收"
+            );
+            assert!(
+                !tree_ok.keys().any(|path| path.starts_with(SHARDS_PREFIX)),
+                "根切换成功后旧分片应被回收"
+            );
+            let fetched = fetch(&provider).unwrap().expect("v2 根是权威");
+            assert!(fetched.semantically_equals(&new));
+        }
+
+        /// 根切换后回收旧根可达但新根不可达的对象，保留新可达对象。
+        #[test]
+        fn root_switch_reclaims_old_objects_and_keeps_new_reachable_ones() {
+            let dir = tempdir().unwrap();
+            let v1 = sample_manifest(&[("volumes/v1/chapters/c1/chapter.md", "hash-v1")]);
+            seed_local_store(dir.path(), &v1);
+            let provider = MemoryProvider::new();
+            publish(&provider, dir.path());
+
+            let tree_v1 = remote_tree(&provider);
+            let old_objects: Vec<String> = tree_v1
+                .keys()
+                .filter(|path| path.starts_with(OBJECT_DIR))
+                .cloned()
+                .collect();
+            assert_eq!(old_objects.len(), 1, "v1 只有一个内容寻址对象");
+
+            // 同一 object_key 的记录变化 + 新增 object_key：旧对象文件不可达。
+            let v2 = sample_manifest(&[
+                ("volumes/v1/chapters/c1/chapter.md", "hash-v2"),
+                ("volumes/v1/chapters/c2/chapter.md", "hash-c2"),
+            ]);
+            std::fs::remove_file(dir.path().join(ROOT_REL)).unwrap();
+            let store = seed_local_store(dir.path(), &v2);
+            let (_, reachable) = store.load_reachable().unwrap().expect("本地 v2 根存在");
+            let new_objects: Vec<String> = reachable
+                .iter()
+                .filter(|rel| rel.starts_with(OBJECT_DIR))
+                .cloned()
+                .collect();
+            assert_eq!(new_objects.len(), 2, "v2 每个 object_key 一个对象文件");
+
+            let tree_before = remote_tree(&provider);
+            publish_remote_manifest(
+                &provider,
+                PREFIX,
+                dir.path(),
+                SYNC_MANIFEST_PATH,
+                &tree_before,
+                None,
+            )
+            .unwrap();
+
+            let tree_v2 = remote_tree(&provider);
+            assert!(
+                !tree_v2.contains_key(&old_objects[0]),
+                "旧根可达但新根不可达的对象应在根切换后回收"
+            );
+            for rel in &new_objects {
+                assert!(tree_v2.contains_key(rel), "新可达对象必须保留: {rel}");
+            }
+            let fetched = fetch(&provider).unwrap().expect("v2 根是权威");
+            assert!(fetched.semantically_equals(&v2));
+        }
+
+        /// 第一次写根返回错误的 Provider 包装（其余操作透传 MemoryProvider）。
+        struct FailRootOnceProvider {
+            inner: MemoryProvider,
+            failed: AtomicBool,
+        }
+
+        impl FailRootOnceProvider {
+            fn new(inner: MemoryProvider) -> Self {
+                Self {
+                    inner,
+                    failed: AtomicBool::new(false),
+                }
+            }
+        }
+
+        impl SyncProvider for FailRootOnceProvider {
+            fn capabilities(&self) -> SyncCapabilities {
+                self.inner.capabilities()
+            }
+
+            fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
+                self.inner.list(prefix)
+            }
+
+            fn read(&self, path: &str) -> Result<Option<RemoteObject>, ProviderError> {
+                self.inner.read(path)
+            }
+
+            fn write(
+                &self,
+                path: &str,
+                content: &[u8],
+                precondition: WritePrecondition,
+            ) -> Result<RemoteVersion, ProviderError> {
+                if path.ends_with("/manifest/root.json")
+                    && !self.failed.swap(true, Ordering::SeqCst)
+                {
+                    return Err(ProviderError::Other {
+                        reason: "simulated root write failure".to_string(),
+                    });
+                }
+                self.inner.write(path, content, precondition)
+            }
+
+            fn delete(
+                &self,
+                path: &str,
+                precondition: DeletePrecondition,
+            ) -> Result<(), ProviderError> {
+                self.inner.delete(path, precondition)
+            }
+        }
     }
 }

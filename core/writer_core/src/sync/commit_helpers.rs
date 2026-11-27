@@ -599,11 +599,13 @@ fn refresh_starmap_references_after_commit(
     Ok(())
 }
 
-/// 引擎状态写回：普通状态文件直接写；清单则落成分片。
+/// 引擎状态写回：普通状态文件直接写；清单则落成 v2 权威存储。
 ///
 /// staging commit 的清单动作来自三方合并后的完整清单字节。这里把它转成
-/// 分片增量（只写变化分片、回收陈旧分片），并删除旧单文件——同步流程里
-/// 不再有"整份清单文件"这个权威容器（#1062 评论 #7218195841 第 4 项）。
+/// v2 存储计划（root + index + 内容寻址 objects），只写变化的
+/// objects/index/root，并回收陈旧对象与索引；旧单文件
+/// `manifest.sync.json` 若仍存在则在同一事务里删除——同步流程里不再有
+/// "整份清单文件"这个权威容器（#1062 评论 #7219676521 第 2 项）。
 fn stage_engine_state_write(
     tx: &mut crate::storage::transaction::SaveTransaction,
     live_root: &Path,
@@ -618,19 +620,19 @@ fn stage_engine_state_write(
     let manifest: crate::sync::types::SyncManifest =
         serde_json::from_slice(content).map_err(|e| {
             crate::Error::Other(format!(
-                "commit manifest {rel_str} is unreadable while staging shards: {e}"
+                "commit manifest {rel_str} is unreadable while staging manifest store: {e}"
             ))
         })?;
-    let plan = crate::sync::lww::plan_manifest_persist(
-        live_root,
-        &rel_str,
-        &manifest,
-    )?;
-    for (rel, bytes) in plan.writes {
-        tx.add_bytes(&rel, &bytes)?;
+    let store = crate::sync::lww::ManifestStore::new(live_root, &rel_str);
+    let generation = uuid::Uuid::new_v4().to_string();
+    let plan = store.plan_sync_manifest(&manifest, &generation)?;
+    // 对象 → 索引 → root（plan.writes 最后一项是 root）；deletes 排在 root
+    // 之后，只回收已不被新根引用的旧对象/索引。
+    for (rel, bytes) in &plan.writes {
+        tx.add_bytes(rel, bytes)?;
     }
-    for rel in plan.deletes {
-        tx.add_delete(&rel)?;
+    for rel in &plan.deletes {
+        tx.add_delete(rel)?;
     }
     if live_root.join(&*rel_str).exists() {
         tx.add_delete(&rel_str)?;
@@ -983,13 +985,22 @@ fn staging_chapter_sources(
     run: &crate::sync::staging::StagingRun,
     default_project_id: Option<&str>,
 ) -> ChapterSourceMap {
-    let path = run
-        .staging_root()
-        .join(crate::sync::lww::SYNC_MANIFEST_PATH);
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return ChapterSourceMap::new();
-    };
-    let Ok(manifest) = serde_json::from_str::<crate::sync::types::SyncManifest>(&text) else {
+    // 清单权威在 v2 store（staging root 下）；单文件只是 prepare 时物化的
+    // 只读视图，合并后可能已过期。先读 store，没有 root 才回退单文件。
+    let staging_root = run.staging_root();
+    let manifest =
+        crate::sync::lww::ManifestStore::new(&staging_root, crate::sync::lww::SYNC_MANIFEST_PATH)
+            .load_all()
+            .ok()
+            .flatten()
+            .or_else(|| {
+                let text = std::fs::read_to_string(
+                    staging_root.join(crate::sync::lww::SYNC_MANIFEST_PATH),
+                )
+                .ok()?;
+                serde_json::from_str::<crate::sync::types::SyncManifest>(&text).ok()
+            });
+    let Some(manifest) = manifest else {
         return ChapterSourceMap::new();
     };
     let mut out = ChapterSourceMap::new();

@@ -98,7 +98,14 @@ pub(crate) fn execute_lww_sync_attempt(
         Some(group) => {
             merge_remote_into_local_app_group(sync_root, provider, remote_prefix, group, state)?
         }
-        None => merge_remote_into_local_snapshot(sync_root, provider, remote_prefix, scope, state, None)?,
+        None => merge_remote_into_local_snapshot(
+            sync_root,
+            provider,
+            remote_prefix,
+            scope,
+            state,
+            None,
+        )?,
     };
 
     // Issue #729 评论 5765306162 问题4：merge 后检查取消令牌。
@@ -187,10 +194,18 @@ pub(crate) fn execute_lww_sync_attempt(
     // 远端 manifest 已经与新快照语义相同时不再写：同一份业务状态不应该因为
     // 序列化格式（compact/pretty、字段顺序）或记录顺序差异制造一次远端提交。
     if !outcome.manifest_unchanged {
+        // 清单权威是本地的 v2 存储：普通 target 在 `app-meta/sync/manifest/`，
+        // App group 在自己的 `app-meta/sync/groups/<key>/manifest/`。
+        let manifest_rel = target
+            .app_group
+            .as_ref()
+            .map(crate::sync::types::AppDataGroup::local_manifest_path)
+            .unwrap_or_else(|| super::SYNC_MANIFEST_PATH.to_string());
         upload_manifest(
             provider,
             &outcome.remote_manifest_path,
-            &outcome.merged_manifest,
+            sync_root,
+            &manifest_rel,
             &outcome.remote_tree_files,
             cancellation_token,
         )?;

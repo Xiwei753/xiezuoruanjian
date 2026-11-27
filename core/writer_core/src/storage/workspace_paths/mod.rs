@@ -127,7 +127,15 @@ fn is_workspace_secret_path(path: &str) -> bool {
 /// 必须排除它们，避免把远端同步运行状态当成用户内容写进本地 Git history。
 fn is_sync_engine_state_path(path: &str) -> bool {
     let path = normalize_workspace_path(path);
-    path == "app-meta/sync/manifest.sync.json"
+    // 清单 v2 权威存储（根/索引/对象）与旧 namespace 分片属于同步引擎状态，
+    // 不是用户内容；staging 遍历与本地 workspace 历史都必须排除它们。
+    let is_manifest_storage = path == "app-meta/sync/manifest"
+        || path.starts_with("app-meta/sync/manifest/")
+        || path.contains("/app-meta/sync/manifest/")
+        || path.contains("/manifest-shards/")
+        || path.starts_with("manifest-shards/");
+    is_manifest_storage
+        || path == "app-meta/sync/manifest.sync.json"
         || path == "app-meta/sync/state.local.json"
         || path == "app-meta/sync/full_state.local.json"
         || path == "app-meta/sync/last_report.local.json"

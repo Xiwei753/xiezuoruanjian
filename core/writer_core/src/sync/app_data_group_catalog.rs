@@ -433,9 +433,10 @@ pub fn discover_local_app_data_groups(root: &std::path::Path) -> crate::Result<V
                 continue;
             }
             let group_dir = entry.path();
-            if !group_dir.join("state.local.json").is_file()
-                && !group_dir.join("manifest.sync.json").is_file()
-            {
+            let has_manifest = group_dir.join("manifest.sync.json").is_file()
+                || group_dir.join("manifest/root.json").is_file()
+                || group_dir.join("manifest-shards").is_dir();
+            if !group_dir.join("state.local.json").is_file() && !has_manifest {
                 continue;
             }
             let group_key = entry.file_name().to_string_lossy().into_owned();
@@ -447,20 +448,36 @@ pub fn discover_local_app_data_groups(root: &std::path::Path) -> crate::Result<V
 
     // v1 App manifests are read-only migration input. They may be the only
     // surviving record of a map whose whole local starmaps/<id> directory is gone.
+    // 聚合清单：v2 root 优先；root 不存在时才读 v1 单文件（只读迁移输入）。
     let legacy_manifest_path = root.join("app-meta/sync/manifest.sync.json");
-    if legacy_manifest_path.is_file() {
-        let bytes = std::fs::read(&legacy_manifest_path).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "discover_local_app_data_groups: read {}: {e}",
-                legacy_manifest_path.display()
-            )))
-        })?;
-        let manifest: SyncManifest = serde_json::from_slice(&bytes).map_err(|e| {
-            crate::Error::Other(format!(
-                "discover_local_app_data_groups: parse {}: {e}",
-                legacy_manifest_path.display()
-            ))
-        })?;
+    let aggregate_manifest = {
+        let store =
+            crate::sync::lww::ManifestStore::new(root, crate::sync::lww::SYNC_MANIFEST_PATH);
+        match store.load_all() {
+            Ok(Some(manifest)) => Some(manifest),
+            Ok(None) if legacy_manifest_path.is_file() => {
+                let bytes = std::fs::read(&legacy_manifest_path).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "discover_local_app_data_groups: read {}: {e}",
+                        legacy_manifest_path.display()
+                    )))
+                })?;
+                Some(serde_json::from_slice::<SyncManifest>(&bytes).map_err(|e| {
+                    crate::Error::Other(format!(
+                        "discover_local_app_data_groups: parse {}: {e}",
+                        legacy_manifest_path.display()
+                    ))
+                })?)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                return Err(crate::Error::Other(format!(
+                    "discover_local_app_data_groups: load aggregate manifest: {e}"
+                )))
+            }
+        }
+    };
+    if let Some(manifest) = aggregate_manifest {
         for group in groups_from_manifest_records(&manifest.files) {
             groups.insert(group.id(), group);
         }

@@ -2,10 +2,10 @@
 //!
 //! 同步与发布不再把整份清单当作“唯一可写容器”：一次合并/确认只产出
 //! 受影响对象的 upsert / delete 增量，known_files 基线按增量结算，
-//! 未涉及对象保留原基线。清单持久化仍是单文件时，至少写入内容由增量
-//! 决定，不再全量重建（分片权威存储由后续迁移完成）。
+//! 未涉及对象保留原基线。持久化走 `ManifestStore::apply_delta`：只写
+//! 受影响的 object/index/root，未涉及对象保持原字节。
 
-use crate::sync::types::ManifestFileRecord;
+use crate::sync::types::{ManifestFileRecord, SyncManifest};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// 一次合并/发布相对上一份基线产生的对象级变化。
@@ -53,6 +53,49 @@ impl ManifestDelta {
         delta
     }
 
+    /// 相对一份已确认基线清单，只计算 `affected` 范围内的对象级增量。
+    ///
+    /// `base` 是持久化的权威清单（未涉及记录的唯一来源），`final_files` 是
+    /// 合并后的目标记录。只有 `affected` 内的路径参与比较：
+    ///
+    /// - 目标记录与基线不同（含新增、字段变化、delete 墓碑变化）→ upsert；
+    /// - 基线有、目标记录没有 → delete；
+    /// - 基线有、目标记录相同 → 不进入增量，存储对象保持原字节。
+    ///
+    /// `final_files` 可以只包含 affected 范围内的最终记录；未涉及的基线记录
+    /// 不需要传进来，也不会被当成删除。
+    pub(crate) fn between(
+        base: &SyncManifest,
+        final_files: &[ManifestFileRecord],
+        affected: &BTreeSet<String>,
+    ) -> Self {
+        let mut delta = Self::default();
+        let base_by_path: BTreeMap<&str, &ManifestFileRecord> = base
+            .files
+            .iter()
+            .filter(|record| affected.contains(&record.path))
+            .map(|record| (record.path.as_str(), record))
+            .collect();
+
+        let mut final_paths: BTreeSet<&str> = BTreeSet::new();
+        for record in final_files {
+            if !affected.contains(&record.path) {
+                continue;
+            }
+            final_paths.insert(record.path.as_str());
+            if base_by_path.get(record.path.as_str()).copied() != Some(record) {
+                delta.upserts.insert(record.path.clone(), record.clone());
+            }
+        }
+
+        for path in base_by_path.keys() {
+            if !final_paths.contains(path) {
+                delta.deletes.insert((*path).to_string());
+            }
+        }
+        delta
+    }
+
     /// 把增量结算进 known_files 基线（顺序：删除后写入，路径不会同时出现）。
     pub(crate) fn apply_to(
         &self,
@@ -64,6 +107,13 @@ impl ManifestDelta {
             known_files_updated_at.remove(path);
         }
         for (path, record) in &self.upserts {
+            if record.op == "delete" {
+                // delete 墓碑仍要写进清单（远端/别台设备需要看到删除事实），
+                // 但本地基线不能保留内容哈希。
+                known_files.remove(path);
+                known_files_updated_at.remove(path);
+                continue;
+            }
             known_files.insert(path.clone(), record.content_hash.clone());
             known_files_updated_at.insert(path.clone(), record.updated_at_ms);
         }

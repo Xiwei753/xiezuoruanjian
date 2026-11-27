@@ -19,9 +19,7 @@ use std::collections::BTreeMap;
 use sha2::{Digest, Sha256};
 
 use crate::sync::local_mutations;
-use crate::sync::types::{
-    AppDataGroup, SyncManifest, SyncScope, SyncTarget, TargetSyncResult,
-};
+use crate::sync::types::{AppDataGroup, SyncManifest, SyncScope, SyncTarget, TargetSyncResult};
 
 /// 单个 target 的对象版本。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,10 +87,16 @@ fn fingerprint_objects(
         if group.is_some_and(|group| !group.owns_path(&record.path)) {
             continue;
         }
-        merged.insert(record.path.as_str(), (record.op.clone(), record.content_hash.clone()));
+        merged.insert(
+            record.path.as_str(),
+            (record.op.clone(), record.content_hash.clone()),
+        );
     }
     for (path, record) in pending {
-        merged.insert(path.as_str(), (record.op.clone(), record.content_hash.clone()));
+        merged.insert(
+            path.as_str(),
+            (record.op.clone(), record.content_hash.clone()),
+        );
     }
     let mut hasher = Sha256::new();
     for (path, (op, hash)) in merged {
@@ -106,9 +110,13 @@ fn fingerprint_objects(
     format!("{:x}", hasher.finalize())
 }
 
-fn read_manifest(sync_root: &std::path::Path, relative: &str) -> crate::Result<Option<SyncManifest>> {
-    // 权威清单是分片目录；旧单文件只作为迁移前的回退。
-    if let Some(manifest) = crate::sync::lww::load_manifest_shards(sync_root, relative)? {
+fn read_manifest(
+    sync_root: &std::path::Path,
+    relative: &str,
+) -> crate::Result<Option<SyncManifest>> {
+    // 权威清单是 v2 存储（root + 两级索引）；root 不存在才回退旧单文件（只读）。
+    let store = crate::sync::lww::ManifestStore::new(sync_root, relative);
+    if let Some(manifest) = store.load_all()? {
         return Ok(Some(manifest));
     }
     let path = sync_root.join(relative);
@@ -178,11 +186,8 @@ pub(crate) fn app_group_version(
     if legacy_layout {
         return Ok(LocalTargetVersion::ineligible("legacy_layout"));
     }
-    let state = crate::sync::SyncService::load_sync_state_read_only_for_group(
-        app_data_root,
-        group,
-        None,
-    )?;
+    let state =
+        crate::sync::SyncService::load_sync_state_read_only_for_group(app_data_root, group, None)?;
     if state.last_error.is_some() {
         return Ok(LocalTargetVersion::ineligible("last_error"));
     }
@@ -272,15 +277,15 @@ pub(crate) fn collect(
     let legacy_layout = uses_legacy_app_layout(app_data_root);
     // 读不到待删/待清理清单时按"有收口动作"处理：宁可完整核对，也不能
     // 因为读失败而跳过远端删除。
-    let lifecycle_pending = match crate::sync::pending_deleted::load_pending_deleted_targets(
-        app_data_root,
-    ) {
-        Ok(pending) => !pending.is_empty(),
-        Err(_) => true,
-    } || match crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root) {
-        Ok(pending) => !pending.is_empty(),
-        Err(_) => true,
-    };
+    let lifecycle_pending =
+        match crate::sync::pending_deleted::load_pending_deleted_targets(app_data_root) {
+            Ok(pending) => !pending.is_empty(),
+            Err(_) => true,
+        } || match crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root)
+        {
+            Ok(pending) => !pending.is_empty(),
+            Err(_) => true,
+        };
     let mut targets = BTreeMap::new();
     let mut no_change_targets = Vec::new();
     // App 数据组共享同一份 mutation 账本：整轮读一次，再按 group 的 owns_path

@@ -3,9 +3,9 @@
 //! 支持 GitLab、Gitee、Gitea、Forgejo、Bitbucket 与自建 Git 服务：
 //! 只使用仓库地址、分支、可选用户名与密码/访问令牌，由远端服务器判定凭据。
 //!
-//! 远端版本 = Git blob OID；`commit_batch` 在本地构造完整 tree 与一个 commit，
-//! 再执行普通（非强制）push。远端变化导致 non-fast-forward 时返回
-//! `PreconditionFailed`，交给现有 LWW 重新读取并决策。
+//! 远端版本 = Git blob OID；`commit_batch` 以固定 base tree OID + 本轮变更只重建
+//! 受影响目录，构造一个 commit 后执行普通（非强制）push。远端变化导致
+//! non-fast-forward 时返回 `PreconditionFailed`，交给现有 LWW 重新读取并决策。
 
 pub mod config;
 mod credentials;
@@ -96,7 +96,8 @@ impl GitHttpsProvider {
             });
         }
         let planned = self.snapshot()?;
-        self.commit_from(planned, mutations, message)
+        let repo = repository::open_or_init(&self.cache_dir)?;
+        self.commit_from(&repo, planned, mutations, message)
     }
 
     /// 以 `planned` 为唯一基线提交。
@@ -106,13 +107,13 @@ impl GitHttpsProvider {
     /// 新建 provider、重新读取 catalog 并重新做完整 LWW，绝不重放旧结果。
     fn commit_from(
         &self,
+        repo: &git2::Repository,
         planned: repository::Snapshot,
         mutations: &[BatchMutation],
         message: &str,
     ) -> Result<BatchCommitResult, ProviderError> {
-        let repo = repository::open_or_init(&self.cache_dir)?;
         let (commit_oid, committed_snapshot) = repository::commit_and_push(
-            &repo,
+            repo,
             &self.config,
             &planned,
             mutations,
@@ -121,18 +122,16 @@ impl GitHttpsProvider {
         )?;
         // 用提交后的实际 tree 证明每个对象写成了什么：Git OID 与决议内容
         // 不一致时调用方可以据此拒绝确认（评审 #7214314073）。
-        let path_versions: std::collections::BTreeMap<String, RemoteVersion> = mutations
-            .iter()
-            .filter_map(|mutation| match mutation {
-                BatchMutation::Put { path, .. } | BatchMutation::ReuseVersion { path, .. } => {
-                    committed_snapshot
-                        .blobs
-                        .get(path)
-                        .map(|oid| (path.clone(), RemoteVersion::new(oid.to_string())))
+        let mut path_versions = std::collections::BTreeMap::new();
+        for mutation in mutations {
+            if let BatchMutation::Put { path, .. } | BatchMutation::ReuseVersion { path, .. } =
+                mutation
+            {
+                if let Some(version) = repository::blob_version(repo, &committed_snapshot, path)? {
+                    path_versions.insert(path.clone(), version);
                 }
-                _ => None,
-            })
-            .collect();
+            }
+        }
         self.advance_snapshot(&planned, committed_snapshot);
         Ok(BatchCommitResult {
             revision: RemoteVersion::new(commit_oid.to_string()),
@@ -219,15 +218,16 @@ impl SyncProvider for GitHttpsProvider {
 
     fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
         let snapshot = self.snapshot()?;
+        let repo = repository::open_or_init(&self.cache_dir)?;
         let needle = if prefix.is_empty() {
             None
         } else {
             Some(format!("{prefix}/"))
         };
         let mut entries = Vec::new();
-        for (path, oid) in snapshot.blobs.iter() {
+        for (path, oid) in snapshot.list_blobs(&repo)? {
             let entry_path = match &needle {
-                None => Some(path.clone()),
+                None => Some(path),
                 Some(needle) => path.strip_prefix(needle).map(str::to_string),
             };
             if let Some(path) = entry_path {
@@ -245,16 +245,16 @@ impl SyncProvider for GitHttpsProvider {
         // 本轮同步固定使用首次读取的 HEAD 快照；快照中没有的路径直接视为
         // 远端不存在。不能在这里隐式 fetch 并替换规划基线。
         let snapshot = self.snapshot()?;
-        if !snapshot.blobs.contains_key(path) {
-            return Ok(None);
-        }
         let repo = repository::open_or_init(&self.cache_dir)?;
-        let content = repository::read_blob(&repo, &snapshot, path)?;
-        Ok(content.map(|content| RemoteObject {
+        let Some(content) = repository::read_blob(&repo, &snapshot, path)? else {
+            return Ok(None);
+        };
+        let version = repository::blob_version(&repo, &snapshot, path)?
+            .unwrap_or_else(|| RemoteVersion::new(""));
+        Ok(Some(RemoteObject {
             path: path.to_string(),
             content,
-            version: repository::blob_version(&snapshot, path)
-                .unwrap_or_else(|| RemoteVersion::new("")),
+            version,
         }))
     }
 
@@ -266,13 +266,15 @@ impl SyncProvider for GitHttpsProvider {
     ) -> Result<RemoteVersion, ProviderError> {
         // 前置条件必须针对本轮计划使用的快照校验；commit 会再确认远端 HEAD 未变化。
         let snapshot = self.snapshot()?;
-        repository::check_write_precondition(&snapshot, path, &precondition)?;
+        let repo = repository::open_or_init(&self.cache_dir)?;
+        repository::check_write_precondition(&repo, &snapshot, path, &precondition)?;
         let version = RemoteVersion::new(
             git2::Oid::hash_object(git2::ObjectType::Blob, content)
                 .map_err(|err| repository::map_git_error(err, "hash_blob"))?
                 .to_string(),
         );
         self.commit_from(
+            &repo,
             snapshot,
             &[BatchMutation::Put {
                 path: path.to_string(),
@@ -285,11 +287,13 @@ impl SyncProvider for GitHttpsProvider {
 
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         let snapshot = self.snapshot()?;
-        repository::check_delete_precondition(&snapshot, path, &precondition)?;
-        if !snapshot.blobs.contains_key(path) {
+        let repo = repository::open_or_init(&self.cache_dir)?;
+        repository::check_delete_precondition(&repo, &snapshot, path, &precondition)?;
+        if snapshot.blob_oid(&repo, path)?.is_none() {
             return Ok(());
         }
         self.commit_from(
+            &repo,
             snapshot,
             &[BatchMutation::Delete {
                 path: path.to_string(),

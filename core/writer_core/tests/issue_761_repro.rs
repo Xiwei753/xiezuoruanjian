@@ -358,26 +358,75 @@ fn build_plan(
 /// #1012：发布目标是稳定树 `projects/p1`，同一批里还可能带删除 legacy
 /// `__generations__/...` 旧对象的 mutation，因此必须按完整稳定树路径精确匹配，
 /// 不能用「后缀相同」过滤。
-/// 汇总 batch 中全部清单分片，重建本批次的完整 manifest。
+/// 汇总 batch 中的 v2 清单存储，重建本批次的完整 manifest。
 ///
-/// #1062 评论 #7218195841：远端清单按命名空间分片发布，不再有单文件
-/// `manifest.sync.json`；同一个 batch 里可能同时出现多个分片 Put。
+/// #1062 评论 #7219676521：远端清单是 `app-meta/sync/manifest/root.json`（提交点）+
+/// 两级索引 + 内容寻址对象；同一 batch 里按 objects → indexes → root 顺序出现多个 Put。
 fn batch_manifest(batch: &RecordedBatch) -> SyncManifest {
-    let needle = format!("{PROJECT_PREFIX}/app-meta/sync/manifest-shards/");
-    let mut files = Vec::new();
-    let mut shards = 0usize;
+    let base = format!("{PROJECT_PREFIX}/app-meta/sync/manifest");
+    let mut puts: HashMap<String, Vec<u8>> = HashMap::new();
     for mutation in &batch.mutations {
         if let BatchMutation::Put { path, content } = mutation {
-            if path.starts_with(&needle) {
-                let shard: SyncManifest = serde_json::from_slice(content).unwrap();
-                files.extend(shard.files);
-                shards += 1;
-            }
+            puts.insert(path.clone(), content.clone());
         }
     }
-    assert!(shards > 0, "batch 应包含至少一个清单分片 Put");
+    let root_path = format!("{base}/root.json");
+    let root_bytes = puts.get(&root_path).unwrap_or_else(|| {
+        panic!(
+            "batch 应包含 v2 清单根 {root_path}，实际 mutations={:?}",
+            batch
+                .mutations
+                .iter()
+                .map(BatchMutation::path)
+                .collect::<Vec<_>>()
+        )
+    });
+    let root: serde_json::Value = serde_json::from_slice(root_bytes).unwrap();
+    assert_eq!(root["schemaVersion"], 2, "清单根 schemaVersion 应为 2");
+    let mut files = Vec::new();
+    for (namespace, index_sha) in root["namespaces"]
+        .as_object()
+        .expect("v2 清单根缺少 namespaces")
+    {
+        let index_sha = index_sha.as_str().expect("root 中的索引 sha 应为字符串");
+        let index_path = format!("{base}/index/{namespace}.json");
+        let index_bytes = puts
+            .get(&index_path)
+            .unwrap_or_else(|| panic!("batch 应包含清单索引 {index_path}"));
+        assert_eq!(
+            sha256_hex(index_bytes),
+            index_sha,
+            "索引内容 sha256 必须等于 root 记录的值"
+        );
+        let index: serde_json::Value = serde_json::from_slice(index_bytes).unwrap();
+        for object_sha in index["objects"]
+            .as_object()
+            .expect("v2 索引缺少 objects 映射")
+            .values()
+        {
+            let object_sha = object_sha.as_str().expect("索引中的对象 sha 应为字符串");
+            let object_path = format!("{base}/objects/{object_sha}.json");
+            let object_bytes = puts
+                .get(&object_path)
+                .unwrap_or_else(|| panic!("batch 应包含清单对象 {object_path}"));
+            assert_eq!(
+                sha256_hex(object_bytes),
+                object_sha,
+                "对象内容 sha256 必须等于其内容寻址文件名"
+            );
+            let object: serde_json::Value = serde_json::from_slice(object_bytes).unwrap();
+            let records: Vec<ManifestFileRecord> =
+                serde_json::from_value(object["files"].clone()).unwrap();
+            files.extend(records);
+        }
+    }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     SyncManifest { files }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn mutation_for<'a>(batch: &'a RecordedBatch, path_suffix: &str) -> &'a BatchMutation {
@@ -1095,13 +1144,13 @@ fn regression_issue_761_real_first_sync_no_manifest_device_id_consistent() {
     );
     let batch = &batches[0];
 
-    // 8. staging 已生成清单分片（materialize_local_snapshot_for_empty_remote 写入）。
+    // 8. staging 已生成 v2 权威清单（materialize_local_snapshot_for_empty_remote 写入）。
     let staging_manifest_after = staging_run
         .staging_root()
-        .join("app-meta/sync/manifest-shards");
+        .join("app-meta/sync/manifest/root.json");
     assert!(
-        staging_manifest_after.is_dir(),
-        "修复后 staging 应已生成 manifest-shards/ 权威清单"
+        staging_manifest_after.is_file(),
+        "修复后 staging 应已生成 manifest/root.json 权威清单"
     );
 
     // 9. staging SyncState 的 known_files 已包含正文/元数据。

@@ -205,21 +205,30 @@ impl StagingRun {
         Ok(())
     }
 
-    /// 把分片清单物化成 staging/base 里的 `manifest.sync.json` 只读视图。
+    /// 把 v2 权威清单物化成 staging/base 里的 `manifest.sync.json` 只读视图。
     ///
-    /// 权威清单已经是分片目录；prepare 之后的 transfer/publish/三方合并
-    /// 仍按"每个 target 一份清单文件"读取，因此在快照目录里生成一次
-    /// canonical JSON 即可，不回写 live。
-    fn materialize_manifest_snapshot(&self, live_root: &Path) -> Result<()> {
+    /// 权威清单是 root + 两级索引 + 内容寻址对象；prepare 之后的
+    /// transfer/publish/三方合并仍按"每个 target 一份清单文件"读取，因此在
+    /// 快照目录里生成一次 canonical JSON 即可，不回写 live。
+    ///
+    /// 来源必须是完整 root：root 存在时严格读取全部索引/对象，任一缺失或
+    /// 损坏都返回 `Err`，不允许跳过该 target；root 不存在时只迁移旧格式
+    /// （没有旧格式来源的 target 不凭空生成空清单）。
+    fn materialize_manifest_snapshot(&self, live_root: &Path) -> crate::Result<()> {
         let mut rel_paths = vec![crate::sync::lww::SYNC_MANIFEST_PATH.to_string()];
         if let Some(group) = &self.app_group {
             rel_paths.push(group.local_manifest_path());
         }
         for rel in rel_paths {
-            let Ok(Some(manifest)) =
-                crate::sync::lww::load_manifest_shards(live_root, &rel)
-            else {
-                continue;
+            let store = crate::sync::lww::ManifestStore::new(live_root, &rel);
+            let manifest = match store.load_root()? {
+                Some(_) => store.load_all()?.ok_or_else(|| {
+                    crate::Error::Other(format!(
+                        "materialize_manifest_snapshot: root for {rel} disappeared while loading"
+                    ))
+                })?,
+                None if store.has_legacy_source() => store.load_or_legacy()?,
+                None => continue,
             };
             let json = manifest.canonical_json()?;
             for root in [self.base_root(), self.staging_root()] {
@@ -591,11 +600,24 @@ impl StagingRun {
                 }
                 StagingCommitClass::EngineState => {
                     let staging_path = staging_root.join(&rel);
+                    // 清单的权威写入发生在 LWW merge（v2 store），prepare 时
+                    // 物化的单文件只是旧视图；commit 必须按 store 读取本轮
+                    // 合并结果，否则会把 prepare 视图写回 live 覆盖合并。
+                    let read_manifest_view = |root: &std::path::Path| -> Result<Option<Vec<u8>>> {
+                        if crate::sync::lww::is_manifest_rel_path(&rel_str) {
+                            let store = crate::sync::lww::ManifestStore::new(root, &rel_str);
+                            if let Some(manifest) = store.load_all()? {
+                                let bytes = manifest.canonical_json()?;
+                                return Ok(Some(bytes.into_bytes()));
+                            }
+                        }
+                        read_opt_bytes(&root.join(&rel))
+                    };
                     let incoming: Option<Vec<u8>> = if let Some(group) = &self.app_group {
                         if rel_str == group.local_manifest_path() {
-                            let base = read_opt_bytes(&base_root.join(&rel))?;
-                            let live = read_opt_bytes(&live_root.join(&rel))?;
-                            let incoming = read_opt_bytes(&staging_path)?;
+                            let base = read_manifest_view(&base_root)?;
+                            let live = read_manifest_view(&live_root)?;
+                            let incoming = read_manifest_view(&staging_root)?;
                             super::sync_state_merge::merge_app_group_manifest_three_way(
                                 base.as_deref(),
                                 live.as_deref(),
@@ -603,10 +625,10 @@ impl StagingRun {
                                 group,
                             )?
                         } else {
-                            read_opt_bytes(&staging_path)?
+                            read_manifest_view(&staging_root)?
                         }
                     } else {
-                        read_opt_bytes(&staging_path)?
+                        read_manifest_view(&staging_root)?
                     };
                     apply_incoming(&mut plan, rel, incoming, StagingCommitClass::EngineState);
                     continue;

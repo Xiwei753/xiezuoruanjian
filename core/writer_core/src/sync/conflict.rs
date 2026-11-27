@@ -157,12 +157,13 @@ fn validate_group_conflict_path(
     Ok(())
 }
 
-/// 一次事务写入 `manifest.sync.json` + `state.local.json` + `conflicts.json`。
+/// 一次事务写入权威清单 + `state.local.json` + `conflicts.json`。
 ///
 /// 用于 LWW merge 完成后原子提交三个决议，避免分多次独立写入中间崩溃
-/// 导致 manifest / state / conflicts 不一致。清单按对象命名空间分片落盘：
-/// 只有内容真的变化的分片进入事务，其余分片保持原字节
-/// （#1062 评论 #7218195841 第 4 项）。
+/// 导致 manifest / state / conflicts 不一致。清单已迁移到 v2 权威存储
+/// （版本化根 + 内容寻址对象 + 两级索引）：这里按对象级存储差生成计划，
+/// 只写受影响的 objects/index/root，陈旧对象与索引由计划 `deletes` 回收
+/// （#1062 评论 #7219676521 第 2 项）。
 pub(crate) fn persist_sync_merge_result(
     sync_root: &Path,
     manifest_path: &str,
@@ -196,9 +197,14 @@ pub(crate) fn persist_sync_merge_result_at_paths(
     let conflicts_json = serde_json::to_string_pretty(conflicts)
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
-    let plan =
-        crate::sync::lww::plan_manifest_persist(sync_root, manifest_path, manifest)?;
+    // known_files 是基线索，不是存储差；用完整目标清单与当前权威 root
+    // 求"存储差"，只重写变化的 objects/index/root。
+    let store = crate::sync::lww::ManifestStore::new(sync_root, manifest_path);
+    let generation = uuid::Uuid::new_v4().to_string();
+    let plan = store.plan_sync_manifest(manifest, &generation)?;
     let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
+    // 对象 → 索引 → root（plan.writes 最后一项是 root）；deletes 排在
+    // root 之后，只回收已不被新根引用的旧对象/索引。
     for (rel, bytes) in &plan.writes {
         tx.add_bytes(rel, bytes)?;
     }
@@ -207,6 +213,45 @@ pub(crate) fn persist_sync_merge_result_at_paths(
     }
     tx.add_bytes(state_path, state_json.as_bytes())?;
     tx.add_bytes(conflicts_path, conflicts_json.as_bytes())?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// 对象级增量的原子持久化入口。
+///
+/// 稀疏合并只产出 affected 范围内的 upsert/delete：这里直接调用
+/// [`crate::sync::lww::ManifestStore::apply_delta`]，只写受影响的
+/// object/index/root，未涉及的存储对象保持原字节；state + conflicts 与清单
+/// 在同一个 [`crate::storage::transaction::SaveTransaction`] 中提交。
+///
+/// 非稀疏路径仍走 [`persist_sync_merge_result`]（完整清单一次迁移/重建）。
+pub(crate) fn persist_sync_merge_delta(
+    sync_root: &Path,
+    manifest_path: &str,
+    delta: &crate::sync::manifest_delta::ManifestDelta,
+    state: &crate::sync::types::SyncState,
+    conflicts: &[SyncConflict],
+) -> crate::Result<()> {
+    let state_json = serde_json::to_string_pretty(state)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+    let conflicts_json = serde_json::to_string_pretty(conflicts)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+
+    let store = crate::sync::lww::ManifestStore::new(sync_root, manifest_path);
+    let generation = uuid::Uuid::new_v4().to_string();
+    let plan = store.apply_delta(delta, &generation)?;
+
+    let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
+    // 对象 → 索引 → root；deletes 排在 root 之后，只回收已不被新根引用的
+    // 旧对象/索引。未进入 delta 的 object/index 不重写。
+    for (rel, bytes) in &plan.writes {
+        tx.add_bytes(rel, bytes)?;
+    }
+    for rel in &plan.deletes {
+        tx.add_delete(rel)?;
+    }
+    tx.add_bytes("app-meta/sync/state.local.json", state_json.as_bytes())?;
+    tx.add_bytes("app-meta/sync/conflicts.json", conflicts_json.as_bytes())?;
     tx.commit()?;
     Ok(())
 }
@@ -2728,6 +2773,16 @@ mod persist_manifest_tests {
 
     const MANIFEST: &str = "app-meta/sync/manifest.sync.json";
 
+    fn object_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let objects = dir.join("app-meta/sync/manifest/objects");
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&objects)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        files.sort();
+        files
+    }
+
     #[test]
     fn unchanged_manifest_is_not_rewritten() {
         let dir = tempfile::tempdir().unwrap();
@@ -2736,16 +2791,26 @@ mod persist_manifest_tests {
         };
         let state = crate::sync::types::SyncState::default();
         persist_sync_merge_result(dir.path(), MANIFEST, &manifest, &state, &[]).unwrap();
-        let shard = dir
-            .path()
-            .join("app-meta/sync/manifest-shards/volumes.json");
-        let before = std::fs::read(&shard).unwrap();
+        let objects_before: Vec<(std::path::PathBuf, Vec<u8>)> = object_files(dir.path())
+            .into_iter()
+            .map(|path| {
+                let bytes = std::fs::read(&path).unwrap();
+                (path, bytes)
+            })
+            .collect();
+        assert_eq!(objects_before.len(), 1);
+        let index_path = dir.path().join("app-meta/sync/manifest/index/volumes.json");
+        let index_before = std::fs::read(&index_path).unwrap();
+
         persist_sync_merge_result(dir.path(), MANIFEST, &manifest, &state, &[]).unwrap();
-        assert_eq!(std::fs::read(&shard).unwrap(), before);
+        for (path, bytes) in objects_before {
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+        assert_eq!(std::fs::read(&index_path).unwrap(), index_before);
     }
 
     #[test]
-    fn changed_manifest_rewrites_only_affected_shard() {
+    fn changed_manifest_rewrites_only_affected_object() {
         let dir = tempfile::tempdir().unwrap();
         let old = SyncManifest {
             files: vec![record("volumes/a.json", "h1"), record("project.json", "p1")],
@@ -2758,10 +2823,16 @@ mod persist_manifest_tests {
             &[],
         )
         .unwrap();
-        let root_shard = dir
-            .path()
-            .join("app-meta/sync/manifest-shards/_root.json");
-        let root_before = std::fs::read(&root_shard).unwrap();
+        let project_object = object_files(dir.path())
+            .into_iter()
+            .find(|path| {
+                let bytes = std::fs::read(path).unwrap();
+                let text = String::from_utf8(bytes).unwrap();
+                text.contains("project.json")
+            })
+            .expect("project object");
+        let project_before = std::fs::read(&project_object).unwrap();
+
         let new = SyncManifest {
             files: vec![record("volumes/a.json", "h2"), record("project.json", "p1")],
         };
@@ -2773,8 +2844,11 @@ mod persist_manifest_tests {
             &[],
         )
         .unwrap();
-        assert_eq!(std::fs::read(&root_shard).unwrap(), root_before);
-        let written = crate::sync::lww::load_sharded_manifest(dir.path(), MANIFEST).unwrap();
+        assert_eq!(std::fs::read(&project_object).unwrap(), project_before);
+        let written = crate::sync::lww::ManifestStore::new(dir.path(), MANIFEST)
+            .load_all()
+            .unwrap()
+            .unwrap();
         let volumes = written
             .files
             .iter()

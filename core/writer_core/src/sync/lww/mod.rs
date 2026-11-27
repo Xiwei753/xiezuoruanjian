@@ -65,13 +65,20 @@ pub(crate) use merge::{
     merge_remote_into_local_snapshot_with_diagnostics, merge_stats_jsonl, LwwMergeOutcome,
 };
 
-// re-export SYNC_MANIFEST_PATH，
-// 供 `full_sync.rs` upload_merged_outcome_to_generation 构造 manifest 远端路径。
-pub(crate) use manifest::{SYNC_MANIFEST_PATH, SYNC_MANIFEST_SHARDS_DIR};
+// re-export SYNC_MANIFEST_PATH / SYNC_MANIFEST_SHARDS_DIR，
+// 供 `full_sync.rs` upload_merged_outcome_to_generation 构造 manifest 远端路径；
+// 旧分片目录常量保留供旧迁移/扫描排除使用。
+pub(crate) use manifest::SYNC_MANIFEST_PATH;
+// 旧分片目录常量由 transfer 直接经 `manifest::` 读取；这里按清单存储契约
+// 保留统一出口，当前主链路不经过该 re-export。
+#[allow(unused_imports)]
+pub(crate) use manifest::SYNC_MANIFEST_SHARDS_DIR;
 
-// re-export 清单分片存储入口：读取端（版本快照、决议冻结、commit 写回）
-// 统一走分片优先/旧文件回退，不再各读各的单文件。
+// re-export 版本化清单存储入口：读取端（版本快照、决议冻结、commit 写回）
+// 统一走 root 优先/旧格式迁移，不再各读各的单文件。
 pub(crate) use manifest::{
-    is_manifest_rel_path, is_manifest_storage_path, load_manifest_shards,
-    load_sharded_manifest, plan_manifest_persist, split_into_shards as split_into_manifest_shards,
+    fetch_remote_manifest_at, is_manifest_rel_path, is_manifest_storage_path, is_sha256_hex,
+    local_manifest_storage, namespace_for_path, object_key, publish_remote_manifest,
+    remote_rel_for, sha256_hex, ManifestIndex, ManifestObject, ManifestRoot, ManifestStorageKind,
+    ManifestStore, ManifestWritePlan, MANIFEST_SCHEMA_VERSION,
 };

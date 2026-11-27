@@ -112,67 +112,16 @@ pub(super) fn fetch_remote_tree(
 
 /// 通过 Provider 拉取远端 manifest。
 ///
-/// 如果远端 tree 中不存在 manifest 文件，返回空的默认 manifest。
+/// 权威来源是远端 v2 清单存储（`app-meta/sync/manifest/root.json` + 两级索引 +
+/// 内容寻址对象）。根存在时只读根列出的索引/对象，缺文件或校验失败直接报错；
+/// 根不存在才回退旧单文件，再回退旧分片目录（一次性迁移读取）。
+/// 三种来源都没有时返回空清单。
 pub(super) fn fetch_remote_manifest(
     provider: &dyn SyncProvider,
     remote_prefix: &str,
     remote_tree_files: &HashMap<String, String>,
 ) -> crate::Result<SyncManifest> {
-    let sync_manifest_path = super::manifest::SYNC_MANIFEST_PATH;
-    // 权威清单是分片对象：合并全部命名空间分片；旧单文件只在尚未迁移的
-    // 远端 tree 上回退读取。
-    let shard_dir = format!("{}/", super::manifest::SYNC_MANIFEST_SHARDS_DIR);
-    let mut shard_paths: Vec<&String> = remote_tree_files
-        .keys()
-        .filter(|path| path.starts_with(&shard_dir))
-        .collect();
-    if !shard_paths.is_empty() {
-        shard_paths.sort();
-        let mut by_path: std::collections::BTreeMap<String, crate::sync::types::ManifestFileRecord> =
-            std::collections::BTreeMap::new();
-        for rel in shard_paths {
-            let remote_path = format!("{remote_prefix}/{rel}");
-            let object = provider.read(&remote_path)?.ok_or_else(|| {
-                crate::Error::SyncRemoteError {
-                    category: "api_error".to_string(),
-                    context: format!("remote manifest shard missing: {remote_path}"),
-                    status: 0,
-                    body_preview: String::new(),
-                }
-            })?;
-            let shard = serde_json::from_slice::<SyncManifest>(&object.content).map_err(|e| {
-                crate::Error::SyncRemoteError {
-                    category: "api_error".to_string(),
-                    context: format!("invalid remote manifest shard {remote_path}: {e}"),
-                    status: 0,
-                    body_preview: String::new(),
-                }
-            })?;
-            for record in shard.files {
-                by_path.insert(record.path.clone(), record);
-            }
-        }
-        return Ok(SyncManifest {
-            files: by_path.into_values().collect(),
-        });
-    }
-
-    let remote_manifest_path = format!("{}/{}", remote_prefix, sync_manifest_path);
-    let mut remote_manifest = SyncManifest::default();
-    if remote_tree_files.contains_key(sync_manifest_path) {
-        if let Some(obj) = provider.read(&remote_manifest_path)? {
-            remote_manifest =
-                serde_json::from_slice::<SyncManifest>(&obj.content).map_err(|e| {
-                    crate::Error::SyncRemoteError {
-                        category: "api_error".to_string(),
-                        context: format!("invalid remote manifest: {}", e),
-                        status: 0,
-                        body_preview: String::new(),
-                    }
-                })?;
-        }
-    }
-    Ok(remote_manifest)
+    super::manifest::fetch_remote_manifest_v2(provider, remote_prefix, remote_tree_files)
 }
 
 /// 并行下载 pending_take_remote 列表中的文件。
@@ -375,14 +324,20 @@ pub(super) fn delete_remote_files(
     Ok(())
 }
 
-/// 上传合并后的 manifest 到远端。
+/// 上传本地权威清单（v2 根 + 两级索引 + 内容寻址对象）到远端。
 ///
-/// - `conditional_write = true`：使用乐观并发前置条件。
-/// - `conditional_write = false`：使用 Unconditional 写入。
+/// 顺序固定：先写不可变对象（远端已有同名对象跳过），再写变化的索引，
+/// **最后写根**；根写入失败直接返回错误，远端旧根仍是权威。根成功后回收
+/// 旧根可达但新根不可达的对象/索引、旧单文件与旧分片目录（回收失败只 warn）。
+///
+/// `sync_root` / `manifest_rel` 定位本地清单存储（App group 的清单在
+/// `app-meta/sync/groups/<key>/manifest/`），远端始终落在
+/// `<remote_prefix>/app-meta/sync/manifest/`。
 pub(super) fn upload_manifest(
     provider: &dyn SyncProvider,
     remote_manifest_path: &str,
-    manifest: &SyncManifest,
+    sync_root: &Path,
+    manifest_rel: &str,
     remote_tree_files: &HashMap<String, String>,
     cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::Result<()> {
@@ -398,38 +353,16 @@ pub(super) fn upload_manifest(
         }
     }
     let sync_manifest_path = super::manifest::SYNC_MANIFEST_PATH;
-    let caps = provider.capabilities();
     let base_prefix = remote_manifest_path
         .strip_suffix(sync_manifest_path)
         .unwrap_or(remote_manifest_path);
-    let shards = super::manifest::split_into_shards(sync_manifest_path, manifest)
-        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-    for (rel, bytes) in &shards {
-        // 远端同路径分片字节完全一致时跳过：只有受影响命名空间会重新写。
-        let unchanged = match provider.read(&format!("{base_prefix}{rel}")) {
-            Ok(Some(object)) => object.content == *bytes,
-            Ok(None) => false,
-            Err(error) => return Err(error.into()),
-        };
-        if unchanged {
-            continue;
-        }
-        let precondition = if caps.conditional_write {
-            match remote_tree_files.get(rel) {
-                Some(sha) => WritePrecondition::IfMatch(RemoteVersion(sha.clone())),
-                None => WritePrecondition::CreateNew,
-            }
-        } else {
-            WritePrecondition::Unconditional
-        };
-        provider.write(&format!("{base_prefix}{rel}"), bytes, precondition)?;
-    }
-    // 迁移完成后远端只保留分片；旧单文件由本路径显式回收。
-    if let Some(sha) = remote_tree_files.get(sync_manifest_path) {
-        provider.delete(
-            remote_manifest_path,
-            DeletePrecondition::IfMatch(RemoteVersion(sha.clone())),
-        )?;
-    }
-    Ok(())
+    let remote_prefix = base_prefix.strip_suffix('/').unwrap_or(base_prefix);
+    super::publish_remote_manifest(
+        provider,
+        remote_prefix,
+        sync_root,
+        manifest_rel,
+        remote_tree_files,
+        cancellation_token,
+    )
 }

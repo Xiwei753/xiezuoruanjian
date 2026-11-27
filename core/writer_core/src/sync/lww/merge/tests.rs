@@ -9,11 +9,34 @@
 
 use super::*;
 use crate::sync::provider::memory::MemoryProvider;
+use crate::sync::sparse_plan::SparseObjectPlan;
 use crate::sync::types::{ManifestFileRecord, SyncManifest, SyncScope, SyncState};
 use tempfile::TempDir;
 
 fn md5_hex(content: &[u8]) -> String {
     crate::sync::hash::content_md5(content)
+}
+
+fn write_sync_file(sync_root: &Path, rel: &str, content: &[u8]) {
+    let path = sync_root.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, content).unwrap();
+}
+
+fn manifest_object_for(sync_root: &Path, path: &str) -> std::path::PathBuf {
+    let needle = format!("\"path\":\"{path}\"");
+    let objects_dir = sync_root.join("app-meta/sync/manifest/objects");
+    let mut matches: Vec<std::path::PathBuf> = std::fs::read_dir(&objects_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|object| std::fs::read_to_string(object).unwrap().contains(&needle))
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected exactly one manifest object for {path}, got {matches:?}"
+    );
+    matches.pop().unwrap()
 }
 
 fn upsert_record(
@@ -333,4 +356,376 @@ fn correction_result_remote_delete_keeps_local_record() {
         state.known_files.get(rel).map(String::as_str),
         Some(hash.as_str())
     );
+}
+
+/// #1062 第 4 项：稀疏快照只读取 affected 路径。
+///
+/// 未受影响文件即使已经从 staging 消失，也不能进入 records 或
+/// `missing_without_delete_fact`；它的已确认记录由基线 manifest 引用。
+#[test]
+fn sparse_snapshot_records_only_affected_paths() {
+    let tmp = TempDir::new().unwrap();
+    let sync_root = tmp.path();
+    let affected = "volumes/a/chapters/c1/chapter.md";
+    let untouched = "volumes/b/chapters/c2/chapter.md";
+    write_sync_file(sync_root, affected, b"chapter one");
+    write_sync_file(sync_root, untouched, b"chapter two");
+
+    let affected_hash = md5_hex(b"chapter one");
+    let untouched_hash = md5_hex(b"chapter two");
+    let mut state = SyncState::default();
+    state.device_id = "current-device".to_string();
+    state
+        .known_files
+        .insert(affected.to_string(), affected_hash.clone());
+    state
+        .known_files
+        .insert(untouched.to_string(), untouched_hash.clone());
+    state
+        .known_files_updated_at
+        .insert(affected.to_string(), 1000);
+    state
+        .known_files_updated_at
+        .insert(untouched.to_string(), 1000);
+    crate::sync::SyncService::save_sync_state(sync_root, &state).unwrap();
+    write_old_manifest(
+        sync_root,
+        vec![
+            upsert_record(affected, &affected_hash, 1000, "local-dev"),
+            upsert_record(untouched, &untouched_hash, 1000, "local-dev"),
+        ],
+    );
+
+    // staging 里未受影响对象没有字节，但这不等于本地删除/缺失。
+    std::fs::remove_file(sync_root.join(untouched)).unwrap();
+
+    let plan = SparseObjectPlan::new(
+        Some("head".to_string()),
+        Vec::<String>::new(),
+        vec![affected.to_string()],
+    );
+    let snapshot = snapshot_local_records_for_merge(
+        sync_root,
+        SyncScope::Project,
+        "current-device",
+        None,
+        Some(&plan),
+    )
+    .unwrap();
+
+    assert_eq!(
+        snapshot.records.keys().cloned().collect::<Vec<_>>(),
+        vec![affected.to_string()],
+        "sparse snapshot must not project unaffected records"
+    );
+    assert!(
+        snapshot.missing_without_delete_fact.is_empty(),
+        "unaffected missing staging object must not be treated as a local delete"
+    );
+    assert_eq!(
+        snapshot.records[affected].content_hash, affected_hash,
+        "affected path must still be hashed from the real snapshot"
+    );
+}
+
+/// #1062 第 4 项：稀疏 merge 只持久化 affected object/index/root，
+/// 未受影响的对象与其它 namespace 索引保持逐字节不变；known_files 未涉及键
+/// 也不被改写。
+#[test]
+fn sparse_merge_persists_only_affected_objects() {
+    let tmp = TempDir::new().unwrap();
+    let sync_root = tmp.path();
+    let affected = "volumes/a/chapters/c1/chapter.md";
+    let untouched = "volumes/b/chapters/c2/chapter.md";
+    let project = "project.json";
+    let project_content = br#"{"title":"p1"}"#;
+    let old_affected_content = b"chapter one v1";
+    let new_affected_content = b"chapter one v2";
+    let untouched_content = b"chapter two v1";
+
+    write_sync_file(sync_root, affected, old_affected_content);
+    write_sync_file(sync_root, untouched, untouched_content);
+    write_sync_file(sync_root, project, project_content);
+
+    let old_affected_hash = md5_hex(old_affected_content);
+    let new_affected_hash = md5_hex(new_affected_content);
+    let untouched_hash = md5_hex(untouched_content);
+    let project_hash = md5_hex(project_content);
+
+    let mut state = SyncState::default();
+    state.device_id = "current-device".to_string();
+    for (path, hash) in [
+        (affected, &old_affected_hash),
+        (untouched, &untouched_hash),
+        (project, &project_hash),
+    ] {
+        state.known_files.insert(path.to_string(), hash.clone());
+        state.known_files_updated_at.insert(path.to_string(), 1000);
+    }
+    crate::sync::SyncService::save_sync_state(sync_root, &state).unwrap();
+
+    let baseline = SyncManifest {
+        files: vec![
+            upsert_record(affected, &old_affected_hash, 1000, "local-dev"),
+            upsert_record(untouched, &untouched_hash, 1000, "local-dev"),
+            upsert_record(project, &project_hash, 1000, "local-dev"),
+        ],
+    };
+    crate::sync::conflict::persist_sync_merge_result(
+        sync_root,
+        SYNC_MANIFEST_PATH,
+        &baseline,
+        &state,
+        &[],
+    )
+    .unwrap();
+
+    let untouched_object = manifest_object_for(sync_root, untouched);
+    let untouched_object_before = std::fs::read(&untouched_object).unwrap();
+    let old_affected_object = manifest_object_for(sync_root, affected);
+    let root_index = sync_root.join("app-meta/sync/manifest/index/_root.json");
+    let root_index_before = std::fs::read(&root_index).unwrap();
+    let volumes_index = sync_root.join("app-meta/sync/manifest/index/volumes.json");
+    let volumes_index_before = std::fs::read(&volumes_index).unwrap();
+
+    // 本地修改 affected 文件；远端仍是基线内容，走三路 LocalChanged → 上传。
+    std::fs::write(sync_root.join(affected), new_affected_content).unwrap();
+
+    let remote_manifest = baseline.clone();
+    let provider = MemoryProvider::with_entries([(
+        format!("projects/p1/{SYNC_MANIFEST_PATH}"),
+        serde_json::to_string(&remote_manifest)
+            .unwrap()
+            .into_bytes(),
+    )]);
+    let plan = SparseObjectPlan::new(
+        Some("head".to_string()),
+        Vec::<String>::new(),
+        vec![affected.to_string()],
+    );
+    let outcome = merge_remote_into_local_snapshot(
+        sync_root,
+        &provider,
+        "projects/p1",
+        SyncScope::Project,
+        &mut state,
+        Some(&plan),
+    )
+    .unwrap();
+
+    // 返回给 full_sync/发布方的仍是完整清单：基线 + affected 覆盖。
+    assert_eq!(outcome.merged_manifest.files.len(), 3);
+    let merged_affected = outcome
+        .merged_manifest
+        .files
+        .iter()
+        .find(|record| record.path == affected)
+        .expect("merged manifest must contain affected record");
+    assert_eq!(merged_affected.content_hash, new_affected_hash);
+    assert!(outcome.remote_upload_paths.contains(&affected.to_string()));
+
+    // 持久化清单同样完整，且只有 affected 记录变化。
+    let stored = ManifestStore::new(sync_root, SYNC_MANIFEST_PATH)
+        .load_all()
+        .unwrap()
+        .expect("manifest root must exist");
+    assert_eq!(stored.files.len(), 3);
+    let stored_affected = stored
+        .files
+        .iter()
+        .find(|record| record.path == affected)
+        .expect("stored manifest must contain affected record");
+    assert_eq!(stored_affected.content_hash, new_affected_hash);
+
+    // 未受影响 object 字节不变；affected 旧 object 被回收、新 object 存在。
+    assert_eq!(
+        std::fs::read(&untouched_object).unwrap(),
+        untouched_object_before,
+        "untouched object must not be rewritten"
+    );
+    assert!(
+        !old_affected_object.exists(),
+        "old affected object must be reclaimed after the delta write"
+    );
+    let new_affected_object = manifest_object_for(sync_root, affected);
+    assert_ne!(new_affected_object, old_affected_object);
+
+    // 其它 namespace 的 index 逐字节不变；affected namespace 的 index 必须变化。
+    assert_eq!(
+        std::fs::read(&root_index).unwrap(),
+        root_index_before,
+        "unaffected namespace index must keep its bytes"
+    );
+    assert_ne!(
+        std::fs::read(&volumes_index).unwrap(),
+        volumes_index_before,
+        "affected namespace index must be rewritten"
+    );
+
+    // known_files：只结算 affected；未涉及键原值保留。
+    assert_eq!(
+        state.known_files.get(affected).map(String::as_str),
+        Some(new_affected_hash.as_str())
+    );
+    for (path, hash) in [(untouched, &untouched_hash), (project, &project_hash)] {
+        assert_eq!(
+            state.known_files.get(path).map(String::as_str),
+            Some(hash.as_str()),
+            "known_files for unaffected {path} must stay unchanged"
+        );
+    }
+}
+
+/// 稀疏 merge 的 delete 墓碑仍写入清单，但本地 known_files 基线必须移除。
+#[test]
+fn sparse_merge_keeps_delete_tombstone_without_known_file() {
+    let tmp = TempDir::new().unwrap();
+    let sync_root = tmp.path();
+    let path = "project.json";
+    let old_hash = md5_hex(b"deleted content");
+
+    let mut state = SyncState::default();
+    state.device_id = "current-device".to_string();
+    state.known_files.insert(path.to_string(), old_hash.clone());
+    state.known_files_updated_at.insert(path.to_string(), 1000);
+    crate::sync::SyncService::save_sync_state(sync_root, &state).unwrap();
+
+    let baseline = SyncManifest {
+        files: vec![upsert_record(path, &old_hash, 1000, "local-dev")],
+    };
+    crate::sync::conflict::persist_sync_merge_result(
+        sync_root,
+        SYNC_MANIFEST_PATH,
+        &baseline,
+        &state,
+        &[],
+    )
+    .unwrap();
+
+    // 本地文件已缺失，远端有近期 delete 事实：按删除收敛，不伪造缺失。
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut delete_record = upsert_record(path, &old_hash, now_ms, "remote-dev");
+    delete_record.op = "delete".to_string();
+    delete_record.deleted_at_ms = Some(now_ms);
+    let remote_manifest = SyncManifest {
+        files: vec![delete_record],
+    };
+    let provider = MemoryProvider::with_entries([(
+        format!("projects/p1/{SYNC_MANIFEST_PATH}"),
+        serde_json::to_string(&remote_manifest)
+            .unwrap()
+            .into_bytes(),
+    )]);
+    let plan = SparseObjectPlan::new(
+        Some("head".to_string()),
+        Vec::<String>::new(),
+        vec![path.to_string()],
+    );
+    let outcome = merge_remote_into_local_snapshot(
+        sync_root,
+        &provider,
+        "projects/p1",
+        SyncScope::Project,
+        &mut state,
+        Some(&plan),
+    )
+    .unwrap();
+
+    assert!(outcome.unresolved_missing_paths.is_empty());
+    let merged = outcome
+        .merged_manifest
+        .files
+        .iter()
+        .find(|record| record.path == path)
+        .expect("delete tombstone must stay in the merged manifest");
+    assert_eq!(merged.op, "delete");
+    assert!(
+        !state.known_files.contains_key(path),
+        "delete tombstone must not leave a content hash in known_files"
+    );
+
+    let stored = ManifestStore::new(sync_root, SYNC_MANIFEST_PATH)
+        .load_all()
+        .unwrap()
+        .expect("manifest root must exist");
+    let stored_record = stored
+        .files
+        .iter()
+        .find(|record| record.path == path)
+        .expect("delete tombstone must be persisted");
+    assert_eq!(stored_record.op, "delete");
+}
+
+/// 非稀疏路径仍产出完整清单（不因为稀疏优化丢掉未涉及记录）。
+#[test]
+fn non_sparse_merge_still_returns_complete_manifest() {
+    let tmp = TempDir::new().unwrap();
+    let sync_root = tmp.path();
+    let first = "volumes/a/chapters/c1/chapter.md";
+    let second = "volumes/b/chapters/c2/chapter.md";
+    write_sync_file(sync_root, first, b"one");
+    write_sync_file(sync_root, second, b"two");
+
+    let first_hash = md5_hex(b"one");
+    let second_hash = md5_hex(b"two");
+    let mut state = SyncState::default();
+    state.device_id = "current-device".to_string();
+    state
+        .known_files
+        .insert(first.to_string(), first_hash.clone());
+    state
+        .known_files
+        .insert(second.to_string(), second_hash.clone());
+    state.known_files_updated_at.insert(first.to_string(), 1000);
+    state
+        .known_files_updated_at
+        .insert(second.to_string(), 1000);
+    crate::sync::SyncService::save_sync_state(sync_root, &state).unwrap();
+    write_old_manifest(
+        sync_root,
+        vec![
+            upsert_record(first, &first_hash, 1000, "local-dev"),
+            upsert_record(second, &second_hash, 1000, "local-dev"),
+        ],
+    );
+
+    let remote_manifest = SyncManifest {
+        files: vec![
+            upsert_record(first, &first_hash, 1000, "local-dev"),
+            upsert_record(second, &second_hash, 1000, "local-dev"),
+        ],
+    };
+    let provider = MemoryProvider::with_entries([(
+        format!("projects/p1/{SYNC_MANIFEST_PATH}"),
+        serde_json::to_string(&remote_manifest)
+            .unwrap()
+            .into_bytes(),
+    )]);
+
+    let outcome = merge_remote_into_local_snapshot(
+        sync_root,
+        &provider,
+        "projects/p1",
+        SyncScope::Project,
+        &mut state,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(outcome.merged_manifest.files.len(), 2);
+    for path in [first, second] {
+        assert!(
+            outcome
+                .merged_manifest
+                .files
+                .iter()
+                .any(|record| record.path == path),
+            "non-sparse merged manifest must contain {path}"
+        );
+    }
+    let stored = ManifestStore::new(sync_root, SYNC_MANIFEST_PATH)
+        .load_all()
+        .unwrap()
+        .expect("manifest root must exist");
+    assert_eq!(stored.files.len(), 2);
 }

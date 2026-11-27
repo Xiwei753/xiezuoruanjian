@@ -419,9 +419,14 @@ fn read_project_lww_from_workspace_manifest(
 
 /// 读 project 级 manifest，提取 LWW 时间和 device_id。
 ///
-/// 远端 manifest 路径：`projects/<id>/app-meta/sync/manifest.sync.json`。
+/// 远端权威清单是 v2 存储：`projects/<id>/app-meta/sync/manifest/root.json` +
+/// `index/<ns>.json` + `objects/<sha256>.json`，由
+/// [`crate::sync::lww::fetch_remote_manifest_at`] 按根严格读取（缺文件/sha256 不符/
+/// JSON 损坏都返回 `Err`，不静默当成没有清单）。根不存在时回退旧单文件
+/// `projects/<id>/app-meta/sync/manifest.sync.json`，再回退旧分片目录
+/// `manifest-shards/*.json`（一次性迁移读取）。
 ///
-/// 与 [`read_project_lww_from_workspace_manifest`] 的区别：本函数只读 project 级 manifest，
+/// 与 [`read_project_lww_from_workspace_manifest`] 的区别：本函数只读 project 级清单，
 /// 不 fallback 到 workspace 总 manifest。workspace manifest 的按需加载由调用方
 /// （[`discover_legacy_remote_catalog`]）负责。
 ///
@@ -430,26 +435,20 @@ fn read_project_lww_from_workspace_manifest(
 /// - project manifest 存在且合法 → `Ok(Some((lww_time, device_id)))`（取所有 file record
 ///   的最大 `(lww_time, device_id)`，LWW 规则：`deleted_at_ms` 优先 for delete op，
 ///   否则 `updated_at_ms`；时间相同 `device_id` 字典序大者胜出）；
-/// - project manifest 不存在 → `Ok(None)`（调用方决定是否 fallback 到 workspace manifest）；
-/// - project manifest 存在但解析失败 → `Err`（损坏的 project manifest 不应被静默隐藏，
-///   不 fallback 到 workspace manifest）；
+/// - 三种清单来源都不存在 → `Ok(None)`（调用方决定是否 fallback 到 workspace manifest）；
+/// - project manifest 存在但读取/校验/解析失败 → `Err`（损坏的 project manifest 不应被
+///   静默隐藏，不 fallback 到 workspace manifest）；
 /// - project manifest 存在但 files 为空 → `Err`（空 manifest 无法可靠判断该 project 的真实 LWW）。
 fn read_project_manifest_lww(
     provider: &dyn SyncProvider,
     project_id: &str,
 ) -> crate::error::Result<Option<(i64, String)>> {
-    let manifest_path = format!("projects/{project_id}/app-meta/sync/manifest.sync.json");
-    let obj = provider.read(&manifest_path).map_err(crate::Error::from)?;
-    let Some(obj) = obj else {
-        // project 级 manifest 不存在 → Ok(None)，调用方按需 fallback 到 workspace 总 manifest。
+    let remote_prefix = format!("projects/{project_id}");
+    let manifest = crate::sync::lww::fetch_remote_manifest_at(provider, &remote_prefix)?;
+    let Some(manifest) = manifest else {
+        // project 级清单不存在 → Ok(None)，调用方按需 fallback 到 workspace 总 manifest。
         return Ok(None);
     };
-    let manifest: SyncManifest = serde_json::from_slice(&obj.content).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "read_project_manifest_lww: parse manifest for {project_id} failed: {e} \
-             — cannot fabricate LWW"
-        )))
-    })?;
     // 取所有 record 的最大 (lww_time, device_id)。
     // manifest 存在但 files 为空 → 返回 Err（不伪造 (0, "") LWW）。
     // 空 manifest 无法可靠判断该 project 的真实 LWW — 调用方（discover_legacy_remote_catalog）
