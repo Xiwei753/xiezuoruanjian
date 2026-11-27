@@ -322,6 +322,11 @@ impl AppBackend {
         qjson_object_from_json(
             &serde_json::json!({
                 "pending": status.pending,
+                "running": status.running,
+                "remaining": status.remaining,
+                "deferred": status.deferred,
+                "conflicted": status.conflicted,
+                "scanIncomplete": status.scan_incomplete,
                 "restored": status.restored,
                 "failed": status.failed,
                 "kept": status.kept,

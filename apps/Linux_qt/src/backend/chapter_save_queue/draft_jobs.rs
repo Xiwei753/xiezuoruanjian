@@ -74,6 +74,9 @@ pub(crate) struct ChapterDraftRestoreStatus {
     pub deferred: usize,
     /// 明确冲突/无法隔离、需要人工处理的章节数。
     pub conflicted: usize,
+    /// 发现扫描是否完整（Issue #1062 评论 #7214283385 第 3 项）。
+    /// 不完整时项目级恢复未决：不得把“没发现”当成“没有草稿”放行写入。
+    pub scan_incomplete: bool,
     pub pending: bool,
     pub restored: usize,
     pub failed: usize,
@@ -124,16 +127,21 @@ pub(crate) fn enqueue_fact(command: ChapterFactCommand) -> Result<(), String> {
 pub(crate) fn enqueue_restore_project(command: ChapterRestoreCommand) -> usize {
     // Issue #1062 评论 #7213634487 第 A 项：UI 等待数与恢复 actor 用同一份
     // 严格发现结果；损坏的旧格式原件也计入待处理，不能被当成“没有草稿”。
-    let (draft_count, discovery_failed) = match super::super::chapter_draft::discover_project_drafts(
-        Path::new(&command.context.projects_root),
-        &command.project_id,
-    ) {
-        Ok(discovery) => (discovery.drafts.len() + discovery.unreadable.len(), 0),
-        Err(error) => {
-            log::warn!("chapter draft discovery failed: {error}");
-            (0, 1)
-        }
-    };
+    let (draft_count, discovery_failed, scan_errors) =
+        match super::super::chapter_draft::discover_project_drafts(
+            Path::new(&command.context.projects_root),
+            &command.project_id,
+        ) {
+            Ok(discovery) => (
+                discovery.drafts.len() + discovery.unreadable.len(),
+                0,
+                discovery.scan_errors.len(),
+            ),
+            Err(error) => {
+                log::warn!("chapter draft discovery failed: {error}");
+                (0, 1, 0)
+            }
+        };
     // Issue #1062 评论 7195690539 第 2 项：发现到的每个草稿目录都必须等
     // 恢复 actor 给出“恢复/归档”决议后才允许编辑器打开，不能因为摘要里
     // fact/text 都为空（空事务头、缺失 blob 的候选）就放行。pending-inputs
@@ -146,7 +154,10 @@ pub(crate) fn enqueue_restore_project(command: ChapterRestoreCommand) -> usize {
             &command.project_id,
         )
         .len()
-        + discovery_failed;
+        + discovery_failed
+        // Issue #1062 评论 #7214283385 第 3 项：扫描不完整时“没发现”不能当成
+        // “没有草稿”，必须等 actor 用一次完整发现给出项目级决议。
+        + scan_errors;
     if count > 0 {
         if let Ok(mut states) = draft_restore_state().lock() {
             states.insert(

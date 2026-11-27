@@ -502,6 +502,21 @@ Rectangle {
     // 这些按章结论只对本次恢复的作品有效；换作品后不能拿旧章节 id 误拦。
     property string draftRestoreStateProjectId: ""
 
+    // Issue #1062 评论 #7214283385 第 3 项：扫描不完整的发现结果不是
+    // “没有草稿”。项目级恢复保持未决，按退避重跑完整恢复；只有一次完整
+    // 扫描确认后才允许进入编辑。
+    property int draftRestoreRetryDelay: 1500
+    Timer {
+        id: draftRestoreRetryTimer
+        interval: root.draftRestoreRetryDelay
+        repeat: false
+        onTriggered: {
+            if (!root.draftRestoreProjectId) return
+            root.ensureProjectDraftsRestored(root.draftRestoreProjectId,
+                                             root.draftRestoreCallback)
+        }
+    }
+
     Timer {
         id: draftRestorePollTimer
         interval: 100
@@ -616,6 +631,22 @@ Rectangle {
                     + ", message=" + String(status.message || ""))
             }
         }
+        if (status && status.scanIncomplete === true) {
+            root.logWriterWarning("chapter_draft_restore_scan_incomplete",
+                "draft discovery incomplete; project recovery stays unresolved: "
+                + String(status.message || ""))
+            if (root.editorBackendRef)
+                root.editorBackendRef.save_status = qsTr("草稿扫描不完整，正在重试完整恢复；完成前不会打开章节")
+            root.draftRestoreProjectId = restoredProjectId
+            root.draftRestoreCallback = ready
+            root.logWriterWarning("chapter_draft_restore_rescan",
+                "retry in " + root.draftRestoreRetryDelay + "ms")
+            draftRestoreRetryTimer.interval = root.draftRestoreRetryDelay
+            root.draftRestoreRetryDelay = Math.min(root.draftRestoreRetryDelay * 2, 30000)
+            draftRestoreRetryTimer.start()
+            return
+        }
+        root.draftRestoreRetryDelay = 1500
         if (ready) ready()
     }
 

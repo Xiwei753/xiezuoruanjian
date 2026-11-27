@@ -208,13 +208,17 @@ impl RestoreCounters {
         &self,
         remaining: usize,
         deferred: usize,
+        scan_incomplete: bool,
     ) -> ChapterDraftRestoreStatus {
         ChapterDraftRestoreStatus {
             running: false,
             remaining,
             deferred,
             conflicted: self.blocked_chapters.len(),
-            pending: false,
+            scan_incomplete,
+            // 扫描不完整时项目级恢复仍未决：QML 必须继续等待一次完整发现，
+            // 不能把已知章节当成“全部草稿”。
+            pending: scan_incomplete,
             restored: self.restored,
             failed: self.failed,
             kept: self.kept,

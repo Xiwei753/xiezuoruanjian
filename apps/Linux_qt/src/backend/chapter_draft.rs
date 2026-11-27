@@ -63,7 +63,7 @@ pub(crate) use ownership::{archived_draft_ownership, draft_event_ownership, Draf
 pub(crate) use pending::{clear_pending_input, pending_inputs, spool_failed_input};
 pub(crate) use restore::{
     discover_project_drafts, list_project_drafts, restore_plan, restore_plan_strict, snapshot,
-    DraftDiscovery, UnreadableDraft,
+    DiscoveryIntegrity, DraftDiscovery, UnreadableDraft,
 };
 pub(crate) use retry::{
     clear_retry_intent, list_retries, list_retries_strict, materialize_retry,

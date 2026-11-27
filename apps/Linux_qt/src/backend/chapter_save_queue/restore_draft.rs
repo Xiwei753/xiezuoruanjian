@@ -192,11 +192,32 @@ pub(super) fn handle_restore_project(
     let mut reported_unreadable: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
     let mut give_up: std::collections::BTreeSet<String> = blocked_chapters.clone();
+    // Issue #1062 评论 #7214283385（附带 P1）：不再用固定 8 轮当终止条件。
+    // 本轮启动时冻结可见事务集合，轮数上界由真实工作量派生；每轮至少推进
+    // 一份 retry 或把失败章节记为 Deferred，真正的终止由“未处理候选为空”
+    // 决定（见下方 remaining 检查）。
+    let frozen_candidates =
+        super::restore_coordinator::retry_snapshot(&projects_root, &command.project_id)
+            .values()
+            .map(std::collections::BTreeSet::len)
+            .sum::<usize>()
+            + super::super::chapter_draft::discover_project_drafts(
+                &projects_root,
+                &command.project_id,
+            )
+            .map(|discovery| discovery.drafts.len() + discovery.unreadable.len())
+            .unwrap_or_default();
+    let max_rounds = frozen_candidates.saturating_add(2);
     let mut round = 0u32;
     loop {
         round = round.saturating_add(1);
-        if round > 8 {
-            counters.note("", "restore queue pass limit reached (remaining kept)");
+        if round > max_rounds {
+            counters.note(
+                "",
+                format!(
+                    "restore queue covered frozen candidates (rounds={max_rounds}, remaining kept)"
+                ),
+            );
             break;
         }
         super::restore_coordinator::materialize_pending_retries(
@@ -220,6 +241,59 @@ pub(super) fn handle_restore_project(
         for error in &discovery.scan_errors {
             counters.failed = counters.failed.saturating_add(1);
             counters.note("", format!("draft discovery: {error}"));
+        }
+        // Issue #1062 评论 #7214283385 第 1 项：Core durable ack 对账必须在
+        // materialize 之后按事务推进。进入作品前的那次全局对账只能覆盖
+        // “已无本地草稿”的 ack；被归档区的 retry 事务会在那一轮被 skipped，
+        // 搬回活动槽位后必须立刻用同一章节的 Core 记录重新对账，再走
+        // restore_plan_strict/replay，否则已提交事实会被当成未提交重放。
+        // 对账失败时保留草稿与 Core journal，并把本章标为 Deferred，不 replay。
+        if !reconcile_failed_all {
+            for draft in &discovery.drafts {
+                let chapter_id = draft.chapter_id.as_str();
+                if give_up.contains(chapter_id)
+                    || blocked_chapters.contains(chapter_id)
+                    || counters.blocked_chapters.iter().any(|id| id == chapter_id)
+                {
+                    continue;
+                }
+                match super::core_ack::reconcile_core_acks(
+                    api,
+                    command.context.projects_root(),
+                    &command.project_id,
+                    Some(chapter_id),
+                ) {
+                    Ok(outcome) => {
+                        for skipped in outcome.skipped {
+                            counters.note(
+                                &skipped.chapter_id,
+                                format!("core_draft_ack_deferred: {}", skipped.reason),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        if error.failures().is_empty() {
+                            reconcile_failed_all = true;
+                            counters
+                                .messages
+                                .push(format!("core_draft_ack_reconcile_failed: {error}"));
+                        } else {
+                            for failure in error.failures() {
+                                blocked_chapters.insert(failure.chapter_id.clone());
+                                give_up.insert(failure.chapter_id.clone());
+                                counters.block(&failure.chapter_id);
+                                counters.note(
+                                    &failure.chapter_id,
+                                    format!(
+                                        "core_draft_ack_reconcile_failed kept (retryable): {}",
+                                        failure.reason
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
         for unreadable in &discovery.unreadable {
             let key = format!("{}\u{1f}{}", unreadable.chapter_id, unreadable.path);
@@ -888,16 +962,51 @@ pub(super) fn handle_restore_project(
     // Issue #1062 评论 #7210163429 第 1/2 项：重试标记按归档事务记账，这里
     // 不再按 chapter_id 收敛“同章过期标记”——那会把别的事务的恢复指针一起
     // 删除。每条标记只会被自己的 materialize/归档丢失路径精确清理。
-    let remaining =
-        super::super::chapter_draft::discover_project_drafts(&projects_root, &command.project_id)
-            .map(|discovery| discovery.drafts.len() + discovery.unreadable.len())
-            .unwrap_or_default();
-    let deferred =
-        super::super::chapter_draft::retry_chapters(&projects_root, &command.project_id).len();
+    // Issue #1062 评论 #7214283385 第 3 项：扫描完整性是显式决议。不完整
+    // 扫描中的“没发现”不能当成“没有草稿”：项目级 remaining 计入扫描错误，
+    // 状态保持 pending，QML 只有拿到一次完整发现才允许进入编辑。
+    let (remaining, deferred, scan_incomplete, scan_errors) =
+        match super::super::chapter_draft::discover_project_drafts(
+            &projects_root,
+            &command.project_id,
+        ) {
+            Ok(discovery) => (
+                discovery.drafts.len() + discovery.unreadable.len() + discovery.scan_errors.len(),
+                super::super::chapter_draft::retry_chapters(&projects_root, &command.project_id)
+                    .len(),
+                !discovery.is_complete(),
+                discovery.scan_errors,
+            ),
+            Err(error) => {
+                counters
+                    .messages
+                    .push(format!("draft discovery failed after restore: {error}"));
+                (
+                    1,
+                    super::super::chapter_draft::retry_chapters(
+                        &projects_root,
+                        &command.project_id,
+                    )
+                    .len(),
+                    true,
+                    vec![error],
+                )
+            }
+        };
+    for error in &scan_errors {
+        counters
+            .messages
+            .push(format!("draft discovery incomplete: {error}"));
+    }
+    if scan_incomplete {
+        counters
+            .messages
+            .push("draft discovery incomplete (project recovery unresolved)".to_string());
+    }
     if let Ok(mut states) = draft_restore_state().lock() {
         states.insert(
             command.project_id,
-            counters.status_with(remaining, deferred),
+            counters.status_with(remaining, deferred, scan_incomplete),
         );
     }
 }

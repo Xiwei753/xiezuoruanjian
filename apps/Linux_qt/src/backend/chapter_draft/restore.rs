@@ -64,6 +64,32 @@ pub(crate) struct DraftDiscovery {
     pub scan_errors: Vec<String>,
 }
 
+/// 一次发现扫描的完整性决议。
+///
+/// Issue #1062 评论 #7214283385 第 3 项：目录迭代失败时已发现的草稿仍然
+/// 可用，但“没发现”不能等于“不存在”；调用方必须把不完整扫描当成项目级
+/// 未决，直到一次完整扫描确认。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiscoveryIntegrity {
+    Complete,
+    Incomplete,
+}
+
+impl DraftDiscovery {
+    /// 本次扫描是否覆盖了全部候选；有扫描级错误即为不完整。
+    pub(crate) fn integrity(&self) -> DiscoveryIntegrity {
+        if self.scan_errors.is_empty() {
+            DiscoveryIntegrity::Complete
+        } else {
+            DiscoveryIntegrity::Incomplete
+        }
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.integrity() == DiscoveryIntegrity::Complete
+    }
+}
+
 /// 严格发现项目内需要恢复的草稿。
 pub(crate) fn discover_project_drafts(
     projects_root: &Path,
