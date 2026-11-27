@@ -1174,7 +1174,9 @@ impl WriterCoreApi {
             let mut recovery_error: Option<String> = None;
             // 读标记放在账本恢复之后：恢复本身可能产生新的恢复责任，提前读会
             // 漏掉这一次（复审 #7213115893 第 4 项）。
-            let had_marker = crate::sync::local_mutations::recovery_pending(root);
+            let start_generation =
+                crate::sync::local_mutations::recovery_pending_generation(root);
+            let had_marker = start_generation.is_some();
             // 正常空闲轮不读整份账本：只有存在未完成恢复标记时才做显式恢复。
             // 损坏账本由写入路径（append_batch）归档重建，读路径如实报错。
             let needs_ledger_recovery = had_marker
@@ -1227,7 +1229,8 @@ impl WriterCoreApi {
                     }
                 }
             }
-            // 有未完成责任时才做显式磁盘重建；正常空闲轮不扫描目录。
+            // 有未完成责任时才做显式磁盘重建；正常空闲轮不扫描目录。账本恢复
+            // 本身也可能产生新责任（归档重建），所以这里重新看一次标记。
             let needs_rescan =
                 had_marker || crate::sync::local_mutations::recovery_pending(root);
             if needs_rescan && recovery_error.is_none() {
@@ -1270,7 +1273,11 @@ impl WriterCoreApi {
                 Some(reason) => {
                     crate::sync::local_mutations::mark_recovery_pending(root, &reason)
                 }
-                None => crate::sync::local_mutations::clear_recovery_pending(root),
+                // 只清自己开始时那一代责任：恢复过程中又产生的新责任保留。
+                None => crate::sync::local_mutations::clear_recovery_pending_if_generation(
+                    root,
+                    start_generation,
+                ),
             }
         }
     }

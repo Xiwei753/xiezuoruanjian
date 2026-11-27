@@ -241,10 +241,22 @@ fn ensure_sequences(
 /// （见 `version_snapshot` 的 `ledger_corrupt` 不 eligible），由真实磁盘内容
 /// 建立新基线。返回是否发生了重建。
 pub(crate) fn repair_corrupt_ledger(sync_root: &Path) -> crate::error::Result<bool> {
-    if load_records(sync_root).is_ok() {
+    let path = ledger_path(sync_root);
+    // 区分"还没有账本"和"账本坏了"：前者不需要恢复责任，后者必须在归档之前
+    // 先持久化恢复责任，避免归档成功后崩溃导致责任丢失（复审 #7213234617 第 3 项）。
+    if !path.exists() {
         return Ok(false);
     }
-    let path = ledger_path(sync_root);
+    match load_records(sync_root) {
+        Ok(_) => return Ok(false),
+        Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(false)
+        }
+        Err(error) => {
+            // 读不出来就无法证明账本健康：先登记恢复责任，再决定是否归档。
+            mark_recovery_pending(sync_root, &format!("ledger-unreadable: {error}"));
+        }
+    }
     if path.exists() {
         let archived = path.with_extension(format!(
             "corrupt-{}.jsonl",
@@ -275,7 +287,10 @@ pub(crate) fn mark_recovery_pending(sync_root: &Path, reason: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let payload = serde_json::json!({ "reason": reason });
+    let payload = serde_json::json!({
+        "reason": reason,
+        "generation": chrono::Utc::now().timestamp_millis(),
+    });
     if let Err(error) = crate::storage::atomic_write_string(&path, &payload.to_string()) {
         log::warn!(
             "[sync] cannot persist recovery-pending marker at {}: {error}",
@@ -294,6 +309,26 @@ pub(crate) fn clear_recovery_pending(sync_root: &Path) {
             "[sync] cannot clear recovery-pending marker at {}: {error}",
             path.display()
         ),
+    }
+}
+
+/// 当前恢复责任的代次；没有责任时返回 `None`。
+///
+/// 恢复开始时记下代次，全部结算成功后只在代次未变时清除：中途又产生新的
+/// 责任时保留标记，下一轮继续。
+pub(crate) fn recovery_pending_generation(sync_root: &Path) -> Option<i64> {
+    let path = sync_root.join(RECOVERY_PENDING_PATH);
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()?
+        .get("generation")?
+        .as_i64()
+}
+
+/// 仅在代次未变时清除恢复标记。
+pub(crate) fn clear_recovery_pending_if_generation(sync_root: &Path, generation: Option<i64>) {
+    if generation.is_some() && recovery_pending_generation(sync_root) == generation {
+        clear_recovery_pending(sync_root);
     }
 }
 
@@ -492,6 +527,10 @@ pub(crate) fn rebuild_pending_from_disk(
     scope: SyncScope,
     app_group: Option<&crate::sync::types::AppDataGroup>,
 ) -> crate::error::Result<usize> {
+    // 读 state、扫描内容、追加事实必须在同一把工作区写锁内完成：否则并发
+    // 业务写入会在"读基线"和"写事实"之间改变磁盘，重建结果与真实内容错配
+    // （复审 #7213234617 第 3 项）。append_batch 内部嵌套取同一把锁是空操作。
+    let _lock = ledger_write_lock(sync_root)?;
     let state = match app_group {
         Some(group) => crate::sync::SyncService::load_sync_state_read_only_for_group(
             sync_root, group, None,
