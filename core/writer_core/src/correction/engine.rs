@@ -627,6 +627,19 @@ impl CorrectionScanner {
         metrics.candidates_filtered_by_segment = metrics
             .candidates_produced
             .saturating_sub(metrics.candidates_attributed);
+        // 上一轮发布失败留下的 checked 结果也要随本批一起重放；否则新扫描
+        // 成功后清掉 pending 会把这部分旧结果永久漏传。
+        if guard.publication_pending {
+            let mut existing: std::collections::HashSet<String> = synced_records
+                .iter()
+                .map(|record| record.record_key())
+                .collect();
+            for record in self.pending_publication_records(&guard, text) {
+                if existing.insert(record.record_key()) {
+                    synced_records.push(record);
+                }
+            }
+        }
         // A rescan that produces the same suggestions and only shifted offsets
         // does not need to rewrite the chapter cache file.
         guard.semantic_dirty |= changed;
