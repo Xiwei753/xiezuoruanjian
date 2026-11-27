@@ -288,11 +288,11 @@ pub(crate) fn publish_pending(
 pub(crate) fn retry_all_pending(
     app_data_root: &Path,
     projects_root: &Path,
-) -> crate::Result<usize> {
+) -> crate::Result<Vec<(String, String)>> {
     let _workspace_lock = crate::storage::WorkspaceWriteLock::acquire(app_data_root)?;
     let project_entries = match fs::read_dir(projects_root) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
             return Err(crate::Error::Other(format!(
                 "open projects root {} failed: {error}",
@@ -300,7 +300,7 @@ pub(crate) fn retry_all_pending(
             )));
         }
     };
-    let mut published = 0usize;
+    let mut published: Vec<(String, String)> = Vec::new();
     let mut first_error: Option<crate::Error> = None;
     for project_entry in project_entries {
         let project_entry = match project_entry {
@@ -365,7 +365,10 @@ pub(crate) fn retry_all_pending(
                 continue;
             };
             match publish_pending(&project_root, &project_id, chapter_id) {
-                Ok(count) => published = published.saturating_add(count),
+                Ok(count) if count > 0 => {
+                    published.push((project_id.clone(), chapter_id.to_string()));
+                }
+                Ok(_) => {}
                 Err(error) => {
                     if first_error.is_none() {
                         first_error = Some(error);

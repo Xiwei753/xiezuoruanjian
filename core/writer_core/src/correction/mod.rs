@@ -61,12 +61,12 @@ pub(crate) fn retry_pending_publications(
     projects_root: &Path,
 ) -> Result<usize, WriterError> {
     let mut settled = 0usize;
-    let mut disk_published = 0usize;
+    let mut disk_published: Vec<(String, String)> = Vec::new();
     let mut disk_error: Option<crate::Error> = None;
     match publication::retry_all_pending(app_data_root, projects_root) {
-        Ok(count) => {
-            disk_published = count;
-            settled = settled.saturating_add(count);
+        Ok(chapters) => {
+            settled = settled.saturating_add(chapters.len());
+            disk_published = chapters;
         }
         Err(error) => disk_error = Some(error),
     }
@@ -74,8 +74,8 @@ pub(crate) fn retry_pending_publications(
     // 永远等不到同章 scanner/retry。
     match CorrectionStore::open_with_projects_root(app_data_root, projects_root) {
         Ok(store) => {
-            if disk_published > 0 {
-                store.invalidate_all_synced_results();
+            for (project_id, chapter_id) in &disk_published {
+                store.invalidate_chapter_synced_results(project_id, chapter_id);
             }
             settled = settled.saturating_add(store.retry_memory_publications());
         }
@@ -1466,11 +1466,16 @@ impl CorrectionStore {
         settled
     }
 
-    /// 同步入口发布了磁盘 pending 后清理所有章节索引；pending 发布是低频
-    /// 恢复路径，之后首次查询会按新目录 mtime 重建。
-    pub(crate) fn invalidate_all_synced_results(&self) {
+    /// 本地发布某章结果后显式释放该章的不可变索引；其余章节保持命中。
+    pub(crate) fn invalidate_chapter_synced_results(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+    ) {
         if let Ok(mut cache) = self.inner.synced_records.lock() {
-            cache.clear();
+            cache.retain(|key, _| {
+                key.project_id != project_id || key.chapter_id != chapter_id
+            });
         }
     }
 
