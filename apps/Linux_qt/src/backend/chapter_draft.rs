@@ -32,7 +32,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use store::DraftLocation;
@@ -206,7 +206,7 @@ impl ChapterDraftSnapshot {
             base_generation: state.base_generation.clone(),
             base_revision: state.base_revision,
             base_sha256: state.base_sha256.clone(),
-            text: state.text.clone(),
+            text: state.text.as_deref().map(str::to_string),
             text_revision: state.text_revision,
             text_sha256: state.text_sha256.clone(),
             fact_count: state.facts.len(),
@@ -265,7 +265,7 @@ struct DraftState {
     base_generation: String,
     base_revision: u64,
     base_sha256: String,
-    text: Option<String>,
+    text: Option<Arc<str>>,
     text_revision: u64,
     text_sha256: String,
     persisted_text_revision: u64,
@@ -409,7 +409,7 @@ pub(crate) fn note_text(
     volume_id: &str,
     session_id: u64,
     generation: &str,
-    text: String,
+    text: impl Into<Arc<str>>,
     revision: u64,
     sha256: &str,
     base: (&str, u64, &str),
@@ -431,7 +431,7 @@ pub(crate) fn note_text(
     if !generation.is_empty() {
         state.generation = generation.to_string();
     }
-    state.text = Some(text);
+    state.text = Some(text.into());
     state.text_revision = revision;
     state.text_sha256 = sha256.to_string();
     state.text_dirty = true;
@@ -678,7 +678,7 @@ pub(crate) fn persist_current(
             )
         };
         PersistPlan {
-            text: write_text.then(|| state.text.clone().unwrap_or_default()),
+            text: if write_text { state.text.clone() } else { None },
             written_revision,
             written_sha256: written_sha256.clone(),
             written_blob: store::blob_name(written_revision, &written_sha256),
@@ -934,7 +934,7 @@ fn ensure_state(location: &DraftLocation) -> bool {
 
 /// `persist_current` 在锁外执行 I/O 所需的不可变快照。
 struct PersistPlan {
-    text: Option<String>,
+    text: Option<Arc<str>>,
     written_revision: u64,
     written_sha256: String,
     written_blob: String,

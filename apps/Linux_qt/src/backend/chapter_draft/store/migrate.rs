@@ -7,6 +7,7 @@
 // 绝不 remove_dir_all。失败返回 Err，旧文件与新目录原件都保留。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::super::DraftState;
 use super::{DraftFactIndex, DraftLocation};
@@ -388,7 +389,7 @@ pub(super) fn legacy_state(
         base_generation: legacy.base_generation,
         base_revision: legacy.base_revision,
         base_sha256: legacy.base_sha256,
-        text: legacy.text,
+        text: legacy.text.map(Arc::from),
         text_revision: legacy.text_revision,
         text_sha256: legacy.text_sha256.clone(),
         persisted_text_revision: legacy.text_revision,

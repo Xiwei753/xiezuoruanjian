@@ -12,7 +12,7 @@ pub(crate) fn draft_metrics() -> (usize, usize) {
     let mut bytes = 0usize;
     for state in registry.values() {
         facts = facts.saturating_add(state.facts.len());
-        bytes = bytes.saturating_add(state.text.as_ref().map_or(0, String::len));
+        bytes = bytes.saturating_add(state.text.as_ref().map_or(0, |text| text.len()));
     }
     (facts, bytes)
 }

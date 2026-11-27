@@ -340,7 +340,7 @@ struct PersistedDraftHead {
     acked_through_revision: u64,
     applied_transactions: Vec<String>,
     applied_commit_sequence: u64,
-    text: Option<String>,
+    text: Option<Arc<str>>,
     text_revision: u64,
     text_sha256: String,
     persisted_text_revision: u64,

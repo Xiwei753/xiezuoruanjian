@@ -17,6 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::{DraftFactIndex, DraftState, DRAFT_SCHEMA_VERSION, MAX_MEMORY_FACT_INDEX};
 
@@ -439,12 +440,14 @@ pub(super) fn read_new_state(
         }
         return Ok(None);
     }
-    let text = read_referenced_text(location, &meta).map_err(|error| {
-        format!(
-            "chapter draft text unreadable (kept): project={} chapter={}: {error}",
-            location.project_id, location.chapter_id
-        )
-    })?;
+    let text = read_referenced_text(location, &meta)
+        .map(|text| text.map(Arc::from))
+        .map_err(|error| {
+            format!(
+                "chapter draft text unreadable (kept): project={} chapter={}: {error}",
+                location.project_id, location.chapter_id
+            )
+        })?;
     let acked: HashSet<String> = meta.acked_event_ids.iter().cloned().collect();
     let mut facts = merge_index(&location.dir, &meta.index(), &acked).map_err(|error| {
         format!(

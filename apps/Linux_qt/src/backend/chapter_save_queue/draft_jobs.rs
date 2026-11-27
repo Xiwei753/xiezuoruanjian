@@ -398,7 +398,7 @@ pub(super) fn handle_draft_text(command: ChapterDraftTextCommand) {
             &command.volume_id,
             snapshot.session_id,
             &snapshot.generation,
-            snapshot.text.to_string(),
+            snapshot.text.clone(),
             snapshot.revision,
             &snapshot.sha256,
             (

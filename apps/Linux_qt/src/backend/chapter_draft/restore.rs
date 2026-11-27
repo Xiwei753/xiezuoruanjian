@@ -307,7 +307,7 @@ pub(crate) fn restore_plan_strict(
         base_generation: state.base_generation.clone(),
         base_revision: state.base_revision,
         base_sha256: state.base_sha256.clone(),
-        text: state.text.clone(),
+        text: state.text.as_deref().map(str::to_string),
         text_revision: state.text_revision,
         text_sha256: state.text_sha256.clone(),
         fact_count: state.facts.len(),
