@@ -708,8 +708,10 @@ impl CorrectionScanner {
             );
             metrics.result = "publication-pending";
             metrics.dirty_preserved_segments = dirty.len();
-            let _ = scan_lease.finish();
+            // 仍持有扫描 token 完成第一次重放：若重放成功，等待中的下一个
+            // 请求能从同步索引直接投影，不必为同一正文再跑模型。
             self.store.retry_publications(&self.project_id, &self.chapter_id);
+            let _ = scan_lease.finish();
             return self.unfinished_snapshot();
         }
         let mut guard = lock_slot(&slot)?;
