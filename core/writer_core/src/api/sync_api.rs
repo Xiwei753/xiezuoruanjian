@@ -2864,6 +2864,19 @@ impl WriterCoreApi {
         let mut publish_error: Option<String> = None;
         let mut publish_error_category: Option<String> = None;
         let mut publish_ack_unsettled = 0usize;
+        // 本 batch 的 manifest 是 transfer 阶段按旧字节生成的；提交后的对象字节
+        // 与它不一致时整批发布会造成"正文 B + 描述 A"。先冻结核对，不一致就
+        // 作废本轮发布，mutation 保持未确认，下一轮从 live 重新规划。
+        let (refrozen, vanished) = round.freeze_from_durable(&publish_facts);
+        if refrozen > 0 || vanished > 0 {
+            log::warn!(
+                "[sync] publish deferred: committed objects differ from the planned batch (refrozen={} vanished={})",
+                refrozen,
+                vanished
+            );
+            round.discard();
+            publish_blocked = true;
+        }
         if !publish_blocked {
             // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
             // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
@@ -2875,19 +2888,6 @@ impl WriterCoreApi {
                 provider,
             );
             let pending_paths = round.pending_len();
-            let (refrozen, vanished) = round.freeze_from_durable(&publish_facts);
-            if refrozen > 0 || vanished > 0 {
-                // 本 batch 的 manifest 是 transfer 阶段按旧字节生成的；对象字节
-                // 与它不一致时整批发布会让远端出现"正文 B + 描述 A"的损坏。
-                // 丢弃本轮发布，下一轮从 live 重新规划（mutation 仍未确认）。
-                log::warn!(
-                    "[sync] publish aborted: committed objects differ from the planned batch (refrozen={} vanished={}); replanning next round",
-                    refrozen,
-                    vanished
-                );
-                round.discard();
-                publish_blocked = true;
-            }
             let publish_started_at = Instant::now();
             // 先固化"本轮将要写出去的对象事实"，用于发布成功后的精确结算。
             let publish_receipts = round.pending_publish_receipts();
