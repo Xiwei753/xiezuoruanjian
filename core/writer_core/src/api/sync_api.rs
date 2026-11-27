@@ -2861,43 +2861,6 @@ impl WriterCoreApi {
                     .collect();
                 consumed_by_target.insert(key.clone(), consumed);
             }
-            // manifest 与对象同源：提交后立即读取已落盘的那一份并冻结成决议。
-            let manifest_live = match planned.target.app_group.as_ref() {
-                Some(group) => planned.target_live_root.join(group.local_manifest_path()),
-                None => planned
-                    .target_live_root
-                    .join(crate::sync::lww::SYNC_MANIFEST_PATH),
-            };
-            if let Ok(bytes) = std::fs::read(&manifest_live) {
-                let bytes = serde_json::from_slice::<crate::sync::types::SyncManifest>(&bytes)
-                    .ok()
-                    .and_then(|manifest| manifest.canonical_json().ok())
-                    .map(String::into_bytes)
-                    .unwrap_or(bytes);
-                let manifest_remote = match planned.target.app_group.as_ref() {
-                    Some(_) => format!("{remote_prefix}/{}", crate::sync::lww::SYNC_MANIFEST_PATH),
-                    None => format!(
-                        "projects/{}/{}",
-                        planned.project_id.as_deref().unwrap_or_default(),
-                        crate::sync::lww::SYNC_MANIFEST_PATH
-                    ),
-                };
-                publish_decisions.push((
-                    manifest_remote,
-                    crate::sync::decision::DurableObjectDecision {
-                        transaction_id: diagnostic_operation_id.to_string(),
-                        identity: crate::sync::lww::SYNC_MANIFEST_PATH.to_string(),
-                        op: crate::sync::decision::DecisionOp::Upsert,
-                        base_hash: None,
-                        final_hash: crate::sync::hash::content_md5(&bytes),
-                        final_version: None,
-                        mutation_seq: 0,
-                        origin: crate::sync::decision::DecisionOrigin::Local,
-                        content: Some(bytes),
-                        dependencies: Vec::new(),
-                    },
-                ));
-            }
             if let Some(ref sink) = progress_sink {
                 let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
                 sink.update_target_finish(
@@ -3690,13 +3653,44 @@ impl WriterCoreApi {
             // 这里仍读取一次刚提交的字节，但读取期间没有并发写者；事务身份、
             // 版本/hash 与内容来自同一次持锁结果，不会出现 A 事务 + B 正文。
             let empty_facts = std::collections::BTreeMap::new();
-            let decisions = crate::sync::commit_helpers::durable_decisions_for_target(
+            let mut decisions = crate::sync::commit_helpers::durable_decisions_for_target(
                 run.target_live_root(),
                 target_with_conflicts.project_id.as_deref(),
                 &target_with_conflicts.result,
                 &committed_paths,
                 facts.unwrap_or(&empty_facts),
             );
+            // manifest 与对象同源：本次持锁提交刚写回的 manifest 在同一快照里
+            // 冻结成决议，发布路径不再在锁外回读。
+            let manifest_live = match target_with_conflicts
+                .group_id
+                .as_deref()
+                .and_then(|group_id| crate::sync::types::AppDataGroup::from_id(group_id).ok())
+            {
+                Some(group) => run.target_live_root().join(group.local_manifest_path()),
+                None => run
+                    .target_live_root()
+                    .join(crate::sync::lww::SYNC_MANIFEST_PATH),
+            };
+            if let Ok(bytes) = std::fs::read(&manifest_live) {
+                let bytes = serde_json::from_slice::<crate::sync::types::SyncManifest>(&bytes)
+                    .ok()
+                    .and_then(|manifest| manifest.canonical_json().ok())
+                    .map(String::into_bytes)
+                    .unwrap_or(bytes);
+                decisions.push(crate::sync::decision::DurableObjectDecision {
+                    transaction_id: operation_id.to_string(),
+                    identity: crate::sync::lww::SYNC_MANIFEST_PATH.to_string(),
+                    op: crate::sync::decision::DecisionOp::Upsert,
+                    base_hash: None,
+                    final_hash: crate::sync::hash::content_md5(&bytes),
+                    final_version: None,
+                    mutation_seq: 0,
+                    origin: crate::sync::decision::DecisionOrigin::Local,
+                    content: Some(bytes),
+                    dependencies: Vec::new(),
+                });
+            }
             (
                 target_with_conflicts,
                 committed_paths,
