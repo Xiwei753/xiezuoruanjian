@@ -1138,7 +1138,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         crate::sync::conflict::persist_sync_merge_result_at_paths(
             sync_root,
             &group.local_manifest_path(),
-            &manifest_json,
+            &sync_manifest,
             &group.local_state_path(),
             state,
             &group.local_conflicts_path(),
@@ -1148,7 +1148,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         crate::sync::conflict::persist_sync_merge_result(
             sync_root,
             SYNC_MANIFEST_PATH,
-            &manifest_json,
+            &sync_manifest,
             state,
             &conflicts_json,
         )?;
@@ -1416,7 +1416,7 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
     crate::sync::conflict::persist_sync_merge_result(
         sync_root,
         SYNC_MANIFEST_PATH,
-        &manifest_json,
+        &sync_manifest,
         &state,
         &conflicts_json,
     )?;

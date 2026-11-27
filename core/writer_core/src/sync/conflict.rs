@@ -160,18 +160,19 @@ fn validate_group_conflict_path(
 /// 一次事务写入 `manifest.sync.json` + `state.local.json` + `conflicts.json`。
 ///
 /// 用于 LWW merge 完成后原子提交三个文件，避免分多次独立写入中间崩溃
-/// 导致 manifest / state / conflicts 不一致。manifest_json 由调用方序列化好传入。
+/// 导致 manifest / state / conflicts 不一致。清单只在本轮语义真的变化时
+/// 重新序列化并写入：未涉及的合并轮次不再重写整份 JSON（#1062 评论 #7218195841）。
 pub(crate) fn persist_sync_merge_result(
     sync_root: &Path,
     manifest_path: &str,
-    manifest_json: &str,
+    manifest: &crate::sync::types::SyncManifest,
     state: &crate::sync::types::SyncState,
     conflicts: &[SyncConflict],
 ) -> crate::Result<()> {
     persist_sync_merge_result_at_paths(
         sync_root,
         manifest_path,
-        manifest_json,
+        manifest,
         "app-meta/sync/state.local.json",
         state,
         "app-meta/sync/conflicts.json",
@@ -183,7 +184,7 @@ pub(crate) fn persist_sync_merge_result(
 pub(crate) fn persist_sync_merge_result_at_paths(
     sync_root: &Path,
     manifest_path: &str,
-    manifest_json: &str,
+    manifest: &crate::sync::types::SyncManifest,
     state_path: &str,
     state: &crate::sync::types::SyncState,
     conflicts_path: &str,
@@ -195,11 +196,33 @@ pub(crate) fn persist_sync_merge_result_at_paths(
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
     let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
-    tx.add_bytes(manifest_path, manifest_json.as_bytes())?;
+    if manifest_needs_rewrite(sync_root, manifest_path, manifest) {
+        let manifest_json = manifest.canonical_json()?;
+        tx.add_bytes(manifest_path, manifest_json.as_bytes())?;
+    }
     tx.add_bytes(state_path, state_json.as_bytes())?;
     tx.add_bytes(conflicts_path, conflicts_json.as_bytes())?;
     tx.commit()?;
     Ok(())
+}
+
+/// 磁盘上的清单是否已经与本次合并结果语义一致。
+///
+/// 一致时整份清单不需要重新序列化/写入；文件缺失或无法解析时必须重写，
+/// 不能把"读不出来"当成"没有变化"。
+fn manifest_needs_rewrite(
+    sync_root: &Path,
+    manifest_path: &str,
+    manifest: &crate::sync::types::SyncManifest,
+) -> bool {
+    let path = sync_root.join(manifest_path);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return true;
+    };
+    match serde_json::from_slice::<crate::sync::types::SyncManifest>(&bytes) {
+        Ok(existing) => !existing.semantically_equals(manifest),
+        Err(_) => true,
+    }
 }
 
 /// 按 `local_path` 去重/替换加入冲突。
@@ -2699,3 +2722,67 @@ impl crate::sync::SyncService {
 #[cfg(test)]
 #[path = "conflict/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod persist_manifest_tests {
+    use super::*;
+    use crate::sync::types::{ManifestFileRecord, SyncManifest};
+
+    fn record(path: &str, hash: &str) -> ManifestFileRecord {
+        ManifestFileRecord {
+            path: path.to_string(),
+            content_hash: hash.to_string(),
+            updated_at_ms: 1,
+            deleted_at_ms: None,
+            device_id: "dev".to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }
+    }
+
+    const MANIFEST: &str = "app-meta/sync/manifest.sync.json";
+
+    #[test]
+    fn unchanged_manifest_is_not_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = SyncManifest {
+            files: vec![record("volumes/a.json", "h1")],
+        };
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join(MANIFEST),
+            manifest.canonical_json().unwrap(),
+        )
+        .unwrap();
+        let state = crate::sync::types::SyncState::default();
+        persist_sync_merge_result(dir.path(), MANIFEST, &manifest, &state, &[]).unwrap();
+        // 语义一致时文件保持原字节：不会被重新序列化覆盖。
+        let before = std::fs::read(dir.path().join(MANIFEST)).unwrap();
+        persist_sync_merge_result(dir.path(), MANIFEST, &manifest, &state, &[]).unwrap();
+        assert_eq!(std::fs::read(dir.path().join(MANIFEST)).unwrap(), before);
+    }
+
+    #[test]
+    fn changed_manifest_is_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        let old = SyncManifest {
+            files: vec![record("volumes/a.json", "h1")],
+        };
+        std::fs::write(dir.path().join(MANIFEST), old.canonical_json().unwrap()).unwrap();
+        let new = SyncManifest {
+            files: vec![record("volumes/a.json", "h2")],
+        };
+        persist_sync_merge_result(
+            dir.path(),
+            MANIFEST,
+            &new,
+            &crate::sync::types::SyncState::default(),
+            &[],
+        )
+        .unwrap();
+        let written: SyncManifest =
+            serde_json::from_slice(&std::fs::read(dir.path().join(MANIFEST)).unwrap()).unwrap();
+        assert_eq!(written.files[0].content_hash, "h2");
+    }
+}
