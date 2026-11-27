@@ -327,6 +327,32 @@ fn to_checkpoint_version(
     }
 }
 
+/// 各同步根的账本序号高水位 + 是否存在未完成恢复。
+///
+/// 返回 `None` 表示不能把本轮当空闲：有恢复责任，或有根读不到水位。
+/// 这是空闲轮唯一的本地读取（每个根一个很小的 JSON），不碰 manifest/账本正文。
+fn collect_idle_watermarks(
+    app_data_root: &std::path::Path,
+    projects_root: &std::path::Path,
+) -> Option<std::collections::BTreeMap<String, u64>> {
+    let mut watermarks = std::collections::BTreeMap::new();
+    let mut add = |key: String, root: &std::path::Path| -> Option<()> {
+        if crate::sync::local_mutations::recovery_pending(root) {
+            return None;
+        }
+        watermarks.insert(key, crate::sync::local_mutations::seq_high_watermark(root));
+        Some(())
+    };
+    add("app".to_string(), app_data_root)?;
+    for project in crate::project::list_projects(projects_root).ok()? {
+        add(
+            format!("project:{}", project.id),
+            &projects_root.join(&project.id),
+        )?;
+    }
+    Some(watermarks)
+}
+
 /// 本轮开始前各 target 的未确认 mutation 快照（path → op/hash/seq）。
 ///
 /// 推送成功后只按这份快照确认"确实随本轮提交发布"的事实；同步期间新写入的
@@ -1030,11 +1056,19 @@ impl WriterCoreApi {
                 last_attempt_at: 0,
                 next_retry_at: 0,
                 consecutive_failures: 0,
+                ledger_watermarks: std::collections::BTreeMap::new(),
             });
         next.repository_identity = repository_identity.to_string();
         next.record_attempt(now);
         if success {
             next.record_success(now);
+            // 记录本次成功后各根的账本高水位：下一次空闲轮只比较它 + 远端 HEAD。
+            if let Some(watermarks) = collect_idle_watermarks(
+                app_data_root,
+                &self.core_read().projects_root,
+            ) {
+                next.ledger_watermarks = watermarks;
+            }
             if let Some(snapshot) = snapshot {
                 if let Some(succeeded) = succeeded {
                     let mut versions = std::collections::BTreeMap::new();
@@ -1653,6 +1687,46 @@ impl WriterCoreApi {
             }
         };
         revision_phase.finish_with_provider("success", provider.as_ref());
+
+        // A'. 真正索引驱动的空闲判定：远端 HEAD 与上次一致，且各根账本高水位
+        // 都没变、没有未完成恢复 —— 本轮不读 manifest/账本正文、不建 plan、
+        // 不 staging、不发布（复审 #7213234617 第 4 项）。
+        if run_mode == SyncRunMode::Incremental && checkpoint_applicable && !force_sync {
+            if let Some(stored) = checkpoint.as_ref() {
+                let same_remote =
+                    probed_revision.as_deref() == Some(stored.remote_revision.as_str());
+                if same_remote && !stored.ledger_watermarks.is_empty() {
+                    if let Some(watermarks) =
+                        collect_idle_watermarks(&app_data_root, &projects_root)
+                    {
+                        if watermarks == stored.ledger_watermarks {
+                            log::info!(
+                                "[sync] idle: remote head and ledger watermarks unchanged (roots={})",
+                                watermarks.len()
+                            );
+                            self.persist_checkpoint(
+                                &app_data_root,
+                                repo_identity.as_deref(),
+                                Some(stored),
+                                None,
+                                None,
+                                probed_revision.as_deref(),
+                                None,
+                                true,
+                                diagnostic_operation_id,
+                            );
+                            let (mut result, _, _) = self.core_write().finalize_full_sync(
+                                Vec::new(),
+                                None,
+                                None,
+                            );
+                            result.targets.clear();
+                            return Ok(result.into());
+                        }
+                    }
+                }
+            }
+        }
 
         let local_snapshot_phase = SyncDiagnosticPhase::start_with_provider(
             diagnostic_operation_id,

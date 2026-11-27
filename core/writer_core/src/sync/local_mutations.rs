@@ -900,13 +900,36 @@ fn apply_published(
                 .get(&entry.path)
                 .is_some_and(|now| *now > entry.updated_at_ms)
         {
-            // 已有更新的事实覆盖了这条旧 ack：不能把基线改回旧内容。
-            log::info!(
-                "[sync] skip stale mutation ack for {} (seq {}, business time {})",
-                entry.path,
-                entry.seq,
-                entry.updated_at_ms
-            );
+            // 更新的业务事实已经覆盖了这条旧 ack：不能把基线改回旧内容。
+            // 但它必须被显式结算，否则会以未确认状态永久留在账本里：
+            // - 账本里该路径已经没有更大的未确认序号 → 这条事实已被更新的
+            //   确认消费，直接结算；
+            // - 还有更大的未确认事实 → 保留，交给下一轮按新事实发布确认。
+            let ledger_seq = latest_ledger_seq(sync_root, &entry.path)?;
+            if ledger_seq <= entry.seq {
+                let current = state
+                    .confirmed_mutation_seq
+                    .get(&entry.path)
+                    .copied()
+                    .unwrap_or(0);
+                if entry.seq > current {
+                    state.confirmed_mutation_seq.insert(entry.path.clone(), entry.seq);
+                }
+                applied.push(entry.clone());
+                log::info!(
+                    "[sync] settled stale mutation ack for {} (seq {} ≤ ledger {})",
+                    entry.path,
+                    entry.seq,
+                    ledger_seq
+                );
+            } else {
+                log::info!(
+                    "[sync] keep stale mutation ack for {} (seq {} < ledger {}): newer local fact wins",
+                    entry.path,
+                    entry.seq,
+                    ledger_seq
+                );
+            }
             continue;
         }
         match entry.op.as_str() {
@@ -951,6 +974,17 @@ fn apply_published(
     crate::sync::SyncService::save_sync_state_for_target(sync_root, target, &state)?;
     compact_confirmed_prefix(sync_root, &applied)?;
     Ok(applied.len())
+}
+
+/// 账本里该路径当前最大的序号；没有记录时返回 0。
+fn latest_ledger_seq(sync_root: &Path, path: &str) -> crate::error::Result<u64> {
+    let records = load_records(sync_root)?;
+    Ok(records
+        .iter()
+        .filter(|record| record.path == path)
+        .map(|record| record.seq)
+        .max()
+        .unwrap_or(0))
 }
 
 /// 按已确认序号压缩账本历史前缀。
