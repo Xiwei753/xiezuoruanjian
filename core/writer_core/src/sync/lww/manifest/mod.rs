@@ -31,7 +31,8 @@ pub(crate) use index::{namespace_for_path, validate_namespace, ManifestIndex};
 pub(crate) use objects::{is_sha256_hex, object_key, sha256_hex, ManifestObject};
 pub(crate) use remote::{
     fetch_remote_manifest as fetch_remote_manifest_v2, fetch_remote_manifest_at,
-    local_manifest_storage, publish_remote_manifest, remote_rel_for, ManifestStorageKind,
+    local_manifest_storage, local_manifest_storage_for_delta, publish_remote_manifest,
+    remote_rel_for, ManifestStorageKind,
 };
 pub(crate) use root::{ManifestRoot, MANIFEST_SCHEMA_VERSION};
 pub(crate) use store::{
@@ -42,8 +43,9 @@ pub(crate) use store::{
 /// 类型和时间戳。
 ///
 /// #1062 评论 #7219676521 第 2 项起，权威存储改为同目录的
-/// `manifest/root.json` + `manifest/index/*.json` + `manifest/objects/*.json`
-/// （见 [`ManifestStore`]）；本路径保留为旧格式迁移来源与扫描排除项。
+/// `manifest/root.json` + `manifest/index/<ns>/<sha256>.json` +
+/// `manifest/objects/<sha256>.json`（见 [`ManifestStore`]）；本路径保留为
+/// 旧格式迁移来源与扫描排除项。
 pub const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
 
 /// 清单分片目录（旧 v1 分片格式，相对同步根）。保留常量供旧迁移/排除使用。

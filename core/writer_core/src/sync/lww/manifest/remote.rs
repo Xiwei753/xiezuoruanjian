@@ -3,15 +3,17 @@
 //! 远端布局与本地 [`ManifestStore`] 同相对路径（相对 `remote_prefix`）：
 //!
 //! ```text
-//! app-meta/sync/manifest/root.json               权威根：namespace → index sha256
-//! app-meta/sync/manifest/index/<ns>.json         object_key → object sha256
-//! app-meta/sync/manifest/objects/<sha256>.json   内容寻址的清单对象
+//! app-meta/sync/manifest/root.json                    权威根：namespace → index sha256
+//! app-meta/sync/manifest/index/<ns>/<sha256>.json     object_key → object sha256
+//! app-meta/sync/manifest/objects/<sha256>.json        内容寻址的清单对象
 //! ```
 //!
 //! ## 读取
 //!
 //! 根存在即权威：只读根列出的索引与对象，任何缺失、sha256 不符、JSON 损坏都返回
 //! `SyncRemoteError`，**绝不**回退旧单文件或旧分片目录，也不把损坏当成空清单。
+//! 索引先读内容寻址路径 `<ns>/<sha256>.json`；缺失时回退 87b15f2 的固定路径
+//! `index/<ns>.json`（一次性迁移读取），但内容 sha256 必须等于根记录值。
 //! 根不存在才回退旧单文件 `app-meta/sync/manifest.sync.json`，再回退旧分片目录
 //! `app-meta/sync/manifest-shards/*.json`（一次性迁移读取）。
 //!
@@ -19,20 +21,26 @@
 //!
 //! 顺序固定：先写不可变对象（远端已有同名对象直接复用），再写变化的索引，
 //! **最后写根**。根是提交点：根写入失败或前置条件失败时本次发布失败，远端旧根
-//! 仍是权威；根成功后才回收旧根可达但新根不可达的对象/索引，以及旧单文件 /
-//! 旧分片目录（回收失败只 warn，不改变已发布事实）。
+//! 仍是权威；根成功且新根可读后才回收「新根与上一代根都不可达」的对象/索引，
+//! 以及旧单文件 / 旧分片目录（回收失败只 warn，不改变已发布事实）。
+//!
+//! 上一代根 = 本次发布前读到的远端根；它的 canonical sha256 写进新根的
+//! `previousRoot`。因此根切换后旧根读者仍能解析自己的索引/对象（保留一代）。
+//! 旧固定路径索引只有在同 sha 的内容寻址副本已由新根提供时才立即回收；索引
+//! 换 sha 或 namespace 被移除时，它仍是上一代根读者的唯一副本，保留一代。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use crate::sync::cancellation_token::SyncCancellationToken;
+use crate::sync::manifest_delta::ManifestDelta;
 use crate::sync::provider::model::{DeletePrecondition, RemoteVersion, WritePrecondition};
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::{ManifestFileRecord, SyncManifest};
 
 use super::{
-    sha256_hex, ManifestIndex, ManifestObject, ManifestRoot, ManifestStore, ManifestWritePlan,
-    SYNC_MANIFEST_PATH, SYNC_MANIFEST_SHARDS_DIR,
+    is_sha256_hex, namespace_for_path, object_key, sha256_hex, ManifestIndex, ManifestObject,
+    ManifestRoot, ManifestStore, ManifestWritePlan, SYNC_MANIFEST_PATH, SYNC_MANIFEST_SHARDS_DIR,
 };
 
 const MANIFEST_DIR_NAME: &str = "manifest";
@@ -121,7 +129,19 @@ fn remote_root_rel() -> String {
     format!("{}/{}", remote_storage_dir_rel(), ROOT_FILE_NAME)
 }
 
-fn remote_index_rel(namespace: &str) -> String {
+fn remote_index_rel(namespace: &str, sha: &str) -> String {
+    format!(
+        "{}/{}/{}/{}{}",
+        remote_storage_dir_rel(),
+        INDEX_DIR_NAME,
+        namespace,
+        sha,
+        JSON_SUFFIX
+    )
+}
+
+/// 87b15f2 旧布局的固定路径远端索引（只读迁移来源）。
+fn remote_legacy_index_rel(namespace: &str) -> String {
     format!(
         "{}/{}/{}{}",
         remote_storage_dir_rel(),
@@ -129,6 +149,16 @@ fn remote_index_rel(namespace: &str) -> String {
         namespace,
         JSON_SUFFIX
     )
+}
+
+/// 旧固定路径索引的相对路径 → namespace；内容寻址路径返回 `None`。
+fn legacy_remote_index_namespace(rel: &str) -> Option<&str> {
+    let prefix = format!("{}/{}/", remote_storage_dir_rel(), INDEX_DIR_NAME);
+    let rest = rel.strip_prefix(&prefix)?;
+    if rest.contains('/') {
+        return None;
+    }
+    rest.strip_suffix(JSON_SUFFIX)
 }
 
 fn remote_object_rel(sha: &str) -> String {
@@ -275,6 +305,57 @@ fn parse_object(bytes: &[u8], origin: &str, key: &str) -> crate::Result<Manifest
     Ok(object)
 }
 
+/// 读取根列出的索引：内容寻址路径优先，缺失回退 87b15f2 固定路径。
+///
+/// 返回 `(bytes, 实际读取路径)`。两种布局都必须让内容 sha256 等于根记录值；
+/// 都缺失 → `Err`（消息带 namespace、sha、两条路径），不静默当成空索引。
+fn read_remote_index(
+    provider: &dyn SyncProvider,
+    remote_prefix: &str,
+    namespace: &str,
+    expected_sha: &str,
+) -> crate::Result<(Vec<u8>, String)> {
+    if !is_sha256_hex(expected_sha) {
+        return Err(remote_error(format!(
+            "remote manifest root references invalid index sha256 for namespace {namespace}: \
+             {expected_sha}"
+        )));
+    }
+    let hashed_path = remote_path(remote_prefix, &remote_index_rel(namespace, expected_sha));
+    if let Some(object) = provider.read(&hashed_path)? {
+        let bytes = verify_remote_index_sha(namespace, expected_sha, &hashed_path, object.content)?;
+        return Ok((bytes, hashed_path));
+    }
+    let legacy_path = remote_path(remote_prefix, &remote_legacy_index_rel(namespace));
+    match provider.read(&legacy_path)? {
+        Some(object) => {
+            let bytes =
+                verify_remote_index_sha(namespace, expected_sha, &legacy_path, object.content)?;
+            Ok((bytes, legacy_path))
+        }
+        None => Err(remote_error(format!(
+            "remote manifest index for namespace {namespace} with sha256 {expected_sha} is \
+             missing: {hashed_path} and {legacy_path}"
+        ))),
+    }
+}
+
+fn verify_remote_index_sha(
+    namespace: &str,
+    expected_sha: &str,
+    path: &str,
+    content: Vec<u8>,
+) -> crate::Result<Vec<u8>> {
+    let actual_sha = sha256_hex(&content);
+    if actual_sha != expected_sha {
+        return Err(remote_error(format!(
+            "remote manifest index {path} sha256 mismatch for namespace {namespace}: root expects \
+             {expected_sha}, actual {actual_sha}"
+        )));
+    }
+    Ok(content)
+}
+
 /// 严格读取 v2 清单：根 → 每个索引 → objects 映射里的每个对象。
 ///
 /// 任一文件缺失、sha256 不符、JSON 损坏、路径不属于该 object_key 都返回
@@ -288,16 +369,8 @@ fn read_v2_manifest(
     let root = parse_root(root_bytes, &remote_path(remote_prefix, &root_rel))?;
     let mut by_path: BTreeMap<String, ManifestFileRecord> = BTreeMap::new();
     for (namespace, index_sha) in &root.namespaces {
-        let index_rel = remote_index_rel(namespace);
-        let index_path = remote_path(remote_prefix, &index_rel);
-        let index_bytes = read_required(provider, remote_prefix, &index_rel, "index")?;
-        let actual_sha = sha256_hex(&index_bytes);
-        if actual_sha != *index_sha {
-            return Err(remote_error(format!(
-                "remote manifest index {index_path} sha256 mismatch: root expects {index_sha}, \
-                 actual {actual_sha}"
-            )));
-        }
+        let (index_bytes, index_path) =
+            read_remote_index(provider, remote_prefix, namespace, index_sha)?;
         let index = parse_index(&index_bytes, &index_path, namespace)?;
         for (key, object_sha) in &index.objects {
             let object_rel = remote_object_rel(object_sha);
@@ -381,26 +454,19 @@ pub(crate) fn local_manifest_storage(
             storage_files_from_plan(store, &plan)
         }
         None => {
-            let Some((root_bytes, reachable)) = store.load_reachable()? else {
+            // 严格按现有本地根读取；旧固定路径索引若尚未迁移，`load_publish_files`
+            // 会把它的字节带回内容寻址路径，发布时一并完成迁移。
+            let Some(view) = store.load_publish_files()? else {
                 return Err(crate::Error::Other(format!(
                     "manifest root {} missing — refusing to publish an empty authority",
                     store.sync_root().join(store.root_rel()).display()
                 )));
             };
-            let root_rel = store.root_rel();
-            reachable
-                .into_iter()
-                .map(|rel| {
-                    let bytes = if rel == root_rel {
-                        Some(root_bytes.clone())
-                    } else {
-                        None
-                    };
-                    ManifestStorageFile {
-                        kind: storage_kind(store, &rel),
-                        rel,
-                        bytes,
-                    }
+            view.into_iter()
+                .map(|(rel, bytes)| ManifestStorageFile {
+                    kind: storage_kind(store, &rel),
+                    rel,
+                    bytes,
                 })
                 .collect()
         }
@@ -412,6 +478,181 @@ pub(crate) fn local_manifest_storage(
             .then_with(|| a.rel.cmp(&b.rel))
     });
     Ok(files)
+}
+
+/// 稀疏轮的增量发布视图：只返回本 delta 涉及的 objects/indexes 与根。
+///
+/// merge 已把 `ManifestDelta` 持久化进本地 [`ManifestStore`]（`apply_delta`
+/// + 一次事务，本地根已指向新索引/对象）。因此发布端不能再调
+/// `plan_write_all` 展开完整可达集合，也不重新 `apply_delta`（那会重算全量
+/// 可达集合、且只报告根变化）：这里只按 delta 涉及的 namespace/object_key
+/// 从当前根取出变化文件的 identity 与字节，根用 delta 稳定 generation 重新
+/// 序列化。
+///
+/// - root 不存在 → `Err`（调用方回退完整入口，不发布空权威）；
+/// - 只读 delta 涉及的索引与对象，未变化 object/index 不加载；
+/// - 顺序 objects → indexes → root，根永远最后。
+pub(crate) fn local_manifest_storage_for_delta(
+    store: &ManifestStore,
+    delta: &ManifestDelta,
+) -> crate::Result<Vec<ManifestStorageFile>> {
+    let Some(root) = store.load_root()? else {
+        return Err(crate::Error::Other(format!(
+            "manifest root {} is missing — refusing to publish a delta without authority",
+            store.sync_root().join(store.root_rel()).display()
+        )));
+    };
+
+    // namespace → 受影响 object_key 集合。upsert 与 delete 都可能让对象/
+    // 索引换内容；不在 delta 里的 namespace/object 一律不碰。
+    let mut affected: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut upserted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for path in delta.upserts.keys() {
+        let namespace = namespace_for_path(path);
+        let key = object_key(path);
+        affected
+            .entry(namespace.clone())
+            .or_default()
+            .insert(key.clone());
+        upserted.entry(namespace).or_default().insert(key);
+    }
+    for path in &delta.deletes {
+        affected
+            .entry(namespace_for_path(path))
+            .or_default()
+            .insert(object_key(path));
+    }
+
+    let mut files: BTreeMap<String, ManifestStorageFile> = BTreeMap::new();
+    for (namespace, keys) in &affected {
+        let Some(index_sha) = root.namespaces.get(namespace) else {
+            if upserted.get(namespace).is_some_and(|keys| !keys.is_empty()) {
+                // upsert 的 namespace 不在当前根里：本地 store 不是 delta 的
+                // 超集（未应用或已损坏），发布根会丢数据 → 回退完整入口。
+                return Err(crate::Error::Other(format!(
+                    "manifest delta upserts namespace {namespace} that is missing from the local \
+                     root — local store does not reflect the delta"
+                )));
+            }
+            // namespace 被整段删除（对象为空）：新根不再引用它，没有索引要发布。
+            continue;
+        };
+        let index_rel = store.index_rel(namespace, index_sha);
+        let (index, index_bytes, _) = store.load_publish_index(namespace, index_sha)?;
+        files.insert(
+            index_rel.clone(),
+            ManifestStorageFile {
+                rel: index_rel,
+                kind: ManifestStorageKind::Index,
+                bytes: Some(index_bytes),
+            },
+        );
+        for key in keys {
+            let Some(object_sha) = index.objects.get(key) else {
+                if upserted
+                    .get(namespace)
+                    .is_some_and(|keys| keys.contains(key))
+                {
+                    return Err(crate::Error::Other(format!(
+                        "manifest delta upserts object key {key} (namespace {namespace}) that is \
+                         missing from the local index — local store does not reflect the delta"
+                    )));
+                }
+                // 对象被删空：索引不再引用，发布端不做任何回收。
+                continue;
+            };
+            let rel = store.object_rel(object_sha);
+            let path = store.sync_root().join(&rel);
+            let bytes = std::fs::read(&path).map_err(|error| {
+                crate::Error::Io(std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "manifest object {} referenced by namespace {namespace} is not readable: \
+                         {error}",
+                        path.display()
+                    ),
+                ))
+            })?;
+            // 对象必须已经反映 delta：upsert 记录在、delete 路径不在。否则本地
+            // store 不是 delta 的超集（merge 未持久化或存储损坏），发布根会
+            // 指向旧内容 → 回退完整入口。
+            let object: ManifestObject = serde_json::from_slice(&bytes).map_err(|error| {
+                crate::Error::Other(format!(
+                    "manifest object {} is corrupt: {error}",
+                    path.display()
+                ))
+            })?;
+            for record in delta.upserts.values() {
+                if object_key(&record.path) != *key {
+                    continue;
+                }
+                if !object.files.iter().any(|existing| existing == record) {
+                    return Err(crate::Error::Other(format!(
+                        "manifest object {} does not reflect delta upsert {} — local store does \
+                         not reflect the delta",
+                        path.display(),
+                        record.path
+                    )));
+                }
+            }
+            if object.files.iter().any(|existing| {
+                delta.deletes.contains(&existing.path) && object_key(&existing.path) == *key
+            }) {
+                return Err(crate::Error::Other(format!(
+                    "manifest object {} still contains a delta delete — local store does not \
+                     reflect the delta",
+                    path.display()
+                )));
+            }
+            files.insert(
+                rel.clone(),
+                ManifestStorageFile {
+                    rel,
+                    kind: ManifestStorageKind::Object,
+                    bytes: Some(bytes),
+                },
+            );
+        }
+    }
+
+    // 根是提交点，最后一项。generation 只由 delta 内容决定（同输入稳定，
+    // 不因 uuid 每轮制造伪提交）；previousRoot 指向当前本地根。
+    let mut new_root = ManifestRoot::new(&delta_generation(delta)?);
+    new_root.namespaces = root.namespaces.clone();
+    new_root.previous_root = Some(root.canonical_sha256()?);
+    let root_rel = store.root_rel();
+    files.insert(
+        root_rel.clone(),
+        ManifestStorageFile {
+            rel: root_rel,
+            kind: ManifestStorageKind::Root,
+            bytes: Some(new_root.canonical_bytes()?),
+        },
+    );
+
+    let mut files: Vec<ManifestStorageFile> = files.into_values().collect();
+    files.sort_by(|a, b| {
+        a.kind
+            .rank()
+            .cmp(&b.kind.rank())
+            .then_with(|| a.rel.cmp(&b.rel))
+    });
+    Ok(files)
+}
+
+/// 稀疏发布的稳定 generation：同一份 delta（同一 base 根）得到同一代根串。
+fn delta_generation(delta: &ManifestDelta) -> crate::Result<String> {
+    #[derive(serde::Serialize)]
+    struct CanonicalDelta<'a> {
+        upserts: &'a BTreeMap<String, ManifestFileRecord>,
+        deletes: &'a BTreeSet<String>,
+    }
+    let bytes = serde_json::to_vec(&CanonicalDelta {
+        upserts: &delta.upserts,
+        deletes: &delta.deletes,
+    })
+    .map_err(crate::Error::Json)?;
+    Ok(format!("delta-{}", sha256_hex(&bytes)))
 }
 
 fn stable_generation(manifest: &SyncManifest) -> crate::Result<String> {
@@ -456,8 +697,10 @@ fn storage_kind(store: &ManifestStore, rel: &str) -> ManifestStorageKind {
 
 /// 远端当前根的可达集合（发布端回收旧对象/索引用）。
 struct RemoteManifestState {
-    /// 相对 `remote_prefix` 的 root/index/object 路径。
+    /// 相对 `remote_prefix` 的 root/index/object 路径（索引用内容寻址路径）。
     reachable: BTreeSet<String>,
+    /// 上一代根的 namespace → index sha256（判断旧固定路径索引是否仍需保留）。
+    namespaces: BTreeMap<String, String>,
 }
 
 /// 读取远端当前根并解析其可达集合；根不存在 → `Ok(None)`。
@@ -471,26 +714,24 @@ fn read_remote_manifest_state(
         return Ok(None);
     };
     let root = parse_root(&object.content, &root_path)?;
+    let namespaces = root.namespaces.clone();
     let mut reachable = BTreeSet::new();
     reachable.insert(root_rel);
     for (namespace, index_sha) in &root.namespaces {
-        let index_rel = remote_index_rel(namespace);
-        let index_path = remote_path(remote_prefix, &index_rel);
-        let index_bytes = read_required(provider, remote_prefix, &index_rel, "index")?;
-        let actual_sha = sha256_hex(&index_bytes);
-        if actual_sha != *index_sha {
-            return Err(remote_error(format!(
-                "remote manifest index {index_path} sha256 mismatch: root expects {index_sha}, \
-                 actual {actual_sha}"
-            )));
-        }
+        let (index_bytes, index_path) =
+            read_remote_index(provider, remote_prefix, namespace, index_sha)?;
         let index = parse_index(&index_bytes, &index_path, namespace)?;
         for object_sha in index.objects.values() {
             reachable.insert(remote_object_rel(object_sha));
         }
-        reachable.insert(index_rel);
+        // 可达集合用内容寻址路径表示：旧固定路径只是迁移来源，回收判断按 sha
+        // 身份而不是物理冗余副本。
+        reachable.insert(remote_index_rel(namespace, index_sha));
     }
-    Ok(Some(RemoteManifestState { reachable }))
+    Ok(Some(RemoteManifestState {
+        reachable,
+        namespaces,
+    }))
 }
 
 fn write_precondition(conditional_write: bool, version: Option<&String>) -> WritePrecondition {
@@ -503,10 +744,43 @@ fn write_precondition(conditional_write: bool, version: Option<&String>) -> Writ
     }
 }
 
+/// 根切换后确认新根可读：root 字节一致，且根列出的每个内容寻址索引都存在、
+/// sha256 匹配。任一失败 → `Err`，调用方不再执行任何回收。
+fn verify_published_remote_root(
+    provider: &dyn SyncProvider,
+    remote_prefix: &str,
+    expected_root_bytes: &[u8],
+) -> crate::Result<()> {
+    let root_path = remote_path(remote_prefix, &remote_root_rel());
+    let Some(object) = provider.read(&root_path)? else {
+        return Err(remote_error(format!(
+            "published remote manifest root is not readable: {root_path}"
+        )));
+    };
+    if object.content != expected_root_bytes {
+        return Err(remote_error(format!(
+            "published remote manifest root {root_path} does not match the bytes just written"
+        )));
+    }
+    let root = parse_root(&object.content, &root_path)?;
+    for (namespace, index_sha) in &root.namespaces {
+        let index_path = remote_path(remote_prefix, &remote_index_rel(namespace, index_sha));
+        let Some(index_object) = provider.read(&index_path)? else {
+            return Err(remote_error(format!(
+                "published remote manifest index {index_path} for namespace {namespace} \
+                 (sha256 {index_sha}) is not readable"
+            )));
+        };
+        verify_remote_index_sha(namespace, index_sha, &index_path, index_object.content)?;
+    }
+    Ok(())
+}
+
 /// 逐文件发布 v2 清单（REST / 非 batch 路径）：对象 → 索引 → 根，根最后写。
 ///
-/// 根写入失败直接返回 `Err`（远端旧根仍是权威）；根成功后才回收旧可达但新根
-/// 不可达的对象/索引，以及旧单文件 / 旧分片目录，回收失败只 warn。
+/// 根写入失败直接返回 `Err`（远端旧根仍是权威）；根成功并确认新根可读后，才
+/// 回收「新根与上一代根都不可达」的对象/索引，以及旧单文件 / 旧分片目录，
+/// 回收失败只 warn。
 #[allow(clippy::too_many_lines)]
 pub(crate) fn publish_remote_manifest(
     provider: &dyn SyncProvider,
@@ -563,17 +837,53 @@ pub(crate) fn publish_remote_manifest(
         )?;
     }
 
-    // 根（files 最后一项）已经写入成功，此后才允许回收旧权威的残留。
+    // 根（files 最后一项）已经写入成功。先确认新根可读（root + 每个内容寻址
+    // 索引），失败则不回收任何文件；确认后才回收「新根与上一代根都不可达」的
+    // 对象/索引，以及旧单文件 / 旧分片目录。
+    let root_file = files
+        .iter()
+        .find(|file| file.kind == ManifestStorageKind::Root)
+        .ok_or_else(|| {
+            crate::Error::Other(format!(
+                "manifest publish plan for {remote_prefix} has no root file"
+            ))
+        })?;
+    let root_bytes = root_file.read_bytes(sync_root)?;
+    verify_published_remote_root(provider, remote_prefix, &root_bytes)?;
+
+    // 上一代已发布根的可达集合：根切换后保留一代，旧根读者仍能解析自己的
+    // 索引/对象；`previousRoot` 记录的就是这个根的身份。
+    let (previous_reachable, previous_namespaces) = match old_state {
+        Some(state) => (state.reachable, state.namespaces),
+        None => (BTreeSet::new(), BTreeMap::new()),
+    };
+    let index_prefix = format!("{}/{}/", remote_storage_dir_rel(), INDEX_DIR_NAME);
+    let object_prefix = format!("{}/{}/", remote_storage_dir_rel(), OBJECTS_DIR_NAME);
     let mut stale: Vec<String> = Vec::new();
-    if let Some(state) = old_state {
-        stale.extend(
-            state
-                .reachable
-                .difference(&new_rels)
-                .filter(|rel| remote_tree_files.contains_key(*rel))
-                .cloned(),
-        );
+    for rel in remote_tree_files.keys() {
+        if !rel.starts_with(&index_prefix) && !rel.starts_with(&object_prefix) {
+            continue;
+        }
+        if let Some(namespace) = legacy_remote_index_namespace(rel) {
+            // 旧固定路径索引：上一代根仍按该 sha 引用、且新根没有提供同一 sha
+            // 的内容寻址副本时，它是旧根读者的唯一副本，保留一代；否则迁移
+            // 已由新根完成，可以回收。
+            let Some(object) = provider.read(&remote_path(remote_prefix, rel))? else {
+                continue;
+            };
+            let sha = sha256_hex(&object.content);
+            let retained = previous_namespaces.get(namespace) == Some(&sha)
+                && !new_rels.contains(&remote_index_rel(namespace, &sha));
+            if !retained {
+                stale.push(rel.clone());
+            }
+            continue;
+        }
+        if !new_rels.contains(rel) && !previous_reachable.contains(rel) {
+            stale.push(rel.clone());
+        }
     }
+    stale.sort();
     let shard_prefix = legacy_shards_prefix();
     let mut legacy: Vec<String> = remote_tree_files
         .keys()

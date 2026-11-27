@@ -295,12 +295,18 @@ fn test_snapshot_local_records_for_merge_tombstone_still_produces_delete_record(
 mod manifest_store {
     use super::super::store::ManifestWritePlan;
     use super::super::SYNC_MANIFEST_PATH;
-    use super::super::{is_manifest_rel_path, is_manifest_storage_path, object_key, ManifestStore};
+    use super::super::{
+        is_manifest_rel_path, is_manifest_storage_path, object_key, sha256_hex, ManifestRoot,
+        ManifestStore,
+    };
     use crate::sync::manifest_delta::ManifestDelta;
     use crate::sync::types::{ManifestFileRecord, SyncManifest};
+    use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
     const GROUP_MANIFEST: &str = "app-meta/sync/groups/app/manifest.sync.json";
+    const STORAGE: &str = "app-meta/sync/manifest";
+    const GROUP_STORAGE: &str = "app-meta/sync/groups/app/manifest";
 
     fn record(path: &str, hash: &str) -> ManifestFileRecord {
         ManifestFileRecord {
@@ -331,7 +337,33 @@ mod manifest_store {
     }
 
     fn storage_dir(dir: &Path) -> PathBuf {
-        dir.join("app-meta/sync/manifest")
+        dir.join(STORAGE)
+    }
+
+    fn root_bytes(dir: &Path, storage: &str) -> Vec<u8> {
+        std::fs::read(dir.join(format!("{storage}/root.json"))).unwrap()
+    }
+
+    /// root 记录的 namespace → index sha256。
+    fn root_namespaces(dir: &Path, storage: &str) -> BTreeMap<String, String> {
+        let root: ManifestRoot = serde_json::from_slice(&root_bytes(dir, storage)).unwrap();
+        root.namespaces
+    }
+
+    /// 内容寻址索引相对路径：`<storage>/index/<ns>/<sha256>.json`。
+    fn index_rel(dir: &Path, storage: &str, namespace: &str) -> String {
+        let sha = root_namespaces(dir, storage)
+            .remove(namespace)
+            .unwrap_or_else(|| panic!("root 缺少 namespace {namespace}"));
+        format!("{storage}/index/{namespace}/{sha}.json")
+    }
+
+    fn index_path(dir: &Path, namespace: &str) -> PathBuf {
+        dir.join(index_rel(dir, STORAGE, namespace))
+    }
+
+    fn legacy_index_path(dir: &Path, storage: &str, namespace: &str) -> PathBuf {
+        dir.join(format!("{storage}/index/{namespace}.json"))
     }
 
     fn find_object(dir: &Path, key: &str) -> PathBuf {
@@ -419,10 +451,14 @@ mod manifest_store {
         let loaded = store.load_or_legacy().unwrap();
         assert!(loaded.semantically_equals(&manifest));
 
-        // 迁移后 root 是权威：索引按 namespace 落盘，旧单文件保留。
+        // 迁移后 root 是权威：索引按 namespace 落到内容寻址路径，旧单文件保留。
         assert!(storage_dir(root).join("root.json").is_file());
-        assert!(storage_dir(root).join("index/volumes.json").is_file());
-        assert!(storage_dir(root).join("index/_root.json").is_file());
+        let volumes_index = index_path(root, "volumes");
+        let root_index = index_path(root, "_root");
+        assert!(volumes_index.is_file());
+        assert!(root_index.is_file());
+        assert!(!legacy_index_path(root, STORAGE, "volumes").exists());
+        assert!(!legacy_index_path(root, STORAGE, "_root").exists());
         assert!(root.join(SYNC_MANIFEST_PATH).is_file());
         assert!(store
             .load_all()
@@ -533,8 +569,8 @@ mod manifest_store {
         let plan = store.plan_write_all(&manifest, "g1").unwrap();
         commit_plan(root, &plan);
 
-        // 索引缺失
-        let index_path = storage_dir(root).join("index/volumes.json");
+        // 索引缺失（内容寻址路径与旧固定路径都不存在）
+        let index_path = index_path(root, "volumes");
         let index_bytes = std::fs::read(&index_path).unwrap();
         std::fs::remove_file(&index_path).unwrap();
         assert!(store.load_all().is_err(), "索引缺失必须报错");
@@ -542,8 +578,29 @@ mod manifest_store {
 
         // 索引 sha256 与 root 不符
         std::fs::write(&index_path, b"{\"schemaVersion\":2}").unwrap();
-        assert!(store.load_all().is_err(), "索引 hash 不符必须报错");
+        let err = store.load_all().unwrap_err();
+        assert!(
+            format!("{err}").contains("sha256 mismatch"),
+            "索引 hash 不符必须报错，实际 {err}"
+        );
         std::fs::write(&index_path, &index_bytes).unwrap();
+
+        // 内容寻址缺失时回退旧固定路径；固定路径内容 sha 不符同样报错。
+        std::fs::rename(&index_path, legacy_index_path(root, STORAGE, "volumes")).unwrap();
+        assert!(store.load_all().is_ok(), "旧固定路径索引应可迁移读取");
+        let legacy_path = legacy_index_path(root, STORAGE, "volumes");
+        std::fs::write(&legacy_path, b"{\"schemaVersion\":2}").unwrap();
+        let err = store.load_all().unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("sha256 mismatch") && message.contains("volumes"),
+            "固定路径 sha 不符应报错并带 namespace，实际 {message}"
+        );
+        assert!(
+            message.contains(&legacy_path.display().to_string()),
+            "错误消息应带读取路径，实际 {message}"
+        );
+        std::fs::write(&legacy_path, &index_bytes).unwrap();
 
         // 对象缺失
         let objects = object_files(root);
@@ -559,6 +616,24 @@ mod manifest_store {
         assert!(store.load_all().is_err(), "对象 hash 不符必须报错");
         std::fs::write(&object_path, &object_bytes).unwrap();
 
+        // root 记录的 sha 在两种布局都找不到：错误消息带 namespace、sha、路径。
+        std::fs::remove_file(&legacy_path).unwrap();
+        let err = store.load_all().unwrap_err();
+        let message = format!("{err}");
+        let root_ns = root_namespaces(root, STORAGE);
+        let expected_sha = root_ns.get("volumes").unwrap();
+        assert!(
+            message.contains("missing")
+                && message.contains("volumes")
+                && message.contains(expected_sha),
+            "索引缺失错误应带 namespace 与 sha，实际 {message}"
+        );
+        assert!(
+            message.contains(&format!("index/volumes/{expected_sha}.json")),
+            "索引缺失错误应带内容寻址路径，实际 {message}"
+        );
+        std::fs::write(&index_path, &index_bytes).unwrap();
+
         // root 损坏
         let root_path = storage_dir(root).join("root.json");
         let root_bytes = std::fs::read(&root_path).unwrap();
@@ -569,6 +644,199 @@ mod manifest_store {
         // root 缺失 → 不是错误，只是没有权威清单。
         std::fs::remove_file(&root_path).unwrap();
         assert!(store.load_all().unwrap().is_none());
+    }
+
+    #[test]
+    fn index_is_content_addressed_and_immutable() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let manifest = SyncManifest {
+            files: vec![
+                record("volumes/v1/chapters/c1/chapter.md", "h1"),
+                record("project.json", "h2"),
+            ],
+        };
+        let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+        commit_plan(root, &store.plan_write_all(&manifest, "g1").unwrap());
+
+        for namespace in ["volumes", "_root"] {
+            let rel = index_rel(root, STORAGE, namespace);
+            let bytes = std::fs::read(root.join(&rel)).unwrap();
+            let file_sha = rel
+                .strip_suffix(".json")
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap();
+            assert_eq!(
+                sha256_hex(&bytes),
+                file_sha,
+                "索引文件名必须等于内容 canonical bytes 的 sha256"
+            );
+            assert_eq!(
+                root_namespaces(root, STORAGE)
+                    .get(namespace)
+                    .map(String::as_str),
+                Some(file_sha),
+                "root 记录的 sha 必须等于索引文件名"
+            );
+            assert!(
+                !legacy_index_path(root, STORAGE, namespace).exists(),
+                "新布局不再写旧固定路径"
+            );
+        }
+
+        // 相同清单再计划：同 sha 索引/对象复用，只重写根（previousRoot 变化）。
+        let plan = store.plan_write_all(&manifest, "g1").unwrap();
+        assert_eq!(plan.writes.len(), 1, "索引/对象同 sha 必须复用");
+        assert_eq!(plan.writes[0].0, plan.root_rel);
+        assert!(plan.deletes.is_empty(), "上一代仍可达的文件不能回收");
+        assert!(store
+            .load_all()
+            .unwrap()
+            .unwrap()
+            .semantically_equals(&manifest));
+    }
+
+    #[test]
+    fn legacy_fixed_index_is_read_then_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let manifest = SyncManifest {
+            files: vec![record("volumes/v1/chapters/c1/chapter.md", "h1")],
+        };
+        let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+        commit_plan(root, &store.plan_write_all(&manifest, "g1").unwrap());
+
+        // 模拟 87b15f2 旧布局：索引只存在于固定路径，内容寻址路径缺失。
+        let hashed_rel = index_rel(root, STORAGE, "volumes");
+        let hashed_path = root.join(&hashed_rel);
+        let legacy_path = legacy_index_path(root, STORAGE, "volumes");
+        std::fs::rename(&hashed_path, &legacy_path).unwrap();
+        assert!(!hashed_path.exists());
+        assert!(
+            store
+                .load_all()
+                .unwrap()
+                .unwrap()
+                .semantically_equals(&manifest),
+            "迁移前必须能回退读取旧固定路径索引"
+        );
+
+        // 下一次写入计划把同一 sha 写到内容寻址路径（根中 sha 不变）。
+        let mut delta = ManifestDelta::default();
+        delta.upserts.insert(
+            "volumes/v1/chapters/c1/chapter.md".to_string(),
+            record("volumes/v1/chapters/c1/chapter.md", "h1"),
+        );
+        let plan = store.apply_delta(&delta, "g2").unwrap();
+        assert!(
+            plan.writes.iter().any(|(rel, _)| rel == &hashed_rel),
+            "迁移计划必须写内容寻址路径: {:?}",
+            plan.writes.iter().map(|(rel, _)| rel).collect::<Vec<_>>()
+        );
+        commit_plan(root, &plan);
+
+        assert!(hashed_path.is_file(), "迁移后新路径必须存在");
+        assert!(!legacy_path.exists(), "根切换后旧固定路径应被回收");
+        assert_eq!(index_rel(root, STORAGE, "volumes"), hashed_rel);
+        assert!(store
+            .load_all()
+            .unwrap()
+            .unwrap()
+            .semantically_equals(&manifest));
+    }
+
+    #[test]
+    fn legacy_fixed_index_with_changed_sha_is_retained_one_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let manifest = SyncManifest {
+            files: vec![record("volumes/v1/chapters/c1/chapter.md", "h1")],
+        };
+        let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+        commit_plan(root, &store.plan_write_all(&manifest, "g1").unwrap());
+
+        // 模拟旧布局：R1 的 volumes 索引只存在于固定路径（sha = S1）。
+        let fixed = legacy_index_path(root, STORAGE, "volumes");
+        std::fs::rename(index_path(root, "volumes"), &fixed).unwrap();
+
+        // R2 索引换成 S2：固定路径仍是上一代根的唯一副本，必须保留一代。
+        let mut delta = ManifestDelta::default();
+        delta.upserts.insert(
+            "volumes/v1/chapters/c1/chapter.md".to_string(),
+            record("volumes/v1/chapters/c1/chapter.md", "h2"),
+        );
+        let plan = store.apply_delta(&delta, "g2").unwrap();
+        let fixed_rel = format!("{STORAGE}/index/volumes.json");
+        let new_index_rel = plan
+            .writes
+            .iter()
+            .map(|(rel, _)| rel.clone())
+            .find(|rel| rel.starts_with(&format!("{STORAGE}/index/volumes/")))
+            .expect("R2 应写新的内容寻址索引");
+        assert!(
+            !plan.deletes.contains(&fixed_rel),
+            "索引换 sha 时旧固定路径仍是上一代根依赖，不能立即回收: {:?}",
+            plan.deletes
+        );
+        commit_plan(root, &plan);
+        assert!(fixed.is_file(), "R2 发布后旧固定路径索引必须保留");
+        assert!(root.join(&new_index_rel).is_file());
+        assert!(store
+            .load_all()
+            .unwrap()
+            .unwrap()
+            .files
+            .iter()
+            .any(|r| r.path == "volumes/v1/chapters/c1/chapter.md" && r.content_hash == "h2"));
+
+        // R3：上一代根换成 S2，固定路径的 S1 不再被需要，可以回收。
+        let plan = store.apply_delta(&ManifestDelta::default(), "g3").unwrap();
+        assert!(
+            plan.deletes.contains(&fixed_rel),
+            "R3 后旧固定路径可回收: {:?}",
+            plan.deletes
+        );
+        commit_plan(root, &plan);
+        assert!(!fixed.exists());
+    }
+
+    #[test]
+    fn corrupt_index_json_is_an_error_with_namespace_and_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let corrupt = b"{not json";
+        let corrupt_sha = sha256_hex(corrupt);
+        let mut root_value = ManifestRoot::new("g1");
+        root_value
+            .namespaces
+            .insert("volumes".to_string(), corrupt_sha.clone());
+        std::fs::create_dir_all(storage_dir(root).join("index/volumes")).unwrap();
+        std::fs::write(
+            storage_dir(root)
+                .join("index/volumes")
+                .join(format!("{corrupt_sha}.json")),
+            corrupt,
+        )
+        .unwrap();
+        std::fs::write(
+            storage_dir(root).join("root.json"),
+            root_value.canonical_bytes().unwrap(),
+        )
+        .unwrap();
+
+        let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+        let err = store.load_all().unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("corrupt") && message.contains("volumes"),
+            "损坏索引应报错并带 namespace，实际 {message}"
+        );
+        assert!(
+            message.contains(&corrupt_sha),
+            "损坏索引错误应带 sha，实际 {message}"
+        );
     }
 
     #[test]
@@ -587,7 +855,8 @@ mod manifest_store {
 
         let c1_object = find_object(root, "volumes/v1/chapters/c1");
         let c2_object = find_object(root, "volumes/v1/chapters/c2");
-        let root_index = storage_dir(root).join("index/_root.json");
+        let root_index = index_path(root, "_root");
+        let volumes_index_r1 = index_path(root, "volumes");
         let c1_before = std::fs::read(&c1_object).unwrap();
         let c2_rel = c2_object
             .strip_prefix(root)
@@ -596,6 +865,7 @@ mod manifest_store {
             .replace('\\', "/");
         assert!(c2_object.is_file());
         let root_index_before = std::fs::read(&root_index).unwrap();
+        let volumes_index_r1_bytes = std::fs::read(&volumes_index_r1).unwrap();
         let root_before = std::fs::read(storage_dir(root).join("root.json")).unwrap();
 
         let mut delta = ManifestDelta::default();
@@ -605,11 +875,24 @@ mod manifest_store {
         );
         let plan = store.apply_delta(&delta, "g2").unwrap();
         assert_eq!(plan.writes.len(), 3, "只写受影响对象 + 索引 + root");
-        assert!(plan.deletes.contains(&c2_rel), "旧 c2 对象不可达要回收");
+        assert!(
+            plan.deletes.is_empty(),
+            "上一代根仍可达的对象/索引必须保留一代: {:?}",
+            plan.deletes
+        );
         commit_plan(root, &plan);
 
+        // 旧 c2 对象/索引仍被上一代根引用 → 根切换后仍存在。
         assert_eq!(std::fs::read(&c1_object).unwrap(), c1_before);
-        assert!(!std::path::Path::new(&c2_object).exists());
+        assert!(c2_object.is_file(), "R1 独有对象在 R2 发布后必须保留");
+        assert!(
+            volumes_index_r1.is_file(),
+            "R1 独有索引在 R2 发布后必须保留"
+        );
+        assert_eq!(
+            std::fs::read(&volumes_index_r1).unwrap(),
+            volumes_index_r1_bytes
+        );
         assert_eq!(std::fs::read(&root_index).unwrap(), root_index_before);
         assert_ne!(
             std::fs::read(storage_dir(root).join("root.json")).unwrap(),
@@ -630,10 +913,32 @@ mod manifest_store {
             .unwrap();
         assert_eq!(c2.content_hash, "h2-new");
         assert!(plan.reachable.contains(&plan.root_rel));
+
+        // R3：上一代边界推进到 R2，R1 独有对象/索引才可回收。
+        let plan_r3 = store.apply_delta(&ManifestDelta::default(), "g3").unwrap();
+        assert!(
+            plan_r3.deletes.contains(&c2_rel),
+            "R3 后 R1 独有对象可回收: {:?}",
+            plan_r3.deletes
+        );
+        let volumes_index_r1_rel = volumes_index_r1
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(
+            plan_r3.deletes.contains(&volumes_index_r1_rel),
+            "R3 后 R1 独有索引可回收: {:?}",
+            plan_r3.deletes
+        );
+        commit_plan(root, &plan_r3);
+        assert!(!c2_object.exists());
+        assert!(!volumes_index_r1.exists());
+        assert_eq!(std::fs::read(&c1_object).unwrap(), c1_before);
     }
 
     #[test]
-    fn deleting_last_record_reclaims_object() {
+    fn deleting_last_record_reclaims_object_one_generation_later() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let manifest = SyncManifest {
@@ -647,17 +952,17 @@ mod manifest_store {
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
+        let volumes_index = index_path(root, "volumes");
 
         let mut delta = ManifestDelta::default();
         delta
             .deletes
             .insert("volumes/v1/chapters/c1/chapter.md".to_string());
         let plan = store.apply_delta(&delta, "g2").unwrap();
-        assert!(plan.deletes.contains(&object_rel), "空 objects 文件要回收");
         assert!(
+            plan.deletes.is_empty(),
+            "R1 可达对象/索引在 R2 发布后仍保留一代: {:?}",
             plan.deletes
-                .contains(&"app-meta/sync/manifest/index/volumes.json".to_string()),
-            "空 namespace 的索引要回收"
         );
         assert!(
             !plan.writes.iter().any(|(rel, _)| rel.contains("/objects/")),
@@ -665,10 +970,72 @@ mod manifest_store {
         );
         commit_plan(root, &plan);
 
+        assert!(object_path.is_file(), "R1 独有对象在 R2 后必须保留");
+        assert!(volumes_index.is_file(), "R1 独有索引在 R2 后必须保留");
+        assert!(store.load_all().unwrap().unwrap().files.is_empty());
+
+        // R3：R1 独有且 R2 不引用的文件才可回收。
+        let plan_r3 = store.apply_delta(&ManifestDelta::default(), "g3").unwrap();
+        assert!(plan_r3.deletes.contains(&object_rel), "R3 回收旧对象");
+        let volumes_index_rel = volumes_index
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(
+            plan_r3.deletes.contains(&volumes_index_rel),
+            "R3 回收空 namespace 的旧索引"
+        );
+        commit_plan(root, &plan_r3);
+
         assert!(!object_path.exists());
-        assert!(!storage_dir(root).join("index/volumes.json").exists());
+        assert!(!volumes_index.exists());
         let loaded = store.load_all().unwrap().unwrap();
         assert!(loaded.files.is_empty());
+    }
+
+    #[test]
+    fn previous_root_records_one_generation_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+        let manifest = SyncManifest {
+            files: vec![record("volumes/v1/chapters/c1/chapter.md", "h1")],
+        };
+        commit_plan(root, &store.plan_write_all(&manifest, "g1").unwrap());
+        let r1_bytes = root_bytes(root, STORAGE);
+        let r1: ManifestRoot = serde_json::from_slice(&r1_bytes).unwrap();
+        assert!(r1.previous_root.is_none(), "首次根没有上一代");
+        let r1_sha = sha256_hex(&r1_bytes);
+
+        let mut delta = ManifestDelta::default();
+        delta.upserts.insert(
+            "volumes/v1/chapters/c1/chapter.md".to_string(),
+            record("volumes/v1/chapters/c1/chapter.md", "h2"),
+        );
+        commit_plan(root, &store.apply_delta(&delta, "g2").unwrap());
+        let r2_bytes = root_bytes(root, STORAGE);
+        let r2: ManifestRoot = serde_json::from_slice(&r2_bytes).unwrap();
+        assert_eq!(
+            r2.previous_root.as_deref(),
+            Some(r1_sha.as_str()),
+            "previousRoot 必须是上一代根 canonical bytes 的 sha256"
+        );
+
+        let v2: serde_json::Value = serde_json::from_slice(&r2_bytes).unwrap();
+        assert_eq!(
+            v2["previousRoot"].as_str(),
+            Some(r1_sha.as_str()),
+            "字段名必须是 camelCase 的 previousRoot"
+        );
+
+        commit_plan(
+            root,
+            &store.apply_delta(&ManifestDelta::default(), "g3").unwrap(),
+        );
+        let r2_sha = sha256_hex(&r2_bytes);
+        let r3: ManifestRoot = serde_json::from_slice(&root_bytes(root, STORAGE)).unwrap();
+        assert_eq!(r3.previous_root.as_deref(), Some(r2_sha.as_str()));
     }
 
     #[test]
@@ -706,9 +1073,9 @@ mod manifest_store {
         assert!(root
             .join("app-meta/sync/groups/app/manifest/root.json")
             .is_file());
-        assert!(root
-            .join("app-meta/sync/groups/app/manifest/index/settings.json")
-            .is_file());
+        let settings_index = index_rel(root, GROUP_STORAGE, "settings");
+        assert!(root.join(&settings_index).is_file());
+        assert!(!legacy_index_path(root, GROUP_STORAGE, "settings").exists());
         // 项目级存储不受影响。
         assert!(!root.join("app-meta/sync/manifest").exists());
         assert!(store

@@ -45,6 +45,10 @@ pub(crate) use crate::sync::content_class::{
 // 把入口函数留在 lww 模块根的对外接口上，调用方仍用 `crate::sync::lww::perform_lww_sync`。
 pub(crate) use engine::perform_lww_sync;
 
+// re-export 原子发布规划：attempt.rs 与测试统一从这里取同一入口，
+// 保证 LWW 发布的 mutation 顺序（业务 → 清单 objects/indexes → 根）只有一份实现。
+pub(crate) use transfer::plan_lww_publish;
+
 // re-export move_to_trash 供 conflict.rs 的 resolve_conflict_take_remote
 // （RemoteDeleted 语义）复用同一 trash 移动逻辑，不重复实现第二套删除路径。
 pub(crate) use transfer::move_to_trash;
@@ -78,7 +82,7 @@ pub(crate) use manifest::SYNC_MANIFEST_SHARDS_DIR;
 // 统一走 root 优先/旧格式迁移，不再各读各的单文件。
 pub(crate) use manifest::{
     fetch_remote_manifest_at, is_manifest_rel_path, is_manifest_storage_path, is_sha256_hex,
-    local_manifest_storage, namespace_for_path, object_key, publish_remote_manifest,
-    remote_rel_for, sha256_hex, ManifestIndex, ManifestObject, ManifestRoot, ManifestStorageKind,
-    ManifestStore, ManifestWritePlan, MANIFEST_SCHEMA_VERSION,
+    local_manifest_storage, local_manifest_storage_for_delta, namespace_for_path, object_key,
+    publish_remote_manifest, remote_rel_for, sha256_hex, ManifestIndex, ManifestObject,
+    ManifestRoot, ManifestStorageKind, ManifestStore, ManifestWritePlan, MANIFEST_SCHEMA_VERSION,
 };

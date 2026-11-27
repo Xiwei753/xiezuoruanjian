@@ -256,6 +256,37 @@ pub(crate) fn persist_sync_merge_delta(
     Ok(())
 }
 
+/// App group 的稀疏增量持久化：清单对象/索引/root + group state/conflicts
+/// 同一 `SaveTransaction`，未涉及对象不重写。
+pub(crate) fn persist_sync_merge_delta_at_paths(
+    sync_root: &Path,
+    manifest_path: &str,
+    delta: &crate::sync::manifest_delta::ManifestDelta,
+    state_path: &str,
+    state: &crate::sync::types::SyncState,
+    conflicts_path: &str,
+    conflicts: &[SyncConflict],
+) -> crate::Result<()> {
+    let state_json = serde_json::to_string_pretty(state)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+    let conflicts_json = serde_json::to_string_pretty(conflicts)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+    let generation = uuid::Uuid::new_v4().to_string();
+    let plan = crate::sync::lww::ManifestStore::new(sync_root, manifest_path)
+        .apply_delta(delta, &generation)?;
+    let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
+    for (rel, bytes) in &plan.writes {
+        tx.add_bytes(rel, bytes)?;
+    }
+    for rel in &plan.deletes {
+        tx.add_delete(rel)?;
+    }
+    tx.add_bytes(state_path, state_json.as_bytes())?;
+    tx.add_bytes(conflicts_path, conflicts_json.as_bytes())?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// 按 `local_path` 去重/替换加入冲突。
 ///
 /// 同一路径重复写入时替换已有记录，不无限 append。`state_conflicts` 和
@@ -2799,7 +2830,15 @@ mod persist_manifest_tests {
             })
             .collect();
         assert_eq!(objects_before.len(), 1);
-        let index_path = dir.path().join("app-meta/sync/manifest/index/volumes.json");
+        // 索引内容寻址：路径由 root 记录的 sha 决定。
+        let root: crate::sync::lww::ManifestRoot = serde_json::from_slice(
+            &std::fs::read(dir.path().join("app-meta/sync/manifest/root.json")).unwrap(),
+        )
+        .unwrap();
+        let index_sha = root.namespaces.get("volumes").expect("volumes index");
+        let index_path = dir.path().join(format!(
+            "app-meta/sync/manifest/index/volumes/{index_sha}.json"
+        ));
         let index_before = std::fs::read(&index_path).unwrap();
 
         persist_sync_merge_result(dir.path(), MANIFEST, &manifest, &state, &[]).unwrap();

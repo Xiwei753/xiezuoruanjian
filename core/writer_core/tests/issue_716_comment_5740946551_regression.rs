@@ -762,7 +762,7 @@ fn read_remote_manifest_v2(provider: &dyn SyncProvider, prefix: &str) -> SyncMan
         .expect("v2 清单根缺少 namespaces");
     for (namespace, index_sha) in namespaces {
         let index_sha = index_sha.as_str().expect("root 中的索引 sha 应为字符串");
-        let index_path = format!("{base}/index/{namespace}.json");
+        let index_path = format!("{base}/index/{namespace}/{index_sha}.json");
         let index_obj = provider
             .read(&index_path)
             .unwrap()

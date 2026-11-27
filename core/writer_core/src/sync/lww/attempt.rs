@@ -2,7 +2,8 @@
 //!
 //! 本文件实现 [`execute_lww_sync_attempt`]：调用统一的 merge 核心
 //! [`super::merge::merge_remote_into_local_snapshot`] 做文件级 LWW 合并，
-//! 然后根据 [`super::merge::LwwMergeOutcome`] 做远端写（upload / delete / upload_manifest）。
+//! 然后把 [`super::merge::LwwMergeOutcome`] 规划成**一次原子批量提交**
+//! （业务内容 + v2 清单根同一批），不再先逐文件覆盖正文、最后才写清单根。
 //!
 //!   ：不再自己维护第二套合并逻辑，统一复用
 //! `merge_remote_into_local_snapshot`，与 `full_sync.rs` LiveProject 同源。
@@ -15,7 +16,15 @@ use std::path::Path;
 use super::merge::{
     merge_remote_into_local_app_group, merge_remote_into_local_snapshot, LwwMergeOutcome,
 };
-use super::transfer::{delete_remote_files, upload_local_files, upload_manifest};
+use super::plan_lww_publish;
+
+/// 拒绝在缺少原子多对象提交能力的 Provider 上发布。
+///
+/// 业务内容与清单根必须进入同一次提交；没有 batch + atomic_write 时，任何
+/// "先逐文件写正文、最后写根"的兜底都会产生不可恢复的中间版本，所以直接
+/// 显式失败，不执行任何 provider.write/delete。
+const NON_ATOMIC_PUBLISH_ERROR: &str =
+    "provider lacks atomic multi-object publish; refusing to publish content and manifest separately";
 
 /// 按 merge 结果决定单次尝试的终态。
 ///
@@ -73,14 +82,16 @@ fn apply_outcome_status(result: &mut SyncResult, outcome: &LwwMergeOutcome, remo
 /// 执行一次 LWW 同步尝试。
 ///
 /// 调用 [`merge_remote_into_local_snapshot`] 做文件级合并（本地 IO + SyncState 保存），
-/// 然后根据 [`LwwMergeOutcome`] 做远端写（upload / delete / upload_manifest）。
+/// 然后把 merge 结果规划成一组 [`crate::sync::provider::model::BatchMutation`]，
+/// 通过一次 `provider.commit_batch` 原子发布业务内容与清单根。
+///
+/// Provider 不具备 `batch + atomic_write` 时直接返回可恢复错误，不做任何远端写。
 ///
 /// 调用方 `perform_lww_sync` 负责重试（最多 2 次）和错误分类。
 ///
 /// Issue #729 评论 5765306162 问题4：`cancellation_token` 在 merge 后、
-/// upload_local_files 后、delete_remote_files 后各检查一次。取消时返回
-/// `Ok(SyncResult::success())`（空成功，不继续下一项），与 perform_lww_sync
-/// 和 run_single_target 入口取消的语义一致。
+/// 规划完成后各检查一次。取消时返回 `Ok(SyncResult::success())`（空成功，
+/// 不继续下一项），与 perform_lww_sync 和 run_single_target 入口取消的语义一致。
 pub(crate) fn execute_lww_sync_attempt(
     sync_root: &Path,
     provider: &dyn SyncProvider,
@@ -91,6 +102,25 @@ pub(crate) fn execute_lww_sync_attempt(
 ) -> crate::Result<SyncResult> {
     let remote_prefix = &target.remote_prefix;
     let scope = target.scope;
+
+    // 业务内容与清单根必须一次原子提交。没有原子多对象能力的 Provider
+    // 在 merge 前就拒绝，避免产生任何"先写正文、根未变"的中间版本。
+    let caps = provider.capabilities();
+    if !caps.batch || !caps.atomic_write {
+        log::warn!(
+            "[sync] lww step=refuse_non_atomic_publish remote_prefix={} batch={} atomic_write={}",
+            remote_prefix,
+            caps.batch,
+            caps.atomic_write
+        );
+        result.status = SyncStatus::RecoverableError("provider_lacks_atomic_publish".to_string());
+        result.error = Some(format!(
+            "{NON_ATOMIC_PUBLISH_ERROR} (batch={}, atomic_write={}, target={})",
+            caps.batch, caps.atomic_write, remote_prefix
+        ));
+        return Ok(result.clone());
+    }
+
     log::debug!("[sync] lww step=正在合并 remote_prefix={}", remote_prefix);
 
     // 调用统一 merge 核心。
@@ -109,7 +139,7 @@ pub(crate) fn execute_lww_sync_attempt(
     };
 
     // Issue #729 评论 5765306162 问题4：merge 后检查取消令牌。
-    // 取消则返回空成功，不继续 upload/delete/upload_manifest。
+    // 取消则返回空成功，不继续规划/发布远端。
     if let Some(token) = cancellation_token {
         if token.is_cancelled() {
             log::info!(
@@ -123,12 +153,11 @@ pub(crate) fn execute_lww_sync_attempt(
 
     // #931 review：merge 已把"本地缺失且远端无可验证 blob"的路径收进
     // unresolved_missing_paths，且 merged_manifest 仍保留其旧 upsert 记录。
-    // 此时 upload / delete_remote / upload_manifest 任一远端写都会发布引用
-    // 缺失 blob 的清单快照，违反"不能发布引用缺失 blob 的完整快照"的规则
-    // （LiveProject 在 transfer_live.rs publish 前同样拦截）。所以在首次
-    // upload_local_files 之前直接返回可恢复错误：只报告本轮 merge 已实际产生的
-    // 本地效果（下载/本地移入 trash 等已生效），远端发布留待缺失事实恢复后
-    // 按已有增量规则进行。
+    // 此时任何远端发布都会把引用缺失 blob 的清单快照提交出去，违反"不能发布
+    // 引用缺失 blob 的完整快照"的规则（LiveProject 在 transfer_live.rs publish
+    // 前同样拦截）。所以在规划/commit_batch 之前直接返回可恢复错误：只报告本轮
+    // merge 已实际产生的本地效果（下载/本地移入 trash 等已生效），远端发布留待
+    // 缺失事实恢复后按已有增量规则进行。
     if !outcome.unresolved_missing_paths.is_empty() {
         apply_outcome_status(result, &outcome, remote_prefix);
         // 本轮没有执行任何远端写：uploaded_files / local_deletes 保持为空；
@@ -149,21 +178,22 @@ pub(crate) fn execute_lww_sync_attempt(
         return Ok(result.clone());
     }
 
-    log::debug!("[sync] lww step=正在上传本地较新文件");
-    upload_local_files(
-        sync_root,
-        provider,
-        remote_prefix,
-        &outcome.remote_upload_paths,
-        &outcome.remote_tree_files,
-        cancellation_token,
-    )?;
+    log::debug!("[sync] lww step=正在规划原子发布");
+    // 清单权威是本地的 v2 存储：普通 target 在 `app-meta/sync/manifest/`，
+    // App group 在自己的 `app-meta/sync/groups/<key>/manifest/`。
+    let manifest_rel = target
+        .app_group
+        .as_ref()
+        .map(crate::sync::types::AppDataGroup::local_manifest_path)
+        .unwrap_or_else(|| super::SYNC_MANIFEST_PATH.to_string());
+    let mutations = plan_lww_publish(sync_root, provider, remote_prefix, &manifest_rel, &outcome)?;
 
-    // Issue #729 评论 5765306162 问题4：upload_local_files 后检查取消令牌。
+    // Issue #729 评论 5765306162 问题4：提交前检查取消令牌。
+    // 取消则返回空成功，不发布本轮的 mutations。
     if let Some(token) = cancellation_token {
         if token.is_cancelled() {
             log::info!(
-                "[sync] lww step=cancelled after upload_local_files remote_prefix={} — returning success",
+                "[sync] lww step=cancelled before commit_batch remote_prefix={} — returning success",
                 remote_prefix
             );
             result.status = SyncStatus::Success;
@@ -171,44 +201,16 @@ pub(crate) fn execute_lww_sync_attempt(
         }
     }
 
-    delete_remote_files(
-        provider,
-        remote_prefix,
-        &outcome.remote_delete_paths,
-        &outcome.remote_tree_files,
-        cancellation_token,
-    )?;
-
-    // Issue #729 评论 5765306162 问题4：delete_remote_files 后检查取消令牌。
-    if let Some(token) = cancellation_token {
-        if token.is_cancelled() {
-            log::info!(
-                "[sync] lww step=cancelled after delete_remote_files remote_prefix={} — returning success",
-                remote_prefix
-            );
-            result.status = SyncStatus::Success;
-            return Ok(result.clone());
-        }
-    }
-
-    // 远端 manifest 已经与新快照语义相同时不再写：同一份业务状态不应该因为
-    // 序列化格式（compact/pretty、字段顺序）或记录顺序差异制造一次远端提交。
-    if !outcome.manifest_unchanged {
-        // 清单权威是本地的 v2 存储：普通 target 在 `app-meta/sync/manifest/`，
-        // App group 在自己的 `app-meta/sync/groups/<key>/manifest/`。
-        let manifest_rel = target
-            .app_group
-            .as_ref()
-            .map(crate::sync::types::AppDataGroup::local_manifest_path)
-            .unwrap_or_else(|| super::SYNC_MANIFEST_PATH.to_string());
-        upload_manifest(
-            provider,
-            &outcome.remote_manifest_path,
-            sync_root,
-            &manifest_rel,
-            &outcome.remote_tree_files,
-            cancellation_token,
-        )?;
+    // 业务内容与清单根在同一次批量提交里原子生效：batch 失败时远端保持旧版本，
+    // 不会出现"正文已变、根未变"的中间快照。
+    if !mutations.is_empty() {
+        log::debug!(
+            "[sync] lww step=commit_batch remote_prefix={} mutations={}",
+            remote_prefix,
+            mutations.len()
+        );
+        let message = format!("sujian: lww sync {remote_prefix}");
+        provider.commit_batch(&mutations, &message)?;
     }
 
     apply_outcome_status(result, &outcome, remote_prefix);

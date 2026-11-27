@@ -52,7 +52,11 @@ pub(super) fn is_generation_path(rel_path: &str) -> bool {
 /// (for example `projects/P` or `app/__groups__/<key>`) is replaced by the
 /// merged manifest in the same commit that updates the catalog.  No generation
 /// UUID, no `generation.meta.json`, and no per-target push.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+///
+/// The snapshot and its v2 manifest root must land in one atomic commit.
+/// Providers without `batch + atomic_write` are rejected explicitly instead of
+/// falling back to a per-file publish that leaves content and root out of sync.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn publish_tree_snapshot(
     provider: &dyn crate::sync::provider::SyncProvider,
     sync_root: &Path,
@@ -64,7 +68,8 @@ pub(super) fn publish_tree_snapshot(
     merge_outcome: Option<&crate::sync::lww::LwwMergeOutcome>,
     cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::sync::types::SyncResult {
-    if provider.capabilities().batch {
+    let capabilities = provider.capabilities();
+    if capabilities.batch && capabilities.atomic_write {
         return publish_snapshot_batch(
             provider,
             sync_root,
@@ -76,50 +81,19 @@ pub(super) fn publish_tree_snapshot(
         );
     }
 
-    let snapshot = match merge_outcome {
-        Some(outcome) => outcome.merged_manifest.clone(),
-        None => match read_staging_generation_manifest(sync_root, app_group) {
-            Ok(manifest) => manifest,
-            Err(error) => return super::transfer_helpers::sync_result_from_error(error),
-        },
-    };
-    // 清单存储（root + 两级索引 + 内容寻址对象）与业务对象一次发布；根字节由
-    // 清单内容派生（见 `local_manifest_storage`），语义未变化时逐字节一致，
-    // 不会因为 generation 串号制造空提交。
-    if let Err(error) = upload_complete_tree_snapshot(
-        provider,
-        sync_root,
-        tree_prefix,
-        &snapshot,
-        scope,
-        app_group,
-        cancellation_token,
-    ) {
-        return super::transfer_helpers::sync_result_from_error(error);
-    }
-    let mut result = crate::sync::types::SyncResult::success();
-    if let Some(outcome) = merge_outcome {
-        result.uploaded_files = outcome.remote_upload_paths.clone();
-        result.downloaded_files = outcome.downloaded_files.clone();
-        result.local_deletes = outcome.remote_delete_paths.clone();
-        result.remote_deletes = outcome.local_deletes.clone();
-        result.overwritten_files = outcome.overwritten_files.clone();
-        result.ignored_files = outcome.ignored_files.clone();
-    }
-    let auto_adjudicated =
-        merge_outcome.is_some_and(|outcome| !outcome.auto_adjudicated_files.is_empty());
-    if result.uploaded_files.is_empty()
-        && result.downloaded_files.is_empty()
-        && result.local_deletes.is_empty()
-        && result.remote_deletes.is_empty()
-    {
-        result.status = SyncStatus::NoChanges;
-    } else if auto_adjudicated {
-        result.status = SyncStatus::LatestWinsApplied;
-    } else {
-        result.status = SyncStatus::Success;
-    }
-    result
+    // 没有原子多对象提交能力时不再保留逐文件发布兜底：正文与清单根分开写
+    // 会留下"正文已变、根未变"的中间版本。显式拒绝，不执行任何 provider 写。
+    log::warn!(
+        "[sync] publish_tree_snapshot: refusing non-atomic publish for {tree_prefix} \
+         (batch={}, atomic_write={})",
+        capabilities.batch,
+        capabilities.atomic_write
+    );
+    super::transfer_helpers::sync_result_from_error(crate::Error::Other(
+        "provider lacks atomic multi-object publish; refusing to publish content and manifest \
+         separately"
+            .to_string(),
+    ))
 }
 
 /// Build one atomic batch that replaces the complete tree at `generation_prefix`.
@@ -275,13 +249,38 @@ fn publish_snapshot_batch(
 
     // 清单权威是 v2 存储：内容寻址对象先写，索引次之，根最后（根是提交点）。
     // 远端语义未变化时不重写清单，避免 generation 串号制造空提交。
+    //
+    // 稀疏轮（merge 已持久化 `ManifestDelta`）只发布 delta 涉及的
+    // objects/indexes 与根，不再用 `plan_write_all` 构造完整可达集合；
+    // 首次同步/迁移/索引损坏（delta 为 None 或本地无 root）仍走完整入口。
     use crate::sync::lww::{ManifestStorageKind, ManifestStore};
     let manifest_store = ManifestStore::new(sync_root, &manifest_rel_path(app_group));
-    let manifest_files =
-        match crate::sync::lww::local_manifest_storage(&manifest_store, Some(&manifest)) {
+    let delta_manifest_files =
+        match merge_outcome.and_then(|outcome| outcome.manifest_delta.as_ref()) {
+            Some(delta) => {
+                match crate::sync::lww::local_manifest_storage_for_delta(&manifest_store, delta) {
+                    Ok(files) => Some(files),
+                    Err(error) => {
+                        log::warn!(
+                            "[sync] publish_snapshot_batch: delta manifest view unavailable for \
+                             {generation_prefix}: {error} — falling back to the full manifest"
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+    // 只有 delta 视图真正可用时才按增量期望树处理；回退完整清单时
+    // desired/删除语义也一并回到完整入口，保持旧行为不变。
+    let delta_mode = delta_manifest_files.is_some();
+    let manifest_files = match delta_manifest_files {
+        Some(files) => files,
+        None => match crate::sync::lww::local_manifest_storage(&manifest_store, Some(&manifest)) {
             Ok(files) => files,
             Err(error) => return super::transfer_helpers::sync_result_from_error(error),
-        };
+        },
+    };
     let mut manifest_remote_paths: Vec<String> = Vec::with_capacity(manifest_files.len());
     let mut root_mutation: Option<BatchMutation> = None;
     for file in &manifest_files {
@@ -339,14 +338,41 @@ fn publish_snapshot_batch(
     // Remove paths that existed in the previous stable tree but are absent
     // from the merged snapshot, including old generation directories left by
     // the migration.
-    // 期望树来自"合并后的 manifest"，不是"本轮 mutation 列表"：没有进入
-    // batch 的路径同样属于期望树（它们已在基线 tree 里，只是不需要重写）。
-    let mut desired: std::collections::HashSet<String> = manifest
-        .files
-        .iter()
-        .filter(|record| record.op != "delete")
-        .map(|record| format!("{generation_prefix}/{}", record.path))
-        .collect();
+    //
+    // 完整模式：期望树来自"合并后的 manifest"，不是"本轮 mutation 列表"：
+    // 没有进入 batch 的路径同样属于期望树（它们已在基线 tree 里，只是不需要
+    // 重写）。delta 模式：不遍历完整 manifest，baseline tree 中除本轮已确认
+    // 的远端删除（`remote_delete_paths`）外全部保留；未变化业务路径不产生
+    // Delete，旧清单对象/索引也保留给上一代根。
+    let mut desired: std::collections::HashSet<String> = if delta_mode {
+        let mut desired: std::collections::HashSet<String> = existing.keys().cloned().collect();
+        if let Some(outcome) = merge_outcome {
+            for rel in &outcome.remote_delete_paths {
+                desired.remove(&format!("{generation_prefix}/{rel}"));
+            }
+        }
+        desired
+    } else {
+        manifest
+            .files
+            .iter()
+            .filter(|record| record.op != "delete")
+            .map(|record| format!("{generation_prefix}/{}", record.path))
+            .collect()
+    };
+    if delta_mode {
+        // 本轮真正 Put/Reuse 的业务路径（新增路径不在 baseline tree 里）必须
+        // 留在期望树中；删除路径不重新加入。
+        for mutation in &mutations {
+            match mutation {
+                BatchMutation::Put { path, .. } | BatchMutation::ReuseVersion { path, .. } => {
+                    desired.insert(path.clone());
+                }
+                BatchMutation::Delete { .. } | BatchMutation::DeleteIfMatch { .. } => {}
+                BatchMutation::CheckObject { .. } | BatchMutation::CheckPrefix { .. } => {}
+            }
+        }
+    }
     desired.extend(manifest_remote_paths);
     for path in existing.keys() {
         if !desired.contains(path) {
@@ -461,171 +487,6 @@ fn build_put_mutation(
         path: format!("{generation_prefix}/{}", record.path),
         content,
     })
-}
-
-/// 把完整 merged manifest 快照上传到稳定 tree prefix。
-///
-/// 本函数遍历 `merged_manifest.files`，对每个 `op=upsert` 的 record：
-/// 1. 路径必须仍在同步白名单（`SyncService::is_whitelisted_path`）。
-/// 2. `staging_root/path` 必须存在。
-/// 3. 重新算 md5 hash，必须 == `record.content_hash`（不一致则 `Err`）。
-/// 4. 写到 `generation_prefix`（`Unconditional`；远端已有相同字节时跳过）。
-///
-/// `op=delete` 的 record 只保留 tombstone（manifest 里有记录），不上传物理文件。
-///
-/// 业务对象写完后发布 v2 清单存储：内容寻址对象 → 变化的索引 → 根，**根最后**
-/// （提交点）。根写失败直接返回错误，远端旧根仍是权威。最后按期望树清理远端
-/// 残留（业务删除、旧 generation 目录、旧单文件 / 旧分片目录）。
-///
-/// 上传规则保证新稳定树的 manifest 与实际对象一致：manifest 声称存在的
-/// 文件对象一定已上传到 tree prefix。原先 `upload_merged_outcome_to_generation`
-/// 只上传 `remote_upload_paths`（delta 动作），NoOp/DownloadRemote/
-/// LwwRemoteWinsDownload/pending_take_remote 成功下载的文件都不会进新树，
-/// 导致 manifest 声称文件存在但实际对象不存在的快照。
-///
-/// Issue #761：本函数仅在 `capabilities().batch == false` 时由
-/// [`publish_tree_snapshot`] 调用（降级路径）。`batch == true` 时走
-/// [`publish_snapshot_batch`]。
-fn upload_complete_tree_snapshot(
-    provider: &dyn crate::sync::provider::SyncProvider,
-    staging_root: &Path,
-    generation_prefix: &str,
-    merged_manifest: &crate::sync::types::SyncManifest,
-    scope: crate::sync::types::SyncScope,
-    app_group: Option<&crate::sync::types::AppDataGroup>,
-    cancellation_token: Option<&SyncCancellationToken>,
-) -> crate::error::Result<()> {
-    use crate::sync::lww::{ManifestStorageKind, ManifestStore};
-    use crate::sync::provider::model::WritePrecondition;
-
-    // 遍历 merged_manifest.files，上传所有 upsert 文件到新 generation prefix。
-    for record in &merged_manifest.files {
-        // op=delete 只保留 tombstone（manifest 里有记录），不上传物理文件。
-        if record.op == "delete" {
-            continue;
-        }
-        if record.op != "upsert" {
-            return Err(crate::Error::Io(std::io::Error::other(format!(
-                "upload_complete_tree_snapshot: unknown op={} for path={}",
-                record.op, record.path
-            ))));
-        }
-
-        // 1. 路径白名单检查。
-        let whitelisted = app_group.map_or_else(
-            || crate::sync::SyncService::is_whitelisted_path(&record.path, scope),
-            |group| crate::sync::SyncService::is_whitelisted_app_group_path(&record.path, group),
-        );
-        if !whitelisted {
-            return Err(crate::Error::Io(std::io::Error::other(format!(
-                "upload_complete_tree_snapshot: path {} not whitelisted for scope {:?}",
-                record.path, scope
-            ))));
-        }
-
-        // 2. staging 文件必须存在。
-        let local_full = staging_root.join(&record.path);
-        if !local_full.exists() {
-            return Err(crate::Error::Io(std::io::Error::other(format!(
-                "upload_complete_tree_snapshot: staging file missing for path={}",
-                record.path
-            ))));
-        }
-
-        // 3. 读取 staging 文件，计算 md5 hash，必须 == record.content_hash。
-        let content = std::fs::read(&local_full).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "upload_complete_tree_snapshot: read {}: {e}",
-                record.path
-            )))
-        })?;
-        let actual_hash = crate::sync::hash::content_md5(&content);
-        if actual_hash != record.content_hash {
-            return Err(crate::Error::Io(std::io::Error::other(format!(
-                "upload_complete_tree_snapshot: hash mismatch for path={} expected={} actual={}",
-                record.path, record.content_hash, actual_hash
-            ))));
-        }
-
-        // 4. 上传到新 generation prefix。
-        let remote_path = format!("{generation_prefix}/{}", record.path);
-        let precondition = WritePrecondition::Unconditional;
-        provider.write(&remote_path, &content, precondition)?;
-
-        // Issue #729：每次 provider.write 返回后检查取消令牌。
-        // 取消则立即停止上传，返回 cancelled 错误。
-        if let Some(token) = cancellation_token {
-            if token.is_cancelled() {
-                log::info!(
-                    "[sync] upload_complete_tree_snapshot: cancellation requested after write {} — returning cancelled",
-                    record.path
-                );
-                return Err(crate::Error::Other(
-                    "sync cancelled during generation upload".into(),
-                ));
-            }
-        }
-    }
-
-    // 清单权威是 v2 存储：对象 → 索引 → 根依次上传，根最后（提交点）。
-    // 根写失败直接返回错误：旧根仍是远端权威，不会出现"根指向不存在对象"。
-    let manifest_store = ManifestStore::new(staging_root, &manifest_rel_path(app_group));
-    let manifest_files =
-        crate::sync::lww::local_manifest_storage(&manifest_store, Some(merged_manifest))?;
-    let mut manifest_remote_paths = Vec::with_capacity(manifest_files.len());
-    for file in &manifest_files {
-        let remote_rel = crate::sync::lww::remote_rel_for(&manifest_store, &file.rel)?;
-        let remote_path = format!("{generation_prefix}/{remote_rel}");
-        manifest_remote_paths.push(remote_path.clone());
-        let bytes = file.read_bytes(staging_root)?;
-        if file.kind == ManifestStorageKind::Object {
-            // 内容寻址对象：远端已有同名对象直接复用。
-            if provider.read(&remote_path)?.is_some() {
-                continue;
-            }
-        } else if let Some(object) = provider.read(&remote_path)? {
-            // 索引/根：字节一致时不重写。
-            if object.content == bytes {
-                continue;
-            }
-        }
-        provider.write(&remote_path, &bytes, WritePrecondition::Unconditional)?;
-
-        // Issue #729：每次 provider.write 返回后检查取消令牌。
-        if let Some(token) = cancellation_token {
-            if token.is_cancelled() {
-                log::info!(
-                    "[sync] upload_complete_tree_snapshot: cancellation requested after manifest \
-                     write {} — returning cancelled",
-                    file.rel
-                );
-                return Err(crate::Error::Other(
-                    "sync cancelled during generation upload".into(),
-                ));
-            }
-        }
-    }
-
-    {
-        let mut desired: std::collections::HashSet<String> = merged_manifest
-            .files
-            .iter()
-            .filter(|record| record.op == "upsert")
-            .map(|record| format!("{generation_prefix}/{}", record.path))
-            .collect();
-        desired.extend(manifest_remote_paths);
-        for entry in provider.list(generation_prefix)? {
-            let path = format!("{generation_prefix}/{}", entry.path);
-            if !desired.contains(&path) {
-                provider.delete(
-                    &path,
-                    crate::sync::provider::model::DeletePrecondition::Unconditional,
-                )?;
-            }
-        }
-    }
-
-    Ok(())
 }
 
 /// 把单个远端对象内容写入 staging（创建父目录 + 写文件）。

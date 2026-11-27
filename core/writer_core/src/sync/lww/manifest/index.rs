@@ -1,7 +1,10 @@
-//! 两级索引的 namespace 索引（`manifest/index/<ns>.json`）。
+//! 两级索引的 namespace 索引（`manifest/index/<ns>/<sha256>.json`）。
 //!
-//! 索引把 object_key 映射到内容寻址的 objects 文件 sha256。同一命名空间的
-//! 索引内容变化才需要重写；未涉及 namespace 的索引保持逐字节不变。
+//! 索引把 object_key 映射到内容寻址的 objects 文件 sha256。索引本身也是内容
+//! 寻址的不可变文件：文件名等于内容（canonical JSON）的 sha256，也是 root
+//! `namespaces` 中记录的值。因此根切换不会覆盖旧根引用的索引；同一 sha 已
+//! 存在时直接复用。旧固定路径 `manifest/index/<ns>.json`（87b15f2 布局）只在
+//! 内容寻址路径缺失时作为一次性迁移读取。
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

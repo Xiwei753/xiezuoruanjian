@@ -388,3 +388,561 @@ fn batch_publishes_business_and_v2_manifest_with_root_last() {
     assert!(object < index, "清单对象应先于索引写入，实际 {paths:?}");
     assert!(index < root, "根必须最后写，实际 {paths:?}");
 }
+
+/// #1062 评论 #7219943077 第 2 项：没有 batch + atomic_write 的 Provider
+/// 不再有逐文件发布兜底，必须显式拒绝且零 provider 写。
+#[test]
+fn non_batch_provider_publish_is_rejected_without_file_writes() {
+    use crate::sync::provider::capabilities::SyncCapabilities;
+    use crate::sync::provider::error::ProviderError;
+    use crate::sync::provider::model::{
+        DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion, WritePrecondition,
+    };
+    use crate::sync::types::{SyncPolicy, SyncScope, SyncStatus};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct NonBatchProvider {
+        inner: MemoryProvider,
+        writes: AtomicUsize,
+        deletes: AtomicUsize,
+    }
+
+    impl NonBatchProvider {
+        fn new() -> Self {
+            Self {
+                inner: MemoryProvider::new(),
+                writes: AtomicUsize::new(0),
+                deletes: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl SyncProvider for NonBatchProvider {
+        fn capabilities(&self) -> SyncCapabilities {
+            SyncCapabilities {
+                batch: false,
+                ..self.inner.capabilities()
+            }
+        }
+
+        fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
+            self.inner.list(prefix)
+        }
+
+        fn read(&self, path: &str) -> Result<Option<RemoteObject>, ProviderError> {
+            self.inner.read(path)
+        }
+
+        fn write(
+            &self,
+            path: &str,
+            content: &[u8],
+            precondition: WritePrecondition,
+        ) -> Result<RemoteVersion, ProviderError> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            self.inner.write(path, content, precondition)
+        }
+
+        fn delete(
+            &self,
+            path: &str,
+            precondition: DeletePrecondition,
+        ) -> Result<(), ProviderError> {
+            self.deletes.fetch_add(1, Ordering::SeqCst);
+            self.inner.delete(path, precondition)
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let provider = NonBatchProvider::new();
+    let policy = SyncPolicy {
+        enabled: true,
+        auto_sync: false,
+        sync_interval_seconds: 60,
+        has_network_permission: true,
+    };
+    let result = super::super::generation::publish_tree_snapshot(
+        &provider,
+        tmp.path(),
+        "projects/p1",
+        SyncScope::Project,
+        None,
+        &policy,
+        true,
+        None,
+        None,
+    );
+
+    match &result.status {
+        SyncStatus::RecoverableError(message) => assert!(
+            message.contains(
+                "provider lacks atomic multi-object publish; refusing to publish content and \
+                 manifest separately"
+            ),
+            "错误文案应说明拒绝逐文件发布，实际 {message:?}"
+        ),
+        other => panic!("非 batch Provider 必须显式拒绝，实际 {other:?}"),
+    }
+    assert_eq!(
+        provider.writes.load(Ordering::SeqCst),
+        0,
+        "拒绝时不得逐文件 provider.write"
+    );
+    assert_eq!(
+        provider.deletes.load(Ordering::SeqCst),
+        0,
+        "拒绝时不得逐文件 provider.delete"
+    );
+    assert!(
+        provider.inner.list("").unwrap().is_empty(),
+        "拒绝时远端不能产生任何对象"
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// #1062 评论 #7219943077 第 3 项（P1）：稀疏 generation 发布只读 delta 清单。
+// ════════════════════════════════════════════════════════════════════════════
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use crate::sync::lww::{LwwMergeOutcome, ManifestStore, SYNC_MANIFEST_PATH};
+use crate::sync::manifest_delta::ManifestDelta;
+use crate::sync::provider::capabilities::SyncCapabilities;
+use crate::sync::provider::error::ProviderError;
+use crate::sync::provider::model::{
+    BatchCommitResult, BatchMutation, DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion,
+    WritePrecondition,
+};
+use crate::sync::types::{SyncPolicy, SyncStatus};
+
+/// 记录 `commit_batch` mutations 的 Provider（其余操作透传 MemoryProvider）。
+struct RecordingBatchProvider {
+    inner: MemoryProvider,
+    mutations: Mutex<Vec<BatchMutation>>,
+}
+
+impl RecordingBatchProvider {
+    fn new() -> Self {
+        Self {
+            inner: MemoryProvider::new(),
+            mutations: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn recorded(&self) -> Vec<BatchMutation> {
+        self.mutations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
+
+impl SyncProvider for RecordingBatchProvider {
+    fn capabilities(&self) -> SyncCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
+        self.inner.list(prefix)
+    }
+
+    fn read(&self, path: &str) -> Result<Option<RemoteObject>, ProviderError> {
+        self.inner.read(path)
+    }
+
+    fn write(
+        &self,
+        path: &str,
+        content: &[u8],
+        precondition: WritePrecondition,
+    ) -> Result<RemoteVersion, ProviderError> {
+        self.inner.write(path, content, precondition)
+    }
+
+    fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
+        self.inner.delete(path, precondition)
+    }
+
+    fn commit_batch(
+        &self,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
+        self.mutations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .extend_from_slice(mutations);
+        self.inner.commit_batch(mutations, message)
+    }
+}
+
+fn manifest_record(path: &str, content_hash: &str, updated_at_ms: i64) -> ManifestFileRecord {
+    ManifestFileRecord {
+        path: path.to_string(),
+        content_hash: content_hash.to_string(),
+        updated_at_ms,
+        deleted_at_ms: None,
+        device_id: "dev-A".to_string(),
+        op: "upsert".to_string(),
+        schema_version: 1,
+    }
+}
+
+fn md5_hex(bytes: &[u8]) -> String {
+    format!("{:x}", md5::compute(bytes))
+}
+
+fn write_staging(root: &std::path::Path, rel: &str, bytes: &[u8]) {
+    let path = root.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+fn commit_store_plan(root: &std::path::Path, plan: &crate::sync::lww::ManifestWritePlan) {
+    let mut tx = crate::storage::transaction::SaveTransaction::new(root);
+    for (rel, bytes) in &plan.writes {
+        tx.add_bytes(rel, bytes).unwrap();
+    }
+    for rel in &plan.deletes {
+        tx.add_delete(rel).unwrap();
+    }
+    tx.commit().unwrap();
+}
+
+fn sync_policy() -> SyncPolicy {
+    SyncPolicy {
+        enabled: true,
+        auto_sync: false,
+        sync_interval_seconds: 60,
+        has_network_permission: true,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn merge_outcome(
+    merged_manifest: SyncManifest,
+    delta: Option<ManifestDelta>,
+    upload_paths: Vec<String>,
+    delete_paths: Vec<String>,
+    remote_tree_files: HashMap<String, String>,
+) -> LwwMergeOutcome {
+    LwwMergeOutcome {
+        conflicts: Vec::new(),
+        downloaded_files: Vec::new(),
+        local_deletes: Vec::new(),
+        remote_upload_paths: upload_paths,
+        remote_delete_paths: delete_paths,
+        overwritten_files: Vec::new(),
+        auto_adjudicated_files: Vec::new(),
+        ignored_files: Vec::new(),
+        pending_take_remote_failed: Vec::new(),
+        unresolved_missing_paths: Vec::new(),
+        remote_tree_files,
+        remote_manifest_path: SYNC_MANIFEST_PATH.to_string(),
+        manifest_json: String::new(),
+        merged_manifest,
+        manifest_unchanged: false,
+        manifest_delta: delta,
+        affected_paths: None,
+    }
+}
+
+fn remote_versions(provider: &dyn SyncProvider, prefix: &str) -> HashMap<String, String> {
+    provider
+        .list(prefix)
+        .unwrap()
+        .into_iter()
+        .map(|entry| (entry.path, entry.version.0))
+        .collect()
+}
+
+/// delta 模式：只发布 delta 涉及的 object/index 与根；未变化业务路径/清单
+/// 对象不产生 Delete，也不读取 staging 完整清单。
+#[test]
+fn delta_publish_skips_full_manifest_and_unchanged_deletes() {
+    let tmp = TempDir::new().unwrap();
+    let staging = tmp.path().join("staging");
+    let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+    let unchanged_rel = "volumes/v1/chapters/c2/chapter.md";
+    let gone_rel = "volumes/v1/chapters/c3/chapter.md";
+    let project_rel = "project.json";
+    write_staging(&staging, chapter_rel, b"chapter v2");
+    write_staging(&staging, unchanged_rel, b"unchanged chapter");
+    write_staging(&staging, project_rel, b"project body");
+
+    let baseline = SyncManifest {
+        files: vec![
+            manifest_record(project_rel, &md5_hex(b"project body"), 10),
+            manifest_record(chapter_rel, &md5_hex(b"old chapter"), 10),
+            manifest_record(unchanged_rel, &md5_hex(b"unchanged chapter"), 10),
+            manifest_record(gone_rel, &md5_hex(b"gone chapter"), 10),
+        ],
+    };
+    let legacy = staging.join(SYNC_MANIFEST_PATH);
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, baseline.canonical_json().unwrap()).unwrap();
+    let store = ManifestStore::new(&staging, SYNC_MANIFEST_PATH);
+    assert!(store
+        .load_or_legacy()
+        .unwrap()
+        .semantically_equals(&baseline));
+
+    let mut delta = ManifestDelta::default();
+    delta.upserts.insert(
+        chapter_rel.to_string(),
+        manifest_record(chapter_rel, &md5_hex(b"chapter v2"), 20),
+    );
+    delta.deletes.insert(gone_rel.to_string());
+    let plan = store.apply_delta(&delta, "g-local").unwrap();
+    commit_store_plan(&staging, &plan);
+    let merged = store.load_all().unwrap().unwrap();
+    assert!(!merged.files.iter().any(|record| record.path == gone_rel));
+
+    let provider = RecordingBatchProvider::new();
+    for (rel, bytes) in [
+        (unchanged_rel, b"unchanged chapter".as_slice()),
+        (gone_rel, b"gone chapter".as_slice()),
+        (project_rel, b"project body".as_slice()),
+    ] {
+        provider
+            .write(
+                &format!("projects/p1/{rel}"),
+                bytes,
+                WritePrecondition::Unconditional,
+            )
+            .unwrap();
+    }
+    let remote_tree_files = remote_versions(&provider, "projects/p1");
+    let outcome = merge_outcome(
+        merged,
+        Some(delta),
+        vec![chapter_rel.to_string()],
+        vec![gone_rel.to_string()],
+        remote_tree_files,
+    );
+
+    let result = super::super::generation::publish_tree_snapshot(
+        &provider,
+        &staging,
+        "projects/p1",
+        crate::sync::types::SyncScope::Project,
+        None,
+        &sync_policy(),
+        true,
+        Some(&outcome),
+        None,
+    );
+    assert!(
+        matches!(&result.status, SyncStatus::Success),
+        "delta 发布应成功，实际 {:?}（error={:?}）",
+        result.status,
+        result.error
+    );
+
+    let mutations = provider.recorded();
+    let paths: Vec<&str> = mutations.iter().map(BatchMutation::path).collect();
+    let manifest_prefix = "projects/p1/app-meta/sync/manifest/";
+    let object_puts: Vec<&str> = paths
+        .iter()
+        .copied()
+        .filter(|path| path.starts_with(&format!("{manifest_prefix}objects/")))
+        .collect();
+    assert_eq!(
+        object_puts.len(),
+        1,
+        "delta 模式只应发布受影响 object，实际 {paths:?}"
+    );
+    let index_puts = paths
+        .iter()
+        .filter(|path| path.starts_with(&format!("{manifest_prefix}index/")))
+        .count();
+    assert_eq!(
+        index_puts, 1,
+        "delta 模式只应发布受影响索引，实际 {paths:?}"
+    );
+    assert_eq!(
+        mutations.last().map(BatchMutation::path),
+        Some("projects/p1/app-meta/sync/manifest/root.json"),
+        "根必须是 batch 最后一项，实际 {paths:?}"
+    );
+    let gone_deletes = mutations
+        .iter()
+        .filter(|mutation| {
+            matches!(mutation, BatchMutation::Delete { path }
+                if path == &format!("projects/p1/{gone_rel}"))
+        })
+        .count();
+    assert_eq!(
+        gone_deletes, 1,
+        "confirmed delete 必须产生一次 Delete，实际 {paths:?}"
+    );
+    assert!(
+        mutations.iter().all(
+            |mutation| !matches!(mutation, BatchMutation::Delete { path }
+                if path == &format!("projects/p1/{unchanged_rel}"))
+        ),
+        "未变化业务路径不得产生 Delete，实际 {paths:?}"
+    );
+    assert!(
+        mutations.iter().all(
+            |mutation| !matches!(mutation, BatchMutation::Delete { path }
+            if path.starts_with(manifest_prefix))
+        ),
+        "delta 模式不得删除旧清单对象/索引（上一代根仍可能引用），实际 {paths:?}"
+    );
+    assert!(
+        paths.contains(&format!("projects/p1/{chapter_rel}").as_str()),
+        "业务 Put 应与 delta 清单同批，实际 {paths:?}"
+    );
+}
+
+/// 完整模式（delta 为 None）行为不变：完整清单 objects/indexes 全部进入
+/// batch，baseline 中不在期望树的旧业务路径产生 Delete。
+#[test]
+fn full_publish_still_emits_complete_manifest_and_deletes_stale_paths() {
+    let tmp = TempDir::new().unwrap();
+    let staging = tmp.path().join("staging");
+    let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+    let stale_rel = "volumes/v1/chapters/c9/stale.md";
+    write_staging(&staging, chapter_rel, b"chapter body");
+
+    let manifest = SyncManifest {
+        files: vec![manifest_record(chapter_rel, &md5_hex(b"chapter body"), 10)],
+    };
+    let legacy = staging.join(SYNC_MANIFEST_PATH);
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, manifest.canonical_json().unwrap()).unwrap();
+    let store = ManifestStore::new(&staging, SYNC_MANIFEST_PATH);
+    assert!(store
+        .load_or_legacy()
+        .unwrap()
+        .semantically_equals(&manifest));
+
+    let provider = RecordingBatchProvider::new();
+    provider
+        .write(
+            &format!("projects/p1/{chapter_rel}"),
+            b"chapter body",
+            WritePrecondition::Unconditional,
+        )
+        .unwrap();
+    provider
+        .write(
+            &format!("projects/p1/{stale_rel}"),
+            b"stale body",
+            WritePrecondition::Unconditional,
+        )
+        .unwrap();
+    let remote_tree_files = remote_versions(&provider, "projects/p1");
+    let outcome = merge_outcome(manifest, None, Vec::new(), Vec::new(), remote_tree_files);
+
+    let result = super::super::generation::publish_tree_snapshot(
+        &provider,
+        &staging,
+        "projects/p1",
+        crate::sync::types::SyncScope::Project,
+        None,
+        &sync_policy(),
+        true,
+        Some(&outcome),
+        None,
+    );
+    assert!(
+        matches!(&result.status, SyncStatus::Success | SyncStatus::NoChanges),
+        "完整发布应成功，实际 {:?}（error={:?}）",
+        result.status,
+        result.error
+    );
+
+    let mutations = provider.recorded();
+    let paths: Vec<&str> = mutations.iter().map(BatchMutation::path).collect();
+    let manifest_prefix = "projects/p1/app-meta/sync/manifest/";
+    let object_puts = paths
+        .iter()
+        .filter(|path| path.starts_with(&format!("{manifest_prefix}objects/")))
+        .count();
+    assert_eq!(
+        object_puts, 1,
+        "完整模式应发布全部清单 objects，实际 {paths:?}"
+    );
+    let index_puts = paths
+        .iter()
+        .filter(|path| path.starts_with(&format!("{manifest_prefix}index/")))
+        .count();
+    assert_eq!(
+        index_puts, 1,
+        "完整模式应发布全部清单 indexes，实际 {paths:?}"
+    );
+    assert_eq!(
+        mutations.last().map(BatchMutation::path),
+        Some("projects/p1/app-meta/sync/manifest/root.json"),
+        "根必须最后，实际 {paths:?}"
+    );
+    assert!(
+        mutations
+            .iter()
+            .any(|mutation| matches!(mutation, BatchMutation::Delete { path }
+            if path == &format!("projects/p1/{stale_rel}"))),
+        "完整模式必须删除不在期望树的旧业务路径，实际 {paths:?}"
+    );
+}
+
+/// delta 模式但本地 store 没有 root：发布端回退完整清单入口，不 panic。
+#[test]
+fn delta_publish_without_local_root_falls_back_to_full_manifest() {
+    let tmp = TempDir::new().unwrap();
+    let staging = tmp.path().join("staging");
+    let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+    write_staging(&staging, chapter_rel, b"chapter body");
+    let manifest = SyncManifest {
+        files: vec![manifest_record(chapter_rel, &md5_hex(b"chapter body"), 10)],
+    };
+    // 不物化 v2 root：manifest 只来自 merge outcome。
+    let mut delta = ManifestDelta::default();
+    delta
+        .upserts
+        .insert(chapter_rel.to_string(), manifest.files[0].clone());
+
+    let provider = RecordingBatchProvider::new();
+    let outcome = merge_outcome(
+        manifest,
+        Some(delta),
+        vec![chapter_rel.to_string()],
+        Vec::new(),
+        HashMap::new(),
+    );
+    let result = super::super::generation::publish_tree_snapshot(
+        &provider,
+        &staging,
+        "projects/p1",
+        crate::sync::types::SyncScope::Project,
+        None,
+        &sync_policy(),
+        true,
+        Some(&outcome),
+        None,
+    );
+    assert!(
+        matches!(&result.status, SyncStatus::Success),
+        "无 root 时回退完整入口仍应成功，实际 {:?}（error={:?}）",
+        result.status,
+        result.error
+    );
+    let mutations = provider.recorded();
+    let paths: Vec<&str> = mutations.iter().map(BatchMutation::path).collect();
+    let manifest_prefix = "projects/p1/app-meta/sync/manifest/";
+    assert_eq!(
+        paths
+            .iter()
+            .filter(|path| path.starts_with(&format!("{manifest_prefix}objects/")))
+            .count(),
+        1,
+        "回退完整入口应发布完整清单 objects，实际 {paths:?}"
+    );
+    assert_eq!(
+        mutations.last().map(BatchMutation::path),
+        Some("projects/p1/app-meta/sync/manifest/root.json"),
+        "根必须最后，实际 {paths:?}"
+    );
+}

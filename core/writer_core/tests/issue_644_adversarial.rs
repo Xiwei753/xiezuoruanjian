@@ -588,7 +588,12 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
         root["namespaces"]["_root"].is_string(),
         "顶层散文件应落入 _root namespace"
     );
-    let index_path = project_live.join("app-meta/sync/manifest/index/_root.json");
+    let root_index_sha = root["namespaces"]["_root"]
+        .as_str()
+        .expect("_root 索引 sha 应为字符串");
+    let index_path = project_live.join(format!(
+        "app-meta/sync/manifest/index/_root/{root_index_sha}.json"
+    ));
     let index_raw = fs::read_to_string(&index_path).unwrap();
     let index: serde_json::Value = serde_json::from_str(&index_raw).unwrap();
     let object_sha = index["objects"]["project.json"]

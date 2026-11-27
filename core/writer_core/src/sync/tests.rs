@@ -4562,6 +4562,54 @@ mod tests {
             store.remove(path);
             Ok(())
         }
+
+        /// #1062：LWW 发布改为一次 `commit_batch`，mock 也要在单锁内原子应用
+        /// Put / Delete / DeleteIfMatch（版本即内容的 blob OID）。
+        fn commit_batch(
+            &self,
+            mutations: &[crate::sync::provider::BatchMutation],
+            _message: &str,
+        ) -> Result<crate::sync::provider::BatchCommitResult, crate::sync::provider::ProviderError>
+        {
+            use crate::sync::provider::BatchMutation;
+            let mut store = self.store.lock().map_err(|_| Self::lock_err())?;
+            let mut next = store.clone();
+            let mut touched = Vec::with_capacity(mutations.len());
+            for mutation in mutations {
+                match mutation {
+                    BatchMutation::Put { path, content } => {
+                        next.insert(path.clone(), content.clone());
+                    }
+                    BatchMutation::Delete { path } => {
+                        next.remove(path);
+                    }
+                    BatchMutation::DeleteIfMatch { path, version } => {
+                        let current = next.get(path).map(|content| {
+                            crate::sync::provider::RemoteVersion(Self::blob_oid(content))
+                        });
+                        if current.as_ref() != Some(version) {
+                            return Err(crate::sync::provider::ProviderError::PreconditionFailed {
+                                path: path.clone(),
+                                reason: "delete version mismatch".to_string(),
+                            });
+                        }
+                        next.remove(path);
+                    }
+                    other => {
+                        return Err(crate::sync::provider::ProviderError::Other {
+                            reason: format!("unsupported batch mutation: {other:?}"),
+                        });
+                    }
+                }
+                touched.push(mutation.path().to_string());
+            }
+            *store = next;
+            Ok(crate::sync::provider::BatchCommitResult {
+                revision: crate::sync::provider::RemoteVersion(Self::blob_oid(b"commit_batch")),
+                touched_paths: touched,
+                path_versions: std::collections::BTreeMap::new(),
+            })
+        }
     }
 
     /// Issue #770 评论 5844542687：merge 旧 unresolved conflict 规范化。
@@ -4718,7 +4766,8 @@ mod tests {
         use tempfile::tempdir;
 
         use crate::sync::lww::{
-            fetch_remote_manifest_at, publish_remote_manifest, ManifestStore, SYNC_MANIFEST_PATH,
+            fetch_remote_manifest_at, publish_remote_manifest, sha256_hex, ManifestStore,
+            SYNC_MANIFEST_PATH,
         };
         use crate::sync::provider::error::ProviderError;
         use crate::sync::provider::memory::MemoryProvider;
@@ -4792,6 +4841,42 @@ mod tests {
                 .find(|path| path.starts_with(dir))
                 .cloned()
                 .unwrap_or_else(|| panic!("远端应包含 {dir} 下的清单文件"))
+        }
+
+        fn root_json(provider: &dyn SyncProvider) -> serde_json::Value {
+            let root = provider
+                .read(&format!("{PREFIX}/{ROOT_REL}"))
+                .unwrap()
+                .expect("远端应有 v2 清单根");
+            serde_json::from_slice(&root.content).unwrap()
+        }
+
+        fn index_rel_for(root: &serde_json::Value, namespace: &str) -> String {
+            let sha = root["namespaces"][namespace]
+                .as_str()
+                .unwrap_or_else(|| panic!("root 缺少 namespace {namespace}"));
+            format!("{INDEX_DIR}{namespace}/{sha}.json")
+        }
+
+        fn legacy_index_rel_for(namespace: &str) -> String {
+            format!("{INDEX_DIR}{namespace}.json")
+        }
+
+        fn commit_plan(root: &Path, plan: &crate::sync::lww::ManifestWritePlan) {
+            let mut tx = crate::storage::transaction::SaveTransaction::new(root);
+            for (rel, bytes) in &plan.writes {
+                tx.add_bytes(rel, bytes).unwrap();
+            }
+            for rel in &plan.deletes {
+                tx.add_delete(rel).unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        fn upsert_delta(path: &str, hash: &str) -> crate::sync::manifest_delta::ManifestDelta {
+            let mut delta = crate::sync::manifest_delta::ManifestDelta::default();
+            delta.upserts.insert(path.to_string(), record(path, hash));
+            delta
         }
 
         /// 根存在时严格读取：对象缺失 / sha256 不符都必须报错，不回退旧格式。
@@ -5016,59 +5101,319 @@ mod tests {
             assert!(fetched.semantically_equals(&new));
         }
 
-        /// 根切换后回收旧根可达但新根不可达的对象，保留新可达对象。
+        /// 发布必须写内容寻址索引 `<ns>/<sha256>.json`，根记录同一 sha；不再写
+        /// 87b15f2 的旧固定路径。
         #[test]
-        fn root_switch_reclaims_old_objects_and_keeps_new_reachable_ones() {
+        fn publish_writes_content_addressed_index_layout() {
             let dir = tempdir().unwrap();
-            let v1 = sample_manifest(&[("volumes/v1/chapters/c1/chapter.md", "hash-v1")]);
-            seed_local_store(dir.path(), &v1);
+            let manifest = sample_manifest(&[
+                ("volumes/v1/chapters/c1/chapter.md", "hash-c1"),
+                ("project.json", "hash-root"),
+            ]);
+            seed_local_store(dir.path(), &manifest);
             let provider = MemoryProvider::new();
             publish(&provider, dir.path());
 
-            let tree_v1 = remote_tree(&provider);
-            let old_objects: Vec<String> = tree_v1
-                .keys()
-                .filter(|path| path.starts_with(OBJECT_DIR))
-                .cloned()
-                .collect();
-            assert_eq!(old_objects.len(), 1, "v1 只有一个内容寻址对象");
+            let tree = remote_tree(&provider);
+            let root = root_json(&provider);
+            assert!(
+                root.get("previousRoot").is_none(),
+                "首次发布根没有 previousRoot"
+            );
+            let namespaces = root["namespaces"].as_object().unwrap();
+            assert_eq!(namespaces.len(), 2);
+            for namespace in namespaces.keys() {
+                let namespace = namespace.as_str();
+                let rel = index_rel_for(&root, namespace);
+                let sha = namespaces[namespace].as_str().unwrap();
+                assert!(tree.contains_key(&rel), "远端应有内容寻址索引 {rel}");
+                let object = provider.read(&format!("{PREFIX}/{rel}")).unwrap().unwrap();
+                assert_eq!(sha256_hex(&object.content), sha);
+                assert!(
+                    !tree.contains_key(&legacy_index_rel_for(namespace)),
+                    "新布局不再写旧固定路径索引"
+                );
+            }
+            let fetched = fetch(&provider).unwrap().expect("v2 根是权威");
+            assert!(fetched.semantically_equals(&manifest));
+        }
 
-            // 同一 object_key 的记录变化 + 新增 object_key：旧对象文件不可达。
-            let v2 = sample_manifest(&[
-                ("volumes/v1/chapters/c1/chapter.md", "hash-v2"),
-                ("volumes/v1/chapters/c2/chapter.md", "hash-c2"),
-            ]);
-            std::fs::remove_file(dir.path().join(ROOT_REL)).unwrap();
-            let store = seed_local_store(dir.path(), &v2);
-            let (_, reachable) = store.load_reachable().unwrap().expect("本地 v2 根存在");
-            let new_objects: Vec<String> = reachable
-                .iter()
-                .filter(|rel| rel.starts_with(OBJECT_DIR))
-                .cloned()
-                .collect();
-            assert_eq!(new_objects.len(), 2, "v2 每个 object_key 一个对象文件");
+        /// 远端/本地旧固定路径索引都可迁移读取；下一次发布把同一 sha 写到
+        /// 内容寻址路径，根切换后回收旧固定路径。
+        #[test]
+        fn legacy_fixed_index_reads_then_publish_migrates_it() {
+            let dir = tempdir().unwrap();
+            let manifest = sample_manifest(&[("volumes/v1/chapters/c1/chapter.md", "hash-c1")]);
+            seed_local_store(dir.path(), &manifest);
+            let provider = MemoryProvider::new();
+            publish(&provider, dir.path());
 
-            let tree_before = remote_tree(&provider);
+            let namespace = "volumes";
+            let root_before = root_json(&provider);
+            let sha = root_before["namespaces"][namespace]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let hashed_rel = index_rel_for(&root_before, namespace);
+            let legacy_rel = legacy_index_rel_for(namespace);
+            let hashed_path = format!("{PREFIX}/{hashed_rel}");
+            let legacy_path = format!("{PREFIX}/{legacy_rel}");
+            let index_bytes = provider.read(&hashed_path).unwrap().unwrap().content;
+            provider
+                .delete(&hashed_path, DeletePrecondition::Unconditional)
+                .unwrap();
+            provider
+                .write(&legacy_path, &index_bytes, WritePrecondition::Unconditional)
+                .unwrap();
+
+            // 旧布局（只有固定路径）仍可读：回退固定路径并校验 sha。
+            let fetched = fetch(&provider)
+                .unwrap()
+                .expect("旧固定路径索引应可迁移读取");
+            assert!(fetched.semantically_equals(&manifest));
+
+            // 本地也退化成旧固定路径布局。
+            let local_hashed = dir.path().join(&hashed_rel);
+            let local_legacy = dir.path().join(&legacy_rel);
+            std::fs::rename(&local_hashed, &local_legacy).unwrap();
+
+            let tree = remote_tree(&provider);
             publish_remote_manifest(
                 &provider,
                 PREFIX,
                 dir.path(),
                 SYNC_MANIFEST_PATH,
-                &tree_before,
+                &tree,
+                None,
+            )
+            .unwrap();
+
+            let tree_after = remote_tree(&provider);
+            assert!(
+                tree_after.contains_key(&hashed_rel),
+                "迁移后新内容寻址路径必须存在"
+            );
+            assert!(
+                !tree_after.contains_key(&legacy_rel),
+                "根切换后旧固定路径索引应被回收"
+            );
+            let root_after = root_json(&provider);
+            assert_eq!(
+                root_after["namespaces"][namespace].as_str(),
+                Some(sha.as_str()),
+                "迁移不改变根中记录的 sha"
+            );
+            let fetched = fetch(&provider).unwrap().expect("v2 根仍是权威");
+            assert!(fetched.semantically_equals(&manifest));
+
+            // 本地下一份写入计划同样迁移到内容寻址路径。
+            let store = ManifestStore::new(dir.path(), SYNC_MANIFEST_PATH);
+            let plan = store
+                .apply_delta(
+                    &crate::sync::manifest_delta::ManifestDelta::default(),
+                    "g-migrate",
+                )
+                .unwrap();
+            commit_plan(dir.path(), &plan);
+            assert!(local_hashed.is_file(), "本地迁移后新路径必须存在");
+            assert!(!local_legacy.exists(), "本地旧固定路径应被回收");
+            assert!(store
+                .load_all()
+                .unwrap()
+                .unwrap()
+                .semantically_equals(&manifest));
+        }
+
+        /// 旧固定路径索引在索引换 sha 时仍是上一代根的唯一副本：保留一代，
+        /// R3 发布后才回收。
+        #[test]
+        fn legacy_fixed_index_with_changed_sha_is_retained_one_generation_remote() {
+            let dir = tempdir().unwrap();
+            let namespace = "volumes";
+            let v1 = sample_manifest(&[("volumes/v1/chapters/c1/chapter.md", "hash-v1")]);
+            let store = seed_local_store(dir.path(), &v1);
+            let provider = MemoryProvider::new();
+            publish(&provider, dir.path());
+
+            let root1 = root_json(&provider);
+            let s1_rel = index_rel_for(&root1, namespace);
+            let legacy_rel = legacy_index_rel_for(namespace);
+            let s1_path = format!("{PREFIX}/{s1_rel}");
+            let legacy_path = format!("{PREFIX}/{legacy_rel}");
+            let s1_bytes = provider.read(&s1_path).unwrap().unwrap().content;
+            provider
+                .delete(&s1_path, DeletePrecondition::Unconditional)
+                .unwrap();
+            provider
+                .write(&legacy_path, &s1_bytes, WritePrecondition::Unconditional)
+                .unwrap();
+
+            // R2：索引换 sha。旧固定路径（S1）是 R1 读者的唯一副本，必须保留。
+            let plan = store
+                .apply_delta(
+                    &upsert_delta("volumes/v1/chapters/c1/chapter.md", "hash-v2"),
+                    "g2",
+                )
+                .unwrap();
+            commit_plan(dir.path(), &plan);
+            let tree = remote_tree(&provider);
+            publish_remote_manifest(
+                &provider,
+                PREFIX,
+                dir.path(),
+                SYNC_MANIFEST_PATH,
+                &tree,
                 None,
             )
             .unwrap();
 
             let tree_v2 = remote_tree(&provider);
             assert!(
-                !tree_v2.contains_key(&old_objects[0]),
-                "旧根可达但新根不可达的对象应在根切换后回收"
+                tree_v2.contains_key(&legacy_rel),
+                "索引换 sha 时旧固定路径必须保留一代"
             );
-            for rel in &new_objects {
-                assert!(tree_v2.contains_key(rel), "新可达对象必须保留: {rel}");
-            }
-            let fetched = fetch(&provider).unwrap().expect("v2 根是权威");
-            assert!(fetched.semantically_equals(&v2));
+            let root2 = root_json(&provider);
+            let s2_rel = index_rel_for(&root2, namespace);
+            assert_ne!(s2_rel, s1_rel, "R2 索引 sha 应变化");
+            assert!(tree_v2.contains_key(&s2_rel));
+
+            // R3：上一代根换成 S2，S1 固定路径不再被需要，可以回收。
+            let plan = store
+                .apply_delta(
+                    &upsert_delta("volumes/v1/chapters/c1/chapter.md", "hash-v3"),
+                    "g3",
+                )
+                .unwrap();
+            commit_plan(dir.path(), &plan);
+            let tree = remote_tree(&provider);
+            publish_remote_manifest(
+                &provider,
+                PREFIX,
+                dir.path(),
+                SYNC_MANIFEST_PATH,
+                &tree,
+                None,
+            )
+            .unwrap();
+
+            let tree_v3 = remote_tree(&provider);
+            assert!(
+                !tree_v3.contains_key(&legacy_rel),
+                "R3 发布后旧固定路径索引可回收"
+            );
+            assert!(
+                tree_v3.contains_key(&s2_rel),
+                "R2 索引在 R3 发布后仍保留一代"
+            );
+            let v3 = sample_manifest(&[("volumes/v1/chapters/c1/chapter.md", "hash-v3")]);
+            assert!(fetch(&provider)
+                .unwrap()
+                .expect("R3 根是权威")
+                .semantically_equals(&v3));
+        }
+
+        /// 根切换保留上一代；R3 发布后才回收 R1 独有而 R2 不引用的对象/索引。
+        #[test]
+        fn root_switch_retains_previous_generation_then_reclaims_it() {
+            let dir = tempdir().unwrap();
+            let v1 = sample_manifest(&[("volumes/v1/chapters/c1/chapter.md", "hash-v1")]);
+            let store = seed_local_store(dir.path(), &v1);
+            let provider = MemoryProvider::new();
+            publish(&provider, dir.path());
+
+            let tree_v1 = remote_tree(&provider);
+            let r1_object = find_rel(&tree_v1, OBJECT_DIR);
+            let r1_index = find_rel(&tree_v1, INDEX_DIR);
+            let r1_root = provider
+                .read(&format!("{PREFIX}/{ROOT_REL}"))
+                .unwrap()
+                .unwrap()
+                .content;
+
+            // R2：同一 object_key 的内容变化 → R1 对象/索引不可达新根。
+            let plan = store
+                .apply_delta(
+                    &upsert_delta("volumes/v1/chapters/c1/chapter.md", "hash-v2"),
+                    "g2",
+                )
+                .unwrap();
+            commit_plan(dir.path(), &plan);
+            let tree = remote_tree(&provider);
+            publish_remote_manifest(
+                &provider,
+                PREFIX,
+                dir.path(),
+                SYNC_MANIFEST_PATH,
+                &tree,
+                None,
+            )
+            .unwrap();
+
+            let tree_v2 = remote_tree(&provider);
+            assert!(
+                tree_v2.contains_key(&r1_object),
+                "R1 独有对象在 R2 发布后必须保留一代"
+            );
+            assert!(
+                tree_v2.contains_key(&r1_index),
+                "R1 独有索引在 R2 发布后必须保留一代"
+            );
+            let r2_object = tree_v2
+                .keys()
+                .find(|path| path.starts_with(OBJECT_DIR) && path.as_str() != r1_object.as_str())
+                .cloned()
+                .expect("R2 应有新的内容寻址对象");
+            let r2_index = tree_v2
+                .keys()
+                .find(|path| path.starts_with(INDEX_DIR) && path.as_str() != r1_index.as_str())
+                .cloned()
+                .expect("R2 应有新的内容寻址索引");
+            let root2 = root_json(&provider);
+            assert_eq!(
+                root2["previousRoot"].as_str(),
+                Some(sha256_hex(&r1_root).as_str()),
+                "R2.previousRoot 必须是 R1 根 canonical bytes 的 sha256"
+            );
+
+            // R3：上一代边界推进到 R2，R1 独有文件才可回收。
+            let plan = store
+                .apply_delta(
+                    &upsert_delta("volumes/v1/chapters/c1/chapter.md", "hash-v3"),
+                    "g3",
+                )
+                .unwrap();
+            commit_plan(dir.path(), &plan);
+            let tree = remote_tree(&provider);
+            publish_remote_manifest(
+                &provider,
+                PREFIX,
+                dir.path(),
+                SYNC_MANIFEST_PATH,
+                &tree,
+                None,
+            )
+            .unwrap();
+
+            let tree_v3 = remote_tree(&provider);
+            assert!(
+                !tree_v3.contains_key(&r1_object),
+                "R3 发布后 R1 独有对象可回收"
+            );
+            assert!(
+                !tree_v3.contains_key(&r1_index),
+                "R3 发布后 R1 独有索引可回收"
+            );
+            assert!(
+                tree_v3.contains_key(&r2_object),
+                "R2 独有对象在 R3 发布后必须保留一代"
+            );
+            assert!(
+                tree_v3.contains_key(&r2_index),
+                "R2 独有索引在 R3 发布后必须保留一代"
+            );
+            let v3 = sample_manifest(&[("volumes/v1/chapters/c1/chapter.md", "hash-v3")]);
+            let fetched = fetch(&provider).unwrap().expect("R3 根是权威");
+            assert!(fetched.semantically_equals(&v3));
         }
 
         /// 第一次写根返回错误的 Provider 包装（其余操作透传 MemoryProvider）。
@@ -5122,6 +5467,617 @@ mod tests {
             ) -> Result<(), ProviderError> {
                 self.inner.delete(path, precondition)
             }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // #1062 评论 #7219943077 第 2 项：LWW 发布 = 业务内容 + 清单根的同一次原子提交
+    // ════════════════════════════════════════════════════════════════════════
+    mod lww_atomic_publish {
+        use std::path::Path;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Mutex;
+
+        use tempfile::tempdir;
+
+        use crate::sync::provider::capabilities::SyncCapabilities;
+        use crate::sync::provider::error::ProviderError;
+        use crate::sync::provider::memory::MemoryProvider;
+        use crate::sync::provider::model::{
+            BatchCommitResult, BatchMutation, DeletePrecondition, RemoteEntry, RemoteObject,
+            RemoteVersion, WritePrecondition,
+        };
+        use crate::sync::provider::SyncProvider;
+        use crate::sync::types::SyncStatus;
+
+        const PREFIX: &str = "projects/test";
+        const ROOT_REL: &str = "app-meta/sync/manifest/root.json";
+
+        /// 记录 `commit_batch` / 逐文件写、可注入失败的 Provider 包装。
+        struct InstrumentedProvider {
+            inner: MemoryProvider,
+            capabilities: SyncCapabilities,
+            fail_batch: bool,
+            batches: Mutex<Vec<Vec<BatchMutation>>>,
+            file_writes: AtomicUsize,
+            file_deletes: AtomicUsize,
+        }
+
+        impl InstrumentedProvider {
+            fn recording(inner: MemoryProvider) -> Self {
+                let capabilities = inner.capabilities();
+                Self {
+                    inner,
+                    capabilities,
+                    fail_batch: false,
+                    batches: Mutex::new(Vec::new()),
+                    file_writes: AtomicUsize::new(0),
+                    file_deletes: AtomicUsize::new(0),
+                }
+            }
+
+            fn failing(inner: MemoryProvider) -> Self {
+                Self {
+                    fail_batch: true,
+                    ..Self::recording(inner)
+                }
+            }
+
+            fn non_atomic(inner: MemoryProvider) -> Self {
+                let capabilities = SyncCapabilities {
+                    batch: false,
+                    ..inner.capabilities()
+                };
+                Self {
+                    capabilities,
+                    ..Self::recording(inner)
+                }
+            }
+
+            fn batches(&self) -> Vec<Vec<BatchMutation>> {
+                self.batches
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone()
+            }
+
+            fn file_writes(&self) -> usize {
+                self.file_writes.load(Ordering::SeqCst)
+            }
+
+            fn file_deletes(&self) -> usize {
+                self.file_deletes.load(Ordering::SeqCst)
+            }
+        }
+
+        impl SyncProvider for InstrumentedProvider {
+            fn capabilities(&self) -> SyncCapabilities {
+                self.capabilities
+            }
+
+            fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
+                self.inner.list(prefix)
+            }
+
+            fn read(&self, path: &str) -> Result<Option<RemoteObject>, ProviderError> {
+                self.inner.read(path)
+            }
+
+            fn write(
+                &self,
+                path: &str,
+                content: &[u8],
+                precondition: WritePrecondition,
+            ) -> Result<RemoteVersion, ProviderError> {
+                self.file_writes.fetch_add(1, Ordering::SeqCst);
+                self.inner.write(path, content, precondition)
+            }
+
+            fn delete(
+                &self,
+                path: &str,
+                precondition: DeletePrecondition,
+            ) -> Result<(), ProviderError> {
+                self.file_deletes.fetch_add(1, Ordering::SeqCst);
+                self.inner.delete(path, precondition)
+            }
+
+            fn commit_batch(
+                &self,
+                mutations: &[BatchMutation],
+                message: &str,
+            ) -> Result<BatchCommitResult, ProviderError> {
+                self.batches
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .push(mutations.to_vec());
+                if self.fail_batch {
+                    return Err(ProviderError::Other {
+                        reason: "simulated batch failure".to_string(),
+                    });
+                }
+                self.inner.commit_batch(mutations, message)
+            }
+        }
+
+        fn remote_snapshot(provider: &dyn SyncProvider) -> Vec<(String, Vec<u8>)> {
+            let mut entries = provider.list("").unwrap();
+            entries.sort_by(|a, b| a.path.cmp(&b.path));
+            entries
+                .into_iter()
+                .map(|entry| {
+                    let object = provider
+                        .read(&entry.path)
+                        .unwrap()
+                        .expect("remote entry must have content");
+                    (entry.path, object.content)
+                })
+                .collect()
+        }
+
+        /// 用 MemoryProvider 跑一次首轮同步，建立远端 v2 清单基线。
+        fn seed_baseline(sync_root: &Path) -> MemoryProvider {
+            std::fs::write(sync_root.join("project.json"), b"baseline project").unwrap();
+            let provider = MemoryProvider::new();
+            let result = super::lww_sync_with_memory(sync_root, &provider, true).unwrap();
+            assert!(
+                result.uploaded_files.contains(&"project.json".to_string()),
+                "首轮同步应上传 project.json，实际 {:?}",
+                result.uploaded_files
+            );
+            provider
+        }
+
+        fn position_of_put(mutations: &[BatchMutation], path: &str) -> Option<usize> {
+            mutations.iter().position(|mutation| {
+                matches!(mutation, BatchMutation::Put { path: actual, .. } if actual == path)
+            })
+        }
+
+        /// 正常 LWW：正文 Put 与清单根 Put 在同一次 `commit_batch` 里，根在最后，
+        /// 不再有单独 `provider.write` / `delete`。
+        #[test]
+        #[cfg(not(windows))]
+        fn lww_publishes_content_and_manifest_root_in_single_batch() {
+            let dir = tempdir().unwrap();
+            let provider = InstrumentedProvider::recording(seed_baseline(dir.path()));
+
+            let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+            let chapter_abs = dir.path().join(chapter_rel);
+            std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+            std::fs::write(&chapter_abs, b"chapter body").unwrap();
+
+            let result = super::lww_sync_with_memory(dir.path(), &provider, true).unwrap();
+            assert!(
+                matches!(
+                    result.status,
+                    SyncStatus::Success | SyncStatus::LatestWinsApplied
+                ),
+                "正常 LWW 应成功，实际 {:?}（error={:?}）",
+                result.status,
+                result.error
+            );
+
+            assert_eq!(
+                provider.file_writes(),
+                0,
+                "LWW 发布不应再逐文件 provider.write"
+            );
+            assert_eq!(
+                provider.file_deletes(),
+                0,
+                "LWW 发布不应再逐文件 provider.delete"
+            );
+            let batches = provider.batches();
+            assert_eq!(
+                batches.len(),
+                1,
+                "一次 LWW 发布应恰好一次 commit_batch，实际 {}",
+                batches.len()
+            );
+            let mutations = &batches[0];
+            let chapter_path = format!("{PREFIX}/{chapter_rel}");
+            let root_path = format!("{PREFIX}/{ROOT_REL}");
+            let chapter_pos = position_of_put(mutations, &chapter_path)
+                .unwrap_or_else(|| panic!("batch 应包含正文 Put，实际 {mutations:?}"));
+            let root_pos = position_of_put(mutations, &root_path)
+                .unwrap_or_else(|| panic!("batch 应包含清单根 Put，实际 {mutations:?}"));
+            assert_eq!(
+                root_pos,
+                mutations.len() - 1,
+                "清单根 Put 必须是 mutations 最后一项"
+            );
+            assert!(chapter_pos < root_pos, "正文 Put 应先于清单根 Put");
+
+            match &mutations[chapter_pos] {
+                BatchMutation::Put { content, .. } => {
+                    assert_eq!(
+                        content.as_slice(),
+                        b"chapter body",
+                        "正文 Put 必须是本地新字节"
+                    );
+                }
+                other => panic!("正文 mutation 必须是 Put，实际 {other:?}"),
+            }
+            match &mutations[root_pos] {
+                BatchMutation::Put { content, .. } => {
+                    let root: serde_json::Value = serde_json::from_slice(content).unwrap();
+                    assert_eq!(root["schemaVersion"], 2, "根必须是 v2 清单根");
+                    assert!(
+                        root["namespaces"]
+                            .as_object()
+                            .is_some_and(|namespaces| !namespaces.is_empty()),
+                        "根必须列出索引命名空间"
+                    );
+                }
+                other => panic!("清单根 mutation 必须是 Put，实际 {other:?}"),
+            }
+
+            // 远端一次提交后即包含正文与可用根，不留中间版本。
+            let published = provider.read(&chapter_path).unwrap().unwrap();
+            assert_eq!(published.content.as_slice(), b"chapter body");
+            assert!(provider.read(&root_path).unwrap().is_some());
+        }
+
+        /// batch 失败：远端保持旧版本、不吞成成功；本地内容不被回滚。
+        #[test]
+        #[cfg(not(windows))]
+        fn failed_batch_keeps_remote_baseline_and_reports_error() {
+            let dir = tempdir().unwrap();
+            let provider = InstrumentedProvider::failing(seed_baseline(dir.path()));
+            let remote_before = remote_snapshot(&provider);
+
+            let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+            let chapter_abs = dir.path().join(chapter_rel);
+            std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+            std::fs::write(&chapter_abs, b"chapter body").unwrap();
+
+            let result = super::lww_sync_with_memory(dir.path(), &provider, true).unwrap();
+            assert!(
+                matches!(result.status, SyncStatus::RecoverableError(_)),
+                "batch 失败必须如实报错，实际 {:?}",
+                result.status
+            );
+            let error = result.error.clone().unwrap_or_default();
+            assert!(
+                error.contains("simulated batch failure"),
+                "错误信息应保留 provider 失败原因，实际 {error:?}"
+            );
+            assert!(
+                result.uploaded_files.is_empty(),
+                "batch 失败不得假装上传成功，实际 {:?}",
+                result.uploaded_files
+            );
+            assert!(
+                !provider.batches().is_empty(),
+                "失败前应已尝试 commit_batch"
+            );
+            assert_eq!(
+                remote_snapshot(&provider),
+                remote_before,
+                "batch 原子失败后远端必须保持旧版本"
+            );
+            assert_eq!(
+                std::fs::read(&chapter_abs).unwrap().as_slice(),
+                b"chapter body",
+                "远端失败不得回滚本地已确认内容"
+            );
+        }
+
+        /// 不具备 batch + atomic_write 的 Provider：显式拒绝，零 write/delete，
+        /// 远端不产生任何版本变化。
+        #[test]
+        #[cfg(not(windows))]
+        fn non_atomic_provider_is_rejected_without_any_remote_write() {
+            let dir = tempdir().unwrap();
+            let provider = InstrumentedProvider::non_atomic(seed_baseline(dir.path()));
+            let remote_before = remote_snapshot(&provider);
+
+            let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+            let chapter_abs = dir.path().join(chapter_rel);
+            std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+            std::fs::write(&chapter_abs, b"chapter body").unwrap();
+
+            let result = super::lww_sync_with_memory(dir.path(), &provider, true).unwrap();
+            match &result.status {
+                SyncStatus::RecoverableError(message) => assert_eq!(
+                    message, "provider_lacks_atomic_publish",
+                    "应返回明确的拒绝状态"
+                ),
+                other => panic!("非原子 Provider 必须显式拒绝，实际 {other:?}"),
+            }
+            let error = result.error.clone().unwrap_or_default();
+            assert!(
+                error.contains(
+                    "provider lacks atomic multi-object publish; refusing to publish content and \
+                     manifest separately"
+                ),
+                "错误文案应说明拒绝理由，实际 {error:?}"
+            );
+            assert_eq!(provider.file_writes(), 0, "拒绝时不得执行 provider.write");
+            assert_eq!(provider.file_deletes(), 0, "拒绝时不得执行 provider.delete");
+            assert!(provider.batches().is_empty(), "拒绝时不得尝试 commit_batch");
+            assert_eq!(
+                remote_snapshot(&provider),
+                remote_before,
+                "拒绝时远端对象集合与内容都不能变化"
+            );
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // #1062 评论 #7219943077 第 3 项（P1）：稀疏轮发布只写 delta 涉及的
+    // objects/indexes 与根，不再展开完整清单。
+    // ════════════════════════════════════════════════════════════════════════
+    mod sparse_delta_publish {
+        use std::collections::{BTreeSet, HashMap};
+        use std::path::Path;
+
+        use tempfile::tempdir;
+
+        use crate::sync::lww::{
+            local_manifest_storage_for_delta, object_key, plan_lww_publish, sha256_hex,
+            LwwMergeOutcome, ManifestObject, ManifestStorageKind, ManifestStore,
+            SYNC_MANIFEST_PATH,
+        };
+        use crate::sync::manifest_delta::ManifestDelta;
+        use crate::sync::provider::memory::MemoryProvider;
+        use crate::sync::provider::model::BatchMutation;
+        use crate::sync::types::{ManifestFileRecord, SyncManifest};
+
+        const PREFIX: &str = "projects/test";
+
+        fn record(path: &str, hash: &str, updated_at_ms: i64) -> ManifestFileRecord {
+            ManifestFileRecord {
+                path: path.to_string(),
+                content_hash: hash.to_string(),
+                op: "upsert".to_string(),
+                updated_at_ms,
+                deleted_at_ms: None,
+                device_id: "dev-A".to_string(),
+                schema_version: 1,
+            }
+        }
+
+        fn commit_plan(root: &Path, plan: &crate::sync::lww::ManifestWritePlan) {
+            let mut tx = crate::storage::transaction::SaveTransaction::new(root);
+            for (rel, bytes) in &plan.writes {
+                tx.add_bytes(rel, bytes).unwrap();
+            }
+            for rel in &plan.deletes {
+                tx.add_delete(rel).unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        /// 旧单文件 → v2 迁移，建立带 root 的本地权威存储。
+        fn seed_store(root: &Path, manifest: &SyncManifest) -> ManifestStore {
+            let legacy = root.join(SYNC_MANIFEST_PATH);
+            std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+            std::fs::write(&legacy, manifest.canonical_json().unwrap()).unwrap();
+            let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+            assert!(store
+                .load_or_legacy()
+                .unwrap()
+                .semantically_equals(manifest));
+            store
+        }
+
+        fn object_rel_for(record: ManifestFileRecord) -> String {
+            let key = object_key(&record.path);
+            let object = ManifestObject::new(&key, vec![record]);
+            let sha = sha256_hex(&object.canonical_bytes().unwrap());
+            format!("app-meta/sync/manifest/objects/{sha}.json")
+        }
+
+        fn outcome_with_delta(
+            merged_manifest: SyncManifest,
+            delta: ManifestDelta,
+            upload_paths: Vec<String>,
+        ) -> LwwMergeOutcome {
+            LwwMergeOutcome {
+                conflicts: Vec::new(),
+                downloaded_files: Vec::new(),
+                local_deletes: Vec::new(),
+                remote_upload_paths: upload_paths,
+                remote_delete_paths: Vec::new(),
+                overwritten_files: Vec::new(),
+                auto_adjudicated_files: Vec::new(),
+                ignored_files: Vec::new(),
+                pending_take_remote_failed: Vec::new(),
+                unresolved_missing_paths: Vec::new(),
+                remote_tree_files: HashMap::new(),
+                remote_manifest_path: SYNC_MANIFEST_PATH.to_string(),
+                manifest_json: String::new(),
+                merged_manifest,
+                manifest_unchanged: false,
+                manifest_delta: Some(delta),
+                affected_paths: Some(BTreeSet::new()),
+            }
+        }
+
+        /// 稀疏轮：delta 视图只返回受影响对象的 objects/index 与根；
+        /// 未受影响 objects/index 不出现，LWW batch 用同一份文件选择。
+        #[test]
+        fn sparse_publish_only_includes_affected_manifest_files() {
+            let dir = tempdir().unwrap();
+            let baseline = SyncManifest {
+                files: vec![
+                    record("project.json", "hash-root", 10),
+                    record("volumes/v1/chapters/c1/chapter.md", "hash-c1", 10),
+                    record("volumes/v2/chapters/c2/chapter.md", "hash-c2", 10),
+                ],
+            };
+            let store = seed_store(dir.path(), &baseline);
+
+            let changed = record("volumes/v1/chapters/c1/chapter.md", "hash-c1-new", 20);
+            let mut delta = ManifestDelta::default();
+            delta.upserts.insert(changed.path.clone(), changed.clone());
+            // merge 已经把 delta 持久化进本地 store，这里复用同一入口模拟。
+            let plan = store.apply_delta(&delta, "g-local").unwrap();
+            commit_plan(dir.path(), &plan);
+            let merged = store.load_all().unwrap().unwrap();
+
+            let files = local_manifest_storage_for_delta(&store, &delta).unwrap();
+            assert_eq!(
+                files.len(),
+                3,
+                "delta 视图只能包含受影响 object/index 与根，实际 {:?}",
+                files
+                    .iter()
+                    .map(|file| (&file.rel, file.kind))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                files
+                    .iter()
+                    .filter(|file| file.kind == ManifestStorageKind::Object)
+                    .count(),
+                1,
+                "只应发布受影响 object"
+            );
+            assert_eq!(
+                files
+                    .iter()
+                    .filter(|file| file.kind == ManifestStorageKind::Index)
+                    .count(),
+                1,
+                "只应发布受影响 namespace 的索引"
+            );
+            assert_eq!(
+                files.last().map(|file| file.kind),
+                Some(ManifestStorageKind::Root),
+                "根必须最后"
+            );
+
+            let expected_object = object_rel_for(changed.clone());
+            assert!(
+                files.iter().any(|file| file.rel == expected_object),
+                "应包含受影响 object {expected_object}，实际 {:?}",
+                files
+                    .iter()
+                    .map(|file| file.rel.clone())
+                    .collect::<Vec<_>>()
+            );
+            let unaffected =
+                object_rel_for(record("volumes/v2/chapters/c2/chapter.md", "hash-c2", 10));
+            let root_object = object_rel_for(record("project.json", "hash-root", 10));
+            for rel in [&unaffected, &root_object] {
+                assert!(
+                    !files.iter().any(|file| file.rel == *rel),
+                    "未受影响 object {rel} 不得进入发布视图"
+                );
+            }
+            let root = store.load_root().unwrap().unwrap();
+            assert_eq!(
+                files[1].rel,
+                store.index_rel("volumes", &root.namespaces["volumes"]),
+                "索引必须来自当前根"
+            );
+
+            // LWW batch 与 delta 视图同源：业务 Put + 受影响 object/index + 根。
+            let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+            let chapter_abs = dir.path().join(chapter_rel);
+            std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+            std::fs::write(&chapter_abs, b"chapter v2").unwrap();
+            let outcome = outcome_with_delta(merged, delta, vec![chapter_rel.to_string()]);
+            let provider = MemoryProvider::new();
+            let mutations =
+                plan_lww_publish(dir.path(), &provider, PREFIX, SYNC_MANIFEST_PATH, &outcome)
+                    .unwrap();
+            let paths: Vec<&str> = mutations.iter().map(BatchMutation::path).collect();
+            let manifest_prefix = format!("{PREFIX}/app-meta/sync/manifest/");
+            let object_puts: Vec<&str> = paths
+                .iter()
+                .copied()
+                .filter(|path| path.starts_with(&format!("{manifest_prefix}objects/")))
+                .collect();
+            let expected_object_path = format!("{PREFIX}/{expected_object}");
+            assert_eq!(
+                object_puts,
+                vec![expected_object_path.as_str()],
+                "batch 只应包含受影响 object，实际 {paths:?}"
+            );
+            let index_puts = paths
+                .iter()
+                .filter(|path| path.starts_with(&format!("{manifest_prefix}index/")))
+                .count();
+            assert_eq!(index_puts, 1, "batch 只应包含受影响索引，实际 {paths:?}");
+            assert!(
+                !paths.contains(&format!("{PREFIX}/{unaffected}").as_str()),
+                "未受影响 object 不得进入 batch"
+            );
+            assert_eq!(
+                mutations.last().map(BatchMutation::path),
+                Some(format!("{PREFIX}/app-meta/sync/manifest/root.json").as_str()),
+                "根必须是 batch 最后一项"
+            );
+            assert!(
+                paths.contains(&format!("{PREFIX}/{chapter_rel}").as_str()),
+                "业务 Put 仍应与清单同批，实际 {paths:?}"
+            );
+        }
+
+        /// 本地没有 root 时 delta 视图报错，调用方回退完整入口而不是 panic；
+        /// 完整入口仍发布全部 objects/indexes，根最后。
+        #[test]
+        fn sparse_publish_without_local_root_falls_back_to_full_manifest() {
+            let dir = tempdir().unwrap();
+            let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+            let chapter_abs = dir.path().join(chapter_rel);
+            std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+            std::fs::write(&chapter_abs, b"chapter body").unwrap();
+
+            let manifest = SyncManifest {
+                files: vec![
+                    record("project.json", "hash-root", 10),
+                    record(chapter_rel, "hash-c1", 10),
+                    record("volumes/v2/chapters/c2/chapter.md", "hash-c2", 10),
+                ],
+            };
+            let store = ManifestStore::new(dir.path(), SYNC_MANIFEST_PATH);
+            let delta = ManifestDelta {
+                upserts: [(chapter_rel.to_string(), record(chapter_rel, "hash-c1", 10))]
+                    .into_iter()
+                    .collect(),
+                deletes: BTreeSet::new(),
+            };
+            let err = local_manifest_storage_for_delta(&store, &delta).unwrap_err();
+            assert!(
+                format!("{err}").contains("manifest root"),
+                "无 root 必须明确报错，实际 {err}"
+            );
+
+            let outcome = outcome_with_delta(manifest, delta, vec![chapter_rel.to_string()]);
+            let provider = MemoryProvider::new();
+            let mutations =
+                plan_lww_publish(dir.path(), &provider, PREFIX, SYNC_MANIFEST_PATH, &outcome)
+                    .unwrap();
+            let manifest_prefix = format!("{PREFIX}/app-meta/sync/manifest/");
+            let object_puts = mutations
+                .iter()
+                .filter(|mutation| {
+                    matches!(mutation, BatchMutation::Put { path, .. }
+                        if path.starts_with(&format!("{manifest_prefix}objects/")))
+                })
+                .count();
+            assert_eq!(
+                object_puts, 3,
+                "回退完整入口后应发布全部 objects，实际 {mutations:?}"
+            );
+            let index_puts = mutations
+                .iter()
+                .filter(|mutation| {
+                    matches!(mutation, BatchMutation::Put { path, .. }
+                        if path.starts_with(&format!("{manifest_prefix}index/")))
+                })
+                .count();
+            assert_eq!(index_puts, 2, "回退完整入口后应发布全部 indexes");
+            assert_eq!(
+                mutations.last().map(BatchMutation::path),
+                Some(format!("{PREFIX}/app-meta/sync/manifest/root.json").as_str()),
+                "根必须最后"
+            );
         }
     }
 }

@@ -389,7 +389,7 @@ fn batch_manifest(batch: &RecordedBatch) -> SyncManifest {
         .expect("v2 清单根缺少 namespaces")
     {
         let index_sha = index_sha.as_str().expect("root 中的索引 sha 应为字符串");
-        let index_path = format!("{base}/index/{namespace}.json");
+        let index_path = format!("{base}/index/{namespace}/{index_sha}.json");
         let index_bytes = puts
             .get(&index_path)
             .unwrap_or_else(|| panic!("batch 应包含清单索引 {index_path}"));

@@ -266,6 +266,10 @@ pub(crate) struct LwwMergeOutcome {
     /// 远端已有 manifest 是否与新快照语义相同。为 `true` 时不需要再写
     /// manifest.sync.json：写入只会因为序列化格式不同制造一次伪提交。
     pub manifest_unchanged: bool,
+    /// 稀疏轮的对象级存储增量；`None` 表示本轮走了完整扫描/重建。
+    pub manifest_delta: Option<crate::sync::manifest_delta::ManifestDelta>,
+    /// 稀疏轮真实受影响的路径集合；发布端据此只加载受影响的对象/索引。
+    pub affected_paths: Option<std::collections::BTreeSet<String>>,
 }
 
 /// 唯一的只读 merge 核心。
@@ -1260,16 +1264,28 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     // 一次事务原子提交 manifest + state + conflicts.json，
     // 避免分多次独立写入中间崩溃导致三者不一致。
     if let Some(group) = app_group {
-        // App group 的稀疏计划尚未接线；仍按完整清单求存储差，语义等价。
-        crate::sync::conflict::persist_sync_merge_result_at_paths(
-            sync_root,
-            &group.local_manifest_path(),
-            &sync_manifest,
-            &group.local_state_path(),
-            state,
-            &group.local_conflicts_path(),
-            &conflicts_json,
-        )?;
+        if sparse.is_some() {
+            // App group 与项目目标共用同一稀疏增量：只写受影响 object/index/root。
+            crate::sync::conflict::persist_sync_merge_delta_at_paths(
+                sync_root,
+                &group.local_manifest_path(),
+                &manifest_delta,
+                &group.local_state_path(),
+                state,
+                &group.local_conflicts_path(),
+                &conflicts_json,
+            )?;
+        } else {
+            crate::sync::conflict::persist_sync_merge_result_at_paths(
+                sync_root,
+                &group.local_manifest_path(),
+                &sync_manifest,
+                &group.local_state_path(),
+                state,
+                &group.local_conflicts_path(),
+                &conflicts_json,
+            )?;
+        }
     } else if sparse.is_some() {
         // 稀疏路径：只提交 affected 对象的 upsert/delete，未涉及
         // objects/index 保持原字节；非稀疏路径仍走完整清单入口。
@@ -1377,6 +1393,8 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         // 供 generation publisher 上传完整快照（不只是 delta 动作）。
         merged_manifest: sync_manifest,
         manifest_unchanged,
+        manifest_delta: sparse.map(|_| manifest_delta),
+        affected_paths: sparse.map(|plan| plan.affected_paths().clone()),
     })
 }
 
@@ -1589,6 +1607,8 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
         merged_manifest: sync_manifest,
         // 远端没有 visible source，不存在"远端 manifest 已等价"的情形。
         manifest_unchanged: false,
+        manifest_delta: None,
+        affected_paths: None,
     })
 }
 

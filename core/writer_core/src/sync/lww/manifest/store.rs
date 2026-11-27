@@ -3,20 +3,28 @@
 //! 布局（相对 `manifest_rel_path` 的父目录）：
 //!
 //! ```text
-//! manifest/root.json                 权威根：generation + namespace → index sha256
-//! manifest/index/<ns>.json           namespace → object_key → object sha256
-//! manifest/objects/<sha256>.json     object_key 下的全部文件记录
+//! manifest/root.json                        权威根：generation + namespace → index sha256
+//! manifest/index/<ns>/<sha256>.json         namespace → object_key → object sha256
+//! manifest/objects/<sha256>.json            object_key 下的全部文件记录
 //! ```
 //!
 //! 不变量：
 //!
 //! - `root.json` 存在即权威；旧单文件 `manifest.sync.json` 与旧
 //!   `manifest-shards/` 目录只作为迁移输入，迁移后保留但不参与读取。
-//! - 对象文件内容寻址：文件名等于内容（canonical JSON）的 sha256；同名文件
-//!   直接复用，绝不重写。
+//! - 索引与对象都是内容寻址的不可变文件：文件名等于内容（canonical JSON）的
+//!   sha256；同名文件直接复用，绝不重写。根按 sha 定位索引，因此根切换前
+//!   旧根引用的索引不会被覆盖。
+//! - `manifest/index/<ns>.json` 是 87b15f2 的旧固定路径布局，只在
+//!   `<ns>/<sha256>.json` 缺失时作为一次性迁移读取；下一次写入计划会把它写到
+//!   内容寻址路径。只有新根已用同一 sha 提供内容寻址副本时才回收旧固定路径；
+//!   索引换 sha 或 namespace 被移除时，它仍是上一代根读者的唯一副本，保留一代。
 //! - `ManifestWritePlan::writes` 的对象/索引/根顺序固定，根永远最后一项；
 //!   调用方用 [`crate::storage::transaction::SaveTransaction`] 一次提交，
 //!   根写失败时旧根仍指向旧对象，不会出现"根指向不存在对象"。
+//! - GC 保留一代：根切换后只回收「既不在新根可达集合、也不在上一代根可达
+//!   集合」的文件（上一代 = 本次发布读到的旧根，其 canonical sha256 写进新根
+//!   的 `previousRoot`）。因此旧根读者在切换后仍能解析自己的索引/对象。
 //! - 任一索引/对象缺失、sha256 不符、JSON 损坏、路径不属于该 object_key
 //!   都返回 `Err`；禁止把损坏或缺失静默当成空清单。
 
@@ -47,6 +55,9 @@ pub(crate) struct ManifestWritePlan {
     /// (相对 sync_root 的路径, canonical 字节)；最后一项固定是 root。
     pub writes: Vec<(String, Vec<u8>)>,
     /// 本计划后不再可达、需要回收的旧对象/索引（相对路径）。
+    ///
+    /// 只包含「新根与上一代已发布根都不可达」的文件，因此根切换后立即执行
+    /// 也不会破坏旧根读者的依赖；执行顺序固定排在根写入之后。
     pub deletes: Vec<String>,
     /// root.json 相对 sync_root 的路径。
     // 发布端要按这个路径单独上传/替换根，当前主链路只消费 writes/deletes。
@@ -138,7 +149,20 @@ impl ManifestStore {
         format!("{}/{}", self.storage_dir_rel, ROOT_FILE_NAME)
     }
 
-    pub(crate) fn index_rel(&self, namespace: &str) -> String {
+    /// 内容寻址索引路径：`<storage>/index/<namespace>/<sha256>.json`。
+    ///
+    /// `sha` 必须等于索引 canonical bytes 的 sha256，也是 root 中记录的值。
+    pub(crate) fn index_rel(&self, namespace: &str, sha: &str) -> String {
+        format!(
+            "{}/{INDEX_DIR_NAME}/{namespace}/{sha}{JSON_SUFFIX}",
+            self.storage_dir_rel
+        )
+    }
+
+    /// 87b15f2 旧布局的固定路径索引：`<storage>/index/<namespace>.json`。
+    ///
+    /// 只用于一次性迁移读取与根切换后的回收，不再写入。
+    pub(crate) fn legacy_index_rel(&self, namespace: &str) -> String {
         format!(
             "{}/{INDEX_DIR_NAME}/{namespace}{JSON_SUFFIX}",
             self.storage_dir_rel
@@ -357,36 +381,46 @@ impl ManifestStore {
             }
             let bytes = index.canonical_bytes()?;
             let index_sha = sha256_hex(&bytes);
-            if old_index_sha.as_deref() != Some(index_sha.as_str()) {
-                writes.push((self.index_rel(namespace), bytes));
+            // 内容寻址：同 sha 已存在（含从旧固定路径迁移过来的情况）则复用，
+            // 只新建/补齐 `<ns>/<sha>.json`，绝不覆盖同名文件。
+            let rel = self.index_rel(namespace, &index_sha);
+            if !self.content_addressed_file_identical(&rel, &bytes, "index")? {
+                writes.push((rel, bytes));
             }
             namespaces.insert(namespace.clone(), index_sha);
             final_indexes.insert(namespace.clone(), index);
         }
 
+        // 旧固定路径索引迁移：未受本计划影响的 namespace 若内容寻址文件尚不存在
+        // （87b15f2 布局），必须补写同一份字节到 `<ns>/<sha>.json`，根中 sha 不变。
+        // 否则本计划的 GC 会删掉旧固定路径这份唯一副本。
+        let planned: BTreeSet<String> = writes.iter().map(|(rel, _)| rel.clone()).collect();
+        let mut migration_writes: Vec<(String, Vec<u8>)> = Vec::new();
+        for (namespace, index_sha) in &namespaces {
+            let rel = self.index_rel(namespace, index_sha);
+            if planned.contains(&rel) || self.sync_root.join(&rel).is_file() {
+                continue;
+            }
+            let (_, bytes, _) = self.read_verified_index_with_bytes(namespace, index_sha)?;
+            migration_writes.push((rel, bytes));
+        }
+        writes.extend(migration_writes);
+
         let root_rel = self.root_rel();
+        let prev_root_sha = current_root
+            .as_ref()
+            .map(ManifestRoot::canonical_sha256)
+            .transpose()?;
         let mut root = ManifestRoot::new(generation);
         root.namespaces = namespaces.clone();
+        root.previous_root = prev_root_sha;
         writes.push((root_rel.clone(), root.canonical_bytes()?));
 
         let pending_writes: BTreeSet<String> = writes.iter().map(|(rel, _)| rel.clone()).collect();
         let new_reachable =
             self.reachable_with_overrides(&namespaces, &final_indexes, &pending_writes, false)?;
-        let old_reachable = match &current_root {
-            Some(root) => self.reachable_with_overrides(
-                &root.namespaces,
-                &BTreeMap::new(),
-                &BTreeSet::new(),
-                false,
-            )?,
-            None => BTreeSet::new(),
-        };
-        let planned_writes: BTreeSet<&str> = writes.iter().map(|(rel, _)| rel.as_str()).collect();
-        let deletes: Vec<String> = old_reachable
-            .difference(&new_reachable)
-            .filter(|rel| !planned_writes.contains(rel.as_str()))
-            .cloned()
-            .collect();
+        // GC 保留一代：上一代已发布根（本次读到的旧根）仍可达的文件不能删。
+        let deletes = self.plan_deletes(&new_reachable, current_root.as_ref())?;
 
         Ok(ManifestWritePlan {
             writes,
@@ -437,8 +471,8 @@ impl ManifestStore {
             }
             let bytes = index.canonical_bytes()?;
             let index_sha = sha256_hex(&bytes);
-            let rel = self.index_rel(&namespace);
-            if !self.file_identical(&rel, &bytes)? {
+            let rel = self.index_rel(&namespace, &index_sha);
+            if !self.content_addressed_file_identical(&rel, &bytes, "index")? {
                 writes.push((rel, bytes));
             }
             namespaces.insert(namespace.clone(), index_sha);
@@ -446,28 +480,21 @@ impl ManifestStore {
         }
 
         let root_rel = self.root_rel();
+        let current_root = self.load_root()?;
+        let prev_root_sha = current_root
+            .as_ref()
+            .map(ManifestRoot::canonical_sha256)
+            .transpose()?;
         let mut root = ManifestRoot::new(generation);
         root.namespaces = namespaces.clone();
+        root.previous_root = prev_root_sha;
         writes.push((root_rel.clone(), root.canonical_bytes()?));
 
         let pending_writes: BTreeSet<String> = writes.iter().map(|(rel, _)| rel.clone()).collect();
         let new_reachable =
             self.reachable_with_overrides(&namespaces, &indexes, &pending_writes, false)?;
-        let old_reachable = match self.load_root()? {
-            Some(root) => self.reachable_with_overrides(
-                &root.namespaces,
-                &BTreeMap::new(),
-                &BTreeSet::new(),
-                false,
-            )?,
-            None => BTreeSet::new(),
-        };
-        let planned_writes: BTreeSet<&str> = writes.iter().map(|(rel, _)| rel.as_str()).collect();
-        let deletes: Vec<String> = old_reachable
-            .difference(&new_reachable)
-            .filter(|rel| !planned_writes.contains(rel.as_str()))
-            .cloned()
-            .collect();
+        // GC 保留一代：上一代已发布根（本次读到的旧根）仍可达的文件不能删。
+        let deletes = self.plan_deletes(&new_reachable, current_root.as_ref())?;
 
         Ok(ManifestWritePlan {
             writes,
@@ -535,6 +562,62 @@ impl ManifestStore {
         Ok(Some((root_bytes, reachable)))
     }
 
+    /// 读取一个 namespace 的索引与发布字节（旧固定路径布局时带回迁移字节）。
+    ///
+    /// 稀疏发布视图只读 delta 涉及的 namespace，用它取 object_key → object
+    /// sha256，不展开完整可达集合。
+    pub(crate) fn load_publish_index(
+        &self,
+        namespace: &str,
+        index_sha: &str,
+    ) -> crate::Result<(ManifestIndex, Vec<u8>, bool)> {
+        self.read_verified_index_with_bytes(namespace, index_sha)
+    }
+
+    /// 当前根的发布视图：canonical 相对路径 + 可选内联字节。
+    ///
+    /// - root 带回原始字节（提交点按原样上传）；
+    /// - 索引总是以内容寻址路径 `<ns>/<sha256>.json` 输出；若该文件尚未落盘而
+    ///   旧固定路径索引可用（87b15f2 布局），则带回字节，让发布端把它写到新
+    ///   路径（迁移），根中的 sha 保持不变；
+    /// - 对象只给出路径（`None`），要求文件存在，否则 `Err`。
+    ///
+    /// root 不存在 → `Ok(None)`。
+    pub(crate) fn load_publish_files(
+        &self,
+    ) -> crate::Result<Option<Vec<(String, Option<Vec<u8>>)>>> {
+        let Some(root) = self.load_root()? else {
+            return Ok(None);
+        };
+        let root_rel = self.root_rel();
+        let root_bytes = self.read_required_bytes(&root_rel, "root")?;
+        let mut files: Vec<(String, Option<Vec<u8>>)> = vec![(root_rel, Some(root_bytes))];
+        let mut seen_objects: BTreeSet<String> = BTreeSet::new();
+        for (namespace, index_sha) in &root.namespaces {
+            let (index, index_bytes, used_legacy) =
+                self.read_verified_index_with_bytes(namespace, index_sha)?;
+            files.push((
+                self.index_rel(namespace, index_sha),
+                if used_legacy { Some(index_bytes) } else { None },
+            ));
+            for object_sha in index.objects.values() {
+                let rel = self.object_rel(object_sha);
+                if !seen_objects.insert(rel.clone()) {
+                    continue;
+                }
+                if !self.sync_root.join(&rel).is_file() {
+                    return Err(crate::Error::Other(format!(
+                        "manifest object {} referenced by namespace {} is missing",
+                        self.sync_root.join(&rel).display(),
+                        namespace
+                    )));
+                }
+                files.push((rel, None));
+            }
+        }
+        Ok(Some(files))
+    }
+
     fn read_optional_bytes(&self, rel: &str) -> crate::Result<Option<Vec<u8>>> {
         let path = self.sync_root.join(rel);
         match std::fs::read(&path) {
@@ -562,22 +645,91 @@ impl ManifestStore {
         namespace: &str,
         expected_sha: &str,
     ) -> crate::Result<ManifestIndex> {
-        let rel = self.index_rel(namespace);
-        let path = self.sync_root.join(&rel);
-        let bytes = self.read_required_bytes(&rel, "index")?;
-        let actual_sha = sha256_hex(&bytes);
+        self.read_verified_index_with_bytes(namespace, expected_sha)
+            .map(|(index, _, _)| index)
+    }
+
+    /// 读取索引并校验 sha256 / 结构；同时返回原始字节与是否来自旧固定路径。
+    fn read_verified_index_with_bytes(
+        &self,
+        namespace: &str,
+        expected_sha: &str,
+    ) -> crate::Result<(ManifestIndex, Vec<u8>, bool)> {
+        let (bytes, path, used_legacy) = self.read_index_bytes(namespace, expected_sha)?;
+        let origin = path.display().to_string();
+        let index: ManifestIndex = serde_json::from_slice(&bytes).map_err(|error| {
+            crate::Error::Other(format!(
+                "manifest index {origin} (namespace {namespace}, sha256 {expected_sha}) is corrupt: {error}"
+            ))
+        })?;
+        index.validate(&origin, namespace)?;
+        Ok((index, bytes, used_legacy))
+    }
+
+    /// 内容寻址路径优先；缺失时回退 87b15f2 的固定路径（一次性迁移读取）。
+    ///
+    /// 两种布局都必须让内容 sha256 等于 root 记录的 sha，否则 `Err`；都找不到
+    /// 同样 `Err`（消息带 namespace、sha、两条路径），绝不静默当成空索引。
+    fn read_index_bytes(
+        &self,
+        namespace: &str,
+        expected_sha: &str,
+    ) -> crate::Result<(Vec<u8>, PathBuf, bool)> {
+        if !is_sha256_hex(expected_sha) {
+            return Err(crate::Error::Other(format!(
+                "manifest root references invalid index sha256 for namespace {namespace}: {expected_sha}"
+            )));
+        }
+        let hashed_path = self.sync_root.join(self.index_rel(namespace, expected_sha));
+        match std::fs::read(&hashed_path) {
+            Ok(bytes) => {
+                self.verify_index_sha(namespace, expected_sha, &bytes, &hashed_path)?;
+                Ok((bytes, hashed_path, false))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let legacy_path = self.sync_root.join(self.legacy_index_rel(namespace));
+                match std::fs::read(&legacy_path) {
+                    Ok(bytes) => {
+                        self.verify_index_sha(namespace, expected_sha, &bytes, &legacy_path)?;
+                        Ok((bytes, legacy_path, true))
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        Err(crate::Error::Other(format!(
+                            "manifest index for namespace {namespace} with sha256 {expected_sha} is \
+                             missing: {} and {}",
+                            hashed_path.display(),
+                            legacy_path.display()
+                        )))
+                    }
+                    Err(error) => Err(crate::Error::Io(std::io::Error::new(
+                        error.kind(),
+                        format!("read manifest index {}: {error}", legacy_path.display()),
+                    ))),
+                }
+            }
+            Err(error) => Err(crate::Error::Io(std::io::Error::new(
+                error.kind(),
+                format!("read manifest index {}: {error}", hashed_path.display()),
+            ))),
+        }
+    }
+
+    fn verify_index_sha(
+        &self,
+        namespace: &str,
+        expected_sha: &str,
+        bytes: &[u8],
+        path: &Path,
+    ) -> crate::Result<()> {
+        let actual_sha = sha256_hex(bytes);
         if actual_sha != expected_sha {
             return Err(crate::Error::Other(format!(
-                "manifest index {} sha256 mismatch: root expects {expected_sha}, actual {actual_sha}",
+                "manifest index {} sha256 mismatch for namespace {namespace}: root expects \
+                 {expected_sha}, actual {actual_sha}",
                 path.display()
             )));
         }
-        let origin = path.display().to_string();
-        let index: ManifestIndex = serde_json::from_slice(&bytes).map_err(|error| {
-            crate::Error::Other(format!("manifest index {origin} is corrupt: {error}"))
-        })?;
-        index.validate(&origin, namespace)?;
-        Ok(index)
+        Ok(())
     }
 
     fn read_verified_object(&self, key: &str, expected_sha: &str) -> crate::Result<ManifestObject> {
@@ -606,32 +758,157 @@ impl ManifestStore {
 
     /// 内容寻址文件已经存在且字节相同 → 复用；存在但字节不同 → 存储损坏。
     fn object_file_identical(&self, rel: &str, bytes: &[u8]) -> crate::Result<bool> {
+        self.content_addressed_file_identical(rel, bytes, "object")
+    }
+
+    /// 内容寻址文件（对象/索引）已存在且字节相同 → 无需重写；存在但字节不同
+    /// → 存储损坏（文件名就是内容 sha256，同名文件必须是同一内容）。
+    fn content_addressed_file_identical(
+        &self,
+        rel: &str,
+        bytes: &[u8],
+        kind: &str,
+    ) -> crate::Result<bool> {
         let path = self.sync_root.join(rel);
         match std::fs::read(&path) {
             Ok(existing) if existing == bytes => Ok(true),
             Ok(_) => Err(crate::Error::Other(format!(
-                "manifest object {} exists with content that does not match its sha256 name",
+                "manifest {kind} {} exists with content that does not match its sha256 name",
                 path.display()
             ))),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(crate::Error::Io(std::io::Error::new(
                 error.kind(),
-                format!("read manifest object {}: {error}", path.display()),
+                format!("read manifest {kind} {}: {error}", path.display()),
             ))),
         }
     }
 
-    /// 普通文件（索引）已存在且字节相同 → 无需重写。
-    fn file_identical(&self, rel: &str, bytes: &[u8]) -> crate::Result<bool> {
-        let path = self.sync_root.join(rel);
-        match std::fs::read(&path) {
-            Ok(existing) => Ok(existing == bytes),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(crate::Error::Io(std::io::Error::new(
-                error.kind(),
-                format!("read manifest index {}: {error}", path.display()),
-            ))),
+    /// 本计划的 GC 回收集合。
+    ///
+    /// 保留边界是「新根可达 ∪ 上一代根可达」；旧固定路径索引另按迁移状态判断
+    /// （见 [`Self::stale_storage_files`]）。
+    fn plan_deletes(
+        &self,
+        new_reachable: &BTreeSet<String>,
+        current_root: Option<&ManifestRoot>,
+    ) -> crate::Result<Vec<String>> {
+        let previous_reachable = match current_root {
+            Some(root) => self.reachable_with_overrides(
+                &root.namespaces,
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                false,
+            )?,
+            None => BTreeSet::new(),
+        };
+        self.stale_storage_files(
+            new_reachable,
+            &previous_reachable,
+            current_root.map(|root| &root.namespaces),
+        )
+    }
+
+    /// 可安全回收的本地清单文件：storage 下实际存在的对象/索引，且既不在新根
+    /// 可达集合、也不在上一代已发布根可达集合。
+    ///
+    /// 旧固定路径索引（`index/<ns>.json`）是 87b15f2 布局的迁移来源，它只有在
+    /// 新根已经用同一 sha 在 `index/<ns>/<sha>.json` 提供同一份内容时才可回收；
+    /// 否则（索引换 sha 或 namespace 被移除）它是上一代根读者的唯一副本，保留
+    /// 一代，等更下一代发布时再回收。
+    fn stale_storage_files(
+        &self,
+        new_reachable: &BTreeSet<String>,
+        previous_reachable: &BTreeSet<String>,
+        previous_namespaces: Option<&BTreeMap<String, String>>,
+    ) -> crate::Result<Vec<String>> {
+        let mut existing: BTreeSet<String> = BTreeSet::new();
+        self.collect_storage_files(
+            &format!("{}/{OBJECTS_DIR_NAME}", self.storage_dir_rel),
+            &mut existing,
+        )?;
+        self.collect_storage_files(
+            &format!("{}/{INDEX_DIR_NAME}", self.storage_dir_rel),
+            &mut existing,
+        )?;
+        let mut deletes = Vec::new();
+        for rel in existing {
+            if let Some(namespace) = self.legacy_index_namespace(&rel) {
+                // 旧固定路径：只有上一代根仍按该 sha 引用、且新根没有提供同一
+                // sha 的内容寻址副本时才保留。
+                let Some(bytes) = self.read_optional_bytes(&rel)? else {
+                    continue;
+                };
+                let sha = sha256_hex(&bytes);
+                let retained = previous_namespaces
+                    .and_then(|namespaces| namespaces.get(namespace))
+                    .is_some_and(|previous_sha| {
+                        *previous_sha == sha
+                            && !new_reachable.contains(&self.index_rel(namespace, &sha))
+                    });
+                if !retained {
+                    deletes.push(rel);
+                }
+                continue;
+            }
+            if !new_reachable.contains(&rel) && !previous_reachable.contains(&rel) {
+                deletes.push(rel);
+            }
         }
+        Ok(deletes)
+    }
+
+    /// 旧固定路径索引的相对路径 → namespace；内容寻址路径返回 `None`。
+    fn legacy_index_namespace<'a>(&self, rel: &'a str) -> Option<&'a str> {
+        let prefix = format!("{}/{}/", self.storage_dir_rel, INDEX_DIR_NAME);
+        let rest = rel.strip_prefix(&prefix)?;
+        if rest.contains('/') {
+            return None;
+        }
+        rest.strip_suffix(JSON_SUFFIX)
+    }
+
+    /// 递归收集 `rel_dir` 下的 `.json` 文件（含 87b15f2 的旧固定路径索引）。
+    fn collect_storage_files(
+        &self,
+        rel_dir: &str,
+        out: &mut BTreeSet<String>,
+    ) -> crate::Result<()> {
+        let dir = self.sync_root.join(rel_dir);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(crate::Error::Io(std::io::Error::new(
+                    error.kind(),
+                    format!("read manifest storage dir {}: {error}", dir.display()),
+                )))
+            }
+        };
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                crate::Error::Io(std::io::Error::new(
+                    error.kind(),
+                    format!("read manifest storage dir {}: {error}", dir.display()),
+                ))
+            })?;
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            let rel = format!("{rel_dir}/{name}");
+            let file_type = entry.file_type().map_err(|error| {
+                crate::Error::Io(std::io::Error::new(
+                    error.kind(),
+                    format!("read manifest storage entry {}: {error}", rel),
+                ))
+            })?;
+            if file_type.is_dir() {
+                self.collect_storage_files(&rel, out)?;
+            } else if file_type.is_file() && name.ends_with(JSON_SUFFIX) {
+                out.insert(rel);
+            }
+        }
+        Ok(())
     }
 
     /// 计算根 + 全部索引 + 全部对象的可达集合。
@@ -654,7 +931,9 @@ impl ManifestStore {
                 Some(index) => index.clone(),
                 None => self.read_verified_index(namespace, index_sha)?,
             };
-            reachable.insert(self.index_rel(namespace));
+            // 可达集合用内容寻址路径表示：旧固定路径只是迁移来源，同一 sha 的
+            // 身份是 `<ns>/<sha>.json`，发布端据此判断迁移是否完成。
+            reachable.insert(self.index_rel(namespace, index_sha));
             for (key, object_sha) in &index.objects {
                 let rel = self.object_rel(object_sha);
                 if !pending_writes.contains(&rel) {

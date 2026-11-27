@@ -11,11 +11,12 @@ use std::path::Path;
 
 use rayon::prelude::*;
 
-use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::path::ValidatedSyncPath;
-use crate::sync::provider::model::{DeletePrecondition, RemoteVersion, WritePrecondition};
+use crate::sync::provider::model::{BatchMutation, RemoteVersion};
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::SyncManifest;
+
+use super::merge::LwwMergeOutcome;
 
 /// 并行下载最大线程数上限。实际线程数由 `SyncCapabilities::max_parallel_downloads`
 /// 和 `MAX_PARALLEL_DOWNLOADS` 的较小值决定。
@@ -239,130 +240,216 @@ pub(super) fn download_remote_files(
     download_result
 }
 
-/// 串行上传本地较新文件到远端。
-///
-/// 通过 `provider.write` 实现 create-or-update：
-/// - `conditional_write = true`：使用乐观并发前置条件（IfMatch / CreateNew）。
-/// - `conditional_write = false`：使用 Unconditional 写入，由 engine 在写前读取远端版本。
-pub(super) fn upload_local_files(
+/// 拼接相对远端根的完整路径（`remote_prefix` 为空时不加前导 `/`）。
+fn remote_path(remote_prefix: &str, rel: &str) -> String {
+    if remote_prefix.is_empty() {
+        rel.to_string()
+    } else {
+        format!("{remote_prefix}/{rel}")
+    }
+}
+
+/// 同一批次内同路径 `Put` 去重：后写覆盖前写，且不产生重复 path 的 mutation。
+fn upsert_put(mutations: &mut Vec<BatchMutation>, path: String, content: Vec<u8>) {
+    let mutation = BatchMutation::Put { path, content };
+    match mutations
+        .iter_mut()
+        .find(|existing| existing.path() == mutation.path())
+    {
+        Some(existing) => *existing = mutation,
+        None => mutations.push(mutation),
+    }
+}
+
+/// 本地业务变更的 mutation 规划：
+/// - `remote_upload_paths` → `Put`（读 `sync_root` 下的字节；同路径后写覆盖）；
+/// - `remote_delete_paths` → 远端有版本时 `DeleteIfMatch`，否则 `Delete`。
+fn plan_business_mutations(
     sync_root: &Path,
-    provider: &dyn SyncProvider,
     remote_prefix: &str,
-    to_upload: &[String],
-    remote_tree_files: &HashMap<String, String>,
-    cancellation_token: Option<&SyncCancellationToken>,
-) -> crate::Result<()> {
-    let caps = provider.capabilities();
-    for path in to_upload {
-        let full_path = sync_root.join(path);
-        if !full_path.exists() {
+    outcome: &LwwMergeOutcome,
+) -> crate::Result<Vec<BatchMutation>> {
+    let mut mutations: Vec<BatchMutation> = Vec::new();
+    for rel in &outcome.remote_upload_paths {
+        let full_path = sync_root.join(rel);
+        let content = std::fs::read(&full_path).map_err(|error| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "lww atomic publish: read {}: {}",
+                full_path.display(),
+                error
+            )))
+        })?;
+        upsert_put(&mut mutations, remote_path(remote_prefix, rel), content);
+    }
+    for rel in &outcome.remote_delete_paths {
+        let path = remote_path(remote_prefix, rel);
+        // 同一批次里不能对同一 path 同时 Put 和 Delete：本地内容已进入本批时，
+        // 以 Put 为准（merge 不应同时产出两者，这里只做防御）。
+        if mutations
+            .iter()
+            .any(|mutation| mutation.path() == path.as_str())
+        {
             continue;
         }
-        let content = std::fs::read(&full_path).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!("read {}: {}", path, e)))
-        })?;
-        let remote_path = format!("{}/{}", remote_prefix, path);
-        let precondition = if caps.conditional_write {
-            match remote_tree_files.get(path.as_str()) {
-                Some(sha) => WritePrecondition::IfMatch(RemoteVersion(sha.clone())),
-                None => WritePrecondition::CreateNew,
-            }
-        } else {
-            WritePrecondition::Unconditional
-        };
-        provider.write(&remote_path, &content, precondition)?;
-        // Issue #729 评论 5765979275：每次 provider.write 返回后检查取消令牌。
-        // 已取消则立即返回，不再上传下一条文件。
-        if let Some(token) = cancellation_token {
-            if token.is_cancelled() {
-                log::info!(
-                    "[sync] upload_local_files: cancellation requested after write {} — stopping upload batch",
-                    path
-                );
-                return Ok(());
-            }
-        }
+        mutations.push(match outcome.remote_tree_files.get(rel.as_str()) {
+            Some(version) => BatchMutation::DeleteIfMatch {
+                path,
+                version: RemoteVersion(version.clone()),
+            },
+            None => BatchMutation::Delete { path },
+        });
     }
-    Ok(())
+    Ok(mutations)
 }
 
-/// 串行删除远端文件。
+/// 远端当前字节是否与本地待发布字节一致（索引等非内容寻址文件用）。
+fn remote_content_equals(
+    provider: &dyn SyncProvider,
+    path: &str,
+    bytes: &[u8],
+) -> crate::Result<bool> {
+    Ok(match provider.read(path)? {
+        Some(object) => object.content == bytes,
+        None => false,
+    })
+}
+
+/// 旧清单（v1 单文件 / 旧分片目录）回收：远端存在时按版本 `DeleteIfMatch`。
 ///
-/// - `conditional_write = true`：使用 IfMatch 前置条件（乐观并发）。
-/// - `conditional_write = false`：使用 Unconditional 删除。
-pub(super) fn delete_remote_files(
+/// 内容寻址 objects/indexes 与上一代根有 `previousRoot` 保留语义，由清单存储的
+/// 发布/GC 契约决定；LWW 原子发布不在这里重算代次，也不删除任何新根可达文件。
+fn plan_legacy_manifest_cleanup(
+    remote_prefix: &str,
+    remote_tree_files: &HashMap<String, String>,
+) -> Vec<BatchMutation> {
+    let shard_prefix = format!("{}/", super::SYNC_MANIFEST_SHARDS_DIR);
+    let mut legacy: Vec<&String> = remote_tree_files
+        .keys()
+        .filter(|rel| rel.as_str() == super::SYNC_MANIFEST_PATH || rel.starts_with(&shard_prefix))
+        .collect();
+    legacy.sort();
+    let mut mutations = Vec::with_capacity(legacy.len());
+    for rel in legacy {
+        let Some(version) = remote_tree_files.get(rel) else {
+            continue;
+        };
+        mutations.push(BatchMutation::DeleteIfMatch {
+            path: remote_path(remote_prefix, rel),
+            version: RemoteVersion(version.clone()),
+        });
+    }
+    mutations
+}
+
+/// v2 清单的 mutation 规划（objects → indexes → 旧清单回收 → root 最后）。
+///
+/// - 内容寻址对象：远端已有同名对象即同字节，直接跳过；
+/// - 索引：远端字节一致时跳过；
+/// - 根：始终按本地新字节 `Put`，且是整批最后一个 mutation（远端提交点）。
+///
+/// 路径全部由 `local_manifest_storage` + `remote_rel_for` 得出，不硬编码
+/// 索引/对象的固定文件名。
+fn plan_manifest_mutations(
+    sync_root: &Path,
     provider: &dyn SyncProvider,
     remote_prefix: &str,
-    paths: &[String],
-    remote_tree_files: &HashMap<String, String>,
-    cancellation_token: Option<&SyncCancellationToken>,
-) -> crate::Result<()> {
-    let caps = provider.capabilities();
-    for path in paths {
-        let remote_path = format!("{}/{}", remote_prefix, path);
-        let precondition = if caps.conditional_write {
-            match remote_tree_files.get(path.as_str()) {
-                Some(sha) => DeletePrecondition::IfMatch(RemoteVersion(sha.clone())),
-                None => DeletePrecondition::Unconditional,
-            }
-        } else {
-            DeletePrecondition::Unconditional
-        };
-        provider.delete(&remote_path, precondition)?;
-        // Issue #729 评论 5765979275：每次 provider.delete 返回后检查取消令牌。
-        // 已取消则立即返回，不再删除下一条文件。
-        if let Some(token) = cancellation_token {
-            if token.is_cancelled() {
-                log::info!(
-                    "[sync] delete_remote_files: cancellation requested after delete {} — stopping delete batch",
-                    path
+    manifest_rel: &str,
+    outcome: &LwwMergeOutcome,
+) -> crate::Result<Vec<BatchMutation>> {
+    let store = super::ManifestStore::new(sync_root, manifest_rel);
+    // 稀疏轮的 merge 已把对象级增量写进本地 store：只发布 delta 涉及的
+    // objects/indexes 与根，不展开完整清单。root 缺失或 delta 视图不可用时
+    // 回退完整入口，保持首次同步/迁移/损坏修复的行为不变。
+    let delta_files = match outcome.manifest_delta.as_ref() {
+        Some(delta) => match super::local_manifest_storage_for_delta(&store, delta) {
+            Ok(files) => Some(files),
+            Err(error) => {
+                log::warn!(
+                    "[sync] lww delta manifest view unavailable for {}: {error} — falling back \
+                     to the full manifest",
+                    sync_root.display()
                 );
-                return Ok(());
+                None
+            }
+        },
+        None => None,
+    };
+    let files = match delta_files {
+        Some(files) => files,
+        None => super::local_manifest_storage(&store, Some(&outcome.merged_manifest))?,
+    };
+    let mut mutations: Vec<BatchMutation> = Vec::with_capacity(files.len() + 1);
+    let mut root_mutation: Option<BatchMutation> = None;
+    for file in &files {
+        let remote_rel = super::remote_rel_for(&store, &file.rel)?;
+        let path = remote_path(remote_prefix, &remote_rel);
+        match file.kind {
+            super::ManifestStorageKind::Object => {
+                if outcome.remote_tree_files.contains_key(&remote_rel) {
+                    continue;
+                }
+                let content = file.read_bytes(sync_root)?;
+                mutations.push(BatchMutation::Put { path, content });
+            }
+            super::ManifestStorageKind::Index => {
+                let content = file.read_bytes(sync_root)?;
+                if remote_content_equals(provider, &path, &content)? {
+                    continue;
+                }
+                mutations.push(BatchMutation::Put { path, content });
+            }
+            super::ManifestStorageKind::Root => {
+                // 根是提交点：不因远端字节相同而跳过，放到整批最后。
+                root_mutation = Some(BatchMutation::Put {
+                    path,
+                    content: file.read_bytes(sync_root)?,
+                });
             }
         }
     }
-    Ok(())
+    mutations.extend(plan_legacy_manifest_cleanup(
+        remote_prefix,
+        &outcome.remote_tree_files,
+    ));
+    if let Some(root) = root_mutation {
+        mutations.push(root);
+    }
+    Ok(mutations)
 }
 
-/// 上传本地权威清单（v2 根 + 两级索引 + 内容寻址对象）到远端。
+/// 把一次 LWW merge 结果规划成**一组**原子提交的 mutations。
 ///
-/// 顺序固定：先写不可变对象（远端已有同名对象跳过），再写变化的索引，
-/// **最后写根**；根写入失败直接返回错误，远端旧根仍是权威。根成功后回收
-/// 旧根可达但新根不可达的对象/索引、旧单文件与旧分片目录（回收失败只 warn）。
+/// 顺序固定：
+/// 1. 正文/业务对象 `Put`；
+/// 2. 业务删除 `DeleteIfMatch` / `Delete`；
+/// 3. v2 清单 objects → indexes 的 `Put`；
+/// 4. 旧 v1 清单（旧单文件、旧分片）回收；
+/// 5. **清单根 `Put` 最后**（根是远端提交点）。
 ///
-/// `sync_root` / `manifest_rel` 定位本地清单存储（App group 的清单在
-/// `app-meta/sync/groups/<key>/manifest/`），远端始终落在
-/// `<remote_prefix>/app-meta/sync/manifest/`。
-pub(super) fn upload_manifest(
-    provider: &dyn SyncProvider,
-    remote_manifest_path: &str,
+/// 业务内容与清单根因此在同一次 `commit_batch` 中原子生效，不再出现
+/// "正文已变、根未变"的中间版本。
+///
+/// 稀疏轮（`outcome.manifest_delta` 为 `Some`）的清单只包含 delta 涉及的
+/// objects/indexes 与根，不构造完整清单；本地 root 缺失或 delta 视图不可用时
+/// 回退完整清单入口。
+pub(crate) fn plan_lww_publish(
     sync_root: &Path,
+    provider: &dyn SyncProvider,
+    remote_prefix: &str,
     manifest_rel: &str,
-    remote_tree_files: &HashMap<String, String>,
-    cancellation_token: Option<&SyncCancellationToken>,
-) -> crate::Result<()> {
-    // Issue #729 评论 5765979275：写 manifest 前先检查取消令牌。
-    // 上一步（upload/delete）取消后不能再开始 manifest 写入。
-    if let Some(token) = cancellation_token {
-        if token.is_cancelled() {
-            log::info!(
-                "[sync] upload_manifest: cancellation requested — skipping manifest write {}",
-                remote_manifest_path
-            );
-            return Ok(());
-        }
+    outcome: &LwwMergeOutcome,
+) -> crate::Result<Vec<BatchMutation>> {
+    let mut mutations = plan_business_mutations(sync_root, remote_prefix, outcome)?;
+    // 清单语义未变化且业务侧也没有变更时不提交：写根只会制造空提交。
+    let publish_manifest = !outcome.manifest_unchanged || !mutations.is_empty();
+    if publish_manifest {
+        mutations.extend(plan_manifest_mutations(
+            sync_root,
+            provider,
+            remote_prefix,
+            manifest_rel,
+            outcome,
+        )?);
     }
-    let sync_manifest_path = super::manifest::SYNC_MANIFEST_PATH;
-    let base_prefix = remote_manifest_path
-        .strip_suffix(sync_manifest_path)
-        .unwrap_or(remote_manifest_path);
-    let remote_prefix = base_prefix.strip_suffix('/').unwrap_or(base_prefix);
-    super::publish_remote_manifest(
-        provider,
-        remote_prefix,
-        sync_root,
-        manifest_rel,
-        remote_tree_files,
-        cancellation_token,
-    )
+    Ok(mutations)
 }

@@ -23,6 +23,42 @@ fn write_sync_file(sync_root: &Path, rel: &str, content: &[u8]) {
     std::fs::write(path, content).unwrap();
 }
 
+/// 按内容哈希定位某个路径的 object 文件（两代保留时同一路径可能有两个）。
+fn manifest_object_with_hash(sync_root: &Path, path: &str, hash: &str) -> std::path::PathBuf {
+    let objects_dir = sync_root.join("app-meta/sync/manifest/objects");
+    let needle_path = format!("\"path\":\"{path}\"");
+    let needle_hash = format!("\"content_hash\":\"{hash}\"");
+    let matches: Vec<std::path::PathBuf> = std::fs::read_dir(&objects_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|object| {
+            let text = std::fs::read_to_string(object).unwrap();
+            text.contains(&needle_path) && text.contains(&needle_hash)
+        })
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected exactly one manifest object for {path} with hash {hash}, got {matches:?}"
+    );
+    matches[0].clone()
+}
+
+/// root 记录的 namespace → index sha 对应的内容寻址索引路径。
+fn manifest_index_for(sync_root: &Path, namespace: &str) -> std::path::PathBuf {
+    let root: crate::sync::lww::ManifestRoot = serde_json::from_slice(
+        &std::fs::read(sync_root.join("app-meta/sync/manifest/root.json")).unwrap(),
+    )
+    .unwrap();
+    let sha = root
+        .namespaces
+        .get(namespace)
+        .unwrap_or_else(|| panic!("namespace {namespace} missing from root"));
+    sync_root.join(format!(
+        "app-meta/sync/manifest/index/{namespace}/{sha}.json"
+    ))
+}
+
 fn manifest_object_for(sync_root: &Path, path: &str) -> std::path::PathBuf {
     let needle = format!("\"path\":\"{path}\"");
     let objects_dir = sync_root.join("app-meta/sync/manifest/objects");
@@ -483,9 +519,9 @@ fn sparse_merge_persists_only_affected_objects() {
     let untouched_object = manifest_object_for(sync_root, untouched);
     let untouched_object_before = std::fs::read(&untouched_object).unwrap();
     let old_affected_object = manifest_object_for(sync_root, affected);
-    let root_index = sync_root.join("app-meta/sync/manifest/index/_root.json");
+    let root_index = manifest_index_for(sync_root, "_root");
     let root_index_before = std::fs::read(&root_index).unwrap();
-    let volumes_index = sync_root.join("app-meta/sync/manifest/index/volumes.json");
+    let volumes_index = manifest_index_for(sync_root, "volumes");
     let volumes_index_before = std::fs::read(&volumes_index).unwrap();
 
     // 本地修改 affected 文件；远端仍是基线内容，走三路 LocalChanged → 上传。
@@ -543,11 +579,13 @@ fn sparse_merge_persists_only_affected_objects() {
         untouched_object_before,
         "untouched object must not be rewritten"
     );
+    // 内容寻址对象保留一代：上一代已发布根仍可能被读者引用，
+    // 不能在新根刚提交后立刻删除。
     assert!(
-        !old_affected_object.exists(),
-        "old affected object must be reclaimed after the delta write"
+        old_affected_object.exists(),
+        "old affected object must be retained for the previous published root"
     );
-    let new_affected_object = manifest_object_for(sync_root, affected);
+    let new_affected_object = manifest_object_with_hash(sync_root, affected, &new_affected_hash);
     assert_ne!(new_affected_object, old_affected_object);
 
     // 其它 namespace 的 index 逐字节不变；affected namespace 的 index 必须变化。
@@ -556,10 +594,17 @@ fn sparse_merge_persists_only_affected_objects() {
         root_index_before,
         "unaffected namespace index must keep its bytes"
     );
-    assert_ne!(
+    // 上一代索引仍按哈希可寻址；新根指向新 sha 的新索引路径。
+    assert_eq!(
         std::fs::read(&volumes_index).unwrap(),
         volumes_index_before,
-        "affected namespace index must be rewritten"
+        "previous generation index must stay readable by its sha"
+    );
+    let new_volumes_index = manifest_index_for(sync_root, "volumes");
+    assert_ne!(new_volumes_index, volumes_index);
+    assert!(
+        new_volumes_index.is_file(),
+        "new index must be content-addressed"
     );
 
     // known_files：只结算 affected；未涉及键原值保留。
@@ -574,6 +619,21 @@ fn sparse_merge_persists_only_affected_objects() {
             "known_files for unaffected {path} must stay unchanged"
         );
     }
+
+    // 再发布一代（空增量）后，第一代不再处于“新根 ∪ 上一代”保留边界内，
+    // 旧 affected object 才可以被回收。
+    crate::sync::conflict::persist_sync_merge_delta(
+        sync_root,
+        SYNC_MANIFEST_PATH,
+        &crate::sync::manifest_delta::ManifestDelta::default(),
+        &state,
+        &[],
+    )
+    .unwrap();
+    assert!(
+        !old_affected_object.exists(),
+        "object unreachable from both current and previous root must be reclaimed"
+    );
 }
 
 /// 稀疏 merge 的 delete 墓碑仍写入清单，但本地 known_files 基线必须移除。
