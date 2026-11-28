@@ -91,21 +91,6 @@ fn writer_error_is_retryable_network(error: &crate::api::error::WriterError) -> 
     }
 }
 
-/// Whether a target failure means the round's merged tree is incomplete and
-/// must not be published.  Isolated `migration` failures (for example one
-/// stats partition) do not invalidate the other groups.
-fn target_blocks_round_publish(target: &crate::sync::types::TargetSyncResult) -> bool {
-    if target.failure_phase.as_deref() == Some("migration") {
-        return false;
-    }
-    matches!(
-        target.result.status,
-        crate::sync::SyncStatus::RecoverableError(_)
-            | crate::sync::SyncStatus::FatalError(_)
-            | crate::sync::SyncStatus::Error(_)
-    )
-}
-
 fn record_sync_phase_failure(
     operation_id: &str,
     phase: &str,
@@ -2067,17 +2052,9 @@ impl WriterCoreApi {
                 publish_succeeded: false,
             });
         }
-        // 有 target 失败时仍然先提交已下载/已合并的内容到 live：单侧下载和
-        // 合并结果不要求远端写成功才能落盘。只是不发布不完整的 tree。
-        let mut publish_blocked = pending_commits
-            .iter()
-            .any(|pending| target_blocks_round_publish(&pending.result));
-        if publish_blocked {
-            round.discard();
-            log::warn!(
-                "[sync] full-sync remote publish discarded because a target failed before publish"
-            );
-        }
+        // 单个 target 失败不冻结整轮发布：失败 target 的远端前缀保持固定
+        // 对象索引不变，成功 target 的对象与索引照常发布。
+        let mut publish_blocked = false;
 
         // C 阶段：把下载、合并与冲突记录持久提交到 live。发布失败不回滚这些
         // 已落盘结果；本地未发布对象版本通过 mutation 账本保持未确认，
@@ -2118,12 +2095,6 @@ impl WriterCoreApi {
                 Some(target_digest.clone()),
                 provider,
             );
-            // 决议键必须在提交前确定：facts 是 preflight 在短事务里取得的
-            // durable 事实，提交后不再重新读 live 拼决议。
-            let decision_key = crate::sync::full_sync::sync_target_checkpoint_key(planned);
-            let decision_facts = decision_key
-                .as_ref()
-                .and_then(|key| preflight_pending.get(key));
             let (
                 target_with_conflicts,
                 target_committed_paths,
@@ -2135,7 +2106,6 @@ impl WriterCoreApi {
                 &staging_runs,
                 &target_sync_result,
                 diagnostic_operation_id,
-                decision_facts,
             );
             let commit_outcome =
                 crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
@@ -2152,6 +2122,7 @@ impl WriterCoreApi {
                 };
                 publish_decisions.push((remote_path, decision.clone()));
             }
+            let decision_key = crate::sync::full_sync::sync_target_checkpoint_key(planned);
             if let Some(key) = decision_key.as_ref() {
                 // 被远端消费的本地事实只认提交阶段冻结的决议（origin =
                 // RemoteConsumed），不再从 transfer 结果列表推测（评审 #7214314073）。
@@ -2294,16 +2265,7 @@ impl WriterCoreApi {
             all_committed_paths.extend(target_committed_paths.into_iter().map(|path| path.path));
         }
 
-        // 本地提交已完成。冲突/失败是落盘终态，但不阻断其它独立对象的发布；
-        // 只有真正没有落盘成功的 target 才冻结整轮远端写。
-        let commit_blocked = all_targets.iter().any(target_blocks_round_publish);
-        if commit_blocked {
-            round.discard();
-            publish_blocked = true;
-            log::warn!(
-                "[sync] local commit did not fully succeed; remote publish discarded for this round"
-            );
-        }
+        // 冲突/失败是落盘终态，不阻断其它独立对象的发布。
         // 取消只阻止远端发布，已经落盘的本地结果仍要收口。
         let cancelled_after_commit = Self::sync_cancelled(cancellation_token.as_ref());
         if cancelled_after_commit {
@@ -2340,10 +2302,23 @@ impl WriterCoreApi {
         }
 
         // 每个 target 的最终对象索引与业务对象在同一次 flush 里提交。
+        // 失败的 target 保持固定远端索引，不为它写 manifest；其它 target 照常发布。
+        let failed_prefixes: std::collections::HashSet<&str> = all_targets
+            .iter()
+            .filter(|target| {
+                matches!(
+                    target.result.status,
+                    crate::sync::SyncStatus::RecoverableError(_)
+                        | crate::sync::SyncStatus::FatalError(_)
+                        | crate::sync::SyncStatus::Error(_)
+                )
+            })
+            .map(|target| target.remote_prefix.as_str())
+            .collect();
         let mut manifest_publish_error: Option<String> = None;
         if !publish_blocked {
             for (target_index, planned) in plan.targets.iter().enumerate() {
-                if planned.is_deleted_target() {
+                if failed_prefixes.contains(planned.target.remote_prefix.as_str()) {
                     continue;
                 }
                 let Some(run) = staging_runs.get(target_index) else {
@@ -2627,9 +2602,6 @@ impl WriterCoreApi {
         staging_runs: &[crate::sync::staging::StagingRun],
         target_sync_result: &crate::sync::types::TargetSyncResult,
         operation_id: &str,
-        facts: Option<
-            &std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
-        >,
     ) -> (
         crate::sync::types::TargetSyncResult,
         Vec<crate::sync::commit_helpers::CommittedPath>,
@@ -2646,12 +2618,9 @@ impl WriterCoreApi {
             );
         }
         match staging_runs.get(target_index) {
-            Some(run) => self.commit_target_after_transfer(
-                run,
-                target_sync_result,
-                operation_id,
-                facts,
-            ),
+            Some(run) => {
+                self.commit_target_after_transfer(run, target_sync_result, operation_id)
+            }
             None => (
                 target_sync_result.clone(),
                 Vec::new(),
@@ -2666,9 +2635,6 @@ impl WriterCoreApi {
         run: &crate::sync::staging::StagingRun,
         target_sync_result: &crate::sync::types::TargetSyncResult,
         operation_id: &str,
-        facts: Option<
-            &std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
-        >,
     ) -> (
         crate::sync::types::TargetSyncResult,
         Vec<crate::sync::commit_helpers::CommittedPath>,
@@ -2770,11 +2736,9 @@ impl WriterCoreApi {
             // commit 前已 flush Store dirty 到 live，此处只 evict 变化的星图 Store 并失效索引。
             // 协调失败注入 target 错误状态（问题2），不假装成功。
             if let Err(e) = Self::coordinate_stores_after_commit(&core, &committed_paths) {
-                target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
-                    format!("store_coordination_failed: {}", e),
-                );
-                target_with_conflicts.result.error =
-                    Some(format!("store coordination after commit failed: {}", e));
+                // 业务 Store 协调只影响本地派生索引，不改变已提交对象事实，
+                // 不能把同步结果改写成失败（那会阻断本可发布的对象）。
+                log::warn!("[sync] store coordination after commit failed: {e}");
             }
 
             // receipt 在持有 workspace 锁时按真实 meta/正文生成；释放锁后不再
@@ -2784,39 +2748,26 @@ impl WriterCoreApi {
                 &committed_paths,
                 operation_id,
             );
-            // Issue #1062 评论 #7214330885（接手 #1065 P0 第 1 项）：决议在
-            // 已持有工作区写锁、刚完成业务落盘时冻结，之后不再回读 live。
-            // 这里仍读取一次刚提交的字节，但读取期间没有并发写者；事务身份、
-            // 版本/hash 与内容来自同一次持锁结果，不会出现 A 事务 + B 正文。
-            let empty_facts = std::collections::BTreeMap::new();
-            let mut decisions = crate::sync::commit_helpers::durable_decisions_for_target(
-                run.target_live_root(),
-                target_with_conflicts.project_id.as_deref(),
-                &target_with_conflicts.result,
-                &committed_paths,
-                facts.unwrap_or(&empty_facts),
-            );
-            // 统一对象比较决定的上传/删除：提交阶段已持锁确定内容，这里冻结成
-            // 发布决议并回填结果计数，发布时不再回读 live。
+            // 决议完全来自提交阶段冻结的版本事实：基线、最终哈希、mutation
+            // 序号和事务身份都随提交计划返回；这里只读一次已提交字节。
             let (uploads, publish_deletes) = run.take_publish_lists();
-            if !uploads.is_empty() || !publish_deletes.is_empty() {
-                decisions.extend(crate::sync::decision::local_publish_decisions(
-                    run.target_live_root(),
-                    run.app_group(),
-                    &uploads,
-                    &publish_deletes,
-                ));
-                target_with_conflicts.result.uploaded_files.extend(
-                    uploads
-                        .iter()
-                        .map(|path| path.to_string_lossy().replace('\\', "/")),
-                );
-                target_with_conflicts.result.remote_deletes.extend(
-                    publish_deletes
-                        .iter()
-                        .map(|path| path.to_string_lossy().replace('\\', "/")),
-                );
-            }
+            let decisions = crate::sync::decision::publish_decisions(
+                run.target_live_root(),
+                &uploads,
+                &publish_deletes,
+            );
+            target_with_conflicts.result.uploaded_files.extend(
+                decisions
+                    .iter()
+                    .filter(|decision| decision.op == crate::sync::decision::DecisionOp::Upsert)
+                    .map(|decision| decision.identity.clone()),
+            );
+            target_with_conflicts.result.remote_deletes.extend(
+                decisions
+                    .iter()
+                    .filter(|decision| decision.op == crate::sync::decision::DecisionOp::Delete)
+                    .map(|decision| decision.identity.clone()),
+            );
             (
                 target_with_conflicts,
                 committed_paths,

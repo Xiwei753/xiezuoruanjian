@@ -39,7 +39,7 @@ pub struct StagingRun {
     /// 同步范围，决定本地扫描/白名单口径。
     scope: crate::sync::types::SyncScope,
     /// 本轮提交决议里需要上传 / 传播删除的本地对象（提交阶段取走）。
-    publish_lists: std::sync::Mutex<(Vec<PathBuf>, Vec<PathBuf>)>,
+    publish_lists: std::sync::Mutex<(Vec<super::commit_plan::PublishObject>, Vec<PathBuf>)>,
     /// 本 target 是"用户已删除作品"的远端删除意图：所有远端对象都按删除传播，
     /// 不再下载回本地。
     delete_intent: bool,
@@ -146,7 +146,7 @@ impl StagingRun {
     /// 记录本轮提交决议中的上传/删除清单。
     pub(crate) fn record_publish_lists(
         &self,
-        uploads: Vec<PathBuf>,
+        uploads: Vec<super::commit_plan::PublishObject>,
         publish_deletes: Vec<PathBuf>,
     ) {
         if let Ok(mut lists) = self.publish_lists.lock() {
@@ -155,7 +155,9 @@ impl StagingRun {
     }
 
     /// 取走本轮提交决议中的上传/删除清单（只取一次）。
-    pub(crate) fn take_publish_lists(&self) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    pub(crate) fn take_publish_lists(
+        &self,
+    ) -> (Vec<super::commit_plan::PublishObject>, Vec<PathBuf>) {
         self.publish_lists
             .lock()
             .map(|mut lists| std::mem::take(&mut *lists))

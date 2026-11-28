@@ -69,68 +69,59 @@ impl DurableObjectDecision {
     }
 }
 
-/// 从"本轮提交阶段确定要发布的本地上传/删除"构造不可变对象决议。
+/// 从提交阶段冻结的上传/删除清单构造不可变对象决议。
 ///
-/// 上传内容当场读取一次并冻结；之后发布只使用决议里的字节。`base_hash` 来自
-/// 已确认基线（known_files），`final_hash` 来自刚读取的内容。没有对应文件的
-/// 上传路径（提交与发布之间被删除）不产生决议，留待下一轮重新比较。
-pub(crate) fn local_publish_decisions(
+/// 版本号、基线、mutation 序号都来自统一裁决；这里只读取一次已提交字节，
+/// 不再重新加载状态或重建上传清单。内容哈希与裁决不一致时放弃该对象，
+/// 留给下一轮重新比较。
+pub(crate) fn publish_decisions(
     live_root: &std::path::Path,
-    group: Option<&crate::sync::types::AppDataGroup>,
-    uploads: &[std::path::PathBuf],
+    uploads: &[crate::sync::staging::PublishObject],
     deletes: &[std::path::PathBuf],
 ) -> Vec<DurableObjectDecision> {
-    let state = match group {
-        Some(group) => crate::sync::SyncService::load_sync_state_read_only_for_group(
-            live_root, group, None,
-        ),
-        None => crate::sync::SyncService::load_sync_state_read_only(live_root, None),
-    }
-    .ok();
-    let known = state
-        .as_ref()
-        .map(|state| state.known_files.clone())
-        .unwrap_or_default();
-    let identity_of = |path: &std::path::Path| -> Option<String> {
-        let identity = path.to_string_lossy().replace('\\', "/");
-        (!identity.is_empty()).then_some(identity)
-    };
-
     let mut decisions = Vec::new();
-    for path in uploads {
-        let Some(identity) = identity_of(path) else {
+    for object in uploads {
+        let identity = object.rel_path.to_string_lossy().replace('\\', "/");
+        if identity.is_empty() {
             continue;
-        };
+        }
         let Ok(content) = std::fs::read(live_root.join(&identity)) else {
             log::warn!(
-                "[sync] local publish decision skipped: committed object unreadable {}",
-                identity
+                "[sync] publish decision skipped: committed object unreadable {identity}"
             );
             continue;
         };
         let final_hash = crate::sync::hash::content_md5(&content);
+        if !object.final_hash.is_empty() && final_hash != object.final_hash {
+            log::warn!(
+                "[sync] publish decision skipped: content changed after commit                  path={identity} expected={} actual={final_hash}",
+                object.final_hash
+            );
+            continue;
+        }
         decisions.push(DurableObjectDecision {
-            transaction_id: String::new(),
-            identity: identity.clone(),
+            transaction_id: object.transaction_id.clone(),
+            identity,
             op: DecisionOp::Upsert,
-            base_hash: known.get(&identity).cloned(),
+            base_hash: object.base_hash.clone(),
             final_hash,
             final_version: None,
-            mutation_seq: 0,
+            mutation_seq: object.mutation_seq,
             origin: DecisionOrigin::Local,
             content: Some(content),
             dependencies: Vec::new(),
         });
     }
     for path in deletes {
-        let Some(identity) = identity_of(path) else {
+        let identity = path.to_string_lossy().replace('\\', "/");
+        if identity.is_empty() {
             continue;
-        };
+        }
         decisions.push(DurableObjectDecision {
             transaction_id: String::new(),
-            identity: identity.clone(),
+            identity,
             op: DecisionOp::Delete,
-            base_hash: known.get(&identity).cloned(),
+            base_hash: None,
             final_hash: String::new(),
             final_version: None,
             mutation_seq: 0,

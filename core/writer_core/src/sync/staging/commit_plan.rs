@@ -21,10 +21,13 @@ pub struct CommitPlan {
     /// 引擎状态写回动作：最终对象索引（manifest，canonical JSON）。
     /// 提交阶段与正文内容在同一个 `SaveTransaction` 写回 live。
     pub engine_state_actions: Vec<CommitAction>,
-    /// 需要上传的本地对象（本地相对路径）。
+    /// 需要上传的本地对象及冻结版本事实。
     ///
-    /// 由提交阶段冻结内容并生成不可变发布决议；传输/发布不再自己猜上传清单。
-    pub uploads: Vec<PathBuf>,
+    /// 比较阶段一次给出基线、最终哈希、真实 mutation 序号/事务；
+    /// 提交阶段只读一次内容生成发布决议，不再重新加载状态。
+    pub uploads: Vec<PublishObject>,
+    /// 已一致对象的基线确认：内容哈希 → 推进已确认版本；`None` → 记录删除事实。
+    pub confirmations: Vec<BaselineUpdate>,
     /// 需要把本地删除传播到远端的对象（本地相对路径）。
     pub publish_deletes: Vec<PathBuf>,
     /// 只有本地有变化、远端未参与：保留本地（无需写盘，上传由 `uploads` 表达）。
@@ -33,6 +36,27 @@ pub struct CommitPlan {
     pub noop: Vec<PathBuf>,
     /// 双侧都改变且结果不同：保留双方原始内容，交给用户选择。
     pub conflict: Vec<StagingConflict>,
+}
+
+/// 待发布对象的冻结版本事实。
+#[derive(Debug, Clone)]
+pub struct PublishObject {
+    pub rel_path: PathBuf,
+    /// 上次双方确认的内容摘要（上传决议的 precondition 基线）。
+    pub base_hash: Option<String>,
+    /// 本次要发布的本地内容摘要。
+    pub final_hash: String,
+    /// 产生该版本的本地 mutation 序号；没有账本记录时为 0。
+    pub mutation_seq: u64,
+    pub transaction_id: String,
+}
+
+/// 已一致对象的基线推进。
+#[derive(Debug, Clone)]
+pub struct BaselineUpdate {
+    pub rel_path: PathBuf,
+    /// `Some(hash)`：双方已确认该内容；`None`：双方已确认删除。
+    pub content_hash: Option<String>,
 }
 
 /// 三方冲突的完整信息。

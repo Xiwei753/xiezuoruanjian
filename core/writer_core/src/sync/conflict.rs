@@ -404,6 +404,14 @@ struct StarmapIdentityFacts {
     main_for_projects: Vec<String>,
 }
 
+/// 用户在冲突列表里的三种选择。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConflictChoice {
+    KeepLocal,
+    TakeRemote,
+    MarkMerged,
+}
+
 impl crate::sync::SyncService {
     /// 从 `conflicts.json` 加载 canonical conflict 并修复 `state` mirror。
     ///
@@ -610,85 +618,167 @@ impl crate::sync::SyncService {
     ///   `RemoteChanged` → `DeleteLocal`，把用户保留的本地正文移进 trash。
     /// - **`BothChanged`**：只有 `canonical_known_hash()` 返回可证明的远端 MD5
     ///   时才覆盖 `known_files`。返回 `None` 时不拿本地 hash 冒充远端 hash。
-    pub fn resolve_conflict_keep_local(sync_root: &Path, path: &str) -> crate::Result<()> {
-        Self::resolve_conflict_keep_local_at_target(sync_root, path, None)
-    }
-
-    pub fn resolve_conflict_keep_local_for_group(
-        sync_root: &Path,
-        path: &str,
-        group: &crate::sync::types::AppDataGroup,
-    ) -> crate::Result<()> {
-        Self::resolve_conflict_keep_local_at_target(sync_root, path, Some(group))
-    }
-
-    fn resolve_conflict_keep_local_at_target(
+    /// 用户在冲突列表里的三种选择 — 都只应用当前对象的决议。
+    ///
+    /// 选择结果通过一次正常对象事务写回：更新本地已确认版本 / 删除事实，
+    /// 不在同步时另加"用户选过了"的状态。
+    fn resolve_object_conflict(
         sync_root: &Path,
         path: &str,
         group: Option<&crate::sync::types::AppDataGroup>,
-    ) -> crate::Result<()> {
-        validate_group_conflict_path(group, path, "resolve_conflict_keep_local")?;
+        guard: Option<&crate::storage::WorkspaceWriteLock>,
+        app_data_root: Option<&Path>,
+        choice: ConflictChoice,
+    ) -> crate::Result<bool> {
+        let operation = match choice {
+            ConflictChoice::KeepLocal => "resolve_conflict_keep_local",
+            ConflictChoice::TakeRemote => "resolve_conflict_take_remote",
+            ConflictChoice::MarkMerged => "resolve_conflict_mark_merged",
+        };
+        validate_group_conflict_path(group, path, operation)?;
         let mut state = load_conflict_state(sync_root, group)?;
         let mut conflicts_json = load_conflicts_for_target(sync_root, group)?;
-
-        // 以 conflicts.json 为 canonical record：找不到直接返回 Err，
-        // 不再回退到读本地文件算 MD5 的 fallback（那会用本地 MD5 冒充远端基线）。
-        // 如果 state mirror 缺这条，用 canonical conflict 补齐。
         let conflict = Self::load_canonical_conflict_and_repair_mirror(
             path,
             &mut state,
             &mut conflicts_json,
-            "resolve_conflict_keep_local",
+            operation,
         )?;
-
-        // BothChanged + canonical_known_hash == None 时返回 Err，保持冲突原样。
-        // 不调用 remove_conflict_in_memory，不返回"解决成功"。
-        if conflict.kind == SyncConflictKind::BothChanged
-            && Self::canonical_known_hash(sync_root, path, &conflict).is_none()
-        {
-            return Err(crate::Error::Other(format!(
-                "resolve_conflict_keep_local: path '{}' has BothChanged conflict with \
-                 non-MD5 remote_hash and no remote_snapshot_path — cannot resolve \
-                 without a proven remote content hash; run a sync to normalize the \
-                 conflict record first",
-                path
-            )));
-        }
-
-        // canonical conflict 已找到并修复 mirror，conflicted_files 必含该 path。
-        // remove 同时校验存在性：如果仍不在则属于内部不一致，返回 Err。
         if !state.conflicted_files.remove(path) {
             return Err(crate::Error::Other(format!(
-                "resolve_conflict_keep_local: path '{}' is not in conflicted_files",
-                path
+                "{operation}: path '{path}' is not in conflicted_files"
             )));
         }
-        // Set known_files to the remote_hash so that three-way comparison on the
-        // next sync sees: base=remote_hash, local≠base, remote=base → LocalChanged → upload.
-        // If we set known_files to local_hash instead, three-way would see
-        // RemoteChanged and download the remote version over local — the opposite of
-        // what "keep local" means.
-        match conflict.kind {
-            SyncConflictKind::RemoteDeleted => {
-                // RemoteDeleted：远端已删除，直接移除 known base。
-                // 下一轮三路比较 base 默认为空，和远端 delete 的空 hash 对齐，
-                // 得到 LocalChanged → 正确上传用户保留的本地正文。
-                // 不能把本地 MD5 写进 known_files 冒充远端 hash——那会让下一轮
-                // 误判为 RemoteChanged → DeleteLocal，把用户保留的本地正文移进 trash。
-                state.known_files.remove(path);
-                state.known_files_updated_at.remove(path);
+
+        let applied_live = match choice {
+            ConflictChoice::KeepLocal => {
+                Self::apply_keep_local_choice(sync_root, path, &conflict, &mut state);
+                false
             }
-            SyncConflictKind::BothChanged => {
-                // BothChanged：只有 canonical_known_hash() 返回可证明的远端 MD5 时
-                // 才覆盖 known_files。返回 None 时不拿本地 hash 冒充远端 hash。
-                // （None 的情况已在上面提前返回 Err，这里 canonical_known_hash 必返回 Some。）
-                Self::apply_both_changed_known_base(sync_root, path, &mut state, &conflict);
+            ConflictChoice::MarkMerged => {
+                Self::apply_mark_merged_choice(path, &conflict, &mut state);
+                false
             }
-        }
-        // Remove the conflict record from state.conflicts and conflicts.json
-        // via the shared in-memory helper.
+            ConflictChoice::TakeRemote => {
+                Self::apply_take_remote_choice(
+                    sync_root,
+                    path,
+                    &conflict,
+                    &mut state,
+                    guard,
+                    app_data_root,
+                )?;
+                true
+            }
+        };
         remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
         persist_conflict_state_for_target(sync_root, group, &state, &conflicts_json)?;
+        Ok(applied_live)
+    }
+
+    /// 保留本地版本：把共同基线推进到"用户选择后的版本事实"，
+    /// 下一轮按正常对象比较传播本地版本，不再回到同一个冲突。
+    fn apply_keep_local_choice(
+        sync_root: &Path,
+        path: &str,
+        conflict: &SyncConflict,
+        state: &mut crate::sync::types::SyncState,
+    ) {
+        match conflict.kind {
+            // 远端删除、本地修改：基线变成"已删除"，下一轮本地内容按新增上传。
+            SyncConflictKind::RemoteDeleted => {
+                state.known_files.remove(path);
+                state.known_files_updated_at.remove(path);
+                state.deleted_files.insert(path.to_string());
+                state.pending_take_remote.remove(path);
+            }
+            // 双端修改 / 本地删除远端修改：基线取远端版本，本地删除或本地内容
+            // 都在下一轮相对该基线传播。
+            SyncConflictKind::BothChanged => {
+                if let Some(hash) = Self::canonical_known_hash(sync_root, path, conflict) {
+                    state.known_files.insert(path.to_string(), hash);
+                    state
+                        .known_files_updated_at
+                        .insert(path.to_string(), chrono::Utc::now().timestamp_millis());
+                }
+                state.deleted_files.remove(path);
+                state.pending_take_remote.remove(path);
+            }
+        }
+    }
+
+    fn apply_mark_merged_choice(
+        path: &str,
+        conflict: &SyncConflict,
+        state: &mut crate::sync::types::SyncState,
+    ) {
+        match conflict.kind {
+            SyncConflictKind::RemoteDeleted => {
+                state.known_files.remove(path);
+                state.known_files_updated_at.remove(path);
+                state.deleted_files.insert(path.to_string());
+            }
+            SyncConflictKind::BothChanged => {
+                let remote_hash = conflict.remote_hash.clone();
+                if !remote_hash.is_empty() {
+                    state.known_files.insert(path.to_string(), remote_hash);
+                    state
+                        .known_files_updated_at
+                        .insert(path.to_string(), chrono::Utc::now().timestamp_millis());
+                }
+                state.deleted_files.remove(path);
+            }
+        }
+        state.pending_take_remote.remove(path);
+    }
+
+    fn apply_take_remote_choice(
+        sync_root: &Path,
+        path: &str,
+        conflict: &SyncConflict,
+        state: &mut crate::sync::types::SyncState,
+        guard: Option<&crate::storage::WorkspaceWriteLock>,
+        app_data_root: Option<&Path>,
+    ) -> crate::Result<()> {
+        match conflict.kind {
+            SyncConflictKind::RemoteDeleted => {
+                if let (Some((volume_id, chapter_id)), Some(app_data_root)) =
+                    (Self::chapter_sync_path_parts(path), app_data_root)
+                {
+                    crate::chapter::delete_chapter(
+                        sync_root,
+                        &volume_id,
+                        &chapter_id,
+                        app_data_root,
+                    )?;
+                } else {
+                    let paths = [path.to_string()];
+                    crate::sync::lww::move_to_trash(sync_root, &paths)?;
+                }
+                state.known_files.remove(path);
+                state.known_files_updated_at.remove(path);
+                state.deleted_files.insert(path.to_string());
+                state.pending_take_remote.remove(path);
+            }
+            SyncConflictKind::BothChanged => {
+                let Some(snapshot_rel) = conflict.remote_snapshot_path.as_deref() else {
+                    // 旧记录没有快照：本轮无法落盘远端内容，排队下一轮重新下载。
+                    state.pending_take_remote.insert(path.to_string());
+                    return Ok(());
+                };
+                Self::apply_remote_snapshot(sync_root, path, snapshot_rel, guard)?;
+                let hash = Self::canonical_known_hash(sync_root, path, conflict);
+                if let Some(hash) = hash {
+                    state.known_files.insert(path.to_string(), hash);
+                    state
+                        .known_files_updated_at
+                        .insert(path.to_string(), chrono::Utc::now().timestamp_millis());
+                }
+                state.deleted_files.remove(path);
+                state.tombstones.retain(|tombstone| tombstone.original_path != path);
+                state.pending_take_remote.remove(path);
+            }
+        }
         Ok(())
     }
 
@@ -706,10 +796,6 @@ impl crate::sync::SyncService {
         }
     }
 
-    /// 用保存的远端 snapshot 原子替换本地正文。
-    ///
-    /// 读取 `sync_root/snapshot_rel` 的内容，atomic_write 到 `sync_root/path`。
-    /// 返回 `Ok(true)` 表示成功替换；`Ok(false)` 表示无 snapshot path（老数据兼容）。
     fn apply_remote_snapshot(
         sync_root: &Path,
         path: &str,
@@ -724,61 +810,56 @@ impl crate::sync::SyncService {
             )))
         })?;
         let local_full_path = sync_root.join(path);
-        // 章节正文必须走版本化提交协调器：冲突解决选择远端正文时，
-        // 正文、meta、提交序号和后续证明批次共享同一决议；不能用普通
-        // atomic_write 绕开章节版本，否则旧的后台保存仍可能覆盖这里。
         if let Some((volume_id, chapter_id)) = Self::chapter_sync_path_parts(path) {
-            {
-                let project_id = sync_root
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_default()
-                    .to_string();
-                if project_id.is_empty() {
-                    return Err(crate::Error::Other(
-                        "resolve_conflict_take_remote: cannot derive project id".to_string(),
-                    ));
-                }
-                let remote_text = String::from_utf8(remote_content.clone()).map_err(|e| {
-                    crate::Error::Other(format!(
-                        "resolve_conflict_take_remote: remote chapter is not UTF-8 {}: {}",
-                        path, e
-                    ))
-                })?;
-                let Some(guard) = guard else {
-                    return Err(crate::Error::Other(
-                        "resolve_conflict_take_remote: chapter restore requires workspace guard"
-                            .to_string(),
-                    ));
-                };
-                let (_, local_content, expected) =
-                    crate::chapter::commit::read_chapter_state_recovering(
-                        sync_root,
-                        guard,
-                        &volume_id,
-                        &chapter_id,
-                    )?;
-                let mut request = crate::chapter::ChapterCommitRequest::new(
-                    crate::chapter::ChapterKey::new(project_id, volume_id, chapter_id),
-                    remote_text,
-                );
-                request.expected = Some(expected);
-                request.base_content = Some(local_content);
-                request.mutation = crate::chapter::ChapterMutationKind::Restore;
-                request.source = crate::chapter::ChapterCommitSource::Restore;
-                request.allow_empty_overwrite = request.content.is_empty();
-                match crate::chapter::commit::commit_chapter_with_guard(
+            let project_id = sync_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            if project_id.is_empty() {
+                return Err(crate::Error::Other(
+                    "resolve_conflict_take_remote: cannot derive project id".to_string(),
+                ));
+            }
+            let remote_text = String::from_utf8(remote_content.clone()).map_err(|e| {
+                crate::Error::Other(format!(
+                    "resolve_conflict_take_remote: remote chapter is not UTF-8 {}: {}",
+                    path, e
+                ))
+            })?;
+            let Some(guard) = guard else {
+                return Err(crate::Error::Other(
+                    "resolve_conflict_take_remote: chapter restore requires workspace guard"
+                        .to_string(),
+                ));
+            };
+            let (_, local_content, expected) =
+                crate::chapter::commit::read_chapter_state_recovering(
                     sync_root,
-                    Some(guard),
-                    request,
-                )? {
-                    crate::chapter::ChapterCommitOutcome::Committed(_) => return Ok(()),
-                    crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
-                        return Err(crate::Error::Other(format!(
-                            "resolve_conflict_take_remote: chapter version advanced during restore: {}",
-                            conflict.key.chapter_id
-                        )));
-                    }
+                    guard,
+                    &volume_id,
+                    &chapter_id,
+                )?;
+            let mut request = crate::chapter::ChapterCommitRequest::new(
+                crate::chapter::ChapterKey::new(project_id, volume_id, chapter_id),
+                remote_text,
+            );
+            request.expected = Some(expected);
+            request.base_content = Some(local_content);
+            request.mutation = crate::chapter::ChapterMutationKind::Restore;
+            request.source = crate::chapter::ChapterCommitSource::Restore;
+            request.allow_empty_overwrite = request.content.is_empty();
+            match crate::chapter::commit::commit_chapter_with_guard(
+                sync_root,
+                Some(guard),
+                request,
+            )? {
+                crate::chapter::ChapterCommitOutcome::Committed(_) => return Ok(()),
+                crate::chapter::ChapterCommitOutcome::Conflict(conflict) => {
+                    return Err(crate::Error::Other(format!(
+                        "resolve_conflict_take_remote: chapter version advanced during restore: {}",
+                        conflict.key.chapter_id
+                    )));
                 }
             }
         }
@@ -792,19 +873,43 @@ impl crate::sync::SyncService {
         Ok(())
     }
 
-    /// 冲突解决：采用远端版本。
-    ///
-    /// BothChanged：用保存的远端副本原子替换本地内容，并把已确认基线推进到
-    /// 远端版本；RemoteDeleted：接受删除（章节走章节删除协议，其它对象移入
-    /// 回收区）。旧记录没有快照时只排队 pending_take_remote，不改本地内容。
+    pub fn resolve_conflict_keep_local(sync_root: &Path, path: &str) -> crate::Result<()> {
+        Self::resolve_object_conflict(
+            sync_root,
+            path,
+            None,
+            None,
+            None,
+            ConflictChoice::KeepLocal,
+        )
+        .map(|_| ())
+    }
+
+    pub fn resolve_conflict_keep_local_for_group(
+        sync_root: &Path,
+        path: &str,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> crate::Result<()> {
+        Self::resolve_object_conflict(
+            sync_root,
+            path,
+            Some(group),
+            None,
+            None,
+            ConflictChoice::KeepLocal,
+        )
+        .map(|_| ())
+    }
+
     pub fn resolve_conflict_take_remote(sync_root: &Path, path: &str) -> crate::Result<bool> {
         let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root).ok();
-        Self::resolve_conflict_take_remote_at_target(
+        Self::resolve_object_conflict(
             sync_root,
             path,
             None,
             guard.as_ref(),
             None,
+            ConflictChoice::TakeRemote,
         )
     }
 
@@ -814,12 +919,13 @@ impl crate::sync::SyncService {
         app_data_root: Option<&Path>,
         path: &str,
     ) -> crate::Result<bool> {
-        Self::resolve_conflict_take_remote_at_target(
+        Self::resolve_object_conflict(
             sync_root,
             path,
             None,
             Some(guard),
             app_data_root,
+            ConflictChoice::TakeRemote,
         )
     }
 
@@ -829,12 +935,13 @@ impl crate::sync::SyncService {
         group: &crate::sync::types::AppDataGroup,
     ) -> crate::Result<bool> {
         let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root).ok();
-        Self::resolve_conflict_take_remote_at_target(
+        Self::resolve_object_conflict(
             sync_root,
             path,
             Some(group),
             guard.as_ref(),
             None,
+            ConflictChoice::TakeRemote,
         )
     }
 
@@ -845,102 +952,26 @@ impl crate::sync::SyncService {
         path: &str,
         group: &crate::sync::types::AppDataGroup,
     ) -> crate::Result<bool> {
-        Self::resolve_conflict_take_remote_at_target(
+        Self::resolve_object_conflict(
             sync_root,
             path,
             Some(group),
             Some(guard),
             app_data_root,
+            ConflictChoice::TakeRemote,
         )
     }
 
-    fn resolve_conflict_take_remote_at_target(
-        sync_root: &Path,
-        path: &str,
-        group: Option<&crate::sync::types::AppDataGroup>,
-        guard: Option<&crate::storage::WorkspaceWriteLock>,
-        app_data_root: Option<&Path>,
-    ) -> crate::Result<bool> {
-        validate_group_conflict_path(group, path, "resolve_conflict_take_remote")?;
-        let mut state = load_conflict_state(sync_root, group)?;
-        let mut conflicts_json = load_conflicts_for_target(sync_root, group)?;
-        let conflict = Self::load_canonical_conflict_and_repair_mirror(
-            path,
-            &mut state,
-            &mut conflicts_json,
-            "resolve_conflict_take_remote",
-        )?;
-        if !state.conflicted_files.remove(path) {
-            return Err(crate::Error::Other(format!(
-                "resolve_conflict_take_remote: path '{}' is not in conflicted_files",
-                path
-            )));
-        }
-        let pending_fallback = Self::decide_take_remote(
+    pub fn resolve_conflict_mark_merged(sync_root: &Path, path: &str) -> crate::Result<()> {
+        Self::resolve_object_conflict(
             sync_root,
             path,
-            &mut state,
-            &conflict,
-            guard,
-            app_data_root,
-        )?;
-        if pending_fallback {
-            state.pending_take_remote.insert(path.to_string());
-        }
-        remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
-        persist_conflict_state_for_target(sync_root, group, &state, &conflicts_json)?;
-        Ok(!pending_fallback)
-    }
-
-    /// 返回 `true` 表示只能排队到下一轮再取远端（旧记录没有快照）。
-    fn decide_take_remote(
-        sync_root: &Path,
-        path: &str,
-        state: &mut crate::sync::types::SyncState,
-        conflict: &SyncConflict,
-        guard: Option<&crate::storage::WorkspaceWriteLock>,
-        app_data_root: Option<&Path>,
-    ) -> crate::Result<bool> {
-        match conflict.kind {
-            SyncConflictKind::RemoteDeleted => {
-                if let (Some((volume_id, chapter_id)), Some(app_data_root)) =
-                    (Self::chapter_sync_path_parts(path), app_data_root)
-                {
-                    crate::chapter::delete_chapter(
-                        sync_root,
-                        &volume_id,
-                        &chapter_id,
-                        app_data_root,
-                    )?;
-                    state.known_files.remove(path);
-                    state.known_files_updated_at.remove(path);
-                    return Ok(false);
-                }
-                let paths = [path.to_string()];
-                crate::sync::lww::move_to_trash(sync_root, &paths)?;
-                state.known_files.remove(path);
-                state.known_files_updated_at.remove(path);
-                Ok(false)
-            }
-            SyncConflictKind::BothChanged => match conflict.remote_snapshot_path.as_deref() {
-                Some(snapshot_rel) => {
-                    Self::apply_remote_snapshot(sync_root, path, snapshot_rel, guard)?;
-                    state.tombstones.retain(|tombstone| tombstone.original_path != path);
-                    if let Some(hash) = Self::canonical_known_hash(sync_root, path, conflict) {
-                        state.known_files.insert(path.to_string(), hash);
-                        state
-                            .known_files_updated_at
-                            .insert(path.to_string(), chrono::Utc::now().timestamp_millis());
-                    }
-                    Ok(false)
-                }
-                None => Ok(true),
-            },
-        }
-    }
-
-    pub fn resolve_conflict_mark_merged(sync_root: &Path, path: &str) -> crate::Result<()> {
-        Self::resolve_conflict_mark_merged_at_target(sync_root, path, None)
+            None,
+            None,
+            None,
+            ConflictChoice::MarkMerged,
+        )
+        .map(|_| ())
     }
 
     pub fn resolve_conflict_mark_merged_for_group(
@@ -948,81 +979,17 @@ impl crate::sync::SyncService {
         path: &str,
         group: &crate::sync::types::AppDataGroup,
     ) -> crate::Result<()> {
-        Self::resolve_conflict_mark_merged_at_target(sync_root, path, Some(group))
-    }
-
-    fn resolve_conflict_mark_merged_at_target(
-        sync_root: &Path,
-        path: &str,
-        group: Option<&crate::sync::types::AppDataGroup>,
-    ) -> crate::Result<()> {
-        validate_group_conflict_path(group, path, "resolve_conflict_mark_merged")?;
-        let mut state = load_conflict_state(sync_root, group)?;
-        let mut conflicts_json = load_conflicts_for_target(sync_root, group)?;
-
-        // 以 conflicts.json 为 canonical record：找不到直接返回 Err，
-        // 不再回退到读本地文件算 MD5 的 fallback（那会用本地 MD5 冒充远端基线）。
-        // 如果 state mirror 缺这条，用 canonical conflict 补齐。
-        let conflict = Self::load_canonical_conflict_and_repair_mirror(
+        Self::resolve_object_conflict(
+            sync_root,
             path,
-            &mut state,
-            &mut conflicts_json,
-            "resolve_conflict_mark_merged",
-        )?;
-
-        // BothChanged + canonical_known_hash == None 时返回 Err，保持冲突原样。
-        // 不调用 remove_conflict_in_memory，不返回"解决成功"。
-        if conflict.kind == SyncConflictKind::BothChanged
-            && Self::canonical_known_hash(sync_root, path, &conflict).is_none()
-        {
-            return Err(crate::Error::Other(format!(
-                "resolve_conflict_mark_merged: path '{}' has BothChanged conflict with \
-                 non-MD5 remote_hash and no remote_snapshot_path — cannot resolve \
-                 without a proven remote content hash; run a sync to normalize the \
-                 conflict record first",
-                path
-            )));
-        }
-
-        // canonical conflict 已找到并修复 mirror，conflicted_files 必含该 path。
-        if !state.conflicted_files.remove(path) {
-            return Err(crate::Error::Other(format!(
-                "resolve_conflict_mark_merged: path '{}' is not in conflicted_files",
-                path
-            )));
-        }
-        // Set known_files to the remote_hash so that three-way comparison on the
-        // next sync sees: base=remote_hash, local≠base, remote=base → LocalChanged → upload.
-        // This ensures the merged local version gets uploaded to the remote.
-        match conflict.kind {
-            SyncConflictKind::RemoteDeleted => {
-                // RemoteDeleted：远端已删除，直接移除 known base。
-                // 下一轮三路比较 base 默认为空，和远端 delete 的空 hash 对齐，
-                // 得到 LocalChanged → 正确上传用户合并后的本地正文。
-                // 不能把本地 MD5 写进 known_files 冒充远端 hash——那会让下一轮
-                // 误判为 RemoteChanged → DeleteLocal，把用户合并后的本地正文移进 trash。
-                state.known_files.remove(path);
-                state.known_files_updated_at.remove(path);
-            }
-            SyncConflictKind::BothChanged => {
-                // BothChanged：只有 canonical_known_hash() 返回可证明的远端 MD5 时
-                // 才覆盖 known_files。返回 None 时不拿本地 hash 冒充远端 hash。
-                // （None 的情况已在上面提前返回 Err，这里 canonical_known_hash 必返回 Some。）
-                Self::apply_both_changed_known_base(sync_root, path, &mut state, &conflict);
-            }
-        }
-        // Remove the conflict record from state.conflicts and conflicts.json
-        // via the shared in-memory helper.
-        remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
-        persist_conflict_state_for_target(sync_root, group, &state, &conflicts_json)?;
-        Ok(())
+            Some(group),
+            None,
+            None,
+            ConflictChoice::MarkMerged,
+        )
+        .map(|_| ())
     }
 
-    /// 加载冲突预览 — 返回本地/远端内容供平台层展示。
-    ///
-    /// 从 `conflicts.json` 找到对应 path 的冲突记录，读取本地正文和远端 snapshot
-    /// （`BothChanged` 时）。平台层只拿返回的 [`SyncConflictPreview`]，不直接读
-    /// `conflicts.json` 或拼磁盘路径。
     pub fn load_conflict_preview(
         sync_root: &Path,
         path: &str,

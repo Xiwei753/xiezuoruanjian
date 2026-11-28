@@ -595,6 +595,37 @@ fn stage_engine_state_write(
 ///   "本地内容冒充已同步"的旧问题；
 /// - 冲突路径保留共同基线，由冲突记录驱动用户选择；
 /// - 正文仍走既有章节提交入口（journal / 证明链），不绕过业务事务。
+/// 把统一裁决给出的已确认基线推进到 state（内容摘要 / 删除事实）。
+///
+/// 与正文事务同一次提交：章节正文由章节事务落盘后，这里只应用同一份
+/// `plan.confirmations`，不再按 content_actions 再猜一遍。
+fn apply_baseline_updates(
+    state: &mut crate::sync::types::SyncState,
+    updates: &[crate::sync::staging::BaselineUpdate],
+) {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    for update in updates {
+        let path = update.rel_path.to_string_lossy().replace('\\', "/");
+        match &update.content_hash {
+            Some(hash) => {
+                state.known_files.insert(path.clone(), hash.clone());
+                state.known_files_updated_at.insert(path.clone(), now_ms);
+                state.deleted_files.remove(&path);
+                state.conflicted_files.remove(&path);
+                state.pending_take_remote.remove(&path);
+                state.tombstones.retain(|tombstone| tombstone.original_path != path);
+            }
+            None => {
+                state.known_files.remove(&path);
+                state.known_files_updated_at.remove(&path);
+                state.deleted_files.insert(path.clone());
+                state.conflicted_files.remove(&path);
+                state.pending_take_remote.remove(&path);
+            }
+        }
+    }
+}
+
 pub(crate) fn commit_object_plan(
     run: &crate::sync::staging::StagingRun,
     plan: &crate::sync::staging::CommitPlan,
@@ -670,7 +701,7 @@ pub(crate) fn commit_object_plan(
         )?,
         None => crate::sync::SyncService::load_sync_state_read_only(live_root, None)?,
     };
-    apply_confirmed_remote_actions(&mut state, &content_actions);
+    apply_baseline_updates(&mut state, &plan.confirmations);
     let state_rel = run
         .app_group()
         .map(crate::sync::types::AppDataGroup::local_state_path)
@@ -767,46 +798,6 @@ pub(crate) fn confirm_published_objects(
         crate::sync::SyncService::save_sync_state_for_target(sync_root, target, &state)?;
     }
     Ok(unconfirmed)
-}
-
-/// 把"实际应用到本机的远端事实"推进到已确认基线。
-///
-/// 只有远端下载/远端删除是本轮已确认的远端事实；本地上传与本地删除要等
-/// 远端发布回执才能推进，否则失败重试时会把未发布的本地内容当成已同步。
-fn apply_confirmed_remote_actions(
-    state: &mut crate::sync::types::SyncState,
-    actions: &[crate::sync::staging::CommitAction],
-) {
-    use crate::sync::staging::CommitAction;
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    for action in actions {
-        let (rel, hash) = match action {
-            CommitAction::Apply { rel_path, content } => (
-                rel_path.to_string_lossy().replace('\\', "/"),
-                Some(crate::sync::hash::content_md5(content)),
-            ),
-            CommitAction::Delete { rel_path } => {
-                (rel_path.to_string_lossy().replace('\\', "/"), None)
-            }
-        };
-        match hash {
-            Some(hash) => {
-                state.known_files.insert(rel.clone(), hash);
-                state.known_files_updated_at.insert(rel.clone(), now_ms);
-                state.deleted_files.remove(&rel);
-                state.conflicted_files.remove(&rel);
-                state.pending_take_remote.remove(&rel);
-            }
-            None => {
-                state.known_files.remove(&rel);
-                state.known_files_updated_at.remove(&rel);
-                state.tombstones.retain(|item| item.original_path != rel);
-                state.deleted_files.insert(rel.clone());
-                state.conflicted_files.remove(&rel);
-                state.pending_take_remote.remove(&rel);
-            }
-        }
-    }
 }
 
 /// 将 commit plan 中的 Apply/Delete 变更通过 SaveTransaction 写回 live root。
@@ -1905,120 +1896,6 @@ pub(crate) fn apply_staging_commits_for_targets(
     clippy::too_many_lines,
     clippy::cognitive_complexity
 )]
-/// 从本轮已落盘的提交结果构造不可变对象决议（复审 #7214105551 第 2 项）。
-///
-/// 必须在提交刚完成、尚未释放本轮上下文时调用：内容在这里读取一次即冻结，
-/// 后续发布只使用决议里的字节，不再回读可变 live。
-pub(crate) fn durable_decisions_for_target(
-    live_root: &std::path::Path,
-    project_id: Option<&str>,
-    result: &crate::sync::types::SyncResult,
-    committed: &[CommittedPath],
-    facts: &std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
-) -> Vec<crate::sync::decision::DurableObjectDecision> {
-    use crate::sync::decision::{DecisionOp, DecisionOrigin, DurableObjectDecision};
-    let project_prefix = project_id.map(|id| format!("projects/{id}/"));
-    let mut decisions = Vec::new();
-    for entry in committed {
-        let workspace_rel = entry.path.to_string_lossy().replace('\\', "/");
-        let identity = match project_prefix.as_deref() {
-            Some(prefix) => match workspace_rel.strip_prefix(prefix) {
-                Some(rest) => rest.to_string(),
-                None => continue,
-            },
-            None => workspace_rel.clone(),
-        };
-        if identity.is_empty() {
-            continue;
-        }
-        let fact = facts.get(&identity);
-        let base_hash = fact
-            .and_then(|record| record.base_hash.clone())
-            .or_else(|| {
-                crate::sync::SyncService::load_sync_state_read_only(live_root, project_id)
-                    .ok()
-                    .and_then(|state| state.known_files.get(&identity).cloned())
-            });
-        let consumed = result
-            .overwritten_files
-            .iter()
-            .any(|path| path == &identity)
-            || result.remote_deletes.iter().any(|path| path == &identity);
-        let downloaded = result.downloaded_files.iter().any(|path| path == &identity);
-        let origin = if consumed {
-            DecisionOrigin::RemoteConsumed
-        } else if downloaded {
-            DecisionOrigin::Merged
-        } else {
-            DecisionOrigin::Local
-        };
-        let (op, content, final_hash) = if entry.deleted {
-            (DecisionOp::Delete, None, String::new())
-        } else {
-            let path = live_root.join(&identity);
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    let hash = crate::sync::hash::content_md5(&bytes);
-                    (DecisionOp::Upsert, Some(bytes), hash)
-                }
-                Err(error) => {
-                    log::warn!(
-                        "[sync] committed object unreadable while freezing decision: {}: {error}",
-                        path.display()
-                    );
-                    continue;
-                }
-            }
-        };
-        decisions.push(DurableObjectDecision {
-            transaction_id: fact
-                .map(|record| record.transaction_id.clone())
-                .unwrap_or_default(),
-            identity,
-            op,
-            base_hash,
-            final_hash,
-            final_version: fact.and_then(|record| record.object_revision),
-            mutation_seq: fact.map(|record| record.seq).unwrap_or(0),
-            origin,
-            content,
-            dependencies: Vec::new(),
-        });
-    }
-    // 未决冲突：本轮不发布本地旧版本，决议显式标记为 Conflict，避免发布路径
-    // 只按文件清单把冲突路径上传（评审 #7214314073 第 2 项）。
-    let covered: std::collections::BTreeSet<String> = decisions
-        .iter()
-        .map(|decision| decision.identity.clone())
-        .collect();
-    for conflict in &result.conflicts {
-        let workspace_rel = conflict.local_path.replace('\\', "/");
-        let identity = match project_prefix.as_deref() {
-            Some(prefix) => match workspace_rel.strip_prefix(prefix) {
-                Some(rest) => rest.to_string(),
-                None => continue,
-            },
-            None => workspace_rel.clone(),
-        };
-        if identity.is_empty() || covered.contains(&identity) {
-            continue;
-        }
-        decisions.push(DurableObjectDecision {
-            transaction_id: String::new(),
-            identity,
-            op: DecisionOp::Upsert,
-            base_hash: Some(conflict.base_hash.clone()),
-            final_hash: conflict.local_hash.clone(),
-            final_version: None,
-            mutation_seq: 0,
-            origin: DecisionOrigin::Conflict,
-            content: None,
-            dependencies: Vec::new(),
-        });
-    }
-    decisions
-}
-
 pub(crate) fn commit_single_target_staging(
     run: &crate::sync::staging::StagingRun,
     target: &crate::sync::types::TargetSyncResult,
@@ -2075,6 +1952,7 @@ pub(crate) fn commit_single_target_staging(
                     return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
                 }
             };
+            run.record_publish_lists(plan.uploads.clone(), plan.publish_deletes.clone());
             let before = capture_action_before(live_root, &plan.content_actions);
 
             // 本轮真正要发布的候选路径：上传 + 远端删除。只对这些推迟
@@ -2085,7 +1963,7 @@ pub(crate) fn commit_single_target_staging(
             published_candidates.extend(
                 plan.uploads
                     .iter()
-                    .map(|path| path.to_string_lossy().replace('\\', "/")),
+                    .map(|object| object.rel_path.to_string_lossy().replace('\\', "/")),
             );
             published_candidates.extend(
                 plan.publish_deletes
@@ -2202,6 +2080,7 @@ pub(crate) fn commit_single_target_staging(
                     return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
                 }
             };
+            run.record_publish_lists(plan.uploads.clone(), plan.publish_deletes.clone());
             let transfer_conflict_paths: std::collections::HashSet<String> = target
                 .result
                 .conflicts

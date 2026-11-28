@@ -1,35 +1,28 @@
 //! 统一对象比较（Issue #1066）。
 //!
-//! 同步不再按业务类别（正文/星图/校对/标签/统计事件…）分别裁决。每个持久
-//! 对象只由三条事实决定：
+//! 每个持久对象只由三条版本事实决定：
 //!
-//! - **共同基线**：该对象上次双方确认的内容摘要（没有基线 = 从未同步过）；
-//! - **本地状态**：当前内容摘要 / 显式删除事实 / 本轮不参与；
-//! - **远端状态**：固定 HEAD 上的内容摘要 / 显式删除 / 本轮不参与。
+//! - **共同基线**：上次双方确认的版本（内容摘要 / 已确认删除 / 从未同步）；
+//! - **本地版本**：当前内容摘要 / 显式删除 / 本轮不参与；
+//! - **远端版本**：固定 HEAD 上的内容摘要 / 显式删除 / 远端没有索引。
 //!
-//! 裁决只有四种结果：跳过、传播一侧、双向真实冲突、双侧删除确认。
-//! 设备时钟不参与胜负判定；"哪一侧更新"只由内容与基线的关系得出。
+//! 节奏只有四种：跳过、传播一侧、双向真实冲突、双侧删除确认。设备时钟、
+//! 业务类别和文件类型都不参与胜负判定。
 //!
-//! ## 语义
-//!
-//! - 内容相同（含双侧均无基线且内容相同）→ [`ObjectVerdict::NoOp`]；
-//! - 只有一侧相对基线改变 → 传播该侧（本地上传 / 远端落盘 / 删除）；
-//! - 双侧都改变且内容不同 → [`ObjectVerdict::Conflict`]，交给用户选择；
-//! - 双侧都删除 → [`ObjectVerdict::ConfirmDelete`]（删除是版本化操作，
-//!   双方独立删除同一对象不需要用户处理）；
-//! - 未参与本轮的对象不是删除：远端没有该对象时本地保持原样，本地没有该
-//!   对象时远端基线保持不变。
+//! 基线、本地、远端使用同一个版本值类型，删除就是"该侧版本为 Deleted"，
+//! 不再用 `Option<&str>` 把"没有基线"和"已确认删除"混成一件事。
 
-/// 单个对象在某一侧的状态。
+/// 单个对象在某一侧的版本事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ObjectSide {
     /// 该侧存在该对象，携带内容摘要。
     Present(String),
-    /// 该侧有显式删除事实（tombstone / 删除记录），且当前不存在该对象。
+    /// 该侧有显式删除事实（已确认删除 / 删除记录 / tombstone）。
     Deleted,
-    /// 本轮该侧没有该对象的事实：既不是内容，也不是删除。
+    /// 该侧本轮没有该对象的事实。
     ///
-    /// 稀疏下载/增量传输中"没下载到"属于这个状态，不能当成删除传播。
+    /// 远端索引缺失时的"没记录"、稀疏传输中的"没下载"都属于这个状态，
+    /// 不能当成删除传播。
     Absent,
 }
 
@@ -43,6 +36,10 @@ impl ObjectSide {
 
     pub(crate) fn is_present(&self) -> bool {
         matches!(self, Self::Present(_))
+    }
+
+    pub(crate) fn is_deleted(&self) -> bool {
+        matches!(self, Self::Deleted)
     }
 }
 
@@ -60,7 +57,7 @@ pub(crate) enum ObjectConflictSide {
 /// 单个对象的同步裁决。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ObjectVerdict {
-    /// 双侧内容相同或都无变化：不传输。
+    /// 双侧一致或都无变化：不传输，但要把基线推进到版本事实。
     NoOp,
     /// 只有本地改变：上传本地内容。
     PublishUpsert,
@@ -70,7 +67,7 @@ pub(crate) enum ObjectVerdict {
     ApplyRemoteUpsert,
     /// 只有远端删除：删除本地对象。
     ApplyRemoteDelete,
-    /// 双侧都删除：确认删除，不再保留基线。
+    /// 双侧都删除：确认删除，不再保留索引记录。
     ConfirmDelete,
     /// 双侧都改变且结果不同：保留双方内容，等用户选择。
     Conflict(ObjectConflictSide),
@@ -86,10 +83,10 @@ impl ObjectVerdict {
 
 /// 统一对象比较入口。
 ///
-/// `base` 是上次双方确认的内容摘要（`None` = 没有共同基线）。比较只使用内容
-/// 摘要与显式删除事实，不使用设备时钟、时间戳或业务类型。
+/// `base` 是上次双方确认的版本；删除是一种版本，不是"没有基线"。比较只
+/// 使用版本相等关系和显式删除事实，不使用时间戳。
 pub(crate) fn compare_object(
-    base: Option<&str>,
+    base: &ObjectSide,
     local: &ObjectSide,
     remote: &ObjectSide,
 ) -> ObjectVerdict {
@@ -98,84 +95,48 @@ pub(crate) fn compare_object(
         return ObjectVerdict::Unparticipated;
     }
 
-    let local_present = local.is_present();
-    let remote_present = remote.is_present();
-
-    // 2. 双侧内容相同 → 无需传输（含双侧都以同一内容出现但没有基线）。
-    if let (Some(local_hash), Some(remote_hash)) = (local.hash(), remote.hash()) {
-        if local_hash == remote_hash {
-            return ObjectVerdict::NoOp;
-        }
-    }
-
-    // 3. 双侧都删除 → 确认删除。
-    if matches!(local, ObjectSide::Deleted) && matches!(remote, ObjectSide::Deleted) {
-        return ObjectVerdict::ConfirmDelete;
-    }
-
-    // 4. 双侧都明确存在且内容不同：按基线判断是否各自修改。
-    if local_present && remote_present {
-        let local_changed = local.hash() != base;
-        let remote_changed = remote.hash() != base;
-        return match (local_changed, remote_changed) {
-            (false, false) => ObjectVerdict::NoOp,
-            (true, false) => ObjectVerdict::PublishUpsert,
-            (false, true) => ObjectVerdict::ApplyRemoteUpsert,
-            (true, true) => ObjectVerdict::Conflict(ObjectConflictSide::BothChanged),
+    // 2. 双侧版本相同：内容相同 → 无需传输；都删除 → 确认删除。
+    if local == remote {
+        return match local {
+            ObjectSide::Present(_) => ObjectVerdict::NoOp,
+            ObjectSide::Deleted => ObjectVerdict::ConfirmDelete,
+            ObjectSide::Absent => ObjectVerdict::Unparticipated,
         };
     }
 
-    // 5. 修改 vs 删除：哪一侧还有内容，就判断它是否相对基线改变。
-    if local_present && matches!(remote, ObjectSide::Deleted) {
-        return if local.hash() == base {
-            // 本地没改、远端删除 → 跟删除。
-            ObjectVerdict::ApplyRemoteDelete
-        } else {
-            ObjectVerdict::Conflict(ObjectConflictSide::RemoteDeleted)
-        };
-    }
-    if matches!(local, ObjectSide::Deleted) && remote_present {
-        return if remote.hash() == base {
-            // 远端没改、本地删除 → 传播删除。
-            ObjectVerdict::PublishDelete
-        } else {
-            ObjectVerdict::Conflict(ObjectConflictSide::LocalDeleted)
-        };
-    }
+    let local_changed = local != base;
+    let remote_changed = remote != base;
 
-    // 6. 只有一侧有事实：另一侧是 Absent（未参与），不是删除。
-    match (local, remote) {
-        (ObjectSide::Present(local_hash), ObjectSide::Absent) => {
-            if base == Some(local_hash.as_str()) {
-                // 本地仍是已确认版本，远端只是没参与本轮。
-                ObjectVerdict::NoOp
-            } else {
-                ObjectVerdict::PublishUpsert
+    match (local_changed, remote_changed) {
+        (false, false) => ObjectVerdict::NoOp,
+        // 3. 只有本地相对基线改变：传播本地版本。
+        (true, false) => match local {
+            ObjectSide::Present(_) => ObjectVerdict::PublishUpsert,
+            ObjectSide::Deleted => ObjectVerdict::PublishDelete,
+            // 本地没有事实而远端停在基线：没有可传播的内容。
+            ObjectSide::Absent => ObjectVerdict::Unparticipated,
+        },
+        // 4. 只有远端相对基线改变：应用远端版本。
+        (false, true) => match remote {
+            ObjectSide::Present(_) => ObjectVerdict::ApplyRemoteUpsert,
+            ObjectSide::Deleted => ObjectVerdict::ApplyRemoteDelete,
+            // 远端没有事实而本地停在基线：远端索引缺失，不是删除。
+            ObjectSide::Absent => ObjectVerdict::NoOp,
+        },
+        // 5. 双侧都相对基线改变且版本不同：真实冲突。
+        (true, true) => match (local, remote) {
+            (ObjectSide::Present(_), ObjectSide::Present(_)) => {
+                ObjectVerdict::Conflict(ObjectConflictSide::BothChanged)
             }
-        }
-        (ObjectSide::Deleted, ObjectSide::Absent) => {
-            if base.is_some() {
-                // 本地显式删除，远端未参与：删除照常传播。
-                ObjectVerdict::PublishDelete
-            } else {
-                ObjectVerdict::NoOp
+            (ObjectSide::Present(_), ObjectSide::Deleted) => {
+                ObjectVerdict::Conflict(ObjectConflictSide::RemoteDeleted)
             }
-        }
-        (ObjectSide::Absent, ObjectSide::Present(remote_hash)) => {
-            if base == Some(remote_hash.as_str()) {
-                ObjectVerdict::NoOp
-            } else {
-                ObjectVerdict::ApplyRemoteUpsert
+            (ObjectSide::Deleted, ObjectSide::Present(_)) => {
+                ObjectVerdict::Conflict(ObjectConflictSide::LocalDeleted)
             }
-        }
-        (ObjectSide::Absent, ObjectSide::Deleted) => {
-            if base.is_some() {
-                ObjectVerdict::ApplyRemoteDelete
-            } else {
-                ObjectVerdict::NoOp
-            }
-        }
-        _ => ObjectVerdict::NoOp,
+            // 一侧没有事实，另一侧改变：缺少该侧版本，不能替用户裁决。
+            _ => ObjectVerdict::Unparticipated,
+        },
     }
 }
 
@@ -189,7 +150,7 @@ pub(crate) fn side_from_content(content: Option<&[u8]>) -> ObjectSide {
     }
 }
 
-/// 内容摘要（MD5）作为基线比较用的规范形式。
+/// 内容摘要（MD5）作为版本比较用的规范形式。
 pub(crate) fn content_hash(content: &[u8]) -> String {
     crate::sync::hash::content_md5(content)
 }
@@ -202,14 +163,17 @@ mod tests {
         ObjectSide::Present(hash.to_string())
     }
 
+    const ABSENT: ObjectSide = ObjectSide::Absent;
+    const DELETED: ObjectSide = ObjectSide::Deleted;
+
     #[test]
     fn identical_content_is_noop_even_without_base() {
         assert_eq!(
-            compare_object(None, &present("a"), &present("a")),
+            compare_object(&ABSENT, &present("a"), &present("a")),
             ObjectVerdict::NoOp
         );
         assert_eq!(
-            compare_object(Some("a"), &present("a"), &present("a")),
+            compare_object(&present("a"), &present("a"), &present("a")),
             ObjectVerdict::NoOp
         );
     }
@@ -217,11 +181,11 @@ mod tests {
     #[test]
     fn single_side_change_is_propagated_without_clock() {
         assert_eq!(
-            compare_object(Some("a"), &present("b"), &present("a")),
+            compare_object(&present("a"), &present("b"), &present("a")),
             ObjectVerdict::PublishUpsert
         );
         assert_eq!(
-            compare_object(Some("a"), &present("a"), &present("b")),
+            compare_object(&present("a"), &present("a"), &present("b")),
             ObjectVerdict::ApplyRemoteUpsert
         );
     }
@@ -229,87 +193,75 @@ mod tests {
     #[test]
     fn both_changed_differently_is_a_real_conflict() {
         assert_eq!(
-            compare_object(Some("a"), &present("b"), &present("c")),
+            compare_object(&present("a"), &present("b"), &present("c")),
             ObjectVerdict::Conflict(ObjectConflictSide::BothChanged)
         );
     }
 
     #[test]
-    fn both_deleted_is_confirmed_not_conflict() {
+    fn delete_versions_participate_in_comparison() {
+        // 远端停在基线、本地删除 → 传播删除。
         assert_eq!(
-            compare_object(Some("a"), &ObjectSide::Deleted, &ObjectSide::Deleted),
-            ObjectVerdict::ConfirmDelete
+            compare_object(&present("a"), &DELETED, &present("a")),
+            ObjectVerdict::PublishDelete
         );
-    }
-
-    #[test]
-    fn modify_against_delete_conflicts_in_both_directions() {
+        // 本地停在基线、远端删除 → 本地删除。
         assert_eq!(
-            compare_object(Some("a"), &present("b"), &ObjectSide::Deleted),
-            ObjectVerdict::Conflict(ObjectConflictSide::RemoteDeleted)
-        );
-        assert_eq!(
-            compare_object(Some("a"), &ObjectSide::Deleted, &present("b")),
-            ObjectVerdict::Conflict(ObjectConflictSide::LocalDeleted)
-        );
-    }
-
-    #[test]
-    fn unchanged_local_delete_follows_remote_delete() {
-        assert_eq!(
-            compare_object(Some("a"), &present("a"), &ObjectSide::Deleted),
+            compare_object(&present("a"), &present("a"), &DELETED),
             ObjectVerdict::ApplyRemoteDelete
         );
+        // 双方都删除 → 确认删除。
         assert_eq!(
-            compare_object(Some("a"), &ObjectSide::Deleted, &present("a")),
+            compare_object(&present("a"), &DELETED, &DELETED),
+            ObjectVerdict::ConfirmDelete
+        );
+        // 删除已是基线：本地重新写入且远端仍删除 → 本地复活，不是冲突。
+        assert_eq!(
+            compare_object(&DELETED, &present("b"), &DELETED),
+            ObjectVerdict::PublishUpsert
+        );
+        // 删除已是基线：远端重新写入且本地仍删除 → 采用远端版本。
+        assert_eq!(
+            compare_object(&DELETED, &DELETED, &present("b")),
+            ObjectVerdict::ApplyRemoteUpsert
+        );
+    }
+
+    #[test]
+    fn delete_without_base_conflicts_once_until_user_chooses() {
+        assert_eq!(
+            compare_object(&ABSENT, &present("a"), &DELETED),
+            ObjectVerdict::Conflict(ObjectConflictSide::RemoteDeleted)
+        );
+        // 用户保留本地后基线变成 Deleted，下一轮不再冲突，改为上传本地版本。
+        assert_eq!(
+            compare_object(&DELETED, &present("a"), &DELETED),
+            ObjectVerdict::PublishUpsert
+        );
+        // 用户保留本地删除后基线是远端版本，下一轮直接传播删除。
+        assert_eq!(
+            compare_object(&present("a"), &DELETED, &present("a")),
             ObjectVerdict::PublishDelete
         );
     }
 
     #[test]
-    fn absent_side_is_not_a_delete() {
-        // 远端没参与本轮，本地未变 → 跳过，不删除。
+    fn absent_side_is_unparticipated_not_delete() {
         assert_eq!(
-            compare_object(Some("a"), &present("a"), &ObjectSide::Absent),
-            ObjectVerdict::NoOp
-        );
-        // 远端没参与，本地改了 → 上传。
-        assert_eq!(
-            compare_object(Some("a"), &present("b"), &ObjectSide::Absent),
-            ObjectVerdict::PublishUpsert
-        );
-        // 本地没参与（未下载/稀疏），远端未变 → 跳过。
-        assert_eq!(
-            compare_object(Some("a"), &ObjectSide::Absent, &present("a")),
-            ObjectVerdict::NoOp
-        );
-        // 本地没参与，远端有新内容 → 下载。
-        assert_eq!(
-            compare_object(Some("a"), &ObjectSide::Absent, &present("b")),
-            ObjectVerdict::ApplyRemoteUpsert
-        );
-    }
-
-    #[test]
-    fn fresh_object_one_side_only() {
-        assert_eq!(
-            compare_object(None, &present("a"), &ObjectSide::Absent),
+            compare_object(&present("a"), &present("b"), &ABSENT),
             ObjectVerdict::PublishUpsert
         );
         assert_eq!(
-            compare_object(None, &ObjectSide::Absent, &present("a")),
-            ObjectVerdict::ApplyRemoteUpsert
+            compare_object(&present("a"), &present("a"), &ABSENT),
+            ObjectVerdict::NoOp
         );
+        // 远端没有索引（Absent）而本地删除了已确认对象：没有远端事实，不传播。
         assert_eq!(
-            compare_object(None, &ObjectSide::Absent, &ObjectSide::Absent),
+            compare_object(&present("a"), &DELETED, &ABSENT),
             ObjectVerdict::Unparticipated
         );
-    }
-
-    #[test]
-    fn local_delete_without_base_is_noop() {
         assert_eq!(
-            compare_object(None, &ObjectSide::Deleted, &ObjectSide::Absent),
+            compare_object(&present("a"), &ABSENT, &present("a")),
             ObjectVerdict::NoOp
         );
     }
