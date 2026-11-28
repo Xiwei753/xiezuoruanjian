@@ -644,7 +644,7 @@ impl crate::sync::SyncService {
             &mut conflicts_json,
             operation,
         )?;
-        if !state.conflicted_files.remove(path) {
+        if !state.conflicted_files.contains(path) {
             return Err(crate::Error::Other(format!(
                 "{operation}: path '{path}' is not in conflicted_files"
             )));
@@ -660,7 +660,7 @@ impl crate::sync::SyncService {
                 false
             }
             ConflictChoice::TakeRemote => {
-                Self::apply_take_remote_choice(
+                let queued = Self::apply_take_remote_choice(
                     sync_root,
                     path,
                     &conflict,
@@ -668,9 +668,19 @@ impl crate::sync::SyncService {
                     guard,
                     app_data_root,
                 )?;
+                if queued {
+                    // 还没有真实采用远端内容：冲突记录与队列都保留，
+                    // 不能告诉 UI 已经应用。
+                    persist_conflict_state_for_target(sync_root, group, &state, &conflicts_json)?;
+                    return Ok(false);
+                }
                 true
             }
         };
+        if !applied_live {
+            Self::register_chosen_local_mutation(sync_root, path, &state)?;
+        }
+        state.conflicted_files.remove(path);
         remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
         persist_conflict_state_for_target(sync_root, group, &state, &conflicts_json)?;
         Ok(applied_live)
@@ -739,7 +749,7 @@ impl crate::sync::SyncService {
         state: &mut crate::sync::types::SyncState,
         guard: Option<&crate::storage::WorkspaceWriteLock>,
         app_data_root: Option<&Path>,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<bool> {
         match conflict.kind {
             SyncConflictKind::RemoteDeleted => {
                 if let (Some((volume_id, chapter_id)), Some(app_data_root)) =
@@ -759,12 +769,13 @@ impl crate::sync::SyncService {
                 state.known_files_updated_at.remove(path);
                 state.deleted_files.insert(path.to_string());
                 state.pending_take_remote.remove(path);
+                Self::settle_replaced_ledger(sync_root, path, state)?;
             }
             SyncConflictKind::BothChanged => {
                 let Some(snapshot_rel) = conflict.remote_snapshot_path.as_deref() else {
                     // 旧记录没有快照：本轮无法落盘远端内容，排队下一轮重新下载。
                     state.pending_take_remote.insert(path.to_string());
-                    return Ok(());
+                    return Ok(true);
                 };
                 Self::apply_remote_snapshot(sync_root, path, snapshot_rel, guard)?;
                 let hash = Self::canonical_known_hash(sync_root, path, conflict);
@@ -777,9 +788,49 @@ impl crate::sync::SyncService {
                 state.deleted_files.remove(path);
                 state.tombstones.retain(|tombstone| tombstone.original_path != path);
                 state.pending_take_remote.remove(path);
+                Self::settle_replaced_ledger(sync_root, path, state)?;
             }
         }
+        Ok(false)
+    }
+
+    /// 远端内容已覆盖本地对象：同一条持久状态里结算被覆盖的账本序号，
+    /// 下一轮不会再用旧 delete/upsert 事实把远端版本删掉。
+    fn settle_replaced_ledger(
+        sync_root: &Path,
+        path: &str,
+        state: &mut crate::sync::types::SyncState,
+    ) -> crate::Result<()> {
+        let seq = crate::sync::local_mutations::latest_ledger_seq(sync_root, path)?;
+        if seq > 0 {
+            state
+                .confirmed_mutation_seq
+                .insert(path.to_string(), seq);
+        }
         Ok(())
+    }
+
+    /// 保留本地/手工合并后，把当前实际内容或删除登记为一条新的普通 mutation。
+    fn register_chosen_local_mutation(
+        sync_root: &Path,
+        path: &str,
+        state: &crate::sync::types::SyncState,
+    ) -> crate::Result<()> {
+        let exists = sync_root.join(path).is_file();
+        let (upserted, deleted) = if exists {
+            (vec![path.to_string()], Vec::new())
+        } else {
+            (Vec::new(), vec![path.to_string()])
+        };
+        let records = crate::sync::local_mutations::records_for_committed_paths(
+            sync_root,
+            &format!("resolve_conflict:{path}"),
+            &state.device_id,
+            &upserted,
+            &deleted,
+            chrono::Utc::now().timestamp_millis(),
+        )?;
+        crate::sync::local_mutations::append_batch(sync_root, &records)
     }
 
     /// 解析 `volumes/<volume>/chapters/<chapter>/chapter.md` 路径。

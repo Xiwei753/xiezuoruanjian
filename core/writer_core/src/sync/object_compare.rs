@@ -104,6 +104,22 @@ pub(crate) fn compare_object(
         };
     }
 
+    // 本地没有该对象（文件丢失/尚未下载）而远端有内容：采用远端是恢复，
+    // 不是删除本地事实。
+    if matches!(local, ObjectSide::Absent) {
+        if matches!(remote, ObjectSide::Present(_)) {
+            return ObjectVerdict::ApplyRemoteUpsert;
+        }
+    }
+
+    // 从未同步过的本地新对象：完整远端树里的"不存在"不是对它的删除，
+    // 远端没有可覆盖的版本，直接上传。
+    if matches!(base, ObjectSide::Absent) {
+        if matches!(local, ObjectSide::Present(_)) && matches!(remote, ObjectSide::Deleted) {
+            return ObjectVerdict::PublishUpsert;
+        }
+    }
+
     let local_changed = local != base;
     let remote_changed = remote != base;
 
@@ -231,10 +247,12 @@ mod tests {
     }
 
     #[test]
-    fn delete_without_base_conflicts_once_until_user_chooses() {
+    fn unknown_base_local_object_is_uploaded_not_blocked_by_remote_delete() {
+        // 从未同步过的本地对象：远端没有它的版本事实，缺失/删除记录都不能
+        // 把用户新写的对象挡在本地。
         assert_eq!(
             compare_object(&ABSENT, &present("a"), &DELETED),
-            ObjectVerdict::Conflict(ObjectConflictSide::RemoteDeleted)
+            ObjectVerdict::PublishUpsert
         );
         // 用户保留本地后基线变成 Deleted，下一轮不再冲突，改为上传本地版本。
         assert_eq!(
@@ -263,9 +281,10 @@ mod tests {
             compare_object(&present("a"), &DELETED, &ABSENT),
             ObjectVerdict::Unparticipated
         );
+        // 本地对象丢失、远端仍有内容：恢复远端版本。
         assert_eq!(
             compare_object(&present("a"), &ABSENT, &present("a")),
-            ObjectVerdict::NoOp
+            ObjectVerdict::ApplyRemoteUpsert
         );
     }
 }

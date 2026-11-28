@@ -615,6 +615,47 @@ pub(crate) fn commit_object_plan(
         None => crate::sync::SyncService::load_sync_state_read_only(live_root, None)?,
     };
     apply_baseline_updates(&mut state, &plan.confirmations);
+    // 与内容/索引同一次提交结算账本序号：NoOp/双删/被远端覆盖的事实
+    // 不再留到下一轮被当成待同步变更。
+    for fact in &plan.settlements {
+        let current = state
+            .confirmed_mutation_seq
+            .get(&fact.path)
+            .copied()
+            .unwrap_or(0);
+        if fact.seq > current {
+            state
+                .confirmed_mutation_seq
+                .insert(fact.path.clone(), fact.seq);
+        }
+    }
+    // 采用远端版本的对象，同一次提交里清掉它旧的无快照冲突记录：
+    // 冲突只在真实应用内容后消失，不由 UI 选择本身猜。
+    let resolved: std::collections::HashSet<String> = plan
+        .confirmations
+        .iter()
+        .map(|update| update.rel_path.to_string_lossy().replace('\\', "/"))
+        .collect();
+    if !resolved.is_empty() {
+        let loaded = match run.app_group() {
+            Some(group) => {
+                crate::sync::conflict::load_conflicts_json_for_group(live_root, group)?
+            }
+            None => crate::sync::conflict::load_conflicts_json(live_root)?,
+        };
+        let before = loaded.len();
+        let mut conflicts = loaded;
+        conflicts.retain(|conflict| !resolved.contains(&conflict.local_path));
+        if conflicts.len() != before {
+            let rel = run
+                .app_group()
+                .map(crate::sync::types::AppDataGroup::local_conflicts_path)
+                .unwrap_or_else(|| "app-meta/sync/conflicts.json".to_string());
+            let bytes = serde_json::to_vec_pretty(&conflicts)
+                .map_err(|error| crate::Error::Io(std::io::Error::other(error.to_string())))?;
+            tx.add_bytes(&rel, &bytes)?;
+        }
+    }
     let state_rel = run
         .app_group()
         .map(crate::sync::types::AppDataGroup::local_state_path)
@@ -624,96 +665,6 @@ pub(crate) fn commit_object_plan(
     tx.add_bytes(&state_rel, &state_bytes)?;
     tx.commit()?;
     Ok(tx)
-}
-
-/// 按发布回执确认本轮真正的远端事实（Issue #1066）。
-///
-/// 只有 flush 实际写出的对象回执才能推进 `known_files`：本地上传在远端确认前
-/// 仍是"未确认事实"，失败重试时不会被误当成已同步。远端采用/删除已在提交阶段
-/// 推进过基线，这里重复确认是幂等的。
-///
-/// 返回无法确认的决议数量（调用方据此上报未结算）。
-pub(crate) fn confirm_published_objects(
-    sync_root: &Path,
-    target: &crate::sync::types::SyncTarget,
-    decisions: &[(String, crate::sync::decision::DurableObjectDecision)],
-    receipts: &[crate::sync::provider::round::PublishReceipt],
-) -> crate::Result<usize> {
-    use crate::sync::decision::DecisionOp;
-
-    let prefix = format!("{}/", target.remote_prefix.trim_end_matches('/'));
-    let mut receipt_by_path: std::collections::HashMap<
-        String,
-        &crate::sync::provider::round::PublishReceipt,
-    > = std::collections::HashMap::new();
-    for receipt in receipts {
-        receipt_by_path.insert(receipt.path.clone(), receipt);
-    }
-
-    // 只有本轮真正允许发布的对象才需要回执确认；未决冲突/纯远端消费的
-    // 决议不进入远端批次，不能因为它们没有回执就报"未结算"。
-    let relevant: Vec<(&str, &crate::sync::decision::DurableObjectDecision)> = decisions
-        .iter()
-        .filter(|(_, decision)| decision.is_publishable())
-        .filter_map(|(remote_path, decision)| {
-            remote_path
-                .strip_prefix(&prefix)
-                .map(|rel| (rel, decision))
-        })
-        .collect();
-    if relevant.is_empty() {
-        return Ok(0);
-    }
-
-    let mut state =
-        crate::sync::SyncService::load_sync_state_for_target(sync_root, target)?;
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let mut unconfirmed = 0usize;
-    let mut confirmed_any = false;
-    for (rel, decision) in relevant {
-        let remote_path = format!("{prefix}{rel}");
-        let receipt = receipt_by_path.get(&remote_path);
-        let confirmed = match decision.op {
-            DecisionOp::Upsert => receipt.is_some_and(|receipt| {
-                receipt.op == "upsert"
-                    && receipt.content_digest.as_deref() == Some(decision.final_hash.as_str())
-            }),
-            DecisionOp::Delete => receipt.is_some_and(|receipt| receipt.op == "delete"),
-        };
-        if !confirmed {
-            unconfirmed += 1;
-            continue;
-        }
-        confirmed_any = true;
-        match decision.op {
-            DecisionOp::Upsert => {
-                state
-                    .known_files
-                    .insert(rel.to_string(), decision.final_hash.clone());
-                state.known_files_updated_at.insert(rel.to_string(), now_ms);
-                state.deleted_files.remove(rel);
-                state.conflicted_files.remove(rel);
-                state.pending_take_remote.remove(rel);
-                state
-                    .tombstones
-                    .retain(|tombstone| tombstone.original_path != rel);
-            }
-            DecisionOp::Delete => {
-                state.known_files.remove(rel);
-                state.known_files_updated_at.remove(rel);
-                state.deleted_files.insert(rel.to_string());
-                state.conflicted_files.remove(rel);
-                state.pending_take_remote.remove(rel);
-                state
-                    .tombstones
-                    .retain(|tombstone| tombstone.original_path != rel);
-            }
-        }
-    }
-    if confirmed_any {
-        crate::sync::SyncService::save_sync_state_for_target(sync_root, target, &state)?;
-    }
-    Ok(unconfirmed)
 }
 
 /// 章节正文协调 + 一次 SaveTransaction 落盘（Issue #1066）。
@@ -1305,6 +1256,7 @@ pub(crate) fn commit_single_target_staging(
                     *publish = crate::sync::staging::PublishBatch {
                         objects: plan.uploads.clone(),
                         deletes: plan.publish_deletes.clone(),
+                        delete_mutations: plan.delete_facts.clone(),
                         manifest: plan.remote_manifest.clone(),
                     };
                     (TargetCommitResult::Ok, plan.conflict, committed_paths)

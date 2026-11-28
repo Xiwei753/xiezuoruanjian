@@ -162,10 +162,14 @@ pub(crate) fn stage_remote_changes(
                 continue;
             }
             let force_fetch = pending_take_remote.contains(&record.path);
+            let local_present = known_root.join(&record.path).is_file();
             if !force_fetch
-                && known.get(&record.path).map(String::as_str) == Some(record.content_hash.as_str())
+                && local_present
+                && known.get(&record.path).map(String::as_str)
+                    == Some(record.content_hash.as_str())
             {
-                // 远端停在已确认基线：本轮未参与。
+                // 远端停在已确认基线且本地对象仍在：本轮未参与。
+                // 本地对象缺失时仍要取固定版本 blob，供提交阶段恢复内容。
                 continue;
             }
             let validated = crate::sync::path::ValidatedSyncPath::new(&record.path)?;

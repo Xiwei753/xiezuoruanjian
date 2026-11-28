@@ -935,7 +935,7 @@ fn apply_published(
 }
 
 /// 账本里该路径当前最大的序号；没有记录时返回 0。
-fn latest_ledger_seq(sync_root: &Path, path: &str) -> crate::error::Result<u64> {
+pub(crate) fn latest_ledger_seq(sync_root: &Path, path: &str) -> crate::error::Result<u64> {
     let records = load_records(sync_root)?;
     Ok(records
         .iter()

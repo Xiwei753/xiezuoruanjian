@@ -386,6 +386,30 @@ impl<'a> RoundProvider<'a> {
         }
     }
 
+    /// 把一个已经完整生成并验证过的局部批次并入全局缓冲。
+    ///
+    /// 每个 target 的对象与索引先在自己的 RoundProvider 里生成；只有全部
+    /// 写入成功后才调用这里，失败 target 的局部缓冲直接丢弃，绝不污染
+    /// 其它 target 的发布批次。
+    pub fn absorb(&self, other: &RoundProvider<'_>) {
+        let Ok(mut other_state) = other.state.lock() else {
+            return;
+        };
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        for (path, entry) in std::mem::take(&mut other_state.entries) {
+            state.entries.insert(path, entry);
+        }
+        state.checks.append(&mut other_state.checks);
+        for (path, baseline) in std::mem::take(&mut other_state.baselines) {
+            state.baselines.entry(path).or_insert(baseline);
+        }
+        state
+            .preconditioned_paths
+            .append(&mut other_state.preconditioned_paths);
+    }
+
     /// Number of buffered entries awaiting the final publication.
     pub fn pending_len(&self) -> usize {
         self.state
@@ -440,14 +464,14 @@ impl<'a> RoundProvider<'a> {
                         .get(remote_path)
                         .and_then(|entry| entry.as_ref())
                         .is_some_and(|entry| {
-                            matches!(entry, BufferedValue::Content(current) if current == content)
+                            matches!(entry, BufferedValue::Content(current) if current.as_slice() == content.as_ref())
                         });
                     if same {
                         continue;
                     }
                     state.entries.insert(
                         remote_path.clone(),
-                        Some(BufferedValue::Content(content.clone())),
+                        Some(BufferedValue::Content(content.to_vec())),
                     );
                     outcome.rewritten += 1;
                 }
@@ -968,7 +992,7 @@ mod tests {
             final_version: Some(1),
             mutation_seq: 1,
             origin: DecisionOrigin::Local,
-            content: Some(b"one".to_vec()),
+            content: Some(std::sync::Arc::from(b"one".to_vec())),
             dependencies: Vec::new(),
         };
         // 旧单文件不再能成为发布依据；但迁移清理的 Delete 必须保留。

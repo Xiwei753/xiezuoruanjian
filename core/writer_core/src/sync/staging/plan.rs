@@ -19,8 +19,7 @@ use crate::sync::types::{AppDataGroup, ManifestFileRecord, SyncManifest, SyncSta
 
 use super::commit_plan::{BaselineUpdate, CommitAction, CommitPlan, PublishObject, StagingConflict};
 use super::resolve::{
-    read_live_manifest, read_live_manifest_for_group, read_staging_manifest,
-    read_staging_manifest_for_group, ManifestRecord,
+    read_staging_manifest, read_staging_manifest_for_group, ManifestRecord,
 };
 use super::run::StagingRun;
 
@@ -46,11 +45,21 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
 
     // 3. 第一次建立索引：把本地已有对象按磁盘内容导入一次持久 mutation 账本，
     //    正常同步之后只按账本与远端版本差异迭代。
+    let local_state_path = match &group {
+        Some(group) => group.local_state_path(),
+        None => "app-meta/sync/state.local.json".to_string(),
+    };
+    // 是否初始化只看本机索引是否存在，不看远端有没有数据：旧本地作品在
+    // 已有远端仓库时首次同步也要导入。
+    let local_manifest_rel = manifest_rel(group.as_ref());
+    let has_local_index = live_root.join(&local_state_path).exists()
+        || crate::sync::lww::ManifestStore::new(live_root, &local_manifest_rel.to_string_lossy())
+            .load_root()?
+            .is_some();
     if !run.delete_intent()
-        && state.known_files.is_empty()
+        && !has_local_index
         && state.tombstones.is_empty()
         && state.deleted_files.is_empty()
-        && remote_records.is_empty()
     {
         crate::sync::local_mutations::rebuild_pending_from_disk(
             live_root,
@@ -76,8 +85,6 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
         group.as_ref(),
     )?;
 
-    let local_manifest_records = read_local_records(&group, live_root)?;
-
     // 5. 参与本轮比较的路径：待同步 ledger ∪ 已确认基线 ∪ 远端变化 ∪
     //    本地索引独有对象。没有版本差异的 known 对象不再逐轮重读。
     let mut paths: BTreeSet<String> = BTreeSet::new();
@@ -92,7 +99,6 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
         .keys()
         .chain(tombstones.iter())
         .chain(pending_take_remote.iter())
-        .chain(local_manifest_records.keys())
     {
         insert(path);
     }
@@ -113,7 +119,7 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
         }
     }
     if run.delete_intent() {
-        for path in known.keys().chain(local_manifest_records.keys()) {
+        for path in known.keys() {
             insert(path);
         }
         for entry in crate::sync::scanner::scan_for_sync_group(
@@ -180,7 +186,8 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
                 ObjectSide::Present(record.content_hash.clone())
             }
             Some(_) => ObjectSide::Absent,
-            None if known.contains_key(&path) => ObjectSide::Deleted,
+            // 远端索引是完整树：缺失就是不存在（统一按 Deleted 版本参与比较）。
+            None if !remote_index_missing => ObjectSide::Deleted,
             None => ObjectSide::Absent,
         };
 
@@ -288,6 +295,13 @@ fn apply_verdict(
     match verdict {
         ObjectVerdict::NoOp => {
             plan.noop.push(rel.to_path_buf());
+            if let Some(record) = pending {
+                plan.settlements.push(mutation_fact(
+                    path,
+                    record,
+                    if record.is_delete() { "delete" } else { "upsert" },
+                ));
+            }
             match remote_meta {
                 Some(record) => {
                     final_records.insert(path.to_string(), to_file_record(record));
@@ -322,12 +336,17 @@ fn apply_verdict(
                 ))
             })?;
             let final_hash = crate::sync::hash::content_md5(&content);
+            let updated_at_ms = pending
+                .map(|record| record.updated_at_ms)
+                .unwrap_or_else(|| file_modified_ms(live_root, rel));
             plan.uploads.push(PublishObject {
                 rel_path: rel.to_path_buf(),
-                content,
+                content: std::sync::Arc::from(content),
                 base_hash: known.get(path).cloned(),
                 final_hash: final_hash.clone(),
                 mutation_seq: pending.map(|record| record.seq).unwrap_or(0),
+                updated_at_ms,
+                deleted_at_ms: None,
                 transaction_id: pending
                     .map(|record| record.transaction_id.clone())
                     .unwrap_or_default(),
@@ -336,9 +355,34 @@ fn apply_verdict(
         }
         ObjectVerdict::PublishDelete => {
             plan.publish_deletes.push(rel.to_path_buf());
+            if let Some(record) = pending {
+                plan.delete_facts
+                    .push(mutation_fact(path, record, "delete"));
+            } else {
+                // 旧 tombstone 没有账本序号：仍然确认删除事实，只是不推进序号。
+                let deleted_at_ms = state
+                    .tombstones
+                    .iter()
+                    .find(|tombstone| tombstone.original_path == path)
+                    .map(|tombstone| tombstone.deleted_at.saturating_mul(1000))
+                    .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+                plan.delete_facts
+                    .push(crate::sync::local_mutations::PublishedMutation {
+                        path: path.to_string(),
+                        op: "delete".to_string(),
+                        content_hash: String::new(),
+                        seq: 0,
+                        updated_at_ms: deleted_at_ms,
+                        deleted_at_ms: Some(deleted_at_ms),
+                    });
+            }
             final_records.insert(path.to_string(), delete_record(state, path));
         }
         ObjectVerdict::ApplyRemoteUpsert => {
+            if let Some(record) = pending {
+                plan.settlements
+                    .push(mutation_fact(path, record, "superseded"));
+            }
             let record = remote_meta
                 .filter(|record| record.op != "delete")
                 .ok_or_else(|| crate::Error::Other(format!(
@@ -360,6 +404,10 @@ fn apply_verdict(
             });
         }
         ObjectVerdict::ApplyRemoteDelete => {
+            if let Some(record) = pending {
+                plan.settlements
+                    .push(mutation_fact(path, record, "superseded"));
+            }
             // 只有本地确实存在对象时才需要落盘删除；远端删除事实本身仍然确认。
             if !matches!(local_side, ObjectSide::Absent) {
                 plan.content_actions.push(CommitAction::Delete {
@@ -374,6 +422,10 @@ fn apply_verdict(
         }
         ObjectVerdict::ConfirmDelete => {
             plan.noop.push(rel.to_path_buf());
+            if let Some(record) = pending {
+                plan.settlements
+                    .push(mutation_fact(path, record, "delete"));
+            }
             final_records.remove(path);
             plan.confirmations.push(BaselineUpdate {
                 rel_path: rel.to_path_buf(),
@@ -416,6 +468,30 @@ fn apply_verdict(
     Ok(())
 }
 
+fn mutation_fact(
+    path: &str,
+    record: &crate::sync::local_mutations::LocalMutationRecord,
+    op: &str,
+) -> crate::sync::local_mutations::PublishedMutation {
+    crate::sync::local_mutations::PublishedMutation {
+        path: path.to_string(),
+        op: op.to_string(),
+        content_hash: record.content_hash.clone(),
+        seq: record.seq,
+        updated_at_ms: record.updated_at_ms,
+        deleted_at_ms: record.deleted_at_ms,
+    }
+}
+
+fn file_modified_ms(live_root: &Path, rel: &Path) -> i64 {
+    std::fs::metadata(live_root.join(rel))
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis())
+}
+
 fn remote_index_missing(staging_root: &Path) -> bool {
     staging_root
         .join(super::download::REMOTE_INDEX_MISSING_MARKER)
@@ -451,17 +527,6 @@ fn load_state(run: &StagingRun, live_root: &Path) -> Result<SyncState> {
         ),
         None => crate::sync::SyncService::load_sync_state_read_only(live_root, None),
     }
-}
-
-fn read_local_records(
-    group: &Option<AppDataGroup>,
-    live_root: &Path,
-) -> Result<HashMap<String, ManifestRecord>> {
-    let records = match group {
-        Some(group) => read_live_manifest_for_group(live_root, group)?,
-        None => read_live_manifest(live_root)?,
-    };
-    Ok(records.unwrap_or_default())
 }
 
 fn read_optional(path: impl AsRef<Path>) -> Result<Option<Vec<u8>>> {

@@ -57,7 +57,7 @@ pub(crate) struct DurableObjectDecision {
     pub(crate) mutation_seq: u64,
     pub(crate) origin: DecisionOrigin,
     /// 冻结的最终内容；delete 时为 None。
-    pub(crate) content: Option<Vec<u8>>,
+    pub(crate) content: Option<std::sync::Arc<[u8]>>,
     /// 依赖对象（同一事务集合内必须一起发布的 identity）。
     pub(crate) dependencies: Vec<String>,
 }

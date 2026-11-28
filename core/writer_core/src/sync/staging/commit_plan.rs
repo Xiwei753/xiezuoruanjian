@@ -23,6 +23,12 @@ pub struct CommitPlan {
     pub uploads: Vec<PublishObject>,
     /// 已一致对象的基线确认：内容哈希 → 推进已确认版本；`None` → 记录删除事实。
     pub confirmations: Vec<BaselineUpdate>,
+    /// 本轮裁决已经确认、不需要再发布的本地账本事实（相同内容 / 双删 /
+    /// 被远端覆盖）。与内容/索引在同一个 SaveTransaction 里结算序号。
+    pub settlements: Vec<crate::sync::local_mutations::PublishedMutation>,
+    /// 本轮要发布删除的账本事实元数据（与 `publish_deletes` 一一对应），
+    /// 推送回执确认后用于结算序号。
+    pub delete_facts: Vec<crate::sync::local_mutations::PublishedMutation>,
     /// 本轮提交后远端应具有的对象索引（固定远端索引 + 本次真实决议）。
     /// 发布阶段直接用它生成远端清单，不再从 live 存储反推。
     pub remote_manifest: Option<crate::sync::types::SyncManifest>,
@@ -42,13 +48,17 @@ pub struct PublishObject {
     pub rel_path: PathBuf,
     /// 比较阶段冻结的本地内容；提交成功后同一字节进入发布决议，
     /// 不再按路径回读 live 猜内容。
-    pub content: Vec<u8>,
+    pub content: std::sync::Arc<[u8]>,
     /// 上次双方确认的内容摘要（上传决议的 precondition 基线）。
     pub base_hash: Option<String>,
     /// 本次要发布的本地内容摘要。
     pub final_hash: String,
     /// 产生该版本的本地 mutation 序号；没有账本记录时为 0。
     pub mutation_seq: u64,
+    /// 该账本事实的业务修改时间；没有账本记录时取文件时间。
+    pub updated_at_ms: i64,
+    /// 删除时间（仅删除事实有值）。
+    pub deleted_at_ms: Option<i64>,
     pub transaction_id: String,
 }
 
@@ -57,6 +67,8 @@ pub struct PublishObject {
 pub struct PublishBatch {
     pub objects: Vec<PublishObject>,
     pub deletes: Vec<PathBuf>,
+    /// 与 `deletes` 对应的账本事实（回执确认后结算序号）。
+    pub delete_mutations: Vec<crate::sync::local_mutations::PublishedMutation>,
     pub manifest: Option<crate::sync::types::SyncManifest>,
 }
 

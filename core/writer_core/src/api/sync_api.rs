@@ -109,26 +109,6 @@ fn record_sync_phase_failure(
 }
 
 /// 把冻结的远端对象索引写成临时 v2 存储，供发布阶段读取。
-fn write_remote_manifest_store(
-    root: &std::path::Path,
-    manifest_rel: &str,
-    manifest: &crate::sync::types::SyncManifest,
-) -> crate::error::Result<()> {
-    let store = crate::sync::lww::ManifestStore::new(root, manifest_rel);
-    let plan = store.plan_write_all(manifest, "")?;
-    for (rel, bytes) in plan.writes {
-        let path = root.join(&rel);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, &bytes)?;
-    }
-    for rel in plan.deletes {
-        let _ = std::fs::remove_file(root.join(&rel));
-    }
-    Ok(())
-}
-
 fn sync_target_digest(target: &str) -> String {
     format!("{:x}", Sha256::digest(target.as_bytes()))
 }
@@ -313,37 +293,6 @@ fn add_fingerprint_field(hasher: &mut Sha256, key: &str, value: &[u8]) {
 ///
 /// 推送成功后只按这份快照确认确实随本轮提交发布的事实；同步期间新写入的
 /// 更大序号保留为下一轮 outbox。
-type PendingMutationMap = std::collections::BTreeMap<
-    String,
-    std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
->;
-
-fn collect_preflight_pending(
-    app_data_root: &std::path::Path,
-    plan: &crate::sync::full_sync::FullSyncPlan,
-) -> crate::error::Result<PendingMutationMap> {
-    // Issue #1065 复审 #7214314073 第 3 项：未确认事实的读取必须与写事务
-    // 互斥；读失败也不能悄悄省略 target，否则本轮会把它当成“没有待上传”。
-    let _workspace_lock = crate::storage::WorkspaceWriteLock::acquire(app_data_root)?;
-    let mut pending = PendingMutationMap::new();
-    for planned in &plan.targets {
-        let Some(key) = crate::sync::full_sync::sync_target_checkpoint_key(planned) else {
-            continue;
-        };
-        let scope = if planned.target.app_group.is_some() {
-            crate::sync::types::SyncScope::App
-        } else {
-            crate::sync::types::SyncScope::Project
-        };
-        let records = crate::sync::local_mutations::pending_records(
-            &planned.target_live_root,
-            scope,
-            planned.target.app_group.as_ref(),
-        )?;
-        pending.insert(key, records);
-    }
-    Ok(pending)
-}
 
 fn repository_identity(config: &crate::sync::SyncConfig) -> Option<String> {
     match serde_json::to_vec(&(&config.active_provider, &config.provider_config)) {
@@ -1056,207 +1005,6 @@ impl WriterCoreApi {
         }
     }
 
-    /// 按推送回执确认本轮实际发布的对象事实（Issue #1065 复审 #3）。
-    ///
-    /// 只确认 preflight 快照里存在、且本轮确实随提交发布的 mutation：推进
-    /// known_files、记录确认序号、按序号压缩账本历史前缀。同步期间新写入的
-    /// 更新事实序号更大，保留到下一轮；失败/跳过的发布不确认任何事实。
-    /// 返回未能结算的 target 数：>0 表示已推送成功但本地确认没有落盘，
-    /// 调用方必须把本轮标成明确的未结算状态（不能只 warn 后报成功）。
-    fn confirm_published_targets(
-        &self,
-        preflight_pending: &PendingMutationMap,
-        targets: &[crate::sync::types::TargetSyncResult],
-        receipts: &[crate::sync::provider::round::PublishReceipt],
-        consumed: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
-        round_id: &str,
-        published_revision: Option<&str>,
-    ) -> usize {
-        let (app_data_root, projects_root) = {
-            let core = self.core_read();
-            (core.app_data_root.clone(), core.projects_root.clone())
-        };
-        let mut unsettled = 0usize;
-        for target in targets {
-            let key = match (&target.group_id, &target.project_id) {
-                (Some(group_id), _) => format!("app:{group_id}"),
-                (None, Some(project_id)) => format!("project:{project_id}"),
-                _ => continue,
-            };
-            let Some(pending) = preflight_pending.get(&key) else {
-                continue;
-            };
-            let (sync_root, sync_target) = match (&target.group_id, &target.project_id) {
-                (Some(group_id), _) => match crate::sync::types::AppDataGroup::from_id(group_id) {
-                    Ok(group) => (
-                        app_data_root.clone(),
-                        crate::sync::types::SyncTarget::app_data_group(group),
-                    ),
-                    Err(_) => continue,
-                },
-                (None, Some(project_id)) => (
-                    projects_root.join(project_id),
-                    crate::sync::types::SyncTarget::project(project_id),
-                ),
-                _ => continue,
-            };
-            let mut published = Vec::new();
-            // 只认 flush 真实写出去的路径 + 内容摘要：计划里的 uploaded_files
-            // 可能与实际发布的对象不一致（回执口径，复审 #3）。
-            let prefix = format!("{}/", target.remote_prefix.trim_end_matches('/'));
-            for receipt in receipts {
-                let Some(rel) = receipt.path.strip_prefix(prefix.as_str()) else {
-                    continue;
-                };
-                let Some(record) = pending.get(rel) else {
-                    continue;
-                };
-                match receipt.op.as_str() {
-                    "upsert" if record.is_upsert() => {
-                        if receipt.content_digest.as_deref() == Some(record.content_hash.as_str()) {
-                            published.push(crate::sync::local_mutations::PublishedMutation {
-                                path: rel.to_string(),
-                                op: "upsert".to_string(),
-                                content_hash: record.content_hash.clone(),
-                                seq: record.seq,
-                                updated_at_ms: record.updated_at_ms,
-                                deleted_at_ms: record.deleted_at_ms,
-                            });
-                        }
-                    }
-                    "delete" if record.is_delete() => {
-                        published.push(crate::sync::local_mutations::PublishedMutation {
-                            path: rel.to_string(),
-                            op: "delete".to_string(),
-                            content_hash: record.content_hash.clone(),
-                            seq: record.seq,
-                            updated_at_ms: record.updated_at_ms,
-                            deleted_at_ms: record.deleted_at_ms,
-                        });
-                    }
-                    _ => {}
-                }
-            }
-            // 已经与远端一致的 pending 事实（编辑后又还原、旧账本遗留）不需要
-            // 发布就能确认：用提交后的 known_files 证明远端基线已是同一内容。
-            // 删除仍然只认推送回执，不能用"known_files 里没有"推断（复审 #3）。
-            if let Ok(state) =
-                crate::sync::SyncService::load_sync_state_for_target(&sync_root, &sync_target)
-            {
-                for (path, record) in pending {
-                    if !record.is_upsert() {
-                        continue;
-                    }
-                    if published.iter().any(|entry| entry.path == *path) {
-                        continue;
-                    }
-                    if state.known_files.get(path) == Some(&record.content_hash) {
-                        published.push(crate::sync::local_mutations::PublishedMutation {
-                            path: path.clone(),
-                            op: "upsert".to_string(),
-                            content_hash: record.content_hash.clone(),
-                            seq: record.seq,
-                            updated_at_ms: record.updated_at_ms,
-                            deleted_at_ms: record.deleted_at_ms,
-                        });
-                    }
-                }
-            }
-            // 远端胜出的事实不再作为本地编辑回推：overwritten/远端删除说明
-            // 本地这次修改已被合并决议放弃，直接标记 superseded（复审 #3）。
-            // 被远端消费/让位的路径来自提交阶段的对象决议，不再拿 transfer
-            // 的 overwritten_files/remote_deletes 反推（复审 #7213234617 第 1 项）。
-            for path in consumed.get(&key).into_iter().flatten() {
-                let Some(record) = pending.get(path) else {
-                    continue;
-                };
-                if published.iter().any(|entry| entry.path == *path) {
-                    continue;
-                }
-                published.push(crate::sync::local_mutations::PublishedMutation {
-                    path: path.clone(),
-                    op: "superseded".to_string(),
-                    content_hash: record.content_hash.clone(),
-                    seq: record.seq,
-                    updated_at_ms: record.updated_at_ms,
-                    deleted_at_ms: record.deleted_at_ms,
-                });
-            }
-            if published.is_empty() {
-                continue;
-            }
-            match crate::sync::local_mutations::mark_confirmed(
-                &sync_root,
-                &sync_target,
-                &published,
-                round_id,
-                published_revision,
-            ) {
-                Ok(_) => {}
-                Err(error) => {
-                    log::warn!("[sync] confirm published mutations failed for {key}: {error}");
-                    unsettled += 1;
-                }
-            }
-        }
-        unsettled
-    }
-
-    /// 按远端发布回执确认对象引擎的本轮本地更改（Issue #1066）。
-    ///
-    /// 只有 flush 真实写出的对象才能推进 `known_files`；未确认对象保持未确认，
-    /// 下一轮重新比较并重推。返回未结算 target 数。
-    fn confirm_object_publications(
-        &self,
-        targets: &[crate::sync::types::TargetSyncResult],
-        decisions: &[(String, crate::sync::decision::DurableObjectDecision)],
-        receipts: &[crate::sync::provider::round::PublishReceipt],
-    ) -> usize {
-        let (app_data_root, projects_root) = {
-            let core = self.core_read();
-            (core.app_data_root.clone(), core.projects_root.clone())
-        };
-        let mut unsettled = 0usize;
-        for target in targets {
-            if !matches!(
-                crate::sync::commit_helpers::target_commit_mode(&target.result.status),
-                crate::sync::commit_helpers::TargetCommitMode::Full
-            ) {
-                continue;
-            }
-            let (sync_root, sync_target) = match (&target.group_id, &target.project_id) {
-                (Some(group_id), _) => match crate::sync::types::AppDataGroup::from_id(group_id) {
-                    Ok(group) => (
-                        app_data_root.clone(),
-                        crate::sync::types::SyncTarget::app_data_group(group),
-                    ),
-                    Err(_) => continue,
-                },
-                (None, Some(project_id)) => (
-                    projects_root.join(project_id),
-                    crate::sync::types::SyncTarget::project(project_id),
-                ),
-                _ => continue,
-            };
-            match crate::sync::commit_helpers::confirm_published_objects(
-                &sync_root,
-                &sync_target,
-                decisions,
-                receipts,
-            ) {
-                Ok(unconfirmed) => unsettled += unconfirmed,
-                Err(error) => {
-                    log::warn!(
-                        "[sync] confirm published objects failed for {}: {error}",
-                        target.remote_prefix
-                    );
-                    unsettled += 1;
-                }
-            }
-        }
-        unsettled
-    }
-
     /// 收口一次“无变化”快路径。
     ///
     /// 只有本轮恢复 settled（业务 obligation 全部结算）时，
@@ -1712,26 +1460,6 @@ impl WriterCoreApi {
                 return Err(crate::api::error::WriterError::from(e));
             }
         }
-        // 在 seed 之前固定各 target 的未确认事实：seed 复制的是这一刻的 live
-        // 内容，推送成功后只按这份快照的序号确认；seed 之后写入的更新事实
-        // 序号更大，保留为下一轮 outbox（Issue #1065 复审 #3）。
-        let preflight_pending = match collect_preflight_pending(&self.app_data_root, &plan) {
-            Ok(pending) => pending,
-            Err(error) => {
-                let msg = format!("collect preflight pending mutations failed: {error}");
-                log::warn!("[sync] prepare: {msg}");
-                let status = crate::sync::full_sync::error_to_persist_status(&error);
-                let error_category = core_sync_category(&error);
-                let _ = self.record_full_sync_preflight_failure_typed(
-                    sync_status_to_wire(&status),
-                    "preflight_pending".to_string(),
-                    error_category,
-                    "preflight_pending".to_string(),
-                    msg,
-                );
-                return Err(crate::api::error::WriterError::from(error));
-            }
-        };
         let staging_phase = SyncDiagnosticPhase::start_with_provider(
             diagnostic_operation_id,
             "staging",
@@ -1792,7 +1520,6 @@ impl WriterCoreApi {
             target_progress,
             diagnostic_operation_id,
             remote_revision_before.as_deref(),
-            &preflight_pending,
         ) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -1870,7 +1597,6 @@ impl WriterCoreApi {
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
         diagnostic_operation_id: &str,
         remote_revision: Option<&str>,
-        preflight_pending: &PendingMutationMap,
     ) -> ApiResult<RoundOutcome> {
         struct PendingTargetCommit {
             target_index: usize,
@@ -2083,22 +1809,16 @@ impl WriterCoreApi {
         // 冻结成刚提交的字节，杜绝推送旧 staging（复审 #2）。
         // 每个 target 的完整发布增量：只在提交成功后生成，包含实际成功的
         // 对象决议与对应远端索引；三者一起进入同一次 Git 提交。
-        struct TargetPublishDelta {
+        struct TargetPublishDelta<'p> {
+            round: crate::sync::provider::round::RoundProvider<'p>,
+            decisions: Vec<(String, crate::sync::decision::DurableObjectDecision)>,
+            objects: Vec<crate::sync::staging::PublishObject>,
+            delete_mutations: Vec<crate::sync::local_mutations::PublishedMutation>,
+            sync_root: std::path::PathBuf,
+            sync_target: crate::sync::types::SyncTarget,
             prefix: String,
-            project_id: Option<String>,
-            manifest_rel: String,
-            index_root: std::path::PathBuf,
-            decisions: Vec<crate::sync::decision::DurableObjectDecision>,
         }
-        let mut target_deltas: Vec<TargetPublishDelta> = Vec::new();
-        let mut publish_decisions: Vec<(String, crate::sync::decision::DurableObjectDecision)> =
-            Vec::new();
-        let mut manifest_publish_error: Option<String> = None;
-        // 被远端消费的本地事实（target key → target 相对路径），用于确认。
-        let mut consumed_by_target: std::collections::BTreeMap<
-            String,
-            std::collections::BTreeSet<String>,
-        > = std::collections::BTreeMap::new();
+        let mut target_deltas: Vec<TargetPublishDelta<'_>> = Vec::new();
         for pending in pending_commits {
             let PendingTargetCommit {
                 target_index,
@@ -2131,7 +1851,7 @@ impl WriterCoreApi {
                 target_committed_paths,
                 target_chapter_changes,
                 target_decisions,
-                target_manifest,
+                target_batch,
             ) = self.commit_transferred_target(
                 target_index,
                 prepared_failure,
@@ -2145,41 +1865,112 @@ impl WriterCoreApi {
                     | crate::sync::SyncStatus::FatalError(_)
                     | crate::sync::SyncStatus::Error(_)
             );
-            // 只有提交成功的 target 才生成完整发布增量；失败 target 无 delta，
-            // 内容与索引都不会进入本轮远端提交。
+            // 只有提交成功的 target 才生成完整发布增量：对象决议与最终索引
+            // 在本 target 自己的 RoundProvider 里一次生成，成功后整体并入全局
+            // 批次；任何一步失败都只丢弃自己的局部批次。
             if !commit_failed {
-                if let (Some(manifest), Some(run)) =
-                    (target_manifest, staging_runs.get(target_index))
-                {
-                    let manifest_rel = planned
-                        .target
-                        .app_group
-                        .as_ref()
-                        .map(crate::sync::types::AppDataGroup::local_manifest_path)
-                        .unwrap_or_else(|| crate::sync::lww::SYNC_MANIFEST_PATH.to_string());
-                    let index_root = self
-                        .app_data_root
-                        .join("app-meta/sync/publish-manifests")
-                        .join(run.run_id());
-                    match write_remote_manifest_store(&index_root, &manifest_rel, &manifest) {
-                        Ok(()) => target_deltas.push(TargetPublishDelta {
-                            prefix: planned.target.remote_prefix.trim_end_matches('/').to_string(),
-                            project_id: planned.project_id.clone(),
-                            manifest_rel,
-                            index_root,
-                            decisions: target_decisions.clone(),
-                        }),
-                        Err(error) => {
-                            // 该 target 的索引无法冻结：本轮不发布它的对象，
-                            // 其它 target 照常提交。
-                            target_with_conflicts.result.status =
-                                crate::sync::SyncStatus::RecoverableError(format!(
-                                    "manifest_stage_failed: {error}"
-                                ));
-                            target_with_conflicts.result.error = Some(format!(
-                                "stage object index for {} failed: {error}",
-                                planned.target.remote_prefix
-                            ));
+                if let Some(run) = staging_runs.get(target_index) {
+                    if target_batch.manifest.is_some() {
+                        let prefix =
+                            planned.target.remote_prefix.trim_end_matches('/').to_string();
+                        let manifest_rel = planned
+                            .target
+                            .app_group
+                            .as_ref()
+                            .map(crate::sync::types::AppDataGroup::local_manifest_path)
+                            .unwrap_or_else(|| crate::sync::lww::SYNC_MANIFEST_PATH.to_string());
+                        let mut target_round =
+                            crate::sync::provider::round::RoundProvider::new(
+                                provider,
+                                remote_revision
+                                    .map(crate::sync::provider::model::RemoteVersion::new),
+                            );
+                        let mut mapped = Vec::new();
+                        for decision in &target_decisions {
+                            let remote_path = match planned.project_id.as_deref() {
+                                Some(project_id) => {
+                                    format!("projects/{project_id}/{}", decision.identity)
+                                }
+                                None => format!("{prefix}/{}", decision.identity),
+                            };
+                            mapped.push((remote_path, decision.clone()));
+                        }
+                        let outcome = target_round.apply_durable_decisions(&mapped);
+                        let mut delta_error = if outcome.missing > 0 {
+                            Some(format!(
+                                "{} decided object(s) missing before publish",
+                                outcome.missing
+                            ))
+                        } else {
+                            None
+                        };
+                        if delta_error.is_none() {
+                            match crate::sync::provider::SyncProvider::list(
+                                &target_round,
+                                &prefix,
+                            ) {
+                                Ok(entries) => {
+                                    let remote_tree_files: std::collections::HashMap<
+                                        String,
+                                        String,
+                                    > = entries
+                                        .into_iter()
+                                        .map(|entry| (entry.path, entry.version.0))
+                                        .collect();
+                                    if let Err(error) =
+                                        crate::sync::lww::publish_remote_manifest(
+                                            &target_round,
+                                            &prefix,
+                                            run.target_live_root(),
+                                            &manifest_rel,
+                                            &remote_tree_files,
+                                            cancellation_token.as_ref(),
+                                        )
+                                    {
+                                        delta_error = Some(format!(
+                                            "stage object index for {prefix} failed: {error}"
+                                        ));
+                                    }
+                                }
+                                Err(error) => {
+                                    delta_error = Some(format!(
+                                        "list remote tree before manifest publish failed: {error}"
+                                    ));
+                                }
+                            }
+                        }
+                        let resolved = match (&planned.target.app_group, &planned.project_id) {
+                            (Some(group), _) => Some((
+                                self.app_data_root.clone(),
+                                crate::sync::types::SyncTarget::app_data_group(group.clone()),
+                            )),
+                            (None, Some(project_id)) => Some((
+                                self.projects_root.join(project_id),
+                                crate::sync::types::SyncTarget::project(project_id),
+                            )),
+                            _ => None,
+                        };
+                        match (delta_error, resolved) {
+                            (None, Some((sync_root, sync_target))) => {
+                                target_deltas.push(TargetPublishDelta {
+                                    round: target_round,
+                                    decisions: mapped,
+                                    objects: target_batch.objects.clone(),
+                                    delete_mutations: target_batch.delete_mutations.clone(),
+                                    sync_root,
+                                    sync_target,
+                                    prefix,
+                                });
+                            }
+                            (error, _) => {
+                                // 该 target 的完整 delta 生成失败：只丢弃它，
+                                // 其它 target 照常发布；对象与索引不会分离。
+                                let message = error
+                                    .unwrap_or_else(|| "target sync root unresolved".to_string());
+                                target_with_conflicts.result.status =
+                                    crate::sync::SyncStatus::RecoverableError(message.clone());
+                                target_with_conflicts.result.error = Some(message);
+                            }
                         }
                     }
                 }
@@ -2187,19 +1978,6 @@ impl WriterCoreApi {
             let commit_outcome =
                 crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
             commit_phase.finish_with_provider(&commit_outcome, provider);
-            let decision_key = crate::sync::full_sync::sync_target_checkpoint_key(planned);
-            if let Some(key) = decision_key.as_ref() {
-                // 被远端消费的本地事实只认提交阶段冻结的决议（origin =
-                // RemoteConsumed），不再从 transfer 结果列表推测（评审 #7214314073）。
-                let consumed: std::collections::BTreeSet<String> = target_decisions
-                    .iter()
-                    .filter(|decision| {
-                        decision.origin == crate::sync::decision::DecisionOrigin::RemoteConsumed
-                    })
-                    .map(|decision| decision.identity.clone())
-                    .collect();
-                consumed_by_target.insert(key.clone(), consumed);
-            }
             if let Some(ref sink) = progress_sink {
                 let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
                 sink.update_target_finish(
@@ -2341,84 +2119,16 @@ impl WriterCoreApi {
             );
         }
 
-        // 每个 target 的发布增量在提交成功时已经冻结（对象决议 + 最终索引）。
-        // 这里把它们合并进同一个 round：对象先进入缓冲，索引随后写入，
-        // 最终由一次 flush 提交。
-        let mut decision_outcome = crate::sync::decision::DecisionApplyOutcome::default();
+        // 每个 target 的完整 delta 已在自己的局部批次里生成成功；这里只做
+        // 内存合并，不会再因为某个 target 的索引失败而丢弃整轮。
         if !publish_blocked {
             for delta in &target_deltas {
-                for decision in &delta.decisions {
-                    let remote_path = match delta.project_id.as_deref() {
-                        Some(project_id) => {
-                            format!("projects/{project_id}/{}", decision.identity)
-                        }
-                        None => format!("{}/{}", delta.prefix, decision.identity),
-                    };
-                    publish_decisions.push((remote_path, decision.clone()));
-                }
-            }
-            decision_outcome = round.apply_durable_decisions(&publish_decisions);
-        }
-        if decision_outcome.rewritten > 0
-            || decision_outcome.withheld > 0
-            || decision_outcome.missing > 0
-        {
-            log::info!(
-                "[sync] publish batch rebuilt from durable decisions: rewritten={} withheld={} missing={}",
-                decision_outcome.rewritten,
-                decision_outcome.withheld,
-                decision_outcome.missing
-            );
-        }
-        if decision_outcome.missing > 0 {
-            log::warn!(
-                "[sync] {} decided object(s) missing before publish; they stay unconfirmed",
-                decision_outcome.missing
-            );
-        }
-
-        // 每个 target 的索引与业务对象在同一次 flush 里提交。索引文件已在
-        // 提交成功时冻结到临时目录；这里只把它们写进同一个 round。
-        if !publish_blocked {
-            for delta in &target_deltas {
-                let remote_tree_files: std::collections::HashMap<String, String> =
-                    match crate::sync::provider::SyncProvider::list(round, &delta.prefix) {
-                        Ok(entries) => entries
-                            .into_iter()
-                            .map(|entry| (entry.path, entry.version.0))
-                            .collect(),
-                        Err(error) => {
-                            manifest_publish_error = Some(format!(
-                                "list remote tree before manifest publish failed: {error}"
-                            ));
-                            publish_blocked = true;
-                            break;
-                        }
-                    };
-                if let Err(error) = crate::sync::lww::publish_remote_manifest(
-                    round,
-                    &delta.prefix,
-                    &delta.index_root,
-                    &delta.manifest_rel,
-                    &remote_tree_files,
-                    cancellation_token.as_ref(),
-                ) {
-                    // 索引写不进 round 就是本轮传输失败：不能只发布对象。
-                    manifest_publish_error = Some(format!(
-                        "publish object index for {} failed: {error}",
-                        delta.prefix
-                    ));
-                    publish_blocked = true;
-                    break;
-                }
-            }
-            if publish_blocked {
-                round.discard();
+                round.absorb(&delta.round);
             }
         }
 
         let mut publish_succeeded = false;
-        let mut publish_error: Option<String> = manifest_publish_error;
+        let mut publish_error: Option<String> = None;
         let mut publish_error_category: Option<String> = None;
         let mut publish_ack_unsettled = 0usize;
 
@@ -2458,21 +2168,89 @@ impl WriterCoreApi {
                         publish_started_at.elapsed().as_millis()
                     );
                     publish_phase.finish_with_provider(outcome, provider);
-                    // 远端提交成功：按回执确认本轮实际发布的对象事实，推进
-                    // known_files 并按序号压缩账本历史前缀。失败/跳过不确认。
-                    publish_ack_unsettled = self.confirm_published_targets(
-                        preflight_pending,
-                        &all_targets,
-                        &publish_receipts,
-                        &consumed_by_target,
-                        diagnostic_operation_id,
-                        published_revision.as_deref(),
-                    );
-                    publish_ack_unsettled += self.confirm_object_publications(
-                        &all_targets,
-                        &publish_decisions,
-                        &publish_receipts,
-                    );
+                    // 远端提交成功：只用本轮实际裁决 + 发布回执结算账本事实，
+                    // 不再从 preflight 快照/known_files 二次猜测。
+                    let mut receipt_by_path: std::collections::HashMap<
+                        &str,
+                        &crate::sync::provider::round::PublishReceipt,
+                    > = std::collections::HashMap::new();
+                    for receipt in &publish_receipts {
+                        receipt_by_path.insert(receipt.path.as_str(), receipt);
+                    }
+                    for delta in &target_deltas {
+                        let mut published = Vec::new();
+                        let mut unconfirmed = false;
+                        for (remote_path, decision) in &delta.decisions {
+                            if !decision.is_publishable() {
+                                continue;
+                            }
+                            let prefix = format!("{}/", delta.prefix);
+                            let Some(identity) = remote_path.strip_prefix(&prefix) else {
+                                continue;
+                            };
+                            let receipt = receipt_by_path.get(remote_path.as_str());
+                            let confirmed = match decision.op {
+                                crate::sync::decision::DecisionOp::Upsert => {
+                                    receipt.is_some_and(|receipt| {
+                                        receipt.op == "upsert"
+                                            && receipt.content_digest.as_deref()
+                                                == Some(decision.final_hash.as_str())
+                                    })
+                                }
+                                crate::sync::decision::DecisionOp::Delete => {
+                                    receipt.is_some_and(|receipt| receipt.op == "delete")
+                                }
+                            };
+                            if !confirmed {
+                                unconfirmed = true;
+                                continue;
+                            }
+                            let identity = identity.to_string();
+                            let mutation = match decision.op {
+                                crate::sync::decision::DecisionOp::Upsert => delta
+                                    .objects
+                                    .iter()
+                                    .find(|object| {
+                                        object.rel_path.to_string_lossy().replace('\\', "/")
+                                            == identity
+                                    })
+                                    .map(|object| {
+                                        crate::sync::local_mutations::PublishedMutation {
+                                            path: identity.clone(),
+                                            op: "upsert".to_string(),
+                                            content_hash: decision.final_hash.clone(),
+                                            seq: object.mutation_seq,
+                                            updated_at_ms: object.updated_at_ms,
+                                            deleted_at_ms: object.deleted_at_ms,
+                                        }
+                                    }),
+                                crate::sync::decision::DecisionOp::Delete => delta
+                                    .delete_mutations
+                                    .iter()
+                                    .find(|mutation| mutation.path == identity)
+                                    .cloned(),
+                            };
+                            match mutation {
+                                Some(mutation) => published.push(mutation),
+                                None => unconfirmed = true,
+                            }
+                        }
+                        if unconfirmed {
+                            publish_ack_unsettled += 1;
+                        }
+                        if !published.is_empty()
+                            && crate::sync::local_mutations::mark_confirmed(
+                                &delta.sync_root,
+                                &delta.sync_target,
+                                &published,
+                                diagnostic_operation_id,
+                                published_revision.as_deref(),
+                            )
+                            .is_err()
+                        {
+                            publish_ack_unsettled += 1;
+                        }
+                    }
                 }
                 Err(error) => {
                     log::warn!(
@@ -2506,10 +2284,6 @@ impl WriterCoreApi {
                     publish_error = Some(format!("remote_publish_failed: {error}"));
                 }
             }
-        }
-
-        for delta in &target_deltas {
-            let _ = std::fs::remove_dir_all(&delta.index_root);
         }
 
         // 每个 target 的 commit 已在同一写锁内完成 Store 协调与索引失效（问题2）。
@@ -2653,7 +2427,7 @@ impl WriterCoreApi {
         Vec<crate::sync::commit_helpers::CommittedPath>,
         Vec<crate::chapter::ChapterChangeReceipt>,
         Vec<crate::sync::decision::DurableObjectDecision>,
-        Option<crate::sync::types::SyncManifest>,
+        crate::sync::staging::PublishBatch,
     ) {
         if prepared_failure {
             // 迁移失败时 staging 未 seed，本组本次不上传也不 Commit。
@@ -2662,7 +2436,7 @@ impl WriterCoreApi {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
-                None,
+                crate::sync::staging::PublishBatch::default(),
             );
         }
         match staging_runs.get(target_index) {
@@ -2674,7 +2448,7 @@ impl WriterCoreApi {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
-                None,
+                crate::sync::staging::PublishBatch::default(),
             ),
         }
     }
@@ -2689,7 +2463,7 @@ impl WriterCoreApi {
         Vec<crate::sync::commit_helpers::CommittedPath>,
         Vec<crate::chapter::ChapterChangeReceipt>,
         Vec<crate::sync::decision::DurableObjectDecision>,
-        Option<crate::sync::types::SyncManifest>,
+        crate::sync::staging::PublishBatch,
     ) {
         // Issue #1039 复核：同步 Commit 与独立 MCP 写事务必须共享应用数据根上的
         // 跨进程工作区锁。锁必须先于 state_lock 获取，并覆盖 live 读取、Store
@@ -2706,7 +2480,13 @@ impl WriterCoreApi {
                 target_with_error.result.error = Some(format!(
                     "cannot acquire workspace write lock before sync commit: {error}"
                 ));
-                return (target_with_error, Vec::new(), Vec::new(), Vec::new(), None);
+                return (
+                    target_with_error,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    crate::sync::staging::PublishBatch::default(),
+                );
             }
         };
 
@@ -2729,7 +2509,13 @@ impl WriterCoreApi {
                     "flush_all_starmap_stores before commit failed: {}",
                     e
                 ));
-                return (target_with_conflicts, Vec::new(), Vec::new(), Vec::new(), None);
+                return (
+                    target_with_conflicts,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    crate::sync::staging::PublishBatch::default(),
+                );
             }
 
             let mut target_with_conflicts = target_sync_result.clone();
@@ -2820,7 +2606,7 @@ impl WriterCoreApi {
                         committed_paths,
                         chapter_receipts,
                         Vec::new(),
-                        None,
+                        crate::sync::staging::PublishBatch::default(),
                     );
                 }
             };
@@ -2841,7 +2627,7 @@ impl WriterCoreApi {
                 committed_paths,
                 chapter_receipts,
                 decisions,
-                publish_batch.manifest,
+                publish_batch,
             )
         })
     }
