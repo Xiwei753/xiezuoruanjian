@@ -206,37 +206,32 @@ pub struct FullSyncDiagnosticsResult {
 ///    `<app_data_root>/app-meta/sync/pending_deleted_targets.json`；
 /// 2. `prepare_full_sync` 加载 pending deleted targets，加入 `FullSyncPlan.targets`，
 ///    `target_kind = "deleted_project"`；
-/// 3. `run_transfer` 对 `deleted_project` target 走 target-delete 计划：
-///    `provider.list(remote_prefix)` 枚举远端对象 → 逐个 `provider.delete(...)`；
-/// 4. 全部远端删除成功后从 pending 列表移除该条目。
+/// 3. 同步把删除当作普通对象删除：以删除前的已确认对象版本为基线，
+///    远端未变的对象逐个发布 Delete，远端新增/修改的对象交给用户选择；
+/// 4. 所有对象处理完后才从 pending 列表移除该条目。
 ///
 /// ## provider-neutral
 ///
 /// 只使用 `SyncProvider::list/delete` 和 capabilities，不写 GitHub 专用逻辑。
 /// GitHub 的 SHA/branch/API 细节由 `GitHubProvider` 自己处理。
 ///
-///   `deleted_at_ms` / `device_id` 参与 LWW 决策。
-/// `run_deleted_target_sync` 先读远端 manifest，用 `deleted_at_ms` 与远端
-/// manifest 的 `max(lww_record_time)` 比较，本地 tombstone 胜出才删远端，
-/// 远端更晚则不删（远端有更新，下次正常 sync 会下载恢复）。
+/// `deleted_at_ms` / `device_id` 只用于诊断与持久化，不参与胜负判定。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingDeletedTarget {
     /// 已删除的同步目标 — `SyncTarget::project(project_id)`。
     pub target: SyncTarget,
-    /// 删除时间戳（Unix 毫秒）。
-    ///
-    ///   参与 LWW 决策，不再只用于排序和日志。
-    /// 与远端 manifest 的 `max(lww_record_time)` 比较，本地 tombstone 胜出才删远端。
+    /// 删除时间戳（Unix 毫秒），只用于诊断。
     pub deleted_at_ms: i64,
     /// 关联的 delete journal token，用于 ack 推进 journal。
     pub journal_token: String,
-    /// 发起删除的设备 ID，用于 LWW 平局决胜。
-    ///
-    ///   时间戳相同时，字典序大的 device_id 获胜
-    /// （与 `sync/lww/compare.rs::resolve_lww_path` 的 tie-break 规则一致）。
-    /// `#[serde(default)]` 保持向后兼容：旧文件反序列化得到空字符串。
+    /// 发起删除的设备 ID，只用于诊断。
     #[serde(default)]
     pub device_id: String,
+    /// 删除前的作品目录（回收区）快照根：提供最后的已确认对象基线。
+    ///
+    /// 旧记录没有这个字段时只能按"没有基线"比较，远端对象一律交给用户选择。
+    #[serde(default)]
+    pub baseline_root: Option<String>,
     /// 需要在远端删除的相对路径列表（相对于 `target.remote_prefix`）。
     ///
     /// `None` 表示删除整个 `remote_prefix` 下所有远端对象（由 `provider.list` 枚举）；
@@ -264,8 +259,15 @@ impl PendingDeletedTarget {
             deleted_at_ms,
             journal_token: journal_token.to_string(),
             device_id: device_id.to_string(),
+            baseline_root: None,
             paths: None,
         }
+    }
+
+    /// 记录删除前作品目录在回收区的位置。
+    pub fn with_baseline_root(mut self, baseline_root: impl Into<String>) -> Self {
+        self.baseline_root = Some(baseline_root.into());
+        self
     }
 }
 

@@ -28,6 +28,9 @@ pub struct CommitPlan {
     pub uploads: Vec<PublishObject>,
     /// 已一致对象的基线确认：内容哈希 → 推进已确认版本；`None` → 记录删除事实。
     pub confirmations: Vec<BaselineUpdate>,
+    /// 本轮提交后远端应具有的对象索引（固定远端索引 + 本次真实决议）。
+    /// 发布阶段直接用它生成远端清单，不再从 live 存储反推。
+    pub remote_manifest: Option<crate::sync::types::SyncManifest>,
     /// 需要把本地删除传播到远端的对象（本地相对路径）。
     pub publish_deletes: Vec<PathBuf>,
     /// 只有本地有变化、远端未参与：保留本地（无需写盘，上传由 `uploads` 表达）。

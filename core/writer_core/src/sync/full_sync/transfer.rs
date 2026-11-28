@@ -7,7 +7,7 @@
 
 use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::provider::SyncProvider;
-use crate::sync::types::{PlannedTargetKind, SyncResult, TargetSyncResult};
+use crate::sync::types::{SyncResult, TargetSyncResult};
 
 use super::transfer_helpers::*;
 use super::FullSyncPlan;
@@ -50,22 +50,17 @@ pub fn run_single_target_transfer(
     let planned = &plan.targets[target_index];
     let staging_root = planned.staging_root.as_deref()?;
 
-    let result = match planned.target_kind {
-        PlannedTargetKind::DeleteRemoteProject => transfer_delete_object_scope(
-            provider,
-            &planned.target,
-            &planned.local_root,
-            staging_root,
-            cancellation_token,
-        ),
-        _ => transfer_object_scope(
-            provider,
-            &planned.target,
-            &planned.local_root,
-            Some(staging_root),
-            cancellation_token,
-        ),
-    };
+    // 删除作品与其它 target 走同一条对象传输：真正需要的远端冲突内容
+    // 也会下载到 staging，供用户预览与选择。
+    let known_root = planned.baseline_root.as_deref().unwrap_or(&planned.local_root);
+    let result = transfer_object_scope(
+        provider,
+        &planned.target,
+        &planned.local_root,
+        known_root,
+        Some(staging_root),
+        cancellation_token,
+    );
 
     let target_sync_result = TargetSyncResult {
         target_kind: planned.target_kind.as_target_kind_str().to_string(),

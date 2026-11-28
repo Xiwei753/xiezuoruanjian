@@ -38,6 +38,7 @@ pub(super) fn transfer_object_scope(
     provider: &dyn SyncProvider,
     target: &SyncTarget,
     live_root: &Path,
+    known_root: &Path,
     staging_root: Option<&Path>,
     cancellation_token: Option<&SyncCancellationToken>,
 ) -> SyncResult {
@@ -61,51 +62,13 @@ pub(super) fn transfer_object_scope(
         provider,
         target,
         live_root,
+        known_root,
         staging_root,
     ) {
         Ok(outcome) => {
             let mut result = SyncResult::success();
             result.downloaded_files = outcome.downloaded;
             result.remote_deletes = outcome.remote_deletes;
-            result
-        }
-        Err(error) => sync_result_from_error(error),
-    }
-}
-
-/// 用户已删除作品的远端删除：只读远端索引，不下载任何 blob。
-///
-/// staging 里的记录就是"远端还有哪些对象"，提交阶段把它们全部发布为删除。
-pub(super) fn transfer_delete_object_scope(
-    provider: &dyn SyncProvider,
-    target: &SyncTarget,
-    live_root: &Path,
-    staging_root: &Path,
-    cancellation_token: Option<&SyncCancellationToken>,
-) -> SyncResult {
-    if let Some(token) = cancellation_token {
-        if token.is_cancelled() {
-            log::info!(
-                "[sync] transfer_delete_object_scope: cancellation requested — skipping {}",
-                target.remote_prefix
-            );
-            return SyncResult::success();
-        }
-    }
-    match crate::sync::staging::download::stage_remote_index_only(
-        provider,
-        target,
-        live_root,
-        staging_root,
-    ) {
-        Ok(outcome) => {
-            let mut result = SyncResult::success();
-            result.remote_deletes = crate::sync::staging::download::read_staged_remote_records(
-                target,
-                staging_root,
-            )
-            .map(|records| records.keys().cloned().collect())
-            .unwrap_or_default();
             result
         }
         Err(error) => sync_result_from_error(error),

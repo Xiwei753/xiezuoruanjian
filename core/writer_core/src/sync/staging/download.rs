@@ -60,18 +60,21 @@ fn read_remote_index(
     crate::sync::lww::fetch_remote_manifest_at(provider, &target.remote_prefix)
 }
 
-/// 本机已确认基线（known_files）。
+/// 本机已确认基线与旧冲突遗留的"下一轮取远端"路径。
 fn load_known_files(
     sync_root: &Path,
     target: &SyncTarget,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<(BTreeMap<String, String>, std::collections::HashSet<String>)> {
     let state: SyncState = match &target.app_group {
         Some(group) => crate::sync::SyncService::load_sync_state_read_only_for_group(
             sync_root, group, None,
         )?,
         None => crate::sync::SyncService::load_sync_state_read_only(sync_root, None)?,
     };
-    Ok(state.known_files.into_iter().collect())
+    Ok((
+        state.known_files.into_iter().collect(),
+        state.pending_take_remote,
+    ))
 }
 
 /// 增量下载远端变化对象到 staging，并把远端索引记录写进 staging manifest。
@@ -84,32 +87,10 @@ pub(crate) fn stage_remote_changes(
     provider: &dyn SyncProvider,
     target: &SyncTarget,
     sync_root: &Path,
+    known_root: &Path,
     staging_root: &Path,
 ) -> Result<RemoteStageOutcome> {
-    stage(provider, target, sync_root, staging_root, true)
-}
-
-/// 只读远端对象索引，不下载任何 blob（作品删除意图使用）。
-///
-/// 索引缺失时列出远端对象，用远端版本号建立"远端仍存在"的事实记录；
-/// 提交阶段把这些对象全部发布为删除。
-pub(crate) fn stage_remote_index_only(
-    provider: &dyn SyncProvider,
-    target: &SyncTarget,
-    sync_root: &Path,
-    staging_root: &Path,
-) -> Result<RemoteStageOutcome> {
-    stage(provider, target, sync_root, staging_root, false)
-}
-
-fn stage(
-    provider: &dyn SyncProvider,
-    target: &SyncTarget,
-    sync_root: &Path,
-    staging_root: &Path,
-    download_blobs: bool,
-) -> Result<RemoteStageOutcome> {
-    let known = load_known_files(sync_root, target)?;
+    let (known, pending_take_remote) = load_known_files(known_root, target)?;
     let mut outcome = RemoteStageOutcome::default();
 
     let remote_manifest = read_remote_index(provider, target)?;
@@ -145,21 +126,6 @@ fn stage(
                         continue;
                     }
                 }
-                if !download_blobs {
-                    records.insert(
-                        rel.clone(),
-                        ManifestFileRecord {
-                            path: rel,
-                            content_hash: entry.version.0.clone(),
-                            updated_at_ms: 0,
-                            deleted_at_ms: None,
-                            device_id: String::new(),
-                            op: "upsert".to_string(),
-                            schema_version: 1,
-                        },
-                    );
-                    continue;
-                }
                 let remote_path = format!("{prefix}/{rel}");
                 let Some(object) = provider.read(&remote_path)? else {
                     continue;
@@ -191,15 +157,15 @@ fn stage(
             if record.content_hash.is_empty() {
                 continue;
             }
-            if !download_blobs {
-                continue;
-            }
-            if known.get(&record.path).map(String::as_str) == Some(record.content_hash.as_str()) {
+            let force_fetch = pending_take_remote.contains(&record.path);
+            if !force_fetch
+                && known.get(&record.path).map(String::as_str) == Some(record.content_hash.as_str())
+            {
                 // 远端停在已确认基线：本轮未参与。
                 continue;
             }
             let local_path = sync_root.join(&record.path);
-            if local_path.is_file() {
+            if !force_fetch && local_path.is_file() {
                 let local_hash = crate::sync::hash::content_md5_file(&local_path).unwrap_or_default();
                 if local_hash == record.content_hash {
                     // 本机已有同一内容，不需要网络下载。

@@ -618,7 +618,8 @@ pub fn ack_project_delete_history(app_data_root: &Path, journal_token: &str) -> 
                 deleted_at_ms,
                 journal_token,
                 &tx.journal.device_id,
-            );
+            )
+            .with_baseline_root(tx.journal.worktree_trash.clone());
             crate::sync::pending_deleted::record_pending_deleted_target(
                 app_data_root,
                 pending_deleted,

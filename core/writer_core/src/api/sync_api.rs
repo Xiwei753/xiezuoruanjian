@@ -108,6 +108,27 @@ fn record_sync_phase_failure(
     record_sync_diagnostic("sync.phase.failure", "sync.run", fields);
 }
 
+/// 把冻结的远端对象索引写成临时 v2 存储，供发布阶段读取。
+fn write_remote_manifest_store(
+    root: &std::path::Path,
+    manifest_rel: &str,
+    manifest: &crate::sync::types::SyncManifest,
+) -> crate::error::Result<()> {
+    let store = crate::sync::lww::ManifestStore::new(root, manifest_rel);
+    let plan = store.plan_write_all(manifest, "")?;
+    for (rel, bytes) in plan.writes {
+        let path = root.join(&rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, &bytes)?;
+    }
+    for rel in plan.deletes {
+        let _ = std::fs::remove_file(root.join(&rel));
+    }
+    Ok(())
+}
+
 fn sync_target_digest(target: &str) -> String {
     format!("{:x}", Sha256::digest(target.as_bytes()))
 }
@@ -2324,6 +2345,11 @@ impl WriterCoreApi {
                 let Some(run) = staging_runs.get(target_index) else {
                     continue;
                 };
+                // 远端清单 = 提交阶段冻结的"固定远端索引 + 本次真实决议"，
+                // 不再从 live 存储反推，也不把未决对象的本地记录发出去。
+                let Some(manifest) = run.take_publish_manifest() else {
+                    continue;
+                };
                 let manifest_rel = planned
                     .target
                     .app_group
@@ -2338,16 +2364,29 @@ impl WriterCoreApi {
                             .map(|entry| (entry.path, entry.version.0))
                             .collect(),
                         Err(error) => {
+                            // 该 target 索引本轮不发布；其它 target 照常进入同一次提交。
                             manifest_publish_error = Some(format!(
                                 "list remote tree before manifest publish failed: {error}"
                             ));
-                            break;
+                            continue;
                         }
                     };
+                let index_root = run.staging_root().join("remote-manifest");
+                if let Err(error) = write_remote_manifest_store(
+                    &index_root,
+                    &manifest_rel,
+                    &manifest,
+                ) {
+                    manifest_publish_error = Some(format!(
+                        "stage object index for {} failed: {error}",
+                        planned.target.remote_prefix
+                    ));
+                    continue;
+                }
                 if let Err(error) = crate::sync::lww::publish_remote_manifest(
                     round,
                     &prefix,
-                    run.target_live_root(),
+                    &index_root,
                     &manifest_rel,
                     &remote_tree_files,
                     cancellation_token.as_ref(),
@@ -2356,12 +2395,7 @@ impl WriterCoreApi {
                         "publish object index for {} failed: {error}",
                         planned.target.remote_prefix
                     ));
-                    break;
                 }
-            }
-            if manifest_publish_error.is_some() {
-                publish_blocked = true;
-                round.discard();
             }
         }
 

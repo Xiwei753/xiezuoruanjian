@@ -37,7 +37,16 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
     };
 
     // 1. 已确认版本索引：基线与最后确认时间。
-    let state = load_state(run, live_root)?;
+    //    删除作品的 target 用删除前回收区快照里的状态作为最后已确认基线；
+    //    绝不能用远端当前版本替代基线（那会无条件覆盖另一端的修改）。
+    let state = if run.delete_intent() {
+        match run.baseline_root() {
+            Some(root) => crate::sync::SyncService::load_sync_state_read_only(root, None)?,
+            None => load_state(run, live_root)?,
+        }
+    } else {
+        load_state(run, live_root)?
+    };
     let known: HashMap<String, String> = state.known_files.clone();
     let known_updated_at: HashMap<String, i64> = state
         .known_files_updated_at
@@ -52,6 +61,7 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
     let deleted_facts: HashSet<String> = state.deleted_files.iter().cloned().collect();
 
     // 2. 本轮持久 mutation：决定本地版本与受影响集合。
+    let pending_take_remote = state.pending_take_remote.clone();
     let pending = crate::sync::local_mutations::pending_records(
         live_root,
         run.scope(),
@@ -98,7 +108,14 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
 
         // 本地版本：删除意图 > 账本事实 > 已确认版本 + mtime > 显式删除。
         let local_side = if delete_intent {
-            ObjectSide::Deleted
+            // 作品删除意图下：仍未存在的对象按删除传播；用户已经选择"采用远端"
+            // 恢复出来的对象按当前内容参与比较，不能再次被删除。
+            let full = live_root.join(&rel);
+            if full.is_file() {
+                ObjectSide::Present(crate::sync::hash::content_md5(&std::fs::read(&full)?))
+            } else {
+                ObjectSide::Deleted
+            }
         } else if let Some(record) = pending_record {
             if record.is_delete() {
                 ObjectSide::Deleted
@@ -133,12 +150,10 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
             None => ObjectSide::Absent,
         };
 
-        // 共同基线：内容摘要优先；其次是已确认删除。删除整个作品的意图下
-        // 基线取远端版本：用户已明确删除，远端对象逐个传播删除，不再逐个
-        // 产生"修改 vs 删除"冲突。
-        let base_side = if delete_intent {
-            remote_side.clone()
-        } else if let Some(hash) = known.get(&path) {
+        // 共同基线：内容摘要优先；其次是已确认删除。删除作品也使用删除前
+        // 已确认的对象基线：远端未变的对象直接传播删除，远端新增/修改的对象
+        // 交给用户选择，不能无条件覆盖另一端的正文。
+        let base_side = if let Some(hash) = known.get(&path) {
             ObjectSide::Present(hash.clone())
         } else if tombstones.contains(&path) || deleted_facts.contains(&path) {
             ObjectSide::Deleted
@@ -146,7 +161,15 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
             ObjectSide::Absent
         };
 
-        let verdict = compare_object(&base_side, &local_side, &remote_side);
+        // 旧冲突遗留的"下一轮取远端"：远端版本在传输阶段已强制下载，
+        // 本轮直接采用远端内容并清掉队列，不能让队列永远不执行。
+        let verdict = if pending_take_remote.contains(&path)
+            && matches!(&remote_side, ObjectSide::Present(_))
+        {
+            ObjectVerdict::ApplyRemoteUpsert
+        } else {
+            compare_object(&base_side, &local_side, &remote_side)
+        };
         apply_verdict(
             &mut plan,
             &mut final_records,
@@ -168,6 +191,7 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
     let manifest = SyncManifest {
         files: final_records.into_values().collect(),
     };
+    plan.remote_manifest = Some(manifest.clone());
     let store = crate::sync::lww::ManifestStore::new(live_root, &manifest_rel.to_string_lossy());
     let write_plan = store.plan_sync_manifest(&manifest, "")?;
     for (rel, bytes) in write_plan.writes {

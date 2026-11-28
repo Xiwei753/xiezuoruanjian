@@ -40,9 +40,12 @@ pub struct StagingRun {
     scope: crate::sync::types::SyncScope,
     /// 本轮提交决议里需要上传 / 传播删除的本地对象（提交阶段取走）。
     publish_lists: std::sync::Mutex<(Vec<super::commit_plan::PublishObject>, Vec<PathBuf>)>,
-    /// 本 target 是"用户已删除作品"的远端删除意图：所有远端对象都按删除传播，
-    /// 不再下载回本地。
+    /// 本轮提交后的远端对象索引。
+    publish_manifest: std::sync::Mutex<Option<crate::sync::types::SyncManifest>>,
+    /// 本 target 是"用户已删除作品"的远端删除意图：所有远端对象都按删除传播。
     delete_intent: bool,
+    /// 删除前作品目录的回收区快照根：提供最后的已确认对象基线。
+    baseline_root: Option<PathBuf>,
     /// Prepare 阶段在传输之前记录的目标级失败（例如本机统计事件库迁移失败）。
     prepare_error: Option<String>,
 }
@@ -63,7 +66,9 @@ impl StagingRun {
             app_group: None,
             scope: crate::sync::types::SyncScope::Project,
             publish_lists: std::sync::Mutex::new((Vec::new(), Vec::new())),
+            publish_manifest: std::sync::Mutex::new(None),
             delete_intent: false,
+            baseline_root: None,
             prepare_error: None,
         })
     }
@@ -123,6 +128,15 @@ impl StagingRun {
         self.delete_intent
     }
 
+    /// 删除前作品目录的回收区快照根。
+    pub(crate) fn set_baseline_root(&mut self, root: Option<PathBuf>) {
+        self.baseline_root = root;
+    }
+
+    pub(crate) fn baseline_root(&self) -> Option<&Path> {
+        self.baseline_root.as_deref()
+    }
+
     /// 记录目标级失败原因。
     pub fn record_prepare_error(&mut self, message: String) {
         self.prepare_error = Some(message);
@@ -152,6 +166,21 @@ impl StagingRun {
         if let Ok(mut lists) = self.publish_lists.lock() {
             *lists = (uploads, publish_deletes);
         }
+    }
+
+    /// 记录本轮提交后的远端对象索引。
+    pub(crate) fn record_publish_manifest(&self, manifest: crate::sync::types::SyncManifest) {
+        if let Ok(mut slot) = self.publish_manifest.lock() {
+            *slot = Some(manifest);
+        }
+    }
+
+    /// 取走本轮提交后的远端对象索引（只取一次）。
+    pub(crate) fn take_publish_manifest(&self) -> Option<crate::sync::types::SyncManifest> {
+        self.publish_manifest
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
     }
 
     /// 取走本轮提交决议中的上传/删除清单（只取一次）。
@@ -198,6 +227,7 @@ pub fn prepare_staging_runs(
             planned.target_kind,
             crate::sync::types::PlannedTargetKind::DeleteRemoteProject
         ));
+        run.set_baseline_root(planned.baseline_root.clone());
         // #955：本机统计设备组必须在传输之前完成旧事件库迁移（写 live）。
         // 迁移失败只记录到该 run：本组本次跳过 Transfer/Commit，其它组继续同步。
         if let Some(error) = migrate_local_stats_group_before_seed(planned) {

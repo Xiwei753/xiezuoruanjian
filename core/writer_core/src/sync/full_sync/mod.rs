@@ -79,6 +79,8 @@ pub struct PlannedTarget {
     pub target_kind: crate::sync::types::PlannedTargetKind,
     pub project_id: Option<String>,
     pub target_live_root: std::path::PathBuf,
+    /// 作品删除前的回收区快照根（提供最后的已确认对象基线）。
+    pub baseline_root: Option<std::path::PathBuf>,
     #[allow(clippy::struct_field_names)]
     pub deleted_journal_token: Option<String>,
     pub deleted_lww: Option<DeletedTargetLww>,

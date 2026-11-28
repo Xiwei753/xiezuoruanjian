@@ -1953,6 +1953,9 @@ pub(crate) fn commit_single_target_staging(
                 }
             };
             run.record_publish_lists(plan.uploads.clone(), plan.publish_deletes.clone());
+            if let Some(manifest) = plan.remote_manifest.clone() {
+                run.record_publish_manifest(manifest);
+            }
             let before = capture_action_before(live_root, &plan.content_actions);
 
             // 本轮真正要发布的候选路径：上传 + 远端删除。只对这些推迟
@@ -2081,6 +2084,9 @@ pub(crate) fn commit_single_target_staging(
                 }
             };
             run.record_publish_lists(plan.uploads.clone(), plan.publish_deletes.clone());
+            if let Some(manifest) = plan.remote_manifest.clone() {
+                run.record_publish_manifest(manifest);
+            }
             let transfer_conflict_paths: std::collections::HashSet<String> = target
                 .result
                 .conflicts

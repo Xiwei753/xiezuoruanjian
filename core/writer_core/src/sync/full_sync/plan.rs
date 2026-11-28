@@ -56,6 +56,7 @@ pub fn build_full_sync_target_plan(
             target_kind: PlannedTargetKind::App,
             project_id: None,
             target_live_root: app_data_root.to_path_buf(),
+            baseline_root: None,
             deleted_journal_token: None,
             deleted_lww: None,
             live_lww: None,
@@ -87,6 +88,10 @@ pub fn build_full_sync_target_plan(
             target_kind: PlannedTargetKind::DeleteRemoteProject,
             project_id: Some(project_id),
             target_live_root: project_root,
+            baseline_root: pending
+                .baseline_root
+                .as_ref()
+                .map(std::path::PathBuf::from),
             deleted_journal_token: Some(pending.journal_token.clone()),
             deleted_lww: None,
             live_lww: None,
@@ -106,6 +111,7 @@ pub fn build_full_sync_target_plan(
             target_kind: PlannedTargetKind::LiveProject,
             project_id: Some(project.id.clone()),
             target_live_root: project_root,
+            baseline_root: None,
             deleted_journal_token: None,
             deleted_lww: None,
             live_lww: None,
@@ -125,6 +131,7 @@ pub fn build_full_sync_target_plan(
             target_kind: PlannedTargetKind::RestoreProject,
             project_id: Some(project_id.clone()),
             target_live_root: project_root,
+            baseline_root: None,
             deleted_journal_token: None,
             deleted_lww: None,
             live_lww: None,
