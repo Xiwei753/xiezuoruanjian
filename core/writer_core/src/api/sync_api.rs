@@ -667,27 +667,17 @@ impl WriterCoreApi {
                 &app_data_root,
                 &projects_root,
                 &sync_config,
-                &crate::sync::types::TargetLifecycleCatalog::default(),
                 &[],
             )
             .map(Into::into)
             .map_err(Into::into);
         };
         // 写锁已释放。
-        // 1b. 无锁：读 remote catalog（网络 IO，只读一个文件）。
-        //   用 discover_legacy_remote_catalog（只读，不写远端）。
-        // dry-run 绝不在远端创建 targets.sync.json。
-        let remote_catalog_snapshot =
-            crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref())
+        // 1b. 无锁：列出远端仍有普通对象的作品（只读目录）。
+        let remote_project_ids =
+            crate::sync::full_sync::discovery::discover_remote_project_ids(provider.as_ref())
                 .map_err(|e| {
-                    log::warn!("[sync] dry-run: discover_legacy_remote_catalog failed: {e}");
-                    crate::api::error::WriterError::from(e)
-                })?;
-
-        let remote_app_data_groups =
-            crate::sync::app_data_group_catalog::discover_remote_app_data_groups(provider.as_ref())
-                .map_err(|e| {
-                    log::warn!("[sync] dry-run: discover_remote_app_data_groups failed: {e}");
+                    log::warn!("[sync] dry-run: discover_remote_project_ids failed: {e}");
                     crate::api::error::WriterError::from(e)
                 })?;
 
@@ -701,8 +691,7 @@ impl WriterCoreApi {
             &app_data_root,
             &projects_root,
             &sync_config,
-            &remote_catalog_snapshot.catalog,
-            &remote_app_data_groups,
+            &remote_project_ids,
         )
         .map(Into::into)
         .map_err(Into::into)
@@ -1557,137 +1546,46 @@ impl WriterCoreApi {
         );
 
         // 写锁已释放。
-        // 1b. 无锁：读 remote catalog（网络 IO，只读一个文件）。
-        //   catalog 读取失败直接结束本次 full sync，
-        // 返回 RecoverableError，不构造空 catalog 继续 plan（空 catalog 会让
-        // planner 误判"远端无记录"做破坏性删除/复活决策）。
-        //   用 discover_legacy_remote_catalog（真做 legacy 枚举），
-        // 不再用 load_remote_catalog（只读 catalog 文件，不做 legacy 发现）。
-        let remote_catalog_phase = SyncDiagnosticPhase::start_with_provider(
+        // 1b. 无锁：列出远端仍有普通对象的作品（网络 IO，只读目录）。
+        // 发现失败结束本次同步，不构造空列表继续 plan——把网络失败当成
+        // "远端没有作品"会让下一轮把本机作品当新作品重传。
+        let remote_projects_phase = SyncDiagnosticPhase::start_with_provider(
             diagnostic_operation_id,
-            "remote_catalog",
+            "remote_projects",
             None,
             provider.as_ref(),
         );
-        let remote_catalog_snapshot =
-            match crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref()) {
-                Ok(snapshot) => snapshot,
+        let remote_project_ids =
+            match crate::sync::full_sync::discovery::discover_remote_project_ids(provider.as_ref()) {
+                Ok(ids) => ids,
                 Err(e) => {
-                    remote_catalog_phase.finish_with_provider("error", provider.as_ref());
-                    let msg = format!("discover_legacy_remote_catalog failed: {e}");
+                    remote_projects_phase.finish_with_provider("error", provider.as_ref());
+                    let msg = format!("discover_remote_project_ids failed: {e}");
                     log::warn!("[sync] prepare: {msg}");
                     let status = crate::sync::full_sync::error_to_persist_status(&e);
                     let error_category = core_sync_category(&e);
                     let _ = self.record_full_sync_preflight_failure_typed(
                         sync_status_to_wire(&status),
-                        "target_catalog".to_string(),
+                        "remote_projects".to_string(),
                         error_category,
-                        "target_catalog".to_string(),
+                        "remote_projects".to_string(),
                         msg,
                     );
                     persist_failure_checkpoint(None);
                     return Err(crate::api::error::WriterError::from(e));
                 }
             };
-        remote_catalog_phase.finish_with_provider("success", provider.as_ref());
+        remote_projects_phase.finish_with_provider("success", provider.as_ref());
 
-        // Issue #729：discover_legacy_remote_catalog 返回后检查取消令牌。
-        // 取消则返回 no-op，不进入 persist_bootstrap_catalog / plan / transfer。
         if let Some(ref token) = cancellation_token {
             if token.is_cancelled() {
                 log::info!(
-                    "[sync] perform_full_sync: cancellation requested after discover_legacy_remote_catalog — returning no-op"
+                    "[sync] perform_full_sync: cancellation requested after discover_remote_project_ids — returning no-op"
                 );
                 return make_noop_result();
             }
         }
 
-        //   catalog 文件不存在于远端（version == __nonexistent__）
-        // → 正式 sync 需要把 discover 合成的 bootstrap catalog 落盘，后续 CAS 写入才有 base version。
-        // dry-run 不走本路径（dry-run 用 perform_full_sync_dry_run_with_catalog，不 persist）。
-        // Issue #729：persist_bootstrap_catalog 前检查取消令牌。
-        if let Some(ref token) = cancellation_token {
-            if token.is_cancelled() {
-                log::info!(
-                    "[sync] perform_full_sync: cancellation requested before persist_bootstrap_catalog — returning no-op"
-                );
-                return make_noop_result();
-            }
-        }
-        let remote_catalog_snapshot =
-            if remote_catalog_snapshot.version.as_str() == "__nonexistent__" {
-                match crate::sync::target_lifecycle::persist_bootstrap_catalog(
-                    &round,
-                    &remote_catalog_snapshot.catalog,
-                    &remote_catalog_snapshot.version,
-                ) {
-                    Ok(persisted) => {
-                        log::info!(
-                            "[sync] prepare: persisted bootstrap catalog ({} records) to remote",
-                            persisted.catalog.records.len()
-                        );
-                        persisted
-                    }
-                    Err(e) => {
-                        let msg = format!("persist_bootstrap_catalog failed: {e}");
-                        log::warn!("[sync] prepare: {msg}");
-                        let status = crate::sync::full_sync::error_to_persist_status(&e);
-                        let error_category = core_sync_category(&e);
-                        let _ = self.record_full_sync_preflight_failure_typed(
-                            sync_status_to_wire(&status),
-                            "target_catalog".to_string(),
-                            error_category,
-                            "target_catalog".to_string(),
-                            msg,
-                        );
-                        persist_failure_checkpoint(None);
-                        return Err(crate::api::error::WriterError::from(e));
-                    }
-                }
-            } else {
-                remote_catalog_snapshot
-            };
-
-        // App data-group catalog is independent from the project lifecycle catalog.
-        // A malformed/unreadable group catalog fails Prepare instead of guessing a
-        // flat App layout and risking a mixed or destructive merge.
-        let app_group_catalog_phase = SyncDiagnosticPhase::start_with_provider(
-            diagnostic_operation_id,
-            "remote_app_group_catalog",
-            None,
-            provider.as_ref(),
-        );
-        let remote_app_data_groups =
-            match crate::sync::app_data_group_catalog::discover_remote_app_data_groups(
-                provider.as_ref(),
-            ) {
-                Ok(groups) => groups,
-                Err(e) => {
-                    app_group_catalog_phase.finish_with_provider("error", provider.as_ref());
-                    let msg = format!("discover_remote_app_data_groups failed: {e}");
-                    log::warn!("[sync] prepare: {msg}");
-                    let status = crate::sync::full_sync::error_to_persist_status(&e);
-                    let error_category = core_sync_category(&e);
-                    let _ = self.record_full_sync_preflight_failure_typed(
-                        sync_status_to_wire(&status),
-                        "app_group_catalog".to_string(),
-                        error_category,
-                        "app_group_catalog".to_string(),
-                        msg,
-                    );
-                    return Err(crate::api::error::WriterError::from(e));
-                }
-            };
-        app_group_catalog_phase.finish_with_provider("success", provider.as_ref());
-        // Issue #729：persist_bootstrap_catalog 返回后检查取消令牌。
-        if let Some(ref token) = cancellation_token {
-            if token.is_cancelled() {
-                log::info!(
-                    "[sync] perform_full_sync: cancellation requested after persist_bootstrap_catalog — returning no-op"
-                );
-                return make_noop_result();
-            }
-        }
         // 1c. 短锁 B：只 persist Syncing + snapshot app_data_root/projects_root。
         //   回退问题：恢复短锁+锁外扫描。
         // 短锁只拿 app_data_root/projects_root/sync_policy/remote snapshot + persist Syncing，
@@ -1706,9 +1604,7 @@ impl WriterCoreApi {
             &projects_root,
             &sync_config,
             force_sync,
-            &remote_catalog_snapshot.catalog,
-            &remote_app_data_groups,
-            remote_catalog_snapshot.clone(),
+            &remote_project_ids,
         ) {
             Ok(plan) => plan,
             Err(err) => {
@@ -2024,8 +1920,6 @@ impl WriterCoreApi {
         let mut chapter_changes: Vec<crate::chapter::ChapterChangeReceipt> = Vec::new();
         let mut pending_commits: Vec<PendingTargetCommit> = Vec::new();
         let mut completed_transfer_results: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
-        let mut catalog_snapshot = plan.remote_catalog_snapshot.clone();
-
         let total_targets = u32::try_from(plan.targets.len()).unwrap_or(u32::MAX);
 
         for target_index in 0..plan.targets.len() {
@@ -2046,17 +1940,8 @@ impl WriterCoreApi {
                 .clone()
                 .or_else(|| planned.target.app_group.as_ref().map(|group| group.id()));
             let target_id_digest = target_id.as_deref().map(sync_target_digest);
-            let active_generation = planned.project_id.as_ref().and_then(|project_id| {
-                catalog_snapshot
-                    .catalog
-                    .records
-                    .iter()
-                    .find(|record| {
-                        record.remote_prefix == planned.target.remote_prefix
-                            || record.target_id == format!("projects/{project_id}")
-                    })
-                    .and_then(|record| record.active_generation.clone())
-            });
+            // 对象协议不再有 generation 概念；旧字段保留到清理完 checkpoint。
+            let active_generation: Option<String> = None;
             let target_started_at = Instant::now();
             let mut target_fields =
                 sync_diagnostic_fields(diagnostic_operation_id, "transfer", Some(&target_digest));
@@ -2129,12 +2014,10 @@ impl WriterCoreApi {
                     round,
                     plan,
                     target_index,
-                    &mut catalog_snapshot,
                     cancellation_token.as_ref(),
-                    &completed_transfer_results,
                     Some(diagnostic_operation_id),
                 )
-                .map(|(result, _resolution, _action)| result)
+                .map(|(result, _action)| result)
             };
             let Some(target_sync_result) = transfer_result else {
                 transfer_phase.finish_with_provider("cancelled", provider);

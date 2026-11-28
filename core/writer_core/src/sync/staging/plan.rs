@@ -102,10 +102,16 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
         let local_hash = local_bytes
             .as_deref()
             .map(crate::sync::hash::content_md5);
-        let local_side = match local_hash.as_deref() {
-            Some(hash) => ObjectSide::Present(hash.to_string()),
-            None if tombstones.contains(&path) => ObjectSide::Deleted,
-            None => ObjectSide::Absent,
+        let delete_intent = run.delete_intent();
+        let local_side = if delete_intent {
+            // 用户显式删除作品：远端所有对象都按"本地已删除"比较。
+            ObjectSide::Deleted
+        } else {
+            match local_hash.as_deref() {
+                Some(hash) => ObjectSide::Present(hash.to_string()),
+                None if tombstones.contains(&path) => ObjectSide::Deleted,
+                None => ObjectSide::Absent,
+            }
         };
         let remote_side = match remote_records.get(&path) {
             Some(record) if record.op == "delete" => ObjectSide::Deleted,
@@ -117,6 +123,10 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
                     && (known.get(&path) == Some(&record.content_hash)
                         || local_hash.as_deref() == Some(record.content_hash.as_str())) =>
                 {
+                    ObjectSide::Present(record.content_hash.clone())
+                }
+                None if run.delete_intent() && !record.content_hash.is_empty() => {
+                    // 删除意图：索引里的对象就是远端事实，本轮不下载内容。
                     ObjectSide::Present(record.content_hash.clone())
                 }
                 None => ObjectSide::Absent,
@@ -133,8 +143,18 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
             None => ObjectSide::Absent,
         };
 
-        let base = known.get(&path).map(String::as_str);
-        let verdict = compare_object(base, &local_side, &remote_side);
+        // 删除意图下共同基线取远端当前版本：用户已经明确删除整个作品，
+        // 远端对象只需逐个传播删除；作品删除本身没有可保留的对象级冲突。
+        let base = if run.delete_intent() {
+            remote_records
+                .get(&path)
+                .filter(|record| record.op != "delete")
+                .map(|record| record.content_hash.clone())
+                .or_else(|| known.get(&path).cloned())
+        } else {
+            known.get(&path).cloned()
+        };
+        let verdict = compare_object(base.as_deref(), &local_side, &remote_side);
         apply_verdict(
             &mut plan,
             &mut final_records,

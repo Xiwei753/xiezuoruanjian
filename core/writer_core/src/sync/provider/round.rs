@@ -1099,7 +1099,6 @@ mod tests {
 /// 因此这些路径不能被决议过滤掉（评论 #7219676521 第一项）。
 fn is_lifecycle_publish_path(path: &str, is_delete: bool) -> bool {
     path.ends_with("/app-meta/sync/targets.sync.json")
-        || path == crate::sync::target_lifecycle::TARGET_CATALOG_REMOTE_PATH
         || is_manifest_publish_path(path, is_delete)
         || path.contains("/__generations__/")
         || path.starts_with("__generations__/")

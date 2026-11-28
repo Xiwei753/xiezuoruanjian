@@ -125,7 +125,16 @@ impl AppDataGroupCatalog {
                 )));
             }
             if let Some(generation) = &record.active_generation {
-                crate::sync::target_lifecycle::validate_generation_id(generation)?;
+                if generation.is_empty()
+                    || generation == "."
+                    || generation == ".."
+                    || generation.contains('/')
+                    || generation.contains('\\')
+                {
+                    return Err(crate::Error::Other(format!(
+                        "invalid generation id in app data group catalog: {generation:?}"
+                    )));
+                }
             }
         }
         Ok(())

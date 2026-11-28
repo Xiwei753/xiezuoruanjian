@@ -1,119 +1,5 @@
 impl crate::facade::WriterCore {
-    /// 三段式全量同步 — Prepare 阶段（短写锁内调用）。
-    ///
-    /// 写 `Syncing` 状态、枚举 targets、算出每个 target 的 `local_root`，
-    /// 产出 [`crate::sync::full_sync::FullSyncPlan`]（owned，不依赖 core）。
-    ///
-    /// **不在**写锁内创建或 seed `StagingRun`。
-    /// seed 涉及磁盘扫描/复制，会把"短写锁"变成"磁盘长锁"，阻塞冷启动卷章读取。
-    /// staging 的创建和 seed 积到 `prepare_staging_runs`，在无锁状态下执行。
-    ///
-    /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
-    ///
-    ///   `remote_catalog` 由调用方传入（在创建 provider 后
-    /// 读取），planner 真正使用它做 target-level LWW 决策。`device_id` 来自真实
-    /// `DeviceInfo.device_id`。
-    ///
-    /// transport 初始化失败时返回 Err（已持久化失败状态）。
-    /// `list_projects` 失败时返回 Err（已持久化失败状态）。
-    pub fn prepare_full_sync(
-        &self,
-        config: &crate::sync::SyncConfig,
-        force_sync: bool,
-        _secrets: crate::sync::SyncSecrets,
-        remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
-        remote_app_data_groups: &[crate::sync::types::AppDataGroup],
-        remote_catalog_snapshot: crate::sync::types::RemoteTargetCatalogSnapshot,
-    ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
-        use crate::sync::full_sync::FullSyncPlan;
-
-        self.persist_full_sync_started();
-
-        let projects = match self.list_projects() {
-            Ok(projects) => projects,
-            Err(err) => {
-                let status = crate::sync::full_sync::error_to_persist_status(&err);
-                let category = err.sync_category();
-                let category = if category.is_empty() {
-                    "other"
-                } else {
-                    category
-                };
-                self.persist_full_sync_early_failure_typed(
-                    status,
-                    "global",
-                    category,
-                    "prepare",
-                    &err.to_string(),
-                );
-                return Err(err);
-            }
-        };
-
-        //   加载 pending deleted targets，
-        // 让 prepare_full_sync 为已删除作品生成 target，run_transfer 走
-        // target-delete 计划清理远端 projects/<id>/ 下所有对象。
-        let pending_deleted =
-            match crate::sync::pending_deleted::load_pending_deleted_targets(&self.app_data_root) {
-                Ok(targets) => targets,
-                Err(err) => {
-                    let status = crate::sync::full_sync::error_to_persist_status(&err);
-                    let category = err.sync_category();
-                    let category = if category.is_empty() {
-                        "other"
-                    } else {
-                        category
-                    };
-                    self.persist_full_sync_early_failure_typed(
-                        status,
-                        "global",
-                        category,
-                        "prepare",
-                        &err.to_string(),
-                    );
-                    return Err(err);
-                }
-            };
-
-        let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
-
-        //   device_id 来自真实 DeviceInfo。
-        let device_id = crate::settings::load_device_info(&self.app_data_root)
-            .map(|info| info.device_id)
-            .unwrap_or_default();
-
-        //   调用共享 planner，传入真实 remote_catalog
-        // 做 target-level LWW 决策。
-        // 加载 pending_remote_cleanups。
-        // 持久化错误向上传递，不再 unwrap_or_default。
-        let pending_remote_cleanups =
-            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&self.app_data_root)?;
-        let targets = crate::sync::full_sync::build_full_sync_target_plan(
-            &self.app_data_root,
-            &self.projects_root,
-            &projects,
-            remote_app_data_groups,
-            &pending_deleted,
-            remote_catalog,
-            &sync_policy,
-            force_sync,
-            &device_id,
-            &pending_remote_cleanups,
-        )?;
-
-        // 不再携带 workspace_git_layout。
-        // 本地 Git 仓库由 bootstrap 阶段初始化，同步计划不负责 Git 生命周期。
-
-        Ok(FullSyncPlan {
-            sync_policy,
-            force_sync,
-            targets,
-            app_data_root: self.app_data_root.clone(),
-            remote_catalog_snapshot,
-        })
-    }
-
-    ///   回退问题：锁外构建 full sync plan。
+    /// 锁外构建 full sync plan。
     ///
     /// 与 [`prepare_full_sync`] 的区别：本函数不调 `persist_full_sync_started`（调用方
     /// 已在短锁内完成），不持任何 Core 锁，所有磁盘读取（list_projects / pending /
@@ -125,9 +11,7 @@ impl crate::facade::WriterCore {
         projects_root: &std::path::Path,
         config: &crate::sync::SyncConfig,
         force_sync: bool,
-        remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
-        remote_app_data_groups: &[crate::sync::types::AppDataGroup],
-        remote_catalog_snapshot: crate::sync::types::RemoteTargetCatalogSnapshot,
+        remote_project_ids: &[String],
     ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
         use crate::sync::full_sync::FullSyncPlan;
 
@@ -138,25 +22,12 @@ impl crate::facade::WriterCore {
 
         let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
 
-        let device_id = crate::settings::load_device_info(app_data_root)
-            .map(|info| info.device_id)
-            .unwrap_or_default();
-
-        // 加载 pending_remote_cleanups。
-        // 持久化错误向上传递，不再 unwrap_or_default。
-        let pending_remote_cleanups =
-            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root)?;
         let targets = crate::sync::full_sync::build_full_sync_target_plan(
             app_data_root,
             projects_root,
             &projects,
-            remote_app_data_groups,
+            remote_project_ids,
             &pending_deleted,
-            remote_catalog,
-            &sync_policy,
-            force_sync,
-            &device_id,
-            &pending_remote_cleanups,
         )?;
 
         Ok(FullSyncPlan {
@@ -164,7 +35,6 @@ impl crate::facade::WriterCore {
             force_sync,
             targets,
             app_data_root: app_data_root.to_path_buf(),
-            remote_catalog_snapshot,
         })
     }
 

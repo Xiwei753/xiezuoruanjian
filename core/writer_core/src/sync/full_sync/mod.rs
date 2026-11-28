@@ -25,10 +25,9 @@
 use crate::sync::types::{SyncTarget, TargetSyncResult};
 
 pub(crate) mod aggregate;
-pub(crate) mod generation;
+pub(crate) mod discovery;
 pub(crate) mod plan;
 pub(crate) mod transfer;
-pub(crate) mod transfer_cleanup;
 pub(crate) mod transfer_helpers;
 
 pub use aggregate::{
@@ -69,7 +68,6 @@ pub struct FullSyncPlan {
     pub force_sync: bool,
     pub targets: Vec<PlannedTarget>,
     pub app_data_root: std::path::PathBuf,
-    pub remote_catalog_snapshot: crate::sync::types::RemoteTargetCatalogSnapshot,
 }
 
 /// 单个 target 的执行计划 — target 元数据 + 本地根 + 分类标签。

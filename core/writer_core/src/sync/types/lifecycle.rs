@@ -32,14 +32,7 @@ pub struct TargetSyncResult {
     #[serde(default)]
     pub failure_phase: Option<String>,
     pub result: SyncResult,
-    ///   deleted target 的 LWW 决策结果。
-    ///
-    /// 仅 `target_kind == "deleted_project"` 时有值。`cleanup_completed_deleted_targets`
-    /// 按此精确确认：`LocalDeleteWins` 且远端删除+catalog tombstone 写入成功才移除 pending；
-    /// `RemoteTargetWins` 且本地恢复成功才移除 pending；`Retry` 保留。
-    #[serde(default)]
-    pub deleted_resolution: Option<DeletedTargetResolution>,
-    ///   本地 lifecycle commit action —
+    /// 本地 lifecycle commit action —
     /// Transfer 阶段产出，Commit 阶段执行。
     ///
     /// - `None`：无 lifecycle action，走普通 staging commit；
@@ -58,7 +51,7 @@ pub struct TargetSyncResult {
 /// （完整业务删除事务），避免 staging commit 把刚删掉的旧作品重新写回来。
 ///
 ///   新增 `ReplaceProject` 变体 —
-/// DeleteLocalProject → remote 又 Upsert 时，本地已有 Project 需要整树替换，
+/// 旧 target 生命周期协议：DeleteLocalProject → remote 又 Upsert 时整树替换，
 /// 不再用<空 staging + 普通三方 commit>冒充 replace。`ReplaceProject` 的 Commit
 /// 语义：对 live ∪ staging 做整树替换（staging 有 → Apply；live 有但 staging 没有 → Delete）。
 ///
@@ -276,177 +269,6 @@ impl PendingDeletedTarget {
     }
 }
 
-// ──   Target 生命周期 catalog（远端持久、provider-neutral） ──
-
-/// target 生命周期操作类型 — provider-neutral，持久化到远端 catalog。
-///
-///   `TargetLifecycleRecord` 记录单个 sync target
-/// （如 `projects/<project_id>`）的生命周期操作，让离线旧设备上线时能读到
-/// target 的 delete tombstone，不会把本地旧 project 重新上传（P 被复活）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TargetOp {
-    Upsert,
-    Delete,
-}
-
-impl TargetOp {
-    /// 线格式字符串。
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TargetOp::Upsert => "upsert",
-            TargetOp::Delete => "delete",
-        }
-    }
-}
-
-/// target 生命周期记录 — 远端持久、provider-neutral。
-///
-/// 持久化到远端 `app/app-meta/sync/targets.sync.json`（app target 的 remote_prefix 下，
-/// 不会随 `projects/<id>/` 一起被删除）。catalog 只通过 `SyncProvider::read/write` 操作，
-/// GitHub SHA / WebDAV ETag 等留在 Provider 里。
-///
-/// ## 与 `PendingDeletedTarget` 的职责区分
-///
-/// - 本地 `pending_deleted_targets.json`（`PendingDeletedTarget`）：负责
-///   "本机删除事务还没同步完成"，本机状态。
-/// - 远端 `targets.sync.json`（`TargetLifecycleRecord`）：负责
-///   "跨设备都必须知道这个 target 的生命周期"，跨设备共识。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TargetLifecycleRecord {
-    /// target 标识，如 `"projects/<project_id>"`，与 `SyncTarget.remote_prefix` 对齐。
-    pub target_id: String,
-    /// 远端前缀，如 `"projects/<project_id>"`。
-    pub remote_prefix: String,
-    /// 操作类型：upsert（target 存在）/ delete（target 已删除）。
-    pub op: TargetOp,
-    /// 记录更新时间（Unix 毫秒）。
-    pub updated_at_ms: i64,
-    /// 删除时间（仅 `op == Delete` 时有值），优先于 `updated_at_ms` 作为 LWW 时间。
-    #[serde(default)]
-    pub deleted_at_ms: Option<i64>,
-    /// 发起操作的设备 ID，用于 LWW tie-break（字典序大的胜出，与 `resolve_lww_path` 同规则）。
-    #[serde(default)]
-    pub device_id: String,
-    ///   generation 原子发布 — Upsert 记录指向的当前可见
-    /// generation ID。
-    ///
-    /// LiveProject 先把完整 Project 上传到不可见 generation prefix
-    /// （`projects/P/__generations__/G/`），全部成功后 CAS `targets.sync.json`
-    /// 写 `active_generation = G`。CAS 成功后 G 才成为可见版本；CAS 输给 Delete
-    /// 则 G 是未引用 generation，后续 GC。
-    ///
-    /// - `Some(G)`：Upsert 的当前可见 generation，RestoreProject 从
-    ///   `projects/P/__generations__/G/` 下载；Delete cleanup 不碰此 generation prefix。
-    /// - `None`：legacy（无 generation）或 Delete 记录，RestoreProject 从 legacy
-    ///   `projects/P/` 下载。
-    #[serde(default)]
-    pub active_generation: Option<String>,
-    /// schema 版本。
-    #[serde(default = "default_target_catalog_schema_version")]
-    pub schema_version: u32,
-}
-
-fn default_target_catalog_schema_version() -> u32 {
-    1
-}
-
-impl TargetLifecycleRecord {
-    /// 构造一条 upsert 记录。
-    pub fn upsert(
-        target_id: &str,
-        remote_prefix: &str,
-        updated_at_ms: i64,
-        device_id: &str,
-    ) -> Self {
-        Self {
-            target_id: target_id.to_string(),
-            remote_prefix: remote_prefix.to_string(),
-            op: TargetOp::Upsert,
-            updated_at_ms,
-            deleted_at_ms: None,
-            device_id: device_id.to_string(),
-            active_generation: None,
-            schema_version: 1,
-        }
-    }
-
-    /// 构造一条 delete tombstone 记录。
-    pub fn delete(
-        target_id: &str,
-        remote_prefix: &str,
-        deleted_at_ms: i64,
-        device_id: &str,
-    ) -> Self {
-        Self {
-            target_id: target_id.to_string(),
-            remote_prefix: remote_prefix.to_string(),
-            op: TargetOp::Delete,
-            updated_at_ms: deleted_at_ms,
-            deleted_at_ms: Some(deleted_at_ms),
-            device_id: device_id.to_string(),
-            active_generation: None,
-            schema_version: 1,
-        }
-    }
-
-    ///   builder 方法 — 给 Upsert 记录设置 active_generation。
-    ///
-    /// 用于 LiveProject generation 原子发布：先上传到 generation prefix，成功后
-    /// 构造 `upsert(...).with_active_generation(G)` 作为 CAS candidate。
-    /// Delete 记录不应设置 active_generation（调用方应只在 Upsert 上调用）。
-    pub fn with_active_generation(mut self, generation: impl Into<String>) -> Self {
-        self.active_generation = Some(generation.into());
-        self
-    }
-}
-
-/// target 生命周期 catalog 容器 — 持久化到远端 `targets.sync.json`。
-///
-/// `records` 按 `target_id` 唯一（合并/upsert 后）。LWW 合并规则：
-/// 按 `target_id` 分组，取 `(lww_time, device_id)` 最大的记录
-/// （与 `resolve_lww_path` 同规则）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct TargetLifecycleCatalog {
-    #[serde(default)]
-    pub records: Vec<TargetLifecycleRecord>,
-}
-
-///   带远端版本的 catalog 快照。
-///
-/// `load_remote_catalog` 返回此结构，携带远端当前版本。
-/// `write_remote_catalog` 用 `version` 做 CAS 写入（`IfMatch`），
-/// 防止多设备并发覆盖彼此的 lifecycle record。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteTargetCatalogSnapshot {
-    pub catalog: TargetLifecycleCatalog,
-    /// 远端 `targets.sync.json` 的当前版本标识。
-    /// `None` 表示文件不存在（首次写应用 `CreateNew`）。
-    pub version: crate::sync::provider::model::RemoteVersion,
-}
-
-// ──   DeletedTargetResolution ──
-
-/// deleted target 的 LWW 决策结果 — provider-neutral typed resolution。
-///
-///   `run_deleted_target_sync` 做完 target-level LWW
-/// 后返回这个 typed resolution（而非 `SyncResult`），`cleanup_completed_deleted_targets`
-/// 按此精确确认是否移除本地 `PendingDeletedTarget`，不再按 `SyncStatus` 猜。
-///
-/// - `LocalDeleteWins` → 执行远端删除 + catalog 写 delete tombstone → 才移除 pending；
-/// - `RemoteTargetWins` → 下载远端到 staging → commit 恢复本地 project → 才移除 pending；
-/// - `Retry` → 什么都不删/恢复 → pending 保留（manifest/读取失败时）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeletedTargetResolution {
-    /// 本地 delete 胜出：执行远端删除 + catalog 写 delete tombstone。
-    LocalDeleteWins,
-    /// 远端 target 胜出：下载远端内容到 staging，commit 恢复本地 project。
-    RemoteTargetWins,
-    /// 无法确定（manifest/读取失败）：不删不恢复，pending 保留。
-    Retry,
-}
-
 // ──   PlannedTargetKind ──
 
 /// 计划阶段 target 的明确类型 — 替代字符串 `target_kind`，强类型决策结果。
@@ -457,99 +279,45 @@ pub enum DeletedTargetResolution {
 ///
 /// ## 决策语义
 ///
-/// - `App`：app target，正常 LWW 同步。
-/// - `LiveProject`：本地 live project，远端无 delete tombstone 或本地更新 → 正常 upsert 同步。
-/// - `DeleteRemoteProject`：本地 pending delete，本地 tombstone 胜出 → 删远端对象 + 写 delete tombstone。
-/// - `DeleteLocalProject`：本地 live project，远端 delete tombstone 更新 → 不上传，本地 project 应删除。
-/// - `RestoreProject`：本地 pending delete，远端 upsert 更新 → 下载远端恢复本地 project。
-/// - `Retry`：无法决策（catalog/manifest 读取失败）→ 不删不恢复，pending 保留。
-/// - `RemoteCleanupProject`：   — 远端残留清理重试。
-///   上一轮 authoritative Delete 清 prefix 失败时记录 `PendingRemoteTargetCleanup`，
-///   下一轮 Prepare 加载 pending 生成此 target，重试 `delete_all_remote_objects`。
+/// - `App`：App 数据组 target。
+/// - `LiveProject`：本机存在的作品，按对象版本比较。
+/// - `DeleteRemoteProject`：本机已删除作品，远端对象逐个发布删除。
+/// - `RestoreProject`：远端还有本机没有的作品，把远端对象下载回来。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlannedTargetKind {
     App,
     LiveProject,
+    /// 用户已删除作品：远端对象逐个发布删除。
     DeleteRemoteProject,
-    DeleteLocalProject,
+    /// 远端还有本机没有的作品：把远端对象下载回来。
     RestoreProject,
-    Retry,
-    /// 远端残留清理重试。
-    RemoteCleanupProject,
 }
 
 impl PlannedTargetKind {
     /// 转为 `TargetSyncResult.target_kind` 的字符串标识（API 契约，不可随意更改）。
     ///
     /// - `App` → `"app"`
-    /// - `LiveProject` / `DeleteLocalProject` → `"project"`（都是 live project target）
-    /// - `DeleteRemoteProject` / `RestoreProject` / `Retry` / `RemoteCleanupProject`
-    ///   → `"deleted_project"`（都是 pending delete / cleanup target）
+    /// - `LiveProject` → `"project"`
+    /// - `DeleteRemoteProject` / `RestoreProject` → `"deleted_project"`
     pub fn as_target_kind_str(&self) -> &'static str {
         match self {
             PlannedTargetKind::App => "app",
-            PlannedTargetKind::LiveProject | PlannedTargetKind::DeleteLocalProject => "project",
-            PlannedTargetKind::DeleteRemoteProject
-            | PlannedTargetKind::RestoreProject
-            | PlannedTargetKind::Retry
-            | PlannedTargetKind::RemoteCleanupProject => "deleted_project",
+            PlannedTargetKind::LiveProject => "project",
+            PlannedTargetKind::DeleteRemoteProject | PlannedTargetKind::RestoreProject => {
+                "deleted_project"
+            }
         }
     }
 
     /// 是否为待删除 target（pending delete target）。
     ///
-    /// `DeleteRemoteProject` / `RestoreProject` / `Retry` / `RemoteCleanupProject`
-    /// 为 true（都是 pending delete / cleanup target）。
+    /// `DeleteRemoteProject` / `RestoreProject` 为 true。
     pub fn is_pending_deleted(&self) -> bool {
         matches!(
             self,
-            PlannedTargetKind::DeleteRemoteProject
-                | PlannedTargetKind::RestoreProject
-                | PlannedTargetKind::Retry
-                | PlannedTargetKind::RemoteCleanupProject
+            PlannedTargetKind::DeleteRemoteProject | PlannedTargetKind::RestoreProject
         )
     }
 }
 
-// ──   TargetLifecycleApplyResult ──
-
-/// provider-neutral 原子决策接口的返回值 — catalog CAS 写入后的决策结果。
-///
-/// 原 `LostToRemote(snapshot)` 让调用方猜 op 反转，
-/// 导致 LWW 相等时被误判为"远端 delete 赢"或"远端 upsert 赢"。新枚举明确四种结果：
-///
-/// - `Applied(snapshot)` → candidate 严格赢，merge + IfMatch 写成功，携带持久化后的完整 snapshot；
-/// - `AlreadyCurrent(snapshot)` → candidate 与远端 record 完全相等（同 op/同时间/同 device_id），
-///   不需要再写 catalog，调用方按 candidate.op 继续后续动作（不删本地/不恢复）；
-/// - `RemoteWinner { snapshot, record }` → 远端严格赢，携带远端最新 snapshot 和**真实**赢的 record，
-///   调用方按 `record.op` 决策（Delete → 删本地；Upsert → 恢复本地），不再猜 op 反转；
-/// - `Retry(err)` → 无法写入（重试耗尽/网络错误等），不删任何远端文件，pending 保留。
-#[derive(Debug)]
-pub enum TargetLifecycleApplyResult {
-    /// candidate 严格赢，CAS 写成功，携带持久化后的完整 snapshot。
-    Applied(RemoteTargetCatalogSnapshot),
-    /// candidate 与远端 record 完全相等，不需要再写 catalog。
-    AlreadyCurrent(RemoteTargetCatalogSnapshot),
-    /// 远端严格赢，携带远端最新 snapshot 和真实赢的 record（含 op）。
-    RemoteWinner {
-        snapshot: RemoteTargetCatalogSnapshot,
-        record: TargetLifecycleRecord,
-    },
-    /// 无法写入（重试耗尽/网络错误等），不删任何远端文件，pending 保留。
-    Retry(crate::Error),
-}
-
-impl TargetLifecycleApplyResult {
-    /// 取出内嵌的 snapshot（Applied/AlreadyCurrent/RemoteWinner 共用）。
-    ///
-    /// `Retry` 返回 `None`（无 snapshot）。供调用方统一更新本地 catalog 缓存。
-    pub fn snapshot(&self) -> Option<&RemoteTargetCatalogSnapshot> {
-        match self {
-            TargetLifecycleApplyResult::Applied(s)
-            | TargetLifecycleApplyResult::AlreadyCurrent(s) => Some(s),
-            TargetLifecycleApplyResult::RemoteWinner { snapshot, .. } => Some(snapshot),
-            TargetLifecycleApplyResult::Retry(_) => None,
-        }
-    }
-}

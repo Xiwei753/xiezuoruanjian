@@ -86,6 +86,29 @@ pub(crate) fn stage_remote_changes(
     sync_root: &Path,
     staging_root: &Path,
 ) -> Result<RemoteStageOutcome> {
+    stage(provider, target, sync_root, staging_root, true)
+}
+
+/// 只读远端对象索引，不下载任何 blob（作品删除意图使用）。
+///
+/// 索引缺失时列出远端对象，用远端版本号建立"远端仍存在"的事实记录；
+/// 提交阶段把这些对象全部发布为删除。
+pub(crate) fn stage_remote_index_only(
+    provider: &dyn SyncProvider,
+    target: &SyncTarget,
+    sync_root: &Path,
+    staging_root: &Path,
+) -> Result<RemoteStageOutcome> {
+    stage(provider, target, sync_root, staging_root, false)
+}
+
+fn stage(
+    provider: &dyn SyncProvider,
+    target: &SyncTarget,
+    sync_root: &Path,
+    staging_root: &Path,
+    download_blobs: bool,
+) -> Result<RemoteStageOutcome> {
     let known = load_known_files(sync_root, target)?;
     let mut outcome = RemoteStageOutcome::default();
 
@@ -111,13 +134,31 @@ pub(crate) fn stage_remote_changes(
             let prefix = target.remote_prefix.trim_end_matches('/');
             for entry in provider.list(prefix)? {
                 let rel = entry.path.trim_start_matches('/').to_string();
-                if rel.is_empty() {
+                if rel.is_empty()
+                    || rel.starts_with("__generations__/")
+                    || rel.contains("/__generations__/")
+                {
                     continue;
                 }
                 if let Some(group) = &target.app_group {
                     if !group.owns_path(&rel) {
                         continue;
                     }
+                }
+                if !download_blobs {
+                    records.insert(
+                        rel.clone(),
+                        ManifestFileRecord {
+                            path: rel,
+                            content_hash: entry.version.0.clone(),
+                            updated_at_ms: 0,
+                            deleted_at_ms: None,
+                            device_id: String::new(),
+                            op: "upsert".to_string(),
+                            schema_version: 1,
+                        },
+                    );
+                    continue;
                 }
                 let remote_path = format!("{prefix}/{rel}");
                 let Some(object) = provider.read(&remote_path)? else {
@@ -148,6 +189,9 @@ pub(crate) fn stage_remote_changes(
                 continue;
             }
             if record.content_hash.is_empty() {
+                continue;
+            }
+            if !download_blobs {
                 continue;
             }
             if known.get(&record.path).map(String::as_str) == Some(record.content_hash.as_str()) {

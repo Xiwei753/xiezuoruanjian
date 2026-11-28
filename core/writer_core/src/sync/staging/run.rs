@@ -40,6 +40,9 @@ pub struct StagingRun {
     scope: crate::sync::types::SyncScope,
     /// 本轮提交决议里需要上传 / 传播删除的本地对象（提交阶段取走）。
     publish_lists: std::sync::Mutex<(Vec<PathBuf>, Vec<PathBuf>)>,
+    /// 本 target 是"用户已删除作品"的远端删除意图：所有远端对象都按删除传播，
+    /// 不再下载回本地。
+    delete_intent: bool,
     /// Prepare 阶段在传输之前记录的目标级失败（例如本机统计事件库迁移失败）。
     prepare_error: Option<String>,
 }
@@ -60,6 +63,7 @@ impl StagingRun {
             app_group: None,
             scope: crate::sync::types::SyncScope::Project,
             publish_lists: std::sync::Mutex::new((Vec::new(), Vec::new())),
+            delete_intent: false,
             prepare_error: None,
         })
     }
@@ -107,6 +111,16 @@ impl StagingRun {
     /// 该 run 的同步范围。
     pub(crate) fn scope(&self) -> crate::sync::types::SyncScope {
         self.scope
+    }
+
+    /// 标记该 run 为"删除远端作品"意图。
+    pub(crate) fn set_delete_intent(&mut self, delete: bool) {
+        self.delete_intent = delete;
+    }
+
+    /// 是否把所有远端对象按删除传播。
+    pub(crate) fn delete_intent(&self) -> bool {
+        self.delete_intent
     }
 
     /// 记录目标级失败原因。
@@ -178,6 +192,10 @@ pub fn prepare_staging_runs(
             None => StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?,
         };
         run.set_scope(planned.target.scope);
+        run.set_delete_intent(matches!(
+            planned.target_kind,
+            crate::sync::types::PlannedTargetKind::DeleteRemoteProject
+        ));
         // #955：本机统计设备组必须在传输之前完成旧事件库迁移（写 live）。
         // 迁移失败只记录到该 run：本组本次跳过 Transfer/Commit，其它组继续同步。
         if let Some(error) = migrate_local_stats_group_before_seed(planned) {

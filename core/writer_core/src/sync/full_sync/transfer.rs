@@ -1,113 +1,70 @@
-//! Transfer phase — execute sync for each planned target and collect results.
+//! Transfer phase — 只把远端对象变化搬进 staging，不做业务裁决。
 //!
-//! `run_single_target_transfer`：每个 target 独立执行（Transfer 只下载，不持锁、
-//! 不写 live）。
-//! 所有 helpers live in `transfer_helpers.rs`.
+//! 每个 target 的 Transfer 都不持锁、不写 live：
+//! - 普通作品/App 组：下载与本机基线、本机内容都不同的远端 blob；
+//! - 用户已删除作品的远端删除：只读远端索引对象，不下载内容，提交阶段把
+//!   所有这些对象发布为删除。
 
-use crate::sync::cancellation_token::{SyncCancellationToken, SyncProgressSink};
+use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::provider::SyncProvider;
-use crate::sync::types::{
-    DeletedTargetResolution, LocalLifecycleCommitAction, SyncResult, TargetSyncResult,
-};
+use crate::sync::types::{PlannedTargetKind, SyncResult, TargetSyncResult};
 
-use super::transfer_cleanup::transfer_remote_cleanup_project;
 use super::transfer_helpers::*;
 use super::FullSyncPlan;
 
-/// 执行单个 target 的 Transfer — 新编排入口。
+/// 执行单个 target 的 Transfer。
 ///
-/// 与 `run_transfer` 的区别：
-/// - **不调用 `persist_unresolved_conflicts_early`**：新编排中 Commit 在 progress 之前完成，
-///   冲突状态由 Commit 阶段写入 live，不需要提前落盘。
-/// - **不调用 progress 回调**：progress 由调用方在 Commit 之后自行发送。
-/// - **不执行 generation GC**：generation GC 在整轮结束后统一执行。
-/// - **接收 `catalog_snapshot: &mut`**：调用方维护 catalog snapshot 跨 target 传递。
-///
-/// 返回 `None` 表示 target 未执行（取消或索引越界）；
-/// 返回 `Some((target_sync_result, resolution, action))` 表示已执行完毕。
-///
-/// `TargetSyncResult` 中已包含 `deleted_resolution` 和 `local_lifecycle_action` 字段，
-/// 同时作为独立元组元素返回是为了方便调用方在 Commit 阶段直接使用，无需再从结构体提取。
+/// 返回 `None` 表示 target 未执行（取消、索引越界或同步关闭）；返回
+/// `Some(..)` 表示 Transfer 已完成，业务裁决留给 Commit。
+#[allow(clippy::type_complexity)]
 pub fn run_single_target_transfer(
     provider: &dyn SyncProvider,
     plan: &FullSyncPlan,
     target_index: usize,
-    catalog_snapshot: &mut crate::sync::types::RemoteTargetCatalogSnapshot,
     cancellation_token: Option<&SyncCancellationToken>,
-    completed_targets: &[TargetSyncResult],
     diagnostic_operation_id: Option<&str>,
 ) -> Option<(
     TargetSyncResult,
-    Option<DeletedTargetResolution>,
-    Option<LocalLifecycleCommitAction>,
+    Option<crate::sync::types::LocalLifecycleCommitAction>,
 )> {
-    use crate::sync::types::PlannedTargetKind;
-
     if !plan.sync_policy.enabled {
         log::debug!("[sync] run_single_target_transfer: sync disabled — returning no-op");
         return None;
     }
-
     if target_index >= plan.targets.len() {
         log::warn!(
-            "[sync] run_single_target_transfer: target_index {} out of bounds (len={})",
-            target_index,
+            "[sync] run_single_target_transfer: target_index {target_index} out of bounds (len={})",
             plan.targets.len()
         );
         return None;
     }
-
-    // Issue #729：target 执行前检查取消令牌。
     if let Some(token) = cancellation_token {
         if token.is_cancelled() {
             log::info!(
-                "[sync] run_single_target_transfer: cancellation requested — skipping target {}",
-                target_index
+                "[sync] run_single_target_transfer: cancellation requested — skipping target {target_index}"
             );
             return None;
         }
     }
 
     let planned = &plan.targets[target_index];
+    let staging_root = planned.staging_root.as_deref()?;
 
-    let (result, resolution, action) = match planned.target_kind {
-        // 普通 App 数据组与作品都走同一条对象增量传输：远端固定 HEAD 的对象索引
-        // 里与本机基线/内容不同的对象才下载，业务裁决统一留给提交阶段。
-        PlannedTargetKind::App | PlannedTargetKind::LiveProject => (
-            transfer_object_scope(
-                provider,
-                &planned.target,
-                &planned.local_root,
-                planned.staging_root.as_deref(),
-                cancellation_token,
-            ),
-            None,
-            None,
+    let result = match planned.target_kind {
+        PlannedTargetKind::DeleteRemoteProject => transfer_delete_object_scope(
+            provider,
+            &planned.target,
+            &planned.local_root,
+            staging_root,
+            cancellation_token,
         ),
-        PlannedTargetKind::DeleteLocalProject => {
-            transfer_delete_local_project(provider, planned, plan, cancellation_token)
-        }
-        PlannedTargetKind::DeleteRemoteProject => {
-            transfer_delete_remote_project(provider, planned, catalog_snapshot, cancellation_token)
-        }
-        PlannedTargetKind::RestoreProject => {
-            transfer_restore_project(provider, planned, plan, cancellation_token)
-        }
-        PlannedTargetKind::Retry => {
-            let msg = "target lifecycle decision retry".to_string();
-            (
-                SyncResult::error(
-                    crate::sync::SyncStatus::RecoverableError(msg.clone()),
-                    msg,
-                    None,
-                ),
-                Some(DeletedTargetResolution::Retry),
-                None,
-            )
-        }
-        PlannedTargetKind::RemoteCleanupProject => {
-            transfer_remote_cleanup_project(provider, planned, cancellation_token)
-        }
+        _ => transfer_object_scope(
+            provider,
+            &planned.target,
+            &planned.local_root,
+            Some(staging_root),
+            cancellation_token,
+        ),
     };
 
     let target_sync_result = TargetSyncResult {
@@ -118,11 +75,10 @@ pub fn run_single_target_transfer(
         failure_path: app_group_failure_path(&planned.target, &result),
         failure_phase: app_group_failure_phase(&planned.target, &result),
         result,
-        deleted_resolution: resolution,
-        local_lifecycle_action: action.clone().unwrap_or_default(),
+        local_lifecycle_action: Default::default(),
     };
 
-    Some((target_sync_result, resolution, action))
+    Some((target_sync_result, None))
 }
 
 /// Prepare 阶段已失败的 target 结果（#955：本机统计事件库迁移失败）。
@@ -153,7 +109,6 @@ pub(crate) fn prepare_failed_target_result(
             error.to_string(),
             None,
         ),
-        deleted_resolution: None,
         local_lifecycle_action: Default::default(),
     }
 }
@@ -184,7 +139,6 @@ fn app_group_failure_path(
 
     // Provider errors include the exact remote object path in forms such as
     // `not found: path=...` and `precondition failed: path=..., reason=...`.
-    // Preserve that evidence when present; otherwise identify the group prefix.
     let path = error
         .split_once("path=")
         .map(|(_, provider_path)| {
@@ -212,17 +166,11 @@ fn app_group_failure_phase(
     if error.contains("local_missing_without_tombstone") {
         return Some("merge".to_string());
     }
-    [
-        "dependency_check",
-        "catalog_read",
-        "merge",
-        "tree_publish",
-        "catalog_publish",
-    ]
-    .iter()
-    .find(|phase| error.starts_with(&format!("{phase}:")))
-    .map_or_else(
-        || Some("transfer".to_string()),
-        |phase| Some((*phase).to_string()),
-    )
+    ["catalog_read", "merge", "tree_publish", "catalog_publish"]
+        .iter()
+        .find(|phase| error.starts_with(&format!("{phase}:")))
+        .map_or_else(
+            || Some("transfer".to_string()),
+            |phase| Some((*phase).to_string()),
+        )
 }

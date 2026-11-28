@@ -202,38 +202,20 @@ impl crate::facade::WriterCore {
         (lifecycle_committed_paths, lifecycle_receipts)
     }
 
-    ///   deleted target 远端清理/恢复成功后，
-    /// 从 pending_deleted_targets.json 移除该条目。
+    /// 删除作品的远端对象全部发布成功后，移除本地 pending 记录。
     ///
-    /// 按 typed `DeletedTargetResolution` 精确确认（不再按 `SyncStatus` 猜）：
-    /// - `LocalDeleteWins` 且 `result.status` 成功类 → 移除 pending（远端删除+catalog tombstone 写入成功）；
-    /// - `RemoteTargetWins` 且 `result.status` 成功类 → 移除 pending（本地恢复成功）；
-    /// - `Retry` 或 `None` → 保留 pending（下次同步重试）。
+    /// 只有 target 状态是成功类才移除；发布失败保留 pending，下一轮重新比较重试。
     fn cleanup_completed_deleted_targets(&self, result: &crate::sync::types::FullSyncResult) {
-        use crate::sync::types::DeletedTargetResolution;
-
-        for t in &result.targets {
-            if t.target_kind != "deleted_project" {
+        for target in &result.targets {
+            if target.target_kind != "deleted_project" {
                 continue;
             }
-            let should_remove = match t.deleted_resolution {
-                Some(DeletedTargetResolution::LocalDeleteWins)
-                | Some(DeletedTargetResolution::RemoteTargetWins) => {
-                    // 且 result.status 是成功类（远端删除/恢复真正落盘成功）。
-                    matches!(
-                        t.result.status,
-                        crate::sync::SyncStatus::Success
-                            | crate::sync::SyncStatus::LatestWinsApplied
-                    )
-                }
-                // Retry 或 None（未走 deleted target 决策路径）→ 保留 pending。
-                Some(DeletedTargetResolution::Retry) | None => false,
-            };
-            if should_remove {
-                self.remove_pending_deleted_by_prefix(&t.remote_prefix);
-                // 同时移除 pending_remote_cleanup
-                // （RemoteCleanupProject 成功时）。如果不存在则是幂等 no-op。
-                self.remove_pending_remote_cleanup_by_prefix(&t.remote_prefix);
+            if matches!(
+                target.result.status,
+                crate::sync::SyncStatus::Success | crate::sync::SyncStatus::LatestWinsApplied
+            ) {
+                self.remove_pending_deleted_by_prefix(&target.remote_prefix);
+                self.remove_pending_remote_cleanup_by_prefix(&target.remote_prefix);
             }
         }
     }
