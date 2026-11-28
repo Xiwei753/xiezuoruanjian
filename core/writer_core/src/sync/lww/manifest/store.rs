@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! manifest/root.json                        权威根：generation + namespace → index sha256
+//! manifest/gc-journal.json                  待回收的旧文件（随新根同一事务写入）
 //! manifest/index/<ns>/<sha256>.json         namespace → object_key → object sha256
 //! manifest/objects/<sha256>.json            object_key 下的全部文件记录
 //! ```
@@ -22,22 +23,29 @@
 //! - `ManifestWritePlan::writes` 的对象/索引/根顺序固定，根（若写）永远最后
 //!   一项；调用方用 [`crate::storage::transaction::SaveTransaction`] 一次提交，
 //!   根写失败时旧根仍指向旧对象，不会出现"根指向不存在对象"。
+//! - [`ManifestStore::apply_delta`] 只为 delta 涉及的 namespace/object_key 读取
+//!   当前索引/对象，不扫描 objects/index 目录、不构造完整可达集合；`deletes`
+//!   恒为空，被替换/移除的旧文件写进 GC journal 由
+//!   [`ManifestStore::collect_manifest_garbage`] 回收。
 //! - 根版本只在清单语义（namespace → index sha256 映射）真实变化或首次建立
 //!   权威时才推进：`apply_delta`/`plan_write_all`/`plan_sync_manifest` 先算
-//!   最终映射并与当前根比较；映射不变时不写根、不回收任何文件，只保留
+//!   最终映射并与当前根比较；映射不变时不写根、不产生 journal 条目，只保留
 //!   "补写缺失的内容寻址文件"（例如旧固定路径索引迁移）这类幂等修复写入。
 //! - `generation` 由 `(schemaVersion, namespaces, localPreviousRoot)` 内容派生，
 //!   调用方传入的 generation 不参与身份；同一内容得到逐字节一致的根。
 //! - 本地根的 `previousRoot` 恒为 `None`：本地 staging/merge 不是已发布代，
 //!   `localPreviousRoot` 记录写盘前本地根 canonical sha256。
-//! - GC 保留一代：根切换后只回收「既不在新根可达集合、也不在上一代根可达
-//!   集合」的文件（上一代 = 本次切换读到的旧根）。因此旧根读者在切换后仍能
-//!   解析自己的索引/对象。
+//! - GC 保留一代：根切换时把旧文件以 `retiredAtRoot = 新根 generation` 写进
+//!   journal，与根同一事务落盘；`collect_manifest_garbage` 只回收
+//!   `retiredAtRoot != 当前根 generation` 且不再被当前根 namespaces/indexes
+//!   引用的条目。因此旧根读者在切换后仍能解析自己的索引/对象。
 //! - 任一索引/对象缺失、sha256 不符、JSON 损坏、路径不属于该 object_key
 //!   都返回 `Err`；禁止把损坏或缺失静默当成空清单。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
 
 use crate::sync::manifest_delta::ManifestDelta;
 use crate::sync::path::ValidatedSyncPath;
@@ -57,27 +65,117 @@ const INDEX_DIR_NAME: &str = "index";
 const OBJECTS_DIR_NAME: &str = "objects";
 const JSON_SUFFIX: &str = ".json";
 
+/// GC journal 文件名（位于 v2 存储目录，属于本地元数据，不进发布视图）。
+const GC_JOURNAL_FILE_NAME: &str = "gc-journal.json";
+/// GC journal 格式版本。
+const GC_JOURNAL_SCHEMA_VERSION: u32 = 1;
+
 /// 一次清单持久化计划。
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ManifestWritePlan {
     /// (相对 sync_root 的路径, canonical 字节)；写根时最后一项固定是 root。
     ///
     /// 清单语义未变化时根不进入 writes；没有需要补写的内容寻址文件时为空。
+    /// `apply_delta` 还会在根之前写入合并后的 GC journal（若有新的 retire 记录）。
     pub writes: Vec<(String, Vec<u8>)>,
-    /// 本计划后不再可达、需要回收的旧对象/索引（相对路径）。
+    /// 本计划执行时需要删除的文件（相对路径）。
     ///
-    /// 只包含「新根与上一代本地根都不可达」的文件，因此根切换后立即执行
-    /// 也不会破坏旧根读者的依赖；执行顺序固定排在根写入之后。清单语义
-    /// 未变化（不写根、不推进代次）时恒为空。
+    /// 只有 `plan_write_all`（完整重建/旧格式迁移）会直接用「新根 ∪ 上一代根」
+    /// 可达集合结算删除；`apply_delta` 点更新恒为空，回收交给
+    /// [`ManifestStore::collect_manifest_garbage`] 按 GC journal 结算。
     pub deletes: Vec<String>,
     /// root.json 相对 sync_root 的路径。
     // 发布端要按这个路径单独上传/替换根，当前主链路只消费 writes/deletes。
     #[allow(dead_code)]
     pub root_rel: String,
     /// 本计划生成后的全部可达文件（objects + indexes + root）。
-    // 发布/GC 接线的输入；本轮先由 plan 计算并保留。
+    ///
+    /// 只有 `plan_write_all` 会完整计算；`apply_delta` 点更新不构造全量可达集合，
+    /// 这里为空。
     #[allow(dead_code)]
     pub reachable: BTreeSet<String>,
+}
+
+/// 持久 retire journal 的一条记录：根切换时被替换/移除、等待回收的旧文件。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ManifestGcEntry {
+    /// 相对 sync_root 的旧文件路径（对象或索引）。
+    pub rel: String,
+    /// 该文件第一次变为不可达时写入的新根 generation。
+    pub retired_at_root: String,
+    /// 记录时间（毫秒时间戳，只用于诊断）。
+    pub recorded_at_ms: i64,
+}
+
+/// 持久 retire journal：`manifest/gc-journal.json`。
+///
+/// 与换根同一 `SaveTransaction` 写入，保证"退休记录随新根 durable"；下一轮
+/// （更下一代根）由 [`ManifestStore::collect_manifest_garbage`] 结算。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ManifestGcJournal {
+    /// 存储格式版本，必须等于 [`GC_JOURNAL_SCHEMA_VERSION`]。
+    pub schema_version: u32,
+    /// 待结算条目，按 `rel` 排序，保证 canonical 字节稳定。
+    #[serde(default)]
+    pub entries: Vec<ManifestGcEntry>,
+}
+
+impl ManifestGcJournal {
+    fn new() -> Self {
+        Self {
+            schema_version: GC_JOURNAL_SCHEMA_VERSION,
+            entries: Vec::new(),
+        }
+    }
+
+    /// 记录一个退休文件；已存在的条目保留最早代次边界（不推迟回收）。
+    fn retire(&mut self, rel: &str, retired_at_root: &str) {
+        if self.entries.iter().any(|entry| entry.rel == rel) {
+            return;
+        }
+        self.entries.push(ManifestGcEntry {
+            rel: rel.to_string(),
+            retired_at_root: retired_at_root.to_string(),
+            recorded_at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        self.entries.sort_by(|a, b| a.rel.cmp(&b.rel));
+    }
+
+    fn canonical_bytes(&self) -> crate::Result<Vec<u8>> {
+        serde_json::to_vec(self).map_err(crate::Error::Json)
+    }
+
+    fn validate(&self, origin: &str) -> crate::Result<()> {
+        if self.schema_version != GC_JOURNAL_SCHEMA_VERSION {
+            return Err(crate::Error::Other(format!(
+                "manifest gc journal {origin} has unsupported schemaVersion {} (expected {})",
+                self.schema_version, GC_JOURNAL_SCHEMA_VERSION
+            )));
+        }
+        for entry in &self.entries {
+            if entry.rel.is_empty() || entry.retired_at_root.is_empty() {
+                return Err(crate::Error::Other(format!(
+                    "manifest gc journal {origin} contains an empty rel/retiredAtRoot entry"
+                )));
+            }
+            // journal 只记录 storage 内的相对路径：拒绝绝对路径与 `..`/空段，
+            // 避免被篡改的 journal 把回收范围带出清单存储目录。
+            if entry.rel.starts_with('/')
+                || entry
+                    .rel
+                    .split('/')
+                    .any(|segment| segment.is_empty() || segment == ".." || segment == ".")
+            {
+                return Err(crate::Error::Other(format!(
+                    "manifest gc journal {origin} contains an unsafe path {}",
+                    entry.rel
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// 是否等于项目/App group 的旧单文件清单。
@@ -158,6 +256,13 @@ impl ManifestStore {
 
     pub(crate) fn root_rel(&self) -> String {
         format!("{}/{}", self.storage_dir_rel, ROOT_FILE_NAME)
+    }
+
+    /// GC journal 路径：`<storage>/gc-journal.json`。
+    ///
+    /// 它是本地清理元数据：不属于发布视图，也不属于业务/清单对象扫描范围。
+    pub(crate) fn gc_journal_rel(&self) -> String {
+        format!("{}/{}", self.storage_dir_rel, GC_JOURNAL_FILE_NAME)
     }
 
     /// 内容寻址索引路径：`<storage>/index/<namespace>/<sha256>.json`。
@@ -252,6 +357,64 @@ impl ManifestStore {
         }))
     }
 
+    /// 只读取指定路径的权威记录（稀疏轮点查）。
+    ///
+    /// 读取顺序：root → 每个受影响 namespace 的索引（同 namespace 只读一次）→
+    /// 每个受影响 object_key 的对象 → 只保留请求路径的记录。未列出的 namespace
+    /// 索引与未涉及的 object 文件不读取、不校验，因此损坏的无关对象不会阻塞
+    /// 稀疏轮。
+    ///
+    /// root 不存在时回退 [`Self::load_all`]（旧格式迁移路径由
+    /// [`Self::load_or_legacy`]/`plan_write_all` 负责；这里与旧行为一致返回空清单）。
+    pub(crate) fn load_records_for_paths(
+        &self,
+        paths: &BTreeSet<String>,
+    ) -> crate::Result<SyncManifest> {
+        if paths.is_empty() {
+            return Ok(SyncManifest::default());
+        }
+        let Some(root) = self.load_root()? else {
+            return Ok(self.load_all()?.unwrap_or_default());
+        };
+        // namespace → 本轮要读的 object_key 集合。同一 namespace 的索引只读一次。
+        let mut wanted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for path in paths {
+            wanted
+                .entry(namespace_for_path(path))
+                .or_default()
+                .insert(object_key(path));
+        }
+        let mut by_path: BTreeMap<String, ManifestFileRecord> = BTreeMap::new();
+        for (namespace, keys) in &wanted {
+            let Some(index_sha) = root.namespaces.get(namespace) else {
+                // namespace 不在权威根里：这些路径没有已确认记录（例如首次同步）。
+                continue;
+            };
+            let index = self.read_verified_index(namespace, index_sha)?;
+            for key in keys {
+                let Some(object_sha) = index.objects.get(key) else {
+                    continue;
+                };
+                let object = self.read_verified_object(key, object_sha)?;
+                for record in object.files {
+                    if !paths.contains(&record.path) {
+                        continue;
+                    }
+                    if by_path.contains_key(&record.path) {
+                        return Err(crate::Error::Other(format!(
+                            "manifest storage contains duplicate path {}",
+                            record.path
+                        )));
+                    }
+                    by_path.insert(record.path.clone(), record);
+                }
+            }
+        }
+        Ok(SyncManifest {
+            files: by_path.into_values().collect(),
+        })
+    }
+
     /// 读取权威清单；root 不存在时迁移旧格式。
     ///
     /// 迁移来源优先级：旧 `manifest-shards/` 目录（上一代权威）→ 旧单文件
@@ -281,8 +444,11 @@ impl ManifestStore {
 
     /// 应用对象级增量，只为受影响的 object/index/root 生成写入。
     ///
-    /// 未涉及的 namespace/index/object 不重写；删除后为空的 objects 文件
-    /// 不写入并在 `deletes` 里回收。
+    /// 未涉及的 namespace/index/object 不读、不重写；删除后为空的 objects 文件
+    /// 不写入。被替换/移除的旧索引、旧对象与旧固定路径索引不在这里删除，而是
+    /// 作为 retire 记录与本次新根写进同一 `SaveTransaction` 的
+    /// `manifest/gc-journal.json`，由 [`Self::collect_manifest_garbage`] 在下一代
+    /// 根结算（保留一代，旧根读者仍能解析自己的索引/对象）。
     ///
     /// `generation` 仅为兼容旧调用方保留，**不参与根身份**：需要写根时
     /// generation 由最终 namespace 映射 + 本地前一个持久根内容派生。
@@ -330,7 +496,8 @@ impl ManifestStore {
         let affected: BTreeSet<String> = upserts.keys().chain(removed.keys()).cloned().collect();
 
         let mut writes: Vec<(String, Vec<u8>)> = Vec::new();
-        let mut final_indexes: BTreeMap<String, ManifestIndex> = BTreeMap::new();
+        // 本计划替换/移除的旧文件：只在根真实推进时以 retire 记录写进 GC journal。
+        let mut retired: BTreeSet<String> = BTreeSet::new();
 
         for namespace in &affected {
             let old_index_sha = namespaces.get(namespace).cloned();
@@ -376,6 +543,9 @@ impl ManifestStore {
 
                 if records.is_empty() {
                     index.objects.remove(&key);
+                    if let Some(old_sha) = current_object_sha {
+                        retired.insert(self.object_rel(&old_sha));
+                    }
                     continue;
                 }
                 let object = ManifestObject::new(&key, records.into_values().collect());
@@ -387,11 +557,18 @@ impl ManifestStore {
                         writes.push((rel, bytes));
                     }
                     index.objects.insert(key, object_sha);
+                    if let Some(old_sha) = current_object_sha {
+                        retired.insert(self.object_rel(&old_sha));
+                    }
                 }
             }
 
             if index.objects.is_empty() {
                 namespaces.remove(namespace);
+                if let Some(old_sha) = &old_index_sha {
+                    retired.insert(self.index_rel(namespace, old_sha));
+                }
+                self.retire_legacy_index_if_unreferenced(namespace, None, &mut retired)?;
                 continue;
             }
             let bytes = index.canonical_bytes()?;
@@ -402,54 +579,62 @@ impl ManifestStore {
             if !self.content_addressed_file_identical(&rel, &bytes, "index")? {
                 writes.push((rel, bytes));
             }
+            if old_index_sha.as_deref() != Some(index_sha.as_str()) {
+                if let Some(old_sha) = &old_index_sha {
+                    retired.insert(self.index_rel(namespace, old_sha));
+                }
+            }
+            // 旧固定路径索引只在新根不再以同一 sha 引用时才退休。
+            self.retire_legacy_index_if_unreferenced(namespace, Some(&index_sha), &mut retired)?;
             namespaces.insert(namespace.clone(), index_sha);
-            final_indexes.insert(namespace.clone(), index);
         }
 
-        // 旧固定路径索引迁移：未受本计划影响的 namespace 若内容寻址文件尚不存在
-        // （87b15f2 布局），必须补写同一份字节到 `<ns>/<sha>.json`，根中 sha 不变。
-        // 否则本计划的 GC 会删掉旧固定路径这份唯一副本。
+        // 旧固定路径索引迁移：只补写受影响 namespace 的内容寻址副本（87b15f2
+        // 布局）。未受影响的 namespace 不读索引、也不改其存储；它们的根引用与
+        // 旧固定路径副本保持原样，不会在本计划里被回收。
         let planned: BTreeSet<String> = writes.iter().map(|(rel, _)| rel.clone()).collect();
-        let mut migration_writes: Vec<(String, Vec<u8>)> = Vec::new();
-        for (namespace, index_sha) in &namespaces {
+        for namespace in &affected {
+            let Some(index_sha) = namespaces.get(namespace) else {
+                continue;
+            };
             let rel = self.index_rel(namespace, index_sha);
             if planned.contains(&rel) || self.sync_root.join(&rel).is_file() {
                 continue;
             }
             let (_, bytes, _) = self.read_verified_index_with_bytes(namespace, index_sha)?;
-            migration_writes.push((rel, bytes));
+            writes.push((rel, bytes));
         }
-        writes.extend(migration_writes);
 
         let root_rel = self.root_rel();
         // 根版本只在清单语义真实变化或首次建立权威时推进。最终 namespace 映射
         // 与当前根一致（空 delta / 相同记录重放 / 旧固定路径迁移）时：不写根、
-        // 不改 generation、不回收任何文件；writes 只保留上面确实缺失的
+        // 不改 generation、不产生 journal 条目；writes 只保留上面确实缺失的
         // 内容寻址索引/对象补写。
         let root_changes = Self::root_version_changes(current_root.as_ref(), &namespaces);
         if root_changes {
-            writes.push((
-                root_rel.clone(),
-                Self::local_root_bytes(current_root.as_ref(), &namespaces)?,
-            ));
+            let local_previous_root = current_root
+                .as_ref()
+                .map(ManifestRoot::canonical_sha256)
+                .transpose()?;
+            let new_root = ManifestRoot::local(namespaces, local_previous_root);
+            if !retired.is_empty() {
+                let mut journal = self
+                    .load_gc_journal()?
+                    .unwrap_or_else(ManifestGcJournal::new);
+                for rel in retired {
+                    journal.retire(&rel, &new_root.generation);
+                }
+                writes.push((self.gc_journal_rel(), journal.canonical_bytes()?));
+            }
+            // 根永远最后：journal 先于根，二者同一 SaveTransaction 提交。
+            writes.push((root_rel.clone(), new_root.canonical_bytes()?));
         }
-
-        let pending_writes: BTreeSet<String> = writes.iter().map(|(rel, _)| rel.clone()).collect();
-        let new_reachable =
-            self.reachable_with_overrides(&namespaces, &final_indexes, &pending_writes, false)?;
-        // GC 保留一代：上一代本地根（本次切换读到的旧根）仍可达的文件不能删。
-        // 语义未变化时没有代次推进，也就没有可结算的回收边界。
-        let deletes = if root_changes {
-            self.plan_deletes(&new_reachable, current_root.as_ref())?
-        } else {
-            Vec::new()
-        };
 
         Ok(ManifestWritePlan {
             writes,
-            deletes,
+            deletes: Vec::new(),
             root_rel,
-            reachable: new_reachable,
+            reachable: BTreeSet::new(),
         })
     }
 
@@ -623,6 +808,161 @@ impl ManifestStore {
             true,
         )?;
         Ok(Some((root_bytes, reachable)))
+    }
+
+    /// 读取 GC journal；不存在 → `Ok(None)`，存在但损坏/版本不符 → `Err`。
+    pub(crate) fn load_gc_journal(&self) -> crate::Result<Option<ManifestGcJournal>> {
+        let rel = self.gc_journal_rel();
+        let Some(bytes) = self.read_optional_bytes(&rel)? else {
+            return Ok(None);
+        };
+        let path = self.sync_root.join(&rel);
+        let origin = path.display().to_string();
+        let journal: ManifestGcJournal = serde_json::from_slice(&bytes).map_err(|error| {
+            crate::Error::Other(format!("manifest gc journal {origin} is corrupt: {error}"))
+        })?;
+        journal.validate(&origin)?;
+        Ok(Some(journal))
+    }
+
+    /// 结算 GC journal：回收上一代及更早的退休文件，返回实际删除数量。
+    ///
+    /// 边界以当前权威根为准：
+    /// - `retiredAtRoot == 当前根 generation` 的条目是本次切换刚刚退休的旧根
+    ///   依赖，保留一代，本轮不删；
+    /// - 其余条目若仍被当前根 namespaces/indexes 引用（例如内容回退后又重新
+    ///   被引用），只从 journal 移除，不删文件；
+    /// - 其余文件删除并从 journal 移除。文件已经不存在（被完整重建路径回收）
+    ///   时只移除条目，不报错。
+    ///
+    /// 当前根不存在时没有可信的代次边界，直接 `Ok(0)`，不猜测、不删除。
+    pub(crate) fn collect_manifest_garbage(&self) -> crate::Result<usize> {
+        let Some(root) = self.load_root()? else {
+            return Ok(0);
+        };
+        let Some(journal) = self.load_gc_journal()? else {
+            return Ok(0);
+        };
+        let total = journal.entries.len();
+        if total == 0 {
+            return Ok(0);
+        }
+
+        // 当前根引用集合：根 + 索引内容寻址路径 + 索引里每个 object 文件。
+        // 只读索引（每个 namespace 一次），不读 object 内容。
+        let mut referenced: BTreeSet<String> = BTreeSet::new();
+        referenced.insert(self.root_rel());
+        for (namespace, index_sha) in &root.namespaces {
+            referenced.insert(self.index_rel(namespace, index_sha));
+            let index = self.read_verified_index(namespace, index_sha)?;
+            for object_sha in index.objects.values() {
+                referenced.insert(self.object_rel(object_sha));
+            }
+        }
+
+        let mut kept: Vec<ManifestGcEntry> = Vec::new();
+        let mut deletes: Vec<String> = Vec::new();
+        for entry in journal.entries {
+            if entry.retired_at_root == root.generation {
+                kept.push(entry);
+                continue;
+            }
+            if self.gc_entry_still_referenced(&referenced, &entry.rel, &root)? {
+                // 重新被当前根引用：只从 journal 移除，保留文件。
+                continue;
+            }
+            if !self.is_manifest_gc_candidate(&entry.rel) {
+                log::warn!(
+                    "[sync] manifest gc journal entry {} is outside manifest object/index storage — \
+                     dropping it without deleting",
+                    entry.rel
+                );
+                continue;
+            }
+            let path = self.sync_root.join(&entry.rel);
+            match std::fs::metadata(&path) {
+                Ok(metadata) if metadata.is_file() => deletes.push(entry.rel),
+                // 已经不存在或不是文件（被完整重建 / 外部清理）：移除条目即可。
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(crate::Error::Io(std::io::Error::new(
+                        error.kind(),
+                        format!("inspect manifest gc candidate {}: {error}", path.display()),
+                    )))
+                }
+            }
+        }
+        if deletes.is_empty() && kept.len() == total {
+            return Ok(0);
+        }
+
+        let remaining = ManifestGcJournal {
+            schema_version: GC_JOURNAL_SCHEMA_VERSION,
+            entries: kept,
+        };
+        let mut tx = crate::storage::transaction::SaveTransaction::new(&self.sync_root);
+        for rel in &deletes {
+            tx.add_delete(rel)?;
+        }
+        tx.add_bytes(&self.gc_journal_rel(), &remaining.canonical_bytes()?)?;
+        tx.commit()?;
+        Ok(deletes.len())
+    }
+
+    /// journal 条目是否仍被当前根引用。
+    ///
+    /// 内容寻址对象/索引直接按路径命中；旧固定路径索引（`index/<ns>.json`）
+    /// 按"当前根是否仍用同一 sha 引用该 namespace"判定。
+    fn gc_entry_still_referenced(
+        &self,
+        referenced: &BTreeSet<String>,
+        rel: &str,
+        root: &ManifestRoot,
+    ) -> crate::Result<bool> {
+        if referenced.contains(rel) {
+            return Ok(true);
+        }
+        let Some(namespace) = self.legacy_index_namespace(rel) else {
+            return Ok(false);
+        };
+        let Some(bytes) = self.read_optional_bytes(rel)? else {
+            return Ok(false);
+        };
+        Ok(root
+            .namespaces
+            .get(namespace)
+            .is_some_and(|sha| *sha == sha256_hex(&bytes)))
+    }
+
+    /// GC 只允许删除清单存储内的对象/索引文件（含旧固定路径索引）。
+    fn is_manifest_gc_candidate(&self, rel: &str) -> bool {
+        if rel == self.root_rel() || rel == self.gc_journal_rel() {
+            return false;
+        }
+        let objects_prefix = format!("{}/{}/", self.storage_dir_rel, OBJECTS_DIR_NAME);
+        let index_prefix = format!("{}/{}/", self.storage_dir_rel, INDEX_DIR_NAME);
+        rel.starts_with(&objects_prefix) || rel.starts_with(&index_prefix)
+    }
+
+    /// 旧固定路径索引若存在且新根不再以同一 sha 引用它，则登记为退休文件。
+    ///
+    /// `new_index_sha` 为 `None` 表示该 namespace 已从新根移除。
+    fn retire_legacy_index_if_unreferenced(
+        &self,
+        namespace: &str,
+        new_index_sha: Option<&str>,
+        retired: &mut BTreeSet<String>,
+    ) -> crate::Result<()> {
+        let rel = self.legacy_index_rel(namespace);
+        let Some(bytes) = self.read_optional_bytes(&rel)? else {
+            return Ok(());
+        };
+        if new_index_sha.is_some_and(|sha| sha256_hex(&bytes) == sha) {
+            return Ok(());
+        }
+        retired.insert(rel);
+        Ok(())
     }
 
     /// 读取一个 namespace 的索引与发布字节（旧固定路径布局时带回迁移字节）。

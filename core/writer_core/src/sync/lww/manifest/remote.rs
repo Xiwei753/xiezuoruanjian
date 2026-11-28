@@ -17,6 +17,10 @@
 //! 根不存在才回退旧单文件 `app-meta/sync/manifest.sync.json`，再回退旧分片目录
 //! `app-meta/sync/manifest-shards/*.json`（一次性迁移读取）。
 //!
+//! 稀疏轮用 [`fetch_remote_manifest_for_paths`] 点查：根存在时只读受影响
+//! namespace 的索引与受影响 object_key 的对象；根不存在时仍按上面的旧格式
+//! 完整读取回退。
+//!
 //! ## 发布
 //!
 //! 顺序固定：先写不可变对象（远端已有同名对象直接复用），再写变化的索引，
@@ -266,6 +270,77 @@ pub(crate) fn fetch_remote_manifest_at(
     }
     shard_paths.sort();
     read_legacy_shards(provider, remote_prefix, &shard_paths).map(Some)
+}
+
+/// 只读取指定路径的远端清单记录（稀疏轮点查）。
+///
+/// 远端 v2 根存在时只读受影响 namespace 的索引（同 namespace 只读一次）与
+/// 受影响 object_key 的对象，不读未涉及的索引/对象；记录再按请求路径过滤。
+/// 根不存在时回退 [`fetch_remote_manifest_at`] 的完整读取（旧单文件 / 旧分片
+/// 目录一次性迁移），与完整入口保持同一严格校验语义。
+pub(crate) fn fetch_remote_manifest_for_paths(
+    provider: &dyn SyncProvider,
+    remote_prefix: &str,
+    paths: &BTreeSet<String>,
+) -> crate::Result<SyncManifest> {
+    if paths.is_empty() {
+        return Ok(SyncManifest::default());
+    }
+    let root_rel = remote_root_rel();
+    let root_path = remote_path(remote_prefix, &root_rel);
+    let Some(root_object) = provider.read(&root_path)? else {
+        return fetch_remote_manifest_at(provider, remote_prefix).map(Option::unwrap_or_default);
+    };
+    let root = parse_root(&root_object.content, &root_path)?;
+    // namespace → 本轮要读的 object_key 集合。
+    let mut wanted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for path in paths {
+        wanted
+            .entry(namespace_for_path(path))
+            .or_default()
+            .insert(object_key(path));
+    }
+    let mut by_path: BTreeMap<String, ManifestFileRecord> = BTreeMap::new();
+    for (namespace, keys) in &wanted {
+        let Some(index_sha) = root.namespaces.get(namespace) else {
+            // namespace 不在远端根里：这些路径没有已确认记录。
+            continue;
+        };
+        let (index_bytes, index_path) =
+            read_remote_index(provider, remote_prefix, namespace, index_sha)?;
+        let index = parse_index(&index_bytes, &index_path, namespace)?;
+        for key in keys {
+            let Some(object_sha) = index.objects.get(key) else {
+                continue;
+            };
+            let object_rel = remote_object_rel(object_sha);
+            let object_path = remote_path(remote_prefix, &object_rel);
+            let object_bytes = read_required(provider, remote_prefix, &object_rel, "object")?;
+            let actual_sha = sha256_hex(&object_bytes);
+            if actual_sha != *object_sha {
+                return Err(remote_error(format!(
+                    "remote manifest object {object_path} sha256 mismatch: index expects \
+                     {object_sha}, actual {actual_sha}"
+                )));
+            }
+            let object = parse_object(&object_bytes, &object_path, key)?;
+            for record in object.files {
+                if !paths.contains(&record.path) {
+                    continue;
+                }
+                if by_path.contains_key(&record.path) {
+                    return Err(remote_error(format!(
+                        "remote manifest contains duplicate path {}",
+                        record.path
+                    )));
+                }
+                by_path.insert(record.path.clone(), record);
+            }
+        }
+    }
+    Ok(SyncManifest {
+        files: by_path.into_values().collect(),
+    })
 }
 
 fn read_required(

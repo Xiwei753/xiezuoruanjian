@@ -549,8 +549,10 @@ fn sparse_merge_persists_only_affected_objects() {
     )
     .unwrap();
 
-    // 返回给 full_sync/发布方的仍是完整清单：基线 + affected 覆盖。
-    assert_eq!(outcome.merged_manifest.files.len(), 3);
+    // 稀疏轮的 merged_manifest 只覆盖 affected（本地基线用 load_records_for_paths
+    // 点查）：完整清单权威仍是本地 store，发布端走 delta 视图。
+    assert_eq!(outcome.merged_manifest.files.len(), 1);
+    assert_eq!(outcome.merged_manifest.files[0].path, affected);
     let merged_affected = outcome
         .merged_manifest
         .files
@@ -584,6 +586,23 @@ fn sparse_merge_persists_only_affected_objects() {
     assert!(
         old_affected_object.exists(),
         "old affected object must be retained for the previous published root"
+    );
+    let old_affected_rel = old_affected_object
+        .strip_prefix(sync_root)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
+    let journal = ManifestStore::new(sync_root, SYNC_MANIFEST_PATH)
+        .load_gc_journal()
+        .unwrap()
+        .expect("真实换根必须写 retire journal");
+    assert!(
+        journal
+            .entries
+            .iter()
+            .any(|entry| entry.rel == old_affected_rel),
+        "被替换的旧 object 必须登记到 journal，实际 {:?}",
+        journal.entries
     );
     let new_affected_object = manifest_object_with_hash(sync_root, affected, &new_affected_hash);
     assert_ne!(new_affected_object, old_affected_object);
@@ -820,4 +839,228 @@ fn non_sparse_merge_still_returns_complete_manifest() {
         .unwrap()
         .expect("manifest root must exist");
     assert_eq!(stored.files.len(), 2);
+}
+
+/// 稀疏 merge 点查远端清单存储：不调用 `provider.list`，也不读未受影响
+/// namespace 的索引/object。
+#[test]
+fn sparse_merge_point_queries_remote_manifest_without_list() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    use crate::sync::provider::capabilities::SyncCapabilities;
+    use crate::sync::provider::error::ProviderError;
+    use crate::sync::provider::model::{
+        BatchCommitResult, BatchMutation, DeletePrecondition, RemoteEntry, RemoteObject,
+        RemoteVersion, WritePrecondition,
+    };
+    use crate::sync::provider::SyncProvider;
+
+    /// 计数 Provider：记录 `list` 次数与每次 `read` 的完整远端路径。
+    struct CountingProvider {
+        inner: MemoryProvider,
+        list_calls: AtomicUsize,
+        read_paths: Mutex<Vec<String>>,
+    }
+
+    impl CountingProvider {
+        fn new(inner: MemoryProvider) -> Self {
+            Self {
+                inner,
+                list_calls: AtomicUsize::new(0),
+                read_paths: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl SyncProvider for CountingProvider {
+        fn capabilities(&self) -> SyncCapabilities {
+            self.inner.capabilities()
+        }
+
+        fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
+            self.list_calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.list(prefix)
+        }
+
+        fn read(&self, path: &str) -> Result<Option<RemoteObject>, ProviderError> {
+            self.read_paths
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(path.to_string());
+            self.inner.read(path)
+        }
+
+        fn write(
+            &self,
+            path: &str,
+            content: &[u8],
+            precondition: WritePrecondition,
+        ) -> Result<RemoteVersion, ProviderError> {
+            self.inner.write(path, content, precondition)
+        }
+
+        fn delete(
+            &self,
+            path: &str,
+            precondition: DeletePrecondition,
+        ) -> Result<(), ProviderError> {
+            self.inner.delete(path, precondition)
+        }
+
+        fn commit_batch(
+            &self,
+            mutations: &[BatchMutation],
+            message: &str,
+        ) -> Result<BatchCommitResult, ProviderError> {
+            self.inner.commit_batch(mutations, message)
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let sync_root = tmp.path();
+    let affected = "volumes/a/chapters/c1/chapter.md";
+    let untouched = "volumes/b/chapters/c2/chapter.md";
+    let project = "project.json";
+    let old_affected_content = b"chapter one v1";
+    let new_affected_content = b"chapter one v2";
+    let untouched_content = b"chapter two v1";
+    let project_content = br#"{"title":"p1"}"#;
+
+    write_sync_file(sync_root, affected, old_affected_content);
+    write_sync_file(sync_root, untouched, untouched_content);
+    write_sync_file(sync_root, project, project_content);
+    let old_affected_hash = md5_hex(old_affected_content);
+    let new_affected_hash = md5_hex(new_affected_content);
+    let untouched_hash = md5_hex(untouched_content);
+    let project_hash = md5_hex(project_content);
+
+    let mut state = SyncState::default();
+    state.device_id = "current-device".to_string();
+    for (path, hash) in [
+        (affected, &old_affected_hash),
+        (untouched, &untouched_hash),
+        (project, &project_hash),
+    ] {
+        state.known_files.insert(path.to_string(), hash.clone());
+        state.known_files_updated_at.insert(path.to_string(), 1000);
+    }
+    crate::sync::SyncService::save_sync_state(sync_root, &state).unwrap();
+
+    let baseline = SyncManifest {
+        files: vec![
+            upsert_record(affected, &old_affected_hash, 1000, "remote-dev"),
+            upsert_record(untouched, &untouched_hash, 1000, "remote-dev"),
+            upsert_record(project, &project_hash, 1000, "remote-dev"),
+        ],
+    };
+    crate::sync::conflict::persist_sync_merge_result(
+        sync_root,
+        SYNC_MANIFEST_PATH,
+        &baseline,
+        &state,
+        &[],
+    )
+    .unwrap();
+
+    // 远端 v2 存储：先写独立目录，再按发布视图逐文件放进 MemoryProvider。
+    let remote_seed = TempDir::new().unwrap();
+    let remote_store = crate::sync::lww::ManifestStore::new(remote_seed.path(), SYNC_MANIFEST_PATH);
+    let remote_plan = remote_store.plan_write_all(&baseline, "").unwrap();
+    let mut tx = crate::storage::transaction::SaveTransaction::new(remote_seed.path());
+    for (rel, bytes) in &remote_plan.writes {
+        tx.add_bytes(rel, bytes).unwrap();
+    }
+    tx.commit().unwrap();
+    let remote_root = remote_store.load_root().unwrap().unwrap();
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    for file in crate::sync::lww::local_manifest_storage(&remote_store, None).unwrap() {
+        let rel = crate::sync::lww::remote_rel_for(&remote_store, &file.rel).unwrap();
+        entries.push((
+            format!("projects/p1/{rel}"),
+            file.read_bytes(remote_seed.path()).unwrap(),
+        ));
+    }
+    entries.push((
+        format!("projects/p1/{affected}"),
+        old_affected_content.to_vec(),
+    ));
+    let provider = CountingProvider::new(MemoryProvider::with_entries(entries));
+
+    // 本地修改 affected，远端仍是基线内容 → 三路 LocalChanged → 上传。
+    std::fs::write(sync_root.join(affected), new_affected_content).unwrap();
+    let plan = SparseObjectPlan::new(
+        Some("head".to_string()),
+        Vec::<String>::new(),
+        vec![affected.to_string()],
+    );
+    let outcome = merge_remote_into_local_snapshot(
+        sync_root,
+        &provider,
+        "projects/p1",
+        SyncScope::Project,
+        &mut state,
+        Some(&plan),
+    )
+    .unwrap();
+
+    assert_eq!(
+        provider.list_calls.load(Ordering::SeqCst),
+        0,
+        "稀疏 merge 不得调用 provider.list"
+    );
+    let reads = provider
+        .read_paths
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    let remote_manifest_dir = "projects/p1/app-meta/sync/manifest";
+    assert!(
+        reads.contains(&format!("{remote_manifest_dir}/root.json")),
+        "必须读远端根，实际 {reads:?}"
+    );
+    assert!(
+        reads
+            .iter()
+            .any(|path| path.starts_with(&format!("{remote_manifest_dir}/index/volumes/"))),
+        "必须点查 affected namespace 索引，实际 {reads:?}"
+    );
+    assert!(
+        !reads.iter().any(|path| path.contains("/index/_root/")),
+        "不得读未受影响 namespace 的索引，实际 {reads:?}"
+    );
+    let remote_volumes_index = remote_store
+        .load_publish_index("volumes", remote_root.namespaces.get("volumes").unwrap())
+        .unwrap()
+        .0;
+    let affected_object_rel = format!(
+        "{remote_manifest_dir}/objects/{}.json",
+        remote_volumes_index
+            .objects
+            .get(&crate::sync::lww::object_key(affected))
+            .unwrap()
+    );
+    let untouched_object_rel = format!(
+        "{remote_manifest_dir}/objects/{}.json",
+        remote_volumes_index
+            .objects
+            .get(&crate::sync::lww::object_key(untouched))
+            .unwrap()
+    );
+    assert!(
+        reads.contains(&affected_object_rel),
+        "必须点查 affected object，实际 {reads:?}"
+    );
+    assert!(
+        !reads.contains(&untouched_object_rel),
+        "不得读未受影响 object，实际 {reads:?}"
+    );
+
+    // 稀疏轮结果只覆盖 affected；完整清单权威仍是本地 store。
+    assert_eq!(outcome.merged_manifest.files.len(), 1);
+    assert_eq!(outcome.merged_manifest.files[0].path, affected);
+    assert_eq!(
+        outcome.merged_manifest.files[0].content_hash, new_affected_hash,
+        "affected 记录必须采用本地新内容"
+    );
 }

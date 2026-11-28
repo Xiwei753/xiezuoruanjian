@@ -144,6 +144,18 @@ pub(super) fn fetch_remote_manifest(
     super::manifest::fetch_remote_manifest_v2(provider, remote_prefix, remote_tree_files)
 }
 
+/// 稀疏轮点查远端清单：只读受影响 namespace/object_key 的清单存储文件。
+///
+/// 远端根不存在时回退旧单文件/旧分片目录的完整读取（一次性迁移语义），
+/// 不把"读不到点查输入"当成"没有清单"。
+pub(super) fn fetch_remote_manifest_for_paths(
+    provider: &dyn SyncProvider,
+    remote_prefix: &str,
+    paths: &std::collections::BTreeSet<String>,
+) -> crate::Result<SyncManifest> {
+    super::manifest::fetch_remote_manifest_for_paths(provider, remote_prefix, paths)
+}
+
 /// 并行下载 pending_take_remote 列表中的文件。
 ///
 /// 返回 `Vec<(path, Option<content>)>`，`None` 表示远端文件缺失。

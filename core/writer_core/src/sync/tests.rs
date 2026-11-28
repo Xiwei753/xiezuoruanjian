@@ -5218,8 +5218,9 @@ mod tests {
             let fetched = fetch(&provider).unwrap().expect("v2 根仍是权威");
             assert!(fetched.semantically_equals(&manifest));
 
-            // 本地下一份写入计划同样把同一 sha 补写到内容寻址路径；这是幂等
-            // 修复事实，不推进本地根版本，也不回收旧固定路径（deletes 为空）。
+            // 本地空增量只做点更新：未受影响 namespace 的旧固定路径不读、不迁，
+            // 仍是可读的迁移来源；根引用与 generation 不变。远端发布入口
+            // （load_publish_files）仍会按发布视图把旧字节补写到内容寻址路径。
             let local_root_path = dir.path().join("app-meta/sync/manifest/root.json");
             let local_root_before = std::fs::read(&local_root_path).unwrap();
             let store = ManifestStore::new(dir.path(), SYNC_MANIFEST_PATH);
@@ -5233,12 +5234,20 @@ mod tests {
                 !plan.writes.iter().any(|(rel, _)| rel == &plan.root_rel),
                 "旧固定路径迁移不得推进本地根版本"
             );
+            assert!(
+                plan.writes.is_empty(),
+                "空增量不得遍历未受影响 namespace 补写索引: {:?}",
+                plan.writes.iter().map(|(rel, _)| rel).collect::<Vec<_>>()
+            );
             assert!(plan.deletes.is_empty());
             commit_plan(dir.path(), &plan);
-            assert!(local_hashed.is_file(), "本地迁移后新路径必须存在");
+            assert!(
+                !local_hashed.is_file(),
+                "点更新不遍历未受影响 namespace，旧固定路径保持原样"
+            );
             assert!(
                 local_legacy.exists(),
-                "无版本推进的幂等迁移不回收本地旧固定路径"
+                "旧固定路径仍是可读的迁移来源，不得回收"
             );
             assert_eq!(
                 std::fs::read(&local_root_path).unwrap(),
@@ -6146,6 +6155,58 @@ mod tests {
                 Some(format!("{PREFIX}/app-meta/sync/manifest/root.json").as_str()),
                 "根必须最后"
             );
+        }
+
+        /// GC journal 只随本地根落盘：不进入发布视图，也不进入业务扫描。
+        #[test]
+        fn sparse_delta_gc_journal_stays_local() {
+            let dir = tempdir().unwrap();
+            let baseline = SyncManifest {
+                files: vec![
+                    record("project.json", "hash-root", 10),
+                    record("volumes/v1/chapters/c1/chapter.md", "hash-c1", 10),
+                    record("volumes/v2/chapters/c2/chapter.md", "hash-c2", 10),
+                ],
+            };
+            let store = seed_store(dir.path(), &baseline);
+
+            let changed = record("volumes/v1/chapters/c1/chapter.md", "hash-c1-new", 20);
+            let mut delta = ManifestDelta::default();
+            delta.upserts.insert(changed.path.clone(), changed);
+            let plan = store.apply_delta(&delta, "g-local").unwrap();
+            assert!(
+                plan.deletes.is_empty(),
+                "点更新不在 writes/deletes 里直接回收旧文件"
+            );
+            assert!(
+                plan.writes
+                    .iter()
+                    .any(|(rel, _)| rel == &store.gc_journal_rel()),
+                "真实换根必须把 retire 记录写进 GC journal"
+            );
+            commit_plan(dir.path(), &plan);
+            let journal = store.load_gc_journal().unwrap().expect("journal 必须落盘");
+            assert!(
+                !journal.entries.is_empty(),
+                "被替换的旧 object/index 必须登记"
+            );
+
+            let files = local_manifest_storage_for_delta(&store, &delta).unwrap();
+            assert!(
+                !files.iter().any(|file| file.rel == store.gc_journal_rel()),
+                "GC journal 不得进入发布视图: {:?}",
+                files
+                    .iter()
+                    .map(|file| file.rel.clone())
+                    .collect::<Vec<_>>()
+            );
+            assert!(crate::sync::lww::is_manifest_storage_path(
+                "app-meta/sync/manifest/gc-journal.json"
+            ));
+            assert!(crate::sync::SyncService::is_blacklisted_path(
+                "app-meta/sync/manifest/gc-journal.json",
+                crate::sync::types::SyncScope::Project,
+            ));
         }
     }
 }

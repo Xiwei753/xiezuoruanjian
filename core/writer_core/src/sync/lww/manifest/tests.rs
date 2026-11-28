@@ -293,15 +293,15 @@ fn test_snapshot_local_records_for_merge_tombstone_still_produces_delete_record(
 // ── v2 版本化存储（root + 两级索引 + 内容寻址对象）────────────────────────
 
 mod manifest_store {
-    use super::super::store::ManifestWritePlan;
+    use super::super::store::{ManifestGcJournal, ManifestWritePlan};
     use super::super::SYNC_MANIFEST_PATH;
     use super::super::{
-        is_manifest_rel_path, is_manifest_storage_path, object_key, sha256_hex, ManifestRoot,
-        ManifestStore,
+        is_manifest_rel_path, is_manifest_storage_path, object_key, sha256_hex, ManifestIndex,
+        ManifestRoot, ManifestStore,
     };
     use crate::sync::manifest_delta::ManifestDelta;
     use crate::sync::types::{ManifestFileRecord, SyncManifest};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
 
     const GROUP_MANIFEST: &str = "app-meta/sync/groups/app/manifest.sync.json";
@@ -431,6 +431,14 @@ mod manifest_store {
         ));
         assert!(is_manifest_storage_path(
             "app-meta/sync/manifest-shards/volumes.json"
+        ));
+        // GC journal 是清单存储自身元数据：必须与对象/索引一样被排除出业务扫描
+        // 与本地历史。
+        assert!(is_manifest_storage_path(
+            "app-meta/sync/manifest/gc-journal.json"
+        ));
+        assert!(is_manifest_storage_path(
+            "app-meta/sync/groups/app/manifest/gc-journal.json"
         ));
         assert!(!is_manifest_storage_path(
             "volumes/v1/chapters/c1/chapter.md"
@@ -762,6 +770,10 @@ mod manifest_store {
 
         assert!(hashed_path.is_file(), "迁移后新路径必须存在");
         assert!(legacy_path.exists(), "无版本推进的幂等迁移不回收旧固定路径");
+        assert!(
+            store.load_gc_journal().unwrap().is_none(),
+            "幂等迁移不得产生 journal 条目"
+        );
         assert_eq!(
             root_bytes(root, STORAGE),
             root_before,
@@ -821,12 +833,33 @@ mod manifest_store {
             .map(|(rel, _)| rel.clone())
             .find(|rel| rel.starts_with(&format!("{STORAGE}/index/volumes/")))
             .expect("R2 应写新的内容寻址索引");
+        let r2_root: ManifestRoot = plan
+            .writes
+            .iter()
+            .find(|(rel, _)| rel == &plan.root_rel)
+            .map(|(_, bytes)| serde_json::from_slice(bytes).unwrap())
+            .expect("R2 必须推进根版本");
+        let planned_journal: ManifestGcJournal = plan
+            .writes
+            .iter()
+            .find(|(rel, _)| rel == &store.gc_journal_rel())
+            .map(|(_, bytes)| serde_json::from_slice(bytes).unwrap())
+            .expect("R2 必须写 journal");
         assert!(
-            !plan.deletes.contains(&fixed_rel),
-            "索引换 sha 时旧固定路径仍是上一代根依赖，不能立即回收: {:?}",
-            plan.deletes
+            planned_journal
+                .entries
+                .iter()
+                .any(|entry| entry.rel == fixed_rel && entry.retired_at_root == r2_root.generation),
+            "索引换 sha 时旧固定路径必须登记为 R2 退休，实际 {:?}",
+            planned_journal.entries
         );
+        assert!(plan.deletes.is_empty(), "点更新不直接删除任何文件");
         commit_plan(root, &plan);
+        assert_eq!(
+            store.collect_manifest_garbage().unwrap(),
+            0,
+            "R2 刚退休的旧固定路径索引保留一代"
+        );
         assert!(fixed.is_file(), "R2 发布后旧固定路径索引必须保留");
         assert!(root.join(&new_index_rel).is_file());
         assert!(store
@@ -848,12 +881,13 @@ mod manifest_store {
             plan.writes.iter().any(|(rel, _)| rel == &plan.root_rel),
             "R3 必须推进根版本"
         );
-        assert!(
-            plan.deletes.contains(&fixed_rel),
-            "R3 后旧固定路径可回收: {:?}",
-            plan.deletes
-        );
+        assert!(plan.deletes.is_empty(), "回收由 GC journal 结算");
         commit_plan(root, &plan);
+        assert_eq!(
+            store.collect_manifest_garbage().unwrap(),
+            2,
+            "R3 回收 R2 退休的旧对象与旧固定路径索引（S1 内容寻址副本已不存在）"
+        );
         assert!(!fixed.exists());
     }
 
@@ -917,6 +951,16 @@ mod manifest_store {
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
+        let volumes_index_r1_rel = volumes_index_r1
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let c1_rel = c1_object
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
         assert!(c2_object.is_file());
         let root_index_before = std::fs::read(&root_index).unwrap();
         let volumes_index_r1_bytes = std::fs::read(&volumes_index_r1).unwrap();
@@ -928,13 +972,50 @@ mod manifest_store {
             record("volumes/v1/chapters/c2/chapter.md", "h2-new"),
         );
         let plan = store.apply_delta(&delta, "g2").unwrap();
-        assert_eq!(plan.writes.len(), 3, "只写受影响对象 + 索引 + root");
-        assert!(
-            plan.deletes.is_empty(),
-            "上一代根仍可达的对象/索引必须保留一代: {:?}",
-            plan.deletes
+        // 点更新：受影响对象 + 索引 + GC journal + root，不构造全量可达集合。
+        assert_eq!(
+            plan.writes.len(),
+            4,
+            "只写受影响对象 + 索引 + journal + root"
         );
+        assert_eq!(
+            plan.writes.last().map(|(rel, _)| rel.as_str()),
+            Some(plan.root_rel.as_str()),
+            "root 必须是 writes 最后一项"
+        );
+        assert!(plan.deletes.is_empty(), "点更新不直接删除任何文件");
+        assert!(plan.reachable.is_empty(), "点更新不构造完整可达集合");
         commit_plan(root, &plan);
+
+        let r2: ManifestRoot =
+            serde_json::from_slice(&std::fs::read(storage_dir(root).join("root.json")).unwrap())
+                .unwrap();
+        // journal 已随新根 durable：R1 的旧对象/索引记录为 R2 退休、保留一代。
+        let journal = store
+            .load_gc_journal()
+            .unwrap()
+            .expect("真实换根必须写 journal");
+        assert_eq!(journal.schema_version, 1);
+        assert_eq!(
+            journal
+                .entries
+                .iter()
+                .filter(|entry| entry.retired_at_root == r2.generation)
+                .count(),
+            2,
+            "应记录旧 c2 对象与旧 volumes 索引，实际 {:?}",
+            journal.entries
+        );
+        assert!(journal.entries.iter().any(|entry| entry.rel == c2_rel));
+        assert!(journal
+            .entries
+            .iter()
+            .any(|entry| entry.rel == volumes_index_r1_rel));
+        assert_eq!(
+            store.collect_manifest_garbage().unwrap(),
+            0,
+            "retiredAtRoot == 当前根的条目本轮不删"
+        );
 
         // 旧 c2 对象/索引仍被上一代根引用 → 根切换后仍存在。
         assert_eq!(std::fs::read(&c1_object).unwrap(), c1_before);
@@ -966,34 +1047,213 @@ mod manifest_store {
             .find(|r| r.path == "volumes/v1/chapters/c2/chapter.md")
             .unwrap();
         assert_eq!(c2.content_hash, "h2-new");
-        assert!(plan.reachable.contains(&plan.root_rel));
 
-        // R3：真实变化推进根版本，上一代边界推进到 R2，R1 独有对象/索引才可回收。
+        // R3：真实变化推进根版本，R2 退休的旧 c2 对象/旧 volumes 索引才可回收。
         let mut delta = ManifestDelta::default();
         delta.upserts.insert(
             "volumes/v1/chapters/c1/chapter.md".to_string(),
             record("volumes/v1/chapters/c1/chapter.md", "h1-new"),
         );
         let plan_r3 = store.apply_delta(&delta, "g3").unwrap();
+        assert!(plan_r3.deletes.is_empty(), "回收仍由 journal 结算");
+        let planned_journal: ManifestGcJournal = plan_r3
+            .writes
+            .iter()
+            .find(|(rel, _)| rel == &store.gc_journal_rel())
+            .map(|(_, bytes)| serde_json::from_slice(bytes).unwrap())
+            .expect("R3 换根必须合并 journal");
         assert!(
-            plan_r3.deletes.contains(&c2_rel),
-            "R3 后 R1 独有对象可回收: {:?}",
-            plan_r3.deletes
+            planned_journal
+                .entries
+                .iter()
+                .any(|entry| entry.rel == c2_rel),
+            "R2 退休条目必须保留到下一代，实际 {:?}",
+            planned_journal.entries
         );
-        let volumes_index_r1_rel = volumes_index_r1
+        assert!(
+            planned_journal
+                .entries
+                .iter()
+                .any(|entry| entry.rel == c1_rel),
+            "R3 刚退休的旧 c1 对象要进 journal，实际 {:?}",
+            planned_journal.entries
+        );
+        commit_plan(root, &plan_r3);
+        assert_eq!(
+            store.collect_manifest_garbage().unwrap(),
+            2,
+            "两代之前（R2 退休）的对象与索引本轮回收"
+        );
+        assert!(!c2_object.exists());
+        assert!(!volumes_index_r1.exists());
+        assert!(c1_object.is_file(), "R3 刚退休的旧 c1 对象必须保留一代");
+        assert_eq!(std::fs::read(&c1_object).unwrap(), c1_before);
+        // 当前根引用的文件与清单必须完好。
+        assert!(
+            index_path(root, "volumes").is_file(),
+            "当前根引用的新索引不能被 GC 删除"
+        );
+        let loaded = store.load_all().unwrap().unwrap();
+        assert!(
+            loaded
+                .files
+                .iter()
+                .any(|record| record.path == "volumes/v1/chapters/c1/chapter.md"
+                    && record.content_hash == "h1-new"),
+            "GC 后当前根清单仍必须可读"
+        );
+    }
+
+    /// 点更新不读取/校验未受影响的 object：无关对象损坏不应阻塞 apply_delta。
+    #[test]
+    fn apply_delta_ignores_unrelated_corrupt_objects() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let manifest = SyncManifest {
+            files: vec![
+                record("volumes/v1/chapters/c1/chapter.md", "h1"),
+                record("volumes/v2/chapters/c2/chapter.md", "h2"),
+            ],
+        };
+        let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+        commit_plan(root, &store.plan_write_all(&manifest, "g1").unwrap());
+
+        // 未被 delta 涉及的 c2 对象损坏：点更新不得读取它。
+        let untouched_object = find_object(root, "volumes/v2/chapters/c2");
+        std::fs::write(&untouched_object, b"{corrupt").unwrap();
+
+        let mut delta = ManifestDelta::default();
+        delta.upserts.insert(
+            "volumes/v1/chapters/c1/chapter.md".to_string(),
+            record("volumes/v1/chapters/c1/chapter.md", "h1-new"),
+        );
+        let plan = store.apply_delta(&delta, "g2").unwrap();
+        assert!(
+            plan.writes.iter().any(|(rel, _)| rel == &plan.root_rel),
+            "受影响对象变化必须推进根"
+        );
+        commit_plan(root, &plan);
+
+        let loaded = store
+            .load_records_for_paths(&BTreeSet::from([
+                "volumes/v1/chapters/c1/chapter.md".to_string()
+            ]))
+            .unwrap();
+        assert_eq!(loaded.files.len(), 1);
+        assert_eq!(loaded.files[0].content_hash, "h1-new");
+        assert!(
+            store.load_all().is_err(),
+            "无关对象已损坏，完整读取必须报错"
+        );
+    }
+
+    /// 稀疏读取只读请求路径的 namespace 索引与 object，不校验未请求对象。
+    #[test]
+    fn load_records_for_paths_only_reads_requested_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let manifest = SyncManifest {
+            files: vec![
+                record("volumes/v1/chapters/c1/chapter.md", "h1"),
+                record("volumes/v2/chapters/c2/chapter.md", "h2"),
+                record("project.json", "h3"),
+            ],
+        };
+        let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+        commit_plan(root, &store.plan_write_all(&manifest, "g1").unwrap());
+
+        // _root namespace 与 c2 对象都不是请求范围：破坏它们不应阻塞点查。
+        std::fs::write(index_path(root, "_root"), b"{corrupt").unwrap();
+        std::fs::write(find_object(root, "volumes/v2/chapters/c2"), b"{corrupt").unwrap();
+
+        let loaded = store
+            .load_records_for_paths(&BTreeSet::from([
+                "volumes/v1/chapters/c1/chapter.md".to_string()
+            ]))
+            .unwrap();
+        assert_eq!(
+            loaded
+                .files
+                .iter()
+                .map(|record| record.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["volumes/v1/chapters/c1/chapter.md"],
+            "只返回请求路径的记录"
+        );
+        assert_eq!(loaded.files[0].content_hash, "h1");
+        assert!(store.load_all().is_err(), "未请求的 namespace/对象已损坏");
+
+        // 请求的路径不在根里：返回空清单，不报错。
+        let missing = store
+            .load_records_for_paths(&BTreeSet::from(["volumes/v9/chapters/x.md".to_string()]))
+            .unwrap();
+        assert!(missing.files.is_empty());
+    }
+
+    /// 文件重新被当前根引用时，GC 只从 journal 移除条目、不删文件。
+    #[test]
+    fn gc_keeps_object_referenced_again_by_current_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let manifest = SyncManifest {
+            files: vec![record("volumes/v1/chapters/c1/chapter.md", "h1")],
+        };
+        let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+        commit_plan(root, &store.plan_write_all(&manifest, "g1").unwrap());
+        let r1_object = find_object(root, "volumes/v1/chapters/c1");
+        let r1_rel = r1_object
             .strip_prefix(root)
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        assert!(
-            plan_r3.deletes.contains(&volumes_index_r1_rel),
-            "R3 后 R1 独有索引可回收: {:?}",
-            plan_r3.deletes
+
+        // R2：c1 改成 h2，R1 对象退休。
+        let mut delta = ManifestDelta::default();
+        delta.upserts.insert(
+            "volumes/v1/chapters/c1/chapter.md".to_string(),
+            record("volumes/v1/chapters/c1/chapter.md", "h2"),
         );
-        commit_plan(root, &plan_r3);
-        assert!(!c2_object.exists());
-        assert!(!volumes_index_r1.exists());
-        assert_eq!(std::fs::read(&c1_object).unwrap(), c1_before);
+        commit_plan(root, &store.apply_delta(&delta, "g2").unwrap());
+        // 从 R2 根解析当前 volumes 索引，拿到 R2 的 c1 object sha（R1 对象仍在）。
+        let r2_index: ManifestIndex =
+            serde_json::from_slice(&std::fs::read(index_path(root, "volumes")).unwrap()).unwrap();
+        let r2_sha = r2_index
+            .objects
+            .get("volumes/v1/chapters/c1")
+            .expect("R2 索引必须含 c1")
+            .clone();
+        let r2_rel = format!("{STORAGE}/objects/{r2_sha}.json");
+        let r2_object = root.join(&r2_rel);
+        assert!(r2_object.is_file());
+        assert_ne!(r1_object, r2_object);
+        assert_eq!(store.collect_manifest_garbage().unwrap(), 0);
+
+        // R3：c1 回退到 h1，R1 对象重新被当前根引用。
+        let mut delta = ManifestDelta::default();
+        delta.upserts.insert(
+            "volumes/v1/chapters/c1/chapter.md".to_string(),
+            record("volumes/v1/chapters/c1/chapter.md", "h1"),
+        );
+        commit_plan(root, &store.apply_delta(&delta, "g3").unwrap());
+        assert_eq!(
+            store.collect_manifest_garbage().unwrap(),
+            0,
+            "当前根重新引用的 R1 文件不能删，R3 刚退休的 R2 文件也保留一代"
+        );
+        assert!(r1_object.is_file(), "重新被引用的对象必须保留");
+        assert!(r2_object.is_file(), "R3 刚退休的对象保留一代");
+
+        let journal = store.load_gc_journal().unwrap().expect("R3 仍有条目");
+        assert!(
+            !journal.entries.iter().any(|entry| entry.rel == r1_rel),
+            "重新被引用的条目必须从 journal 移除，实际 {:?}",
+            journal.entries
+        );
+        assert!(
+            journal.entries.iter().any(|entry| entry.rel == r2_rel),
+            "R3 刚退休的条目仍保留，实际 {:?}",
+            journal.entries
+        );
     }
 
     #[test]
@@ -1018,11 +1278,7 @@ mod manifest_store {
             .deletes
             .insert("volumes/v1/chapters/c1/chapter.md".to_string());
         let plan = store.apply_delta(&delta, "g2").unwrap();
-        assert!(
-            plan.deletes.is_empty(),
-            "R1 可达对象/索引在 R2 发布后仍保留一代: {:?}",
-            plan.deletes
-        );
+        assert!(plan.deletes.is_empty(), "R1 文件在 R2 发布后仍保留一代");
         assert!(
             !plan.writes.iter().any(|(rel, _)| rel.contains("/objects/")),
             "空对象不写入"
@@ -1032,8 +1288,24 @@ mod manifest_store {
         assert!(object_path.is_file(), "R1 独有对象在 R2 后必须保留");
         assert!(volumes_index.is_file(), "R1 独有索引在 R2 后必须保留");
         assert!(store.load_all().unwrap().unwrap().files.is_empty());
+        let journal = store.load_gc_journal().unwrap().expect("R2 写 journal");
+        assert!(journal.entries.iter().any(|entry| entry.rel == object_rel));
+        let volumes_index_rel = volumes_index
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(journal
+            .entries
+            .iter()
+            .any(|entry| entry.rel == volumes_index_rel));
+        assert_eq!(
+            store.collect_manifest_garbage().unwrap(),
+            0,
+            "当前代 retire 条目保留一代"
+        );
 
-        // R3：真实变化推进根版本；R1 独有且 R2 不引用的文件才可回收。
+        // R3：真实变化推进根版本；R2 退休且当前根不引用的文件才可回收。
         let mut delta = ManifestDelta::default();
         delta.upserts.insert(
             "project.json".to_string(),
@@ -1047,17 +1319,13 @@ mod manifest_store {
                 .any(|(rel, _)| rel == &plan_r3.root_rel),
             "R3 必须推进根版本"
         );
-        assert!(plan_r3.deletes.contains(&object_rel), "R3 回收旧对象");
-        let volumes_index_rel = volumes_index
-            .strip_prefix(root)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/");
-        assert!(
-            plan_r3.deletes.contains(&volumes_index_rel),
-            "R3 回收空 namespace 的旧索引"
-        );
+        assert!(plan_r3.deletes.is_empty(), "回收由 GC journal 结算");
         commit_plan(root, &plan_r3);
+        assert_eq!(
+            store.collect_manifest_garbage().unwrap(),
+            2,
+            "R3 回收 R2 退休的旧对象与空 namespace 索引"
+        );
 
         assert!(!object_path.exists());
         assert!(!volumes_index.exists());
@@ -1102,6 +1370,10 @@ mod manifest_store {
             generation_after.generation, generation_before.generation,
             "空增量不得改变 generation"
         );
+        assert!(
+            store.load_gc_journal().unwrap().is_none(),
+            "空增量不得产生 journal 条目"
+        );
     }
 
     #[test]
@@ -1124,6 +1396,10 @@ mod manifest_store {
         let plan = store.apply_delta(&delta, "ignored").unwrap();
         assert!(plan.writes.is_empty(), "语义相同 delta 不得重写清单");
         assert!(plan.deletes.is_empty());
+        assert!(
+            store.load_gc_journal().unwrap().is_none(),
+            "语义相同 delta 不得产生 journal 条目"
+        );
         commit_plan(root, &plan);
         assert_eq!(root_bytes(root, STORAGE), root_before);
     }

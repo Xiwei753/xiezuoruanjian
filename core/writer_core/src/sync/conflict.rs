@@ -157,12 +157,34 @@ fn validate_group_conflict_path(
     Ok(())
 }
 
+/// 清单根提交成功后结算 GC journal：失败只记录日志，不影响已提交结果。
+///
+/// `apply_delta` 不再全目录扫描求删除集合，被替换/移除的旧对象/索引以 retire
+/// 记录随新根落盘；这里只在提交成功后按当前根结算上一代及更早的退休文件。
+fn collect_manifest_garbage_after_commit(
+    store: &crate::sync::lww::ManifestStore,
+    sync_root: &Path,
+) {
+    match store.collect_manifest_garbage() {
+        Ok(0) => {}
+        Ok(reclaimed) => log::info!(
+            "[sync] manifest gc reclaimed {reclaimed} retired file(s) under {}",
+            sync_root.display()
+        ),
+        Err(error) => log::warn!(
+            "[sync] manifest gc after commit failed under {}: {error}",
+            sync_root.display()
+        ),
+    }
+}
+
 /// 一次事务写入权威清单 + `state.local.json` + `conflicts.json`。
 ///
 /// 用于 LWW merge 完成后原子提交三个决议，避免分多次独立写入中间崩溃
 /// 导致 manifest / state / conflicts 不一致。清单已迁移到 v2 权威存储
 /// （版本化根 + 内容寻址对象 + 两级索引）：这里按对象级存储差生成计划，
-/// 只写受影响的 objects/index/root，陈旧对象与索引由计划 `deletes` 回收
+/// 只写受影响的 objects/index/root；被替换的旧对象/索引先写入 GC journal，
+/// 提交成功后由 `collect_manifest_garbage` 保留一代再回收
 /// （#1062 评论 #7219676521 第 2 项）。
 pub(crate) fn persist_sync_merge_result(
     sync_root: &Path,
@@ -214,6 +236,7 @@ pub(crate) fn persist_sync_merge_result_at_paths(
     tx.add_bytes(state_path, state_json.as_bytes())?;
     tx.add_bytes(conflicts_path, conflicts_json.as_bytes())?;
     tx.commit()?;
+    collect_manifest_garbage_after_commit(&store, sync_root);
     Ok(())
 }
 
@@ -253,6 +276,7 @@ pub(crate) fn persist_sync_merge_delta(
     tx.add_bytes("app-meta/sync/state.local.json", state_json.as_bytes())?;
     tx.add_bytes("app-meta/sync/conflicts.json", conflicts_json.as_bytes())?;
     tx.commit()?;
+    collect_manifest_garbage_after_commit(&store, sync_root);
     Ok(())
 }
 
@@ -271,8 +295,8 @@ pub(crate) fn persist_sync_merge_delta_at_paths(
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
     let conflicts_json = serde_json::to_string_pretty(conflicts)
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-    let plan =
-        crate::sync::lww::ManifestStore::new(sync_root, manifest_path).apply_delta(delta, "")?;
+    let store = crate::sync::lww::ManifestStore::new(sync_root, manifest_path);
+    let plan = store.apply_delta(delta, "")?;
     let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
     for (rel, bytes) in &plan.writes {
         tx.add_bytes(rel, bytes)?;
@@ -283,6 +307,7 @@ pub(crate) fn persist_sync_merge_delta_at_paths(
     tx.add_bytes(state_path, state_json.as_bytes())?;
     tx.add_bytes(conflicts_path, conflicts_json.as_bytes())?;
     tx.commit()?;
+    collect_manifest_garbage_after_commit(&store, sync_root);
     Ok(())
 }
 

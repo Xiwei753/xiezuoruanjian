@@ -49,7 +49,8 @@ use super::manifest::{
     SYNC_MANIFEST_PATH,
 };
 use super::transfer::{
-    download_pending_take_remote, download_remote_files, fetch_remote_manifest, fetch_remote_tree,
+    download_pending_take_remote, download_remote_files, fetch_remote_manifest,
+    fetch_remote_manifest_for_paths, fetch_remote_tree, fetch_remote_versions_for_paths,
     move_to_trash, save_conflict_copy,
 };
 
@@ -406,11 +407,30 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         "[sync] merge_remote_into_local_snapshot: source_remote_prefix={}",
         source_remote_prefix
     );
-    let remote_tree_files = fetch_remote_tree(provider, source_remote_prefix)?;
-    let remote_manifest_path = format!("{}/{}", source_remote_prefix, SYNC_MANIFEST_PATH);
-    let remote_manifest =
-        fetch_remote_manifest(provider, source_remote_prefix, &remote_tree_files)?;
+    // 稀疏轮按 affected 路径点查远端：不 list 全树、不读未受影响远端清单对象；
+    // 非稀疏路径保持整树 + 完整清单读取。
+    let (remote_manifest, remote_tree_files) = match sparse {
+        Some(plan) => {
+            let versions = fetch_remote_versions_for_paths(
+                provider,
+                source_remote_prefix,
+                plan.affected_paths(),
+            )?;
+            let manifest = fetch_remote_manifest_for_paths(
+                provider,
+                source_remote_prefix,
+                plan.affected_paths(),
+            )?;
+            (manifest, versions)
+        }
+        None => {
+            let tree = fetch_remote_tree(provider, source_remote_prefix)?;
+            let manifest = fetch_remote_manifest(provider, source_remote_prefix, &tree)?;
+            (manifest, tree)
+        }
+    };
     let remote_manifest_baseline = remote_manifest.clone();
+    let remote_manifest_path = format!("{}/{}", source_remote_prefix, SYNC_MANIFEST_PATH);
 
     let now_ms = chrono::Utc::now().timestamp_millis();
 
@@ -420,16 +440,15 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         snapshot_local_records_for_merge(sync_root, scope, &state.device_id, app_group, sparse)?;
     let local_records = local_snapshot.records;
 
-    // 稀疏基线：未受影响记录的权威来源。读取一次后只在最终构造清单时使用；
-    // 不在 LWW 循环里逐条 clone/判定。非稀疏路径不需要基线（本轮完整清单
-    // 由 records 直接构造）。
+    // 稀疏基线：未受影响记录的权威来源。只点查 affected 路径（不 load_all），
+    // 读取一次后只在最终构造清单时使用；不在 LWW 循环里逐条 clone/判定。
+    // 非稀疏路径不需要基线（本轮完整清单由 records 直接构造）。
     let manifest_rel_path = app_group
         .map(crate::sync::types::AppDataGroup::local_manifest_path)
         .unwrap_or_else(|| SYNC_MANIFEST_PATH.to_string());
     let baseline_manifest = match sparse {
-        Some(_) => ManifestStore::new(sync_root, &manifest_rel_path)
-            .load_all()?
-            .unwrap_or_default(),
+        Some(plan) => ManifestStore::new(sync_root, &manifest_rel_path)
+            .load_records_for_paths(plan.affected_paths())?,
         None => SyncManifest::default(),
     };
 
@@ -1181,7 +1200,22 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     };
 
     let manifest_json = sync_manifest.canonical_json()?;
-    let manifest_unchanged = remote_manifest_baseline.semantically_equals(&sync_manifest);
+    // 稀疏轮的远端清单与本地基线都只覆盖 affected 范围，只能在该范围内比较
+    // "清单是否变化"；非稀疏路径仍比较完整清单。
+    let manifest_unchanged = match sparse {
+        Some(plan) => {
+            let affected = |manifest: &SyncManifest| SyncManifest {
+                files: manifest
+                    .files
+                    .iter()
+                    .filter(|record| plan.contains(&record.path))
+                    .cloned()
+                    .collect(),
+            };
+            affected(&remote_manifest_baseline).semantically_equals(&affected(&sync_manifest))
+        }
+        None => remote_manifest_baseline.semantically_equals(&sync_manifest),
+    };
 
     // 在内存中收集冲突到 state.conflicts 和 conflicts_json，
     // 不再逐条调用 record_sync_conflict（每次内部写盘）。
