@@ -535,10 +535,22 @@ fn try_publish_sparse_batch(
     // 若某个未解决冲突连远端 blob 都没有，就没有可复用的安全版本：
     // 整批退回 PartialConflict，绝不发布不完整 generation。
     for conflict in &outcome.conflicts {
-        if !outcome
-            .remote_tree_files
-            .contains_key(conflict.local_path.as_str())
-        {
+        let path = conflict.local_path.as_str();
+        if outcome.remote_tree_files.contains_key(path) {
+            continue;
+        }
+        // 远端删除形成的冲突（RemoteDeleted）：固定 base 的远端事实是
+        // tombstone/delete，不需要可复用 blob；保留远端删除记录即可。
+        let tombstone = delta
+            .upserts
+            .get(path)
+            .is_some_and(|record| record.op == "delete")
+            || outcome
+                .merged_manifest
+                .files
+                .iter()
+                .any(|record| record.path == path && record.op == "delete");
+        if !tombstone {
             return None;
         }
     }
@@ -619,39 +631,6 @@ fn try_publish_sparse_batch(
         mutations.push(mutation);
     }
 
-    // 远端 retire：本地 journal 记录的被替换对象/索引，在同一个提交里按路径
-    // 点查固定 HEAD 后删除（不枚举全树）；只删上一代及更早的条目。
-    let current_generation = match store.load_root() {
-        Ok(root) => root.map(|root| root.generation),
-        Err(error) => return Some(super::transfer_helpers::sync_result_from_error(error)),
-    };
-    let retirements = match store.pending_remote_retirements(current_generation.as_deref()) {
-        Ok(paths) => paths,
-        Err(error) => return Some(super::transfer_helpers::sync_result_from_error(error)),
-    };
-    let mut retired_remote: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for rel in retirements {
-        let remote_path = format!("{generation_prefix}/{rel}");
-        match provider.read(&remote_path) {
-            Ok(Some(object)) => {
-                mutations.push(BatchMutation::DeleteIfMatch {
-                    path: remote_path,
-                    version: object.version,
-                });
-                retired_remote.insert(rel);
-            }
-            Ok(None) => {
-                // 远端本来就没有（例如只在本机 retire 的 legacy 路径）。
-                retired_remote.insert(rel);
-            }
-            Err(error) => {
-                return Some(super::transfer_helpers::sync_result_from_provider_error(
-                    error,
-                ));
-            }
-        }
-    }
-
     let mut root_mutation: Option<BatchMutation> = None;
     for file in &manifest_files {
         let remote_rel = match crate::sync::lww::remote_rel_for(&store, &file.rel) {
@@ -706,14 +685,6 @@ fn try_publish_sparse_batch(
             ));
         }
     }
-    if !retired_remote.is_empty() {
-        if let Err(error) = store.mark_remote_retired(&retired_remote) {
-            log::warn!(
-                "[sync] sparse publish: remote retire journal update failed for                  {generation_prefix}: {error} — will retry on the next publish"
-            );
-        }
-    }
-
     let mut result = crate::sync::types::SyncResult::success();
     if !outcome.conflicts.is_empty() {
         result.status = crate::sync::types::SyncStatus::PartialConflict;
