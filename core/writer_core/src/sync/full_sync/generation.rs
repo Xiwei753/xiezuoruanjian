@@ -151,9 +151,15 @@ fn publish_snapshot_batch(
     if let Some(outcome) = merge_outcome {
         if outcome.manifest_view == crate::sync::lww::MergeManifestView::Sparse {
             let mut result = crate::sync::types::SyncResult::success();
-            let message = "sparse merge manifest view cannot be published as a complete \
-                 manifest; refusing to overwrite the remote root with affected records only"
-                .to_string();
+            let message = if outcome.conflicts.is_empty() {
+                "sparse merge manifest view cannot be published as a complete manifest; \
+                 refusing to overwrite the remote root with affected records only"
+                    .to_string()
+            } else {
+                "unresolved conflict path has no remote blob to reuse; generation publish \
+                 skipped to avoid publishing incomplete content"
+                    .to_string()
+            };
             result.status = if outcome.conflicts.is_empty() {
                 SyncStatus::RecoverableError(message.clone())
             } else {
@@ -526,6 +532,16 @@ fn try_publish_sparse_batch(
     let delta = outcome.manifest_delta.as_ref()?;
     // 冲突对象按对象隔离：不上传其本地字节、不删除其远端版本，
     // 继续复用远端记录/blob；其余路径的安全增量照常发布。
+    // 若某个未解决冲突连远端 blob 都没有，就没有可复用的安全版本：
+    // 整批退回 PartialConflict，绝不发布不完整 generation。
+    for conflict in &outcome.conflicts {
+        if !outcome
+            .remote_tree_files
+            .contains_key(conflict.local_path.as_str())
+        {
+            return None;
+        }
+    }
     let conflicted = &outcome.unresolved_conflict_paths;
     let store = crate::sync::lww::ManifestStore::new(sync_root, &manifest_rel_path(app_group));
     let manifest_files = match crate::sync::lww::local_manifest_storage_for_delta_with_base(

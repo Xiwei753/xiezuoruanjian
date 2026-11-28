@@ -548,15 +548,17 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                         return (result, None, None);
                     }
 
-                    // 冲突轮也允许 CAS：非冲突对象已按对象增量发布成功，
-                    // 冲突路径仍保留在 retained_conflict，最终结果维持 PartialConflict。
+                    // 冲突轮只有在本轮确实发布了非冲突内容时才允许继续 CAS：
+                    // 没有任何安全增量时保持原 PartialConflict 结果（含拒绝原因），
+                    // 不能推进 catalog 指针。
+                    let partial_with_progress =
+                        matches!(content_result.status, SyncStatus::PartialConflict)
+                            && (!content_result.uploaded_files.is_empty()
+                                || !content_result.local_deletes.is_empty());
                     let content_ok = matches!(
                         content_result.status,
-                        SyncStatus::Success
-                            | SyncStatus::NoChanges
-                            | SyncStatus::LatestWinsApplied
-                            | SyncStatus::PartialConflict
-                    );
+                        SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
+                    ) || partial_with_progress;
                     if !content_ok {
                         return (content_result, None, None);
                     }

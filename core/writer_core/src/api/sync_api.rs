@@ -481,6 +481,63 @@ fn should_retry_full_sync_via_github_api(config: &crate::sync::SyncConfig) -> bo
     }
 }
 
+/// 一条本轮未能结算的恢复责任身份（业务 obligation 或正文证明意图）。
+///
+/// 恢复失败/延后不能只留在日志里：消息必须能定位到真实同步根、事务类型和
+/// 业务事务 ID，平台才能知道“数据仍在本地、等待下一次恢复”。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecoveryIssue {
+    /// obligation kind（`mutation_ack` / `chapter_projections` / …），或
+    /// `workspace_lock` / `proof_intent` 等恢复阶段身份。
+    kind: String,
+    /// 归属同步根（canonical 后的绝对路径）。
+    root: String,
+    /// 业务事务 ID；整根级失败（锁、校准）没有单一事务时为空。
+    transaction_id: Option<String>,
+    /// obligation 的额外身份（project/chapter），或证明意图的章节路径。
+    detail: Option<String>,
+    /// 本轮真实错误文本；只有“义务仍在索引里”的延后项可能是说明文字。
+    error: String,
+    /// 本轮结束时该责任仍在 durable 索引/意图目录中等待下一轮。
+    deferred: bool,
+}
+
+impl RecoveryIssue {
+    fn new(
+        kind: impl Into<String>,
+        root: impl Into<String>,
+        transaction_id: Option<String>,
+        detail: Option<String>,
+        error: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: kind.into(),
+            root: root.into(),
+            transaction_id,
+            detail,
+            error: error.into(),
+            deferred: false,
+        }
+    }
+
+    fn describe(&self) -> String {
+        let mut text = format!("kind={} root={}", self.kind, self.root);
+        if let Some(transaction_id) = &self.transaction_id {
+            text.push_str(&format!(" transaction_id={transaction_id}"));
+        }
+        if let Some(detail) = &self.detail {
+            text.push_str(&format!(" detail={detail}"));
+        }
+        if self.deferred {
+            text.push_str(" state=deferred");
+        }
+        if !self.error.is_empty() {
+            text.push_str(&format!(" error={}", self.error));
+        }
+        text
+    }
+}
+
 /// 同步 API — 全量同步统一入口。
 ///
 /// 一个全局 `SyncConfig` + 一份全局凭据，`perform_full_sync` 内部按 `SyncTarget`
@@ -490,17 +547,212 @@ fn should_retry_full_sync_via_github_api(config: &crate::sync::SyncConfig) -> bo
 ///
 /// 存在未结算业务事务时，空闲快路径与“无变化”结论都必须让位给明确的
 /// 待处理状态，不能只 warn。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RecoveryOutcome {
     completed: usize,
     failed: usize,
     deferred: usize,
     generation: u64,
+    /// 失败/延后的具体身份，按 (kind, root, transaction_id) 去重。
+    issues: Vec<RecoveryIssue>,
 }
 
 impl RecoveryOutcome {
     fn settled(&self) -> bool {
         self.failed == 0 && self.deferred == 0
+    }
+
+    fn record_issue(&mut self, issue: RecoveryIssue) {
+        if let Some(existing) = self.issues.iter_mut().find(|existing| {
+            existing.kind == issue.kind
+                && existing.root == issue.root
+                && existing.transaction_id == issue.transaction_id
+        }) {
+            existing.deferred |= issue.deferred;
+            if existing.detail.is_none() {
+                existing.detail = issue.detail;
+            }
+            if existing.error.is_empty() && !issue.error.is_empty() {
+                existing.error = issue.error;
+            }
+            return;
+        }
+        self.issues.push(issue);
+    }
+}
+
+/// 本轮同步前恢复的完整结算事实：业务 obligation + 正文证明意图。
+///
+/// `RecoveryOutcome` 的 `failed/deferred` 计数语义保持不变；这里额外携带
+/// 本轮真实失败身份，并作为 fast path / finalize 的输入，确保恢复未完成
+/// 不会被 `NoChanges` 或纯成功终态吞掉。
+#[derive(Debug, Clone, Default)]
+struct RecoverySettlement {
+    outcome: RecoveryOutcome,
+    /// 正文证明意图恢复后仍未解决/无法启动的责任。
+    proof_issues: Vec<RecoveryIssue>,
+}
+
+impl RecoverySettlement {
+    fn new(outcome: RecoveryOutcome, proof_issues: Vec<RecoveryIssue>) -> Self {
+        Self {
+            outcome,
+            proof_issues,
+        }
+    }
+
+    fn settled(&self) -> bool {
+        self.outcome.settled() && self.proof_issues.is_empty()
+    }
+
+    fn unsettled_message(&self) -> Option<String> {
+        if self.settled() {
+            return None;
+        }
+        let outcome = &self.outcome;
+        let mut message = format!(
+            "sync recovery not settled: completed={} failed={} deferred={} generation={}",
+            outcome.completed, outcome.failed, outcome.deferred, outcome.generation
+        );
+        let mut details: Vec<String> = outcome.issues.iter().map(RecoveryIssue::describe).collect();
+        details.extend(self.proof_issues.iter().map(RecoveryIssue::describe));
+        if details.is_empty() {
+            message.push_str("; no issue identity captured");
+            return Some(message);
+        }
+        const MAX_DETAILS: usize = 8;
+        message.push_str("; ");
+        message.push_str(
+            &details
+                .iter()
+                .take(MAX_DETAILS)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" | "),
+        );
+        if details.len() > MAX_DETAILS {
+            message.push_str(&format!(" | ... {} more", details.len() - MAX_DETAILS));
+        }
+        Some(message)
+    }
+
+    /// 本轮恢复未结算时，注入 finalize 的阶段失败。
+    fn round_phase_failure(&self) -> Option<crate::facade::RoundPhaseFailure> {
+        self.unsettled_message()
+            .map(|message| crate::facade::RoundPhaseFailure {
+                category: "recovery_unsettled".to_string(),
+                message,
+                message_key: None,
+            })
+    }
+
+    /// 把未结算身份附加到一次已经生成的同步结果上。
+    ///
+    /// 成功类终态升级为 `recoverable_error`；已有更严重终态保留状态但追加
+    /// 恢复身份，确保 PartialConflict/既有错误不会把恢复事实吞掉。
+    fn annotate_result(&self, result: &mut FullSyncResultDto) {
+        if self.settled() {
+            return;
+        }
+        let Some(message) = self.unsettled_message() else {
+            return;
+        };
+        // 成功类终态没有别的失败语义，直接升级为带身份的待结算错误。
+        if matches!(
+            result.overall_status.as_str(),
+            "success" | "no_changes" | "latest_wins_applied" | "idle" | "syncing"
+        ) {
+            result.overall_status = "recoverable_error".to_string();
+            result.error = Some(message);
+            result.error_category = Some("recovery_unsettled".to_string());
+            result.failure_stage = Some("recovery".to_string());
+            return;
+        }
+        // 已有更严重终态（PartialConflict/Fatal/…）保留状态与既有分类，只把
+        // 恢复身份追加到错误文本；冲突终态不能因此被改写成“恢复错误”。
+        let error_class = matches!(
+            result.overall_status.as_str(),
+            "recoverable_error" | "fatal_error" | "error"
+        );
+        if error_class
+            && (result.failure_stage.is_none()
+                || result.failure_stage.as_deref() == Some("core_sync"))
+        {
+            result.failure_stage = Some("recovery".to_string());
+        }
+        if result
+            .error
+            .as_deref()
+            .is_some_and(|existing| existing.contains(&message))
+        {
+            return;
+        }
+        let combined = match result.error.take() {
+            Some(existing) if !existing.is_empty() => format!("{existing}; {message}"),
+            _ => message,
+        };
+        result.error = Some(combined);
+        if error_class && result.error_category.is_none() {
+            result.error_category = Some("recovery_unsettled".to_string());
+        }
+    }
+}
+
+/// 合并本轮原有的阶段失败与恢复未结算事实，二者都不能被吞掉。
+fn merge_round_failure(
+    existing: Option<crate::facade::RoundPhaseFailure>,
+    recovery: &RecoverySettlement,
+) -> Option<crate::facade::RoundPhaseFailure> {
+    let Some(recovery_failure) = recovery.round_phase_failure() else {
+        return existing;
+    };
+    match existing {
+        None => Some(recovery_failure),
+        Some(existing) => Some(crate::facade::RoundPhaseFailure {
+            category: existing.category,
+            message: format!("{}; {}", existing.message, recovery_failure.message),
+            message_key: existing.message_key,
+        }),
+    }
+}
+
+/// 从稳定证明事件 ID 中取回 workspace 相对路径（`sync:<run>:<path>:<index>`）。
+fn proof_event_workspace_path(event_id: &str) -> Option<String> {
+    let rest = event_id.strip_prefix("sync:")?;
+    let (_run_id, rest) = rest.split_once(':')?;
+    let (workspace_path, _action_index) = rest.rsplit_once(':')?;
+    if workspace_path.is_empty() {
+        None
+    } else {
+        Some(workspace_path.replace('\\', "/"))
+    }
+}
+
+/// 把正文证明恢复问题转成本轮的结算身份：记录章节路径、事务和真实错误。
+fn proof_intent_issue(
+    app_data_root: &std::path::Path,
+    issue: &crate::sync::proof_intent::ProofRecoveryIssue,
+) -> RecoveryIssue {
+    let workspace_path = issue
+        .event_id
+        .as_deref()
+        .and_then(proof_event_workspace_path);
+    let detail = match (&workspace_path, &issue.project_id) {
+        (Some(path), Some(project_id)) => Some(format!("{path} (project {project_id})")),
+        (Some(path), None) => Some(path.clone()),
+        (None, Some(project_id)) => Some(format!("project {project_id}")),
+        (None, None) => None,
+    };
+    RecoveryIssue {
+        kind: "proof_intent".to_string(),
+        root: app_data_root
+            .join(crate::sync::proof_intent::PROOF_INTENTS_DIR)
+            .display()
+            .to_string(),
+        transaction_id: issue.transaction_id.clone(),
+        detail,
+        error: issue.description(),
+        deferred: true,
     }
 }
 
@@ -908,25 +1160,40 @@ impl WriterCoreApi {
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
                 .map_err(|error| crate::api::error::WriterError::from(error))?;
         let core = self.core_read();
-        let recovery = core
-            .sync_proof_intents_pending()
-            .then(|| core.recover_pending_sync_proof_intents());
-        if let Some(Err(error)) = recovery {
-            log::warn!("recover pending sync proof intents before sync failed: {error}");
-        }
+        let proof_issues = if core.sync_proof_intents_pending() {
+            match core.recover_pending_sync_proof_state() {
+                Ok(state) => state
+                    .unresolved_for_project(None)
+                    .into_iter()
+                    .map(|issue| proof_intent_issue(&self.app_data_root, issue))
+                    .collect::<Vec<_>>(),
+                Err(error) => {
+                    log::warn!("recover pending sync proof intents before sync failed: {error}");
+                    vec![RecoveryIssue {
+                        kind: "proof_intent".to_string(),
+                        root: self
+                            .app_data_root
+                            .join(crate::sync::proof_intent::PROOF_INTENTS_DIR)
+                            .display()
+                            .to_string(),
+                        transaction_id: None,
+                        detail: None,
+                        error: error.to_string(),
+                        deferred: true,
+                    }]
+                }
+            }
+        } else {
+            Vec::new()
+        };
         drop(core);
         drop(_recovery_workspace_lock);
         // 所有 durable 未投影 / 未结算事实必须在任何 fast path、target 过滤之前
         // 恢复：账本重建与补号、待确认 ack、章节 journal 的同步投影（复审 #4）。
         let recovery_outcome = self.recover_sync_state_before_preflight();
-        if !recovery_outcome.settled() {
-            log::warn!(
-                "[sync] recovery has unsettled work: completed={} failed={} deferred={} generation={}",
-                recovery_outcome.completed,
-                recovery_outcome.failed,
-                recovery_outcome.deferred,
-                recovery_outcome.generation
-            );
+        let recovery = RecoverySettlement::new(recovery_outcome, proof_issues);
+        if let Some(message) = recovery.unsettled_message() {
+            log::warn!("[sync] {message}");
         }
         // 平台触发原因只决定"是否绕过周期间隔"（force_sync），以及是否走显式
         // 重建；它不再影响本地/远端版本比对，也不影响冲突裁决。
@@ -963,6 +1230,7 @@ impl WriterCoreApi {
             progress_sink.clone(),
             target_progress,
             &operation_id,
+            &recovery,
         );
         let sync_config: crate::sync::SyncConfig = config.clone().into();
         let mut retried_via_github_api = false;
@@ -989,6 +1257,7 @@ impl WriterCoreApi {
                     progress_sink.clone(),
                     target_progress,
                     &operation_id,
+                    &recovery,
                 );
                 continue;
             }
@@ -1019,6 +1288,7 @@ impl WriterCoreApi {
                     progress_sink.clone(),
                     target_progress,
                     &operation_id,
+                    &recovery,
                 );
                 continue;
             }
@@ -1278,6 +1548,13 @@ impl WriterCoreApi {
             Err(error) => {
                 log::warn!("[sync] recovery workspace lock failed: {error}");
                 outcome.failed = outcome.failed.saturating_add(1);
+                outcome.record_issue(RecoveryIssue::new(
+                    "workspace_lock",
+                    app_data_root.display().to_string(),
+                    None,
+                    None,
+                    format!("recovery workspace lock failed: {error}"),
+                ));
                 return outcome;
             }
         };
@@ -1325,6 +1602,13 @@ impl WriterCoreApi {
                                     root.display()
                                 );
                                 outcome.failed = outcome.failed.saturating_add(1);
+                                outcome.record_issue(RecoveryIssue::new(
+                                    obligation.kind.clone(),
+                                    obligation.root.clone(),
+                                    Some(obligation.transaction_id.clone()),
+                                    obligation.detail.clone(),
+                                    error.to_string(),
+                                ));
                             }
                         }
                     }
@@ -1341,6 +1625,13 @@ impl WriterCoreApi {
                                     root.display()
                                 );
                                 outcome.failed = outcome.failed.saturating_add(1);
+                                outcome.record_issue(RecoveryIssue::new(
+                                    obligation.kind.clone(),
+                                    obligation.root.clone(),
+                                    Some(obligation.transaction_id.clone()),
+                                    obligation.detail.clone(),
+                                    error.to_string(),
+                                ));
                             }
                         }
                     }
@@ -1363,6 +1654,16 @@ impl WriterCoreApi {
                                     chapter_id
                                 );
                                 outcome.failed = outcome.failed.saturating_add(1);
+                                outcome.record_issue(RecoveryIssue::new(
+                                    obligation.kind.clone(),
+                                    obligation.root.clone(),
+                                    Some(obligation.transaction_id.clone()),
+                                    obligation
+                                        .detail
+                                        .clone()
+                                        .or_else(|| Some(format!("{project_id}/{chapter_id}"))),
+                                    error.to_string(),
+                                ));
                             }
                         }
                     }
@@ -1374,8 +1675,58 @@ impl WriterCoreApi {
                                 root.display()
                             );
                             outcome.failed = outcome.failed.saturating_add(1);
+                            outcome.record_issue(RecoveryIssue::new(
+                                obligation.kind.clone(),
+                                obligation.root.clone(),
+                                Some(obligation.transaction_id.clone()),
+                                obligation.detail.clone(),
+                                error.to_string(),
+                            ));
                         }
                     },
+                    "starmap_references" => {
+                        match crate::sync::starmap_reference_obligation::recover_reference_index(
+                            &root,
+                        ) {
+                            Ok(_) => {
+                                if let Err(error) = crate::sync::dirty_index::clear_obligation(
+                                    &app_data_root,
+                                    "starmap_references",
+                                    &root,
+                                    &obligation.transaction_id,
+                                ) {
+                                    log::warn!(
+                                        "[sync] starmap reference obligation clear failed at {}: {error}",
+                                        root.display()
+                                    );
+                                    outcome.failed = outcome.failed.saturating_add(1);
+                                    outcome.record_issue(RecoveryIssue::new(
+                                        obligation.kind.clone(),
+                                        obligation.root.clone(),
+                                        Some(obligation.transaction_id.clone()),
+                                        obligation.detail.clone(),
+                                        error.to_string(),
+                                    ));
+                                } else {
+                                    outcome.completed = outcome.completed.saturating_add(1);
+                                }
+                            }
+                            Err(error) => {
+                                log::warn!(
+                                    "[sync] starmap reference index rebuild failed at {}: {error}",
+                                    root.display()
+                                );
+                                outcome.failed = outcome.failed.saturating_add(1);
+                                outcome.record_issue(RecoveryIssue::new(
+                                    obligation.kind.clone(),
+                                    obligation.root.clone(),
+                                    Some(obligation.transaction_id.clone()),
+                                    obligation.detail.clone(),
+                                    error.to_string(),
+                                ));
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1400,6 +1751,13 @@ impl WriterCoreApi {
                         "[correction] retry pending correction publications failed: {error}"
                     );
                     outcome.failed = outcome.failed.saturating_add(1);
+                    outcome.record_issue(RecoveryIssue::new(
+                        "correction_publication",
+                        app_data_root.display().to_string(),
+                        None,
+                        None,
+                        error.to_string(),
+                    ));
                 }
             }
         }
@@ -1428,12 +1786,19 @@ impl WriterCoreApi {
                 Err(error) => {
                     log::warn!("[sync] list projects for recovery failed: {error}");
                     outcome.failed = outcome.failed.saturating_add(1);
+                    outcome.record_issue(RecoveryIssue::new(
+                        "list_projects",
+                        projects_root.display().to_string(),
+                        None,
+                        None,
+                        error.to_string(),
+                    ));
                 }
             }
         }
 
         for root in &roots {
-            let mut recovery_error: Option<String> = None;
+            let mut recovery_error: Option<(&'static str, String)> = None;
             let start_generation = crate::sync::local_mutations::recovery_pending_generation(root);
             let had_marker = start_generation.is_some();
             let needs_ledger_recovery =
@@ -1449,7 +1814,7 @@ impl WriterCoreApi {
                             "[sync] local mutation ledger recovery failed at {}: {error}",
                             root.display()
                         );
-                        recovery_error = Some(format!("ledger: {error}"));
+                        recovery_error = Some(("ledger_rebuild", format!("ledger: {error}")));
                     }
                 }
             }
@@ -1468,7 +1833,7 @@ impl WriterCoreApi {
                                 "[sync] replay pending mutation acks failed at {}: {error}",
                                 root.display()
                             );
-                            recovery_error = Some(format!("acks: {error}"));
+                            recovery_error = Some(("mutation_acks", format!("acks: {error}")));
                         }
                     }
                 }
@@ -1484,7 +1849,8 @@ impl WriterCoreApi {
                                 "[sync] replay chapter mutation projections failed at {}: {error}",
                                 root.display()
                             );
-                            recovery_error = Some(format!("journal: {error}"));
+                            recovery_error =
+                                Some(("chapter_projections", format!("journal: {error}")));
                         }
                     }
                 }
@@ -1521,15 +1887,22 @@ impl WriterCoreApi {
                             "[sync] rebuild pending mutations failed at {}: {error}",
                             root.display()
                         );
-                        recovery_error = Some(format!("rescan: {error}"));
+                        recovery_error = Some(("rescan", format!("rescan: {error}")));
                     }
                 }
             }
             // 索引可用时 recovery 标记由各义务结算负责，不能因为“本轮没看到
             // 目录”就清掉（seed_clean 同理）。
             match recovery_error {
-                Some(reason) => {
+                Some((kind, reason)) => {
                     outcome.failed = outcome.failed.saturating_add(1);
+                    outcome.record_issue(RecoveryIssue::new(
+                        kind,
+                        root.display().to_string(),
+                        None,
+                        None,
+                        reason.clone(),
+                    ));
                     crate::sync::local_mutations::mark_recovery_pending(root, &reason);
                 }
                 None => {
@@ -1550,11 +1923,31 @@ impl WriterCoreApi {
                 Err(error) => {
                     log::warn!("[sync] mark recovery calibrated failed: {error}");
                     outcome.failed = outcome.failed.saturating_add(1);
+                    outcome.record_issue(RecoveryIssue::new(
+                        "recovery_calibration",
+                        app_data_root.display().to_string(),
+                        None,
+                        None,
+                        error.to_string(),
+                    ));
                 }
             }
         }
         // 仍未结算的责任保持待处理：调用方不得据此宣称收敛或 no_changes。
-        outcome.deferred = crate::sync::dirty_index::obligations(&app_data_root).len();
+        // 索引里的义务本身就是下一轮恢复的待办身份；这里显式登记，失败笔与
+        // 延后笔共享同一 (kind, root, transaction_id)，按身份去重。
+        let deferred = crate::sync::dirty_index::obligations(&app_data_root);
+        outcome.deferred = deferred.len();
+        for obligation in deferred {
+            outcome.record_issue(RecoveryIssue {
+                kind: obligation.kind,
+                root: obligation.root,
+                transaction_id: Some(obligation.transaction_id),
+                detail: obligation.detail,
+                error: "obligation remains deferred in the durable dirty index".to_string(),
+                deferred: true,
+            });
+        }
         outcome
     }
 
@@ -1704,6 +2097,28 @@ impl WriterCoreApi {
         unsettled
     }
 
+    /// 收口一次“无变化”快路径。
+    ///
+    /// 只有本轮恢复 settled（业务 obligation 全部结算、无待恢复证明意图）时，
+    /// 聚合结果才允许停在 `NoChanges`/`Success`；否则由 finalize 升级为带
+    /// 事务/路径身份的 `RecoverableError`。targets 在 finalize 后清空，保持
+    /// 平台对 checkpoint no-op 的既有识别方式。
+    fn finalize_fast_path_no_change(
+        &self,
+        no_change_targets: Vec<crate::sync::types::TargetSyncResult>,
+        recovery: &RecoverySettlement,
+    ) -> FullSyncResultDto {
+        let (mut result, _, _) = self.core_write().finalize_full_sync(
+            no_change_targets,
+            None,
+            recovery.round_phase_failure(),
+        );
+        result.targets.clear();
+        let mut result: FullSyncResultDto = result.into();
+        recovery.annotate_result(&mut result);
+        result
+    }
+
     #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
     fn perform_full_sync_once(
         &self,
@@ -1714,13 +2129,19 @@ impl WriterCoreApi {
         progress_sink: Option<SyncProgressSink>,
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
         diagnostic_operation_id: &str,
+        recovery: &RecoverySettlement,
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
         // 与 sync disabled 相同的 no-op FullSyncResult。
         // Issue #729：各阶段边界检查取消令牌后复用此闭包返回，避免重复构造。
-        let make_noop_result =
-            || -> ApiResult<FullSyncResultDto> { Ok(Self::full_sync_noop_result()) };
+        // 本轮恢复未结算时，no-op 也必须是 `RecoverableError`，不能把未完成
+        // 的业务事务显示成一次普通成功（复审 #7236446138 第 3 项）。
+        let make_noop_result = || -> ApiResult<FullSyncResultDto> {
+            let mut result = Self::full_sync_noop_result();
+            recovery.annotate_result(&mut result);
+            Ok(result)
+        };
 
         // sync disabled → 直接返回 no-op，
         // 不创建 provider、不读 catalog、不建 plan、不进入 run_transfer。
@@ -1978,10 +2399,8 @@ impl WriterCoreApi {
                                 true,
                                 diagnostic_operation_id,
                             );
-                            let (mut result, _, _) =
-                                self.core_write().finalize_full_sync(Vec::new(), None, None);
-                            result.targets.clear();
-                            return Ok(result.into());
+                            let result = self.finalize_fast_path_no_change(Vec::new(), recovery);
+                            return Ok(result);
                         }
                     }
                 }
@@ -2069,16 +2488,12 @@ impl WriterCoreApi {
                         true,
                         diagnostic_operation_id,
                     );
-                    let (mut result, _, _) = self.core_write().finalize_full_sync(
-                        snapshot.no_change_targets.clone(),
-                        None,
-                        None,
-                    );
                     // The target results were persisted by finalize_full_sync. Returning
                     // an empty list lets the platform distinguish this checkpoint no-op
                     // and avoid launching generation GC on every polling interval.
-                    result.targets.clear();
-                    return Ok(result.into());
+                    let result = self
+                        .finalize_fast_path_no_change(snapshot.no_change_targets.clone(), recovery);
+                    return Ok(result);
                 }
             }
         }
@@ -2460,18 +2875,12 @@ impl WriterCoreApi {
                         true,
                         diagnostic_operation_id,
                     );
-                    let (mut result, _, _) = self.core_write().finalize_full_sync(
-                        snapshot.no_change_targets.clone(),
-                        None,
-                        None,
-                    );
-                    result.targets.clear();
-                    return Ok(result.into());
+                    let result = self
+                        .finalize_fast_path_no_change(snapshot.no_change_targets.clone(), recovery);
+                    return Ok(result);
                 }
-                let (mut result, _, _) =
-                    self.core_write().finalize_full_sync(Vec::new(), None, None);
-                result.targets.clear();
-                return Ok(result.into());
+                let result = self.finalize_fast_path_no_change(Vec::new(), recovery);
+                return Ok(result);
             }
         }
 
@@ -2715,6 +3124,7 @@ impl WriterCoreApi {
             diagnostic_operation_id,
             remote_revision_before.as_deref(),
             &preflight_pending,
+            Some(recovery),
         ) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -2839,6 +3249,7 @@ impl WriterCoreApi {
             &operation_id,
             None,
             &PendingMutationMap::new(),
+            None,
         )
         .map(|outcome| outcome.result)
     }
@@ -2856,7 +3267,11 @@ impl WriterCoreApi {
         diagnostic_operation_id: &str,
         remote_revision: Option<&str>,
         preflight_pending: &PendingMutationMap,
+        recovery: Option<&RecoverySettlement>,
     ) -> ApiResult<RoundOutcome> {
+        // 外部（集成测试）直接驱动编排时没有同步前恢复事实；此时按“已结算”
+        // 处理，保持该入口原有的结果语义。
+        let recovery = recovery.cloned().unwrap_or_default();
         struct PendingTargetCommit {
             target_index: usize,
             prepared_failure: bool,
@@ -3064,8 +3479,10 @@ impl WriterCoreApi {
                 "[sync] perform_full_sync: cancellation requested after per-target loop — discarding buffered remote writes"
             );
             self.core_write().persist_full_sync_cancelled();
+            let mut cancelled_result = Self::full_sync_noop_result();
+            recovery.annotate_result(&mut cancelled_result);
             return Ok(RoundOutcome {
-                result: Self::full_sync_noop_result(),
+                result: cancelled_result,
                 published_revision: None,
                 publish_succeeded: false,
             });
@@ -3524,6 +3941,9 @@ impl WriterCoreApi {
         } else {
             None
         };
+        // 恢复未结算与推送/取消阶段失败同等进入本轮终态：任何一方都不能
+        // 因为另一方已经失败而被吞掉（复审 #7236446138 第 3 项）。
+        let round_phase_failure = merge_round_failure(round_phase_failure, &recovery);
         let (result, committed_paths, lifecycle_receipts) = {
             let core = self.core_write();
             core.finalize_full_sync(all_targets, None, round_phase_failure)
@@ -3554,6 +3974,9 @@ impl WriterCoreApi {
         // 阶段失败已在 finalize 前汇入持久终态（复审 #4）：这里只做 DTO 转换，
         // 不能再事后改内存结果，否则 Core 的 last_success 与 UI 不一致。
         let mut result: FullSyncResultDto = result.into();
+        // PartialConflict / 既有错误不会被 finalize 的阶段失败分支改写：这里补上
+        // 恢复身份，保证任何终态都能看到未结算事务，而不是只在成功类终态生效。
+        recovery.annotate_result(&mut result);
         result.local_content_changed = local_content_changed;
         result.chapter_changes = chapter_changes.into_iter().map(Into::into).collect();
         Ok(RoundOutcome {
@@ -4782,5 +5205,351 @@ mod shared_definition_path_tests {
         let affected = starmap_ids_for_committed_paths(&core, [definition_path.as_path()]).unwrap();
         assert!(affected.contains(&first));
         assert!(affected.contains(&second));
+    }
+}
+
+#[cfg(test)]
+mod recovery_settlement_tests {
+    use super::*;
+    use crate::sync::types::{SyncResult, TargetSyncResult};
+
+    fn no_change_target() -> TargetSyncResult {
+        TargetSyncResult {
+            target_kind: "app".to_string(),
+            project_id: None,
+            remote_prefix: "app".to_string(),
+            group_id: Some("global".to_string()),
+            failure_path: None,
+            failure_phase: None,
+            result: SyncResult::no_changes(),
+            deleted_resolution: None,
+            local_lifecycle_action: Default::default(),
+        }
+    }
+
+    /// 构造一条会重放失败的 `mutation_ack` 义务：root 是不可读目录（普通文件）。
+    fn write_broken_obligation_index(
+        api: &WriterCoreApi,
+        broken_root: &std::path::Path,
+        transaction_id: &str,
+    ) {
+        let mut obligations = serde_json::Map::new();
+        obligations.insert(
+            format!(
+                "mutation_ack\u{1f}{}\u{1f}{}",
+                broken_root.display(),
+                transaction_id
+            ),
+            serde_json::json!({
+                "kind": "mutation_ack",
+                "root": broken_root.display().to_string(),
+                "transaction_id": transaction_id,
+                "detail": "app:global",
+            }),
+        );
+        let index = serde_json::json!({
+            "schema_version": crate::sync::dirty_index::SCHEMA_VERSION,
+            "targets": {},
+            "obligations": obligations,
+            "recovery_calibrated": true,
+            "recovery_generation": 1,
+            "recovery_calibrated_at_ms": 1,
+        });
+        let path = api
+            .app_data_root
+            .join(crate::sync::dirty_index::DIRTY_INDEX_PATH);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_string(&index).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn replay_failure_records_obligation_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects_root = temp.path().join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+        let api = WriterCoreApi::new(temp.path(), &projects_root);
+        let broken_root = temp.path().join("broken-root");
+        std::fs::write(&broken_root, b"not a directory").unwrap();
+        let transaction_id = "round-broken\u{1f}app:global";
+        write_broken_obligation_index(&api, &broken_root, transaction_id);
+
+        let outcome = api.recover_sync_state_before_preflight();
+
+        assert!(
+            !outcome.settled(),
+            "replay failure must keep recovery unsettled"
+        );
+        assert!(outcome.failed > 0);
+        assert_eq!(outcome.deferred, 1, "obligation remains in the dirty index");
+        let issue = outcome
+            .issues
+            .iter()
+            .find(|issue| issue.kind == "mutation_ack")
+            .expect("failed obligation identity must be recorded");
+        assert_eq!(issue.transaction_id.as_deref(), Some(transaction_id));
+        assert_eq!(issue.root, broken_root.display().to_string());
+        assert!(
+            !issue.error.is_empty(),
+            "real replay error text must be kept"
+        );
+        assert!(
+            issue.deferred,
+            "still-pending obligation is marked deferred"
+        );
+
+        // 快路径收口直接消费同一份真实恢复事实：不能停在 NoChanges。
+        let settlement = RecoverySettlement::new(outcome, Vec::new());
+        let result = api.finalize_fast_path_no_change(vec![no_change_target()], &settlement);
+        assert_eq!(result.overall_status, "recoverable_error");
+        let message = result
+            .error
+            .expect("fast path must report the failed replay");
+        assert!(message.contains("transaction_id=round-broken"), "{message}");
+        assert!(
+            message.contains(&broken_root.display().to_string()),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn unsettled_recovery_keeps_successful_publications_in_result() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects_root = temp.path().join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+        let api = WriterCoreApi::new(temp.path(), &projects_root);
+        let mut outcome = RecoveryOutcome {
+            failed: 1,
+            deferred: 0,
+            ..RecoveryOutcome::default()
+        };
+        outcome.record_issue(RecoveryIssue::new(
+            "mutation_ack",
+            "/data/app",
+            Some("round-published".to_string()),
+            None,
+            "ack replay failed",
+        ));
+        let settlement = RecoverySettlement::new(outcome, Vec::new());
+        let mut sync_result = SyncResult::success();
+        sync_result.uploaded_files = vec!["volumes/v1/chapters/c1/chapter.md".to_string()];
+        let target = TargetSyncResult {
+            target_kind: "project".to_string(),
+            project_id: Some("p1".to_string()),
+            remote_prefix: "projects/p1".to_string(),
+            group_id: None,
+            failure_path: None,
+            failure_phase: None,
+            result: sync_result,
+            deleted_resolution: None,
+            local_lifecycle_action: Default::default(),
+        };
+
+        let (full, _, _) = api.core_write().finalize_full_sync(
+            vec![target],
+            None,
+            settlement.round_phase_failure(),
+        );
+
+        assert!(matches!(
+            full.overall_status,
+            crate::sync::SyncStatus::RecoverableError(ref category)
+                if category == "recovery_unsettled"
+        ));
+        assert_eq!(
+            full.total_uploaded, 1,
+            "published receipt count must survive"
+        );
+        assert_eq!(full.targets.len(), 1);
+        assert_eq!(
+            full.targets[0].result.uploaded_files,
+            vec!["volumes/v1/chapters/c1/chapter.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn fast_path_keeps_no_changes_only_when_recovery_settled() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects_root = temp.path().join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+        let api = WriterCoreApi::new(temp.path(), &projects_root);
+
+        let result = api
+            .finalize_fast_path_no_change(vec![no_change_target()], &RecoverySettlement::default());
+
+        assert_eq!(result.overall_status, "no_changes");
+        assert!(result.error.is_none());
+        assert!(
+            result.targets.is_empty(),
+            "fast path still returns no targets"
+        );
+    }
+
+    #[test]
+    fn fast_path_reports_failed_recovery_with_transaction_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects_root = temp.path().join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+        let api = WriterCoreApi::new(temp.path(), &projects_root);
+
+        let mut outcome = RecoveryOutcome {
+            completed: 0,
+            failed: 1,
+            deferred: 1,
+            generation: 7,
+            issues: Vec::new(),
+        };
+        outcome.record_issue(RecoveryIssue::new(
+            "chapter_projections",
+            "/data/app",
+            Some("tx-chapter-1".to_string()),
+            Some("projects/p1/volumes/v1/chapters/c1/chapter.md".to_string()),
+            "journal replay failed: corrupt manifest",
+        ));
+        let settlement = RecoverySettlement::new(outcome, Vec::new());
+
+        let result = api.finalize_fast_path_no_change(vec![no_change_target()], &settlement);
+
+        assert_eq!(result.overall_status, "recoverable_error");
+        assert_ne!(result.overall_status, "no_changes");
+        let message = result.error.expect("unsettled recovery must be reported");
+        assert!(message.contains("kind=chapter_projections"), "{message}");
+        assert!(message.contains("root=/data/app"), "{message}");
+        assert!(message.contains("transaction_id=tx-chapter-1"), "{message}");
+        assert!(message.contains("chapter.md"), "{message}");
+        assert_eq!(result.error_category.as_deref(), Some("recovery_unsettled"));
+        assert_eq!(result.failure_stage.as_deref(), Some("recovery"));
+        assert!(result.targets.is_empty());
+    }
+
+    #[test]
+    fn fast_path_blocks_no_changes_when_only_proof_intent_is_pending() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects_root = temp.path().join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+        let api = WriterCoreApi::new(temp.path(), &projects_root);
+        let settlement = RecoverySettlement::new(
+            RecoveryOutcome::default(),
+            vec![RecoveryIssue {
+                kind: "proof_intent".to_string(),
+                root: "/data/app/stats/proof-intents".to_string(),
+                transaction_id: Some("tx-proof-2".to_string()),
+                detail: Some("projects/p2/volumes/v1/chapters/c9/chapter.md".to_string()),
+                error: "正文事务尚未确认提交，证明事件尚未入库".to_string(),
+                deferred: true,
+            }],
+        );
+
+        let result = api.finalize_fast_path_no_change(vec![no_change_target()], &settlement);
+
+        assert_eq!(result.overall_status, "recoverable_error");
+        let message = result.error.expect("proof intent pending must be reported");
+        assert!(message.contains("kind=proof_intent"), "{message}");
+        assert!(message.contains("transaction_id=tx-proof-2"), "{message}");
+        assert!(message.contains("chapters/c9/chapter.md"), "{message}");
+    }
+
+    #[test]
+    fn partial_conflict_keeps_status_and_appends_recovery_identity() {
+        let mut outcome = RecoveryOutcome {
+            failed: 1,
+            deferred: 0,
+            ..RecoveryOutcome::default()
+        };
+        outcome.record_issue(RecoveryIssue::new(
+            "chapter_projections",
+            "/data/app",
+            Some("tx-partial-1".to_string()),
+            None,
+            "journal replay failed",
+        ));
+        let settlement = RecoverySettlement::new(outcome, Vec::new());
+        let full = crate::sync::types::FullSyncResult {
+            overall_status: crate::sync::SyncStatus::PartialConflict,
+            targets: Vec::new(),
+            total_uploaded: 1,
+            total_downloaded: 0,
+            total_local_deletes: 0,
+            total_remote_deletes: 0,
+            total_overwritten: 0,
+            total_ignored: 0,
+            total_conflicts: 1,
+            error: Some("1 conflict pending".to_string()),
+            error_category: None,
+            message_key: Some("sync.result.partial_conflict_summary".to_string()),
+        };
+        let mut result: FullSyncResultDto = full.into();
+
+        settlement.annotate_result(&mut result);
+
+        assert_eq!(result.overall_status, "partial_conflict");
+        let message = result.error.expect("conflict error must keep both facts");
+        assert!(message.contains("1 conflict pending"), "{message}");
+        assert!(message.contains("transaction_id=tx-partial-1"), "{message}");
+        assert_eq!(result.error_category, None);
+        assert_eq!(
+            result.failure_stage.as_deref(),
+            Some("core_sync"),
+            "conflict stage must not be rewritten as a recovery failure"
+        );
+        assert_eq!(
+            result.message_key.as_deref(),
+            Some("sync.result.partial_conflict_summary")
+        );
+        assert_eq!(result.total_uploaded, 1, "published receipts remain intact");
+    }
+
+    #[test]
+    fn proof_intent_issue_keeps_chapter_path_and_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let issue = crate::sync::proof_intent::ProofRecoveryIssue {
+            project_id: Some("p1".to_string()),
+            transaction_id: Some("tx-proof-1".to_string()),
+            event_id: Some(
+                "sync:run-1:projects/p1/volumes/v1/chapters/c1/chapter.md:0".to_string(),
+            ),
+            message: "证明事件尚未入库".to_string(),
+            missing_fields: vec!["after_text".to_string()],
+        };
+
+        let converted = proof_intent_issue(temp.path(), &issue);
+
+        assert_eq!(converted.kind, "proof_intent");
+        assert_eq!(converted.transaction_id.as_deref(), Some("tx-proof-1"));
+        let detail = converted.detail.expect("chapter path identity");
+        assert!(detail.contains("projects/p1/volumes/v1/chapters/c1/chapter.md"));
+        assert!(converted.error.contains("证明事件尚未入库"));
+        assert!(converted.deferred);
+    }
+
+    #[test]
+    fn merged_round_failure_keeps_both_publish_and_recovery_errors() {
+        let mut outcome = RecoveryOutcome {
+            failed: 1,
+            deferred: 0,
+            ..RecoveryOutcome::default()
+        };
+        outcome.record_issue(RecoveryIssue::new(
+            "mutation_ack",
+            "/data/app",
+            Some("round-9".to_string()),
+            None,
+            "ack replay failed",
+        ));
+        let settlement = RecoverySettlement::new(outcome, Vec::new());
+        let existing = crate::facade::RoundPhaseFailure {
+            category: "remote_publish_failed".to_string(),
+            message: "publish failed".to_string(),
+            message_key: Some("sync.result.network_failed".to_string()),
+        };
+
+        let merged = merge_round_failure(Some(existing), &settlement)
+            .expect("recovery failure must be merged");
+        assert_eq!(merged.category, "remote_publish_failed");
+        assert!(merged.message.contains("publish failed"));
+        assert!(merged.message.contains("transaction_id=round-9"));
+        assert_eq!(
+            merged.message_key.as_deref(),
+            Some("sync.result.network_failed")
+        );
     }
 }

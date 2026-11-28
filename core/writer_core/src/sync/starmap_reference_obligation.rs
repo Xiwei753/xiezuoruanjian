@@ -99,6 +99,12 @@ impl PendingStarmapReferences {
     }
 }
 
+/// 恢复入口：按权威实例重建整份引用索引（索引损坏或增量更新多次失败时用）。
+pub(crate) fn recover_reference_index(live_root: &Path) -> crate::error::Result<usize> {
+    let index = crate::starmap::library::rebuild_reference_index(live_root)?;
+    Ok(index.nodes.len())
+}
+
 fn register(
     app_root: &Path,
     live_root: &Path,

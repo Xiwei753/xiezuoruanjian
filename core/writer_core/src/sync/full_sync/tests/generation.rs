@@ -998,12 +998,17 @@ fn sparse_conflict_publishes_safe_delta_only() {
     let plan = store.apply_delta(&delta, "g-local").unwrap();
     commit_store_plan(&staging, &plan);
     let merged = store.load_all().unwrap().unwrap();
+    // 冲突路径的远端 blob 仍可复用（merge 保留远端记录），因此允许发布安全增量。
+    let remote_tree_files: HashMap<String, String> =
+        [(conflict_rel.to_string(), "conflict-blob-oid".to_string())]
+            .into_iter()
+            .collect();
     let mut outcome = merge_outcome(
         merged,
         Some(delta),
         vec![safe_rel.to_string()],
         Vec::new(),
-        HashMap::new(),
+        remote_tree_files,
     );
     outcome.conflicts.push(crate::sync::types::SyncConflict {
         local_path: conflict_rel.to_string(),
