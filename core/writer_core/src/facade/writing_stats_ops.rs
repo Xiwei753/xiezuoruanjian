@@ -576,16 +576,14 @@ impl super::WriterCore {
             // 同一恢复轮只枚举一次真实未决事务，按章节顺序逐个投影；单个
             // 事务失败保留自己的 journal，不阻断其它章节。即使本次没有恢复
             // 出正文决议，也要把损坏清单的真实失败带回结果。
-            let scan =
+            let transactions =
                 match crate::chapter::commit::pending_chapter_proof_transactions(&project_root) {
-                    Ok(scan) => scan,
+                    Ok(transactions) => transactions,
                     Err(error) => {
                         failures.push(format!("{}: {error}", project_root.display()));
                         continue;
                     }
                 };
-            failures.extend(scan.failures);
-            let transactions = scan.transactions;
             if recovered.is_empty() && transactions.is_empty() {
                 continue;
             }
@@ -633,12 +631,11 @@ impl super::WriterCore {
         &self,
         project_root: &std::path::Path,
     ) -> Result<()> {
-        let scan = crate::chapter::commit::pending_chapter_proof_transactions(project_root)?;
+        let transactions = crate::chapter::commit::pending_chapter_proof_transactions(project_root)?;
         // 同一章前序 journal 投影失败时，后续 journal 不能越过它；其他章
         // 仍继续结算。进程内失败集只用于本轮，durable journal 仍是事实来源。
         let mut blocked_chapters = std::collections::HashSet::new();
-        let mut failures: Vec<String> = scan.failures;
-        let transactions = scan.transactions;
+        let mut failures: Vec<String> = Vec::new();
         for transaction in &transactions {
             if blocked_chapters.contains(&transaction.key) {
                 continue;

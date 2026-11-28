@@ -157,66 +157,23 @@ pub(crate) fn preserve_superseded_conflict(
 }
 
 /// 列出当前项目内已发布正文、但仍有证明投影未确认的 journal。
-pub struct PendingChapterProofScan {
-    pub transactions: Vec<super::PendingChapterProofTransaction>,
-    pub failures: Vec<String>,
-}
-
 pub fn pending_chapter_proof_transactions(
     project_root: &Path,
-) -> Result<PendingChapterProofScan> {
-    let root = journal_root(project_root);
-    match fs::metadata(&root) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(PendingChapterProofScan {
-                transactions: Vec::new(),
-                failures: Vec::new(),
-            })
-        }
-        Err(error) => {
-            return Err(Error::Other(format!(
-                "failed to inspect chapter commit journal root {}: {error}",
-                root.display()
-            )))
-        }
-    }
-    let mut transactions = Vec::new();
-    let mut failures = Vec::new();
-    for (_, manifest) in chapter_transaction_manifests(project_root)? {
-        if manifest.phase == ChapterCommitPhase::Applied && !manifest.pending_projections.is_empty()
-        {
-            transactions.push((
-                manifest.commit_sequence,
-                manifest.created_at_ms,
-                super::PendingChapterProofTransaction {
-                    transaction_id: manifest.transaction_id,
-                    key: manifest.key,
-                    commit_sequence: manifest.commit_sequence,
-                },
-            ));
-        }
-    }
-    // read_dir 顺序不稳定；证明投影必须按发生顺序推进，否则同章后一笔会越过
-    // 尚未完成的证明事件。时间戳相同的极端情况再用事务 ID 稳定排序。
-    transactions.sort_by(|left, right| {
-        (
-            left.0,
-            left.1,
-            &left.2.key.chapter_id,
-            &left.2.transaction_id,
-        )
-            .cmp(&(
-                right.0,
-                right.1,
-                &right.2.key.chapter_id,
-                &right.2.transaction_id,
-            ))
-    });
-    Ok(PendingChapterProofScan {
-        transactions: transactions.into_iter().map(|(_, _, item)| item).collect(),
-        failures,
-    })
+) -> Result<Vec<super::PendingChapterProofTransaction>> {
+    let mut transactions: Vec<_> = chapter_transaction_manifests(project_root)?
+        .into_iter()
+        .filter(|(_, manifest)| {
+            manifest.phase == ChapterCommitPhase::Applied
+                && !manifest.pending_projections.is_empty()
+        })
+        .map(|(_, manifest)| super::PendingChapterProofTransaction {
+            transaction_id: manifest.transaction_id,
+            key: manifest.key,
+            commit_sequence: manifest.commit_sequence,
+        })
+        .collect();
+    transactions.sort_by_key(|transaction| (transaction.key.chapter_id.clone(), transaction.commit_sequence));
+    Ok(transactions)
 }
 
 /// 恢复冲突时补写仍可取得的三方正文材料（base 取本批首条证明的基线）。
@@ -249,11 +206,11 @@ fn write_recovered_conflict_materials(
     Ok(())
 }
 
-/// 读取本章事务目录中所有已发布、待证明的事务，按 commit_sequence 排序。
-pub(crate) fn pending_chapter_proof_transactions_for_key(
+/// 读取本章事务目录的全部 manifest（同章枚举的唯一入口）。
+fn chapter_manifests_for_key(
     project_root: &Path,
     key: &ChapterKey,
-) -> Result<Vec<super::PendingChapterProofTransaction>> {
+) -> Result<Vec<(PathBuf, ChapterCommitManifest)>> {
     let dir = chapter_transactions_dir(project_root, key);
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
@@ -265,7 +222,7 @@ pub(crate) fn pending_chapter_proof_transactions_for_key(
             )))
         }
     };
-    let mut transactions = Vec::new();
+    let mut manifests = Vec::new();
     for entry in entries {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -288,18 +245,34 @@ pub(crate) fn pending_chapter_proof_transactions_for_key(
                 manifest_path.display()
             ))
         })?;
-        if manifest.key != *key
-            || manifest.phase != ChapterCommitPhase::Applied
-            || manifest.pending_projections.is_empty()
-        {
-            continue;
+        if manifest.key != *key {
+            return Err(Error::Other(format!(
+                "chapter transaction {} contains a different chapter key",
+                entry.path().display()
+            )));
         }
-        transactions.push(super::PendingChapterProofTransaction {
+        manifests.push((entry.path(), manifest));
+    }
+    Ok(manifests)
+}
+
+/// 读取本章事务目录中所有已发布、待证明的事务，按 commit_sequence 排序。
+pub(crate) fn pending_chapter_proof_transactions_for_key(
+    project_root: &Path,
+    key: &ChapterKey,
+) -> Result<Vec<super::PendingChapterProofTransaction>> {
+    let mut transactions: Vec<_> = chapter_manifests_for_key(project_root, key)?
+        .into_iter()
+        .filter(|(_, manifest)| {
+            manifest.phase == ChapterCommitPhase::Applied
+                && !manifest.pending_projections.is_empty()
+        })
+        .map(|(_, manifest)| super::PendingChapterProofTransaction {
             transaction_id: manifest.transaction_id,
             key: manifest.key,
             commit_sequence: manifest.commit_sequence,
-        });
-    }
+        })
+        .collect();
     transactions.sort_by_key(|transaction| transaction.commit_sequence);
     Ok(transactions)
 }
@@ -469,7 +442,27 @@ pub fn replay_pending_sync_mutations(project_root: &Path) -> Result<usize> {
             continue;
         }
         match project_manifest_sync_mutations(project_root, &tx_dir, &mut manifest)? {
-            true => replayed += 1,
+            true => {
+                replayed += 1;
+                // 同步账本已 durable；没有其它待确认投影时按现有完成逻辑
+                // 结算并删除空事务。
+                if manifest.pending_projections.is_empty()
+                    && manifest.draft_ack_projections.is_empty()
+                {
+                    manifest.phase = ChapterCommitPhase::Finished;
+                    write_manifest(&tx_dir, &manifest)?;
+                    if let Err(error) = remove_transaction_dir(
+                        project_root,
+                        &manifest.key,
+                        &manifest.transaction_id,
+                    ) {
+                        log::warn!(
+                            "failed to clean finished chapter commit {}: {error}",
+                            tx_dir.display()
+                        );
+                    }
+                }
+            }
             false => failures.push(format!(
                 "{}: sync projection not durable",
                 manifest.transaction_id
@@ -520,51 +513,46 @@ fn recover_pending_chapter_commits_filtered(
         }
     }
     migrate_legacy_transactions(project_root)?;
-    let mut entries = Vec::new();
-    let chapters_root = root.join(CHAPTERS_DIR);
-    if let Ok(volumes) = fs::read_dir(&chapters_root) {
-        for volume in volumes {
-            let volume = volume?;
-            if !volume.file_type()?.is_dir() {
+    cleanup_manifestless_transactions(project_root)?;
+    let entries = chapter_transaction_manifests(project_root)?;
+    recover_chapter_commit_entries(project_root, entries)
+}
+
+/// 启动时清理没有 manifest 的事务残留（Prepared 之前退出）。
+fn cleanup_manifestless_transactions(project_root: &Path) -> Result<()> {
+    let root = journal_root(project_root).join(CHAPTERS_DIR);
+    let volumes = match fs::read_dir(&root) {
+        Ok(volumes) => volumes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to read chapter transaction root {}: {error}",
+                root.display()
+            )))
+        }
+    };
+    for volume in volumes {
+        let volume = volume?;
+        if !volume.file_type()?.is_dir() {
+            continue;
+        }
+        for chapter in fs::read_dir(volume.path())? {
+            let chapter = chapter?;
+            if !chapter.file_type()?.is_dir() {
                 continue;
             }
-            for chapter in fs::read_dir(volume.path())? {
-                let chapter = chapter?;
-                if !chapter.file_type()?.is_dir() {
+            for transaction in fs::read_dir(chapter.path())? {
+                let transaction = transaction?;
+                if !transaction.file_type()?.is_dir() {
                     continue;
                 }
-                for transaction in fs::read_dir(chapter.path())? {
-                    let transaction = transaction?;
-                    if !transaction.file_type()?.is_dir() {
-                        continue;
-                    }
-                    let dir = transaction.path();
-                    let manifest_path = dir.join("manifest.json");
-                    let raw = match fs::read_to_string(&manifest_path) {
-                        Ok(raw) => raw,
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                        Err(error) => {
-                            return Err(Error::Other(format!(
-                                "failed to read chapter commit manifest {}: {error}",
-                                manifest_path.display()
-                            )))
-                        }
-                    };
-                    match serde_json::from_str::<ChapterCommitManifest>(&raw) {
-                        Ok(manifest) => entries.push((dir, manifest)),
-                        Err(error) => {
-                            log::error!(
-                                "chapter commit journal manifest parse failed, transaction preserved: {}: {}",
-                                manifest_path.display(),
-                                error
-                            );
-                        }
-                    }
+                if !transaction.path().join("manifest.json").exists() {
+                    fs::remove_dir_all(transaction.path())?;
                 }
             }
         }
     }
-    recover_chapter_commit_entries(project_root, entries)
+    Ok(())
 }
 
 /// 读取每章事务目录中的 manifest（新布局）。
@@ -650,7 +638,10 @@ fn migrate_legacy_transactions(project_root: &Path) -> Result<()> {
         let manifest_path = dir.join("manifest.json");
         let raw = match fs::read_to_string(&manifest_path) {
             Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::remove_dir_all(&dir)?;
+                continue;
+            }
             Err(error) => {
                 return Err(Error::Other(format!(
                     "failed to read chapter commit manifest {}: {error}",
@@ -658,19 +649,19 @@ fn migrate_legacy_transactions(project_root: &Path) -> Result<()> {
                 )))
             }
         };
-        let manifest: ChapterCommitManifest = match serde_json::from_str(&raw) {
-            Ok(manifest) => manifest,
-            Err(error) => {
-                log::error!(
-                    "legacy chapter commit manifest {} is corrupt, left in place: {error}",
-                    manifest_path.display()
-                );
-                continue;
-            }
-        };
+        let manifest: ChapterCommitManifest = serde_json::from_str(&raw).map_err(|error| {
+            Error::Other(format!(
+                "legacy chapter commit manifest {} is corrupt: {error}",
+                manifest_path.display()
+            ))
+        })?;
         let target = chapter_transaction_dir(project_root, &manifest.key, &manifest.transaction_id);
         if target.exists() {
-            continue;
+            return Err(Error::Other(format!(
+                "legacy chapter commit {} conflicts with existing transaction {}",
+                dir.display(),
+                target.display()
+            )));
         }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
@@ -695,50 +686,10 @@ fn recover_chapter_transactions(
     project_root: &Path,
     key: &ChapterKey,
 ) -> Result<Vec<ChapterCommitRecovery>> {
-    let dir = chapter_transactions_dir(project_root, key);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(Error::Other(format!(
-                "failed to read chapter transaction dir {}: {error}",
-                dir.display()
-            )))
-        }
-    };
-    let mut transactions = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let manifest_path = entry.path().join("manifest.json");
-        let raw = match fs::read_to_string(&manifest_path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(Error::Other(format!(
-                    "failed to read chapter commit manifest {}: {error}",
-                    manifest_path.display()
-                )))
-            }
-        };
-        let manifest: ChapterCommitManifest = serde_json::from_str(&raw).map_err(|error| {
-            Error::Other(format!(
-                "chapter commit manifest {} is corrupt: {error}",
-                manifest_path.display()
-            ))
-        })?;
-        if manifest.key != *key {
-            return Err(Error::Other(format!(
-                "chapter transaction {} contains a different chapter key",
-                entry.path().display()
-            )));
-        }
-        if manifest.phase == ChapterCommitPhase::Decided {
-            transactions.push((entry.path(), manifest));
-        }
-    }
+    let mut transactions: Vec<_> = chapter_manifests_for_key(project_root, key)?
+        .into_iter()
+        .filter(|(_, manifest)| manifest.phase == ChapterCommitPhase::Decided)
+        .collect();
     transactions.sort_by_key(|(_, manifest)| (manifest.commit_sequence, manifest.created_at_ms));
     recover_chapter_commit_entries(project_root, transactions)
 }

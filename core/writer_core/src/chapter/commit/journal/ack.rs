@@ -62,7 +62,11 @@ fn confirm_pending_projections(
                 return Ok(false);
             }
         }
-        manifest.phase = ChapterCommitPhase::Finished;
+        // 同步账本尚未 durable 时保留 Applied，等重放入口补投影；不能因为
+        // 统计/草稿确认清空就删掉唯一待同步决议。
+        if manifest.sync_projection_done {
+            manifest.phase = ChapterCommitPhase::Finished;
+        }
     }
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
@@ -106,7 +110,11 @@ pub fn mark_chapter_commit_draft_ack(
                 return Ok(false);
             }
         }
-        manifest.phase = ChapterCommitPhase::Finished;
+        // 同步账本尚未 durable 时保留 Applied，等重放入口补投影；不能因为
+        // 统计/草稿确认清空就删掉唯一待同步决议。
+        if manifest.sync_projection_done {
+            manifest.phase = ChapterCommitPhase::Finished;
+        }
     }
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
