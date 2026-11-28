@@ -24,7 +24,11 @@ use super::resolve::{
 use super::run::StagingRun;
 
 /// 计算本轮提交决议。
-pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> {
+pub(crate) fn compute(
+    run: &StagingRun,
+    live_root: &Path,
+    ledger: &HashMap<String, crate::sync::local_mutations::LocalMutationRecord>,
+) -> Result<CommitPlan> {
     let group = run.app_group().cloned();
     let staging_root = run.staging_root();
     let mut plan = CommitPlan::default();
@@ -80,23 +84,17 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
     let pending_take_remote: HashSet<String> = state.pending_take_remote.iter().cloned().collect();
 
     // 4. 本轮持久 mutation：决定本地版本与受影响集合。
-    let ledger_snapshot = if initialized_from_disk {
-        None
+    // 账本由实际提交函数在同一把锁内读取；只有首次从磁盘导入时账本刚被
+    // 写入新事实，才需要重读一次。
+    let pending = if initialized_from_disk {
+        crate::sync::local_mutations::pending_records(live_root, run.scope(), group.as_ref())?
     } else {
-        run.ledger_snapshot()
-    };
-    let pending = match ledger_snapshot.as_ref() {
-        Some(ledger) => crate::sync::local_mutations::pending_records_in(
-            ledger.as_ref(),
+        crate::sync::local_mutations::pending_records_in(
+            ledger,
             &state.confirmed_mutation_seq,
             run.scope(),
             group.as_ref(),
-        )?,
-        None => crate::sync::local_mutations::pending_records(
-            live_root,
-            run.scope(),
-            group.as_ref(),
-        )?,
+        )?
     };
 
     // 5. 参与本轮比较的路径：待同步 ledger ∪ 已确认基线 ∪ 远端变化 ∪

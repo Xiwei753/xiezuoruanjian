@@ -44,18 +44,6 @@ pub struct StagingRun {
     baseline_root: Option<PathBuf>,
     /// Prepare 阶段在传输之前记录的目标级失败（例如本机统计事件库迁移失败）。
     prepare_error: Option<String>,
-    /// 本轮开始时读取一次的持久 mutation 账本快照；多个 App 组共享同一份，
-    /// 不在每组 plan 里重复读整份账本。
-    ledger_snapshot: std::sync::Mutex<
-        Option<
-            std::sync::Arc<
-                std::collections::HashMap<
-                    String,
-                    crate::sync::local_mutations::LocalMutationRecord,
-                >,
-            >,
-        >,
-    >,
 }
 
 impl StagingRun {
@@ -76,7 +64,6 @@ impl StagingRun {
             delete_intent: false,
             baseline_root: None,
             prepare_error: None,
-            ledger_snapshot: std::sync::Mutex::new(None),
         })
     }
 
@@ -154,30 +141,6 @@ impl StagingRun {
         self.prepare_error.as_deref()
     }
 
-    pub(crate) fn set_ledger_snapshot(
-        &self,
-        ledger: std::sync::Arc<
-            std::collections::HashMap<String, crate::sync::local_mutations::LocalMutationRecord>,
-        >,
-    ) {
-        if let Ok(mut slot) = self.ledger_snapshot.lock() {
-            *slot = Some(ledger);
-        }
-    }
-
-    pub(crate) fn ledger_snapshot(
-        &self,
-    ) -> Option<
-        std::sync::Arc<
-            std::collections::HashMap<String, crate::sync::local_mutations::LocalMutationRecord>,
-        >,
-    > {
-        self.ledger_snapshot
-            .lock()
-            .ok()
-            .and_then(|slot| slot.clone())
-    }
-
     /// staging 子目录（Transfer 阶段写入远端变化对象）。
     pub fn staging_root(&self) -> PathBuf {
         self.run_root.join(STAGING_SUBDIR)
@@ -188,9 +151,15 @@ impl StagingRun {
         self.run_root.join(BASE_SUBDIR)
     }
 
-    /// 统一对象比较入口（Issue #1066）：见 [`super::plan::compute`]。
-    pub fn compute_commit_plan(&self, live_root: &Path) -> Result<CommitPlan> {
-        super::plan::compute(self, live_root)
+    pub fn compute_commit_plan(
+        &self,
+        live_root: &Path,
+        ledger: &std::collections::HashMap<
+            String,
+            crate::sync::local_mutations::LocalMutationRecord,
+        >,
+    ) -> Result<CommitPlan> {
+        super::plan::compute(self, live_root, ledger)
     }
 
     /// 清理整个 run 目录。

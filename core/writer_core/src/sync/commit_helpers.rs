@@ -1205,7 +1205,17 @@ pub(crate) fn commit_single_target_staging(
         }
         TargetCommitMode::Full | TargetCommitMode::ConflictMetadataOnly => {
             let live_root = run.target_live_root();
-            let mut plan = match run.compute_commit_plan(live_root) {
+            // 账本在同一把工作区锁内读取一次，直接交给唯一裁决；跨 target
+            // 的锁批次不复用，避免下载期间的业务写入被旧快照覆盖。
+            let ledger = match crate::sync::local_mutations::latest_ledger(live_root) {
+                Ok(ledger) => ledger,
+                Err(error) => {
+                    let msg = format!("read mutation ledger failed: {error}");
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            };
+            let mut plan = match run.compute_commit_plan(live_root, &ledger) {
                 Ok(plan) => plan,
                 Err(e) => {
                     let msg = format!("compute_commit_plan failed: {}", e);

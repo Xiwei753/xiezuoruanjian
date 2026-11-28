@@ -1749,17 +1749,6 @@ impl WriterCoreApi {
             sync_target: crate::sync::types::SyncTarget,
             prefix: String,
         }
-        // 本地提交批次内每个同步根只读一次账本；网络 Transfer 阶段不持有锁，
-        // 也不会使用过期的前置快照。
-        let mut ledger_cache: std::collections::HashMap<
-            std::path::PathBuf,
-            std::sync::Arc<
-                std::collections::HashMap<
-                    String,
-                    crate::sync::local_mutations::LocalMutationRecord,
-                >,
-            >,
-        > = std::collections::HashMap::new();
         let mut target_deltas: Vec<TargetPublishDelta<'_>> = Vec::new();
         for pending in pending_commits {
             let PendingTargetCommit {
@@ -1800,7 +1789,6 @@ impl WriterCoreApi {
                 &staging_runs,
                 &target_sync_result,
                 diagnostic_operation_id,
-                &mut ledger_cache,
             );
             let commit_failed = matches!(
                 target_with_conflicts.result.status,
@@ -2365,15 +2353,6 @@ impl WriterCoreApi {
         staging_runs: &[crate::sync::staging::StagingRun],
         target_sync_result: &crate::sync::types::TargetSyncResult,
         operation_id: &str,
-        ledger_cache: &mut std::collections::HashMap<
-            std::path::PathBuf,
-            std::sync::Arc<
-                std::collections::HashMap<
-                    String,
-                    crate::sync::local_mutations::LocalMutationRecord,
-                >,
-            >,
-        >,
     ) -> (
         crate::sync::types::TargetSyncResult,
         Vec<crate::sync::commit_helpers::CommittedPath>,
@@ -2393,12 +2372,7 @@ impl WriterCoreApi {
         }
         match staging_runs.get(target_index) {
             Some(run) => {
-                self.commit_target_after_transfer(
-                    run,
-                    target_sync_result,
-                    operation_id,
-                    ledger_cache,
-                )
+                self.commit_target_after_transfer(run, target_sync_result, operation_id)
             }
             None => (
                 target_sync_result.clone(),
@@ -2415,15 +2389,6 @@ impl WriterCoreApi {
         run: &crate::sync::staging::StagingRun,
         target_sync_result: &crate::sync::types::TargetSyncResult,
         operation_id: &str,
-        ledger_cache: &mut std::collections::HashMap<
-            std::path::PathBuf,
-            std::sync::Arc<
-                std::collections::HashMap<
-                    String,
-                    crate::sync::local_mutations::LocalMutationRecord,
-                >,
-            >,
-        >,
     ) -> (
         crate::sync::types::TargetSyncResult,
         Vec<crate::sync::commit_helpers::CommittedPath>,
@@ -2463,38 +2428,6 @@ impl WriterCoreApi {
         crate::sync::state_lock::with_sync_state_lock(run.target_live_root(), || {
             let core = self.core_write();
 
-            // 业务 Store 已在各自保存入口持久化；这里只读取本同步根在
-            // 本轮提交批次里的账本快照，不在每个 target 上重复读整份账本。
-            let snapshot = match ledger_cache.get(run.target_live_root()) {
-                Some(snapshot) => snapshot.clone(),
-                None => match crate::sync::local_mutations::latest_ledger(
-                    run.target_live_root(),
-                ) {
-                    Ok(ledger) => {
-                        let snapshot = std::sync::Arc::new(ledger);
-                        ledger_cache.insert(run.target_live_root().to_path_buf(), snapshot.clone());
-                        snapshot
-                    }
-                    Err(error) => {
-                        let mut target_with_error = target_sync_result.clone();
-                        target_with_error.result.status =
-                            crate::sync::SyncStatus::RecoverableError(
-                                "ledger_read_failed".to_string(),
-                            );
-                        target_with_error.result.error = Some(format!(
-                            "read mutation ledger before commit failed: {error}"
-                        ));
-                        return (
-                            target_with_error,
-                            Vec::new(),
-                            Vec::new(),
-                            Vec::new(),
-                            crate::sync::staging::PublishBatch::default(),
-                        );
-                    }
-                },
-            };
-            run.set_ledger_snapshot(snapshot);
             let mut target_with_conflicts = target_sync_result.clone();
             let mut chapter_commit_receipts = Vec::new();
             let mut publish_batch = crate::sync::staging::PublishBatch::default();
@@ -2700,8 +2633,8 @@ impl WriterCoreApi {
         let _workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
             .map_err(crate::api::error::WriterError::from)?;
 
-        // 冲突事务开始前协调 dirty Store，避免脏 Store 覆盖冲突解决结果。
-        self.core_write().flush_all_starmap_stores()?;
+        // 业务 Store 由业务保存入口持久化；这里不再做全局 flush，避免无关
+        // 星图保存失败阻断一次普通的“采用远端”操作。
 
         // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 target root 的
         // state/conflict mutation。resolve 拿同一把 root lock，与 Commit 互斥：
