@@ -232,6 +232,20 @@ pub fn pending_chapter_proof_transactions(
             ));
         }
     }
+    for (_, manifest) in chapter_transaction_manifests(project_root)? {
+        if manifest.phase == ChapterCommitPhase::Applied && !manifest.pending_projections.is_empty()
+        {
+            transactions.push((
+                manifest.commit_sequence,
+                manifest.created_at_ms,
+                super::PendingChapterProofTransaction {
+                    transaction_id: manifest.transaction_id,
+                    key: manifest.key,
+                    commit_sequence: manifest.commit_sequence,
+                },
+            ));
+        }
+    }
     // read_dir 顺序不稳定；证明投影必须按发生顺序推进，否则同章后一笔会越过
     // 尚未完成的证明事件。时间戳相同的极端情况再用事务 ID 稳定排序。
     transactions.sort_by(|left, right| {
@@ -284,26 +298,32 @@ fn write_recovered_conflict_materials(
     Ok(())
 }
 
-/// 按本章定位链取出从最早到本次事务的未确认证明队列。
-///
-/// 只沿 `previous_proof_transaction` 读取本章真实事务，不枚举其它章节。
-pub(crate) fn pending_chapter_proof_chain(
+/// 读取本章事务目录中所有已发布、待证明的事务，按 commit_sequence 排序。
+pub(crate) fn pending_chapter_proof_transactions_for_key(
     project_root: &Path,
-    transaction_id: &str,
+    key: &ChapterKey,
 ) -> Result<Vec<super::PendingChapterProofTransaction>> {
-    let mut chain = Vec::new();
-    let mut cursor = Some(transaction_id.to_string());
-    let mut seen = std::collections::HashSet::new();
-    while let Some(current) = cursor {
-        if !seen.insert(current.clone()) {
+    let dir = chapter_transactions_dir(project_root, key);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
             return Err(Error::Other(format!(
-                "chapter proof transaction chain loops at {current}"
-            )));
+                "failed to read chapter transaction dir {}: {error}",
+                dir.display()
+            )))
         }
-        let manifest_path = journal_root(project_root).join(&current).join("manifest.json");
+    };
+    let mut transactions = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let manifest_path = entry.path().join("manifest.json");
         let raw = match fs::read_to_string(&manifest_path) {
             Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
                 return Err(Error::Other(format!(
                     "failed to read chapter commit manifest {}: {error}",
@@ -317,26 +337,46 @@ pub(crate) fn pending_chapter_proof_chain(
                 manifest_path.display()
             ))
         })?;
-        if manifest.transaction_id != current {
-            return Err(Error::Other(format!(
-                "chapter commit manifest {} names transaction {}, expected {current}",
-                manifest_path.display(),
-                manifest.transaction_id
-            )));
-        }
-        if manifest.phase == ChapterCommitPhase::Applied
-            && !manifest.pending_projections.is_empty()
+        if manifest.key != *key
+            || manifest.phase != ChapterCommitPhase::Applied
+            || manifest.pending_projections.is_empty()
         {
-            chain.push(super::PendingChapterProofTransaction {
-                transaction_id: manifest.transaction_id.clone(),
-                key: manifest.key.clone(),
-                commit_sequence: manifest.commit_sequence,
-            });
+            continue;
         }
-        cursor = manifest.previous_proof_transaction;
+        transactions.push(super::PendingChapterProofTransaction {
+            transaction_id: manifest.transaction_id,
+            key: manifest.key,
+            commit_sequence: manifest.commit_sequence,
+        });
     }
-    chain.reverse();
-    Ok(chain)
+    transactions.sort_by_key(|transaction| transaction.commit_sequence);
+    Ok(transactions)
+}
+
+/// 由本次事务找到其章，再返回该章从早到晚的未确认证明队列。
+pub(crate) fn pending_chapter_proof_transactions_for_transaction(
+    project_root: &Path,
+    transaction_id: &str,
+) -> Result<Vec<super::PendingChapterProofTransaction>> {
+    let tx_dir = find_transaction_dir(project_root, transaction_id)?;
+    let manifest_path = tx_dir.join("manifest.json");
+    let raw = match fs::read_to_string(&manifest_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to read chapter commit manifest {}: {error}",
+                manifest_path.display()
+            )))
+        }
+    };
+    let manifest: ChapterCommitManifest = serde_json::from_str(&raw).map_err(|error| {
+        Error::Other(format!(
+            "chapter commit manifest {} is corrupt: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    pending_chapter_proof_transactions_for_key(project_root, &manifest.key)
 }
 
 /// 读取 journal 中尚未确认的证明事件（供投影 worker 使用）。
@@ -344,9 +384,7 @@ pub fn pending_chapter_proof_events(
     project_root: &Path,
     transaction_id: &str,
 ) -> Result<Vec<super::ChapterProofProjection>> {
-    let manifest_path = journal_root(project_root)
-        .join(transaction_id)
-        .join("manifest.json");
+    let manifest_path = find_transaction_dir(project_root, transaction_id)?.join("manifest.json");
     let raw = match fs::read_to_string(&manifest_path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -380,9 +418,7 @@ pub fn pending_chapter_sync_proof_facts(
     project_root: &Path,
     transaction_id: &str,
 ) -> Result<Vec<super::ChapterSyncProofFact>> {
-    let manifest_path = journal_root(project_root)
-        .join(transaction_id)
-        .join("manifest.json");
+    let manifest_path = find_transaction_dir(project_root, transaction_id)?.join("manifest.json");
     let raw = match fs::read_to_string(&manifest_path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -458,6 +494,20 @@ pub fn pending_chapter_sync_proof_fact_ids(
                 continue;
             }
         };
+        if manifest.phase != ChapterCommitPhase::Applied {
+            continue;
+        }
+        for fact in &manifest.sync_proof_facts {
+            if manifest
+                .pending_projections
+                .iter()
+                .any(|id| id == &fact.event_id)
+            {
+                ids.insert(fact.event_id.clone());
+            }
+        }
+    }
+    for (_, manifest) in chapter_transaction_manifests(project_root)? {
         if manifest.phase != ChapterCommitPhase::Applied {
             continue;
         }
@@ -631,7 +681,7 @@ pub fn replay_pending_sync_mutation(project_root: &Path, transaction_id: &str) -
             "invalid chapter commit transaction id: {transaction_id}"
         )));
     }
-    let tx_dir = journal_root(project_root).join(transaction_id);
+    let tx_dir = find_transaction_dir(project_root, transaction_id)?;
     let manifest_path = tx_dir.join("manifest.json");
     let raw = match fs::read_to_string(&manifest_path) {
         Ok(raw) => raw,
@@ -676,7 +726,7 @@ fn recover_pending_chapter_commits_filtered(
     only_key: Option<&ChapterKey>,
 ) -> Result<Vec<ChapterCommitRecovery>> {
     if let Some(key) = only_key {
-        return recover_chapter_locator(project_root, key);
+        return recover_chapter_transactions(project_root, key);
     }
     let root = journal_root(project_root);
     match fs::metadata(&root) {
@@ -689,94 +739,225 @@ fn recover_pending_chapter_commits_filtered(
             )))
         }
     }
+    migrate_legacy_transactions(project_root)?;
     let mut entries = Vec::new();
-    for entry in fs::read_dir(&root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let dir = entry.path();
-        if dir.file_name().and_then(|name| name.to_str()) == Some(CONFLICT_DIR)
-            || dir.file_name().and_then(|name| name.to_str()) == Some(CHAPTER_PENDING_DIR)
-        {
-            continue;
-        }
-        let manifest_path = dir.join("manifest.json");
-        let raw = match fs::read_to_string(&manifest_path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if let Err(error) = fs::remove_dir_all(&dir) {
-                    log::warn!(
-                        "failed to clean chapter commit directory without manifest {}: {error}",
-                        dir.display()
-                    );
-                }
+    let chapters_root = root.join(CHAPTERS_DIR);
+    if let Ok(volumes) = fs::read_dir(&chapters_root) {
+        for volume in volumes {
+            let volume = volume?;
+            if !volume.file_type()?.is_dir() {
                 continue;
             }
-            Err(error) => {
-                return Err(Error::Other(format!(
-                    "failed to read chapter commit manifest {}: {error}",
-                    manifest_path.display()
-                )));
-            }
-        };
-        match serde_json::from_str::<ChapterCommitManifest>(&raw) {
-            Ok(manifest) => entries.push((dir, manifest)),
-            Err(error) => {
-                log::error!(
-                    "chapter commit journal manifest parse failed, transaction preserved: {}: {}",
-                    manifest_path.display(),
-                    error
-                );
+            for chapter in fs::read_dir(volume.path())? {
+                let chapter = chapter?;
+                if !chapter.file_type()?.is_dir() {
+                    continue;
+                }
+                for transaction in fs::read_dir(chapter.path())? {
+                    let transaction = transaction?;
+                    if !transaction.file_type()?.is_dir() {
+                        continue;
+                    }
+                    let dir = transaction.path();
+                    let manifest_path = dir.join("manifest.json");
+                    let raw = match fs::read_to_string(&manifest_path) {
+                        Ok(raw) => raw,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => {
+                            return Err(Error::Other(format!(
+                                "failed to read chapter commit manifest {}: {error}",
+                                manifest_path.display()
+                            )))
+                        }
+                    };
+                    match serde_json::from_str::<ChapterCommitManifest>(&raw) {
+                        Ok(manifest) => entries.push((dir, manifest)),
+                        Err(error) => {
+                            log::error!(
+                                "chapter commit journal manifest parse failed, transaction preserved: {}: {}",
+                                manifest_path.display(),
+                                error
+                            );
+                        }
+                    }
+                }
             }
         }
     }
     recover_chapter_commit_entries(project_root, entries, true)
 }
 
-/// 读取/提交当前章时只按该章定位文件找到真实未完成正文事务。
-fn recover_chapter_locator(
+/// 读取每章事务目录中的 manifest（新布局）。
+pub(super) fn chapter_transaction_manifests(
     project_root: &Path,
-    key: &ChapterKey,
-) -> Result<Vec<ChapterCommitRecovery>> {
-    let Some(transaction_id) = read_chapter_locator(project_root, key)? else {
-        return Ok(Vec::new());
-    };
-    let tx_dir = journal_root(project_root).join(&transaction_id);
-    let manifest_path = tx_dir.join("manifest.json");
-    let raw = match fs::read_to_string(&manifest_path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // 定位指向已清理事务：清掉陈旧定位，不再全项目扫描。
-            clear_chapter_locator(project_root, key)?;
-            return Ok(Vec::new());
-        }
+) -> Result<Vec<(PathBuf, ChapterCommitManifest)>> {
+    let root = journal_root(project_root).join(CHAPTERS_DIR);
+    let mut manifests = Vec::new();
+    let volumes = match fs::read_dir(&root) {
+        Ok(volumes) => volumes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(manifests),
         Err(error) => {
             return Err(Error::Other(format!(
-                "failed to read located chapter commit manifest {}: {error}",
-                manifest_path.display()
+                "failed to read chapter transaction root {}: {error}",
+                root.display()
             )))
         }
     };
-    let manifest: ChapterCommitManifest = serde_json::from_str(&raw).map_err(|error| {
-        Error::Other(format!(
-            "located chapter commit manifest {} is corrupt: {error}",
-            manifest_path.display()
-        ))
-    })?;
-    if &manifest.key != key {
-        clear_chapter_locator(project_root, key)?;
-        return Ok(Vec::new());
+    for volume in volumes {
+        let volume = volume?;
+        if !volume.file_type()?.is_dir() {
+            continue;
+        }
+        for chapter in fs::read_dir(volume.path())? {
+            let chapter = chapter?;
+            if !chapter.file_type()?.is_dir() {
+                continue;
+            }
+            for transaction in fs::read_dir(chapter.path())? {
+                let transaction = transaction?;
+                if !transaction.file_type()?.is_dir() {
+                    continue;
+                }
+                let manifest_path = transaction.path().join("manifest.json");
+                let raw = match fs::read_to_string(&manifest_path) {
+                    Ok(raw) => raw,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        return Err(Error::Other(format!(
+                            "failed to read chapter commit manifest {}: {error}",
+                            manifest_path.display()
+                        )))
+                    }
+                };
+                match serde_json::from_str::<ChapterCommitManifest>(&raw) {
+                    Ok(manifest) => manifests.push((transaction.path(), manifest)),
+                    Err(error) => {
+                        log::error!(
+                            "chapter commit manifest {} is corrupt, skipped: {error}",
+                            manifest_path.display()
+                        );
+                    }
+                }
+            }
+        }
     }
-    if manifest.phase == ChapterCommitPhase::Applied {
-        // 正文已发布，只剩证明投影：定位是该章未决证明队列的入口，保留。
-        return Ok(Vec::new());
+    Ok(manifests)
+}
+
+/// 启动恢复时把旧的扁平事务目录一次性迁入每章目录；旧布局只在这里出现。
+fn migrate_legacy_transactions(project_root: &Path) -> Result<()> {
+    let root = journal_root(project_root);
+    let entries = match fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to read chapter commit journal root {}: {error}",
+                root.display()
+            )))
+        }
+    };
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let dir = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name == CHAPTERS_DIR || name == CONFLICT_DIR {
+            continue;
+        }
+        let manifest_path = dir.join("manifest.json");
+        let raw = match fs::read_to_string(&manifest_path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to read chapter commit manifest {}: {error}",
+                    manifest_path.display()
+                )))
+            }
+        };
+        let manifest: ChapterCommitManifest = match serde_json::from_str(&raw) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                log::error!(
+                    "legacy chapter commit manifest {} is corrupt, left in place: {error}",
+                    manifest_path.display()
+                );
+                continue;
+            }
+        };
+        let target = chapter_transaction_dir(project_root, &manifest.key, &manifest.transaction_id);
+        if target.exists() {
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if let Err(error) = fs::rename(&dir, &target) {
+            log::warn!(
+                "failed to migrate legacy chapter commit {} -> {}: {error}",
+                dir.display(),
+                target.display()
+            );
+        }
     }
-    if manifest.phase != ChapterCommitPhase::Decided {
-        clear_chapter_locator(project_root, key)?;
-        return Ok(Vec::new());
+    Ok(())
+}
+
+/// 读取/提交当前章时只读该章事务目录，找到未发布的正文决议。
+fn recover_chapter_transactions(
+    project_root: &Path,
+    key: &ChapterKey,
+) -> Result<Vec<ChapterCommitRecovery>> {
+    let dir = chapter_transactions_dir(project_root, key);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to read chapter transaction dir {}: {error}",
+                dir.display()
+            )))
+        }
+    };
+    let mut transactions = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let manifest_path = entry.path().join("manifest.json");
+        let raw = match fs::read_to_string(&manifest_path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to read chapter commit manifest {}: {error}",
+                    manifest_path.display()
+                )))
+            }
+        };
+        let manifest: ChapterCommitManifest = serde_json::from_str(&raw).map_err(|error| {
+            Error::Other(format!(
+                "chapter commit manifest {} is corrupt: {error}",
+                manifest_path.display()
+            ))
+        })?;
+        if manifest.key != *key {
+            return Err(Error::Other(format!(
+                "chapter transaction {} contains a different chapter key",
+                entry.path().display()
+            )));
+        }
+        if manifest.phase == ChapterCommitPhase::Decided {
+            transactions.push((entry.path(), manifest));
+        }
     }
-    recover_chapter_commit_entries(project_root, vec![(tx_dir, manifest)], false)
+    transactions.sort_by_key(|(_, manifest)| (manifest.commit_sequence, manifest.created_at_ms));
+    recover_chapter_commit_entries(project_root, transactions, false)
 }
 
 fn recover_chapter_commit_entries(
@@ -788,20 +969,12 @@ fn recover_chapter_commit_entries(
 
     let mut recovered = Vec::new();
     for (tx_dir, mut manifest) in entries {
-        let key = manifest.key.clone();
-        let transaction_id = manifest.transaction_id.clone();
         match manifest.phase {
             ChapterCommitPhase::Prepared => {
-                // 未决议：live 从未被触碰。保留目录供人工诊断，不能删除后
-                // 继续写 Finished manifest；陈旧定位一并清理。
-                if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
-                    log::warn!("failed to clear stale chapter commit locator: {error}");
-                }
+                // 未决议：live 从未被触碰。保留目录供人工诊断，不发布。
                 continue;
             }
             ChapterCommitPhase::Decided => {
-                // 决议已 durable：登记本章定位，崩溃后读写仍能直达该事务。
-                write_chapter_locator(project_root, &key, &transaction_id)?;
                 let published = if manifest.deleted {
                     publish_deleted(project_root, &tx_dir, &mut manifest)?
                 } else {
@@ -839,9 +1012,6 @@ fn recover_chapter_commit_entries(
                         superseded: true,
                         conflict_dir: Some(conflict_dir),
                     });
-                    if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
-                        log::warn!("failed to clear chapter commit locator: {error}");
-                    }
                     if let Err(error) = remove_transaction_dir(&tx_dir) {
                         log::warn!(
                             "failed to clean delivered superseded chapter commit {}: {error}",
@@ -850,42 +1020,11 @@ fn recover_chapter_commit_entries(
                     }
                     continue;
                 }
-                if manifest.pending_projections.is_empty() {
-                    if let Err(error) = clear_chapter_locator_if(
-                        project_root,
-                        &key,
-                        &manifest.transaction_id,
-                    ) {
-                        log::warn!("failed to clear chapter commit locator after publish: {error}");
-                    }
-                }
             }
             ChapterCommitPhase::Applied => {
-                // 已发布只待证明的记录保留定位，作为该章未决证明队列的入口；
-                // 正文闸门不再因它阻塞。启动恢复时按从早到晚写入，最后一条
-                // 就是该章最新的未决事务。
-                if manifest.pending_projections.is_empty()
-                    && manifest.draft_ack_projections.is_empty()
-                {
-                    if let Err(error) = clear_chapter_locator_if(
-                        project_root,
-                        &key,
-                        &manifest.transaction_id,
-                    ) {
-                        log::warn!("failed to clear stale chapter commit locator: {error}");
-                    }
-                } else {
-                    write_chapter_locator(project_root, &key, &transaction_id)?;
-                }
+                // 正文已发布，只剩证明投影；事务目录由同章证明队列读取。
             }
             ChapterCommitPhase::Finished => {
-                if let Err(error) = advance_chapter_locator_after_finished(
-                    project_root,
-                    &key,
-                    &manifest,
-                ) {
-                    log::warn!("failed to advance chapter commit locator: {error}");
-                }
                 if let Err(error) = remove_transaction_dir(&tx_dir) {
                     log::warn!(
                         "failed to clean finished chapter commit {}: {error}",
@@ -930,9 +1069,6 @@ fn recover_chapter_commit_entries(
                             tx_dir.display()
                         );
                     }
-                }
-                if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
-                    log::warn!("failed to clear chapter commit locator: {error}");
                 }
                 continue;
             }
@@ -1042,6 +1178,27 @@ pub fn pending_chapter_draft_acks(
                 ));
             }
         };
+        if manifest.draft_ack_projections.is_empty()
+            || !matches!(
+                manifest.phase,
+                ChapterCommitPhase::Applied | ChapterCommitPhase::Decided
+            )
+        {
+            continue;
+        }
+        acks.push((
+            manifest.commit_sequence,
+            manifest.created_at_ms,
+            super::PendingChapterDraftAck {
+                transaction_id: manifest.transaction_id.clone(),
+                key: manifest.key.clone(),
+                event_ids: manifest.draft_ack_projections.clone(),
+                after: manifest.after.clone(),
+                commit_sequence: manifest.commit_sequence,
+            },
+        ));
+    }
+    for (_, manifest) in chapter_transaction_manifests(project_root)? {
         if manifest.draft_ack_projections.is_empty()
             || !matches!(
                 manifest.phase,

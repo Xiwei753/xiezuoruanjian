@@ -6,7 +6,7 @@ use chrono::Utc;
 use super::super::Chapter;
 use super::super::ChapterProofProjection;
 use super::journal::{
-    journal_root, mark_chapter_commit_draft_ack, mark_pending, md5_hex, pending_chapter_draft_acks,
+    chapter_transaction_dir, journal_root, mark_chapter_commit_draft_ack, mark_pending, md5_hex, pending_chapter_draft_acks,
     read_current, recover_pending_chapter_commits, sha256_hex, write_manifest,
     ChapterCommitManifest, ChapterCommitPhase,
 };
@@ -177,7 +177,6 @@ fn recovery_applies_decided_body_but_never_overwrites_newer_content() {
         superseded_reason: None,
         sync_mutations: Vec::new(),
         sync_projection_done: true,
-        previous_proof_transaction: None,
     };
     write_manifest(&tx_dir, &manifest).unwrap();
     recover_pending_chapter_commits(root).unwrap();
@@ -226,7 +225,7 @@ fn draft_proof_events_stay_pending_until_platform_ack() {
     assert_eq!(acks[0].transaction_id, receipt.transaction_id);
     assert_eq!(acks[0].event_ids, vec!["evt-1", "evt-2"]);
     assert_eq!(acks[0].after.revision, receipt.after.revision);
-    assert!(journal_root(root).join(&receipt.transaction_id).exists());
+    assert!(chapter_transaction_dir(root, &key, &receipt.transaction_id).exists());
 
     // 进程重启扫描：仍保留该事务，等待平台草稿确认。
     let recovered = recover_pending_chapter_commits(root).unwrap();
@@ -234,9 +233,9 @@ fn draft_proof_events_stay_pending_until_platform_ack() {
     assert_eq!(recovered[0].draft_ack_projections.len(), 2);
 
     assert!(!mark_chapter_commit_draft_ack(root, &receipt.transaction_id, "evt-1").unwrap());
-    assert!(journal_root(root).join(&receipt.transaction_id).exists());
+    assert!(chapter_transaction_dir(root, &key, &receipt.transaction_id).exists());
     assert!(mark_chapter_commit_draft_ack(root, &receipt.transaction_id, "evt-2").unwrap());
-    assert!(!journal_root(root).join(&receipt.transaction_id).exists());
+    assert!(!chapter_transaction_dir(root, &key, &receipt.transaction_id).exists());
     assert!(pending_chapter_draft_acks(root).unwrap().is_empty());
 }
 

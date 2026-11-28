@@ -589,33 +589,29 @@ impl super::WriterCore {
             if recovered.is_empty() && transactions.is_empty() {
                 continue;
             }
-            // 本轮已成功确认的事务要从“更早未决”集合里移除，否则同章后续
-            // 事务会把它误判成仍未投影而整章阻塞。
-            let mut remaining = transactions.clone();
+            let mut blocked_chapters = std::collections::HashSet::new();
             for item in recovered {
-                if item.superseded || item.pending_projections.is_empty() {
+                if item.superseded
+                    || item.pending_projections.is_empty()
+                    || blocked_chapters.contains(&item.key)
+                {
                     continue;
                 }
-                let Some(current) = remaining
+                let Some(current) = transactions
                     .iter()
                     .find(|transaction| transaction.transaction_id == item.transaction_id)
                 else {
                     continue;
                 };
-                if let Err(error) = self.apply_pending_chapter_proof_transaction(
-                    &project_root,
-                    current,
-                    &remaining,
-                ) {
+                if let Err(error) =
+                    self.apply_pending_chapter_proof_transaction(&project_root, current)
+                {
+                    blocked_chapters.insert(item.key.clone());
                     failures.push(format!(
                         "{}: transaction {}: {error}",
                         project_root.display(),
                         item.transaction_id
                     ));
-                } else {
-                    remaining.retain(|transaction| {
-                        transaction.transaction_id != item.transaction_id
-                    });
                 }
             }
         }
@@ -643,25 +639,19 @@ impl super::WriterCore {
         let mut blocked_chapters = std::collections::HashSet::new();
         let mut failures: Vec<String> = scan.failures;
         let transactions = scan.transactions;
-        // 成功确认的事务从 remaining 移除，供同章后续事务判断“前序仍未决”。
-        let mut remaining = transactions.clone();
         for transaction in &transactions {
             if blocked_chapters.contains(&transaction.key) {
                 continue;
             }
-            if let Err(error) = self.apply_pending_chapter_proof_transaction(
-                project_root,
-                transaction,
-                &remaining,
-            ) {
+            if let Err(error) =
+                self.apply_pending_chapter_proof_transaction(project_root, transaction)
+            {
                 blocked_chapters.insert(transaction.key.clone());
                 failures.push(format!(
                     "{}: proof projection not durable for transaction {}: {error}",
                     project_root.display(),
                     transaction.transaction_id
                 ));
-            } else {
-                remaining.retain(|item| item.transaction_id != transaction.transaction_id);
             }
         }
         if failures.is_empty() {
@@ -691,18 +681,18 @@ impl super::WriterCore {
         project_root: &std::path::Path,
         transaction_id: &str,
     ) -> Result<()> {
-        let chain =
-            crate::chapter::commit::pending_chapter_proof_chain(project_root, transaction_id)?;
+        let chain = crate::chapter::commit::pending_chapter_proof_transactions_for_transaction(
+            project_root,
+            transaction_id,
+        )?;
         if chain.is_empty() {
             // 事务已确认/已清理：没有待投影事实。
             return Ok(());
         }
         // 同章从最早未确认事务开始，逐笔推进；旧事务失败时保留给下一次
         // 该章保存或既有恢复入口，不跳过它直接投影新批次。
-        let mut remaining = chain.clone();
         for current in &chain {
-            self.apply_pending_chapter_proof_transaction(project_root, current, &remaining)?;
-            remaining.retain(|item| item.transaction_id != current.transaction_id);
+            self.apply_pending_chapter_proof_transaction(project_root, current)?;
         }
         Ok(())
     }
@@ -711,18 +701,7 @@ impl super::WriterCore {
         &self,
         project_root: &std::path::Path,
         current: &crate::chapter::commit::PendingChapterProofTransaction,
-        transactions: &[crate::chapter::commit::PendingChapterProofTransaction],
     ) -> Result<()> {
-        // 同章仍有更早的未确认 journal 时，当前批次的 proof event 不能先写，
-        // 否则证明链会按错误的因果顺序接续。
-        if transactions.iter().any(|item| {
-            item.key == current.key && item.commit_sequence < current.commit_sequence
-        }) {
-            return Err(Error::Other(format!(
-                "chapter proof transaction {} has an earlier pending transaction for the same chapter",
-                current.transaction_id
-            )));
-        }
         let events = crate::chapter::commit::pending_chapter_proof_events(
             project_root,
             &current.transaction_id,

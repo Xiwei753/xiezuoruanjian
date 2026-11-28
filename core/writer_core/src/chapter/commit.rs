@@ -30,7 +30,7 @@ const PENDING_MARKER: &str = "pending.marker";
 /// 冲突材料目录。
 const CONFLICT_DIR: &str = "conflicts";
 /// 每章未完成正文决议的定位目录，不是 journal 事务目录。
-const CHAPTER_PENDING_DIR: &str = "chapter-pending";
+const CHAPTERS_DIR: &str = "chapters";
 /// 正文投影文件名。
 const BODY_FILE: &str = "chapter.md";
 /// 元数据投影文件名。
@@ -375,10 +375,14 @@ mod publish;
 pub(crate) use journal::commit_chapter_with_guard;
 pub(crate) use journal::read_chapter_state;
 pub(crate) use journal::write_editor_conflict_material;
+pub(crate) use journal::{
+    pending_chapter_proof_transactions_for_key,
+    pending_chapter_proof_transactions_for_transaction,
+};
 pub use journal::{
     mark_chapter_commit_draft_ack, mark_chapter_commit_projection, mark_chapter_commit_projections,
     pending_chapter_draft_acks,
-    pending_chapter_proof_chain, pending_chapter_proof_events, pending_chapter_proof_transactions,
+    pending_chapter_proof_events, pending_chapter_proof_transactions,
     pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
     read_chapter_state_recovering, read_chapter_version, read_chapter_version_recovering,
     recover_pending_chapter_commits, replay_pending_sync_mutation, replay_pending_sync_mutations,

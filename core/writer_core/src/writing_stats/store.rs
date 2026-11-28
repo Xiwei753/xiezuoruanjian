@@ -558,7 +558,7 @@ impl StatsStore {
             }
             batch_ids.insert(event.event_id.clone(), identity);
             let key = (origin.clone(), date.clone());
-            if self.event_is_persisted_identity(&origin, &date, &event)? {
+            if self.event_is_persisted(&origin, &date, &event.event_id)? {
                 if !actuals.contains_key(&key) {
                     let ids = wanted.get(&key).cloned().unwrap_or_default();
                     let mut found = HashMap::new();
@@ -578,6 +578,13 @@ impl StatsStore {
                         event.event_id
                     )));
                 };
+                if actual.business_identity_fingerprint()? != identity {
+                    self.reset_proof_state_for(&mut *state, &involved);
+                    return Err(crate::Error::Other(format!(
+                        "stats event {} is already persisted with different business facts",
+                        event.event_id
+                    )));
+                }
                 self.advance_proof_state_from_persisted(&mut working, &actual);
                 touched.insert(key);
                 continue;

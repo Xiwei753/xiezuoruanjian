@@ -21,8 +21,15 @@ mod recovery;
 pub(crate) use manifest::{
     AdditionalFilePlan, ChapterCommitManifest, ChapterCommitRecovery, ChapterSyncMutationPlan,
 };
-use recovery::{project_manifest_sync_mutations, recover_pending_chapter_commits_for_key};
+use recovery::{
+    chapter_transaction_manifests, project_manifest_sync_mutations,
+    recover_pending_chapter_commits_for_key,
+};
 pub(crate) use recovery::preserve_superseded_conflict;
+pub(crate) use recovery::{
+    pending_chapter_proof_transactions_for_key,
+    pending_chapter_proof_transactions_for_transaction,
+};
 pub use recovery::{
     pending_chapter_draft_acks, pending_chapter_proof_events, pending_chapter_proof_transactions,
     pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
@@ -58,96 +65,52 @@ pub(super) fn journal_root(project_root: &Path) -> PathBuf {
     project_root.join(JOURNAL_DIR)
 }
 
+/// 每章事务目录：`chapter-commits/chapters/<volume>/<chapter>/<transaction>/`。
+pub(super) fn chapter_transactions_dir(project_root: &Path, key: &ChapterKey) -> PathBuf {
+    journal_root(project_root)
+        .join(CHAPTERS_DIR)
+        .join(&key.volume_id)
+        .join(&key.chapter_id)
+}
+
+pub(super) fn chapter_transaction_dir(
+    project_root: &Path,
+    key: &ChapterKey,
+    transaction_id: &str,
+) -> PathBuf {
+    chapter_transactions_dir(project_root, key).join(transaction_id)
+}
+
+/// 按事务 ID 找到真实事务目录：新布局先查每章目录，旧扁平布局保持兼容。
+pub(super) fn find_transaction_dir(project_root: &Path, transaction_id: &str) -> Result<PathBuf> {
+    let chapters = journal_root(project_root).join(CHAPTERS_DIR);
+    if let Ok(volumes) = fs::read_dir(&chapters) {
+        for volume in volumes.flatten() {
+            if !volume.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            if let Ok(chapters) = fs::read_dir(volume.path()) {
+                for chapter in chapters.flatten() {
+                    if !chapter.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                        continue;
+                    }
+                    let candidate = chapter.path().join(transaction_id);
+                    if candidate.is_dir() {
+                        return Ok(candidate);
+                    }
+                }
+            }
+        }
+    }
+    Ok(journal_root(project_root).join(transaction_id))
+}
+
 /// 冲突回执文件名：只有 manifest 确定的材料全部 durable 后，归档路径才写入。
 const CONFLICT_RECEIPT_FILE: &str = "conflict.json";
 
 /// 一笔事务的冲突归档目录（normal 归档与恢复归档共用同一路径）。
 pub(super) fn conflict_dir_path(project_root: &Path, transaction_id: &str) -> PathBuf {
     journal_root(project_root).join(CONFLICT_DIR).join(transaction_id)
-}
-
-/// 当前章未完成正文决议的定位文件；读取/提交热路径只按它定位事务，
-/// 不再扫描整个作品的 journal 清单。
-fn chapter_locator_path(project_root: &Path, key: &ChapterKey) -> PathBuf {
-    journal_root(project_root)
-        .join(CHAPTER_PENDING_DIR)
-        .join(&key.volume_id)
-        .join(format!("{}.json", key.chapter_id))
-}
-
-pub(super) fn write_chapter_locator(
-    project_root: &Path,
-    key: &ChapterKey,
-    transaction_id: &str,
-) -> Result<()> {
-    let path = chapter_locator_path(project_root, key);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    crate::storage::atomic_write_string(&path, transaction_id)
-}
-
-pub(super) fn clear_chapter_locator(project_root: &Path, key: &ChapterKey) -> Result<()> {
-    let path = chapter_locator_path(project_root, key);
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(Error::Other(format!(
-            "failed to clear chapter commit locator {}: {error}",
-            path.display()
-        ))),
-    }
-}
-
-/// 事务完成后的定位推进：优先指向同章上一笔仍未确认证明的事务。
-pub(super) fn advance_chapter_locator_after_finished(
-    project_root: &Path,
-    key: &ChapterKey,
-    manifest: &ChapterCommitManifest,
-) -> Result<()> {
-    match read_chapter_locator(project_root, key)? {
-        Some(current) if current == manifest.transaction_id => {
-            match manifest.previous_proof_transaction.as_deref() {
-                Some(previous) => write_chapter_locator(project_root, key, previous),
-                None => clear_chapter_locator(project_root, key),
-            }
-        }
-        _ => Ok(()),
-    }
-}
-
-/// 只在定位仍指向本次事务时清理；不能把另一笔真实未决事务的定位删掉。
-pub(super) fn clear_chapter_locator_if(
-    project_root: &Path,
-    key: &ChapterKey,
-    transaction_id: &str,
-) -> Result<()> {
-    match read_chapter_locator(project_root, key)? {
-        Some(current) if current == transaction_id => clear_chapter_locator(project_root, key),
-        _ => Ok(()),
-    }
-}
-
-pub(super) fn read_chapter_locator(
-    project_root: &Path,
-    key: &ChapterKey,
-) -> Result<Option<String>> {
-    let path = chapter_locator_path(project_root, key);
-    match fs::read_to_string(&path) {
-        Ok(raw) => {
-            let transaction_id = raw.trim();
-            if transaction_id.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(transaction_id.to_string()))
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(Error::Other(format!(
-            "failed to read chapter commit locator {}: {error}",
-            path.display()
-        ))),
-    }
 }
 
 fn pending_marker(project_root: &Path) -> PathBuf {
@@ -202,10 +165,13 @@ fn next_commit_sequence(project_root: &Path) -> Result<u64> {
 
 fn max_journal_commit_sequence(project_root: &Path) -> Result<u64> {
     let root = journal_root(project_root);
-    if !root.exists() {
-        return Ok(0);
-    }
     let mut max_sequence = 0;
+    for (_, manifest) in chapter_transaction_manifests(project_root)? {
+        max_sequence = max_sequence.max(manifest.commit_sequence);
+    }
+    if !root.exists() {
+        return Ok(max_sequence);
+    }
     for entry in fs::read_dir(&root)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -270,7 +236,7 @@ fn clear_pending_if_idle(project_root: &Path) -> Result<()> {
         // 冲突归档目录是 Superseded 事务的材料副本，不是未决事务；它没有
         // manifest 探针，不能让它把 pending marker 永久钉住。
         if entry.file_name().to_string_lossy() == CONFLICT_DIR
-            || entry.file_name().to_string_lossy() == CHAPTER_PENDING_DIR
+            || entry.file_name().to_string_lossy() == CHAPTERS_DIR
         {
             continue;
         }
@@ -871,7 +837,7 @@ pub(crate) fn commit_chapter_with_guard(
     ensure_journal_dir(project_root)?;
     mark_pending(project_root)?;
     let commit_sequence = next_commit_sequence(project_root)?;
-    let tx_dir = journal_root(project_root).join(&transaction_id);
+    let tx_dir = chapter_transaction_dir(project_root, &key, &transaction_id);
     fs::create_dir_all(&tx_dir)?;
 
     // 1) 先把所有提交材料 durable 落盘（未决议，崩溃可丢弃）。
@@ -964,40 +930,6 @@ pub(crate) fn commit_chapter_with_guard(
         occurred_at_ms,
         &device_id,
     );
-    // 同章上一笔已发布但未确认的证明事务；新事务接在它后面，保存后按
-    // 最早顺序补投影，不能跳过旧链头。
-    let previous_proof_transaction = match read_chapter_locator(project_root, &key)? {
-        Some(transaction_id) => {
-            let manifest_path = journal_root(project_root)
-                .join(&transaction_id)
-                .join("manifest.json");
-            match fs::read_to_string(&manifest_path) {
-                Ok(raw) => match serde_json::from_str::<ChapterCommitManifest>(&raw) {
-                    Ok(previous)
-                        if previous.phase == ChapterCommitPhase::Applied
-                            && !previous.pending_projections.is_empty() =>
-                    {
-                        Some(transaction_id)
-                    }
-                    Ok(_) => None,
-                    Err(error) => {
-                        return Err(Error::Other(format!(
-                            "failed to parse previous chapter commit manifest {}: {error}",
-                            manifest_path.display()
-                        )))
-                    }
-                },
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => {
-                    return Err(Error::Other(format!(
-                        "failed to read previous chapter commit manifest {}: {error}",
-                        manifest_path.display()
-                    )))
-                }
-            }
-        }
-        None => None,
-    };
     let mut manifest = ChapterCommitManifest {
         schema_version: 1,
         transaction_id: transaction_id.clone(),
@@ -1035,13 +967,11 @@ pub(crate) fn commit_chapter_with_guard(
         superseded_reason: None,
         sync_mutations,
         sync_projection_done: false,
-        previous_proof_transaction,
     };
     write_manifest(&tx_dir, &manifest)?;
 
-    // 2) 先让本章定位指向这笔决议，再持久化 Decided：两步之间退出时，
-    // 热路径仍能找到这笔尚未发布的正文决议。
-    write_chapter_locator(project_root, &key, &transaction_id)?;
+    // 2) 决议 durable。只有这一步成功后才允许触碰 live；事务目录本身
+    // 就是恢复入口，不再维护单独定位。
     manifest.phase = ChapterCommitPhase::Decided;
     write_manifest(&tx_dir, &manifest)?;
 
@@ -1062,9 +992,6 @@ pub(crate) fn commit_chapter_with_guard(
             &request.content,
         )?;
         crate::storage::sync_dir(&conflict_dir)?;
-        if let Err(error) = clear_chapter_locator_if(project_root, &key, &transaction_id) {
-            log::warn!("failed to clear chapter commit locator after conflict: {error}");
-        }
         // 回执即将返回调用方；归档目录已 durable，源事务不再保留。
         if let Err(error) = remove_transaction_dir(&tx_dir) {
             log::warn!(
@@ -1083,18 +1010,6 @@ pub(crate) fn commit_chapter_with_guard(
 
     // 正文已发布；仍有证明投影时定位继续指向本事务，供本次/后续该章保存
     // 按最早顺序补投影。没有待投影时才清掉正文定位。
-    if manifest.pending_projections.is_empty() {
-        match manifest.previous_proof_transaction.as_deref() {
-            Some(previous) => write_chapter_locator(project_root, &key, previous)?,
-            None => {
-                if let Err(error) =
-                    clear_chapter_locator_if(project_root, &key, &transaction_id)
-                {
-                    log::warn!("failed to clear chapter commit locator after publish: {error}");
-                }
-            }
-        }
-    }
 
     // 4) 先把同步投影按同一决议落进账本；投影未 durable 时 journal 保持
     //    Applied 且不删除，恢复入口用同一份 manifest.sync_mutations 重放。
@@ -1107,11 +1022,6 @@ pub(crate) fn commit_chapter_with_guard(
         manifest.phase = ChapterCommitPhase::Finished;
         write_manifest(&tx_dir, &manifest)?;
         let _ = remove_transaction_dir(&tx_dir);
-        if let Err(error) =
-            advance_chapter_locator_after_finished(project_root, &key, &manifest)
-        {
-            log::warn!("failed to advance chapter commit locator: {error}");
-        }
     } else {
         // 去重，事件 ID 重发不会制造第二份 pending。
         pending.sort();

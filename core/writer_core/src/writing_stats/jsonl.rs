@@ -104,51 +104,6 @@ pub(crate) fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<JsonlRe
     Ok(records)
 }
 
-/// 读取完整记录，但容忍文件末尾未写完的最后一行。
-///
-/// 只跳过“没有以换行结束且无法解析”的尾片，中间损坏仍报错。用于批写前
-/// 一次取出本批涉及分区的真实事件；尾片随后用本批确定序列化行修复。
-pub(crate) fn read_jsonl_tolerant_tail<T: DeserializeOwned>(
-    path: &Path,
-) -> Result<Vec<JsonlRecord<T>>> {
-    let Some(file) = open_for_read(path)? else {
-        return Ok(Vec::new());
-    };
-    let mut records = Vec::new();
-    let mut reader = BufReader::new(file);
-    let mut bytes = Vec::new();
-    let mut line_number = 0usize;
-    loop {
-        bytes.clear();
-        let read = std::io::BufRead::read_until(&mut reader, b'\n', &mut bytes)?;
-        if read == 0 {
-            break;
-        }
-        line_number += 1;
-        let terminated = bytes.last() == Some(&b'\n');
-        if terminated {
-            bytes.pop();
-            if bytes.last() == Some(&b'\r') {
-                bytes.pop();
-            }
-        }
-        if bytes.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        match serde_json::from_slice::<T>(&bytes) {
-            Ok(value) => records.push(JsonlRecord {
-                line: line_number,
-                value,
-            }),
-            Err(_) if !terminated => break,
-            Err(error) => {
-                return Err(invalid_json_bytes(path, line_number, error));
-            }
-        }
-    }
-    Ok(records)
-}
-
 /// 扫描文件中的稳定 ID（严格流式读取，逐行丢弃已解析值）。
 ///
 /// 每行必须能按业务结构解析；空 ID 的记录会记录行号而不是被当成坏数据。

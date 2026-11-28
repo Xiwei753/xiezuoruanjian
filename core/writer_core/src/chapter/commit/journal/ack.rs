@@ -36,7 +36,7 @@ fn confirm_pending_projections(
     transaction_id: &str,
     projection_ids: &[&str],
 ) -> Result<bool> {
-    let tx_dir = journal_root(project_root).join(transaction_id);
+    let tx_dir = find_transaction_dir(project_root, transaction_id)?;
     let manifest_path = tx_dir.join("manifest.json");
     if !manifest_path.exists() {
         return Ok(false);
@@ -64,11 +64,6 @@ fn confirm_pending_projections(
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
         let _ = remove_transaction_dir(&tx_dir);
-        if let Err(error) =
-            advance_chapter_locator_after_finished(project_root, &manifest.key, &manifest)
-        {
-            log::warn!("failed to advance chapter commit locator: {error}");
-        }
         return Ok(true);
     }
     Ok(false)
@@ -84,7 +79,7 @@ pub fn mark_chapter_commit_draft_ack(
     transaction_id: &str,
     projection_id: &str,
 ) -> Result<bool> {
-    let tx_dir = journal_root(project_root).join(transaction_id);
+    let tx_dir = find_transaction_dir(project_root, transaction_id)?;
     let manifest_path = tx_dir.join("manifest.json");
     if !manifest_path.exists() {
         return Ok(false);
@@ -112,11 +107,6 @@ pub fn mark_chapter_commit_draft_ack(
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
         let _ = remove_transaction_dir(&tx_dir);
-        if let Err(error) =
-            advance_chapter_locator_after_finished(project_root, &manifest.key, &manifest)
-        {
-            log::warn!("failed to advance chapter commit locator: {error}");
-        }
         return Ok(true);
     }
     Ok(false)

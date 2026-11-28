@@ -106,9 +106,6 @@ pub(crate) struct ChapterCommitManifest {
     /// 同步投影是否已经 durable 落进账本；false 时 journal 不能进 Finished。
     #[serde(default)]
     pub(crate) sync_projection_done: bool,
-    /// 同一章上一笔仍有未确认证明投影的事务；用于按最早顺序补投影。
-    #[serde(default)]
-    pub(crate) previous_proof_transaction: Option<String>,
 }
 
 /// 一次待恢复 journal 的可读结果。
