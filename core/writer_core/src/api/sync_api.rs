@@ -1468,7 +1468,7 @@ impl WriterCoreApi {
         );
         // staging 只是本轮下载与裁决的临时目录：不再按对象裁剪 seed，
         // 也不再复制 live 快照（Issue #1066）。
-        let staging_runs =
+        let mut staging_runs =
             match crate::sync::staging::prepare_staging_runs(&mut plan) {
                 Ok(runs) => runs,
                 Err(err) => {
@@ -1497,6 +1497,39 @@ impl WriterCoreApi {
                 // Syncing，取消前持久化取消终态。
                 self.core_write().persist_full_sync_cancelled();
                 return make_noop_result();
+            }
+        }
+
+        // 本轮共享的持久 mutation 账本快照：App 组很多，不在每组 plan 里
+        // 重复读整份账本；每个同步根只读一次。
+        {
+            let mut ledgers: std::collections::HashMap<
+                std::path::PathBuf,
+                std::sync::Arc<
+                    std::collections::HashMap<
+                        String,
+                        crate::sync::local_mutations::LocalMutationRecord,
+                    >,
+                >,
+            > = std::collections::HashMap::new();
+            for run in &mut staging_runs {
+                let root = run.target_live_root().to_path_buf();
+                if !ledgers.contains_key(&root) {
+                    match crate::sync::local_mutations::latest_ledger(&root) {
+                        Ok(ledger) => {
+                            ledgers.insert(root.clone(), std::sync::Arc::new(ledger));
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "[sync] read mutation ledger snapshot for {} failed: {error}",
+                                root.display()
+                            );
+                        }
+                    }
+                }
+                if let Some(ledger) = ledgers.get(&root) {
+                    run.set_ledger_snapshot(ledger.clone());
+                }
             }
         }
 

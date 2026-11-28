@@ -848,71 +848,22 @@ fn apply_published(
             // 已经确认过：幂等跳过。
             continue;
         }
-        if entry.seq != 0
-            && state
-                .known_files_updated_at
-                .get(&entry.path)
-                .is_some_and(|now| *now > entry.updated_at_ms)
-        {
-            // 更新的业务事实已经覆盖了这条旧 ack：不能把基线改回旧内容。
-            // 但它必须被显式结算，否则会以未确认状态永久留在账本里：
-            // - 账本里该路径已经没有更大的未确认序号 → 这条事实已被更新的
-            //   确认消费，直接结算；
-            // - 还有更大的未确认事实 → 保留，交给下一轮按新事实发布确认。
-            let ledger_seq = latest_ledger_seq(sync_root, &entry.path)?;
-            if ledger_seq <= entry.seq {
-                let current = state
-                    .confirmed_mutation_seq
-                    .get(&entry.path)
-                    .copied()
-                    .unwrap_or(0);
-                if entry.seq > current {
-                    state
-                        .confirmed_mutation_seq
-                        .insert(entry.path.clone(), entry.seq);
-                }
-                applied.push(entry.clone());
-                log::info!(
-                    "[sync] settled stale mutation ack for {} (seq {} ≤ ledger {})",
-                    entry.path,
-                    entry.seq,
-                    ledger_seq
-                );
-            } else {
-                log::info!(
-                    "[sync] keep stale mutation ack for {} (seq {} < ledger {}): newer local fact wins",
-                    entry.path,
-                    entry.seq,
-                    ledger_seq
-                );
-            }
-            continue;
-        }
-        match entry.op.as_str() {
-            "delete" => {
-                state.known_files.remove(&entry.path);
-                state.known_files_updated_at.remove(&entry.path);
-                let published_at = entry.deleted_at_ms.map(|ms| ms / 1000);
-                state.tombstones.retain(|tombstone| {
-                    if tombstone.original_path != entry.path {
-                        return true;
-                    }
-                    match published_at {
-                        Some(published_at) => tombstone.deleted_at > published_at,
-                        None => true,
-                    }
-                });
-            }
-            "superseded" => {}
-            _ => {
-                state
-                    .known_files
-                    .insert(entry.path.clone(), entry.content_hash.clone());
-                // 业务修改时间，不用确认时刻冒充。
-                state
-                    .known_files_updated_at
-                    .insert(entry.path.clone(), entry.updated_at_ms);
-            }
+        // 实际 Git 发布的版本就是新的共同基线；本地之后的新编辑有更大的
+        // 未确认序号，下一轮自然会重新出现。这里不做业务时间比较，也不回查
+        // 账本猜测，只按本轮真实发布事实推进。
+        if entry.op != "superseded" {
+            let update = crate::sync::staging::BaselineUpdate {
+                rel_path: std::path::PathBuf::from(&entry.path),
+                content_hash: if entry.op == "delete" {
+                    None
+                } else {
+                    Some(entry.content_hash.clone())
+                },
+            };
+            crate::sync::commit_helpers::apply_baseline_updates(
+                &mut state,
+                std::slice::from_ref(&update),
+            );
         }
         let current = state
             .confirmed_mutation_seq

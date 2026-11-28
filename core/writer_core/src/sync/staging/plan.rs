@@ -37,7 +37,6 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
     .unwrap_or_default()
     .into_iter()
     .collect();
-    let remote_index_missing = remote_index_missing(&staging_root);
 
     // 2. 已确认版本索引（唯一权威状态始终是 live root；删除作品在 Prepare
     //    阶段已把回收区的已确认版本写成 live 的初始索引）。
@@ -56,6 +55,7 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
         || crate::sync::lww::ManifestStore::new(live_root, &local_manifest_rel.to_string_lossy())
             .load_root()?
             .is_some();
+    let mut initialized_from_disk = false;
     if !run.delete_intent()
         && !has_local_index
         && state.tombstones.is_empty()
@@ -67,6 +67,7 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
             group.as_ref(),
         )?;
         state = load_state(run, live_root)?;
+        initialized_from_disk = true;
     }
 
     let known: HashMap<String, String> = state.known_files.clone();
@@ -79,11 +80,19 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
     let pending_take_remote: HashSet<String> = state.pending_take_remote.iter().cloned().collect();
 
     // 4. 本轮持久 mutation：决定本地版本与受影响集合。
-    let pending = crate::sync::local_mutations::pending_records(
-        live_root,
-        run.scope(),
-        group.as_ref(),
-    )?;
+    let pending = match run.ledger_snapshot().filter(|_| !initialized_from_disk) {
+        Some(ledger) => crate::sync::local_mutations::pending_records_in(
+            ledger.as_ref(),
+            live_root,
+            run.scope(),
+            group.as_ref(),
+        )?,
+        None => crate::sync::local_mutations::pending_records(
+            live_root,
+            run.scope(),
+            group.as_ref(),
+        )?,
+    };
 
     // 5. 参与本轮比较的路径：待同步 ledger ∪ 已确认基线 ∪ 远端变化 ∪
     //    本地索引独有对象。没有版本差异的 known 对象不再逐轮重读。
@@ -110,12 +119,20 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
             insert(path);
         }
     }
-    if !remote_index_missing {
-        // 远端索引是完整树：已确认对象不在索引里就是远端删除。
-        for path in known.keys() {
-            if !remote_records.contains_key(path) {
-                insert(path);
-            }
+    // 远端完整树（索引或 provider.list）里没有的已确认对象就是远端删除。
+    for path in known.keys() {
+        if !remote_records.contains_key(path) {
+            insert(path);
+        }
+    }
+    // 传输阶段为了恢复"本地缺失但远端内容等于基线"的对象下载了 blob；
+    // 这些路径也必须进入本轮比较，否则下载后无人应用。
+    for (path, record) in &remote_records {
+        if record.op != "delete"
+            && staging_root.join(path).is_file()
+            && !live_root.join(path).is_file()
+        {
+            insert(path);
         }
     }
     if run.delete_intent() {
@@ -150,18 +167,28 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
         let pending_record = pending.get(&path);
 
         // 本地版本：删除意图 > 账本事实 > 磁盘当前内容 > 显式删除。
-        let local_side = if delete_intent {
+        let (local_side, local_bytes) = if delete_intent {
             let full = live_root.join(&rel);
-            if full.is_file() {
-                ObjectSide::Present(crate::sync::hash::content_md5(&std::fs::read(&full)?))
-            } else {
-                ObjectSide::Deleted
+            match std::fs::read(&full) {
+                Ok(bytes) => (
+                    ObjectSide::Present(crate::sync::hash::content_md5(&bytes)),
+                    Some(std::sync::Arc::from(bytes)),
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    (ObjectSide::Deleted, None)
+                }
+                Err(error) => {
+                    return Err(crate::Error::Other(format!(
+                        "delete-intent object {} cannot be read: {error}",
+                        full.display()
+                    )))
+                }
             }
         } else if let Some(record) = pending_record {
             if record.is_delete() {
-                ObjectSide::Deleted
+                (ObjectSide::Deleted, None)
             } else if record.content_hash.is_empty() {
-                ObjectSide::Absent
+                (ObjectSide::Absent, None)
             } else {
                 // 账本记录的是业务提交内容；磁盘被外部改写时以磁盘为准，
                 // 但待发布对象必须真实存在，读取失败就是本轮读失败。
@@ -172,7 +199,8 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
                         full.display()
                     ))
                 })?;
-                ObjectSide::Present(crate::sync::hash::content_md5(&bytes))
+                let side = ObjectSide::Present(crate::sync::hash::content_md5(&bytes));
+                (side, Some(std::sync::Arc::from(bytes)))
             }
         } else {
             local_side_from_disk(live_root, &rel, &tombstones, &deleted_facts)?
@@ -186,9 +214,8 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
                 ObjectSide::Present(record.content_hash.clone())
             }
             Some(_) => ObjectSide::Absent,
-            // 远端索引是完整树：缺失就是不存在（统一按 Deleted 版本参与比较）。
-            None if !remote_index_missing => ObjectSide::Deleted,
-            None => ObjectSide::Absent,
+            // 远端完整树缺失就是不存在：统一按 Deleted 版本参与比较。
+            None => ObjectSide::Deleted,
         };
 
         // 共同基线只取已确认版本；tombstone 是本地待发布删除，不是基线。
@@ -220,6 +247,7 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
             &verdict,
             live_root,
             &local_side,
+            local_bytes.as_ref(),
             &known,
             pending_record,
             remote_record,
@@ -264,17 +292,18 @@ fn local_side_from_disk(
     rel: &Path,
     tombstones: &HashSet<String>,
     deleted_facts: &HashSet<String>,
-) -> Result<ObjectSide> {
+) -> Result<(ObjectSide, Option<std::sync::Arc<[u8]>>)> {
     let full = live_root.join(rel);
     if full.is_file() {
         let bytes = std::fs::read(&full)?;
-        return Ok(ObjectSide::Present(crate::sync::hash::content_md5(&bytes)));
+        let side = ObjectSide::Present(crate::sync::hash::content_md5(&bytes));
+        return Ok((side, Some(std::sync::Arc::from(bytes))));
     }
     let path = rel.to_string_lossy().replace('\\', "/");
     if tombstones.contains(&path) || deleted_facts.contains(&path) {
-        return Ok(ObjectSide::Deleted);
+        return Ok((ObjectSide::Deleted, None));
     }
-    Ok(ObjectSide::Absent)
+    Ok((ObjectSide::Absent, None))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -287,6 +316,7 @@ fn apply_verdict(
     verdict: &ObjectVerdict,
     live_root: &Path,
     local_side: &ObjectSide,
+    local_bytes: Option<&std::sync::Arc<[u8]>>,
     known: &HashMap<String, String>,
     pending: Option<&crate::sync::local_mutations::LocalMutationRecord>,
     remote_meta: Option<&ManifestRecord>,
@@ -322,17 +352,10 @@ fn apply_verdict(
             plan.noop.push(rel.to_path_buf());
         }
         ObjectVerdict::PublishUpsert => {
-            let ObjectSide::Present(_) = local_side else {
-                return Err(crate::Error::Other(format!(
+            let content = local_bytes.cloned().ok_or_else(|| {
+                crate::Error::Other(format!(
                     "publish upsert without local content for {}",
                     rel.display()
-                )));
-            };
-            let full = live_root.join(rel);
-            let content = std::fs::read(&full).map_err(|error| {
-                crate::Error::Other(format!(
-                    "local object {} cannot be read: {error}",
-                    full.display()
                 ))
             })?;
             let final_hash = crate::sync::hash::content_md5(&content);
@@ -341,7 +364,7 @@ fn apply_verdict(
                 .unwrap_or_else(|| file_modified_ms(live_root, rel));
             plan.uploads.push(PublishObject {
                 rel_path: rel.to_path_buf(),
-                content: std::sync::Arc::from(content),
+                content,
                 base_hash: known.get(path).cloned(),
                 final_hash: final_hash.clone(),
                 mutation_seq: pending.map(|record| record.seq).unwrap_or(0),
@@ -490,12 +513,6 @@ fn file_modified_ms(live_root: &Path, rel: &Path) -> i64 {
         .and_then(|time| time.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
         .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or_else(|| chrono::Utc::now().timestamp_millis())
-}
-
-fn remote_index_missing(staging_root: &Path) -> bool {
-    staging_root
-        .join(super::download::REMOTE_INDEX_MISSING_MARKER)
-        .exists()
 }
 
 fn is_engine_path(path: &str, group: Option<&AppDataGroup>) -> bool {

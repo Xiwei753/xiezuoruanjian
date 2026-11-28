@@ -509,7 +509,7 @@ fn collect_rebased_anchor_paths(
 ///
 /// 与正文事务同一次提交：章节正文由章节事务落盘后，这里只应用同一份
 /// `plan.confirmations`，不再按 content_actions 再猜一遍。
-fn apply_baseline_updates(
+pub(crate) fn apply_baseline_updates(
     state: &mut crate::sync::types::SyncState,
     updates: &[crate::sync::staging::BaselineUpdate],
 ) {
@@ -654,6 +654,11 @@ pub(crate) fn commit_object_plan(
             let bytes = serde_json::to_vec_pretty(&conflicts)
                 .map_err(|error| crate::Error::Io(std::io::Error::other(error.to_string())))?;
             tx.add_bytes(&rel, &bytes)?;
+            // state.local.json 里的镜像同一份事实，必须一起清掉，避免旧冲突
+            // 在下一轮从镜像复活。
+            state
+                .conflicts
+                .retain(|conflict| !resolved.contains(&conflict.local_path));
         }
     }
     let state_rel = run

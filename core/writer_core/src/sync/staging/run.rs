@@ -44,6 +44,10 @@ pub struct StagingRun {
     baseline_root: Option<PathBuf>,
     /// Prepare 阶段在传输之前记录的目标级失败（例如本机统计事件库迁移失败）。
     prepare_error: Option<String>,
+    /// 本轮开始时读取一次的持久 mutation 账本快照；多个 App 组共享同一份，
+    /// 不在每组 plan 里重复读整份账本。
+    ledger_snapshot:
+        Option<std::sync::Arc<std::collections::HashMap<String, crate::sync::local_mutations::LocalMutationRecord>>>,
 }
 
 impl StagingRun {
@@ -64,6 +68,7 @@ impl StagingRun {
             delete_intent: false,
             baseline_root: None,
             prepare_error: None,
+            ledger_snapshot: None,
         })
     }
 
@@ -139,6 +144,25 @@ impl StagingRun {
     /// 目标级失败原因。
     pub fn prepare_error(&self) -> Option<&str> {
         self.prepare_error.as_deref()
+    }
+
+    pub(crate) fn set_ledger_snapshot(
+        &mut self,
+        ledger: std::sync::Arc<
+            std::collections::HashMap<String, crate::sync::local_mutations::LocalMutationRecord>,
+        >,
+    ) {
+        self.ledger_snapshot = Some(ledger);
+    }
+
+    pub(crate) fn ledger_snapshot(
+        &self,
+    ) -> Option<
+        &std::sync::Arc<
+            std::collections::HashMap<String, crate::sync::local_mutations::LocalMutationRecord>,
+        >,
+    > {
+        self.ledger_snapshot.as_ref()
     }
 
     /// staging 子目录（Transfer 阶段写入远端变化对象）。

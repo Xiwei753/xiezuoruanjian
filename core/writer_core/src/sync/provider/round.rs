@@ -22,7 +22,7 @@ use crate::sync::provider::{ProviderNetworkMetrics, SyncProvider};
 
 #[derive(Clone)]
 enum BufferedValue {
-    Content(Vec<u8>),
+    Content(std::sync::Arc<[u8]>),
     Version(RemoteVersion),
 }
 
@@ -337,7 +337,10 @@ impl<'a> RoundProvider<'a> {
                 let mut state = self.lock_state()?;
                 state
                     .entries
-                    .insert(path.clone(), Some(BufferedValue::Content(content.clone())));
+                    .insert(
+                        path.clone(),
+                        Some(BufferedValue::Content(std::sync::Arc::from(content.as_slice()))),
+                    );
                 Ok(())
             }
             BatchMutation::ReuseVersion { path, version } => {
@@ -464,14 +467,14 @@ impl<'a> RoundProvider<'a> {
                         .get(remote_path)
                         .and_then(|entry| entry.as_ref())
                         .is_some_and(|entry| {
-                            matches!(entry, BufferedValue::Content(current) if current.as_slice() == content.as_ref())
+                            matches!(entry, BufferedValue::Content(current) if current[..] == content[..])
                         });
                     if same {
                         continue;
                     }
                     state.entries.insert(
                         remote_path.clone(),
-                        Some(BufferedValue::Content(content.to_vec())),
+                        Some(BufferedValue::Content(content.clone())),
                     );
                     outcome.rewritten += 1;
                 }
@@ -558,68 +561,61 @@ impl<'a> RoundProvider<'a> {
                 baseline.insert(path, version);
             }
         }
-        let mut mutations: Vec<BatchMutation> = entries
-            .into_iter()
-            .filter_map(|(path, entry)| match entry {
+        let mut mutations: Vec<BatchMutation> = Vec::new();
+        // 空 mutation 不代表"没有确认"：与固定 HEAD 已一致的对象直接把
+        // 该路径的版本事实作为回执返回，调用方据此结算，不生成空提交。
+        let mut satisfied: Vec<PublishReceipt> = Vec::new();
+        for (path, entry) in entries {
+            match entry {
                 Some(BufferedValue::Content(content)) => {
                     // 内容与基线逐字节相同（git blob OID 一致）时不进入 batch：
                     // 重复上传既浪费一次网络写，也会在 REST batch 上制造"内容没变
                     // 的提交"（Issue #1065 伪空提交）。
-                    if let Some(existing) = baseline.get(&path) {
-                        // 只对 git 对象名（40 位 hex）比较；非 git 后端的版本串
-                        // 不参与，避免误判。
-                        let existing = existing.as_str();
-                        if crate::sync::hash::is_legacy_git_blob_oid(existing)
-                            && crate::sync::hash::git_blob_oid(&content)
-                                .map(|digest| digest == existing)
-                                .unwrap_or(false)
-                        {
-                            return None;
-                        }
+                    let existing = baseline
+                        .get(&path)
+                        .map(|version| version.as_str())
+                        .filter(|version| crate::sync::hash::is_legacy_git_blob_oid(version));
+                    if existing.is_some_and(|existing| {
+                        crate::sync::hash::git_blob_oid(&content)
+                            .map(|digest| digest == existing)
+                            .unwrap_or(false)
+                    }) {
+                        satisfied.push(PublishReceipt {
+                            path,
+                            op: "upsert".to_string(),
+                            content_digest: Some(crate::sync::hash::content_md5(&content)),
+                            remote_version: existing.map(str::to_string),
+                        });
+                    } else {
+                        mutations.push(BatchMutation::Put {
+                            path,
+                            content: content.to_vec(),
+                        });
                     }
-                    Some(BatchMutation::Put { path, content })
                 }
                 Some(BufferedValue::Version(version)) => {
-                    if baseline.get(&path) == Some(&version) {
-                        None
-                    } else {
-                        Some(BatchMutation::ReuseVersion { path, version })
+                    if baseline.get(&path) != Some(&version) {
+                        mutations.push(BatchMutation::ReuseVersion { path, version });
                     }
                 }
                 None => {
                     if baseline.contains_key(&path) {
-                        Some(BatchMutation::Delete { path })
+                        mutations.push(BatchMutation::Delete { path });
                     } else {
-                        None
+                        // 固定 HEAD 里本来就不存在：删除已满足。
+                        satisfied.push(PublishReceipt {
+                            path,
+                            op: "delete".to_string(),
+                            content_digest: None,
+                            remote_version: None,
+                        });
                     }
                 }
-            })
-            .collect();
-        let mut checked_objects: BTreeSet<String> = BTreeSet::new();
-        for check in &checks {
-            if let Some(sanitized) = self.sanitize_check(check, &baselines)? {
-                if let BatchMutation::CheckObject { path, .. } = &sanitized {
-                    checked_objects.insert(path.clone());
-                }
-                mutations.push(sanitized);
             }
         }
-        // A write/delete precondition validated against the overlay must still
-        // hold on the real remote tree the final commit is built from.
-        for path in preconditioned_paths {
-            if checked_objects.contains(&path) {
-                continue;
-            }
-            let expected_version = self.baseline_from(&baselines, &path)?;
-            mutations.push(BatchMutation::CheckObject {
-                path,
-                expected_version,
-            });
-        }
-
         // 只把真正进入提交的 Put/ReuseVersion/Delete 变成回执；CheckObject/
         // CheckPrefix 不是对象事实。空内容过滤后没有事实就不确认。
-        let receipts: Vec<PublishReceipt> = mutations
+        let mut receipts: Vec<PublishReceipt> = mutations
             .iter()
             .filter_map(|mutation| match mutation {
                 BatchMutation::Put { path, content } => Some(PublishReceipt {
@@ -646,8 +642,10 @@ impl<'a> RoundProvider<'a> {
                 _ => None,
             })
             .collect();
+        receipts.extend(satisfied);
 
-        // 过滤后可能只剩"什么也不用写"：不再发起一次空提交。
+        // 过滤后可能只剩"什么也不用写"：不再发起一次空提交；已满足的对象
+        // 仍然带回执供调用方结算。
         if mutations.is_empty() {
             return Ok(RoundFlushOutcome {
                 committed: false,
@@ -659,7 +657,7 @@ impl<'a> RoundProvider<'a> {
                     touched_paths: Vec::new(),
                     path_versions: std::collections::BTreeMap::new(),
                 },
-                receipts: Vec::new(),
+                receipts,
             });
         }
 
@@ -670,7 +668,6 @@ impl<'a> RoundProvider<'a> {
                 &format!("sujian: sync round ({} mutations)", mutations.len()),
             )?;
             let committed = Some(&result.revision) != self.base_revision.as_ref();
-            let mut receipts = receipts;
             for receipt in &mut receipts {
                 if let Some(version) = result.path_versions.get(&receipt.path) {
                     receipt.remote_version = Some(version.as_str().to_string());
@@ -787,7 +784,7 @@ impl SyncProvider for RoundProvider<'_> {
                 let version = Self::buffered_version(&content);
                 Ok(Some(RemoteObject {
                     path: path.to_string(),
-                    content,
+                    content: content.to_vec(),
                     version,
                 }))
             }
@@ -830,7 +827,7 @@ impl SyncProvider for RoundProvider<'_> {
         let mut state = self.lock_state()?;
         state.entries.insert(
             path.to_string(),
-            Some(BufferedValue::Content(content.to_vec())),
+            Some(BufferedValue::Content(std::sync::Arc::from(content))),
         );
         Ok(version)
     }

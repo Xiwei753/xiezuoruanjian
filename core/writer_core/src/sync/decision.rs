@@ -84,20 +84,13 @@ pub(crate) fn publish_decisions(
         if identity.is_empty() {
             continue;
         }
-        let final_hash = crate::sync::hash::content_md5(&object.content);
-        if !object.final_hash.is_empty() && final_hash != object.final_hash {
-            return Err(crate::Error::Other(format!(
-                "publish decision content changed after commit: path={identity} \
-                 expected={} actual={final_hash}",
-                object.final_hash
-            )));
-        }
+        // 内容与哈希都在比较阶段冻结，这里不再重算或回读 live。
         decisions.push(DurableObjectDecision {
             transaction_id: object.transaction_id.clone(),
             identity,
             op: DecisionOp::Upsert,
             base_hash: object.base_hash.clone(),
-            final_hash,
+            final_hash: object.final_hash.clone(),
             final_version: None,
             mutation_seq: object.mutation_seq,
             origin: DecisionOrigin::Local,

@@ -25,12 +25,6 @@ use crate::sync::types::{
 
 use super::resolve::{read_staging_manifest, read_staging_manifest_for_group};
 
-/// staging 根下的标记文件：远端还没有对象索引（首次同步/旧端）。
-///
-/// 提交阶段据此区分"远端索引说没有该对象"（= 删除）与"远端根本没有索引"
-/// （= 未参与，不是删除）。
-pub(crate) const REMOTE_INDEX_MISSING_MARKER: &str = ".remote-index-missing";
-
 /// 一次增量下载的结果。
 #[derive(Debug, Default, Clone)]
 pub(crate) struct RemoteStageOutcome {
@@ -40,8 +34,6 @@ pub(crate) struct RemoteStageOutcome {
     pub remote_deletes: Vec<String>,
     /// staging 里写入的远端记录总数。
     pub records: usize,
-    /// 远端索引不可用（首次同步）时为 true：此时远端"没有该对象"不是删除。
-    pub remote_index_missing: bool,
 }
 
 /// staging manifest 的相对路径（按 target 的 group 决定）。
@@ -95,23 +87,17 @@ pub(crate) fn stage_remote_changes(
 
     let remote_manifest = read_remote_index(provider, target)?;
     let mut records: BTreeMap<String, ManifestFileRecord> = BTreeMap::new();
-    let marker = staging_root.join(REMOTE_INDEX_MISSING_MARKER);
+    let has_index = remote_manifest.is_some();
 
     match remote_manifest {
         Some(manifest) => {
-            let _ = std::fs::remove_file(&marker);
             for record in manifest.files {
                 records.insert(record.path.clone(), record);
             }
         }
         None => {
-            outcome.remote_index_missing = true;
-            if let Some(parent) = marker.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&marker, b"1")?;
             // 首次同步/旧端：远端只有对象文件，没有索引。列出远端对象并下载，
-            // 用实际内容建立第一版索引；此时"远端没有"不代表删除。
+            // 用实际内容建立第一版索引；列表就是远端完整树。
             let prefix = target.remote_prefix.trim_end_matches('/');
             for entry in provider.list(prefix)? {
                 let rel = entry.path.trim_start_matches('/').to_string();
@@ -151,8 +137,8 @@ pub(crate) fn stage_remote_changes(
         }
     }
 
-    // 有索引时只下载真正变化的 blob。
-    if !outcome.remote_index_missing {
+    // 有索引时只下载真正变化的 blob；无索引时上面已经按远端完整树下载过。
+    if has_index {
         for record in records.values() {
             if record.op == "delete" {
                 outcome.remote_deletes.push(record.path.clone());
