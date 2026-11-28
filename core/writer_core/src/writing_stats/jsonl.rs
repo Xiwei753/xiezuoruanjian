@@ -386,7 +386,7 @@ pub(crate) fn confirm_durable(path: &Path) -> Result<()> {
 /// - `lines` 为空时仍对已有文件执行一次分隔符修复与 `sync_all`，让上一次
 ///   “写成功但同步失败”的事实得到确认；文件本来不存在则什么都不做。
 pub(crate) fn append_jsonl_lines(path: &Path, lines: &[String]) -> Result<()> {
-    append_jsonl_lines_with(path, lines, true)
+    append_jsonl_lines_with(path, lines, true).map(|_| ())
 }
 
 /// 追加但不立即 `sync_all`，返回本次是否创建了文件（需要稍后同步父目录）。
