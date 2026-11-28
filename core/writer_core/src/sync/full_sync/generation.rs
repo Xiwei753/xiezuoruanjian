@@ -146,6 +146,27 @@ fn publish_snapshot_batch(
         return result;
     }
 
+    // 稀疏视图只能走上面的 affected 发布；走到这里说明冲突或 delta 视图不可用。
+    // 局部 manifest 绝不能当作完整权威发布，否则未涉及记录会从新根消失。
+    if let Some(outcome) = merge_outcome {
+        if outcome.manifest_view == crate::sync::lww::MergeManifestView::Sparse {
+            let mut result = crate::sync::types::SyncResult::success();
+            let message = "sparse merge manifest view cannot be published as a complete \
+                 manifest; refusing to overwrite the remote root with affected records only"
+                .to_string();
+            result.status = if outcome.conflicts.is_empty() {
+                SyncStatus::RecoverableError(message.clone())
+            } else {
+                SyncStatus::PartialConflict
+            };
+            result.error = Some(message);
+            result.conflicts = outcome.conflicts.clone();
+            result.downloaded_files = outcome.downloaded_files.clone();
+            result.local_deletes = outcome.remote_delete_paths.clone();
+            return result;
+        }
+    }
+
     // 本次 tree 的完整 manifest：merge 后的快照，或首次同步时 staging 的本地 manifest。
     let manifest: crate::sync::types::SyncManifest = match merge_outcome {
         Some(outcome) => outcome.merged_manifest.clone(),
@@ -521,6 +542,32 @@ fn try_publish_sparse_batch(
             return None;
         }
     };
+
+    let final_namespaces = match store.load_root() {
+        Ok(Some(root)) => root.namespaces,
+        Ok(None) => {
+            return Some(super::transfer_helpers::sync_result_from_error(
+                crate::Error::Other(
+                    "sparse publish: local manifest root is missing after merge".to_string(),
+                ),
+            ));
+        }
+        Err(error) => {
+            return Some(super::transfer_helpers::sync_result_from_error(error));
+        }
+    };
+    let business_unchanged =
+        outcome.remote_upload_paths.is_empty() && outcome.remote_delete_paths.is_empty();
+    if business_unchanged
+        && outcome.manifest_unchanged
+        && outcome.remote_base_namespaces == final_namespaces
+    {
+        let mut result = crate::sync::types::SyncResult::success();
+        result.status = SyncStatus::NoChanges;
+        result.downloaded_files = outcome.downloaded_files.clone();
+        result.remote_deletes = outcome.local_deletes.clone();
+        return Some(result);
+    }
 
     let mut mutations: Vec<BatchMutation> = Vec::new();
     let mut uploaded_files: Vec<String> = Vec::new();

@@ -659,8 +659,14 @@ fn merge_outcome(
         manifest_json: String::new(),
         merged_manifest,
         manifest_unchanged: false,
+        manifest_view: if delta.is_some() {
+            crate::sync::lww::MergeManifestView::Sparse
+        } else {
+            crate::sync::lww::MergeManifestView::Complete
+        },
         manifest_delta: delta,
         affected_paths: None,
+        remote_base_namespaces: std::collections::BTreeMap::new(),
         remote_base_root: None,
     }
 }
@@ -915,7 +921,7 @@ fn full_publish_still_emits_complete_manifest_and_deletes_stale_paths() {
 
 /// delta 模式但本地 store 没有 root：发布端回退完整清单入口，不 panic。
 #[test]
-fn delta_publish_without_local_root_falls_back_to_full_manifest() {
+fn delta_view_unavailable_refuses_partial_complete_publish() {
     let tmp = TempDir::new().unwrap();
     let staging = tmp.path().join("staging");
     let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
@@ -949,25 +955,133 @@ fn delta_publish_without_local_root_falls_back_to_full_manifest() {
         None,
     );
     assert!(
-        matches!(&result.status, SyncStatus::Success),
-        "无 root 时回退完整入口仍应成功，实际 {:?}（error={:?}）",
-        result.status,
-        result.error
+        matches!(&result.status, SyncStatus::RecoverableError(_)),
+        "delta 视图不可用时不得把局部 manifest 当完整权威发布，实际 {:?}",
+        result.status
     );
-    let mutations = provider.recorded();
-    let paths: Vec<&str> = mutations.iter().map(BatchMutation::path).collect();
-    let manifest_prefix = "projects/p1/app-meta/sync/manifest/";
-    assert_eq!(
-        paths
-            .iter()
-            .filter(|path| path.starts_with(&format!("{manifest_prefix}objects/")))
-            .count(),
-        1,
-        "回退完整入口应发布完整清单 objects，实际 {paths:?}"
+    assert!(
+        provider.recorded().is_empty(),
+        "拒绝发布时不得产生任何远端 mutation，实际 {:?}",
+        provider.recorded()
     );
-    assert_eq!(
-        mutations.last().map(BatchMutation::path),
-        Some("projects/p1/app-meta/sync/manifest/root.json"),
-        "根必须最后，实际 {paths:?}"
+}
+
+/// 稀疏结果带未解决冲突：不得把局部 manifest 当完整根发布。
+#[test]
+fn sparse_conflict_refuses_partial_complete_publish() {
+    let tmp = TempDir::new().unwrap();
+    let staging = tmp.path().join("staging");
+    let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+    write_staging(&staging, chapter_rel, b"chapter local");
+    let baseline = SyncManifest {
+        files: vec![
+            manifest_record("project.json", "hash-project", 10),
+            manifest_record(chapter_rel, "hash-base", 10),
+        ],
+    };
+    let legacy = staging.join(SYNC_MANIFEST_PATH);
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, baseline.canonical_json().unwrap()).unwrap();
+    let store = ManifestStore::new(&staging, SYNC_MANIFEST_PATH);
+    let merged = store.load_or_legacy().unwrap();
+    let mut delta = ManifestDelta::default();
+    delta.upserts.insert(
+        chapter_rel.to_string(),
+        manifest_record(chapter_rel, &md5_hex(b"chapter local"), 20),
+    );
+    let mut outcome = merge_outcome(
+        merged,
+        Some(delta),
+        vec![chapter_rel.to_string()],
+        Vec::new(),
+        HashMap::new(),
+    );
+    outcome.conflicts.push(crate::sync::types::SyncConflict {
+        local_path: chapter_rel.to_string(),
+        remote_path: chapter_rel.to_string(),
+        local_hash: md5_hex(b"chapter local"),
+        remote_hash: md5_hex(b"chapter remote"),
+        base_hash: "hash-base".to_string(),
+        created_at: 10,
+        description: "both changed".to_string(),
+        kind: crate::sync::types::SyncConflictKind::BothChanged,
+        remote_snapshot_path: None,
+        remote_graph_snapshot_dir: None,
+    });
+
+    let provider = RecordingBatchProvider::new();
+    let result = super::super::generation::publish_tree_snapshot(
+        &provider,
+        &staging,
+        "projects/p1",
+        crate::sync::types::SyncScope::Project,
+        None,
+        &sync_policy(),
+        true,
+        Some(&outcome),
+        None,
+    );
+    assert!(
+        matches!(&result.status, SyncStatus::PartialConflict),
+        "冲突期间不得发布局部清单，实际 {:?}",
+        result.status
+    );
+    assert!(
+        provider.recorded().is_empty(),
+        "冲突时不得产生远端 mutation，实际 {:?}",
+        provider.recorded()
+    );
+}
+
+/// 稀疏轮没有真实变化：不产生根 Put，也不制造空提交。
+#[test]
+fn sparse_no_op_publish_does_not_commit_root() {
+    let tmp = TempDir::new().unwrap();
+    let staging = tmp.path().join("staging");
+    let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+    write_staging(&staging, chapter_rel, b"chapter body");
+    let baseline = SyncManifest {
+        files: vec![
+            manifest_record("project.json", "hash-project", 10),
+            manifest_record(chapter_rel, &md5_hex(b"chapter body"), 10),
+        ],
+    };
+    let legacy = staging.join(SYNC_MANIFEST_PATH);
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, baseline.canonical_json().unwrap()).unwrap();
+    let store = ManifestStore::new(&staging, SYNC_MANIFEST_PATH);
+    let merged = store.load_or_legacy().unwrap();
+    let base_namespaces = store.load_root().unwrap().unwrap().namespaces;
+    let mut outcome = merge_outcome(
+        merged,
+        Some(ManifestDelta::default()),
+        Vec::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+    outcome.manifest_unchanged = true;
+    outcome.remote_base_namespaces = base_namespaces;
+
+    let provider = RecordingBatchProvider::new();
+    let result = super::super::generation::publish_tree_snapshot(
+        &provider,
+        &staging,
+        "projects/p1",
+        crate::sync::types::SyncScope::Project,
+        None,
+        &sync_policy(),
+        false,
+        Some(&outcome),
+        None,
+    );
+    assert!(
+        matches!(&result.status, SyncStatus::NoChanges),
+        "无变化轮不得推进根，实际 {:?}",
+        result.status
+    );
+    assert!(
+        provider.recorded().is_empty(),
+        "无变化轮不得提交，实际 {:?}",
+        provider.recorded()
     );
 }

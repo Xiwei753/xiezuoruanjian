@@ -362,8 +362,10 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                 .as_deref()
                 .unwrap_or(&planned.local_root);
             let candidate = match &merge_outcome_opt {
-                Some(outcome) => {
-                    // 直接从 outcome.merged_manifest 算 LWW，不重读磁盘。
+                Some(outcome)
+                    if outcome.manifest_view == crate::sync::lww::MergeManifestView::Complete =>
+                {
+                    // 完整清单才可直接算 LWW；稀疏局部清单必须回读磁盘。
                     match super::super::plan::manifest_target_lww(&outcome.merged_manifest) {
                         Some(lww) => crate::sync::types::TargetLifecycleRecord::upsert(
                             &planned.target.remote_prefix,
@@ -386,8 +388,8 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                         }
                     }
                 }
-                None => {
-                    // 兜底：merge_outcome_opt 为 None 时回退到磁盘读（保留原语义）。
+                Some(_) | None => {
+                    // 稀疏局部清单或没有 outcome：回退到磁盘读出的完整清单。
                     match super::super::plan::read_post_transfer_lww(post_transfer_root) {
                         Some(lww) => crate::sync::types::TargetLifecycleRecord::upsert(
                             &planned.target.remote_prefix,

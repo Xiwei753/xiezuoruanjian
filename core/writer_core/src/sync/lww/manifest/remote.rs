@@ -248,10 +248,22 @@ pub(crate) fn fetch_remote_root_identity(
     provider: &dyn SyncProvider,
     remote_prefix: &str,
 ) -> crate::Result<Option<String>> {
+    Ok(fetch_remote_root_state(provider, remote_prefix)?.map(|(sha, _)| sha))
+}
+
+/// 读取远端 v2 根的 canonical sha256 与解析后的根（命名空间映射）。
+pub(crate) fn fetch_remote_root_state(
+    provider: &dyn SyncProvider,
+    remote_prefix: &str,
+) -> crate::Result<Option<(String, ManifestRoot)>> {
     let rel = remote_root_rel();
-    Ok(provider
-        .read(&remote_path(remote_prefix, &rel))?
-        .map(|object| sha256_hex(&object.content)))
+    let Some(object) = provider.read(&remote_path(remote_prefix, &rel))? else {
+        return Ok(None);
+    };
+    let sha = sha256_hex(&object.content);
+    let origin = remote_path(remote_prefix, &rel);
+    let root = parse_root(&object.content, &origin)?;
+    Ok(Some((sha, root)))
 }
 
 /// 不需要远端 tree 的版本：直接探测根 → 旧单文件 → 旧分片目录。

@@ -5970,6 +5970,8 @@ mod tests {
                 manifest_unchanged: false,
                 manifest_delta: Some(delta),
                 affected_paths: Some(BTreeSet::new()),
+                manifest_view: crate::sync::lww::MergeManifestView::Sparse,
+                remote_base_namespaces: std::collections::BTreeMap::new(),
                 remote_base_root: None,
             }
         }

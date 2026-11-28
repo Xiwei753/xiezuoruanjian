@@ -222,6 +222,15 @@ fn apply_affected_to_baseline(
     out
 }
 
+/// 合并结果携带的清单视图语义。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeManifestView {
+    /// `merged_manifest` 是完整快照（完整合并/首次同步/空远端物化）。
+    Complete,
+    /// `merged_manifest` 只含本轮 affected 记录；完整发布必须换用权威来源。
+    Sparse,
+}
+
 /// LWW merge 核心产出。
 ///
 /// [`merge_remote_into_local_snapshot`] 返回此结构，调用方根据字段做远端写。
@@ -271,6 +280,13 @@ pub(crate) struct LwwMergeOutcome {
     pub manifest_delta: Option<crate::sync::manifest_delta::ManifestDelta>,
     /// 稀疏轮真实受影响的路径集合；发布端据此只加载受影响的对象/索引。
     pub affected_paths: Option<std::collections::BTreeSet<String>>,
+    /// 清单视图的语义：完整快照，还是只含本轮 affected 的局部视图。
+    ///
+    /// 稀疏合并只加载受影响记录，绝不能把这个局部结果当作完整清单发布；
+    /// `Complete` 才允许按 `merged_manifest` 构造完整发布根。
+    pub manifest_view: MergeManifestView,
+    /// 本轮读取的固定远端 base 清单根命名空间映射（稀疏发布判空用）。
+    pub remote_base_namespaces: std::collections::BTreeMap<String, String>,
     /// 本轮读取的固定远端 base 清单根的 canonical sha256。
     ///
     /// 只有远端存在 v2 根时才有值；发布根用它在 `previousRoot` 记录真实
@@ -399,7 +415,12 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     // 稀疏计划随 staging run 落盘：调用方没有显式传入时，从本阶段的工作根读取。
     // 没有计划（首次同步/迁移/完整核对）时行为与原先完全一致。
     let sparse_owned;
+    // 从旧 active generation 读取、向稳定 target 发布时，不能只把 affected
+    // 对象搬过去：稳定树尚未承接该代其余可见内容。跨代切换强制完整合并，
+    // 由完整发布路径用源 tree 版本复用 blob，一次原子提交建立稳定基线。
+    let cross_generation_source = target_remote_prefix != source_remote_prefix;
     let sparse = match sparse {
+        Some(_) if cross_generation_source => None,
         Some(plan) => Some(plan),
         None => {
             // 计划文件存在但损坏时直接失败：静默退回全量会把“读不到输入”
@@ -416,8 +437,12 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     // 非稀疏路径保持整树 + 完整清单读取。
 
     // 发布根绑定本轮固定 base 的已发布身份：固定远端根在发布/GC 之前读取。
-    let remote_base_root =
-        crate::sync::lww::fetch_remote_root_identity(provider, source_remote_prefix)?;
+    let remote_base_state =
+        crate::sync::lww::fetch_remote_root_state(provider, source_remote_prefix)?;
+    let remote_base_root = remote_base_state.as_ref().map(|(sha, _)| sha.clone());
+    let remote_base_namespaces = remote_base_state
+        .map(|(_, root)| root.namespaces)
+        .unwrap_or_default();
     let (remote_manifest, remote_tree_files) = match sparse {
         Some(plan) => {
             let versions = fetch_remote_versions_for_paths(
@@ -1438,6 +1463,12 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         manifest_unchanged,
         manifest_delta: sparse.map(|_| manifest_delta),
         affected_paths: sparse.map(|plan| plan.affected_paths().clone()),
+        manifest_view: if sparse.is_some() {
+            MergeManifestView::Sparse
+        } else {
+            MergeManifestView::Complete
+        },
+        remote_base_namespaces,
         remote_base_root,
     })
 }
@@ -1653,6 +1684,8 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
         manifest_unchanged: false,
         manifest_delta: None,
         affected_paths: None,
+        manifest_view: MergeManifestView::Complete,
+        remote_base_namespaces: std::collections::BTreeMap::new(),
         remote_base_root: None,
     })
 }

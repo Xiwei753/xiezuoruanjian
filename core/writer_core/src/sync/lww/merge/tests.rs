@@ -1064,3 +1064,102 @@ fn sparse_merge_point_queries_remote_manifest_without_list() {
         "affected 记录必须采用本地新内容"
     );
 }
+
+/// 从旧 active generation 读取、向稳定 target 发布：稀疏计划必须被禁用，
+/// 结果必须是完整视图，未涉及的 B 不能被丢掉。
+#[test]
+fn cross_generation_source_forces_complete_merge() {
+    use crate::sync::provider::SyncProvider;
+    let device = "dev-remote";
+    let stable = "projects/p";
+    let generation = "projects/p/__generations__/g1";
+    let provider = MemoryProvider::new();
+    let records = vec![
+        upsert_record("project.json", &md5_hex(b"project"), 10, device),
+        upsert_record(
+            "volumes/v1/chapters/a/chapter.md",
+            &md5_hex(b"a"),
+            10,
+            device,
+        ),
+        upsert_record(
+            "volumes/v1/chapters/b/chapter.md",
+            &md5_hex(b"b"),
+            10,
+            device,
+        ),
+    ];
+    for record in &records {
+        let content = match record.path.as_str() {
+            "project.json" => b"project".to_vec(),
+            "volumes/v1/chapters/a/chapter.md" => b"a".to_vec(),
+            _ => b"b".to_vec(),
+        };
+        provider
+            .write(
+                &format!("{generation}/{}", record.path),
+                &content,
+                crate::sync::provider::model::WritePrecondition::Unconditional,
+            )
+            .unwrap();
+    }
+    provider
+        .write(
+            &format!("{generation}/{SYNC_MANIFEST_PATH}"),
+            SyncManifest {
+                files: records.clone(),
+            }
+            .canonical_json()
+            .unwrap()
+            .as_bytes(),
+            crate::sync::provider::model::WritePrecondition::Unconditional,
+        )
+        .unwrap();
+
+    let staging = TempDir::new().unwrap();
+    let plan = SparseObjectPlan::new(
+        None,
+        ["volumes/v1/chapters/a/chapter.md".to_string()],
+        Vec::<String>::new(),
+    );
+    let mut state = SyncState::default();
+    state.device_id = "dev-local".to_string();
+    let outcome = super::merge_remote_into_local_snapshot_with_diagnostics(
+        staging.path(),
+        &provider,
+        stable,
+        generation,
+        SyncScope::Project,
+        &mut state,
+        None,
+        "staging",
+        Some(&plan),
+    )
+    .unwrap();
+
+    assert_eq!(
+        outcome.manifest_view,
+        MergeManifestView::Complete,
+        "跨代切换必须退回完整合并"
+    );
+    for path in [
+        "project.json",
+        "volumes/v1/chapters/a/chapter.md",
+        "volumes/v1/chapters/b/chapter.md",
+    ] {
+        assert!(
+            outcome
+                .merged_manifest
+                .files
+                .iter()
+                .any(|record| record.path == path),
+            "完整合并必须包含 {path}，实际 {:?}",
+            outcome
+                .merged_manifest
+                .files
+                .iter()
+                .map(|record| record.path.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+}
