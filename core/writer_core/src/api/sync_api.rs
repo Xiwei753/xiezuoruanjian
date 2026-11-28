@@ -1891,6 +1891,8 @@ impl WriterCoreApi {
         let mut chapter_changes: Vec<crate::chapter::ChapterChangeReceipt> = Vec::new();
         let mut pending_commits: Vec<PendingTargetCommit> = Vec::new();
         let mut completed_transfer_results: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
+        let mut target_manifests: Vec<Option<crate::sync::types::SyncManifest>> =
+            plan.targets.iter().map(|_| None).collect();
         let total_targets = u32::try_from(plan.targets.len()).unwrap_or(u32::MAX);
 
         for target_index in 0..plan.targets.len() {
@@ -2121,6 +2123,7 @@ impl WriterCoreApi {
                 target_committed_paths,
                 target_chapter_changes,
                 target_decisions,
+                target_manifest,
             ) = self.commit_transferred_target(
                 target_index,
                 prepared_failure,
@@ -2128,6 +2131,9 @@ impl WriterCoreApi {
                 &target_sync_result,
                 diagnostic_operation_id,
             );
+            if let Some(slot) = target_manifests.get_mut(target_index) {
+                *slot = target_manifest;
+            }
             let commit_outcome =
                 crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
             commit_phase.finish_with_provider(&commit_outcome, provider);
@@ -2347,7 +2353,10 @@ impl WriterCoreApi {
                 };
                 // 远端清单 = 提交阶段冻结的"固定远端索引 + 本次真实决议"，
                 // 不再从 live 存储反推，也不把未决对象的本地记录发出去。
-                let Some(manifest) = run.take_publish_manifest() else {
+                let Some(manifest) = target_manifests
+                    .get(target_index)
+                    .and_then(std::clone::Clone::clone)
+                else {
                     continue;
                 };
                 let manifest_rel = planned
@@ -2641,6 +2650,7 @@ impl WriterCoreApi {
         Vec<crate::sync::commit_helpers::CommittedPath>,
         Vec<crate::chapter::ChapterChangeReceipt>,
         Vec<crate::sync::decision::DurableObjectDecision>,
+        Option<crate::sync::types::SyncManifest>,
     ) {
         if prepared_failure {
             // 迁移失败时 staging 未 seed，本组本次不上传也不 Commit。
@@ -2649,6 +2659,7 @@ impl WriterCoreApi {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                None,
             );
         }
         match staging_runs.get(target_index) {
@@ -2660,6 +2671,7 @@ impl WriterCoreApi {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                None,
             ),
         }
     }
@@ -2674,6 +2686,7 @@ impl WriterCoreApi {
         Vec<crate::sync::commit_helpers::CommittedPath>,
         Vec<crate::chapter::ChapterChangeReceipt>,
         Vec<crate::sync::decision::DurableObjectDecision>,
+        Option<crate::sync::types::SyncManifest>,
     ) {
         // Issue #1039 复核：同步 Commit 与独立 MCP 写事务必须共享应用数据根上的
         // 跨进程工作区锁。锁必须先于 state_lock 获取，并覆盖 live 读取、Store
@@ -2690,7 +2703,7 @@ impl WriterCoreApi {
                 target_with_error.result.error = Some(format!(
                     "cannot acquire workspace write lock before sync commit: {error}"
                 ));
-                return (target_with_error, Vec::new(), Vec::new(), Vec::new());
+                return (target_with_error, Vec::new(), Vec::new(), Vec::new(), None);
             }
         };
 
@@ -2713,16 +2726,18 @@ impl WriterCoreApi {
                     "flush_all_starmap_stores before commit failed: {}",
                     e
                 ));
-                return (target_with_conflicts, Vec::new(), Vec::new(), Vec::new());
+                return (target_with_conflicts, Vec::new(), Vec::new(), Vec::new(), None);
             }
 
             let mut target_with_conflicts = target_sync_result.clone();
             let mut chapter_commit_receipts = Vec::new();
+            let mut publish_batch = crate::sync::staging::PublishBatch::default();
             let (commit_result, conflicts, committed_paths) =
                 crate::sync::commit_helpers::commit_single_target_staging(
                     run,
                     target_sync_result,
                     &mut chapter_commit_receipts,
+                    &mut publish_batch,
                 );
 
             Self::apply_staging_conflicts_to_target(
@@ -2784,11 +2799,10 @@ impl WriterCoreApi {
             );
             // 决议完全来自提交阶段冻结的版本事实：基线、最终哈希、mutation
             // 序号和事务身份都随提交计划返回；这里只读一次已提交字节。
-            let (uploads, publish_deletes) = run.take_publish_lists();
             let decisions = crate::sync::decision::publish_decisions(
                 run.target_live_root(),
-                &uploads,
-                &publish_deletes,
+                &publish_batch.objects,
+                &publish_batch.deletes,
             );
             target_with_conflicts.result.uploaded_files.extend(
                 decisions
@@ -2807,6 +2821,7 @@ impl WriterCoreApi {
                 committed_paths,
                 chapter_receipts,
                 decisions,
+                publish_batch.manifest,
             )
         })
     }

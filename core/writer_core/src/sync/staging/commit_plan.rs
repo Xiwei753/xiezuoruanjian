@@ -54,6 +54,14 @@ pub struct PublishObject {
     pub transaction_id: String,
 }
 
+/// 一次提交冻结的发布事实：上传对象、远端删除与最终远端索引。
+#[derive(Debug, Default)]
+pub struct PublishBatch {
+    pub objects: Vec<PublishObject>,
+    pub deletes: Vec<PathBuf>,
+    pub manifest: Option<crate::sync::types::SyncManifest>,
+}
+
 /// 已一致对象的基线推进。
 #[derive(Debug, Clone)]
 pub struct BaselineUpdate {

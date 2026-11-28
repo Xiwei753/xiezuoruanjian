@@ -1900,6 +1900,7 @@ pub(crate) fn commit_single_target_staging(
     run: &crate::sync::staging::StagingRun,
     target: &crate::sync::types::TargetSyncResult,
     chapter_receipts: &mut Vec<crate::chapter::ChapterSyncCommitReceipt>,
+    publish: &mut crate::sync::staging::PublishBatch,
 ) -> (
     TargetCommitResult,
     Vec<crate::sync::staging::StagingConflict>,
@@ -1952,10 +1953,11 @@ pub(crate) fn commit_single_target_staging(
                     return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
                 }
             };
-            run.record_publish_lists(plan.uploads.clone(), plan.publish_deletes.clone());
-            if let Some(manifest) = plan.remote_manifest.clone() {
-                run.record_publish_manifest(manifest);
-            }
+            *publish = crate::sync::staging::PublishBatch {
+                objects: plan.uploads.clone(),
+                deletes: plan.publish_deletes.clone(),
+                manifest: plan.remote_manifest.clone(),
+            };
             let before = capture_action_before(live_root, &plan.content_actions);
 
             // 本轮真正要发布的候选路径：上传 + 远端删除。只对这些推迟
@@ -2083,10 +2085,11 @@ pub(crate) fn commit_single_target_staging(
                     return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
                 }
             };
-            run.record_publish_lists(plan.uploads.clone(), plan.publish_deletes.clone());
-            if let Some(manifest) = plan.remote_manifest.clone() {
-                run.record_publish_manifest(manifest);
-            }
+            *publish = crate::sync::staging::PublishBatch {
+                objects: plan.uploads.clone(),
+                deletes: plan.publish_deletes.clone(),
+                manifest: plan.remote_manifest.clone(),
+            };
             let transfer_conflict_paths: std::collections::HashSet<String> = target
                 .result
                 .conflicts

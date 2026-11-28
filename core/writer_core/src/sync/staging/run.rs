@@ -38,10 +38,6 @@ pub struct StagingRun {
     app_group: Option<crate::sync::types::AppDataGroup>,
     /// 同步范围，决定本地扫描/白名单口径。
     scope: crate::sync::types::SyncScope,
-    /// 本轮提交决议里需要上传 / 传播删除的本地对象（提交阶段取走）。
-    publish_lists: std::sync::Mutex<(Vec<super::commit_plan::PublishObject>, Vec<PathBuf>)>,
-    /// 本轮提交后的远端对象索引。
-    publish_manifest: std::sync::Mutex<Option<crate::sync::types::SyncManifest>>,
     /// 本 target 是"用户已删除作品"的远端删除意图：所有远端对象都按删除传播。
     delete_intent: bool,
     /// 删除前作品目录的回收区快照根：提供最后的已确认对象基线。
@@ -65,8 +61,6 @@ impl StagingRun {
             target_live_root,
             app_group: None,
             scope: crate::sync::types::SyncScope::Project,
-            publish_lists: std::sync::Mutex::new((Vec::new(), Vec::new())),
-            publish_manifest: std::sync::Mutex::new(None),
             delete_intent: false,
             baseline_root: None,
             prepare_error: None,
@@ -155,42 +149,6 @@ impl StagingRun {
     /// base 子目录（章节事务的历史基线视图；不再复制 live 整棵树）。
     pub fn base_root(&self) -> PathBuf {
         self.run_root.join(BASE_SUBDIR)
-    }
-
-    /// 记录本轮提交决议中的上传/删除清单。
-    pub(crate) fn record_publish_lists(
-        &self,
-        uploads: Vec<super::commit_plan::PublishObject>,
-        publish_deletes: Vec<PathBuf>,
-    ) {
-        if let Ok(mut lists) = self.publish_lists.lock() {
-            *lists = (uploads, publish_deletes);
-        }
-    }
-
-    /// 记录本轮提交后的远端对象索引。
-    pub(crate) fn record_publish_manifest(&self, manifest: crate::sync::types::SyncManifest) {
-        if let Ok(mut slot) = self.publish_manifest.lock() {
-            *slot = Some(manifest);
-        }
-    }
-
-    /// 取走本轮提交后的远端对象索引（只取一次）。
-    pub(crate) fn take_publish_manifest(&self) -> Option<crate::sync::types::SyncManifest> {
-        self.publish_manifest
-            .lock()
-            .ok()
-            .and_then(|mut slot| slot.take())
-    }
-
-    /// 取走本轮提交决议中的上传/删除清单（只取一次）。
-    pub(crate) fn take_publish_lists(
-        &self,
-    ) -> (Vec<super::commit_plan::PublishObject>, Vec<PathBuf>) {
-        self.publish_lists
-            .lock()
-            .map(|mut lists| std::mem::take(&mut *lists))
-            .unwrap_or_default()
     }
 
     /// 统一对象比较入口（Issue #1066）：见 [`super::plan::compute`]。
