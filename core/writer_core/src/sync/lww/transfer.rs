@@ -111,6 +111,25 @@ pub(super) fn fetch_remote_tree(
     Ok(map)
 }
 
+/// 只读取指定路径的远端版本（稀疏轮用），不 `list` 整个前缀。
+///
+/// 缺失路径不进入结果；`read` 返回的版本与 tree 中该路径的 blob 一致，
+/// 供 LWW 比较受影响文件使用。
+pub(super) fn fetch_remote_versions_for_paths(
+    provider: &dyn SyncProvider,
+    remote_prefix: &str,
+    paths: &std::collections::BTreeSet<String>,
+) -> crate::Result<HashMap<String, String>> {
+    let mut map = HashMap::with_capacity(paths.len());
+    for path in paths {
+        let remote_path = format!("{remote_prefix}/{path}");
+        if let Some(object) = provider.read(&remote_path)? {
+            map.insert(path.clone(), object.version.0);
+        }
+    }
+    Ok(map)
+}
+
 /// 通过 Provider 拉取远端 manifest。
 ///
 /// 权威来源是远端 v2 清单存储（`app-meta/sync/manifest/root.json` + 两级索引 +

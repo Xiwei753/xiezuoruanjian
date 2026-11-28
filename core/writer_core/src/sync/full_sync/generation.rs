@@ -132,6 +132,20 @@ fn publish_snapshot_batch(
         }
     }
 
+    // 稀疏轮只发布 affected：不加载完整 manifest、不 list 全树，
+    // 业务 Put/Delete 与清单变化 objects/indexes/root 一次提交。
+    // 冲突或 delta 视图不可用时返回 None，回退到下面的完整入口。
+    if let Some(result) = try_publish_sparse_batch(
+        provider,
+        sync_root,
+        generation_prefix,
+        app_group,
+        merge_outcome,
+        cancellation_token,
+    ) {
+        return result;
+    }
+
     // 本次 tree 的完整 manifest：merge 后的快照，或首次同步时 staging 的本地 manifest。
     let manifest: crate::sync::types::SyncManifest = match merge_outcome {
         Some(outcome) => outcome.merged_manifest.clone(),
@@ -464,6 +478,137 @@ fn read_staging_generation_manifest(
 ///
 /// 读不到文件或哈希不一致时返回 `Err`：宁可不发布，也不发布内容与 manifest 不符的
 /// generation。
+/// 稀疏发布：只处理 `affected_paths` + 本轮确认的删除 + 清单 delta。
+///
+/// 返回 `None` 表示不适用（无 delta、delta 视图不可用、存在冲突需要完整入口
+/// 的 PartialConflict 语义等），调用方回退完整发布。不调用 `provider.list`，
+/// 不遍历完整 `manifest.files`，不受远端对象总数影响。
+fn try_publish_sparse_batch(
+    provider: &dyn crate::sync::provider::SyncProvider,
+    sync_root: &Path,
+    generation_prefix: &str,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
+    merge_outcome: Option<&crate::sync::lww::LwwMergeOutcome>,
+    cancellation_token: Option<&SyncCancellationToken>,
+) -> Option<crate::sync::types::SyncResult> {
+    use crate::sync::provider::model::{BatchMutation, RemoteVersion};
+
+    let outcome = merge_outcome?;
+    let delta = outcome.manifest_delta.as_ref()?;
+    // 冲突路径需要完整入口的 PartialConflict 判定（不能发布不完整树）。
+    if !outcome.conflicts.is_empty() {
+        return None;
+    }
+    let store = crate::sync::lww::ManifestStore::new(sync_root, &manifest_rel_path(app_group));
+    let manifest_files = match crate::sync::lww::local_manifest_storage_for_delta(&store, delta) {
+        Ok(files) => files,
+        Err(error) => {
+            log::warn!(
+                "[sync] sparse publish: delta manifest view unavailable for {generation_prefix}:                  {error} — falling back to the full publish path"
+            );
+            return None;
+        }
+    };
+
+    let mut mutations: Vec<BatchMutation> = Vec::new();
+    let mut uploaded_files: Vec<String> = Vec::new();
+    for path in &outcome.remote_upload_paths {
+        let Some(record) = delta.upserts.get(path) else {
+            // delta 里没有该业务记录说明本轮记录不完整，交回完整入口。
+            return None;
+        };
+        match build_put_mutation(sync_root, generation_prefix, record) {
+            Ok(mutation) => {
+                mutations.push(mutation);
+                uploaded_files.push(path.clone());
+            }
+            Err(error) => {
+                return Some(super::transfer_helpers::sync_result_from_error(error));
+            }
+        }
+    }
+    for path in &outcome.remote_delete_paths {
+        let remote_path = format!("{generation_prefix}/{path}");
+        let mutation = match outcome.remote_tree_files.get(path) {
+            Some(version) => BatchMutation::DeleteIfMatch {
+                path: remote_path,
+                version: RemoteVersion(version.clone()),
+            },
+            None => BatchMutation::Delete { path: remote_path },
+        };
+        mutations.push(mutation);
+    }
+
+    let mut root_mutation: Option<BatchMutation> = None;
+    for file in &manifest_files {
+        let remote_rel = match crate::sync::lww::remote_rel_for(&store, &file.rel) {
+            Ok(rel) => rel,
+            Err(error) => return Some(super::transfer_helpers::sync_result_from_error(error)),
+        };
+        let remote_path = format!("{generation_prefix}/{remote_rel}");
+        let bytes = match file.read_bytes(sync_root) {
+            Ok(bytes) => bytes,
+            Err(error) => return Some(super::transfer_helpers::sync_result_from_error(error)),
+        };
+        let mutation = BatchMutation::Put {
+            path: remote_path,
+            content: bytes,
+        };
+        if file.kind == crate::sync::lww::ManifestStorageKind::Root {
+            root_mutation = Some(mutation);
+        } else {
+            mutations.push(mutation);
+        }
+    }
+    // 旧单文件清单在稀疏轮只按远端已知版本删除；旧分片目录留给完整同步/GC。
+    if let Some(version) = outcome
+        .remote_tree_files
+        .get(crate::sync::lww::SYNC_MANIFEST_PATH)
+    {
+        mutations.push(BatchMutation::DeleteIfMatch {
+            path: format!(
+                "{generation_prefix}/{}",
+                crate::sync::lww::SYNC_MANIFEST_PATH
+            ),
+            version: RemoteVersion(version.clone()),
+        });
+    }
+    if let Some(root) = root_mutation {
+        mutations.push(root);
+    }
+
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            return Some(super::transfer_helpers::sync_result_from_error(
+                crate::Error::Other("sync cancelled during sparse tree publish".into()),
+            ));
+        }
+    }
+
+    if !mutations.is_empty() {
+        let message = format!("sujian: publish sparse tree {generation_prefix}");
+        if let Err(error) = provider.commit_batch(&mutations, &message) {
+            return Some(super::transfer_helpers::sync_result_from_provider_error(
+                error,
+            ));
+        }
+    }
+
+    let mut result = crate::sync::types::SyncResult::success();
+    result.uploaded_files = uploaded_files;
+    result.downloaded_files = outcome.downloaded_files.clone();
+    result.local_deletes = outcome.remote_delete_paths.clone();
+    result.remote_deletes = outcome.local_deletes.clone();
+    result.overwritten_files = outcome.overwritten_files.clone();
+    result.ignored_files = outcome.ignored_files.clone();
+    result.status = if mutations.is_empty() {
+        SyncStatus::NoChanges
+    } else {
+        SyncStatus::Success
+    };
+    Some(result)
+}
+
 fn build_put_mutation(
     sync_root: &Path,
     generation_prefix: &str,

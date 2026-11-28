@@ -241,6 +241,7 @@ fn batch_publishes_business_and_v2_manifest_with_root_last() {
     struct RecordingBatchProvider {
         inner: MemoryProvider,
         mutations: Mutex<Vec<BatchMutation>>,
+        list_calls: std::sync::atomic::AtomicUsize,
     }
 
     impl RecordingBatchProvider {
@@ -248,7 +249,12 @@ fn batch_publishes_business_and_v2_manifest_with_root_last() {
             Self {
                 inner: MemoryProvider::new(),
                 mutations: Mutex::new(Vec::new()),
+                list_calls: std::sync::atomic::AtomicUsize::new(0),
             }
+        }
+
+        fn list_calls(&self) -> usize {
+            self.list_calls.load(std::sync::atomic::Ordering::Relaxed)
         }
 
         fn recorded(&self) -> Vec<BatchMutation> {
@@ -265,6 +271,8 @@ fn batch_publishes_business_and_v2_manifest_with_root_last() {
         }
 
         fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
+            self.list_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.inner.list(prefix)
         }
 
@@ -520,6 +528,7 @@ use crate::sync::types::{SyncPolicy, SyncStatus};
 struct RecordingBatchProvider {
     inner: MemoryProvider,
     mutations: Mutex<Vec<BatchMutation>>,
+    list_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl RecordingBatchProvider {
@@ -527,7 +536,12 @@ impl RecordingBatchProvider {
         Self {
             inner: MemoryProvider::new(),
             mutations: Mutex::new(Vec::new()),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    fn list_calls(&self) -> usize {
+        self.list_calls.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn recorded(&self) -> Vec<BatchMutation> {
@@ -544,6 +558,8 @@ impl SyncProvider for RecordingBatchProvider {
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
+        self.list_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.inner.list(prefix)
     }
 
@@ -722,6 +738,7 @@ fn delta_publish_skips_full_manifest_and_unchanged_deletes() {
         remote_tree_files,
     );
 
+    let list_before_publish = provider.list_calls();
     let result = super::super::generation::publish_tree_snapshot(
         &provider,
         &staging,
@@ -738,6 +755,11 @@ fn delta_publish_skips_full_manifest_and_unchanged_deletes() {
         "delta 发布应成功，实际 {:?}（error={:?}）",
         result.status,
         result.error
+    );
+    assert_eq!(
+        provider.list_calls(),
+        list_before_publish,
+        "稀疏发布不得 list 远端全树"
     );
 
     let mutations = provider.recorded();
@@ -766,16 +788,18 @@ fn delta_publish_skips_full_manifest_and_unchanged_deletes() {
         Some("projects/p1/app-meta/sync/manifest/root.json"),
         "根必须是 batch 最后一项，实际 {paths:?}"
     );
+    let gone_path = format!("projects/p1/{gone_rel}");
     let gone_deletes = mutations
         .iter()
-        .filter(|mutation| {
-            matches!(mutation, BatchMutation::Delete { path }
-                if path == &format!("projects/p1/{gone_rel}"))
+        .filter(|mutation| match mutation {
+            BatchMutation::Delete { path } => path == &gone_path,
+            BatchMutation::DeleteIfMatch { path, .. } => path == &gone_path,
+            _ => false,
         })
         .count();
     assert_eq!(
         gone_deletes, 1,
-        "confirmed delete 必须产生一次 Delete，实际 {paths:?}"
+        "confirmed delete 必须产生一次删除，实际 {paths:?}"
     );
     assert!(
         mutations.iter().all(
