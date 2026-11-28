@@ -1621,11 +1621,7 @@ impl StatsStore {
             .iter()
             .map(|(_, segment)| segment.event_id.clone())
             .collect();
-        if sync {
-            jsonl::append_jsonl_lines(&path, &lines)?;
-        } else {
-            jsonl::append_jsonl_lines_deferred(&path, &lines)?;
-        }
+        jsonl::append_jsonl_lines(&path, &lines)?;
 
         let mut cache = self.lock_written_ids();
         let known = cache
