@@ -358,6 +358,56 @@ impl super::WriterCore {
         Ok(serde_json::to_string(&projection)?)
     }
 
+    /// 把一批编辑事实构造成显式证明批次（Issue #1069）。
+    ///
+    /// Harmony 端把随快照冻结的编辑事实整批送来，设备身份、source 分类与投影
+    /// 全部由 Core 生成，平台不手拼 `ChapterProofProjection`。基线正文只放在
+    /// 批次第一项（与 [`Self::enqueue_pending_editor_proof`] 一致），避免每条
+    /// 编辑都把整章正文复制一次；没有可回放事实的输入直接跳过。
+    pub fn build_editor_proof_batch(
+        &self,
+        inputs: &[crate::api::EditorChangeStatsInputDto],
+    ) -> Result<Vec<crate::chapter::ChapterProofProjection>> {
+        let mut projections: Vec<crate::chapter::ChapterProofProjection> = Vec::new();
+        for input in inputs {
+            let Some(mut projection) = self.build_editor_proof_projection(input)? else {
+                continue;
+            };
+            if !projections.is_empty() {
+                projection.baseline_text = None;
+            }
+            projections.push(projection);
+        }
+        Ok(projections)
+    }
+
+    /// 编辑事务的统计上报，但不为证明缓存 pending 投影（Issue #1069）。
+    ///
+    /// - `changes` 为空：没有可回放的证明，按旧口径直接写统计事件；
+    /// - `changes` 非空：证明随正文作为显式批次提交，统计与证明由 journal
+    ///   决议后一次写入。这里既不写统计也不写 pending —— 若先落一条无 proof
+    ///   的统计事件，之后同一 `event_id` 的有 proof 事件会被 Core 判成
+    ///   “不同业务事实”而拒绝，证明链就永远补不齐。
+    pub fn record_editor_change_stats_without_proof(
+        &self,
+        input: &crate::api::EditorChangeStatsInputDto,
+    ) -> Result<()> {
+        if !input.changes.is_empty() {
+            return Ok(());
+        }
+        self.record_editor_change_stats(
+            &input.platform,
+            &input.project_id,
+            &input.volume_id,
+            &input.chapter_id,
+            input.cause.into(),
+            input.inserted_chars,
+            input.deleted_chars,
+            &input.event_id,
+            input.occurred_at_ms,
+        )
+    }
+
     /// 由编辑事实构造证明投影；不写 pending map，供显式批次保存直接使用。
     fn build_editor_proof_projection(
         &self,

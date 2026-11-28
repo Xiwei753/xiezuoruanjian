@@ -84,6 +84,18 @@ pub(crate) fn baseline_text_from_projection(json: &str) -> Option<String> {
     value.get("baselineText")?.as_str().map(str::to_string)
 }
 
+/// 事实链第一条事件记录的“编辑前正文摘要”。
+///
+/// Issue #1069：用它判断草稿事实是否接在当前已提交正文之后——同机保存回执
+/// 已推进磁盘版本、QML 尚未应用回执时，草稿 meta 的 base 会显得过旧。
+pub(crate) fn proof_before_text_sha256(json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    value
+        .pointer("/event/proof/beforeTextSha256")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// 草稿事件链第一条事实携带的原始基线正文，用于外部变更后的冲突材料。
 ///
 /// 不能用 `opened.content`：外部同步/MCP 改过正文后它就是外部新版本，把它
@@ -834,6 +846,22 @@ fn restore_draft_decision(
     };
     let base_known = !plan.base_generation.is_empty() || plan.base_revision > 0;
     let base_matches = base_matches_plan(&plan, &opened.version);
+    // Issue #1069：同机保存回执可能已推进磁盘版本，而草稿 meta 的 base 还是
+    // QML 未应用回执时的旧版本。只有当第一条事实的 before 摘要正好等于当前
+    // 磁盘正文摘要时，才能证明草稿事实接在已提交正文之后，属于本机回执造成
+    // 的旧 base，而不是外部改写；否则仍按外部冲突保留草稿。
+    let draft_starts_at_disk = plan.facts.first().is_some_and(|fact| {
+        proof_before_text_sha256(&fact.projection_json)
+            .is_some_and(|digest| digest == writer_core::chapter::content_sha256(&opened.content))
+    });
+    if !base_matches && draft_starts_at_disk {
+        log::info!(
+            "restore draft rebased onto committed receipt: chapter={} draft_base={} disk_version={}",
+            plan.chapter_id,
+            version_display(&draft_base),
+            version_display(&opened.version)
+        );
+    }
     let commit_revision = restore_commit_revision(&plan);
     // Issue #1062 评论 7193847871 第 3 项：无事实草稿只要正文已经等于
     // 当前 live 正文（Core 原始 SHA-256 协议）或 meta 已记录为确认快照，
@@ -896,7 +924,9 @@ fn restore_draft_decision(
     // 草稿终态，再以草稿原始 base 为 expected、原始基线为 base_content
     // 调一次保存，让 Core 落出 base.md=旧基线、local.md=外部版本、
     // incoming.md=草稿终态的冲突材料；草稿本身原样保留。
-    if !base_matches {
+    // Issue #1069：草稿事实起点等于当前磁盘正文时不是外部冲突，而是同机
+    // 回执造成的旧 base，继续走下面的 replay/提交路径，不归档。
+    if !base_matches && !draft_starts_at_disk {
         let origin = match original_base_text(&plan) {
             Some(origin) => origin,
             None => {
@@ -952,6 +982,8 @@ fn restore_draft_decision(
             Some(origin),
             commit_revision,
             &plan.batch_json,
+            true,
+            // Issue #1069：冲突材料保存同样保留 Qt 的 draft ack 语义。
             true,
         );
         match result {
@@ -1225,6 +1257,8 @@ fn restore_draft_decision(
         Some(opened.content),
         commit_revision,
         &plan.batch_json,
+        true,
+        // Issue #1069：Qt 的持久化草稿仍需 Core journal 保留 draft ack。
         true,
     );
     match result {

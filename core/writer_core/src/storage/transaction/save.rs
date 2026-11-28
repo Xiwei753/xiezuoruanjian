@@ -22,12 +22,17 @@ pub struct SaveTransaction {
     /// 备份模式标志。
     /// 为 `true` 时，commit 前先把被覆盖/删除的旧文件备份到 `tx_dir/backup/`，
     /// 使 `rollback()` 能恢复到 commit 前的状态。
+    /// 生产同步不使用这个失败回退路径（只有 durable journal 重放）；当前仅测试
+    /// 与显式撤销场景启用。
     backup_mode: bool,
     ///
     /// commit 时备份的旧文件列表。用 `BackupEntry` 枚举替代空字符串哨兵。
     backed_up_files: Vec<BackupEntry>,
     /// backup_mode 时 commit 不再 cleanup，
     /// 必须等事务完成后由调用方显式调用 `finish()` 清理。
+    ///
+    /// 非 backup_mode 的 `commit()` 已经持久化 `FilesCommitted` 并清理事务目录，
+    /// 此时 `finish()` 只更新内存状态，不再写盘。
     finished: bool,
 }
 
@@ -103,6 +108,10 @@ impl SaveTransaction {
     ///
     /// commit 前先把被覆盖/删除的旧文件备份到事务目录下的 `backup/` 子目录，
     /// 使 `rollback()` 能恢复到 commit 前的状态。
+    ///
+    /// 这不是生产同步的失败回退协议：同步只有一个 durable 决议，失败后按
+    /// journal 重放继续发布；本模式只保留给需要显式撤销一次已提交事务的
+    /// 调用方（当前没有生产调用点，只有事务单元测试使用）。
     pub fn enable_backup_mode(&mut self) {
         self.backup_mode = true;
     }
@@ -111,7 +120,9 @@ impl SaveTransaction {
     ///
     /// 回滚 commit 写入的文件变更，更新 manifest phase 为 RolledBack 并清理事务目录。
     ///
-    /// 仅在 `backup_mode` 且已 `commit` 后调用有效。
+    /// 仅在 `backup_mode` 且已 `commit` 后调用有效；非 backup/未提交时直接返回
+    /// `Ok(())`。这是显式撤销工具，当前没有生产调用点（同步失败不靠它回退，
+    /// 而是按 durable journal 幂等重放），不要把它描述成生产同步的失败回退能力。
     /// 按 `BackupEntry` 明确恢复旧文件或删除本次新建文件。
     /// - `RestoreFile`：从备份恢复旧文件。
     /// - `RemoveCreated`：删除 commit 新建的文件；只有 `NotFound` 视为成功，
@@ -198,14 +209,32 @@ impl SaveTransaction {
     /// 事务完成后调用，更新 manifest phase 为 Finished 并清理事务目录。
     ///
     /// `backup_mode` 时 `commit()` 不再自动 cleanup；调用方必须在事务提交
-    /// 完成后显式调用 `finish()`。非 backup_mode 时 `commit()` 已 cleanup，
-    /// `finish()` 是空操作。
+    /// 完成后显式调用 `finish()`。非 backup_mode（或没有任何 entry）时
+    /// `commit()` 已清理事务目录，`finish()` 只把本地状态标为 finished，
+    /// 不再写 manifest、也不会重新创建 tx_dir。
+    ///
+    /// 未完成 `commit()` 就调用 `finish()` 返回明确错误，不能静默成功。
     ///
     /// `write_manifest_phase(Finished)` 失败时返回 Err，**不**设 finished、
     /// **不**调 cleanup，保留 tx_dir 给下次恢复。
     pub fn finish(&mut self) -> Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+        if !self.committed {
+            return Err(crate::error::Error::Other(format!(
+                "SaveTransaction::finish called before commit completed: tx={}",
+                self.transaction_id
+            )));
+        }
+        // 非 backup（或没有 entry，commit 已提前 cleanup）时不再碰磁盘：
+        // FilesCommitted 已经是 durable 的成功决议。
+        if !self.backup_mode || self.entries.is_empty() {
+            self.finished = true;
+            return Ok(());
+        }
         //
-        // 更新 manifest phase 为 Finished。用 `?` 传播错误，不吞错。
+        // backup_mode：更新 manifest phase 为 Finished。用 `?` 传播错误，不吞错。
         let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
         self.write_manifest_phase(&manifest_path, TransactionPhase::Finished)?;
         // Finished 已持久化成功，才设 finished 并 cleanup。
@@ -242,6 +271,9 @@ impl SaveTransaction {
 
     pub fn commit(&mut self) -> Result<()> {
         if self.entries.is_empty() {
+            // 没有 live 变更也是一次已完成的提交；标记 committed 后
+            // `finish()` 才能按幂等成功处理，而不是报“未提交”。
+            self.committed = true;
             self.cleanup();
             return Ok(());
         }

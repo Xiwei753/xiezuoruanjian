@@ -210,6 +210,32 @@ export class NativeStatsBridge {
     } catch (e) { return nativeError<boolean>(e) }
   }
 
+  // Issue #1069：不写 Core pending 证明的统计入口。带 changes 的编辑事务统计
+  // 与证明由 journal 随正文显式批次一次写入；没有 changes 的仍立即写统计。
+  // 与 recordEditorChangeStats 共用同一条 Node-API async work 通道。
+  async recordEditorChangeStatsWithoutProof(
+    input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = JSON.stringify(input)
+      const ok: boolean =
+        await this.core.getNativeModule().nativeRecordEditorChangeStatsWithoutProof(jsonStr)
+      return { success: ok, data: ok,
+        userMessage: ok ? undefined : 'record_editor_change_stats_without_proof failed' }
+    } catch (e) { return nativeError<boolean>(e) }
+  }
+
+  // Issue #1069：把随快照冻结的编辑事实批次交给 Core 生成证明投影。设备身份、
+  // source 分类和 `{event, baselineText}` 批次形状都由 Core 决定，ArkTS 只透传输入、
+  // 原样保存返回的 JSON 字符串（下一次保存请求的 proofBatchJson）。
+  async buildEditorProofBatch(inputs: EditorChangeStatsInput[]): Promise<ResultEnvelope<string>> {
+    try {
+      const jsonStr: string = JSON.stringify(inputs)
+      const envelopeJson: string =
+        await this.core.getNativeModule().nativeBuildEditorProofBatch(jsonStr)
+      return this.core.parseEnvelope<string>(envelopeJson)
+    } catch (e) { return nativeError<string>(e) }
+  }
+
   // Issue #1008：按章节回放手写证明。请求/响应都是 Core 定义的 JSON；
   // 先等编辑事件落盘，避免回放读到缺事件的中间状态。
   async replayChapterProof(requestJson: string): Promise<ResultEnvelope<Object>> {

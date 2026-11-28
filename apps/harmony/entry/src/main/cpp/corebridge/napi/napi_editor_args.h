@@ -1,12 +1,16 @@
-// ── Editor Session NAPI 参数读取（编辑 session 域统一入口）──
+// ── 共享 NAPI 参数读取（章节/项目/卷/星图/编辑 session 域统一入口）──
 //
-// 由 napi_editor_session.cpp include（该文件又被 napi_init.cpp #include，属于同一
-// 翻译单元）。全部函数都是 static，避免与其它 NAPI 域的同名 helper 冲突。
+// 由 napi_init.cpp 在 include 各域实现之前 include；napi_editor_session.cpp 也会
+// include（同一翻译单元，include guard 保证只定义一次）。全部函数都是 static，
+// 避免与其它 NAPI 域的同名 helper 冲突。
 //
 // 约定：
 // - 读取失败（参数缺失、类型不符、范围非法、Node-API 调用失败）返回 false，
 //   出参保持 0/nullptr；调用方必须显式返回 INVALID_ARGUMENT 错误 JSON，
 //   不能把未初始化的 buffer 或 0 当成合法值继续调用 Rust C ABI。
+// - JSON 返回型 handler 统一用 napi_arg_invalid_result() 构造 INVALID_ARGUMENT
+//   信封；int32/其它非 JSON 返回值的 handler 用 napi_arg_throw_invalid() 抛
+//   INVALID_ARGUMENT 异常，不能改变各自对 ArkTS 的返回值类型契约。
 // - 字符串出参成功时为 new[] 分配的 NUL 结尾 UTF-8 副本，调用方用 delete[] 释放。
 // - 字符串按 CStr 传给 Rust，因此**不支持内嵌 U+0000**：含 NUL 的 ArkTS 字符串
 //   判为非法参数（返回 false，由调用方转 INVALID_ARGUMENT），不能静默截断。
@@ -165,6 +169,46 @@ static bool napi_arg_get_u32(napi_env env, napi_value value, uint32_t* out) {
     }
     *out = static_cast<uint32_t>(as_int64);
     return true;
+}
+
+// napi_arg_get_bool: 读取必填 bool 参数。
+//   先校验 napi_typeof == napi_boolean，再读取；类型不符/读取失败返回 false，
+//   *out 保持 false。用于 allow_empty_overwrite / is_embed 这类会改变业务语义的开关，
+//   不能把非 bool 参数当成默认 false 继续执行。
+static bool napi_arg_get_bool(napi_env env, napi_value value, bool* out) {
+    if (out == nullptr) {
+        return false;
+    }
+    *out = false;
+
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, value, &type) != napi_ok || type != napi_boolean) {
+        return false;
+    }
+    return napi_get_value_bool(env, value, out) == napi_ok;
+}
+
+// napi_arg_invalid_result: JSON 返回型 handler 的统一 INVALID_ARGUMENT 返回值。
+//   napi_editor_invalid_arg_json() 是静态字面量，不能交给 ReturnJsonString
+//   （后者按 Core 所有权调用 writer_core_free_string），这里直接构造 NAPI 字符串。
+//   字符串创建失败与其它 NAPI 字符串失败保持同一语义：抛 E_NAPI_STRING 并返回 nullptr。
+static napi_value napi_arg_invalid_result(napi_env env) {
+    napi_value result = nullptr;
+    if (napi_create_string_utf8(env, napi_editor_invalid_arg_json(),
+                                NAPI_AUTO_LENGTH, &result) != napi_ok) {
+        napi_throw_error(env, "E_NAPI_STRING", "Failed to create INVALID_ARGUMENT JSON string");
+        return nullptr;
+    }
+    return result;
+}
+
+// napi_arg_throw_invalid: 非 JSON 返回值 handler（如 nativeInit 的 int32 状态码）
+//   的参数错误出口。这些 API 的 ArkTS 调用方按数值接收结果，不能塞错误信封字符串，
+//   因此以 INVALID_ARGUMENT 错误码抛 JS 异常；调用方的 try/catch 会转成 NATIVE_ERROR。
+static napi_value napi_arg_throw_invalid(napi_env env, const char* detail) {
+    napi_throw_error(env, "INVALID_ARGUMENT",
+                     detail != nullptr ? detail : "Invalid native argument");
+    return nullptr;
 }
 
 #endif  // NAPI_EDITOR_ARGS_H

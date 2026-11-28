@@ -439,6 +439,9 @@ pub fn save_chapter_verified_with_version(
         &[],
         &[],
         None,
+        // 与 `ChapterCommitRequest::new` 一致默认 true；这些入口不携带
+        // proof_events，不会产生待确认的 draft ack。
+        true,
     )
     .map(|outcome| outcome.receipt)
 }
@@ -484,6 +487,9 @@ pub(super) fn save_chapter_verified_with_options(
         &[],
         &[],
         None,
+        // 与 `ChapterCommitRequest::new` 一致默认 true；这些入口不携带
+        // proof_events，不会产生待确认的 draft ack。
+        true,
     )
     .map(|outcome| outcome.receipt)
 }

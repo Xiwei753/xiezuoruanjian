@@ -461,6 +461,9 @@ impl super::WriterCore {
             workspace_lock,
             &proof_events,
             proof_snapshot_revision,
+            // ID 批次路径只被 Harmony FFI 使用；Harmony 没有平台持久草稿，
+            // 由 Core 完成投影后自行清理 journal。
+            false,
         )?;
         if !proof_events.is_empty() && !result.0.transaction_id.is_empty() {
             let completed: std::collections::HashSet<String> = proof_events
@@ -513,6 +516,7 @@ impl super::WriterCore {
         proof_snapshot_revision: u64,
         proof_events: &[crate::chapter::ChapterProofProjection],
         workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
+        draft_ack_required: bool,
     ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
         let project_root = self.project_root(project_id);
         // 正文保存不以历史证明为前提；真实待恢复事项保留在各自 journal 中。
@@ -542,6 +546,7 @@ impl super::WriterCore {
             workspace_lock,
             proof_events,
             (proof_snapshot_revision > 0).then_some(proof_snapshot_revision),
+            draft_ack_required,
         )?;
         if !proof_events.is_empty() && !result.0.transaction_id.is_empty() {
             let completed: std::collections::HashSet<String> = proof_events
@@ -651,6 +656,8 @@ impl super::WriterCore {
                 workspace_lock,
                 &proof_events,
                 proof_snapshot_revision,
+                // 该入口只被 Harmony FFI 使用：无平台持久草稿，不生成 draft ack。
+                false,
             )?;
         if !proof_events.is_empty() && !receipt.transaction_id.is_empty() {
             let completed: std::collections::HashSet<String> = proof_events

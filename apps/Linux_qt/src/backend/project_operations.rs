@@ -60,7 +60,19 @@ impl AppBackend {
         };
 
         if let Some(project_id) = self.selected_project_id.clone() {
-            let projects = api.list_projects().unwrap_or_default();
+            // Issue #1069：读取失败不是“项目被删除”。保留当前选择，只有
+            // Ok([]) / 明确不包含时才清空。
+            let projects = match api.list_projects() {
+                Ok(projects) => projects,
+                Err(error) => {
+                    crate::backend::app_backend::debug_error_static(
+                        "project_operations",
+                        "reconcile_list_projects_failed",
+                        &format!("keep selected project={project_id}: {error}"),
+                    );
+                    return false;
+                }
+            };
             let project_exists = projects.iter().any(|p| p.id == project_id);
             if !project_exists {
                 self.selected_project_id = None;
@@ -74,7 +86,17 @@ impl AppBackend {
             self.selected_project_id.clone(),
             self.selected_volume_id.clone(),
         ) {
-            let volumes = api.list_volumes(&project_id).unwrap_or_default();
+            let volumes = match api.list_volumes(&project_id) {
+                Ok(volumes) => volumes,
+                Err(error) => {
+                    crate::backend::app_backend::debug_error_static(
+                        "project_operations",
+                        "reconcile_list_volumes_failed",
+                        &format!("keep selected volume={volume_id}: {error}"),
+                    );
+                    return false;
+                }
+            };
             let volume_exists = volumes.iter().any(|v| v.id == volume_id);
             if !volume_exists {
                 self.selected_volume_id = None;
@@ -88,9 +110,17 @@ impl AppBackend {
             self.selected_volume_id.clone(),
             self.selected_chapter_id.clone(),
         ) {
-            let chapters = api
-                .list_chapters(&project_id, &volume_id)
-                .unwrap_or_default();
+            let chapters = match api.list_chapters(&project_id, &volume_id) {
+                Ok(chapters) => chapters,
+                Err(error) => {
+                    crate::backend::app_backend::debug_error_static(
+                        "project_operations",
+                        "reconcile_list_chapters_failed",
+                        &format!("keep selected chapter={chapter_id}: {error}"),
+                    );
+                    return false;
+                }
+            };
             let chapter_exists = chapters.iter().any(|c| c.id == chapter_id);
             if !chapter_exists {
                 self.clear_editor_state();

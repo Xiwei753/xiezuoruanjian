@@ -115,6 +115,40 @@ impl super::WriterAppService {
         self.api.record_editor_proof_fact(input)
     }
 
+    /// 把平台冻结的编辑事实批次投影成 Core 定义的证明批次（Issue #1069）。
+    ///
+    /// 入参是 `[EditorChangeStatsInputDto]` 的 JSON，返回值是
+    /// `[ChapterProofProjection]` 的 JSON（直接作为正文保存请求的
+    /// `proofBatchJson`）。设备身份与投影都由 Core 生成，平台不手拼。
+    pub fn build_editor_proof_batch_json(
+        &self,
+        events_json: String,
+    ) -> Result<String, WriterError> {
+        let inputs: Vec<EditorChangeStatsInputDto> =
+            serde_json::from_str(&events_json).map_err(WriterError::from)?;
+        let projections = self
+            .api
+            .core_write()
+            .build_editor_proof_batch(&inputs)
+            .map_err(WriterError::from)?;
+        serde_json::to_string(&projections).map_err(|error| WriterError::Json(error.to_string()))
+    }
+
+    /// 编辑事务的统计上报，但不写 Core 全局 pending 证明（Issue #1069）。
+    ///
+    /// Harmony 的证明随正文作为显式批次提交；有 `changes` 的编辑事务统计与
+    /// 证明由 journal 一次写入，没有 `changes` 的仍立即写统计。同一事件不再
+    /// 同时存在于 pending map 和显式批次里。
+    pub fn record_editor_change_stats_without_proof(
+        &self,
+        input: EditorChangeStatsInputDto,
+    ) -> Result<(), WriterError> {
+        self.api
+            .core_write()
+            .record_editor_change_stats_without_proof(&input)
+            .map_err(WriterError::from)
+    }
+
     /// 从未提交草稿的原始证明批次 replay 出最终正文（Issue #1062 1.1）。
     pub fn replay_editor_proof_batch(
         &self,

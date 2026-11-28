@@ -349,7 +349,10 @@ unsafe fn save_chapter_json(
 
 /// JSON 入口：把多个字符串参数打包成一次异步 NAPI 调用，避免 ArkTS 主线程
 /// 直接执行 Rust I/O。字段：projectId/volumeId/chapterId/content/generation/
-/// revision/sha256/baseContent/allowEmptyOverwrite/clear。
+/// revision/sha256/baseContent/allowEmptyOverwrite/clear，
+/// 以及证明批次二选一：`proofEventIds`（旧全局 pending map 路径）或
+/// `proofBatchJson`（Issue #1069：平台随快照冻结的 `ChapterProofProjection` 数组，
+/// 非空时正文与证明一次提交，且不产生需要平台确认的 draft ack）。
 ///
 /// # Safety
 /// `payload` must be a valid null-terminated UTF-8 JSON string.
@@ -411,6 +414,9 @@ pub unsafe extern "C" fn writer_core_save_chapter_versioned_json(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    // Issue #1069：平台随快照冻结的原始证明批次（`ChapterProofProjection` JSON 数组）。
+    // 非空时正文与证明一次提交；空串保持旧的 event ID 批次路径（旧客户端）。
+    let proof_batch_json = string_field("proofBatchJson").unwrap_or_default();
     if let Some(snapshot_revision) = proof_snapshot_revision {
         let Ok(expected_revision) = u64::try_from(revision) else {
             return err_json("INVALID_ARGUMENT", "expected_revision is negative");
@@ -426,18 +432,34 @@ pub unsafe extern "C" fn writer_core_save_chapter_versioned_json(
         let chapter = chapter_id.clone();
         let content_value = content.clone();
         let event_ids = proof_event_ids;
+        let proof_batch = proof_batch_json;
         return match with_app_service(move |svc| {
+            let proof_batch_empty = proof_batch.trim().is_empty();
             let receipt = if clear {
-                svc.clear_chapter_content_versioned_with_batch(
-                    project,
-                    volume,
-                    chapter,
-                    Some(expected),
-                    base,
-                    snapshot_revision,
-                    event_ids,
-                )
-            } else {
+                if proof_batch_empty {
+                    svc.clear_chapter_content_versioned_with_batch(
+                        project,
+                        volume,
+                        chapter,
+                        Some(expected),
+                        base,
+                        snapshot_revision,
+                        event_ids,
+                    )
+                } else {
+                    // Harmony 没有平台持久化草稿：Core 自行完成投影并清理 journal，
+                    // 不产生永远无人确认的 draft ack。
+                    svc.clear_chapter_content_versioned_with_proof_batch(
+                        project,
+                        volume,
+                        chapter,
+                        Some(expected),
+                        base,
+                        snapshot_revision,
+                        proof_batch,
+                    )
+                }
+            } else if proof_batch_empty {
                 svc.save_chapter_content_versioned_with_batch(
                     project,
                     volume,
@@ -448,6 +470,19 @@ pub unsafe extern "C" fn writer_core_save_chapter_versioned_json(
                     snapshot_revision,
                     event_ids,
                     allow_empty,
+                )
+            } else {
+                svc.save_chapter_content_versioned_with_proof_batch(
+                    project,
+                    volume,
+                    chapter,
+                    content_value,
+                    Some(expected),
+                    base,
+                    snapshot_revision,
+                    proof_batch,
+                    allow_empty,
+                    false,
                 )
             }
             .map_err(|error| format!("{}", error))?;

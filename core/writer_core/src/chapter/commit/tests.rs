@@ -231,9 +231,26 @@ fn draft_proof_events_stay_pending_until_platform_ack() {
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].draft_ack_projections.len(), 2);
 
-    assert!(!mark_chapter_commit_draft_ack(root, &key, &receipt.transaction_id, "evt-1").unwrap());
+    let workspace_lock = crate::storage::WorkspaceWriteLock::acquire(root).unwrap();
+    let first_ack = mark_chapter_commit_draft_ack(
+        root,
+        &workspace_lock,
+        &key,
+        &receipt.transaction_id,
+        "evt-1",
+    )
+    .unwrap();
+    assert!(!first_ack);
     assert!(chapter_transaction_dir(root, &key, &receipt.transaction_id).exists());
-    assert!(mark_chapter_commit_draft_ack(root, &key, &receipt.transaction_id, "evt-2").unwrap());
+    let second_ack = mark_chapter_commit_draft_ack(
+        root,
+        &workspace_lock,
+        &key,
+        &receipt.transaction_id,
+        "evt-2",
+    )
+    .unwrap();
+    assert!(second_ack);
     assert!(!chapter_transaction_dir(root, &key, &receipt.transaction_id).exists());
     assert!(pending_chapter_draft_acks(root).unwrap().is_empty());
 }

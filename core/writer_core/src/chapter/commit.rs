@@ -201,6 +201,12 @@ pub struct ChapterCommitRequest {
     pub trash_path: Option<std::path::PathBuf>,
     /// 需要调用方在正文/元数据发布后补写的投影 ID；为空表示无滞后投影。
     pub projection_ids: Vec<String>,
+    /// 平台是否有独立持久化的草稿需要确认本次原始证明事件。
+    ///
+    /// Qt 在本地保存草稿后按事件精确 ack，`true`；Harmony 没有外部草稿，
+    /// Core 完成投影后自行清理 journal，`false`（此时 journal 不生成
+    /// `draft_ack_projections`，避免永远无人确认的 ack）。
+    pub draft_ack_required: bool,
 }
 
 impl ChapterCommitRequest {
@@ -225,6 +231,7 @@ impl ChapterCommitRequest {
             app_data_root: None,
             trash_path: None,
             projection_ids: Vec::new(),
+            draft_ack_required: true,
         }
     }
 }
@@ -377,8 +384,8 @@ pub(crate) use journal::{
     pending_chapter_proof_payload, pending_chapter_proof_transactions_for_key,
 };
 pub use journal::{
-    mark_chapter_commit_draft_ack, mark_chapter_commit_projection, mark_chapter_commit_projections,
-    pending_chapter_draft_acks,
+    mark_chapter_commit_draft_ack, mark_chapter_commit_draft_acks, mark_chapter_commit_projection,
+    mark_chapter_commit_projections, pending_chapter_draft_acks,
     pending_chapter_proof_transactions, pending_chapter_sync_proof_fact_ids,
     read_chapter_state_recovering, read_chapter_version, read_chapter_version_recovering,
     recover_pending_chapter_commits, replay_pending_sync_mutations,

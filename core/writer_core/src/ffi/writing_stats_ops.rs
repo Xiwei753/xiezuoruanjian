@@ -135,6 +135,10 @@ pub unsafe extern "C" fn writer_core_get_current_writing_speed(window_seconds: u
 /// 平台端在编辑事务发生时调本函数，把编辑事实（cause + contentDelta）原样送进来，
 /// `cause → EventSource` 和各计数字段的映射由 Core 决定，端侧不猜 source。
 ///
+/// 带 `changes` 的事件会同时把证明投影留在 Core 全局 pending map，供旧的
+/// event-id 批次保存消费。Harmony 新链路用 [`writer_core_record_editor_change_stats_without_proof`]：
+/// 证明随正文作为显式批次提交，不能再留一份 pending 生命周期。
+///
 /// # Safety
 /// `event_json` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串，内容为
 /// [`crate::api::EditorChangeStatsInputDto`] 的 JSON。返回 false 表示解析或落盘失败。
@@ -151,6 +155,62 @@ pub unsafe extern "C" fn writer_core_record_editor_change_stats(event_json: *con
             .map_err(|e| format!("{}", e))
     })
     .is_ok()
+}
+
+/// 按编辑事务上报写作统计，但不把证明投影写进全局 pending map（Issue #1069）。
+///
+/// 入参与 [`writer_core_record_editor_change_stats`] 完全相同，区别在证明与统计的
+/// 生命周期：带 `changes` 的事务由平台把同一份冻结事实交给
+/// [`writer_core_build_editor_proof_batch_json`] 生成显式批次，随正文一次提交，
+/// 统计与证明都由 journal 决议后写入（这里立即返回，不写统计、不留 pending）；
+/// 没有 `changes` 的事务没有可回放证明，仍按旧口径立即写统计事件。
+/// 这样同一 `event_id` 不会出现「先无 proof 统计、后有 proof 事件」两份业务事实。
+///
+/// # Safety
+/// `event_json` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串，内容为
+/// [`crate::api::EditorChangeStatsInputDto`] 的 JSON。返回 false 表示解析或落盘失败。
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_record_editor_change_stats_without_proof(
+    event_json: *const c_char,
+) -> bool {
+    let json_str = match c_str_to_rust(event_json) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    with_app_service(|svc| {
+        let input: crate::api::EditorChangeStatsInputDto =
+            serde_json::from_str(&json_str).map_err(|e| format!("invalid stats input: {}", e))?;
+        svc.record_editor_change_stats_without_proof(input)
+            .map_err(|e| format!("{}", e))
+    })
+    .is_ok()
+}
+
+/// 把一批编辑事实投影成 Core 定义的证明批次（Issue #1069）。
+///
+/// 入参是 `[EditorChangeStatsInputDto]` 的 JSON；返回的 ResultEnvelope
+/// `data` 是 `[ChapterProofProjection]` 的 JSON 字符串，可直接作为正文保存
+/// 请求的 `proofBatchJson`。设备身份、source 分类与投影都在 Core 完成，
+/// 平台不手拼证明。
+///
+/// # Safety
+/// `events_json` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串。
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_build_editor_proof_batch_json(
+    events_json: *const c_char,
+) -> *mut c_char {
+    let events_json = match c_str_to_rust(events_json) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &error.to_string()),
+    };
+    match with_app_service(|svc| {
+        svc.build_editor_proof_batch_json(events_json)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(json) => ok_json(json),
+        Err(error) => err_json("UNKNOWN_ERROR", &error),
+    }
 }
 
 /// 按章节回放证明事件。请求/响应都是 JSON，播放器只渲染 Core 返回的状态。

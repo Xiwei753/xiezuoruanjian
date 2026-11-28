@@ -20,7 +20,8 @@ import emitter from '@ohos.events.emitter'
 import { util } from '@kit.ArkTS'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { SYNC_DURABLE_COMMIT_EVENT_ID } from '../../settings/presentation/SyncRunTypes'
-import { EditorSessionSnapshot, EditorEditResult, EditorTransactionCause, EditorOperationKind } from '../../../corebridge/dto/EditorDtos'
+import { EditorSessionSnapshot, EditorEditResult, EditorTransactionCause, EditorOperationKind,
+  EditorChangeStatsInput } from '../../../corebridge/dto/EditorDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { ChapterVersion, ChapterSaveReceipt } from '../../../corebridge/dto/ProjectDtos'
 import { EditorSessionCoordinator, EditorStateUpdate } from './EditorSessionCoordinator'
@@ -99,8 +100,10 @@ export interface WritingWorkflowConfig {
 // Issue #629 评论 5308748920 问题3：保存事务记录（命名 interface，避免对象字面量类型）。
 // Issue #1054 复审：不可变保存请求。授权在入队前按这份快照的 session/revision
 // 精确计算，执行时不再读取保存期间更新的最新快照来判断旧请求。
-// Issue #1059：入队即冻结 chapter/session/revision/text/baseVersion/baseContent/statsBarrier，
+// Issue #1059：入队即冻结 chapter/session/revision/text/baseVersion/baseContent/证明上界，
 // 等待期间不得用 this.lastSavedVersion / this.lastSavedContent 重写这里的 base。
+// Issue #1069：正文请求自带 Core 生成的显式证明批次，正文与证明一次提交；
+// 统计发送成功与否不是正文保存的前置条件。
 interface SaveRequest {
   // 本次队列请求身份；直接前序（predecessorId）与日志都按它关联。
   requestId: number
@@ -119,20 +122,23 @@ interface SaveRequest {
   // 才允许推进（advanceSuccessors）；外部同步/切章/删除产生的版本不会替换它。
   baseVersion: ChapterVersion | null
   baseContent: string
-  // 与快照同一次结算冻结的统计批次上界：这份正文定型前入队的最后一条统计 seq。
-  statsBarrier: number
-  // 冻结到 statsBarrier 为止的编辑事件 ID；随正文一起提交，Core 只认这些事件。
-  proofEventIds: string[]
+  // 与快照同一次结算冻结的证明事实上界：这份正文定型前入队的最后一条事件 seq。
+  // 只用于冻结证明事实，不等待统计发送完成。
+  proofBarrier: number
+  // Core 生成的显式证明批次（`ChapterProofProjection` JSON 数组字符串，每项
+  // `{event, baselineText}`）。正文与这批证明一次提交；空串只用于确实没有编辑事实的保存。
+  // 保存失败时队列里的冻结事实保留，重试时重取同一批。
+  proofBatchJson: string
   // 直接前序本地保存请求 ID；-1 表示这条请求没有可继承的回执。
   predecessorId: number
 }
 
 // 调用方已结算的快照身份。缺省时只用于非空保存；空保存必须带精确来源。
-// statsBarrier 必须与 snapshot 一起固定，不能等到真正写盘时才读 currentSeq。
+// proofBarrier 必须与 snapshot 一起固定，不能等到真正写盘时才读 currentSeq。
 interface SaveSnapshotSource {
   sessionId: number
   revision: number
-  statsBarrier: number
+  proofBarrier: number
 }
 
 // 单一保存 actor 的队列项：等待者只拿自己请求的 promise，
@@ -150,6 +156,25 @@ interface EditorBarrierFailure {
   readonly stage: string
   readonly errorCode: string
   readonly detail: string
+}
+
+// Issue #1069 D：删除章节/卷的结果。
+// deleted 表示 Core 确实删除（success && data === true）；activeChapterClosed 表示
+// 被删目标就是当前活动章节（或包含它的卷），协调器已结束输入→冻结保存→关闭会话，
+// 页面据此切到有效章节或离开写作页；失败时会话已恢复，页面留在本页。
+export interface WritingDeletionResult {
+  readonly deleted: boolean
+  readonly activeChapterClosed: boolean
+}
+
+// Core `ChapterProofProjection` 线格式里只读取事件身份（`event.event_id`）：
+// 正文回执只能确认本次实际提交的批次，不能按累计 revision 清场。
+interface ProofBatchWireEvent {
+  event_id?: string
+}
+
+interface ProofBatchWireItem {
+  event?: ProofBatchWireEvent
 }
 
 export class WritingWorkflowCoordinator implements ActiveWritingSession {
@@ -367,7 +392,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       a.revision === b.revision && a.contentSha256 === b.contentSha256
   }
 
-  // 可复用的保存请求必须连冻结基线、统计批次和显示语义都完全一致；
+  // 可复用的保存请求必须连冻结基线、证明批次和显示语义都完全一致；
   // 只比较文本会让“同文本但基线已前进”的请求共用一次旧写入。
   private sameSaveRequest(a: SaveRequest, b: SaveRequest): boolean {
     return a.projectId === b.projectId && a.volumeId === b.volumeId &&
@@ -375,13 +400,13 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       a.sessionEpoch === b.sessionEpoch && a.revision === b.revision &&
       a.text === b.text && a.allowEmptyOverwrite === b.allowEmptyOverwrite &&
       a.isAutoSave === b.isAutoSave && this.sameVersion(a.baseVersion, b.baseVersion) &&
-      a.baseContent === b.baseContent && a.statsBarrier === b.statsBarrier &&
-      a.proofEventIds.length === b.proofEventIds.length &&
-      a.proofEventIds.every((id: string, index: number): boolean => id === b.proofEventIds[index])
+      a.baseContent === b.baseContent && a.proofBarrier === b.proofBarrier &&
+      a.proofBatchJson === b.proofBatchJson
   }
 
   // 从调用方已结算的 Core 快照冻结保存身份；session 必须仍属于同一编辑会话。
-  // 统计批次上界与这份快照在同一次结算里固定，避免保存前才读 currentSeq 把后到的输入算进本批。
+  // 证明事实的冻结上界与这份快照在同一次结算里固定，避免保存前才读 currentSeq
+  // 把后到的输入算进本批。
   private snapshotSaveSource(snap: EditorSessionSnapshot | null): SaveSnapshotSource | null {
     const sessionId = this.editorCoordinator.getSessionId()
     if (snap === null || sessionId === null) {
@@ -390,7 +415,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     return {
       sessionId: sessionId,
       revision: snap.revision,
-      statsBarrier: this.statsQueue.currentSeq()
+      proofBarrier: this.statsQueue.currentSeq()
     }
   }
 
@@ -680,19 +705,16 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // ── 保存 ──
 
   // Issue #1059 保存 actor（单一队列，串行 drain）：
-  //   ensureSnapshotSaved 冻结合成 SaveRequest（身份/正文/基线/统计上界）→ 入队；
+  //   ensureSnapshotSaved 冻结合成 SaveRequest（身份/正文/基线/证明批次）→ 入队；
   //   drainSaveQueue 一次只取队首 → executeSaveRequest 落盘 → 回执身份校验 → 结算；
   //   只有成功回执能经由 advanceSuccessors 推进“直接后继”的冻结 base。
   // 等待者共享请求自己的 promise，不再有第二个保存入口能覆盖在飞请求。
   //
-  // 已知 Core API 缺口（本次边界内无法补齐）：
-  // 1. 版本化正文保存 writer_core_save_chapter_versioned 不接受本批事件 IDs；
-  //    writer_core_save_chapter_with_stats 可带显式事件，但没有 expected version CAS；
-  // 2. ChapterSaveReceiptDto 丢弃了 Core receipt 的 transactionId / pendingProjections，
-  //    平台无法从回执确认“本批证明已随本次正文提交”。
-  // 因此本文件把批次固定为 seq 上界（statsBarrier）并在正文提交前要求该批次全部进入 Core；
-  // 失败就整笔请求失败，绝不把正文先写成功、证明留给下一次保存按正文摘要反查。
-  // 彻底移除该前置 flush 需要新增“版本化 CAS + 显式事件批次 + 回执投影确认”的 C ABI。
+  // Issue #1069：正文与证明一次提交。
+  // 版本化正文保存接受 Core 生成的显式证明批次（`ChapterProofProjection` JSON）；
+  // 保存前不再 flush 统计队列 —— 统计发送失败或积压只影响统计页读数，不会让正文
+  // 不落盘。正文提交失败时队列里的冻结事实原样保留，重试时重取同一批 eventId。
+  // 只有确实没有编辑事实的保存才允许传空批次。
 
   // Issue #629 评论 5308748920 问题3：手动/自动保存入口。
   // 先取得稳定 snapshot（flush + whenIdle），再调 ensureSnapshotSaved 精确保存这份文本。
@@ -711,23 +733,47 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #1054 复审：入队时把章节/session/revision/文本/空覆盖授权冻结成不可变请求；
   // 等待旧保存期间即使正文继续前进，也不会重新解释旧请求的删除意图。
   // Issue #1059：调用方只负责把已结算快照放进单一 actor 队列，绝不在等待后重写 base。
+  // Issue #1069：入队前冻结本批证明事实并让 Core 生成显式批次；生成失败只失败本次
+  // 保存，队列事实保留，重试时重取同一批（eventId 稳定）。
   async ensureSnapshotSaved(targetText: string, isAutoSave: boolean,
     allowEmptyOverwrite: boolean = false, source: SaveSnapshotSource | null = null): Promise<boolean> {
+    const projectId: string = this.projectId
+    const volumeId: string = this.volumeId
+    const chapterId: string = this.chapterId
+    const sessionEpoch: number = this.sessionEpoch
     const sessionId: number = source !== null ? source.sessionId
       : (this.editorCoordinator.getSessionId() ?? -1)
     const revision: number = source !== null ? source.revision
       : (this.editorCoordinator.getSnapshot()?.revision ?? -1)
-    // 统计批次上界必须与快照同批冻结；缺省时用入队瞬间的上界。
-    const statsBarrier: number = source !== null ? source.statsBarrier : this.statsQueue.currentSeq()
+    // 证明事实上界必须与快照同批冻结；缺省时用入队瞬间的上界。
+    const proofBarrier: number = source !== null ? source.proofBarrier : this.statsQueue.currentSeq()
+    const proofInputs: EditorChangeStatsInput[] = this.statsQueue.freezeProofBatchThrough(
+      proofBarrier, projectId, volumeId, chapterId)
+    const proofBatchJson: string | null = await this.buildProofBatch(proofInputs)
+    if (proofBatchJson === null) {
+      // 批次生成失败：本次保存不提交正文，冻结事实保留，下次保存重取同一批。
+      this.lastSaveFailed = true
+      this.saveMessage = this.textProvider(WritingTextKey.SaveError)
+      this.emit(null, null)
+      return false
+    }
+    if (this.projectId !== projectId || this.volumeId !== volumeId ||
+      this.chapterId !== chapterId || this.sessionEpoch !== sessionEpoch) {
+      // 生成批次期间切章/删章/同步回填：这份请求已不属于当前章节，不入队；
+      // 冻结事实仍留在队列里供新会话自己的保存使用。
+      hilog.warn(0x0000, 'WritingWorkflowCoordinator',
+        `drop save request built across session boundary chapter=${chapterId}`)
+      return false
+    }
     const predecessorId: number = this.resolvePredecessorId(
-      this.projectId, this.volumeId, this.chapterId, sessionId, this.sessionEpoch)
+      projectId, volumeId, chapterId, sessionId, sessionEpoch)
     const request: SaveRequest = {
       requestId: this.nextSaveRequestId,
-      projectId: this.projectId,
-      volumeId: this.volumeId,
-      chapterId: this.chapterId,
+      projectId: projectId,
+      volumeId: volumeId,
+      chapterId: chapterId,
       sessionId: sessionId,
-      sessionEpoch: this.sessionEpoch,
+      sessionEpoch: sessionEpoch,
       revision: revision,
       text: targetText,
       allowEmptyOverwrite: this.resolveEmptyOverwriteAuthorization(
@@ -735,16 +781,61 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       isAutoSave: isAutoSave,
       baseVersion: this.lastSavedVersion,
       baseContent: this.lastSavedContent,
-      statsBarrier: statsBarrier,
-      proofEventIds: this.statsQueue.proofEventIdsThrough(
-        statsBarrier, this.projectId, this.volumeId, this.chapterId),
+      proofBarrier: proofBarrier,
+      proofBatchJson: proofBatchJson,
       predecessorId: predecessorId
     }
     this.nextSaveRequestId += 1
     return this.enqueueSaveRequest(request)
   }
 
-  // 队列是唯一保存入口：同一份请求（同文本、同 revision、同冻结基线、同统计批次）
+  // 让 Core 把冻结的编辑事实投影成显式证明批次。空输入表示这次保存确实没有编辑事实；
+  // 其余失败返回 null，由调用方保留事实并让本次保存失败（绝不传空批次绕过）。
+  private async buildProofBatch(inputs: EditorChangeStatsInput[]): Promise<string | null> {
+    if (inputs.length === 0) {
+      return ''
+    }
+    try {
+      const result = await this.bridge.buildEditorProofBatch(inputs)
+      if (!result.success || result.data === undefined) {
+        hilog.error(0x0000, 'WritingWorkflowCoordinator',
+          `build proof batch failed events=${inputs.length}`
+            + ` errorCode=${result.errorCode !== undefined ? result.errorCode : 'UNKNOWN'}`)
+        return null
+      }
+      return result.data
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      hilog.error(0x0000, 'WritingWorkflowCoordinator',
+        `build proof batch failed events=${inputs.length}: ${detail}`)
+      return null
+    }
+  }
+
+  // 本次提交的证明事件身份：只从冻结批次里读 `event.event_id`，不构造证明。
+  // 回执确认后按它释放对应事实，未提交/未确认的事件继续保留。
+  private proofEventIdsOfBatch(proofBatchJson: string): string[] {
+    const ids: string[] = []
+    if (proofBatchJson.length === 0) {
+      return ids
+    }
+    try {
+      const items: ProofBatchWireItem[] = JSON.parse(proofBatchJson) as ProofBatchWireItem[]
+      for (let i = 0; i < items.length; i++) {
+        const event = items[i].event
+        const eventId: string = event !== undefined && event.event_id !== undefined
+          ? event.event_id : ''
+        if (eventId.length > 0) {
+          ids.push(eventId)
+        }
+      }
+    } catch (err) {
+      hilog.error(0x0000, 'WritingWorkflowCoordinator', 'proof batch json parse failed')
+    }
+    return ids
+  }
+
+  // 队列是唯一保存入口：同一份请求（同文本、同 revision、同冻结基线、同证明批次）
   // 由多个等待者共享同一个 promise，绝不各自启动 doSaveChapter 覆盖在飞保存。
   private enqueueSaveRequest(request: SaveRequest): Promise<boolean> {
     const reusable = this.findReusableSaveEntry(request)
@@ -831,7 +922,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   }
 
   // 真实持久化：只接受已冻结的请求。
-  // - 统计批次失败：不提交正文，避免正文前进后这批证明只能靠正文摘要反查；
+  // - 正文与冻结证明批次一次提交；统计发送失败/积压不参与这里的成败判定（Issue #1069）；
   // - 回执必须对应本请求的章节路径/版本基线与正文长度，否则不得据此推进状态；
   // - 只有仍属于当前 session/epoch/chapter 的回执才能写 lastSavedVersion/content。
   private async executeSaveRequest(request: SaveRequest): Promise<boolean> {
@@ -851,29 +942,15 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     this.emit(null, null)
 
     try {
-      // 冻结批次：只等入队时固定的 statsBarrier 及之前的事件。
-      // 本批统计没有全部进入 Core 就不提交正文——否则正文版本前进后，
-      // 这批事件只能靠正文摘要反查归属，等同于把事件留在错误批次里。
-      const statsFlushed: boolean = await this.flushEditorStatsQueue(request.statsBarrier)
-      if (!statsFlushed) {
-        if (this.isRequestCurrent(request)) {
-          this.lastSaveFailed = true
-          this.saveMessage = this.textProvider(WritingTextKey.SaveError)
-        }
-        return false
-      }
-      if (!this.isRequestCurrent(request)) {
-        // 等统计期间切章/重载/同步回填：不在旧会话上写盘。
-        return false
-      }
-      // 空正文只有在入队时已确认的授权下才走显式 clear 入口。
+      // 空正文只有在入队时已确认的授权下才走显式 clear 入口；
+      // 保存/清空都携带同一份 Core 生成的证明批次。
       const result = request.allowEmptyOverwrite
         ? await this.bridge.clearChapterVersioned(
             request.chapterId, request.baseVersion, request.baseContent,
-            request.revision, request.proofEventIds)
+            request.revision, request.proofBatchJson)
         : await this.bridge.saveChapterVersioned(
             request.chapterId, request.text, request.baseVersion, request.baseContent, false,
-            request.revision, request.proofEventIds)
+            request.revision, request.proofBatchJson)
       if (!result.success || !result.data) {
         if (this.isRequestCurrent(request)) {
           this.lastSaveFailed = true
@@ -907,9 +984,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       if (receipt.transactionId.length > 0) {
         emitter.emit({ eventId: SYNC_DURABLE_COMMIT_EVENT_ID })
       }
-      // 正文已 durable，精确 ack 本次请求携带的证明事件；不能按累计
-      // revision 清空，否则并发新编辑会丢失。
-      this.statsQueue.acknowledgeProofEvents(request.proofEventIds)
+      // 正文已 durable：只释放本次批次实际提交的证明事实；不能按累计 revision
+      // 清空，否则并发新编辑会丢失。
+      this.statsQueue.acknowledgeProofEvents(this.proofEventIdsOfBatch(request.proofBatchJson))
       // 只有这次回执能推进直接后继的冻结 base；外部同步/切章/删除不会走到这里。
       this.advanceSuccessors(request, receipt.version)
       return true
@@ -1265,8 +1342,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // finishActiveComposition → whenIdle → save → closeAsync。
   // 幂等：closeTask 复用同一 Promise；失败后重置允许重试。
   async performGracefulClose(): Promise<boolean> {
-    // 无编辑会话（零章节工作台）：没有 session 需要 close/save，直接允许离开。
-    if (this.chapterId.length === 0 && this.editorCoordinator.getSessionId() === null) {
+    // 没有打开的编辑会话（零章节工作台 / 加载失败 / 删除活动章节后已关闭）：
+    // 没有正文或预编辑需要结算，直接允许离开/切章。
+    if (this.editorCoordinator.getSessionId() === null) {
       return true
     }
     if (this.closeTask !== null) {
@@ -1326,9 +1404,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         (afterFinish.composition !== null && afterFinish.composition !== undefined)) {
         return false
       }
-      // 4. 保存稳定 snapshot。这次保存自带与快照同批冻结的统计上界：
-      //    本批统计没全部进入 Core 就不提交正文（失败即拒绝关闭并保留未保存状态），
-      //    不能像旧流程那样先 flush、失败只记日志然后继续落盘丢事件。
+      // 4. 保存稳定 snapshot。正文与随快照冻结的证明批次一次提交（Issue #1069）：
+      //    统计发送成功与否不影响这里，证明事实会在回执确认后释放。
       //    即使全文与上次相同也要调用：输入后还原会留下尚未 durable 的证明批次，
       //    Core 需要建仅事件 journal。
       const savedText: string = afterFinish.text
@@ -1380,12 +1457,13 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   // Issue #629 评论14 第1项：宽屏左侧切章节。
   // 先完成当前 Writing 的 performGracefulClose()（safeReplacePathWithStack 内部 guard），
   // 成功后把当前 Writing route 替换成目标章节的 Writing route；失败保持原章节。
-  async switchChapter(chapterId: string, chapterTitle: string, volumeId: string): Promise<void> {
+  // 返回 false 表示导航事务没有真正替换路由（删除活动章节后的回退依赖它）。
+  async switchChapter(chapterId: string, chapterTitle: string, volumeId: string): Promise<boolean> {
     if (chapterId === this.chapterId) {
-      return // 已是当前章节
+      return true // 已是当前章节
     }
     const targetKey = `writing:${this.projectId}:${volumeId}:${chapterId}`
-    await this.navigation.safeReplacePathWithStack(this.navPathStack, targetKey, () => {
+    return this.navigation.safeReplacePathWithStack(this.navPathStack, targetKey, () => {
       const replaceParam: WritingRouteParams = {
         chapterId: chapterId,
         chapterTitle: chapterTitle,
@@ -1397,6 +1475,123 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         param: replaceParam
       })
     })
+  }
+
+  // ── 删除活动章节 / 卷（Issue #1069 D）──
+
+  // 删除章节。非活动章节直接走 Core 删除（严格校验 success && data === true）；
+  // 被删目标就是当前活动章节时必须先结束输入 → 冻结并保存 → 关闭会话，再让 Core 删除。
+  // 删除失败恢复当前会话，页面留在本页；成功清除旧版本与章节身份，由页面切章/离页。
+  async deleteChapter(chapterId: string): Promise<WritingDeletionResult> {
+    if (chapterId.length === 0) {
+      return { deleted: false, activeChapterClosed: false }
+    }
+    if (chapterId !== this.chapterId) {
+      const deleted: boolean = await this.deleteChapterInCore(chapterId)
+      return { deleted: deleted, activeChapterClosed: false }
+    }
+    return this.deleteActiveChapter((): Promise<boolean> => this.deleteChapterInCore(chapterId))
+  }
+
+  // 删除卷。包含当前活动章节的卷走同一套保存/关闭流程；其他卷直接删。
+  async deleteVolume(volumeId: string): Promise<WritingDeletionResult> {
+    if (volumeId.length === 0 || this.projectId.length === 0) {
+      return { deleted: false, activeChapterClosed: false }
+    }
+    if (volumeId !== this.volumeId) {
+      const deleted: boolean = await this.deleteVolumeInCore(volumeId)
+      return { deleted: deleted, activeChapterClosed: false }
+    }
+    return this.deleteActiveChapter((): Promise<boolean> => this.deleteVolumeInCore(volumeId))
+  }
+
+  private async deleteChapterInCore(chapterId: string): Promise<boolean> {
+    try {
+      const result = await this.bridge.deleteChapter(chapterId)
+      return result.success && result.data === true
+    } catch (err) {
+      hilog.error(0x0000, 'WritingWorkflowCoordinator', `delete chapter failed: ${err}`)
+      return false
+    }
+  }
+
+  private async deleteVolumeInCore(volumeId: string): Promise<boolean> {
+    try {
+      const result = await this.bridge.deleteVolume(this.projectId, volumeId)
+      return result.success && result.data === true
+    } catch (err) {
+      hilog.error(0x0000, 'WritingWorkflowCoordinator', `delete volume failed: ${err}`)
+      return false
+    }
+  }
+
+  // 活动章节/卷的删除事务：结束输入 → 冻结并保存 → 关闭会话 → Core 删除。
+  // - 屏障/保存失败：会话与正文都还在，本次不删除（页面按既有失败状态提示）；
+  // - 删除失败：恢复当前会话，页面继续留在本页；
+  // - 删除成功：清除旧版本与章节身份（含该章未提交的证明事实），页面切章或离页。
+  private async deleteActiveChapter(
+    deleteInCore: () => Promise<boolean>): Promise<WritingDeletionResult> {
+    const closed: boolean = await this.performGracefulClose()
+    if (!closed) {
+      return { deleted: false, activeChapterClosed: false }
+    }
+    const deleted: boolean = await deleteInCore()
+    if (!deleted) {
+      await this.restoreSessionAfterFailedDelete()
+      return { deleted: false, activeChapterClosed: true }
+    }
+    this.resetAfterActiveChapterDeleted()
+    return { deleted: true, activeChapterClosed: true }
+  }
+
+  // 删除失败：用已落盘正文恢复当前会话，页面留在本页可继续写（不能只刷新目录树）。
+  private async restoreSessionAfterFailedDelete(): Promise<void> {
+    // 新代次：关闭前在飞的旧保存请求回执不能再改写恢复后的基线。
+    this.beginSessionBoundary()
+    // closeTask 里缓存的是“已关闭”的成功结果，恢复会话后必须允许重新关闭。
+    this.closeTask = null
+    try {
+      const reopened = await this.editorCoordinator.open(
+        this.chapterSessionTargetId(), this.lastSavedContent)
+      if (!reopened.success || reopened.data === undefined) {
+        // 会话恢复失败：给出明确失败状态，页面不会把空会话当成可继续写。
+        this.lastSaveFailed = true
+        this.saveMessage = this.textProvider(WritingTextKey.SaveFailed)
+        this.emit(null, null)
+        return
+      }
+      this.proofBaselineSent = false
+      this.hasUnsavedChanges = false
+      const hook = this.sessionOpenedHook
+      if (hook !== null) {
+        await hook(reopened.data)
+      }
+      this.emit(reopened.data, null)
+    } catch (err) {
+      hilog.error(0x0000, 'WritingWorkflowCoordinator',
+        `restore session after failed delete failed: ${err}`)
+      this.emit(null, null)
+    }
+  }
+
+  // 活动章节/卷已删除：清除旧版本、正文投影与章节身份；该章未提交的证明事实一并丢弃
+  // （Core 不会再接受这个章节的正文，保留只会变成无法解析的保存请求）。
+  private resetAfterActiveChapterDeleted(): void {
+    const deletedChapterId: string = this.chapterId
+    this.beginSessionBoundary()
+    this.closeTask = null
+    this.statsQueue.discardProofFacts(this.projectId, this.volumeId, deletedChapterId)
+    this.content = ''
+    this.wordCount = 0
+    this.hasUnsavedChanges = false
+    this.lastSavedContent = ''
+    this.lastSavedContentHash = null
+    this.lastSavedVersion = null
+    this.lastSaveFailed = false
+    this.saveMessage = ''
+    this.proofBaselineSent = false
+    this.chapterId = ''
+    this.emit(null, null)
   }
 
   // ── 内部工具 ──
@@ -1411,11 +1606,6 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     }
     const comp = snap.composition
     return this.editorCoordinator.finishComposition(comp.sessionId, comp.generation)
-  }
-
-  // 等写作统计队列写完 barrier 及之前入队的那些事件。
-  private flushEditorStatsQueue(barrier: number): Promise<boolean> {
-    return this.statsQueue.flushThrough(barrier)
   }
 
   // 保存 / 清空成功提示 2s 后自动清除（与页面原行为一致）。

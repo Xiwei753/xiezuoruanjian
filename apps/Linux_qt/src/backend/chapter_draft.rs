@@ -395,6 +395,21 @@ fn now_ms() -> i64 {
 
 // ── 公开 API ──────────────────────────────────────────────────────────────
 
+/// 本章草稿状态是否已在 actor 内加载（不读盘、不创建）。
+///
+/// Issue #1069：worker 只在“即将新建草稿”时读取一次 Core 已提交版本，
+/// 用于链被淘汰/新会话后仍以已确认版本作为新草稿基线。
+pub(crate) fn draft_state_initialized(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+) -> bool {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+        return false;
+    };
+    lock_registry().contains_key(&location.key)
+}
+
 /// 编辑器最近一次报告的正文候选；落盘由 actor 的 `persist_current` 按节流
 /// 与证明水位决定。
 ///
@@ -618,8 +633,42 @@ pub(crate) fn note_fact(
     Ok(())
 }
 
-/// Core 侧投影构造失败的原始命令（event ID/revision/session/generation/input JSON）。
-/// 同样 Err，绝不跳过。
+/// Issue #1069：spool 写失败时的内存失败标记。
+///
+/// 原始事实没有可恢复副本时不能继续投影；把 eventId/revision 记进同一份
+/// `failed_inputs`，`freeze_batch_for` 会拒绝越过它的保存。这里只更新已加载
+/// 的草稿状态，不新建空 meta（没有草稿时冻结会因读不到状态而 fail-closed）。
+pub(crate) fn note_failed_input_in_memory(
+    projects_root: &Path,
+    project_id: &str,
+    chapter_id: &str,
+    event_id: &str,
+    revision: u64,
+) {
+    let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
+        log::warn!(
+            "cannot record failed proof input without draft identity: project={project_id} chapter={chapter_id} event={event_id}"
+        );
+        return;
+    };
+    let mut drafts = lock_registry();
+    let Some(state) = drafts.get_mut(&location.key) else {
+        log::warn!(
+            "cannot record failed proof input without loaded draft: project={project_id} chapter={chapter_id} event={event_id}"
+        );
+        return;
+    };
+    if !state
+        .failed_inputs
+        .iter()
+        .any(|(existing, _)| existing == event_id)
+    {
+        state.failed_inputs.push((event_id.to_string(), revision));
+        state.meta_dirty = true;
+    }
+}
+
+/// 把当前草稿正文/事实按节流或 `force` 落盘；失败如实返回 Err，绝不跳过。
 /// 返回 true 表示草稿目录已完全删除（无事实且无正文）。
 pub(crate) fn persist_current(
     projects_root: &Path,

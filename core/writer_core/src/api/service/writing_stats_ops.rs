@@ -125,6 +125,11 @@ impl WriterCoreApi {
             projection_ids.clone(),
         )?;
         let project_root = self.projects_root.join(project_id);
+        // Issue #1069 评论 3：投影 ack 是「读 manifest → 清 pending → 可能发布
+        // Decided → 写回/清理」的完整读改写，必须在与正文提交相同的工作区写锁内
+        // 完成，否则并发 ack 会互相覆盖。这里在逐条 ack 前取一次锁并持有整批，
+        // 与下方统计路径的锁顺序保持一致（工作区锁在外层）。
+        let _workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         for event in events {
             let event_id = event.event_id.clone();
             self.record_editor_change_stats(event)?;

@@ -229,8 +229,17 @@ char*  writer_core_get_writing_speed_curve(const char* start_date, const char* e
 char*  writer_core_get_current_writing_speed(uint32_t window_seconds);
 // 按编辑事务上报写作统计（Harmony 走这条）。cause→source 的映射在 Core 侧做，
 // C 层只透传编辑事实。event_json 里带平台端固定并重发的 eventId/occurredAtMs，
-// Core 按 eventId 幂等去重。
+// Core 按 eventId 幂等去重。带 changes 的事件会额外把证明投影留在 Core 全局
+// pending map，供旧的 event-id 批次保存消费。
 bool  writer_core_record_editor_change_stats(const char* event_json);
+// Issue #1069：同上，但不写 pending 证明。带 changes 的编辑事务统计与证明由
+// journal 随正文显式批次一次写入；没有 changes 的仍立即写统计事件。
+bool  writer_core_record_editor_change_stats_without_proof(const char* event_json);
+// Issue #1069：把平台冻结的编辑事实批次（[EditorChangeStatsInputDto] JSON）投影成
+// Core 定义的证明批次（[ChapterProofProjection] JSON）。设备身份、source 分类与
+// 投影都在 Core 完成，返回的 ResultEnvelope.data 是可直接作为正文保存请求
+// proofBatchJson 的 JSON 字符串；平台不手拼证明。
+char* writer_core_build_editor_proof_batch_json(const char* events_json);
 // 上报一条已测量的前台编辑器写作计时切片。平台只给 session_id / 起止毫秒 /
 // 项目卷章 / 暂停原因与固定 event_id；device_id、业务日由 Core 补齐。Core 按
 // event_id 幂等去重，同一设备重叠切片按并集计。

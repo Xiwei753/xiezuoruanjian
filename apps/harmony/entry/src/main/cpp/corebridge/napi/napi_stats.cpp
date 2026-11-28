@@ -291,6 +291,8 @@ static napi_value NativeGetCurrentWritingSpeed(napi_env env, napi_callback_info 
 struct StatsRecordWork {
     // 事件 JSON 的堆拷贝，execute 回调在线程池里读它。
     char* json = nullptr;
+    // Issue #1069：true 时走不写 pending 证明的统计入口（证明随正文显式批次提交）。
+    bool without_proof = false;
     // create_promise 给的 deferred。complete 回调用它 resolve/reject，
     // 放在载荷里而不是 instance data：instance data 是 env 全局的，
     // 两条调用重叠会互相覆盖对方的 deferred，第一个 Promise 永远不落地。
@@ -304,10 +306,16 @@ struct StatsRecordWork {
 
 // Execute 回调 — 运行在线程池线程，可以安全调用 Rust（含文件 I/O）。
 // 这里不碰任何 napi_value：NAPI 的 JS 侧对象只能在主线程用。
+// Issue #1069：不写 Core pending 证明的统计入口。带 changes 的编辑事务统计与
+// 证明由 journal 随正文显式批次一次写入；没有 changes 的仍立即写统计。
 static void StatsRecordExecute(napi_env env, void* data) {
     (void)env;
     auto* work = static_cast<StatsRecordWork*>(data);
-    work->ok = writer_core_record_editor_change_stats(work->json);
+    // Issue #1069：Harmony 的证明由 buildEditorProofBatch 随正文显式提交，
+    // 统计这条链不能再用会把投影留进 Core pending map 的旧入口。
+    work->ok = work->without_proof
+        ? writer_core_record_editor_change_stats_without_proof(work->json)
+        : writer_core_record_editor_change_stats(work->json);
 }
 
 // Complete 回调 — 回到主线程，把结果 resolve/reject 成 Promise，然后释放 work。
@@ -339,7 +347,8 @@ static void StatsRecordComplete(napi_env env, napi_status status, void* data) {
     delete work;
 }
 
-static napi_value NativeRecordEditorChangeStats(napi_env env, napi_callback_info info) {
+static napi_value RecordEditorChangeStatsImpl(napi_env env, napi_callback_info info,
+                                              bool without_proof) {
     size_t argc = 1;
     napi_value args[1] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
@@ -349,6 +358,7 @@ static napi_value NativeRecordEditorChangeStats(napi_env env, napi_callback_info
 
     auto* work = new StatsRecordWork();
     work->json = json;
+    work->without_proof = without_proof;
 
     napi_value promise = nullptr;
     if (napi_create_promise(env, &work->deferred, &promise) != napi_ok) {
@@ -359,7 +369,9 @@ static napi_value NativeRecordEditorChangeStats(napi_env env, napi_callback_info
     }
 
     napi_value resource_name = nullptr;
-    const char* name = "WriterCoreRecordEditorChangeStats";
+    const char* name = without_proof
+        ? "WriterCoreRecordEditorChangeStatsWithoutProof"
+        : "WriterCoreRecordEditorChangeStats";
     napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &resource_name);
 
     napi_async_work async_work = nullptr;
@@ -381,6 +393,101 @@ static napi_value NativeRecordEditorChangeStats(napi_env env, napi_callback_info
     }
 
     // 调用方（ArkTS）拿到 Promise，await 它就是等磁盘写入真正完成。
+    return promise;
+}
+
+static napi_value NativeRecordEditorChangeStats(napi_env env, napi_callback_info info) {
+    return RecordEditorChangeStatsImpl(env, info, false);
+}
+
+// Issue #1069：不写 Core pending 证明的统计入口。带 changes 的编辑事务
+// 统计与证明随正文显式批次一次提交，同一事件不能有两条证明生命周期。
+static napi_value NativeRecordEditorChangeStatsWithoutProof(napi_env env, napi_callback_info info) {
+    return RecordEditorChangeStatsImpl(env, info, true);
+}
+
+// Issue #1069：证明批次投影。入参是冻结编辑事实（[EditorChangeStatsInputDto] JSON），
+// Rust 侧完成设备身份与投影并返回 ResultEnvelope（data 为
+// [ChapterProofProjection] JSON 字符串）。与统计上报同一条 ThreadPool 通道：
+// 设备身份读/建会碰磁盘，不能落在 ArkUI 主线程。
+struct ProofBatchBuildWork {
+    char* events_json = nullptr;
+    char* result_json = nullptr;
+    napi_deferred deferred = nullptr;
+    napi_async_work async_work = nullptr;
+};
+
+static void ProofBatchBuildExecute(napi_env env, void* data) {
+    (void)env;
+    auto* work = static_cast<ProofBatchBuildWork*>(data);
+    work->result_json = writer_core_build_editor_proof_batch_json(work->events_json);
+}
+
+static void ProofBatchBuildComplete(napi_env env, napi_status status, void* data) {
+    auto* work = static_cast<ProofBatchBuildWork*>(data);
+    if (status == napi_ok) {
+        // Rust 侧理论上不返回 NULL；即便出现也按 Core 的错误形状回给 ArkTS，
+        // 不让 Promise 永远悬着。
+        const char* json = work->result_json != nullptr
+            ? work->result_json
+            : "{\"success\":false,\"errorCode\":\"NULL_RESULT\"}";
+        napi_value value = nullptr;
+        napi_create_string_utf8(env, json, NAPI_AUTO_LENGTH, &value);
+        napi_resolve_deferred(env, work->deferred, value);
+    } else {
+        napi_value message = nullptr;
+        const char* text = "build_editor_proof_batch async work aborted";
+        napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &message);
+        napi_reject_deferred(env, work->deferred, message);
+    }
+    if (work->result_json != nullptr) {
+        writer_core_free_string(work->result_json);
+    }
+    napi_delete_async_work(env, work->async_work);
+    delete[] work->events_json;
+    delete work;
+}
+
+static napi_value NativeBuildEditorProofBatch(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    // JSON 先拷到堆上：execute 回调跑在别的线程，不能读 NAPI value。
+    auto* work = new ProofBatchBuildWork();
+    work->events_json = TakeStringArg(env, argc >= 1 ? args[0] : nullptr);
+
+    napi_value promise = nullptr;
+    if (napi_create_promise(env, &work->deferred, &promise) != napi_ok) {
+        delete[] work->events_json;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_create_promise failed");
+        return nullptr;
+    }
+
+    napi_value resource_name = nullptr;
+    const char* name = "WriterCoreBuildEditorProofBatch";
+    napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &resource_name);
+
+    napi_async_work async_work = nullptr;
+    if (napi_create_async_work(env, nullptr, resource_name, ProofBatchBuildExecute,
+                               ProofBatchBuildComplete, work, &async_work) != napi_ok) {
+        delete[] work->events_json;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_create_async_work failed");
+        return nullptr;
+    }
+    work->async_work = async_work;
+
+    if (napi_queue_async_work(env, async_work) != napi_ok) {
+        napi_delete_async_work(env, async_work);
+        delete[] work->events_json;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_queue_async_work failed");
+        return nullptr;
+    }
+
+    // 调用方（ArkTS）await 这个 Promise 才拿到 Core 生成的证明批次。
     return promise;
 }
 
@@ -542,6 +649,8 @@ napi_property_descriptor* getStatsDescriptors(size_t* count) {
         {"nativeGetWritingSpeedCurve", nullptr, NativeGetWritingSpeedCurve, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetCurrentWritingSpeed", nullptr, NativeGetCurrentWritingSpeed, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeRecordEditorChangeStats", nullptr, NativeRecordEditorChangeStats, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeRecordEditorChangeStatsWithoutProof", nullptr, NativeRecordEditorChangeStatsWithoutProof, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeBuildEditorProofBatch", nullptr, NativeBuildEditorProofBatch, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeRecordWritingActivitySegment", nullptr, NativeRecordWritingActivitySegment, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeReplayChapterProof", nullptr, NativeReplayChapterProof, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeExportChapterProof", nullptr, NativeExportChapterProof, nullptr, nullptr, nullptr, napi_default, nullptr},

@@ -21,6 +21,11 @@
 // 失败事件会保留原命令和稳定 eventId，后续 barrier/查询会重试；重试成功后必须把
 // 对应序号从失败集合里移除，否则一次短暂失败会让统计永远读不到。
 //
+// **这套账本只判统计**（Issue #1069）：`isCleanThrough` / `firstDroppedSeq` 只决定
+// 统计读取与页面关闭时的刷新是否干净，**不参与正文保存判定**。正文保存依赖随快照
+// 冻结的证明事实批次（EditorStatsQueue.pendingProofFacts），统计失败、积压丢弃
+// 都不会让正文不落盘。
+//
 // 生产代码：feature/editor/stats/EditorStatsQueue.ets。
 // 运行测试：node --experimental-strip-types editor_stats_barrier.test.mjs
 
@@ -36,8 +41,9 @@ export class StatsBarrierLedger {
   private completedSeq: number = 0
   // 仍未成功写入的失败序号。重试成功后移除；只有全部清除才恢复「干净」。
   private failedSeqs: number[] = []
-  // 被丢弃（没写进 Core）事件里**最早**的序号。0 表示至今没有丢弃。
-  // 丢弃也是一种「这条统计没进 Core」，与失败同口径。
+  // 被丢弃（没写进 Core）统计事件里**最早的**序号。0 表示至今没有丢弃。
+  // 丢弃也是一种「这条统计没进 Core」，与失败同口径；它只影响统计读取，
+  // 不影响正文保存（证明事实另有独立生命周期，见文件头）。
   private firstDroppedSeq: number = 0
 
   /** 给下一条事件分配序号并记录为「已入队」。返回该序号。 */
@@ -46,7 +52,7 @@ export class StatsBarrierLedger {
     return this.lastEnqueuedSeq
   }
 
-  /** 当前入队过的最后一个序号（保存流程拿它当 barrier）。 */
+  /** 当前入队过的最后一个序号（保存流程拿它当证明事实的冻结上界）。 */
   currentSeq(): number {
     return this.lastEnqueuedSeq
   }
@@ -68,8 +74,8 @@ export class StatsBarrierLedger {
   }
 
   /**
-   * 一条事件被丢弃（积压上限等）而没写进 Core。
-   * 调用方 flushThrough 越过它时应当看到「不干净」。
+   * 一条统计事件被丢弃（积压上限等）而没写进 Core。
+   * 调用方 flushThrough 越过它时应当看到「统计不干净」；正文保存不读这个判据。
    */
   dropped(seq: number): void {
     this.firstDroppedSeq = keepEarliest(this.firstDroppedSeq, seq)
@@ -81,10 +87,11 @@ export class StatsBarrierLedger {
   }
 
   /**
-   * barrier 及之前是否全部成功写进 Core（丢弃也算不干净）。
+   * barrier 及之前的**统计**是否全部成功写进 Core（丢弃也算不干净）。
    *
    * 判据是「1..=barrier 区间内是否仍有失败/丢弃」：失败重试成功会从集合移除，
    * 因此一次短暂失败不会永久污染统计；丢弃仍按最早序号记脏。
+   * 只用于统计读取/页面关闭刷新，不能拿它决定正文是否落盘（Issue #1069）。
    */
   isCleanThrough(barrier: number): boolean {
     const hasFailedInRange: boolean = this.failedSeqs.some((seq: number): boolean => seq <= barrier)

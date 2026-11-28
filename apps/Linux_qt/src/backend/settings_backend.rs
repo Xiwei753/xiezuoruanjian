@@ -809,8 +809,7 @@ impl SettingsBackend {
         self.theme_data_changed();
     }
     fn save_local_settings(&mut self) -> bool {
-        self.pending_save = false;
-        match self.with_app_mut(|app| app.save_local_settings()) {
+        let saved = match self.with_app_mut(|app| app.save_local_settings()) {
             Ok(result) => result,
             Err(_) => {
                 crate::backend::app_backend::debug_error_static(
@@ -820,7 +819,13 @@ impl SettingsBackend {
                 );
                 false
             }
+        };
+        // Issue #1069：只有确认保存成功才清除待保存标记；失败保留 true，
+        // 让下一次 flush_pending_settings_save / do_save_local_settings 真正重试。
+        if saved {
+            self.pending_save = false;
         }
+        saved
     }
 
     /// 标记设置已变更，需要延迟保存。

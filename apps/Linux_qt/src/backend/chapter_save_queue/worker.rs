@@ -85,6 +85,29 @@ impl ChapterSaveWorkerState {
             self.chains.remove(&key);
         }
     }
+
+    /// 最近一次 Core 已确认的版本（同一 workspace/项目/章节/会话）。
+    ///
+    /// Issue #1069：草稿新建时 QML 的 `committedChapter*` 可能还没应用回执；
+    /// worker 用已确认回执作为新草稿基线，避免把新事实建到旧版本上。
+    pub(super) fn chain_receipt_for(
+        &self,
+        context: &ChapterSaveContext,
+        project_id: &str,
+        chapter_id: &str,
+        session_id: u64,
+    ) -> Option<ChapterVersionDto> {
+        let key = format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            context.key(),
+            project_id,
+            chapter_id,
+            session_id
+        );
+        self.chains
+            .get(&key)
+            .and_then(|chain| chain.receipt.clone())
+    }
 }
 
 fn chapter_chain_key(request: &ChapterSaveRequest) -> String {
@@ -174,7 +197,7 @@ fn handle_job(state: &mut ChapterSaveWorkerState, job: ChapterSaveJob) {
         ChapterSaveJob::RecordFact(command) => {
             draft_jobs::handle_record_fact(state, command);
         }
-        ChapterSaveJob::DraftText(command) => draft_jobs::handle_draft_text(command),
+        ChapterSaveJob::DraftText(command) => draft_jobs::handle_draft_text(state, command),
         ChapterSaveJob::RestoreProject(command) => {
             super::restore_draft::handle_restore_project(state, command);
         }
@@ -384,6 +407,9 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
         request.identity.snapshot_revision,
         &proof_batch_json,
         request.allow_empty_overwrite,
+        // Issue #1069：Qt 有独立持久化草稿，journal 必须保留待平台确认的
+        // draft ack；Core 只负责投影，不替平台清理。
+        true,
     );
 
     match save_result {

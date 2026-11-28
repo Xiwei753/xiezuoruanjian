@@ -770,13 +770,18 @@ pub(crate) fn commit_chapter_with_guard(
         None
     };
     // 平台草稿负责确认的原始证明事件：同一 durable 决议保存，不进入
-    // pending_projections（那套由 Core 自己写统计）。
-    let mut draft_ack_ids: Vec<String> = request
-        .proof_events
-        .iter()
-        .map(|fact| fact.event_id().to_string())
-        .filter(|event_id| !event_id.is_empty())
-        .collect();
+    // pending_projections（那套由 Core 自己写统计）。只有确实存在外部持久
+    // 草稿的平台（Qt）才要求 ack；Harmony 由 Core 完成投影后自行清理。
+    let mut draft_ack_ids: Vec<String> = if request.draft_ack_required {
+        request
+            .proof_events
+            .iter()
+            .map(|fact| fact.event_id().to_string())
+            .filter(|event_id| !event_id.is_empty())
+            .collect()
+    } else {
+        Vec::new()
+    };
     draft_ack_ids.sort();
     draft_ack_ids.dedup();
     let mut pending_projections = request.projection_ids.clone();
@@ -948,7 +953,7 @@ pub(crate) fn commit_chapter_with_guard(
 
 mod ack;
 pub use ack::{
-    mark_chapter_commit_draft_ack, mark_chapter_commit_projection,
+    mark_chapter_commit_draft_ack, mark_chapter_commit_draft_acks, mark_chapter_commit_projection,
     mark_chapter_commit_projections,
 };
 

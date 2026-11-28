@@ -1171,8 +1171,9 @@ interface WriterAppService {
 
     /// Issue #1062 1.2：显式原始证明批次保存。proof_batch_json 是
     /// record_editor_proof_fact 返回值的 JSON 数组；Core 逐条 replay 校验。
+    /// draft_ack_required 区分平台是否有独立持久化草稿（Qt true / Harmony false）。
     [Throws=WriterError]
-    ChapterSaveReceiptDto save_chapter_content_versioned_with_proof_batch(string project_id, string volume_id, string chapter_id, string content, ChapterVersionDto? expected_version, string? base_content, u64 proof_snapshot_revision, string proof_batch_json, boolean allow_empty_overwrite);
+    ChapterSaveReceiptDto save_chapter_content_versioned_with_proof_batch(string project_id, string volume_id, string chapter_id, string content, ChapterVersionDto? expected_version, string? base_content, u64 proof_snapshot_revision, string proof_batch_json, boolean allow_empty_overwrite, boolean draft_ack_required);
 
     [Throws=WriterError]
     ChapterSaveReceiptDto clear_chapter_content(string project_id, string volume_id, string chapter_id);
@@ -1193,7 +1194,7 @@ interface WriterAppService {
 
     /// Issue #1062：确认平台草稿已完成某笔提交的精确 ack。
     [Throws=WriterError]
-    u32 acknowledge_chapter_commit_draft(string project_id, string transaction_id, sequence<string> event_ids);
+    u32 acknowledge_chapter_commit_draft(string project_id, string volume_id, string chapter_id, string transaction_id, sequence<string> event_ids);
 
     [Throws=WriterError]
     boolean update_chapter_note(string project_id, string volume_id, string chapter_id, string note);

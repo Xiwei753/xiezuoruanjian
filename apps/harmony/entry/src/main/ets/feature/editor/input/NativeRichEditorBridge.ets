@@ -183,6 +183,10 @@ interface PendingNativeChange {
   rangeStart: number
   rangeEnd: number
   insertedText: string
+  // Issue #1069 评论 1：replacementString.getString() 读取失败时，insertedText=''
+  // 只代表「未知」，不是用户删除了这段文本。该标记只约束本次 change：onDidChange
+  // 必须改用原生全文差量重建事实；合法的空替换（读取成功、确实为空）不会置位。
+  replacementTextReadFailed: boolean
   preview: boolean
   changeSequence: number
 }
@@ -1725,12 +1729,16 @@ export class NativeRichEditorBridge {
     const rangeStart: number = value.range.start ?? 0
     const rangeEnd: number = value.range.end ?? rangeStart
     let insertedText: string = ''
+    let replacementTextReadFailed: boolean = false
     if (value.replacementString !== undefined && value.replacementString !== null) {
       try {
         insertedText = value.replacementString.getString()
       } catch (e) {
-        insertedText = ''
-        this.reportNativeFactError('onContentWillChange', `replacementString unavailable: ${JSON.stringify(e)}`)
+        // Issue #1069 评论 1：读取失败时 insertedText 保持空串，但这不是真实删除。
+        // 只标记本次变更事实不可用于增量提交，由 onContentDidChange 读原生全文重建。
+        replacementTextReadFailed = true
+        this.reportNativeFactError('onContentWillChange',
+          `replacementString read failed; replacement text unknown: ${JSON.stringify(e)}`)
       }
     }
     // previewText 只有携带非空预览内容时才代表未提交的预编辑。
@@ -1749,6 +1757,7 @@ export class NativeRichEditorBridge {
       rangeStart: rangeStart,
       rangeEnd: rangeEnd,
       insertedText: insertedText,
+      replacementTextReadFailed: replacementTextReadFailed,
       preview: preview,
       changeSequence: this.changeSequence
     }
@@ -1775,7 +1784,8 @@ export class NativeRichEditorBridge {
     let insertedText: string = ''
     let factError: boolean = false
 
-    if (pending !== null && pending.rangeStart >= 0 && pending.rangeEnd >= pending.rangeStart &&
+    if (pending !== null && !pending.replacementTextReadFailed
+        && pending.rangeStart >= 0 && pending.rangeEnd >= pending.rangeStart &&
         pending.rangeEnd <= previousText.length) {
       startUtf16 = pending.rangeStart
       endUtf16 = pending.rangeEnd
@@ -1787,12 +1797,17 @@ export class NativeRichEditorBridge {
           `rangeAfter declares ${declaredAfterLength} but replacement has ${insertedText.length}`)
       }
     } else {
-      // 缺少同一笔 onWillChange 事实：以原生全文为真相恢复（非热路径）。
+      // 缺少同一笔 onWillChange 事实，或 replacementString 读取失败。后者的
+      // insertedText='' 只代表未知，绝不能当成「删除这段文本」提交 Core；统一以
+      // 原生全文为真相重建（非热路径）。合法的零长度删除命中上面的分支，不走这里。
+      const readFailure: boolean = pending !== null && pending.replacementTextReadFailed
+      const recoveryReason: string = readFailure
+        ? 'replacement text read failed' : 'missing will-change facts'
       const nativeFullText = this.readNativeFullText()
       if (nativeFullText === null) {
-        this.reportNativeFactError('onContentDidChange', 'native full text unavailable')
+        this.reportNativeFactError('onContentDidChange', `${recoveryReason}; native full text unavailable`)
         // 原生事实不可用：冻结消费并交由 reconcile 给出确定结果（可 rebase → healthy，否则 conflict）。
-        this.enterReconciling('native text fact mismatch and native full text unavailable')
+        this.enterReconciling(`${recoveryReason} and native full text unavailable`)
         return
       }
       const recovered = this.computeDiff(previousText, nativeFullText)
@@ -1801,7 +1816,7 @@ export class NativeRichEditorBridge {
       insertedText = recovered.replacement
       factError = true
       this.reportNativeFactError('onContentDidChange',
-        `missing will-change facts; recovered start=${startUtf16} end=${endUtf16} insertedLen=${insertedText.length}`)
+        `${recoveryReason}; recovered start=${startUtf16} end=${endUtf16} insertedLen=${insertedText.length}`)
     }
 
     const oldText: string = previousText.substring(startUtf16, endUtf16)

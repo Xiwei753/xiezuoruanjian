@@ -36,14 +36,16 @@ export interface IWriterCoreBridge {
   // 精确 sessionId/revision 时才传 true；普通 saveChapter 仍拒绝意外空覆盖。
   saveChapterWithOptions(chapterId: string, text: string, allowEmptyOverwrite: boolean): Promise<ResultEnvelope<ChapterSaveReceipt>>
   // Issue #1059：完整版本 CAS；expected 来自最近一次 open/save receipt。
+  // Issue #1069：proofBatchJson 是 Core 生成的显式证明批次（JSON 数组字符串），
+  // 正文与这批证明一次提交；空串只用于确实没有编辑事实的保存。
   saveChapterVersioned(chapterId: string, text: string, expected: ChapterVersion,
     baseContent: string, allowEmptyOverwrite: boolean,
-    proofSnapshotRevision: number, proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>>
+    proofSnapshotRevision: number, proofBatchJson: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
   // Issue #1063：只写冲突材料，不发布正文、不做版本 CAS；由编辑会话冲突状态机调用。
   writeEditorConflictMaterial(request: EditorConflictMaterialRequest): Promise<ResultEnvelope<EditorConflictMaterialReceipt>>
   clearChapterVersioned(chapterId: string, expected: ChapterVersion,
     baseContent: string, proofSnapshotRevision: number,
-    proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>>
+    proofBatchJson: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
   clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
   createChapter(volumeId: string, name: string): Promise<ResultEnvelope<ChapterMeta>>
   renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>>
@@ -123,6 +125,13 @@ export interface IWriterCoreBridge {
   // Issue #829 评论5：按编辑事务上报写作统计。透传 cause + contentDelta，
   // source 分类由 Core 决定，端侧不要自己拼 source 字符串。
   recordEditorChangeStats(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>>
+  // Issue #1069：不写 Core pending 证明的统计入口。带 changes 的编辑事务统计
+  // 与证明由 journal 随正文显式批次一次写入；没有 changes 的仍立即写统计。
+  recordEditorChangeStatsWithoutProof(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>>
+  // Issue #1069：把冻结的编辑事实批次投影成 Core 定义的证明批次。
+  // data 是 `[ChapterProofProjection]` JSON 字符串，直接作为保存请求的 proofBatchJson；
+  // 设备身份与投影都在 Core 生成，端侧不手拼证明。
+  buildEditorProofBatch(inputs: EditorChangeStatsInput[]): Promise<ResultEnvelope<string>>
   // Issue #981：上报已由平台单调时钟测量完成的前台写作切片。
   recordWritingActivitySegment(input: WritingActivitySegmentInput): Promise<ResultEnvelope<boolean>>
   replayChapterProof(requestJson: string): Promise<ResultEnvelope<Object>>

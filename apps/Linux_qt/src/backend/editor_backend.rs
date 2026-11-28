@@ -186,6 +186,9 @@ pub struct EditorBackend {
             current_session_id: u64,
         ) -> QJsonObject
     ),
+    /// Issue #1069：UI 放弃旧 chapterSaveSession 的结果订阅（不取消已开始的写盘）。
+    #[allow(dead_code)]
+    abandon_chapter_save_session: qt_method!(fn(&mut self, session_id: u64)),
     #[allow(dead_code)]
     read_chapter_version: qt_method!(
         fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
@@ -780,6 +783,12 @@ impl EditorBackend {
                 }))
             }
         }
+    }
+
+    /// Issue #1069：QML 明确放弃旧保存会话的结果订阅。只放弃结果交付与
+    /// 正文副本，不取消已经开始的 Core 写盘。
+    fn abandon_chapter_save_session(&mut self, session_id: u64) {
+        chapter_save_queue::abandon_session_results(session_id);
     }
 
     /// 把队列回执转成 QML JSON，并在第一次读到终态时应用保存副作用。

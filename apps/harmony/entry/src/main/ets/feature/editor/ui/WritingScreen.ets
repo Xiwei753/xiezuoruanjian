@@ -15,7 +15,8 @@ import {
   WritingWorkflowConfig,
   WritingWorkflowUpdate,
   WritingTextKey,
-  WritingTextProvider
+  WritingTextProvider,
+  WritingDeletionResult
 } from '../session/WritingWorkflowCoordinator'
 import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
 import { EditorStatsQueue } from '../stats/EditorStatsQueue'
@@ -46,7 +47,7 @@ import { NearbyDeviceSyncCoordinator } from '../../../platform/peer/NearbyDevice
 import { HarmonyShareService } from '../../../platform/share/HarmonyShareService'
 import { SharePayload } from '../../../platform/share/SharePayload'
 import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
-import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
+import { ChapterMeta, VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import {
   ScreenRole,
@@ -1328,10 +1329,20 @@ export struct WritingScreen {
     if (!this.projectId) {
       return
     }
-    const ok: boolean = await this.workspaceViewModel.deleteVolumeIn(this.projectId, volumeId)
-    if (ok) {
-      this.loadProjectTree()
+    // Issue #1069：包含当前活动章节的卷不能直接删。协调器统一做「结束输入 →
+    // 冻结并保存 → 关闭会话 → Core 删除」，失败会恢复当前会话，页面留在本页。
+    const result: WritingDeletionResult = await this.writingWorkflow.deleteVolume(volumeId)
+    if (!result.deleted) {
+      if (result.activeChapterClosed) {
+        this.showWritingToast('删除失败，已恢复当前章节')
+      }
+      return
     }
+    if (result.activeChapterClosed) {
+      await this.continueAfterDeletedActiveChapter()
+      return
+    }
+    await this.loadProjectTree()
   }
 
   // Issue #629 评论14 第1项：删除章节（宽屏左侧目录面板回调）— 确认后删除。
@@ -1345,10 +1356,60 @@ export struct WritingScreen {
   }
 
   private async doDeleteChapter(chapterId: string): Promise<void> {
-    const ok: boolean = await this.workspaceViewModel.deleteChapterIn(chapterId)
-    if (ok) {
-      this.loadProjectTree()
+    // Issue #1069：当前活动章节的删除必须先完成保存并关闭会话，不能直接调
+    // workspaceViewModel.deleteChapterIn；非活动章节由协调器严格校验回执后直接删。
+    const result: WritingDeletionResult = await this.writingWorkflow.deleteChapter(chapterId)
+    if (!result.deleted) {
+      if (result.activeChapterClosed) {
+        this.showWritingToast('删除失败，已恢复当前章节')
+      }
+      return
     }
+    if (result.activeChapterClosed) {
+      await this.continueAfterDeletedActiveChapter()
+      return
+    }
+    await this.loadProjectTree()
+  }
+
+  // Issue #1069：活动章节删除成功后会话已关闭、章节身份已清除。
+  // 从刷新后的目录树取一个有效章节切过去；切章事务被拒绝或没有可用章节时离页，
+  // 绝不留在已删除章节的空编辑态。
+  private async continueAfterDeletedActiveChapter(): Promise<void> {
+    const treeLoaded: boolean = await this.loadProjectTree()
+    const next: ChapterMeta | null = treeLoaded ? this.firstChapterInTree() : null
+    if (next !== null) {
+      this.richEditorBridge.cancelIdleWaiters('chapter switch')
+      const switched: boolean = await this.annotationEditQueue
+        .then((): Promise<boolean> => this.writingWorkflow.switchChapter(
+          next.id, next.title, this.volumeIdOfChapter(next.id)))
+        .catch((): boolean => false)
+      if (switched) {
+        return
+      }
+    }
+    await this.writingWorkflow.requestLeave()
+  }
+
+  private firstChapterInTree(): ChapterMeta | null {
+    for (const vt of this.volumeTrees) {
+      if (vt.chapters.length > 0) {
+        return vt.chapters[0]
+      }
+    }
+    return null
+  }
+
+  // 目录树里章节所属的卷；找不到时返回空串（路由只用它参与 targetKey 身份）。
+  private volumeIdOfChapter(chapterId: string): string {
+    for (const vt of this.volumeTrees) {
+      for (const ch of vt.chapters) {
+        if (ch.id === chapterId) {
+          return vt.volume.id
+        }
+      }
+    }
+    return ''
   }
 
   async loadSettings() {

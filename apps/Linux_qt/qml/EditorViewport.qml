@@ -453,7 +453,10 @@ Item {
         anchors.fill: editorScroll
         visible: true
         focus: true
+        // Issue #1069：切章/开章屏障期间（isLoadingChapter）编辑器不再接收输入，
+        // 避免“旧章输入被接收但 QML 忽略、随后被新章正文覆盖”。
         editor_enabled: root.editorControllerRef.chapterId !== ""
+            && !root.editorControllerRef.isLoadingChapter
         font_pixel_size: root.settingsBackendRef ? root.settingsBackendRef.setting_font_size : 16
         font_family: "serif"
         line_spacing: root.settingsBackendRef ? root.settingsBackendRef.setting_line_spacing : 1.5

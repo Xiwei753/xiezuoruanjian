@@ -11,6 +11,8 @@
 #include <napi/native_api.h>
 #include <hilog/log.h>
 #include "writer_core_bridge.h"
+// Issue #1069 评论 4：params 读取统一走共享 helper（各域实现由下方 include 引入）。
+#include "napi_editor_args.h"
 
 // ── Harmony NAPI 绑定 ──
 //
@@ -21,8 +23,8 @@
 //   调用方必须通过 writer_core_free_string 释放。
 // - ReturnJsonString 在将 char* 复制到 NAPI string 后立即释放，
 //   保证无内存泄漏。
-// - dup_napi_string 将 NAPI string 复制到调用方提供的缓冲区，
-//   缓冲区生命周期由调用方管理。
+// - 入参字符串由 napi_editor_args.h 的 napi_arg_get_string 以 new[] 复制为
+//   NUL 结尾副本，调用 C ABI 后由调用方 delete[] 释放。
 
 // ── HiLog 有界记录队列 + Callback ──
 //
@@ -183,15 +185,6 @@ static void RegisterHilogCallback() {
 
 // ── Inline utility helpers (shared across domains) ──
 
-// dup_napi_string: Copy a NAPI string value into a pre-allocated buffer.
-//   Caller must ensure buf is large enough (typically 2048 for paths).
-//   Returns pointer to buf; lifetime managed by caller.
-static char* dup_napi_string(napi_env env, napi_value value, char* buf, size_t buf_size) {
-    size_t len = 0;
-    napi_get_value_string_utf8(env, value, buf, buf_size, &len);
-    return buf;
-}
-
 // 字符串创建统一失败语义：napi_create_string_utf8 失败（通常为 OOM / env 关闭）
 // 时抛出 JS 异常并返回 nullptr，由 ArkTS 调用方（如 NativeEditorSessionBridge）
 // 的 try/catch 转成 NATIVE_ERROR；不自造未定义值冒充结果。
@@ -253,6 +246,7 @@ static napi_value ReturnJsonString(napi_env env, char* json) {
 //     -1 = app_data_root is null
 //     -2 = invalid UTF-8
 //     -4 = bootstrap failed
+//   字符串参数非法（非字符串/内嵌 NUL/分配失败）抛 INVALID_ARGUMENT，不伪造状态码。
 static napi_value NativeInit(napi_env env, napi_callback_info info) {
     size_t argc = 9;
     napi_value args[9];
@@ -260,55 +254,42 @@ static napi_value NativeInit(napi_env env, napi_callback_info info) {
 
     if (argc < 1) {
         OH_LOG_ERROR(LOG_APP, "NativeInit: expected at least 1 argument (app_data_root), got %{public}zu", argc);
-        napi_throw_error(env, nullptr, "Expected at least 1 argument: app_data_root");
-        return nullptr;
+        return napi_arg_throw_invalid(env, "Expected at least 1 argument: app_data_root");
     }
 
-    char app_data_root[2048] = {0};
-    char files_dir[2048] = {0};
-    char cache_dir[2048] = {0};
-    char device_id[256] = {0};
-    char app_version[128] = {0};
-    char locale[64] = {0};
-    char timezone[64] = {0};
-    size_t len = 0;
+    // Issue #1069 评论 4：路径/设备信息按实际长度读取，不再往固定 2048/256
+    // 缓冲里复制后截断；任一字符串参数类型不符/含内嵌 NUL/分配失败都直接失败。
+    char* app_data_root = nullptr;
+    char* files_dir = nullptr;
+    char* cache_dir = nullptr;
+    char* device_id = nullptr;
+    char* app_version = nullptr;
+    char* locale = nullptr;
+    char* timezone = nullptr;
 
-    napi_get_value_string_utf8(env, args[0], app_data_root, sizeof(app_data_root), &len);
+    const bool args_ok =
+        napi_arg_get_string(env, args[0], &app_data_root)
+        && (argc < 2 || napi_arg_get_string(env, args[1], &files_dir))
+        && (argc < 3 || napi_arg_get_string(env, args[2], &cache_dir))
+        && (argc < 4 || napi_arg_get_string(env, args[3], &device_id))
+        && (argc < 5 || napi_arg_get_string(env, args[4], &app_version))
+        && (argc < 6 || napi_arg_get_string(env, args[5], &locale))
+        && (argc < 7 || napi_arg_get_string(env, args[6], &timezone));
+    if (!args_ok) {
+        delete[] app_data_root;
+        delete[] files_dir;
+        delete[] cache_dir;
+        delete[] device_id;
+        delete[] app_version;
+        delete[] locale;
+        delete[] timezone;
+        return napi_arg_throw_invalid(env, "Invalid string argument for nativeInit");
+    }
 
-    // Optional arguments: only read if provided, otherwise pass null/0 to Rust
-    const char* p_files_dir = nullptr;
-    const char* p_cache_dir = nullptr;
-    const char* p_device_id = nullptr;
-    const char* p_app_version = nullptr;
-    const char* p_locale = nullptr;
-    const char* p_timezone = nullptr;
+    // Optional non-string arguments keep their default; a non-number is treated as
+    // "unknown" (-1), not as a fabricated online state.
     int32_t is_connected = -1;  // 未知（未提供时不得伪造成在线）
     int32_t is_metered = -1;    // 未知
-
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], files_dir, sizeof(files_dir), &len);
-        p_files_dir = files_dir;
-    }
-    if (argc >= 3) {
-        napi_get_value_string_utf8(env, args[2], cache_dir, sizeof(cache_dir), &len);
-        p_cache_dir = cache_dir;
-    }
-    if (argc >= 4) {
-        napi_get_value_string_utf8(env, args[3], device_id, sizeof(device_id), &len);
-        p_device_id = device_id;
-    }
-    if (argc >= 5) {
-        napi_get_value_string_utf8(env, args[4], app_version, sizeof(app_version), &len);
-        p_app_version = app_version;
-    }
-    if (argc >= 6) {
-        napi_get_value_string_utf8(env, args[5], locale, sizeof(locale), &len);
-        p_locale = locale;
-    }
-    if (argc >= 7) {
-        napi_get_value_string_utf8(env, args[6], timezone, sizeof(timezone), &len);
-        p_timezone = timezone;
-    }
     if (argc >= 8) {
         napi_get_value_int32(env, args[7], &is_connected);
     }
@@ -318,14 +299,22 @@ static napi_value NativeInit(napi_env env, napi_callback_info info) {
 
     OH_LOG_INFO(LOG_APP, "NativeInit: calling writer_core_init_harmony with app_data_root='%{public}s' (argc=%{public}zu, is_connected=%{public}d, is_metered=%{public}d)",
                 app_data_root, argc, is_connected, is_metered);
-    int32_t result = writer_core_init_harmony(app_data_root, p_files_dir, p_cache_dir,
-                                               p_device_id, p_app_version, p_locale, p_timezone,
+    int32_t result = writer_core_init_harmony(app_data_root, files_dir, cache_dir,
+                                               device_id, app_version, locale, timezone,
                                                is_connected, is_metered);
     OH_LOG_INFO(LOG_APP, "NativeInit: writer_core_init_harmony returned %{public}d", result);
 
     if (result != 0) {
         OH_LOG_ERROR(LOG_APP, "NativeInit: FAILED with code %{public}d (app_data_root='%{public}s')", result, app_data_root);
     }
+
+    delete[] app_data_root;
+    delete[] files_dir;
+    delete[] cache_dir;
+    delete[] device_id;
+    delete[] app_version;
+    delete[] locale;
+    delete[] timezone;
 
     napi_value ret;
     napi_create_int32(env, result, &ret);
@@ -382,6 +371,7 @@ static napi_value NativeGetLoadStatus(napi_env env, napi_callback_info info) {
 //   -1 = any argument is null
 //   -2 = any argument contains invalid UTF-8
 //   -3 = local settings could not be read/parsed
+//   字符串参数非法（非字符串/内嵌 NUL/分配失败）抛 INVALID_ARGUMENT。
 // Arguments: logDir, appDataRoot, deviceId, appVersion, buildKey, locale, timezone (all strings).
 // session_id is generated inside Rust; enabled/verbose are read from the Core LocalSettings
 // under appDataRoot (settings.local.json), not hardcoded.
@@ -392,45 +382,39 @@ static napi_value NativeInitDiagnostics(napi_env env, napi_callback_info info) {
 
     if (argc < 7) {
         OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: expected 7 arguments, got %{public}zu", argc);
-        napi_throw_error(env, nullptr, "Expected 7 arguments: logDir, appDataRoot, deviceId, appVersion, buildKey, locale, timezone");
-        return nullptr;
+        return napi_arg_throw_invalid(env,
+            "Expected 7 arguments: logDir, appDataRoot, deviceId, appVersion, buildKey, locale, timezone");
     }
 
-    char log_dir[2048] = {0};
-    char app_data_root[2048] = {0};
-    char device_id[256] = {0};
-    char app_version[128] = {0};
-    char build_key[256] = {0};
-    char locale[64] = {0};
-    char timezone[64] = {0};
-    size_t len = 0;
-
-    // app_data_root 是设置文件所在的数据根路径，绝不能把半截路径传给 Rust 去
-    // 读 settings.local.json。Node-API 契约：buf 非空时 result 返回“实际复制
-    // 的字节数”（不含终止符），缓冲不足只会截断补 NUL，因此复制长度无法检测
-    // 截断。这里先用 buf=nullptr 只查询原字符串字节长度，确认能完整装入缓冲后
-    // 再复制，并校验复制字节数与查询长度一致。
-    size_t root_len = 0;
-    napi_status root_status = napi_get_value_string_utf8(env, args[1], nullptr, 0, &root_len);
-    if (root_status != napi_ok || root_len == 0 || root_len >= sizeof(app_data_root)) {
-        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: invalid appDataRoot length/status");
-        napi_throw_error(env, nullptr, "Invalid appDataRoot");
-        return nullptr;
+    // Issue #1069 评论 4：全部字符串按实际长度读取；app_data_root 是设置文件
+    // 所在的数据根路径，绝不能把截断路径或空路径交给 Rust 去读
+    // settings.local.json，也不能用未校验的固定缓冲继续初始化。
+    char* log_dir = nullptr;
+    char* app_data_root = nullptr;
+    char* device_id = nullptr;
+    char* app_version = nullptr;
+    char* build_key = nullptr;
+    char* locale = nullptr;
+    char* timezone = nullptr;
+    const bool args_ok =
+        napi_arg_get_string(env, args[0], &log_dir)
+        && napi_arg_get_string(env, args[1], &app_data_root)
+        && napi_arg_get_string(env, args[2], &device_id)
+        && napi_arg_get_string(env, args[3], &app_version)
+        && napi_arg_get_string(env, args[4], &build_key)
+        && napi_arg_get_string(env, args[5], &locale)
+        && napi_arg_get_string(env, args[6], &timezone);
+    if (!args_ok || app_data_root[0] == '\0') {
+        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: invalid string argument or empty appDataRoot");
+        delete[] log_dir;
+        delete[] app_data_root;
+        delete[] device_id;
+        delete[] app_version;
+        delete[] build_key;
+        delete[] locale;
+        delete[] timezone;
+        return napi_arg_throw_invalid(env, "Invalid string argument for nativeInitDiagnostics");
     }
-    size_t root_copied = 0;
-    root_status = napi_get_value_string_utf8(env, args[1], app_data_root, sizeof(app_data_root), &root_copied);
-    if (root_status != napi_ok || root_copied != root_len) {
-        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: appDataRoot copy failed");
-        napi_throw_error(env, nullptr, "Failed to read appDataRoot");
-        return nullptr;
-    }
-
-    napi_get_value_string_utf8(env, args[0], log_dir, sizeof(log_dir), &len);
-    napi_get_value_string_utf8(env, args[2], device_id, sizeof(device_id), &len);
-    napi_get_value_string_utf8(env, args[3], app_version, sizeof(app_version), &len);
-    napi_get_value_string_utf8(env, args[4], build_key, sizeof(build_key), &len);
-    napi_get_value_string_utf8(env, args[5], locale, sizeof(locale), &len);
-    napi_get_value_string_utf8(env, args[6], timezone, sizeof(timezone), &len);
 
     // Issue #760 评论 5824787641：RegisterHilogCallback() 已移至 NAPI Init() 开头，
     // 在模块加载时（比 EntryAbility.onCreate 更早）完成注册，此处不再重复调用。
@@ -442,6 +426,14 @@ static napi_value NativeInitDiagnostics(napi_env env, napi_callback_info info) {
     if (result != 0) {
         OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: FAILED with code %{public}d", result);
     }
+
+    delete[] log_dir;
+    delete[] app_data_root;
+    delete[] device_id;
+    delete[] app_version;
+    delete[] build_key;
+    delete[] locale;
+    delete[] timezone;
 
     napi_value ret;
     napi_create_int32(env, result, &ret);
@@ -510,14 +502,16 @@ static napi_value NativeRecordDiagnosticEvent(napi_env env, napi_callback_info i
 
     if (argc < 1) {
         OH_LOG_ERROR(LOG_APP, "NativeRecordDiagnosticEvent: expected 1 argument, got %{public}zu", argc);
-        napi_throw_error(env, nullptr, "Expected 1 argument: payload_json");
-        return nullptr;
+        return napi_arg_throw_invalid(env, "Expected 1 argument: payload_json");
     }
 
-    size_t payload_len = 0;
-    napi_get_value_string_utf8(env, args[0], nullptr, 0, &payload_len);
-    char* payload = new char[payload_len + 1];
-    napi_get_value_string_utf8(env, args[0], payload, payload_len + 1, &payload_len);
+    // Issue #1069 评论 4：诊断事件 JSON 同样走统一长度读取；非字符串/内嵌 NUL/
+    // 分配失败直接失败，不能把空 payload 当成合法 JSON 继续记录。
+    char* payload = nullptr;
+    if (!napi_arg_get_string(env, args[0], &payload)) {
+        OH_LOG_ERROR(LOG_APP, "NativeRecordDiagnosticEvent: invalid payload_json argument");
+        return napi_arg_throw_invalid(env, "Invalid payload_json argument");
+    }
 
     int32_t result = writer_core_record_diagnostic_event_json(payload);
     delete[] payload;
@@ -539,21 +533,21 @@ static napi_value NativeExportDiagnostics(napi_env env, napi_callback_info info)
 
     if (argc < 2) {
         OH_LOG_ERROR(LOG_APP, "NativeExportDiagnostics: expected 2 arguments, got %{public}zu", argc);
-        napi_throw_error(env, nullptr, "Expected 2 arguments: output_dir, attachments_json");
-        return nullptr;
+        // 该 handler 的返回值是字符串路径或 JSON 错误信封，参数错误也返回信封。
+        return napi_arg_invalid_result(env);
     }
 
-    // Extract output_dir
-    size_t output_dir_len = 0;
-    napi_get_value_string_utf8(env, args[0], nullptr, 0, &output_dir_len);
-    char* output_dir = new char[output_dir_len + 1];
-    napi_get_value_string_utf8(env, args[0], output_dir, output_dir_len + 1, &output_dir_len);
-
-    // Extract attachments_json
-    size_t attachments_len = 0;
-    napi_get_value_string_utf8(env, args[1], nullptr, 0, &attachments_len);
-    char* attachments_json = new char[attachments_len + 1];
-    napi_get_value_string_utf8(env, args[1], attachments_json, attachments_len + 1, &attachments_len);
+    // Issue #1069 评论 4：目录与 attachments JSON 走统一长度读取，失败直接
+    // INVALID_ARGUMENT，不再按固定/未校验的读取继续导出。
+    char* output_dir = nullptr;
+    char* attachments_json = nullptr;
+    if (!napi_arg_get_string(env, args[0], &output_dir)
+        || !napi_arg_get_string(env, args[1], &attachments_json)) {
+        delete[] output_dir;
+        delete[] attachments_json;
+        OH_LOG_ERROR(LOG_APP, "NativeExportDiagnostics: invalid string argument");
+        return napi_arg_invalid_result(env);
+    }
 
     char* zip_path = writer_core_export_diagnostics(output_dir, attachments_json);
 
@@ -607,14 +601,14 @@ static napi_value NativeCalculateWordCount(napi_env env, napi_callback_info info
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     if (argc < 1) {
-        napi_throw_error(env, nullptr, "Expected 1 argument: text");
-        return nullptr;
+        return napi_arg_throw_invalid(env, "Expected 1 argument: text");
     }
 
-    size_t text_len = 0;
-    napi_get_value_string_utf8(env, args[0], nullptr, 0, &text_len);
-    char* text = new char[text_len + 1];
-    napi_get_value_string_utf8(env, args[0], text, text_len + 1, &text_len);
+    // Issue #1069 评论 4：正文同样走统一长度读取，避免把截断文本当完整正文计数。
+    char* text = nullptr;
+    if (!napi_arg_get_string(env, args[0], &text)) {
+        return napi_arg_throw_invalid(env, "Invalid text argument");
+    }
 
     int32_t count = writer_core_calculate_word_count(text);
     delete[] text;

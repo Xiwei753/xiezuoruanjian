@@ -29,6 +29,7 @@ impl WriterCoreApi {
         proof_snapshot_revision: u64,
         proof_batch_json: &str,
         allow_empty_overwrite: bool,
+        draft_ack_required: bool,
     ) -> ApiResult<ChapterSaveReceiptDto> {
         self.save_chapter_content_with_proof_batch_internal(
             project_id,
@@ -41,11 +42,15 @@ impl WriterCoreApi {
             base_content.as_deref(),
             proof_snapshot_revision,
             proof_batch_json,
+            draft_ack_required,
         )
         .map(|(dto, _)| dto)
     }
 
     /// 清空正文并携带平台冻结的原始证明批次；清空使用同一批次协议。
+    ///
+    /// 该入口只被 Harmony FFI 使用：Harmony 没有平台持久草稿，固定
+    /// `draft_ack_required = false`，由 Core 完成投影后自行清理 journal。
     pub fn clear_chapter_content_versioned_with_proof_batch(
         &self,
         project_id: &str,
@@ -67,6 +72,7 @@ impl WriterCoreApi {
             base_content.as_deref(),
             proof_snapshot_revision,
             proof_batch_json,
+            false,
         )
         .map(|(dto, _)| dto)
     }
@@ -84,6 +90,7 @@ impl WriterCoreApi {
         base_content: Option<&str>,
         proof_snapshot_revision: u64,
         proof_batch_json: &str,
+        draft_ack_required: bool,
     ) -> ApiResult<(ChapterSaveReceiptDto, crate::chapter::ChapterSaveReceipt)> {
         let proof_events: Vec<crate::chapter::ChapterProofProjection> =
             if proof_batch_json.trim().is_empty() {
@@ -114,6 +121,7 @@ impl WriterCoreApi {
                 proof_snapshot_revision,
                 &proof_events,
                 Some(&workspace_lock),
+                draft_ack_required,
             )
             .map_err(WriterError::from)?;
         self.finalize_chapter_content_save(
@@ -198,8 +206,12 @@ impl WriterCoreApi {
 
     /// 确认平台草稿已完成某笔提交的精确 ack。
     ///
-    /// 传入空 `event_ids` 时只推进 `transaction_id` 的现有状态；每确认一个
-    /// 事件 ID 返回计数。journal 全部确认后自行清理。
+    /// 传入空 `event_ids` 时不清除任何 ID，但仍会推进 `transaction_id` 的现有
+    /// 状态（清空后的 journal 在这里收口/清理），返回 0；非空时每清除一个
+    /// 事件 ID 返回计数。
+    ///
+    /// 整个“读取 manifest → 清除 ack → Decided 发布 → 写回/清理”都在工作区
+    /// 写锁内完成，且同一调用多个 eventId 只读一次、写回一次 manifest。
     pub fn acknowledge_chapter_commit_draft(
         &self,
         project_id: String,
@@ -209,23 +221,24 @@ impl WriterCoreApi {
         event_ids: Vec<String>,
     ) -> ApiResult<u32> {
         let project_root = self.projects_root.join(&project_id);
-        let key = crate::chapter::ChapterKey::new(project_id.clone(), volume_id.clone(), chapter_id.clone());
-        let mut acknowledged = 0u32;
-        for event_id in event_ids {
-            if event_id.is_empty() {
-                continue;
-            }
-            if crate::chapter::commit::mark_chapter_commit_draft_ack(
-                &project_root,
-                &key,
-                &transaction_id,
-                &event_id,
-            )
-            .map_err(WriterError::from)?
-            {
-                acknowledged += 1;
-            }
-        }
+        let key = crate::chapter::ChapterKey::new(project_id, volume_id, chapter_id);
+        let event_ids: Vec<&str> = event_ids
+            .iter()
+            .map(String::as_str)
+            .filter(|event_id| !event_id.is_empty())
+            .collect();
+        // 与同文件 proof-batch 保存使用同一把工作区写锁；不能在无锁状态下
+        // 读取 manifest 后直接覆盖。空 ID 列表也要取锁并走同一收口路径。
+        let workspace_lock = crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
+            .map_err(WriterError::from)?;
+        let acknowledged = crate::chapter::commit::mark_chapter_commit_draft_acks(
+            &project_root,
+            &workspace_lock,
+            &key,
+            &transaction_id,
+            &event_ids,
+        )
+        .map_err(WriterError::from)?;
         Ok(acknowledged)
     }
 }

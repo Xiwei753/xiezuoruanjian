@@ -128,10 +128,19 @@ impl super::WriterCore {
             }
             "settings.editor.auto_save_delay.set" => {
                 if let Some(delay) = args.get("delayMs").and_then(|v| v.as_u64()) {
-                    if !(500..=10000).contains(&delay) {
+                    // Issue #1069：与 LocalSettings::validate 使用同一组范围常量，
+                    // 不在这里另写 500 的下限（否则写入成功、重载被钳制回 1000）。
+                    if !(crate::settings::ranges::AUTO_SAVE_DELAY_MIN_MS
+                        ..=crate::settings::ranges::AUTO_SAVE_DELAY_MAX_MS)
+                        .contains(&delay)
+                    {
                         return Ok(ActionResult {
                             success: false,
-                            message: Some("Delay must be between 500 and 10000".to_string()),
+                            message: Some(format!(
+                                "Delay must be between {} and {}",
+                                crate::settings::ranges::AUTO_SAVE_DELAY_MIN_MS,
+                                crate::settings::ranges::AUTO_SAVE_DELAY_MAX_MS
+                            )),
                             data: None,
                             proposed_ui: None,
                             requires_confirmation: None,

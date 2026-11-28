@@ -281,6 +281,9 @@ impl super::WriterAppService {
     }
 
     /// 显式原始证明批次保存（Issue #1062 1.2）。
+    ///
+    /// `draft_ack_required` 区分平台是否有独立持久化草稿：Qt 传 `true`，
+    /// Harmony 无外部草稿传 `false`（Core 完成投影后自行清理 journal）。
     #[allow(clippy::too_many_arguments)]
     pub fn save_chapter_content_versioned_with_proof_batch(
         &self,
@@ -293,6 +296,7 @@ impl super::WriterAppService {
         proof_snapshot_revision: u64,
         proof_batch_json: String,
         allow_empty_overwrite: bool,
+        draft_ack_required: bool,
     ) -> Result<ChapterSaveReceiptDto, WriterError> {
         self.api.save_chapter_content_versioned_with_proof_batch(
             &project_id,
@@ -304,6 +308,7 @@ impl super::WriterAppService {
             proof_snapshot_revision,
             &proof_batch_json,
             allow_empty_overwrite,
+            draft_ack_required,
         )
     }
 

@@ -65,9 +65,11 @@ export class NativeChapterBridge {
   }
 
   // Issue #1059：完整版本 CAS 的保存/清空。expected 必须来自最近一次 open/save。
+  // Issue #1069：proofBatchJson 是 Core 生成的显式证明批次（JSON 数组字符串），
+  // 正文与证明一次提交；空串只用于确实没有编辑事实的保存。
   async saveChapterVersioned(chapterId: string, text: string, expected: ChapterVersion,
     baseContent: string, allowEmptyOverwrite: boolean,
-    proofSnapshotRevision: number, proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    proofSnapshotRevision: number, proofBatchJson: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     const loc = await this.core.resolveChapterLocation(chapterId)
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
@@ -84,7 +86,7 @@ export class NativeChapterBridge {
         baseContent: baseContent,
         allowEmptyOverwrite: allowEmptyOverwrite,
         proofSnapshotRevision: proofSnapshotRevision,
-        proofEventIds: proofEventIds,
+        proofBatchJson: proofBatchJson,
         clear: false
       })
       const jsonStr: string = await this.core.getNativeModule().nativeSaveChapterVersioned(payload)
@@ -124,7 +126,7 @@ export class NativeChapterBridge {
 
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
     baseContent: string, proofSnapshotRevision: number,
-    proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    proofBatchJson: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     const loc = await this.core.resolveChapterLocation(chapterId)
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
@@ -140,7 +142,7 @@ export class NativeChapterBridge {
         baseContent: baseContent,
         allowEmptyOverwrite: true,
         proofSnapshotRevision: proofSnapshotRevision,
-        proofEventIds: proofEventIds,
+        proofBatchJson: proofBatchJson,
         clear: true
       })
       const jsonStr: string = await this.core.getNativeModule().nativeClearChapterVersioned(payload)

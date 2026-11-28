@@ -282,6 +282,9 @@ struct ChapterSaveEntry {
     conflict_draft_path: String,
     state: ChapterSaveState,
     delivered: bool,
+    /// Issue #1069：UI 已明确放弃该会话的结果订阅；条目仍保留最小回执
+    /// 元数据供迟到查询，但整章正文副本可以立即释放，且不再触发副作用。
+    abandoned: bool,
 }
 
 /// GUI 线程读到的结果视图。
@@ -406,32 +409,55 @@ pub(crate) fn next_request_id() -> u32 {
 }
 
 fn prune_store(store: &mut ChapterSaveStore) {
+    // Issue #1069：结果缓存和正文副本各有确定生命周期。先回收“终态且已交付/
+    // 已放弃”的条目；如果表已满但这些条目都还没交付，也必须回收最老的终态
+    // 条目，不能因为全是 delivered=false 就永远无法回收。
     while store.entries.len() >= MAX_RETAINED_RESULTS {
-        // Issue #1062 1.3：只淘汰已终态且已交付的回执；本轮不可淘汰的条目
-        // 旋转到队尾继续等下一次机会，不能因为最老条目还不可淘汰就整体停手
-        // （否则表满后永远不会再回收）。
-        let mut evicted = false;
-        for _ in 0..store.order.len() {
-            let Some(oldest) = store.order.pop_front() else {
-                return;
-            };
-            let evict = store
-                .entries
-                .get(&oldest)
-                .map(|entry| entry.state == ChapterSaveState::Terminal && entry.delivered)
-                .unwrap_or(true);
-            if evict {
-                store.entries.remove(&oldest);
-                evicted = true;
-            } else {
-                // 还在队列里/尚未交付的结果不淘汰，旋转到队尾。
-                store.order.push_back(oldest);
-            }
+        if evict_retained_entry(store) {
+            continue;
         }
-        if !evicted {
-            return;
-        }
+        break;
     }
+}
+
+/// 回收一条可淘汰的终态记录；返回是否真的移除了条目。
+fn evict_retained_entry(store: &mut ChapterSaveStore) -> bool {
+    let slots = store.order.len();
+    // 第一轮：终态且结果已被消费（或会话已放弃）——正文和回执都不再需要。
+    for _ in 0..slots {
+        let Some(oldest) = store.order.pop_front() else {
+            return false;
+        };
+        let removable = store.entries.get(&oldest).is_some_and(|entry| {
+            entry.state == ChapterSaveState::Terminal && (entry.delivered || entry.abandoned)
+        });
+        if removable {
+            store.entries.remove(&oldest);
+            return true;
+        }
+        store.order.push_back(oldest);
+    }
+    // 第二轮：全是未交付的终态历史。回收最老的一条；迟到轮询会拿到
+    // unknown，调用方按显式失败收口，不会静默推进 base。
+    for _ in 0..slots {
+        let Some(oldest) = store.order.pop_front() else {
+            return false;
+        };
+        let terminal = store
+            .entries
+            .get(&oldest)
+            .is_some_and(|entry| entry.state == ChapterSaveState::Terminal);
+        if terminal {
+            // 正文副本先释放，再丢弃条目本身。
+            if let Some(entry) = store.entries.get_mut(&oldest) {
+                entry.content = Arc::from("");
+            }
+            store.entries.remove(&oldest);
+            return true;
+        }
+        store.order.push_back(oldest);
+    }
+    false
 }
 
 /// 登记一条 Pending 请求（正文同时进入 mailbox；channel 只传 id）。
@@ -449,6 +475,7 @@ fn register_pending_entry(store: &mut ChapterSaveStore, request: ChapterSaveRequ
             conflict_draft_path: String::new(),
             state: ChapterSaveState::Pending,
             delivered: false,
+            abandoned: false,
         },
     );
     store.mailbox.insert(request_id, request);
@@ -476,6 +503,7 @@ pub(crate) fn fail_before_enqueue(
                 conflict_draft_path: String::new(),
                 state: ChapterSaveState::Pending,
                 delivered: false,
+                abandoned: false,
             },
         );
     }
@@ -489,6 +517,10 @@ pub(crate) fn complete_ok(request_id: u32, receipt: ChapterSaveReceiptDto, chain
         entry.outcome = ChapterSaveOutcome::Ok(receipt);
         entry.chained = chained;
         entry.state = ChapterSaveState::Terminal;
+        // Issue #1069：会话已放弃的结果不会再交付 UI，正文副本现在即可释放。
+        if entry.abandoned {
+            entry.content = Arc::from("");
+        }
     }
     store.mailbox.remove(&request_id);
     clear_pending_index(&mut store, request_id);
@@ -508,6 +540,10 @@ pub(crate) fn complete_error(
         entry.chained = chained;
         entry.conflict_draft_path = conflict_draft_path;
         entry.state = ChapterSaveState::Terminal;
+        // Issue #1069：已放弃会话的终态正文不再需要保留给 UI。
+        if entry.abandoned {
+            entry.content = Arc::from("");
+        }
     }
     store.mailbox.remove(&request_id);
     clear_pending_index(&mut store, request_id);
@@ -584,10 +620,10 @@ fn snapshot_entry(entry: &mut ChapterSaveEntry, delivered_now: bool) -> ChapterS
         delivered_now,
     };
     let terminal = entry.state == ChapterSaveState::Terminal;
-    if delivered_now && terminal {
-        // 终态首次交付后不再需要正文副本：调用方只在 delivered_now 时应用
-        // 保存副作用，保留整章正文只会让结果表随历史回执持续增长
-        // （Issue #1062 第 1.3 项：清理已完成回执和历史快照引用）。
+    if terminal && (delivered_now || entry.abandoned) {
+        // 终态首次交付（或会话已放弃）后不再需要正文副本：调用方只在
+        // delivered_now 时应用保存副作用，保留整章正文只会让结果表随历史
+        // 回执持续增长（Issue #1069：正文副本与结果缓存各有生命周期）。
         entry.content = Arc::from("");
     }
     snapshot
@@ -632,6 +668,35 @@ pub(crate) fn wait(request_id: u32, timeout: Duration) -> ChapterSaveWait {
         let waited = condvar.wait_timeout(store, deadline - now);
         let (guard, _) = waited.unwrap_or_else(|poisoned| poisoned.into_inner());
         store = guard;
+    }
+}
+
+/// Issue #1069：UI 明确放弃某个 `chapterSaveSession` 的结果订阅。
+///
+/// 只放弃结果交付与正文副本，不取消已经开始的 Core 写盘：in-flight 请求仍由
+/// worker 完成，邮件箱里的待执行快照也照常执行。已终态条目的正文立即释放；
+/// 未终态条目在 worker 结束时释放，迟到轮询只拿到最小回执元数据。
+pub(crate) fn abandon_session_results(session_id: u64) {
+    let (_, condvar) = results();
+    let mut store = lock_store();
+    let mut affected = 0usize;
+    for entry in store.entries.values_mut() {
+        if entry.identity.session_id != session_id {
+            continue;
+        }
+        affected += 1;
+        entry.abandoned = true;
+        // 放弃后不再触发 current_save_status / 搜索索引等副作用。
+        entry.delivered = true;
+        entry.content = Arc::from("");
+    }
+    prune_store(&mut store);
+    drop(store);
+    condvar.notify_all();
+    if affected > 0 {
+        log::info!(
+            "[chapter-save-queue] abandoned {affected} save results for session {session_id}"
+        );
     }
 }
 

@@ -57,6 +57,9 @@ QtObject {
     // Internal state
     property bool isLoadingChapter: false
     property bool isApplyingFormat: false
+    // Issue #1069：格式化等待在途保存回执期间禁止再次进入格式化，但不进入
+    // saveGuardActive()，否则这次格式化请求会被自己的 guard 拦住。
+    property bool formatTextInFlight: false
     // Issue #721: 改名为 settingsSaveGuardActive，收窄语义为纯保存 guard。
     // 不再传成 SujianEditorItem.is_applying_settings 的编辑器视觉抑制状态。
     property bool settingsSaveGuardActive: false
@@ -359,6 +362,14 @@ QtObject {
                                          changesJson, oldSelectionAnchor, oldSelectionHead,
                                          newSelectionAnchor, newSelectionHead,
                                          beforeTextSha256, afterTextSha256) {
+            // Issue #1069：切章/开章屏障期间不再把迟到编辑事实交给旧章 actor。
+            // 屏障前的编辑已在 requestChapterSave 的快照里，并已按发生顺序
+            // 同步投递；这里到达的事实只可能是旧文档禁用输入后的残余。
+            if (controller.isLoadingChapter) {
+                controller.logWriterWarning("editor_change_during_load_barrier",
+                    "cause=" + cause + ", newRevision=" + Number(newRevision));
+                return;
+            }
             // Issue #1052：只记录已提交 Core revision，用于保存快照的单调性校验。
             // 不再按删除字符数累计"删了多少"，保存合法性完全由同一时点快照
             // （正文 + revision + 内容摘要）证明，不做长度猜测。
@@ -1766,6 +1777,12 @@ QtObject {
         var revision = targetEditorItem ? Number(targetEditorItem.text_revision) : -1;
         committedEditorRevision = revision;
         lastSavedEditorRevision = revision;
+        // Issue #1069：旧 chapterSaveSession 的结果不再交付 UI，但已开始的
+        // Core 写盘不取消；Rust 侧只放弃结果订阅并回收正文副本。
+        var previousSession = Number(chapterSaveSession);
+        if (editorBackendRef && editorBackendRef.abandon_chapter_save_session) {
+            editorBackendRef.abandon_chapter_save_session(previousSession);
+        }
         chapterSaveSession += 1;
         chapterSaveConflictNotified = false;
         pendingChapterSaves = ({});
@@ -1957,6 +1974,14 @@ QtObject {
 
     function handlePlainTextChanged() {
         if (controller.saveGuardActive()) return;
+        // Issue #1069：切章/开章屏障期间编辑器已禁用输入。若仍有迟到的
+        // text_changed，它属于旧文档且不在本次保存快照里，不能更新统计/自动
+        // 保存计时，否则会和新文档正文互相覆盖。
+        if (controller.isLoadingChapter) {
+            logWriterWarning("text_changed_during_load_barrier",
+                "identity=" + editorDocumentIdentity());
+            return;
+        }
 
         // Issue #978: 每键只更新轻量事实并重启防抖计时器，不读取整章正文。
         // 空正文保护在 saveCurrentChapter / flushActiveEditorBeforeSync 等保存边界执行。
@@ -2604,6 +2629,22 @@ QtObject {
         return requestChapterSave("autosave_queue");
     }
 
+    // Issue #1069：切章/开章/清空屏障的统一入口。开始屏障前先提交正在进行的
+    // IME composition，再通过 isLoadingChapter 关闭 editor_enabled；否则
+    // composition 的 commit 会迟到，落到新文档或形成旧文档的残余编辑事实。
+    function commitActiveImeComposition(reason) {
+        if (Qt && Qt.inputMethod && typeof Qt.inputMethod.commit === "function") {
+            Qt.inputMethod.commit();
+        } else {
+            logWriterWarning("chapter_barrier_ime_unavailable", "reason=" + reason);
+        }
+    }
+
+    function beginChapterLoadBarrier(reason) {
+        commitActiveImeComposition(reason);
+        isLoadingChapter = true;
+    }
+
     // Load chapter: content comes from Rust core as plain text.
     //
     // Issue #1062 1.3：需要先保存当前章节时改为异步续接——保存回执 ok 后
@@ -2628,6 +2669,9 @@ QtObject {
             return immediate;
         }
 
+        // Issue #1069：保存快照必须包含正在进行的 IME composition；先提交，
+        // 再取快照入队，避免 composition 的 commit 落在快照之后丢失归属。
+        commitActiveImeComposition("chapter_switch");
         var requestId = requestChapterSave("chapter_switch", function(result) {
             if (String(result && result.status ? result.status : "") !== "ok") {
                 isLoadingChapter = false;
@@ -2657,7 +2701,7 @@ QtObject {
             return null;
         }
         // 回执到达前继续保持加载 guard，阻止重复切章 / 保存。
-        isLoadingChapter = true;
+        beginChapterLoadBarrier("chapter_switch_wait_save");
         return {"queued": true, "requestId": requestId};
     }
 
@@ -2677,7 +2721,7 @@ QtObject {
 
     // 同步打开章节正文（不负责切章前的保存）。
     function openChapterContentNow(pId, vId, cId) {
-        isLoadingChapter = true;
+        beginChapterLoadBarrier("open_chapter_content");
 
         // Issue #1062 评论 #7187981523：替换正文前先留住上一章版本用于失败
         // 回滚，并清空本章 base。任何失败都不能让上一章版本继续给本章当 base。
@@ -2786,6 +2830,9 @@ QtObject {
     // 用 isLoadingChapter 包住清理，避免清空正文被当成用户编辑触发保存。
     // 同步删除当前章节/分卷/作品后调用，使编辑器退回"请选择或新建章节"。
     function clearActiveChapter() {
+        // Issue #1069：清空前的 IME composition 必须先提交，否则会被当成
+        // 新文档输入或留在旧文档的草稿里。
+        commitActiveImeComposition("clear_active_chapter");
         // Issue #1062 1.3：清空身份前把最新正文 force 写进可恢复草稿。
         var unloadSnapshot = readCommittedEditorSnapshot("clear_active_chapter");
         if (unloadSnapshot.ok) {
@@ -2795,7 +2842,7 @@ QtObject {
                 "reason=" + unloadSnapshot.reason
                 + ", identity=" + editorDocumentIdentity());
         }
-        isLoadingChapter = true;
+        beginChapterLoadBarrier("clear_active_chapter");
         try {
             releaseCorrectionSession(projectId, chapterId);
             if (targetEditorItem) {
@@ -2817,6 +2864,12 @@ QtObject {
             lastPotentialExplicitClearAtMs = 0;
             // Issue #1059：清空文档即开启新的保存会话；未完成回执不再应用到
             // 空文档，旧请求的写盘仍由 Rust 队列完成。
+            // Issue #1069：递增前先通知 Rust 放弃旧会话的结果订阅，只释放
+            // 正文副本，不取消已经开始的 Core 写盘。
+            var clearedSession = Number(chapterSaveSession);
+            if (editorBackendRef && editorBackendRef.abandon_chapter_save_session) {
+                editorBackendRef.abandon_chapter_save_session(clearedSession);
+            }
             chapterSaveSession += 1;
             chapterSaveConflictNotified = false;
             pendingChapterSaves = ({});
@@ -2848,8 +2901,16 @@ QtObject {
         settingsGuardTimer.restart();
     }
 
+    // Issue #1069：格式化必须以已提交事务版本为基线。
+    // 1) 先让当前版本的在途保存完成并应用回执；失败则不覆盖正文、不换会话。
+    // 2) 成功后才重新读取最新快照（等待期间的新输入以回调时快照为准）并格式化。
+    // 3) 格式化重建文档后再以新 revision 提交保存。
     function formatText() {
         if (!targetEditorItem) return;
+        if (formatTextInFlight || isApplyingFormat) return;
+        if (!editorBackendRef || !editorBackendRef.format_plain_text) return;
+        // Issue #1069：格式化前的保存快照必须包含正在进行的 IME composition。
+        commitActiveImeComposition("format_text");
         // Issue #1052：格式化读入的正文同样必须与已提交事务版本配对。
         var snapshot = readCommittedEditorSnapshot("format_text_read");
         if (!snapshot.ok) return;
@@ -2859,35 +2920,61 @@ QtObject {
             });
             return;
         }
+        if (!snapshot.text) return;
 
-        var raw = snapshot.text;
-        if (!raw) return;
-        if (!editorBackendRef || !editorBackendRef.format_plain_text) return;
-        // 正文格式化规则归 Core：这里只触发后端业务操作、刷新编辑器快照并保存。
-        // Issue #1052：格式化后的正文经 reload_plain_text 重建 EditorKernel，
-        // 保存改由 markEditorDocumentLoaded 之后的同一时点快照提供，不再需要
-        // "登记格式化删减字符数"来让长度守卫放行。
-        var plain = editorBackendRef.format_plain_text(raw);
-
-        isApplyingFormat = true;
+        formatTextInFlight = true;
         autoSaveTimer.stop();
-        try {
-            targetEditorItem.reload_plain_text(plain);
-            beginAnnotationDocumentSession();
-            targetEditorItem.clear_undo_stack();
-            // reload 建立新 EditorKernel，revision 从新文档起点重新开始；重新
-            // 绑定文档身份与已提交基线，避免旧 revision 被当成过期快照。
-            markEditorDocumentLoaded(projectId, volumeId, chapterId);
-        } finally {
-            isApplyingFormat = false;
+        var requestId = requestChapterSave("format_text_flush", function(result) {
+            // Issue #1069：续接回执可能是被后续快照接替后的最终回执（superseded
+            // 链会把等待方挂到最后一个请求上），因此这里看到的是已应用的基线。
+            formatTextInFlight = false;
+            if (String(result && result.status ? result.status : "") !== "ok") {
+                // 保存失败：保留原编辑器正文和旧会话，不开始格式化覆盖。
+                logWriterWarning("format_text_save_blocked",
+                    "status=" + String(result && result.status ? result.status : "")
+                    + ", errorCode=" + String(result
+                        && (result.errorCode || result.messageKey) || "")
+                    + ", identity=" + editorDocumentIdentity());
+                if (editorBackendRef) {
+                    editorBackendRef.save_status = qsTr("格式化前保存失败，未改动正文");
+                }
+                return;
+            }
+            // 等待期间可能继续输入：重新读回调时最新快照，避免用过期文本覆盖。
+            var latest = readCommittedEditorSnapshot("format_text_after_save");
+            if (!latest.ok) return;
+            if (latest.suspiciousEmpty) {
+                blockUnsafeEmptySave("format_text_after_save", {
+                    "editorItemLength": latest.text.length
+                });
+                return;
+            }
+            var raw = latest.text;
+            if (!raw) return;
+            // 正文格式化规则归 Core：这里只触发后端业务操作、刷新编辑器快照并保存。
+            var plain = editorBackendRef.format_plain_text(raw);
+            isApplyingFormat = true;
+            try {
+                targetEditorItem.reload_plain_text(plain);
+                beginAnnotationDocumentSession();
+                targetEditorItem.clear_undo_stack();
+                // reload 建立新 EditorKernel，revision 从新文档起点重新开始；重新
+                // 绑定文档身份与已提交基线，避免旧 revision 被当成过期快照。
+                markEditorDocumentLoaded(projectId, volumeId, chapterId);
+            } finally {
+                isApplyingFormat = false;
+            }
+            // 格式化重建了正文与 revision：旧结果失效并重新标脏，先恢复缓存显示，
+            // 实际扫描等下一个周期或手动请求。
+            invalidateCorrectionResults(true);
+            syncCorrectionTracking(plain, Number(targetEditorItem.text_revision));
+            requestCorrectionSnapshot();
+            saveCurrentChapter();
+        });
+        if (requestId <= 0) {
+            formatTextInFlight = false;
+            logWriterWarning("format_text_flush_rejected",
+                "identity=" + editorDocumentIdentity());
         }
-
-        // 格式化重建了正文与 revision：旧结果失效并重新标脏，先恢复缓存显示，
-        // 实际扫描等下一个周期或手动请求。
-        invalidateCorrectionResults(true);
-        syncCorrectionTracking(plain, Number(targetEditorItem.text_revision));
-        requestCorrectionSnapshot();
-
-        saveCurrentChapter();
     }
 }

@@ -953,12 +953,13 @@ impl crate::sync::SyncService {
     }
 
     pub fn resolve_conflict_take_remote(sync_root: &Path, path: &str) -> crate::Result<bool> {
-        let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root).ok();
+        // Issue #1069：获取写锁失败不能继续修改冲突对象，原样返回锁错误。
+        let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root)?;
         Self::resolve_object_conflict(
             sync_root,
             path,
             None,
-            guard.as_ref(),
+            Some(&guard),
             None,
             ConflictChoice::TakeRemote,
         )
@@ -985,12 +986,13 @@ impl crate::sync::SyncService {
         path: &str,
         group: &crate::sync::types::AppDataGroup,
     ) -> crate::Result<bool> {
-        let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root).ok();
+        // Issue #1069：写锁获取失败必须返回错误，不能无锁继续改冲突对象。
+        let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root)?;
         Self::resolve_object_conflict(
             sync_root,
             path,
             Some(group),
-            guard.as_ref(),
+            Some(&guard),
             None,
             ConflictChoice::TakeRemote,
         )

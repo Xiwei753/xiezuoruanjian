@@ -509,15 +509,117 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// 冷启动恢复中断的 Syncing 状态。
+    /// 冷启动恢复中断的 Syncing 状态，并继续发布上次中断的 sync target
+    /// durable commit 决议。
     ///
     /// 读取 `full_state.local.json`，只有旧状态是 `Syncing` 才原子改成
     /// `RecoverableError("previous_full_sync_interrupted")`；其它终态不动。
+    /// 然后扫描每个 target 的固定 commit decision 路径，按那份 `Decided`
+    /// 继续发布尚未完成的文件；重复调用幂等。
     /// 只能在新 Core/WriterAppService 实例启动时执行一次。
     pub fn recover_interrupted_full_sync_state(&self) -> ApiResult<bool> {
-        self.core_write()
-            .recover_interrupted_full_sync_state()
-            .map_err(Into::into)
+        let state_changed = self.core_write().recover_interrupted_full_sync_state()?;
+        let recovered = self.recover_pending_sync_commit_decisions();
+        if recovered.is_empty() {
+            return Ok(state_changed);
+        }
+        Ok(true)
+    }
+
+    /// 按每个 target 的固定 durable commit decision 继续发布未完成对象。
+    ///
+    /// 只按 manifest 里的 before/after 决定发布，不重新比较哪一边更新；
+    /// 已发布的条目只确认，未发布的条目幂等补写。进程启动与每轮同步 Prepare
+    /// 前都会调用，重复调用幂等。
+    fn recover_pending_sync_commit_decisions(
+        &self,
+    ) -> Vec<crate::sync::commit_helpers::RecoveredSyncCommit> {
+        let (app_data_root, projects_root) = {
+            let core = self.core_read();
+            (core.app_data_root.clone(), core.projects_root.clone())
+        };
+        let recovered = crate::sync::commit_helpers::recover_pending_sync_commits(
+            &app_data_root,
+            &projects_root,
+        );
+        if recovered.is_empty() {
+            return recovered;
+        }
+        let mut applied_paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut chapter_changes = 0usize;
+        for item in &recovered {
+            applied_paths.extend(item.applied_paths.iter().map(|path| path.path.clone()));
+            chapter_changes += item.chapter_changes.len();
+            log::info!(
+                "[sync] commit recovery: target={} applied={} chapter_changes={} pending={} superseded={}",
+                item.target_live_root.display(),
+                item.applied_paths.len(),
+                item.chapter_changes.len(),
+                item.pending.len(),
+                item.superseded.len()
+            );
+            if !item.pending.is_empty() {
+                log::warn!(
+                    "[sync] commit recovery still pending for {}: {}",
+                    item.target_live_root.display(),
+                    item.pending.join(", ")
+                );
+            }
+            if !item.superseded.is_empty() {
+                log::warn!(
+                    "[sync] commit recovery superseded objects for {}: {}",
+                    item.target_live_root.display(),
+                    item.superseded.join(", ")
+                );
+            }
+        }
+        if !applied_paths.is_empty() {
+            let committed: Vec<crate::sync::commit_helpers::CommittedPath> = recovered
+                .iter()
+                .flat_map(|item| item.applied_paths.iter().cloned())
+                .collect();
+            {
+                let core = self.core_write();
+                if let Err(error) = Self::coordinate_stores_after_commit(&core, &committed) {
+                    log::warn!(
+                        "[sync] store coordination after commit recovery failed: {error}"
+                    );
+                }
+                // 恢复发布同样可能留下 journal 证明投影；按回执所属 project
+                // root 结算，避免启动恢复后统计一直停在 pending。
+                let mut project_roots = std::collections::HashSet::new();
+                for item in &recovered {
+                    let target_root = item.target_live_root.as_path();
+                    for change in &item.chapter_changes {
+                        let project_root = if target_root.join("projects").is_dir() {
+                            target_root.join("projects").join(&change.key.project_id)
+                        } else {
+                            target_root.to_path_buf()
+                        };
+                        project_roots.insert(project_root);
+                    }
+                }
+                for project_root in project_roots {
+                    if let Err(error) =
+                        core.retry_pending_chapter_proof_projections(&project_root)
+                    {
+                        log::warn!(
+                            "[sync] pending chapter proof retry after recovery failed for {}: {error}",
+                            project_root.display()
+                        );
+                    }
+                }
+            }
+            // 与正常 sync commit 同一 history/账本口径：同步自身写盘不能被
+            // 投影成待上传的本地 mutation（服务层按该 message 跳过）。
+            self.record_workspace_paths_history(&applied_paths, "full_sync_commit");
+        }
+        log::info!(
+            "[sync] commit recovery finished: {} object(s), {} chapter change(s)",
+            applied_paths.len(),
+            chapter_changes
+        );
+        recovered
     }
 
     /// 平台预处理失败写同一份 Core FullSyncState 的窄接口。
@@ -1066,6 +1168,11 @@ impl WriterCoreApi {
                 return make_noop_result();
             }
         }
+
+        // 上一轮（同进程内）commit 中断时，先按 durable 决议完成发布，再进入
+        // 本轮 Prepare；不能在没有新变化时把待恢复对象一直留在磁盘上。
+        // 启动入口 recover_interrupted_full_sync_state 与这里调用同一个幂等实现。
+        self.recover_pending_sync_commit_decisions();
 
         // Snapshot secrets before acquiring core_write（避免持锁期间回调 override）。
         let secrets = self.secrets_override_snapshot().unwrap_or_default();
@@ -2304,47 +2411,6 @@ impl WriterCoreApi {
         token.is_some_and(SyncCancellationToken::is_cancelled)
     }
 
-    /// 单个 target 的 Commit（短写锁）— 把 staging 的三方结果写进 live 终态，
-    /// 并把该 target 的未解决冲突写进 live 的 `state.local.json / conflicts.json`。
-    ///
-    /// progress 必须在**本函数返回之后**才发：返回时该 target 的冲突状态已经是 live
-    /// 最终值，用户收到 progress 立刻 resolve 不会被后续 Commit 覆盖。
-    ///
-    /// 返回 `(冲突已合并进结果的 target 结果, workspace-relative committed paths)`。
-    /// 把 `record_staging_conflicts` 的结果合并进 target 结果。
-    /// 从 `commit_target_after_transfer` 提取以控制 `with_sync_state_lock` 闭包嵌套深度
-    /// （Issue #762 评论 5834136935）。
-    fn apply_staging_conflicts_to_target(
-        target_with_conflicts: &mut crate::sync::types::TargetSyncResult,
-        run: &crate::sync::staging::StagingRun,
-        target_sync_result: &crate::sync::types::TargetSyncResult,
-        conflicts: &[crate::sync::staging::StagingConflict],
-    ) {
-        if conflicts.is_empty() {
-            return;
-        }
-        let existing_conflicts = target_sync_result.result.conflicts.clone();
-        match crate::sync::conflict::record_staging_conflicts_for_group(
-            run.target_live_root(),
-            &target_sync_result.remote_prefix,
-            conflicts,
-            &existing_conflicts,
-            run.app_group(),
-        ) {
-            Ok(merged) => {
-                target_with_conflicts.result.conflicts = merged;
-                target_with_conflicts.result.status = crate::sync::SyncStatus::Conflict;
-            }
-            Err(e) => {
-                target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
-                    format!("staging_conflict_persist_failed: {}", e),
-                );
-                target_with_conflicts.result.error =
-                    Some(format!("failed to persist staging conflicts: {}", e));
-            }
-        }
-    }
-
     /// Commit 已 Transfer 的 target；Prepare 阶段失败的目标跳过 Commit（#955）。
     fn commit_transferred_target(
         &self,
@@ -2398,8 +2464,8 @@ impl WriterCoreApi {
     ) {
         // Issue #1039 复核：同步 Commit 与独立 MCP 写事务必须共享应用数据根上的
         // 跨进程工作区锁。锁必须先于 state_lock 获取，并覆盖 live 读取、Store
-        // flush、三方 plan、SaveTransaction、组级 state/manifest 写回与账本压缩；
-        // 否则 MCP 在 plan 读取 live 后写入的对象会被旧计划覆盖。
+        // flush、三方 plan、durable commit 决议与逐文件发布、组级 state/manifest
+        // 写回与账本压缩；否则 MCP 在 plan 读取 live 后写入的对象会被旧计划覆盖。
         let _workspace_lock = match crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
         {
             Ok(lock) => lock,
@@ -2422,36 +2488,58 @@ impl WriterCoreApi {
         };
 
         // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 sync root 的
-        // state/conflict mutation。整段 Commit（三方 merge + SaveTransaction 写回 +
-        // record_staging_conflicts）持有该 project root 的共享锁，防止 UI resolve
+        // state/conflict mutation。整段 Commit（durable 决议 + 章节 journal +
+        // 逐文件幂等发布）持有该 project root 的共享锁，防止 UI resolve
         // 在 Commit 过程中写入后被旧 merged state 覆盖。
         crate::sync::state_lock::with_sync_state_lock(run.target_live_root(), || {
             let core = self.core_write();
 
             let mut target_with_conflicts = target_sync_result.clone();
-            let mut chapter_commit_receipts = Vec::new();
-            let mut publish_batch = crate::sync::staging::PublishBatch::default();
-            let (commit_result, conflicts, committed_paths) =
-                crate::sync::commit_helpers::commit_single_target_staging(
-                    run,
-                    target_sync_result,
-                    &mut chapter_commit_receipts,
-                    &mut publish_batch,
-                );
-
-            Self::apply_staging_conflicts_to_target(
-                &mut target_with_conflicts,
+            let commit = crate::sync::commit_helpers::commit_single_target_staging(
                 run,
                 target_sync_result,
-                &conflicts,
+                operation_id,
             );
+            let crate::sync::commit_helpers::TargetCommitOutcome {
+                result: commit_result,
+                conflicts: committed_conflicts,
+                committed_paths,
+                chapter_changes: committed_chapter_changes,
+                chapter_receipts: chapter_commit_receipts,
+                publish: publish_batch,
+            } = commit;
 
-            // commit 失败注入错误状态。
-            if let crate::sync::commit_helpers::TargetCommitResult::Failed(msg) = &commit_result {
-                crate::sync::commit_helpers::apply_commit_failure_to_target(
-                    &mut target_with_conflicts,
-                    msg,
-                );
+            // 冲突记录是同一份 durable 决议的一部分：只有它真实落盘时才把
+            // canonical 列表交给 target；失败/待恢复不能假装冲突已持久化。
+            if let Some(conflicts) = committed_conflicts {
+                target_with_conflicts.result.conflicts = conflicts;
+                if !target_with_conflicts.result.conflicts.is_empty()
+                    && matches!(
+                        &commit_result,
+                        crate::sync::commit_helpers::TargetCommitResult::Ok
+                    )
+                {
+                    target_with_conflicts.result.status = crate::sync::SyncStatus::Conflict;
+                }
+            }
+
+            // 失败/部分发布都携带真实已发布对象身份；不能把已写盘章节藏进
+            // 空 committed_paths。
+            match &commit_result {
+                crate::sync::commit_helpers::TargetCommitResult::RecoveryPending(message) => {
+                    crate::sync::commit_helpers::apply_commit_recovery_pending_to_target(
+                        &mut target_with_conflicts,
+                        message,
+                    );
+                }
+                crate::sync::commit_helpers::TargetCommitResult::Failed(message) => {
+                    crate::sync::commit_helpers::apply_commit_failure_to_target(
+                        &mut target_with_conflicts,
+                        message,
+                    );
+                }
+                crate::sync::commit_helpers::TargetCommitResult::Ok
+                | crate::sync::commit_helpers::TargetCommitResult::Skipped => {}
             }
 
             if !chapter_commit_receipts.is_empty() {
@@ -2489,13 +2577,9 @@ impl WriterCoreApi {
                 log::warn!("[sync] store coordination after commit failed: {e}");
             }
 
-            // receipt 在持有 workspace 锁时按真实 meta/正文生成；释放锁后不再
-            // 回读磁盘，避免晚到的外部写入污染本次同步结果。
-            let chapter_receipts = crate::sync::commit_helpers::build_chapter_change_receipts(
-                &self.app_data_root,
-                &committed_paths,
-                operation_id,
-            );
+            // 章节回执完全来自 durable 决议记录的 before/after 版本，不再在
+            // 提交后回读 live 猜“哪些章节变了”；失败时也只包含真实已发布章节。
+            let chapter_receipts = committed_chapter_changes;
             // 决议完全来自提交阶段冻结的版本事实：内容、基线、最终哈希、
             // mutation 序号和事务身份都随提交计划返回；这里不再回读 live。
             // 只有提交成功时 publish_batch 才非空；失败 target 没有发布事实。

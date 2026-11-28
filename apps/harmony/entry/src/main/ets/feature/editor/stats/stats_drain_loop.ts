@@ -20,6 +20,8 @@
 //    drainPromise 只覆盖「当前这一条」，barrier 一到就能立刻返回。仍然严格串行，
 //    也不会增加 Native 调用次数。
 // 3. flushThrough(barrier) 只等 barrier 及之前的事件，并重试其中失败的项；只有全部成功才返回 true。
+//    它只服务统计读取与页面关闭，**不是正文保存的前置条件**（Issue #1069）：正文证明事实
+//    由 EditorStatsQueue 单独冻结并保留到回执确认，这里的丢弃/失败不影响正文落盘。
 //
 // 运行测试：node --experimental-strip-types __tests__/editor_stats_drain.test.mjs
 
@@ -30,7 +32,8 @@ export interface SequencedPayload {
   seq: number
 }
 
-/** 积压上限。超过就丢最旧的一条，并按 seq 记一笔「脏」，调用方 flushThrough 时能看到。 */
+/** 积压上限。超过就丢最旧的一条，并按 seq 记一笔「脏」，调用方 flushThrough 时能看到。
+ *  只影响统计条目：正文证明事实不在本层，不会被这里的 shift() 丢掉（Issue #1069）。 */
 const MAX_QUEUE_SIZE: number = 512
 
 /** 单条写入失败后的重发次数（Issue #981：eventId 稳定，重发由 Core 幂等去重）。 */
@@ -85,7 +88,7 @@ export class SerialStatsDrain<T extends SequencedPayload> {
     return this.droppedCount
   }
 
-  /** 当前入队过的最后一个序号（保存流程拿它当 barrier）。 */
+  /** 当前入队过的最后一个序号（保存流程拿它当证明事实的冻结上界）。 */
   currentSeq(): number {
     return this.ledger.currentSeq()
   }
@@ -100,8 +103,8 @@ export class SerialStatsDrain<T extends SequencedPayload> {
   enqueue(item: T): void {
     if (this.pending.length >= MAX_QUEUE_SIZE) {
       const dropped: T | undefined = this.pending.shift()
-      // 被丢弃的这条也按 seq 记一笔：调用方 flushThrough 到它之后时应当看到不干净，
-      // 而不是以为「统计都写进去了」。丢弃不重试。
+      // 被丢弃的这条也按 seq 记一笔：统计查询 flushThrough 到它之后时应当看到不干净，
+      // 而不是以为「统计都写进去了」。丢弃不重试；正文证明事实由队列外壳另行保留。
       if (dropped !== undefined) {
         this.droppedCount++
         this.ledger.dropped(dropped.seq)

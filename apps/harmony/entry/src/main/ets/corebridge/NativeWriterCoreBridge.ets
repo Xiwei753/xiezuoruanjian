@@ -246,10 +246,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async saveChapterVersioned(chapterId: string, text: string, expected: ChapterVersion,
     baseContent: string, allowEmptyOverwrite: boolean,
-    proofSnapshotRevision: number, proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    proofSnapshotRevision: number, proofBatchJson: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     return this.chapterBridge.saveChapterVersioned(
       chapterId, text, expected, baseContent, allowEmptyOverwrite,
-      proofSnapshotRevision, proofEventIds)
+      proofSnapshotRevision, proofBatchJson)
   }
 
   // Issue #1063：冲突材料专用入口（只写材料，不发布正文、不做版本 CAS）。
@@ -260,9 +260,9 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async clearChapterVersioned(chapterId: string, expected: ChapterVersion,
     baseContent: string, proofSnapshotRevision: number,
-    proofEventIds: string[]): Promise<ResultEnvelope<ChapterSaveReceipt>> {
+    proofBatchJson: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     return this.chapterBridge.clearChapterVersioned(
-      chapterId, expected, baseContent, proofSnapshotRevision, proofEventIds)
+      chapterId, expected, baseContent, proofSnapshotRevision, proofBatchJson)
   }
 
   async clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
@@ -491,6 +491,17 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async recordEditorChangeStats(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>> {
     return this.statsBridge.recordEditorChangeStats(input)
+  }
+
+  // Issue #1069：不写 Core pending 证明的统计入口（统计与证明随正文批次一次写入）。
+  async recordEditorChangeStatsWithoutProof(
+    input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>> {
+    return this.statsBridge.recordEditorChangeStatsWithoutProof(input)
+  }
+
+  // Issue #1069：Core 生成证明批次（`ChapterProofProjection` JSON 数组字符串）。
+  async buildEditorProofBatch(inputs: EditorChangeStatsInput[]): Promise<ResultEnvelope<string>> {
+    return this.statsBridge.buildEditorProofBatch(inputs)
   }
 
   async recordWritingActivitySegment(input: WritingActivitySegmentInput): Promise<ResultEnvelope<boolean>> {

@@ -8,16 +8,19 @@ static napi_value NativeListChapters(napi_env env, napi_callback_info info) {
     napi_value args[2];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
+    char* project_id = nullptr;
+    char* volume_id = nullptr;
+    if (argc < 2 || !napi_arg_get_string(env, args[0], &project_id)
+        || !napi_arg_get_string(env, args[1], &volume_id)) {
+        delete[] project_id;
+        delete[] volume_id;
+        return napi_arg_invalid_result(env);
     }
 
-    return ReturnJsonString(env, writer_core_list_chapters(project_id, volume_id));
+    napi_value result = ReturnJsonString(env, writer_core_list_chapters(project_id, volume_id));
+    delete[] project_id;
+    delete[] volume_id;
+    return result;
 }
 
 static napi_value NativeCreateChapter(napi_env env, napi_callback_info info) {
@@ -25,20 +28,23 @@ static napi_value NativeCreateChapter(napi_env env, napi_callback_info info) {
     napi_value args[3];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char name[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    }
-    if (argc >= 3) {
-        napi_get_value_string_utf8(env, args[2], name, sizeof(name), nullptr);
+    char* project_id = nullptr;
+    char* volume_id = nullptr;
+    char* name = nullptr;
+    if (argc < 3 || !napi_arg_get_string(env, args[0], &project_id)
+        || !napi_arg_get_string(env, args[1], &volume_id)
+        || !napi_arg_get_string(env, args[2], &name)) {
+        delete[] project_id;
+        delete[] volume_id;
+        delete[] name;
+        return napi_arg_invalid_result(env);
     }
 
-    return ReturnJsonString(env, writer_core_create_chapter(project_id, volume_id, name));
+    napi_value result = ReturnJsonString(env, writer_core_create_chapter(project_id, volume_id, name));
+    delete[] project_id;
+    delete[] volume_id;
+    delete[] name;
+    return result;
 }
 
 static napi_value NativeOpenChapter(napi_env env, napi_callback_info info) {
@@ -46,20 +52,23 @@ static napi_value NativeOpenChapter(napi_env env, napi_callback_info info) {
     napi_value args[3];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    }
-    if (argc >= 3) {
-        napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
+    char* project_id = nullptr;
+    char* volume_id = nullptr;
+    char* chapter_id = nullptr;
+    if (argc < 3 || !napi_arg_get_string(env, args[0], &project_id)
+        || !napi_arg_get_string(env, args[1], &volume_id)
+        || !napi_arg_get_string(env, args[2], &chapter_id)) {
+        delete[] project_id;
+        delete[] volume_id;
+        delete[] chapter_id;
+        return napi_arg_invalid_result(env);
     }
 
-    return ReturnJsonString(env, writer_core_open_chapter(project_id, volume_id, chapter_id));
+    napi_value result = ReturnJsonString(env, writer_core_open_chapter(project_id, volume_id, chapter_id));
+    delete[] project_id;
+    delete[] volume_id;
+    delete[] chapter_id;
+    return result;
 }
 
 static napi_value NativeSaveChapter(napi_env env, napi_callback_info info) {
@@ -67,32 +76,28 @@ static napi_value NativeSaveChapter(napi_env env, napi_callback_info info) {
     napi_value args[4];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    }
-    if (argc >= 3) {
-        napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
-    }
-
-    // Chapter content can be large, use dynamic allocation
+    char* project_id = nullptr;
+    char* volume_id = nullptr;
+    char* chapter_id = nullptr;
+    // Issue #1069 评论 4：正文走 helper 的已初始化、NUL 结尾 buffer；两次
+    // napi_get_value_string_utf8 的 status/分配失败都统一转 INVALID_ARGUMENT，
+    // 绝不再把未初始化字节交给 writer_core_save_chapter。
     char* content = nullptr;
-    if (argc >= 4) {
-        size_t content_len = 0;
-        napi_get_value_string_utf8(env, args[3], nullptr, 0, &content_len);
-        content = new char[content_len + 1];
-        napi_get_value_string_utf8(env, args[3], content, content_len + 1, &content_len);
-    } else {
-        content = new char[1];
-        content[0] = '\0';
+    if (argc < 4 || !napi_arg_get_string(env, args[0], &project_id)
+        || !napi_arg_get_string(env, args[1], &volume_id)
+        || !napi_arg_get_string(env, args[2], &chapter_id)
+        || !napi_arg_get_string(env, args[3], &content)) {
+        delete[] project_id;
+        delete[] volume_id;
+        delete[] chapter_id;
+        delete[] content;
+        return napi_arg_invalid_result(env);
     }
 
     napi_value result = ReturnJsonString(env, writer_core_save_chapter(project_id, volume_id, chapter_id, content));
+    delete[] project_id;
+    delete[] volume_id;
+    delete[] chapter_id;
     delete[] content;
     return result;
 }
@@ -102,51 +107,40 @@ static napi_value NativeSaveChapterWithOptions(napi_env env, napi_callback_info 
     napi_value args[5];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    }
-    if (argc >= 3) {
-        napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
-    }
-
-    // Chapter content can be large, use dynamic allocation.
+    char* project_id = nullptr;
+    char* volume_id = nullptr;
+    char* chapter_id = nullptr;
     char* content = nullptr;
-    if (argc >= 4) {
-        size_t content_len = 0;
-        napi_get_value_string_utf8(env, args[3], nullptr, 0, &content_len);
-        content = new char[content_len + 1];
-        napi_get_value_string_utf8(env, args[3], content, content_len + 1, &content_len);
-    } else {
-        content = new char[1];
-        content[0] = '\0';
+    if (argc < 4 || !napi_arg_get_string(env, args[0], &project_id)
+        || !napi_arg_get_string(env, args[1], &volume_id)
+        || !napi_arg_get_string(env, args[2], &chapter_id)
+        || !napi_arg_get_string(env, args[3], &content)) {
+        delete[] project_id;
+        delete[] volume_id;
+        delete[] chapter_id;
+        delete[] content;
+        return napi_arg_invalid_result(env);
     }
 
     // Issue #1054：空覆盖意图必须由调用方显式给出布尔值；缺省按 false，
-    // 保持 Core 对意外空覆盖的拒绝。
+    // 保持 Core 对意外空覆盖的拒绝。给了但不是 bool 时不能当 false 继续。
     bool allow_empty_overwrite = false;
-    if (argc >= 5) {
-        napi_get_value_bool(env, args[4], &allow_empty_overwrite);
+    if (argc >= 5 && !napi_arg_get_bool(env, args[4], &allow_empty_overwrite)) {
+        delete[] project_id;
+        delete[] volume_id;
+        delete[] chapter_id;
+        delete[] content;
+        return napi_arg_invalid_result(env);
     }
 
     napi_value result = ReturnJsonString(env,
         writer_core_save_chapter_with_options(project_id, volume_id, chapter_id, content,
                                               allow_empty_overwrite));
+    delete[] project_id;
+    delete[] volume_id;
+    delete[] chapter_id;
     delete[] content;
     return result;
-}
-
-static char* ReadDynamicString(napi_env env, napi_value value) {
-    size_t len = 0;
-    napi_get_value_string_utf8(env, value, nullptr, 0, &len);
-    char* out = new char[len + 1];
-    napi_get_value_string_utf8(env, value, out, len + 1, &len);
-    return out;
 }
 
 static char* SaveChapterVersionedJsonWorker(const char* input) {
@@ -154,10 +148,20 @@ static char* SaveChapterVersionedJsonWorker(const char* input) {
 }
 
 static napi_value NativeSaveChapterVersioned(napi_env env, napi_callback_info info) {
-    std::string input;
-    NapiJsonAsyncReadArg(env, info, &input);
-    return NapiJsonAsyncSubmit(env, "saveChapterVersioned", input.c_str(),
-                               SaveChapterVersionedJsonWorker);
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    // Issue #1069 评论 4：版本化保存的 JSON payload 同样走统一字符串读取，
+    // 非字符串/内嵌 NUL/分配失败直接 INVALID_ARGUMENT，不把空串送进异步工作。
+    char* input = nullptr;
+    if (argc < 1 || !napi_arg_get_string(env, args[0], &input)) {
+        return napi_arg_invalid_result(env);
+    }
+    napi_value result = NapiJsonAsyncSubmit(env, "saveChapterVersioned", input,
+                                            SaveChapterVersionedJsonWorker);
+    delete[] input;
+    return result;
 }
 
 // Issue #1063：只写编辑会话冲突材料，不发布正文、不做版本 CAS。
@@ -166,17 +170,33 @@ static char* WriteEditorConflictMaterialJsonWorker(const char* input) {
 }
 
 static napi_value NativeWriteEditorConflictMaterial(napi_env env, napi_callback_info info) {
-    std::string input;
-    NapiJsonAsyncReadArg(env, info, &input);
-    return NapiJsonAsyncSubmit(env, "writeEditorConflictMaterial", input.c_str(),
-                               WriteEditorConflictMaterialJsonWorker);
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char* input = nullptr;
+    if (argc < 1 || !napi_arg_get_string(env, args[0], &input)) {
+        return napi_arg_invalid_result(env);
+    }
+    napi_value result = NapiJsonAsyncSubmit(env, "writeEditorConflictMaterial", input,
+                                            WriteEditorConflictMaterialJsonWorker);
+    delete[] input;
+    return result;
 }
 
 static napi_value NativeClearChapterVersioned(napi_env env, napi_callback_info info) {
-    std::string input;
-    NapiJsonAsyncReadArg(env, info, &input);
-    return NapiJsonAsyncSubmit(env, "clearChapterVersioned", input.c_str(),
-                               SaveChapterVersionedJsonWorker);
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char* input = nullptr;
+    if (argc < 1 || !napi_arg_get_string(env, args[0], &input)) {
+        return napi_arg_invalid_result(env);
+    }
+    napi_value result = NapiJsonAsyncSubmit(env, "clearChapterVersioned", input,
+                                            SaveChapterVersionedJsonWorker);
+    delete[] input;
+    return result;
 }
 
 static napi_value NativeRenameChapter(napi_env env, napi_callback_info info) {
@@ -184,16 +204,27 @@ static napi_value NativeRenameChapter(napi_env env, napi_callback_info info) {
     napi_value args[4];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    char new_name[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    if (argc >= 3) napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
-    if (argc >= 4) napi_get_value_string_utf8(env, args[3], new_name, sizeof(new_name), nullptr);
+    char* project_id = nullptr;
+    char* volume_id = nullptr;
+    char* chapter_id = nullptr;
+    char* new_name = nullptr;
+    if (argc < 4 || !napi_arg_get_string(env, args[0], &project_id)
+        || !napi_arg_get_string(env, args[1], &volume_id)
+        || !napi_arg_get_string(env, args[2], &chapter_id)
+        || !napi_arg_get_string(env, args[3], &new_name)) {
+        delete[] project_id;
+        delete[] volume_id;
+        delete[] chapter_id;
+        delete[] new_name;
+        return napi_arg_invalid_result(env);
+    }
 
-    return ReturnJsonString(env, writer_core_rename_chapter(project_id, volume_id, chapter_id, new_name));
+    napi_value result = ReturnJsonString(env, writer_core_rename_chapter(project_id, volume_id, chapter_id, new_name));
+    delete[] project_id;
+    delete[] volume_id;
+    delete[] chapter_id;
+    delete[] new_name;
+    return result;
 }
 
 static napi_value NativeDeleteChapter(napi_env env, napi_callback_info info) {
@@ -201,14 +232,23 @@ static napi_value NativeDeleteChapter(napi_env env, napi_callback_info info) {
     napi_value args[3];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    if (argc >= 3) napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
+    char* project_id = nullptr;
+    char* volume_id = nullptr;
+    char* chapter_id = nullptr;
+    if (argc < 3 || !napi_arg_get_string(env, args[0], &project_id)
+        || !napi_arg_get_string(env, args[1], &volume_id)
+        || !napi_arg_get_string(env, args[2], &chapter_id)) {
+        delete[] project_id;
+        delete[] volume_id;
+        delete[] chapter_id;
+        return napi_arg_invalid_result(env);
+    }
 
-    return ReturnJsonString(env, writer_core_delete_chapter(project_id, volume_id, chapter_id));
+    napi_value result = ReturnJsonString(env, writer_core_delete_chapter(project_id, volume_id, chapter_id));
+    delete[] project_id;
+    delete[] volume_id;
+    delete[] chapter_id;
+    return result;
 }
 
 static napi_value NativeReorderChapters(napi_env env, napi_callback_info info) {
@@ -216,23 +256,21 @@ static napi_value NativeReorderChapters(napi_env env, napi_callback_info info) {
     napi_value args[3];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-
-    size_t json_len = 0;
+    char* project_id = nullptr;
+    char* volume_id = nullptr;
     char* json = nullptr;
-    if (argc >= 3) {
-        napi_get_value_string_utf8(env, args[2], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[2], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
+    if (argc < 3 || !napi_arg_get_string(env, args[0], &project_id)
+        || !napi_arg_get_string(env, args[1], &volume_id)
+        || !napi_arg_get_string(env, args[2], &json)) {
+        delete[] project_id;
+        delete[] volume_id;
+        delete[] json;
+        return napi_arg_invalid_result(env);
     }
 
     napi_value result = ReturnJsonString(env, writer_core_reorder_chapters(project_id, volume_id, json));
+    delete[] project_id;
+    delete[] volume_id;
     delete[] json;
     return result;
 }
@@ -242,14 +280,23 @@ static napi_value NativeClearChapter(napi_env env, napi_callback_info info) {
     napi_value args[3];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    if (argc >= 3) napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
+    char* project_id = nullptr;
+    char* volume_id = nullptr;
+    char* chapter_id = nullptr;
+    if (argc < 3 || !napi_arg_get_string(env, args[0], &project_id)
+        || !napi_arg_get_string(env, args[1], &volume_id)
+        || !napi_arg_get_string(env, args[2], &chapter_id)) {
+        delete[] project_id;
+        delete[] volume_id;
+        delete[] chapter_id;
+        return napi_arg_invalid_result(env);
+    }
 
-    return ReturnJsonString(env, writer_core_clear_chapter(project_id, volume_id, chapter_id));
+    napi_value result = ReturnJsonString(env, writer_core_clear_chapter(project_id, volume_id, chapter_id));
+    delete[] project_id;
+    delete[] volume_id;
+    delete[] chapter_id;
+    return result;
 }
 
 // ── Recent edits ──

@@ -27,6 +27,43 @@ struct MutationSeqState {
     /// 已分配过的最大序号；下一次分配从 `+1` 开始。
     #[serde(default)]
     high_watermark: u64,
+    /// 当前对象最新事实的增量索引（Issue #1069）：append 只按 path 查这里，
+    /// 不再每次重读整份历史账本。旧文件没有该字段时按账本一次性重建。
+    #[serde(default)]
+    latest: BTreeMap<String, LatestMutationFact>,
+    /// 建立索引时账本的字节长度；与当前文件长度不一致说明账本被压缩、
+    /// 归档或上次 append 后索引尚未保存，需要重新扫描一次。
+    #[serde(default)]
+    ledger_len: u64,
+}
+
+/// 增量索引里一条对象的最后事实，只保留判重/时序比较需要的字段。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LatestMutationFact {
+    op: String,
+    #[serde(default)]
+    content_hash: String,
+    #[serde(default)]
+    object_revision: Option<u64>,
+    updated_at_ms: i64,
+    #[serde(default)]
+    deleted_at_ms: Option<i64>,
+}
+
+impl LatestMutationFact {
+    fn from_record(record: &LocalMutationRecord) -> Self {
+        Self {
+            op: record.op.clone(),
+            content_hash: record.content_hash.clone(),
+            object_revision: record.object_revision,
+            updated_at_ms: record.updated_at_ms,
+            deleted_at_ms: record.deleted_at_ms,
+        }
+    }
+
+    fn business_time_ms(&self) -> i64 {
+        self.deleted_at_ms.unwrap_or(self.updated_at_ms)
+    }
 }
 
 fn seq_state_path(sync_root: &Path) -> PathBuf {
@@ -58,6 +95,45 @@ fn save_seq_state(sync_root: &Path, state: &MutationSeqState) -> crate::error::R
     }
     let text = serde_json::to_string(state)?;
     crate::storage::atomic_write_string(&path, &text)
+}
+
+fn build_latest_index(records: &[LocalMutationRecord]) -> BTreeMap<String, LatestMutationFact> {
+    let mut latest = BTreeMap::new();
+    for record in records {
+        latest.insert(record.path.clone(), LatestMutationFact::from_record(record));
+    }
+    latest
+}
+
+/// 读取带最新事实索引的序号状态。
+///
+/// 正常会话只读 `mutation-seq.json`；只有旧文件没有索引、或账本长度与索引
+/// 记录不一致（旧版迁移、外部压缩、append 后崩溃）时才扫描一次账本重建。
+fn load_indexed_state(sync_root: &Path) -> crate::error::Result<MutationSeqState> {
+    let mut state = load_seq_state(sync_root)?;
+    let ledger_len = fs::metadata(ledger_path(sync_root))
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    let needs_rebuild = if ledger_len == 0 {
+        // 账本为空：索引也必须为空，避免残留已不存在的事实。
+        !state.latest.is_empty()
+    } else {
+        state.latest.is_empty() || state.ledger_len != ledger_len
+    };
+    if needs_rebuild {
+        let records = load_records(sync_root)?;
+        let ledger_max = records.iter().map(|record| record.seq).max().unwrap_or(0);
+        state.latest = build_latest_index(&records);
+        state.ledger_len = ledger_len;
+        // 旧账本没有 seq-state 时，索引重建同时把高水位抬到账本最大值，
+        // 防止下一次分配覆盖已存在序号。
+        state.high_watermark = state
+            .high_watermark
+            .max(ledger_max)
+            .max(confirmed_watermark(sync_root));
+        save_seq_state(sync_root, &state)?;
+    }
+    Ok(state)
 }
 
 /// 所有 target 状态里已确认过的最大序号。
@@ -96,21 +172,28 @@ fn confirmed_watermark(sync_root: &Path) -> u64 {
 }
 
 /// 预留 count 个序号并**先持久化高水位**，再交给调用方使用。
+///
+/// Issue #1069：正常会话只读持久高水位 + 增量索引，不再每次全量重读历史账本；
+/// 旧账本/索引缺失由 [`load_indexed_state`] 一次性重建。
 fn reserve_sequences(sync_root: &Path, count: usize) -> crate::error::Result<Vec<u64>> {
     if count == 0 {
         return Ok(Vec::new());
     }
-    let mut state = load_seq_state(sync_root)?;
-    let ledger_max = load_records(sync_root)?
-        .iter()
-        .map(|record| record.seq)
-        .max()
-        .unwrap_or(0);
-    let floor = ledger_max.max(confirmed_watermark(sync_root));
-    let start = state.high_watermark.max(floor) + 1;
+    let mut state = load_indexed_state(sync_root)?;
+    reserve_sequences_from_state(sync_root, &mut state, count)
+}
+
+/// 在已加载并校验过的索引状态上预留序号；调用方负责随后把索引更新写回。
+fn reserve_sequences_from_state(
+    sync_root: &Path,
+    state: &mut MutationSeqState,
+    count: usize,
+) -> crate::error::Result<Vec<u64>> {
     let count = u64::try_from(count).unwrap_or(u64::MAX);
+    let floor = confirmed_watermark(sync_root);
+    let start = state.high_watermark.max(floor) + 1;
     state.high_watermark = start.saturating_add(count).saturating_sub(1);
-    save_seq_state(sync_root, &state)?;
+    save_seq_state(sync_root, state)?;
     Ok((start..=state.high_watermark).collect())
 }
 
@@ -380,18 +463,23 @@ pub(crate) fn append_batch(
     let _lock = ledger_write_lock(sync_root)?;
     // 账本损坏时先归档重建：写入路径不能因为历史损坏而拒绝记录新的业务事实。
     repair_corrupt_ledger(sync_root)?;
-    let mut existing = load_records(sync_root)?;
-    ensure_sequences(sync_root, &mut existing)?;
-    let mut latest: HashMap<String, LocalMutationRecord> = HashMap::new();
-    for record in existing {
-        latest.insert(record.path.clone(), record);
+    // 旧账本（还没有 seq-state / 存在未编号事实）只在检测到该状态时迁移一次；
+    // 正常会话不再全量读取账本。
+    if needs_ledger_recovery(sync_root) {
+        let mut existing = load_records(sync_root)?;
+        ensure_sequences(sync_root, &mut existing)?;
     }
-    // 同一对象重复写入同一内容不产生新的待同步事实。账本在发布确认后才压缩，
-    // 因此这里只需和当前最后一条事实比较：op/内容哈希/对象版本都没变就不是
-    // 业务变更，不追加记录，也不产生新的待同步代次。
+    let mut state = load_indexed_state(sync_root)?;
+    // 同一对象重复写入同一内容不产生新的待同步事实。增量索引只保留每个
+    // path 的最后一条事实；同一批内 later 记录覆盖 earlier，与原全量扫描
+    // 的判重口径一致。peers 只用于本批次内比较，不改动已持久化的索引。
+    let mut prospective: BTreeMap<String, LatestMutationFact> = BTreeMap::new();
     let mut fresh: Vec<LocalMutationRecord> = Vec::new();
     for record in records {
-        let previous = latest.get(&record.path);
+        let previous = state
+            .latest
+            .get(&record.path)
+            .or_else(|| prospective.get(&record.path));
         let unchanged = previous.is_some_and(|previous| {
             previous.op == record.op
                 && previous.content_hash == record.content_hash
@@ -403,7 +491,7 @@ pub(crate) fn append_batch(
         // 旧事务迟到的重放不能覆盖更新的业务事实：按真实业务时间比较，
         // 落后于账本最后一条就直接丢弃，不分配新序号（复审 #1）。
         if let Some(previous) = previous {
-            let previous_time = previous.deleted_at_ms.unwrap_or(previous.updated_at_ms);
+            let previous_time = previous.business_time_ms();
             let incoming_time = record.deleted_at_ms.unwrap_or(record.updated_at_ms);
             if incoming_time < previous_time {
                 log::info!(
@@ -417,14 +505,15 @@ pub(crate) fn append_batch(
         }
         let mut record = record.clone();
         record.seq = 0;
-        latest.insert(record.path.clone(), record.clone());
+        prospective.insert(record.path.clone(), LatestMutationFact::from_record(&record));
         fresh.push(record);
     }
     if fresh.is_empty() {
         return Ok(());
     }
     // 先按去重后的真实条数预留序号并持久化高水位，再落盘事实。
-    let mut reserved = reserve_sequences(sync_root, fresh.len())?.into_iter();
+    let mut reserved =
+        reserve_sequences_from_state(sync_root, &mut state, fresh.len())?.into_iter();
     for record in &mut fresh {
         record.seq = reserved.next().unwrap_or(0);
     }
@@ -442,6 +531,15 @@ pub(crate) fn append_batch(
     let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
     file.write_all(lines.as_bytes())?;
     file.sync_data()?;
+    // 账本已 durable，再把索引与它对齐。若这里失败，下次加载会因
+    // ledger_len 不一致而按账本重建，不会长期留下超前/滞后的假事实。
+    for record in &fresh {
+        state
+            .latest
+            .insert(record.path.clone(), LatestMutationFact::from_record(record));
+    }
+    state.ledger_len = fs::metadata(&path)?.len();
+    save_seq_state(sync_root, &state)?;
     Ok(())
 }
 

@@ -51,11 +51,13 @@ impl WriterCoreApi {
         }
 
         // 2. 生成事务 ID，创建 staging 目录
-        // 路径：app_data_root/.restore-staging/<txId>/
-        // 项目会创建在：app_data_root/.restore-staging/<txId>/<projectId>/
+        // Issue #1069：staging 必须与最终作品根在同一文件系统，否则
+        // rename 会因 EXDEV 失败。放在 projects_root 下而不是 app_data_root 下。
+        // 路径：projects_root/.restore-staging/<txId>/
+        // 项目会创建在：projects_root/.restore-staging/<txId>/<projectId>/
         let transaction_id = Uuid::new_v4().to_string();
         let staging_root = self
-            .app_data_root
+            .projects_root
             .join(".restore-staging")
             .join(&transaction_id);
 

@@ -145,6 +145,8 @@ fn save_chapter_verified_with_changes_inner(
         None,
         &[],
         None,
+        // 不带证明事件的普通保存：没有原始证明事件，也就没有待确认 ack。
+        true,
     )
 }
 
@@ -179,6 +181,9 @@ pub fn save_chapter_verified_with_changes_versioned(
         workspace_lock,
         &[],
         None,
+        // ID 批次路径只被 Harmony FFI 使用；Harmony 没有平台持久草稿，
+        // 由 Core 完成投影后自行清理 journal。
+        false,
     )
 }
 
@@ -214,6 +219,8 @@ pub fn save_chapter_verified_with_changes_and_files_versioned(
         workspace_lock,
         &[],
         None,
+        // 同上：ID 批次只被 Harmony FFI 使用，不产生待平台确认的草稿 ack。
+        false,
     )
 }
 
@@ -233,6 +240,7 @@ pub fn save_chapter_verified_with_changes_and_files_versioned_with_proof(
     workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     proof_events: &[crate::chapter::commit::ChapterProofProjection],
     proof_snapshot_revision: Option<u64>,
+    draft_ack_required: bool,
 ) -> Result<(
     ChapterSaveReceipt,
     crate::storage::workspace_git::WorkspaceChangeSet,
@@ -251,6 +259,7 @@ pub fn save_chapter_verified_with_changes_and_files_versioned_with_proof(
         workspace_lock,
         proof_events,
         proof_snapshot_revision,
+        draft_ack_required,
     )
 }
 
@@ -269,6 +278,7 @@ fn save_chapter_verified_with_changes_inner_versioned(
     workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     proof_events: &[crate::chapter::commit::ChapterProofProjection],
     proof_snapshot_revision: Option<u64>,
+    draft_ack_required: bool,
 ) -> Result<(
     ChapterSaveReceipt,
     crate::storage::workspace_git::WorkspaceChangeSet,
@@ -286,6 +296,7 @@ fn save_chapter_verified_with_changes_inner_versioned(
         projection_ids,
         proof_events,
         proof_snapshot_revision,
+        draft_ack_required,
     )?;
 
     // 变更集只包含保存事务真实写过的文件（project-relative），

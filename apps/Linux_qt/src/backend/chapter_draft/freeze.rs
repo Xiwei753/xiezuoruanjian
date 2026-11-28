@@ -106,6 +106,7 @@ pub(crate) fn freeze_batch_for(
         }
     }
     let mut batch = Vec::with_capacity(selected.len());
+    let mut previous_new_revision: Option<u64> = None;
     for fact in selected {
         let path = store::fact_file_path(&location.dir, fact.seq, &fact.event_id);
         let parsed = store::read_fact_file(&path)?;
@@ -119,6 +120,39 @@ pub(crate) fn freeze_batch_for(
                 path.display()
             ));
         }
+        // Issue #1069：不得只看最后一条 revision。相邻事实必须首尾相接，
+        // 中间缺失时后面的正文不能带着断开的证明链提交成 durable。
+        let projection: serde_json::Value = serde_json::from_str(&parsed.projection_json)
+            .map_err(|error| {
+                format!(
+                    "draft fact projection decode failed: event={} path={}: {error}",
+                    parsed.event_id,
+                    path.display()
+                )
+            })?;
+        let base_revision = projection
+            .pointer("/event/proof/baseRevision")
+            .and_then(serde_json::Value::as_u64);
+        let new_revision = projection
+            .pointer("/event/proof/newRevision")
+            .and_then(serde_json::Value::as_u64);
+        if let (Some(previous), Some(base)) = (previous_new_revision, base_revision) {
+            if base != previous {
+                return Err(format!(
+                    "draft fact revision chain broken: event={} base={base} previous_new={previous} project={project_id} chapter={chapter_id}",
+                    parsed.event_id
+                ));
+            }
+        }
+        if let (Some(base), Some(new)) = (base_revision, new_revision) {
+            if new <= base {
+                return Err(format!(
+                    "draft fact revision does not advance: event={} base={base} new={new} project={project_id} chapter={chapter_id}",
+                    parsed.event_id
+                ));
+            }
+        }
+        previous_new_revision = new_revision;
         batch.push(LoadedFact {
             event_id: parsed.event_id,
             revision: parsed.revision,

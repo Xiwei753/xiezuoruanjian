@@ -212,11 +212,66 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
             return;
         }
     };
-    let base = (
-        command.base_generation.as_str(),
-        command.base_revision,
-        command.base_sha256.as_str(),
+    // Issue #1069：新建草稿的 base 以 worker 已确认回执为准；只有输入事实的
+    // before 摘要确实对应回执正文时才算归属，否则保留 QML 记录的旧 base，
+    // 由恢复链按真实外部冲突处理，不推测重基线。
+    let chain_receipt = state.chain_receipt_for(
+        &command.context,
+        &command.project_id,
+        &command.chapter_id,
+        session_id,
     );
+    // Issue #1069：链被淘汰或新会话时，只在“即将新建草稿”时读取一次 Core
+    // 已提交版本；事实的 before 摘要必须与它对应，不能凭本地时间/正文猜。
+    let fallback_receipt = if chain_receipt.is_none()
+        && !super::super::chapter_draft::draft_state_initialized(
+            &projects_root,
+            &command.project_id,
+            &command.chapter_id,
+        )
+        && !command.input.before_text_sha256.is_empty()
+    {
+        match state.api_for(&command.context).open_chapter(
+            &command.project_id,
+            &command.volume_id,
+            &command.chapter_id,
+        ) {
+            Ok(opened)
+                if opened.version.content_sha256 == command.input.before_text_sha256 =>
+            {
+                Some((
+                    opened.version.object_generation,
+                    opened.version.revision,
+                    opened.version.content_sha256,
+                ))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let effective_base = match chain_receipt.as_ref() {
+        Some(receipt)
+            if !command.input.before_text_sha256.is_empty()
+                && receipt.content_sha256 == command.input.before_text_sha256 =>
+        {
+            (
+                receipt.object_generation.as_str(),
+                receipt.revision,
+                receipt.content_sha256.as_str(),
+            )
+        }
+        _ => match fallback_receipt.as_ref() {
+            Some((generation, revision, sha256)) => {
+                (generation.as_str(), *revision, sha256.as_str())
+            }
+            None => (
+                command.base_generation.as_str(),
+                command.base_revision,
+                command.base_sha256.as_str(),
+            ),
+        },
+    };
     if let Err(error) = super::super::chapter_draft::spool_failed_input(
         &projects_root,
         &command.project_id,
@@ -227,10 +282,11 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
         revision,
         &event_id,
         &input_json,
-        base,
+        effective_base,
     ) {
-        // spool 失败时仍尝试投影 + 事实文件；真正写盘失败会进入内存失败集合
-        // 并阻塞冻结，不会静默通过保存。
+        // Issue #1069：原始事实没有落盘就不能继续投影——一旦投影被写成
+        // 事实文件，它就成了不可从 spool 恢复的唯一副本。立即停止，并把
+        // 该 eventId/revision 记入内存失败集合；冻结会拒绝越过它的保存。
         crate::backend::app_backend::debug_error_static(
             "chapter_draft",
             "record_editor_proof_fact_spool_failed",
@@ -239,6 +295,14 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
                 command.project_id, command.chapter_id
             ),
         );
+        super::super::chapter_draft::note_failed_input_in_memory(
+            &projects_root,
+            &command.project_id,
+            &command.chapter_id,
+            &event_id,
+            revision,
+        );
+        return;
     }
     let api = state.api_for(&command.context);
     let projection_json = match api.record_editor_proof_fact(command.input) {
@@ -393,13 +457,42 @@ pub(super) fn retry_pending_inputs(
 /// Issue #1062 评论 7191076411 第 2 项：正文不再由 GUI 线程直接改 registry。
 /// 命令按 actor 顺序到达，快照始终是该章最新一份；没有快照（已被更早命令
 /// 取走）时只做一次节流落盘。
-pub(super) fn handle_draft_text(command: ChapterDraftTextCommand) {
+pub(super) fn handle_draft_text(
+    state: &mut ChapterSaveWorkerState,
+    command: ChapterDraftTextCommand,
+) {
     let projects_root = Path::new(&command.context.projects_root);
     let mut force = command.force;
     if let Some(snapshot) =
         take_draft_text_snapshot(&command.context, &command.project_id, &command.chapter_id)
     {
         force |= snapshot.force;
+        // Issue #1069：新草稿的 base 以 worker 已确认回执为准。QML 在回执到达前
+        // 仍会带旧 committedChapter*；同一 generation 且回执确实前进时，编辑器
+        // 正文就是那次保存的续写，不能把新草稿建到旧版本上。
+        let chain_receipt = state.chain_receipt_for(
+            &command.context,
+            &command.project_id,
+            &command.chapter_id,
+            snapshot.session_id,
+        );
+        let effective_base = match chain_receipt.as_ref() {
+            Some(receipt)
+                if receipt.object_generation == snapshot.generation
+                    && receipt.revision > snapshot.base_revision =>
+            {
+                (
+                    receipt.object_generation.as_str(),
+                    receipt.revision,
+                    receipt.content_sha256.as_str(),
+                )
+            }
+            _ => (
+                snapshot.base_generation.as_str(),
+                snapshot.base_revision,
+                snapshot.base_sha256.as_str(),
+            ),
+        };
         // base 只在草稿状态未初始化时生效；之后由 Core durable receipt /
         // pending-ack 推进（见 chapter_draft::note_text）。
         super::super::chapter_draft::note_text(
@@ -412,11 +505,7 @@ pub(super) fn handle_draft_text(command: ChapterDraftTextCommand) {
             snapshot.text.clone(),
             snapshot.revision,
             &snapshot.sha256,
-            (
-                &snapshot.base_generation,
-                snapshot.base_revision,
-                &snapshot.base_sha256,
-            ),
+            effective_base,
             snapshot.editor_base_revision,
         );
         log::debug!(
