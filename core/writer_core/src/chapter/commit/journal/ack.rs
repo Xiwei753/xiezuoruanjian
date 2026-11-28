@@ -64,6 +64,11 @@ fn confirm_pending_projections(
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
         let _ = remove_transaction_dir(&tx_dir);
+        if let Err(error) =
+            advance_chapter_locator_after_finished(project_root, &manifest.key, &manifest)
+        {
+            log::warn!("failed to advance chapter commit locator: {error}");
+        }
         return Ok(true);
     }
     Ok(false)
@@ -107,6 +112,11 @@ pub fn mark_chapter_commit_draft_ack(
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
         let _ = remove_transaction_dir(&tx_dir);
+        if let Err(error) =
+            advance_chapter_locator_after_finished(project_root, &manifest.key, &manifest)
+        {
+            log::warn!("failed to advance chapter commit locator: {error}");
+        }
         return Ok(true);
     }
     Ok(false)

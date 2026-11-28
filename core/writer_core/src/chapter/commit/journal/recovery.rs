@@ -254,40 +254,89 @@ pub fn pending_chapter_proof_transactions(
     })
 }
 
-/// 按真实事务 ID 读取一笔仍待投影的证明事务；不存在/已确认返回 `None`。
+/// 恢复冲突时补写仍可取得的三方正文材料（base 取本批首条证明的基线）。
+fn write_recovered_conflict_materials(
+    project_root: &Path,
+    tx_dir: &Path,
+    manifest: &ChapterCommitManifest,
+    conflict_dir: &Path,
+) -> Result<()> {
+    let mut wrote = false;
+    if let Some(base) = manifest
+        .proof_events
+        .first()
+        .and_then(|projection| projection.baseline_text.as_deref())
+    {
+        crate::storage::atomic_write_bytes(&conflict_dir.join("base.md"), base.as_bytes())?;
+        wrote = true;
+    }
+    if let Ok(local) = fs::read_to_string(manifest.key.body_path(project_root)) {
+        crate::storage::atomic_write_bytes(&conflict_dir.join("local.md"), local.as_bytes())?;
+        wrote = true;
+    }
+    if let Ok(incoming) = fs::read_to_string(tx_dir.join(BODY_FILE)) {
+        crate::storage::atomic_write_bytes(&conflict_dir.join("incoming.md"), incoming.as_bytes())?;
+        wrote = true;
+    }
+    if wrote {
+        crate::storage::sync_dir(conflict_dir)?;
+    }
+    Ok(())
+}
+
+/// 按本章定位链取出从最早到本次事务的未确认证明队列。
 ///
-/// 正文保存后的投影只处理本次事务，不枚举项目内其它章节的 manifest。
-pub fn pending_chapter_proof_transaction(
+/// 只沿 `previous_proof_transaction` 读取本章真实事务，不枚举其它章节。
+pub(crate) fn pending_chapter_proof_chain(
     project_root: &Path,
     transaction_id: &str,
-) -> Result<Option<super::PendingChapterProofTransaction>> {
-    let manifest_path = journal_root(project_root)
-        .join(transaction_id)
-        .join("manifest.json");
-    let raw = match fs::read_to_string(&manifest_path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
+) -> Result<Vec<super::PendingChapterProofTransaction>> {
+    let mut chain = Vec::new();
+    let mut cursor = Some(transaction_id.to_string());
+    let mut seen = std::collections::HashSet::new();
+    while let Some(current) = cursor {
+        if !seen.insert(current.clone()) {
             return Err(Error::Other(format!(
-                "failed to read chapter commit manifest {}: {error}",
-                manifest_path.display()
-            )))
+                "chapter proof transaction chain loops at {current}"
+            )));
         }
-    };
-    let manifest: ChapterCommitManifest = serde_json::from_str(&raw).map_err(|error| {
-        Error::Other(format!(
-            "chapter commit manifest {} is corrupt: {error}",
-            manifest_path.display()
-        ))
-    })?;
-    if manifest.phase != ChapterCommitPhase::Applied || manifest.pending_projections.is_empty() {
-        return Ok(None);
+        let manifest_path = journal_root(project_root).join(&current).join("manifest.json");
+        let raw = match fs::read_to_string(&manifest_path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to read chapter commit manifest {}: {error}",
+                    manifest_path.display()
+                )))
+            }
+        };
+        let manifest: ChapterCommitManifest = serde_json::from_str(&raw).map_err(|error| {
+            Error::Other(format!(
+                "chapter commit manifest {} is corrupt: {error}",
+                manifest_path.display()
+            ))
+        })?;
+        if manifest.transaction_id != current {
+            return Err(Error::Other(format!(
+                "chapter commit manifest {} names transaction {}, expected {current}",
+                manifest_path.display(),
+                manifest.transaction_id
+            )));
+        }
+        if manifest.phase == ChapterCommitPhase::Applied
+            && !manifest.pending_projections.is_empty()
+        {
+            chain.push(super::PendingChapterProofTransaction {
+                transaction_id: manifest.transaction_id.clone(),
+                key: manifest.key.clone(),
+                commit_sequence: manifest.commit_sequence,
+            });
+        }
+        cursor = manifest.previous_proof_transaction;
     }
-    Ok(Some(super::PendingChapterProofTransaction {
-        transaction_id: manifest.transaction_id,
-        key: manifest.key,
-        commit_sequence: manifest.commit_sequence,
-    }))
+    chain.reverse();
+    Ok(chain)
 }
 
 /// 读取 journal 中尚未确认的证明事件（供投影 worker 使用）。
@@ -682,7 +731,7 @@ fn recover_pending_chapter_commits_filtered(
             }
         }
     }
-    recover_chapter_commit_entries(project_root, entries)
+    recover_chapter_commit_entries(project_root, entries, true)
 }
 
 /// 读取/提交当前章时只按该章定位文件找到真实未完成正文事务。
@@ -715,17 +764,25 @@ fn recover_chapter_locator(
             manifest_path.display()
         ))
     })?;
-    if &manifest.key != key || manifest.phase != ChapterCommitPhase::Decided {
-        // 正文已发布/已切换决议：定位过期，不再让辅助投影进入热路径。
+    if &manifest.key != key {
         clear_chapter_locator(project_root, key)?;
         return Ok(Vec::new());
     }
-    recover_chapter_commit_entries(project_root, vec![(tx_dir, manifest)])
+    if manifest.phase == ChapterCommitPhase::Applied {
+        // 正文已发布，只剩证明投影：定位是该章未决证明队列的入口，保留。
+        return Ok(Vec::new());
+    }
+    if manifest.phase != ChapterCommitPhase::Decided {
+        clear_chapter_locator(project_root, key)?;
+        return Ok(Vec::new());
+    }
+    recover_chapter_commit_entries(project_root, vec![(tx_dir, manifest)], false)
 }
 
 fn recover_chapter_commit_entries(
     project_root: &Path,
     mut entries: Vec<(PathBuf, ChapterCommitManifest)>,
+    clear_pending: bool,
 ) -> Result<Vec<ChapterCommitRecovery>> {
     entries.sort_by_key(|(_, manifest)| (manifest.commit_sequence, manifest.created_at_ms));
 
@@ -767,6 +824,12 @@ fn recover_chapter_commit_entries(
                             continue;
                         }
                     };
+                    write_recovered_conflict_materials(
+                        project_root,
+                        &tx_dir,
+                        &manifest,
+                        Path::new(&conflict_dir),
+                    )?;
                     recovered.push(ChapterCommitRecovery {
                         transaction_id: manifest.transaction_id.clone(),
                         key: manifest.key.clone(),
@@ -779,20 +842,49 @@ fn recover_chapter_commit_entries(
                     if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
                         log::warn!("failed to clear chapter commit locator: {error}");
                     }
+                    if let Err(error) = remove_transaction_dir(&tx_dir) {
+                        log::warn!(
+                            "failed to clean delivered superseded chapter commit {}: {error}",
+                            tx_dir.display()
+                        );
+                    }
                     continue;
                 }
-                if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
-                    log::warn!("failed to clear chapter commit locator after publish: {error}");
+                if manifest.pending_projections.is_empty() {
+                    if let Err(error) = clear_chapter_locator_if(
+                        project_root,
+                        &key,
+                        &manifest.transaction_id,
+                    ) {
+                        log::warn!("failed to clear chapter commit locator after publish: {error}");
+                    }
                 }
             }
             ChapterCommitPhase::Applied => {
-                if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
-                    log::warn!("failed to clear stale chapter commit locator: {error}");
+                // 已发布只待证明的记录保留定位，作为该章未决证明队列的入口；
+                // 正文闸门不再因它阻塞。启动恢复时按从早到晚写入，最后一条
+                // 就是该章最新的未决事务。
+                if manifest.pending_projections.is_empty()
+                    && manifest.draft_ack_projections.is_empty()
+                {
+                    if let Err(error) = clear_chapter_locator_if(
+                        project_root,
+                        &key,
+                        &manifest.transaction_id,
+                    ) {
+                        log::warn!("failed to clear stale chapter commit locator: {error}");
+                    }
+                } else {
+                    write_chapter_locator(project_root, &key, &transaction_id)?;
                 }
             }
             ChapterCommitPhase::Finished => {
-                if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
-                    log::warn!("failed to clear stale chapter commit locator: {error}");
+                if let Err(error) = advance_chapter_locator_after_finished(
+                    project_root,
+                    &key,
+                    &manifest,
+                ) {
+                    log::warn!("failed to advance chapter commit locator: {error}");
                 }
                 if let Err(error) = remove_transaction_dir(&tx_dir) {
                     log::warn!(
@@ -808,15 +900,29 @@ fn recover_chapter_commit_entries(
                 // manifest 补齐并自校验，再交付恢复回执——不能直接 continue，
                 // 否则 Qt 拿不到这笔已放弃事务的真实 transaction_id/conflict_dir。
                 match preserve_superseded_conflict(project_root, &tx_dir, &manifest) {
-                    Ok(conflict_dir) => recovered.push(ChapterCommitRecovery {
-                        transaction_id: manifest.transaction_id.clone(),
-                        key: manifest.key.clone(),
-                        after: manifest.after.clone(),
-                        pending_projections: manifest.pending_projections.clone(),
-                        draft_ack_projections: manifest.draft_ack_projections.clone(),
-                        superseded: true,
-                        conflict_dir: Some(conflict_dir),
-                    }),
+                    Ok(conflict_dir) => {
+                        write_recovered_conflict_materials(
+                            project_root,
+                            &tx_dir,
+                            &manifest,
+                            Path::new(&conflict_dir),
+                        )?;
+                        recovered.push(ChapterCommitRecovery {
+                            transaction_id: manifest.transaction_id.clone(),
+                            key: manifest.key.clone(),
+                            after: manifest.after.clone(),
+                            pending_projections: manifest.pending_projections.clone(),
+                            draft_ack_projections: manifest.draft_ack_projections.clone(),
+                            superseded: true,
+                            conflict_dir: Some(conflict_dir),
+                        });
+                        if let Err(error) = remove_transaction_dir(&tx_dir) {
+                            log::warn!(
+                                "failed to clean delivered superseded chapter commit {}: {error}",
+                                tx_dir.display()
+                            );
+                        }
+                    }
                     Err(error) => {
                         // 归档不完整：保留事务等下一次恢复，不交付指向残件的回执。
                         log::error!(
@@ -866,7 +972,9 @@ fn recover_chapter_commit_entries(
             conflict_dir: None,
         });
     }
-    clear_pending_if_idle(project_root)?;
+    if clear_pending {
+        clear_pending_if_idle(project_root)?;
+    }
     Ok(recovered)
 }
 

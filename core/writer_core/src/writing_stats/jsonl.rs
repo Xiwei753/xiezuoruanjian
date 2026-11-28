@@ -460,6 +460,87 @@ fn read_trailing_fragment_bytes(file: &mut File, len: u64) -> Result<Vec<u8>> {
     Ok(collected)
 }
 
+/// 截掉文件末尾无法解析成完整记录的残片；完整 JSON（即使没有换行）保留。
+///
+/// 用于重试恢复：残片不是事件，journal 会按原始事实重写，不能因为它保存的
+/// 派生 seq/hash 已变化而永久拒绝恢复。
+pub(crate) fn truncate_incomplete_tail<T: DeserializeOwned>(path: &Path) -> Result<bool> {
+    let mut file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to open stats jsonl {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    let len = file.metadata()?.len();
+    let tail = read_trailing_fragment_bytes(&mut file, len)?;
+    if tail.is_empty() || serde_json::from_slice::<T>(&tail).is_ok() {
+        return Ok(false);
+    }
+    truncate_tail(&mut file, len, tail.len())?;
+    Ok(true)
+}
+
+/// 流式读取指定 ID 的完整记录，尾部未完成残片忽略；中间损坏仍报错。
+///
+/// 恢复路径只取本批真正需要的旧事件，不把整日文件读成 `Vec`。
+pub(crate) fn read_jsonl_matching_ids<T, F>(
+    path: &Path,
+    wanted: &HashSet<String>,
+    id_of: F,
+) -> Result<Vec<JsonlRecord<T>>>
+where
+    T: DeserializeOwned,
+    F: for<'a> Fn(&'a T) -> &'a str,
+{
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(file) = open_for_read(path)? else {
+        return Ok(Vec::new());
+    };
+    let mut records = Vec::new();
+    let mut reader = BufReader::new(file);
+    let mut buffer = Vec::new();
+    let mut line_number = 0usize;
+    loop {
+        buffer.clear();
+        let read = reader.read_until(b'\n', &mut buffer).map_err(|error| {
+            Error::Other(format!(
+                "failed to read stats jsonl {} line {}: {error}",
+                path.display(),
+                line_number + 1
+            ))
+        })?;
+        if read == 0 {
+            break;
+        }
+        line_number += 1;
+        let complete = buffer.last() == Some(&b'\n');
+        let raw: &[u8] = if complete {
+            &buffer[..buffer.len() - 1]
+        } else {
+            &buffer[..]
+        };
+        if raw.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        match serde_json::from_slice::<T>(raw) {
+            Ok(value) if wanted.contains(id_of(&value)) => records.push(JsonlRecord {
+                line: line_number,
+                value,
+            }),
+            Ok(_) => {}
+            Err(_) if !complete => break,
+            Err(error) => return Err(invalid_json_bytes(path, line_number, error)),
+        }
+    }
+    Ok(records)
+}
+
 /// 确认一个已有 JSONL 文件的内容已持久化。
 ///
 /// 用于“ID 已在磁盘上所以跳过追加”的去重命中：读得到不代表上次 `write_all`

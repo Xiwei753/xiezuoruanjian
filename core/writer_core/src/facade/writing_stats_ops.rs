@@ -691,13 +691,20 @@ impl super::WriterCore {
         project_root: &std::path::Path,
         transaction_id: &str,
     ) -> Result<()> {
-        let Some(current) =
-            crate::chapter::commit::pending_chapter_proof_transaction(project_root, transaction_id)?
-        else {
+        let chain =
+            crate::chapter::commit::pending_chapter_proof_chain(project_root, transaction_id)?;
+        if chain.is_empty() {
             // 事务已确认/已清理：没有待投影事实。
             return Ok(());
-        };
-        self.apply_pending_chapter_proof_transaction(project_root, &current, &[current.clone()])
+        }
+        // 同章从最早未确认事务开始，逐笔推进；旧事务失败时保留给下一次
+        // 该章保存或既有恢复入口，不跳过它直接投影新批次。
+        let mut remaining = chain.clone();
+        for current in &chain {
+            self.apply_pending_chapter_proof_transaction(project_root, current, &remaining)?;
+            remaining.retain(|item| item.transaction_id != current.transaction_id);
+        }
+        Ok(())
     }
 
     fn apply_pending_chapter_proof_transaction(

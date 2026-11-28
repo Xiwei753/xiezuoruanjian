@@ -391,17 +391,22 @@ impl StatsStore {
         }
     }
 
-    /// 读取某日分区的完整事件，保留未完成尾片（随后用本批确定行修复）。
-    fn load_partition_events(
+    /// 流式取回本批真正需要的旧事件（原始段 + 归档段），不保留整日 Vec。
+    fn load_events_by_ids(
         &self,
         origin: &str,
         date: &str,
+        ids: &HashSet<String>,
     ) -> Result<Vec<WritingInputEvent>> {
         let mut events: Vec<WritingInputEvent> =
-            jsonl::read_jsonl_tolerant_tail::<WritingInputEvent>(&self.event_file_path(origin, date))?
-                .into_iter()
-                .map(|record| record.value)
-                .collect();
+            jsonl::read_jsonl_matching_ids::<WritingInputEvent, _>(
+                &self.event_file_path(origin, date),
+                ids,
+                |event| event.event_id.as_str(),
+            )?
+            .into_iter()
+            .map(|record| record.value)
+            .collect();
         let archive_path = self
             .app_data_root
             .join(checkpoint::archive_relative_path(origin, date));
@@ -413,7 +418,9 @@ impl StatsStore {
                 compressed: true,
             };
             for event in self.parse_events_file(&file)? {
-                if !events.iter().any(|existing| existing.event_id == event.event_id) {
+                if ids.contains(&event.event_id)
+                    && !events.iter().any(|existing| existing.event_id == event.event_id)
+                {
                     events.push(event);
                 }
             }
@@ -469,8 +476,6 @@ impl StatsStore {
         if !state.initialized {
             self.initialize_proof_state(&mut state)?;
         }
-        // 只把本批涉及的章节链头/摘要与设备级 next_seq 带进工作状态，
-        // 不克隆其它章节的摘要和完整缺口正文。
         let involved: HashSet<String> = items
             .iter()
             .filter(|(event, _)| {
@@ -499,13 +504,35 @@ impl StatsStore {
                 working.gap_baselines.insert(key.clone(), gap.clone());
             }
         }
+        // 本批事件 ID 按分区预先列出：只有判重命中旧 ID 时才流式取这些事件，
+        // 正常保存不读取整天文件，也不把当天全部正文片段装进 Vec。
+        let mut wanted: BTreeMap<(String, String), HashSet<String>> = BTreeMap::new();
+        for (event, _) in &items {
+            if event
+                .proof
+                .as_ref()
+                .is_none_or(|proof| !proof.has_content_change())
+            {
+                continue;
+            }
+            let date = self.timestamp_to_date(event.timestamp_ms)?;
+            wanted
+                .entry((event.device_id.clone(), date))
+                .or_default()
+                .insert(event.event_id.clone());
+        }
+        // 未完成尾部不是事件；不能因为它保存的旧 seq/hash 与本次重算不同
+        // 就永久拒绝恢复。完整 JSON 尾行保留，只有解析失败的残片被截断。
+        for (origin, date) in wanted.keys() {
+            jsonl::truncate_incomplete_tail::<WritingInputEvent>(
+                &self.event_file_path(origin, date),
+            )?;
+        }
         let mut prepared: Vec<WritingInputEvent> = Vec::new();
-        // 本批涉及的分区只在开始时按“保留尾片”读一次；已落盘的 A 与同一批
-        // 里只写了半行的 B 都由这份真实事实判断，不再逐事件严格重读整日。
-        let mut partition_events: BTreeMap<(String, String), Vec<WritingInputEvent>> =
-            BTreeMap::new();
-        let mut touched_partitions: BTreeSet<(String, String)> = BTreeSet::new();
+        let mut touched: BTreeSet<(String, String)> = BTreeSet::new();
         let mut batch_ids: HashMap<String, u64> = HashMap::new();
+        let mut actuals: BTreeMap<(String, String), HashMap<String, WritingInputEvent>> =
+            BTreeMap::new();
         for (event, baseline_text) in items {
             if event
                 .proof
@@ -520,8 +547,6 @@ impl StatsStore {
             }
             let date = self.timestamp_to_date(event.timestamp_ms)?;
             let identity = event.business_identity_fingerprint()?;
-            // 同一批内先按 event_id 判重，避免同一条事件计算两次链头后在
-            // select_fresh_events 阶段才被丢掉（第二次计算出的 seq/hash 是假的）。
             if let Some(seen) = batch_ids.get(&event.event_id) {
                 if *seen == identity {
                     continue;
@@ -533,52 +558,48 @@ impl StatsStore {
             }
             batch_ids.insert(event.event_id.clone(), identity);
             let key = (origin.clone(), date.clone());
-            if !partition_events.contains_key(&key) {
-                partition_events.insert(key.clone(), self.load_partition_events(&origin, &date)?);
-            }
-            let actual = partition_events
-                .get(&key)
-                .and_then(|events| events.iter().find(|candidate| candidate.event_id == event.event_id));
-            if let Some(actual) = actual {
-                let actual = actual.clone();
-                if actual.business_identity_fingerprint()? != identity {
+            if self.event_is_persisted_identity(&origin, &date, &event)? {
+                if !actuals.contains_key(&key) {
+                    let ids = wanted.get(&key).cloned().unwrap_or_default();
+                    let mut found = HashMap::new();
+                    for record in self.load_events_by_ids(&origin, &date, &ids)? {
+                        found.insert(record.event_id.clone(), record);
+                    }
+                    actuals.insert(key.clone(), found);
+                }
+                let actual = actuals
+                    .get(&key)
+                    .and_then(|events| events.get(&event.event_id))
+                    .cloned();
+                let Some(actual) = actual else {
+                    self.reset_proof_state_for(&mut *state, &involved);
                     return Err(crate::Error::Other(format!(
-                        "stats event {} is already persisted with different business facts",
+                        "stats event {} is indexed as persisted but cannot be read back",
                         event.event_id
                     )));
-                }
+                };
                 self.advance_proof_state_from_persisted(&mut working, &actual);
-                touched_partitions.insert(key);
+                touched.insert(key);
                 continue;
             }
             if let Some(prepared_event) =
                 self.prepare_proof_event(&mut working, event, baseline_text.as_deref())?
             {
                 prepared.push(prepared_event);
-                touched_partitions.insert(key);
+                touched.insert(key);
             }
         }
         if prepared.is_empty() {
-            // 全部是已落盘事件：只补确认本批真实分区，并发布读回的真实链头。
-            for (origin, date) in &touched_partitions {
-                let events = partition_events
-                    .get(&(origin.clone(), date.clone()))
-                    .cloned()
-                    .unwrap_or_default();
-                let lines: Vec<String> = events
-                    .iter()
-                    .map(serde_json::to_string)
-                    .collect::<std::result::Result<_, _>>()?;
-                jsonl::repair_tail_fragment::<WritingInputEvent>(
-                    &self.event_file_path(origin, date),
-                    &lines,
-                )?;
+            // 全部已落盘：只确认本批真实分区，不重新序列化当天所有事件。
+            for (origin, date) in &touched {
                 self.confirm_event_partition_durable(origin, date)?;
             }
             self.publish_proof_state(&mut *state, working);
             return Ok(0);
         }
 
+        // 事件已在上面按 ID 判重；这里直接写确定序列化行，不再走
+        // select_fresh_events 的二次扫描/二次 repair。
         let mut by_partition: BTreeMap<(String, String), Vec<WritingInputEvent>> = BTreeMap::new();
         for event in &prepared {
             let date = self.timestamp_to_date(event.timestamp_ms)?;
@@ -587,47 +608,35 @@ impl StatsStore {
                 .or_default()
                 .push(event.clone());
         }
-        // 追加前先用本批确定序列化行修掉涉及分区的未完成尾片；这样已落盘的
-        // A 不会阻止同一文件里 B 的残片恢复。
-        for (key, events) in &by_partition {
+        let mut written = 0usize;
+        for ((origin, date), events) in &by_partition {
             let lines: Vec<String> = events
                 .iter()
                 .map(serde_json::to_string)
                 .collect::<std::result::Result<_, _>>()?;
-            jsonl::repair_tail_fragment::<WritingInputEvent>(
-                &self.event_file_path(&key.0, &key.1),
-                &lines,
-            )?;
-        }
-        for key in &touched_partitions {
-            self.invalidate_written_ids(&format!("{}/{}", key.0, key.1));
-        }
-        let mut written = 0usize;
-        let mut partitions: Vec<(String, String)> = Vec::new();
-        for ((origin, date), events) in by_partition {
-            match self.append_confirmed_events(&origin, &date, events, false) {
-                Ok(count) => {
-                    written += count;
-                    partitions.push((origin, date));
+            if let Err(error) =
+                jsonl::append_jsonl_lines_deferred(&self.event_file_path(origin, date), &lines)
+            {
+                for key in &touched {
+                    self.invalidate_written_ids(&format!("{}/{}", key.0, key.1));
                 }
-                Err(error) => {
-                    // 本批可能有分区已写入但未确认；丢掉本批涉及的 ID
-                    // 缓存，并让下一次调用从完整持久事件重建链状态。
-                    for (origin, date) in &partitions {
-                        self.invalidate_written_ids(&format!("{origin}/{date}"));
-                    }
-                    self.invalidate_written_ids(&format!("{origin}/{date}"));
-                    self.reset_proof_state_for(&mut *state, &involved);
-                    return Err(error);
-                }
+                self.reset_proof_state_for(&mut *state, &involved);
+                return Err(error);
+            }
+            written += lines.len();
+            let mut cache = self.lock_written_ids();
+            let known = cache.entry(format!("{origin}/{date}")).or_default();
+            for event in events {
+                known.insert(
+                    event.event_id.clone(),
+                    event.business_identity_fingerprint()?,
+                );
             }
         }
-        // 只有实际分区确认 durable 后才允许发布链头；去重命中的分区也要
-        // 补一次文件与目录项确认。
-        for (origin, date) in touched_partitions.iter() {
+        for (origin, date) in &touched {
             if let Err(error) = self.confirm_event_partition_durable(origin, date) {
-                for (origin, date) in &partitions {
-                    self.invalidate_written_ids(&format!("{origin}/{date}"));
+                for key in &touched {
+                    self.invalidate_written_ids(&format!("{}/{}", key.0, key.1));
                 }
                 self.reset_proof_state_for(&mut *state, &involved);
                 return Err(error);
@@ -643,8 +652,6 @@ impl StatsStore {
             let Some(proof) = event.proof.as_ref() else {
                 continue;
             };
-            // 事件是长期事实，checkpoint 只是加速索引；写失败不能反过来
-            // 否定已落盘的编辑事件，因此只记录错误并继续。
             if proof.seq > 0 && proof.seq % PERIODIC_CHECKPOINT_INTERVAL == 0 {
                 if let Err(error) = self.write_periodic_checkpoint(
                     &event.chapter_id,
