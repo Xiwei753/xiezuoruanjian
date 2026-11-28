@@ -524,10 +524,9 @@ fn try_publish_sparse_batch(
 
     let outcome = merge_outcome?;
     let delta = outcome.manifest_delta.as_ref()?;
-    // 冲突路径需要完整入口的 PartialConflict 判定（不能发布不完整树）。
-    if !outcome.conflicts.is_empty() {
-        return None;
-    }
+    // 冲突对象按对象隔离：不上传其本地字节、不删除其远端版本，
+    // 继续复用远端记录/blob；其余路径的安全增量照常发布。
+    let conflicted = &outcome.unresolved_conflict_paths;
     let store = crate::sync::lww::ManifestStore::new(sync_root, &manifest_rel_path(app_group));
     let manifest_files = match crate::sync::lww::local_manifest_storage_for_delta_with_base(
         &store,
@@ -572,6 +571,9 @@ fn try_publish_sparse_batch(
     let mut mutations: Vec<BatchMutation> = Vec::new();
     let mut uploaded_files: Vec<String> = Vec::new();
     for path in &outcome.remote_upload_paths {
+        if conflicted.contains(path) {
+            continue;
+        }
         let Some(record) = delta.upserts.get(path) else {
             // delta 里没有该业务记录说明本轮记录不完整，交回完整入口。
             return None;
@@ -587,6 +589,9 @@ fn try_publish_sparse_batch(
         }
     }
     for path in &outcome.remote_delete_paths {
+        if conflicted.contains(path) {
+            continue;
+        }
         let remote_path = format!("{generation_prefix}/{path}");
         let mutation = match outcome.remote_tree_files.get(path) {
             Some(version) => BatchMutation::DeleteIfMatch {
@@ -596,6 +601,39 @@ fn try_publish_sparse_batch(
             None => BatchMutation::Delete { path: remote_path },
         };
         mutations.push(mutation);
+    }
+
+    // 远端 retire：本地 journal 记录的被替换对象/索引，在同一个提交里按路径
+    // 点查固定 HEAD 后删除（不枚举全树）；只删上一代及更早的条目。
+    let current_generation = match store.load_root() {
+        Ok(root) => root.map(|root| root.generation),
+        Err(error) => return Some(super::transfer_helpers::sync_result_from_error(error)),
+    };
+    let retirements = match store.pending_remote_retirements(current_generation.as_deref()) {
+        Ok(paths) => paths,
+        Err(error) => return Some(super::transfer_helpers::sync_result_from_error(error)),
+    };
+    let mut retired_remote: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for rel in retirements {
+        let remote_path = format!("{generation_prefix}/{rel}");
+        match provider.read(&remote_path) {
+            Ok(Some(object)) => {
+                mutations.push(BatchMutation::DeleteIfMatch {
+                    path: remote_path,
+                    version: object.version,
+                });
+                retired_remote.insert(rel);
+            }
+            Ok(None) => {
+                // 远端本来就没有（例如只在本机 retire 的 legacy 路径）。
+                retired_remote.insert(rel);
+            }
+            Err(error) => {
+                return Some(super::transfer_helpers::sync_result_from_provider_error(
+                    error,
+                ));
+            }
+        }
     }
 
     let mut root_mutation: Option<BatchMutation> = None;
@@ -652,19 +690,31 @@ fn try_publish_sparse_batch(
             ));
         }
     }
+    if !retired_remote.is_empty() {
+        if let Err(error) = store.mark_remote_retired(&retired_remote) {
+            log::warn!(
+                "[sync] sparse publish: remote retire journal update failed for                  {generation_prefix}: {error} — will retry on the next publish"
+            );
+        }
+    }
 
     let mut result = crate::sync::types::SyncResult::success();
+    if !outcome.conflicts.is_empty() {
+        result.status = crate::sync::types::SyncStatus::PartialConflict;
+        result.error = Some(format!(
+            "{} conflicted path(s) left unresolved; published the remaining safe changes",
+            outcome.conflicts.len()
+        ));
+        result.conflicts = outcome.conflicts.clone();
+    } else if mutations.is_empty() {
+        result.status = crate::sync::types::SyncStatus::NoChanges;
+    }
     result.uploaded_files = uploaded_files;
     result.downloaded_files = outcome.downloaded_files.clone();
     result.local_deletes = outcome.remote_delete_paths.clone();
     result.remote_deletes = outcome.local_deletes.clone();
     result.overwritten_files = outcome.overwritten_files.clone();
     result.ignored_files = outcome.ignored_files.clone();
-    result.status = if mutations.is_empty() {
-        SyncStatus::NoChanges
-    } else {
-        SyncStatus::Success
-    };
     Some(result)
 }
 

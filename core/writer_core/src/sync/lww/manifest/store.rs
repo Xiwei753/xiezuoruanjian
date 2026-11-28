@@ -106,6 +106,13 @@ pub(crate) struct ManifestGcEntry {
     pub retired_at_root: String,
     /// 记录时间（毫秒时间戳，只用于诊断）。
     pub recorded_at_ms: i64,
+    /// 远端当前 HEAD 是否已经删除该路径。
+    ///
+    /// 本地 retire 与远端 retire 是两条独立责任：本地 GC 删除本地文件前，
+    /// 远端可能仍可达；只有发布事务确实删除了远端路径（或确认远端不存在）
+    /// 才置位，条目在此之前必须保留以便重试。
+    #[serde(default)]
+    pub remote_retired: bool,
 }
 
 /// 持久 retire journal：`manifest/gc-journal.json`。
@@ -139,6 +146,7 @@ impl ManifestGcJournal {
             rel: rel.to_string(),
             retired_at_root: retired_at_root.to_string(),
             recorded_at_ms: chrono::Utc::now().timestamp_millis(),
+            remote_retired: false,
         });
         self.entries.sort_by(|a, b| a.rel.cmp(&b.rel));
     }
@@ -825,6 +833,56 @@ impl ManifestStore {
         Ok(Some(journal))
     }
 
+    /// 尚未在远端删除的退休路径（按 rel 排序）。
+    ///
+    /// 发布端按这些路径点查固定 HEAD 并 `DeleteIfMatch`，不做全树枚举。
+    pub(crate) fn pending_remote_retirements(
+        &self,
+        exclude_generation: Option<&str>,
+    ) -> crate::Result<Vec<String>> {
+        Ok(self
+            .load_gc_journal()?
+            .map(|journal| {
+                journal
+                    .entries
+                    .into_iter()
+                    .filter(|entry| !entry.remote_retired)
+                    // 刚刚退休的一代仍可能被并发读者用旧根引用：远端保留一代，
+                    // 下一轮换根后才删除。
+                    .filter(|entry| {
+                        exclude_generation
+                            .map_or(true, |generation| entry.retired_at_root != generation)
+                    })
+                    .map(|entry| entry.rel)
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// 远端删除已随发布事务提交：把对应条目标记为已回收，保留本地 GC 边界。
+    pub(crate) fn mark_remote_retired(&self, rels: &BTreeSet<String>) -> crate::Result<()> {
+        if rels.is_empty() {
+            return Ok(());
+        }
+        let Some(mut journal) = self.load_gc_journal()? else {
+            return Ok(());
+        };
+        let mut changed = false;
+        for entry in &mut journal.entries {
+            if !entry.remote_retired && rels.contains(&entry.rel) {
+                entry.remote_retired = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(());
+        }
+        let mut tx = crate::storage::transaction::SaveTransaction::new(&self.sync_root);
+        tx.add_bytes(&self.gc_journal_rel(), &journal.canonical_bytes()?)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// 结算 GC journal：回收上一代及更早的退休文件，返回实际删除数量。
     ///
     /// 边界以当前权威根为准：
@@ -863,34 +921,43 @@ impl ManifestStore {
         let mut kept: Vec<ManifestGcEntry> = Vec::new();
         let mut deletes: Vec<String> = Vec::new();
         for entry in journal.entries {
+            let rel = entry.rel.clone();
             if entry.retired_at_root == root.generation {
                 kept.push(entry);
                 continue;
             }
-            if self.gc_entry_still_referenced(&referenced, &entry.rel, &root)? {
+            if self.gc_entry_still_referenced(&referenced, &rel, &root)? {
                 // 重新被当前根引用：只从 journal 移除，保留文件。
                 continue;
             }
-            if !self.is_manifest_gc_candidate(&entry.rel) {
+            if !self.is_manifest_gc_candidate(&rel) {
                 log::warn!(
                     "[sync] manifest gc journal entry {} is outside manifest object/index storage — \
                      dropping it without deleting",
-                    entry.rel
+                    rel
                 );
                 continue;
             }
-            let path = self.sync_root.join(&entry.rel);
-            match std::fs::metadata(&path) {
-                Ok(metadata) if metadata.is_file() => deletes.push(entry.rel),
-                // 已经不存在或不是文件（被完整重建 / 外部清理）：移除条目即可。
-                Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            let path = self.sync_root.join(&rel);
+            let remove_local = match std::fs::metadata(&path) {
+                Ok(metadata) if metadata.is_file() => true,
+                // 已经不存在或不是文件（被完整重建 / 外部清理）：只结算条目。
+                Ok(_) => false,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
                 Err(error) => {
                     return Err(crate::Error::Io(std::io::Error::new(
                         error.kind(),
                         format!("inspect manifest gc candidate {}: {error}", path.display()),
                     )))
                 }
+            };
+            // 本地回收与远端回收是两条独立责任：本地文件可以按代际边界先删，
+            // 远端 HEAD 上的删除由发布端点查后结算；条目保留到远端确认。
+            if !entry.remote_retired {
+                kept.push(entry);
+            }
+            if remove_local {
+                deletes.push(rel);
             }
         }
         if deletes.is_empty() && kept.len() == total {

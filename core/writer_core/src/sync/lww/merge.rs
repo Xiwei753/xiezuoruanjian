@@ -280,6 +280,11 @@ pub(crate) struct LwwMergeOutcome {
     pub manifest_delta: Option<crate::sync::manifest_delta::ManifestDelta>,
     /// 稀疏轮真实受影响的路径集合；发布端据此只加载受影响的对象/索引。
     pub affected_paths: Option<std::collections::BTreeSet<String>>,
+    /// 本轮结束时仍未解决的冲突路径全集（含此前遗留的 `state.conflicted_files`）。
+    ///
+    /// 发布端必须按对象隔离：这些路径不上传本地字节、不产生远端删除，
+    /// 继续复用远端记录/blob；其余路径的安全增量照常发布。
+    pub unresolved_conflict_paths: std::collections::BTreeSet<String>,
     /// 清单视图的语义：完整快照，还是只含本轮 affected 的局部视图。
     ///
     /// 稀疏合并只加载受影响记录，绝不能把这个局部结果当作完整清单发布；
@@ -1463,6 +1468,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         manifest_unchanged,
         manifest_delta: sparse.map(|_| manifest_delta),
         affected_paths: sparse.map(|plan| plan.affected_paths().clone()),
+        unresolved_conflict_paths: state.conflicted_files.iter().cloned().collect(),
         manifest_view: if sparse.is_some() {
             MergeManifestView::Sparse
         } else {
@@ -1684,6 +1690,7 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
         manifest_unchanged: false,
         manifest_delta: None,
         affected_paths: None,
+        unresolved_conflict_paths: std::collections::BTreeSet::new(),
         manifest_view: MergeManifestView::Complete,
         remote_base_namespaces: std::collections::BTreeMap::new(),
         remote_base_root: None,

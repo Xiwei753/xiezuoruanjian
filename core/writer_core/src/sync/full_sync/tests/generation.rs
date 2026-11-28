@@ -659,6 +659,7 @@ fn merge_outcome(
         manifest_json: String::new(),
         merged_manifest,
         manifest_unchanged: false,
+        unresolved_conflict_paths: std::collections::BTreeSet::new(),
         manifest_view: if delta.is_some() {
             crate::sync::lww::MergeManifestView::Sparse
         } else {
@@ -966,17 +967,21 @@ fn delta_view_unavailable_refuses_partial_complete_publish() {
     );
 }
 
-/// 稀疏结果带未解决冲突：不得把局部 manifest 当完整根发布。
+/// 稀疏结果带未解决冲突：只发布非冲突对象的安全增量，冲突路径保持远端版本，
+/// 最终状态为 PartialConflict 并列出已上传文件。
 #[test]
-fn sparse_conflict_refuses_partial_complete_publish() {
+fn sparse_conflict_publishes_safe_delta_only() {
     let tmp = TempDir::new().unwrap();
     let staging = tmp.path().join("staging");
-    let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
-    write_staging(&staging, chapter_rel, b"chapter local");
+    let conflict_rel = "volumes/v1/chapters/c1/chapter.md";
+    let safe_rel = "volumes/v2/chapters/c2/chapter.md";
+    write_staging(&staging, conflict_rel, b"chapter conflict local");
+    write_staging(&staging, safe_rel, b"chapter safe local");
     let baseline = SyncManifest {
         files: vec![
             manifest_record("project.json", "hash-project", 10),
-            manifest_record(chapter_rel, "hash-base", 10),
+            manifest_record(conflict_rel, "hash-conflict-base", 10),
+            manifest_record(safe_rel, "hash-safe-base", 10),
         ],
     };
     let legacy = staging.join(SYNC_MANIFEST_PATH);
@@ -985,29 +990,36 @@ fn sparse_conflict_refuses_partial_complete_publish() {
     let store = ManifestStore::new(&staging, SYNC_MANIFEST_PATH);
     let merged = store.load_or_legacy().unwrap();
     let mut delta = ManifestDelta::default();
+    // 冲突路径在 merge 里保留远端记录：delta 不携带本地字节。
     delta.upserts.insert(
-        chapter_rel.to_string(),
-        manifest_record(chapter_rel, &md5_hex(b"chapter local"), 20),
+        safe_rel.to_string(),
+        manifest_record(safe_rel, &md5_hex(b"chapter safe local"), 20),
     );
+    let plan = store.apply_delta(&delta, "g-local").unwrap();
+    commit_store_plan(&staging, &plan);
+    let merged = store.load_all().unwrap().unwrap();
     let mut outcome = merge_outcome(
         merged,
         Some(delta),
-        vec![chapter_rel.to_string()],
+        vec![safe_rel.to_string()],
         Vec::new(),
         HashMap::new(),
     );
     outcome.conflicts.push(crate::sync::types::SyncConflict {
-        local_path: chapter_rel.to_string(),
-        remote_path: chapter_rel.to_string(),
-        local_hash: md5_hex(b"chapter local"),
-        remote_hash: md5_hex(b"chapter remote"),
-        base_hash: "hash-base".to_string(),
+        local_path: conflict_rel.to_string(),
+        remote_path: conflict_rel.to_string(),
+        local_hash: md5_hex(b"chapter conflict local"),
+        remote_hash: "hash-conflict-base".to_string(),
+        base_hash: "hash-conflict-base".to_string(),
         created_at: 10,
         description: "both changed".to_string(),
         kind: crate::sync::types::SyncConflictKind::BothChanged,
         remote_snapshot_path: None,
         remote_graph_snapshot_dir: None,
     });
+    outcome
+        .unresolved_conflict_paths
+        .insert(conflict_rel.to_string());
 
     let provider = RecordingBatchProvider::new();
     let result = super::super::generation::publish_tree_snapshot(
@@ -1023,13 +1035,23 @@ fn sparse_conflict_refuses_partial_complete_publish() {
     );
     assert!(
         matches!(&result.status, SyncStatus::PartialConflict),
-        "冲突期间不得发布局部清单，实际 {:?}",
+        "冲突轮最终状态应为 PartialConflict，实际 {:?}",
         result.status
     );
     assert!(
-        provider.recorded().is_empty(),
-        "冲突时不得产生远端 mutation，实际 {:?}",
-        provider.recorded()
+        result.uploaded_files.iter().any(|path| path == safe_rel),
+        "非冲突章节必须已上传，实际 {:?}",
+        result.uploaded_files
+    );
+    let recorded = provider.recorded();
+    let paths: Vec<&str> = recorded.iter().map(BatchMutation::path).collect();
+    assert!(
+        paths.contains(&format!("projects/p1/{safe_rel}").as_str()),
+        "安全章节应进入同一批次，实际 {paths:?}"
+    );
+    assert!(
+        !paths.contains(&format!("projects/p1/{conflict_rel}").as_str()),
+        "冲突章节不得上传本地字节，实际 {paths:?}"
     );
 }
 
@@ -1083,5 +1105,120 @@ fn sparse_no_op_publish_does_not_commit_root() {
         provider.recorded().is_empty(),
         "无变化轮不得提交，实际 {:?}",
         provider.recorded()
+    );
+}
+
+/// 稀疏发布把本地 retire journal 里超过一代的对象/索引在同一个远端提交里删除。
+#[test]
+fn sparse_publish_deletes_retired_manifest_objects() {
+    use crate::sync::provider::SyncProvider;
+    let tmp = TempDir::new().unwrap();
+    let staging = tmp.path().join("staging");
+    let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+    let project_rel = "project.json";
+    write_staging(&staging, chapter_rel, b"chapter v1");
+    write_staging(&staging, project_rel, b"project v1");
+    let baseline = SyncManifest {
+        files: vec![
+            manifest_record(project_rel, &md5_hex(b"project v1"), 10),
+            manifest_record(chapter_rel, &md5_hex(b"chapter v1"), 10),
+        ],
+    };
+    let legacy = staging.join(SYNC_MANIFEST_PATH);
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, baseline.canonical_json().unwrap()).unwrap();
+    let store = ManifestStore::new(&staging, SYNC_MANIFEST_PATH);
+    let plan = store.plan_write_all(&baseline, "").unwrap();
+    commit_store_plan(&staging, &plan);
+
+    // 远端固定基线：当前发布视图的 root/index/object 全部落到 provider。
+    let provider = RecordingBatchProvider::new();
+    for file in crate::sync::lww::local_manifest_storage(&store, None).unwrap() {
+        provider
+            .write(
+                &format!("projects/p1/{}", file.rel),
+                &file.read_bytes(&staging).unwrap(),
+                WritePrecondition::Unconditional,
+            )
+            .unwrap();
+    }
+    let base_root_bytes = provider
+        .read("projects/p1/app-meta/sync/manifest/root.json")
+        .unwrap()
+        .unwrap()
+        .content;
+    let base_root: crate::sync::lww::ManifestRoot =
+        serde_json::from_slice(&base_root_bytes).unwrap();
+
+    // 第一次换根：章节 v2，旧 object/index 进入 retire journal。
+    write_staging(&staging, chapter_rel, b"chapter v2");
+    let mut delta1 = ManifestDelta::default();
+    delta1.upserts.insert(
+        chapter_rel.to_string(),
+        manifest_record(chapter_rel, &md5_hex(b"chapter v2"), 20),
+    );
+    let plan1 = store.apply_delta(&delta1, "").unwrap();
+    commit_store_plan(&staging, &plan1);
+
+    // 第二次换根：project v2，使第一次退休的条目超过保留代际。
+    write_staging(&staging, project_rel, b"project v2");
+    let mut delta2 = ManifestDelta::default();
+    delta2.upserts.insert(
+        project_rel.to_string(),
+        manifest_record(project_rel, &md5_hex(b"project v2"), 30),
+    );
+    let plan2 = store.apply_delta(&delta2, "").unwrap();
+    commit_store_plan(&staging, &plan2);
+    let merged = store.load_all().unwrap().unwrap();
+    let pending_before = store.pending_remote_retirements(None).unwrap();
+    assert!(
+        !pending_before.is_empty(),
+        "两次换根后应有待远端回收的清单文件"
+    );
+
+    let mut outcome = merge_outcome(
+        merged,
+        Some(delta2),
+        vec![project_rel.to_string()],
+        Vec::new(),
+        HashMap::new(),
+    );
+    outcome.remote_base_namespaces = base_root.namespaces;
+
+    let result = super::super::generation::publish_tree_snapshot(
+        &provider,
+        &staging,
+        "projects/p1",
+        crate::sync::types::SyncScope::Project,
+        None,
+        &sync_policy(),
+        true,
+        Some(&outcome),
+        None,
+    );
+    assert!(
+        matches!(&result.status, SyncStatus::Success | SyncStatus::NoChanges),
+        "稀疏发布应成功，实际 {:?}（error={:?}）",
+        result.status,
+        result.error
+    );
+    let mutations = provider.recorded();
+    let retired_deletes: Vec<&str> = mutations
+        .iter()
+        .filter_map(|mutation| match mutation {
+            BatchMutation::DeleteIfMatch { path, .. } => Some(path.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        retired_deletes
+            .iter()
+            .any(|path| path.contains("/manifest/objects/") || path.contains("/manifest/index/")),
+        "远端提交必须包含退休清单文件删除，实际 {retired_deletes:?}"
+    );
+    let pending_after = store.pending_remote_retirements(None).unwrap();
+    assert!(
+        pending_after.len() < pending_before.len(),
+        "远端删除提交后旧代条目必须结清，剩余只保留当前代（before={pending_before:?}, after={pending_after:?}）"
     );
 }

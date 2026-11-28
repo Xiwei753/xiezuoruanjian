@@ -65,6 +65,7 @@ pub mod service;
 /// 跨 WriterCoreApi 实例串行化同一 sync root 的 state/conflict mutation（Issue #762 评论 5834136935）。
 pub(crate) mod sparse_plan;
 pub mod staging;
+pub(crate) mod starmap_reference_obligation;
 pub(crate) mod state_lock;
 ///   target 生命周期 catalog（远端持久、provider-neutral）。
 pub mod target_lifecycle;

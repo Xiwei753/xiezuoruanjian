@@ -290,25 +290,19 @@ impl<'a> RoundProvider<'a> {
     }
 
     fn overlay_entries(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
+        // 固定 HEAD 的基线只枚举请求的 prefix（Git 走该子树，REST 也限定范围），
+        // 不再先拉全库再本地过滤。
+        let mut entries: BTreeMap<String, RemoteVersion> = self
+            .inner
+            .list(prefix)?
+            .into_iter()
+            .map(|entry| (entry.path, entry.version))
+            .collect();
         let needle = if prefix.is_empty() {
             String::new()
         } else {
             format!("{prefix}/")
         };
-        let mut entries: BTreeMap<String, RemoteVersion> = self
-            .all_remote_entries()?
-            .into_iter()
-            .filter_map(|entry| {
-                if needle.is_empty() {
-                    Some((entry.path, entry.version))
-                } else {
-                    entry
-                        .path
-                        .strip_prefix(&needle)
-                        .map(|path| (path.to_string(), entry.version))
-                }
-            })
-            .collect();
         let state = self.lock_state()?;
         for (path, entry) in &state.entries {
             let relative = if needle.is_empty() {
@@ -530,11 +524,16 @@ impl<'a> RoundProvider<'a> {
         // ReuseVersion、基线里本来就没有的 Delete 都不应进入 batch（GitHub API
         // 会因此上传/删除多余对象，Git 也要多算一次 tree）。真正的内容变化
         // 仍然保留 Precondition 校验。
-        let baseline: std::collections::HashMap<String, RemoteVersion> = self
-            .all_remote_entries()?
-            .into_iter()
-            .map(|entry| (entry.path, entry.version))
-            .collect();
+        // 只为本批实际涉及的路径读取固定基线版本；空 Put/Delete 的消除
+        // 不再依赖全库枚举（Git 一次按路径查 OID）。
+        let baseline_paths: std::collections::BTreeSet<String> = entries.keys().cloned().collect();
+        let mut baseline: std::collections::HashMap<String, RemoteVersion> =
+            std::collections::HashMap::with_capacity(baseline_paths.len());
+        for path in baseline_paths {
+            if let Some(version) = self.real_baseline_for(&path)? {
+                baseline.insert(path, version);
+            }
+        }
         let mut mutations: Vec<BatchMutation> = entries
             .into_iter()
             .filter_map(|(path, entry)| match entry {
@@ -867,6 +866,41 @@ mod tests {
 
         round.flush().unwrap();
         assert_eq!(inner.read("a.txt").unwrap().unwrap().content, b"a".to_vec());
+    }
+
+    #[test]
+    fn flush_and_prefixed_listing_do_not_enumerate_the_whole_remote() {
+        let inner = MemoryProvider::new();
+        for path in ["projects/P/a.txt", "projects/P/b.txt", "other/c.txt"] {
+            inner
+                .write(path, b"x", WritePrecondition::Unconditional)
+                .unwrap();
+        }
+        let round = RoundProvider::new(&inner, None);
+        round
+            .write("projects/P/d.txt", b"new", WritePrecondition::CreateNew)
+            .unwrap();
+        round.flush().unwrap();
+        assert!(
+            round
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .base_entries
+                .is_none(),
+            "flush 不得为了消除空变更而缓存全库条目"
+        );
+        let listed = round.list("projects/P").unwrap();
+        assert_eq!(listed.len(), 3);
+        assert!(
+            round
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .base_entries
+                .is_none(),
+            "按 prefix 列目录不得退化成全库枚举缓存"
+        );
     }
 
     #[test]

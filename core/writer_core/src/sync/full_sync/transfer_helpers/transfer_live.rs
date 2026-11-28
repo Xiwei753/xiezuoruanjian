@@ -548,9 +548,14 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                         return (result, None, None);
                     }
 
+                    // 冲突轮也允许 CAS：非冲突对象已按对象增量发布成功，
+                    // 冲突路径仍保留在 retained_conflict，最终结果维持 PartialConflict。
                     let content_ok = matches!(
                         content_result.status,
-                        SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
+                        SyncStatus::Success
+                            | SyncStatus::NoChanges
+                            | SyncStatus::LatestWinsApplied
+                            | SyncStatus::PartialConflict
                     );
                     if !content_ok {
                         return (content_result, None, None);

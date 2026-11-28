@@ -576,29 +576,6 @@ fn is_starmap_library_object_path(path: &std::path::Path) -> bool {
         && components[3].ends_with(".json")
 }
 
-/// 同步直接落盘画布实例或素材库对象后，本机派生的缓存必须立即失效重建。
-/// 索引仍只留在本机，不进入 Git；但下一次共享编辑必须能看到这些新实例。
-fn refresh_starmap_references_after_commit(
-    live_root: &Path,
-    actions: &[crate::sync::staging::CommitAction],
-) -> crate::error::Result<()> {
-    let touched = actions.iter().any(|action| {
-        let rel = match action {
-            crate::sync::staging::CommitAction::Apply { rel_path, .. }
-            | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
-        };
-        is_starmap_node_instance_path(rel) || is_starmap_library_object_path(rel)
-    });
-    if !touched {
-        return Ok(());
-    }
-    crate::starmap::library::refresh_library_index_cache(live_root)?;
-    if crate::starmap::library::library_entries_dir(live_root).is_dir() {
-        crate::starmap::library::rebuild_reference_index(live_root)?;
-    }
-    Ok(())
-}
-
 /// 引擎状态写回：普通状态文件直接写；清单则落成 v2 权威存储。
 ///
 /// staging commit 的清单动作来自三方合并后的完整清单字节。这里把它转成
@@ -685,8 +662,20 @@ pub(crate) fn apply_commit_plan_to_live(
             }
         }
     }
-    tx.commit()?;
-    refresh_starmap_references_after_commit(live_root, content_actions)?;
+    let pending_references =
+        crate::sync::starmap_reference_obligation::PendingStarmapReferences::begin(
+            live_root,
+            content_actions,
+        )?;
+    if let Err(error) = tx.commit() {
+        if let Some(pending) = pending_references {
+            pending.cancel();
+        }
+        return Err(error);
+    }
+    if let Some(pending) = pending_references {
+        pending.settle();
+    }
     Ok(tx)
 }
 
@@ -785,8 +774,20 @@ fn apply_commit_plan_with_sync_state_merge_for_group(
             }
         }
     }
-    tx.commit()?;
-    refresh_starmap_references_after_commit(live_root, content_actions)?;
+    let pending_references =
+        crate::sync::starmap_reference_obligation::PendingStarmapReferences::begin(
+            live_root,
+            content_actions,
+        )?;
+    if let Err(error) = tx.commit() {
+        if let Some(pending) = pending_references {
+            pending.cancel();
+        }
+        return Err(error);
+    }
+    if let Some(pending) = pending_references {
+        pending.settle();
+    }
     Ok(tx)
 }
 
