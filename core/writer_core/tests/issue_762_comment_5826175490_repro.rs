@@ -451,7 +451,7 @@ fn target_progress_exposes_conflict_before_full_sync_finishes() {
         remote_catalog_snapshot,
     };
     // 与生产 Phase 2 一致：从 live seed staging（base + staging 克隆）。
-    let staging_runs = prepare_staging_runs(&mut plan, &std::collections::HashMap::new()).unwrap();
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
     assert_eq!(staging_runs.len(), 1);
 
     let recorder = ProgressRecorder::new(live_root);
@@ -577,7 +577,7 @@ fn two_conflicting_projects_fixture() -> TwoConflictFixture {
         app_data_root,
         remote_catalog_snapshot,
     };
-    let staging_runs = prepare_staging_runs(&mut plan, &std::collections::HashMap::new()).unwrap();
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
     assert_eq!(staging_runs.len(), 2, "两个 target 各有一个 staging run");
     let staging_run_roots = staging_runs
         .iter()
@@ -889,7 +889,7 @@ fn preexisting_conflict_resolved_before_target_commit_keep_local_is_not_revived(
     };
     // 与生产 Phase 2 一致：从 live seed staging（base + staging 克隆）。
     // 此时 staging 里有旧的 conflict A 状态（从 live 复制）。
-    let staging_runs = prepare_staging_runs(&mut plan, &std::collections::HashMap::new()).unwrap();
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
     assert_eq!(staging_runs.len(), 2);
 
     // 在 p1 Commit 前对 live 调 resolve_conflict_keep_local(A)。
@@ -1035,7 +1035,7 @@ fn preexisting_conflict_resolved_before_target_commit_take_remote_is_not_revived
         app_data_root: app_data_root.clone(),
         remote_catalog_snapshot,
     };
-    let staging_runs = prepare_staging_runs(&mut plan, &std::collections::HashMap::new()).unwrap();
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
     assert_eq!(staging_runs.len(), 2);
 
     // 在 p1 Commit 前对 live 调 resolve_conflict_take_remote(A)。
@@ -1193,7 +1193,7 @@ fn first_sync_preserves_stable_device_id_from_staging() {
         remote_catalog_snapshot,
     };
     // 与生产 Phase 2 一致：从 live seed staging（base + staging 克隆）。
-    let staging_runs = prepare_staging_runs(&mut plan, &std::collections::HashMap::new()).unwrap();
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
     assert_eq!(staging_runs.len(), 1);
 
     let api = WriterCoreApi::new(&app_data_root, &projects_root);

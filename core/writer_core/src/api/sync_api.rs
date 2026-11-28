@@ -2509,7 +2509,7 @@ impl WriterCoreApi {
                     .unwrap_or_else(|| crate::sync::lww::SYNC_MANIFEST_PATH.to_string());
                 let prefix = planned.target.remote_prefix.trim_end_matches('/').to_string();
                 let remote_tree_files: std::collections::HashMap<String, String> =
-                    match round.list(&prefix) {
+                    match crate::sync::provider::SyncProvider::list(round, &prefix) {
                         Ok(entries) => entries
                             .into_iter()
                             .map(|entry| (entry.path, entry.version.0))
@@ -2522,7 +2522,7 @@ impl WriterCoreApi {
                         }
                     };
                 if let Err(error) = crate::sync::lww::publish_remote_manifest(
-                    &round,
+                    round,
                     &prefix,
                     run.target_live_root(),
                     &manifest_rel,

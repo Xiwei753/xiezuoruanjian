@@ -329,7 +329,7 @@ fn setup_round() -> RoundSetup {
         app_data_root: app_data_root.clone(),
         remote_catalog_snapshot,
     };
-    let staging_runs = prepare_staging_runs(&mut plan, &std::collections::HashMap::new()).unwrap();
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
     assert_eq!(staging_runs.len(), 1, "一个 target 一个 staging run");
 
     // 两个独立 API 实例 — 关键：指向同一 app/projects root，但 core_instance 独立。

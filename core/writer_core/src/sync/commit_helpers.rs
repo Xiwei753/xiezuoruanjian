@@ -1387,6 +1387,38 @@ fn save_conflict_snapshots(
     Ok(())
 }
 
+pub(crate) enum TargetCommitResult {
+    Ok,
+    Skipped,
+    Failed(String),
+}
+
+/// 把 staging commit 失败注入 target 结果。
+///
+/// 清单读取/解析失败带 `manifest_read_failed: path=... cause=...`；保留具体
+/// 路径并归到 merge 阶段，避免把损坏的清单误报成传输失败。
+pub(crate) fn apply_commit_failure_to_target(
+    target: &mut crate::sync::types::TargetSyncResult,
+    message: &str,
+) {
+    target.result.status =
+        crate::sync::SyncStatus::RecoverableError(format!("staging_commit_failed: {message}"));
+    target.result.error = Some(format!("staging commit failed: {message}"));
+
+    if message.contains("manifest_read_failed:") {
+        target.failure_phase = Some("merge".to_string());
+        if let Some((_, path)) = message.split_once("path=") {
+            let path = path
+                .split(|character: char| character.is_whitespace() || character == ',')
+                .next()
+                .unwrap_or_default();
+            if !path.is_empty() {
+                target.failure_path = Some(path.to_string());
+            }
+        }
+    }
+}
+
 pub(crate) struct StagingCommitOutcome {
     pub(crate) target_results: Vec<TargetCommitResult>,
     pub(crate) target_conflicts: Vec<Vec<crate::sync::staging::StagingConflict>>,
@@ -2387,5 +2419,3 @@ pub(crate) fn commit_single_target_staging(
         }
     }
 }
-
-#

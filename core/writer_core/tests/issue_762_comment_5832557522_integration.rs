@@ -327,7 +327,7 @@ fn sink_and_callback_cooperate_on_same_sync_chain() {
         app_data_root: app_data_root.clone(),
         remote_catalog_snapshot,
     };
-    let staging_runs = prepare_staging_runs(&mut plan, &std::collections::HashMap::new()).unwrap();
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
     assert_eq!(staging_runs.len(), 2, "两个 target 各一个 staging run");
 
     // #763 sink：两个 target。

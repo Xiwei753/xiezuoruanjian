@@ -286,7 +286,10 @@ mod tests {
     fn strict_read_reports_line_number() {
         let path = temp_file("strict");
         fs::write(&path, "{\"event_id\":\"a\",\"value\":1}\nnot json\n").unwrap();
-        let error = read_jsonl::<TestEvent>(&path).unwrap_err().to_string();
+        let error = match read_jsonl::<TestEvent>(&path) {
+            Ok(_) => panic!("strict read should reject invalid JSON"),
+            Err(error) => error.to_string(),
+        };
         assert!(error.contains("line 2"), "{error}");
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }

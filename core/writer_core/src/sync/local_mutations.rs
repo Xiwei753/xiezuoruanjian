@@ -793,6 +793,25 @@ fn remove_pending_ack(
     crate::storage::atomic_write_string(&path, &text)
 }
 
+/// 确认一批已发布的本地更改：先登记确认意图，再推进 known_files，
+/// 成功后移除意图（幂等；失败保留意图供下次重放）。
+pub(crate) fn mark_confirmed(
+    sync_root: &Path,
+    target: &crate::sync::types::SyncTarget,
+    published: &[PublishedMutation],
+    round_id: &str,
+    revision: Option<&str>,
+) -> crate::error::Result<usize> {
+    if published.is_empty() {
+        return Ok(0);
+    }
+    let _lock = ledger_write_lock(sync_root)?;
+    push_pending_ack(sync_root, target, published, round_id, revision)?;
+    let count = apply_published(sync_root, target, published)?;
+    remove_pending_ack(sync_root, target, round_id)?;
+    Ok(count)
+}
+
 fn pending_ack_identity(target: &crate::sync::types::SyncTarget) -> (String, String) {
     match target.app_group.as_ref() {
         Some(group) => ("app".to_string(), group.id()),

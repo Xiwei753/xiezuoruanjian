@@ -37,7 +37,11 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
 
     // 1. 共同基线：只信已确认状态，不用文件 mtime / 设备时钟。
     let state = load_state(run, live_root)?;
-    let known: HashMap<String, String> = state.known_files.iter().cloned().collect();
+    let known: HashMap<String, String> = state
+        .known_files
+        .iter()
+        .map(|(path, hash)| (path.clone(), hash.clone()))
+        .collect();
     let tombstones: HashSet<String> = state
         .tombstones
         .iter()
@@ -68,7 +72,7 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
     for group_entry in &group {
         for path in known.keys() {
             if group_entry.owns_path(path) {
-                paths.insert(path.clone());
+                paths.insert(path.to_string());
             }
         }
     }

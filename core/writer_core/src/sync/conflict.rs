@@ -792,6 +792,165 @@ impl crate::sync::SyncService {
         Ok(())
     }
 
+    /// 冲突解决：采用远端版本。
+    ///
+    /// BothChanged：用保存的远端副本原子替换本地内容，并把已确认基线推进到
+    /// 远端版本；RemoteDeleted：接受删除（章节走章节删除协议，其它对象移入
+    /// 回收区）。旧记录没有快照时只排队 pending_take_remote，不改本地内容。
+    pub fn resolve_conflict_take_remote(sync_root: &Path, path: &str) -> crate::Result<bool> {
+        let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root).ok();
+        Self::resolve_conflict_take_remote_at_target(
+            sync_root,
+            path,
+            None,
+            guard.as_ref(),
+            None,
+        )
+    }
+
+    pub fn resolve_conflict_take_remote_with_guard(
+        sync_root: &Path,
+        guard: &crate::storage::WorkspaceWriteLock,
+        app_data_root: Option<&Path>,
+        path: &str,
+    ) -> crate::Result<bool> {
+        Self::resolve_conflict_take_remote_at_target(
+            sync_root,
+            path,
+            None,
+            Some(guard),
+            app_data_root,
+        )
+    }
+
+    pub fn resolve_conflict_take_remote_for_group(
+        sync_root: &Path,
+        path: &str,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> crate::Result<bool> {
+        let guard = crate::storage::WorkspaceWriteLock::acquire(sync_root).ok();
+        Self::resolve_conflict_take_remote_at_target(
+            sync_root,
+            path,
+            Some(group),
+            guard.as_ref(),
+            None,
+        )
+    }
+
+    pub fn resolve_conflict_take_remote_for_group_with_guard(
+        sync_root: &Path,
+        guard: &crate::storage::WorkspaceWriteLock,
+        app_data_root: Option<&Path>,
+        path: &str,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> crate::Result<bool> {
+        Self::resolve_conflict_take_remote_at_target(
+            sync_root,
+            path,
+            Some(group),
+            Some(guard),
+            app_data_root,
+        )
+    }
+
+    fn resolve_conflict_take_remote_at_target(
+        sync_root: &Path,
+        path: &str,
+        group: Option<&crate::sync::types::AppDataGroup>,
+        guard: Option<&crate::storage::WorkspaceWriteLock>,
+        app_data_root: Option<&Path>,
+    ) -> crate::Result<bool> {
+        validate_group_conflict_path(group, path, "resolve_conflict_take_remote")?;
+        let mut state = load_conflict_state(sync_root, group)?;
+        let mut conflicts_json = load_conflicts_for_target(sync_root, group)?;
+        let conflict = Self::load_canonical_conflict_and_repair_mirror(
+            path,
+            &mut state,
+            &mut conflicts_json,
+            "resolve_conflict_take_remote",
+        )?;
+        if !state.conflicted_files.remove(path) {
+            return Err(crate::Error::Other(format!(
+                "resolve_conflict_take_remote: path '{}' is not in conflicted_files",
+                path
+            )));
+        }
+        let pending_fallback = Self::decide_take_remote(
+            sync_root,
+            path,
+            &mut state,
+            &conflict,
+            guard,
+            app_data_root,
+        )?;
+        if pending_fallback {
+            state.pending_take_remote.insert(path.to_string());
+        }
+        remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
+        persist_conflict_state_for_target(sync_root, group, &state, &conflicts_json)?;
+        Ok(!pending_fallback)
+    }
+
+    /// 返回 `true` 表示只能排队到下一轮再取远端（旧记录没有快照）。
+    fn decide_take_remote(
+        sync_root: &Path,
+        path: &str,
+        state: &mut crate::sync::types::SyncState,
+        conflict: &SyncConflict,
+        guard: Option<&crate::storage::WorkspaceWriteLock>,
+        app_data_root: Option<&Path>,
+    ) -> crate::Result<bool> {
+        match conflict.kind {
+            SyncConflictKind::RemoteDeleted => {
+                if let (Some((volume_id, chapter_id)), Some(app_data_root)) =
+                    (Self::chapter_sync_path_parts(path), app_data_root)
+                {
+                    crate::chapter::delete_chapter(
+                        sync_root,
+                        &volume_id,
+                        &chapter_id,
+                        app_data_root,
+                    )?;
+                    state.known_files.remove(path);
+                    state.known_files_updated_at.remove(path);
+                    return Ok(false);
+                }
+                let paths = [path.to_string()];
+                crate::sync::lww::move_to_trash(sync_root, &paths)?;
+                state.known_files.remove(path);
+                state.known_files_updated_at.remove(path);
+                Ok(false)
+            }
+            SyncConflictKind::BothChanged => match conflict.remote_snapshot_path.as_deref() {
+                Some(snapshot_rel) => {
+                    Self::apply_remote_snapshot(sync_root, path, snapshot_rel, guard)?;
+                    state.tombstones.retain(|tombstone| tombstone.original_path != path);
+                    if let Some(hash) = Self::canonical_known_hash(sync_root, path, conflict) {
+                        state.known_files.insert(path.to_string(), hash);
+                        state
+                            .known_files_updated_at
+                            .insert(path.to_string(), chrono::Utc::now().timestamp_millis());
+                    }
+                    Ok(false)
+                }
+                None => Ok(true),
+            },
+        }
+    }
+
+    pub fn resolve_conflict_mark_merged(sync_root: &Path, path: &str) -> crate::Result<()> {
+        Self::resolve_conflict_mark_merged_at_target(sync_root, path, None)
+    }
+
+    pub fn resolve_conflict_mark_merged_for_group(
+        sync_root: &Path,
+        path: &str,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> crate::Result<()> {
+        Self::resolve_conflict_mark_merged_at_target(sync_root, path, Some(group))
+    }
+
     fn resolve_conflict_mark_merged_at_target(
         sync_root: &Path,
         path: &str,
