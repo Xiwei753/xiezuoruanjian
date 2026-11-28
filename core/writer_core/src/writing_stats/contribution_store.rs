@@ -1788,7 +1788,7 @@ impl ContributionStore {
     pub fn load_all_events(&self) -> Result<Vec<ContributionEvent>> {
         self.recover_pending_events()?;
         let mut events = Vec::new();
-        let mut seen = HashSet::new();
+        let mut seen: HashMap<String, u64> = HashMap::new();
         for origin in self.list_origins()? {
             let dir = self.events_root().join(&origin);
             let origin_entries = match fs::read_dir(&dir) {
@@ -1820,8 +1820,20 @@ impl ContributionStore {
                     if event.origin_device_id.is_empty() {
                         event.origin_device_id = origin.clone();
                     }
-                    if !event.event_id.is_empty() && !seen.insert(event.event_id.clone()) {
-                        continue;
+                    if !event.event_id.is_empty() {
+                        let identity = event.business_identity_fingerprint()?;
+                        match seen.get(&event.event_id).copied() {
+                            Some(stored) if stored == identity => continue,
+                            Some(_) => {
+                                return Err(Error::Other(format!(
+                                    "contribution event {} is stored with conflicting business payloads",
+                                    event.event_id
+                                )))
+                            }
+                            None => {
+                                seen.insert(event.event_id.clone(), identity);
+                            }
+                        }
                     }
                     events.push(event);
                 }

@@ -573,11 +573,9 @@ impl super::WriterCore {
                         continue;
                     }
                 };
-            if recovered.is_empty() {
-                continue;
-            }
             // 同一恢复轮只枚举一次真实未决事务，按章节顺序逐个投影；单个
-            // 事务失败保留自己的 journal，不阻断其它章节。
+            // 事务失败保留自己的 journal，不阻断其它章节。即使本次没有恢复
+            // 出正文决议，也要把损坏清单的真实失败带回结果。
             let scan =
                 match crate::chapter::commit::pending_chapter_proof_transactions(&project_root) {
                     Ok(scan) => scan,
@@ -588,6 +586,9 @@ impl super::WriterCore {
                 };
             failures.extend(scan.failures);
             let transactions = scan.transactions;
+            if recovered.is_empty() && transactions.is_empty() {
+                continue;
+            }
             // 本轮已成功确认的事务要从“更早未决”集合里移除，否则同章后续
             // 事务会把它误判成仍未投影而整章阻塞。
             let mut remaining = transactions.clone();
