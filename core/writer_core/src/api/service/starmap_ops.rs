@@ -3409,7 +3409,7 @@ impl WriterCoreApi {
             })?;
 
         // plan 是纯计算：写入 Store 前先确定宿主图，才能登记它真实的 before。
-        let owner_starmap_id = {
+        let planned = {
             let context = self.build_resolver_context(&from_core.route.root_starmap_id)?;
             crate::starmap::connections::plan_cross_canvas_edge(&context, &from_core, &to_core)
                 .map_err(|e| {
@@ -3417,14 +3417,20 @@ impl WriterCoreApi {
                         "create_cross_canvas_edge: plan before write failed: {e:?}"
                     ))
                 })?
-                .1
-                .starmap_id
         };
+        let owner_starmap_id = planned.1.starmap_id.clone();
         self.register_starmap_before_write(&owner_starmap_id, None)?;
 
         let result = self
             .core_write()
-            .create_cross_canvas_edge(from_core, to_core, kind.into(), label, payload_core)
+            .create_cross_canvas_edge_planned(
+                from_core,
+                to_core,
+                kind.into(),
+                label,
+                payload_core,
+                planned,
+            )
             .map_err(|e| {
                 WriterError::Other(format!("create_cross_canvas_edge: write failed: {e:?}"))
             })?;

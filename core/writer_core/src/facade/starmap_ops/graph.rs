@@ -1343,6 +1343,31 @@ impl super::super::WriterCore {
         label: Option<String>,
         payload: Option<serde_json::Value>,
     ) -> Result<CreateCrossCanvasEdgeResult> {
+        self.create_cross_canvas_edge_inner(from, to, kind, label, payload, None)
+    }
+
+    /// 写入由调用方已规划好的跨画布边，不再重复 plan。
+    pub fn create_cross_canvas_edge_planned(
+        &self,
+        from: crate::starmap::connections::StarMapEndpointSelection,
+        to: crate::starmap::connections::StarMapEndpointSelection,
+        kind: crate::starmap::types::StarMapEdgeKind,
+        label: Option<String>,
+        payload: Option<serde_json::Value>,
+        planned: (String, crate::starmap::types::reference::StarMapTargetPath, crate::starmap::types::reference::StarMapTargetPath),
+    ) -> Result<CreateCrossCanvasEdgeResult> {
+        self.create_cross_canvas_edge_inner(from, to, kind, label, payload, Some(planned))
+    }
+
+    fn create_cross_canvas_edge_inner(
+        &self,
+        from: crate::starmap::connections::StarMapEndpointSelection,
+        to: crate::starmap::connections::StarMapEndpointSelection,
+        kind: crate::starmap::types::StarMapEdgeKind,
+        label: Option<String>,
+        payload: Option<serde_json::Value>,
+        planned: Option<(String, crate::starmap::types::reference::StarMapTargetPath, crate::starmap::types::reference::StarMapTargetPath)>,
+    ) -> Result<CreateCrossCanvasEdgeResult> {
         let root_starmap_id = from.route.root_starmap_id.clone();
         let mut stores = self
             .starmap_stores
@@ -1357,15 +1382,19 @@ impl super::super::WriterCore {
             self.ensure_starmap_loaded(store)?;
         }
 
-        let context = self.build_resolver_context(&stores);
-
-        // 1. plan：求共同宿主图、edge_id、from/to 路径（纯计算，不写 Store）。
-        let (edge_id, from_path, to_path) = crate::starmap::connections::plan_cross_canvas_edge(
-            &context, &from, &to,
-        )
-        .map_err(|e| {
-            crate::error::Error::Other(format!("create_cross_canvas_edge: plan failed: {e:?}"))
-        })?;
+        // 1. plan：调用方已经规划时直接复用，避免同一操作跨画布边 plan 两次。
+        let (edge_id, from_path, to_path) = match planned {
+            Some(planned) => planned,
+            None => {
+                let context = self.build_resolver_context(&stores);
+                crate::starmap::connections::plan_cross_canvas_edge(&context, &from, &to)
+                    .map_err(|e| {
+                        crate::error::Error::Other(format!(
+                            "create_cross_canvas_edge: plan failed: {e:?}"
+                        ))
+                    })?
+            }
+        };
 
         // plan 保证 from_path/to_path 的 starmap_id 都是宿主图 ID。
         let owner_starmap_id = from_path.starmap_id.clone();

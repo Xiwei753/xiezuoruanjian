@@ -378,7 +378,8 @@ pub(crate) use journal::write_editor_conflict_material;
 pub use journal::{
     mark_chapter_commit_draft_ack, mark_chapter_commit_projection, mark_chapter_commit_projections,
     pending_chapter_draft_acks,
-    pending_chapter_proof_events, pending_chapter_proof_transactions,
+    pending_chapter_proof_events, pending_chapter_proof_transaction,
+    pending_chapter_proof_transactions,
     pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
     read_chapter_state_recovering, read_chapter_version, read_chapter_version_recovering,
     recover_pending_chapter_commits, replay_pending_sync_mutation, replay_pending_sync_mutations,

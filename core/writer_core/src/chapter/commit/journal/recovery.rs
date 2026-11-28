@@ -254,6 +254,42 @@ pub fn pending_chapter_proof_transactions(
     })
 }
 
+/// 按真实事务 ID 读取一笔仍待投影的证明事务；不存在/已确认返回 `None`。
+///
+/// 正文保存后的投影只处理本次事务，不枚举项目内其它章节的 manifest。
+pub fn pending_chapter_proof_transaction(
+    project_root: &Path,
+    transaction_id: &str,
+) -> Result<Option<super::PendingChapterProofTransaction>> {
+    let manifest_path = journal_root(project_root)
+        .join(transaction_id)
+        .join("manifest.json");
+    let raw = match fs::read_to_string(&manifest_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to read chapter commit manifest {}: {error}",
+                manifest_path.display()
+            )))
+        }
+    };
+    let manifest: ChapterCommitManifest = serde_json::from_str(&raw).map_err(|error| {
+        Error::Other(format!(
+            "chapter commit manifest {} is corrupt: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    if manifest.phase != ChapterCommitPhase::Applied || manifest.pending_projections.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(super::PendingChapterProofTransaction {
+        transaction_id: manifest.transaction_id,
+        key: manifest.key,
+        commit_sequence: manifest.commit_sequence,
+    }))
+}
+
 /// 读取 journal 中尚未确认的证明事件（供投影 worker 使用）。
 pub fn pending_chapter_proof_events(
     project_root: &Path,
@@ -701,7 +737,7 @@ fn recover_chapter_commit_entries(
             ChapterCommitPhase::Prepared => {
                 // 未决议：live 从未被触碰。保留目录供人工诊断，不能删除后
                 // 继续写 Finished manifest；陈旧定位一并清理。
-                if let Err(error) = clear_chapter_locator(project_root, &key) {
+                if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
                     log::warn!("failed to clear stale chapter commit locator: {error}");
                 }
                 continue;
@@ -740,22 +776,22 @@ fn recover_chapter_commit_entries(
                         superseded: true,
                         conflict_dir: Some(conflict_dir),
                     });
-                    if let Err(error) = clear_chapter_locator(project_root, &key) {
+                    if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
                         log::warn!("failed to clear chapter commit locator: {error}");
                     }
                     continue;
                 }
-                if let Err(error) = clear_chapter_locator(project_root, &key) {
+                if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
                     log::warn!("failed to clear chapter commit locator after publish: {error}");
                 }
             }
             ChapterCommitPhase::Applied => {
-                if let Err(error) = clear_chapter_locator(project_root, &key) {
+                if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
                     log::warn!("failed to clear stale chapter commit locator: {error}");
                 }
             }
             ChapterCommitPhase::Finished => {
-                if let Err(error) = clear_chapter_locator(project_root, &key) {
+                if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
                     log::warn!("failed to clear stale chapter commit locator: {error}");
                 }
                 if let Err(error) = remove_transaction_dir(&tx_dir) {
@@ -789,7 +825,7 @@ fn recover_chapter_commit_entries(
                         );
                     }
                 }
-                if let Err(error) = clear_chapter_locator(project_root, &key) {
+                if let Err(error) = clear_chapter_locator_if(project_root, &key, &manifest.transaction_id) {
                     log::warn!("failed to clear chapter commit locator: {error}");
                 }
                 continue;

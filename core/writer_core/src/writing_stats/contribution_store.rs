@@ -474,6 +474,29 @@ impl ContributionStore {
         Ok((count, head))
     }
 
+    /// 查询单个事件在真实分区中的身份；只返回本批需要的条目，不复制整份
+    /// 来源历史。缓存未建立或已失效时才重扫该来源。
+    fn persisted_identity(
+        &self,
+        origin: &str,
+        event_id: &str,
+    ) -> Result<Option<PersistedEventIdentity>> {
+        let fingerprint = self.origin_fingerprint(origin);
+        {
+            let cache = self
+                .event_id_cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(entry) = cache.get(origin) {
+                if entry.fingerprint == fingerprint {
+                    return Ok(entry.identities.get(event_id).cloned());
+                }
+            }
+        }
+        let identities = self.load_origin_event_identities(origin)?;
+        Ok(identities.get(event_id).cloned())
+    }
+
     /// 读取某来源分区已落盘事件 ID -> 业务事实指纹，用于幂等去重。
     ///
     /// 缓存只在 origin 指纹变化（同步替换目录、generation 更新）时重扫；
@@ -1408,7 +1431,6 @@ impl ContributionStore {
         // 先按真实落盘事实（ID -> 业务事实指纹）去重，再给新增事件分配
         // 序号/计数/哈希。重发相同 event_id 时不能推进任何派生索引，否则会
         // 留下不存在的“幽灵链头”；同一 ID 不同业务事实必须报错而不是覆盖。
-        let existing = self.load_existing_identities(&prepared)?;
         let mut unique = Vec::with_capacity(prepared.len());
         let mut batch_seen: HashMap<(String, String), u64> = HashMap::new();
         for event in prepared {
@@ -1419,7 +1441,9 @@ impl ContributionStore {
             }
             let identity = event.business_identity_fingerprint()?;
             let key = (event.origin_device_id.clone(), event.event_id.clone());
-            if let Some(stored) = existing.get(&key.0).and_then(|ids| ids.get(&key.1)) {
+            if let Some(stored) = self
+                .persisted_identity(&event.origin_device_id, &event.event_id)?
+            {
                 if stored.identity == identity {
                     continue;
                 }
@@ -1495,25 +1519,6 @@ impl ContributionStore {
         drop(_write_guard);
         self.maintain_starmap_checkpoints(&checkpoint_targets);
         Ok(appended.written)
-    }
-
-    /// 读取本批事件涉及来源分区的已落盘 ID -> 业务事实指纹（同一来源只读一次）。
-    fn load_existing_identities(
-        &self,
-        events: &[ContributionEvent],
-    ) -> Result<HashMap<String, HashMap<String, PersistedEventIdentity>>> {
-        let mut existing_by_origin: HashMap<String, HashMap<String, PersistedEventIdentity>> =
-            HashMap::new();
-        for event in events {
-            if existing_by_origin.contains_key(&event.origin_device_id) {
-                continue;
-            }
-            existing_by_origin.insert(
-                event.origin_device_id.clone(),
-                self.load_origin_event_identities(&event.origin_device_id)?,
-            );
-        }
-        Ok(existing_by_origin)
     }
 
     /// 重放上次进程在「业务已成功、事件已进入 journal」之后未能追加的事件。
@@ -1630,8 +1635,6 @@ impl ContributionStore {
         // 去重命中的 pending 事件没有新行可写，也必须确认其真实分区 durable
         // 后才能让调用方删除 journal。
         let mut partitions: HashSet<(String, String)> = HashSet::new();
-        let mut identities_by_origin: HashMap<String, HashMap<String, PersistedEventIdentity>> =
-            HashMap::new();
         for event in events {
             let origin = if event.origin_device_id.is_empty() {
                 self.resolve_origin_device_id()?
@@ -1640,23 +1643,16 @@ impl ContributionStore {
             };
             // 事件可能已在别的日期分区（或归档）真实落盘；确认必须使用
             // 实际位置，不能用 pending 自带的日期猜分区。
-            if !identities_by_origin.contains_key(&origin) {
-                identities_by_origin.insert(
-                    origin.clone(),
-                    self.load_origin_event_identities(&origin)?,
-                );
-            }
-            let date = identities_by_origin
-                .get(&origin)
-                .and_then(|identities| identities.get(&event.event_id))
-                .map(|stored| stored.date.clone())
-                .unwrap_or_else(|| {
+            let date = match self.persisted_identity(&origin, &event.event_id)? {
+                Some(stored) => stored.date,
+                None => {
                     if event.local_date.is_empty() {
-                        local_date_for_event(event.occurred_at_ms)
+                        local_date_for_event(event.occurred_at_ms)?
                     } else {
-                        Ok(event.local_date.clone())
+                        event.local_date.clone()
                     }
-                })?;
+                }
+            };
             partitions.insert((origin, date));
         }
         for (origin, date) in partitions {
@@ -1728,7 +1724,7 @@ impl ContributionStore {
         let fresh_events = if recovering {
             // 先按 pending 原始字节修复确定残片，再从修复后的真实分区重建
             // 身份索引并过滤；不能拿追加失败前的目录 mtime 缓存直接判重。
-            self.repair_pending_event_tails(events)?;
+            // 尾片只由 recover_pending_events 按原始 pending 行修复一次。
             self.invalidate_origin_event_caches(events);
             self.filter_persisted_events(events)?
         } else {
@@ -1770,14 +1766,6 @@ impl ContributionStore {
             }
             partitions.push((origin, date, indexes, expected_lines, identities));
         }
-        if recovering {
-            for (origin, date, _, expected_lines, _) in &partitions {
-                jsonl::repair_tail_fragment::<ContributionEvent>(
-                    &self.event_file_path(origin, date),
-                    expected_lines,
-                )?;
-            }
-        }
         let mut appended = PartitionAppend::default();
         for (origin, date, indexes, expected_lines, identities) in partitions {
             let path = self.event_file_path(&origin, &date);
@@ -1801,9 +1789,8 @@ impl ContributionStore {
         &self,
         events: &[ContributionEvent],
     ) -> Result<Vec<ContributionEvent>> {
-        let mut identities_by_origin: HashMap<String, HashMap<String, PersistedEventIdentity>> =
-            HashMap::new();
         let mut fresh = Vec::with_capacity(events.len());
+        let mut batch_seen: HashMap<(String, String), u64> = HashMap::new();
         for event in events {
             if event.event_id.is_empty() {
                 return Err(Error::Other(
@@ -1815,22 +1802,18 @@ impl ContributionStore {
             } else {
                 event.origin_device_id.clone()
             };
-            let date = if event.local_date.is_empty() {
-                local_date_for_event(event.occurred_at_ms)?
-            } else {
-                event.local_date.clone()
-            };
-            if !identities_by_origin.contains_key(&origin) {
-                identities_by_origin.insert(
-                    origin.clone(),
-                    self.load_origin_event_identities(&origin)?,
-                );
-            }
             let identity = event.business_identity_fingerprint()?;
-            let existing = identities_by_origin
-                .get(&origin)
-                .and_then(|ids| ids.get(&event.event_id));
-            match existing {
+            let batch_key = (origin.clone(), event.event_id.clone());
+            if let Some(stored) = batch_seen.get(&batch_key) {
+                if *stored == identity {
+                    continue;
+                }
+                return Err(Error::Other(format!(
+                    "contribution batch contains event {} twice with different business payloads",
+                    event.event_id
+                )));
+            }
+            match self.persisted_identity(&origin, &event.event_id)? {
                 Some(stored) if stored.identity == identity => continue,
                 Some(_) => {
                     return Err(Error::Other(format!(
@@ -1839,15 +1822,7 @@ impl ContributionStore {
                     )))
                 }
                 None => {
-                    if let Some(ids) = identities_by_origin.get_mut(&origin) {
-                        ids.insert(
-                            event.event_id.clone(),
-                            PersistedEventIdentity {
-                                date: date.clone(),
-                                identity,
-                            },
-                        );
-                    }
+                    batch_seen.insert(batch_key, identity);
                     fresh.push(event.clone());
                 }
             }

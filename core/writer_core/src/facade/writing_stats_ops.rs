@@ -691,19 +691,13 @@ impl super::WriterCore {
         project_root: &std::path::Path,
         transaction_id: &str,
     ) -> Result<()> {
-        let scan = crate::chapter::commit::pending_chapter_proof_transactions(project_root)?;
-        for failure in &scan.failures {
-            log::warn!("pending chapter proof scan reported failure: {failure}");
-        }
-        let transactions = scan.transactions;
-        let Some(current) = transactions
-            .iter()
-            .find(|transaction| transaction.transaction_id == transaction_id)
+        let Some(current) =
+            crate::chapter::commit::pending_chapter_proof_transaction(project_root, transaction_id)?
         else {
             // 事务已确认/已清理：没有待投影事实。
             return Ok(());
         };
-        self.apply_pending_chapter_proof_transaction(project_root, current, &transactions)
+        self.apply_pending_chapter_proof_transaction(project_root, &current, &[current.clone()])
     }
 
     fn apply_pending_chapter_proof_transaction(

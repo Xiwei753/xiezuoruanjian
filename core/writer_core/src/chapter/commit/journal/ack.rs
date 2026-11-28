@@ -56,7 +56,6 @@ fn confirm_pending_projections(
         if manifest.phase == ChapterCommitPhase::Decided {
             let published = publish_decided(project_root, &tx_dir, &mut manifest)?;
             if !published {
-                clear_pending_if_idle(project_root)?;
                 return Ok(false);
             }
         }
@@ -65,7 +64,6 @@ fn confirm_pending_projections(
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
         let _ = remove_transaction_dir(&tx_dir);
-        clear_pending_if_idle(project_root)?;
         return Ok(true);
     }
     Ok(false)
@@ -101,7 +99,6 @@ pub fn mark_chapter_commit_draft_ack(
         if manifest.phase == ChapterCommitPhase::Decided {
             let published = publish_decided(project_root, &tx_dir, &mut manifest)?;
             if !published {
-                clear_pending_if_idle(project_root)?;
                 return Ok(false);
             }
         }
@@ -110,7 +107,6 @@ pub fn mark_chapter_commit_draft_ack(
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
         let _ = remove_transaction_dir(&tx_dir);
-        clear_pending_if_idle(project_root)?;
         return Ok(true);
     }
     Ok(false)

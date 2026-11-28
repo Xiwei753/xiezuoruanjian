@@ -99,6 +99,18 @@ pub(super) fn clear_chapter_locator(project_root: &Path, key: &ChapterKey) -> Re
     }
 }
 
+/// 只在定位仍指向本次事务时清理；不能把另一笔真实未决事务的定位删掉。
+pub(super) fn clear_chapter_locator_if(
+    project_root: &Path,
+    key: &ChapterKey,
+    transaction_id: &str,
+) -> Result<()> {
+    match read_chapter_locator(project_root, key)? {
+        Some(current) if current == transaction_id => clear_chapter_locator(project_root, key),
+        _ => Ok(()),
+    }
+}
+
 pub(super) fn read_chapter_locator(
     project_root: &Path,
     key: &ChapterKey,
@@ -162,9 +174,11 @@ fn next_commit_sequence(project_root: &Path) -> Result<u64> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    let max_persisted = max_journal_commit_sequence(project_root)?;
-    let current = counter.map_or(max_persisted, |value| value.max(max_persisted));
-    let next = current.saturating_add(1);
+    let next = match counter {
+        Some(value) => value.saturating_add(1),
+        // 计数器确实缺失/损坏时才扫 journal 重建；正常写入不清点全项目。
+        None => max_journal_commit_sequence(project_root)?.saturating_add(1),
+    };
     crate::storage::atomic_write_bytes(&path, next.to_string().as_bytes())?;
     Ok(next)
 }
@@ -389,10 +403,8 @@ fn recover_pending_for_read(
     project_root: &Path,
     key: &ChapterKey,
 ) -> Result<()> {
-    if pending_marker(project_root).exists() {
-        // 只处理当前章真实未完成的正文决议；全项目恢复只在启动/显式入口。
-        recover_pending_chapter_commits_for_key(project_root, key)?;
-    }
+    // 只读本章定位文件；不依赖全项目 pending 探针，也不枚举其它章。
+    recover_pending_chapter_commits_for_key(project_root, key)?;
     Ok(())
 }
 
@@ -975,11 +987,11 @@ pub(crate) fn commit_chapter_with_guard(
     };
     write_manifest(&tx_dir, &manifest)?;
 
-    // 2) 决议 durable。只有这一步成功后才允许触碰 live。
+    // 2) 先让本章定位指向这笔决议，再持久化 Decided：两步之间退出时，
+    // 热路径仍能找到这笔尚未发布的正文决议。
+    write_chapter_locator(project_root, &key, &transaction_id)?;
     manifest.phase = ChapterCommitPhase::Decided;
     write_manifest(&tx_dir, &manifest)?;
-    // 决议已 durable：登记本章定位，后续读写只按这个事务恢复。
-    write_chapter_locator(project_root, &key, &transaction_id)?;
 
     // 3) 发布正文/元数据/附加文件投影；删除提交单独发布 trash+tombstone。
     let published = if deleting {
@@ -998,10 +1010,9 @@ pub(crate) fn commit_chapter_with_guard(
             &request.content,
         )?;
         crate::storage::sync_dir(&conflict_dir)?;
-        if let Err(error) = clear_chapter_locator(project_root, &key) {
+        if let Err(error) = clear_chapter_locator_if(project_root, &key, &transaction_id) {
             log::warn!("failed to clear chapter commit locator after conflict: {error}");
         }
-        clear_pending_if_idle(project_root)?;
         return Ok(ChapterCommitOutcome::Conflict(ChapterConflict {
             key,
             expected: request.expected,
@@ -1012,7 +1023,7 @@ pub(crate) fn commit_chapter_with_guard(
     }
 
     // 正文决议完成：定位文件不再代表未决正文；清理失败不影响已提交事实。
-    if let Err(error) = clear_chapter_locator(project_root, &key) {
+    if let Err(error) = clear_chapter_locator_if(project_root, &key, &transaction_id) {
         log::warn!("failed to clear chapter commit locator after publish: {error}");
     }
 
@@ -1027,7 +1038,6 @@ pub(crate) fn commit_chapter_with_guard(
         manifest.phase = ChapterCommitPhase::Finished;
         write_manifest(&tx_dir, &manifest)?;
         let _ = remove_transaction_dir(&tx_dir);
-        clear_pending_if_idle(project_root)?;
     } else {
         // 去重，事件 ID 重发不会制造第二份 pending。
         pending.sort();

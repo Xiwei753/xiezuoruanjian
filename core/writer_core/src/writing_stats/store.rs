@@ -37,7 +37,7 @@ use crate::writing_stats::proof::{
 use crate::writing_stats::{WritingActivitySegment, WritingInputEvent};
 use chrono::NaiveDate;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -378,6 +378,49 @@ impl StatsStore {
         Ok(fresh)
     }
 
+    fn publish_proof_state(&self, state: &mut ProofStoreState, working: ProofStoreState) {
+        state.next_seq = working.next_seq;
+        for (key, head) in working.chains {
+            state.chains.insert(key, head);
+        }
+        for (key, digest) in working.digests {
+            state.digests.insert(key, digest);
+        }
+        for (key, gap) in working.gap_baselines {
+            state.gap_baselines.insert(key, gap);
+        }
+    }
+
+    /// 读取某日分区的完整事件，保留未完成尾片（随后用本批确定行修复）。
+    fn load_partition_events(
+        &self,
+        origin: &str,
+        date: &str,
+    ) -> Result<Vec<WritingInputEvent>> {
+        let mut events: Vec<WritingInputEvent> =
+            jsonl::read_jsonl_tolerant_tail::<WritingInputEvent>(&self.event_file_path(origin, date))?
+                .into_iter()
+                .map(|record| record.value)
+                .collect();
+        let archive_path = self
+            .app_data_root
+            .join(checkpoint::archive_relative_path(origin, date));
+        if archive_path.is_file() {
+            let file = EventFile {
+                origin: origin.to_string(),
+                date: date.to_string(),
+                path: archive_path,
+                compressed: true,
+            };
+            for event in self.parse_events_file(&file)? {
+                if !events.iter().any(|existing| existing.event_id == event.event_id) {
+                    events.push(event);
+                }
+            }
+        }
+        Ok(events)
+    }
+
     /// 丢弃某个缓存键的 ID 缓存，让下一次写入以磁盘真值重建。
     fn invalidate_written_ids(&self, cache_key: &str) {
         let mut cache = self.lock_written_ids();
@@ -457,6 +500,12 @@ impl StatsStore {
             }
         }
         let mut prepared: Vec<WritingInputEvent> = Vec::new();
+        // 本批涉及的分区只在开始时按“保留尾片”读一次；已落盘的 A 与同一批
+        // 里只写了半行的 B 都由这份真实事实判断，不再逐事件严格重读整日。
+        let mut partition_events: BTreeMap<(String, String), Vec<WritingInputEvent>> =
+            BTreeMap::new();
+        let mut touched_partitions: BTreeSet<(String, String)> = BTreeSet::new();
+        let mut batch_ids: HashMap<String, u64> = HashMap::new();
         for (event, baseline_text) in items {
             if event
                 .proof
@@ -470,29 +519,63 @@ impl StatsStore {
                 return Err(crate::Error::Other("proof 事件缺少来源设备 ID".to_string()));
             }
             let date = self.timestamp_to_date(event.timestamp_ms)?;
-            if self.event_is_persisted_identity(&origin, &date, &event)? {
-                // 去重命中同样要确认 durable，才能让调用方删除 journal。
-                self.confirm_event_partition_durable(&origin, &date)?;
-                let actual = self.load_persisted_event(&origin, &date, &event.event_id)?;
-                let Some(actual) = actual else {
-                    // 索引说存在但读不到完整事件：当前内存链头无法证明，
-                    // 让下一次调用从完整持久事实重新初始化。
-                    self.reset_proof_state_for(&mut *state, &involved);
+            let identity = event.business_identity_fingerprint()?;
+            // 同一批内先按 event_id 判重，避免同一条事件计算两次链头后在
+            // select_fresh_events 阶段才被丢掉（第二次计算出的 seq/hash 是假的）。
+            if let Some(seen) = batch_ids.get(&event.event_id) {
+                if *seen == identity {
+                    continue;
+                }
+                return Err(crate::Error::Other(format!(
+                    "stats batch contains event {} twice with different business facts",
+                    event.event_id
+                )));
+            }
+            batch_ids.insert(event.event_id.clone(), identity);
+            let key = (origin.clone(), date.clone());
+            if !partition_events.contains_key(&key) {
+                partition_events.insert(key.clone(), self.load_partition_events(&origin, &date)?);
+            }
+            let actual = partition_events
+                .get(&key)
+                .and_then(|events| events.iter().find(|candidate| candidate.event_id == event.event_id));
+            if let Some(actual) = actual {
+                let actual = actual.clone();
+                if actual.business_identity_fingerprint()? != identity {
                     return Err(crate::Error::Other(format!(
-                        "stats event {} is indexed as persisted but cannot be read back",
+                        "stats event {} is already persisted with different business facts",
                         event.event_id
                     )));
-                };
+                }
                 self.advance_proof_state_from_persisted(&mut working, &actual);
+                touched_partitions.insert(key);
                 continue;
             }
             if let Some(prepared_event) =
                 self.prepare_proof_event(&mut working, event, baseline_text.as_deref())?
             {
                 prepared.push(prepared_event);
+                touched_partitions.insert(key);
             }
         }
         if prepared.is_empty() {
+            // 全部是已落盘事件：只补确认本批真实分区，并发布读回的真实链头。
+            for (origin, date) in &touched_partitions {
+                let events = partition_events
+                    .get(&(origin.clone(), date.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                let lines: Vec<String> = events
+                    .iter()
+                    .map(serde_json::to_string)
+                    .collect::<std::result::Result<_, _>>()?;
+                jsonl::repair_tail_fragment::<WritingInputEvent>(
+                    &self.event_file_path(origin, date),
+                    &lines,
+                )?;
+                self.confirm_event_partition_durable(origin, date)?;
+            }
+            self.publish_proof_state(&mut *state, working);
             return Ok(0);
         }
 
@@ -503,6 +586,21 @@ impl StatsStore {
                 .entry((event.device_id.clone(), date))
                 .or_default()
                 .push(event.clone());
+        }
+        // 追加前先用本批确定序列化行修掉涉及分区的未完成尾片；这样已落盘的
+        // A 不会阻止同一文件里 B 的残片恢复。
+        for (key, events) in &by_partition {
+            let lines: Vec<String> = events
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<std::result::Result<_, _>>()?;
+            jsonl::repair_tail_fragment::<WritingInputEvent>(
+                &self.event_file_path(&key.0, &key.1),
+                &lines,
+            )?;
+        }
+        for key in &touched_partitions {
+            self.invalidate_written_ids(&format!("{}/{}", key.0, key.1));
         }
         let mut written = 0usize;
         let mut partitions: Vec<(String, String)> = Vec::new();
@@ -526,7 +624,7 @@ impl StatsStore {
         }
         // 只有实际分区确认 durable 后才允许发布链头；去重命中的分区也要
         // 补一次文件与目录项确认。
-        for (origin, date) in &partitions {
+        for (origin, date) in touched_partitions.iter() {
             if let Err(error) = self.confirm_event_partition_durable(origin, date) {
                 for (origin, date) in &partitions {
                     self.invalidate_written_ids(&format!("{origin}/{date}"));
@@ -535,16 +633,7 @@ impl StatsStore {
                 return Err(error);
             }
         }
-        state.next_seq = working.next_seq;
-        for (key, head) in working.chains {
-            state.chains.insert(key, head);
-        }
-        for (key, digest) in working.digests {
-            state.digests.insert(key, digest);
-        }
-        for (key, gap) in working.gap_baselines {
-            state.gap_baselines.insert(key, gap);
-        }
+        self.publish_proof_state(&mut *state, working);
         drop(state);
         if written > 0 {
             self.proof_generation.fetch_add(1, Ordering::SeqCst);
@@ -1550,43 +1639,6 @@ impl StatsStore {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// 从具体日分区读回一条完整持久事件（原始段优先，其次归档段）。
-    fn load_persisted_event(
-        &self,
-        origin: &str,
-        date: &str,
-        event_id: &str,
-    ) -> Result<Option<WritingInputEvent>> {
-        if event_id.is_empty() {
-            return Ok(None);
-        }
-        let raw = self.event_file_path(origin, date);
-        let records = jsonl::read_jsonl::<WritingInputEvent>(&raw)?;
-        if let Some(found) = records
-            .into_iter()
-            .find(|record| record.value.event_id == event_id)
-        {
-            return Ok(Some(found.value));
-        }
-        let archive_path = self
-            .app_data_root
-            .join(checkpoint::archive_relative_path(origin, date));
-        if archive_path.is_file() {
-            let file = EventFile {
-                origin: origin.to_string(),
-                date: date.to_string(),
-                path: archive_path,
-                compressed: true,
-            };
-            for event in self.parse_events_file(&file)? {
-                if event.event_id == event_id {
-                    return Ok(Some(event));
-                }
-            }
-        }
-        Ok(None)
-    }
-
     /// 扫描某设备某个 UTC 日期的原始 JSONL 与已封口归档，按 event_id
     /// 记录业务事实指纹（不记录派生 seq/hash）。
     fn scan_persisted_ids(&self, origin: &str, date: &str) -> Result<HashMap<String, u64>> {
@@ -1662,36 +1714,6 @@ impl StatsStore {
         Ok(cache
             .get(&cache_key)
             .is_some_and(|ids| ids.contains_key(event_id)))
-    }
-
-    /// 同一 event_id 必须是同一份 journal 业务事实才允许视为已写入；
-    /// 派生 seq/hash 的差异不参与比较。
-    fn event_is_persisted_identity(
-        &self,
-        origin: &str,
-        date: &str,
-        event: &WritingInputEvent,
-    ) -> Result<bool> {
-        if event.event_id.is_empty() {
-            return Ok(false);
-        }
-        let mut cache = self.lock_written_ids();
-        let cache_key = format!("{origin}/{date}");
-        if !cache.contains_key(&cache_key) {
-            let ids = self.scan_persisted_ids(origin, date)?;
-            cache.insert(cache_key.clone(), ids);
-        }
-        let Some(ids) = cache.get(&cache_key) else {
-            return Ok(false);
-        };
-        match ids.get(&event.event_id) {
-            Some(stored) if *stored == event.business_identity_fingerprint()? => Ok(true),
-            Some(_) => Err(crate::Error::Other(format!(
-                "stats event {} is already persisted with different business facts",
-                event.event_id
-            ))),
-            None => Ok(false),
-        }
     }
 
     /// 确认某个事件分区已经 durable：当天原始段要求文件级同步；已封口
