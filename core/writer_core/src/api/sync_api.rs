@@ -970,9 +970,18 @@ impl WriterCoreApi {
         match crate::sync::app_data_group_catalog::discover_local_app_data_groups(&app_data_root) {
             Ok(groups) => {
                 for group in groups {
+                    let confirmed = match crate::sync::SyncService::load_sync_state_read_only_for_group(
+                        &app_data_root,
+                        &group,
+                        None,
+                    ) {
+                        Ok(state) => state.confirmed_mutation_seq,
+                        // 状态读不到时保守地按"有变更"处理。
+                        Err(_) => return true,
+                    };
                     let pending = crate::sync::local_mutations::pending_records_in(
                         &ledger,
-                        &app_data_root,
+                        &confirmed,
                         crate::sync::types::SyncScope::App,
                         Some(&group),
                     );
@@ -1118,39 +1127,6 @@ impl WriterCoreApi {
         };
         provider.set_operation_id(Some(diagnostic_operation_id));
         provider_phase.finish("success");
-
-        // A checkpoint snapshot must observe StarMap Store dirty state on disk.
-        // The later staging-seed flush remains necessary for edits made while the
-        // local snapshot and plan are being prepared.
-        let starmap_flush_phase = SyncDiagnosticPhase::start_with_provider(
-            diagnostic_operation_id,
-            "starmap_store_flush",
-            None,
-            provider.as_ref(),
-        );
-        if let Err(error) = self.flush_all_starmap_stores() {
-            starmap_flush_phase.finish_with_provider("error", provider.as_ref());
-            let error_category = sync_error_category(&error).to_string();
-            let writer_error = error;
-            record_sync_phase_failure(
-                diagnostic_operation_id,
-                "starmap_store_flush",
-                &writer_error,
-            );
-            log::warn!(
-                "[sync] starmap_store_flush failed: error_code={}",
-                writer_error.code()
-            );
-            let _ = self.record_full_sync_preflight_failure_typed(
-                "recoverable_error".to_string(),
-                "starmap_store_flush".to_string(),
-                error_category,
-                "starmap_store_flush".to_string(),
-                writer_error.to_string(),
-            );
-            return Err(writer_error);
-        }
-        starmap_flush_phase.finish_with_provider("success", provider.as_ref());
 
         let (app_data_root, projects_root, previous_full_sync_state) = {
             let core = self.core_write();
@@ -1415,51 +1391,6 @@ impl WriterCoreApi {
                 return make_noop_result();
             }
         }
-        // staging seed 前 flush 所有 Store 的 dirty/删除状态，
-        // 保证 staging seed 能看到本地最新修改（问题1）。
-        // flush 失败则终止同步——不能让 staging seed 基于过时数据做三方合并。
-        if let Err(e) = self.core_write().flush_all_starmap_stores() {
-            let msg = format!("flush_all_starmap_stores before staging seed failed: {e}");
-            log::warn!("[sync] prepare: {msg}");
-            let status = crate::sync::full_sync::error_to_persist_status(&e);
-            let error_category = core_sync_category(&e);
-            let _ = self.record_full_sync_preflight_failure_typed(
-                sync_status_to_wire(&status),
-                "staging_seed".to_string(),
-                error_category,
-                "staging_seed".to_string(),
-                msg,
-            );
-            return Err(crate::api::error::WriterError::from(e));
-        }
-        // Issue #1005: 在 staging seed 前一次性迁移本地旧 settings.sync.json。
-        // 这样 base/live/staging 快照从同一份规范内容开始，compute_commit_plan
-        // 只读 live，不会在失败/取消时提前改写用户文件。
-        for planned_target in &plan.targets {
-            if planned_target.target.app_group.as_ref()
-                != Some(&crate::sync::types::AppDataGroup::Global)
-            {
-                continue;
-            }
-            let settings_path = planned_target.target_live_root.join("settings.sync.json");
-            if let Err(e) = crate::settings::normalize_syncable_settings_file(&settings_path) {
-                let msg = format!(
-                    "normalize settings.sync.json before staging seed failed at {}: {e}",
-                    settings_path.display()
-                );
-                log::warn!("[sync] prepare: {msg}");
-                let status = crate::sync::full_sync::error_to_persist_status(&e);
-                let error_category = core_sync_category(&e);
-                let _ = self.record_full_sync_preflight_failure_typed(
-                    sync_status_to_wire(&status),
-                    "staging_seed".to_string(),
-                    error_category,
-                    "staging_seed".to_string(),
-                    msg,
-                );
-                return Err(crate::api::error::WriterError::from(e));
-            }
-        }
         let staging_phase = SyncDiagnosticPhase::start_with_provider(
             diagnostic_operation_id,
             "staging",
@@ -1497,39 +1428,6 @@ impl WriterCoreApi {
                 // Syncing，取消前持久化取消终态。
                 self.core_write().persist_full_sync_cancelled();
                 return make_noop_result();
-            }
-        }
-
-        // 本轮共享的持久 mutation 账本快照：App 组很多，不在每组 plan 里
-        // 重复读整份账本；每个同步根只读一次。
-        {
-            let mut ledgers: std::collections::HashMap<
-                std::path::PathBuf,
-                std::sync::Arc<
-                    std::collections::HashMap<
-                        String,
-                        crate::sync::local_mutations::LocalMutationRecord,
-                    >,
-                >,
-            > = std::collections::HashMap::new();
-            for run in &mut staging_runs {
-                let root = run.target_live_root().to_path_buf();
-                if !ledgers.contains_key(&root) {
-                    match crate::sync::local_mutations::latest_ledger(&root) {
-                        Ok(ledger) => {
-                            ledgers.insert(root.clone(), std::sync::Arc::new(ledger));
-                        }
-                        Err(error) => {
-                            log::warn!(
-                                "[sync] read mutation ledger snapshot for {} failed: {error}",
-                                root.display()
-                            );
-                        }
-                    }
-                }
-                if let Some(ledger) = ledgers.get(&root) {
-                    run.set_ledger_snapshot(ledger.clone());
-                }
             }
         }
 
@@ -1851,6 +1749,17 @@ impl WriterCoreApi {
             sync_target: crate::sync::types::SyncTarget,
             prefix: String,
         }
+        // 本地提交批次内每个同步根只读一次账本；网络 Transfer 阶段不持有锁，
+        // 也不会使用过期的前置快照。
+        let mut ledger_cache: std::collections::HashMap<
+            std::path::PathBuf,
+            std::sync::Arc<
+                std::collections::HashMap<
+                    String,
+                    crate::sync::local_mutations::LocalMutationRecord,
+                >,
+            >,
+        > = std::collections::HashMap::new();
         let mut target_deltas: Vec<TargetPublishDelta<'_>> = Vec::new();
         for pending in pending_commits {
             let PendingTargetCommit {
@@ -1891,6 +1800,7 @@ impl WriterCoreApi {
                 &staging_runs,
                 &target_sync_result,
                 diagnostic_operation_id,
+                &mut ledger_cache,
             );
             let commit_failed = matches!(
                 target_with_conflicts.result.status,
@@ -2455,6 +2365,15 @@ impl WriterCoreApi {
         staging_runs: &[crate::sync::staging::StagingRun],
         target_sync_result: &crate::sync::types::TargetSyncResult,
         operation_id: &str,
+        ledger_cache: &mut std::collections::HashMap<
+            std::path::PathBuf,
+            std::sync::Arc<
+                std::collections::HashMap<
+                    String,
+                    crate::sync::local_mutations::LocalMutationRecord,
+                >,
+            >,
+        >,
     ) -> (
         crate::sync::types::TargetSyncResult,
         Vec<crate::sync::commit_helpers::CommittedPath>,
@@ -2474,7 +2393,12 @@ impl WriterCoreApi {
         }
         match staging_runs.get(target_index) {
             Some(run) => {
-                self.commit_target_after_transfer(run, target_sync_result, operation_id)
+                self.commit_target_after_transfer(
+                    run,
+                    target_sync_result,
+                    operation_id,
+                    ledger_cache,
+                )
             }
             None => (
                 target_sync_result.clone(),
@@ -2491,6 +2415,15 @@ impl WriterCoreApi {
         run: &crate::sync::staging::StagingRun,
         target_sync_result: &crate::sync::types::TargetSyncResult,
         operation_id: &str,
+        ledger_cache: &mut std::collections::HashMap<
+            std::path::PathBuf,
+            std::sync::Arc<
+                std::collections::HashMap<
+                    String,
+                    crate::sync::local_mutations::LocalMutationRecord,
+                >,
+            >,
+        >,
     ) -> (
         crate::sync::types::TargetSyncResult,
         Vec<crate::sync::commit_helpers::CommittedPath>,
@@ -2530,27 +2463,38 @@ impl WriterCoreApi {
         crate::sync::state_lock::with_sync_state_lock(run.target_live_root(), || {
             let core = self.core_write();
 
-            // 问题1：commit 前 flush 所有 Store dirty 到 live 磁盘，
-            // 保证三方合并的 ours（live）包含用户在 Transfer 期间的编辑。
-            // flush 失败则注入 target 错误状态，不继续 commit（避免基于过时 live 做合并）。
-            if let Err(e) = core.flush_all_starmap_stores() {
-                let mut target_with_conflicts = target_sync_result.clone();
-                target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
-                    format!("pre_commit_flush_failed: {}", e),
-                );
-                target_with_conflicts.result.error = Some(format!(
-                    "flush_all_starmap_stores before commit failed: {}",
-                    e
-                ));
-                return (
-                    target_with_conflicts,
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    crate::sync::staging::PublishBatch::default(),
-                );
-            }
-
+            // 业务 Store 已在各自保存入口持久化；这里只读取本同步根在
+            // 本轮提交批次里的账本快照，不在每个 target 上重复读整份账本。
+            let snapshot = match ledger_cache.get(run.target_live_root()) {
+                Some(snapshot) => snapshot.clone(),
+                None => match crate::sync::local_mutations::latest_ledger(
+                    run.target_live_root(),
+                ) {
+                    Ok(ledger) => {
+                        let snapshot = std::sync::Arc::new(ledger);
+                        ledger_cache.insert(run.target_live_root().to_path_buf(), snapshot.clone());
+                        snapshot
+                    }
+                    Err(error) => {
+                        let mut target_with_error = target_sync_result.clone();
+                        target_with_error.result.status =
+                            crate::sync::SyncStatus::RecoverableError(
+                                "ledger_read_failed".to_string(),
+                            );
+                        target_with_error.result.error = Some(format!(
+                            "read mutation ledger before commit failed: {error}"
+                        ));
+                        return (
+                            target_with_error,
+                            Vec::new(),
+                            Vec::new(),
+                            Vec::new(),
+                            crate::sync::staging::PublishBatch::default(),
+                        );
+                    }
+                },
+            };
+            run.set_ledger_snapshot(snapshot);
             let mut target_with_conflicts = target_sync_result.clone();
             let mut chapter_commit_receipts = Vec::new();
             let mut publish_batch = crate::sync::staging::PublishBatch::default();

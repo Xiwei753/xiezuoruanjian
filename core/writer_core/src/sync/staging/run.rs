@@ -46,8 +46,16 @@ pub struct StagingRun {
     prepare_error: Option<String>,
     /// 本轮开始时读取一次的持久 mutation 账本快照；多个 App 组共享同一份，
     /// 不在每组 plan 里重复读整份账本。
-    ledger_snapshot:
-        Option<std::sync::Arc<std::collections::HashMap<String, crate::sync::local_mutations::LocalMutationRecord>>>,
+    ledger_snapshot: std::sync::Mutex<
+        Option<
+            std::sync::Arc<
+                std::collections::HashMap<
+                    String,
+                    crate::sync::local_mutations::LocalMutationRecord,
+                >,
+            >,
+        >,
+    >,
 }
 
 impl StagingRun {
@@ -68,7 +76,7 @@ impl StagingRun {
             delete_intent: false,
             baseline_root: None,
             prepare_error: None,
-            ledger_snapshot: None,
+            ledger_snapshot: std::sync::Mutex::new(None),
         })
     }
 
@@ -147,22 +155,27 @@ impl StagingRun {
     }
 
     pub(crate) fn set_ledger_snapshot(
-        &mut self,
+        &self,
         ledger: std::sync::Arc<
             std::collections::HashMap<String, crate::sync::local_mutations::LocalMutationRecord>,
         >,
     ) {
-        self.ledger_snapshot = Some(ledger);
+        if let Ok(mut slot) = self.ledger_snapshot.lock() {
+            *slot = Some(ledger);
+        }
     }
 
     pub(crate) fn ledger_snapshot(
         &self,
     ) -> Option<
-        &std::sync::Arc<
+        std::sync::Arc<
             std::collections::HashMap<String, crate::sync::local_mutations::LocalMutationRecord>,
         >,
     > {
-        self.ledger_snapshot.as_ref()
+        self.ledger_snapshot
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone())
     }
 
     /// staging 子目录（Transfer 阶段写入远端变化对象）。

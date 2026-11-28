@@ -80,10 +80,15 @@ pub(crate) fn compute(run: &StagingRun, live_root: &Path) -> Result<CommitPlan> 
     let pending_take_remote: HashSet<String> = state.pending_take_remote.iter().cloned().collect();
 
     // 4. 本轮持久 mutation：决定本地版本与受影响集合。
-    let pending = match run.ledger_snapshot().filter(|_| !initialized_from_disk) {
+    let ledger_snapshot = if initialized_from_disk {
+        None
+    } else {
+        run.ledger_snapshot()
+    };
+    let pending = match ledger_snapshot.as_ref() {
         Some(ledger) => crate::sync::local_mutations::pending_records_in(
             ledger.as_ref(),
-            live_root,
+            &state.confirmed_mutation_seq,
             run.scope(),
             group.as_ref(),
         )?,

@@ -591,7 +591,13 @@ pub(crate) fn pending_records(
     // 不在这里修复：恢复统一由同步入口的显式 [`recover_ledger`] 完成，避免
     // 读取路径悄悄重写账本、也避免拿空索引当作"没有待同步事实"（复审 #3）。
     let ledger = latest_ledger(sync_root)?;
-    pending_records_in(&ledger, sync_root, scope, app_group)
+    let state = match app_group {
+        Some(group) => crate::sync::SyncService::load_sync_state_read_only_for_group(
+            sync_root, group, None,
+        )?,
+        None => crate::sync::SyncService::load_sync_state_read_only(sync_root, None)?,
+    };
+    pending_records_in(&ledger, &state.confirmed_mutation_seq, scope, app_group)
 }
 
 /// 读取并修复账本，返回"路径 → 最新事实"的索引（已补序号）。
@@ -620,24 +626,12 @@ pub(crate) fn latest_ledger(
 /// 从一个已读入的账本索引里挑出某个 target 的待同步事实。
 pub(crate) fn pending_records_in(
     ledger: &HashMap<String, LocalMutationRecord>,
-    sync_root: &Path,
+    confirmed_seq: &BTreeMap<String, u64>,
     scope: SyncScope,
     app_group: Option<&AppDataGroup>,
 ) -> crate::error::Result<BTreeMap<String, LocalMutationRecord>> {
-    // 账本已在 read 阶段修复（latest_ledger），这里不再重复完整读一遍：
-    // App 组可能很多，逐组重读整份 JSONL 会把增量调度退化成全量 IO。
-    // 已确认随远端提交发布的事实不算"待同步"。确认只看推送回执写入的序号，
-    // 不用 known_files 是否包含该路径推断删除（复审 #3）。
-    let confirmed_seq = match app_group {
-        Some(group) => {
-            crate::sync::SyncService::load_sync_state_read_only_for_group(sync_root, group, None)
-                .map(|state| state.confirmed_mutation_seq)
-                .unwrap_or_default()
-        }
-        None => crate::sync::SyncService::load_sync_state_read_only(sync_root, None)
-            .map(|state| state.confirmed_mutation_seq)
-            .unwrap_or_default(),
-    };
+    // 调用方已持有本轮读取的权威状态：确认序号直接从这里取，不重复读
+    // state.local.json，也不把读取失败降级成"没有已确认事实"。
     let mut pending = BTreeMap::new();
     for (path, record) in ledger {
         if !is_sync_business_path(path, scope) {

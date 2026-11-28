@@ -613,6 +613,28 @@ impl<'a> RoundProvider<'a> {
                 }
             }
         }
+        let mut checked_objects: BTreeSet<String> = BTreeSet::new();
+        for check in &checks {
+            if let Some(sanitized) = self.sanitize_check(check, &baselines)? {
+                if let BatchMutation::CheckObject { path, .. } = &sanitized {
+                    checked_objects.insert(path.clone());
+                }
+                mutations.push(sanitized);
+            }
+        }
+        // A write/delete precondition validated against the overlay must still
+        // hold on the real remote tree the final commit is built from.
+        for path in preconditioned_paths {
+            if checked_objects.contains(&path) {
+                continue;
+            }
+            let expected_version = self.baseline_from(&baselines, &path)?;
+            mutations.push(BatchMutation::CheckObject {
+                path,
+                expected_version,
+            });
+        }
+
         // 只把真正进入提交的 Put/ReuseVersion/Delete 变成回执；CheckObject/
         // CheckPrefix 不是对象事实。空内容过滤后没有事实就不确认。
         let mut receipts: Vec<PublishReceipt> = mutations
