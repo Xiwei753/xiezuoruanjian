@@ -23,6 +23,37 @@ use super::{
     ChapterSaveWorkerState,
 };
 
+/// 新草稿的 base 计算——`handle_draft_text` 与 `handle_record_fact` 共用这一处
+/// （Issue #1069 评论 2），避免两条路径对新草稿基线给出不同答案。
+///
+/// 只有 worker 已确认的回执才可能成为新草稿 base：
+/// - 传入 `before` 摘要（含空摘要）时，回执正文摘要必须与它完全一致；空摘要
+///   不会匹配任何回执，即“没有可校验的输入事实”不会被当成重基线依据；
+/// - 传 `None`（正文快照没有 before 摘要）时，只接受同一 generation 且确实
+///   前进的回执，不能把“未知世代”的正文重基线；
+/// - 都不满足时保留调用方记录的本地 base，交给恢复链按真实外部冲突处理，
+///   不在这里推测重基线。
+fn new_draft_base(
+    receipt: Option<&ChapterVersionDto>,
+    before_text_sha256: Option<&str>,
+    local: (&str, u64, &str),
+) -> (String, u64, String) {
+    if let Some(receipt) = receipt {
+        let accepted = match before_text_sha256 {
+            Some(before) => receipt.content_sha256 == before,
+            None => receipt.object_generation == local.0 && receipt.revision > local.1,
+        };
+        if accepted {
+            return (
+                receipt.object_generation.clone(),
+                receipt.revision,
+                receipt.content_sha256.clone(),
+            );
+        }
+    }
+    (local.0.to_string(), local.1, local.2.to_string())
+}
+
 /// 一条待持久化的编辑事实。
 pub(crate) struct ChapterFactCommand {
     pub context: ChapterSaveContext,
@@ -212,9 +243,9 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
             return;
         }
     };
-    // Issue #1069：新建草稿的 base 以 worker 已确认回执为准；只有输入事实的
-    // before 摘要确实对应回执正文时才算归属，否则保留 QML 记录的旧 base，
-    // 由恢复链按真实外部冲突处理，不推测重基线。
+    // Issue #1069：新建草稿的 base 由 `new_draft_base` 统一计算（与
+    // `handle_draft_text` 同一处）：已确认回执只有和事实 before 摘要对应时才
+    // 生效，否则保留 QML 记录的旧 base，由恢复链按真实外部冲突处理。
     let chain_receipt = state.chain_receipt_for(
         &command.context,
         &command.project_id,
@@ -223,7 +254,7 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
     );
     // Issue #1069：链被淘汰或新会话时，只在“即将新建草稿”时读取一次 Core
     // 已提交版本；事实的 before 摘要必须与它对应，不能凭本地时间/正文猜。
-    let fallback_receipt = if chain_receipt.is_none()
+    let fallback_receipt: Option<ChapterVersionDto> = if chain_receipt.is_none()
         && !super::super::chapter_draft::draft_state_initialized(
             &projects_root,
             &command.project_id,
@@ -239,39 +270,22 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
             Ok(opened)
                 if opened.version.content_sha256 == command.input.before_text_sha256 =>
             {
-                Some((
-                    opened.version.object_generation,
-                    opened.version.revision,
-                    opened.version.content_sha256,
-                ))
+                Some(opened.version)
             }
             _ => None,
         }
     } else {
         None
     };
-    let effective_base = match chain_receipt.as_ref() {
-        Some(receipt)
-            if !command.input.before_text_sha256.is_empty()
-                && receipt.content_sha256 == command.input.before_text_sha256 =>
-        {
-            (
-                receipt.object_generation.as_str(),
-                receipt.revision,
-                receipt.content_sha256.as_str(),
-            )
-        }
-        _ => match fallback_receipt.as_ref() {
-            Some((generation, revision, sha256)) => {
-                (generation.as_str(), *revision, sha256.as_str())
-            }
-            None => (
-                command.base_generation.as_str(),
-                command.base_revision,
-                command.base_sha256.as_str(),
-            ),
-        },
-    };
+    let effective_base = new_draft_base(
+        chain_receipt.as_ref().or(fallback_receipt.as_ref()),
+        Some(command.input.before_text_sha256.as_str()),
+        (
+            command.base_generation.as_str(),
+            command.base_revision,
+            command.base_sha256.as_str(),
+        ),
+    );
     if let Err(error) = super::super::chapter_draft::spool_failed_input(
         &projects_root,
         &command.project_id,
@@ -282,7 +296,7 @@ pub(super) fn handle_record_fact(state: &mut ChapterSaveWorkerState, command: Ch
         revision,
         &event_id,
         &input_json,
-        effective_base,
+        (&effective_base.0, effective_base.1, effective_base.2.as_str()),
     ) {
         // Issue #1069：原始事实没有落盘就不能继续投影——一旦投影被写成
         // 事实文件，它就成了不可从 spool 恢复的唯一副本。立即停止，并把
@@ -467,32 +481,25 @@ pub(super) fn handle_draft_text(
         take_draft_text_snapshot(&command.context, &command.project_id, &command.chapter_id)
     {
         force |= snapshot.force;
-        // Issue #1069：新草稿的 base 以 worker 已确认回执为准。QML 在回执到达前
-        // 仍会带旧 committedChapter*；同一 generation 且回执确实前进时，编辑器
-        // 正文就是那次保存的续写，不能把新草稿建到旧版本上。
+        // Issue #1069：新草稿的 base 由 `new_draft_base` 统一计算（与
+        // `handle_record_fact` 同一处）。QML 在回执到达前仍会带旧
+        // committedChapter*；同一 generation 且回执确实前进时，编辑器正文就是
+        // 那次保存的续写，不能把新草稿建到旧版本上；否则保留快照里的本地 base。
         let chain_receipt = state.chain_receipt_for(
             &command.context,
             &command.project_id,
             &command.chapter_id,
             snapshot.session_id,
         );
-        let effective_base = match chain_receipt.as_ref() {
-            Some(receipt)
-                if receipt.object_generation == snapshot.generation
-                    && receipt.revision > snapshot.base_revision =>
-            {
-                (
-                    receipt.object_generation.as_str(),
-                    receipt.revision,
-                    receipt.content_sha256.as_str(),
-                )
-            }
-            _ => (
+        let effective_base = new_draft_base(
+            chain_receipt.as_ref(),
+            None,
+            (
                 snapshot.base_generation.as_str(),
                 snapshot.base_revision,
                 snapshot.base_sha256.as_str(),
             ),
-        };
+        );
         // base 只在草稿状态未初始化时生效；之后由 Core durable receipt /
         // pending-ack 推进（见 chapter_draft::note_text）。
         super::super::chapter_draft::note_text(
@@ -505,7 +512,7 @@ pub(super) fn handle_draft_text(
             snapshot.text.clone(),
             snapshot.revision,
             &snapshot.sha256,
-            effective_base,
+            (&effective_base.0, effective_base.1, effective_base.2.as_str()),
             snapshot.editor_base_revision,
         );
         log::debug!(
