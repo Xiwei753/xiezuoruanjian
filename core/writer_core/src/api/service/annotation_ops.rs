@@ -666,8 +666,7 @@ impl WriterCoreApi {
         let store = self.annotation_store(&project_id)?;
         let before = store
             .get_tag(&tag_id)
-            .ok()
-            .flatten()
+            .map_err(WriterError::from)?
             .filter(|tag| tag.deleted_at_ms.is_none())
             .map(|tag| Self::annotation_snapshot(tag.updated_at_ms.to_string(), tag.name));
         let paths = store
@@ -708,14 +707,12 @@ impl WriterCoreApi {
         let store = self.annotation_store(&project_id)?;
         let source_before = store
             .get_tag(&source_tag_id)
-            .ok()
-            .flatten()
+            .map_err(WriterError::from)?
             .filter(|tag| tag.deleted_at_ms.is_none())
             .map(|tag| Self::annotation_snapshot(tag.updated_at_ms.to_string(), tag.name.clone()));
         let target_before = store
             .get_tag(&target_tag_id)
-            .ok()
-            .flatten()
+            .map_err(WriterError::from)?
             .filter(|tag| tag.deleted_at_ms.is_none())
             .map(|tag| Self::annotation_snapshot(tag.updated_at_ms.to_string(), tag.name));
         let paths = store
@@ -730,8 +727,7 @@ impl WriterCoreApi {
         if changed {
             let target_after = store
                 .get_tag(&target_tag_id)
-                .ok()
-                .flatten()
+                .map_err(WriterError::from)?
                 .filter(|tag| tag.deleted_at_ms.is_none())
                 .map(|tag| Self::annotation_snapshot(tag.updated_at_ms.to_string(), tag.name));
             let context = crate::writing_stats::current_mutation_context();
@@ -1352,8 +1348,7 @@ impl WriterCoreApi {
         let store = self.annotation_store(&project_id)?;
         let before = store
             .get_named_entry(&entry_id)
-            .ok()
-            .flatten()
+            .map_err(WriterError::from)?
             .filter(|entry| entry.deleted_at_ms.is_none())
             .map(|entry| {
                 Self::annotation_snapshot(entry.updated_at_ms.to_string(), entry.canonical_name)
@@ -1647,30 +1642,26 @@ impl WriterCoreApi {
         }
         // Canvas-instance links are owned by their canvas's store, which may be
         // the global store even when the UI is working inside a project.
+        // 选 store 的读取结果就是删除前的真实旧值，直接复用，不重新读一遍。
         let project_store = self.annotation_store(&project_id)?;
-        let store = if project_store
+        let project_link = project_store
             .get_link(&link_id)
-            .map_err(WriterError::from)?
-            .is_some()
-        {
-            project_store
+            .map_err(WriterError::from)?;
+        let (store, existing_link) = if project_link.is_some() {
+            (project_store, project_link)
         } else {
             let global_store = self.global_annotation_store();
-            if global_store
+            let global_link = global_store
                 .get_link(&link_id)
-                .map_err(WriterError::from)?
-                .is_some()
-            {
-                global_store
+                .map_err(WriterError::from)?;
+            if global_link.is_some() {
+                (global_store, global_link)
             } else {
-                project_store
+                (project_store, None)
             }
         };
         let store_project_id = store.project_id().to_string();
-        let before = store
-            .get_link(&link_id)
-            .ok()
-            .flatten()
+        let before = existing_link
             .filter(|link| link.deleted_at_ms.is_none())
             .map(|link| {
                 Self::annotation_snapshot(

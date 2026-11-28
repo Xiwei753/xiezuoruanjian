@@ -33,8 +33,17 @@ pub enum WriterError {
         reason: String,
     },
     /// 章节正文 base 版本已过期；提交未发布，冲突材料保留在 Core。
-    #[error("Chapter version conflict")]
-    ChapterVersionConflict,
+    ///
+    /// 回执直接携带实际事务 ID 与归档目录，平台端不得按目录 mtime 或正文
+    /// 相等去猜测本次冲突材料。
+    #[error(
+        "chapter version conflict: chapter_id={chapter_id}, transaction_id={transaction_id}, conflict_dir={conflict_dir}"
+    )]
+    ChapterVersionConflict {
+        chapter_id: String,
+        transaction_id: String,
+        conflict_dir: String,
+    },
     /// 显式证明批次不完整；保存未发布正文，调用方可重试同一批。
     #[error("Proof batch incomplete")]
     ProofBatchIncomplete,
@@ -102,7 +111,7 @@ impl WriterError {
             WriterError::VolumeNotFound => "VOLUME_NOT_FOUND",
             WriterError::ChapterNotFound => "CHAPTER_NOT_FOUND",
             WriterError::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
-            WriterError::ChapterVersionConflict => "CHAPTER_VERSION_CONFLICT",
+            WriterError::ChapterVersionConflict { .. } => "CHAPTER_VERSION_CONFLICT",
             WriterError::ProofBatchIncomplete => "PROOF_BATCH_INCOMPLETE",
             WriterError::ProofBatchMismatch(_) => "PROOF_BATCH_MISMATCH",
             WriterError::NotImplemented => "NOT_IMPLEMENTED",
@@ -134,7 +143,7 @@ impl WriterError {
             WriterError::VolumeNotFound => "error.volume_not_found",
             WriterError::ChapterNotFound => "error.chapter_not_found",
             WriterError::EmptyOverwriteBlocked { .. } => "error.empty_overwrite_blocked",
-            WriterError::ChapterVersionConflict => "error.chapter_version_conflict",
+            WriterError::ChapterVersionConflict { .. } => "error.chapter_version_conflict",
             WriterError::ProofBatchIncomplete => "error.proof_batch_incomplete",
             WriterError::ProofBatchMismatch(_) => "error.proof_batch_mismatch",
             WriterError::NotImplemented => "error.not_implemented",
@@ -171,6 +180,15 @@ impl WriterError {
                 m.insert("old_len".into(), old_len.to_string());
                 m.insert("new_len".into(), new_len.to_string());
                 m.insert("reason".into(), reason.clone());
+            }
+            WriterError::ChapterVersionConflict {
+                chapter_id,
+                transaction_id,
+                conflict_dir,
+            } => {
+                m.insert("chapter_id".into(), chapter_id.clone());
+                m.insert("transaction_id".into(), transaction_id.clone());
+                m.insert("conflict_dir".into(), conflict_dir.clone());
             }
             WriterError::InvalidDeleteTarget(detail) => {
                 m.insert("detail".into(), detail.clone());
@@ -253,7 +271,16 @@ impl From<crate::error::Error> for WriterError {
                 new_len: new_len as u32,
                 reason,
             },
-            Error::ChapterVersionConflict { .. } => WriterError::ChapterVersionConflict,
+            Error::ChapterVersionConflict {
+                chapter_id,
+                transaction_id,
+                conflict_dir,
+                ..
+            } => WriterError::ChapterVersionConflict {
+                chapter_id,
+                transaction_id,
+                conflict_dir,
+            },
             Error::ProofBatchIncomplete { .. } => WriterError::ProofBatchIncomplete,
             Error::ProofBatchMismatch { detail, .. } => WriterError::ProofBatchMismatch(detail),
             Error::NotImplemented => WriterError::NotImplemented,

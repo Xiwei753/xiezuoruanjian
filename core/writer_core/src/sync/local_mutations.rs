@@ -33,16 +33,21 @@ fn seq_state_path(sync_root: &Path) -> PathBuf {
     sync_root.join(MUTATION_SEQ_PATH)
 }
 
-fn load_seq_state(sync_root: &Path) -> MutationSeqState {
-    match fs::read_to_string(seq_state_path(sync_root)) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|error| {
-            log::warn!(
-                "[sync] mutation seq state unreadable at {}: {error}; falling back to ledger maximum",
-                sync_root.display()
-            );
-            MutationSeqState::default()
+fn load_seq_state(sync_root: &Path) -> crate::error::Result<MutationSeqState> {
+    let path = seq_state_path(sync_root);
+    match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).map_err(|error| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "[sync] mutation seq state corrupt at {}: {error}",
+                path.display()
+            )))
         }),
-        Err(_) => MutationSeqState::default(),
+        // 从未分配过序号是正常状态；其它读错误必须上报，不能当成 0。
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(MutationSeqState::default()),
+        Err(error) => Err(crate::Error::Io(std::io::Error::other(format!(
+            "[sync] mutation seq state unreadable at {}: {error}",
+            path.display()
+        )))),
     }
 }
 
@@ -90,17 +95,12 @@ fn confirmed_watermark(sync_root: &Path) -> u64 {
     highest
 }
 
-/// 当前序号高水位（只读，用于 target 版本指纹）。
-pub(crate) fn seq_high_watermark(sync_root: &Path) -> u64 {
-    load_seq_state(sync_root).high_watermark
-}
-
 /// 预留 count 个序号并**先持久化高水位**，再交给调用方使用。
 fn reserve_sequences(sync_root: &Path, count: usize) -> crate::error::Result<Vec<u64>> {
     if count == 0 {
         return Ok(Vec::new());
     }
-    let mut state = load_seq_state(sync_root);
+    let mut state = load_seq_state(sync_root)?;
     let ledger_max = load_records(sync_root)?
         .iter()
         .map(|record| record.seq)
@@ -123,39 +123,6 @@ fn ledger_write_lock(sync_root: &Path) -> crate::error::Result<crate::storage::W
     let root = crate::storage::WorkspaceWriteLock::current_root()
         .unwrap_or_else(|| sync_root.to_path_buf());
     crate::storage::WorkspaceWriteLock::acquire(&root)
-}
-
-/// 把本次 durable 账本变化投影到 workspace dirty 索引。
-///
-/// 只在能确定 workspace 根时登记；登记失败不阻断业务写入——索引缺失/长度
-/// 不一致会让空闲判据回落到完整路径，不会误报“无待办”。
-fn project_into_dirty_index<F>(sync_root: &Path, update: F)
-where
-    F: FnOnce(&Path, &Path) -> crate::error::Result<()>,
-{
-    if let Err(error) = project_into_dirty_index_strict(sync_root, update) {
-        log::warn!(
-            "[sync] workspace dirty index projection failed for {}: {error}",
-            sync_root.display()
-        );
-    }
-}
-
-/// 严格版索引投影：无法确定 workspace 根或写索引失败都返回 Err。
-///
-/// 恢复责任登记必须用这个版本——不能让一次 best-effort 写决定 durable
-/// 事务是否会被恢复入口发现。
-fn project_into_dirty_index_strict<F>(sync_root: &Path, update: F) -> crate::error::Result<()>
-where
-    F: FnOnce(&Path, &Path) -> crate::error::Result<()>,
-{
-    let app_root = crate::storage::WorkspaceWriteLock::current_root().ok_or_else(|| {
-        crate::Error::Other(format!(
-            "workspace write lock is not held while projecting recovery intent for {}",
-            sync_root.display()
-        ))
-    })?;
-    update(&app_root, sync_root)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -326,9 +293,6 @@ pub(crate) fn mark_recovery_pending(sync_root: &Path, reason: &str) {
             path.display()
         );
     }
-    project_into_dirty_index(sync_root, |app_root, root| {
-        crate::sync::dirty_index::set_recovery(app_root, root, true)
-    });
 }
 
 /// 清除恢复标记（本轮所有重放都成功）。
@@ -342,11 +306,6 @@ pub(crate) fn clear_recovery_pending(sync_root: &Path) {
             path.display()
         ),
     }
-    project_into_dirty_index(sync_root, |app_root, root| {
-        crate::sync::dirty_index::set_recovery(app_root, root, false)?;
-        // 恢复过程可能重建/改写了账本：条目在下次完整快照前不可信。
-        crate::sync::dirty_index::invalidate(app_root, root)
-    });
 }
 
 /// 当前恢复责任的代次；没有责任时返回 `None`。
@@ -483,11 +442,6 @@ pub(crate) fn append_batch(
     let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
     file.write_all(lines.as_bytes())?;
     file.sync_data()?;
-    // 账本落盘后再登记索引：投影失败只会让空闲判据变保守。
-    let appended = fresh.clone();
-    project_into_dirty_index(sync_root, |app_root, root| {
-        crate::sync::dirty_index::record_appended(app_root, root, &appended)
-    });
     Ok(())
 }
 
@@ -503,18 +457,19 @@ pub(crate) fn records_for_committed_paths(
     upserted: &[String],
     deleted: &[String],
     now_ms: i64,
-) -> Vec<LocalMutationRecord> {
+) -> crate::error::Result<Vec<LocalMutationRecord>> {
     let sync_root_text = sync_root.to_string_lossy().into_owned();
     let mut records = Vec::new();
     for rel_path in upserted {
         let path = sync_root.join(rel_path);
-        let Ok(content) = fs::read(&path) else {
-            log::warn!(
-                "[sync] committed object missing after commit; skip mutation: {}",
+        // 已提交的对象必须在账本里有事实：读不到就返回真实 IO 错误，由调用方
+        // 标记恢复待处理，不能静默丢掉这一项（Issue #1066 评论 #7237527352）。
+        let content = fs::read(&path).map_err(|error| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "[sync] committed object missing after commit: {} : {error}",
                 path.display()
-            );
-            continue;
-        };
+            )))
+        })?;
         let (object_type, object_id) = object_identity(rel_path);
         records.push(LocalMutationRecord {
             schema_version: 1,
@@ -552,7 +507,7 @@ pub(crate) fn records_for_committed_paths(
             seq: 0,
         });
     }
-    records
+    Ok(records)
 }
 
 /// 显式修复：把"已落盘但没有进账本"的**内容变化**补成待同步事实。
@@ -804,36 +759,11 @@ fn push_pending_ack(
         revision: revision.map(str::to_string),
         published: published.to_vec(),
     });
-    // 恢复责任先落盘：崩溃窗口里“ack 文件已写、索引未登记”的二次写不能
-    // 决定一笔业务事实是否被发现（评审 #7218195841 第 3 项）。登记失败时
-    // 不写 ack，直接返回错误，由调用方保持未结算。
-    let obligation = crate::sync::dirty_index::RecoveryObligation {
-        kind: "mutation_ack".to_string(),
-        root: crate::sync::dirty_index::root_key(sync_root),
-        transaction_id: format!("{round_id}\u{1f}{kind}\u{1f}{id}"),
-        detail: Some(id.clone()),
-    };
-    project_into_dirty_index_strict(sync_root, |app_root, _root| {
-        crate::sync::dirty_index::record_obligation(app_root, obligation)
-    })?;
     let text = serde_json::to_string(&acks)?;
     crate::storage::atomic_write_string(&pending_ack_path(sync_root), &text)
 }
 
 /// 从确认意图文件里移除一条已经结算成功的意图（按 target + round 精确匹配）。
-/// 清除某一笔 mutation ack 的恢复责任（按 round + target 精确匹配）。
-fn clear_mutation_ack_obligation(
-    sync_root: &Path,
-    round_id: &str,
-    target_kind: &str,
-    target_id: &str,
-) {
-    let transaction_id = format!("{round_id}\u{1f}{target_kind}\u{1f}{target_id}");
-    project_into_dirty_index(sync_root, |app_root, root| {
-        crate::sync::dirty_index::clear_obligation(app_root, "mutation_ack", root, &transaction_id)
-    });
-}
-
 fn remove_pending_ack(
     sync_root: &Path,
     target: &crate::sync::types::SyncTarget,
@@ -857,127 +787,10 @@ fn remove_pending_ack(
                 Err(error)
             }
         })?;
-        clear_mutation_ack_obligation(sync_root, round_id, &kind, &id);
         return Ok(());
     }
     let text = serde_json::to_string(&acks)?;
-    let written = crate::storage::atomic_write_string(&path, &text);
-    if written.is_ok() {
-        clear_mutation_ack_obligation(sync_root, round_id, &kind, &id);
-    }
-    written
-}
-
-/// 重放"已推送但未结算"的确认意图。
-///
-/// 读取、应用、清理都在同一把账本写锁内：否则并发 append 会在"读旧账本 →
-/// 写回压缩结果"之间被覆盖（复审 #3）。
-pub(crate) fn replay_pending_acks(sync_root: &Path) -> crate::error::Result<usize> {
-    replay_pending_acks_filtered(sync_root, None)
-}
-
-/// 只重放指定 round 的确认意图（dirty index 精确定位，不用扫描全部作品）。
-pub(crate) fn replay_pending_acks_for_round(
-    sync_root: &Path,
-    round_id: &str,
-) -> crate::error::Result<usize> {
-    replay_pending_acks_filtered(sync_root, Some(round_id))
-}
-
-fn replay_pending_acks_filtered(
-    sync_root: &Path,
-    round_filter: Option<&str>,
-) -> crate::error::Result<usize> {
-    let _lock = ledger_write_lock(sync_root)?;
-    let mut acks = load_pending_acks(sync_root)?;
-    if acks.entries.is_empty() {
-        return Ok(0);
-    }
-    let mut remaining: Vec<PendingAckEntry> = Vec::new();
-    let mut applied = 0usize;
-    for entry in std::mem::take(&mut acks.entries) {
-        if round_filter.is_some_and(|round| entry.round_id != round) {
-            remaining.push(entry);
-            continue;
-        }
-        let target = if entry.target_kind == "app" {
-            match crate::sync::types::AppDataGroup::from_id(&entry.target_id) {
-                Ok(group) => crate::sync::types::SyncTarget::app_data_group(group),
-                Err(_) => {
-                    log::warn!(
-                        "[sync] dropping pending ack for unknown app group {}",
-                        entry.target_id
-                    );
-                    continue;
-                }
-            }
-        } else {
-            crate::sync::types::SyncTarget::project(&entry.target_id)
-        };
-        match apply_published(sync_root, &target, &entry.published) {
-            Ok(count) => {
-                applied += count;
-                clear_mutation_ack_obligation(
-                    sync_root,
-                    &entry.round_id,
-                    &entry.target_kind,
-                    &entry.target_id,
-                );
-            }
-            Err(error) => {
-                log::warn!(
-                    "[sync] pending mutation ack replay failed for {}:{} (kept): {error}",
-                    entry.target_kind,
-                    entry.target_id
-                );
-                remaining.push(entry);
-            }
-        }
-    }
-    acks.entries = remaining;
-    let path = pending_ack_path(sync_root);
-    let unsettled = acks.entries.len();
-    if acks.entries.is_empty() {
-        let _ = fs::remove_file(path);
-    } else {
-        let text = serde_json::to_string(&acks)?;
-        crate::storage::atomic_write_string(&path, &text)?;
-    }
-    if unsettled > 0 {
-        // 还有未结算的确认意图：调用方必须把它当作"恢复未完成"，不能因为
-        // 其余条目成功就当整轮恢复成功（复审 #7213115893 第 4 项）。
-        return Err(crate::error::Error::Other(format!(
-            "mutation ack replay incomplete: {unsettled} target(s) unsettled"
-        )));
-    }
-    Ok(applied)
-}
-
-/// 远端提交成功后按回执确认 mutation：推进 known_files、记录确认序号、压缩历史前缀。
-///
-/// `published` 必须来自本轮真正成功的远端提交（或经固定远端 tree 证实已一致），
-/// 且每条的 seq/hash 与账本事实完全一致。确认意图先落盘，读取、应用、清理都在
-/// 同一把账本写锁内；任何一步失败都返回错误并保留 durable 未结算状态，由下一轮
-/// 重放（复审 #3）。
-pub(crate) fn mark_confirmed(
-    sync_root: &Path,
-    target: &crate::sync::types::SyncTarget,
-    published: &[PublishedMutation],
-    round_id: &str,
-    revision: Option<&str>,
-) -> crate::error::Result<usize> {
-    if published.is_empty() {
-        return Ok(0);
-    }
-    let _lock = ledger_write_lock(sync_root)?;
-    push_pending_ack(sync_root, target, published, round_id, revision)?;
-    let count = apply_published(sync_root, target, published)?;
-    remove_pending_ack(sync_root, target, round_id)?;
-    let confirmed = published.to_vec();
-    project_into_dirty_index(sync_root, |app_root, root| {
-        crate::sync::dirty_index::record_confirmed(app_root, root, &confirmed)
-    });
-    Ok(count)
+    crate::storage::atomic_write_string(&path, &text)
 }
 
 fn pending_ack_identity(target: &crate::sync::types::SyncTarget) -> (String, String) {

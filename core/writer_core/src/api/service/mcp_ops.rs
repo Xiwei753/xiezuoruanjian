@@ -422,6 +422,7 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         let context = crate::writing_stats::current_mutation_context();
+        let roots_after = Some(crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids);
         self.record_starmap_meta_with_context(
             &context,
             Some(project_id),
@@ -429,61 +430,58 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Create,
             None,
             Some(&meta),
-            crate::starmap::load_index(&self.app_data_root)
-                .ok()
-                .map(|index| index.root_starmap_ids),
+            roots_after,
         )?;
         // 模板可能已经生成节点/边/嵌入/链接，逐个记录来源，保持与
         // `create_starmap` 相同的统计口径。
-        if let Some(graph) = self.get_starmap_graph_snapshot(&meta.starmap_id) {
-            for node in &graph.nodes {
-                self.record_starmap_object_with_context(
-                    &context,
-                    Some(project_id),
-                    &meta.starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapNode,
-                    &node.id,
-                    crate::writing_stats::ContributionOperation::Create,
-                    None,
-                    Some(&graph),
-                )?;
-            }
-            for edge in &graph.edges {
-                self.record_starmap_object_with_context(
-                    &context,
-                    Some(project_id),
-                    &meta.starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapEdge,
-                    &edge.id,
-                    crate::writing_stats::ContributionOperation::Create,
-                    None,
-                    Some(&graph),
-                )?;
-            }
-            for embed in &graph.embeds {
-                self.record_starmap_object_with_context(
-                    &context,
-                    Some(project_id),
-                    &meta.starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapEmbed,
-                    &embed.instance_id,
-                    crate::writing_stats::ContributionOperation::Create,
-                    None,
-                    Some(&graph),
-                )?;
-            }
-            for link in &graph.links {
-                self.record_starmap_object_with_context(
-                    &context,
-                    Some(project_id),
-                    &meta.starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapLink,
-                    &link.link_id,
-                    crate::writing_stats::ContributionOperation::Create,
-                    None,
-                    Some(&graph),
-                )?;
-            }
+        let graph = self.get_starmap_graph_snapshot(&meta.starmap_id)?;
+        for node in &graph.nodes {
+            self.record_starmap_object_with_context(
+                &context,
+                Some(project_id),
+                &meta.starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapNode,
+                &node.id,
+                crate::writing_stats::ContributionOperation::Create,
+                None,
+                Some(&graph),
+            )?;
+        }
+        for edge in &graph.edges {
+            self.record_starmap_object_with_context(
+                &context,
+                Some(project_id),
+                &meta.starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapEdge,
+                &edge.id,
+                crate::writing_stats::ContributionOperation::Create,
+                None,
+                Some(&graph),
+            )?;
+        }
+        for embed in &graph.embeds {
+            self.record_starmap_object_with_context(
+                &context,
+                Some(project_id),
+                &meta.starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapEmbed,
+                &embed.instance_id,
+                crate::writing_stats::ContributionOperation::Create,
+                None,
+                Some(&graph),
+            )?;
+        }
+        for link in &graph.links {
+            self.record_starmap_object_with_context(
+                &context,
+                Some(project_id),
+                &meta.starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapLink,
+                &link.link_id,
+                crate::writing_stats::ContributionOperation::Create,
+                None,
+                Some(&graph),
+            )?;
         }
         self.commit_contribution_batch(&mut contribution_batch)?;
         self.finish_starmap_contribution_transaction(&meta.starmap_id, &mut contribution_txn)?;

@@ -96,8 +96,17 @@ pub fn record_editor_change_stats(
     event_id: &str,
     occurred_at_ms: i64,
 ) -> Result<(), WriterError> {
-    let changes: Vec<writer_core::api::EditorChangeDto> =
-        serde_json::from_str(changes_json).unwrap_or_default();
+    // 旧调用点确实没有 changes（空串）时按空批次处理；非空但 JSON 损坏
+    // 必须返回错误，不能把坏 JSON 当成“没有 changes”进入纯统计。
+    let changes: Vec<writer_core::api::EditorChangeDto> = if changes_json.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(changes_json).map_err(|error| {
+            WriterError::Json(format!(
+                "invalid editor changes_json for {project_id}/{volume_id}/{chapter_id}: {error}"
+            ))
+        })?
+    };
     let input = writer_core::api::EditorChangeStatsInputDto {
         platform: "linux".to_string(),
         project_id: project_id.to_string(),

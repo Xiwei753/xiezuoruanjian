@@ -146,44 +146,77 @@ pub(super) fn mark_pending(project_root: &Path) -> Result<()> {
 }
 
 /// 没有未完成 journal 时移除探针。
+///
+/// 任何目录项/清单读取失败都保留 marker 并返回真实错误：探针用于恢复入口
+/// 判断是否有未完成事务，猜测的“已完成”会让 journal 永远不被重放。
 fn clear_pending_if_idle(project_root: &Path) -> Result<()> {
     let root = journal_root(project_root);
     let marker = pending_marker(project_root);
-    if !marker.exists() {
-        return Ok(());
+    match fs::metadata(&marker) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to inspect chapter commit pending marker {}: {error}",
+                marker.display()
+            )))
+        }
     }
     let mut unfinished = false;
-    if let Ok(entries) = fs::read_dir(&root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let manifest_path = path.join("manifest.json");
-            if !manifest_path.exists() {
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let manifest_path = entry.path().join("manifest.json");
+        let content = match fs::read_to_string(&manifest_path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // 事务目录尚未写出清单：仍未完成，保留 marker。
                 unfinished = true;
                 break;
             }
-            match fs::read_to_string(&manifest_path)
-                .ok()
-                .and_then(|raw| serde_json::from_str::<ChapterCommitManifest>(&raw).ok())
-            {
-                Some(manifest)
-                    if matches!(
-                        manifest.phase,
-                        ChapterCommitPhase::Finished
-                            | ChapterCommitPhase::Superseded
-                            | ChapterCommitPhase::Prepared
-                    ) => {}
-                _ => {
-                    unfinished = true;
-                    break;
-                }
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to read chapter commit manifest {}: {error}",
+                    manifest_path.display()
+                )))
+            }
+        };
+        match serde_json::from_str::<ChapterCommitManifest>(&content) {
+            Ok(manifest)
+                if matches!(
+                    manifest.phase,
+                    ChapterCommitPhase::Finished
+                        | ChapterCommitPhase::Superseded
+                        | ChapterCommitPhase::Prepared
+                ) => {}
+            Ok(_) => {
+                unfinished = true;
+                break;
+            }
+            Err(error) => {
+                // 损坏清单无法证明已结束，保留 marker 等恢复入口处理。
+                log::warn!(
+                    "chapter commit manifest {} is corrupt, keeping pending marker: {error}",
+                    manifest_path.display()
+                );
+                unfinished = true;
+                break;
             }
         }
     }
     if !unfinished {
-        let _ = fs::remove_file(marker);
+        match fs::remove_file(&marker) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to remove chapter commit pending marker {}: {error}",
+                    marker.display()
+                )))
+            }
+        }
     }
     Ok(())
 }
@@ -194,11 +227,36 @@ pub(super) fn read_current(
 ) -> Result<(Chapter, String, ChapterVersion)> {
     let meta_path = key.meta_path(project_root);
     let body_path = key.body_path(project_root);
-    if !meta_path.exists() || !body_path.exists() {
-        return Err(Error::ChapterNotFound);
-    }
-    let meta: Chapter = serde_json::from_str(&fs::read_to_string(&meta_path)?)?;
-    let content = fs::read_to_string(&body_path)?;
+    let meta_content = match fs::read_to_string(&meta_path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Error::ChapterNotFound)
+        }
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to read chapter meta {}: {error}",
+                meta_path.display()
+            )))
+        }
+    };
+    let content = match fs::read_to_string(&body_path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Error::ChapterNotFound)
+        }
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to read chapter body {}: {error}",
+                body_path.display()
+            )))
+        }
+    };
+    let meta: Chapter = serde_json::from_str(&meta_content).map_err(|error| {
+        Error::Other(format!(
+            "invalid chapter meta {}: {error}",
+            meta_path.display()
+        ))
+    })?;
     let version = ChapterVersion {
         object_generation: meta.object_generation.clone(),
         revision: meta.revision,
@@ -256,7 +314,7 @@ fn recover_pending_for_read(
     project_root: &Path,
 ) -> Result<()> {
     if pending_marker(project_root).exists() {
-        let _ = recover_pending_chapter_commits(project_root)?;
+        recover_pending_chapter_commits(project_root)?;
     }
     Ok(())
 }
@@ -561,6 +619,7 @@ pub(crate) fn commit_chapter_with_guard(
                 key,
                 expected: Some(expected.clone()),
                 actual: before,
+                transaction_id,
                 conflict_dir,
             }));
         }
@@ -794,6 +853,7 @@ pub(crate) fn commit_chapter_with_guard(
             key,
             expected: request.expected,
             actual: before,
+            transaction_id,
             conflict_dir,
         }));
     }
@@ -808,7 +868,6 @@ pub(crate) fn commit_chapter_with_guard(
     if sync_projected && pending.is_empty() && manifest.draft_ack_projections.is_empty() {
         manifest.phase = ChapterCommitPhase::Finished;
         write_manifest(&tx_dir, &manifest)?;
-        clear_projection_obligation(project_root, &manifest.transaction_id);
         let _ = remove_transaction_dir(&tx_dir);
         clear_pending_if_idle(project_root)?;
     } else {
@@ -816,11 +875,9 @@ pub(crate) fn commit_chapter_with_guard(
         pending.sort();
         pending.dedup();
         manifest.pending_projections = pending.clone();
-        // 先登记恢复意图、再写 journal：崩溃在两次写之间时恢复入口仍能找到
-        // 这笔事务；意图写失败会让索引回到未校准状态，由完整发现兜底。
-        record_projection_obligation(project_root, &manifest.transaction_id);
+        // journal 本身就是这笔事务的 durable 恢复入口：写失败直接返回，
+        // 由调用方保留事务目录。
         if let Err(error) = write_manifest(&tx_dir, &manifest) {
-            clear_projection_obligation(project_root, &manifest.transaction_id);
             return Err(error);
         }
     }
@@ -942,41 +999,4 @@ fn build_chapter_sync_mutations(
         });
     }
     plans
-}
-
-/// 登记“这笔 journal 还有未完成同步投影”的恢复责任。
-pub(crate) fn record_projection_obligation(project_root: &Path, transaction_id: &str) {
-    let Some(app_root) = crate::storage::WorkspaceWriteLock::current_root() else {
-        return;
-    };
-    let obligation = crate::sync::dirty_index::RecoveryObligation {
-        kind: "chapter_projections".to_string(),
-        root: crate::sync::dirty_index::root_key(project_root),
-        transaction_id: transaction_id.to_string(),
-        detail: None,
-    };
-    if let Err(error) = crate::sync::dirty_index::record_obligation(&app_root, obligation) {
-        log::warn!("[sync] cannot record chapter projection obligation: {error}");
-        if let Err(error) = crate::sync::dirty_index::invalidate_recovery_calibration(&app_root) {
-            log::warn!("[sync] cannot invalidate recovery calibration: {error}");
-        }
-    }
-}
-
-/// 投影/事务完成后按原事务身份结算恢复责任。
-pub(crate) fn clear_projection_obligation(project_root: &Path, transaction_id: &str) {
-    let Some(app_root) = crate::storage::WorkspaceWriteLock::current_root() else {
-        return;
-    };
-    if let Err(error) = crate::sync::dirty_index::clear_obligation(
-        &app_root,
-        "chapter_projections",
-        project_root,
-        transaction_id,
-    ) {
-        log::warn!("[sync] cannot clear chapter projection obligation: {error}");
-        if let Err(error) = crate::sync::dirty_index::invalidate_recovery_calibration(&app_root) {
-            log::warn!("[sync] cannot invalidate recovery calibration: {error}");
-        }
-    }
 }

@@ -16,8 +16,8 @@
 // 冲突语义：Core 的 `save_chapter_content_versioned` 在 base 版本不匹配时
 // 不发布正文，并把 base/local/incoming 三方材料写到
 // `<project_root>/app-meta/chapter-commits/conflicts/<transaction_id>/`。
-// 因此冲突正文（本次快照的 incoming.md）在返回 CHAPTER_VERSION_CONFLICT 时
-// 已经持久化；这里额外只做只读定位，把材料目录回给 QML 便于提示/排查，
+// Core 的 CHAPTER_VERSION_CONFLICT 回执 params 直接携带真实 transactionId 与
+// conflictDir；这里只把回执路径转给 QML，不按目录 mtime/正文相等猜测材料，
 // 不复制正文、不维护第二套冲突状态。
 // =============================================================================
 
@@ -25,17 +25,15 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use writer_core::api::types::{ChapterSaveReceiptDto, ChapterVersionDto};
 use writer_core::api::WriterCoreApi;
 use writer_core::storage::git_repo_layout::GitRepoLayout;
 
-use conflict_material::find_conflict_material;
 use worker::chapter_save_worker_loop;
 use worker::ChapterSaveWorkerState;
 
-mod conflict_material;
 mod core_ack;
 mod draft_jobs;
 mod kept_draft;
@@ -310,8 +308,6 @@ const MAX_RETAINED_RESULTS: usize = 128;
 /// worker 为每个（项目, 章节）保留一条 base 链；限制条数，避免长会话里把
 /// 每章正文都留在内存。
 const MAX_CHAPTER_CHAINS: usize = 64;
-/// 冲突材料定位的时间窗口：只看本轮保存刚写入的材料目录。
-pub(super) const CONFLICT_MATERIAL_WINDOW: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChapterSaveState {

@@ -184,41 +184,23 @@ impl crate::facade::WriterCore {
         config: &crate::sync::SyncConfig,
         secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
-        self.create_sync_provider_inner(config, secrets, true)
-    }
-
-    /// generation GC maintenance 等维护路径的 provider factory。
-    ///
-    /// 与 [`create_sync_provider_for_plan`] 的区别：transport 初始化失败时**只返回
-    /// Err，不调用 `persist_full_sync_early_failure`**，不触碰磁盘
-    /// `FullSyncState`。维护失败只能作为维护错误，不能把用户同步的终态重新写成
-    /// 失败（Issue #779 评论 5854912227）。
-    pub fn create_sync_provider_for_maintenance(
-        &self,
-        config: &crate::sync::SyncConfig,
-        secrets: &crate::sync::SyncSecrets,
-    ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
-        self.create_sync_provider_inner(config, secrets, false)
+        self.create_sync_provider_inner(config, secrets)
     }
 
     /// provider 构造内部实现。
     ///
-    /// `persist_preflight_failure`：
-    /// - `true`：用户同步路径，transport 初始化失败时调
-    ///   `persist_full_sync_early_failure(status, "preflight")` 持久化失败状态；
-    /// - `false`：维护路径（GC maintenance 等），transport 初始化失败只返回 Err，
-    ///   不触碰 `FullSyncState`。
+    /// transport 初始化失败时调 `persist_full_sync_early_failure(status, "preflight")`
+    /// 持久化失败状态。
     pub(crate) fn create_sync_provider_inner(
         &self,
         config: &crate::sync::SyncConfig,
         secrets: &crate::sync::SyncSecrets,
-        persist_preflight_failure: bool,
     ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
         let create_github_api = |provider_config: &crate::sync::provider::ProviderConfig| {
             #[cfg(feature = "github-api")]
             {
                 let transport =
-                    self.init_sync_transport_with_optional_persist(persist_preflight_failure)?;
+                    self.init_sync_transport_with_persist()?;
                 let crate::sync::provider::ProviderConfig::GitHub(github_config) = provider_config
                 else {
                     return Err(crate::Error::Other(
@@ -299,38 +281,28 @@ impl crate::facade::WriterCore {
         )
     }
 
-    /// 初始化 sync transport，可选持久化 preflight 失败状态。
-    ///
-    /// `persist_preflight_failure = true`（用户同步路径）：失败时调
-    /// `persist_full_sync_early_failure(status, "preflight")` 持久化失败状态；
-    /// `false`（维护路径）：只返回 Err，不触碰 `FullSyncState`。
+    /// 初始化 sync transport；失败时持久化 preflight 失败状态（用户同步路径）。
     #[cfg(feature = "github-api")]
-    fn init_sync_transport_with_optional_persist(
+    fn init_sync_transport_with_persist(
         &self,
-        persist_preflight_failure: bool,
     ) -> crate::error::Result<std::sync::Arc<dyn writer_platform_api::SyncTransport>> {
-        let transport_result = self.init_sync_transport();
-        if persist_preflight_failure {
-            transport_result.inspect_err(|err| {
-                let status = crate::sync::full_sync::error_to_persist_status(err);
-                let category = {
-                    let category = err.sync_category();
-                    if category.is_empty() {
-                        "other"
-                    } else {
-                        category
-                    }
-                };
-                self.persist_full_sync_early_failure_typed(
-                    status,
-                    "github_api_fallback_init",
-                    category,
-                    "github_api_fallback_init",
-                    &err.to_string(),
-                );
-            })
-        } else {
-            transport_result
-        }
+        self.init_sync_transport().inspect_err(|err| {
+            let status = crate::sync::full_sync::error_to_persist_status(err);
+            let category = {
+                let category = err.sync_category();
+                if category.is_empty() {
+                    "other"
+                } else {
+                    category
+                }
+            };
+            self.persist_full_sync_early_failure_typed(
+                status,
+                "github_api_fallback_init",
+                category,
+                "github_api_fallback_init",
+                &err.to_string(),
+            );
+        })
     }
 }

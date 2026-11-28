@@ -192,34 +192,7 @@ pub(super) fn handle_restore_project(
     let mut reported_unreadable: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
     let mut give_up: std::collections::BTreeSet<String> = blocked_chapters.clone();
-    // Issue #1062 评论 #7214283385（附带 P1）：不再用固定 8 轮当终止条件。
-    // 本轮启动时冻结可见事务集合，轮数上界由真实工作量派生；每轮至少推进
-    // 一份 retry 或把失败章节记为 Deferred，真正的终止由“未处理候选为空”
-    // 决定（见下方 remaining 检查）。
-    let frozen_candidates =
-        super::restore_coordinator::retry_snapshot(&projects_root, &command.project_id)
-            .values()
-            .map(std::collections::BTreeSet::len)
-            .sum::<usize>()
-            + super::super::chapter_draft::discover_project_drafts(
-                &projects_root,
-                &command.project_id,
-            )
-            .map(|discovery| discovery.drafts.len() + discovery.unreadable.len())
-            .unwrap_or_default();
-    let max_rounds = frozen_candidates.saturating_add(2);
-    let mut round = 0usize;
     loop {
-        round = round.saturating_add(1);
-        if round > max_rounds {
-            counters.note(
-                "",
-                format!(
-                    "restore queue covered frozen candidates (rounds={max_rounds}, remaining kept)"
-                ),
-            );
-            break;
-        }
         super::restore_coordinator::materialize_pending_retries(
             &projects_root,
             &command.project_id,

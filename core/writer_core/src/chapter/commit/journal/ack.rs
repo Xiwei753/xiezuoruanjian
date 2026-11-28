@@ -43,7 +43,6 @@ pub fn mark_chapter_commit_projection(
     }
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
-        super::clear_projection_obligation(project_root, &manifest.transaction_id);
         let _ = remove_transaction_dir(&tx_dir);
         clear_pending_if_idle(project_root)?;
         return Ok(true);
@@ -89,7 +88,6 @@ pub fn mark_chapter_commit_draft_ack(
     }
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
-        super::clear_projection_obligation(project_root, &manifest.transaction_id);
         let _ = remove_transaction_dir(&tx_dir);
         clear_pending_if_idle(project_root)?;
         return Ok(true);

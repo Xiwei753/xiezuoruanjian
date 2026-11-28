@@ -68,3 +68,76 @@ impl DurableObjectDecision {
         matches!(self.origin, DecisionOrigin::Local | DecisionOrigin::Merged)
     }
 }
+
+/// 从"本轮提交阶段确定要发布的本地上传/删除"构造不可变对象决议。
+///
+/// 上传内容当场读取一次并冻结；之后发布只使用决议里的字节。`base_hash` 来自
+/// 已确认基线（known_files），`final_hash` 来自刚读取的内容。没有对应文件的
+/// 上传路径（提交与发布之间被删除）不产生决议，留待下一轮重新比较。
+pub(crate) fn local_publish_decisions(
+    live_root: &std::path::Path,
+    group: Option<&crate::sync::types::AppDataGroup>,
+    uploads: &[std::path::PathBuf],
+    deletes: &[std::path::PathBuf],
+) -> Vec<DurableObjectDecision> {
+    let state = match group {
+        Some(group) => crate::sync::SyncService::load_sync_state_read_only_for_group(
+            live_root, group, None,
+        ),
+        None => crate::sync::SyncService::load_sync_state_read_only(live_root, None),
+    }
+    .ok();
+    let known = state
+        .as_ref()
+        .map(|state| state.known_files.clone())
+        .unwrap_or_default();
+    let identity_of = |path: &std::path::Path| -> Option<String> {
+        let identity = path.to_string_lossy().replace('\\', "/");
+        (!identity.is_empty()).then_some(identity)
+    };
+
+    let mut decisions = Vec::new();
+    for path in uploads {
+        let Some(identity) = identity_of(path) else {
+            continue;
+        };
+        let Ok(content) = std::fs::read(live_root.join(&identity)) else {
+            log::warn!(
+                "[sync] local publish decision skipped: committed object unreadable {}",
+                identity
+            );
+            continue;
+        };
+        let final_hash = crate::sync::hash::content_md5(&content);
+        decisions.push(DurableObjectDecision {
+            transaction_id: String::new(),
+            identity: identity.clone(),
+            op: DecisionOp::Upsert,
+            base_hash: known.get(&identity).cloned(),
+            final_hash,
+            final_version: None,
+            mutation_seq: 0,
+            origin: DecisionOrigin::Local,
+            content: Some(content),
+            dependencies: Vec::new(),
+        });
+    }
+    for path in deletes {
+        let Some(identity) = identity_of(path) else {
+            continue;
+        };
+        decisions.push(DurableObjectDecision {
+            transaction_id: String::new(),
+            identity: identity.clone(),
+            op: DecisionOp::Delete,
+            base_hash: known.get(&identity).cloned(),
+            final_hash: String::new(),
+            final_version: None,
+            mutation_seq: 0,
+            origin: DecisionOrigin::Local,
+            content: None,
+            dependencies: Vec::new(),
+        });
+    }
+    decisions
+}

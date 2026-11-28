@@ -7,14 +7,25 @@ use super::model::*;
 /// 扫描事务目录，恢复未完成的事务，并保留所有无法判定的事务错误。
 ///
 /// 与 [`recover_pending_transactions`] 相比，本函数不会吞掉 manifest 读/解析
-/// 失败：证明意图恢复必须知道“事务状态未知”，不能在未知时删除意图。
+/// 失败：调用方必须知道“事务状态未知”，不能在未知时清理事务材料。
 /// 每笔错误都绑定到具体事务（[`TransactionRecoveryError`]），调用方不能靠
 /// 字符串猜测错误属于哪笔事务。
 pub(crate) fn scan_pending_transactions(target_root: &Path) -> TransactionRecoveryScan {
     let tx_base = target_root.join(TRANSACTIONS_DIR);
     let mut scan = TransactionRecoveryScan::default();
-    if !tx_base.exists() {
-        return scan;
+    match fs::metadata(&tx_base) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return scan,
+        Err(error) => {
+            scan.errors.push(TransactionRecoveryError {
+                transaction_id: None,
+                message: format!(
+                    "inspect transaction dir {} failed: {error}",
+                    tx_base.display()
+                ),
+            });
+            return scan;
+        }
     }
 
     let entries = match fs::read_dir(&tx_base) {
@@ -120,103 +131,69 @@ fn recover_transaction_dir(
         .map(ToString::to_string);
     let manifest_path = tx_dir.join(MANIFEST_FILENAME);
 
-    if manifest_path.exists() {
-        let manifest: TransactionManifest = match fs::read_to_string(&manifest_path) {
-            Ok(s) => match serde_json::from_str(&s) {
-                Ok(m) => m,
-                Err(e) => {
-                    let message = format!(
-                        "[transaction] recover: manifest parse failed for tx_dir={}: {} \
-                         — preserving tx_dir, will retry next startup",
-                        tx_dir.display(),
-                        e
-                    );
-                    log::warn!("{message}");
-                    record_scan_error(scan, dir_transaction_id, message);
-                    return;
-                }
-            },
-            Err(e) => {
+    // 清单是否存在必须由真实读取判定：NotFound 才是“从未决议”，其它
+    // 读取错误代表事务状态未知，保留目录并记录错误。
+    let manifest = match fs::read_to_string(&manifest_path) {
+        Ok(raw) => match serde_json::from_str::<TransactionManifest>(&raw) {
+            Ok(manifest) => Some(manifest),
+            Err(error) => {
                 let message = format!(
-                    "[transaction] recover: manifest read failed for tx_dir={}: {} \
+                    "[transaction] recover: manifest parse failed for tx_dir={}: {error} \
                      — preserving tx_dir, will retry next startup",
-                    tx_dir.display(),
-                    e
-                );
-                log::warn!("{message}");
-                record_scan_error(scan, dir_transaction_id, message);
-                return;
-            }
-        };
-
-        match manifest.phase {
-            TransactionPhase::RolledBack => {
-                let _ = fs::remove_dir_all(&tx_dir);
-                return;
-            }
-            TransactionPhase::FilesCommitted | TransactionPhase::Finished
-                if manifest.proof_intent_ids.is_empty() =>
-            {
-                let _ = fs::remove_dir_all(&tx_dir);
-                return;
-            }
-            TransactionPhase::FilesCommitted | TransactionPhase::Finished => {
-                // 正文已提交，但绑定的证明意图尚未写入证明事件链；
-                // 保留 manifest 供 proof_intent recovery 依据 phase 补记。
-                scan.transactions.push(TransactionRecovery {
-                    transaction_id: manifest.transaction_id,
-                    recovered_files: Vec::new(),
-                    missing_files: Vec::new(),
-                    phase: manifest.phase,
-                    proof_intent_ids: manifest.proof_intent_ids,
-                    tx_dir,
-                    target_root: target_root.to_path_buf(),
-                });
-                return;
-            }
-            TransactionPhase::Prepared => {
-                // Prepared 阶段：先完整预检，再重放 rename/delete。
-            }
-        }
-    } else {
-        // 没有 manifest 时没有可重放的 rename 材料；commit marker 只说明
-        // 文件事务曾经提交过，保留目录没有额外恢复价值。
-        if tx_dir.join(COMMIT_MARKER).exists() {
-            let _ = fs::remove_dir_all(&tx_dir);
-            return;
-        }
-        let _ = fs::remove_dir_all(&tx_dir);
-        return;
-    }
-
-    // Prepared 阶段恢复：重新读取 manifest，避免使用上面只读了一部分的状态。
-    let manifest: TransactionManifest = match fs::read_to_string(&manifest_path) {
-        Ok(s) => match serde_json::from_str(&s) {
-            Ok(m) => m,
-            Err(e) => {
-                let message = format!(
-                    "[transaction] recover: manifest re-read parse failed for tx_dir={}: {} \
-                     — preserving tx_dir, will retry next startup",
-                    tx_dir.display(),
-                    e
+                    tx_dir.display()
                 );
                 log::warn!("{message}");
                 record_scan_error(scan, dir_transaction_id, message);
                 return;
             }
         },
-        Err(e) => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
             let message = format!(
-                "[transaction] recover: manifest re-read failed for tx_dir={}: {} \
+                "[transaction] recover: manifest read failed for tx_dir={}: {error} \
                  — preserving tx_dir, will retry next startup",
-                tx_dir.display(),
-                e
+                tx_dir.display()
             );
             log::warn!("{message}");
             record_scan_error(scan, dir_transaction_id, message);
             return;
         }
     };
+    let Some(manifest) = manifest else {
+        // 清单从未落盘：事务未决议，live 从未被修改，目录没有恢复材料。
+        if let Err(error) = fs::remove_dir_all(&tx_dir) {
+            log::warn!(
+                "failed to clean undecided transaction dir {}: {error}",
+                tx_dir.display()
+            );
+        }
+        return;
+    };
+
+    match manifest.phase {
+        TransactionPhase::RolledBack => {
+            if let Err(error) = fs::remove_dir_all(&tx_dir) {
+                log::warn!(
+                    "failed to clean rolled-back transaction dir {}: {error}",
+                    tx_dir.display()
+                );
+            }
+            return;
+        }
+        TransactionPhase::FilesCommitted | TransactionPhase::Finished => {
+            // 正文已提交，事务目录没有其它需要保留的恢复材料。
+            if let Err(error) = fs::remove_dir_all(&tx_dir) {
+                log::warn!(
+                    "failed to clean committed transaction dir {}: {error}",
+                    tx_dir.display()
+                );
+            }
+            return;
+        }
+        TransactionPhase::Prepared => {
+            // Prepared 阶段：先完整预检，再重放 rename/delete。
+        }
+    }
 
     let outcome = match recover_prepared_files(target_root, &tx_dir, &manifest) {
         Ok(outcome) => outcome,
@@ -241,7 +218,6 @@ fn recover_transaction_dir(
                 recovered_files: Vec::new(),
                 missing_files: conflict.affected_paths,
                 phase: TransactionPhase::Prepared,
-                proof_intent_ids: manifest.proof_intent_ids,
                 tx_dir,
                 target_root: target_root.to_path_buf(),
             });
@@ -258,64 +234,30 @@ fn recover_transaction_dir(
         );
     }
 
-    let phase = if manifest.proof_intent_ids.is_empty() {
-        if missing_files.is_empty() {
-            // 全部条目重放成功，事务可判定完成，manifest/staging 不再需要。
-            let _ = fs::remove_dir_all(&tx_dir);
-        } else {
-            // 无 proof intent 不等于恢复完成。只要有条目重放失败，staged 文件
-            // 与 manifest 就是唯一的恢复依据，必须保留 Prepared 目录供下次
-            // 启动继续幂等重放。
+    // 正文事务不再链接证明意图：全部条目重放成功即完成，事务目录可清理；
+    // 只要有条目重放失败，staging/manifest 是唯一恢复依据，必须保留重试。
+    if missing_files.is_empty() {
+        // 全部条目重放成功，事务可判定完成，manifest/staging 不再需要。
+        if let Err(error) = fs::remove_dir_all(&tx_dir) {
             log::warn!(
-                "[transaction] recover: tx={} has {} unreplayed file(s), \
-                 preserving Prepared manifest and staging for retry",
-                manifest.transaction_id,
-                missing_files.len()
+                "failed to clean replayed transaction dir {}: {error}",
+                tx_dir.display()
             );
         }
-        TransactionPhase::Prepared
-    } else if missing_files.is_empty() {
-        let mut restored = manifest.clone();
-        restored.phase = TransactionPhase::FilesCommitted;
-        match serde_json::to_string_pretty(&restored)
-            .map_err(crate::Error::from)
-            .and_then(|json| crate::storage::atomic_write_string(&manifest_path, &json))
-        {
-            Ok(()) => {
-                scan.transactions.push(TransactionRecovery {
-                    transaction_id: restored.transaction_id,
-                    recovered_files,
-                    missing_files,
-                    phase: TransactionPhase::FilesCommitted,
-                    proof_intent_ids: restored.proof_intent_ids,
-                    tx_dir,
-                    target_root: target_root.to_path_buf(),
-                });
-                return;
-            }
-            Err(error) => {
-                let message = format!(
-                    "[transaction] recover: persist FilesCommitted failed for tx={} at {}: {error}",
-                    manifest.transaction_id,
-                    tx_dir.display()
-                );
-                log::warn!("{message}");
-                record_scan_error(scan, Some(manifest.transaction_id.clone()), message);
-                TransactionPhase::Prepared
-            }
-        }
     } else {
-        // 重放材料不完整，不能宣称事务已提交；保留 Prepared 目录，让证明
-        // 恢复保留意图并等待下一次启动重试。
-        TransactionPhase::Prepared
-    };
+        log::warn!(
+            "[transaction] recover: tx={} has {} unreplayed file(s), \
+             preserving Prepared manifest and staging for retry",
+            manifest.transaction_id,
+            missing_files.len()
+        );
+    }
 
     scan.transactions.push(TransactionRecovery {
         transaction_id: manifest.transaction_id,
         recovered_files,
         missing_files,
-        phase,
-        proof_intent_ids: manifest.proof_intent_ids,
+        phase: TransactionPhase::Prepared,
         tx_dir,
         target_root: target_root.to_path_buf(),
     });

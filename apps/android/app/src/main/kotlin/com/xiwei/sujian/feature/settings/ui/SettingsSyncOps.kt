@@ -93,7 +93,19 @@ private suspend fun SettingsViewModel.runCommandTransaction(
     try {
         // #595 五：事务结束后一次性刷新完整同步 profile 状态。
         refreshSyncProfileState()
-    } catch (_: Exception) {
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // 刷新失败必须走现有同步结果展示，不能让旧 profile 冒充刷新成功。
+        _uiState.update {
+            it.copy(
+                syncResult = StructuredSyncResult(
+                    statusCode = SYNC_STATUS_ERROR,
+                    messageKey = MSG_UNEXPECTED_ERROR,
+                    sanitizedDiagnostic = e.message,
+                ),
+            )
+        }
     }
 }
 
@@ -255,7 +267,19 @@ suspend fun SettingsViewModel.executeDiagnosticsTransaction(
                 secureStorageWarning = refreshedWarning,
             )
         }
-    } catch (_: Exception) {
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // 能力/安全存储状态刷新失败走现有同步结果展示，不静默保留旧值。
+        _uiState.update {
+            it.copy(
+                syncResult = StructuredSyncResult(
+                    statusCode = SYNC_STATUS_ERROR,
+                    messageKey = MSG_UNEXPECTED_ERROR,
+                    sanitizedDiagnostic = e.message,
+                ),
+            )
+        }
     }
 }
 

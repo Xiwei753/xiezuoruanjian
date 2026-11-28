@@ -1,7 +1,7 @@
 //! Transfer phase — execute sync for each planned target and collect results.
 //!
-//! Contains `run_transfer`（兼容入口，给旧测试用）和 `run_single_target_transfer`
-//! （新编排入口，每个 target 独立执行，不调用 `persist_unresolved_conflicts_early`）。
+//! `run_single_target_transfer`：每个 target 独立执行（Transfer 只下载，不持锁、
+//! 不写 live）。
 //! 所有 helpers live in `transfer_helpers.rs`.
 
 use crate::sync::cancellation_token::{SyncCancellationToken, SyncProgressSink};
@@ -12,220 +12,7 @@ use crate::sync::types::{
 
 use super::transfer_cleanup::transfer_remote_cleanup_project;
 use super::transfer_helpers::*;
-use super::{FullSyncPlan, FullSyncTransferResult};
-
-/// 执行 Transfer 阶段：对 plan 中每个 target 调对应同步函数，收集结果。
-///
-///   CAS — 执行破坏性动作前重新读远端 catalog 确认 winner。
-///
-/// 本函数是纯函数 — 不接触 `WriterCore`、不持锁、不写 `FullSyncState`。
-///
-/// `cancellation_token`：平台层持有的取消令牌。在每次 target 迭代开头检查
-/// `is_cancelled()`，如果已取消则 break 并返回已收集的结果（已完成的 targets +
-/// 剩余的标记为 cancelled/skipped）。
-///
-/// `progress_sink`：可选的进度 sink（Issue #763）。在 target 开始/结束时写入当前
-/// target 的 remote_prefix / project_id / phase / finished / total，供诊断包导出时
-/// 读取实时进度。`None` 时不产生任何进度更新。
-///
-/// `target_progress`：可选的 #762 callback。每个 target Transfer 完成后回调一次，
-/// 平台层据此实时刷新冲突状态。生产路径（`perform_full_sync_with_provider`）的
-/// callback 在 Commit 之后调，不在此处调；本参数仅供兼容入口 `run_transfer` 的
-/// 旧测试用。
-#[allow(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    clippy::excessive_nesting
-)]
-pub fn run_transfer(
-    provider: &dyn SyncProvider,
-    plan: &FullSyncPlan,
-    cancellation_token: Option<&SyncCancellationToken>,
-    progress_sink: Option<&SyncProgressSink>,
-    target_progress: Option<&super::SyncProgressCallback>,
-) -> FullSyncTransferResult {
-    if !plan.sync_policy.enabled {
-        log::debug!("[sync] run_transfer: sync disabled — returning no-op");
-        return FullSyncTransferResult {
-            targets: Vec::new(),
-            generation_gc_result: None,
-        };
-    }
-
-    let mut catalog_snapshot = plan.remote_catalog_snapshot.clone();
-
-    let total_targets = u32::try_from(plan.targets.len()).unwrap_or(u32::MAX);
-    let mut targets = Vec::with_capacity(plan.targets.len());
-    for target_index in 0..plan.targets.len() {
-        // Issue #729：每次 target 迭代开头检查取消令牌。
-        // 已取消则 break，已完成的 targets 保留，剩余的不执行。
-        if let Some(token) = cancellation_token {
-            if token.is_cancelled() {
-                log::info!(
-                    "[sync] run_transfer: cancellation requested — breaking after {} targets",
-                    targets.len()
-                );
-                break;
-            }
-        }
-
-        let planned = &plan.targets[target_index];
-
-        // Issue #763：target 开始时写入进度 sink。
-        if let Some(sink) = progress_sink {
-            let finished = u32::try_from(target_index).unwrap_or(u32::MAX);
-            sink.update_target_start(
-                &planned.target.remote_prefix,
-                planned.project_id.as_deref(),
-                "transfer",
-                finished,
-                total_targets,
-            );
-        }
-
-        // 与生产编排共用同一个单 target 入口，不复制 dispatch。
-        let Some((target_result, _resolution, _action)) = run_single_target_transfer(
-            provider,
-            plan,
-            target_index,
-            &mut catalog_snapshot,
-            cancellation_token,
-            &targets,
-            progress_sink.and_then(SyncProgressSink::operation_id),
-        ) else {
-            // 取消（或索引越界）→ 停止本轮，已完成的 targets 保留。
-            break;
-        };
-
-        // Issue #763：target 结束时写入进度 sink（phase 清空表示该 target 已完成）。
-        if let Some(sink) = progress_sink {
-            let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
-            sink.update_target_finish(
-                &planned.target.remote_prefix,
-                planned.project_id.as_deref(),
-                finished,
-                total_targets,
-            );
-        }
-
-        // 每个 target 完成后立即回调 progress，平台层据此实时刷新冲突状态，
-        // 不必等最终 FullSyncResult。
-        // 注意：本回调是"Transfer 后"而非"Commit 后"——`run_transfer` 是兼容入口
-        // 不做 Commit。生产路径的 callback 在 `perform_full_sync_with_provider` 的
-        // Commit 之后调，不经过此处。
-        if let Some(cb) = target_progress {
-            let progress_status =
-                crate::api::types::sync_status_to_wire(&target_result.result.status);
-            let progress_conflict_count =
-                u32::try_from(target_result.result.conflicts.len()).unwrap_or(u32::MAX);
-            cb(super::SyncTargetProgress {
-                project_id: target_result.project_id.clone(),
-                target_kind: target_result.target_kind.clone(),
-                status: progress_status,
-                conflict_count: progress_conflict_count,
-            });
-        }
-
-        targets.push(target_result);
-    }
-
-    // generation GC — 清理未引用 generation。
-    // Issue #729：generation GC 循环前检查取消令牌，取消则跳过整个 GC。
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let mut generation_gc_result: Option<Result<(), String>> = None;
-    if let Some(token) = cancellation_token {
-        if token.is_cancelled() {
-            log::info!("[sync] run_transfer: cancellation requested — skipping generation GC");
-            return FullSyncTransferResult {
-                targets,
-                generation_gc_result: None,
-            };
-        }
-    }
-    // Issue #763 评论 5831610228：generation GC 阶段不再在循环前用 set_phase 写死 phase，
-    // 改为在循环内每处理一个 planned target 时用 set_target_phase 更新 remote_prefix /
-    // project_id / phase，避免残留最后一个 Transfer target 导致诊断包指错作品。
-    for planned in &plan.targets {
-        // Issue #729：generation GC 循环内每个 target 前检查取消令牌。
-        if let Some(token) = cancellation_token {
-            if token.is_cancelled() {
-                log::info!(
-                    "[sync] run_transfer: cancellation requested during generation GC — breaking"
-                );
-                break;
-            }
-        }
-        // Issue #763 评论 5831610228：generation GC 循环里每处理一个 planned，
-        // 都更新 sink 的 target 信息，避免残留最后一个 Transfer target 指错作品。
-        if let Some(sink) = progress_sink {
-            sink.set_target_phase(
-                &planned.target.remote_prefix,
-                planned.project_id.as_deref(),
-                "generation_gc",
-            );
-        }
-        if planned.target.remote_prefix.starts_with("projects/") {
-            let active_generation = crate::sync::target_lifecycle::find_record(
-                &catalog_snapshot.catalog,
-                &planned.target.remote_prefix,
-            )
-            .and_then(|r| r.active_generation.as_deref());
-            match crate::sync::generation_gc::run_generation_gc(
-                provider,
-                &planned.target.remote_prefix,
-                active_generation,
-                now_ms,
-                crate::sync::generation_gc::GENERATION_RETENTION_MS,
-                cancellation_token,
-            ) {
-                Ok(()) => {}
-                Err(e) => {
-                    log::warn!(
-                        "[sync] run_transfer: generation GC failed for {}: {e}",
-                        planned.target.remote_prefix
-                    );
-                    generation_gc_result = Some(Err(e.to_string()));
-                }
-            }
-        }
-    }
-
-    FullSyncTransferResult {
-        targets,
-        generation_gc_result,
-    }
-}
-
-/// Build the completion table for planned StarMap graph groups, keyed by the
-/// BARE starmap id stored in `StarMapIndexRecord`. `AppDataGroup::id()` returns
-/// `starmap:<id>` and must only be used to look up target results.
-fn build_starmap_group_completion(
-    plan: &FullSyncPlan,
-    completed_targets: &[TargetSyncResult],
-) -> std::collections::HashMap<String, bool> {
-    use crate::sync::types::AppDataGroup;
-
-    let mut completion = std::collections::HashMap::new();
-    for candidate in &plan.targets {
-        let Some(group @ AppDataGroup::Starmap(starmap_id)) = &candidate.target.app_group else {
-            continue;
-        };
-        let group_id = group.id();
-        let completed = completed_targets
-            .iter()
-            .find(|result| result.group_id.as_deref() == Some(group_id.as_str()))
-            .is_some_and(|result| {
-                matches!(
-                    &result.result.status,
-                    crate::sync::SyncStatus::Success
-                        | crate::sync::SyncStatus::NoChanges
-                        | crate::sync::SyncStatus::LatestWinsApplied
-                )
-            });
-        completion.insert(starmap_id.clone(), completed);
-    }
-    completion
-}
+use super::FullSyncPlan;
 
 /// 执行单个 target 的 Transfer — 新编排入口。
 ///
@@ -283,53 +70,19 @@ pub fn run_single_target_transfer(
 
     let planned = &plan.targets[target_index];
 
-    // StarmapIndex publication is checked inside `transfer_app_data_group`
-    // against the FINAL merged index. Build the bare-id completion table here;
-    // `AppDataGroup::id()` uses the separate `starmap:<id>` namespace.
-    let starmap_group_completion = if matches!(
-        planned.target.app_group.as_ref(),
-        Some(crate::sync::types::AppDataGroup::StarmapIndex)
-    ) {
-        build_starmap_group_completion(plan, completed_targets)
-    } else {
-        std::collections::HashMap::new()
-    };
-
     let (result, resolution, action) = match planned.target_kind {
-        PlannedTargetKind::App => {
-            let sync_root = planned
-                .staging_root
-                .as_deref()
-                .unwrap_or(&planned.local_root);
-            let r = if planned.target.app_group.is_some() {
-                transfer_app_data_group(
-                    provider,
-                    sync_root,
-                    &plan.sync_policy,
-                    &planned.target,
-                    plan.force_sync,
-                    cancellation_token,
-                    &starmap_group_completion,
-                )
-            } else {
-                run_single_target(
-                    provider,
-                    sync_root,
-                    &plan.sync_policy,
-                    &planned.target,
-                    plan.force_sync,
-                    cancellation_token,
-                )
-            };
-            (r, None, None)
-        }
-        PlannedTargetKind::LiveProject => transfer_live_project(
-            provider,
-            planned,
-            catalog_snapshot,
-            plan,
-            cancellation_token,
-            diagnostic_operation_id,
+        // 普通 App 数据组与作品都走同一条对象增量传输：远端固定 HEAD 的对象索引
+        // 里与本机基线/内容不同的对象才下载，业务裁决统一留给提交阶段。
+        PlannedTargetKind::App | PlannedTargetKind::LiveProject => (
+            transfer_object_scope(
+                provider,
+                &planned.target,
+                &planned.local_root,
+                planned.staging_root.as_deref(),
+                cancellation_token,
+            ),
+            None,
+            None,
         ),
         PlannedTargetKind::DeleteLocalProject => {
             transfer_delete_local_project(provider, planned, plan, cancellation_token)

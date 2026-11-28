@@ -460,41 +460,59 @@ impl SyncedResultIndex {
 
 /// 加载一个章节在当前 mode + scanner 稳定身份下的全部记录。
 ///
-/// 目录或文件缺失、JSON 损坏、版本不符、身份不匹配都跳过；本函数不返回错误，
-/// 让恢复路径保持只读且可降级。
+/// 目录不存在、版本不符、身份不匹配都按“没有可用记录”略过；真实的目录/
+/// 文件读取或 JSON 损坏返回带路径错误，由调用方按现有缓存失效入口重建，
+/// 不能静默当成“未检查”重扫整个章节。
 pub(crate) fn load_records(
     project_root: &Path,
     project_id: &str,
     chapter_id: &str,
     mode: &str,
     scanner_stable: &str,
-) -> Vec<SyncedCorrectionRecord> {
+) -> crate::Result<Vec<SyncedCorrectionRecord>> {
     let Some(dir) = chapter_records_dir(project_root, chapter_id) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
-    let mut paths = entries
-        .filter_map(std::result::Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "json")
-        })
-        .collect::<Vec<_>>();
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|error| {
+        crate::Error::Other(format!(
+            "failed to read synced correction records dir {}: {error}",
+            dir.display()
+        ))
+    })? {
+        let entry = entry.map_err(|error| {
+            crate::Error::Other(format!(
+                "failed to read synced correction record entry in {}: {error}",
+                dir.display()
+            ))
+        })?;
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            paths.push(path);
+        }
+    }
     paths.sort();
     let mut records = Vec::new();
     for path in paths {
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(record) = serde_json::from_str::<SyncedCorrectionRecord>(&content) else {
-            continue;
-        };
+        let content = std::fs::read_to_string(&path).map_err(|error| {
+            crate::Error::Other(format!(
+                "failed to read synced correction record {}: {error}",
+                path.display()
+            ))
+        })?;
+        let record: SyncedCorrectionRecord = serde_json::from_str(&content).map_err(|error| {
+            crate::Error::Other(format!(
+                "corrupt synced correction record {}: {error}",
+                path.display()
+            ))
+        })?;
         let Some(file_key) = path.file_stem().and_then(|stem| stem.to_str()) else {
             continue;
         };
+        // 版本/项目/章节/模式/扫描器身份不匹配都是正常的缓存失效，略过。
         if record.schema_version != SCHEMA_VERSION
             || !record.checked
             || record.project_id != project_id
@@ -507,7 +525,7 @@ pub(crate) fn load_records(
         }
         records.push(record);
     }
-    records
+    Ok(records)
 }
 
 /// 显式作品级回收：删除一个章节的全部同步记录文件。

@@ -1,52 +1,246 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::writing_stats::projection::CurrentWritingSpeed;
 use crate::writing_stats::{DateRange, EventSource, WritingInputEvent};
 
 use serde_json::Value;
 
+/// 已移除的同步证明意图目录（相对 app_data_root）。
+const LEGACY_SYNC_PROOF_DIR: &str = "stats/proof-intents";
+/// 一次性迁移后的归档目录。
+const LEGACY_SYNC_PROOF_MIGRATED_DIR: &str = "stats/proof-intents-migrated";
+
+/// 旧同步证明意图记录。字段与 Issue #1008 的意图文件一致。
+#[derive(serde::Deserialize)]
+struct LegacySyncProofRecord {
+    #[serde(default)]
+    format_version: u32,
+    event_id: String,
+    project_id: String,
+    volume_id: String,
+    chapter_id: String,
+    #[serde(default)]
+    action: String,
+    before_text: Option<String>,
+    after_text: Option<String>,
+    #[serde(default)]
+    source_device_id: String,
+    #[serde(default)]
+    occurred_at_ms: i64,
+}
+
+/// 旧意图对应的正文提交状态。只有能确认已提交的记录才补记证明。
+enum LegacySyncProofLiveState {
+    Committed,
+    Uncommitted,
+    Unknown,
+}
+
 impl super::WriterCore {
-    /// `stats/proof-intents` 绝对路径。
-    pub(crate) fn sync_proof_intent_root(&self) -> std::path::PathBuf {
-        self.app_data_root
-            .join(crate::sync::proof_intent::PROOF_INTENTS_DIR)
-    }
-
-    pub(crate) fn sync_proof_intents_pending(&self) -> bool {
-        self.proof_intents_pending
-            .load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    pub(crate) fn refresh_sync_proof_intents_pending(&self) {
-        let root = self.sync_proof_intent_root();
-        let pending = match crate::sync::proof_intent::refresh_pending(&root) {
-            Ok(()) => crate::sync::proof_intent::has_pending(&root),
-            Err(error) => {
-                log::warn!("[proof_intent] 刷新待恢复标志失败: {error}");
-                true
-            }
-        };
-        self.proof_intents_pending
-            .store(pending, std::sync::atomic::Ordering::Release);
-    }
-
-    /// 扫描并补记所有未完成的同步证明意图，返回本轮可复用的恢复状态。
+    /// 一次性迁移旧 `stats/proof-intents` 记录到现有正文证明链。
     ///
-    /// 一次同步只调用一次：状态里同时包含已落盘事件集合和按项目可过滤的
-    /// 未完成问题，后续每个 target 不需要重新扫描/解压全部历史事件。
-    pub(crate) fn recover_pending_sync_proof_state(
-        &self,
-    ) -> Result<crate::sync::proof_intent::ProofRecoveryState> {
-        let state = crate::sync::proof_intent::recover_pending_state(self)?;
-        self.refresh_sync_proof_intents_pending();
-        Ok(state)
+    /// 同步不再维护独立的正文证明意图与恢复状态机。旧目录中未结算的记录在
+    /// 启动时按现有正文证明写入入口 [`Self::record_sync_content_change_at`]
+    /// 补记；原文件移入 `stats/proof-intents-migrated` 保留。无法确认正文
+    /// 是否已提交（或同步后又被编辑）的记录不伪造证明、不删除，只记录日志。
+    pub(crate) fn migrate_legacy_sync_proof_records(&self) -> Result<()> {
+        let root = self.app_data_root.join(LEGACY_SYNC_PROOF_DIR);
+        if !root.is_dir() {
+            return Ok(());
+        }
+        let archive_root = self.app_data_root.join(LEGACY_SYNC_PROOF_MIGRATED_DIR);
+        let mut records = Vec::new();
+        for entry in std::fs::read_dir(&root)? {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    log::warn!("[sync-proof-migration] 读取旧证明目录项失败: {error}");
+                    continue;
+                }
+            };
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let parsed = std::fs::read_to_string(&path)
+                .map_err(crate::Error::from)
+                .and_then(|text| {
+                    serde_json::from_str::<LegacySyncProofRecord>(&text)
+                        .map_err(crate::Error::from)
+                });
+            match parsed {
+                Ok(record) if record.format_version == 1 && !record.event_id.is_empty() => {
+                    records.push((path, record));
+                }
+                Ok(record) => {
+                    log::warn!(
+                        "[sync-proof-migration] 旧证明记录格式不受支持，保留原文件 {}: format_version={}",
+                        path.display(),
+                        record.format_version
+                    );
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[sync-proof-migration] 旧证明记录无法读取，保留原文件 {}: {error}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        if records.is_empty() {
+            return Ok(());
+        }
+        let event_ids: std::collections::HashSet<String> = records
+            .iter()
+            .map(|(_, record)| record.event_id.clone())
+            .collect();
+        let persisted = self
+            .get_stats_api()
+            .store()
+            .find_events_by_ids(&event_ids)?;
+        let mut transferred = 0usize;
+        let mut archived = 0usize;
+        let mut unconfirmed = 0usize;
+        let mut retained = 0usize;
+        for (path, record) in records {
+            if persisted.contains_key(&record.event_id) {
+                if move_legacy_sync_proof_record(&path, &archive_root) {
+                    archived += 1;
+                } else {
+                    retained += 1;
+                }
+                continue;
+            }
+            match legacy_sync_proof_live_state(self, &record) {
+                LegacySyncProofLiveState::Committed => {
+                    match self.record_sync_content_change_at(
+                        &record.project_id,
+                        &record.volume_id,
+                        &record.chapter_id,
+                        record.before_text.as_deref(),
+                        record.after_text.as_deref(),
+                        &record.event_id,
+                        &record.source_device_id,
+                        "",
+                        record.occurred_at_ms,
+                    ) {
+                        Ok(_) => {
+                            transferred += 1;
+                            if !move_legacy_sync_proof_record(&path, &archive_root) {
+                                retained += 1;
+                            }
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "[sync-proof-migration] 旧证明记录转入正文证明失败，保留原文件 {}: {error}",
+                                path.display()
+                            );
+                            retained += 1;
+                        }
+                    }
+                }
+                LegacySyncProofLiveState::Uncommitted => {
+                    log::warn!(
+                        "[sync-proof-migration] 旧证明记录对应正文未提交，不补记证明，归档 {}",
+                        path.display()
+                    );
+                    if move_legacy_sync_proof_record(&path, &archive_root) {
+                        unconfirmed += 1;
+                    } else {
+                        retained += 1;
+                    }
+                }
+                LegacySyncProofLiveState::Unknown => {
+                    log::warn!(
+                        "[sync-proof-migration] 无法确认旧证明记录对应的正文提交，保留原文件 {}",
+                        path.display()
+                    );
+                    retained += 1;
+                }
+            }
+        }
+        let marker = root.join(".pending");
+        if marker.is_file() {
+            if let Err(error) = std::fs::remove_file(&marker) {
+                log::warn!("[sync-proof-migration] 删除旧待恢复标记失败: {error}");
+            }
+        }
+        log::warn!(
+            "[sync-proof-migration] 旧同步证明记录迁移完成: 补记={transferred} 已落盘归档={archived} 未提交归档={unconfirmed} 保留={retained}，来源 {}",
+            root.display()
+        );
+        Ok(())
     }
+}
 
-    /// 扫描并补记所有未完成的同步证明意图。返回本次完成（补记或确认已存在）
-    /// 的意图数量。单个意图失败只记录错误，不阻断后续意图。
-    pub(crate) fn recover_pending_sync_proof_intents(&self) -> Result<usize> {
-        Ok(self.recover_pending_sync_proof_state()?.recovered())
+fn legacy_sync_proof_live_state(
+    core: &super::WriterCore,
+    record: &LegacySyncProofRecord,
+) -> LegacySyncProofLiveState {
+    let live_path = core
+        .projects_root()
+        .join(&record.project_id)
+        .join("volumes")
+        .join(&record.volume_id)
+        .join("chapters")
+        .join(&record.chapter_id)
+        .join("chapter.md");
+    let live = match std::fs::read_to_string(&live_path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return LegacySyncProofLiveState::Unknown,
+    };
+    match record.action.as_str() {
+        "delete" => match live {
+            None => LegacySyncProofLiveState::Committed,
+            Some(text) if record.before_text.as_deref() == Some(text.as_str()) => {
+                LegacySyncProofLiveState::Uncommitted
+            }
+            Some(_) => LegacySyncProofLiveState::Unknown,
+        },
+        "apply" => match live {
+            Some(text) => {
+                if record.after_text.as_deref() == Some(text.as_str()) {
+                    LegacySyncProofLiveState::Committed
+                } else if record.before_text.as_deref() == Some(text.as_str()) {
+                    LegacySyncProofLiveState::Uncommitted
+                } else {
+                    LegacySyncProofLiveState::Unknown
+                }
+            }
+            None => LegacySyncProofLiveState::Unknown,
+        },
+        _ => LegacySyncProofLiveState::Unknown,
     }
+}
 
+fn move_legacy_sync_proof_record(
+    path: &std::path::Path,
+    archive_root: &std::path::Path,
+) -> bool {
+    let Some(file_name) = path.file_name() else {
+        return false;
+    };
+    if let Err(error) = std::fs::create_dir_all(archive_root) {
+        log::warn!(
+            "[sync-proof-migration] 创建归档目录失败 {}: {error}",
+            archive_root.display()
+        );
+        return false;
+    }
+    let target = archive_root.join(file_name);
+    match std::fs::rename(path, &target) {
+        Ok(()) => true,
+        Err(error) => {
+            log::warn!(
+                "[sync-proof-migration] 归档旧证明记录失败 {}: {error}",
+                path.display()
+            );
+            false
+        }
+    }
+}
+
+impl super::WriterCore {
     /// 按章节回放证明事件，返回目标时刻的正文/选区与校验结果。
     pub fn replay_chapter_proof(
         &self,
@@ -118,8 +312,7 @@ impl super::WriterCore {
         &self,
         input: &crate::api::EditorChangeStatsInputDto,
     ) -> Result<()> {
-        // 编辑热路径不再扫描整个工作区的同步证明意图：恢复只在工作区打开、
-        // 启动和同步开始时各做一次，避免每次按键都枚举目录。
+        // 编辑热路径只追加统计/证明事件，不扫描工作区目录。
 
         if input.changes.is_empty() {
             return self.record_editor_change_stats(
@@ -141,7 +334,7 @@ impl super::WriterCore {
         // 证明事件先留在 Core，随下一次正文提交写入同一 durable journal。
         // 只有 journal 决议成功后才允许写统计/证明，链头不能超越已提交正文。
         let key = self.pending_proof_key(&input.project_id, &input.volume_id, &input.chapter_id);
-        self.enqueue_pending_editor_proof(key, projection);
+        self.enqueue_pending_editor_proof(key, projection)?;
         Ok(())
     }
 
@@ -281,23 +474,27 @@ impl super::WriterCore {
         &self,
         key: String,
         projection: crate::chapter::ChapterProofProjection,
-    ) {
-        if let Ok(mut pending) = self.pending_editor_proof.lock() {
-            let events = pending.entry(key).or_default();
-            if events
-                .iter()
-                .any(|existing| existing.event_id() == projection.event_id())
-            {
-                return;
-            }
-            let mut projection = projection;
-            // 基线正文只对本章第一条待提交事件保留，避免每条编辑都把整章正文
-            // 复制进内存/journal。
-            if !events.is_empty() {
-                projection.baseline_text = None;
-            }
-            events.push(projection);
+    ) -> Result<()> {
+        let mut pending = self.pending_editor_proof.lock().map_err(|error| {
+            Error::Other(format!(
+                "pending editor proof queue lock failed while enqueueing: {error}"
+            ))
+        })?;
+        let events = pending.entry(key).or_default();
+        if events
+            .iter()
+            .any(|existing| existing.event_id() == projection.event_id())
+        {
+            return Ok(());
         }
+        let mut projection = projection;
+        // 基线正文只对本章第一条待提交事件保留，避免每条编辑都把整章正文
+        // 复制进内存/journal。
+        if !events.is_empty() {
+            projection.baseline_text = None;
+        }
+        events.push(projection);
+        Ok(())
     }
 
     fn pending_proof_key(&self, project_id: &str, volume_id: &str, chapter_id: &str) -> String {
@@ -313,13 +510,14 @@ impl super::WriterCore {
         project_id: &str,
         volume_id: &str,
         chapter_id: &str,
-    ) -> Vec<crate::chapter::ChapterProofProjection> {
+    ) -> Result<Vec<crate::chapter::ChapterProofProjection>> {
         let key = self.pending_proof_key(project_id, volume_id, chapter_id);
-        self.pending_editor_proof
-            .lock()
-            .ok()
-            .and_then(|pending| pending.get(&key).cloned())
-            .unwrap_or_default()
+        let pending = self.pending_editor_proof.lock().map_err(|error| {
+            Error::Other(format!(
+                "pending editor proof queue lock failed while reading: {error}"
+            ))
+        })?;
+        Ok(pending.get(&key).cloned().unwrap_or_default())
     }
 
     pub(crate) fn clear_pending_editor_proof(
@@ -328,25 +526,39 @@ impl super::WriterCore {
         volume_id: &str,
         chapter_id: &str,
         event_ids: &std::collections::HashSet<String>,
-    ) {
+    ) -> Result<()> {
         let key = self.pending_proof_key(project_id, volume_id, chapter_id);
-        if let Ok(mut pending) = self.pending_editor_proof.lock() {
-            if let Some(events) = pending.get_mut(&key) {
-                events.retain(|event| !event_ids.contains(event.event_id()));
-                if events.is_empty() {
-                    pending.remove(&key);
-                }
+        let mut pending = self.pending_editor_proof.lock().map_err(|error| {
+            Error::Other(format!(
+                "pending editor proof queue lock failed while clearing: {error}"
+            ))
+        })?;
+        if let Some(events) = pending.get_mut(&key) {
+            events.retain(|event| !event_ids.contains(event.event_id()));
+            if events.is_empty() {
+                pending.remove(&key);
             }
         }
+        Ok(())
     }
 
     /// 启动/工作区打开时补写 journal 中滞留的正文证明投影。
     /// 只扫描确实存在 journal 的作品；普通打开章节不触发。
     pub fn recover_pending_chapter_proof_projections(&self) -> Result<()> {
-        let Ok(entries) = std::fs::read_dir(&self.projects_root) else {
-            return Ok(());
-        };
-        for entry in entries.flatten() {
+        let entries = std::fs::read_dir(&self.projects_root).map_err(|error| {
+            Error::Other(format!(
+                "failed to scan projects root {} for pending chapter proofs: {error}",
+                self.projects_root.display()
+            ))
+        })?;
+        let mut failures: Vec<String> = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                Error::Other(format!(
+                    "failed to read projects root {} entry: {error}",
+                    self.projects_root.display()
+                ))
+            })?;
             let project_root = entry.path();
             if !project_root.is_dir() {
                 continue;
@@ -355,10 +567,9 @@ impl super::WriterCore {
                 match crate::chapter::commit::recover_pending_chapter_commits(&project_root) {
                     Ok(recovered) => recovered,
                     Err(error) => {
-                        log::warn!(
-                            "chapter commit recovery failed for {}: {error}",
-                            project_root.display()
-                        );
+                        // 真实待恢复事项保留在 journal 中，并把失败带回启动错误，
+                        // 不能只记日志后报告恢复成功。
+                        failures.push(format!("{}: {error}", project_root.display()));
                         continue;
                     }
                 };
@@ -366,30 +577,57 @@ impl super::WriterCore {
                 if item.superseded || item.pending_projections.is_empty() {
                     continue;
                 }
-                self.apply_pending_chapter_proof(&project_root, &item.transaction_id);
+                if !self.apply_pending_chapter_proof(&project_root, &item.transaction_id) {
+                    failures.push(format!(
+                        "{}: pending proof projection not durable for transaction {}",
+                        project_root.display(),
+                        item.transaction_id
+                    ));
+                }
             }
         }
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Other(format!(
+                "chapter proof recovery incomplete: {}",
+                failures.join("; ")
+            )))
+        }
     }
 
     /// 重试当前项目内所有已发布但未确认的证明投影。保存/清空前调用，
     /// 避免一次投影失败要等下次启动才恢复。
-    pub(crate) fn retry_pending_chapter_proof_projections(&self, project_root: &std::path::Path) {
-        let Ok(transactions) =
-            crate::chapter::commit::pending_chapter_proof_transactions(project_root)
-        else {
-            return;
-        };
+    pub(crate) fn retry_pending_chapter_proof_projections(
+        &self,
+        project_root: &std::path::Path,
+    ) -> Result<()> {
+        let transactions =
+            crate::chapter::commit::pending_chapter_proof_transactions(project_root)?;
         // 同一章前序 journal 投影失败时，后续 journal 不能越过它；其他章
         // 仍继续结算。进程内失败集只用于本轮，durable journal 仍是事实来源。
         let mut blocked_chapters = std::collections::HashSet::new();
+        let mut failures: Vec<String> = Vec::new();
         for transaction in transactions {
             if blocked_chapters.contains(&transaction.key) {
                 continue;
             }
             if !self.apply_pending_chapter_proof(project_root, &transaction.transaction_id) {
                 blocked_chapters.insert(transaction.key.clone());
+                failures.push(format!(
+                    "{}: proof projection not durable for transaction {}",
+                    project_root.display(),
+                    transaction.transaction_id
+                ));
             }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Other(format!(
+                "chapter proof retry incomplete: {}",
+                failures.join("; ")
+            )))
         }
     }
 
@@ -546,8 +784,8 @@ impl super::WriterCore {
         )
     }
 
-    /// 带稳定事件时间的同步证明写入。崩溃恢复必须复用意图日志里的原始时间，
-    /// 否则跨 UTC 日会落到另一个事件分区，幂等判断也会失效。
+    /// 带稳定事件时间的同步证明写入。恢复与一次性迁移必须复用事务或旧记录
+    /// 里的原始时间，否则跨 UTC 日会落到另一个事件分区，幂等判断也会失效。
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_lines)]
     pub(crate) fn record_sync_content_change_at(
@@ -831,7 +1069,7 @@ impl super::WriterCore {
     ) -> Result<()> {
         use crate::editor::EditorTransactionCause;
 
-        // 同上：统计事件写入不触发全工作区证明恢复，证明链不会越写越慢。
+        // 同上：统计事件写入只追加事件，不做全工作区扫描。
 
         // 设备身份由 Core 读/建，不让平台端传；平台初始化注入的稳定 ID 优先。
         let platform = self.effective_platform(platform_str);

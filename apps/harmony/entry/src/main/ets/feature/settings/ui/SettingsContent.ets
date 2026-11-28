@@ -510,11 +510,7 @@ export struct SettingsContent {
   }
 
   private showLocateToast(message: string): void {
-    try {
-      promptAction.showToast({ message: message })
-    } catch (_e) {
-      // Toast 失败不影响分类展开本身。
-    }
+    promptAction.showToast({ message: message })
   }
 
   private settingItemId(settingKey: string): string {
@@ -918,11 +914,7 @@ export struct SettingsContent {
 
   // Issue #952：设置页同步入口 Toast（合并进后台自动任务时的进行中/结果反馈）。
   private showSyncEntryToast(message: string): void {
-    try {
-      promptAction.showToast({ message: message })
-    } catch (_e) {
-      // Toast 失败不影响同步结果本身。
-    }
+    promptAction.showToast({ message: message })
   }
 
   // 从 Core 全局冲突列表取真实剩余数；拉取失败保持旧值（-1 时退回同步结果判断）。

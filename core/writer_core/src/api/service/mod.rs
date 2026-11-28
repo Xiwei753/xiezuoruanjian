@@ -141,25 +141,21 @@ impl WriterCoreApi {
         if let Err(error) = core.set_platform_identity(device_id, platform) {
             log::error!("[writing_stats] 纠正设备平台身份失败: {error}");
         }
-        // 先完成正文 journal 决议与证明投影，再处理旧同步证明意图；后者
-        // 可能依赖已提交正文版本，顺序不能反过来。
+        // 先完成正文 journal 决议与证明投影，再把已移除的同步证明意图机制留下
+        // 的旧记录一次性迁入现有正文证明链。
         if let Err(error) = core.recover_pending_chapter_proof_projections() {
             eprintln!("[writing_stats] 启动恢复正文证明投影失败: {error}");
         }
-        // 应用启动、平台注入稳定设备身份后，立即补记上次进程留下的同步证明
-        // 意图；此时解析出的来源分区与本次编辑事件一致。
-        if core.sync_proof_intents_pending() {
-            if let Err(error) = core.recover_pending_sync_proof_intents() {
-                eprintln!("[writing_stats] 启动恢复同步证明意图失败: {error}");
-            }
+        if let Err(error) = core.migrate_legacy_sync_proof_records() {
+            eprintln!("[writing_stats] 旧同步证明记录迁移失败: {error}");
         }
     }
 
-    /// 纯内存注入平台身份，不执行磁盘 I/O 或同步证明恢复。
+    /// 纯内存注入平台身份，不执行磁盘 I/O 或正文证明迁移。
     ///
     /// 供热路径构造临时 API 时使用：只设置内存中的 `preferred_device_id`
     /// 和 `preferred_platform`，不触发 `reconcile_platform_identity`
-    /// 或 `recover_pending_sync_proof_intents`。
+    /// 或旧同步证明记录迁移。
     pub(crate) fn set_platform_identity_memory(
         &self,
         device_id: &str,
@@ -308,14 +304,27 @@ impl WriterCoreApi {
                 .filter(|(_, deleting)| *deleting)
                 .map(|(path, _)| path.clone())
                 .collect();
-            let records = crate::sync::local_mutations::records_for_committed_paths(
+            let records = match crate::sync::local_mutations::records_for_committed_paths(
                 &sync_root,
                 message,
                 &device_id,
                 &upserted,
                 &deleted,
                 chrono::Utc::now().timestamp_millis(),
-            );
+            ) {
+                Ok(records) => records,
+                Err(error) => {
+                    crate::sync::local_mutations::mark_recovery_pending(
+                        &sync_root,
+                        "change_set_projection_read_failed",
+                    );
+                    log::warn!(
+                        "[sync] change-set mutation projection failed for {}: {error}",
+                        sync_root.display()
+                    );
+                    continue;
+                }
+            };
             if records.is_empty() {
                 continue;
             }

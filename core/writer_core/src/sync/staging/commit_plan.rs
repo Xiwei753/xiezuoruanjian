@@ -4,35 +4,34 @@ use std::path::PathBuf;
 ///
 ///   拆 `content_actions` `engine_state_actions`。
 /// - `content_actions`：用户内容（正文、元数据、缓存）的写回动作。
-/// - `engine_state_actions`：同步引擎自身状态（`manifest.sync.json`）的写回动作。
-///   `state.local.json` / `conflicts.json` 不在此列——它们走三方语义合并
-///   （[`Self::needs_sync_state_merge`]），避免用户在同步期间解决的冲突被
-///   staging 旧基线覆盖复活（Issue #762 评论 5830266600）。
+/// - `engine_state_actions`：同步引擎自身状态（最终对象索引）的写回动作。
+///   `state.local.json` / `conflicts.json` 永不从 staging 复制或三方合并；
+///   提交阶段只写本轮真实裁决产生的记录（Issue #1066）。
 ///
 /// 两类最后用同一个 `SaveTransaction` 一次写回 live，不另起第二套保存路径。
 #[derive(Default, Debug)]
 pub struct CommitPlan {
-    /// 用户内容写回动作：local==base 时安全应用 incoming（含 incoming 独有新增）。
+    /// 本 plan 由统一对象比较产出（Issue #1066）。
+    ///
+    /// 提交阶段据此走对象提交：只推进远端已确认对象的基线，冲突/上传等待
+    /// 回执确认；不再走旧的 state 三方合并。旧生命周期路径仍产出 false 的 plan。
+    pub object_engine: bool,
+    /// 用户内容写回动作：本地未改时应用远端内容/删除（含远端独有新增）。
     pub content_actions: Vec<CommitAction>,
-    /// 引擎状态写回动作：`app-meta/sync/manifest.sync.json`。
-    /// Transfer 在 staging 里更新了它，Commit 必须写回 live。
-    /// `state.local.json` / `conflicts.json` 不在此列——走三方语义合并。
+    /// 引擎状态写回动作：最终对象索引（manifest，canonical JSON）。
+    /// 提交阶段与正文内容在同一个 `SaveTransaction` 写回 live。
     pub engine_state_actions: Vec<CommitAction>,
-    /// 是否需要对 `state.local.json` / `conflicts.json` 做三方语义合并。
-    /// true 时调用方应调
-    /// [`crate::sync::staging::sync_state_merge::merge_sync_state_three_way`]
-    /// 并在同一 tx 里提交合并结果，而不是从 `engine_state_actions` 直接 apply。
-    pub needs_sync_state_merge: bool,
-    /// StarMap object paths removed by the final three-way graph membership merge.
-    /// Commit removes their cached sync-state facts together with the content decision.
-    pub starmap_pruned_object_paths: std::collections::HashSet<String>,
-    /// incoming==base，保留 local（无需动作，记录供诊断）。
+    /// 需要上传的本地对象（本地相对路径）。
+    ///
+    /// 由提交阶段冻结内容并生成不可变发布决议；传输/发布不再自己猜上传清单。
+    pub uploads: Vec<PathBuf>,
+    /// 需要把本地删除传播到远端的对象（本地相对路径）。
+    pub publish_deletes: Vec<PathBuf>,
+    /// 只有本地有变化、远端未参与：保留本地（无需写盘，上传由 `uploads` 表达）。
     pub keep_local: Vec<PathBuf>,
-    /// local==incoming，内容相同，无需操作。
+    /// 双侧内容相同，无需操作。
     pub noop: Vec<PathBuf>,
-    /// 两边都改，三方冲突（正文走三方合并语义，metadata 走 LWW，由调用方决定）。
-    /// 用 `StagingConflict` 替代 `PathBuf`，
-    /// 保留 base/local/incoming 哈希，让 Commit 阶段能映射成 `SyncConflict` 并持久化。
+    /// 双侧都改变且结果不同：保留双方原始内容，交给用户选择。
     pub conflict: Vec<StagingConflict>,
 }
 
@@ -89,9 +88,6 @@ pub enum CommitAction {
 /// 哪些本地状态必须写回 live：
 /// - `Content`：用户内容，走三方比较/LWW 决策。
 /// - `EngineState`：同步引擎自身状态（`manifest.sync.json`），直接写回 live。
-/// - `EngineStateMerge`：需要三方语义合并的引擎状态（`state.local.json`、
-///   `conflicts.json`）。不能直接 apply incoming——用户在同步期间解决的冲突
-///   会被 staging 旧基线覆盖复活（Issue #762 评论 5830266600）。
 /// - `Skip`：永不进 commit（.git/、full-sync-staging/、app-meta/transactions/、
 ///   config.local.json、secrets）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,12 +97,6 @@ pub(crate) enum StagingCommitClass {
     /// 引擎状态：`manifest.sync.json`。Transfer 在 staging 里更新了它，
     /// Commit 必须写回 live。
     EngineState,
-    /// 需要三方语义合并的引擎状态：`state.local.json`、`conflicts.json`。
-    /// 不能直接 apply incoming——用户在同步期间解决的冲突会被 staging 旧基线
-    /// 覆盖复活（Issue #762 评论 5830266600）。调用方应调
-    /// [`crate::sync::staging::sync_state_merge::merge_sync_state_three_way`]
-    /// 并在同一 tx 里提交合并结果。
-    EngineStateMerge,
     /// 永不进 commit：.git/、full-sync-staging/、app-meta/transactions/、
     /// config.local.json、secrets。
     Skip,
@@ -153,11 +143,10 @@ pub(crate) fn classify_staging_commit_path(raw_path: &str) -> StagingCommitClass
     if path == "app-meta/sync/manifest.sync.json" {
         return StagingCommitClass::EngineState;
     }
-    // state.local.json / conflicts.json 走三方语义合并——
-    // 用户在同步期间解决的冲突不能被 staging 旧基线覆盖复活
-    // （Issue #762 评论 5830266600）。
+    // state.local.json / conflicts.json 只由提交阶段按本轮真实裁决写入，
+    // 永不从 staging 复制或做三方合并（Issue #1066）。
     if path == "app-meta/sync/state.local.json" || path == "app-meta/sync/conflicts.json" {
-        return StagingCommitClass::EngineStateMerge;
+        return StagingCommitClass::Skip;
     }
 
     // 平台配置/凭证：不从 staging 覆盖 live（设备专属）。
@@ -185,7 +174,7 @@ pub(crate) fn classify_staging_commit_path_for_group(
         return StagingCommitClass::EngineState;
     }
     if path == group.local_state_path() || path == group.local_conflicts_path() {
-        return StagingCommitClass::EngineStateMerge;
+        return StagingCommitClass::Skip;
     }
 
     // Legacy aggregate files can be read by group migration code but are not owned
@@ -235,11 +224,6 @@ pub(crate) fn apply_incoming(
     match class {
         StagingCommitClass::EngineState => plan.engine_state_actions.push(action),
         StagingCommitClass::Content => plan.content_actions.push(action),
-        StagingCommitClass::EngineStateMerge => {
-            // EngineStateMerge 路径不通过 apply_incoming 写回——
-            // 调用方（compute_commit_plan）应设 needs_sync_state_merge=true
-            // 并 continue，不调 apply_incoming。此分支防御性丢弃。
-        }
         StagingCommitClass::Skip => {
             // classify_staging_commit_path 已过滤 Skip，不应到达此处。
             // 防御性丢弃，不写回 live。

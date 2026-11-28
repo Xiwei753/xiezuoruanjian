@@ -275,13 +275,22 @@ pub(crate) fn reconciled_ack_transactions(
     projects_root: &Path,
     project_id: &str,
     chapter_filter: Option<&str>,
-) -> Vec<(String, String)> {
+) -> Result<Vec<(String, String)>, String> {
     let root = super::store::drafts_root(projects_root, project_id);
-    let Ok(chapters) = std::fs::read_dir(&root) else {
-        return Vec::new();
+    let chapters = match std::fs::read_dir(&root) {
+        Ok(chapters) => chapters,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!(
+                "read draft chapters dir {}: {error}",
+                root.display()
+            ))
+        }
     };
     let mut transactions = Vec::new();
-    for chapter in chapters.flatten() {
+    for chapter in chapters {
+        let chapter =
+            chapter.map_err(|error| format!("read draft chapters dir {}: {error}", root.display()))?;
         let chapter_name = chapter.file_name();
         let Some(chapter_id) = chapter_name.to_str() else {
             continue;
@@ -292,54 +301,75 @@ pub(crate) fn reconciled_ack_transactions(
             }
         }
         let dir = chapter.path().join(ACK_DIR);
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!("read pending acks dir {}: {error}", dir.display()))
+            }
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                format!("read pending acks dir {}: {error}", dir.display())
+            })?;
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(ack) = serde_json::from_str::<PendingAck>(&content) else {
-                continue;
-            };
+            let content = std::fs::read_to_string(&path).map_err(|error| {
+                format!("read reconciled pending ack {}: {error}", path.display())
+            })?;
+            let ack = serde_json::from_str::<PendingAck>(&content).map_err(|error| {
+                format!("decode reconciled pending ack {}: {error}", path.display())
+            })?;
             if ack.reconciled && !ack.transaction_id.is_empty() {
                 transactions.push((chapter_id.to_string(), ack.transaction_id));
             }
         }
     }
-    transactions
+    Ok(transactions)
 }
 
 /// 把某笔 ack 标为已本地完成（mark_committed 成功后由 worker 调用）。
+///
+/// 只有本地 durable 完成状态写成功后才允许调用 Core 确认；读取/解析/写入
+/// 失败都返回真实错误，不能把不可读确认当成“没有待确认事件”。
 pub(crate) fn reconciled_ack(
     projects_root: &Path,
     project_id: &str,
     chapter_id: &str,
     transaction_id: &str,
-) {
+) -> Result<(), String> {
     let Some(location) = DraftLocation::new(projects_root, project_id, chapter_id) else {
-        return;
+        return Err(format!(
+            "invalid draft location for reconciled ack {project_id}/{chapter_id}"
+        ));
     };
     let path = ack_path(&location, transaction_id);
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return;
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // 没有本地 ack 文件：没有可标记的事实，按幂等成功处理。
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(format!(
+                "read pending ack {}: {error}",
+                path.display()
+            ))
+        }
     };
-    let Ok(mut ack) = serde_json::from_str::<PendingAck>(&content) else {
-        return;
-    };
+    let mut ack = serde_json::from_str::<PendingAck>(&content)
+        .map_err(|error| format!("decode pending ack {}: {error}", path.display()))?;
     if ack.reconciled {
-        return;
+        return Ok(());
     }
     ack.reconciled = true;
-    if let Ok(json) = serde_json::to_string(&ack) {
-        if let Err(error) = writer_core::storage::atomic_write_string(&path, &json) {
-            log::warn!("write reconciled pending ack {}: {error}", path.display());
-        }
-    }
+    let json = serde_json::to_string(&ack)
+        .map_err(|error| format!("encode reconciled pending ack {}: {error}", path.display()))?;
+    writer_core::storage::atomic_write_string(&path, &json)
+        .map_err(|error| format!("write reconciled pending ack {}: {error}", path.display()))?;
+    Ok(())
 }
 
 /// 本地已完成、等待回写 Core journal 的 ack（按 commit_sequence 递增）。
@@ -365,12 +395,10 @@ pub(crate) fn reconciled_acks(
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(ack) = serde_json::from_str::<PendingAck>(&content) else {
-            continue;
-        };
+        let content = std::fs::read_to_string(&path)
+            .map_err(|error| format!("read pending ack {}: {error}", path.display()))?;
+        let ack = serde_json::from_str::<PendingAck>(&content)
+            .map_err(|error| format!("decode pending ack {}: {error}", path.display()))?;
         if ack.reconciled {
             acks.push((ack, path));
         }

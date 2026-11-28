@@ -235,9 +235,9 @@ pub fn save_reference_index(app_data_root: &Path, index: &StarMapReferenceIndex)
 ///
 /// 首次进入（既没有独立对象文件也没有旧索引）时执行旧数据拆分，保证旧画布/
 /// 星图对象转换成独立归属文件。已初始化时由
-/// [`reconcile_reference_index`] 一次性补回缺失引用与落后的 `projectId`；
-/// 已有绑定与实例资产身份冲突时保留原绑定并返回错误，不静默覆盖身份冲突
-/// 材料。批量收敛只写一次索引，不逐节点重复读写全量索引。
+/// [`reconcile_reference_index`] 一次性补回缺失引用、落后 `projectId` 与
+/// 与实例不一致的派生资产绑定；实例文件始终是身份权威。批量收敛只写一次
+/// 索引，不逐节点重复读写全量索引。
 pub fn ensure_library_index(app_data_root: &Path) -> Result<StarMapLibraryIndex> {
     let initialized = library_entries_dir(app_data_root).exists()
         || library_folders_dir(app_data_root).exists()
@@ -246,15 +246,7 @@ pub fn ensure_library_index(app_data_root: &Path) -> Result<StarMapLibraryIndex>
         return migrate_library(app_data_root);
     }
     let index = load_library_index(app_data_root)?;
-    let reconciliation = reconcile_reference_index(app_data_root)?;
-    if let Some(conflict) = reconciliation.conflicts.first() {
-        return Err(Error::Other(format!(
-            "starmap reference index conflict: {} binding(s) disagree with confirmed node \
-             instances; first: {}; preserve existing references and node bytes",
-            reconciliation.conflicts.len(),
-            conflict.describe()
-        )));
-    }
+    reconcile_reference_index(app_data_root)?;
     Ok(index)
 }
 
@@ -481,35 +473,13 @@ fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) {
 pub(crate) struct ReferenceIndexReconciliation {
     /// 从已确认画布实例补回的缺失引用数。
     pub added: usize,
-    /// 按实例事实补齐 `projectId` 的记录数。
+    /// 按实例事实补齐 `projectId` / 修正 `assetId` 的记录数。
     pub updated: usize,
-    /// 既有绑定与实例资产身份冲突、为保留材料而未覆盖的记录。
-    pub conflicts: Vec<ReferenceIndexConflict>,
 }
 
 impl ReferenceIndexReconciliation {
     fn is_empty(&self) -> bool {
         self.added == 0 && self.updated == 0
-    }
-}
-
-/// 反向引用索引与已确认实例的资产身份冲突。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ReferenceIndexConflict {
-    pub starmap_id: String,
-    pub instance_id: String,
-    /// 画布实例文件里的资产身份（事实）。
-    pub instance_asset_id: String,
-    /// `references.json` 既有记录里的资产身份（保留不覆盖）。
-    pub reference_asset_id: String,
-}
-
-impl ReferenceIndexConflict {
-    fn describe(&self) -> String {
-        format!(
-            "starmap_id={} instance_id={} instance_asset_id={} reference_asset_id={}",
-            self.starmap_id, self.instance_id, self.instance_asset_id, self.reference_asset_id
-        )
     }
 }
 
@@ -654,13 +624,10 @@ pub(crate) fn load_or_rebuild_reference_index(
 ///
 /// - 索引缺失/损坏：按实例事实重建后写回（即使为空也保持文件存在）；
 /// - 索引存在但缺项：只补缺失记录；
-/// - 记录与实例资产一致、`projectId` 落后：按实例事实补齐（实例是归属事实，
-///   索引已有归属不会被实例的空值抹掉）；
-/// - 记录与实例资产冲突：保留既有绑定不覆盖，冲突通过返回值交给调用方；
+/// - 记录与实例资产不一致：按实例事实改写派生绑定（实例是身份权威）；
+/// - `projectId` 落后：按实例事实补齐（索引已有归属不会被实例的空值抹掉）；
 /// - 已确认实例覆盖不到的既有记录保留：`record_node_reference` 先于实例
 ///   文件落盘，记录可能存在而文件尚未写入，不能据此删除派生材料。
-///
-/// 有冲突时不写盘：既有绑定和实例字节都保持原样。
 pub(crate) fn reconcile_reference_index(
     app_data_root: &Path,
 ) -> Result<ReferenceIndexReconciliation> {
@@ -695,16 +662,12 @@ pub(crate) fn reconcile_reference_index(
             merged.push(record.clone());
             continue;
         };
-        if record.asset_id != fact.asset_id {
-            reconciliation.conflicts.push(ReferenceIndexConflict {
-                starmap_id: record.starmap_id.clone(),
-                instance_id: record.instance_id.clone(),
-                instance_asset_id: fact.asset_id.clone(),
-                reference_asset_id: record.asset_id.clone(),
-            });
-            continue;
-        }
         let mut record = record.clone();
+        if record.asset_id != fact.asset_id {
+            // 派生索引落后于实例：按实例事实修正，不保留错误绑定。
+            record.asset_id = fact.asset_id.clone();
+            reconciliation.updated += 1;
+        }
         let next_project_id = fact
             .project_id
             .clone()
@@ -723,7 +686,7 @@ pub(crate) fn reconcile_reference_index(
         reconciliation.added += 1;
     }
 
-    if reconciliation.conflicts.is_empty() && (force_write || !reconciliation.is_empty()) {
+    if force_write || !reconciliation.is_empty() {
         sort_references(&mut merged);
         let refs = StarMapReferenceIndex {
             schema_version: CURRENT_LIBRARY_SCHEMA_VERSION,
@@ -765,20 +728,36 @@ pub fn load_node_definition(
     asset_id: &str,
 ) -> Result<Option<StarMapNodeDefinition>> {
     let path = node_definition_abs_path(app_data_root, asset_id);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let content = fs::read_to_string(&path)?;
-    let definition = serde_json::from_str(&content)?;
+    // 只有真实不存在才是 None；读取/权限失败必须返回，不能伪装成“没有对象”。
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(crate::error::Error::Other(format!(
+                "failed to read starmap node definition {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    let definition = serde_json::from_str(&content).map_err(|error| {
+        crate::error::Error::Other(format!(
+            "corrupt starmap node definition {}: {error}",
+            path.display()
+        ))
+    })?;
     Ok(Some(definition))
 }
 
 pub fn delete_node_definition(app_data_root: &Path, asset_id: &str) -> Result<()> {
     let path = node_definition_abs_path(app_data_root, asset_id);
-    if path.exists() {
-        fs::remove_file(path)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(crate::error::Error::Other(format!(
+            "failed to delete starmap node definition {}: {error}",
+            path.display()
+        ))),
     }
-    Ok(())
 }
 
 pub(crate) fn new_entry_id() -> String {
@@ -1054,8 +1033,8 @@ pub fn assign_entry_scope(
 /// - 缺失 → 追加；
 /// - 已存在且 `assetId` 相同 → 只补齐 `projectId`（实例是归属事实；索引里
 ///   已有的项目归属不会被空值抹掉）；
-/// - 已存在但指向另一个 `assetId` → 返回错误，保留既有绑定材料，绝不静默
-///   改写身份。
+/// - 已存在但指向另一个 `assetId` → 按实例事实改写派生绑定（实例文件是身份
+///   权威，反向索引只是派生视图，不能反向否定实例）。
 pub fn record_node_reference(
     app_data_root: &Path,
     starmap_id: &str,
@@ -1072,12 +1051,14 @@ pub fn record_node_reference(
         .find(|record| record.starmap_id == starmap_id && record.instance_id == instance_id)
     {
         if record.asset_id != asset_id {
-            return Err(Error::Other(format!(
-                "starmap node reference conflict: starmap_id={starmap_id} \
-                 instance_id={instance_id} existing_asset_id={} incoming_asset_id={asset_id}; \
-                 preserve existing reference",
+            // 派生索引落后于实例：按实例重建这一条，不阻断实例/本体落盘。
+            log::debug!(
+                "starmap reference index repaired from instance: starmap_id={starmap_id} \
+                 instance_id={instance_id} indexed_asset_id={} instance_asset_id={asset_id}",
                 record.asset_id
-            )));
+            );
+            record.asset_id = asset_id.to_string();
+            changed = true;
         }
         let next_project_id = match project_id {
             Some(project_id) => Some(project_id),
@@ -1321,9 +1302,16 @@ pub fn asset_title(app_data_root: &Path, target: &StarMapAssetRef) -> Result<Opt
         StarMapAssetKind::Node => Ok(load_node_definition(app_data_root, &target.asset_id)?
             .map(|definition| definition.title)),
         StarMapAssetKind::StarMap => {
-            Ok(crate::starmap::get_starmap(app_data_root, &target.asset_id)
-                .ok()
-                .map(|meta| meta.title))
+            match crate::starmap::get_starmap(app_data_root, &target.asset_id) {
+                Ok(meta) => Ok(Some(meta.title)),
+                // 只有对象真实不存在才是“无标题”；其它读取/解析错误必须返回。
+                Err(crate::error::Error::Io(error))
+                    if error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    Ok(None)
+                }
+                Err(error) => Err(error),
+            }
         }
     }
 }

@@ -1609,7 +1609,7 @@ pub fn with_layout_core_api<P1: AsRef<Path>, P2: AsRef<Path>>(
 /// 与 [`with_layout_core_api`] 相同，但接受 `&PlatformInit` 以注入平台身份。
 ///
 /// 使用 `set_platform_identity_memory`（纯内存注入），不执行磁盘 I/O 或
-/// 同步证明恢复。完整的持久化身份纠正只在 `bootstrap_core_api_with_init`
+/// 证明迁移。完整的持久化身份纠正只在 `bootstrap_core_api_with_init`
 /// 或 `with_layout_core_api_with_init_persistent` 真正打开工作区时执行一次。
 pub fn with_layout_core_api_with_init<P1: AsRef<Path>, P2: AsRef<Path>>(
     app_data_root: P1,
@@ -1631,8 +1631,8 @@ pub fn with_layout_core_api_with_init<P1: AsRef<Path>, P2: AsRef<Path>>(
 }
 
 /// 与 [`with_layout_core_api_with_init`] 相同，但执行完整的持久化身份纠正
-///（`set_platform_identity`，含 `reconcile_platform_identity` 和
-/// `recover_pending_sync_proof_intents`）。
+///（`set_platform_identity`，含 `reconcile_platform_identity` 和旧同步证明
+/// 记录的一次性迁移）。
 ///
 /// 只在打开/切换工作区时调用一次。热路径请用
 /// [`with_layout_core_api_with_init`]（纯内存注入）。

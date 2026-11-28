@@ -101,7 +101,7 @@ fn settle_store_publications(
     }
 }
 
-/// 按 dirty index 的单章定位发布（不遍历 projects 根）。
+/// 按待发布目录的单章定位发布（不遍历 projects 根）。
 pub(crate) fn publish_pending_chapter(
     app_data_root: &Path,
     projects_root: &Path,
@@ -500,7 +500,13 @@ fn model_cache() -> &'static Mutex<ModelSlotRegistry> {
 }
 
 fn model_slot(path: &Path) -> Result<Arc<ModelLoadSlot>, WriterError> {
-    let _ = ensure_model_lifecycle_manager();
+    // 生命周期线程负责 Ready 会话的空闲回收；启动失败时不能让本次加载
+    // 假装有后台回收，明确报错并由调用方重试。
+    if !ensure_model_lifecycle_manager() {
+        return Err(WriterError::Other(
+            "correction model lifecycle manager failed to start; retry model load".into(),
+        ));
+    }
     let mut slots = model_cache()
         .lock()
         .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
@@ -520,8 +526,15 @@ fn take_unconfigured_engines(
     inner: &CorrectionStoreInner,
     key: &Path,
 ) -> Vec<Arc<CorrectionEngine>> {
-    let Ok(mut engines) = inner.engines.lock() else {
-        return Vec::new();
+    let mut engines = match inner.engines.lock() {
+        Ok(engines) => engines,
+        Err(error) => {
+            log::warn!(
+                target: "correction",
+                "correction_unconfigured_engine_lock_failed: {error}"
+            );
+            return Vec::new();
+        }
     };
     let mut removed = Vec::new();
     engines.retain(|_, cached| {
@@ -539,8 +552,15 @@ fn take_unconfigured_engines(
 
 /// Move one idle model slot out and wake waiters so they reload from config.
 fn take_model_slot(slot: &ModelLoadSlot) -> Option<Arc<ProofreadingModel>> {
-    let Ok(mut state) = slot.state.lock() else {
-        return None;
+    let mut state = match slot.state.lock() {
+        Ok(state) => state,
+        Err(error) => {
+            log::warn!(
+                target: "correction",
+                "correction_model_slot_lock_failed: {error}"
+            );
+            return None;
+        }
     };
     let previous = std::mem::replace(&mut *state, ModelLoadState::Empty);
     slot.wake.notify_all();
@@ -1002,7 +1022,7 @@ struct ModelManagerWake {
 
 static RETIRED_MODEL_RESOURCES: OnceLock<Mutex<Vec<RetiredModelResources>>> = OnceLock::new();
 static MODEL_MANAGER_WAKE: OnceLock<ModelManagerWake> = OnceLock::new();
-static MODEL_MANAGER_READY: OnceLock<bool> = OnceLock::new();
+static MODEL_MANAGER_READY: OnceLock<Mutex<bool>> = OnceLock::new();
 /// Issue #1062 评论 #7213696214 第 2 项：显式“离开文档”租约结束信号。
 /// 置位后生命周期线程会立即收敛所有已无扫描/引擎引用的模型，而不是等
 /// 固定 120 秒空闲窗口；仍在使用中的 session 由 `Arc` 引用计数保护。
@@ -1023,22 +1043,31 @@ fn model_manager_wake() -> &'static ModelManagerWake {
 /// the thread could not be spawned; callers then release synchronously so a
 /// failed spawn cannot leak sessions forever.
 fn ensure_model_lifecycle_manager() -> bool {
-    *MODEL_MANAGER_READY.get_or_init(|| {
-        let wake = model_manager_wake();
-        match thread::Builder::new()
-            .name("correction-model-lifecycle".to_string())
-            .spawn(move || model_lifecycle_loop(wake))
-        {
-            Ok(_) => true,
-            Err(error) => {
-                log::warn!(
-                    target: "correction",
-                    "correction_model_lifecycle_spawn_failed: {error}"
-                );
-                false
-            }
+    let ready = MODEL_MANAGER_READY.get_or_init(|| Mutex::new(false));
+    let mut ready = ready
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if *ready {
+        return true;
+    }
+    let wake = model_manager_wake();
+    match thread::Builder::new()
+        .name("correction-model-lifecycle".to_string())
+        .spawn(move || model_lifecycle_loop(wake))
+    {
+        Ok(_) => {
+            *ready = true;
+            true
         }
-    })
+        Err(error) => {
+            // 不缓存失败：后续显式加载仍可再次尝试启动线程。
+            log::warn!(
+                target: "correction",
+                "correction_model_lifecycle_spawn_failed: {error}"
+            );
+            false
+        }
+    }
 }
 
 fn model_lifecycle_loop(wake: &'static ModelManagerWake) {
@@ -1062,8 +1091,15 @@ fn model_lifecycle_loop(wake: &'static ModelManagerWake) {
 
 fn release_retired_model_resources(thread_label: &'static str) {
     let batches = {
-        let Ok(mut queue) = retired_model_resources().lock() else {
-            return;
+        let mut queue = match retired_model_resources().lock() {
+            Ok(queue) => queue,
+            Err(error) => {
+                log::warn!(
+                    target: "correction",
+                    "correction_retired_resource_lock_failed: {error}"
+                );
+                return;
+            }
         };
         std::mem::take(&mut *queue)
     };
@@ -1145,8 +1181,17 @@ fn retire_model_resources(resources: RetiredModelResources) {
         release_model_resources(resources, "caller-fallback");
         return;
     }
-    if let Ok(mut queue) = retired_model_resources().lock() {
-        queue.push(resources);
+    match retired_model_resources().lock() {
+        Ok(mut queue) => queue.push(resources),
+        Err(error) => {
+            // 无法入队时同步释放，不能让 Arc owner 泄漏。
+            log::warn!(
+                target: "correction",
+                "correction_retired_resource_queue_failed: {error}"
+            );
+            release_model_resources(resources, "caller-fallback");
+            return;
+        }
     }
     model_manager_wake().condvar.notify_all();
 }
@@ -1155,23 +1200,39 @@ fn retire_model_resources(resources: RetiredModelResources) {
 /// scanner/engine leases are left in place; the model slot keeps its `Arc`
 /// until the scanner naturally finishes and the next manager pass runs.
 fn collect_idle_model_resources(immediate: bool) -> Option<RetiredModelResources> {
-    let slots = model_cache().lock().ok()?;
+    let slots = match model_cache().lock() {
+        Ok(slots) => slots,
+        Err(error) => {
+            log::warn!(
+                target: "correction",
+                "correction_idle_model_cache_lock_failed: {error}"
+            );
+            return None;
+        }
+    };
     let now = Instant::now();
-    let expired_paths: HashSet<PathBuf> = slots
-        .iter()
-        .filter_map(|(path, slot)| {
-            let state = slot.state.lock().ok()?;
-            match &*state {
-                ModelLoadState::Ready { last_used, .. }
-                    if immediate
-                        || now.saturating_duration_since(*last_used) >= IDLE_MODEL_GRACE =>
-                {
-                    Some(path.clone())
-                }
-                _ => None,
+    let mut expired_paths: HashSet<PathBuf> = HashSet::new();
+    for (path, slot) in slots.iter() {
+        let state = match slot.state.lock() {
+            Ok(state) => state,
+            Err(error) => {
+                log::warn!(
+                    target: "correction",
+                    "correction_idle_model_slot_lock_failed {}: {error}",
+                    path.display()
+                );
+                continue;
             }
-        })
-        .collect();
+        };
+        if matches!(
+            &*state,
+            ModelLoadState::Ready { last_used, .. }
+                if immediate
+                    || now.saturating_duration_since(*last_used) >= IDLE_MODEL_GRACE
+        ) {
+            expired_paths.insert(path.clone());
+        }
+    }
     if expired_paths.is_empty() {
         return None;
     }
@@ -1179,10 +1240,18 @@ fn collect_idle_model_resources(immediate: bool) -> Option<RetiredModelResources
     let mut engines = Vec::new();
     let mut active_paths: HashSet<PathBuf> = HashSet::new();
     if let Some(stores) = STORE_REGISTRY.get() {
-        if let Ok(stores) = stores.lock() {
+        match stores.lock() {
+            Ok(stores) => {
             for inner in stores.values() {
-                let Ok(mut cache) = inner.engines.lock() else {
-                    continue;
+                let mut cache = match inner.engines.lock() {
+                    Ok(cache) => cache,
+                    Err(error) => {
+                        log::warn!(
+                            target: "correction",
+                            "correction_idle_engine_lock_failed: {error}"
+                        );
+                        continue;
+                    }
                 };
                 let keys: Vec<_> = cache
                     .iter()
@@ -1210,6 +1279,11 @@ fn collect_idle_model_resources(immediate: bool) -> Option<RetiredModelResources
                     }
                 }
             }
+            }
+            Err(error) => log::warn!(
+                target: "correction",
+                "correction_store_registry_lock_failed: {error}"
+            ),
         }
     }
 
@@ -1369,24 +1443,66 @@ impl CorrectionStore {
             }
         }
         // 读目录/反序列化不持有全局索引锁，restore 的章节 slot 锁也不在此处。
-        let mut records = synced_results::load_records(
+        // 记录是派生数据：读取/JSON 损坏时记录真实错误并让该章缓存失效，
+        // 返回空索引但不缓存损坏结果，不阻塞正文保存。
+        let mut records = match synced_results::load_records(
             &project_root,
             project_id,
             chapter_id,
             mode,
             scanner_stable,
-        );
+        ) {
+            Ok(records) => records,
+            Err(error) => {
+                log::warn!(
+                    target: "correction",
+                    "correction synced records rebuild failed for project={} chapter={}: {error}",
+                    project_id,
+                    chapter_id
+                );
+                self.inner
+                    .synced_records
+                    .lock()
+                    .map_err(|_| {
+                        WriterError::Other(
+                            "correction synced record cache lock poisoned".into(),
+                        )
+                    })?
+                    .remove(&key);
+                return Ok(Arc::new(synced_results::SyncedResultIndex::default()));
+            }
+        };
         let after = std::fs::metadata(&dir)
             .and_then(|meta| meta.modified())
             .ok();
         if after != signature {
-            records = synced_results::load_records(
+            records = match synced_results::load_records(
                 &project_root,
                 project_id,
                 chapter_id,
                 mode,
                 scanner_stable,
-            );
+            ) {
+                Ok(records) => records,
+                Err(error) => {
+                    log::warn!(
+                        target: "correction",
+                        "correction synced records re-read failed for project={} chapter={}: {error}",
+                        project_id,
+                        chapter_id
+                    );
+                    self.inner
+                        .synced_records
+                        .lock()
+                        .map_err(|_| {
+                            WriterError::Other(
+                                "correction synced record cache lock poisoned".into(),
+                            )
+                        })?
+                        .remove(&key);
+                    return Ok(Arc::new(synced_results::SyncedResultIndex::default()));
+                }
+            };
         }
         let index = Arc::new(synced_results::SyncedResultIndex::build(&records));
         let mut cache = self.inner.synced_records.lock().map_err(|_| {
@@ -1679,9 +1795,13 @@ impl CorrectionStore {
     /// Resolve the process-shared slot for one exact model key. The scanner
     /// keeps this handle so per-window activity updates do not lock or traverse
     /// the process-wide path cache.
-    pub(super) fn model_slot_for_key(key: &ModelCacheKey) -> Option<Arc<ModelLoadSlot>> {
-        let slots = model_cache().lock().ok()?;
-        slots.get(&key.path).cloned()
+    pub(super) fn model_slot_for_key(
+        key: &ModelCacheKey,
+    ) -> Result<Option<Arc<ModelLoadSlot>>, WriterError> {
+        let slots = model_cache()
+            .lock()
+            .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
+        Ok(slots.get(&key.path).cloned())
     }
 
     /// Extend the idle deadline of exactly the model this scanner is using.

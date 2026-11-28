@@ -16,35 +16,35 @@
 //! 唯一的解码入口：新格式实例、旧格式完整节点、素材库共同基线、同步 incoming
 //! 全部走这里，输出一个完整的对象级计划 [`NodeObjectPlan`]：
 //!
-//! - `definition`：需要写进素材库的共享本体（已有同内容本体时为 `None`）；
+//! - `definition`：需要写进素材库的共享本体（已有同版本/更新版本本体时为 `None`）；
 //! - `instance`：画布节点文件应保存的实例（含解析出的稳定 `assetId`）；
-//! - `rewrite_instance`：节点文件需要从旧格式重写成实例格式。
+//! - `rewrite_instance`：节点文件需要从旧格式重写成实例格式；
+//! - `legacy_tags`：旧节点携带、需要先迁出到 annotations 仓库的标签。
 //!
-//! # 稳定身份解析顺序
+//! # 稳定身份解析顺序（实例是身份权威）
 //!
-//! 1. 已有实例反向绑定（`starmaps/library/references.json`）；
-//! 2. 素材库里旧节点 id 对应的本体；
-//! 3. 旧节点 id 本身。
+//! 1. 实例已有的非空 `assetId`：直接采用，派生反向索引从实例重建；
+//! 2. 已确认实例反向绑定（`starmaps/library/references.json`）；
+//! 3. 素材库里与对象 id 相同的旧节点本体；
+//! 4. 旧节点 id 本身。
 //!
-//! 绝不生成随机 ID：同一份旧数据在任何设备、任何顺序下都解析出同一个素材身份。
+//! 绝不生成随机 ID，也绝不因为"找不到本体"拒绝一个只有位置、本体尚未到达的
+//! 实例：实例允许先落盘，加载时按
+//! [`crate::starmap::types::NodeDefinitionState::ProvisionalMissingDefinition`]
+//! 呈现未解析节点，等真实本体到达后自动变成已解析。反向索引是派生视图，
+//! 不能反向否定实例事实。
 //!
-//! # 身份冲突
+//! # 共享内容按对象版本合并
 //!
-//! 以下情况返回明确错误，并保留原始字节（调用方不得写半成品）：
-//!
-//! - 同一 asset id 已存在本体，但共享内容（title/kind/payload/content/anchors/
-//!   portal/style/provenance 的规范化 JSON）不同；
-//! - 同一旧节点 id 对应多个互相不兼容的本体；
-//! - 新格式实例的 `assetId` 与反向绑定不一致，或 `assetId` 为空且无本体可补全。
-//!
-//! 错误信息统一带上 `starmap_id`、`object_type=node`、`object_id`、画布节点文件
-//! 路径、涉及的 asset id / 本体路径和冲突字段。
+//! 同一 asset id 已有本体时不再把"内容不同"当成身份冲突：按本体 revision
+//! 比较，较新的版本胜出（相同 revision 保留已有本体）。旧节点原文在事务
+//! 完成前始终保留，失败可安全重试。
 //!
 //! # 幂等
 //!
 //! 新格式实例不做任何改写；旧节点迁移后再次解码得到相同计划（第二次
-//! `rewrite_instance=false`、`definition=None`）。写入顺序固定为"先本体、后
-//! 实例"，任何一步失败都可以安全重试。
+//! `rewrite_instance=false`、`definition=None`）。写入顺序固定为"先标签、
+//! 再本体、后实例"，任何一步失败都可以安全重试。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -67,7 +67,7 @@ const LEGACY_TAGS_FIELD: &str = "tags";
 /// 统一解码后的节点对象迁移计划。
 #[derive(Debug, Clone)]
 pub(crate) struct NodeObjectPlan {
-    /// 需要写入素材库的共享本体；`None` 表示素材库已有同内容本体可复用。
+    /// 需要写入素材库的共享本体；`None` 表示素材库已有同内容/更新版本本体可复用。
     pub definition: Option<StarMapNodeDefinition>,
     /// 画布节点文件应保存的实例。
     pub instance: StarMapNodeInstance,
@@ -75,6 +75,11 @@ pub(crate) struct NodeObjectPlan {
     pub wrote_definition: bool,
     /// 输入是旧格式完整节点（或缺少 `assetId` 的实例），节点文件必须重写成实例。
     pub rewrite_instance: bool,
+    /// 旧节点文件里尚未迁出的标签（`plan.instance.asset_id` 的标签）。
+    ///
+    /// 重写实例会丢掉旧 `tags` 字段，因此落盘前必须先把它们写进 annotations
+    /// 关系仓库；迁移失败只影响派生标签关系，不阻断实例本身落盘。
+    pub legacy_tags: Vec<String>,
 }
 
 impl NodeObjectPlan {
@@ -86,18 +91,25 @@ impl NodeObjectPlan {
 
 /// `references.json` 对某个实例反向绑定的状态。
 ///
-/// `assetId` 是身份事实：不一致是身份冲突。`projectId` 是实例归属的派生
-/// 字段：实例有新值时只是索引待补齐，不当作冲突。
+/// 反向索引是派生视图：`assetId` 不一致说明索引落后于实例事实，按实例重建
+/// 即可，不能反向否定权威实例，也不能阻断加载或同步。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ReferenceBindingState {
     /// 索引里没有该 `(starmap_id, instance_id)` 记录（派生索引待修复）。
     Missing,
+    /// 记录存在但 `assetId` 与实例不一致（派生索引落后，按实例重建）。
+    Stale { reference_asset_id: String },
     /// 记录存在且资产一致，但 `projectId` 与实例不一致（派生字段待补齐）。
     ProjectStale,
     /// 记录存在且与实例完整一致。
     Consistent,
-    /// 同一实例在索引里绑定到了另一个资产身份。
-    Conflict { reference_asset_id: String },
+}
+
+impl ReferenceBindingState {
+    /// 派生索引是否需要按实例事实重建/补齐。
+    pub(crate) fn needs_repair(&self) -> bool {
+        !matches!(self, Self::Consistent)
+    }
 }
 
 /// 解码时可用的素材库视图。
@@ -147,8 +159,8 @@ impl NodeObjectBindings {
 
     /// 检查实例与 `references.json` 的绑定是否完整一致。
     ///
-    /// 缺失/`projectId` 落后是派生索引待修复；资产身份不同是身份冲突，
-    /// 调用方必须保留原始材料，不能静默覆盖既有绑定。
+    /// 缺失/`projectId` 落后/资产身份不同都只是派生索引待修复；调用方按实例
+    /// 事实重建索引即可。
     pub(crate) fn reference_binding_state(
         &self,
         instance: &StarMapNodeInstance,
@@ -160,7 +172,7 @@ impl NodeObjectBindings {
             return ReferenceBindingState::Missing;
         };
         if reference.asset_id != instance.asset_id {
-            return ReferenceBindingState::Conflict {
+            return ReferenceBindingState::Stale {
                 reference_asset_id: reference.asset_id.clone(),
             };
         }
@@ -222,7 +234,10 @@ impl NodeObjectBindings {
 ///
 /// `app_data_root` 是素材库所在根；`existing_bindings` 可选，用于同步合并时
 /// 带上 base/incoming 的素材库视图。纯解码，**不写任何文件**；需要落盘时
-/// 调用 [`persist_node_object_plan`]，顺序固定为"先本体、后实例"。
+/// 调用 [`persist_node_object_plan`]，顺序固定为"先标签、再本体、后实例"。
+///
+/// 这是唯一的解码入口：加载、同步落盘、搜索抽取、素材库发布都走这里，
+/// 不再有"校验模式/纯内存模式"第二套解码。
 pub(crate) fn decode_node_object(
     app_data_root: &Path,
     starmap_id: &str,
@@ -236,43 +251,6 @@ pub(crate) fn decode_node_object(
         object_id,
         bytes,
         existing_bindings,
-        true,
-    )
-}
-
-/// 纯 bytes 解码：不访问素材库磁盘，只校验节点格式/身份并生成计划。
-///
-/// 用于没有 `app_data_root` 的纯计算调用点。此时不读取已有本体，也不做
-/// 素材库内容冲突判定（旧节点仍会生成待发布的定义计划）；需要落盘/冲突
-/// 判定的生产路径必须用 [`decode_node_object`]。
-pub(crate) fn decode_node_object_in_memory(
-    starmap_id: &str,
-    object_id: &str,
-    bytes: &[u8],
-) -> Result<NodeObjectPlan> {
-    decode_node_object_impl(None, starmap_id, object_id, bytes, None, false)
-}
-
-/// 同步侧校验解码：只校验格式和对象内身份，不做素材库内容冲突判定，
-/// 也不生成可发布的本体。
-///
-/// 用于同步合并前对 base/local/incoming 三方的预校验：非胜出侧不会被发布，
-/// 它的历史/旧共享内容与现在素材库本体不同是正常的，不能据此把整组打成
-/// 身份冲突。真正胜出的一侧仍由 [`decode_node_object`] 严格解码。
-pub(crate) fn decode_node_object_validation(
-    app_data_root: &Path,
-    starmap_id: &str,
-    object_id: &str,
-    bytes: &[u8],
-    existing_bindings: Option<&NodeObjectBindings>,
-) -> Result<NodeObjectPlan> {
-    decode_node_object_impl(
-        Some(app_data_root),
-        starmap_id,
-        object_id,
-        bytes,
-        existing_bindings,
-        false,
     )
 }
 
@@ -282,7 +260,6 @@ fn decode_node_object_impl(
     object_id: &str,
     bytes: &[u8],
     existing_bindings: Option<&NodeObjectBindings>,
-    content_check: bool,
 ) -> Result<NodeObjectPlan> {
     let node_path = node_rel_path_string(starmap_id, object_id);
     // 先按新格式实例解析。旧完整节点没有 `instanceId`，不会命中这个分支；
@@ -298,7 +275,6 @@ fn decode_node_object_impl(
             &node_path,
             instance,
             existing_bindings,
-            content_check,
         ),
         Err(instance_error) => match serde_json::from_slice::<StarMapNode>(bytes) {
             Ok(node) => decode_legacy_node(
@@ -309,7 +285,6 @@ fn decode_node_object_impl(
                 bytes,
                 node,
                 existing_bindings,
-                content_check,
             ),
             Err(legacy_error) => Err(Error::Other(format!(
                 "starmap node object is neither a node instance nor a legacy node: \
@@ -329,7 +304,6 @@ fn decode_instance(
     node_path: &str,
     mut instance: StarMapNodeInstance,
     existing_bindings: Option<&NodeObjectBindings>,
-    content_check: bool,
 ) -> Result<NodeObjectPlan> {
     if instance.instance_id != object_id {
         return Err(identity_mismatch_error(
@@ -355,42 +329,18 @@ fn decode_instance(
 
     if instance.asset_id.trim().is_empty() {
         rewrite_instance = true;
-        instance.asset_id = if content_check {
-            resolve_instance_asset_id(
-                app_data_root,
-                starmap_id,
-                object_id,
-                node_path,
-                existing_bindings,
-            )?
-        } else {
-            // 基线只做身份解析，不要求本体已经存在。
-            existing_bindings
-                .and_then(|bindings| bindings.instance_asset(starmap_id, object_id))
-                .filter(|asset_id| !asset_id.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| object_id.to_string())
-        };
-    } else if content_check {
-        // 当前内容才校验实例身份与反向绑定一致；共同基线是历史快照，
-        // 实例被重新绑定过是正常的，不能据此阻断合并。
-        if let Some(reference_asset) =
-            existing_bindings.and_then(|bindings| bindings.instance_asset(starmap_id, object_id))
-        {
-            if reference_asset != instance.asset_id {
-                return Err(Error::Other(format!(
-                    "starmap node instance identity conflict: path={node_path} \
-                     object_type=node object_id={object_id} starmap_id={starmap_id} \
-                     instance_asset_id={} reference_asset_id={reference_asset} \
-                     conflict_fields=assetId",
-                    instance.asset_id
-                )));
-            }
-        }
+        instance.asset_id = resolve_instance_asset_id(
+            app_data_root,
+            starmap_id,
+            object_id,
+            existing_bindings,
+        );
     }
+    // 非空 `assetId` 是实例的权威身份：派生反向索引落后时由调用方按实例重建，
+    // 不在这里把"索引与实例不一致"变成加载/同步阻断。
 
     // 实例文件只保存画布归属事实；references.json 里的反向绑定是同一
-    // (starmap, instance) 的权威归属记录。需要重写实例（旧格式/空 assetId）
+    // (starmap, instance) 的派生归属记录。需要重写实例（旧格式/空 assetId）
     // 时用它补全缺失的 projectId；已经稳定的实例保持原字节不动。
     if rewrite_instance && instance.project_id.is_none() {
         instance.project_id = existing_bindings
@@ -403,41 +353,38 @@ fn decode_instance(
         instance,
         wrote_definition: false,
         rewrite_instance,
+        legacy_tags: Vec::new(),
     })
 }
 
-/// `assetId` 为空的新格式实例：按反向绑定 / 旧节点 id 解析。
+/// `assetId` 为空的新格式实例：按反向绑定 / 同 ID 本体 / 旧节点 id 解析。
 ///
-/// 反向绑定是已有实例的权威身份：即使对应本体尚未落盘（旧数据里实例可以
-/// 先于本体存在），也直接复用绑定，不误报冲突。没有任何绑定、也没有旧节点
-/// id 对应本体时才失败——找不到本体不能"补空"，保留原始材料。
+/// 反向绑定是已有实例的派生身份，即使对应本体尚未落盘（旧数据里实例可以
+/// 先于本体存在）也直接复用。都没有时退回对象 id 本身——它是稳定身份，
+/// 本体稍后到达即可解析；绝不因为"本体还没到"拒绝只有位置的实例。
 fn resolve_instance_asset_id(
     app_data_root: Option<&Path>,
     starmap_id: &str,
     object_id: &str,
-    node_path: &str,
     existing_bindings: Option<&NodeObjectBindings>,
-) -> Result<String> {
+) -> String {
     if let Some(reference_asset) =
         existing_bindings.and_then(|bindings| bindings.instance_asset(starmap_id, object_id))
     {
         if !reference_asset.is_empty() {
-            return Ok(reference_asset.to_string());
+            return reference_asset.to_string();
         }
     }
-    // 旧节点 id 本身是稳定身份：素材库里已有同 id 本体时直接复用。
-    if lookup_definition(app_data_root, existing_bindings, object_id)?.is_some() {
-        return Ok(object_id.to_string());
+    // 旧节点 id 本身是稳定身份：素材库里已有同 id 本体时直接复用；即使读取
+    // 本体失败也退回对象 id，不让素材库 I/O 阻断实例身份。
+    if lookup_definition(app_data_root, existing_bindings, object_id)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return object_id.to_string();
     }
-    // 既没有反向绑定，也没有能对上旧节点 id 的本体：身份无法判定。
-    // 保留原始字节，交给调用方按身份冲突处理；绝不静默生成新 asset id。
-    Err(Error::Other(format!(
-        "starmap node identity conflict: path={node_path} object_type=node \
-         object_id={object_id} starmap_id={starmap_id} instance_asset_id=<empty> \
-         candidate_asset_id={object_id} conflict_fields=assetId \
-         detail=empty assetId has no reference binding or shared definition to resolve; \
-         preserve original node bytes"
-    )))
+    object_id.to_string()
 }
 
 /// 解码旧格式完整节点，生成稳定身份、共享本体和实例。
@@ -450,72 +397,36 @@ fn decode_legacy_node(
     bytes: &[u8],
     node: StarMapNode,
     existing_bindings: Option<&NodeObjectBindings>,
-    content_check: bool,
 ) -> Result<NodeObjectPlan> {
     if node.id != object_id {
         return Err(identity_mismatch_error(
             starmap_id, object_id, node_path, &node.id,
         ));
     }
-    // 旧标签必须先由 tags 迁移写进 annotations 关系仓库；这里重写节点文件会丢掉
-    // `tags` 字段，所以不能在标签仍存在时静默继续。共同基线不会被重写，
-    // 因此基线解码不做这个阻断。
-    if content_check {
-        if let Some(tag_count) = legacy_tag_count(bytes) {
-            return Err(Error::Other(format!(
-                "legacy node still carries unmigrated tags and cannot be rewritten as an \
-                 instance: path={node_path} object_type=node object_id={object_id} \
-                 starmap_id={starmap_id} legacy_tags={tag_count}; run starmap tag migration first"
-            )));
-        }
-    }
+    // 旧标签由 tags 迁移写进 annotations 关系仓库；计划把它带出去，由
+    // `persist_node_object_plan` 在重写实例前迁出，不阻断解码/同步。
+    let legacy_tags = legacy_tags(bytes);
 
     let explicit_asset_id = if node.asset_id.trim().is_empty() {
         None
     } else {
         Some(node.asset_id.as_str())
     };
-    let (asset_id, definition) = if content_check {
-        let (asset_id, existing_definition) = resolve_legacy_identity(
-            app_data_root,
-            starmap_id,
-            object_id,
-            explicit_asset_id,
-            node_path,
-            existing_bindings,
-        )?;
-        let candidate = StarMapNodeDefinition::from_node(asset_id.clone(), &node);
-        let definition = match existing_definition {
-            Some(existing) => {
-                let conflict_fields = shared_content_diff(&existing, &candidate);
-                if !conflict_fields.is_empty() {
-                    return Err(identity_conflict_error(
-                        starmap_id,
-                        object_id,
-                        node_path,
-                        &asset_id,
-                        &conflict_fields,
-                        "legacy node shared content differs from existing definition",
-                    ));
-                }
-                // 同一内容的本体已存在：复用，不覆盖本体 revision。
-                None
-            }
-            None => Some(candidate),
-        };
-        (asset_id, definition)
-    } else {
-        // 共同基线：只解析身份，不比较/生成本体（基线计划不会被发布）。
-        let asset_id = explicit_asset_id
-            .map(str::to_string)
-            .or_else(|| {
-                existing_bindings
-                    .and_then(|bindings| bindings.instance_asset(starmap_id, object_id))
-                    .filter(|asset_id| !asset_id.is_empty())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| object_id.to_string());
-        (asset_id, None)
+    let (asset_id, existing_definition) = resolve_legacy_identity(
+        app_data_root,
+        starmap_id,
+        object_id,
+        explicit_asset_id,
+        existing_bindings,
+    )?;
+    let candidate = StarMapNodeDefinition::from_node(asset_id.clone(), &node);
+    // 共享内容按对象版本合并：已有本体 revision 不低于候选时保留既有本体，不把
+    // 历史快照（同步 base / 旧端离线副本）覆盖到较新的共享内容上；更新的候选
+    // 照常发布。旧节点原文在事务完成前一直留在磁盘上。
+    let definition = match existing_definition {
+        Some(existing) if existing.updated_at >= candidate.updated_at => None,
+        Some(existing) if shared_content_equal(&existing, &candidate) => None,
+        _ => Some(candidate),
     };
 
     let project_id = existing_bindings
@@ -536,33 +447,22 @@ fn decode_legacy_node(
         definition,
         instance,
         rewrite_instance: true,
+        legacy_tags,
     })
 }
 
 /// 旧节点的稳定身份解析。
 ///
-/// 返回 `(asset_id, 已有本体)`。已有本体若存在，调用方负责比较共享内容。
+/// 返回 `(asset_id, 已有本体)`。已有本体若存在，调用方按对象版本合并共享内容。
+/// 实例已有的非空 `assetId` 是权威身份，派生反向索引落后不构成冲突。
 fn resolve_legacy_identity(
     app_data_root: Option<&Path>,
     starmap_id: &str,
     object_id: &str,
     explicit_asset_id: Option<&str>,
-    node_path: &str,
     existing_bindings: Option<&NodeObjectBindings>,
 ) -> Result<(String, Option<StarMapNodeDefinition>)> {
     if let Some(explicit) = explicit_asset_id {
-        if let Some(reference_asset) =
-            existing_bindings.and_then(|bindings| bindings.instance_asset(starmap_id, object_id))
-        {
-            if reference_asset != explicit {
-                return Err(Error::Other(format!(
-                    "starmap node identity conflict: path={node_path} object_type=node \
-                     object_id={object_id} starmap_id={starmap_id} \
-                     legacy_asset_id={explicit} reference_asset_id={reference_asset} \
-                     conflict_fields=assetId; preserve original node bytes"
-                )));
-            }
-        }
         let definition = lookup_definition(app_data_root, existing_bindings, explicit)?;
         return Ok((explicit.to_string(), definition));
     }
@@ -572,17 +472,12 @@ fn resolve_legacy_identity(
         .filter(|asset_id| !asset_id.is_empty())
         .map(str::to_string);
     let mut candidates: Vec<String> = Vec::new();
+    // 优先已确认绑定，其次旧节点 id 自身（稳定身份）。
     if let Some(asset_id) = &reference_asset {
         candidates.push(asset_id.clone());
     }
     if !object_id.is_empty() && !candidates.iter().any(|candidate| candidate == object_id) {
         candidates.push(object_id.to_string());
-    }
-    if candidates.is_empty() {
-        return Err(Error::Other(format!(
-            "legacy node has no stable identity candidate: path={node_path} \
-             object_type=node object_id={object_id} starmap_id={starmap_id}"
-        )));
     }
 
     let mut found: Vec<(String, StarMapNodeDefinition)> = Vec::new();
@@ -591,31 +486,16 @@ fn resolve_legacy_identity(
             found.push((candidate.clone(), definition));
         }
     }
-    // 同一旧节点 id 对应多个本体时，内容必须一致；否则身份不可判定。
-    if found.len() > 1 {
-        let (first_asset_id, first_definition) = &found[0];
-        for (other_asset_id, other_definition) in found.iter().skip(1) {
-            let conflict_fields = shared_content_diff(first_definition, other_definition);
-            if !conflict_fields.is_empty() {
-                return Err(Error::Other(format!(
-                    "starmap node identity conflict: same legacy node id maps to multiple \
-                     incompatible definitions: path={node_path} object_type=node \
-                     object_id={object_id} starmap_id={starmap_id} \
-                     asset_id={first_asset_id} conflicting_asset_id={other_asset_id} \
-                     definition_path={} conflicting_definition_path={} conflict_fields={}; \
-                     preserve original node bytes",
-                    crate::starmap::library::node_definition_rel_path(first_asset_id).display(),
-                    crate::starmap::library::node_definition_rel_path(other_asset_id).display(),
-                    conflict_fields.join(",")
-                )));
-            }
-        }
-    }
-    if let Some((asset_id, definition)) = found.into_iter().next() {
+    // 同一旧节点 id 对应多个本体时按对象版本合并：取 revision 最高的一个，
+    // 相同 revision 取先出现的（已确认绑定优先）。
+    if let Some((asset_id, definition)) = found
+        .into_iter()
+        .max_by_key(|(_, definition)| definition.updated_at)
+    {
         return Ok((asset_id, Some(definition)));
     }
 
-    // 没有任何已有本体：优先使用可靠绑定，否则旧节点 id 自身作为稳定身份。
+    // 没有任何已有本体：优先使用已确认绑定，否则旧节点 id 自身作为稳定身份。
     let fallback = reference_asset.unwrap_or_else(|| object_id.to_string());
     Ok((fallback, None))
 }
@@ -700,15 +580,15 @@ pub(crate) fn placeholder_definition(instance: &StarMapNodeInstance) -> StarMapN
     }
 }
 
-/// 把对象级计划落盘：先写共享本体，再写画布实例，最后登记反向引用。
+/// 把对象级计划落盘：先迁出旧标签，再写共享本体，然后写画布实例，最后
+/// 按实例重建反向引用。
 ///
 /// 幂等：已存在同内容本体/实例时重复调用不改变结果。任何一步失败都返回
 /// `Err`，调用方不得宣告迁移成功（原始字节仍在磁盘上，可安全重试）。
 ///
-/// 成功返回的含义包含 `references.json` 已同步完成：
-/// [`crate::starmap::library::record_node_reference`] 幂等补齐缺失项，
-/// 既有绑定指向别的资产身份时返回错误而不是覆盖。因此调用方不能因为实例
-/// 文件已经是合法新格式就跳过本函数——崩溃重入必须靠实例事实补齐派生索引。
+/// 旧标签迁移失败只记录诊断：标签是派生关系，不能阻断实例/本体落盘，否则
+/// 同步又会因为一个缺失的派生字段卡住整组。实例已有非空 `assetId` 是身份
+/// 权威，反向索引按实例重建。
 pub(crate) fn persist_node_object_plan(
     app_data_root: &Path,
     starmap_id: &str,
@@ -722,11 +602,42 @@ pub(crate) fn persist_node_object_plan(
             plan.instance.instance_id, object_id
         )));
     }
-    // 先写本体：节点文件一旦变成实例引用，本体必须已经可用。
+    // 1. 迁出旧标签：重写实例会丢掉旧 `tags` 字段，所以标签没有全部迁出时
+    //    只写本体、保留旧节点原文，等下一次（库索引可用后）再完成实例重写。
+    let mut tags_pending = false;
+    if !plan.legacy_tags.is_empty() && !plan.instance.asset_id.is_empty() {
+        let legacy = [(
+            plan.instance.asset_id.clone(),
+            plan.instance.project_id.clone(),
+            plan.legacy_tags.clone(),
+        )];
+        match crate::annotations::migration::migrate_starmap_node_tags(app_data_root, &legacy) {
+            Ok(report) if report.conflicts.is_empty() => {}
+            Ok(report) => {
+                tags_pending = true;
+                log::warn!(
+                    "starmap node legacy tags still pending for starmap_id={starmap_id} \
+                     object_id={object_id} asset_id={}: {} conflict(s); keeping legacy node bytes",
+                    plan.instance.asset_id,
+                    report.conflicts.len()
+                );
+            }
+            Err(error) => {
+                tags_pending = true;
+                log::warn!(
+                    "starmap node legacy tags migration failed for starmap_id={starmap_id} \
+                     object_id={object_id} asset_id={}: {error}; keeping legacy node bytes",
+                    plan.instance.asset_id
+                );
+            }
+        }
+    }
+    // 2. 写本体：节点文件一旦变成实例引用，本体必须已经可用。
     if let Some(definition) = &plan.definition {
         crate::starmap::library::save_node_definition(app_data_root, definition)?;
     }
-    if plan.rewrite_instance {
+    // 3. 写实例：旧标签还留在原文里时不能重写，否则标签会从数据里消失。
+    if plan.rewrite_instance && !tags_pending {
         let rel_path = package_storage::node_rel_path(starmap_id, object_id);
         let path = app_data_root.join(&rel_path);
         if let Some(parent) = path.parent() {
@@ -735,6 +646,7 @@ pub(crate) fn persist_node_object_plan(
         let content = serde_json::to_string_pretty(&plan.instance)?;
         crate::storage::atomic_write_string(&path, &content)?;
     }
+    // 4. 反向索引从实例重建（派生视图，落后时直接按实例修正）。
     crate::starmap::library::record_node_reference(
         app_data_root,
         starmap_id,
@@ -743,6 +655,11 @@ pub(crate) fn persist_node_object_plan(
         &plan.instance.asset_id,
     )?;
     Ok(())
+}
+
+/// 共享内容（不含 asset id / 时间戳）是否一致。
+fn shared_content_equal(left: &StarMapNodeDefinition, right: &StarMapNodeDefinition) -> bool {
+    shared_content_fields(left) == shared_content_fields(right)
 }
 
 /// 规范化共享内容（不含 asset id / 时间戳）的字段序列。
@@ -757,22 +674,6 @@ fn shared_content_fields(definition: &StarMapNodeDefinition) -> Vec<(&'static st
         ("style", serde_json::json!(definition.style)),
         ("provenance", serde_json::json!(definition.provenance)),
     ]
-}
-
-/// 共享内容差异字段（规范化 JSON 比较），空表示内容一致。
-fn shared_content_diff(
-    left: &StarMapNodeDefinition,
-    right: &StarMapNodeDefinition,
-) -> Vec<&'static str> {
-    let left_fields = shared_content_fields(left);
-    let right_fields = shared_content_fields(right);
-    let mut diff = Vec::new();
-    for ((name, left_value), (_, right_value)) in left_fields.into_iter().zip(right_fields) {
-        if left_value != right_value {
-            diff.push(name);
-        }
-    }
-    diff
 }
 
 /// 画布节点文件的包内相对路径字符串（用于错误信息）。
@@ -795,32 +696,20 @@ fn identity_mismatch_error(
     ))
 }
 
-fn identity_conflict_error(
-    starmap_id: &str,
-    object_id: &str,
-    node_path: &str,
-    asset_id: &str,
-    conflict_fields: &[&str],
-    detail: &str,
-) -> Error {
-    Error::Other(format!(
-        "starmap node identity conflict: path={node_path} object_type=node \
-         object_id={object_id} starmap_id={starmap_id} asset_id={asset_id} \
-         definition_path={} conflict_fields={} detail={detail}; preserve original node bytes",
-        crate::starmap::library::node_definition_rel_path(asset_id).display(),
-        conflict_fields.join(",")
-    ))
-}
-
-/// 旧节点文件里非空 `tags` 数组的长度；没有则返回 `None`。
-fn legacy_tag_count(bytes: &[u8]) -> Option<usize> {
-    let value: Value = serde_json::from_slice(bytes).ok()?;
-    let tags = value.get(LEGACY_TAGS_FIELD)?.as_array()?;
-    if tags.is_empty() {
-        None
-    } else {
-        Some(tags.len())
-    }
+/// 旧节点文件里的非空 `tags` 数组；没有则返回空列表。
+fn legacy_tags(bytes: &[u8]) -> Vec<String> {
+    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
+        return Vec::new();
+    };
+    let Some(tags) = value.get(LEGACY_TAGS_FIELD).and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    tags.iter()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 #[cfg(test)]

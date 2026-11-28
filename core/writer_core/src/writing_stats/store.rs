@@ -29,6 +29,7 @@ use crate::editor::{EditorChange, EditorSelection, Utf8ByteOffset};
 use crate::error::Result;
 use crate::writing_stats::calendar;
 use crate::writing_stats::checkpoint::{self, ProofCheckpoint};
+use crate::writing_stats::jsonl;
 use crate::writing_stats::proof::{
     self, apply_changes, chain_content_hash, compute_event_hash, content_hash_of_text,
     text_digest_matches, text_sha256,
@@ -37,8 +38,8 @@ use crate::writing_stats::{WritingActivitySegment, WritingInputEvent};
 use chrono::NaiveDate;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -264,19 +265,11 @@ impl StatsStore {
         if fresh.is_empty() {
             return Ok(0);
         }
-        let mut buffer = String::new();
+        let mut lines = Vec::with_capacity(fresh.len());
         for event in &fresh {
-            buffer.push_str(&serde_json::to_string(event)?);
-            buffer.push('\n');
+            lines.push(serde_json::to_string(event)?);
         }
-        {
-            let file_path = self.event_file_path(origin, date);
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&file_path)?;
-            file.write_all(buffer.as_bytes())?;
-        }
+        jsonl::append_jsonl_lines(&self.event_file_path(origin, date), &lines)?;
 
         let mut cache = self.lock_written_ids();
         let ids = cache.entry(format!("{origin}/{date}")).or_default();
@@ -1307,7 +1300,11 @@ impl StatsStore {
 
     /// 扫描某设备某个 UTC 日期的原始 JSONL 与已封口归档，按 event_id 去重。
     fn scan_persisted_ids(&self, origin: &str, date: &str) -> Result<HashSet<String>> {
-        let mut ids = self.scan_ids(&self.event_file_path(origin, date))?;
+        let mut ids = jsonl::read_jsonl_ids::<WritingInputEvent, _>(
+            &self.event_file_path(origin, date),
+            |event| event.event_id.as_str(),
+        )?
+        .ids;
         let archive_path = self
             .app_data_root
             .join(checkpoint::archive_relative_path(origin, date));
@@ -1459,19 +1456,11 @@ impl StatsStore {
         if fresh.is_empty() {
             return Ok(0);
         }
-        let mut buffer = String::new();
+        let mut lines = Vec::with_capacity(fresh.len());
         for segment in &fresh {
-            buffer.push_str(&serde_json::to_string(segment)?);
-            buffer.push('\n');
+            lines.push(serde_json::to_string(segment)?);
         }
-        {
-            let file_path = self.session_file_path(origin, date);
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&file_path)?;
-            file.write_all(buffer.as_bytes())?;
-        }
+        jsonl::append_jsonl_lines(&self.session_file_path(origin, date), &lines)?;
 
         let mut cache = self.lock_written_ids();
         let ids = cache
@@ -1494,7 +1483,11 @@ impl StatsStore {
         let mut cache = self.lock_written_ids();
         let cache_key = format!("sessions:{origin}/{date}");
         if !cache.contains_key(&cache_key) {
-            let ids = self.scan_ids(&self.session_file_path(origin, date))?;
+            let ids = jsonl::read_jsonl_ids::<WritingActivitySegment, _>(
+                &self.session_file_path(origin, date),
+                |segment| segment.event_id.as_str(),
+            )?
+            .ids;
             cache.insert(cache_key.clone(), ids);
         }
         let Some(ids) = cache.get(&cache_key) else {
@@ -1766,22 +1759,15 @@ impl StatsStore {
         let logged = load_logged_conflict_ids(&path)?;
 
         let mut batch_seen: HashSet<&str> = HashSet::new();
-        let mut pending = String::new();
+        let mut lines = Vec::new();
         for conflict in conflicts {
             let event_id = conflict.event_id.as_str();
             if event_id.is_empty() || logged.contains(event_id) || !batch_seen.insert(event_id) {
                 continue;
             }
-            pending.push_str(&serde_json::to_string(conflict)?);
-            pending.push('\n');
+            lines.push(serde_json::to_string(conflict)?);
         }
-        if pending.is_empty() {
-            return Ok(());
-        }
-
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-        file.write_all(pending.as_bytes())?;
-        Ok(())
+        jsonl::append_jsonl_lines(&path, &lines)
     }
 
     /// 严格读取单个计时切片文件（任何一行解析失败都报错）。
@@ -1797,9 +1783,8 @@ impl StatsStore {
             }
             let segment: WritingActivitySegment = serde_json::from_str(trimmed).map_err(|e| {
                 crate::Error::Other(format!(
-                    "Corrupt writing activity segment at stats/events/{}/{}.sessions.jsonl:{}: {}",
-                    file.origin,
-                    file.date,
+                    "Corrupt writing activity segment at {}:{}: {}",
+                    file.path.display(),
                     idx + 1,
                     e
                 ))
@@ -1825,34 +1810,6 @@ impl StatsStore {
             }
         }
         Ok(merged)
-    }
-
-    /// best-effort 扫描已写入的 event_id，损坏行跳过。
-    fn scan_ids(&self, path: &Path) -> Result<HashSet<String>> {
-        let mut ids = HashSet::new();
-        if !path.is_file() {
-            return Ok(ids);
-        }
-        let handle = File::open(&path)?;
-        for line in BufReader::new(handle).lines() {
-            let Ok(line) = line else {
-                continue;
-            };
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-                continue;
-            };
-            let Some(id) = value.get("event_id").and_then(|value| value.as_str()) else {
-                continue;
-            };
-            if !id.is_empty() {
-                ids.insert(id.to_string());
-            }
-        }
-        Ok(ids)
     }
 }
 
@@ -2011,6 +1968,8 @@ fn load_logged_conflict_ids(path: &Path) -> Result<HashSet<String>> {
 mod tests {
     use super::*;
     use crate::writing_stats::{EventSource, Platform};
+    use std::fs::OpenOptions;
+    use std::io::Write;
     use tempfile::TempDir;
 
     fn create_mock_store() -> (TempDir, StatsStore) {
@@ -2152,7 +2111,7 @@ mod tests {
     }
 
     #[test]
-    fn test_record_events_tolerates_corrupt_history_lines() {
+    fn test_record_events_reports_corrupt_history_lines() {
         let (tmp, store) = create_mock_store();
         let event = create_mock_event();
         let date = store.timestamp_to_date(event.timestamp_ms).unwrap();
@@ -2163,11 +2122,18 @@ mod tests {
 
         let mut fresh = create_mock_event();
         fresh.event_id = "event-after-corrupt".to_string();
-        assert_eq!(store.record_events(vec![fresh]).unwrap(), 1);
+        // 写入路径不得把读取/解析失败当成“没有历史”继续追加；错误带路径与行号，
+        // 原文件保持原样，修好历史后再重试仍能落盘。
+        let error = store.record_events(vec![fresh.clone()]).unwrap_err();
+        assert!(error.to_string().contains(&path.display().to_string()), "{error}");
+        assert!(error.to_string().contains("line 1"), "{error}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"bad\":}\n");
 
-        let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("event-after-corrupt"));
-        assert!(content.contains("{\"bad\":}"));
+        fs::write(&path, "").unwrap();
+        assert_eq!(store.record_events(vec![fresh]).unwrap(), 1);
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("event-after-corrupt"));
     }
 
     #[test]

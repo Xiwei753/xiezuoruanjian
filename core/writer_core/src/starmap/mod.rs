@@ -115,18 +115,33 @@ pub(crate) fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
     migration::migrate_index(app_data_root)?;
 
     let path = index_path(app_data_root);
-    if !path.exists() {
-        let _ = library::ensure_library_index(app_data_root)?;
-        return Ok(StarMapIndexRecord {
-            schema_version: migration::NEW_INDEX_SCHEMA_VERSION,
-            starmap_ids: vec![],
-            root_starmap_ids: vec![],
-            main_starmap_by_project: std::collections::HashMap::new(),
-            updated_at: now_epoch(),
-        });
-    }
-    let content = fs::read_to_string(&path)?;
-    let idx: StarMapIndexRecord = serde_json::from_str(&content)?;
+    // 只有索引真实不存在才返回空索引；读取/权限失败必须返回，不能把
+    // “读不到”伪装成“没有星图”。
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            library::ensure_library_index(app_data_root)?;
+            return Ok(StarMapIndexRecord {
+                schema_version: migration::NEW_INDEX_SCHEMA_VERSION,
+                starmap_ids: vec![],
+                root_starmap_ids: vec![],
+                main_starmap_by_project: std::collections::HashMap::new(),
+                updated_at: now_epoch(),
+            });
+        }
+        Err(error) => {
+            return Err(crate::error::Error::Other(format!(
+                "failed to read starmap index {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    let idx: StarMapIndexRecord = serde_json::from_str(&content).map_err(|error| {
+        crate::error::Error::Other(format!(
+            "corrupt starmap index {}: {error}",
+            path.display()
+        ))
+    })?;
     // 双重保险：迁移入口可能被别的调用方式绕开，反序列化后再断言一次版本。
     if idx.schema_version != migration::NEW_INDEX_SCHEMA_VERSION {
         return Err(crate::error::Error::UnsupportedVersion {
@@ -135,7 +150,7 @@ pub(crate) fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
     }
     // 素材库目录同样在首次读取星图索引时完成一次性迁移；迁移只读文件，
     // 不回调 load_index，避免递归。
-    let _ = library::ensure_library_index(app_data_root)?;
+    library::ensure_library_index(app_data_root)?;
     Ok(idx)
 }
 

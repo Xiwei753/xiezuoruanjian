@@ -65,7 +65,7 @@ impl super::WriterCore {
     }
 
     pub fn rebuild_search_index(&self, project_id: Option<&str>) -> Result<SearchIndexStatus> {
-        let entries = super::super::search::rebuild::rebuild_index(
+        let report = super::super::search::rebuild::rebuild_index(
             &self.app_data_root,
             &self.projects_root,
             project_id,
@@ -75,9 +75,9 @@ impl super::WriterCore {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(pid) = project_id {
-            service.rebuild_project_from_entries(pid, entries);
+            service.rebuild_project_from_extraction(pid, report);
         } else {
-            service.rebuild_from_entries(entries);
+            service.rebuild_from_extraction(report);
         }
         Ok(service.status())
     }

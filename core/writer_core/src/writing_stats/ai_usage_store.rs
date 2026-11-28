@@ -14,8 +14,7 @@
 //! 修改，不能把输入/输出字数随 `MutationContext` 复制到每条对象事件上。
 
 use std::collections::{BTreeMap, HashSet};
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
@@ -27,6 +26,7 @@ use crate::storage::WorkspaceWriteLock;
 use crate::writing_stats::ai_usage::AiUsageEvent;
 use crate::writing_stats::calendar;
 use crate::writing_stats::contribution_store::{resolve_device_partition_id, valid_segment};
+use crate::writing_stats::jsonl;
 
 const EVENTS_ROOT: &str = "stats/events";
 const PENDING_ROOT: &str = "stats/pending/ai-usage";
@@ -110,24 +110,39 @@ impl AiUsageStore {
         if !pending_dir.is_dir() {
             return Ok(());
         }
-        let mut paths: Vec<PathBuf> = fs::read_dir(&pending_dir)?
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension == "json")
-            })
-            .collect();
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for entry in fs::read_dir(&pending_dir)? {
+            let entry = entry.map_err(|error| {
+                Error::Other(format!(
+                    "failed to read AI usage pending directory {}: {error}",
+                    pending_dir.display()
+                ))
+            })?;
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                paths.push(path);
+            }
+        }
         paths.sort();
         for path in paths {
-            let content = match fs::read_to_string(&path) {
-                Ok(content) => content,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error.into()),
-            };
-            let events: Vec<AiUsageEvent> = serde_json::from_str(&content)?;
+            let content = fs::read_to_string(&path).map_err(|error| {
+                Error::Other(format!(
+                    "failed to read AI usage pending journal {}: {error}",
+                    path.display()
+                ))
+            })?;
+            let events: Vec<AiUsageEvent> = serde_json::from_str(&content).map_err(|error| {
+                Error::Other(format!(
+                    "corrupt AI usage pending journal {}: {error}",
+                    path.display()
+                ))
+            })?;
             if !events.is_empty() {
                 let prepared = self.prepare_events(events, None)?;
+                // 追加成功（含 sync_all）后才删除 journal。
                 self.append_events(&prepared)?;
             }
             remove_pending_file(&path)?;
@@ -214,24 +229,26 @@ impl AiUsageStore {
         let mut written = 0usize;
         for ((origin, date), events) in by_origin_date {
             let path = self.event_file_path(&origin, &date);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
+            let mut expected_lines = Vec::with_capacity(events.len());
+            for event in &events {
+                expected_lines.push(serde_json::to_string(*event)?);
             }
+            // 崩溃留下的尾部残行只有 pending 能证明时才截断；完整记录缺换行
+            // 由共用追加函数补分隔符。
+            jsonl::repair_tail_with_pending::<AiUsageEvent>(&path, &expected_lines)?;
             let mut existing = read_ids(&path)?;
-            let mut buffer = String::new();
+            let mut fresh_lines = Vec::new();
             for event in events {
                 if existing.contains(&event.event_id) {
                     continue;
                 }
-                buffer.push_str(&serde_json::to_string(event)?);
-                buffer.push('\n');
+                fresh_lines.push(serde_json::to_string(event)?);
                 existing.insert(event.event_id.clone());
                 written += 1;
             }
-            if buffer.is_empty() {
-                continue;
+            if !fresh_lines.is_empty() {
+                jsonl::append_jsonl_lines(&path, &fresh_lines)?;
             }
-            append_buffer(&path, buffer.as_bytes())?;
         }
         Ok(written)
     }
@@ -248,43 +265,31 @@ impl AiUsageStore {
         let mut seen = HashSet::new();
         for origin in self.list_origins()? {
             let dir = self.events_root().join(&origin);
-            let mut paths: Vec<PathBuf> = fs::read_dir(&dir)?
-                .filter_map(|entry| entry.ok())
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.ends_with(AI_USAGE_SUFFIX))
-                })
-                .collect();
+            let mut paths: Vec<PathBuf> = Vec::new();
+            for entry in fs::read_dir(&dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(AI_USAGE_SUFFIX))
+                {
+                    paths.push(path);
+                }
+            }
             paths.sort();
             for path in paths {
-                let file = fs::File::open(&path)?;
-                for line in BufReader::new(file).lines() {
-                    let line = line?;
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
-                    let mut event: AiUsageEvent = match serde_json::from_str(line) {
-                        Ok(event) => event,
-                        Err(error) => {
-                            eprintln!(
-                                "[writing_stats] skip malformed AI usage event in {}: {error}",
-                                path.display()
-                            );
-                            continue;
-                        }
-                    };
+                for record in jsonl::read_jsonl::<AiUsageEvent>(&path)? {
+                    let mut event = record.value;
                     if !event.local_date.is_empty()
                         && validate_local_date(&event.local_date).is_err()
                     {
-                        eprintln!(
-                            "[writing_stats] skip AI usage event with invalid local date in {}: {:?}",
+                        return Err(Error::Other(format!(
+                            "invalid local date in AI usage event at {}:{}: {:?}",
                             path.display(),
+                            record.line,
                             event.local_date
-                        );
-                        continue;
+                        )));
                     }
                     if event.origin_device_id.is_empty() {
                         event.origin_device_id = origin.clone();
@@ -344,21 +349,10 @@ fn validate_local_date(date: &str) -> Result<()> {
 }
 
 fn read_ids(path: &Path) -> Result<HashSet<String>> {
-    let mut ids = HashSet::new();
-    let file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
-        Err(error) => return Err(error.into()),
-    };
-    for line in BufReader::new(file).lines() {
-        let line = line?;
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-            if let Some(id) = value.get("event_id").and_then(|id| id.as_str()) {
-                ids.insert(id.to_string());
-            }
-        }
-    }
-    Ok(ids)
+    Ok(jsonl::read_jsonl_ids::<AiUsageEvent, _>(path, |event| {
+        event.event_id.as_str()
+    })?
+    .ids)
 }
 
 fn remove_pending_file(path: &Path) -> Result<()> {
@@ -367,23 +361,4 @@ fn remove_pending_file(path: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
-}
-
-/// 一次性追加并保证半行 JSON 不会吞掉后续恢复写入的事件。
-fn append_buffer(path: &Path, buffer: &[u8]) -> Result<()> {
-    let mut file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
-        .open(path)?;
-    if file.metadata()?.len() > 0 {
-        file.seek(SeekFrom::End(-1))?;
-        let mut last = [0u8; 1];
-        file.read_exact(&mut last)?;
-        if last[0] != b'\n' {
-            file.write_all(b"\n")?;
-        }
-    }
-    file.write_all(buffer)?;
-    Ok(())
 }

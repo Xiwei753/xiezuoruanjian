@@ -1,10 +1,151 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use serde::de::DeserializeOwned;
 
 use super::types::*;
 use crate::annotations::{
     AnnotationStore, LinkTarget, NamedEntry, ObjectLink, ObjectRef, Tag, TagBinding,
 };
-use crate::error::Result;
+use crate::error::{Error, Result};
+
+/// 一次索引提取中单个来源的失败。
+///
+/// 索引是可重建的派生缓存：单个作品/卷/章节/星图/设置文件读取失败时，提取
+/// 继续处理其它来源，并把这个来源的路径与原始错误带回来。调用方据此保留该
+/// 来源上一次有效的索引条目，而不是用空结果覆盖整批索引。
+#[derive(Debug, Clone)]
+pub struct ExtractionFailure {
+    /// 出错的文件或目录。
+    pub path: PathBuf,
+    /// 原始错误文本（包含 IO/JSON 的路径上下文）。
+    pub error: String,
+    /// 受影响的索引范围；`SearchScope::All` 表示该目标下的全部范围。
+    pub scope: SearchScope,
+    /// 受影响的持久化对象；只填写已经知道的部分。
+    pub target: SearchTarget,
+}
+
+impl ExtractionFailure {
+    /// 旧索引中的条目是否属于这个失败来源（需要原样保留）。
+    pub(crate) fn protects(&self, entry: &IndexEntry) -> bool {
+        (self.scope == SearchScope::All || self.scope == entry.scope)
+            && target_covers(&self.target, &entry.target)
+    }
+}
+
+/// `partial` 中已填写的字段必须与 `actual` 一致；未填写表示该字段不参与匹配。
+fn target_covers(partial: &SearchTarget, actual: &SearchTarget) -> bool {
+    fn same(left: Option<&str>, right: Option<&str>) -> bool {
+        left.map_or(true, |value| right == Some(value))
+    }
+    same(partial.project_id.as_deref(), actual.project_id.as_deref())
+        && same(partial.volume_id.as_deref(), actual.volume_id.as_deref())
+        && same(partial.chapter_id.as_deref(), actual.chapter_id.as_deref())
+        && same(partial.starmap_id.as_deref(), actual.starmap_id.as_deref())
+        && same(partial.node_id.as_deref(), actual.node_id.as_deref())
+        && same(partial.edge_id.as_deref(), actual.edge_id.as_deref())
+        && same(partial.link_id.as_deref(), actual.link_id.as_deref())
+        && same(partial.embed_id.as_deref(), actual.embed_id.as_deref())
+        && same(
+            partial.setting_key.as_deref(),
+            actual.setting_key.as_deref(),
+        )
+        && same(
+            partial.setting_section.as_deref(),
+            actual.setting_section.as_deref(),
+        )
+}
+
+/// 一次全量/按作品提取的结果。
+///
+/// `entries` 只包含**真正提取成功**的来源；`failures` 列出失败来源。两者一起
+/// 交给索引更新入口，由它决定保留哪些旧条目。
+#[derive(Debug, Default)]
+pub struct ExtractionReport {
+    pub entries: Vec<IndexEntry>,
+    pub failures: Vec<ExtractionFailure>,
+}
+
+impl ExtractionReport {
+    pub fn is_complete(&self) -> bool {
+        self.failures.is_empty()
+    }
+
+    pub fn extend(&mut self, other: ExtractionReport) {
+        self.entries.extend(other.entries);
+        self.failures.extend(other.failures);
+    }
+
+    fn push(&mut self, entry: IndexEntry) {
+        self.entries.push(entry);
+    }
+
+    fn fail(
+        &mut self,
+        path: &Path,
+        error: impl std::fmt::Display,
+        scope: SearchScope,
+        target: SearchTarget,
+    ) {
+        self.failures.push(ExtractionFailure {
+            path: path.to_path_buf(),
+            error: error.to_string(),
+            scope,
+            target,
+        });
+    }
+}
+
+fn project_target(project_id: &str) -> SearchTarget {
+    SearchTarget {
+        project_id: Some(project_id.to_string()),
+        ..Default::default()
+    }
+}
+
+fn volume_target(project_id: &str, volume_id: &str) -> SearchTarget {
+    SearchTarget {
+        project_id: Some(project_id.to_string()),
+        volume_id: Some(volume_id.to_string()),
+        ..Default::default()
+    }
+}
+
+fn chapter_target(project_id: &str, volume_id: &str, chapter_id: &str) -> SearchTarget {
+    SearchTarget {
+        project_id: Some(project_id.to_string()),
+        volume_id: Some(volume_id.to_string()),
+        chapter_id: Some(chapter_id.to_string()),
+        ..Default::default()
+    }
+}
+
+fn starmap_target(starmap_id: &str) -> SearchTarget {
+    SearchTarget {
+        starmap_id: Some(starmap_id.to_string()),
+        ..Default::default()
+    }
+}
+
+/// 读取一个可选的 JSON 元数据文件。
+///
+/// - 文件真实不存在 → `Ok(None)`，由调用方按现有含义把它当作非业务目录略过；
+/// - 权限/IO 失败或 JSON 损坏 → `Err`，消息带真实路径。
+fn read_json_optional<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to read {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    serde_json::from_str(&content)
+        .map(Some)
+        .map_err(|error| Error::Other(format!("{} is corrupt: {error}", path.display())))
+}
 
 // TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
@@ -17,15 +158,9 @@ use crate::error::Result;
 pub fn extract_chapter_entries(
     projects_root: &Path,
     project_id: Option<&str>,
-) -> Result<Vec<IndexEntry>> {
-    let mut entries = Vec::new();
-    let projects_dir = projects_root;
-
-    if !projects_dir.exists() {
-        return Ok(entries);
-    }
-
-    let projects = scan_dirs(projects_dir)?;
+) -> Result<ExtractionReport> {
+    let mut report = ExtractionReport::default();
+    let projects = scan_dirs(projects_root)?;
     for (pid, project_path) in projects {
         if let Some(filter_id) = project_id {
             if pid != filter_id {
@@ -33,67 +168,146 @@ pub fn extract_chapter_entries(
             }
         }
 
-        let proj: Option<crate::project::Project> =
-            std::fs::read_to_string(project_path.join("project.json"))
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok());
-        let proj_title = proj.as_ref().map(|p| p.title.as_str()).unwrap_or("");
-        entries.push(extract_project_title_entry(&pid, proj_title));
+        let target = project_target(&pid);
+        let project_meta = project_path.join("project.json");
+        let project = match read_json_optional::<crate::project::Project>(&project_meta) {
+            Ok(Some(project)) => Some(project),
+            // 没有 project.json 的目录不是作品，按现有含义略过。
+            Ok(None) => continue,
+            Err(error) => {
+                // 只有作品标题来源失败；卷/章节仍按目录继续扫描。
+                report.fail(
+                    &project_meta,
+                    error,
+                    SearchScope::ProjectTitle,
+                    target.clone(),
+                );
+                None
+            }
+        };
+        if let Some(project) = &project {
+            report.push(extract_project_title_entry(&pid, &project.title));
+        }
+
         // Annotation extraction needs the app data root for shared node
         // definitions and canvas graphs. `projects_root` is normally
         // `<app_data_root>/projects`, so its parent is the workspace root.
-        entries.extend(extract_annotation_entries_with_root(
-            &project_path,
-            &pid,
-            projects_root.parent(),
-        )?);
+        match extract_annotation_entries_with_root(&project_path, &pid, projects_root.parent()) {
+            Ok(entries) => report.entries.extend(entries),
+            Err(error) => {
+                let annotations_dir = project_path.join("annotations");
+                for scope in [
+                    SearchScope::AnnotationTag,
+                    SearchScope::AnnotationEntry,
+                    SearchScope::AnnotationLink,
+                ] {
+                    report.fail(&annotations_dir, &error, scope, target.clone());
+                }
+            }
+        }
 
         let volumes_dir = project_path.join("volumes");
-        if !volumes_dir.exists() {
-            continue;
-        }
-        let volumes = scan_dirs(&volumes_dir)?;
-        for (vid, volume_path) in volumes {
-            let vol: Option<crate::volume::Volume> =
-                std::fs::read_to_string(volume_path.join("volume.json"))
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok());
-            let vol_title = vol.as_ref().map(|v| v.title.as_str()).unwrap_or("");
-            entries.push(extract_volume_title_entry(&pid, &vid, vol_title));
-
-            let chapters_dir = volume_path.join("chapters");
-            if !chapters_dir.exists() {
+        let volumes = match scan_dirs(&volumes_dir) {
+            Ok(volumes) => volumes,
+            Err(error) => {
+                report.fail(&volumes_dir, error, SearchScope::All, target.clone());
                 continue;
             }
-            let chapters = scan_dirs(&chapters_dir)?;
+        };
+        for (vid, volume_path) in volumes {
+            let vt = volume_target(&pid, &vid);
+            let volume_meta = volume_path.join("volume.json");
+            let volume = match read_json_optional::<crate::volume::Volume>(&volume_meta) {
+                Ok(Some(volume)) => volume,
+                // 没有 volume.json 的目录不是卷，按现有含义略过它的章节。
+                Ok(None) => continue,
+                Err(error) => {
+                    report.fail(&volume_meta, error, SearchScope::All, vt.clone());
+                    continue;
+                }
+            };
+            report.push(extract_volume_title_entry(&pid, &vid, &volume.title));
+
+            let chapters_dir = volume_path.join("chapters");
+            let chapters = match scan_dirs(&chapters_dir) {
+                Ok(chapters) => chapters,
+                Err(error) => {
+                    report.fail(&chapters_dir, error, SearchScope::All, vt);
+                    continue;
+                }
+            };
             for (cid, chapter_path) in chapters {
-                let ch_title = load_chapter_title(&chapter_path);
-                entries.push(extract_chapter_title_entry(&pid, &vid, &cid, &ch_title));
-
-                let md_path = chapter_path.join("chapter.md");
-                if md_path.exists() {
-                    if let Ok(body) = std::fs::read_to_string(&md_path) {
-                        entries.push(extract_chapter_body_entry(
-                            &pid, &vid, &cid, &ch_title, &body,
-                        ));
-                    }
-                }
-
-                let note_path = chapter_path.join("chapter.note.md");
-                if note_path.exists() {
-                    if let Ok(note) = std::fs::read_to_string(&note_path) {
-                        if !note.is_empty() {
-                            entries.push(extract_chapter_note_entry(
-                                &pid, &vid, &cid, &ch_title, &note,
-                            ));
-                        }
-                    }
-                }
+                extract_chapter_entries_for_chapter(&mut report, &pid, &vid, &cid, &chapter_path);
             }
         }
     }
 
-    Ok(entries)
+    Ok(report)
+}
+
+/// 提取一个章节的标题/正文/备注。标题读取失败时跳过整个章节，避免用空标题
+/// 覆盖该章节上一次有效的标题、正文和备注索引。
+fn extract_chapter_entries_for_chapter(
+    report: &mut ExtractionReport,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    chapter_path: &Path,
+) {
+    let target = chapter_target(project_id, volume_id, chapter_id);
+    let meta_path = chapter_path.join("chapter.meta.json");
+    let title = match load_chapter_title(&meta_path) {
+        Ok(Some(title)) => title,
+        // 没有 chapter.meta.json 的目录不是章节。
+        Ok(None) => return,
+        Err(error) => {
+            report.fail(&meta_path, error, SearchScope::All, target);
+            return;
+        }
+    };
+    report.push(extract_chapter_title_entry(
+        project_id,
+        volume_id,
+        chapter_id,
+        &title,
+    ));
+
+    let body_path = chapter_path.join("chapter.md");
+    match std::fs::read_to_string(&body_path) {
+        Ok(body) => report.push(extract_chapter_body_entry(
+            project_id,
+            volume_id,
+            chapter_id,
+            &title,
+            &body,
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => report.fail(
+            &body_path,
+            error,
+            SearchScope::ChapterBody,
+            chapter_target(project_id, volume_id, chapter_id),
+        ),
+    }
+
+    let note_path = chapter_path.join("chapter.note.md");
+    match std::fs::read_to_string(&note_path) {
+        Ok(note) if !note.is_empty() => report.push(extract_chapter_note_entry(
+            project_id,
+            volume_id,
+            chapter_id,
+            &title,
+            &note,
+        )),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => report.fail(
+            &note_path,
+            error,
+            SearchScope::ChapterNote,
+            chapter_target(project_id, volume_id, chapter_id),
+        ),
+    }
 }
 
 /// Build the searchable projection of one project's active annotation records.
@@ -433,27 +647,30 @@ fn object_ref_search_text(
                 )
             })
             .unwrap_or_else(fallback)),
-        ObjectRef::NodeAsset { object_id, .. } => {
-            Ok(node_asset_search_text(app_data_root, object_id).unwrap_or_else(fallback))
-        }
+        ObjectRef::NodeAsset { object_id, .. } => Ok(
+            node_asset_search_text(app_data_root, object_id)?.unwrap_or_else(fallback),
+        ),
         ObjectRef::NodeInstance {
             starmap_id,
             object_id,
         } => Ok(
-            canvas_node_search_text(app_data_root, starmap_id, object_id).unwrap_or_else(fallback),
+            canvas_node_search_text(app_data_root, starmap_id, object_id)?
+                .unwrap_or_else(fallback),
         ),
         ObjectRef::EmbedInstance {
             starmap_id,
             object_id,
         } => Ok(
-            canvas_embed_search_text(app_data_root, starmap_id, object_id).unwrap_or_else(fallback),
+            canvas_embed_search_text(app_data_root, starmap_id, object_id)?
+                .unwrap_or_else(fallback),
         ),
         ObjectRef::CanvasAnchor {
             object_id,
             anchor_id,
             ..
         } => Ok(
-            canvas_anchor_search_text(app_data_root, object_id, anchor_id).unwrap_or_else(fallback),
+            canvas_anchor_search_text(app_data_root, object_id, anchor_id)?
+                .unwrap_or_else(fallback),
         ),
         _ => Ok(fallback()),
     }
@@ -486,66 +703,88 @@ fn canvas_route_search_text(route: &crate::object_ref::CanvasRoute) -> String {
 
 /// Shared node asset text. The definition is the single content owner; every
 /// canvas instance projects the same text.
-fn node_asset_search_text(app_data_root: Option<&Path>, asset_id: &str) -> Option<String> {
-    let app_data_root = app_data_root?;
-    let definition =
-        crate::starmap::library::load_node_definition(app_data_root, asset_id).ok()??;
-    Some(node_definition_text(&definition.title, &definition.content))
+///
+/// 只有素材真实不存在时返回 `Ok(None)`；素材库读取/解析失败向上传播，不能把
+/// 失败当成「该对象没有可搜索文本」。
+fn node_asset_search_text(
+    app_data_root: Option<&Path>,
+    asset_id: &str,
+) -> Result<Option<String>> {
+    let Some(app_data_root) = app_data_root else {
+        return Ok(None);
+    };
+    Ok(
+        crate::starmap::library::load_node_definition(app_data_root, asset_id)?
+            .map(|definition| node_definition_text(&definition.title, &definition.content)),
+    )
 }
 
 fn canvas_node_search_text(
     app_data_root: Option<&Path>,
     starmap_id: &str,
     instance_id: &str,
-) -> Option<String> {
-    let store = load_canvas_store(app_data_root, starmap_id)?;
-    let node = store.get_node(instance_id)?;
-    Some(node_definition_text(&node.title, &node.content))
+) -> Result<Option<String>> {
+    let Some(store) = load_canvas_store(app_data_root, starmap_id)? else {
+        return Ok(None);
+    };
+    Ok(store
+        .get_node(instance_id)
+        .map(|node| node_definition_text(&node.title, &node.content)))
 }
 
 fn canvas_embed_search_text(
     app_data_root: Option<&Path>,
     starmap_id: &str,
     instance_id: &str,
-) -> Option<String> {
-    let store = load_canvas_store(app_data_root, starmap_id)?;
-    let embed = store.get_embed(instance_id)?;
-    Some(
+) -> Result<Option<String>> {
+    let Some(store) = load_canvas_store(app_data_root, starmap_id)? else {
+        return Ok(None);
+    };
+    Ok(store.get_embed(instance_id).map(|embed| {
         embed
             .label
             .clone()
-            .unwrap_or_else(|| embed.target_starmap_id.clone()),
-    )
+            .unwrap_or_else(|| embed.target_starmap_id.clone())
+    }))
 }
 
 fn canvas_anchor_search_text(
     app_data_root: Option<&Path>,
     asset_id: &str,
     anchor_id: &str,
-) -> Option<String> {
-    let app_data_root = app_data_root?;
-    let definition =
-        crate::starmap::library::load_node_definition(app_data_root, asset_id).ok()??;
-    let anchor = definition
+) -> Result<Option<String>> {
+    let Some(app_data_root) = app_data_root else {
+        return Ok(None);
+    };
+    let Some(definition) =
+        crate::starmap::library::load_node_definition(app_data_root, asset_id)?
+    else {
+        return Ok(None);
+    };
+    Ok(definition
         .anchors
         .iter()
-        .find(|anchor| anchor.anchor_id == anchor_id)?;
-    Some(
-        anchor
-            .label
-            .clone()
-            .unwrap_or_else(|| format!("锚点 {}", anchor.anchor_id)),
-    )
+        .find(|anchor| anchor.anchor_id == anchor_id)
+        .map(|anchor| {
+            anchor
+                .label
+                .clone()
+                .unwrap_or_else(|| format!("锚点 {}", anchor.anchor_id))
+        }))
 }
 
+/// 加载画布。画布目录/`graph.json` 真实不存在时保持空图（返回空 store），
+/// 只有 IO/JSON 损坏才向上传播。
 fn load_canvas_store(
     app_data_root: Option<&Path>,
     starmap_id: &str,
-) -> Option<crate::starmap::store::StarMapStore> {
-    let app_data_root = app_data_root?;
+) -> Result<Option<crate::starmap::store::StarMapStore>> {
+    let Some(app_data_root) = app_data_root else {
+        return Ok(None);
+    };
     let mut store = crate::starmap::store::StarMapStore::new(app_data_root, starmap_id);
-    store.load_full().ok()?;
-    Some(store)
+    store.load_full()?;
+    Ok(Some(store))
 }
 
 fn node_definition_text(
@@ -588,22 +827,24 @@ fn object_ref_kind_label(object_ref: &ObjectRef) -> &'static str {
 pub fn extract_starmap_entries(
     app_data_root: &Path,
     project_id: Option<&str>,
-) -> Result<Vec<IndexEntry>> {
-    let mut entries = Vec::new();
+) -> Result<ExtractionReport> {
+    let mut report = ExtractionReport::default();
     let starmaps_dir = app_data_root.join("starmaps");
-
-    if !starmaps_dir.exists() {
-        return Ok(entries);
-    }
-
     let starmap_dirs = scan_dirs(&starmaps_dir)?;
+
     for (sid, starmap_path) in starmap_dirs {
         let meta_path = starmaps_dir.join(format!("{}.meta.json", sid));
-        let meta: Option<crate::starmap::StarMapMeta> = std::fs::read_to_string(&meta_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok());
+        let meta = match read_json_optional::<crate::starmap::StarMapMeta>(&meta_path) {
+            Ok(Some(meta)) => meta,
+            // 没有 meta 的目录不是可索引的星图。
+            Ok(None) => continue,
+            Err(error) => {
+                report.fail(&meta_path, error, SearchScope::All, starmap_target(&sid));
+                continue;
+            }
+        };
 
-        let bound_project: Option<&str> = meta.as_ref().and_then(|m| m.project_id.as_deref());
+        let bound_project: Option<&str> = meta.project_id.as_deref();
 
         if let Some(filter_id) = project_id {
             if bound_project != Some(filter_id) {
@@ -611,125 +852,232 @@ pub fn extract_starmap_entries(
             }
         }
 
-        let title = meta.as_ref().map(|m| m.title.as_str()).unwrap_or("");
-        entries.push(extract_starmap_title_entry(&sid, bound_project, title));
+        report.push(extract_starmap_title_entry(
+            &sid,
+            bound_project,
+            &meta.title,
+        ));
 
         let nodes_dir = starmap_path.join("nodes");
-        if nodes_dir.exists() {
-            if let Ok(node_files) = scan_json_files(&nodes_dir) {
+        match scan_json_files(&nodes_dir) {
+            Ok(node_files) => {
                 for (nid, node_file) in node_files {
-                    // 新契约（Issue #1060/#1062）：节点文件保存 StarMapNodeInstance，
-                    // 共享标题/正文在素材库定义里；必须走统一解码入口，不能把节点文件
-                    // 当完整 StarMapNode 反序列化。
-                    let Ok(bytes) = std::fs::read(&node_file) else {
-                        continue;
-                    };
-                    let Ok(plan) = crate::starmap::migration::nodes::decode_node_object(
+                    extract_starmap_node(
+                        &mut report,
                         app_data_root,
                         &sid,
+                        bound_project,
                         &nid,
-                        &bytes,
-                        None,
-                    ) else {
-                        continue;
-                    };
-                    let definition = match plan.definition {
-                        Some(definition) => Some(definition),
-                        None => crate::starmap::library::load_node_definition(
-                            app_data_root,
-                            &plan.instance.asset_id,
-                        )
-                        .ok()
-                        .flatten(),
-                    };
-                    let Some(definition) = definition else {
-                        continue;
-                    };
-                    // Issue #1060：节点上的旧 `tags` 字段已迁到 annotations
-                    // 仓库，星图实体条目不再携带第二份标签文本。
-                    let content = extract_node_search_text(&definition.content);
-                    if !definition.title.is_empty() || !content.is_empty() {
-                        entries.push(extract_starmap_node_entry(
-                            &sid,
-                            &nid,
-                            bound_project,
-                            &definition.title,
-                            &content,
-                        ));
-                    }
+                        &node_file,
+                    );
                 }
             }
+            Err(error) => report.fail(
+                &nodes_dir,
+                error,
+                SearchScope::StarmapNode,
+                starmap_target(&sid),
+            ),
         }
 
         let edges_dir = starmap_path.join("edges");
-        if edges_dir.exists() {
-            if let Ok(edge_files) = scan_json_files(&edges_dir) {
+        match scan_json_files(&edges_dir) {
+            Ok(edge_files) => {
                 for (eid, edge_file) in edge_files {
-                    let edge: Option<crate::starmap::types::StarMapEdge> =
-                        std::fs::read_to_string(&edge_file)
-                            .ok()
-                            .and_then(|s| serde_json::from_str(&s).ok());
-                    if let Some(e) = edge {
-                        let label = e.label.as_deref().unwrap_or("");
-                        if !label.is_empty() {
-                            entries.push(extract_starmap_edge_entry(
+                    match read_json_optional::<crate::starmap::types::StarMapEdge>(&edge_file) {
+                        Ok(Some(edge)) => {
+                            if let Some(label) = edge.label.filter(|label| !label.is_empty()) {
+                                report.push(extract_starmap_edge_entry(
+                                    &sid,
+                                    &eid,
+                                    bound_project,
+                                    &label,
+                                ));
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => report.fail(
+                            &edge_file,
+                            error,
+                            SearchScope::StarmapEdgeLabel,
+                            SearchTarget {
+                                project_id: bound_project.map(str::to_string),
+                                starmap_id: Some(sid.clone()),
+                                edge_id: Some(eid),
+                                ..Default::default()
+                            },
+                        ),
+                    }
+                }
+            }
+            Err(error) => report.fail(
+                &edges_dir,
+                error,
+                SearchScope::StarmapEdgeLabel,
+                starmap_target(&sid),
+            ),
+        }
+
+        let links_dir = starmap_path.join("links");
+        match scan_json_files(&links_dir) {
+            Ok(link_files) => {
+                for (lid, link_file) in link_files {
+                    match read_json_optional::<crate::starmap::types::StarMapLink>(&link_file) {
+                        Ok(Some(link)) => {
+                            if let Some(label) = link.label.filter(|label| !label.is_empty()) {
+                                report.push(extract_starmap_link_entry(
+                                    &sid,
+                                    &lid,
+                                    bound_project,
+                                    &label,
+                                ));
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => report.fail(
+                            &link_file,
+                            error,
+                            SearchScope::StarmapLink,
+                            SearchTarget {
+                                project_id: bound_project.map(str::to_string),
+                                starmap_id: Some(sid.clone()),
+                                link_id: Some(lid),
+                                ..Default::default()
+                            },
+                        ),
+                    }
+                }
+            }
+            Err(error) => report.fail(
+                &links_dir,
+                error,
+                SearchScope::StarmapLink,
+                starmap_target(&sid),
+            ),
+        }
+
+        let embeds_dir = starmap_path.join("embeds");
+        match scan_json_files(&embeds_dir) {
+            Ok(embed_files) => {
+                for (eid, embed_file) in embed_files {
+                    match read_json_optional::<crate::starmap::types::StarMapEmbed>(&embed_file) {
+                        Ok(Some(embed)) => {
+                            let label = embed.label.as_deref().unwrap_or("");
+                            report.push(extract_starmap_embed_entry(
                                 &sid,
                                 &eid,
                                 bound_project,
                                 label,
                             ));
                         }
+                        Ok(None) => {}
+                        Err(error) => report.fail(
+                            &embed_file,
+                            error,
+                            SearchScope::StarmapEmbed,
+                            SearchTarget {
+                                project_id: bound_project.map(str::to_string),
+                                starmap_id: Some(sid.clone()),
+                                embed_id: Some(eid),
+                                ..Default::default()
+                            },
+                        ),
                     }
                 }
             }
-        }
-
-        let links_dir = starmap_path.join("links");
-        if links_dir.exists() {
-            if let Ok(link_files) = scan_json_files(&links_dir) {
-                for (lid, link_file) in link_files {
-                    let link: Option<crate::starmap::types::StarMapLink> =
-                        std::fs::read_to_string(&link_file)
-                            .ok()
-                            .and_then(|s| serde_json::from_str(&s).ok());
-                    if let Some(l) = link {
-                        let label = l.label.as_deref().unwrap_or("");
-                        if !label.is_empty() {
-                            entries.push(extract_starmap_link_entry(
-                                &sid,
-                                &lid,
-                                bound_project,
-                                label,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        let embeds_dir = starmap_path.join("embeds");
-        if embeds_dir.exists() {
-            if let Ok(embed_files) = scan_json_files(&embeds_dir) {
-                for (eid, embed_file) in embed_files {
-                    let embed: Option<crate::starmap::types::StarMapEmbed> =
-                        std::fs::read_to_string(&embed_file)
-                            .ok()
-                            .and_then(|s| serde_json::from_str(&s).ok());
-                    if let Some(e) = embed {
-                        let label = e.label.as_deref().unwrap_or("");
-                        entries.push(extract_starmap_embed_entry(
-                            &sid,
-                            &eid,
-                            bound_project,
-                            label,
-                        ));
-                    }
-                }
-            }
+            Err(error) => report.fail(
+                &embeds_dir,
+                error,
+                SearchScope::StarmapEmbed,
+                starmap_target(&sid),
+            ),
         }
     }
 
-    Ok(entries)
+    Ok(report)
+}
+
+/// 提取一个画布节点。节点文件/共享定义读取失败时记录该节点来源，不生成空标题
+/// 条目去覆盖旧索引。
+fn extract_starmap_node(
+    report: &mut ExtractionReport,
+    app_data_root: &Path,
+    starmap_id: &str,
+    bound_project: Option<&str>,
+    node_id: &str,
+    node_file: &Path,
+) {
+    let target = SearchTarget {
+        project_id: bound_project.map(str::to_string),
+        starmap_id: Some(starmap_id.to_string()),
+        node_id: Some(node_id.to_string()),
+        ..Default::default()
+    };
+    // 新契约（Issue #1060/#1062）：节点文件保存 StarMapNodeInstance，
+    // 共享标题/正文在素材库定义里；必须走统一解码入口，不能把节点文件
+    // 当完整 StarMapNode 反序列化。
+    let bytes = match std::fs::read(node_file) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            report.fail(
+                node_file,
+                format!("failed to read {}: {error}", node_file.display()),
+                SearchScope::StarmapNode,
+                target,
+            );
+            return;
+        }
+    };
+    let plan = match crate::starmap::migration::nodes::decode_node_object(
+        app_data_root,
+        starmap_id,
+        node_id,
+        &bytes,
+        None,
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            report.fail(node_file, error, SearchScope::StarmapNode, target);
+            return;
+        }
+    };
+    let definition = match plan.definition {
+        Some(definition) => Some(definition),
+        None => match crate::starmap::library::load_node_definition(
+            app_data_root,
+            &plan.instance.asset_id,
+        ) {
+            Ok(definition) => definition,
+            Err(error) => {
+                report.fail(node_file, error, SearchScope::StarmapNode, target);
+                return;
+            }
+        },
+    };
+    let Some(definition) = definition else {
+        report.fail(
+            node_file,
+            format!(
+                "node definition {} is missing for canvas node {}",
+                plan.instance.asset_id, node_id
+            ),
+            SearchScope::StarmapNode,
+            target,
+        );
+        return;
+    };
+    // Issue #1060：节点上的旧 `tags` 字段已迁到 annotations
+    // 仓库，星图实体条目不再携带第二份标签文本。
+    let content = extract_node_search_text(&definition.content);
+    if !definition.title.is_empty() || !content.is_empty() {
+        report.push(extract_starmap_node_entry(
+            starmap_id,
+            node_id,
+            bound_project,
+            &definition.title,
+            &content,
+        ));
+    }
 }
 
 struct SettingCatalogEntry {
@@ -939,11 +1287,8 @@ fn setting_value_text(value: &serde_json::Value) -> String {
     }
 }
 
-/// 把一份设置 JSON 展开成逐项可搜索的索引条目。
-pub fn extract_settings_from_json(group: &str, content: &str) -> Vec<IndexEntry> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
-        return Vec::new();
-    };
+/// 把一份已解析的设置 JSON 展开成逐项可搜索的索引条目。
+fn settings_entries_from_value(group: &str, value: &serde_json::Value) -> Vec<IndexEntry> {
     SETTINGS_CATALOG
         .iter()
         .filter(|item| item.group == group)
@@ -970,24 +1315,89 @@ pub fn extract_settings_from_json(group: &str, content: &str) -> Vec<IndexEntry>
         .collect()
 }
 
-pub fn extract_setting_entries(app_data_root: &Path) -> Result<Vec<IndexEntry>> {
-    let mut entries = Vec::new();
-
-    let local_content = std::fs::read_to_string(app_data_root.join("settings.local.json"))
-        .ok()
-        .or_else(|| serde_json::to_string(&crate::settings::LocalSettings::default()).ok());
-    if let Some(content) = local_content {
-        entries.extend(extract_settings_from_json("local", &content));
+/// 把一份设置 JSON 展开成逐项可搜索的索引条目。
+///
+/// 调用方传入的是刚从强类型设置 DTO 序列化出的内存 JSON（设置保存后的增量
+/// 投影）；磁盘读取走 [`extract_setting_entries`]，后者区分真实不存在与
+/// IO/JSON 损坏。
+pub fn extract_settings_from_json(group: &str, content: &str) -> Vec<IndexEntry> {
+    match serde_json::from_str::<serde_json::Value>(content) {
+        Ok(value) => settings_entries_from_value(group, &value),
+        Err(_) => Vec::new(),
     }
+}
 
-    let sync_content = std::fs::read_to_string(app_data_root.join("settings.sync.json"))
-        .ok()
-        .or_else(|| serde_json::to_string(&crate::settings::SyncableSettings::default()).ok());
-    if let Some(content) = sync_content {
-        entries.extend(extract_settings_from_json("sync", &content));
-    }
+fn extract_settings_file<T: serde::Serialize>(
+    report: &mut ExtractionReport,
+    app_data_root: &Path,
+    file_name: &str,
+    group: &str,
+    default: T,
+) {
+    let path = app_data_root.join(file_name);
+    let value = match std::fs::read_to_string(&path) {
+        Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(value) => value,
+            Err(error) => {
+                report.fail(
+                    &path,
+                    format!("settings {} is corrupt: {error}", path.display()),
+                    SearchScope::Setting,
+                    SearchTarget::default(),
+                );
+                return;
+            }
+        },
+        // 只有设置文件真实不存在才使用默认配置；权限/IO 失败必须保留旧索引。
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match serde_json::to_value(default) {
+                Ok(value) => value,
+                Err(error) => {
+                    report.fail(
+                        &path,
+                        format!(
+                            "failed to serialize default settings for {}: {error}",
+                            path.display()
+                        ),
+                        SearchScope::Setting,
+                        SearchTarget::default(),
+                    );
+                    return;
+                }
+            }
+        }
+        Err(error) => {
+            report.fail(
+                &path,
+                format!("failed to read settings {}: {error}", path.display()),
+                SearchScope::Setting,
+                SearchTarget::default(),
+            );
+            return;
+        }
+    };
+    report
+        .entries
+        .extend(settings_entries_from_value(group, &value));
+}
 
-    Ok(entries)
+pub fn extract_setting_entries(app_data_root: &Path) -> Result<ExtractionReport> {
+    let mut report = ExtractionReport::default();
+    extract_settings_file(
+        &mut report,
+        app_data_root,
+        "settings.local.json",
+        "local",
+        crate::settings::LocalSettings::default(),
+    );
+    extract_settings_file(
+        &mut report,
+        app_data_root,
+        "settings.sync.json",
+        "sync",
+        crate::settings::SyncableSettings::default(),
+    );
+    Ok(report)
 }
 
 pub fn extract_starmap_node_entry(
@@ -1227,60 +1637,80 @@ pub fn now_epoch() -> u64 {
         .as_secs()
 }
 
-#[allow(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    clippy::excessive_nesting,
-    clippy::too_many_arguments,
-    clippy::type_complexity
-)]
+fn read_dir_entries(dir: &Path) -> Result<Option<Vec<std::fs::DirEntry>>> {
+    match std::fs::read_dir(dir) {
+        Ok(entries) => entries.collect::<std::io::Result<Vec<_>>>().map(Some).map_err(
+            |error| Error::Other(format!("failed to read directory {}: {error}", dir.display())),
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Error::Other(format!(
+            "failed to read directory {}: {error}",
+            dir.display()
+        ))),
+    }
+}
+
+fn entry_is_dir(entry: &std::fs::DirEntry) -> Result<bool> {
+    let path = entry.path();
+    let file_type = entry
+        .file_type()
+        .map_err(|error| Error::Other(format!("failed to inspect {}: {error}", path.display())))?;
+    Ok(file_type.is_dir() || (file_type.is_symlink() && path.is_dir()))
+}
+
+fn entry_is_file(entry: &std::fs::DirEntry) -> Result<bool> {
+    let path = entry.path();
+    let file_type = entry
+        .file_type()
+        .map_err(|error| Error::Other(format!("failed to inspect {}: {error}", path.display())))?;
+    Ok(file_type.is_file() || (file_type.is_symlink() && path.is_file()))
+}
+
+fn json_file_id(path: &Path) -> Option<(String, PathBuf)> {
+    let name = path.file_name().and_then(|name| name.to_str())?;
+    let id = name.strip_suffix(".json")?;
+    Some((id.to_string(), path.to_path_buf()))
+}
+
 fn scan_dirs(dir: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     let mut result = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    result.push((name.to_string(), path));
-                }
-            }
+    let Some(entries) = read_dir_entries(dir)? else {
+        return Ok(result);
+    };
+    for entry in entries {
+        if !entry_is_dir(&entry)? {
+            continue;
+        }
+        let path = entry.path();
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            result.push((name.to_string(), path));
         }
     }
     Ok(result)
 }
 
-#[allow(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    clippy::excessive_nesting,
-    clippy::too_many_arguments,
-    clippy::type_complexity
-)]
 fn scan_json_files(dir: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     let mut result = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.ends_with(".json") {
-                        let id = name.trim_end_matches(".json").to_string();
-                        result.push((id, path));
-                    }
+    let Some(entries) = read_dir_entries(dir)? else {
+        return Ok(result);
+    };
+    for entry in entries {
+        let path = entry.path();
+        if entry_is_file(&entry)? {
+            // 包存储把对象放在一级 bucket 子目录里；这里保持原有的一层扫描。
+            if let Some(file) = json_file_id(&path) {
+                result.push(file);
+            }
+        } else if entry_is_dir(&entry)? {
+            let Some(sub_entries) = read_dir_entries(&path)? else {
+                continue;
+            };
+            for sub_entry in sub_entries {
+                if !entry_is_file(&sub_entry)? {
+                    continue;
                 }
-            } else if path.is_dir() {
-                if let Ok(sub_entries) = std::fs::read_dir(&path) {
-                    for sub_entry in sub_entries.flatten() {
-                        let sub_path = sub_entry.path();
-                        if sub_path.is_file() {
-                            if let Some(name) = sub_path.file_name().and_then(|n| n.to_str()) {
-                                if name.ends_with(".json") {
-                                    let id = name.trim_end_matches(".json").to_string();
-                                    result.push((id, sub_path));
-                                }
-                            }
-                        }
-                    }
+                if let Some(file) = json_file_id(&sub_entry.path()) {
+                    result.push(file);
                 }
             }
         }
@@ -1288,16 +1718,35 @@ fn scan_json_files(dir: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     Ok(result)
 }
 
-fn load_chapter_title(chapter_path: &Path) -> String {
-    std::fs::read_to_string(chapter_path.join("chapter.meta.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| {
-            v.get("title")
-                .and_then(|f| f.as_str())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_default()
+/// 读取章节标题。meta 文件真实不存在返回 `Ok(None)`（不是章节目录）；读取/
+/// 解析失败或缺少标题字段返回带路径错误，由调用方保留该章节旧索引。
+fn load_chapter_title(meta_path: &Path) -> Result<Option<String>> {
+    let content = match std::fs::read_to_string(meta_path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to read chapter meta {}: {error}",
+                meta_path.display()
+            )))
+        }
+    };
+    let value: serde_json::Value = serde_json::from_str(&content).map_err(|error| {
+        Error::Other(format!(
+            "chapter meta {} is corrupt: {error}",
+            meta_path.display()
+        ))
+    })?;
+    let title = value
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            Error::Other(format!(
+                "chapter meta {} has no title field",
+                meta_path.display()
+            ))
+        })?;
+    Ok(Some(title.to_string()))
 }
 
 fn extract_node_search_text(content: &crate::starmap::semantic::StarMapNodeContent) -> String {

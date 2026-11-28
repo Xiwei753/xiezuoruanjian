@@ -65,7 +65,6 @@ impl StarMapStore {
 
         if !self.dirty_nodes.is_empty() {
             let ids: Vec<String> = self.dirty_nodes.iter().cloned().collect();
-            let mut succeeded = true;
             for node_id in &ids {
                 if let Some(node) = self.nodes.get(node_id) {
                     // Issue #1062 评论 #7236446138 第 2 项：画布节点文件只保存
@@ -102,9 +101,12 @@ impl StarMapStore {
                             changed_paths.push(rel_path);
                             successful_writes.nodes.insert(node_id.clone());
                         }
-                        Err(_) => {
-                            succeeded = false;
-                            break;
+                        Err(error) => {
+                            // 直接传播真实路径/原因；dirty 集合保持原样，下一轮重试。
+                            return Err(crate::error::Error::Other(format!(
+                                "failed to save starmap node instance {}/{}: {error}",
+                                self.starmap_id, node_id
+                            )));
                         }
                     }
                 } else {
@@ -112,14 +114,10 @@ impl StarMapStore {
                     successful_writes.nodes.insert(node_id.clone());
                 }
             }
-            if !succeeded {
-                failed_types.push("Node".to_string());
-            }
         }
 
         if !self.dirty_edges.is_empty() {
             let ids: Vec<String> = self.dirty_edges.iter().cloned().collect();
-            let mut succeeded = true;
             for edge_id in &ids {
                 if let Some(edge) = self.edges.get(edge_id) {
                     match package_storage::save_edge(&self.app_data_root, &self.starmap_id, edge) {
@@ -127,23 +125,21 @@ impl StarMapStore {
                             changed_paths.push(rel_path);
                             successful_writes.edges.insert(edge_id.clone());
                         }
-                        Err(_) => {
-                            succeeded = false;
-                            break;
+                        Err(error) => {
+                            return Err(crate::error::Error::Other(format!(
+                                "failed to save starmap edge {}/{}: {error}",
+                                self.starmap_id, edge_id
+                            )));
                         }
                     }
                 } else {
                     successful_writes.edges.insert(edge_id.clone());
                 }
             }
-            if !succeeded {
-                failed_types.push("Edge".to_string());
-            }
         }
 
         if !self.dirty_embeds.is_empty() {
             let ids: Vec<String> = self.dirty_embeds.iter().cloned().collect();
-            let mut succeeded = true;
             for instance_id in &ids {
                 if let Some(embed) = self.embeds.get(instance_id) {
                     match package_storage::save_embed(&self.app_data_root, &self.starmap_id, embed)
@@ -152,17 +148,16 @@ impl StarMapStore {
                             changed_paths.push(rel_path);
                             successful_writes.embeds.insert(instance_id.clone());
                         }
-                        Err(_) => {
-                            succeeded = false;
-                            break;
+                        Err(error) => {
+                            return Err(crate::error::Error::Other(format!(
+                                "failed to save starmap embed {}/{}: {error}",
+                                self.starmap_id, instance_id
+                            )));
                         }
                     }
                 } else {
                     successful_writes.embeds.insert(instance_id.clone());
                 }
-            }
-            if !succeeded {
-                failed_types.push("Embed".to_string());
             }
         }
 
@@ -579,9 +574,11 @@ impl StarMapStore {
                     }
                     true
                 }
-                Err(_) => {
-                    failed_types.push("GraphMeta".to_string());
-                    false
+                Err(error) => {
+                    return Err(crate::error::Error::Other(format!(
+                        "failed to commit starmap graph meta {}: {error}",
+                        self.starmap_id
+                    )));
                 }
             }
         } else {

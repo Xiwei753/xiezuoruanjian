@@ -278,6 +278,8 @@ pub struct ChapterConflict {
     pub key: ChapterKey,
     pub expected: Option<ChapterVersion>,
     pub actual: ChapterVersion,
+    /// 本次冲突材料所属的章节提交事务 ID（与 `conflict_dir` 目录名一致）。
+    pub transaction_id: String,
     pub conflict_dir: String,
 }
 

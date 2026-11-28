@@ -64,11 +64,11 @@ fn invalidate_correction_result_caches(
     }
 }
 
-/// 章节正文在 commit 前的真实快照。同步证明必须用这个快照作为 before，
+/// 章节正文在 commit 前的真实快照。章节回执必须用这个快照作为 before，
 /// 不能等应用后再从 live 倒推，也不能把“文件不存在”当成空正文。
 #[derive(Debug, Clone)]
 pub(crate) enum CommittedBefore {
-    /// 非章节正文路径，不为证明读取。
+    /// 非章节正文路径，不需要正文快照。
     NotTracked,
     /// 章节正文在 commit 前不存在（首次导入/删除已不存在）。
     Missing,
@@ -77,7 +77,7 @@ pub(crate) enum CommittedBefore {
         bytes: Vec<u8>,
         version: Option<crate::chapter::ChapterVersion>,
     },
-    /// 读取失败，证明事件必须明确报错而不是伪造 before。
+    /// 读取失败，回执必须明确报错而不是伪造 before。
     Error(String),
 }
 
@@ -545,37 +545,6 @@ fn collect_rebased_anchor_paths(
     }
 }
 
-fn is_starmap_node_instance_path(path: &std::path::Path) -> bool {
-    let components = path
-        .components()
-        .filter_map(|component| match component {
-            std::path::Component::Normal(value) => Some(value.to_string_lossy()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    components.len() == 5
-        && components[0] == "starmaps"
-        && components[1] != "library"
-        && components[2] == "nodes"
-        && components[4].ends_with(".json")
-}
-
-/// 素材库归属/目录对象文件：`starmaps/library/{entries,folders}/<id>.json`。
-fn is_starmap_library_object_path(path: &std::path::Path) -> bool {
-    let components = path
-        .components()
-        .filter_map(|component| match component {
-            std::path::Component::Normal(value) => Some(value.to_string_lossy()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    components.len() == 4
-        && components[0] == "starmaps"
-        && components[1] == "library"
-        && (components[2] == "entries" || components[2] == "folders")
-        && components[3].ends_with(".json")
-}
-
 /// 引擎状态写回：普通状态文件直接写；清单则落成 v2 权威存储。
 ///
 /// staging commit 的清单动作来自三方合并后的完整清单字节。这里把它转成
@@ -617,6 +586,229 @@ fn stage_engine_state_write(
     Ok(())
 }
 
+/// 统一对象比较产出的提交：内容、对象索引与已确认基线一次原子落盘。
+///
+/// 与旧 [`apply_commit_plan_with_optional_merge`] 的区别：
+/// - 不再做 state.local.json 三方语义合并：`known_files` 只在这里按"实际应用了
+///   远端内容/删除"推进；
+/// - 本地上传/本地删除不推进基线（要等远端发布回执确认），因此不会出现
+///   "本地内容冒充已同步"的旧问题；
+/// - 冲突路径保留共同基线，由冲突记录驱动用户选择；
+/// - 正文仍走既有章节提交入口（journal / 证明链），不绕过业务事务。
+pub(crate) fn commit_object_plan(
+    run: &crate::sync::staging::StagingRun,
+    plan: &crate::sync::staging::CommitPlan,
+    content_actions: &[crate::sync::staging::CommitAction],
+    backup_mode: bool,
+    chapter_receipts: &mut Vec<crate::chapter::ChapterSyncCommitReceipt>,
+) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
+    use crate::sync::staging::CommitAction;
+
+    let live_root = run.target_live_root();
+    let workspace_lock = crate::storage::WorkspaceWriteLock::acquire(run.app_data_root())?;
+
+    let mut content_actions = content_actions.to_vec();
+    let default_project_id = live_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let chapter_sources = staging_chapter_sources(run, Some(default_project_id));
+    let (handled_chapters, chapter_result) = commit_synced_chapter_bodies(
+        live_root,
+        &workspace_lock,
+        &content_actions,
+        run.run_id(),
+        run.app_data_root(),
+        &run.base_root(),
+        &chapter_sources,
+        chapter_receipts,
+    );
+    chapter_result?;
+    if !handled_chapters.is_empty() {
+        content_actions.retain(|action| {
+            let rel = match action {
+                CommitAction::Apply { rel_path, .. } | CommitAction::Delete { rel_path } => rel_path,
+            };
+            !handled_chapters.contains(rel)
+        });
+    }
+    let mut rebased_anchors = rebase_chapter_anchors(live_root, &content_actions)?;
+    content_actions.append(&mut rebased_anchors);
+
+    let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
+    if backup_mode {
+        tx.enable_backup_mode();
+    }
+    for action in &plan.engine_state_actions {
+        match action {
+            CommitAction::Apply { rel_path, content } => {
+                let rel = rel_path.to_string_lossy();
+                tx.add_bytes(&rel, content)?;
+            }
+            CommitAction::Delete { rel_path } => {
+                let rel = rel_path.to_string_lossy();
+                tx.add_delete(&rel)?;
+            }
+        }
+    }
+    for action in &content_actions {
+        match action {
+            CommitAction::Apply { rel_path, content } => {
+                let rel = rel_path.to_string_lossy();
+                tx.add_bytes(&rel, content)?;
+            }
+            CommitAction::Delete { rel_path } => {
+                let rel = rel_path.to_string_lossy();
+                tx.add_delete(&rel)?;
+            }
+        }
+    }
+
+    let mut state = match run.app_group() {
+        Some(group) => crate::sync::SyncService::load_sync_state_read_only_for_group(
+            live_root, group, None,
+        )?,
+        None => crate::sync::SyncService::load_sync_state_read_only(live_root, None)?,
+    };
+    apply_confirmed_remote_actions(&mut state, &content_actions);
+    let state_rel = run
+        .app_group()
+        .map(crate::sync::types::AppDataGroup::local_state_path)
+        .unwrap_or_else(|| "app-meta/sync/state.local.json".to_string());
+    let state_bytes = serde_json::to_vec_pretty(&state)
+        .map_err(|error| crate::Error::Io(std::io::Error::other(error.to_string())))?;
+    tx.add_bytes(&state_rel, &state_bytes)?;
+    tx.commit()?;
+    Ok(tx)
+}
+
+/// 按发布回执确认本轮真正的远端事实（Issue #1066）。
+///
+/// 只有 flush 实际写出的对象回执才能推进 `known_files`：本地上传在远端确认前
+/// 仍是"未确认事实"，失败重试时不会被误当成已同步。远端采用/删除已在提交阶段
+/// 推进过基线，这里重复确认是幂等的。
+///
+/// 返回无法确认的决议数量（调用方据此上报未结算）。
+pub(crate) fn confirm_published_objects(
+    sync_root: &Path,
+    target: &crate::sync::types::SyncTarget,
+    decisions: &[(String, crate::sync::decision::DurableObjectDecision)],
+    receipts: &[crate::sync::provider::round::PublishReceipt],
+) -> crate::Result<usize> {
+    use crate::sync::decision::DecisionOp;
+
+    let prefix = format!("{}/", target.remote_prefix.trim_end_matches('/'));
+    let mut receipt_by_path: std::collections::HashMap<
+        String,
+        &crate::sync::provider::round::PublishReceipt,
+    > = std::collections::HashMap::new();
+    for receipt in receipts {
+        receipt_by_path.insert(receipt.path.clone(), receipt);
+    }
+
+    // 只有本轮真正允许发布的对象才需要回执确认；未决冲突/纯远端消费的
+    // 决议不进入远端批次，不能因为它们没有回执就报"未结算"。
+    let relevant: Vec<(&str, &crate::sync::decision::DurableObjectDecision)> = decisions
+        .iter()
+        .filter(|(_, decision)| decision.is_publishable())
+        .filter_map(|(remote_path, decision)| {
+            remote_path
+                .strip_prefix(&prefix)
+                .map(|rel| (rel, decision))
+        })
+        .collect();
+    if relevant.is_empty() {
+        return Ok(0);
+    }
+
+    let mut state =
+        crate::sync::SyncService::load_sync_state_for_target(sync_root, target)?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut unconfirmed = 0usize;
+    let mut confirmed_any = false;
+    for (rel, decision) in relevant {
+        let remote_path = format!("{prefix}{rel}");
+        let receipt = receipt_by_path.get(&remote_path);
+        let confirmed = match decision.op {
+            DecisionOp::Upsert => receipt.is_some_and(|receipt| {
+                receipt.op == "upsert"
+                    && receipt.content_digest.as_deref() == Some(decision.final_hash.as_str())
+            }),
+            DecisionOp::Delete => receipt.is_some_and(|receipt| receipt.op == "delete"),
+        };
+        if !confirmed {
+            unconfirmed += 1;
+            continue;
+        }
+        confirmed_any = true;
+        match decision.op {
+            DecisionOp::Upsert => {
+                state
+                    .known_files
+                    .insert(rel.to_string(), decision.final_hash.clone());
+                state.known_files_updated_at.insert(rel.to_string(), now_ms);
+                state.deleted_files.remove(rel);
+                state.conflicted_files.remove(rel);
+                state.pending_take_remote.remove(rel);
+                state
+                    .tombstones
+                    .retain(|tombstone| tombstone.original_path != rel);
+            }
+            DecisionOp::Delete => {
+                state.known_files.remove(rel);
+                state.known_files_updated_at.remove(rel);
+                state.deleted_files.insert(rel.to_string());
+                state.conflicted_files.remove(rel);
+                state.pending_take_remote.remove(rel);
+            }
+        }
+    }
+    if confirmed_any {
+        crate::sync::SyncService::save_sync_state_for_target(sync_root, target, &state)?;
+    }
+    Ok(unconfirmed)
+}
+
+/// 把"实际应用到本机的远端事实"推进到已确认基线。
+///
+/// 只有远端下载/远端删除是本轮已确认的远端事实；本地上传与本地删除要等
+/// 远端发布回执才能推进，否则失败重试时会把未发布的本地内容当成已同步。
+fn apply_confirmed_remote_actions(
+    state: &mut crate::sync::types::SyncState,
+    actions: &[crate::sync::staging::CommitAction],
+) {
+    use crate::sync::staging::CommitAction;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    for action in actions {
+        let (rel, hash) = match action {
+            CommitAction::Apply { rel_path, content } => (
+                rel_path.to_string_lossy().replace('\\', "/"),
+                Some(crate::sync::hash::content_md5(content)),
+            ),
+            CommitAction::Delete { rel_path } => {
+                (rel_path.to_string_lossy().replace('\\', "/"), None)
+            }
+        };
+        match hash {
+            Some(hash) => {
+                state.known_files.insert(rel.clone(), hash);
+                state.known_files_updated_at.insert(rel.clone(), now_ms);
+                state.deleted_files.remove(&rel);
+                state.conflicted_files.remove(&rel);
+                state.pending_take_remote.remove(&rel);
+            }
+            None => {
+                state.known_files.remove(&rel);
+                state.known_files_updated_at.remove(&rel);
+                state.tombstones.retain(|item| item.original_path != rel);
+                state.deleted_files.insert(rel.clone());
+                state.conflicted_files.remove(&rel);
+                state.pending_take_remote.remove(&rel);
+            }
+        }
+    }
+}
+
 /// 将 commit plan 中的 Apply/Delete 变更通过 SaveTransaction 写回 live root。
 ///
 /// 删除 `git_finalize_recovery` 参数。
@@ -628,13 +820,11 @@ pub(crate) fn apply_commit_plan_to_live(
     content_actions: &[crate::sync::staging::CommitAction],
     engine_state_actions: &[crate::sync::staging::CommitAction],
     backup_mode: bool,
-    proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
 ) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
     if content_actions.is_empty() && engine_state_actions.is_empty() && !backup_mode {
         return Ok(crate::storage::transaction::SaveTransaction::new(live_root));
     }
     let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
-    tx.link_proof_recovery(proof_recovery_records.to_vec());
     if backup_mode {
         tx.enable_backup_mode();
     }
@@ -662,321 +852,14 @@ pub(crate) fn apply_commit_plan_to_live(
             }
         }
     }
-    let pending_references =
-        crate::sync::starmap_reference_obligation::PendingStarmapReferences::begin(
-            live_root,
-            content_actions,
-        )?;
-    if let Err(error) = tx.commit() {
-        if let Some(pending) = pending_references {
-            pending.cancel();
-        }
-        return Err(error);
-    }
-    if let Some(pending) = pending_references {
-        pending.settle();
-    }
+    tx.commit()?;
     Ok(tx)
 }
 
-/// 带 sync state 三方语义合并的 commit plan 写回 live。
-///
-/// 与 [`apply_commit_plan_to_live`] 的区别：`state.local.json` 和
-/// `conflicts.json` 不从 `engine_state_actions` 直接 apply incoming，
-/// 而是用 `merged_state` / `merged_conflicts`（由
-/// [`crate::sync::staging::sync_state_merge::merge_sync_state_three_way`]
-/// 产出）在同一个 `SaveTransaction` 里提交。
-///
-/// `engine_state_actions` 此时只剩 `manifest.sync.json`（`state.local.json` /
-/// `conflicts.json` 已被 `compute_commit_plan` 排除，走 `EngineStateMerge` 分支）。
-///
-/// Issue #762 评论 5830266600：用户在同步期间解决的冲突不能被 staging 旧基线
-/// 覆盖复活。
-pub(crate) fn apply_commit_plan_with_sync_state_merge(
-    live_root: &Path,
-    content_actions: &[crate::sync::staging::CommitAction],
-    engine_state_actions: &[crate::sync::staging::CommitAction],
-    merged_state: &crate::sync::types::SyncState,
-    merged_conflicts: &[crate::sync::types::SyncConflict],
-    backup_mode: bool,
-) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
-    apply_commit_plan_with_sync_state_merge_for_group(
-        live_root,
-        content_actions,
-        engine_state_actions,
-        merged_state,
-        merged_conflicts,
-        None,
-        backup_mode,
-        &[],
-    )
-}
-
-fn apply_commit_plan_with_sync_state_merge_for_group(
-    live_root: &Path,
-    content_actions: &[crate::sync::staging::CommitAction],
-    engine_state_actions: &[crate::sync::staging::CommitAction],
-    merged_state: &crate::sync::types::SyncState,
-    merged_conflicts: &[crate::sync::types::SyncConflict],
-    app_group: Option<&crate::sync::types::AppDataGroup>,
-    backup_mode: bool,
-    proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
-) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
-    // 注意：此处不像 apply_commit_plan_to_live 那样对
-    // `content_actions.is_empty() && engine_state_actions.is_empty() && !backup_mode`
-    // 做 early return。进入本函数本身就说明 `plan.needs_sync_state_merge == true`，
-    // `merged_state` / `merged_conflicts` 是需要提交的动作。即使 content_actions 和
-    // engine_state_actions 都为空，也必须把 `app-meta/sync/state.local.json` 和
-    // `app-meta/sync/conflicts.json` 加入 SaveTransaction，否则已算好的 merged state
-    // 会被静默丢掉，live 的 state/conflicts 停留在旧值（Issue #762 评论 5831990584）。
-    let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
-    tx.link_proof_recovery(proof_recovery_records.to_vec());
-    if backup_mode {
-        tx.enable_backup_mode();
-    }
-    // engine_state_actions 只剩 manifest.sync.json。
-    for action in engine_state_actions {
-        match action {
-            crate::sync::staging::CommitAction::Apply { rel_path, content } => {
-                stage_engine_state_write(&mut tx, live_root, rel_path, content)?;
-            }
-            crate::sync::staging::CommitAction::Delete { rel_path } => {
-                let rel_str = rel_path.to_string_lossy();
-                tx.add_delete(&rel_str)?;
-            }
-        }
-    }
-    // 合并后的 state.local.json + conflicts.json。
-    let state_json = serde_json::to_string_pretty(merged_state)
-        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-    let conflicts_json = serde_json::to_string_pretty(merged_conflicts)
-        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-    let (state_path, conflicts_path) = match app_group {
-        Some(group) => (group.local_state_path(), group.local_conflicts_path()),
-        None => (
-            "app-meta/sync/state.local.json".to_string(),
-            "app-meta/sync/conflicts.json".to_string(),
-        ),
-    };
-    tx.add_bytes(&state_path, state_json.as_bytes())?;
-    tx.add_bytes(&conflicts_path, conflicts_json.as_bytes())?;
-    // content_actions（安全正文）。
-    stage_rebased_chapter_anchors(live_root, content_actions, &mut tx)?;
-    for action in content_actions {
-        match action {
-            crate::sync::staging::CommitAction::Apply { rel_path, content } => {
-                let rel_str = rel_path.to_string_lossy();
-                tx.add_bytes(&rel_str, content)?;
-            }
-            crate::sync::staging::CommitAction::Delete { rel_path } => {
-                let rel_str = rel_path.to_string_lossy();
-                tx.add_delete(&rel_str)?;
-            }
-        }
-    }
-    let pending_references =
-        crate::sync::starmap_reference_obligation::PendingStarmapReferences::begin(
-            live_root,
-            content_actions,
-        )?;
-    if let Err(error) = tx.commit() {
-        if let Some(pending) = pending_references {
-            pending.cancel();
-        }
-        return Err(error);
-    }
-    if let Some(pending) = pending_references {
-        pending.settle();
-    }
-    Ok(tx)
-}
-
-pub(crate) enum TargetCommitResult {
-    Ok,
-    Skipped,
-    Failed(String),
-}
-
-/// Inject a staging-commit failure into the target result.
-///
-/// Manifest read/parse failures carry `manifest_read_failed: path=... cause=...`
-/// from the staging layer. Preserve that concrete path and report the failure
-/// as `merge`, so a corrupted manifest is not misreported as a transfer error.
-pub(crate) fn apply_commit_failure_to_target(
-    target: &mut crate::sync::types::TargetSyncResult,
-    message: &str,
-) {
-    target.result.status =
-        crate::sync::SyncStatus::RecoverableError(format!("staging_commit_failed: {message}"));
-    target.result.error = Some(format!("staging commit failed: {message}"));
-
-    if message.contains("manifest_read_failed:") {
-        target.failure_phase = Some("merge".to_string());
-        if let Some((_, path)) = message.split_once("path=") {
-            let path = path
-                .split(|character: char| character.is_whitespace() || character == ',')
-                .next()
-                .unwrap_or_default();
-            if !path.is_empty() {
-                target.failure_path = Some(path.to_string());
-            }
-        }
-    }
-}
-
-/// 根据 `plan.needs_sync_state_merge` 选择走三方语义合并还是直接 apply。
-///
-/// - `needs_sync_state_merge == true`：调
-///   [`merge_sync_state_three_way`] 得到合并后的 state/conflicts，
-///   再调 [`apply_commit_plan_with_sync_state_merge`] 在同一个 tx 里提交。
-/// - `needs_sync_state_merge == false`：走原 [`apply_commit_plan_to_live`]。
+/// 章节正文协调 + 一次 SaveTransaction 落盘（Issue #1066）。
 ///
 /// `content_actions` 由调用方过滤（`ConflictMetadataOnly` 会过滤掉 transfer
-/// 冲突路径），`engine_state_actions` 直接用 `plan.engine_state_actions`
-/// （只剩 `manifest.sync.json`）。
-/// 统计事件 JSONL 的最终合并必须在 live 提交锁内完成。
-///
-/// transfer 阶段的 staging 快照可能早于独立 MCP 的追加；这里在
-/// `WorkspaceWriteLock` 下重新读取当前 live 与 staging，按 event ID 求并集，
-/// 再把最终字节、known_files 和 manifest 记录一起推进到提交事务。
-fn refresh_stats_event_actions(
-    live_root: &Path,
-    staging_root: &Path,
-    group: &crate::sync::types::AppDataGroup,
-    content_actions: &mut [crate::sync::staging::CommitAction],
-    engine_state_actions: &mut Vec<crate::sync::staging::CommitAction>,
-    merged_state: &mut crate::sync::types::SyncState,
-) -> crate::error::Result<()> {
-    let mut changed: Vec<(String, String, i64)> = Vec::new();
-    for action in content_actions.iter_mut() {
-        let rel_path = match action {
-            crate::sync::staging::CommitAction::Apply { rel_path, .. }
-            | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path.clone(),
-        };
-        let rel_str = rel_path.to_string_lossy().to_string();
-        if !rel_str.ends_with(".jsonl")
-            || crate::sync::types::stats_device_id_for_event_path(&rel_str).is_none()
-        {
-            continue;
-        }
-        let live_bytes = match std::fs::read(live_root.join(&rel_path)) {
-            Ok(bytes) => Some(bytes),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "read live stats events {}: {error}",
-                    live_root.join(&rel_path).display()
-                ))))
-            }
-        };
-        let staging_bytes = match std::fs::read(staging_root.join(&rel_path)) {
-            Ok(bytes) => Some(bytes),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "read staging stats events {}: {error}",
-                    staging_root.join(&rel_path).display()
-                ))))
-            }
-        };
-        let merged = crate::sync::lww::merge_stats_jsonl(
-            live_bytes.as_deref().unwrap_or_default(),
-            staging_bytes.as_deref().unwrap_or_default(),
-        );
-        if merged.is_empty() {
-            continue;
-        }
-        let merged_hash = crate::sync::hash::content_md5(&merged);
-        let merged_at = chrono::Utc::now().timestamp_millis();
-        *action = crate::sync::staging::CommitAction::Apply {
-            rel_path: rel_path.clone(),
-            content: merged,
-        };
-        merged_state
-            .known_files
-            .insert(rel_str.clone(), merged_hash.clone());
-        merged_state
-            .known_files_updated_at
-            .insert(rel_str.clone(), merged_at);
-        changed.push((rel_str, merged_hash, merged_at));
-    }
-
-    if changed.is_empty() {
-        return Ok(());
-    }
-
-    let manifest_rel = group.local_manifest_path();
-    let manifest_path = PathBuf::from(&manifest_rel);
-    let manifest_index = engine_state_actions.iter().position(|action| match action {
-        crate::sync::staging::CommitAction::Apply { rel_path, .. }
-        | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path == &manifest_path,
-    });
-    let mut manifest: crate::sync::types::SyncManifest = match manifest_index {
-        Some(index) => match &engine_state_actions[index] {
-            crate::sync::staging::CommitAction::Apply { content, .. } => {
-                serde_json::from_slice(content).map_err(|error| {
-                    crate::Error::Other(format!(
-                        "parse merged app group manifest {}: {error}",
-                        manifest_rel
-                    ))
-                })?
-            }
-            crate::sync::staging::CommitAction::Delete { .. } => {
-                crate::sync::types::SyncManifest { files: Vec::new() }
-            }
-        },
-        None => match std::fs::read(live_root.join(&manifest_rel)) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
-                crate::Error::Other(format!(
-                    "parse live app group manifest {}: {error}",
-                    manifest_rel
-                ))
-            })?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                crate::sync::types::SyncManifest { files: Vec::new() }
-            }
-            Err(error) => {
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "read live app group manifest {}: {error}",
-                    manifest_rel
-                ))))
-            }
-        },
-    };
-    for (rel_path, content_hash, updated_at_ms) in changed {
-        if let Some(record) = manifest
-            .files
-            .iter_mut()
-            .find(|record| record.path == rel_path)
-        {
-            record.content_hash = content_hash;
-            record.updated_at_ms = updated_at_ms;
-            record.deleted_at_ms = None;
-            record.device_id = merged_state.device_id.clone();
-            record.op = "upsert".to_string();
-        } else {
-            manifest.files.push(crate::sync::types::ManifestFileRecord {
-                path: rel_path,
-                content_hash,
-                updated_at_ms,
-                deleted_at_ms: None,
-                device_id: merged_state.device_id.clone(),
-                op: "upsert".to_string(),
-                schema_version: 1,
-            });
-        }
-    }
-    let manifest_bytes = serde_json::to_vec(&manifest)?;
-    let action = crate::sync::staging::CommitAction::Apply {
-        rel_path: manifest_path,
-        content: manifest_bytes,
-    };
-    match manifest_index {
-        Some(index) => engine_state_actions[index] = action,
-        None => engine_state_actions.push(action),
-    }
-    Ok(())
-}
+/// 冲突路径），`engine_state_actions` 直接用 `plan.engine_state_actions`。
 
 /// staging manifest 中章节正文的来源设备与原始发生时间。事件 ID 和回执必须
 /// 复用这份事实，不能在提交时重新取本机时间或空设备。
@@ -1379,7 +1262,6 @@ fn apply_commit_plan_with_optional_merge(
     plan: &crate::sync::staging::CommitPlan,
     content_actions: &[crate::sync::staging::CommitAction],
     backup_mode: bool,
-    proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
     published_candidates: &[String],
     mut chapter_receipts: Option<&mut Vec<crate::chapter::ChapterSyncCommitReceipt>>,
 ) -> std::result::Result<
@@ -1389,10 +1271,6 @@ fn apply_commit_plan_with_optional_merge(
     ),
     (crate::error::Error, std::collections::HashSet<PathBuf>),
 > {
-    let stats_group = match run.app_group() {
-        Some(group @ crate::sync::types::AppDataGroup::StatsDevice(_)) => Some(group.clone()),
-        _ => None,
-    };
     // plan 到 apply 之间必须持有与 MCP 相同的跨进程工作区锁。统计事件还需要
     // 在锁内重新读取 live/staging 求并集；章节正文协调器也必须用同一把锁
     // 做恢复读取和版本 CAS。外层若已持锁，这里按同一 root 嵌套获取。
@@ -1439,111 +1317,17 @@ fn apply_commit_plan_with_optional_merge(
             });
             content_actions.append(&mut rebased_anchor_actions);
         }
-        let mut engine_state_actions = plan.engine_state_actions.clone();
+        let engine_state_actions = plan.engine_state_actions.clone();
 
-        let result = if plan.needs_sync_state_merge {
-            let base_root = run.base_root();
-            let staging_root = run.staging_root();
-            let app_group = run.app_group();
-            let (mut merged_state, mut merged_conflicts) =
-                crate::sync::staging::sync_state_merge::merge_sync_state_three_way_for_target(
-                    &base_root,
-                    live_root,
-                    &staging_root,
-                    app_group,
-                )?;
-            for path in &plan.starmap_pruned_object_paths {
-                merged_state.known_files.remove(path);
-                merged_state.known_files_updated_at.remove(path);
-                merged_state.pending_take_remote.remove(path);
-                merged_state.conflicted_files.remove(path);
-                merged_state
-                    .conflicts
-                    .retain(|conflict| conflict.local_path != *path);
-                merged_conflicts.retain(|conflict| conflict.local_path != *path);
-            }
-            if let Some(group) = &stats_group {
-                refresh_stats_event_actions(
-                    live_root,
-                    &staging_root,
-                    group,
-                    &mut content_actions,
-                    &mut engine_state_actions,
-                    &mut merged_state,
-                )?;
-            }
-            // 尚未被远端发布确认的本地事实，不能推进 known_files。
-            // known_files 是"远端已确认基线"，不是"本地磁盘内容"：提前推进会让
-            // 下一轮把未发布的本地内容当成已同步，要么永不重推，要么被远端旧内容
-            // 覆盖。覆盖范围是账本里该 target 的全部未确认事实（上传、删除、墓碑），
-            // 不只是本次 uploaded_files（Issue #1065 复审 #3）。
-            // 基线取本轮 base_root 的 state（同步开始前已确认的远端版本）。
-            let scope = if app_group.is_some() {
-                crate::sync::types::SyncScope::App
-            } else {
-                crate::sync::types::SyncScope::Project
-            };
-            // 只推迟"本轮要发布、但还没确认"的事实：已经与远端一致的 pending
-            // （编辑后又还原、旧版账本遗留）保留 merge 结果，推送确认后再压缩。
-            let deferred: Vec<String> =
-                crate::sync::local_mutations::pending_records(live_root, scope, app_group)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|(path, record)| {
-                        published_candidates
-                            .iter()
-                            .any(|candidate| candidate == path)
-                            || record.is_delete()
-                    })
-                    .map(|(path, _)| path)
-                    .collect();
-            if !deferred.is_empty() {
-                let base_state = match app_group {
-                    Some(group) => crate::sync::SyncService::load_sync_state_read_only_for_group(
-                        &base_root, group, None,
-                    ),
-                    None => crate::sync::SyncService::load_sync_state_read_only(&base_root, None),
-                };
-                match base_state {
-                    Ok(base_state) => {
-                        for path in &deferred {
-                            match base_state.known_files.get(path) {
-                                Some(hash) => {
-                                    merged_state.known_files.insert(path.clone(), hash.clone());
-                                }
-                                None => {
-                                    merged_state.known_files.remove(path);
-                                    merged_state.known_files_updated_at.remove(path);
-                                }
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "[sync] cannot load base state for unconfirmed mutations; keeping merged known_files: {error}"
-                        );
-                    }
-                }
-            }
-            apply_commit_plan_with_sync_state_merge_for_group(
-                live_root,
-                &content_actions,
-                &engine_state_actions,
-                &merged_state,
-                &merged_conflicts,
-                app_group,
-                backup_mode,
-                proof_recovery_records,
-            )
-        } else {
-            apply_commit_plan_to_live(
-                live_root,
-                &content_actions,
-                &engine_state_actions,
-                backup_mode,
-                proof_recovery_records,
-            )
-        };
+        // Issue #1066：提交层不再做第二套业务合并。plan 已经是唯一裁决结果，
+        // content_actions 就是本轮要写回的内容（含远端采用/本地保留），
+        // engine_state_actions 直接是最终对象索引。
+        let result = apply_commit_plan_to_live(
+            live_root,
+            &content_actions,
+            &engine_state_actions,
+            backup_mode,
+        );
 
         // 账本不再在 commit 阶段压缩：确认改为"远端提交回执 + 序号"驱动
         // （见 local_mutations::mark_confirmed），避免用本地 known_files 冒充已发布。
@@ -1573,12 +1357,7 @@ fn apply_commit_plan_with_optional_merge(
 /// 必须在 `run.cleanup()` 之前调用——cleanup 会删除 staging_root，之后读不到 incoming。
 /// 已填快照（`remote_snapshot_path.is_some()`）的条目跳过，避免重复保存。
 ///
-/// **issue #902 第十四轮复核**：对 graph 级 BothChanged 冲突
-/// （`is_starmap_graph_meta_path(rel_path)` 且 kind == BothChanged），额外从
-/// staging_root 读取该星图的**所有子对象文件**，保存到
-/// `<live_root>/.conflict-snapshot/starmaps/<id>/<timestamp>/` 下保留原相对结构，
-/// 填入 `StagingConflict.remote_graph_snapshot_dir`。`apply_starmap_graph_remote_modify`
-/// 据此恢复远端整图。
+/// Issue #1066：废弃整图冲突副本协议，冲突只按对象保存远端内容快照。
 fn save_conflict_snapshots(
     live_root: &Path,
     staging_root: &Path,
@@ -1604,276 +1383,7 @@ fn save_conflict_snapshots(
         let snapshot_rel = crate::sync::lww::save_conflict_copy(live_root, &rel_str, &incoming)?;
         sc.remote_snapshot_path = Some(snapshot_rel);
 
-        // graph 级 BothChanged：额外保存远端整图子对象快照。
-        if crate::sync::staging::starmap_merge::is_starmap_graph_meta_path(&rel_str) {
-            match save_graph_conflict_snapshot(live_root, staging_root, &rel_str, &incoming) {
-                Ok(dir) => sc.remote_graph_snapshot_dir = Some(dir),
-                Err(e) => {
-                    let msg = format!("save_graph_conflict_snapshot failed for {}: {}", rel_str, e);
-                    return Err(crate::error::Error::Other(msg));
-                }
-            }
-        }
-
-        // meta-only 星图冲突：保存远端 meta + index 身份事实快照
-        // （issue #902 第十九轮复核问题1b）。
-        if crate::sync::staging::starmap_merge::is_starmap_meta_path(&rel_str) {
-            match save_meta_only_conflict_snapshot(live_root, staging_root, &rel_str) {
-                Ok(dir) => sc.remote_graph_snapshot_dir = Some(dir),
-                Err(e) => {
-                    let msg = format!(
-                        "save_meta_only_conflict_snapshot failed for {}: {}",
-                        rel_str, e
-                    );
-                    return Err(crate::error::Error::Other(msg));
-                }
-            }
-        }
     }
-    Ok(())
-}
-
-/// 为 graph 级 BothChanged 冲突保存远端整图子对象快照（issue #902 第十四轮复核）。
-///
-/// 从 staging_root 读取该星图的 incoming graph.json（`incoming_graph_bytes`），
-/// 解析成员表，把所有子对象文件从 staging_root 复制到
-/// `<live_root>/.conflict-snapshot/starmaps/<id>/<timestamp>/` 下保留原相对结构
-/// （`starmaps/<id>/<type_dir>/<bucket>/<obj_id>.json`）。
-///
-/// 返回快照目录相对 `live_root` 的路径（如
-/// `.conflict-snapshot/starmaps/<id>/<timestamp>`）。
-///
-/// staging_root 中缺失的成员对象返回 `Err`——incoming graph 引用了不存在的对象
-/// 是远端数据不一致，不能静默跳过。
-///
-/// **issue #902 第十五轮复核**：额外从 staging_root 读取 incoming
-/// `starmaps/index.json`，提取该星图的 root/main 身份事实，写入快照目录下的
-/// `index_facts.json`，供 `apply_starmap_graph_remote_modify` 恢复身份。
-fn save_graph_conflict_snapshot(
-    live_root: &Path,
-    staging_root: &Path,
-    graph_rel: &str,
-    incoming_graph_bytes: &[u8],
-) -> crate::error::Result<String> {
-    use crate::starmap::package_storage::bucket_for_id;
-    use crate::starmap::store::meta::GraphMeta;
-
-    // 解析 starmap_id：starmaps/<id>/graph.json
-    let normalized = graph_rel.replace('\\', "/");
-    let parts: Vec<&str> = normalized.split('/').collect();
-    // is_starmap_graph_meta_path 已验证 parts.len() == 3
-    let starmap_id = parts[1];
-
-    // 解析 incoming graph.json 得到成员表
-    let graph: GraphMeta = serde_json::from_slice(incoming_graph_bytes).map_err(|e| {
-        crate::error::Error::Other(format!(
-            "save_graph_conflict_snapshot: 解析 incoming graph.json 失败 ({}): {}",
-            graph_rel, e
-        ))
-    })?;
-
-    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-    let snapshot_dir_rel = format!(".conflict-snapshot/starmaps/{}/{}", starmap_id, timestamp);
-
-    // 收集所有成员 (type_dir, id)。
-    // Issue #1060：链接不再是星图包内对象（唯一所有者在 annotations 仓库），
-    // 不再要求 staging 中存在 links/*.json。
-    let members: Vec<(&str, &String)> = graph
-        .node_ids
-        .iter()
-        .map(|id| ("nodes", id))
-        .chain(graph.edge_ids.iter().map(|id| ("edges", id)))
-        .chain(graph.embed_instance_ids.iter().map(|id| ("embeds", id)))
-        .collect();
-
-    for (type_dir, id) in members {
-        let bucket = bucket_for_id(id);
-        let obj_rel = format!(
-            "starmaps/{}/{}/{}/{}.json",
-            starmap_id, type_dir, bucket, id
-        );
-        let staging_obj_path = staging_root.join(&obj_rel);
-        if !staging_obj_path.exists() {
-            return Err(crate::error::Error::Other(format!(
-                "save_graph_conflict_snapshot: incoming graph 成员 {} '{}' 在 staging_root 中不存在 ({})",
-                type_dir, id, obj_rel
-            )));
-        }
-        let obj_bytes = std::fs::read(&staging_obj_path)?;
-        // 保存到快照目录，保留原相对结构
-        let snap_rel = format!("{}/{}", snapshot_dir_rel, obj_rel);
-        let snap_path = live_root.join(&snap_rel);
-        if let Some(parent) = snap_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        crate::storage::transaction::atomic_write_bytes(&snap_path, &obj_bytes).map_err(|e| {
-            crate::error::Error::Io(std::io::Error::other(format!(
-                "save_graph_conflict_snapshot: 写入快照对象 {} 失败: {}",
-                snap_rel, e
-            )))
-        })?;
-    }
-
-    // issue #902 第十六轮复核：保存远端 meta.json 快照，
-    // 供 apply_starmap_graph_remote_modify 恢复 meta。
-    // issue #902 第十七轮复核问题4：远端整图修改冲突的快照要求 meta.json 必须存在。
-    // 远端有 graph 就必须有 meta（graph 和 meta 是同一整图实体的组成部分），
-    // 缺少 meta 无法完整恢复远端星图，返回明确错误而非静默跳过。
-    let meta_rel = format!("starmaps/{}.meta.json", starmap_id);
-    let staging_meta_path = staging_root.join(&meta_rel);
-    if !staging_meta_path.exists() {
-        return Err(crate::error::Error::Other(format!(
-            "save_graph_conflict_snapshot: 远端整图修改冲突的快照要求 meta.json 存在 ({})，\
-             缺少 meta 无法完整恢复远端星图",
-            meta_rel
-        )));
-    }
-    let meta_bytes = std::fs::read(&staging_meta_path)?;
-    let snap_meta_rel = format!("{}/{}", snapshot_dir_rel, meta_rel);
-    let snap_meta_path = live_root.join(&snap_meta_rel);
-    if let Some(parent) = snap_meta_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    crate::storage::transaction::atomic_write_bytes(&snap_meta_path, &meta_bytes).map_err(|e| {
-        crate::error::Error::Io(std::io::Error::other(format!(
-            "save_graph_conflict_snapshot: 写入快照 meta {} 失败: {}",
-            snap_meta_rel, e
-        )))
-    })?;
-
-    // issue #902 第十五轮复核：保存远端 index 身份事实（root/main），
-    // 供 apply_starmap_graph_remote_modify 恢复 root_starmap_ids 和
-    // main_starmap_by_project。issue #902 第十九轮复核问题3：staging_root
-    // 中没有 index.json 时返回错误（不再静默跳过）。
-    save_starmap_identity_facts(live_root, staging_root, starmap_id, &snapshot_dir_rel)?;
-
-    Ok(snapshot_dir_rel)
-}
-
-/// 为 meta-only 星图冲突保存远端 meta + index 身份事实快照
-/// （issue #902 第十九轮复核问题1b）。
-///
-/// meta-only 星图（无 graph.json）的 DeleteModifyConflict 以 meta.json 为锚点。
-/// BothChanged（本地删除远端修改）时保存远端 meta.json 和 index 身份事实，
-/// 供 apply_starmap_meta_remote_modify 恢复。不保存 graph 对象（graph 不存在）。
-fn save_meta_only_conflict_snapshot(
-    live_root: &Path,
-    staging_root: &Path,
-    meta_rel: &str,
-) -> crate::error::Result<String> {
-    // 解析 starmap_id：starmaps/<id>.meta.json
-    let normalized = meta_rel.replace('\\', "/");
-    let parts: Vec<&str> = normalized.split('/').collect();
-    // is_starmap_meta_path 已验证 parts.len() == 2
-    let file_name = parts[1];
-    let starmap_id = &file_name[..file_name.len() - ".meta.json".len()];
-
-    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-    let snapshot_dir_rel = format!(".conflict-snapshot/starmaps/{}/{}", starmap_id, timestamp);
-
-    // 保存远端 meta.json 到快照目录
-    let staging_meta_path = staging_root.join(meta_rel);
-    if !staging_meta_path.exists() {
-        return Err(crate::error::Error::Other(format!(
-            "save_meta_only_conflict_snapshot: incoming meta.json 在 staging_root 中不存在 ({})",
-            meta_rel
-        )));
-    }
-    let meta_bytes = std::fs::read(&staging_meta_path)?;
-    let snap_meta_rel = format!("{}/{}", snapshot_dir_rel, meta_rel);
-    let snap_meta_path = live_root.join(&snap_meta_rel);
-    if let Some(parent) = snap_meta_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    crate::storage::transaction::atomic_write_bytes(&snap_meta_path, &meta_bytes).map_err(|e| {
-        crate::error::Error::Io(std::io::Error::other(format!(
-            "save_meta_only_conflict_snapshot: 写入快照 meta {} 失败: {}",
-            snap_meta_rel, e
-        )))
-    })?;
-
-    // 保存 index 身份事实（复用现有函数）
-    save_starmap_identity_facts(live_root, staging_root, starmap_id, &snapshot_dir_rel)?;
-
-    Ok(snapshot_dir_rel)
-}
-
-/// 远端星图 index 身份事实（issue #902 第十五轮复核）。
-///
-/// 由 `save_graph_conflict_snapshot` 从 staging_root 的 `starmaps/index.json`
-/// 提取，写入快照目录下的 `index_facts.json`。`apply_starmap_graph_remote_modify`
-/// 读取后恢复 `root_starmap_ids` 和 `main_starmap_by_project`。
-#[derive(serde::Serialize, serde::Deserialize)]
-pub(crate) struct StarmapIdentityFacts {
-    /// 该星图是否在 `root_starmap_ids` 中。
-    pub is_root: bool,
-    /// 该星图作为哪些 project 的 main starmap（`main_starmap_by_project` 中
-    /// value == starmap_id 的所有 key）。
-    pub main_for_projects: Vec<String>,
-}
-
-/// 从 staging_root 的 `starmaps/index.json` 提取指定星图的 root/main 身份事实，
-/// 写入快照目录下的 `index_facts.json`（issue #902 第十五轮复核）。
-///
-/// issue #902 第十九轮复核问题3：staging_root 中没有 `starmaps/index.json` 时
-/// 返回 `Err`（不再静默跳过）。新生成的远端整图/meta-only 冲突快照要求 staging
-/// index.json 存在以提取身份事实，否则后续 `apply_starmap_*_remote_modify` 无法
-/// 恢复 root_starmap_ids 和 main_starmap_by_project，恢复的根星图会从一级入口
-/// 消失。
-fn save_starmap_identity_facts(
-    live_root: &Path,
-    staging_root: &Path,
-    starmap_id: &str,
-    snapshot_dir_rel: &str,
-) -> crate::error::Result<()> {
-    let staging_index_path = staging_root.join("starmaps").join("index.json");
-    if !staging_index_path.exists() {
-        return Err(crate::error::Error::Other(format!(
-            "save_starmap_identity_facts: 新生成的远端整图/meta-only 冲突快照要求 \
-             staging index.json 存在以提取身份事实 (starmap_id='{}', staging_root='{}')",
-            starmap_id,
-            staging_root.display()
-        )));
-    }
-    let index_bytes = std::fs::read(&staging_index_path)?;
-    let idx: crate::starmap::StarMapIndexRecord =
-        serde_json::from_slice(&index_bytes).map_err(|e| {
-            crate::error::Error::Other(format!(
-                "save_starmap_identity_facts: 解析 staging index.json 失败: {}",
-                e
-            ))
-        })?;
-
-    let is_root = idx.root_starmap_ids.iter().any(|x| x == starmap_id);
-    let main_for_projects: Vec<String> = idx
-        .main_starmap_by_project
-        .iter()
-        .filter(|(_, v)| *v == starmap_id)
-        .map(|(k, _)| k.clone())
-        .collect();
-
-    let facts = StarmapIdentityFacts {
-        is_root,
-        main_for_projects,
-    };
-    let facts_bytes = serde_json::to_vec_pretty(&facts).map_err(|e| {
-        crate::error::Error::Other(format!(
-            "save_starmap_identity_facts: 序列化 index_facts.json 失败: {}",
-            e
-        ))
-    })?;
-
-    let facts_rel = format!("{}/index_facts.json", snapshot_dir_rel);
-    let facts_path = live_root.join(&facts_rel);
-    if let Some(parent) = facts_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    crate::storage::transaction::atomic_write_bytes(&facts_path, &facts_bytes).map_err(|e| {
-        crate::error::Error::Io(std::io::Error::other(format!(
-            "save_starmap_identity_facts: 写入 index_facts.json 失败: {}",
-            e
-        )))
-    })?;
     Ok(())
 }
 
@@ -2017,7 +1527,6 @@ pub(crate) fn apply_staging_commits_for_targets(
                     &plan.content_actions,
                     false,
                     &[],
-                    &[],
                     None,
                 ) {
                     Ok((tx, _)) => tx,
@@ -2134,7 +1643,6 @@ pub(crate) fn apply_staging_commits_for_targets(
                     &plan,
                     &safe_content_actions,
                     false,
-                    &[],
                     &[],
                     None,
                 ) {
@@ -2277,7 +1785,6 @@ pub(crate) fn apply_staging_commits_for_targets(
                     &plan.content_actions,
                     &plan.engine_state_actions,
                     false,
-                    &[],
                 ) {
                     Ok(tx) => tx,
                     Err(e) => {
@@ -2348,29 +1855,6 @@ pub(crate) fn apply_staging_commits_for_targets(
         target_conflicts,
         committed_paths,
     }
-}
-
-/// 证明 intent 只应覆盖仍由普通 SaveTransaction 落盘的 action。
-/// 章节正文改由 chapter journal 的 sync_proof_facts 一次性决议，不能再创建
-/// 第二份 SyncProofIntent，否则同一正文会生成两个证明事件。
-fn proof_actions_without_chapter_bodies(
-    live_root: &Path,
-    actions: &[crate::sync::staging::CommitAction],
-) -> Vec<crate::sync::staging::CommitAction> {
-    use crate::sync::staging::CommitAction;
-    actions
-        .iter()
-        .filter(|action| {
-            let rel_path = match action {
-                CommitAction::Apply { rel_path, .. } | CommitAction::Delete { rel_path } => {
-                    rel_path
-                }
-            };
-            !project_relative_sync_path(live_root, rel_path)
-                .is_some_and(|(_, relative, _)| chapter_id_for_body_path(&relative).is_some())
-        })
-        .cloned()
-        .collect()
 }
 
 /// 单 target staging commit — 新编排入口。
@@ -2506,7 +1990,6 @@ pub(crate) fn durable_decisions_for_target(
 pub(crate) fn commit_single_target_staging(
     run: &crate::sync::staging::StagingRun,
     target: &crate::sync::types::TargetSyncResult,
-    intent_sink: Option<&crate::sync::proof_intent::ProofIntentSink<'_>>,
     chapter_receipts: &mut Vec<crate::chapter::ChapterSyncCommitReceipt>,
 ) -> (
     TargetCommitResult,
@@ -2561,49 +2044,61 @@ pub(crate) fn commit_single_target_staging(
                 }
             };
             let before = capture_action_before(live_root, &plan.content_actions);
-            let proof_actions =
-                proof_actions_without_chapter_bodies(live_root, &plan.content_actions);
-            let proof_before = capture_action_before(live_root, &proof_actions);
-
-            let proof_recovery_records = match intent_sink {
-                Some(sink) => match sink.prepare(
-                    run.run_id(),
-                    target.target_kind.as_str(),
-                    target.project_id.as_deref(),
-                    &proof_actions,
-                    &proof_before,
-                ) {
-                    Ok(records) => records,
-                    Err(error) => {
-                        let msg = format!("prepare proof intent failed: {error}");
-                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                        return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
-                    }
-                },
-                None => Vec::new(),
-            };
 
             // 本轮真正要发布的候选路径：上传 + 远端删除。只对这些推迟
             // known_files；已经与远端一致的 pending 事实保持 merge 结果。
+            // 统一对象比较产出的上传/删除清单也在本轮发布范围内。
             let mut published_candidates: Vec<String> = target.result.uploaded_files.clone();
             published_candidates.extend(target.result.local_deletes.iter().cloned());
-            let mut tx = match apply_commit_plan_with_optional_merge(
-                run,
-                live_root,
-                &plan,
-                &plan.content_actions,
-                false,
-                &proof_recovery_records,
-                &published_candidates,
-                Some(&mut *chapter_receipts),
-            ) {
-                Ok((tx, _)) => tx,
-                Err((e, partial)) => {
-                    let msg = format!("apply_commit_plan failed: {}", e);
-                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                    let committed_paths =
-                        partial_committed_paths(target, &plan.content_actions, &partial, &before);
-                    return (TargetCommitResult::Failed(msg), Vec::new(), committed_paths);
+            published_candidates.extend(
+                plan.uploads
+                    .iter()
+                    .map(|path| path.to_string_lossy().replace('\\', "/")),
+            );
+            published_candidates.extend(
+                plan.publish_deletes
+                    .iter()
+                    .map(|path| path.to_string_lossy().replace('\\', "/")),
+            );
+            let mut tx = if plan.object_engine {
+                // 统一对象提交：内容 + 对象索引 + 已确认基线一次落盘，
+                // 不做 state 三方合并，也不回读 live 猜胜负。
+                match commit_object_plan(
+                    run,
+                    &plan,
+                    &plan.content_actions,
+                    false,
+                    &mut *chapter_receipts,
+                ) {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        let msg = format!("commit_object_plan failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                    }
+                }
+            } else {
+                match apply_commit_plan_with_optional_merge(
+                    run,
+                    live_root,
+                    &plan,
+                    &plan.content_actions,
+                    false,
+                    &published_candidates,
+                    Some(&mut *chapter_receipts),
+                ) {
+                    Ok((tx, _)) => tx,
+                    Err((e, partial)) => {
+                        let msg = format!("apply_commit_plan failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        let committed_paths = partial_committed_paths(
+                            target,
+                            &plan.content_actions,
+                            &partial,
+                            &before,
+                        );
+                        return (TargetCommitResult::Failed(msg), Vec::new(), committed_paths);
+                    }
                 }
             };
 
@@ -2644,7 +2139,7 @@ pub(crate) fn commit_single_target_staging(
                     let msg = format!("tx.finish() failed: {}", e);
                     log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                     // finish 失败不代表所有 action 都没落盘。把本次 plan 涉及
-                    // 的路径带回，调用方按 live 实际状态生成 receipt/证明事实，
+                    // 的路径带回，调用方按 live 实际状态生成章节回执，
                     // 避免已写入正文却丢失同步回执。
                     let mut partial_paths = Vec::new();
                     collect_action_paths(
@@ -2698,43 +2193,38 @@ pub(crate) fn commit_single_target_staging(
                 .cloned()
                 .collect();
             let before = capture_action_before(live_root, &safe_content_actions);
-            let proof_actions =
-                proof_actions_without_chapter_bodies(live_root, &safe_content_actions);
-            let proof_before = capture_action_before(live_root, &proof_actions);
-            let proof_recovery_records = match intent_sink {
-                Some(sink) => match sink.prepare(
-                    run.run_id(),
-                    target.target_kind.as_str(),
-                    target.project_id.as_deref(),
-                    &proof_actions,
-                    &proof_before,
-                ) {
-                    Ok(records) => records,
-                    Err(error) => {
-                        let msg = format!("prepare proof intent failed: {error}");
+            let tx = if plan.object_engine {
+                match commit_object_plan(run, &plan, &safe_content_actions, false, &mut Vec::new())
+                {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        let msg = format!("commit_object_plan failed: {}", e);
                         log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                         return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
                     }
-                },
-                None => Vec::new(),
-            };
-            let tx = match apply_commit_plan_with_optional_merge(
-                run,
-                live_root,
-                &plan,
-                &safe_content_actions,
-                false,
-                &proof_recovery_records,
-                &[],
-                None,
-            ) {
-                Ok((tx, _)) => tx,
-                Err((e, partial)) => {
-                    let msg = format!("apply_commit_plan failed: {}", e);
-                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                    let committed_paths =
-                        partial_committed_paths(target, &safe_content_actions, &partial, &before);
-                    return (TargetCommitResult::Failed(msg), Vec::new(), committed_paths);
+                }
+            } else {
+                match apply_commit_plan_with_optional_merge(
+                    run,
+                    live_root,
+                    &plan,
+                    &safe_content_actions,
+                    false,
+                    &[],
+                    None,
+                ) {
+                    Ok((tx, _)) => tx,
+                    Err((e, partial)) => {
+                        let msg = format!("apply_commit_plan failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        let committed_paths = partial_committed_paths(
+                            target,
+                            &safe_content_actions,
+                            &partial,
+                            &before,
+                        );
+                        return (TargetCommitResult::Failed(msg), Vec::new(), committed_paths);
+                    }
                 }
             };
             let mut committed_paths = Vec::new();
@@ -2824,32 +2314,11 @@ pub(crate) fn commit_single_target_staging(
             };
 
             let before = capture_action_before(live_root, &plan.content_actions);
-            let proof_actions =
-                proof_actions_without_chapter_bodies(live_root, &plan.content_actions);
-            let proof_before = capture_action_before(live_root, &proof_actions);
-            let proof_recovery_records = match intent_sink {
-                Some(sink) => match sink.prepare(
-                    run.run_id(),
-                    target.target_kind.as_str(),
-                    target.project_id.as_deref(),
-                    &proof_actions,
-                    &proof_before,
-                ) {
-                    Ok(records) => records,
-                    Err(error) => {
-                        let msg = format!("prepare proof intent failed: {error}");
-                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                        return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
-                    }
-                },
-                None => Vec::new(),
-            };
             let mut tx = match apply_commit_plan_to_live(
                 live_root,
                 &plan.content_actions,
                 &plan.engine_state_actions,
                 false,
-                &proof_recovery_records,
             ) {
                 Ok(tx) => tx,
                 Err(e) => {
@@ -2895,7 +2364,7 @@ pub(crate) fn commit_single_target_staging(
                     let msg = format!("tx.finish() failed: {}", e);
                     log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                     // finish 失败不代表所有 action 都没落盘。把本次 plan 涉及
-                    // 的路径带回，调用方按 live 实际状态生成 receipt/证明事实，
+                    // 的路径带回，调用方按 live 实际状态生成章节回执，
                     // 避免已写入正文却丢失同步回执。
                     let mut partial_paths = Vec::new();
                     collect_action_paths(
@@ -2919,5 +2388,4 @@ pub(crate) fn commit_single_target_staging(
     }
 }
 
-#[cfg(test)]
-mod tests;
+#

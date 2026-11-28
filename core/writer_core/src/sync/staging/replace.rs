@@ -177,19 +177,6 @@ pub(crate) fn build_replace_project_plan(
                 apply_incoming(&mut plan, rel, incoming, StagingCommitClass::EngineState);
                 continue;
             }
-            StagingCommitClass::EngineStateMerge => {
-                // state.local.json / conflicts.json：ReplaceProject 走整树替换，
-                // 直接写回 staging 值（不走三方合并——ReplaceProject 是破坏性
-                // 整树覆盖，不存在"用户在同步期间解决冲突"的竞态）。
-                let staging_path = staging_root.join(&rel);
-                let incoming: Option<Vec<u8>> = if staging_path.exists() {
-                    Some(read_bytes(&staging_path)?)
-                } else {
-                    None
-                };
-                apply_incoming(&mut plan, rel, incoming, StagingCommitClass::EngineState);
-                continue;
-            }
             StagingCommitClass::Content => {
                 // 走下方整树替换语义。
             }

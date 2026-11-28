@@ -84,30 +84,24 @@ class ProjectUseCase(
             repository.reorderProjects(orderedProjectIds)
         }
 
+    // 只有“查无此作品/章节”才返回空标题；读取/解析失败必须抛给调用方，
+    // 不能把真实错误伪装成“标题为空”。协程取消自然向上传播。
     override suspend fun getProjectTitle(projectId: String): String =
         withContext(Dispatchers.IO) {
-            try {
-                repository.getProjects().find { it.id == projectId }?.title ?: ""
-            } catch (_: Exception) {
-                ""
-            }
+            repository.getProjects().find { it.id == projectId }?.title ?: ""
         }
 
     override suspend fun getChapterTitle(chapterId: String): String =
         withContext(Dispatchers.IO) {
-            try {
-                val projects = repository.getProjects()
-                for (project in projects) {
-                    val volumes = repository.getVolumes(project.id)
-                    for (volume in volumes) {
-                        val chapters = repository.getChapters(project.id, volume.id)
-                        val found = chapters.find { it.id == chapterId }
-                        if (found != null) return@withContext found.title
-                    }
+            val projects = repository.getProjects()
+            for (project in projects) {
+                val volumes = repository.getVolumes(project.id)
+                for (volume in volumes) {
+                    val chapters = repository.getChapters(project.id, volume.id)
+                    val found = chapters.find { it.id == chapterId }
+                    if (found != null) return@withContext found.title
                 }
-                ""
-            } catch (_: Exception) {
-                ""
             }
+            ""
         }
 }

@@ -41,8 +41,6 @@ mod writing_stats_ops;
 pub use starmap_ops::{StarMapAssetCopyResult, StarMapCopyResult};
 pub(crate) use sync_ops::commit::RoundPhaseFailure;
 
-#[cfg(all(test, feature = "github-api"))]
-mod sync_ops_tests;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -96,9 +94,6 @@ pub struct WriterCore {
     /// Desktop，否则首次同步会先把设备身份写成 desktop；本字段由
     /// `WriterCoreApi` 从 `PlatformInit` 注入，未注入时才回退持久化身份。
     pub(crate) preferred_platform: std::sync::Mutex<Option<writer_platform_api::PlatformKind>>,
-    /// 是否存在未完成的同步证明意图。编辑/同步热路径只在为 true 时才扫描
-    /// 意图目录，避免每次按键都做文件系统枚举。
-    pub(crate) proof_intents_pending: std::sync::atomic::AtomicBool,
     /// 尚未随正文提交的编辑证明事件。保存成功后写入同一 journal；提交失败
     /// 或冲突时保留，下一次保存继续携带，避免证明链超越已提交正文。
     ///
@@ -146,24 +141,6 @@ pub struct ProjectWritingLifetimeStats {
 
 impl WriterCore {
     pub fn new<P1: AsRef<Path>, P2: AsRef<Path>>(app_data_root: P1, projects_root: P2) -> Self {
-        let proof_intent_root = app_data_root
-            .as_ref()
-            .join(crate::sync::proof_intent::PROOF_INTENTS_DIR);
-        // 升级兼容：旧版本可能已经留下意图文件但没有轻量标记。启动时只对
-        // 已存在的意图目录做一次校准，之后编辑热路径只 stat 标记。
-        let mut proof_intents_pending = crate::sync::proof_intent::has_pending(&proof_intent_root);
-        if proof_intent_root.is_dir() {
-            match crate::sync::proof_intent::refresh_pending(&proof_intent_root) {
-                Ok(()) => {
-                    proof_intents_pending =
-                        crate::sync::proof_intent::has_pending(&proof_intent_root);
-                }
-                Err(error) => {
-                    log::warn!("[proof_intent] 启动校准待恢复意图失败: {error}");
-                    proof_intents_pending = true;
-                }
-            }
-        }
         Self {
             app_data_root: app_data_root.as_ref().to_path_buf(),
             projects_root: projects_root.as_ref().to_path_buf(),
@@ -176,7 +153,6 @@ impl WriterCore {
             path_dependency_index: std::sync::Mutex::new(None),
             preferred_device_id: std::sync::Mutex::new(None),
             preferred_platform: std::sync::Mutex::new(None),
-            proof_intents_pending: std::sync::atomic::AtomicBool::new(proof_intents_pending),
             pending_editor_proof: SHARED_PENDING_EDITOR_PROOF
                 .get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())))
                 .clone(),

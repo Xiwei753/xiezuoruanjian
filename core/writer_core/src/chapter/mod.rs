@@ -145,7 +145,8 @@ pub fn list_valid_chapter_ids(project_root: &Path) -> Result<std::collections::H
 
 /// 列出指定卷下的所有章节，按 `order` 字段升序排列。
 /// 使用 `par_iter` 并行读取各章节的 `chapter.meta.json`，适用于章节数量较多的场景。
-/// 不存在的 meta 文件或解析失败的章节静默跳过（不返回错误）。
+/// 没有 meta 的目录按现有含义不是章节，略过；已有 meta 的权限/IO/解析失败
+/// 返回带路径错误，不能静默跳过后让创建/重排基于伪完整列表。
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -158,37 +159,62 @@ pub fn list_chapters(project_root: &Path, volume_id: &str) -> Result<Vec<Chapter
         .join("volumes")
         .join(volume_id)
         .join("chapters");
-    if !chapters_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let entries: Vec<_> = fs::read_dir(chapters_dir)?.collect::<std::io::Result<Vec<_>>>()?;
+    let entries: Vec<_> = match fs::read_dir(&chapters_dir) {
+        Ok(entries) => entries
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|error| {
+                crate::error::Error::Other(format!(
+                    "failed to read chapters directory {}: {error}",
+                    chapters_dir.display()
+                ))
+            })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(crate::error::Error::Other(format!(
+                "failed to read chapters directory {}: {error}",
+                chapters_dir.display()
+            )))
+        }
+    };
 
     let mut chapters: Vec<Chapter> = entries
         .into_par_iter()
         .filter_map(|entry| {
             let path = entry.path();
-            if path.is_dir() {
-                let meta_path = path.join("chapter.meta.json");
-                if meta_path.exists() {
-                    match fs::read_to_string(&meta_path) {
-                        Ok(content) => {
-                            if let Ok(chapter) = serde_json::from_str::<Chapter>(&content) {
-                                Some(Ok(chapter))
-                            } else {
-                                None
-                            }
-                        }
-                        Err(e) => Some(Err(e)),
-                    }
-                } else {
-                    None
+            let is_dir = match entry.file_type() {
+                Ok(file_type) => file_type.is_dir() || (file_type.is_symlink() && path.is_dir()),
+                Err(error) => {
+                    return Some(Err(crate::error::Error::Other(format!(
+                        "failed to inspect {}: {error}",
+                        path.display()
+                    ))))
                 }
-            } else {
-                None
+            };
+            if !is_dir {
+                return None;
             }
+            let meta_path = path.join("chapter.meta.json");
+            let content = match fs::read_to_string(&meta_path) {
+                Ok(content) => content,
+                // 现有含义：没有 meta 的目录不是章节，略过。
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+                Err(error) => {
+                    return Some(Err(crate::error::Error::Other(format!(
+                        "failed to read chapter meta {}: {error}",
+                        meta_path.display()
+                    ))))
+                }
+            };
+            Some(
+                serde_json::from_str::<Chapter>(&content).map_err(|error| {
+                    crate::error::Error::Other(format!(
+                        "chapter meta {} is corrupt: {error}",
+                        meta_path.display()
+                    ))
+                }),
+            )
         })
-        .collect::<std::result::Result<Vec<_>, std::io::Error>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     chapters.sort_by_key(|c| c.order);
     Ok(chapters)
@@ -569,6 +595,7 @@ pub fn delete_chapter(
         commit::ChapterCommitOutcome::Conflict(conflict) => {
             Err(crate::error::Error::ChapterVersionConflict {
                 chapter_id: chapter_id.to_string(),
+                transaction_id: conflict.transaction_id,
                 expected_hash: conflict
                     .expected
                     .as_ref()

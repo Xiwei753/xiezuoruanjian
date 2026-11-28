@@ -63,7 +63,7 @@ fn legacy_node_plan_creates_definition_and_instance_idempotently() {
 }
 
 #[test]
-fn conflicting_definition_reports_asset_and_fields() {
+fn conflicting_definition_merges_by_object_version() {
     let dir = tempdir().unwrap();
     let starmap_id = "sm_1";
     let node_id = "n1";
@@ -77,13 +77,24 @@ fn conflicting_definition_reports_asset_and_fields() {
     definition.title = "被改过的标题".to_string();
     crate::starmap::library::save_node_definition(dir.path(), &definition).unwrap();
 
-    let error = decode_node_object(dir.path(), starmap_id, node_id, &bytes, None)
-        .expect_err("different shared content must be an identity conflict");
-    let message = error.to_string();
-    assert!(message.contains("starmap_id=sm_1"), "{message}");
-    assert!(message.contains("object_id=n1"), "{message}");
-    assert!(message.contains("asset_id=n1"), "{message}");
-    assert!(message.contains("title"), "{message}");
+    // 同一 revision 的旧节点不再被当成身份冲突：保留已有本体，不覆盖。
+    let plan = decode_node_object(dir.path(), starmap_id, node_id, &bytes, None).unwrap();
+    assert!(
+        plan.definition.is_none(),
+        "same-revision existing definition must win"
+    );
+    assert_eq!(plan.instance.asset_id, "n1");
+    assert!(plan.rewrite_instance);
+
+    // 旧节点原文定的 revision 更高时按对象版本发布新本体。
+    let mut newer = legacy_node_json(node_id);
+    newer["updatedAt"] = serde_json::json!(99);
+    newer["title"] = serde_json::json!("更新的标题");
+    write_legacy_node(dir.path(), starmap_id, node_id, &newer);
+    let newer_bytes = std::fs::read(&node_path).unwrap();
+    let plan = decode_node_object(dir.path(), starmap_id, node_id, &newer_bytes, None).unwrap();
+    let definition = plan.definition.expect("newer revision must be published");
+    assert_eq!(definition.title, "更新的标题");
 }
 
 #[test]
@@ -230,7 +241,7 @@ fn instance_without_asset_id_field_resolves_reference_binding() {
 }
 
 #[test]
-fn instance_without_asset_id_or_binding_reports_identity_conflict() {
+fn instance_without_asset_id_or_binding_uses_object_id_and_waits_for_definition() {
     let dir = tempdir().unwrap();
     let starmap_id = "sm_1";
     let node_id = "n1";
@@ -250,23 +261,66 @@ fn instance_without_asset_id_or_binding_reports_identity_conflict() {
     std::fs::create_dir_all(node_path.parent().unwrap()).unwrap();
     std::fs::write(&node_path, &bytes).unwrap();
 
-    let error = decode_node_object(dir.path(), starmap_id, node_id, &bytes, None)
-        .expect_err("empty assetId without a binding must be an identity conflict");
-    let message = error.to_string();
-    assert!(
-        message.contains("starmap node identity conflict"),
-        "{message}"
-    );
-    assert!(message.contains("object_id=n1"), "{message}");
-    assert!(message.contains("candidate_asset_id=n1"), "{message}");
-    assert!(message.contains("conflict_fields=assetId"), "{message}");
-    assert!(
-        message.contains("preserve original node bytes"),
-        "{message}"
-    );
+    // 只有位置、本体尚未到达的实例允许持久保存：身份退回对象 id，等待真实本体。
+    let plan = decode_node_object(dir.path(), starmap_id, node_id, &bytes, None).unwrap();
+    assert_eq!(plan.instance.asset_id, node_id);
+    assert!(plan.definition.is_none());
+    assert!(plan.rewrite_instance);
+
+    persist_node_object_plan(dir.path(), starmap_id, node_id, &plan).unwrap();
+    let rewritten: Value = serde_json::from_slice(&std::fs::read(&node_path).unwrap()).unwrap();
+    assert_eq!(rewritten["assetId"], node_id);
+}
+
+#[test]
+fn instance_asset_id_is_authoritative_over_stale_reference_index() {
+    let dir = tempdir().unwrap();
+    let starmap_id = "sm_1";
+    let node_id = "n1";
+    let mut bindings = NodeObjectBindings::new();
+    // 派生索引落后：绑定指向旧资产，实例文件已重新绑定到新资产。
+    bindings.insert_instance_reference(starmap_id, node_id, "asset_old", Some("p1"));
+    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+        "instanceId": node_id,
+        "assetId": "asset_new",
+        "position": {"x": 1.0, "y": 2.0},
+        "starmapId": starmap_id,
+        "createdAt": 5,
+        "updatedAt": 6
+    }))
+    .unwrap();
+
+    let plan =
+        decode_node_object(dir.path(), starmap_id, node_id, &bytes, Some(&bindings)).unwrap();
+    assert_eq!(plan.instance.asset_id, "asset_new");
+    assert!(plan.definition.is_none());
+
+    persist_node_object_plan(dir.path(), starmap_id, node_id, &plan).unwrap();
+    let repaired = NodeObjectBindings::load_reference_bindings(dir.path()).unwrap();
     assert_eq!(
-        std::fs::read(&node_path).unwrap(),
-        bytes,
-        "解码失败必须保留原始节点字节"
+        repaired.reference_binding_state(&plan.instance),
+        ReferenceBindingState::Consistent,
+        "reverse index must be rebuilt from the authoritative instance"
     );
+}
+
+#[test]
+fn legacy_node_tags_are_migrated_before_instance_rewrite() {
+    let dir = tempdir().unwrap();
+    let starmap_id = "sm_1";
+    let node_id = "n1";
+    let mut value = legacy_node_json(node_id);
+    value["tags"] = serde_json::json!(["人物", "设定"]);
+    write_legacy_node(dir.path(), starmap_id, node_id, &value);
+    let node_path = dir
+        .path()
+        .join(package_storage::node_rel_path(starmap_id, node_id));
+    let bytes = std::fs::read(&node_path).unwrap();
+
+    let plan = decode_node_object(dir.path(), starmap_id, node_id, &bytes, None).unwrap();
+    assert_eq!(plan.legacy_tags, vec!["人物".to_string(), "设定".to_string()]);
+    persist_node_object_plan(dir.path(), starmap_id, node_id, &plan).unwrap();
+
+    let rewritten: Value = serde_json::from_slice(&std::fs::read(&node_path).unwrap()).unwrap();
+    assert!(rewritten.get("tags").is_none(), "{rewritten}");
 }

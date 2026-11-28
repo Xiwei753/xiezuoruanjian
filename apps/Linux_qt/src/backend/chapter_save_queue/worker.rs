@@ -528,9 +528,20 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
             let code = error.code().to_string();
             let conflict = code == "CHAPTER_VERSION_CONFLICT";
             let conflict_draft_path = if conflict {
-                // 只读定位：Core 在返回冲突前已写好本次快照的 incoming.md，
-                // 这里把目录回给 QML 便于提示/排查，不复制正文、不改状态。
-                find_conflict_material(&request)
+                // Core 回执直接携带本次冲突的真实事务 ID 与归档目录；
+                // 不按目录 mtime/正文相等猜测，避免同章并行冲突或两章
+                // 正文相同时指到错误路径。
+                let params = error.params();
+                let conflict_dir = params.get("conflict_dir").cloned().unwrap_or_default();
+                let transaction_id = params.get("transaction_id").cloned().unwrap_or_default();
+                crate::backend::app_backend::debug_error_static(
+                    "chapter_save_queue",
+                    "chapter_conflict_receipt",
+                    &format!(
+                        "request_id={request_id} transaction_id={transaction_id} conflict_dir={conflict_dir}"
+                    ),
+                );
+                conflict_dir
             } else {
                 String::new()
             };

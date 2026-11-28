@@ -49,19 +49,36 @@ pub struct Volume {
 
 /// 列出指定项目下所有卷。
 ///
-/// 使用 `rayon` 并行读取各卷的 `volume.json`，解析失败的卷静默跳过。
+/// 使用 `rayon` 并行读取各卷的 `volume.json`。没有 `volume.json` 的目录按现有
+/// 含义不是卷，直接略过；已有 meta 的读取/权限/解析失败返回带路径错误，不能
+/// 静默跳过让创建/重排基于一份伪完整列表。
 /// 结果按 `order` 字段升序排列。
 pub fn list_volumes(project_root: &Path) -> Result<Vec<Volume>> {
     let volumes_dir = project_root.join("volumes");
-    if !volumes_dir.exists() {
-        return Ok(Vec::new());
-    }
+    let entries = match fs::read_dir(&volumes_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(crate::error::Error::Other(format!(
+                "failed to read volumes directory {}: {error}",
+                volumes_dir.display()
+            )))
+        }
+    };
 
     let mut dir_paths = Vec::new();
-    for entry in fs::read_dir(volumes_dir)? {
-        let entry = entry?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            crate::error::Error::Other(format!(
+                "failed to read an entry under {}: {error}",
+                volumes_dir.display()
+            ))
+        })?;
         let path = entry.path();
-        if path.is_dir() {
+        let file_type = entry.file_type().map_err(|error| {
+            crate::error::Error::Other(format!("failed to inspect {}: {error}", path.display()))
+        })?;
+        if file_type.is_dir() || (file_type.is_symlink() && path.is_dir()) {
             dir_paths.push(path);
         }
     }
@@ -70,16 +87,25 @@ pub fn list_volumes(project_root: &Path) -> Result<Vec<Volume>> {
         .into_par_iter()
         .map(|path| {
             let meta_path = path.join("volume.json");
-            if meta_path.exists() {
-                let content = fs::read_to_string(&meta_path)?;
-                if let Ok(volume) = serde_json::from_str::<Volume>(&content) {
-                    Ok(Some(volume))
-                } else {
-                    Ok(None)
+            let content = match fs::read_to_string(&meta_path) {
+                Ok(content) => content,
+                // 没有 volume.json 的目录不是卷，按现有含义略过。
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => {
+                    return Err(crate::error::Error::Other(format!(
+                        "failed to read volume meta {}: {error}",
+                        meta_path.display()
+                    )))
                 }
-            } else {
-                Ok(None)
-            }
+            };
+            serde_json::from_str::<Volume>(&content)
+                .map(Some)
+                .map_err(|error| {
+                    crate::error::Error::Other(format!(
+                        "volume meta {} is corrupt: {error}",
+                        meta_path.display()
+                    ))
+                })
         })
         .collect();
 
@@ -209,7 +235,12 @@ pub fn delete_volume(project_root: &Path, volume_id: &str, app_data_root: &Path)
     let rel_volume_dir = normalize_rel_path(&volume_dir, project_root);
     let rel_trash_path = normalize_rel_path(&trash_path, app_data_root);
 
-    crate::trash::generate_tombstones(&mut state, &trash_path, &rel_volume_dir, &rel_trash_path);
+    crate::trash::generate_tombstones(
+        &mut state,
+        &trash_path,
+        &rel_volume_dir,
+        &rel_trash_path,
+    )?;
     crate::sync::SyncService::save_sync_state(project_root, &state)?;
     Ok(())
 }

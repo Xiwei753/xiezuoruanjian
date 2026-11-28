@@ -57,7 +57,7 @@ fn write_is_idempotent_and_empty_suggestions_round_trip() {
         "equivalent record must not rewrite"
     );
     assert_eq!(first, std::fs::read_to_string(&path).unwrap());
-    let loaded = load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a");
+    let loaded = load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a").unwrap();
     assert_eq!(loaded.len(), 1);
     assert!(loaded[0].suggestions.is_empty() && loaded[0].checked);
     assert!(loaded[0].text_sha256 == "t" && loaded[0].context_sha256 == "ctx");
@@ -84,12 +84,20 @@ fn load_skips_bad_files_and_identity_mismatches() {
         serde_json::to_string(&wrong_version).unwrap(),
     )
     .unwrap();
-    assert!(load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a").is_empty());
+    assert!(load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a")
+        .unwrap()
+        .is_empty());
     assert!(write_record(root, &record("t3", "ctx")).unwrap());
-    let loaded = load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a");
+    let loaded = load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a").unwrap();
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].text_sha256, "t3");
-    assert!(load_records(root, "project-a", "chapter-1", MODE_RULES, "stable-a").is_empty());
-    assert!(load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-b").is_empty());
-    assert!(load_records(root, "project-a", "missing-chapter", MODE_MODEL, "stable-a").is_empty());
+    assert!(load_records(root, "project-a", "chapter-1", MODE_RULES, "stable-a")
+        .unwrap()
+        .is_empty());
+    assert!(load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-b")
+        .unwrap()
+        .is_empty());
+    assert!(load_records(root, "project-a", "missing-chapter", MODE_MODEL, "stable-a")
+        .unwrap()
+        .is_empty());
 }

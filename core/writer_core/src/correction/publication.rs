@@ -221,7 +221,6 @@ pub(crate) fn write_pending(
     fs::create_dir_all(&dir)?;
     // durable 意图先登记：登记失败时不写待发布文件，避免出现“有文件、索引
     // 不知道”的不可发现状态（评审 #7218195841 第 3 项）。
-    record_publication_obligation(project_root, project_id, chapter_id)?;
     for record in records {
         let key = record_key_for(project_id, chapter_id, record)?;
         let path = dir.join(format!("{key}.json"));
@@ -237,48 +236,6 @@ pub(crate) fn write_pending(
     Ok(())
 }
 
-/// 登记“本章还有待发布校对结果”的恢复责任（评审 #7215361837 第 2 项）。
-///
-/// 返回 Err 表示索引投影失败：调用方不得把待发布文件当作可发现事实。
-fn record_publication_obligation(
-    project_root: &Path,
-    project_id: &str,
-    chapter_id: &str,
-) -> crate::Result<()> {
-    let Some(app_root) = crate::storage::WorkspaceWriteLock::current_root() else {
-        return Err(invalid_record(
-            project_id,
-            chapter_id,
-            "workspace write lock not held",
-        ));
-    };
-    let obligation = crate::sync::dirty_index::RecoveryObligation {
-        kind: "correction_publication".to_string(),
-        root: crate::sync::dirty_index::root_key(project_root),
-        transaction_id: format!("{project_id}\u{1f}{chapter_id}"),
-        detail: Some(chapter_id.to_string()),
-    };
-    if let Err(error) = crate::sync::dirty_index::record_obligation(&app_root, obligation) {
-        log::warn!("[sync] cannot record correction publication obligation: {error}");
-        let _ = crate::sync::dirty_index::invalidate_recovery_calibration(&app_root);
-        return Err(error);
-    }
-    Ok(())
-}
-
-fn clear_publication_obligation(project_root: &Path, project_id: &str, chapter_id: &str) {
-    let Some(app_root) = crate::storage::WorkspaceWriteLock::current_root() else {
-        return;
-    };
-    if let Err(error) = crate::sync::dirty_index::clear_obligation(
-        &app_root,
-        "correction_publication",
-        project_root,
-        &format!("{project_id}\u{1f}{chapter_id}"),
-    ) {
-        log::warn!("[sync] cannot clear correction publication obligation: {error}");
-    }
-}
 
 /// 发布本章待发布事实；只删除实际发布成功的文件，新追加的文件不受影响。
 /// 返回本轮确认的记录数（0 表示没有待办）。
@@ -289,7 +246,6 @@ pub(crate) fn publish_pending(
 ) -> crate::Result<usize> {
     let pending = load_pending(project_root, project_id, chapter_id)?;
     if pending.is_empty() {
-        clear_publication_obligation(project_root, project_id, chapter_id);
         return Ok(0);
     }
     let records: Vec<SyncedCorrectionRecord> =
@@ -322,7 +278,6 @@ pub(crate) fn publish_pending(
             }
         }
     }
-    clear_publication_obligation(project_root, project_id, chapter_id);
     // 只有真正写出/更新结果文件才需要失效章节索引；只是确认已存在的
     // 记录并清理 pending 不应触发重新加载整个目录。
     Ok(written)

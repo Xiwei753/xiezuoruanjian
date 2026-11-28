@@ -260,9 +260,10 @@ impl CorrectionScanner {
             ],
         );
         let model_key = model_snapshot.key.clone();
-        let model_slot = model_key
-            .as_ref()
-            .and_then(CorrectionStore::model_slot_for_key);
+        let model_slot = match model_key.as_ref() {
+            Some(key) => CorrectionStore::model_slot_for_key(key)?,
+            None => None,
+        };
         let engine = if let Some(engine) =
             store.cached_engine(&project_id, lexicon_version, model_key.as_ref())?
         {

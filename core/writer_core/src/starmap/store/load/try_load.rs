@@ -188,35 +188,20 @@ impl StarMapStore {
                 )));
             }
         };
-        // Issue #1062 评论 #7213634487 第 C 项：解析出的规范实例与
-        // `references.json` 的绑定必须完整一致。缺失/`projectId` 落后是派生
-        // 索引待修复（只补引用，不改写已合法的节点文件）；同一实例绑定到别的
-        // 资产身份是身份冲突，保留原始材料和既有绑定并明确报错。
+        // 反向索引是派生视图：缺失、projectId 落后、assetId 与实例不一致都只是
+        // 派生索引待修复。实例文件（含非空 assetId）是身份权威，绝不因为索引
+        // 落后就把节点打成身份冲突、阻断加载或同步。
         let reference_state = bindings.reference_binding_state(&plan.instance);
-        if let ReferenceBindingState::Conflict { reference_asset_id } = &reference_state {
-            self.recovery_log.push(LoadDiagnostic {
-                kind: LoadDiagnosticKind::Corrupt,
-                object_type: "node instance".to_string(),
-                object_id: node_id.to_string(),
-                detail: format!(
-                    "node reference conflict: path={} starmap_id={} instance_asset_id={} \
-                     reference_asset_id={reference_asset_id}",
-                    node_path.display(),
-                    self.starmap_id,
-                    plan.instance.asset_id
-                ),
-            });
-            return Err(Error::Other(format!(
-                "starmap node identity conflict: path={} object_type=node object_id={} \
-                 starmap_id={} instance_asset_id={} reference_asset_id={reference_asset_id} \
-                 conflict_fields=assetId; preserve original node bytes and existing reference",
+        if let ReferenceBindingState::Stale { reference_asset_id } = &reference_state {
+            log::debug!(
+                "starmap reference index stale: path={} starmap_id={} instance_asset_id={} \
+                 reference_asset_id={reference_asset_id} — rebuilding from instance",
                 node_path.display(),
-                node_id,
                 self.starmap_id,
                 plan.instance.asset_id
-            )));
+            );
         }
-        if plan.wrote_definition || plan.rewrite_instance {
+        if plan.wrote_definition || plan.rewrite_instance || !plan.legacy_tags.is_empty() {
             crate::starmap::migration::nodes::persist_node_object_plan(
                 &self.app_data_root,
                 &self.starmap_id,
@@ -231,9 +216,9 @@ impl StarMapStore {
                     self.starmap_id
                 ))
             })?;
-        } else if reference_state != ReferenceBindingState::Consistent {
+        } else if reference_state.needs_repair() {
             // 崩溃重入：实例文件已是合法新格式，迁移 flag 全为 false，
-            // 但派生反向索引缺这一条（或 projectId 落后）；只补索引。
+            // 但派生反向索引缺这一条（或 projectId/assetId 落后）；只补索引。
             crate::starmap::library::record_node_reference(
                 &self.app_data_root,
                 &self.starmap_id,

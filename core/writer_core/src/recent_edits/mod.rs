@@ -114,11 +114,21 @@ fn resolve_current_chapter_owner(
         .join(&edit.chapter_id)
         .join("chapter.meta.json");
 
-    if direct.is_file() {
-        return Ok(Some(ChapterOwner {
-            project_id: edit.project_id.clone(),
-            volume_id: edit.volume_id.clone(),
-        }));
+    match fs::metadata(&direct) {
+        Ok(metadata) if metadata.is_file() => {
+            return Ok(Some(ChapterOwner {
+                project_id: edit.project_id.clone(),
+                volume_id: edit.volume_id.clone(),
+            }));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(crate::error::Error::Other(format!(
+                "failed to inspect chapter meta {}: {error}",
+                direct.display()
+            )))
+        }
     }
 
     for project in crate::project::list_projects(projects_root)? {
@@ -163,11 +173,20 @@ pub fn get_recent_edits(app_data_root: &Path, projects_root: &Path) -> Result<Ve
     }
 
     let recent_path = app_data_root.join("recent_edits.json");
-    let raw: Vec<RecentEdit> = if recent_path.exists() {
-        let content = fs::read_to_string(&recent_path)?;
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        Vec::new()
+    let raw: Vec<RecentEdit> = match fs::read_to_string(&recent_path) {
+        Ok(content) => serde_json::from_str(&content).map_err(|error| {
+            crate::error::Error::Other(format!(
+                "recent edits {} is corrupt: {error}",
+                recent_path.display()
+            ))
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => {
+            return Err(crate::error::Error::Other(format!(
+                "failed to read recent edits {}: {error}",
+                recent_path.display()
+            )))
+        }
     };
 
     let edits = normalize_recent_edits(projects_root, raw.clone())?;
@@ -211,16 +230,25 @@ pub fn record_recent_edit(
         e.to_vec()
     } else {
         let recent_path = app_data_root.join("recent_edits.json");
-        if recent_path.exists() {
-            let content = fs::read_to_string(&recent_path)?;
-            let raw: Vec<RecentEdit> = serde_json::from_str(&content).unwrap_or_default();
-            //   项1：磁盘数据进入缓存前统一走 normalize，
-            // 确保旧数据里的重复项不会绕过去重进入缓存。
-            // normalize 现在按当前作品树校正章节归属。
-            normalize_recent_edits(projects_root, raw)?
-        } else {
-            Vec::new()
-        }
+        let raw: Vec<RecentEdit> = match fs::read_to_string(&recent_path) {
+            Ok(content) => serde_json::from_str(&content).map_err(|error| {
+                crate::error::Error::Other(format!(
+                    "recent edits {} is corrupt: {error}",
+                    recent_path.display()
+                ))
+            })?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                return Err(crate::error::Error::Other(format!(
+                    "failed to read recent edits {}: {error}",
+                    recent_path.display()
+                )))
+            }
+        };
+        //   项1：磁盘数据进入缓存前统一走 normalize，
+        // 确保旧数据里的重复项不会绕过去重进入缓存。
+        // normalize 现在按当前作品树校正章节归属。
+        normalize_recent_edits(projects_root, raw)?
     };
 
     // 不直接相信调用方传来的三元组，先解析 canonical owner。

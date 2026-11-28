@@ -303,107 +303,14 @@ fn add_fingerprint_field(hasher: &mut Sha256, key: &str, value: &[u8]) {
     hasher.update(value);
 }
 
-/// 对象级本地版本快照。
-///
-/// 只由已确认的 manifest 对象版本与持久化 mutation 账本组成；不读取
-/// `state.local.json` 的运行状态字段，也不扫描磁盘。`NoChanges` 落盘的
-/// `last_sync_time` 因此不会让下一轮 checkpoint 失效（Issue #1065）。
-fn local_sync_version_snapshot(
-    app_data_root: &std::path::Path,
-    projects_root: &std::path::Path,
-) -> crate::Result<crate::sync::version_snapshot::LocalVersionSnapshot> {
-    crate::sync::version_snapshot::collect(app_data_root, projects_root)
-}
-
-/// 把运行时快照转换成 checkpoint 里的持久化版本。
-fn to_checkpoint_version(
-    version: &crate::sync::version_snapshot::LocalTargetVersion,
-) -> crate::sync::full_sync_state::TargetVersionCheckpoint {
-    crate::sync::full_sync_state::TargetVersionCheckpoint {
-        object_fingerprint: version.object_fingerprint.clone(),
-        pending_fingerprint: version.pending_fingerprint.clone(),
-        pending_objects: u32::try_from(version.pending_objects).unwrap_or(u32::MAX),
-        eligible: version.eligible,
-    }
-}
-
-/// 章节正文与 meta 是同一业务对象的两个文件：给出另一个的路径。
-fn chapter_sibling_path(path: &str) -> Option<String> {
-    if let Some(prefix) = path.strip_suffix("/chapter.md") {
-        return Some(format!("{prefix}/chapter.meta.json"));
-    }
-    if let Some(prefix) = path.strip_suffix("/chapter.meta.json") {
-        return Some(format!("{prefix}/chapter.md"));
-    }
-    None
-}
-
-/// 从结果 DTO 取 checkpoint 键：作品看 project_id，App 组按远端前缀里的
-/// storage key 反查组 id（DTO 不携带组 id）。
-fn dto_target_checkpoint_key(
-    target: &crate::api::types::TargetSyncResultDto,
-    app_groups: &[crate::sync::types::AppDataGroup],
-) -> Option<String> {
-    if let Some(project_id) = target.project_id.as_deref() {
-        return Some(format!("project:{project_id}"));
-    }
-    let prefix = target.remote_prefix.trim_end_matches('/');
-    let storage_key = prefix.strip_prefix("app/__groups__/")?;
-    app_groups
-        .iter()
-        .find(|group| group.storage_key() == storage_key)
-        .map(|group| format!("app:{}", group.id()))
-}
-
-/// 远端路径 → target 相对路径（`projects/<id>/...` 与
-/// `app/__groups__/<storage_key>/...` 两种前缀）。
-fn target_relative_remote_path(
-    remote_path: &str,
-    key: &str,
-    app_groups: &[crate::sync::types::AppDataGroup],
-) -> Option<String> {
-    let path = remote_path.replace('\\', "/");
-    if let Some(project_id) = key.strip_prefix("project:") {
-        return path
-            .strip_prefix(&format!("projects/{project_id}/"))
-            .map(str::to_string);
-    }
-    let group_id = key.strip_prefix("app:")?;
-    let group = app_groups.iter().find(|group| group.id() == group_id)?;
-    path.strip_prefix(&format!("app/__groups__/{}/", group.storage_key()))
-        .map(str::to_string)
-}
-
 /// 本轮开始前各 target 的未确认 mutation 快照（path → op/hash/seq）。
 ///
-/// 推送成功后只按这份快照确认"确实随本轮提交发布"的事实；同步期间新写入的
-/// 更大序号保留为下一轮 outbox（Issue #1065 复审 #3）。
+/// 推送成功后只按这份快照确认确实随本轮提交发布的事实；同步期间新写入的
+/// 更大序号保留为下一轮 outbox。
 type PendingMutationMap = std::collections::BTreeMap<
     String,
     std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
 >;
-
-/// checkpoint 里的 target key → 同步根，用于校验 dirty 索引。
-///
-/// 只遍历 checkpoint 自己记录的 target，不枚举作品目录；索引里出现未知但仍
-/// 存在的 root 时由 `is_clean_for_checkpoint` 判脏。
-fn checkpoint_expected_roots(
-    app_data_root: &std::path::Path,
-    projects_root: &std::path::Path,
-    checkpoint: &crate::sync::full_sync_state::FullSyncCheckpoint,
-) -> Vec<(String, std::path::PathBuf)> {
-    checkpoint
-        .target_versions
-        .keys()
-        .map(|key| {
-            let root = key
-                .strip_prefix("project:")
-                .map(|project_id| projects_root.join(project_id))
-                .unwrap_or_else(|| app_data_root.to_path_buf());
-            (key.clone(), root)
-        })
-        .collect()
-}
 
 fn collect_preflight_pending(
     app_data_root: &std::path::Path,
@@ -478,281 +385,6 @@ fn should_retry_full_sync_via_github_api(config: &crate::sync::SyncConfig) -> bo
         #[cfg(feature = "github-api")]
         Some(ProviderConfig::GitHub(github)) => router::is_github_https_remote(&github.remote_url),
         _ => false,
-    }
-}
-
-/// 一条本轮未能结算的恢复责任身份（业务 obligation 或正文证明意图）。
-///
-/// 恢复失败/延后不能只留在日志里：消息必须能定位到真实同步根、事务类型和
-/// 业务事务 ID，平台才能知道“数据仍在本地、等待下一次恢复”。
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RecoveryIssue {
-    /// obligation kind（`mutation_ack` / `chapter_projections` / …），或
-    /// `workspace_lock` / `proof_intent` 等恢复阶段身份。
-    kind: String,
-    /// 归属同步根（canonical 后的绝对路径）。
-    root: String,
-    /// 业务事务 ID；整根级失败（锁、校准）没有单一事务时为空。
-    transaction_id: Option<String>,
-    /// obligation 的额外身份（project/chapter），或证明意图的章节路径。
-    detail: Option<String>,
-    /// 本轮真实错误文本；只有“义务仍在索引里”的延后项可能是说明文字。
-    error: String,
-    /// 本轮结束时该责任仍在 durable 索引/意图目录中等待下一轮。
-    deferred: bool,
-}
-
-impl RecoveryIssue {
-    fn new(
-        kind: impl Into<String>,
-        root: impl Into<String>,
-        transaction_id: Option<String>,
-        detail: Option<String>,
-        error: impl Into<String>,
-    ) -> Self {
-        Self {
-            kind: kind.into(),
-            root: root.into(),
-            transaction_id,
-            detail,
-            error: error.into(),
-            deferred: false,
-        }
-    }
-
-    fn describe(&self) -> String {
-        let mut text = format!("kind={} root={}", self.kind, self.root);
-        if let Some(transaction_id) = &self.transaction_id {
-            text.push_str(&format!(" transaction_id={transaction_id}"));
-        }
-        if let Some(detail) = &self.detail {
-            text.push_str(&format!(" detail={detail}"));
-        }
-        if self.deferred {
-            text.push_str(" state=deferred");
-        }
-        if !self.error.is_empty() {
-            text.push_str(&format!(" error={}", self.error));
-        }
-        text
-    }
-}
-
-/// 同步 API — 全量同步统一入口。
-///
-/// 一个全局 `SyncConfig` + 一份全局凭据，`perform_full_sync` 内部按 `SyncTarget`
-/// 把不同本地根映射到同一个远端仓库的不同前缀。
-/// 旧的"作品同步 + 应用数据同步"两套用户配置 API 已删除。
-/// 一次同步前恢复的结构化结果（评审 #7218195841 第 2 项）。
-///
-/// 存在未结算业务事务时，空闲快路径与“无变化”结论都必须让位给明确的
-/// 待处理状态，不能只 warn。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct RecoveryOutcome {
-    completed: usize,
-    failed: usize,
-    deferred: usize,
-    generation: u64,
-    /// 失败/延后的具体身份，按 (kind, root, transaction_id) 去重。
-    issues: Vec<RecoveryIssue>,
-}
-
-impl RecoveryOutcome {
-    fn settled(&self) -> bool {
-        self.failed == 0 && self.deferred == 0
-    }
-
-    fn record_issue(&mut self, issue: RecoveryIssue) {
-        if let Some(existing) = self.issues.iter_mut().find(|existing| {
-            existing.kind == issue.kind
-                && existing.root == issue.root
-                && existing.transaction_id == issue.transaction_id
-        }) {
-            existing.deferred |= issue.deferred;
-            if existing.detail.is_none() {
-                existing.detail = issue.detail;
-            }
-            if existing.error.is_empty() && !issue.error.is_empty() {
-                existing.error = issue.error;
-            }
-            return;
-        }
-        self.issues.push(issue);
-    }
-}
-
-/// 本轮同步前恢复的完整结算事实：业务 obligation + 正文证明意图。
-///
-/// `RecoveryOutcome` 的 `failed/deferred` 计数语义保持不变；这里额外携带
-/// 本轮真实失败身份，并作为 fast path / finalize 的输入，确保恢复未完成
-/// 不会被 `NoChanges` 或纯成功终态吞掉。
-#[derive(Debug, Clone, Default)]
-struct RecoverySettlement {
-    outcome: RecoveryOutcome,
-    /// 正文证明意图恢复后仍未解决/无法启动的责任。
-    proof_issues: Vec<RecoveryIssue>,
-}
-
-impl RecoverySettlement {
-    fn new(outcome: RecoveryOutcome, proof_issues: Vec<RecoveryIssue>) -> Self {
-        Self {
-            outcome,
-            proof_issues,
-        }
-    }
-
-    fn settled(&self) -> bool {
-        self.outcome.settled() && self.proof_issues.is_empty()
-    }
-
-    fn unsettled_message(&self) -> Option<String> {
-        if self.settled() {
-            return None;
-        }
-        let outcome = &self.outcome;
-        let mut message = format!(
-            "sync recovery not settled: completed={} failed={} deferred={} generation={}",
-            outcome.completed, outcome.failed, outcome.deferred, outcome.generation
-        );
-        let mut details: Vec<String> = outcome.issues.iter().map(RecoveryIssue::describe).collect();
-        details.extend(self.proof_issues.iter().map(RecoveryIssue::describe));
-        if details.is_empty() {
-            message.push_str("; no issue identity captured");
-            return Some(message);
-        }
-        const MAX_DETAILS: usize = 8;
-        message.push_str("; ");
-        message.push_str(
-            &details
-                .iter()
-                .take(MAX_DETAILS)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(" | "),
-        );
-        if details.len() > MAX_DETAILS {
-            message.push_str(&format!(" | ... {} more", details.len() - MAX_DETAILS));
-        }
-        Some(message)
-    }
-
-    /// 本轮恢复未结算时，注入 finalize 的阶段失败。
-    fn round_phase_failure(&self) -> Option<crate::facade::RoundPhaseFailure> {
-        self.unsettled_message()
-            .map(|message| crate::facade::RoundPhaseFailure {
-                category: "recovery_unsettled".to_string(),
-                message,
-                message_key: None,
-            })
-    }
-
-    /// 把未结算身份附加到一次已经生成的同步结果上。
-    ///
-    /// 成功类终态升级为 `recoverable_error`；已有更严重终态保留状态但追加
-    /// 恢复身份，确保 PartialConflict/既有错误不会把恢复事实吞掉。
-    fn annotate_result(&self, result: &mut FullSyncResultDto) {
-        if self.settled() {
-            return;
-        }
-        let Some(message) = self.unsettled_message() else {
-            return;
-        };
-        // 成功类终态没有别的失败语义，直接升级为带身份的待结算错误。
-        if matches!(
-            result.overall_status.as_str(),
-            "success" | "no_changes" | "latest_wins_applied" | "idle" | "syncing"
-        ) {
-            result.overall_status = "recoverable_error".to_string();
-            result.error = Some(message);
-            result.error_category = Some("recovery_unsettled".to_string());
-            result.failure_stage = Some("recovery".to_string());
-            return;
-        }
-        // 已有更严重终态（PartialConflict/Fatal/…）保留状态与既有分类，只把
-        // 恢复身份追加到错误文本；冲突终态不能因此被改写成“恢复错误”。
-        let error_class = matches!(
-            result.overall_status.as_str(),
-            "recoverable_error" | "fatal_error" | "error"
-        );
-        if error_class
-            && (result.failure_stage.is_none()
-                || result.failure_stage.as_deref() == Some("core_sync"))
-        {
-            result.failure_stage = Some("recovery".to_string());
-        }
-        if result
-            .error
-            .as_deref()
-            .is_some_and(|existing| existing.contains(&message))
-        {
-            return;
-        }
-        let combined = match result.error.take() {
-            Some(existing) if !existing.is_empty() => format!("{existing}; {message}"),
-            _ => message,
-        };
-        result.error = Some(combined);
-        if error_class && result.error_category.is_none() {
-            result.error_category = Some("recovery_unsettled".to_string());
-        }
-    }
-}
-
-/// 合并本轮原有的阶段失败与恢复未结算事实，二者都不能被吞掉。
-fn merge_round_failure(
-    existing: Option<crate::facade::RoundPhaseFailure>,
-    recovery: &RecoverySettlement,
-) -> Option<crate::facade::RoundPhaseFailure> {
-    let Some(recovery_failure) = recovery.round_phase_failure() else {
-        return existing;
-    };
-    match existing {
-        None => Some(recovery_failure),
-        Some(existing) => Some(crate::facade::RoundPhaseFailure {
-            category: existing.category,
-            message: format!("{}; {}", existing.message, recovery_failure.message),
-            message_key: existing.message_key,
-        }),
-    }
-}
-
-/// 从稳定证明事件 ID 中取回 workspace 相对路径（`sync:<run>:<path>:<index>`）。
-fn proof_event_workspace_path(event_id: &str) -> Option<String> {
-    let rest = event_id.strip_prefix("sync:")?;
-    let (_run_id, rest) = rest.split_once(':')?;
-    let (workspace_path, _action_index) = rest.rsplit_once(':')?;
-    if workspace_path.is_empty() {
-        None
-    } else {
-        Some(workspace_path.replace('\\', "/"))
-    }
-}
-
-/// 把正文证明恢复问题转成本轮的结算身份：记录章节路径、事务和真实错误。
-fn proof_intent_issue(
-    app_data_root: &std::path::Path,
-    issue: &crate::sync::proof_intent::ProofRecoveryIssue,
-) -> RecoveryIssue {
-    let workspace_path = issue
-        .event_id
-        .as_deref()
-        .and_then(proof_event_workspace_path);
-    let detail = match (&workspace_path, &issue.project_id) {
-        (Some(path), Some(project_id)) => Some(format!("{path} (project {project_id})")),
-        (Some(path), None) => Some(path.clone()),
-        (None, Some(project_id)) => Some(format!("project {project_id}")),
-        (None, None) => None,
-    };
-    RecoveryIssue {
-        kind: "proof_intent".to_string(),
-        root: app_data_root
-            .join(crate::sync::proof_intent::PROOF_INTENTS_DIR)
-            .display()
-            .to_string(),
-        transaction_id: issue.transaction_id.clone(),
-        detail,
-        error: issue.description(),
-        deferred: true,
     }
 }
 
@@ -911,13 +543,6 @@ impl WriterCoreApi {
         self.core_read()
             .load_full_sync_state()
             .map(|opt| opt.map(Into::into))
-            .map_err(Into::into)
-    }
-
-    /// Last successful generation GC time stored in this workspace's app-meta sync state.
-    pub fn load_generation_gc_maintenance_last_success_at(&self) -> ApiResult<Option<i64>> {
-        let core = self.core_read();
-        crate::sync::generation_gc::load_maintenance_last_success_at(&core.app_data_root)
             .map_err(Into::into)
     }
 
@@ -1152,49 +777,9 @@ impl WriterCoreApi {
             })
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let started_at = Instant::now();
-        // Issue #1008：进入同步前先补记上次进程留下的“正文已提交、证明未落盘”
-        // 意图，保证本次 Prepare 使用的前置事实已包含原同步编辑。
-        // 恢复会检查/修改 live 事实，必须与正文写事务共用 workspace 锁；
-        // 只在恢复窗口持锁，不覆盖后续网络传输。
-        let _recovery_workspace_lock =
-            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)
-                .map_err(|error| crate::api::error::WriterError::from(error))?;
-        let core = self.core_read();
-        let proof_issues = if core.sync_proof_intents_pending() {
-            match core.recover_pending_sync_proof_state() {
-                Ok(state) => state
-                    .unresolved_for_project(None)
-                    .into_iter()
-                    .map(|issue| proof_intent_issue(&self.app_data_root, issue))
-                    .collect::<Vec<_>>(),
-                Err(error) => {
-                    log::warn!("recover pending sync proof intents before sync failed: {error}");
-                    vec![RecoveryIssue {
-                        kind: "proof_intent".to_string(),
-                        root: self
-                            .app_data_root
-                            .join(crate::sync::proof_intent::PROOF_INTENTS_DIR)
-                            .display()
-                            .to_string(),
-                        transaction_id: None,
-                        detail: None,
-                        error: error.to_string(),
-                        deferred: true,
-                    }]
-                }
-            }
-        } else {
-            Vec::new()
-        };
-        drop(core);
-        drop(_recovery_workspace_lock);
-        // 所有 durable 未投影 / 未结算事实必须在任何 fast path、target 过滤之前
-        // 恢复：账本重建与补号、待确认 ack、章节 journal 的同步投影（复审 #4）。
-        let recovery_outcome = self.recover_sync_state_before_preflight();
-        let recovery = RecoverySettlement::new(recovery_outcome, proof_issues);
-        if let Some(message) = recovery.unsettled_message() {
-            log::warn!("[sync] {message}");
-        }
+        // Issue #1066：同步前置不再做全工作区恢复扫描。对象事实只由本轮
+        // 固定远端 HEAD + 持久对象索引比较得到；正文 journal 的投影由正文层
+        // 自己的恢复入口负责。
         // 平台触发原因只决定"是否绕过周期间隔"（force_sync），以及是否走显式
         // 重建；它不再影响本地/远端版本比对，也不影响冲突裁决。
         let trigger_label = progress_sink
@@ -1230,7 +815,6 @@ impl WriterCoreApi {
             progress_sink.clone(),
             target_progress,
             &operation_id,
-            &recovery,
         );
         let sync_config: crate::sync::SyncConfig = config.clone().into();
         let mut retried_via_github_api = false;
@@ -1257,7 +841,6 @@ impl WriterCoreApi {
                     progress_sink.clone(),
                     target_progress,
                     &operation_id,
-                    &recovery,
                 );
                 continue;
             }
@@ -1288,7 +871,6 @@ impl WriterCoreApi {
                     progress_sink.clone(),
                     target_progress,
                     &operation_id,
-                    &recovery,
                 );
                 continue;
             }
@@ -1362,21 +944,19 @@ impl WriterCoreApi {
         result
     }
 
-    /// 持久化 checkpoint。
+    /// 持久化 checkpoint：只记录退避与"已消费的远端 HEAD"。
     ///
-    /// - `succeeded == None`：这一轮的目标全部确认（无变化快速路径 / 无 target 需要处理）；
-    /// - `succeeded == Some(set)`：只确认集合内的 target，其余 target 保留上一轮条目，
-    ///   下一轮自然重试，不会因为一个 target 失败而让整份 checkpoint 失效。
-    /// - `published_revision`：本轮实际 push 成功的提交。自己推送产生的 HEAD 就是
-    ///   已被消费的远端状态，不再要求"前后 HEAD 相等"。
+    /// 不再保存本地对象指纹/target 版本（Issue #1066）：是否有变化由每轮
+    /// 固定 HEAD + 持久对象索引比较得出，checkpoint 不参与裁决。
+    ///
+    /// - `published_revision`：本轮实际 push 成功的提交，优先作为已消费版本；
+    /// - `consumed_remote_revision`：本轮固定快照的 HEAD（没有推送时）。
     #[allow(clippy::too_many_arguments)]
     fn persist_checkpoint(
         &self,
         app_data_root: &std::path::Path,
         repository_identity: Option<&str>,
         previous: Option<&crate::sync::full_sync_state::FullSyncCheckpoint>,
-        snapshot: Option<&crate::sync::version_snapshot::LocalVersionSnapshot>,
-        succeeded: Option<&std::collections::BTreeSet<String>>,
         consumed_remote_revision: Option<&str>,
         published_revision: Option<&str>,
         success: bool,
@@ -1403,32 +983,6 @@ impl WriterCoreApi {
         next.record_attempt(now);
         if success {
             next.record_success(now);
-            if let Some(snapshot) = snapshot {
-                if let Some(succeeded) = succeeded {
-                    let mut versions = std::collections::BTreeMap::new();
-                    for (key, version) in &snapshot.targets {
-                        // 还有未确认 mutation 的 target 不写入 checkpoint：
-                        // 下一轮必须重新进入计划确认它们，不能靠"指纹相同"跳过
-                        // （Issue #1065 复审 #3）。
-                        if version.pending_objects > 0 {
-                            continue;
-                        }
-                        if succeeded.contains(key) {
-                            versions.insert(key.clone(), to_checkpoint_version(version));
-                        } else if let Some(existing) = next.target_versions.get(key) {
-                            versions.insert(key.clone(), existing.clone());
-                        }
-                    }
-                    next.target_versions = versions;
-                } else {
-                    next.target_versions = snapshot
-                        .targets
-                        .iter()
-                        .filter(|(_, version)| version.pending_objects == 0)
-                        .map(|(key, version)| (key.clone(), to_checkpoint_version(version)))
-                        .collect();
-                }
-            }
             // 远端已消费版本：优先本轮自己的推送，其次本轮固定快照的 HEAD。
             if let Some(revision) = published_revision {
                 next.remote_revision = revision.to_string();
@@ -1454,7 +1008,7 @@ impl WriterCoreApi {
 
     /// 是否存在尚未随远端提交确认的本地业务变更。
     ///
-    /// 只读 mutation 账本（对象级 dirty index），不做网络探测、不扫描磁盘内容：
+    /// 只读 mutation 账本，不做网络探测、不扫描磁盘内容：
     /// 平台端用它决定"这一轮只需要轻量探测"还是"有东西要上传"。读不到时按
     /// 保守值 `true` 返回，避免把"不知道"当成"没有变更"。
     pub fn sync_has_pending_mutations(&self) -> bool {
@@ -1462,30 +1016,7 @@ impl WriterCoreApi {
             let core = self.core_read();
             (core.app_data_root.clone(), core.projects_root.clone())
         };
-        // 持久 dirty/recovery 索引干净且账本未被未登记追加时，直接回答“没有
-        // 待上传”，不再枚举全部作品（Qt/鸿蒙都走这一个 Core 接口）。
-        if let Some(checkpoint) =
-            crate::sync::full_sync_state::FullSyncCheckpoint::load(&app_data_root)
-                .ok()
-                .flatten()
-        {
-            let expected = checkpoint_expected_roots(&app_data_root, &projects_root, &checkpoint);
-            let index_clean = crate::sync::dirty_index::load(&app_data_root).is_some_and(|index| {
-                crate::sync::dirty_index::is_clean_for_checkpoint(&index, &expected)
-            });
-            let lifecycle_clear =
-                crate::sync::pending_deleted::load_pending_deleted_targets(&app_data_root)
-                    .map(|targets| targets.is_empty())
-                    .unwrap_or(false)
-                    && crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(
-                        &app_data_root,
-                    )
-                    .map(|cleanups| cleanups.is_empty())
-                    .unwrap_or(false);
-            if index_clean && lifecycle_clear {
-                return false;
-            }
-        }
+        // 只读持久 mutation 账本；不再用 dirty 索引/checkpoint 指纹推断。
         // App 组共享同一份账本：只读一次，再按 group 过滤。
         let ledger = match crate::sync::local_mutations::latest_ledger(&app_data_root) {
             Ok(ledger) => ledger,
@@ -1528,427 +1059,6 @@ impl WriterCoreApi {
             }
             Err(_) => true,
         }
-    }
-
-    /// 同步入口的持久恢复：在任何 fast path / target 过滤之前对所有 root 执行。
-    ///
-    /// 只做幂等重放：损坏账本归档重建并补号、待确认 ack 应用、章节 journal 的
-    /// 同步投影重放。失败保留 durable 事实并在本轮继续，不会因"快照没变化"
-    /// 而永远跳过（复审 #4）。
-    fn recover_sync_state_before_preflight(&self) -> RecoveryOutcome {
-        let (app_data_root, projects_root) = {
-            let core = self.core_read();
-            (core.app_data_root.clone(), core.projects_root.clone())
-        };
-        let mut outcome = RecoveryOutcome::default();
-        // 恢复要清除索引责任并写 journal/校对目录：整段在同一 workspace
-        // 事务锁内完成，结算与索引更新不再分裂成两个锁窗口（评审 #7218195841 第 3 项）。
-        let _lock = match crate::storage::WorkspaceWriteLock::acquire(&app_data_root) {
-            Ok(lock) => lock,
-            Err(error) => {
-                log::warn!("[sync] recovery workspace lock failed: {error}");
-                outcome.failed = outcome.failed.saturating_add(1);
-                outcome.record_issue(RecoveryIssue::new(
-                    "workspace_lock",
-                    app_data_root.display().to_string(),
-                    None,
-                    None,
-                    format!("recovery workspace lock failed: {error}"),
-                ));
-                return outcome;
-            }
-        };
-        // 只有“schema 当前 + 恢复目录已完整校准”的索引才能按 ID 恢复；
-        // 旧索引经普通写入提升 schema 不算升级完成（评审 #7218195841 第 1 项）。
-        let index = crate::sync::dirty_index::load_usable(&app_data_root);
-        let index_usable = index.is_some();
-        outcome.generation = index
-            .as_ref()
-            .map(|index| index.recovery_generation)
-            .unwrap_or(0);
-        let obligations: Vec<crate::sync::dirty_index::RecoveryObligation> = index
-            .as_ref()
-            .map(|index| index.obligations.values().cloned().collect())
-            .unwrap_or_default();
-
-        if index_usable {
-            // 按冻结的 (kind, root, tx) 逐笔恢复，不再全目录扫描。
-            for obligation in &obligations {
-                let root = std::path::PathBuf::from(&obligation.root);
-                match obligation.kind.as_str() {
-                    "mutation_ack" => {
-                        let round = obligation
-                            .transaction_id
-                            .split('\u{1f}')
-                            .next()
-                            .unwrap_or_default();
-                        match crate::sync::local_mutations::replay_pending_acks_for_round(
-                            &root, round,
-                        ) {
-                            Ok(_) => {
-                                let prefix = format!("{round}\u{1f}");
-                                let _ = crate::sync::dirty_index::clear_obligations_matching(
-                                    &app_data_root,
-                                    "mutation_ack",
-                                    &root,
-                                    &prefix,
-                                );
-                                outcome.completed = outcome.completed.saturating_add(1);
-                            }
-                            Err(error) => {
-                                log::warn!(
-                                    "[sync] replay pending ack {} failed at {}: {error}",
-                                    round,
-                                    root.display()
-                                );
-                                outcome.failed = outcome.failed.saturating_add(1);
-                                outcome.record_issue(RecoveryIssue::new(
-                                    obligation.kind.clone(),
-                                    obligation.root.clone(),
-                                    Some(obligation.transaction_id.clone()),
-                                    obligation.detail.clone(),
-                                    error.to_string(),
-                                ));
-                            }
-                        }
-                    }
-                    "chapter_projections" => {
-                        match crate::chapter::commit::replay_pending_sync_mutation(
-                            &root,
-                            &obligation.transaction_id,
-                        ) {
-                            Ok(_) => outcome.completed = outcome.completed.saturating_add(1),
-                            Err(error) => {
-                                log::warn!(
-                                    "[sync] replay chapter projection {} failed at {}: {error}",
-                                    obligation.transaction_id,
-                                    root.display()
-                                );
-                                outcome.failed = outcome.failed.saturating_add(1);
-                                outcome.record_issue(RecoveryIssue::new(
-                                    obligation.kind.clone(),
-                                    obligation.root.clone(),
-                                    Some(obligation.transaction_id.clone()),
-                                    obligation.detail.clone(),
-                                    error.to_string(),
-                                ));
-                            }
-                        }
-                    }
-                    "correction_publication" => {
-                        let mut parts = obligation.transaction_id.split('\u{1f}');
-                        let project_id = parts.next().unwrap_or_default();
-                        let chapter_id = parts.next().unwrap_or_default();
-                        match crate::correction::publish_pending_chapter(
-                            &app_data_root,
-                            &projects_root,
-                            &root,
-                            project_id,
-                            chapter_id,
-                        ) {
-                            Ok(_) => outcome.completed = outcome.completed.saturating_add(1),
-                            Err(error) => {
-                                log::warn!(
-                                    "[correction] publish pending {}:{} failed: {error}",
-                                    project_id,
-                                    chapter_id
-                                );
-                                outcome.failed = outcome.failed.saturating_add(1);
-                                outcome.record_issue(RecoveryIssue::new(
-                                    obligation.kind.clone(),
-                                    obligation.root.clone(),
-                                    Some(obligation.transaction_id.clone()),
-                                    obligation
-                                        .detail
-                                        .clone()
-                                        .or_else(|| Some(format!("{project_id}/{chapter_id}"))),
-                                    error.to_string(),
-                                ));
-                            }
-                        }
-                    }
-                    "ledger_rebuild" => match crate::sync::local_mutations::recover_ledger(&root) {
-                        Ok(_) => outcome.completed = outcome.completed.saturating_add(1),
-                        Err(error) => {
-                            log::warn!(
-                                "[sync] ledger recovery failed at {}: {error}",
-                                root.display()
-                            );
-                            outcome.failed = outcome.failed.saturating_add(1);
-                            outcome.record_issue(RecoveryIssue::new(
-                                obligation.kind.clone(),
-                                obligation.root.clone(),
-                                Some(obligation.transaction_id.clone()),
-                                obligation.detail.clone(),
-                                error.to_string(),
-                            ));
-                        }
-                    },
-                    "starmap_references" => {
-                        match crate::sync::starmap_reference_obligation::recover_reference_index(
-                            &root,
-                        ) {
-                            Ok(_) => {
-                                if let Err(error) = crate::sync::dirty_index::clear_obligation(
-                                    &app_data_root,
-                                    "starmap_references",
-                                    &root,
-                                    &obligation.transaction_id,
-                                ) {
-                                    log::warn!(
-                                        "[sync] starmap reference obligation clear failed at {}: {error}",
-                                        root.display()
-                                    );
-                                    outcome.failed = outcome.failed.saturating_add(1);
-                                    outcome.record_issue(RecoveryIssue::new(
-                                        obligation.kind.clone(),
-                                        obligation.root.clone(),
-                                        Some(obligation.transaction_id.clone()),
-                                        obligation.detail.clone(),
-                                        error.to_string(),
-                                    ));
-                                } else {
-                                    outcome.completed = outcome.completed.saturating_add(1);
-                                }
-                            }
-                            Err(error) => {
-                                log::warn!(
-                                    "[sync] starmap reference index rebuild failed at {}: {error}",
-                                    root.display()
-                                );
-                                outcome.failed = outcome.failed.saturating_add(1);
-                                outcome.record_issue(RecoveryIssue::new(
-                                    obligation.kind.clone(),
-                                    obligation.root.clone(),
-                                    Some(obligation.transaction_id.clone()),
-                                    obligation.detail.clone(),
-                                    error.to_string(),
-                                ));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            let drained =
-                crate::correction::drain_memory_publications(&app_data_root, &projects_root);
-            if drained > 0 {
-                log::info!("[correction] published {drained} in-memory correction result(s)");
-            }
-        } else {
-            // 唯一完整恢复重建入口：完整校对发现 + 全项目枚举 + 全 root 账本/ack/journal。
-            // 重建失败保持“未校准”，下一轮继续走这里，不会伪装成已升级的空索引。
-            match crate::correction::retry_pending_publications(&app_data_root, &projects_root) {
-                Ok(0) => {}
-                Ok(published) => {
-                    log::info!(
-                        "[correction] published {published} pending correction results before sync"
-                    );
-                    outcome.completed = outcome.completed.saturating_add(1);
-                }
-                Err(error) => {
-                    log::warn!(
-                        "[correction] retry pending correction publications failed: {error}"
-                    );
-                    outcome.failed = outcome.failed.saturating_add(1);
-                    outcome.record_issue(RecoveryIssue::new(
-                        "correction_publication",
-                        app_data_root.display().to_string(),
-                        None,
-                        None,
-                        error.to_string(),
-                    ));
-                }
-            }
-        }
-
-        let mut roots: Vec<std::path::PathBuf> = vec![app_data_root.clone()];
-        if index_usable {
-            if let Some(index) = index.as_ref() {
-                for obligation in &obligations {
-                    roots.push(std::path::PathBuf::from(&obligation.root));
-                }
-                for (root_key, entry) in &index.targets {
-                    if entry.recovery {
-                        roots.push(std::path::PathBuf::from(root_key));
-                    }
-                }
-            }
-            roots.sort();
-            roots.dedup();
-        } else {
-            match crate::project::list_projects(&projects_root) {
-                Ok(projects) => {
-                    for project in projects {
-                        roots.push(projects_root.join(project.id));
-                    }
-                }
-                Err(error) => {
-                    log::warn!("[sync] list projects for recovery failed: {error}");
-                    outcome.failed = outcome.failed.saturating_add(1);
-                    outcome.record_issue(RecoveryIssue::new(
-                        "list_projects",
-                        projects_root.display().to_string(),
-                        None,
-                        None,
-                        error.to_string(),
-                    ));
-                }
-            }
-        }
-
-        for root in &roots {
-            let mut recovery_error: Option<(&'static str, String)> = None;
-            let start_generation = crate::sync::local_mutations::recovery_pending_generation(root);
-            let had_marker = start_generation.is_some();
-            let needs_ledger_recovery =
-                had_marker || crate::sync::local_mutations::needs_ledger_recovery(root);
-            if needs_ledger_recovery {
-                match crate::sync::local_mutations::recover_ledger(root) {
-                    Ok(true) => {
-                        log::warn!("[sync] local mutation ledger rebuilt at {}", root.display())
-                    }
-                    Ok(false) => {}
-                    Err(error) => {
-                        log::warn!(
-                            "[sync] local mutation ledger recovery failed at {}: {error}",
-                            root.display()
-                        );
-                        recovery_error = Some(("ledger_rebuild", format!("ledger: {error}")));
-                    }
-                }
-            }
-            // 索引可用时，ack 与 journal 已经按 obligation 的 ID 精确重放过；
-            // 这里再全目录扫描会把要省的枚举重新做一遍（评审 #7218195841 第 3 项）。
-            if !index_usable {
-                if recovery_error.is_none() {
-                    match crate::sync::local_mutations::replay_pending_acks(root) {
-                        Ok(0) => {}
-                        Ok(applied) => log::info!(
-                            "[sync] replayed {applied} pending mutation acks at {}",
-                            root.display()
-                        ),
-                        Err(error) => {
-                            log::warn!(
-                                "[sync] replay pending mutation acks failed at {}: {error}",
-                                root.display()
-                            );
-                            recovery_error = Some(("mutation_acks", format!("acks: {error}")));
-                        }
-                    }
-                }
-                if recovery_error.is_none() && *root != app_data_root {
-                    match crate::chapter::commit::replay_pending_sync_mutations(root) {
-                        Ok(0) => {}
-                        Ok(replayed) => log::info!(
-                            "[sync] replayed {replayed} chapter mutation projection outboxes at {}",
-                            root.display()
-                        ),
-                        Err(error) => {
-                            log::warn!(
-                                "[sync] replay chapter mutation projections failed at {}: {error}",
-                                root.display()
-                            );
-                            recovery_error =
-                                Some(("chapter_projections", format!("journal: {error}")));
-                        }
-                    }
-                }
-            }
-            let needs_rescan = had_marker || crate::sync::local_mutations::recovery_pending(root);
-            if needs_rescan && recovery_error.is_none() {
-                let rescan: crate::Result<usize> = if *root == app_data_root {
-                    crate::sync::app_data_group_catalog::discover_local_app_data_groups(root)
-                        .and_then(|groups| {
-                            let mut total = 0usize;
-                            for group in groups {
-                                total += crate::sync::local_mutations::rebuild_pending_from_disk(
-                                    root,
-                                    crate::sync::types::SyncScope::App,
-                                    Some(&group),
-                                )?;
-                            }
-                            Ok(total)
-                        })
-                } else {
-                    crate::sync::local_mutations::rebuild_pending_from_disk(
-                        root,
-                        crate::sync::types::SyncScope::Project,
-                        None,
-                    )
-                };
-                match rescan {
-                    Ok(count) => log::info!(
-                        "[sync] rebuilt {count} pending mutations from disk at {}",
-                        root.display()
-                    ),
-                    Err(error) => {
-                        log::warn!(
-                            "[sync] rebuild pending mutations failed at {}: {error}",
-                            root.display()
-                        );
-                        recovery_error = Some(("rescan", format!("rescan: {error}")));
-                    }
-                }
-            }
-            // 索引可用时 recovery 标记由各义务结算负责，不能因为“本轮没看到
-            // 目录”就清掉（seed_clean 同理）。
-            match recovery_error {
-                Some((kind, reason)) => {
-                    outcome.failed = outcome.failed.saturating_add(1);
-                    outcome.record_issue(RecoveryIssue::new(
-                        kind,
-                        root.display().to_string(),
-                        None,
-                        None,
-                        reason.clone(),
-                    ));
-                    crate::sync::local_mutations::mark_recovery_pending(root, &reason);
-                }
-                None => {
-                    crate::sync::local_mutations::clear_recovery_pending_if_generation(
-                        root,
-                        start_generation,
-                    );
-                }
-            }
-        }
-
-        if !index_usable && outcome.failed == 0 {
-            match crate::sync::dirty_index::mark_recovery_calibrated(&app_data_root) {
-                Ok(generation) => {
-                    log::info!("[sync] recovery obligations calibrated (generation {generation})");
-                    outcome.generation = generation;
-                }
-                Err(error) => {
-                    log::warn!("[sync] mark recovery calibrated failed: {error}");
-                    outcome.failed = outcome.failed.saturating_add(1);
-                    outcome.record_issue(RecoveryIssue::new(
-                        "recovery_calibration",
-                        app_data_root.display().to_string(),
-                        None,
-                        None,
-                        error.to_string(),
-                    ));
-                }
-            }
-        }
-        // 仍未结算的责任保持待处理：调用方不得据此宣称收敛或 no_changes。
-        // 索引里的义务本身就是下一轮恢复的待办身份；这里显式登记，失败笔与
-        // 延后笔共享同一 (kind, root, transaction_id)，按身份去重。
-        let deferred = crate::sync::dirty_index::obligations(&app_data_root);
-        outcome.deferred = deferred.len();
-        for obligation in deferred {
-            outcome.record_issue(RecoveryIssue {
-                kind: obligation.kind,
-                root: obligation.root,
-                transaction_id: Some(obligation.transaction_id),
-                detail: obligation.detail,
-                error: "obligation remains deferred in the durable dirty index".to_string(),
-                deferred: true,
-            });
-        }
-        outcome
     }
 
     /// 按推送回执确认本轮实际发布的对象事实（Issue #1065 复审 #3）。
@@ -2097,26 +1207,74 @@ impl WriterCoreApi {
         unsettled
     }
 
+    /// 按远端发布回执确认对象引擎的本轮本地更改（Issue #1066）。
+    ///
+    /// 只有 flush 真实写出的对象才能推进 `known_files`；未确认对象保持未确认，
+    /// 下一轮重新比较并重推。返回未结算 target 数。
+    fn confirm_object_publications(
+        &self,
+        targets: &[crate::sync::types::TargetSyncResult],
+        decisions: &[(String, crate::sync::decision::DurableObjectDecision)],
+        receipts: &[crate::sync::provider::round::PublishReceipt],
+    ) -> usize {
+        let (app_data_root, projects_root) = {
+            let core = self.core_read();
+            (core.app_data_root.clone(), core.projects_root.clone())
+        };
+        let mut unsettled = 0usize;
+        for target in targets {
+            if !matches!(
+                crate::sync::commit_helpers::target_commit_mode(&target.result.status),
+                crate::sync::commit_helpers::TargetCommitMode::Full
+            ) {
+                continue;
+            }
+            let (sync_root, sync_target) = match (&target.group_id, &target.project_id) {
+                (Some(group_id), _) => match crate::sync::types::AppDataGroup::from_id(group_id) {
+                    Ok(group) => (
+                        app_data_root.clone(),
+                        crate::sync::types::SyncTarget::app_data_group(group),
+                    ),
+                    Err(_) => continue,
+                },
+                (None, Some(project_id)) => (
+                    projects_root.join(project_id),
+                    crate::sync::types::SyncTarget::project(project_id),
+                ),
+                _ => continue,
+            };
+            match crate::sync::commit_helpers::confirm_published_objects(
+                &sync_root,
+                &sync_target,
+                decisions,
+                receipts,
+            ) {
+                Ok(unconfirmed) => unsettled += unconfirmed,
+                Err(error) => {
+                    log::warn!(
+                        "[sync] confirm published objects failed for {}: {error}",
+                        target.remote_prefix
+                    );
+                    unsettled += 1;
+                }
+            }
+        }
+        unsettled
+    }
+
     /// 收口一次“无变化”快路径。
     ///
-    /// 只有本轮恢复 settled（业务 obligation 全部结算、无待恢复证明意图）时，
+    /// 只有本轮恢复 settled（业务 obligation 全部结算）时，
     /// 聚合结果才允许停在 `NoChanges`/`Success`；否则由 finalize 升级为带
     /// 事务/路径身份的 `RecoverableError`。targets 在 finalize 后清空，保持
     /// 平台对 checkpoint no-op 的既有识别方式。
     fn finalize_fast_path_no_change(
         &self,
         no_change_targets: Vec<crate::sync::types::TargetSyncResult>,
-        recovery: &RecoverySettlement,
     ) -> FullSyncResultDto {
-        let (mut result, _, _) = self.core_write().finalize_full_sync(
-            no_change_targets,
-            None,
-            recovery.round_phase_failure(),
-        );
+        let (mut result, _, _) = self.core_write().finalize_full_sync(no_change_targets, None);
         result.targets.clear();
-        let mut result: FullSyncResultDto = result.into();
-        recovery.annotate_result(&mut result);
-        result
+        result.into()
     }
 
     #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
@@ -2129,19 +1287,13 @@ impl WriterCoreApi {
         progress_sink: Option<SyncProgressSink>,
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
         diagnostic_operation_id: &str,
-        recovery: &RecoverySettlement,
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
         // 与 sync disabled 相同的 no-op FullSyncResult。
         // Issue #729：各阶段边界检查取消令牌后复用此闭包返回，避免重复构造。
-        // 本轮恢复未结算时，no-op 也必须是 `RecoverableError`，不能把未完成
-        // 的业务事务显示成一次普通成功（复审 #7236446138 第 3 项）。
-        let make_noop_result = || -> ApiResult<FullSyncResultDto> {
-            let mut result = Self::full_sync_noop_result();
-            recovery.annotate_result(&mut result);
-            Ok(result)
-        };
+        let make_noop_result =
+            || -> ApiResult<FullSyncResultDto> { Ok(Self::full_sync_noop_result()) };
 
         // sync disabled → 直接返回 no-op，
         // 不创建 provider、不读 catalog、不建 plan、不进入 run_transfer。
@@ -2287,8 +1439,6 @@ impl WriterCoreApi {
                 &app_data_root,
                 repo_identity.as_deref(),
                 checkpoint.as_ref(),
-                None,
-                None,
                 consumed,
                 None,
                 false,
@@ -2346,157 +1496,13 @@ impl WriterCoreApi {
         };
         revision_phase.finish_with_provider("success", provider.as_ref());
 
-        // 空闲快路径只查持久 dirty/recovery 索引 + 固定远端 HEAD（评审
-        // #7214314073 第 3/4 项）：索引干净且账本字节数与登记一致时，不再
-        // 枚举作品、解析 manifest 或扫描恢复目录。索引缺失/不一致/有恢复
-        // 责任一律回落到下面的完整本地快照，绝不把“不知道”当“没有变化”。
-        if run_mode == SyncRunMode::Incremental && checkpoint_applicable {
-            if let Some(checkpoint) = checkpoint.as_ref() {
-                if probed_revision.as_deref() == Some(checkpoint.remote_revision.as_str()) {
-                    let expected =
-                        checkpoint_expected_roots(&app_data_root, &projects_root, checkpoint);
-                    let lifecycle_pending_cheap = match (
-                        crate::sync::pending_deleted::load_pending_deleted_targets(&app_data_root),
-                        crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(
-                            &app_data_root,
-                        ),
-                    ) {
-                        (Ok(deleted), Ok(cleanups)) => !deleted.is_empty() || !cleanups.is_empty(),
-                        // 读不到收口清单：必须完整核对，不能跳过远端删除。
-                        _ => true,
-                    };
-                    if !lifecycle_pending_cheap {
-                        let index_clean = crate::sync::dirty_index::load(&app_data_root)
-                            .is_some_and(|index| {
-                                crate::sync::dirty_index::is_clean_for_checkpoint(&index, &expected)
-                            });
-                        if index_clean {
-                            log::info!(
-                                "[sync] workspace dirty index clean; returning no_changes without local snapshot"
-                            );
-                            let mut fields = sync_diagnostic_fields(
-                                diagnostic_operation_id,
-                                "dirty_index_match",
-                                None,
-                            );
-                            fields.insert(
-                                "skipped_targets".to_string(),
-                                serde_json::Value::Number(serde_json::Number::from(
-                                    u64::try_from(expected.len()).unwrap_or(u64::MAX),
-                                )),
-                            );
-                            record_sync_diagnostic("sync.checkpoint.skip", "sync.run", fields);
-                            // 只带了 index/HEAD 证据，没有新的对象快照：保留上一轮
-                            // checkpoint 的 target_versions，不伪造版本推进。
-                            self.persist_checkpoint(
-                                &app_data_root,
-                                repo_identity.as_deref(),
-                                Some(checkpoint),
-                                None,
-                                None,
-                                probed_revision.as_deref(),
-                                None,
-                                true,
-                                diagnostic_operation_id,
-                            );
-                            let result = self.finalize_fast_path_no_change(Vec::new(), recovery);
-                            return Ok(result);
-                        }
-                    }
-                }
-            }
-        }
-
-        let local_snapshot_phase = SyncDiagnosticPhase::start_with_provider(
-            diagnostic_operation_id,
-            "local_snapshot",
-            None,
-            provider.as_ref(),
-        );
-        let preflight_snapshot = match local_sync_version_snapshot(&app_data_root, &projects_root) {
-            Ok(snapshot) => {
-                local_snapshot_phase.finish_with_provider("success", provider.as_ref());
-                Some(snapshot)
-            }
-            Err(error) => {
-                local_snapshot_phase.finish_with_provider("error", provider.as_ref());
-                log::warn!(
-                    "[sync] local object version snapshot failed; continuing with LWW: {error}"
-                );
-                None
-            }
-        };
-
-        // 待完成的删除/远端清理事务不在任何 target 的对象版本里，必须让它们
-        // 进入完整计划，不能被"无变化"快速路径或 target 过滤挡掉。
-        let lifecycle_pending = preflight_snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.lifecycle_pending);
+        // 本轮是否只需轻量探测：只以远端 HEAD 与 checkpoint 相同为准。
+        // 对象是否真的未变由逐 target 的统一比较决定（Issue #1066），不再有
+        // 本地指纹/脏索引快路径。
         let remote_probed_unchanged = checkpoint_applicable
-            && !lifecycle_pending
             && checkpoint.as_ref().is_some_and(|checkpoint| {
                 probed_revision.as_deref() == Some(checkpoint.remote_revision.as_str())
             });
-
-        // 无变化快速路径：远端 HEAD 未变 + 每个 target 的业务对象版本与
-        // mutation 代次都等于 checkpoint 记录的那一轮。任何 target 不 eligible
-        // （冲突/错误/缺基线）都回落到完整 LWW，但只影响该 target 的判定。
-        if run_mode == SyncRunMode::Incremental && remote_probed_unchanged {
-            if let (Some(checkpoint), Some(snapshot)) =
-                (checkpoint.as_ref(), preflight_snapshot.as_ref())
-            {
-                // 还有未确认 mutation 的 target 必须再走一轮合并来确认
-                // （发布成功只代表远端已有内容，本地"已确认基线"要由下一次
-                // 合并把 known_files 推进到远端实际内容后才能清账）。
-                let all_match = checkpoint.target_versions.len() == snapshot.targets.len()
-                    && snapshot.targets.iter().all(|(key, version)| {
-                        version.pending_objects == 0
-                            && checkpoint.target_versions.get(key).is_some_and(|stored| {
-                                stored.matches(&to_checkpoint_version(version))
-                            })
-                    });
-                if all_match {
-                    log::info!(
-                        "[sync] full-sync checkpoint matched; returning no_changes without fetch or transfers"
-                    );
-                    // 完整快照已证明所有 target 无未确认事实：校准持久 dirty
-                    // 索引，使后续空闲轮不必再枚举作品/解析 manifest。
-                    let expected =
-                        checkpoint_expected_roots(&app_data_root, &projects_root, checkpoint);
-                    if let Err(error) =
-                        crate::sync::dirty_index::seed_clean(&app_data_root, &expected)
-                    {
-                        log::warn!("[sync] cannot seed workspace dirty index: {error}");
-                    }
-                    let mut fields =
-                        sync_diagnostic_fields(diagnostic_operation_id, "checkpoint_match", None);
-                    fields.insert(
-                        "skipped_targets".to_string(),
-                        serde_json::Value::Number(serde_json::Number::from(
-                            u64::try_from(snapshot.targets.len()).unwrap_or(u64::MAX),
-                        )),
-                    );
-                    record_sync_diagnostic("sync.checkpoint.skip", "sync.run", fields);
-                    self.persist_checkpoint(
-                        &app_data_root,
-                        repo_identity.as_deref(),
-                        Some(checkpoint),
-                        Some(snapshot),
-                        None,
-                        probed_revision.as_deref(),
-                        None,
-                        true,
-                        diagnostic_operation_id,
-                    );
-                    // The target results were persisted by finalize_full_sync. Returning
-                    // an empty list lets the platform distinguish this checkpoint no-op
-                    // and avoid launching generation GC on every polling interval.
-                    let result = self
-                        .finalize_fast_path_no_change(snapshot.no_change_targets.clone(), recovery);
-                    return Ok(result);
-                }
-            }
-        }
 
         // 远端 HEAD 未变（只是本地有修改）时，用本地缓存的 commit 直接构造固定
         // 快照，不再 fetch；ls-remote 已确认远端仍是那个提交。
@@ -2540,103 +1546,6 @@ impl WriterCoreApi {
             }
         };
         revision_phase.finish_with_provider("success", provider.as_ref());
-
-        // 每个受影响 target 的远端变化相对路径（strip 掉 target 前缀），用于
-        // 构造对象级增量计划（复审 #7213234617 第 2 项）。
-        let mut remote_changed_paths: std::collections::BTreeMap<
-            String,
-            std::collections::BTreeSet<String>,
-        > = std::collections::BTreeMap::new();
-        let mut remote_unmapped_keys: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
-        // 远端差异 → 受影响 target。只有 checkpoint 可比较且 Provider 能给出
-        // tree diff 时才做增量选择；基线缺失/迁移/无法给出差异一律完整核对。
-        let affected_targets: Option<std::collections::BTreeSet<String>> = match (
-            run_mode,
-            checkpoint_applicable,
-            preflight_snapshot.as_ref(),
-            checkpoint.as_ref(),
-        ) {
-            (SyncRunMode::Incremental, true, Some(snapshot), Some(checkpoint))
-                if !snapshot.lifecycle_pending =>
-            {
-                let app_groups =
-                    crate::sync::app_data_group_catalog::discover_local_app_data_groups(
-                        &app_data_root,
-                    )
-                    .unwrap_or_default();
-                let project_ids: Vec<String> = match crate::project::list_projects(&projects_root) {
-                    Ok(projects) => projects.into_iter().map(|project| project.id).collect(),
-                    Err(_) => Vec::new(),
-                };
-                let mut remote_keys = std::collections::BTreeSet::new();
-                let mut remote_paths_known = remote_probed_unchanged;
-                if !remote_probed_unchanged {
-                    match provider.changed_paths_since(&checkpoint.remote_revision) {
-                        Ok(Some(paths)) => {
-                            remote_paths_known = true;
-                            for path in paths {
-                                match crate::sync::version_snapshot::target_key_for_remote_path(
-                                    &path,
-                                    &app_groups,
-                                    &project_ids,
-                                ) {
-                                    Some(key) => {
-                                        if let Some(relative) =
-                                            target_relative_remote_path(&path, &key, &app_groups)
-                                        {
-                                            remote_changed_paths
-                                                .entry(key.clone())
-                                                .or_default()
-                                                .insert(relative);
-                                        } else {
-                                            remote_unmapped_keys.insert(key.clone());
-                                        }
-                                        remote_keys.insert(key);
-                                    }
-                                    None => {
-                                        // 无法归因的远端路径（catalog 顶层、未知目录）
-                                        // 必须影响全部 target，不能静默漏掉。
-                                        remote_paths_known = false;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        Ok(None) | Err(_) => {
-                            remote_paths_known = false;
-                        }
-                    }
-                }
-                if remote_paths_known {
-                    for (key, version) in &snapshot.targets {
-                        let locally_changed = !checkpoint
-                            .target_versions
-                            .get(key)
-                            .is_some_and(|stored| stored.matches(&to_checkpoint_version(version)));
-                        // 未确认 mutation 必须进入本轮计划：即使指纹与 checkpoint
-                        // 记录相同（例如上一轮推送成功但尚未确认），也不能被过滤掉，
-                        // 否则这些事实永远等不到下一轮（Issue #1065 复审 #3）。
-                        if locally_changed || version.pending_objects > 0 {
-                            remote_keys.insert(key.clone());
-                        }
-                    }
-                    // 已消失的 target（例如本地删除了作品）仍需交给正常流程收口。
-                    for key in checkpoint.target_versions.keys() {
-                        if !snapshot.targets.contains_key(key) {
-                            remote_keys.insert(key.clone());
-                        }
-                    }
-                    Some(remote_keys)
-                } else {
-                    log::info!(
-                        "[sync] remote tree diff unavailable; keeping every target in the LWW plan"
-                    );
-                    None
-                }
-            }
-            _ => None,
-        };
 
         // Issue #1012: create the one-round buffer before bootstrap so the
         // first catalog write is part of the same final commit.
@@ -2833,57 +1742,6 @@ impl WriterCoreApi {
             }
         }
 
-        // 只对受影响的 target 建 staging、做 LWW 和发布：远端 tree diff 映射出的
-        // target ∪ 本地对象版本变化的 target。远端与本地都没变的 target 不进入
-        // 计划，也不产生任何远端写。
-        if let Some(affected) = affected_targets.as_ref() {
-            let previous_target_count = plan.targets.len();
-            plan.targets.retain(
-                |planned| match crate::sync::full_sync::sync_target_checkpoint_key(planned) {
-                    Some(key) => affected.contains(&key),
-                    // 没有稳定 key 的 target（生命周期/删除收口）总是保留。
-                    None => true,
-                },
-            );
-            let skipped_target_count = previous_target_count.saturating_sub(plan.targets.len());
-            if skipped_target_count > 0 {
-                log::info!(
-                    "[sync] unchanged targets skipped from transfer plan: count={skipped_target_count}"
-                );
-            }
-            if plan.targets.is_empty() {
-                let mut fields =
-                    sync_diagnostic_fields(diagnostic_operation_id, "unchanged_targets", None);
-                fields.insert(
-                    "skipped_targets".to_string(),
-                    serde_json::Value::Number(serde_json::Number::from(
-                        u64::try_from(skipped_target_count).unwrap_or(u64::MAX),
-                    )),
-                );
-                record_sync_diagnostic("sync.checkpoint.skip", "sync.run", fields);
-                if let (Some(checkpoint), Some(snapshot)) =
-                    (checkpoint.as_ref(), preflight_snapshot.as_ref())
-                {
-                    self.persist_checkpoint(
-                        &app_data_root,
-                        repo_identity.as_deref(),
-                        Some(checkpoint),
-                        Some(snapshot),
-                        None,
-                        remote_revision_before.as_deref(),
-                        None,
-                        true,
-                        diagnostic_operation_id,
-                    );
-                    let result = self
-                        .finalize_fast_path_no_change(snapshot.no_change_targets.clone(), recovery);
-                    return Ok(result);
-                }
-                let result = self.finalize_fast_path_no_change(Vec::new(), recovery);
-                return Ok(result);
-            }
-        }
-
         // Phase 2: Seed staging（不持锁）— 磁盘扫描/复制，创建隔离 staging 目录。
         // seed 失败直接终止本次同步，不继续拿半成品。
         // prepare_staging_runs 是纯函数，不依赖 WriterCore，无需持锁。
@@ -2978,101 +1836,10 @@ impl WriterCoreApi {
             None,
             provider.as_ref(),
         );
-        // 对象级增量计划：只为"远端确实变了 + 本地确有未确认事实"的 target
-        // 裁剪 staging。条件全部满足才裁剪，否则整树 seed（完整核对）。
-        let sparse_plans: std::collections::HashMap<
-            String,
-            crate::sync::sparse_plan::SparseObjectPlan,
-        > = {
-            let mut plans = std::collections::HashMap::new();
-            // 只有在"真增量"模式下、且远端 diff 完整可归因时才允许裁剪；
-            // 显式重建/迁移与 diff 未知一律完整核对。
-            let incremental_inputs_ready = run_mode == SyncRunMode::Incremental
-                && checkpoint_applicable
-                && affected_targets.is_some();
-            if incremental_inputs_ready {
-                if let Some(snapshot) = preflight_snapshot.as_ref() {
-                    for planned in &plan.targets {
-                        let Some(key) = crate::sync::full_sync::sync_target_checkpoint_key(planned)
-                        else {
-                            continue;
-                        };
-                        if remote_unmapped_keys.contains(&key) {
-                            continue;
-                        }
-                        let Some(version) = snapshot.targets.get(&key) else {
-                            continue;
-                        };
-                        if !version.eligible {
-                            continue;
-                        }
-                        // 星图组的 graph↔对象依赖闭包必须先显式建模，暂不裁剪。
-                        if matches!(
-                            planned.target.app_group.as_ref(),
-                            Some(crate::sync::types::AppDataGroup::Starmap(_))
-                                | Some(crate::sync::types::AppDataGroup::StarmapIndex)
-                        ) {
-                            continue;
-                        }
-                        let pending = preflight_pending.get(&key);
-                        let pending_count = pending.map_or(0, std::collections::BTreeMap::len);
-                        // 本地脏事实必须全部来自未确认 mutation，否则整树核对。
-                        if pending_count != version.pending_objects {
-                            continue;
-                        }
-                        let mut remote_paths: Vec<String> = remote_changed_paths
-                            .get(&key)
-                            .map(|paths| paths.iter().cloned().collect())
-                            .unwrap_or_default();
-                        let mut pending_paths: Vec<String> = pending
-                            .map(|records| records.keys().cloned().collect())
-                            .unwrap_or_default();
-                        if remote_paths.is_empty() && pending_paths.is_empty() {
-                            continue;
-                        }
-                        remote_paths.sort();
-                        remote_paths.dedup();
-                        pending_paths.sort();
-                        pending_paths.dedup();
-                        // 业务对象依赖：章节正文与 meta 属于同一对象，必须同时加载，
-                        // 否则三方比较会把同一个章节的另一半当成未加载而沿用旧事实。
-                        let mut expanded: Vec<String> = remote_paths
-                            .iter()
-                            .chain(pending_paths.iter())
-                            .cloned()
-                            .collect();
-                        for path in &expanded {
-                            if let Some(sibling) = chapter_sibling_path(path) {
-                                pending_paths.push(sibling);
-                            }
-                        }
-                        expanded.clear();
-                        pending_paths.sort();
-                        pending_paths.dedup();
-                        let plan = crate::sync::sparse_plan::SparseObjectPlan::new(
-                            checkpoint
-                                .as_ref()
-                                .map(|stored| stored.remote_revision.clone()),
-                            pending_paths,
-                            remote_paths,
-                        )
-                        // 短事务锁内已经取到的不可变事实：seq/op/base hash/content
-                        // hash/业务时间/删除时间；本轮后续编辑不改这份输入。
-                        .with_mutations(pending.cloned().unwrap_or_default());
-                        plans.insert(key, plan);
-                    }
-                }
-            }
-            plans
-        };
-        if !sparse_plans.is_empty() {
-            log::info!(
-                "[sync] object-level incremental plan: {} target(s)",
-                sparse_plans.len()
-            );
-        }
+        // staging 只是本轮下载与裁决的临时目录：不再按对象裁剪 seed，
+        // 也不再复制 live 快照（Issue #1066）。
         let staging_runs =
-            match crate::sync::staging::prepare_staging_runs(&mut plan, &sparse_plans) {
+            match crate::sync::staging::prepare_staging_runs(&mut plan) {
                 Ok(runs) => runs,
                 Err(err) => {
                     staging_phase.finish_with_provider("error", provider.as_ref());
@@ -3124,7 +1891,6 @@ impl WriterCoreApi {
             diagnostic_operation_id,
             remote_revision_before.as_deref(),
             &preflight_pending,
-            Some(recovery),
         ) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -3135,8 +1901,6 @@ impl WriterCoreApi {
                     &app_data_root,
                     repo_identity.as_deref(),
                     checkpoint.as_ref(),
-                    None,
-                    None,
                     remote_revision_before.as_deref(),
                     None,
                     false,
@@ -3155,41 +1919,15 @@ impl WriterCoreApi {
                 "success" | "no_changes" | "latest_wins_applied"
             )
         });
-        // checkpoint 只确认"这一轮 preflight 快照对应的版本"：本轮期间新到的
-        // mutation 不在快照里，下一轮 pending 代次不同，自然重新处理。
-        // 失败 target 不推进（保留旧条目 → 下一轮重试该 target）；成功 target
-        // 的远端版本用本轮实际发布的提交，而不是"前后 HEAD 相等"。
-        let app_groups =
-            crate::sync::app_data_group_catalog::discover_local_app_data_groups(&app_data_root)
-                .unwrap_or_default();
-        if let Some(snapshot) = local_sync_version_snapshot(&app_data_root, &projects_root).ok() {
-            let succeeded: std::collections::BTreeSet<String> = result
-                .targets
-                .iter()
-                .filter(|target| {
-                    matches!(
-                        target.result.status.as_str(),
-                        "success" | "no_changes" | "latest_wins_applied"
-                    )
-                })
-                .filter_map(|target| dto_target_checkpoint_key(target, &app_groups))
-                .collect();
-            self.persist_checkpoint(
-                &app_data_root,
-                repo_identity.as_deref(),
-                checkpoint.as_ref(),
-                Some(&snapshot),
-                if fully_converged && publish_succeeded {
-                    Some(&succeeded)
-                } else {
-                    None
-                },
-                remote_revision_before.as_deref(),
-                published_revision.as_deref(),
-                fully_converged && publish_succeeded,
-                diagnostic_operation_id,
-            );
-        }
+        self.persist_checkpoint(
+            &app_data_root,
+            repo_identity.as_deref(),
+            checkpoint.as_ref(),
+            remote_revision_before.as_deref(),
+            published_revision.as_deref(),
+            fully_converged && publish_succeeded,
+            diagnostic_operation_id,
+        );
 
         // 同步可能修改磁盘上的星图数据（staging → commit），失效路径依赖索引
         // 确保下次查询从真实数据重建，不持有过期 entry（问题1）。
@@ -3249,7 +1987,6 @@ impl WriterCoreApi {
             &operation_id,
             None,
             &PendingMutationMap::new(),
-            None,
         )
         .map(|outcome| outcome.result)
     }
@@ -3267,11 +2004,7 @@ impl WriterCoreApi {
         diagnostic_operation_id: &str,
         remote_revision: Option<&str>,
         preflight_pending: &PendingMutationMap,
-        recovery: Option<&RecoverySettlement>,
     ) -> ApiResult<RoundOutcome> {
-        // 外部（集成测试）直接驱动编排时没有同步前恢复事实；此时按“已结算”
-        // 处理，保持该入口原有的结果语义。
-        let recovery = recovery.cloned().unwrap_or_default();
         struct PendingTargetCommit {
             target_index: usize,
             prepared_failure: bool,
@@ -3479,8 +2212,7 @@ impl WriterCoreApi {
                 "[sync] perform_full_sync: cancellation requested after per-target loop — discarding buffered remote writes"
             );
             self.core_write().persist_full_sync_cancelled();
-            let mut cancelled_result = Self::full_sync_noop_result();
-            recovery.annotate_result(&mut cancelled_result);
+            let cancelled_result = Self::full_sync_noop_result();
             return Ok(RoundOutcome {
                 result: cancelled_result,
                 published_revision: None,
@@ -3502,21 +2234,6 @@ impl WriterCoreApi {
         // C 阶段：把下载、合并与冲突记录持久提交到 live。发布失败不回滚这些
         // 已落盘结果；本地未发布对象版本通过 mutation 账本保持未确认，
         // 下一轮继续推进（见 commit_helpers 的 deferred upload 处理）。
-        // Issue #1021 复核：恢复只在一轮同步内做一次，所有 target 复用同一
-        // 已落盘事件集合/未完成问题，避免每组 target 重解压全部历史事件。
-        // 证明恢复会读 live 并写统计/意图，必须持有 workspace 锁，
-        // 且锁序为 workspace → Core。
-        let _proof_recovery_workspace_lock =
-            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root).map_err(|error| {
-                crate::api::error::WriterError::from(crate::error::Error::from(error))
-            })?;
-        let mut proof_recovery_state = match self.core_write().recover_pending_sync_proof_state() {
-            Ok(state) => state,
-            Err(error) => crate::sync::proof_intent::ProofRecoveryState::failed(format!(
-                "recover pending sync proof intents before commit failed: {error}"
-            )),
-        };
-        drop(_proof_recovery_workspace_lock);
         // 本轮已经 durable 落进 live 的对象事实：发布前用它把待发布内容
         // 冻结成刚提交的字节，杜绝推送旧 staging（复审 #2）。
         let mut publish_decisions: Vec<(String, crate::sync::decision::DurableObjectDecision)> =
@@ -3569,7 +2286,6 @@ impl WriterCoreApi {
                 prepared_failure,
                 &staging_runs,
                 &target_sync_result,
-                &mut proof_recovery_state,
                 diagnostic_operation_id,
                 decision_facts,
             );
@@ -3730,13 +2446,8 @@ impl WriterCoreApi {
             all_committed_paths.extend(target_committed_paths.into_iter().map(|path| path.path));
         }
 
-        // 本地 commit 之后再判定一次：commit 可能失败（工作区锁/flush/三方合并），
-        // 也可能因为并发编辑得到与 staging 不同的结果。任一 target 没有真正落盘
-        // 成功就不发布整轮远端树，避免推送未落盘的旧 staging 内容（复审 #2）。
-        // 只有"确实失败/未落盘"的 target 才阻断发布：冲突（Conflict /
-        // PartialConflict）是成功落盘的终态，冲突路径由 generation 复用远端
-        // blob、LWW 排除上传处理，不能因此冻结其它独立对象的发布
-        // （Issue #1065 复审 #2、#4）。
+        // 本地提交已完成。冲突/失败是落盘终态，但不阻断其它独立对象的发布；
+        // 只有真正没有落盘成功的 target 才冻结整轮远端写。
         let commit_blocked = all_targets.iter().any(target_blocks_round_publish);
         if commit_blocked {
             round.discard();
@@ -3745,10 +2456,7 @@ impl WriterCoreApi {
                 "[sync] local commit did not fully succeed; remote publish discarded for this round"
             );
         }
-
-        // Issue #729 + #1065 复审 #2：取消只阻止**远端发布**，已经落盘的本地结果
-        // 仍要收口——finalize、history、索引失效都要照常执行。提前 return 会让
-        // 平台看不到已提交的变更，也会漏写本地 history。
+        // 取消只阻止远端发布，已经落盘的本地结果仍要收口。
         let cancelled_after_commit = Self::sync_cancelled(cancellation_token.as_ref());
         if cancelled_after_commit {
             round.discard();
@@ -3758,14 +2466,8 @@ impl WriterCoreApi {
             );
         }
 
-        let mut publish_succeeded = false;
-        let mut publish_error: Option<String> = None;
-        let mut publish_error_category: Option<String> = None;
-        let mut publish_ack_unsettled = 0usize;
-        // 按不可变决议重建本轮发布批次：内容取自提交阶段冻结的字节，
-        // 纯远端消费的条目移除；不再回读 live、不再二次覆盖 manifest。
-        // 本轮已决定不发布（冲突/失败）时不再改写缓冲：没有 flush，改写只会
-        // 留下口惠而实不至的"决议已应用"。
+        // 先按不可变决议重建发布批次（内容取自提交阶段冻结的字节），
+        // 再基于该批次的远端视图发布对象索引：索引必须能看到本轮新增对象。
         let decision_outcome = if publish_blocked {
             crate::sync::decision::DecisionApplyOutcome::default()
         } else {
@@ -3788,28 +2490,66 @@ impl WriterCoreApi {
                 decision_outcome.missing
             );
         }
-        // 作品删除/替换的生命周期批次由 target_lifecycle 直接生成远端删除，
-        // 它们不是对象决议；这类轮次不做对象过滤，避免漏删远端项目。
-        let lifecycle_batch = plan.targets.iter().any(|planned| {
-            !matches!(
-                planned.target_kind,
-                crate::sync::types::PlannedTargetKind::App
-                    | crate::sync::types::PlannedTargetKind::LiveProject
-            )
-        })
-            || !crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(
-                &self.app_data_root,
-            )
-            .map(|cleanups| cleanups.is_empty())
-            .unwrap_or(false);
-        if !publish_blocked && !lifecycle_batch {
-            // 没有 durable 决议的普通对象不得随 transfer 缓冲自行发布：发布
-            // 批次最终只由决议 + 生命周期元数据组成（评审 #7214314073）。
-            let dropped = round.retain_decided_objects(&publish_decisions);
-            if dropped > 0 {
-                log::info!("[sync] dropped {dropped} undecided buffered object(s) before publish");
+
+        // 每个 target 的最终对象索引与业务对象在同一次 flush 里提交。
+        let mut manifest_publish_error: Option<String> = None;
+        if !publish_blocked {
+            for (target_index, planned) in plan.targets.iter().enumerate() {
+                if planned.is_deleted_target() {
+                    continue;
+                }
+                let Some(run) = staging_runs.get(target_index) else {
+                    continue;
+                };
+                let manifest_rel = planned
+                    .target
+                    .app_group
+                    .as_ref()
+                    .map(crate::sync::types::AppDataGroup::local_manifest_path)
+                    .unwrap_or_else(|| crate::sync::lww::SYNC_MANIFEST_PATH.to_string());
+                let prefix = planned.target.remote_prefix.trim_end_matches('/').to_string();
+                let remote_tree_files: std::collections::HashMap<String, String> =
+                    match round.list(&prefix) {
+                        Ok(entries) => entries
+                            .into_iter()
+                            .map(|entry| (entry.path, entry.version.0))
+                            .collect(),
+                        Err(error) => {
+                            manifest_publish_error = Some(format!(
+                                "list remote tree before manifest publish failed: {error}"
+                            ));
+                            break;
+                        }
+                    };
+                if let Err(error) = crate::sync::lww::publish_remote_manifest(
+                    &round,
+                    &prefix,
+                    run.target_live_root(),
+                    &manifest_rel,
+                    &remote_tree_files,
+                    cancellation_token.as_ref(),
+                ) {
+                    manifest_publish_error = Some(format!(
+                        "publish object index for {} failed: {error}",
+                        planned.target.remote_prefix
+                    ));
+                    break;
+                }
+            }
+            if manifest_publish_error.is_some() {
+                publish_blocked = true;
+                round.discard();
             }
         }
+
+        let mut publish_succeeded = false;
+        let mut publish_error: Option<String> = manifest_publish_error;
+        let mut publish_error_category: Option<String> = None;
+        let mut publish_ack_unsettled = 0usize;
+
+        // 发布批次 = 提交阶段冻结的对象决议 + 本轮最终对象索引存储。
+        // 不再按"决议白名单"过滤缓冲：索引文件与业务对象都来自同一次提交，
+        // 过滤只会丢掉刚写完的索引。
         if !publish_blocked {
             // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
             // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
@@ -3852,6 +2592,11 @@ impl WriterCoreApi {
                         &consumed_by_target,
                         diagnostic_operation_id,
                         published_revision.as_deref(),
+                    );
+                    publish_ack_unsettled += self.confirm_object_publications(
+                        &all_targets,
+                        &publish_decisions,
+                        &publish_receipts,
                     );
                 }
                 Err(error) => {
@@ -3941,12 +2686,9 @@ impl WriterCoreApi {
         } else {
             None
         };
-        // 恢复未结算与推送/取消阶段失败同等进入本轮终态：任何一方都不能
-        // 因为另一方已经失败而被吞掉（复审 #7236446138 第 3 项）。
-        let round_phase_failure = merge_round_failure(round_phase_failure, &recovery);
         let (result, committed_paths, lifecycle_receipts) = {
             let core = self.core_write();
-            core.finalize_full_sync(all_targets, None, round_phase_failure)
+            core.finalize_full_sync(all_targets, round_phase_failure)
         };
 
         // 合并 per-target committed_paths 与 finalize 阶段返回的 committed_paths。
@@ -3974,9 +2716,6 @@ impl WriterCoreApi {
         // 阶段失败已在 finalize 前汇入持久终态（复审 #4）：这里只做 DTO 转换，
         // 不能再事后改内存结果，否则 Core 的 last_success 与 UI 不一致。
         let mut result: FullSyncResultDto = result.into();
-        // PartialConflict / 既有错误不会被 finalize 的阶段失败分支改写：这里补上
-        // 恢复身份，保证任何终态都能看到未结算事务，而不是只在成功类终态生效。
-        recovery.annotate_result(&mut result);
         result.local_content_changed = local_content_changed;
         result.chapter_changes = chapter_changes.into_iter().map(Into::into).collect();
         Ok(RoundOutcome {
@@ -4039,7 +2778,6 @@ impl WriterCoreApi {
         prepared_failure: bool,
         staging_runs: &[crate::sync::staging::StagingRun],
         target_sync_result: &crate::sync::types::TargetSyncResult,
-        proof_recovery_state: &mut crate::sync::proof_intent::ProofRecoveryState,
         operation_id: &str,
         facts: Option<
             &std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
@@ -4063,7 +2801,6 @@ impl WriterCoreApi {
             Some(run) => self.commit_target_after_transfer(
                 run,
                 target_sync_result,
-                proof_recovery_state,
                 operation_id,
                 facts,
             ),
@@ -4080,7 +2817,6 @@ impl WriterCoreApi {
         &self,
         run: &crate::sync::staging::StagingRun,
         target_sync_result: &crate::sync::types::TargetSyncResult,
-        proof_recovery_state: &mut crate::sync::proof_intent::ProofRecoveryState,
         operation_id: &str,
         facts: Option<
             &std::collections::BTreeMap<String, crate::sync::local_mutations::LocalMutationRecord>,
@@ -4132,62 +2868,14 @@ impl WriterCoreApi {
                 return (target_with_conflicts, Vec::new(), Vec::new(), Vec::new());
             }
 
-            let sync_sources =
-                staging_manifest_device_ids(run, target_sync_result.project_id.as_deref());
-            // Issue #1008 / #1021 复核：上一轮崩溃留下的证明恢复已经在本轮
-            // Commit 循环前统一执行；这里只复用结果，不再为每个 target 重扫。
-            if let Some(error) = proof_recovery_state.failure().map(str::to_string) {
-                let mut target_with_error = target_sync_result.clone();
-                target_with_error.result.status = crate::sync::SyncStatus::RecoverableError(
-                    "sync_proof_recovery_failed".to_string(),
-                );
-                target_with_error.result.error = Some(error);
-                return (target_with_error, Vec::new(), Vec::new(), Vec::new());
-            }
-            let intent_root = core.sync_proof_intent_root();
-            let intent_sink =
-                crate::sync::proof_intent::ProofIntentSink::new(&intent_root, &sync_sources);
             let mut target_with_conflicts = target_sync_result.clone();
-            // 积压证明未完成时不能继续改同一项目正文：后续 Commit 会让新的
-            // before/after 越过旧事件，证明链将无法按发生顺序接续。
-            if let Some(project_id) = target_sync_result.project_id.as_deref() {
-                let issues = proof_recovery_state.unresolved_for_project(Some(project_id));
-                if !issues.is_empty() {
-                    target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
-                        "sync_proof_recovery_pending".to_string(),
-                    );
-                    let detail = issues
-                        .iter()
-                        .take(3)
-                        .map(|issue| issue.description())
-                        .collect::<Vec<_>>()
-                        .join("；");
-                    target_with_conflicts.result.error = Some(format!(
-                        "上次同步正文已落盘但证明事件尚未恢复；先完成证明恢复再同步该作品: {detail}"
-                    ));
-                    return (target_with_conflicts, Vec::new(), Vec::new(), Vec::new());
-                }
-            }
             let mut chapter_commit_receipts = Vec::new();
             let (commit_result, conflicts, committed_paths) =
                 crate::sync::commit_helpers::commit_single_target_staging(
                     run,
                     target_sync_result,
-                    Some(&intent_sink),
                     &mut chapter_commit_receipts,
                 );
-            let journal_chapter_keys: std::collections::HashSet<(String, String, String)> =
-                chapter_commit_receipts
-                    .iter()
-                    .map(|receipt| {
-                        (
-                            receipt.key.project_id.clone(),
-                            receipt.key.volume_id.clone(),
-                            receipt.key.chapter_id.clone(),
-                        )
-                    })
-                    .collect();
-            core.refresh_sync_proof_intents_pending();
 
             Self::apply_staging_conflicts_to_target(
                 &mut target_with_conflicts,
@@ -4204,202 +2892,29 @@ impl WriterCoreApi {
                 );
             }
 
-            // Issue #1008：同步落盘的正文变化是明确的 SyncRemote 事实，不能等
-            // 下次保存时被统归为 Unknown 外部变更。事件以 Core 当前证明链头为
-            // before，Apply 读取刚写入 projects_root 的实际正文；Delete 记录真实
-            // 删除事实。证明落盘失败必须反映到该 target，不能只打 warn 后假装成功。
-            // 文件已经落盘但事务 finish/冲突快照失败时，committed_paths 仍
-            // 非空；证明事实必须补记，否则下一轮会因缺少 SyncRemote 事件而
-            // 把真实同步变更误判为旧快照。
-            if matches!(
-                commit_result,
-                crate::sync::commit_helpers::TargetCommitResult::Ok
-            ) || !committed_paths.is_empty()
-                || !chapter_commit_receipts.is_empty()
-            {
-                let mut proof_errors: Vec<String> = Vec::new();
-                let mut proof_completed_ids = std::collections::HashSet::new();
-                // 普通同步的章节正文/证明事实已写入同一 chapter journal；
-                // 这些事实由 receipt 的 transaction_id/event_id 驱动投影 worker，
-                // 不能再用 committed_paths 的枚举序号反查旧 intent。
-                for (action_index, committed) in committed_paths.iter().enumerate() {
-                    let path = &committed.path;
-                    let Some((project_id, volume_id, chapter_id)) = chapter_path_parts(path) else {
-                        continue;
-                    };
-                    if journal_chapter_keys.contains(&(
-                        project_id.clone(),
-                        volume_id.clone(),
-                        chapter_id.clone(),
-                    )) {
-                        continue;
-                    }
-                    let before_text = match &committed.before {
-                        crate::sync::commit_helpers::CommittedBefore::Missing => None,
-                        crate::sync::commit_helpers::CommittedBefore::Text { bytes, .. } => {
-                            match std::str::from_utf8(bytes) {
-                                Ok(text) => Some(text.to_string()),
-                                Err(e) => {
-                                    proof_errors.push(format!(
-                                        "同步章节前置正文不是 UTF-8 {}: {}",
-                                        path.display(),
-                                        e
-                                    ));
-                                    continue;
-                                }
-                            }
-                        }
-                        crate::sync::commit_helpers::CommittedBefore::Error(e) => {
-                            proof_errors.push(e.clone());
-                            continue;
-                        }
-                        crate::sync::commit_helpers::CommittedBefore::NotTracked => {
-                            proof_errors
-                                .push(format!("同步章节缺少 commit 前置快照: {}", path.display()));
-                            continue;
-                        }
-                    };
-                    let after_text = if committed.deleted {
-                        None
+            if !chapter_commit_receipts.is_empty() {
+                // 正文已落盘；立即按回执所属 project root 结算 journal 证明。
+                // app target 的 live_root 是 projects 的父目录，不能拿它当
+                // 项目根扫描 journal。投影失败只保留 pending，不影响正文提交。
+                let target_root = std::path::Path::new(run.target_live_root());
+                let mut project_roots = std::collections::HashSet::new();
+                for receipt in &chapter_commit_receipts {
+                    let project_root = if target_root.join("projects").is_dir() {
+                        target_root.join("projects").join(&receipt.key.project_id)
                     } else {
-                        let Some(live_path) = chapter_live_path(&core, path) else {
-                            proof_errors.push(format!("无法映射同步章节路径: {}", path.display()));
-                            continue;
-                        };
-                        match std::fs::read_to_string(&live_path) {
-                            Ok(text) => Some(text),
-                            Err(e) => {
-                                proof_errors.push(format!(
-                                    "读取同步章节 {} 失败: {}",
-                                    live_path.display(),
-                                    e
-                                ));
-                                continue;
-                            }
-                        }
+                        target_root.to_path_buf()
                     };
-                    // prepare 对无内容变化的动作不生成意图；证明循环也必须跳过，
-                    // 否则会把正常的 no-op 当成“意图缺失”。
-                    if before_text.as_deref().unwrap_or("") == after_text.as_deref().unwrap_or("") {
-                        continue;
-                    }
-                    // run_id + 落盘路径 + 动作序号唯一标识一次真实同步提交；同一
-                    // 章节 A→B→A→B 不会被内容 hash 误去重。事件 ID 固定后重发复用。
-                    let sync_event_id =
-                        format!("sync:{}:{}:{}", run.run_id(), path.display(), action_index);
-                    // Issue #1062 1.4：已提交正文不能因为旧 SyncProofIntent 不存在
-                    // 而判同步失败。意图只是“设备/发生时间”的持久化载体；缺失时用
-                    // 本次提交的真实 before/after、固定 event ID 和当前时间补记，
-                    // 证明链仍按真实正文接续。
-                    let (source_device, occurred_at_ms) = match intent_sink.load(&sync_event_id) {
-                        Ok(Some(intent)) => {
-                            let expected_action = if committed.deleted {
-                                crate::sync::proof_intent::SyncProofAction::Delete
-                            } else {
-                                crate::sync::proof_intent::SyncProofAction::Apply
-                            };
-                            if intent.event_id != sync_event_id
-                                || intent.action_index != action_index
-                                || intent.workspace_path != path.display().to_string()
-                                || intent.action != expected_action
-                                || intent.is_delete() != committed.deleted
-                                || intent.project_id != project_id
-                                || intent.volume_id != volume_id
-                                || intent.chapter_id != chapter_id
-                                || intent.occurred_at_ms <= 0
-                                || intent.before_text.as_deref() != before_text.as_deref()
-                                || intent.after_text.as_deref() != after_text.as_deref()
-                            {
-                                proof_errors.push(format!(
-                                    "同步证明意图与本次提交不匹配，已保留待恢复: {}",
-                                    sync_event_id
-                                ));
-                                continue;
-                            }
-                            (intent.source_device_id, intent.occurred_at_ms)
-                        }
-                        Ok(None) => {
-                            // 缺意图不再阻塞：device 交给 Core 的稳定身份，
-                            // 时间取本次同步提交的真实时刻。
-                            log::warn!(
-                                "sync proof intent missing for committed chapter, \
-                                 recording fact without intent: {sync_event_id}"
-                            );
-                            (String::new(), chrono::Utc::now().timestamp_millis())
-                        }
-                        Err(error) => {
-                            proof_errors.push(format!(
-                                "读取同步证明意图失败，已保留待恢复 {}: {error}",
-                                sync_event_id
-                            ));
-                            continue;
-                        }
-                    };
-                    match core.record_sync_content_change_at(
-                        &project_id,
-                        &volume_id,
-                        &chapter_id,
-                        before_text.as_deref(),
-                        after_text.as_deref(),
-                        &sync_event_id,
-                        source_device.as_str(),
-                        "",
-                        occurred_at_ms,
-                    ) {
-                        Ok(_) => {
-                            proof_recovery_state.mark_event_persisted(&sync_event_id);
-                            proof_completed_ids.insert(sync_event_id.clone());
-                        }
-                        Err(e) => proof_errors.push(format!("{}: {e}", path.display())),
-                    }
+                    project_roots.insert(project_root);
                 }
-                // 先删除仅因证明未写完而保留的事务目录，再删除意图。若进程在
-                // 两步之间退出，残留意图会因事件已落盘而被下次恢复直接清理；
-                // 反过来先删意图则会留下“事务已提交但意图缺失”的不可判定状态。
-                let retained_ids = intent_sink
-                    .cleanup_completed_transactions(run.target_live_root(), &proof_completed_ids);
-                for event_id in proof_completed_ids.difference(&retained_ids) {
-                    if let Err(error) = intent_sink.remove(event_id) {
-                        log::warn!("remove completed sync proof intent {event_id} failed: {error}");
+                for project_root in project_roots {
+                    if let Err(error) =
+                        core.retry_pending_chapter_proof_projections(&project_root)
+                    {
+                        log::warn!(
+                            "pending chapter proof retry failed for {}: {error}",
+                            project_root.display()
+                        );
                     }
-                }
-                core.refresh_sync_proof_intents_pending();
-                if !chapter_commit_receipts.is_empty() {
-                    // 正文已落盘；立即按回执所属 project root 结算 journal 证明。
-                    // app target 的 live_root 是 projects 的父目录，不能拿它当
-                    // 项目根扫描 journal。投影失败只保留 pending，不影响正文提交。
-                    let target_root = std::path::Path::new(run.target_live_root());
-                    let mut project_roots = std::collections::HashSet::new();
-                    for receipt in &chapter_commit_receipts {
-                        let project_root = if target_root.join("projects").is_dir() {
-                            target_root.join("projects").join(&receipt.key.project_id)
-                        } else {
-                            target_root.to_path_buf()
-                        };
-                        project_roots.insert(project_root);
-                    }
-                    for project_root in project_roots {
-                        core.retry_pending_chapter_proof_projections(&project_root);
-                    }
-                }
-                if !proof_errors.is_empty() {
-                    let detail = proof_errors.join("; ");
-                    // 本轮后续 target 复用同一状态：本组证明未写完时，同项目
-                    // 不应继续改正文，避免旧事件被新的 before/after 越过。
-                    proof_recovery_state.record_issue(
-                        crate::sync::proof_intent::ProofRecoveryIssue {
-                            project_id: target_sync_result.project_id.clone(),
-                            transaction_id: None,
-                            event_id: None,
-                            missing_fields: Vec::new(),
-                            message: format!("同步正文已落盘，但证明事件记录失败: {detail}"),
-                        },
-                    );
-                    target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
-                        "sync_proof_record_failed".to_string(),
-                    );
-                    target_with_conflicts.result.error =
-                        Some(format!("同步正文已落盘，但证明事件记录失败: {detail}"));
                 }
             }
 
@@ -4433,6 +2948,27 @@ impl WriterCoreApi {
                 &committed_paths,
                 facts.unwrap_or(&empty_facts),
             );
+            // 统一对象比较决定的上传/删除：提交阶段已持锁确定内容，这里冻结成
+            // 发布决议并回填结果计数，发布时不再回读 live。
+            let (uploads, publish_deletes) = run.take_publish_lists();
+            if !uploads.is_empty() || !publish_deletes.is_empty() {
+                decisions.extend(crate::sync::decision::local_publish_decisions(
+                    run.target_live_root(),
+                    run.app_group(),
+                    &uploads,
+                    &publish_deletes,
+                ));
+                target_with_conflicts.result.uploaded_files.extend(
+                    uploads
+                        .iter()
+                        .map(|path| path.to_string_lossy().replace('\\', "/")),
+                );
+                target_with_conflicts.result.remote_deletes.extend(
+                    publish_deletes
+                        .iter()
+                        .map(|path| path.to_string_lossy().replace('\\', "/")),
+                );
+            }
             (
                 target_with_conflicts,
                 committed_paths,
@@ -4461,110 +2997,6 @@ impl WriterCoreApi {
             core.evict_starmap_store_after_commit(starmap_id)?;
         }
         core.invalidate_path_dependency_index();
-        Ok(())
-    }
-
-    /// Issue #779 评论 5854082763：generation GC maintenance 独立入口。
-    ///
-    /// 主同步（perform_full_sync）拿到终态后立即返回，GC 由平台层通过此方法
-    /// 异步调用。此方法有自己独立的 cancellation token，不复用用户同步 token。
-    ///
-    /// 内部：创建 provider → discover catalog → 对每个 project target 调 run_generation_gc。
-    /// GC 失败只 log warn，不传播（下一轮自然再清）。
-    ///
-    /// Issue #779 评论 5854912227：maintenance 用 [`create_sync_provider_for_maintenance`]
-    /// 创建 provider，**不调用 `persist_full_sync_early_failure`**，不触碰磁盘
-    /// `FullSyncState`。generation GC 失败只能作为维护错误，不能把正文同步重新
-    /// 变成失败。后续 discover catalog 失败、`run_generation_gc` 失败、网络/认证/
-    /// 权限失败都只 log warn / 返回 maintenance 错误，不调任何
-    /// `persist_full_sync_*failure`。
-    #[allow(clippy::excessive_nesting)]
-    pub fn perform_generation_gc_maintenance(
-        &self,
-        config: SyncConfigDto,
-        cancellation_token: Option<SyncCancellationToken>,
-    ) -> ApiResult<()> {
-        let sync_config: crate::sync::SyncConfig = config.into();
-        if !sync_config.enabled {
-            return Ok(());
-        }
-        if let Some(ref token) = cancellation_token {
-            if token.is_cancelled() {
-                return Ok(());
-            }
-        }
-        let secrets = self.secrets_override_snapshot().unwrap_or_default();
-        //   用无副作用 provider factory：transport 初始化失败只返回 Err，
-        // 不调 persist_full_sync_early_failure，不污染用户同步终态（Issue #779 评论 5854912227）。
-        let (provider, app_data_root) = {
-            let core = self.core_write();
-            (
-                core.create_sync_provider_for_maintenance(&sync_config, &secrets)?,
-                core.app_data_root.clone(),
-            )
-        };
-        let remote_catalog_snapshot =
-            match crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref()) {
-                Ok(snapshot) => snapshot,
-                Err(e) => {
-                    log::warn!("[sync] gc_maintenance: discover catalog failed: {e}");
-                    return Err(e.into());
-                }
-            };
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let mut first_gc_error = None;
-        for record in &remote_catalog_snapshot.catalog.records {
-            if !record.remote_prefix.starts_with("projects/") {
-                continue;
-            }
-            // Issue #779 评论 5854511049：不再只处理 Upsert。
-            // - Upsert：传当前 active_generation 作为保护。
-            // - Delete：同样调 run_generation_gc，active hint 传 None（作品已删除，
-            //   没有需要保护的 active generation，所有超过 retention 的 generation 都可清）。
-            //   delete_all_remote_objects 故意跳过 __generations__，留给 GC 在 retention
-            //   到期后清；若 maintenance 再跳过 Delete，这些旧 generation 将永久留在远端。
-            //   仍由 run_generation_gc 自己执行 retention、incomplete lease、删除前 fresh
-            //   catalog 二次确认这些安全规则。
-            let active_hint = match record.op {
-                crate::sync::types::TargetOp::Upsert => record.active_generation.as_deref(),
-                crate::sync::types::TargetOp::Delete => None,
-            };
-            if let Some(ref token) = cancellation_token {
-                if token.is_cancelled() {
-                    log::info!("[sync] gc_maintenance: cancellation requested — stopping");
-                    return Ok(());
-                }
-            }
-            if let Err(e) = crate::sync::generation_gc::run_generation_gc(
-                provider.as_ref(),
-                &record.remote_prefix,
-                active_hint,
-                now_ms,
-                crate::sync::generation_gc::GENERATION_RETENTION_MS,
-                cancellation_token.as_ref(),
-            ) {
-                log::warn!(
-                    "[sync] gc_maintenance: GC failed for {}: {e}",
-                    record.remote_prefix
-                );
-                if first_gc_error.is_none() {
-                    first_gc_error = Some(e);
-                }
-            }
-        }
-        if let Some(token) = cancellation_token.as_ref() {
-            if token.is_cancelled() {
-                log::info!("[sync] gc_maintenance: cancellation requested — skipping maintenance timestamp");
-                return Ok(());
-            }
-        }
-        if let Some(error) = first_gc_error {
-            return Err(error.into());
-        }
-        crate::sync::generation_gc::save_maintenance_last_success_at(
-            &app_data_root,
-            chrono::Utc::now().timestamp(),
-        )?;
         Ok(())
     }
 
@@ -5053,105 +3485,6 @@ mod tests {
     }
 }
 
-/// 从 workspace-relative 章节正文路径解析 `(project, volume, chapter)`。
-fn chapter_path_parts(path: &std::path::Path) -> Option<(String, String, String)> {
-    let parts: Vec<String> = path
-        .components()
-        .filter_map(|component| component.as_os_str().to_str().map(ToString::to_string))
-        .collect();
-    let project = parts.iter().position(|part| part == "projects")?;
-    let volume = parts.iter().position(|part| part == "volumes")?;
-    let chapter = parts.iter().position(|part| part == "chapters")?;
-    if volume + 1 >= parts.len()
-        || !parts
-            .get(chapter + 2)
-            .is_some_and(|name| name == "chapter.md")
-    {
-        return None;
-    }
-    Some((
-        parts.get(project + 1)?.clone(),
-        parts.get(volume + 1)?.clone(),
-        parts.get(chapter + 1)?.clone(),
-    ))
-}
-
-/// 把 workspace-relative `projects/<pid>/...` 映射到独立注入的 projects_root。
-///
-/// 作品根与 app_data_root 可以分离，不能用 app_data_root.join(workspace_path)
-/// 猜正文位置。
-fn chapter_live_path(
-    core: &crate::facade::WriterCore,
-    workspace_path: &std::path::Path,
-) -> Option<std::path::PathBuf> {
-    let mut components = workspace_path.components();
-    if components.next()?.as_os_str() != "projects" {
-        return None;
-    }
-    let project_id = components.next()?.as_os_str().to_str()?;
-    Some(
-        core.projects_root()
-            .join(project_id)
-            .join(components.as_path()),
-    )
-}
-
-/// 从 staging manifest 收集 `project/volume/chapter -> 远端设备`，供 SyncRemote
-/// 证明事件记录真实来源。只按 chapter_id 会在不同作品同名章节时串来源。
-fn staging_manifest_device_ids(
-    run: &crate::sync::staging::StagingRun,
-    default_project_id: Option<&str>,
-) -> std::collections::HashMap<String, String> {
-    // 清单权威在 staging 的 v2 store；单文件只是 prepare 物化视图，合并后
-    // 可能过期。先读 store，没有 root 才回退单文件。
-    let staging_root = run.staging_root();
-    let manifest =
-        crate::sync::lww::ManifestStore::new(&staging_root, crate::sync::lww::SYNC_MANIFEST_PATH)
-            .load_all()
-            .ok()
-            .flatten()
-            .or_else(|| {
-                let text = std::fs::read_to_string(
-                    staging_root.join(crate::sync::lww::SYNC_MANIFEST_PATH),
-                )
-                .ok()?;
-                serde_json::from_str::<crate::sync::types::SyncManifest>(&text).ok()
-            });
-    let Some(manifest) = manifest else {
-        return std::collections::HashMap::new();
-    };
-    let mut out = std::collections::HashMap::new();
-    for record in manifest.files {
-        if record.device_id.is_empty() {
-            continue;
-        }
-        if let Some(key) = chapter_key_from_path_str(&record.path, default_project_id) {
-            out.insert(key, record.device_id);
-        }
-    }
-    out
-}
-
-fn chapter_key_from_path_str(path: &str, default_project_id: Option<&str>) -> Option<String> {
-    let parts: Vec<&str> = path.split('/').collect();
-    let volumes = parts.iter().position(|part| *part == "volumes")?;
-    let chapters = parts.iter().position(|part| *part == "chapters")?;
-    if parts.get(chapters + 2) != Some(&"chapter.md") {
-        return None;
-    }
-    let project_id = parts
-        .iter()
-        .position(|part| *part == "projects")
-        .and_then(|projects| parts.get(projects + 1).copied())
-        .or(default_project_id)?;
-    Some(format!(
-        "{}/{}/{}",
-        project_id,
-        parts.get(volumes + 1)?,
-        parts.get(chapters + 1)?
-    ))
-}
-
 #[cfg(test)]
 mod shared_definition_path_tests {
     use super::{
@@ -5205,351 +3538,5 @@ mod shared_definition_path_tests {
         let affected = starmap_ids_for_committed_paths(&core, [definition_path.as_path()]).unwrap();
         assert!(affected.contains(&first));
         assert!(affected.contains(&second));
-    }
-}
-
-#[cfg(test)]
-mod recovery_settlement_tests {
-    use super::*;
-    use crate::sync::types::{SyncResult, TargetSyncResult};
-
-    fn no_change_target() -> TargetSyncResult {
-        TargetSyncResult {
-            target_kind: "app".to_string(),
-            project_id: None,
-            remote_prefix: "app".to_string(),
-            group_id: Some("global".to_string()),
-            failure_path: None,
-            failure_phase: None,
-            result: SyncResult::no_changes(),
-            deleted_resolution: None,
-            local_lifecycle_action: Default::default(),
-        }
-    }
-
-    /// 构造一条会重放失败的 `mutation_ack` 义务：root 是不可读目录（普通文件）。
-    fn write_broken_obligation_index(
-        api: &WriterCoreApi,
-        broken_root: &std::path::Path,
-        transaction_id: &str,
-    ) {
-        let mut obligations = serde_json::Map::new();
-        obligations.insert(
-            format!(
-                "mutation_ack\u{1f}{}\u{1f}{}",
-                broken_root.display(),
-                transaction_id
-            ),
-            serde_json::json!({
-                "kind": "mutation_ack",
-                "root": broken_root.display().to_string(),
-                "transaction_id": transaction_id,
-                "detail": "app:global",
-            }),
-        );
-        let index = serde_json::json!({
-            "schema_version": crate::sync::dirty_index::SCHEMA_VERSION,
-            "targets": {},
-            "obligations": obligations,
-            "recovery_calibrated": true,
-            "recovery_generation": 1,
-            "recovery_calibrated_at_ms": 1,
-        });
-        let path = api
-            .app_data_root
-            .join(crate::sync::dirty_index::DIRTY_INDEX_PATH);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, serde_json::to_string(&index).unwrap()).unwrap();
-    }
-
-    #[test]
-    fn replay_failure_records_obligation_identity() {
-        let temp = tempfile::tempdir().unwrap();
-        let projects_root = temp.path().join("projects");
-        std::fs::create_dir_all(&projects_root).unwrap();
-        let api = WriterCoreApi::new(temp.path(), &projects_root);
-        let broken_root = temp.path().join("broken-root");
-        std::fs::write(&broken_root, b"not a directory").unwrap();
-        let transaction_id = "round-broken\u{1f}app:global";
-        write_broken_obligation_index(&api, &broken_root, transaction_id);
-
-        let outcome = api.recover_sync_state_before_preflight();
-
-        assert!(
-            !outcome.settled(),
-            "replay failure must keep recovery unsettled"
-        );
-        assert!(outcome.failed > 0);
-        assert_eq!(outcome.deferred, 1, "obligation remains in the dirty index");
-        let issue = outcome
-            .issues
-            .iter()
-            .find(|issue| issue.kind == "mutation_ack")
-            .expect("failed obligation identity must be recorded");
-        assert_eq!(issue.transaction_id.as_deref(), Some(transaction_id));
-        assert_eq!(issue.root, broken_root.display().to_string());
-        assert!(
-            !issue.error.is_empty(),
-            "real replay error text must be kept"
-        );
-        assert!(
-            issue.deferred,
-            "still-pending obligation is marked deferred"
-        );
-
-        // 快路径收口直接消费同一份真实恢复事实：不能停在 NoChanges。
-        let settlement = RecoverySettlement::new(outcome, Vec::new());
-        let result = api.finalize_fast_path_no_change(vec![no_change_target()], &settlement);
-        assert_eq!(result.overall_status, "recoverable_error");
-        let message = result
-            .error
-            .expect("fast path must report the failed replay");
-        assert!(message.contains("transaction_id=round-broken"), "{message}");
-        assert!(
-            message.contains(&broken_root.display().to_string()),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn unsettled_recovery_keeps_successful_publications_in_result() {
-        let temp = tempfile::tempdir().unwrap();
-        let projects_root = temp.path().join("projects");
-        std::fs::create_dir_all(&projects_root).unwrap();
-        let api = WriterCoreApi::new(temp.path(), &projects_root);
-        let mut outcome = RecoveryOutcome {
-            failed: 1,
-            deferred: 0,
-            ..RecoveryOutcome::default()
-        };
-        outcome.record_issue(RecoveryIssue::new(
-            "mutation_ack",
-            "/data/app",
-            Some("round-published".to_string()),
-            None,
-            "ack replay failed",
-        ));
-        let settlement = RecoverySettlement::new(outcome, Vec::new());
-        let mut sync_result = SyncResult::success();
-        sync_result.uploaded_files = vec!["volumes/v1/chapters/c1/chapter.md".to_string()];
-        let target = TargetSyncResult {
-            target_kind: "project".to_string(),
-            project_id: Some("p1".to_string()),
-            remote_prefix: "projects/p1".to_string(),
-            group_id: None,
-            failure_path: None,
-            failure_phase: None,
-            result: sync_result,
-            deleted_resolution: None,
-            local_lifecycle_action: Default::default(),
-        };
-
-        let (full, _, _) = api.core_write().finalize_full_sync(
-            vec![target],
-            None,
-            settlement.round_phase_failure(),
-        );
-
-        assert!(matches!(
-            full.overall_status,
-            crate::sync::SyncStatus::RecoverableError(ref category)
-                if category == "recovery_unsettled"
-        ));
-        assert_eq!(
-            full.total_uploaded, 1,
-            "published receipt count must survive"
-        );
-        assert_eq!(full.targets.len(), 1);
-        assert_eq!(
-            full.targets[0].result.uploaded_files,
-            vec!["volumes/v1/chapters/c1/chapter.md".to_string()]
-        );
-    }
-
-    #[test]
-    fn fast_path_keeps_no_changes_only_when_recovery_settled() {
-        let temp = tempfile::tempdir().unwrap();
-        let projects_root = temp.path().join("projects");
-        std::fs::create_dir_all(&projects_root).unwrap();
-        let api = WriterCoreApi::new(temp.path(), &projects_root);
-
-        let result = api
-            .finalize_fast_path_no_change(vec![no_change_target()], &RecoverySettlement::default());
-
-        assert_eq!(result.overall_status, "no_changes");
-        assert!(result.error.is_none());
-        assert!(
-            result.targets.is_empty(),
-            "fast path still returns no targets"
-        );
-    }
-
-    #[test]
-    fn fast_path_reports_failed_recovery_with_transaction_identity() {
-        let temp = tempfile::tempdir().unwrap();
-        let projects_root = temp.path().join("projects");
-        std::fs::create_dir_all(&projects_root).unwrap();
-        let api = WriterCoreApi::new(temp.path(), &projects_root);
-
-        let mut outcome = RecoveryOutcome {
-            completed: 0,
-            failed: 1,
-            deferred: 1,
-            generation: 7,
-            issues: Vec::new(),
-        };
-        outcome.record_issue(RecoveryIssue::new(
-            "chapter_projections",
-            "/data/app",
-            Some("tx-chapter-1".to_string()),
-            Some("projects/p1/volumes/v1/chapters/c1/chapter.md".to_string()),
-            "journal replay failed: corrupt manifest",
-        ));
-        let settlement = RecoverySettlement::new(outcome, Vec::new());
-
-        let result = api.finalize_fast_path_no_change(vec![no_change_target()], &settlement);
-
-        assert_eq!(result.overall_status, "recoverable_error");
-        assert_ne!(result.overall_status, "no_changes");
-        let message = result.error.expect("unsettled recovery must be reported");
-        assert!(message.contains("kind=chapter_projections"), "{message}");
-        assert!(message.contains("root=/data/app"), "{message}");
-        assert!(message.contains("transaction_id=tx-chapter-1"), "{message}");
-        assert!(message.contains("chapter.md"), "{message}");
-        assert_eq!(result.error_category.as_deref(), Some("recovery_unsettled"));
-        assert_eq!(result.failure_stage.as_deref(), Some("recovery"));
-        assert!(result.targets.is_empty());
-    }
-
-    #[test]
-    fn fast_path_blocks_no_changes_when_only_proof_intent_is_pending() {
-        let temp = tempfile::tempdir().unwrap();
-        let projects_root = temp.path().join("projects");
-        std::fs::create_dir_all(&projects_root).unwrap();
-        let api = WriterCoreApi::new(temp.path(), &projects_root);
-        let settlement = RecoverySettlement::new(
-            RecoveryOutcome::default(),
-            vec![RecoveryIssue {
-                kind: "proof_intent".to_string(),
-                root: "/data/app/stats/proof-intents".to_string(),
-                transaction_id: Some("tx-proof-2".to_string()),
-                detail: Some("projects/p2/volumes/v1/chapters/c9/chapter.md".to_string()),
-                error: "正文事务尚未确认提交，证明事件尚未入库".to_string(),
-                deferred: true,
-            }],
-        );
-
-        let result = api.finalize_fast_path_no_change(vec![no_change_target()], &settlement);
-
-        assert_eq!(result.overall_status, "recoverable_error");
-        let message = result.error.expect("proof intent pending must be reported");
-        assert!(message.contains("kind=proof_intent"), "{message}");
-        assert!(message.contains("transaction_id=tx-proof-2"), "{message}");
-        assert!(message.contains("chapters/c9/chapter.md"), "{message}");
-    }
-
-    #[test]
-    fn partial_conflict_keeps_status_and_appends_recovery_identity() {
-        let mut outcome = RecoveryOutcome {
-            failed: 1,
-            deferred: 0,
-            ..RecoveryOutcome::default()
-        };
-        outcome.record_issue(RecoveryIssue::new(
-            "chapter_projections",
-            "/data/app",
-            Some("tx-partial-1".to_string()),
-            None,
-            "journal replay failed",
-        ));
-        let settlement = RecoverySettlement::new(outcome, Vec::new());
-        let full = crate::sync::types::FullSyncResult {
-            overall_status: crate::sync::SyncStatus::PartialConflict,
-            targets: Vec::new(),
-            total_uploaded: 1,
-            total_downloaded: 0,
-            total_local_deletes: 0,
-            total_remote_deletes: 0,
-            total_overwritten: 0,
-            total_ignored: 0,
-            total_conflicts: 1,
-            error: Some("1 conflict pending".to_string()),
-            error_category: None,
-            message_key: Some("sync.result.partial_conflict_summary".to_string()),
-        };
-        let mut result: FullSyncResultDto = full.into();
-
-        settlement.annotate_result(&mut result);
-
-        assert_eq!(result.overall_status, "partial_conflict");
-        let message = result.error.expect("conflict error must keep both facts");
-        assert!(message.contains("1 conflict pending"), "{message}");
-        assert!(message.contains("transaction_id=tx-partial-1"), "{message}");
-        assert_eq!(result.error_category, None);
-        assert_eq!(
-            result.failure_stage.as_deref(),
-            Some("core_sync"),
-            "conflict stage must not be rewritten as a recovery failure"
-        );
-        assert_eq!(
-            result.message_key.as_deref(),
-            Some("sync.result.partial_conflict_summary")
-        );
-        assert_eq!(result.total_uploaded, 1, "published receipts remain intact");
-    }
-
-    #[test]
-    fn proof_intent_issue_keeps_chapter_path_and_error() {
-        let temp = tempfile::tempdir().unwrap();
-        let issue = crate::sync::proof_intent::ProofRecoveryIssue {
-            project_id: Some("p1".to_string()),
-            transaction_id: Some("tx-proof-1".to_string()),
-            event_id: Some(
-                "sync:run-1:projects/p1/volumes/v1/chapters/c1/chapter.md:0".to_string(),
-            ),
-            message: "证明事件尚未入库".to_string(),
-            missing_fields: vec!["after_text".to_string()],
-        };
-
-        let converted = proof_intent_issue(temp.path(), &issue);
-
-        assert_eq!(converted.kind, "proof_intent");
-        assert_eq!(converted.transaction_id.as_deref(), Some("tx-proof-1"));
-        let detail = converted.detail.expect("chapter path identity");
-        assert!(detail.contains("projects/p1/volumes/v1/chapters/c1/chapter.md"));
-        assert!(converted.error.contains("证明事件尚未入库"));
-        assert!(converted.deferred);
-    }
-
-    #[test]
-    fn merged_round_failure_keeps_both_publish_and_recovery_errors() {
-        let mut outcome = RecoveryOutcome {
-            failed: 1,
-            deferred: 0,
-            ..RecoveryOutcome::default()
-        };
-        outcome.record_issue(RecoveryIssue::new(
-            "mutation_ack",
-            "/data/app",
-            Some("round-9".to_string()),
-            None,
-            "ack replay failed",
-        ));
-        let settlement = RecoverySettlement::new(outcome, Vec::new());
-        let existing = crate::facade::RoundPhaseFailure {
-            category: "remote_publish_failed".to_string(),
-            message: "publish failed".to_string(),
-            message_key: Some("sync.result.network_failed".to_string()),
-        };
-
-        let merged = merge_round_failure(Some(existing), &settlement)
-            .expect("recovery failure must be merged");
-        assert_eq!(merged.category, "remote_publish_failed");
-        assert!(merged.message.contains("publish failed"));
-        assert!(merged.message.contains("transaction_id=round-9"));
-        assert_eq!(
-            merged.message_key.as_deref(),
-            Some("sync.result.network_failed")
-        );
     }
 }

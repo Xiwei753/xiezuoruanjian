@@ -5,11 +5,14 @@
 //!
 //! ## 主要功能
 //!
-//! - **远端同步**: 通过 `SyncProvider` trait 抽象 GitHub / 其它远端存储后端
-//! - **LWW 冲突解决**: Last-Writer-Wins 引擎处理设置和元数据同步
-//! - **Full Sync**: provider-neutral 的完整同步算法（prepare / transfer / commit）
+//! - **远端同步**: 通过 `SyncProvider` trait 抽象 GitHub / Git HTTPS 传输后端；
+//!   业务编排只有一套，传输/认证按 provider 适配。
+//! - **对象版本比较**: `object_compare` 给出唯一裁决（相同跳过、单侧变更传播、
+//!   双侧不同修改交用户、删除按版本化操作处理）。
+//! - **Full Sync**: 固定远端 HEAD → 增量下载缺失 blob → 一次 `SaveTransaction`
+//!   提交内容与对象索引 → 一次远端提交 → 按回执精确确认。
 //! - **同步配置管理**: 管理远程 URL、认证信息、代理设置、分支等配置
-//! - **冲突检测与解决**: 提供文件冲突检测、设置冲突语义合并等功能
+//! - **冲突检测与解决**: 冲突只记录对象路径、双方版本/内容与共同基线。
 //! - **同步诊断**: 提供 provider 诊断信息（network_ok / auth_ok / remote_ok 等）
 //! - **安全处理**: URL 凭证脱敏、敏感信息保护
 //!
@@ -20,10 +23,10 @@
 //!     = 本地版本历史 / diff / rollback，唯一 workspace repo
 //!
 //! sync/provider/*
-//!     = 远端存储 Provider
+//!     = 远端存储 Provider（传输适配器）
 //!
-//! sync/lww + full_sync + staging
-//!     = provider-neutral 同步算法
+//! sync/{object_compare,full_sync,staging,commit_helpers}
+//!     = 唯一业务同步引擎
 //! ```
 
 #![allow(clippy::module_inception)]
@@ -40,40 +43,33 @@ pub mod conflict;
 pub mod content_class;
 pub(crate) mod decision;
 pub mod diagnostics;
-pub(crate) mod dirty_index;
 pub mod full_sync;
 pub mod full_sync_state;
 pub(crate) mod full_sync_utils;
-///   generation GC（provider-neutral 清理未引用 generation）。
-pub mod generation_gc;
 /// 同步哈希语义集中模块（MD5 内容哈希 / Git blob OID / 旧基线归一化）。
 pub(crate) mod hash;
 /// 成功 Core 事务留下的本地对象变更事实（同步版本投影的提交时间/设备来源）。
 pub(crate) mod local_mutations;
 pub mod lww;
 pub(crate) mod manifest_delta;
+pub(crate) mod object_compare;
 ///   待删除同步 target 的持久化（provider-neutral）。
 pub mod path;
 pub mod pending_deleted;
 /// 待清理远端残留的持久化（provider-neutral）。
 pub mod pending_remote_cleanup;
-/// 同步正文与证明事件之间的可恢复事务意图（Issue #1008）。
-pub(crate) mod proof_intent;
 pub mod provider;
 pub mod scanner;
 pub mod service;
-/// 跨 WriterCoreApi 实例串行化同一 sync root 的 state/conflict mutation（Issue #762 评论 5834136935）。
+/// 稀疏对象计划（旧 lww 合并路径的只读参数，Issue #1066 后不再参与裁决）。
 pub(crate) mod sparse_plan;
 pub mod staging;
-pub(crate) mod starmap_reference_obligation;
+/// 跨 WriterCoreApi 实例串行化同一 sync root 的 state/conflict mutation（Issue #762）。
 pub(crate) mod state_lock;
 ///   target 生命周期 catalog（远端持久、provider-neutral）。
 pub mod target_lifecycle;
-pub mod tests;
 pub mod types;
 pub mod url;
-/// 对象级本地版本快照（空闲同步不变化判定 / 增量 target 选择，Issue #1065）。
-pub(crate) mod version_snapshot;
 
 pub use provider::*;
 pub use service::*;

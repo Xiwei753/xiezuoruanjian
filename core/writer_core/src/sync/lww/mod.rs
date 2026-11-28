@@ -1,91 +1,38 @@
-//! LWW (Last-Writer-Wins) 同步策略实现。
+//! 版本化对象索引与同步文件原语（Issue #1066 保留的清单存储层）。
 //!
-//! 本模块实现基于 GitHub API 的文件级同步，不依赖 Git 本地仓库。
-//! 与 `service.rs` 中的 Git 同步路径（依赖 git2 crate，需 `git-https` feature）并行存在，
-//! 两者目的相同但传输和冲突检测方式不同：
+//! 同步主链不再有 LWW 子引擎：对象比较在
+//! [`crate::sync::object_compare`]，裁决在
+//! [`crate::sync::staging::plan`]，提交在
+//! [`crate::sync::commit_helpers::commit_object_plan`]。本模块只保留：
 //!
-//! | 维度         | LWW 路径（本模块）                    | Git 路径（service.rs）          |
-//! |-------------|--------------------------------------|-------------------------------|
-//! | 传输方式     | GitHub REST API 直接读写文件           | git2 clone/pull/push          |
-//! | 冲突检测     | 三路比较（UserTextDocument）+ LWW 时间戳（Metadata/GeneratedCache） | dry-run checkout + index diff |
-//! | 清单文件     | `app-meta/sync/manifest.sync.json`    | Git index                     |
-//! | feature 门控 | 无（始终可用）                         | `git-https`                   |
+//! - [`manifest`]：本地/远端版本化清单存储（root + 两级索引 + 内容寻址对象），
+//!   以及一次性读取旧单文件/旧分片格式的迁移入口；
+//! - [`transfer`]：冲突副本与 trash 两个文件原语。
 //!
-//! ## 核心不变量
-//!
-//! - `manifest.sync.json` 是本地文件状态的唯一事实来源，记录每个路径的 content_hash、op、updated_at_ms。
-//! - 三路比较仅用于 `UserTextDocument`（正文、大纲等）；`Metadata`/`GeneratedCache` 走 LWW 时间戳决胜。
-//! - LWW 决胜规则：时间戳较大方获胜；时间戳相同时按 device_id 字典序决胜（保证双方独立计算结果一致）。
-//! - 远端删除的文件移至 `app-meta/sync/trash/` 而非直接删除，防止同步异常导致数据丢失。
-//! - 下载使用 atomic rename（先写 .tmp 再 rename），保证中断不会留下半写入文件。
-//!
-//! ## 模块结构
-//!
-//! - [`engine`]：同步入口 `perform_lww_sync`，负责 debounce、重试与错误分类。
-//! - [`attempt`]：单次同步尝试 `execute_lww_sync_attempt`，负责完整编排。
-//! - [`compare`]：三路/LWW 路径决策。
-//! - [`manifest`]：本地/远端记录构造与清单读写。
-//! - [`transfer`]：远端 tree/manifest 拉取与文件上传/下载/删除。
+//! 远端读写一律通过 [`crate::sync::provider::SyncProvider`]，不绑定具体传输。
 
-mod attempt;
-mod compare;
-mod engine;
 mod manifest;
-mod merge;
 mod transfer;
 
-// 从 lww.rs 抽出的子模块，保持 pub/pub(crate) 接口不变。
-// 纯分类/比较提升为 sync::content_class（始终可用），
-// 这里 re-export 保持原 lww.rs 的 pub(crate) 接口，让旧测试 `crate::sync::lww::*` 仍可用。
-#[allow(unused_imports)]
-pub(crate) use crate::sync::content_class::{
-    classify_content_path, is_document_content_path, ContentClass,
-};
-
-// 把入口函数留在 lww 模块根的对外接口上，调用方仍用 `crate::sync::lww::perform_lww_sync`。
-pub(crate) use engine::perform_lww_sync;
-
-// re-export 原子发布规划：attempt.rs 与测试统一从这里取同一入口，
-// 保证 LWW 发布的 mutation 顺序（业务 → 清单 objects/indexes → 根）只有一份实现。
-pub(crate) use transfer::plan_lww_publish;
-
-// re-export move_to_trash 供 conflict.rs 的 resolve_conflict_take_remote
-// （RemoteDeleted 语义）复用同一 trash 移动逻辑，不重复实现第二套删除路径。
+// re-export move_to_trash，供 conflict.rs 的 resolve_conflict_take_remote
+// （RemoteDeleted 语义）复用同一 trash 移动逻辑。
 pub(crate) use transfer::move_to_trash;
 
-// re-export save_conflict_copy 供 commit_helpers 在 staging cleanup 前保存远端快照，
-// 让 staging BothChanged 冲突也能像 LWW 冲突一样保留远端 snapshot。
+// re-export save_conflict_copy，供 commit_helpers 在 staging cleanup 前保存远端快照。
 pub(crate) use transfer::save_conflict_copy;
 
-//   re-export 只读 local record 投影 helper，
-// 供 `build_sync_plan`（plan/dry-run 路径）复用，保持 plan 与 LWW execute attempt
-// 同一 source of truth（per-file 真实 winner device_id + 真实删除时间）。
+// 只读 local record 投影 helper：plan/dry-run 与提交阶段共用。
+#[allow(unused_imports)]
 pub(crate) use manifest::{snapshot_app_group_records_read_only, snapshot_local_records_read_only};
 
-// re-export 统一 merge 核心，
-// 供 `execute_lww_sync_attempt`（普通 LWW）和 `full_sync.rs` LiveProject 复用。
-pub(crate) use merge::{
-    materialize_local_snapshot_for_empty_remote, merge_remote_into_local_app_group,
-    merge_remote_into_local_snapshot_with_diagnostics, merge_stats_jsonl, LwwMergeOutcome,
-    MergeManifestView,
-};
-
-// re-export SYNC_MANIFEST_PATH / SYNC_MANIFEST_SHARDS_DIR，
-// 供 `full_sync.rs` upload_merged_outcome_to_generation 构造 manifest 远端路径；
-// 旧分片目录常量保留供旧迁移/扫描排除使用。
 pub(crate) use manifest::SYNC_MANIFEST_PATH;
-// 旧分片目录常量由 transfer 直接经 `manifest::` 读取；这里按清单存储契约
-// 保留统一出口，当前主链路不经过该 re-export。
 #[allow(unused_imports)]
 pub(crate) use manifest::SYNC_MANIFEST_SHARDS_DIR;
 
-// re-export 版本化清单存储入口：读取端（版本快照、决议冻结、commit 写回）
-// 统一走 root 优先/旧格式迁移，不再各读各的单文件。
+// 版本化清单存储入口：读取统一 root 优先/旧格式迁移，不再各读各的单文件。
 pub(crate) use manifest::{
-    fetch_remote_manifest_at, fetch_remote_root_identity, fetch_remote_root_state,
-    is_manifest_rel_path, is_manifest_storage_path, is_sha256_hex, local_manifest_storage,
-    local_manifest_storage_for_delta, local_manifest_storage_for_delta_with_base,
-    local_manifest_storage_with_published_base, namespace_for_path, object_key,
-    publish_remote_manifest, remote_rel_for, sha256_hex, ManifestIndex, ManifestObject,
-    ManifestRoot, ManifestStorageKind, ManifestStore, ManifestWritePlan, MANIFEST_SCHEMA_VERSION,
+    fetch_remote_manifest_at, is_manifest_rel_path, is_manifest_storage_path, is_sha256_hex,
+    namespace_for_path, object_key, publish_remote_manifest, remote_rel_for, sha256_hex,
+    ManifestIndex, ManifestObject, ManifestRoot, ManifestStore, ManifestWritePlan,
+    MANIFEST_SCHEMA_VERSION,
 };

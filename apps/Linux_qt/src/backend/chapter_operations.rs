@@ -174,20 +174,29 @@ impl AppBackend {
                     self.debug_log("chapter", "save_chapter_success", &format!("len={}", len));
                     self.current_save_status = "已保存".to_string();
                     // Issue #982：只更新本章正文条目，不重建整个工作区索引。
-                    let title = self.chapter_title_from_tree(&p, &v, &c).unwrap_or_default();
-                    let entry = writer_core::search::extractor::extract_chapter_body_entry(
-                        &p, &v, &c, &title, &text_str,
-                    );
-                    self.search_bridge().apply_updates(vec![
-                        writer_core::search::SearchIndexUpdate {
-                            action: writer_core::search::SearchIndexAction::Upsert,
-                            object_id: entry.object_id.clone(),
-                            scope: entry.scope,
-                            title: entry.title.clone(),
-                            body: entry.body.clone(),
-                            target: Some(entry.target.clone()),
-                        },
-                    ]);
+                    // 标题读取失败时保留已有索引（含正确标题），不用空标题覆盖。
+                    match self.chapter_title_from_tree(&p, &v, &c) {
+                        Some(title) if !title.trim().is_empty() => {
+                            let entry = writer_core::search::extractor::extract_chapter_body_entry(
+                                &p, &v, &c, &title, &text_str,
+                            );
+                            self.search_bridge().apply_updates(vec![
+                                writer_core::search::SearchIndexUpdate {
+                                    action: writer_core::search::SearchIndexAction::Upsert,
+                                    object_id: entry.object_id.clone(),
+                                    scope: entry.scope,
+                                    title: entry.title.clone(),
+                                    body: entry.body.clone(),
+                                    target: Some(entry.target.clone()),
+                                },
+                            ]);
+                        }
+                        _ => {
+                            log::warn!(
+                                "skip chapter search index update: title unavailable for {p}/{v}/{c}"
+                            );
+                        }
+                    }
                     // 正文保存不触发 workspace_state_changed，避免 reload_tree 刷新整棵树。
                     // 保存只改变章节内容，不改变工作区结构（项目/卷/章节增删改）。
                     serde_to_qjson_object(serde_json::json!({
@@ -332,21 +341,28 @@ impl AppBackend {
     ) {
         self.current_save_status = "已保存".to_string();
         // Issue #982：只更新本章正文条目，不重建整个工作区索引。
-        let title = self
-            .chapter_title_from_tree(project_id, volume_id, chapter_id)
-            .unwrap_or_default();
-        let entry = writer_core::search::extractor::extract_chapter_body_entry(
-            project_id, volume_id, chapter_id, &title, text,
-        );
-        self.search_bridge()
-            .apply_updates(vec![writer_core::search::SearchIndexUpdate {
-                action: writer_core::search::SearchIndexAction::Upsert,
-                object_id: entry.object_id.clone(),
-                scope: entry.scope,
-                title: entry.title.clone(),
-                body: entry.body.clone(),
-                target: Some(entry.target.clone()),
-            }]);
+        // 标题读取失败时保留已有索引（含正确标题），不用空标题覆盖。
+        match self.chapter_title_from_tree(project_id, volume_id, chapter_id) {
+            Some(title) if !title.trim().is_empty() => {
+                let entry = writer_core::search::extractor::extract_chapter_body_entry(
+                    project_id, volume_id, chapter_id, &title, text,
+                );
+                self.search_bridge()
+                    .apply_updates(vec![writer_core::search::SearchIndexUpdate {
+                        action: writer_core::search::SearchIndexAction::Upsert,
+                        object_id: entry.object_id.clone(),
+                        scope: entry.scope,
+                        title: entry.title.clone(),
+                        body: entry.body.clone(),
+                        target: Some(entry.target.clone()),
+                    }]);
+            }
+            _ => {
+                log::warn!(
+                    "skip chapter search index update: title unavailable for {project_id}/{volume_id}/{chapter_id}"
+                );
+            }
+        }
     }
 
     /// 保存成功回执的 QML JSON 形状（纯数据，不产生副作用）。

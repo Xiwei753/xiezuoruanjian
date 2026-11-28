@@ -66,12 +66,10 @@ pub(super) fn make_outcome_callback(
 }
 
 // 同步执行按关注点拆成三个子模块：
-//   - gc.rs：generation GC maintenance 后台线程
 //   - dry_run.rs：预演（只算不落盘）
 //   - perform.rs：真实执行 perform_sync_internal
 // 本文件保留同步结果处理、perform_sync 入口与共享的 format_conflict_files。
 mod dry_run;
-mod gc;
 mod perform;
 
 /// Issue #1058：自动同步的触发原因。QML 只传原因字符串，`auto_sync_due` 与
@@ -191,7 +189,7 @@ impl AppBackend {
 
         self.current_sync_status = outcome.sync_status.clone();
         // Issue #779 评论 5853718466：Core 返回终态后立即结束同步 operation；
-        // generation GC 作为 Core 内部独立 maintenance 异步执行（spawn 后台线程，
+        // 远端发布与本地提交在同一轮完成；不再有 generation 概念。
         // fire-and-forget），不占用本 operation 的 busy 生命周期。Core 修改后
         // perform_full_sync 拿到终态即返回，outcome 及时到达，此处立即清
         // current_sync_in_progress，UI 不会因 GC 慢而一直显示 syncing。
@@ -222,33 +220,6 @@ impl AppBackend {
         } else {
             SyncOutcomeEffect::StatusOnly
         };
-
-        // Issue #779 评论 5854734343：GC 触发要看完整成功类终态，不仅字面上的 success，
-        // 还包括 no_changes / latest_wins_applied / branch_missing_recovered —
-        // 这些都是 Core aggregate_full_sync_result() 的成功类终态。GC 在成功同步后
-        // 仅当独立维护周期到期时启动，no_changes 不会每轮触发远端代际扫描。
-        // 注意：sync_success（用于 content_changed）不包含 no_changes，
-        // 避免无变化时也触发 content refresh。
-        let gc_success = matches!(
-            status_str,
-            "success" | "no_changes" | "latest_wins_applied" | "branch_missing_recovered"
-        );
-        if gc_success && !self.manual_sync_pending && self.gc_maintenance_due() {
-            if self.current_gc_maintenance_cancel_token.is_some() {
-                // 旧 GC 还没退干净（done callback 还没清 token），标记 pending，
-                // 等 done callback 清 token 后补启动。不直接丢，避免本轮 GC 永久跳过。
-                self.gc_maintenance_pending = true;
-                self.debug_log(
-                    "sync",
-                    "gc_maintenance_pending_set",
-                    "GC needed but previous GC token still present — deferring to pending",
-                );
-            } else {
-                // token 空闲，直接启动。清掉可能残留的 pending（本轮 GC 已启动）。
-                self.gc_maintenance_pending = false;
-                self.start_gc_maintenance();
-            }
-        }
 
         // 当前同步任务真正结束并把 busy 清掉后，检查 manual_sync_pending。
         // 为 true 时先清 flag，再启动一次 manual sync。

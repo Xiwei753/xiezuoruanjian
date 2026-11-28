@@ -5,8 +5,8 @@
 //! 同步只搬运文件，不重写 `actor`/`entrypoint`。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -15,6 +15,7 @@ use crate::storage::atomic_write_string;
 use crate::writing_stats::contribution::{
     ContributionEvent, ContributionObjectType, ContributionOperation, MutationActor,
 };
+use crate::writing_stats::jsonl;
 use crate::writing_stats::starmap_checkpoint::{
     append_starmap_checkpoint, ensure_checkpoint_storage, has_starmap_checkpoints,
     list_checkpoint_headers, load_checkpoint_at, StarMapProofCheckpoint,
@@ -57,6 +58,24 @@ struct ReplayMetadata {
     sequences: HashMap<String, u64>,
     chains: HashMap<(String, String), String>,
     checkpoint_targets: Vec<(String, String, u64)>,
+}
+
+/// 一次分区追加的真实结果：写入条数 + 每个来源实际新增的事件 ID。
+#[derive(Default)]
+struct PartitionAppend {
+    written: usize,
+    written_ids: HashMap<String, Vec<String>>,
+}
+
+/// 计算事件归属的业务日；两种日历都无法解析时返回带时间戳的错误。
+fn local_date_for_event(occurred_at_ms: i64) -> Result<String> {
+    crate::writing_stats::calendar::local_date_at(occurred_at_ms)
+        .or_else(|_| crate::writing_stats::calendar::utc_date_at(occurred_at_ms))
+        .map_err(|error| {
+            Error::Other(format!(
+                "failed to derive local date for stats event at {occurred_at_ms}: {error}"
+            ))
+        })
 }
 
 /// 某来源分支在给定位置上的增量状态承诺。
@@ -159,11 +178,20 @@ impl ContributionStore {
             .join(format!("{starmap_id}.count"))
     }
 
+    /// 分支计数只是可重建的派生索引：写失败时清掉对应缓存并记录日志，
+    /// 不把未落盘的值当成后续回放的真相。
     fn persist_branch_count(&self, origin: &str, starmap_id: &str, count: u64) {
-        let _ = atomic_write_string(
-            &self.replay_branch_count_path(origin, starmap_id),
-            &count.to_string(),
-        );
+        let path = self.replay_branch_count_path(origin, starmap_id);
+        if let Err(error) = atomic_write_string(&path, &count.to_string()) {
+            log::warn!(
+                "failed to persist starmap branch count {}: {error}",
+                path.display()
+            );
+            self.invalidate_branch_commitments(&[(
+                origin.to_string(),
+                starmap_id.to_string(),
+            )]);
+        }
     }
 
     fn generation_path(&self) -> PathBuf {
@@ -171,16 +199,43 @@ impl ContributionStore {
     }
 
     /// 事件库代数：每次追加事件后更新，供回放缓存判断失效。
+    ///
+    /// 代数只是派生缓存；缺失返回 0，读取/解析失败记录日志后返回 0，
+    /// 让调用方宁可多重建一次缓存。
     pub fn replay_generation(&self) -> u64 {
-        fs::read_to_string(self.generation_path())
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(0)
+        let path = self.generation_path();
+        match fs::read_to_string(&path) {
+            Ok(value) => match value.trim().parse::<u64>() {
+                Ok(generation) => generation,
+                Err(error) => {
+                    log::warn!(
+                        "invalid starmap replay generation {}: {error}",
+                        path.display()
+                    );
+                    0
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => {
+                log::warn!(
+                    "failed to read starmap replay generation {}: {error}",
+                    path.display()
+                );
+                0
+            }
+        }
     }
 
     fn bump_replay_generation(&self) -> u64 {
         let value = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default() as u64;
-        let _ = atomic_write_string(&self.generation_path(), &value.to_string());
+        let path = self.generation_path();
+        if let Err(error) = atomic_write_string(&path, &value.to_string()) {
+            log::warn!(
+                "failed to persist starmap replay generation {}: {error}",
+                path.display()
+            );
+            self.invalidate_all_branch_commitments();
+        }
         value
     }
 
@@ -243,13 +298,22 @@ impl ContributionStore {
 
     fn read_replay_sequence(&self, origin: &str) -> Result<u64> {
         let path = self.replay_sequence_path(origin);
-        if let Ok(value) = fs::read_to_string(&path) {
-            if let Ok(sequence) = value.trim().parse::<u64>() {
-                return Ok(sequence);
+        match fs::read_to_string(&path) {
+            Ok(value) => value.trim().parse::<u64>().map_err(|error| {
+                Error::Other(format!(
+                    "invalid starmap replay sequence {}: {error}",
+                    path.display()
+                ))
+            }),
+            // 首次升级后没有 sequence 文件：从已落盘事件里恢复最大位置。
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.scan_replay_sequence(origin)
             }
+            Err(error) => Err(Error::Other(format!(
+                "failed to read starmap replay sequence {}: {error}",
+                path.display()
+            ))),
         }
-        // 首次升级后没有 sequence 文件：从已落盘事件里恢复最大位置。
-        self.scan_replay_sequence(origin)
     }
 
     fn scan_replay_sequence(&self, origin: &str) -> Result<u64> {
@@ -264,13 +328,8 @@ impl ContributionStore {
                 if !name.ends_with(OBJECTS_SUFFIX) {
                     continue;
                 }
-                let file = fs::File::open(&path)?;
-                for line in BufReader::new(file).lines() {
-                    let Ok(line) = line else { continue };
-                    let Ok(event) = serde_json::from_str::<ContributionEvent>(&line) else {
-                        continue;
-                    };
-                    if let Some(position) = event.replay_position {
+                for record in jsonl::read_jsonl::<ContributionEvent>(&path)? {
+                    if let Some(position) = record.value.replay_position {
                         max_position = max_position.max(position.saturating_add(1));
                     }
                 }
@@ -279,10 +338,16 @@ impl ContributionStore {
         Ok(max_position)
     }
 
-    fn read_replay_chain_head(&self, origin: &str, starmap_id: &str) -> String {
-        fs::read_to_string(self.replay_chain_path(origin, starmap_id))
-            .map(|value| value.trim().to_string())
-            .unwrap_or_default()
+    fn read_replay_chain_head(&self, origin: &str, starmap_id: &str) -> Result<String> {
+        let path = self.replay_chain_path(origin, starmap_id);
+        match fs::read_to_string(&path) {
+            Ok(value) => Ok(value.trim().to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(error) => Err(Error::Other(format!(
+                "failed to read starmap replay chain {}: {error}",
+                path.display()
+            ))),
+        }
     }
 
     /// 读取某来源分支「星图 + 设备」已落盘的回放事件数与链头。
@@ -290,21 +355,35 @@ impl ContributionStore {
     /// 设备级 `replay_position` 只是跨星图排序序号，不能当回放位置。这里按
     /// 真实对象事件计数，供新事件哈希和检查点使用同一 0..N 坐标系。
     fn read_branch_replay_state(&self, origin: &str, starmap_id: &str) -> Result<(u64, String)> {
-        if let Ok(value) = fs::read_to_string(self.replay_branch_count_path(origin, starmap_id)) {
-            if let Ok(count) = value.trim().parse::<u64>() {
-                let head = self.read_replay_chain_head(origin, starmap_id);
+        let path = self.replay_branch_count_path(origin, starmap_id);
+        match fs::read_to_string(&path) {
+            Ok(value) => {
+                let count = value.trim().parse::<u64>().map_err(|error| {
+                    Error::Other(format!(
+                        "invalid starmap branch count {}: {error}",
+                        path.display()
+                    ))
+                })?;
+                let head = self.read_replay_chain_head(origin, starmap_id)?;
                 // 只有计数、没有链头时说明本地索引不完整，必须回扫真实事件。
                 if count == 0 || !head.is_empty() {
                     return Ok((count, head));
                 }
+                self.scan_branch_replay_state(origin, starmap_id)
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.scan_branch_replay_state(origin, starmap_id)
+            }
+            Err(error) => Err(Error::Other(format!(
+                "failed to read starmap branch count {}: {error}",
+                path.display()
+            ))),
         }
-        self.scan_branch_replay_state(origin, starmap_id)
     }
 
     fn scan_branch_replay_state(&self, origin: &str, starmap_id: &str) -> Result<(u64, String)> {
         let dir = self.events_root().join(origin);
-        let chain_head = self.read_replay_chain_head(origin, starmap_id);
+        let chain_head = self.read_replay_chain_head(origin, starmap_id)?;
         if !dir.is_dir() {
             return Ok((0, chain_head));
         }
@@ -318,13 +397,9 @@ impl ContributionStore {
             if !name.ends_with(OBJECTS_SUFFIX) {
                 continue;
             }
-            let file = fs::File::open(&path)?;
-            for line in BufReader::new(file).lines() {
-                let Ok(line) = line else { continue };
-                // 强类型读取 camelCase JSONL；手写字段名会在 eventHash 等处出错。
-                let Ok(event) = serde_json::from_str::<ContributionEvent>(&line) else {
-                    continue;
-                };
+            // 强类型读取 camelCase JSONL；手写字段名会在 eventHash 等处出错。
+            for record in jsonl::read_jsonl::<ContributionEvent>(&path)? {
+                let event = record.value;
                 let Some(delta) = event.replay_delta.as_ref() else {
                     continue;
                 };
@@ -1054,15 +1129,27 @@ impl ContributionStore {
     fn maintain_starmap_checkpoints(&self, targets: &[(String, String, u64)]) {
         for (origin, starmap_id, position) in targets {
             // 旧 JSONL 只在这里（写路径）一次性迁移，普通读取不写其它设备分区。
-            let _ = ensure_checkpoint_storage(&self.app_data_root, origin, starmap_id);
-            let last = crate::writing_stats::starmap_checkpoint::last_checkpoint_position(
+            // 检查点只是派生索引：迁移/读取失败时跳过本轮并记录，不能按 0
+            // 猜测位置补出错误检查点。
+            if let Err(error) = ensure_checkpoint_storage(&self.app_data_root, origin, starmap_id) {
+                log::warn!(
+                    "failed to prepare starmap checkpoint storage for {origin}/{starmap_id}: {error}"
+                );
+                continue;
+            }
+            let last = match crate::writing_stats::starmap_checkpoint::last_checkpoint_position(
                 &self.app_data_root,
                 origin,
                 starmap_id,
-            )
-            .ok()
-            .flatten()
-            .unwrap_or(0);
+            ) {
+                Ok(position) => position.unwrap_or(0),
+                Err(error) => {
+                    log::warn!(
+                        "failed to read last starmap checkpoint position for {origin}/{starmap_id}: {error}"
+                    );
+                    continue;
+                }
+            };
             if position.saturating_sub(last) < STARMAP_CHECKPOINT_INTERVAL {
                 continue;
             }
@@ -1093,13 +1180,22 @@ impl ContributionStore {
             let request = crate::writing_stats::starmap_replay::StarMapReplayRequest::for_position(
                 starmap_id, origin, *position,
             );
-            let Ok(mut session) =
-                crate::writing_stats::starmap_replay::StarMapReplaySession::open(self, &request)
-            else {
-                continue;
+            let mut session = match crate::writing_stats::starmap_replay::StarMapReplaySession::open(
+                self, &request,
+            ) {
+                Ok(session) => session,
+                Err(error) => {
+                    log::warn!(
+                        "failed to open starmap replay for checkpoint {origin}/{starmap_id}@{position}: {error}"
+                    );
+                    continue;
+                }
             };
             let frame = session.frame_at(&request);
             if !frame.valid {
+                log::warn!(
+                    "starmap replay frame invalid at checkpoint {origin}/{starmap_id}@{position}; checkpoint skipped"
+                );
                 continue;
             }
             // 检查点必须锚定第 N 个位置自己的事件链头，不能读取仍在增长
@@ -1176,18 +1272,15 @@ impl ContributionStore {
         let _write_guard = contribution_write_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.recover_pending_events_locked()?;
         let origin = self.resolve_origin_device_id()?;
-        let device_info =
-            crate::settings::load_device_info(&self.app_data_root).unwrap_or_default();
+        // 设备信息只在“文件不存在”时为空；读取/解析失败必须报错，
+        // 不能把损坏的设备配置当成没有平台。
+        let device_info = crate::settings::load_device_info(&self.app_data_root)?;
         let mut prepared = Vec::with_capacity(events.len());
         for mut event in events {
             if event.local_date.is_empty() {
-                event.local_date =
-                    crate::writing_stats::calendar::local_date_at(event.occurred_at_ms)
-                        .or_else(|_| {
-                            crate::writing_stats::calendar::utc_date_at(event.occurred_at_ms)
-                        })
-                        .unwrap_or_default();
+                event.local_date = local_date_for_event(event.occurred_at_ms)?;
             }
             if event.origin_device_id.is_empty() {
                 event.origin_device_id = origin.clone();
@@ -1204,19 +1297,9 @@ impl ContributionStore {
             prepared.push(event);
         }
 
-        self.recover_pending_events_locked()?;
         // 先按真实落盘事实去重，再给新增事件分配序号/计数/哈希。重发相同
         // event_id 时不能推进任何派生索引，否则会留下不存在的“幽灵链头”。
-        let mut existing_by_origin: HashMap<String, HashSet<String>> = HashMap::new();
-        for event in &prepared {
-            if existing_by_origin.contains_key(&event.origin_device_id) {
-                continue;
-            }
-            existing_by_origin.insert(
-                event.origin_device_id.clone(),
-                self.load_origin_event_ids(&event.origin_device_id)?,
-            );
-        }
+        let existing_by_origin = self.load_existing_ids(&prepared)?;
         let mut seen_in_batch: HashSet<(String, String)> = HashSet::new();
         prepared.retain(|event| {
             if event.event_id.is_empty() {
@@ -1257,57 +1340,50 @@ impl ContributionStore {
             .unwrap_or_default();
         let pending_path = self.pending_file_path(&transaction_id, prepared.len());
         self.write_pending(&pending_path, &prepared)?;
-        self.persist_baseline_checkpoints(&prepared);
 
-        let mut by_date: BTreeMap<String, Vec<ContributionEvent>> = BTreeMap::new();
-        for event in prepared {
-            let date = if event.local_date.is_empty() {
-                crate::writing_stats::calendar::local_date_at(event.occurred_at_ms)
-                    .or_else(|_| crate::writing_stats::calendar::utc_date_at(event.occurred_at_ms))
-                    .unwrap_or_else(|_| "1970-01-01".to_string())
-            } else {
-                event.local_date.clone()
-            };
-            by_date.entry(date).or_default().push(event);
-        }
-
-        let partition_dir = self.events_root().join(&origin);
-        fs::create_dir_all(&partition_dir)?;
-        let mut written = 0usize;
-        let mut written_ids: Vec<String> = Vec::new();
-        let existing_ids = existing_by_origin.entry(origin.clone()).or_default();
-        for (date, events) in by_date {
-            let path = self.event_file_path(&origin, &date);
-            let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-            for event in events {
-                if !event.event_id.is_empty() && existing_ids.contains(&event.event_id) {
-                    continue;
-                }
-                let line = serde_json::to_string(&event)?;
-                writeln!(file, "{line}")?;
-                if !event.event_id.is_empty() {
-                    existing_ids.insert(event.event_id.clone());
-                    written_ids.push(event.event_id.clone());
-                }
-                written += 1;
-            }
-        }
+        // 事件、基线检查点、回放索引全部落稳后才删 journal；任一步失败都
+        // 保留 pending，下次重放会以磁盘事实重新判重并补齐。
+        let appended = self.append_partition_files(&prepared)?;
+        self.persist_baseline_checkpoints(&prepared)?;
         self.persist_replay_metadata(&metadata.sequences, &metadata.chains)?;
         for (origin, starmap_id, count) in &checkpoint_targets {
             self.persist_branch_count(origin, starmap_id, *count);
         }
-        // 元数据和分支计数落稳后才删 journal；中途崩溃时下次重放会重新
-        // 扫描真实事件并修正计数，避免沿用旧缓存跳过位置。
-        fs::remove_file(&pending_path)?;
+        fs::remove_file(&pending_path).map_err(|error| {
+            Error::Other(format!(
+                "failed to remove contribution pending journal {}: {error}",
+                pending_path.display()
+            ))
+        })?;
         self.bump_replay_generation();
         self.publish_branch_commitments(&checkpoint_targets, &metadata.chains);
         commitment_guard.committed = true;
-        self.cache_written_event_ids(&origin, &written_ids);
+        for (origin, ids) in appended.written_ids {
+            self.cache_written_event_ids(&origin, &ids);
+        }
         // 检查点回放会通过 load_all_events 重入 pending recovery；先释放写锁，
         // 否则同一线程会在不可重入的全局锁上死锁。
         drop(_write_guard);
         self.maintain_starmap_checkpoints(&checkpoint_targets);
-        Ok(written)
+        Ok(appended.written)
+    }
+
+    /// 读取本批事件涉及来源分区的已落盘 ID（同一来源只读一次）。
+    fn load_existing_ids(
+        &self,
+        events: &[ContributionEvent],
+    ) -> Result<HashMap<String, HashSet<String>>> {
+        let mut existing_by_origin: HashMap<String, HashSet<String>> = HashMap::new();
+        for event in events {
+            if existing_by_origin.contains_key(&event.origin_device_id) {
+                continue;
+            }
+            existing_by_origin.insert(
+                event.origin_device_id.clone(),
+                self.load_origin_event_ids(&event.origin_device_id)?,
+            );
+        }
+        Ok(existing_by_origin)
     }
 
     /// 重放上次进程在「业务已成功、事件已进入 journal」之后未能追加的事件。
@@ -1323,22 +1399,46 @@ impl ContributionStore {
         if !pending_dir.is_dir() {
             return Ok(());
         }
-        let mut paths: Vec<PathBuf> = fs::read_dir(&pending_dir)?
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension == "json")
-            })
-            .collect();
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for entry in fs::read_dir(&pending_dir)? {
+            let entry = entry.map_err(|error| {
+                Error::Other(format!(
+                    "failed to read contribution pending directory {}: {error}",
+                    pending_dir.display()
+                ))
+            })?;
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                paths.push(path);
+            }
+        }
         paths.sort();
         for path in paths {
-            let content = fs::read_to_string(&path)?;
-            let events: Vec<ContributionEvent> = serde_json::from_str(&content)?;
+            let content = fs::read_to_string(&path).map_err(|error| {
+                Error::Other(format!(
+                    "failed to read contribution pending journal {}: {error}",
+                    path.display()
+                ))
+            })?;
+            let events: Vec<ContributionEvent> =
+                serde_json::from_str(&content).map_err(|error| {
+                    Error::Other(format!(
+                        "corrupt contribution pending journal {}: {error}",
+                        path.display()
+                    ))
+                })?;
             if !events.is_empty() {
                 self.append_events_locked(&events)?;
             }
-            fs::remove_file(&path)?;
+            fs::remove_file(&path).map_err(|error| {
+                Error::Other(format!(
+                    "failed to remove recovered contribution pending journal {}: {error}",
+                    path.display()
+                ))
+            })?;
         }
         Ok(())
     }
@@ -1372,8 +1472,23 @@ impl ContributionStore {
     }
 
     fn append_events_locked(&self, events: &[ContributionEvent]) -> Result<()> {
-        let mut by_origin_date: BTreeMap<(String, String), Vec<&ContributionEvent>> =
-            BTreeMap::new();
+        let appended = self.append_partition_files(events)?;
+        self.persist_baseline_checkpoints(events)?;
+        self.rebuild_replay_indexes(events)?;
+        self.bump_replay_generation();
+        self.invalidate_all_branch_commitments();
+        for (origin, ids) in appended.written_ids {
+            self.cache_written_event_ids(&origin, &ids);
+        }
+        Ok(())
+    }
+
+    /// 按 `origin_device_id + local_date` 分区追加事件，返回真正写入的事件数。
+    ///
+    /// 正式写入与 pending 重放共用这一处：追加前先用尚存 pending 中确定事件的
+    /// 序列化行修复崩溃残行，再按已落盘 ID 去重，最后逐分区 `sync_all`。
+    fn append_partition_files(&self, events: &[ContributionEvent]) -> Result<PartitionAppend> {
+        let mut by_partition: BTreeMap<(String, String), Vec<&ContributionEvent>> = BTreeMap::new();
         for event in events {
             let origin = if event.origin_device_id.is_empty() {
                 self.resolve_origin_device_id()?
@@ -1381,61 +1496,60 @@ impl ContributionStore {
                 event.origin_device_id.clone()
             };
             let date = if event.local_date.is_empty() {
-                crate::writing_stats::calendar::local_date_at(event.occurred_at_ms)
-                    .or_else(|_| crate::writing_stats::calendar::utc_date_at(event.occurred_at_ms))
-                    .unwrap_or_else(|_| "1970-01-01".to_string())
+                local_date_for_event(event.occurred_at_ms)?
             } else {
                 event.local_date.clone()
             };
-            by_origin_date
-                .entry((origin, date))
-                .or_default()
-                .push(event);
+            by_partition.entry((origin, date)).or_default().push(event);
         }
+        let mut appended = PartitionAppend::default();
         let mut existing_by_origin: HashMap<String, HashSet<String>> = HashMap::new();
-        for (origin, _) in by_origin_date.keys() {
-            if !existing_by_origin.contains_key(origin) {
-                existing_by_origin.insert(origin.clone(), self.load_origin_event_ids(origin)?);
-            }
-        }
-        let mut written_by_origin: HashMap<String, Vec<String>> = HashMap::new();
-        for ((origin, date), events) in by_origin_date {
+        for ((origin, date), events) in by_partition {
             let path = self.event_file_path(&origin, &date);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let existing = existing_by_origin.entry(origin.clone()).or_default();
-            let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+            let mut expected_lines = Vec::with_capacity(events.len());
             for event in &events {
+                expected_lines.push(serde_json::to_string(*event)?);
+            }
+            jsonl::repair_tail_with_pending::<ContributionEvent>(&path, &expected_lines)?;
+            let existing = match existing_by_origin.entry(origin.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(self.load_origin_event_ids(&origin)?)
+                }
+            };
+            let mut fresh_lines = Vec::new();
+            let mut fresh_ids = Vec::new();
+            for event in events {
                 if !event.event_id.is_empty() && existing.contains(&event.event_id) {
                     continue;
                 }
-                writeln!(file, "{}", serde_json::to_string(event)?)?;
+                fresh_lines.push(serde_json::to_string(event)?);
                 if !event.event_id.is_empty() {
                     existing.insert(event.event_id.clone());
-                    written_by_origin
-                        .entry(origin.clone())
-                        .or_default()
-                        .push(event.event_id.clone());
+                    fresh_ids.push(event.event_id.clone());
                 }
             }
+            if fresh_lines.is_empty() {
+                continue;
+            }
+            appended.written += fresh_lines.len();
+            jsonl::append_jsonl_lines(&path, &fresh_lines)?;
+            if !fresh_ids.is_empty() {
+                appended
+                    .written_ids
+                    .entry(origin.clone())
+                    .or_default()
+                    .extend(fresh_ids);
+            }
         }
-        let all_events: Vec<ContributionEvent> = events.to_vec();
-        self.persist_baseline_checkpoints(&all_events);
-        self.rebuild_replay_indexes(&all_events)?;
-        self.bump_replay_generation();
-        self.invalidate_all_branch_commitments();
-        for (origin, ids) in written_by_origin {
-            self.cache_written_event_ids(&origin, &ids);
-        }
-        Ok(())
+        Ok(appended)
     }
 
     /// 第一次在旧星图上记录回放事件时落一条真实基线检查点。
     ///
     /// 基线明确标记历史不完整：旧星图不是从空白创建出来的，回放不能伪造
     /// 更早的过程。检查点按位置 0 幂等写入，重复调用不会覆盖。
-    fn persist_baseline_checkpoints(&self, events: &[ContributionEvent]) {
+    fn persist_baseline_checkpoints(&self, events: &[ContributionEvent]) -> Result<()> {
         for event in events {
             let Some(delta) = event.replay_delta.as_ref() else {
                 continue;
@@ -1447,14 +1561,11 @@ impl ContributionStore {
                 continue;
             }
             let device_id = if event.origin_device_id.is_empty() {
-                match self.resolve_origin_device_id() {
-                    Ok(id) => id,
-                    Err(_) => continue,
-                }
+                self.resolve_origin_device_id()?
             } else {
                 event.origin_device_id.clone()
             };
-            if has_starmap_checkpoints(&self.app_data_root, &device_id, &delta.starmap_id) {
+            if has_starmap_checkpoints(&self.app_data_root, &device_id, &delta.starmap_id)? {
                 continue;
             }
             let checkpoint = StarMapProofCheckpoint::new(
@@ -1469,10 +1580,14 @@ impl ContributionStore {
                 },
                 baseline.history_complete,
             );
-            if let Err(error) = append_starmap_checkpoint(&self.app_data_root, &checkpoint) {
-                log::warn!("failed to persist starmap baseline checkpoint: {error}");
-            }
+            append_starmap_checkpoint(&self.app_data_root, &checkpoint).map_err(|error| {
+                Error::Other(format!(
+                    "failed to persist starmap baseline checkpoint for {}/{}: {error}",
+                    device_id, delta.starmap_id
+                ))
+            })?;
         }
+        Ok(())
     }
 
     pub fn load_all_events(&self) -> Result<Vec<ContributionEvent>> {
@@ -1484,34 +1599,22 @@ impl ContributionStore {
             if !dir.is_dir() {
                 continue;
             }
-            let mut paths: Vec<PathBuf> = fs::read_dir(&dir)?
-                .filter_map(|entry| entry.ok())
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.ends_with(OBJECTS_SUFFIX))
-                })
-                .collect();
+            let mut paths: Vec<PathBuf> = Vec::new();
+            for entry in fs::read_dir(&dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(OBJECTS_SUFFIX))
+                {
+                    paths.push(path);
+                }
+            }
             paths.sort();
             for path in paths {
-                let file = fs::File::open(&path)?;
-                for line in BufReader::new(file).lines() {
-                    let line = line?;
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
-                    let mut event: ContributionEvent = match serde_json::from_str(line) {
-                        Ok(event) => event,
-                        Err(error) => {
-                            eprintln!(
-                                "[writing_stats] skip malformed contribution event in {}: {error}",
-                                path.display()
-                            );
-                            continue;
-                        }
-                    };
+                for record in jsonl::read_jsonl::<ContributionEvent>(&path)? {
+                    let mut event = record.value;
                     if event.origin_device_id.is_empty() {
                         event.origin_device_id = origin.clone();
                     }
@@ -1585,7 +1688,13 @@ pub fn invalidate_stats_event_store(app_data_root: &Path) {
         .join(EVENTS_ROOT)
         .join(".contribution-generation");
     let value = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default() as u64;
-    let _ = atomic_write_string(&path, &value.to_string());
+    if let Err(error) = atomic_write_string(&path, &value.to_string()) {
+        // 代数只是回放缓存失效信号：写失败记录真实路径，调用方仍会清缓存。
+        log::warn!(
+            "failed to persist contribution replay generation {}: {error}",
+            path.display()
+        );
+    }
     // 同步替换可能改写任意来源分区；显式清掉该 app data 根的分支承诺缓存。
     // 本地单分支写入不会走到这里，因此不会让其它星图的有效缓存过期。
     invalidate_branch_commitment_cache_for_root(app_data_root);
@@ -1604,10 +1713,18 @@ fn invalidate_branch_commitment_cache_for_root(app_data_root: &Path) {
 /// 对象贡献事件与 AI 请求/响应事件共用同一来源分区规则；设备信息缺失时
 /// 按既有设置流程生成，已有但非法则明确报错，不写入无法同步的目录名。
 pub(crate) fn resolve_device_partition_id(app_data_root: &Path) -> Result<String> {
-    let info = match crate::settings::load_device_info(app_data_root) {
-        Ok(info) if valid_segment(&info.device_id) => info,
-        _ => crate::settings::ensure_device_info(app_data_root, "", "", None)?,
-    };
+    let info = crate::settings::load_device_info(app_data_root)?;
+    if !info.device_id.is_empty() {
+        if !valid_segment(&info.device_id) {
+            return Err(Error::Other(format!(
+                "invalid device id for stats event partition: {:?}",
+                info.device_id
+            )));
+        }
+        return Ok(info.device_id);
+    }
+    // 只有确实没有设备信息时才初始化；读取/解析失败在上一行已经返回。
+    let info = crate::settings::ensure_device_info(app_data_root, "", "", None)?;
     if !valid_segment(&info.device_id) {
         return Err(Error::Other(format!(
             "invalid device id for stats event partition: {:?}",
@@ -1618,21 +1735,10 @@ pub(crate) fn resolve_device_partition_id(app_data_root: &Path) -> Result<String
 }
 
 fn read_ids(path: &Path) -> Result<HashSet<String>> {
-    let mut ids = HashSet::new();
-    let file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
-        Err(error) => return Err(error.into()),
-    };
-    for line in BufReader::new(file).lines() {
-        let line = line?;
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-            if let Some(id) = value.get("event_id").and_then(|id| id.as_str()) {
-                ids.insert(id.to_string());
-            }
-        }
-    }
-    Ok(ids)
+    Ok(jsonl::read_jsonl_ids::<ContributionEvent, _>(path, |event| {
+        event.event_id.as_str()
+    })?
+    .ids)
 }
 
 pub(crate) fn valid_segment(value: &str) -> bool {
@@ -1660,6 +1766,8 @@ pub fn operation_key(operation: ContributionOperation) -> &'static str {
 #[cfg(test)]
 mod starmap_tail_tests {
     use super::*;
+    use std::fs::OpenOptions;
+    use std::io::Write;
 
     fn write_events(root: &Path, date: &str, positions: impl IntoIterator<Item = u64>) {
         let dir = root.join(EVENTS_ROOT).join("device1");

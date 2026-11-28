@@ -80,6 +80,7 @@ pub(crate) fn save_chapter_verified_with_options_and_files(
         }
         ChapterCommitOutcome::Conflict(conflict) => Err(Error::ChapterVersionConflict {
             chapter_id: chapter_id.to_string(),
+            transaction_id: conflict.transaction_id,
             expected_hash: conflict
                 .expected
                 .as_ref()

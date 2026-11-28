@@ -65,7 +65,11 @@ impl WriterCoreApi {
         batch.owns_batch = false;
         let events = ACTIVE_BATCH
             .with(|slot| slot.borrow_mut().take())
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                super::WriterError::Other(
+                    "contribution batch missing while committing; no events written".into(),
+                )
+            })?;
         self.record_contribution_events(events)
     }
 
@@ -190,10 +194,8 @@ impl WriterCoreApi {
 
     pub(crate) fn begin_starmap_contribution_transaction(
         &self,
-        starmap_id: &str,
     ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
     {
-        let _ = starmap_id;
         crate::writing_stats::contribution_transaction::ContributionTransaction::begin_deferred(
             &self.app_data_root,
         )
@@ -412,10 +414,15 @@ impl WriterCoreApi {
             .and_then(|graph| Self::starmap_object_snapshot(graph, object_type, object_id));
         let after = after_graph
             .and_then(|graph| Self::starmap_object_snapshot(graph, object_type, object_id));
-        let revision = after
-            .as_ref()
-            .and_then(|snapshot| snapshot.version.parse::<u64>().ok())
-            .unwrap_or(0);
+        let revision = match after.as_ref() {
+            Some(snapshot) => snapshot.version.parse::<u64>().map_err(|error| {
+                super::WriterError::Other(format!(
+                    "invalid starmap object version for {object_type:?} {object_id}: {:?}: {error}",
+                    snapshot.version
+                ))
+            })?,
+            None => 0,
+        };
         let mut delta = StarMapProofDelta::for_object(
             starmap_id,
             object_type,
@@ -431,7 +438,7 @@ impl WriterCoreApi {
             after_graph,
             object_type,
             object_id,
-        ) {
+        )? {
             delta = delta.with_baseline(baseline);
         }
         let result = self.record_contribution_event_with_context_and_delta(
@@ -489,7 +496,7 @@ impl WriterCoreApi {
                 root_starmap_ids: Vec::new(),
                 history_complete: true,
             });
-        } else if let Some(baseline) = self.starmap_meta_replay_baseline(starmap_id, before) {
+        } else if let Some(baseline) = self.starmap_meta_replay_baseline(starmap_id, before)? {
             delta = delta.with_baseline(baseline);
         }
         self.record_contribution_event_with_context_and_delta(
@@ -513,25 +520,28 @@ impl WriterCoreApi {
         after_graph: Option<&StarMapGraph>,
         object_type: ContributionObjectType,
         object_id: &str,
-    ) -> Option<StarMapProofBaseline> {
+    ) -> super::ApiResult<Option<StarMapProofBaseline>> {
         if starmap_created_in_active_batch(starmap_id) {
-            return None;
+            return Ok(None);
         }
         let device_id = self
             .core_write()
             .get_stats_api()
             .contribution_store()
-            .resolve_origin_device_id()
-            .ok()?;
-        if has_starmap_checkpoints(&self.app_data_root, &device_id, starmap_id) {
-            return None;
+            .resolve_origin_device_id()?;
+        if has_starmap_checkpoints(&self.app_data_root, &device_id, starmap_id)? {
+            return Ok(None);
         }
         let graph = match before_graph {
             Some(graph) => graph.clone(),
             None => {
                 // 第一条操作就是新增对象：用写入后的真实图减去该对象，得到
                 // 操作前的图状态，而不是把新对象提前放进基线。
-                let mut graph = after_graph?.clone();
+                let Some(after_graph) = after_graph else {
+                    // 非图对象（文本/注释）没有图基线可补。
+                    return Ok(None);
+                };
+                let mut graph = after_graph.clone();
                 match object_type {
                     ContributionObjectType::StarMapNode => {
                         graph.nodes.retain(|node| node.id != object_id);
@@ -545,50 +555,45 @@ impl WriterCoreApi {
                     ContributionObjectType::StarMapLink => {
                         graph.links.retain(|link| link.link_id != object_id);
                     }
-                    _ => return None,
+                    _ => return Ok(None),
                 }
                 graph
             }
         };
-        let meta = self.core_write().get_starmap(starmap_id).ok();
-        let root_starmap_ids = crate::starmap::load_index(&self.app_data_root)
-            .map(|index| index.root_starmap_ids)
-            .unwrap_or_default();
-        Some(StarMapProofBaseline {
+        let meta = Some(self.core_write().get_starmap(starmap_id)?);
+        let root_starmap_ids = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
+        Ok(Some(StarMapProofBaseline {
             meta,
             graph,
             root_starmap_ids,
             history_complete: false,
-        })
+        }))
     }
 
     fn starmap_meta_replay_baseline(
         &self,
         starmap_id: &str,
         before: Option<&StarMapMeta>,
-    ) -> Option<StarMapProofBaseline> {
+    ) -> super::ApiResult<Option<StarMapProofBaseline>> {
         if starmap_created_in_active_batch(starmap_id) {
-            return None;
+            return Ok(None);
         }
         let device_id = self
             .core_write()
             .get_stats_api()
             .contribution_store()
-            .resolve_origin_device_id()
-            .ok()?;
-        if has_starmap_checkpoints(&self.app_data_root, &device_id, starmap_id) {
-            return None;
+            .resolve_origin_device_id()?;
+        if has_starmap_checkpoints(&self.app_data_root, &device_id, starmap_id)? {
+            return Ok(None);
         }
         let graph = self.get_starmap_graph_snapshot(starmap_id)?;
-        let root_starmap_ids = crate::starmap::load_index(&self.app_data_root)
-            .map(|index| index.root_starmap_ids)
-            .unwrap_or_default();
-        Some(StarMapProofBaseline {
+        let root_starmap_ids = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
+        Ok(Some(StarMapProofBaseline {
             meta: before.cloned(),
             graph,
             root_starmap_ids,
             history_complete: false,
-        })
+        }))
     }
 
     pub(crate) fn record_starmap_object(
@@ -614,8 +619,13 @@ impl WriterCoreApi {
         )
     }
 
-    pub(crate) fn get_starmap_graph_snapshot(&self, starmap_id: &str) -> Option<StarMapGraph> {
-        self.core_write().get_starmap_graph(starmap_id).ok()
+    pub(crate) fn get_starmap_graph_snapshot(
+        &self,
+        starmap_id: &str,
+    ) -> super::ApiResult<StarMapGraph> {
+        self.core_write()
+            .get_starmap_graph(starmap_id)
+            .map_err(Into::into)
     }
 
     /// 收集当前仍存在的星图节点文字快照。

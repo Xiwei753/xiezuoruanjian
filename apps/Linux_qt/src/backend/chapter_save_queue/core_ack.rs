@@ -281,16 +281,28 @@ pub(super) fn reconcile_core_acks(
     // Issue #1062 评论 #7213128711 第 3 项：Core 已不再列出、但本地仍是
     // reconciled 的 ack（已确认成功但删文件前崩溃/删除失败）按已确认决议
     // 幂等清理，避免只剩 ack 的槽位永远无法收口。
-    for (chapter, transaction_id) in
-        chapter_draft::reconciled_ack_transactions(root, project_id, chapter_id)
-    {
-        if core_transactions.contains(&transaction_id) {
-            continue;
+    // 孤儿确认清理必须基于真实枚举结果：目录/文件不可读时不能当作“没有
+    // 待清理事项”，否则会把不可读确认永久留下或误删。
+    match chapter_draft::reconciled_ack_transactions(root, project_id, chapter_id) {
+        Ok(transactions) => {
+            for (chapter, transaction_id) in transactions {
+                if core_transactions.contains(&transaction_id) {
+                    continue;
+                }
+                chapter_draft::complete_pending_ack(root, project_id, &chapter, &transaction_id);
+                log::info!(
+                    "reconciled orphan draft ack removed: project={project_id} chapter={chapter} transaction={transaction_id}"
+                );
+            }
         }
-        chapter_draft::complete_pending_ack(root, project_id, &chapter, &transaction_id);
-        log::info!(
-            "reconciled orphan draft ack removed: project={project_id} chapter={chapter} transaction={transaction_id}"
-        );
+        Err(error) => {
+            outcome.failures.push(ReconcileFailure {
+                transaction_id: String::new(),
+                volume_id: String::new(),
+                chapter_id: chapter_id.to_string(),
+                reason: format!("enumerate reconciled acks (kept): {error}"),
+            });
+        }
     }
     for (chapter, volume_id) in chapters {
         if blocked.contains(&chapter) {
@@ -385,12 +397,19 @@ pub(super) fn acknowledge_core_transaction(
     if event_ids.is_empty() {
         return false;
     }
-    chapter_draft::reconciled_ack(
+    // 本地 durable 完成状态写成功后才允许确认 Core；写失败时保留本地 ack，
+    // 下一次对账重试，不能先确认 Core 再丢本地事实。
+    if let Err(error) = chapter_draft::reconciled_ack(
         Path::new(projects_root),
         project_id,
         chapter_id,
         transaction_id,
-    );
+    ) {
+        log::error!(
+            "reconciled_ack failed, Core acknowledge deferred: project={project_id} chapter={chapter_id} transaction={transaction_id}: {error}"
+        );
+        return false;
+    }
     if acknowledge_one(api, project_id, transaction_id, event_ids).is_ok() {
         chapter_draft::complete_pending_ack(
             Path::new(projects_root),

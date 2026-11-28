@@ -1,22 +1,18 @@
-//! 同步服务层 — 编排 LWW 同步策略的统一入口。
+//! 同步服务层 — 扫描与计划入口。
 //!
-//! `SyncService` 是同步功能的业务编排层，提供：
-//! - LWW 同步（`perform_lww_sync`，`pub(crate)`）：内部 staging LWW 引擎，
-//!   唯一生产入口是 `WriterCoreApi::perform_full_sync`，不作为对 live root 的
-//!   独立同步入口
-//! - 诊断（`perform_sync_diagnostics`）：探测网络、认证、仓库和分支可用性
-//! - 路径过滤（`is_blacklisted_path`/`is_whitelisted_path`）：见 `config_store` 模块
+//! 生产同步入口是 `WriterCoreApi::perform_full_sync`（对象版本比较 → 增量传输
+//! → 一次提交 → 一次发布 → 精确确认）。本模块只保留：
+//! - 扫描与 dry-run 计划（与正式入口使用同一只读对象比较口径）
+//! - 路径过滤（`is_blacklisted_path`/`is_whitelisted_path`）：见 `config_store`
 //!
 //! ## 线程安全
 //!
 //! `SyncService` 的方法均为关联函数（无 `&self`），所有状态通过参数传递。
 //! 调用方（`WriterAppService`）通过 `Mutex` 保证线程安全。
 
-use crate::sync::lww;
 use crate::sync::scanner;
 use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncPlan;
-use crate::sync::types::SyncResult;
 use crate::sync::types::SyncScope;
 use crate::sync::types::SyncStatus;
 use std::path::Path;
@@ -42,42 +38,6 @@ impl SyncService {
             return Ok(SyncPlan::new());
         }
         scanner::build_sync_plan(sync_root, scope)
-    }
-}
-
-impl SyncService {
-    /// 内部 staging LWW 引擎，**不是**对 live root
-    /// 的独立同步入口。
-    ///
-    /// 唯一生产入口是 `WriterCoreApi::perform_full_sync`（staging → LWW merge →
-    /// remote publish → staging commit to live）。本函数只在 full_sync 内部编排
-    /// 里被 `run_single_target` 调用，调用方必须传隔离 staging root。
-    ///
-    /// 直接对 live root 调用本函数是错误的：`merge_remote_into_local_snapshot`
-    /// 会在远端写之前推进本地 manifest/known_files/SyncState，远端上传失败时
-    /// 本地基线已错误前移。降级为 `pub(crate)` 阻止外部（facade/app_service/
-    /// uniffi）直接对 live root 调用。
-    ///
-    /// 通过 `SyncProvider` trait 与具体后端解耦：调用方传入已构造的 provider,
-    /// engine 不直接依赖 `SyncConfig`/`SyncSecrets`/`SyncTransport`。
-    /// `sync_policy` 携带 engine 决策所需的通用字段（enabled/interval 等）。
-    /// `force_sync=true` 跳过 debounce。
-    pub(crate) fn perform_lww_sync(
-        sync_root: &Path,
-        provider: &dyn crate::sync::provider::SyncProvider,
-        sync_policy: &crate::sync::types::SyncPolicy,
-        target: &crate::sync::types::SyncTarget,
-        force_sync: bool,
-        cancellation_token: Option<&crate::sync::cancellation_token::SyncCancellationToken>,
-    ) -> crate::Result<SyncResult> {
-        lww::perform_lww_sync(
-            sync_root,
-            provider,
-            sync_policy,
-            target,
-            force_sync,
-            cancellation_token,
-        )
     }
 }
 
@@ -113,10 +73,6 @@ impl SyncService {
         scanner::build_sync_plan_for_target(sync_root, target)
     }
 
-    /// 占位同步方法——当前返回 NotImplemented，实际同步通过 perform_lww_sync 执行。
-    pub fn sync(&self) -> crate::Result<()> {
-        Err(crate::Error::NotImplemented)
-    }
 }
 
 impl Default for SyncService {

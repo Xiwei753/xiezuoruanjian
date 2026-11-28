@@ -703,35 +703,42 @@ pub fn load_latest_checkpoint_at_or_before(
     load_checkpoint_at(root, device_id, starmap_id, header.position)
 }
 
-pub fn has_starmap_checkpoints(root: &Path, device_id: &str, starmap_id: &str) -> bool {
-    match load_checkpoint_index(root, device_id, starmap_id) {
-        Ok(headers) if headers.is_empty() => false,
-        Ok(headers) => {
-            // 索引存在但快照全缺失/未迁移时不能算作可用历史，否则旧星图
-            // 永远无法补建基线。旧 JSONL 中的同位置事实仍算有效来源。
-            if headers.iter().any(|header| {
-                snapshot_path(root, &header.device_id, &header.starmap_id, header).is_file()
-            }) {
-                return true;
+/// 是否存在可用的星图历史检查点。
+///
+/// 返回 `Ok(false)` 只表示“确实没有可用的历史事实”：索引为空，或索引存在但
+/// 没有任何可用快照/旧 JSONL 同位置记录。索引或快照读取失败必须返回错误，
+/// 写路径不得据此补写基线覆盖既有事实。
+pub fn has_starmap_checkpoints(
+    root: &Path,
+    device_id: &str,
+    starmap_id: &str,
+) -> Result<bool> {
+    let headers = load_checkpoint_index(root, device_id, starmap_id)?;
+    if headers.is_empty() {
+        return Ok(false);
+    }
+    for header in &headers {
+        let path = snapshot_path(root, &header.device_id, &header.starmap_id, header);
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => return Ok(true),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to inspect starmap checkpoint snapshot {}: {error}",
+                    path.display()
+                )))
             }
-            read_legacy_checkpoints(root, device_id, starmap_id)
-                .ok()
-                .flatten()
-                .is_some_and(|checkpoints| {
-                    checkpoints.iter().any(|checkpoint| {
-                        headers
-                            .iter()
-                            .any(|header| header.position == checkpoint.position)
-                    })
-                })
-        }
-        // 索引损坏且无法读取时按“可能有历史”处理，避免写基线覆盖既有事实。
-        Err(_) => {
-            starmap_checkpoint_index_path(root, device_id, starmap_id).exists()
-                || starmap_checkpoint_path(root, device_id, starmap_id).exists()
-                || starmap_checkpoint_snapshots_dir(root, device_id, starmap_id).is_dir()
         }
     }
+    // 索引存在但快照全缺失/未迁移时不能算作可用历史，否则旧星图永远无法
+    // 补建基线。旧 JSONL 中的同位置事实仍算有效来源。
+    let legacy = read_legacy_checkpoints(root, device_id, starmap_id)?;
+    Ok(legacy.is_some_and(|checkpoints| {
+        checkpoints
+            .iter()
+            .any(|checkpoint| headers.iter().any(|header| header.position == checkpoint.position))
+    }))
 }
 
 /// 全量枚举检查点（导出/证明等需要完整读取的路径使用）。

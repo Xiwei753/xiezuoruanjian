@@ -626,15 +626,15 @@ impl SearchBackend {
         let query_hash = cursor_hash(query, scope, context, authorization);
         let mut start_index = 0;
         if let Some(raw_cursor) = cursor {
+            // 旧游标失效（关键词/范围/上下文变化、索引重建后游标对象消失、或
+            // 旧版 object_id 游标已不存在）时按重启分页语义从第一页重新开始。
+            // 不能静默返回空页，否则调用方会误以为「没有更多结果」而停止翻页。
             if let Ok(parsed) = serde_json::from_str::<SearchCursor>(raw_cursor) {
                 if parsed.query_hash == query_hash {
                     start_index = all_results
                         .iter()
                         .position(|result| is_after_cursor(result, &parsed))
-                        .unwrap_or(all_results.len());
-                } else {
-                    // 关键词/范围/上下文已变化，旧游标失效。
-                    return SearchResultPage::default();
+                        .unwrap_or(0);
                 }
             } else if let Some(position) = all_results
                 .iter()
@@ -642,8 +642,6 @@ impl SearchBackend {
             {
                 // 兼容旧版把 object_id 当游标的调用方。
                 start_index = position + 1;
-            } else {
-                return SearchResultPage::default();
             }
         }
 
@@ -696,16 +694,30 @@ impl SearchBackend {
         ids
     }
 
-    pub fn remove_by_target_project_id(&mut self, project_id: &str) {
-        let ids_to_remove: Vec<String> = self
-            .entries
-            .iter()
-            .filter(|(_, entry)| entry.target.project_id.as_deref() == Some(project_id))
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in ids_to_remove {
-            self.remove(&id);
+    /// 当前索引条目的快照。重建索引时用于保留失败来源上一次有效的条目。
+    pub(crate) fn entries_snapshot(&self) -> Vec<IndexEntry> {
+        self.entries.values().cloned().collect()
+    }
+
+    /// 用一份完整条目集合一次性替换当前索引。
+    ///
+    /// 与逐条 `remove`/`insert` 不同，这里先构建新映射与新范围索引，最后一起
+    /// 交换，重建期间不会出现「旧条目已删、新条目未入」的中间态。重复 ID 以后
+    /// 出现的条目为准（调用方把新提取的条目放在最后）。
+    pub(crate) fn replace_entries(&mut self, entries: Vec<IndexEntry>) {
+        let mut next = HashMap::with_capacity(entries.len());
+        for entry in entries {
+            next.insert(entry.object_id.clone(), entry);
         }
+        let mut scope_index: HashMap<SearchScope, Vec<String>> = HashMap::new();
+        for entry in next.values() {
+            scope_index
+                .entry(entry.scope)
+                .or_default()
+                .push(entry.object_id.clone());
+        }
+        self.entries = next;
+        self.scope_index = scope_index;
     }
 
     pub fn clear(&mut self) {

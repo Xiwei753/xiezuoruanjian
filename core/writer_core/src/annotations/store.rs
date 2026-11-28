@@ -1029,7 +1029,14 @@ impl AnnotationStore {
     ) -> crate::Result<Option<T>> {
         let path = self.record_path(collection, id)?;
         match fs::read_to_string(path) {
-            Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
+            Ok(content) => {
+                // 旧格式外链不是有效的对象链接记录：读取结果排除，文件删除只由
+                // `migrate_legacy_external_link_records` 一次性执行。
+                if collection == "links" && is_legacy_external_link_record(&content) {
+                    return Ok(None);
+                }
+                Ok(Some(serde_json::from_str(&content)?))
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
         }
@@ -1062,42 +1069,58 @@ impl AnnotationStore {
         }
         paths.sort();
 
-        if collection == "links" {
-            self.remove_legacy_external_link_records(&paths)?;
-        }
-
         let mut records = Vec::with_capacity(paths.len());
         for path in paths {
-            let content = fs::read_to_string(path)?;
+            let content = fs::read_to_string(&path)?;
+            // 普通读取只读：旧格式外链被识别时从结果排除，不在读取期间删文件。
+            if collection == "links" && is_legacy_external_link_record(&content) {
+                continue;
+            }
             records.push(serde_json::from_str(&content)?);
         }
         Ok(records)
     }
 
+    /// 旧格式外链的一次性迁移入口。
+    ///
     /// External-URL annotation links were removed with the external-binding
     /// feature. Older project data stored them as
-    /// `{"target":{"kind":"externalUrl","value":"..."}}`; remove those records
-    /// before deserializing the object-only link model. Internal object links
-    /// are left untouched.
-    fn remove_legacy_external_link_records(&self, paths: &[PathBuf]) -> crate::Result<()> {
-        for path in paths {
-            let content = fs::read_to_string(path)?;
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+    /// `{"target":{"kind":"externalUrl","value":"..."}}`; those files are not
+    /// part of the object-only link model. This is the only place that deletes
+    /// them: it returns the workspace-relative paths that were actually
+    /// removed, so the caller can record the deletion fact. Normal reads
+    /// ([`Self::read_collection`] / [`Self::get_link`]) only exclude such
+    /// records and never delete files. Internal object links are untouched.
+    pub fn migrate_legacy_external_link_records(&self) -> crate::Result<Vec<String>> {
+        let dir = self.collection_path("links")?;
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut removed = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_file()
+                || entry.path().extension().and_then(|ext| ext.to_str()) != Some("json")
+            {
                 continue;
-            };
-            let target = value.get("target");
-            let is_external = target
-                .and_then(|target| target.get("kind"))
-                .and_then(|kind| kind.as_str())
-                == Some("externalUrl")
-                || target
-                    .and_then(|target| target.get("externalUrl"))
-                    .is_some_and(|url| !url.is_null());
-            if is_external {
-                fs::remove_file(path)?;
             }
+            let path = entry.path();
+            let content = fs::read_to_string(&path)?;
+            if !is_legacy_external_link_record(&content) {
+                continue;
+            }
+            fs::remove_file(&path)?;
+            removed.push(
+                path.strip_prefix(&self.project_root)
+                    .map_err(|_| invalid_annotation("annotation path escaped its project"))?
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
         }
-        Ok(())
+        removed.sort();
+        Ok(removed)
     }
 
     fn write_record<T: Serialize>(
@@ -1236,6 +1259,22 @@ fn fnv1a64(value: &str) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+/// 旧格式外链记录（external-binding 功能移除前写入的链接）。
+///
+/// 普通读取用它把旧链接从结果里排除；只有迁移入口会实际删除文件。
+fn is_legacy_external_link_record(content: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
+        return false;
+    };
+    let Some(target) = value.get("target") else {
+        return false;
+    };
+    target.get("kind").and_then(serde_json::Value::as_str) == Some("externalUrl")
+        || target
+            .get("externalUrl")
+            .is_some_and(|url| !url.is_null())
 }
 
 fn invalid_annotation(message: &str) -> crate::error::Error {

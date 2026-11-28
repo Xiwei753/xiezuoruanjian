@@ -1,4 +1,5 @@
 use super::backend::SearchBackend;
+use super::extractor::{ExtractionFailure, ExtractionReport};
 use super::types::*;
 use super::update_queue::SearchUpdateQueue;
 
@@ -7,6 +8,8 @@ pub struct SearchIndexService {
     update_queue: SearchUpdateQueue,
     last_rebuild_at: u64,
     is_rebuilding: bool,
+    /// 上一次重建中失败的来源（保留旧索引的那些来源）。
+    last_rebuild_failures: Vec<ExtractionFailure>,
 }
 
 impl SearchIndexService {
@@ -16,6 +19,7 @@ impl SearchIndexService {
             update_queue: SearchUpdateQueue::new(),
             last_rebuild_at: 0,
             is_rebuilding: false,
+            last_rebuild_failures: Vec::new(),
         }
     }
 
@@ -132,24 +136,73 @@ impl SearchIndexService {
         self.backend.remove_by_prefix(prefix);
     }
 
-    pub fn rebuild_from_entries(&mut self, entries: Vec<IndexEntry>) {
-        self.is_rebuilding = true;
-        self.backend.clear();
-        self.update_queue.clear();
-        for entry in entries {
-            self.backend.insert(entry);
-        }
-        self.last_rebuild_at = super::extractor::now_epoch();
-        self.is_rebuilding = false;
+    /// 用一次完整提取结果替换全量索引。
+    ///
+    /// 完整提取（没有失败来源）时用新条目一次性替换整个索引；部分来源失败时
+    /// 保留这些来源上一次有效的条目，其余来源按本次提取结果更新。不会先清空
+    /// 索引，也不会丢弃重建期间已入队的合法增量更新。
+    pub fn rebuild_from_extraction(&mut self, report: ExtractionReport) {
+        self.apply_rebuild(None, report);
     }
 
-    pub fn rebuild_project_from_entries(&mut self, project_id: &str, entries: Vec<IndexEntry>) {
+    /// 用一次按作品提取结果替换该作品的索引条目。
+    ///
+    /// 与全量重建走同一套替换语义：其它作品的条目、以及失败来源的旧条目原样
+    /// 保留；该作品成功提取的来源按本次结果更新。
+    pub fn rebuild_project_from_extraction(&mut self, project_id: &str, report: ExtractionReport) {
+        self.apply_rebuild(Some(project_id), report);
+    }
+
+    /// 上一次重建中保留旧索引的失败来源。
+    pub fn last_rebuild_failures(&self) -> &[ExtractionFailure] {
+        &self.last_rebuild_failures
+    }
+
+    fn apply_rebuild(&mut self, project_id: Option<&str>, report: ExtractionReport) {
         self.is_rebuilding = true;
-        self.backend.remove_by_target_project_id(project_id);
-        for entry in entries {
-            self.backend.insert(entry);
+        let mut entries = Vec::new();
+        let mut protected_counts = vec![0usize; report.failures.len()];
+
+        for entry in self.backend.entries_snapshot() {
+            let in_scope = project_id
+                .map_or(true, |pid| entry.target.project_id.as_deref() == Some(pid));
+            if !in_scope {
+                entries.push(entry);
+                continue;
+            }
+            if let Some(index) = report
+                .failures
+                .iter()
+                .position(|failure| failure.protects(&entry))
+            {
+                protected_counts[index] += 1;
+                entries.push(entry);
+            }
         }
-        self.update_queue.clear_by_project_id(project_id);
+
+        for (failure, protected) in report.failures.iter().zip(protected_counts) {
+            if protected == 0 {
+                log::warn!(
+                    "search index rebuild: source {} failed ({}); no previous entries retained for scope {:?}",
+                    failure.path.display(),
+                    failure.error,
+                    failure.scope
+                );
+            } else {
+                log::warn!(
+                    "search index rebuild: source {} failed ({}); retained {protected} previous entries for scope {:?}",
+                    failure.path.display(),
+                    failure.error,
+                    failure.scope
+                );
+            }
+        }
+
+        entries.extend(report.entries);
+        self.backend.replace_entries(entries);
+        // 重建前已经入队的增量更新属于更新的事实，替换后再应用，不能清空。
+        self.apply_queue();
+        self.last_rebuild_failures = report.failures;
         self.last_rebuild_at = super::extractor::now_epoch();
         self.is_rebuilding = false;
     }

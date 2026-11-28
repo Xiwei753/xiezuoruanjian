@@ -43,45 +43,71 @@ pub fn list_projects(projects_root: &Path) -> Result<Vec<Project>> {
     list_projects_inner(projects_root)
 }
 
+/// 读取一个作品目录的 `project.json`。
+///
+/// - 文件真实不存在 → `Ok(None)`：该目录不是作品，按现有含义略过；
+/// - 权限/IO 失败或 JSON 损坏 → `Err`，消息带真实路径，不把坏作品当成不存在。
+fn read_project_meta(path: &Path) -> Result<Option<Project>> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(crate::error::Error::Other(format!(
+                "failed to read project meta {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    serde_json::from_str(&content).map(Some).map_err(|error| {
+        crate::error::Error::Other(format!("project meta {} is corrupt: {error}", path.display()))
+    })
+}
+
 /// 纯读取项目元数据，不调用 `workspace_git::ensure_workspace_repo`。
 ///
 ///   冷启动/同步不能把 Core 卡住——列表/摘要不能顺手迁移
 /// 所有旧作品。迁移职责移到 `sync::staging::prepare_staging_runs`（已释放 Core 写锁之后）。
 /// 作品目录不再各自养 Git 仓库，list 永远只读 `project.json`。
-#[allow(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    clippy::excessive_nesting,
-    clippy::too_many_arguments,
-    clippy::type_complexity
-)]
 fn list_projects_inner(projects_root: &Path) -> Result<Vec<Project>> {
     let projects_dir = projects_root;
-    if !projects_dir.exists() {
-        return Ok(Vec::new());
-    }
+    let entries = match fs::read_dir(projects_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(crate::error::Error::Other(format!(
+                "failed to read projects directory {}: {error}",
+                projects_dir.display()
+            )))
+        }
+    };
 
     let mut projects = Vec::new();
-    for entry in fs::read_dir(projects_dir)? {
-        let entry = entry?;
-        let ft = entry.file_type()?;
-        let is_dir = ft.is_dir() || (ft.is_symlink() && entry.path().is_dir());
-        if is_dir {
-            let meta_path = entry.path().join("project.json");
-            match fs::read_to_string(&meta_path) {
-                Ok(content) => {
-                    if let Ok(project) = serde_json::from_str::<Project>(&content) {
-                        //   纯读取，不触发迁移。
-                        // 旧作品（无 .git/）的 Git 迁移由 `sync::staging::prepare_staging_runs`
-                        // 在已释放 Core 写锁之后执行，不堵住冷启动卷章读取。
-                        // 作品不再各自养 Git 仓库，list 永远只读元数据。
-                        projects.push(project);
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {}
-                Err(e) => return Err(e.into()),
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            crate::error::Error::Other(format!(
+                "failed to read an entry under {}: {error}",
+                projects_dir.display()
+            ))
+        })?;
+        let path = entry.path();
+        let ft = entry.file_type().map_err(|error| {
+            crate::error::Error::Other(format!("failed to inspect {}: {error}", path.display()))
+        })?;
+        let is_dir = ft.is_dir() || (ft.is_symlink() && path.is_dir());
+        if !is_dir {
+            continue;
+        }
+        let meta_path = path.join("project.json");
+        match read_project_meta(&meta_path)? {
+            Some(project) => {
+                //   纯读取，不触发迁移。
+                // 旧作品（无 .git/）的 Git 迁移由 `sync::staging::prepare_staging_runs`
+                // 在已释放 Core 写锁之后执行，不堵住冷启动卷章读取。
+                // 作品不再各自养 Git 仓库，list 永远只读元数据。
+                projects.push(project);
             }
+            // 没有 project.json 的目录不是作品，按现有含义略过。
+            None => {}
         }
     }
     projects.sort_by_key(|p| p.order);
@@ -94,11 +120,7 @@ fn list_projects_inner(projects_root: &Path) -> Result<Vec<Project>> {
 /// 必须报 NotFound，不能让调用方拿到「0 字空作品」冒充真实作品。
 pub fn get_project(projects_root: &Path, project_id: &str) -> Result<Project> {
     let meta_path = projects_root.join(project_id).join("project.json");
-    if !meta_path.exists() {
-        return Err(crate::error::Error::ProjectNotFound);
-    }
-    let content = fs::read_to_string(&meta_path)?;
-    Ok(serde_json::from_str(&content)?)
+    read_project_meta(&meta_path)?.ok_or(crate::error::Error::ProjectNotFound)
 }
 
 /// 项目统计摘要。
@@ -288,18 +310,21 @@ fn create_project_with_id_and_order(
     fs::create_dir_all(project_dir.join("volumes"))?;
     fs::create_dir_all(project_dir.join("characters"))?;
 
-    let meta_path = project_dir.join("project.json");
-    let content = serde_json::to_string_pretty(&project)?;
-    crate::storage::atomic_write_string(&meta_path, &content)?;
-
     // 恢复/导入场景不自动创建"第一卷"——卷信息在 manifest 中已包含，由调用方逐卷恢复
     if id_opt.is_none() {
         // 新建作品时一次性安装普通可编辑预设标签。读取/打开作品不补回被用户删除的标签。
         crate::annotations::store::AnnotationStore::new(&project_dir, &id)
             .initialize_default_tags()?;
-        // 普通新建场景：自动创建默认卷保持产品一致性
-        let _ = crate::volume::create_volume(&project_dir, "第一卷");
+        // 普通新建场景：自动创建默认卷保持产品一致性。失败直接返回，不吞成
+        // "没有卷的成功作品"。
+        crate::volume::create_volume(&project_dir, "第一卷")?;
     }
+
+    // project.json 是作品进入列表/搜索的持久提交点：只有目录、默认标签和
+    // 默认卷都成功后才写出；前面任何一步失败都不会留下被当作真实作品的半成品。
+    let meta_path = project_dir.join("project.json");
+    let content = serde_json::to_string_pretty(&project)?;
+    crate::storage::atomic_write_string(&meta_path, &content)?;
 
     Ok(project)
 }
@@ -324,12 +349,7 @@ pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -
     let project_dir = projects_root.join(project_id);
     let meta_path = project_dir.join("project.json");
 
-    if !meta_path.exists() {
-        return Err(crate::error::Error::ProjectNotFound);
-    }
-
-    let meta_str = fs::read_to_string(&meta_path)?;
-    let mut meta: Project = serde_json::from_str(&meta_str)?;
+    let mut meta = read_project_meta(&meta_path)?.ok_or(crate::error::Error::ProjectNotFound)?;
 
     meta.title = new_title.to_string();
     meta.updated_at = Utc::now().to_rfc3339();

@@ -55,10 +55,11 @@ pub enum Error {
     /// 章节正文 base 版本已过期。提交没有发布任何投影，三方材料保存在
     /// `conflict_dir` 供调用方展示或合并。
     #[error(
-        "chapter version conflict: chapter_id={chapter_id}, expected_hash={expected_hash}, actual_hash={actual_hash}, conflict_dir={conflict_dir}"
+        "chapter version conflict: chapter_id={chapter_id}, transaction_id={transaction_id}, expected_hash={expected_hash}, actual_hash={actual_hash}, conflict_dir={conflict_dir}"
     )]
     ChapterVersionConflict {
         chapter_id: String,
+        transaction_id: String,
         expected_hash: String,
         actual_hash: String,
         conflict_dir: String,
@@ -269,11 +270,13 @@ impl Error {
             }
             Error::ChapterVersionConflict {
                 chapter_id,
+                transaction_id,
                 expected_hash,
                 actual_hash,
                 conflict_dir,
             } => {
                 m.insert("chapter_id".into(), chapter_id.clone());
+                m.insert("transaction_id".into(), transaction_id.clone());
                 m.insert("expected_hash".into(), expected_hash.clone());
                 m.insert("actual_hash".into(), actual_hash.clone());
                 m.insert("conflict_dir".into(), conflict_dir.clone());

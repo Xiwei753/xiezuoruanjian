@@ -132,14 +132,14 @@ fn stale_reference_project_is_backfilled_from_instance() {
 }
 
 #[test]
-fn conflicting_reference_is_preserved_and_reported() {
+fn stale_reference_asset_is_rebuilt_from_instance() {
     let dir = TempDir::new().unwrap();
     let starmap_id = "sm_ref_conflict";
     let instance_id = "n1";
     let node_path =
         write_canonical_instance(dir.path(), starmap_id, instance_id, "asset_new", Some("p1"));
     let original = std::fs::read(&node_path).unwrap();
-    let conflicting = StarMapReferenceIndex {
+    let stale = StarMapReferenceIndex {
         schema_version: CURRENT_LIBRARY_SCHEMA_VERSION,
         nodes: vec![StarMapNodeReference {
             asset_id: "asset_old".to_string(),
@@ -149,39 +149,28 @@ fn conflicting_reference_is_preserved_and_reported() {
         }],
         updated_at: 0,
     };
-    crate::starmap::library::save_reference_index(dir.path(), &conflicting).unwrap();
-    let index_path = crate::starmap::library::reference_index_abs_path(dir.path());
-    let index_before = std::fs::read(&index_path).unwrap();
+    crate::starmap::library::save_reference_index(dir.path(), &stale).unwrap();
 
+    // 反向索引是派生视图：实例文件是身份权威，索引落后时按实例重建，
+    // 不阻断加载。
     let mut store = StarMapStore::new(dir.path(), starmap_id);
-    let error = store
+    let node = store
         .try_load_node(instance_id)
-        .expect_err("conflicting reference binding must fail closed");
-    let message = error.to_string();
-    assert!(
-        message.contains("starmap node instance identity conflict"),
-        "{message}"
-    );
-    assert!(message.contains("instance_asset_id=asset_new"), "{message}");
-    assert!(
-        message.contains("reference_asset_id=asset_old"),
-        "{message}"
-    );
+        .expect("stale reference index must be rebuilt from the instance");
+    assert_eq!(node.asset_id, "asset_new");
 
     assert_eq!(
         std::fs::read(&node_path).unwrap(),
         original,
-        "身份冲突时不得改写实例文件"
+        "重建派生索引不能改写已经合法的实例文件"
     );
-    assert_eq!(
-        std::fs::read(&index_path).unwrap(),
-        index_before,
-        "身份冲突时不得覆盖既有反向绑定"
-    );
+    let refs = reference_index(dir.path());
+    assert_eq!(refs.nodes.len(), 1);
+    assert_eq!(refs.nodes[0].asset_id, "asset_new");
 }
 
 #[test]
-fn reference_binding_state_separates_missing_stale_and_conflict() {
+fn reference_binding_state_separates_missing_stale_and_consistent() {
     let starmap_id = "sm_state";
     let with_project = instance(starmap_id, "n1", "asset_a", Some("p1"));
     let mut bindings = NodeObjectBindings::new();
@@ -236,9 +225,10 @@ fn reference_binding_state_separates_missing_stale_and_conflict() {
         instance_id: "n1".to_string(),
         project_id: Some("p1".to_string()),
     });
+    // 派生索引落后于实例：只是待重建，不是阻断性的身份冲突。
     assert_eq!(
         bindings.reference_binding_state(&with_project),
-        ReferenceBindingState::Conflict {
+        ReferenceBindingState::Stale {
             reference_asset_id: "asset_b".to_string(),
         }
     );

@@ -1595,7 +1595,7 @@ mod ack_strictness_tests {
         let acks = reconciled_acks(root, "p1", "c1").expect("reconciled");
         assert_eq!(acks.len(), 1);
         assert_eq!(
-            reconciled_ack_transactions(root, "p1", None),
+            reconciled_ack_transactions(root, "p1", None).unwrap(),
             vec![("c1".to_string(), "tx-1".to_string())]
         );
         complete_pending_ack(root, "p1", "c1", "tx-1");

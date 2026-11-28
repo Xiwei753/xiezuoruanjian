@@ -217,7 +217,7 @@ impl super::WriterCore {
     }
 
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> Result<()> {
-        let _ = crate::starmap::unbind_starmap_from_project(&self.app_data_root, starmap_id)?;
+        crate::starmap::unbind_starmap_from_project(&self.app_data_root, starmap_id)?;
         Ok(())
     }
 

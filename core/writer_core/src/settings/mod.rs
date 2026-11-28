@@ -327,10 +327,15 @@ pub struct SyncableSettings {
 
 pub fn load_local_settings(config_dir: &Path) -> Result<LocalSettings> {
     let path = config_dir.join("settings.local.json");
-    if !path.exists() {
-        return Ok(LocalSettings::default());
-    }
-    let content = fs::read_to_string(&path)?;
+    // 只有真实不存在才用默认设置；权限/IO 失败必须返回，不能让设置写回
+    // 以“默认值”覆盖用户已有配置。
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LocalSettings::default())
+        }
+        Err(error) => return Err(error.into()),
+    };
     // Issue #705 评论 5716410988: 旧版本 LocalSettings 同时有 theme_mode 和 appearance_mode,
     // rename_all=camelCase 后旧文件同时存在 themeMode 和 appearanceMode。
     // 不能用 serde alias(会报 duplicate field),改为原始 JSON 迁移:
@@ -508,13 +513,18 @@ pub fn normalize_syncable_settings_file(path: &Path) -> Result<Option<Vec<u8>>> 
 
 pub fn load_syncable_settings(config_dir: &Path) -> Result<SyncableSettings> {
     let path = config_dir.join("settings.sync.json");
-    if !path.exists() {
-        return Ok(SyncableSettings::default());
-    }
     if let Some(normalized) = normalize_syncable_settings_file(&path)? {
         return Ok(serde_json::from_slice(&normalized)?);
     }
-    let content = fs::read_to_string(&path)?;
+    // 只有真实不存在才用默认设置；读取失败必须返回，避免写回时丢掉
+    // 用户/其它设备已经写入的字段。
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SyncableSettings::default())
+        }
+        Err(error) => return Err(error.into()),
+    };
     Ok(serde_json::from_str(&content)?)
 }
 
@@ -541,20 +551,30 @@ fn record_settings_mutation(config_dir: &Path) {
     .map(|state| state.device_id)
     .unwrap_or_default();
     let upserted = vec!["settings.sync.json".to_string()];
-    let mutations = crate::sync::local_mutations::records_for_committed_paths(
+    let mutations = match crate::sync::local_mutations::records_for_committed_paths(
         config_dir,
         &uuid::Uuid::new_v4().to_string(),
         &device_id,
         &upserted,
         &[],
         chrono::Utc::now().timestamp_millis(),
-    )
-    .into_iter()
-    .filter(|record| {
-        crate::sync::local_mutations::is_sync_business_path(&record.path, SyncScope::App)
-            && group.owns_path(&record.path)
-    })
-    .collect::<Vec<_>>();
+    ) {
+        Ok(records) => records
+            .into_iter()
+            .filter(|record| {
+                crate::sync::local_mutations::is_sync_business_path(&record.path, SyncScope::App)
+                    && group.owns_path(&record.path)
+            })
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            crate::sync::local_mutations::mark_recovery_pending(
+                config_dir,
+                "settings_projection_read_failed",
+            );
+            log::warn!("[sync] settings mutation projection failed: {error}");
+            return;
+        }
+    };
     if mutations.is_empty() {
         return;
     }
@@ -618,10 +638,15 @@ pub struct DeviceInfo {
 
 pub fn load_device_info(config_dir: &Path) -> Result<DeviceInfo> {
     let path = config_dir.join("device/current_device.json");
-    if !path.exists() {
-        return Ok(DeviceInfo::default());
-    }
-    let content = fs::read_to_string(&path)?;
+    // 只有真实不存在才视为未初始化；已有文件读取/解析失败必须返回，
+    // 不能让调用方重新生成设备 ID。
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DeviceInfo::default())
+        }
+        Err(error) => return Err(error.into()),
+    };
     Ok(serde_json::from_str(&content)?)
 }
 
@@ -643,7 +668,7 @@ pub fn ensure_device_info(
     device_class: &str,
     preferred_device_id: Option<&str>,
 ) -> Result<DeviceInfo> {
-    let mut info = load_device_info(config_dir).unwrap_or_default();
+    let mut info = load_device_info(config_dir)?;
     let mut changed = false;
     if info.device_id.is_empty() {
         info.device_id = preferred_device_id
@@ -682,7 +707,7 @@ pub fn reconcile_platform_identity(
     if platform.is_empty() {
         return ensure_device_info(config_dir, platform, device_class, preferred_device_id);
     }
-    let mut info = load_device_info(config_dir).unwrap_or_default();
+    let mut info = load_device_info(config_dir)?;
     let mut changed = false;
     if info.device_id.is_empty() {
         info.device_id = preferred_device_id
@@ -728,7 +753,9 @@ pub fn get_effective_font_size(config_dir: &Path) -> f64 {
 /// Sets the editor font size in SyncableSettings.
 /// Does NOT modify LocalSettings.editor_font_size (preserved for backward compatibility).
 pub fn set_editor_font_size(config_dir: &Path, font_size: f64) -> Result<()> {
-    let mut syncable = load_syncable_settings(config_dir).unwrap_or_default();
+    // 只改目标字段，其余同步设置原样保留；读取失败直接返回，不能用
+    // 默认设置覆盖已有字段。
+    let mut syncable = load_syncable_settings(config_dir)?;
     syncable.font_size = font_size;
     save_syncable_settings(config_dir, &syncable)
 }

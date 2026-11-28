@@ -54,6 +54,7 @@ pub mod checkpoint;
 pub mod contribution;
 pub mod contribution_store;
 pub(crate) mod contribution_transaction;
+pub(crate) mod jsonl;
 pub mod migration;
 pub mod projection;
 pub mod proof;

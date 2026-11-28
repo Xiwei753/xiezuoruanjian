@@ -85,15 +85,7 @@ pub fn record_pending_deleted_target(
         )))
     })?;
     crate::storage::atomic_write_string(&path, &content)?;
-    note_recovery_obligation(app_data_root, "pending_project_delete");
     Ok(())
-}
-
-/// 把“还有待收口的删除事务”投影到 workspace dirty 索引，避免空闲快路径跳过。
-fn note_recovery_obligation(app_data_root: &Path, _reason: &str) {
-    if let Err(error) = crate::sync::dirty_index::set_recovery(app_data_root, app_data_root, true) {
-        log::warn!("[sync] cannot record delete recovery in dirty index: {error}");
-    }
 }
 
 /// 移除一个已完成的待删除 target（按 `journal_token` 匹配）。
@@ -120,16 +112,6 @@ pub fn remove_pending_deleted_target(
         )))
     })?;
     crate::storage::atomic_write_string(&path, &content)?;
-    // 只有两类收口清单都清空才解除恢复责任；读取失败按“仍有责任”处理。
-    let still_pending = !list.targets.is_empty()
-        || crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root)
-            .map(|cleanups| !cleanups.is_empty())
-            .unwrap_or(true);
-    if let Err(error) =
-        crate::sync::dirty_index::set_recovery(app_data_root, app_data_root, still_pending)
-    {
-        log::warn!("[sync] cannot update delete recovery in dirty index: {error}");
-    }
     Ok(())
 }
 

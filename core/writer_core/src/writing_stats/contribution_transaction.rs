@@ -710,36 +710,48 @@ pub(crate) fn recover_pending(app_data_root: &Path) -> Result<()> {
     if !root.is_dir() {
         return Ok(());
     }
-    let mut dirs: Vec<PathBuf> = fs::read_dir(&root)?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry.map_err(|error| {
+            Error::Other(format!(
+                "failed to read contribution transaction directory {}: {error}",
+                root.display()
+            ))
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            dirs.push(path);
+        }
+    }
     dirs.sort();
     for dir in dirs {
         let manifest_path = dir.join(MANIFEST_FILE);
-        let content = match fs::read_to_string(&manifest_path) {
-            Ok(content) => content,
-            Err(_) => {
-                let _ = fs::remove_dir_all(&dir);
-                continue;
-            }
-        };
-        let manifest: ContributionTransactionManifest = match serde_json::from_str(&content) {
-            Ok(manifest) => manifest,
-            Err(error) => {
-                log::error!(
-                    "skip malformed contribution transaction {}: {error}",
-                    dir.display()
-                );
-                continue;
-            }
-        };
+        // 清单读取/解析失败不能猜成“未完成备份”直接删除：事务目录是唯一能
+        // 解释对象备份状态的凭据，必须保留并把真实错误交回调用方。
+        let content = fs::read_to_string(&manifest_path).map_err(|error| {
+            Error::Other(format!(
+                "failed to read contribution transaction manifest {}: {error}",
+                manifest_path.display()
+            ))
+        })?;
+        let manifest: ContributionTransactionManifest =
+            serde_json::from_str(&content).map_err(|error| {
+                Error::Other(format!(
+                    "corrupt contribution transaction manifest {}: {error}",
+                    manifest_path.display()
+                ))
+            })?;
         match manifest.phase {
             TransactionPhase::BackingUp => {
                 // 备份尚未完成，对象还没有开始修改；只清理不完整备份，
-                // 绝不能拿不完整备份覆盖原始对象。
-                let _ = fs::remove_dir_all(&dir);
+                // 绝不能拿不完整备份覆盖原始对象。删除失败说明目录仍可能
+                // 有用，保留并报告。
+                fs::remove_dir_all(&dir).map_err(|error| {
+                    Error::Other(format!(
+                        "failed to clean incomplete contribution backup {}: {error}",
+                        dir.display()
+                    ))
+                })?;
             }
             TransactionPhase::Prepared => {
                 let report = restore::restore_manifest(app_data_root, &dir, &manifest)?;
@@ -766,7 +778,12 @@ pub(crate) fn recover_pending(app_data_root: &Path) -> Result<()> {
                         report.preserved.len()
                     );
                 }
-                let _ = fs::remove_dir_all(&dir);
+                fs::remove_dir_all(&dir).map_err(|error| {
+                    Error::Other(format!(
+                        "failed to clean recovered contribution transaction {}: {error}",
+                        dir.display()
+                    ))
+                })?;
             }
             TransactionPhase::ObjectApplied => {
                 append_mutation_facts(&manifest.mutations)?;
@@ -779,10 +796,20 @@ pub(crate) fn recover_pending(app_data_root: &Path) -> Result<()> {
                 ) {
                     log::warn!("failed to append recovered stats workspace event: {error}");
                 }
-                let _ = fs::remove_dir_all(&dir);
+                fs::remove_dir_all(&dir).map_err(|error| {
+                    Error::Other(format!(
+                        "failed to clean applied contribution transaction {}: {error}",
+                        dir.display()
+                    ))
+                })?;
             }
             TransactionPhase::Committed => {
-                let _ = fs::remove_dir_all(&dir);
+                fs::remove_dir_all(&dir).map_err(|error| {
+                    Error::Other(format!(
+                        "failed to clean committed contribution transaction {}: {error}",
+                        dir.display()
+                    ))
+                })?;
             }
         }
     }

@@ -239,23 +239,6 @@ impl AppBackend {
             );
         }
 
-        // Issue #779 评论 5854082763：新用户同步开始时，取消已有 GC maintenance。
-        // GC maintenance 会尽快停止发起新的远端操作（token 取消后 run_generation_gc
-        // 在下次检查时退出）。不立即清 current_gc_maintenance_cancel_token —
-        // GC 线程的 done callback 会清。
-        if let Some(gc_token) = self.current_gc_maintenance_cancel_token.as_ref() {
-            gc_token.cancel();
-            // Issue #779 评论 5854734343：cancel 了正在跑的 GC，标记 pending，
-            // 确保本轮用户同步完成后能补启动一次 GC（不靠"下次用户再同步"兜底）。
-            // 不清 token — GC 线程的 done callback 会清，并在清后检查 pending 补启动。
-            self.gc_maintenance_pending = true;
-            self.debug_log(
-                "sync",
-                "gc_maintenance_cancelled_for_user_sync",
-                "cancelled existing GC maintenance before starting user sync",
-            );
-        }
-
         // 获取 workspace git layout 快照，供后台线程用 with_layout_core_api 构造 API。
         // 不在线程里重新 bootstrap（ensure .git + recover_storage_transactions）。
         // 无 layout 说明 workspace 未正确打开，直接返回状态错误。

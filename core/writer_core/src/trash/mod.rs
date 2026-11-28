@@ -71,12 +71,15 @@ pub fn move_chapter_to_trash(
 /// 按 `(original_path, trash_path, kind)` 三元组判定已有 tombstone，
 /// 已存在则跳过，不存在才追加。这样即使死在"tombstone 已写、phase 尚未
 /// 持久化"的窗口，重放也不改变语义。
+///
+/// 遍历错误不会被跳过：调用方拿不到完整删除清单时必须返回错误，不能把
+/// 未扫描到的文件当作「不存在、无需 tombstone」继续完成删除。
 pub(crate) fn generate_tombstones(
     state: &mut crate::sync::SyncState,
     trash_path: &Path,
     rel_original_dir: &str,
     rel_trash_path: &str,
-) {
+) -> Result<()> {
     // 预收集已有 tombstone 的键集合，避免 O(n²) 线性扫描。
     let mut existing_keys: std::collections::HashSet<(String, String, String)> =
         std::collections::HashSet::with_capacity(state.tombstones.len());
@@ -88,11 +91,16 @@ pub(crate) fn generate_tombstones(
         ));
     }
 
-    for entry in walkdir::WalkDir::new(trash_path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-    {
+    for entry in walkdir::WalkDir::new(trash_path) {
+        let entry = entry.map_err(|error| {
+            crate::error::Error::Other(format!(
+                "failed to scan trash directory {}: {error}",
+                trash_path.display()
+            ))
+        })?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let rel_file_path = entry
             .path()
             .strip_prefix(trash_path)
@@ -149,6 +157,7 @@ pub(crate) fn generate_tombstones(
         };
         state.tombstones.push(tombstone);
     }
+    Ok(())
 }
 
 #[cfg(test)]

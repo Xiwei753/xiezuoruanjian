@@ -128,7 +128,12 @@ pub(super) fn publish_deleted(
         .to_string_lossy()
         .replace('\\', "/");
     let mut state = crate::sync::SyncService::load_sync_state(project_root)?;
-    crate::trash::generate_tombstones(&mut state, &trash_path, &rel_chapter_dir, &rel_trash_path);
+    crate::trash::generate_tombstones(
+        &mut state,
+        &trash_path,
+        &rel_chapter_dir,
+        &rel_trash_path,
+    )?;
     crate::sync::SyncService::save_sync_state(project_root, &state)?;
 
     manifest.phase = ChapterCommitPhase::Applied;

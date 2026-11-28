@@ -8,11 +8,8 @@ fn extract_node_search_body(content: &crate::starmap::semantic::StarMapNodeConte
     content.search_text()
 }
 
-fn get_starmap_project_id(api: &WriterCoreApi, starmap_id: &str) -> Option<String> {
-    api.core_write()
-        .get_starmap(starmap_id)
-        .ok()
-        .and_then(|meta| meta.project_id)
+fn get_starmap_project_id(api: &WriterCoreApi, starmap_id: &str) -> ApiResult<Option<String>> {
+    Ok(api.core_write().get_starmap(starmap_id)?.project_id)
 }
 
 fn node_patch_has_shared_fields(patch: &crate::api::types::StarMapNodePatchDto) -> bool {
@@ -178,17 +175,16 @@ impl WriterCoreApi {
         });
         // 同 rename：guard 不能留在实参临时值里，否则后续记录路径一旦再取
         // core 写锁就是同线程自锁。
-        let after_meta = self.core_write().get_starmap(&starmap_id).ok();
+        let after_meta = self.core_write().get_starmap(&starmap_id)?;
+        let roots_after = Some(crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids);
         self.record_starmap_meta_with_context(
             &crate::writing_stats::current_mutation_context(),
             project_id.as_deref(),
             &starmap_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            after_meta.as_ref(),
-            crate::starmap::load_index(&self.app_data_root)
-                .ok()
-                .map(|index| index.root_starmap_ids),
+            Some(&after_meta),
+            roots_after,
         )?;
         self.commit_contribution_batch(&mut contribution_batch)?;
         self.finish_starmap_contribution_transaction(&starmap_id, &mut contribution_txn)?;
@@ -223,8 +219,8 @@ impl WriterCoreApi {
             .core_write()
             .add_starmap_embed(starmap_id, embed.try_into().map_err(WriterError::from)?)
             .map_err(WriterError::from)?;
-        let project_id = get_starmap_project_id(self, starmap_id);
-        let after = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
+        let after = self.get_starmap_graph_snapshot(starmap_id)?;
         self.record_starmap_object(
             project_id.as_deref(),
             starmap_id,
@@ -232,7 +228,7 @@ impl WriterCoreApi {
             &result.instance_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            after.as_ref(),
+            Some(&after),
         )?;
         let entry = crate::search::extractor::extract_starmap_embed_entry(
             starmap_id,
@@ -274,12 +270,12 @@ impl WriterCoreApi {
         // 根身份与 Embed 同属一次来源事务：index 在修改前登记备份，
         // 宿主图文件在 add 之后、flush 之前登记，保证失败时可整体回滚。
         contribution_txn.prepare_paths(&[self.app_data_root.join("starmaps/index.json")])?;
-        let project_id = get_starmap_project_id(self, host_starmap_id);
+        let project_id = get_starmap_project_id(self, host_starmap_id)?;
         let result = self
             .core_write()
             .embed_existing_root_starmap(host_starmap_id, child_starmap_id, position.into())
             .map_err(WriterError::from)?;
-        let after = self.get_starmap_graph_snapshot(host_starmap_id);
+        let after = self.get_starmap_graph_snapshot(host_starmap_id)?;
         self.record_starmap_object(
             project_id.as_deref(),
             host_starmap_id,
@@ -287,7 +283,7 @@ impl WriterCoreApi {
             &result.instance_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            after.as_ref(),
+            Some(&after),
         )?;
         let entry = crate::search::extractor::extract_starmap_embed_entry(
             host_starmap_id,
@@ -421,7 +417,7 @@ impl WriterCoreApi {
             Some(&starmap_meta),
             None,
         )?;
-        let after = self.get_starmap_graph_snapshot(host_starmap_id);
+        let after = self.get_starmap_graph_snapshot(host_starmap_id)?;
         self.record_starmap_object_with_context(
             &context,
             project_id.as_deref(),
@@ -430,7 +426,7 @@ impl WriterCoreApi {
             &embed.instance_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            after.as_ref(),
+            Some(&after),
         )?;
 
         self.commit_contribution_batch(&mut contribution_batch)?;
@@ -503,22 +499,18 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
-        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let before = self.get_starmap_graph_snapshot(starmap_id)?;
         ensure_starmap_revision(
             before
-                .as_ref()
-                .and_then(|graph| {
-                    graph
-                        .embeds
-                        .iter()
-                        .find(|embed| embed.instance_id == instance_id)
-                })
+                .embeds
+                .iter()
+                .find(|embed| embed.instance_id == instance_id)
                 .map(|embed| embed.updated_at),
             expected_revision,
             "embed",
             instance_id,
         )?;
-        let project_id = get_starmap_project_id(self, starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
         let trajectory = patch.trajectory.clone();
         let result = self
             .core_write()
@@ -528,7 +520,7 @@ impl WriterCoreApi {
                 patch.try_into().map_err(WriterError::from)?,
             )
             .map_err(WriterError::from)?;
-        let after = self.get_starmap_graph_snapshot(starmap_id);
+        let after = self.get_starmap_graph_snapshot(starmap_id)?;
         let context = crate::writing_stats::current_mutation_context();
         self.record_starmap_object_with_context_and_trajectory(
             &context,
@@ -537,8 +529,8 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionObjectType::StarMapEmbed,
             instance_id,
             crate::writing_stats::ContributionOperation::Update,
-            before.as_ref(),
-            after.as_ref(),
+            Some(&before),
+            Some(&after),
             &trajectory,
         )?;
         let entry = crate::search::extractor::extract_starmap_embed_entry(
@@ -572,29 +564,23 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
-        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let before = self.get_starmap_graph_snapshot(starmap_id)?;
         ensure_starmap_revision(
             before
-                .as_ref()
-                .and_then(|graph| {
-                    graph
-                        .embeds
-                        .iter()
-                        .find(|embed| embed.instance_id == instance_id)
-                })
+                .embeds
+                .iter()
+                .find(|embed| embed.instance_id == instance_id)
                 .map(|embed| embed.updated_at),
             expected_revision,
             "embed",
             instance_id,
         )?;
-        let project_id = get_starmap_project_id(self, starmap_id);
-        let embedded_target = before.as_ref().and_then(|graph| {
-            graph
-                .embeds
-                .iter()
-                .find(|embed| embed.instance_id == instance_id)
-                .map(|embed| embed.target_starmap_id.clone())
-        });
+        let project_id = get_starmap_project_id(self, starmap_id)?;
+        let embedded_target = before
+            .embeds
+            .iter()
+            .find(|embed| embed.instance_id == instance_id)
+            .map(|embed| embed.target_starmap_id.clone());
         // 删除事实先预览：级联链接墓碑在删除时立即写 annotations 仓库，
         // 必须在执行前登记回滚路径。
         let preview = self
@@ -630,7 +616,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             starmap_id,
             &deleted,
-            before.as_ref(),
+            Some(&before),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
@@ -679,8 +665,8 @@ impl WriterCoreApi {
             .add_starmap_link(starmap_id, link.try_into().map_err(WriterError::from)?)
             .map_err(WriterError::from)?;
         let label = result.label.clone().unwrap_or_default();
-        let project_id = get_starmap_project_id(self, starmap_id);
-        let after = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
+        let after = self.get_starmap_graph_snapshot(starmap_id)?;
         self.record_starmap_object(
             project_id.as_deref(),
             starmap_id,
@@ -688,7 +674,7 @@ impl WriterCoreApi {
             &result.link_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            after.as_ref(),
+            Some(&after),
         )?;
         let entry = crate::search::extractor::extract_starmap_link_entry(
             starmap_id,
@@ -730,17 +716,18 @@ impl WriterCoreApi {
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let link_rel = self.starmap_link_rel_path(starmap_id, link_id)?;
         contribution_txn.prepare_paths(&[self.app_data_root.join(&link_rel)])?;
-        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let before = self.get_starmap_graph_snapshot(starmap_id)?;
         ensure_starmap_revision(
             before
-                .as_ref()
-                .and_then(|graph| graph.links.iter().find(|link| link.link_id == link_id))
+                .links
+                .iter()
+                .find(|link| link.link_id == link_id)
                 .map(|link| link.updated_at),
             expected_revision,
             "link",
             link_id,
         )?;
-        let project_id = get_starmap_project_id(self, starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
         let result = self
             .core_write()
             .update_starmap_link(
@@ -749,15 +736,15 @@ impl WriterCoreApi {
                 patch.try_into().map_err(WriterError::from)?,
             )
             .map_err(WriterError::from)?;
-        let after = self.get_starmap_graph_snapshot(starmap_id);
+        let after = self.get_starmap_graph_snapshot(starmap_id)?;
         self.record_starmap_object(
             project_id.as_deref(),
             starmap_id,
             crate::writing_stats::ContributionObjectType::StarMapLink,
             link_id,
             crate::writing_stats::ContributionOperation::Update,
-            before.as_ref(),
-            after.as_ref(),
+            Some(&before),
+            Some(&after),
         )?;
         let label = result.label.clone().unwrap_or_default();
         let entry = crate::search::extractor::extract_starmap_link_entry(
@@ -794,17 +781,18 @@ impl WriterCoreApi {
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
         let link_rel = self.starmap_link_rel_path(starmap_id, link_id)?;
         contribution_txn.prepare_paths(&[self.app_data_root.join(&link_rel)])?;
-        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let before = self.get_starmap_graph_snapshot(starmap_id)?;
         ensure_starmap_revision(
             before
-                .as_ref()
-                .and_then(|graph| graph.links.iter().find(|link| link.link_id == link_id))
+                .links
+                .iter()
+                .find(|link| link.link_id == link_id)
                 .map(|link| link.updated_at),
             expected_revision,
             "link",
             link_id,
         )?;
-        let project_id = get_starmap_project_id(self, starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
         self.core_write().delete_starmap_link(starmap_id, link_id)?;
         self.record_starmap_object(
             project_id.as_deref(),
@@ -812,7 +800,7 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionObjectType::StarMapLink,
             link_id,
             crate::writing_stats::ContributionOperation::Delete,
-            before.as_ref(),
+            Some(&before),
             None,
         )?;
         contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
@@ -937,17 +925,15 @@ impl WriterCoreApi {
             .core_write()
             .list_starmap_library(&scope)
             .map_err(WriterError::from)?;
-        let entries = entries
-            .into_iter()
-            .map(|entry| {
-                let title =
-                    crate::starmap::library::asset_title(&self.app_data_root, &entry.target)
-                        .ok()
-                        .flatten()
-                        .unwrap_or_default();
-                serde_json::json!({ "entry": entry, "title": title })
-            })
-            .collect::<Vec<_>>();
+        let mut mapped = Vec::with_capacity(entries.len());
+        for entry in entries {
+            // 只有对象真实不存在才是“无标题”；素材读取/解析失败必须返回，
+            // 不能把坏素材伪装成空标题继续列表。
+            let title = crate::starmap::library::asset_title(&self.app_data_root, &entry.target)?
+                .unwrap_or_default();
+            mapped.push(serde_json::json!({ "entry": entry, "title": title }));
+        }
+        let entries = mapped;
         Self::json_string(&serde_json::json!({
             "scope": scope,
             "entries": entries,
@@ -1043,7 +1029,7 @@ impl WriterCoreApi {
             )
             .map_err(WriterError::from)?;
         let node_content = extract_node_search_body(&result.content);
-        let project_id = get_starmap_project_id(self, starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
         let entry = crate::search::extractor::extract_starmap_node_entry(
             starmap_id,
             &result.id,
@@ -1059,7 +1045,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        let after = self.get_starmap_graph_snapshot(starmap_id);
+        let after = self.get_starmap_graph_snapshot(starmap_id)?;
         self.record_starmap_object(
             project_id.as_deref(),
             starmap_id,
@@ -1067,7 +1053,7 @@ impl WriterCoreApi {
             &result.id,
             crate::writing_stats::ContributionOperation::Link,
             None,
-            after.as_ref(),
+            Some(&after),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
@@ -1116,8 +1102,8 @@ impl WriterCoreApi {
                 Some(embed_instance_id),
             )
             .map_err(WriterError::from)?;
-        let project_id = get_starmap_project_id(self, host_starmap_id);
-        let after = self.get_starmap_graph_snapshot(host_starmap_id);
+        let project_id = get_starmap_project_id(self, host_starmap_id)?;
+        let after = self.get_starmap_graph_snapshot(host_starmap_id)?;
         self.record_starmap_object(
             project_id.as_deref(),
             host_starmap_id,
@@ -1125,7 +1111,7 @@ impl WriterCoreApi {
             &result.instance_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            after.as_ref(),
+            Some(&after),
         )?;
         let entry = crate::search::extractor::extract_starmap_embed_entry(
             host_starmap_id,
@@ -1255,18 +1241,10 @@ impl WriterCoreApi {
                 let mut copy_batch = self.begin_contribution_batch();
                 let mut graphs = std::collections::HashMap::new();
                 let mut projects = std::collections::HashMap::new();
-                let roots_after = crate::starmap::load_index(&self.app_data_root)
-                    .ok()
-                    .map(|index| index.root_starmap_ids);
+                let roots_after =
+                    Some(crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids);
                 for meta in &result.starmaps {
-                    let graph = self
-                        .get_starmap_graph_snapshot(&meta.starmap_id)
-                        .ok_or_else(|| {
-                            WriterError::Other(format!(
-                                "copied starmap graph missing: {}",
-                                meta.starmap_id
-                            ))
-                        })?;
+                    let graph = self.get_starmap_graph_snapshot(&meta.starmap_id)?;
                     graphs.insert(meta.starmap_id.clone(), graph);
                     projects.insert(meta.starmap_id.clone(), meta.project_id.clone());
                 }
@@ -1487,69 +1465,65 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         let context = crate::writing_stats::current_mutation_context();
+        let after_meta = self.core_write().get_starmap(&result.starmap_id)?;
+        let roots_after = Some(crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids);
         self.record_starmap_meta_with_context(
             &context,
             project_id,
             &result.starmap_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            self.core_write()
-                .get_starmap(&result.starmap_id)
-                .ok()
-                .as_ref(),
-            crate::starmap::load_index(&self.app_data_root)
-                .ok()
-                .map(|index| index.root_starmap_ids),
+            Some(&after_meta),
+            roots_after,
         )?;
-        if let Some(graph) = self.get_starmap_graph_snapshot(&result.starmap_id) {
-            for node in &graph.nodes {
-                self.record_starmap_object_with_context(
-                    &context,
-                    project_id,
-                    &result.starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapNode,
-                    &node.id,
-                    crate::writing_stats::ContributionOperation::Create,
-                    None,
-                    Some(&graph),
-                )?;
-            }
-            for edge in &graph.edges {
-                self.record_starmap_object_with_context(
-                    &context,
-                    project_id,
-                    &result.starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapEdge,
-                    &edge.id,
-                    crate::writing_stats::ContributionOperation::Create,
-                    None,
-                    Some(&graph),
-                )?;
-            }
-            for embed in &graph.embeds {
-                self.record_starmap_object_with_context(
-                    &context,
-                    project_id,
-                    &result.starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapEmbed,
-                    &embed.instance_id,
-                    crate::writing_stats::ContributionOperation::Create,
-                    None,
-                    Some(&graph),
-                )?;
-            }
-            for link in &graph.links {
-                self.record_starmap_object_with_context(
-                    &context,
-                    project_id,
-                    &result.starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapLink,
-                    &link.link_id,
-                    crate::writing_stats::ContributionOperation::Create,
-                    None,
-                    Some(&graph),
-                )?;
-            }
+        let graph = self.get_starmap_graph_snapshot(&result.starmap_id)?;
+        for node in &graph.nodes {
+            self.record_starmap_object_with_context(
+                &context,
+                project_id,
+                &result.starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapNode,
+                &node.id,
+                crate::writing_stats::ContributionOperation::Create,
+                None,
+                Some(&graph),
+            )?;
+        }
+        for edge in &graph.edges {
+            self.record_starmap_object_with_context(
+                &context,
+                project_id,
+                &result.starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapEdge,
+                &edge.id,
+                crate::writing_stats::ContributionOperation::Create,
+                None,
+                Some(&graph),
+            )?;
+        }
+        for embed in &graph.embeds {
+            self.record_starmap_object_with_context(
+                &context,
+                project_id,
+                &result.starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapEmbed,
+                &embed.instance_id,
+                crate::writing_stats::ContributionOperation::Create,
+                None,
+                Some(&graph),
+            )?;
+        }
+        for link in &graph.links {
+            self.record_starmap_object_with_context(
+                &context,
+                project_id,
+                &result.starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapLink,
+                &link.link_id,
+                crate::writing_stats::ContributionOperation::Create,
+                None,
+                Some(&graph),
+            )?;
         }
         self.commit_contribution_batch(&mut contribution_batch)?;
         self.finish_starmap_contribution_transaction(&result.starmap_id, &mut contribution_txn)?;
@@ -1598,7 +1572,7 @@ impl WriterCoreApi {
             )
             .map_err(WriterError::from)?;
         let node_content = extract_node_search_body(&result.content);
-        let project_id = get_starmap_project_id(self, starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
         let entry = crate::search::extractor::extract_starmap_node_entry(
             starmap_id,
             &result.id,
@@ -1614,7 +1588,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        let after = self.get_starmap_graph_snapshot(starmap_id);
+        let after = self.get_starmap_graph_snapshot(starmap_id)?;
         self.record_starmap_object(
             project_id.as_deref(),
             starmap_id,
@@ -1622,7 +1596,7 @@ impl WriterCoreApi {
             &result.id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            after.as_ref(),
+            Some(&after),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
@@ -1665,7 +1639,7 @@ impl WriterCoreApi {
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = StarmapStoreTransaction::from_transaction(
             self,
-            self.begin_starmap_contribution_transaction(starmap_id)?,
+            self.begin_starmap_contribution_transaction()?,
         );
         let history_token = crate::storage::journal::workspace_change::new_token();
         // rename 直接写 meta：必须在修改前登记具体文件，来源事务才能回滚。
@@ -1675,7 +1649,7 @@ impl WriterCoreApi {
             .join(format!("{}.meta.json", starmap_id))])?;
         self.register_starmap_history_journal(&mut contribution_txn, &history_token)?;
         //   用 _with_changes 版本记录本地历史。
-        let before_meta = self.core_write().get_starmap(starmap_id).ok();
+        let before_meta = self.core_write().get_starmap(starmap_id)?;
         let (result, change_set) = self
             .core_write()
             .rename_starmap_with_changes(starmap_id, new_title)
@@ -1685,7 +1659,7 @@ impl WriterCoreApi {
             &change_set,
             crate::storage::journal::workspace_change::WorkspaceChangeOpType::RenameStarMap,
         )?;
-        let project_id = get_starmap_project_id(self, starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
         let entry = crate::search::extractor::extract_starmap_title_entry(
             starmap_id,
             project_id.as_deref(),
@@ -1702,14 +1676,14 @@ impl WriterCoreApi {
         // after 快照先落到局部变量再传引用：直接写在实参里会让 `core_write()`
         // 的 guard 活到整条调用语句结束，而贡献记录内部还会再取一次 core 写锁
         // （starmap_meta_replay_baseline），同一线程自锁。
-        let after_meta = self.core_write().get_starmap(starmap_id).ok();
+        let after_meta = self.core_write().get_starmap(starmap_id)?;
         self.record_starmap_meta_with_context(
             &crate::writing_stats::current_mutation_context(),
             project_id.as_deref(),
             starmap_id,
             crate::writing_stats::ContributionOperation::Update,
-            before_meta.as_ref(),
-            after_meta.as_ref(),
+            Some(&before_meta),
+            Some(&after_meta),
             None,
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
@@ -1748,15 +1722,10 @@ impl WriterCoreApi {
         // 之前一进函数就删搜索索引，如果 plan_delete_starmap 因外部引用拒绝删除、
         // 或 save_pending 失败，星图还在但搜索索引已经没了。现在把搜索索引删除
         // 移到 apply_planned_delete_starmap 成功 + mark_local_applied 之后。
-        let before_meta = self.core_write().get_starmap(starmap_id).ok();
-        let contribution_project = before_meta
-            .as_ref()
-            .and_then(|meta| meta.project_id.clone())
-            .unwrap_or_default();
-        let before_graph = self.get_starmap_graph_snapshot(starmap_id);
-        let device_id = crate::settings::load_device_info(&self.app_data_root)
-            .map(|i| i.device_id)
-            .unwrap_or_default();
+        let before_meta = self.core_write().get_starmap(starmap_id)?;
+        let contribution_project = before_meta.project_id.clone().unwrap_or_default();
+        let before_graph = self.get_starmap_graph_snapshot(starmap_id)?;
+        let device_id = crate::settings::load_device_info(&self.app_data_root)?.device_id;
         // 先 flush 全部 dirty starmap stores，确保引用扫描读到最新磁盘数据。
         self.core_write().flush_all_starmap_stores()?;
         self.core_write().remove_starmap_store(starmap_id);
@@ -1823,66 +1792,63 @@ impl WriterCoreApi {
             contribution_txn.enqueue_search_prefix_delete(prefix.clone());
         }
         let context = crate::writing_stats::current_mutation_context();
+        let roots_after = Some(crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids);
         self.record_starmap_meta_with_context(
             &context,
             Some(&contribution_project),
             starmap_id,
             crate::writing_stats::ContributionOperation::Delete,
-            before_meta.as_ref(),
+            Some(&before_meta),
             None,
-            crate::starmap::load_index(&self.app_data_root)
-                .ok()
-                .map(|index| index.root_starmap_ids),
+            roots_after,
         )?;
-        if let Some(graph) = before_graph {
-            for node in &graph.nodes {
-                self.record_starmap_object_with_context(
-                    &context,
-                    Some(&contribution_project),
-                    starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapNode,
-                    &node.id,
-                    crate::writing_stats::ContributionOperation::Delete,
-                    Some(&graph),
-                    None,
-                )?;
-            }
-            for edge in &graph.edges {
-                self.record_starmap_object_with_context(
-                    &context,
-                    Some(&contribution_project),
-                    starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapEdge,
-                    &edge.id,
-                    crate::writing_stats::ContributionOperation::Delete,
-                    Some(&graph),
-                    None,
-                )?;
-            }
-            for embed in &graph.embeds {
-                self.record_starmap_object_with_context(
-                    &context,
-                    Some(&contribution_project),
-                    starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapEmbed,
-                    &embed.instance_id,
-                    crate::writing_stats::ContributionOperation::Delete,
-                    Some(&graph),
-                    None,
-                )?;
-            }
-            for link in &graph.links {
-                self.record_starmap_object_with_context(
-                    &context,
-                    Some(&contribution_project),
-                    starmap_id,
-                    crate::writing_stats::ContributionObjectType::StarMapLink,
-                    &link.link_id,
-                    crate::writing_stats::ContributionOperation::Delete,
-                    Some(&graph),
-                    None,
-                )?;
-            }
+        for node in &before_graph.nodes {
+            self.record_starmap_object_with_context(
+                &context,
+                Some(&contribution_project),
+                starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapNode,
+                &node.id,
+                crate::writing_stats::ContributionOperation::Delete,
+                Some(&before_graph),
+                None,
+            )?;
+        }
+        for edge in &before_graph.edges {
+            self.record_starmap_object_with_context(
+                &context,
+                Some(&contribution_project),
+                starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapEdge,
+                &edge.id,
+                crate::writing_stats::ContributionOperation::Delete,
+                Some(&before_graph),
+                None,
+            )?;
+        }
+        for embed in &before_graph.embeds {
+            self.record_starmap_object_with_context(
+                &context,
+                Some(&contribution_project),
+                starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapEmbed,
+                &embed.instance_id,
+                crate::writing_stats::ContributionOperation::Delete,
+                Some(&before_graph),
+                None,
+            )?;
+        }
+        for link in &before_graph.links {
+            self.record_starmap_object_with_context(
+                &context,
+                Some(&contribution_project),
+                starmap_id,
+                crate::writing_stats::ContributionObjectType::StarMapLink,
+                &link.link_id,
+                crate::writing_stats::ContributionOperation::Delete,
+                Some(&before_graph),
+                None,
+            )?;
         }
         self.commit_contribution_batch(&mut contribution_batch)?;
         // 对象删除与来源事件 durable 后才允许写 Git history；journal 处于
@@ -1926,7 +1892,7 @@ impl WriterCoreApi {
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = StarmapStoreTransaction::from_transaction(
             self,
-            self.begin_starmap_contribution_transaction(starmap_id)?,
+            self.begin_starmap_contribution_transaction()?,
         );
         let history_token = crate::storage::journal::workspace_change::new_token();
         // bind 直接写 meta，并可能先写 index；两者都要进入来源事务备份清单。
@@ -1937,7 +1903,7 @@ impl WriterCoreApi {
             self.app_data_root.join("starmaps/index.json"),
         ])?;
         self.register_starmap_history_journal(&mut contribution_txn, &history_token)?;
-        let before_meta = self.core_write().get_starmap(starmap_id).ok();
+        let before_meta = self.core_write().get_starmap(starmap_id)?;
         //   用 _with_changes 版本记录本地历史。
         let change_set = self
             .core_write()
@@ -1964,69 +1930,31 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        let graph_result = self.core_write().get_starmap_graph(starmap_id);
-        if let Ok(graph) = graph_result {
-            for node in &graph.nodes {
-                let node_content = extract_node_search_body(&node.content);
-                let entry = crate::search::extractor::extract_starmap_node_entry(
+        let graph = self.core_write().get_starmap_graph(starmap_id)?;
+        for node in &graph.nodes {
+            let node_content = extract_node_search_body(&node.content);
+            let entry = crate::search::extractor::extract_starmap_node_entry(
+                starmap_id,
+                &node.id,
+                Some(project_id),
+                &node.title,
+                &node_content,
+            );
+            contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Upsert,
+                object_id: entry.object_id.clone(),
+                scope: entry.scope,
+                title: entry.title.clone(),
+                body: entry.body.clone(),
+                target: Some(entry.target.clone()),
+            });
+        }
+        for edge in &graph.edges {
+            let label = edge.label.as_deref().unwrap_or("");
+            if !label.is_empty() {
+                let entry = crate::search::extractor::extract_starmap_edge_entry(
                     starmap_id,
-                    &node.id,
-                    Some(project_id),
-                    &node.title,
-                    &node_content,
-                );
-                contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
-                    action: crate::search::SearchIndexAction::Upsert,
-                    object_id: entry.object_id.clone(),
-                    scope: entry.scope,
-                    title: entry.title.clone(),
-                    body: entry.body.clone(),
-                    target: Some(entry.target.clone()),
-                });
-            }
-            for edge in &graph.edges {
-                let label = edge.label.as_deref().unwrap_or("");
-                if !label.is_empty() {
-                    let entry = crate::search::extractor::extract_starmap_edge_entry(
-                        starmap_id,
-                        &edge.id,
-                        Some(project_id),
-                        label,
-                    );
-                    contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
-                        action: crate::search::SearchIndexAction::Upsert,
-                        object_id: entry.object_id.clone(),
-                        scope: entry.scope,
-                        title: entry.title.clone(),
-                        body: entry.body.clone(),
-                        target: Some(entry.target.clone()),
-                    });
-                }
-            }
-            for link in &graph.links {
-                let label = link.label.as_deref().unwrap_or("");
-                if !label.is_empty() {
-                    let entry = crate::search::extractor::extract_starmap_link_entry(
-                        starmap_id,
-                        &link.link_id,
-                        Some(project_id),
-                        label,
-                    );
-                    contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
-                        action: crate::search::SearchIndexAction::Upsert,
-                        object_id: entry.object_id.clone(),
-                        scope: entry.scope,
-                        title: entry.title.clone(),
-                        body: entry.body.clone(),
-                        target: Some(entry.target.clone()),
-                    });
-                }
-            }
-            for embed in &graph.embeds {
-                let label = embed.label.as_deref().unwrap_or("");
-                let entry = crate::search::extractor::extract_starmap_embed_entry(
-                    starmap_id,
-                    &embed.instance_id,
+                    &edge.id,
                     Some(project_id),
                     label,
                 );
@@ -2040,12 +1968,48 @@ impl WriterCoreApi {
                 });
             }
         }
+        for link in &graph.links {
+            let label = link.label.as_deref().unwrap_or("");
+            if !label.is_empty() {
+                let entry = crate::search::extractor::extract_starmap_link_entry(
+                    starmap_id,
+                    &link.link_id,
+                    Some(project_id),
+                    label,
+                );
+                contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: entry.object_id.clone(),
+                    scope: entry.scope,
+                    title: entry.title.clone(),
+                    body: entry.body.clone(),
+                    target: Some(entry.target.clone()),
+                });
+            }
+        }
+        for embed in &graph.embeds {
+            let label = embed.label.as_deref().unwrap_or("");
+            let entry = crate::search::extractor::extract_starmap_embed_entry(
+                starmap_id,
+                &embed.instance_id,
+                Some(project_id),
+                label,
+            );
+            contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Upsert,
+                object_id: entry.object_id.clone(),
+                scope: entry.scope,
+                title: entry.title.clone(),
+                body: entry.body.clone(),
+                target: Some(entry.target.clone()),
+            });
+        }
         self.record_starmap_meta_with_context(
             &crate::writing_stats::current_mutation_context(),
             Some(project_id),
             starmap_id,
             crate::writing_stats::ContributionOperation::Link,
-            before_meta.as_ref(),
+            Some(&before_meta),
             Some(&meta),
             None,
         )?;
@@ -2082,7 +2046,7 @@ impl WriterCoreApi {
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = StarmapStoreTransaction::from_transaction(
             self,
-            self.begin_starmap_contribution_transaction(starmap_id)?,
+            self.begin_starmap_contribution_transaction()?,
         );
         let history_token = crate::storage::journal::workspace_change::new_token();
         // unbind 直接写 meta，并可能先写 index；两者都要进入来源事务备份清单。
@@ -2093,7 +2057,7 @@ impl WriterCoreApi {
             self.app_data_root.join("starmaps/index.json"),
         ])?;
         self.register_starmap_history_journal(&mut contribution_txn, &history_token)?;
-        let before_meta = self.core_write().get_starmap(starmap_id).ok();
+        let before_meta = self.core_write().get_starmap(starmap_id)?;
         //   用 _with_changes 版本记录本地历史。
         let change_set = self
             .core_write()
@@ -2117,16 +2081,30 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        let graph_result = self.core_write().get_starmap_graph(starmap_id);
-        if let Ok(graph) = graph_result {
-            for node in &graph.nodes {
-                let node_content = extract_node_search_body(&node.content);
-                let entry = crate::search::extractor::extract_starmap_node_entry(
-                    starmap_id,
-                    &node.id,
-                    None,
-                    &node.title,
-                    &node_content,
+        let graph = self.core_write().get_starmap_graph(starmap_id)?;
+        for node in &graph.nodes {
+            let node_content = extract_node_search_body(&node.content);
+            let entry = crate::search::extractor::extract_starmap_node_entry(
+                starmap_id,
+                &node.id,
+                None,
+                &node.title,
+                &node_content,
+            );
+            contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Upsert,
+                object_id: entry.object_id.clone(),
+                scope: entry.scope,
+                title: entry.title.clone(),
+                body: entry.body.clone(),
+                target: Some(entry.target.clone()),
+            });
+        }
+        for edge in &graph.edges {
+            let label = edge.label.as_deref().unwrap_or("");
+            if !label.is_empty() {
+                let entry = crate::search::extractor::extract_starmap_edge_entry(
+                    starmap_id, &edge.id, None, label,
                 );
                 contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
                     action: crate::search::SearchIndexAction::Upsert,
@@ -2137,46 +2115,13 @@ impl WriterCoreApi {
                     target: Some(entry.target.clone()),
                 });
             }
-            for edge in &graph.edges {
-                let label = edge.label.as_deref().unwrap_or("");
-                if !label.is_empty() {
-                    let entry = crate::search::extractor::extract_starmap_edge_entry(
-                        starmap_id, &edge.id, None, label,
-                    );
-                    contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
-                        action: crate::search::SearchIndexAction::Upsert,
-                        object_id: entry.object_id.clone(),
-                        scope: entry.scope,
-                        title: entry.title.clone(),
-                        body: entry.body.clone(),
-                        target: Some(entry.target.clone()),
-                    });
-                }
-            }
-            for link in &graph.links {
-                let label = link.label.as_deref().unwrap_or("");
-                if !label.is_empty() {
-                    let entry = crate::search::extractor::extract_starmap_link_entry(
-                        starmap_id,
-                        &link.link_id,
-                        None,
-                        label,
-                    );
-                    contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
-                        action: crate::search::SearchIndexAction::Upsert,
-                        object_id: entry.object_id.clone(),
-                        scope: entry.scope,
-                        title: entry.title.clone(),
-                        body: entry.body.clone(),
-                        target: Some(entry.target.clone()),
-                    });
-                }
-            }
-            for embed in &graph.embeds {
-                let label = embed.label.as_deref().unwrap_or("");
-                let entry = crate::search::extractor::extract_starmap_embed_entry(
+        }
+        for link in &graph.links {
+            let label = link.label.as_deref().unwrap_or("");
+            if !label.is_empty() {
+                let entry = crate::search::extractor::extract_starmap_link_entry(
                     starmap_id,
-                    &embed.instance_id,
+                    &link.link_id,
                     None,
                     label,
                 );
@@ -2190,16 +2135,30 @@ impl WriterCoreApi {
                 });
             }
         }
-        let contribution_project = before_meta
-            .as_ref()
-            .and_then(|meta| meta.project_id.clone())
-            .unwrap_or_default();
+        for embed in &graph.embeds {
+            let label = embed.label.as_deref().unwrap_or("");
+            let entry = crate::search::extractor::extract_starmap_embed_entry(
+                starmap_id,
+                &embed.instance_id,
+                None,
+                label,
+            );
+            contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Upsert,
+                object_id: entry.object_id.clone(),
+                scope: entry.scope,
+                title: entry.title.clone(),
+                body: entry.body.clone(),
+                target: Some(entry.target.clone()),
+            });
+        }
+        let contribution_project = before_meta.project_id.clone().unwrap_or_default();
         self.record_starmap_meta_with_context(
             &crate::writing_stats::current_mutation_context(),
             Some(&contribution_project),
             starmap_id,
             crate::writing_stats::ContributionOperation::Unlink,
-            before_meta.as_ref(),
+            Some(&before_meta),
             Some(&meta),
             None,
         )?;
@@ -2234,7 +2193,17 @@ impl WriterCoreApi {
     pub(crate) fn refresh_starmap_search_index(&self, starmap_id: &str) {
         let meta = match self.core_write().get_starmap(starmap_id) {
             Ok(m) => m,
-            Err(_) => return,
+            Err(error) => {
+                // 索引是派生缓存：对象已不存在时跳过；其它读取错误记录后
+                // 跳过，下一次显式重建/写操作会补齐。
+                if !matches!(error, crate::error::Error::Io(ref io) if io.kind() == std::io::ErrorKind::NotFound)
+                {
+                    log::warn!(
+                        "skip starmap search index refresh for {starmap_id}: {error}"
+                    );
+                }
+                return;
+            }
         };
         let entry =
             crate::search::extractor::extract_starmap_title_entry(starmap_id, None, &meta.title);
@@ -2246,8 +2215,16 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        let graph_result = self.core_write().get_starmap_graph(starmap_id);
-        if let Ok(graph) = graph_result {
+        let graph = match self.core_write().get_starmap_graph(starmap_id) {
+            Ok(graph) => graph,
+            Err(error) => {
+                log::warn!(
+                    "starmap {starmap_id} graph unavailable, indexing title only: {error}"
+                );
+                return;
+            }
+        };
+        {
             for node in &graph.nodes {
                 let node_content = extract_node_search_body(&node.content);
                 let entry = crate::search::extractor::extract_starmap_node_entry(
@@ -2328,44 +2305,54 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction()?;
         let history_token = crate::storage::journal::workspace_change::new_token();
         // set_main 直接写 starmaps/index.json；先登记备份并按统一阶段补 history。
         contribution_txn.prepare_paths(&[self.app_data_root.join("starmaps/index.json")])?;
         self.register_starmap_history_journal(&mut contribution_txn, &history_token)?;
         let mut contribution_batch = self.begin_contribution_batch();
+        // 变更前读取真实主图关系：旧主图可能尚未设置（None），索引或 meta 读取
+        // 失败必须直接报错；新主图必须真实存在，不能伪造一个 meta 充当 before。
+        let previous_before = self.core_write().get_main_starmap_for_project(project_id)?;
+        let new_before = self.core_write().get_starmap(starmap_id)?;
         //   用 _with_changes 版本记录本地历史。
-        let previous = self.get_main_starmap_for_project(project_id).ok().flatten();
         let change_set = self
             .core_write()
             .set_main_starmap_for_project_with_changes(starmap_id, project_id)
             .map_err(crate::api::error::WriterError::from)?;
+        if change_set.is_empty() {
+            // 核心确认主图映射没有实际变化（原主图就是新主图），也不再生成
+            // 伪 Link/Unlink；此前的存在性与项目绑定校验已经由核心完成。
+            return Ok(true);
+        }
         let history_journal = self.save_starmap_history_journal(
             &history_token,
             &change_set,
             crate::storage::journal::workspace_change::WorkspaceChangeOpType::SetMainStarMap,
         )?;
         let context = crate::writing_stats::current_mutation_context();
-        if let Some(previous) = previous.filter(|meta| meta.starmap_id != starmap_id) {
-            let before = self.core_write().get_starmap(&previous.starmap_id).ok();
+        if let Some(previous_before) = previous_before {
+            // 旧主图只失去 main 映射，项目绑定仍然存在：after 取变更后的真实 meta，
+            // 不能用 None 冒充“已解绑”。
+            let previous_after = self.core_write().get_starmap(&previous_before.starmap_id)?;
             self.record_starmap_meta_with_context(
                 &context,
                 Some(project_id),
-                &previous.starmap_id,
+                &previous_before.starmap_id,
                 crate::writing_stats::ContributionOperation::Unlink,
-                before.as_ref(),
-                None,
+                Some(&previous_before),
+                Some(&previous_after),
                 None,
             )?;
         }
-        let after = self.core_write().get_starmap(starmap_id).ok();
+        let new_after = self.core_write().get_starmap(starmap_id)?;
         self.record_starmap_meta_with_context(
             &context,
             Some(project_id),
             starmap_id,
             crate::writing_stats::ContributionOperation::Link,
-            None,
-            after.as_ref(),
+            Some(&new_before),
+            Some(&new_after),
             None,
         )?;
         self.commit_contribution_batch(&mut contribution_batch)?;
@@ -2415,11 +2402,12 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
-        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let before = self.get_starmap_graph_snapshot(starmap_id)?;
         ensure_starmap_revision(
             before
-                .as_ref()
-                .and_then(|graph| graph.nodes.iter().find(|node| node.id == node_id))
+                .nodes
+                .iter()
+                .find(|node| node.id == node_id)
                 .map(|node| node.updated_at),
             expected_revision,
             "node",
@@ -2453,9 +2441,7 @@ impl WriterCoreApi {
         affected_starmaps.dedup();
         contribution_txn.include_starmaps(&affected_starmaps);
         let mut before_graphs = std::collections::HashMap::new();
-        if let Some(graph) = before.as_ref() {
-            before_graphs.insert(starmap_id.to_string(), graph.clone());
-        }
+        before_graphs.insert(starmap_id.to_string(), before.clone());
         for affected_starmap in &affected_starmaps {
             if before_graphs.contains_key(affected_starmap) {
                 continue;
@@ -2486,12 +2472,10 @@ impl WriterCoreApi {
                 expected_revision,
             )
             .map_err(WriterError::from)?;
-        let project_id = get_starmap_project_id(self, starmap_id);
-        let after = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
+        let after = self.get_starmap_graph_snapshot(starmap_id)?;
         let mut after_graphs = std::collections::HashMap::new();
-        if let Some(graph) = after.as_ref() {
-            after_graphs.insert(starmap_id.to_string(), graph.clone());
-        }
+        after_graphs.insert(starmap_id.to_string(), after.clone());
         for affected_starmap in &affected_starmaps {
             if after_graphs.contains_key(affected_starmap) {
                 continue;
@@ -2523,7 +2507,7 @@ impl WriterCoreApi {
                 &mut contribution_txn,
                 affected_starmap,
                 after_node,
-            );
+            )?;
             let before_graph = before_graphs.get(affected_starmap);
             if affected_starmap == starmap_id && affected_instance == node_id {
                 self.record_starmap_object_with_context_and_trajectory(
@@ -2539,7 +2523,7 @@ impl WriterCoreApi {
                 )?;
                 origin_recorded = true;
             } else {
-                let affected_project = get_starmap_project_id(self, affected_starmap);
+                let affected_project = get_starmap_project_id(self, affected_starmap)?;
                 self.record_starmap_object_with_context_and_trajectory(
                     &propagated_context,
                     affected_project.as_deref(),
@@ -2554,7 +2538,7 @@ impl WriterCoreApi {
             }
         }
         if !origin_recorded {
-            self.enqueue_starmap_node_search_update(&mut contribution_txn, starmap_id, &result);
+            self.enqueue_starmap_node_search_update(&mut contribution_txn, starmap_id, &result)?;
             self.record_starmap_object_with_context_and_trajectory(
                 &context,
                 project_id.as_deref(),
@@ -2562,8 +2546,8 @@ impl WriterCoreApi {
                 crate::writing_stats::ContributionObjectType::StarMapNode,
                 node_id,
                 crate::writing_stats::ContributionOperation::Update,
-                before.as_ref(),
-                after.as_ref(),
+                Some(&before),
+                Some(&after),
                 &trajectory,
             )?;
         }
@@ -2725,17 +2709,18 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
-        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let before = self.get_starmap_graph_snapshot(starmap_id)?;
         ensure_starmap_revision(
             before
-                .as_ref()
-                .and_then(|graph| graph.nodes.iter().find(|node| node.id == node_id))
+                .nodes
+                .iter()
+                .find(|node| node.id == node_id)
                 .map(|node| node.updated_at),
             expected_revision,
             "node",
             node_id,
         )?;
-        let project_id = get_starmap_project_id(self, starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
         // 删除事实先预览：级联链接墓碑在删除时立即写 annotations 仓库，
         // 必须在执行前登记回滚路径，否则失败回滚无法恢复活动链接。
         let preview = self
@@ -2766,7 +2751,7 @@ impl WriterCoreApi {
             project_id.as_deref(),
             starmap_id,
             &deleted,
-            before.as_ref(),
+            Some(&before),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new();
@@ -2803,8 +2788,8 @@ impl WriterCoreApi {
             .add_starmap_edge(starmap_id, edge.try_into().map_err(WriterError::from)?)
             .map_err(WriterError::from)?;
         let label = result.label.clone().unwrap_or_default();
-        let project_id = get_starmap_project_id(self, starmap_id);
-        let after = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
+        let after = self.get_starmap_graph_snapshot(starmap_id)?;
         self.record_starmap_object(
             project_id.as_deref(),
             starmap_id,
@@ -2812,7 +2797,7 @@ impl WriterCoreApi {
             &result.id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            after.as_ref(),
+            Some(&after),
         )?;
         let entry = crate::search::extractor::extract_starmap_edge_entry(
             starmap_id,
@@ -2851,11 +2836,12 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
-        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let before = self.get_starmap_graph_snapshot(starmap_id)?;
         ensure_starmap_revision(
             before
-                .as_ref()
-                .and_then(|graph| graph.edges.iter().find(|edge| edge.id == edge_id))
+                .edges
+                .iter()
+                .find(|edge| edge.id == edge_id)
                 .map(|edge| edge.updated_at),
             expected_revision,
             "edge",
@@ -2870,7 +2856,7 @@ impl WriterCoreApi {
             )
             .map_err(WriterError::from)?;
         let label = result.label.clone().unwrap_or_default();
-        let project_id = get_starmap_project_id(self, starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
         let entry = crate::search::extractor::extract_starmap_edge_entry(
             starmap_id,
             edge_id,
@@ -2885,15 +2871,15 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        let after = self.get_starmap_graph_snapshot(starmap_id);
+        let after = self.get_starmap_graph_snapshot(starmap_id)?;
         self.record_starmap_object(
             project_id.as_deref(),
             starmap_id,
             crate::writing_stats::ContributionObjectType::StarMapEdge,
             edge_id,
             crate::writing_stats::ContributionOperation::Update,
-            before.as_ref(),
-            after.as_ref(),
+            Some(&before),
+            Some(&after),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())
@@ -2912,17 +2898,18 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_txn = self.begin_starmap_store_transaction(starmap_id)?;
-        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let before = self.get_starmap_graph_snapshot(starmap_id)?;
         ensure_starmap_revision(
             before
-                .as_ref()
-                .and_then(|graph| graph.edges.iter().find(|edge| edge.id == edge_id))
+                .edges
+                .iter()
+                .find(|edge| edge.id == edge_id)
                 .map(|edge| edge.updated_at),
             expected_revision,
             "edge",
             edge_id,
         )?;
-        let project_id = get_starmap_project_id(self, starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id)?;
         self.core_write().delete_starmap_edge(starmap_id, edge_id)?;
         contribution_txn.enqueue_search_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
@@ -2938,7 +2925,7 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionObjectType::StarMapEdge,
             edge_id,
             crate::writing_stats::ContributionOperation::Delete,
-            before.as_ref(),
+            Some(&before),
             None,
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
@@ -3263,7 +3250,7 @@ impl WriterCoreApi {
                 WriterError::Other(format!("create_cross_canvas_edge: write failed: {e:?}"))
             })?;
 
-        let project_id = get_starmap_project_id(self, &result.owner_starmap_id);
+        let project_id = get_starmap_project_id(self, &result.owner_starmap_id)?;
         let edge_id = result.edge.id.clone();
         contribution_txn.include_starmaps(std::slice::from_ref(&result.owner_starmap_id));
         contribution_txn.prepare_paths(&[
@@ -3277,7 +3264,7 @@ impl WriterCoreApi {
                     &result.owner_starmap_id,
                 )),
         ])?;
-        let after_graph = self.get_starmap_graph_snapshot(&result.owner_starmap_id);
+        let after_graph = self.get_starmap_graph_snapshot(&result.owner_starmap_id)?;
         self.record_starmap_object(
             project_id.as_deref(),
             &result.owner_starmap_id,
@@ -3285,7 +3272,7 @@ impl WriterCoreApi {
             &edge_id,
             crate::writing_stats::ContributionOperation::Create,
             None,
-            after_graph.as_ref(),
+            Some(&after_graph),
         )?;
         self.finish_starmap_contribution_transaction(
             &result.owner_starmap_id,
@@ -3404,9 +3391,7 @@ impl WriterCoreApi {
         change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
         op_type: crate::storage::journal::workspace_change::WorkspaceChangeOpType,
     ) -> ApiResult<crate::storage::journal::workspace_change::WorkspaceChangeJournal> {
-        let device_id = crate::settings::load_device_info(&self.app_data_root)
-            .map(|info| info.device_id)
-            .unwrap_or_default();
+        let device_id = crate::settings::load_device_info(&self.app_data_root)?.device_id;
         crate::storage::journal::workspace_change::WorkspaceChangeJournal::save_pending_with_token(
             &self.app_data_root,
             token,
@@ -3567,8 +3552,8 @@ impl WriterCoreApi {
         transaction: &mut StarmapStoreTransaction<'_>,
         starmap_id: &str,
         node: &crate::starmap::types::StarMapNode,
-    ) {
-        let project_id = get_starmap_project_id(self, starmap_id);
+    ) -> ApiResult<()> {
+        let project_id = get_starmap_project_id(self, starmap_id)?;
         let node_content = extract_node_search_body(&node.content);
         let entry = crate::search::extractor::extract_starmap_node_entry(
             starmap_id,
@@ -3585,6 +3570,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        Ok(())
     }
 
     /// 共享内容传播会同时修改多个画布；每个画布都在提交前 flush，保证

@@ -12,10 +12,10 @@ mod tests {
         projects_root: &std::path::Path,
         project_id: Option<&str>,
     ) -> crate::error::Result<SearchIndexStatus> {
-        let entries =
+        let report =
             crate::search::rebuild::rebuild_index(app_data_root, projects_root, project_id)?;
         let mut service = SearchIndexService::new();
-        service.rebuild_from_entries(entries);
+        service.rebuild_from_extraction(report);
         Ok(service.status())
     }
 
@@ -389,7 +389,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = extract_starmap_entries(dir.path(), None).unwrap();
+        let entries = extract_starmap_entries(dir.path(), None).unwrap().entries;
         let link_entries: Vec<_> = entries
             .iter()
             .filter(|e| e.scope == SearchScope::StarmapLink)
@@ -698,7 +698,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = extract_starmap_entries(dir.path(), None).unwrap();
+        let entries = extract_starmap_entries(dir.path(), None).unwrap().entries;
         let node_entries: Vec<_> = entries
             .iter()
             .filter(|e| e.scope == SearchScope::StarmapNode)
@@ -947,7 +947,7 @@ mod tests {
             serde_json::json!({"starmapId": "sm1", "projectId": "p1", "title": "CamelMap", "createdAt": 0, "updatedAt": 0}).to_string(),
         ).unwrap();
 
-        let entries = extract_starmap_entries(dir.path(), None).unwrap();
+        let entries = extract_starmap_entries(dir.path(), None).unwrap().entries;
         let title_entries: Vec<_> = entries
             .iter()
             .filter(|e| e.scope == SearchScope::StarmapTitle)
@@ -1572,7 +1572,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = extract_starmap_entries(dir.path(), None).unwrap();
+        let entries = extract_starmap_entries(dir.path(), None).unwrap().entries;
         let embed_entries: Vec<_> = entries
             .iter()
             .filter(|e| e.scope == SearchScope::StarmapEmbed)
@@ -1587,7 +1587,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_by_target_project_id_removes_only_matching_entries() {
+    fn project_rebuild_with_empty_extraction_removes_only_matching_entries() {
         let mut service = SearchIndexService::new();
         service.enqueue_update(SearchIndexUpdate {
             action: SearchIndexAction::Upsert,
@@ -1647,8 +1647,10 @@ mod tests {
             }),
         });
         assert_eq!(service.backend().entry_count(), 3);
-        service.remove_by_prefix("___never_match___");
-        service.backend_mut().remove_by_target_project_id("p1");
+        service.rebuild_project_from_extraction(
+            "p1",
+            crate::search::extractor::ExtractionReport::default(),
+        );
         let results = service.search("P1", SearchScope::All, 10, None);
         assert!(results.is_empty(), "p1 entry should be removed");
         let results_p2 = service.search("P2", SearchScope::All, 10, None);

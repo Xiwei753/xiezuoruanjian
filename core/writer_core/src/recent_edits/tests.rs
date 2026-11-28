@@ -34,21 +34,28 @@ fn write_chapter_meta(
 }
 
 #[test]
-fn test_record_recent_edit_corrupt_json() {
+fn test_corrupt_recent_edits_returns_error_and_keeps_file() {
     let dir = tempdir().unwrap();
     let app_data_root = dir.path();
     let projects_root = dir.path().join("projects");
 
     let recent_path = app_data_root.join("recent_edits.json");
-    fs::write(&recent_path, "{ corrupted data ]}").unwrap();
+    let corrupt = "{ corrupted data ]}";
+    fs::write(&recent_path, corrupt).unwrap();
 
-    record_recent_edit(app_data_root, &projects_root, "p1", "v1", "c1").unwrap();
-
-    let edits = get_recent_edits(app_data_root, &projects_root).unwrap();
-    assert_eq!(edits.len(), 1);
-    assert_eq!(edits[0].project_id, "p1");
-    assert_eq!(edits[0].volume_id, "v1");
-    assert_eq!(edits[0].chapter_id, "c1");
+    assert!(
+        record_recent_edit(app_data_root, &projects_root, "p1", "v1", "c1").is_err(),
+        "corrupt recent_edits must return an error instead of being treated as an empty list"
+    );
+    assert!(
+        get_recent_edits(app_data_root, &projects_root).is_err(),
+        "reading corrupt recent_edits must not cache a fake empty list"
+    );
+    assert_eq!(
+        fs::read_to_string(&recent_path).unwrap(),
+        corrupt,
+        "the existing recent_edits file must be preserved"
+    );
 }
 
 #[test]

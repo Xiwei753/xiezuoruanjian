@@ -131,9 +131,6 @@ pub fn record_pending_remote_cleanup(
         )))
     })?;
     crate::storage::atomic_write_string(&path, &content)?;
-    if let Err(error) = crate::sync::dirty_index::set_recovery(app_data_root, app_data_root, true) {
-        log::warn!("[sync] cannot record remote cleanup recovery in dirty index: {error}");
-    }
     Ok(())
 }
 
@@ -161,15 +158,6 @@ pub fn remove_pending_remote_cleanup(
         )))
     })?;
     crate::storage::atomic_write_string(&path, &content)?;
-    let still_pending = !list.cleanups.is_empty()
-        || crate::sync::pending_deleted::load_pending_deleted_targets(app_data_root)
-            .map(|targets| !targets.is_empty())
-            .unwrap_or(true);
-    if let Err(error) =
-        crate::sync::dirty_index::set_recovery(app_data_root, app_data_root, still_pending)
-    {
-        log::warn!("[sync] cannot update remote cleanup recovery in dirty index: {error}");
-    }
     Ok(())
 }
 

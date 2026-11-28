@@ -1,26 +1,20 @@
 //! Transfer helper functions — shared utilities used by transfer.rs and other submodules.
 //!
-//! Contains error conversion, remote object operations, staging downloads, single-target sync,
-//! and per-kind transfer functions extracted from run_transfer.
+//! Contains error conversion, remote object operations, staging downloads,
+//! and per-kind transfer functions.
 
 use std::path::Path;
 
-use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::provider::SyncProvider;
-use crate::sync::types::{SyncPolicy, SyncResult, SyncTarget};
+use crate::sync::cancellation_token::SyncCancellationToken;
+use crate::sync::types::{SyncResult, SyncTarget};
 
 use super::{FullSyncPlan, LiveTargetLww, PlannedTarget};
 
-// 单 target 的传输实现按目标类别拆分：
-//   - transfer_live.rs：正常上传 live 项目
-//   - transfer_project_ops.rs：恢复 / 删除本地 / 删除远端
-// 两个子模块在这里整体重导出，`use super::transfer_helpers::*` 的调用方不受影响。
-mod transfer_app_group;
-mod transfer_live;
+// 生命周期 target（恢复 / 删除本地 / 删除远端）的传输实现。
+// 普通 App 组与作品不再有各自的传输/合并实现：统一走 `transfer_object_scope`。
 mod transfer_project_ops;
 
-pub(super) use transfer_app_group::transfer_app_data_group;
-pub(super) use transfer_live::transfer_live_project;
 pub(super) use transfer_project_ops::{
     transfer_delete_local_project, transfer_delete_remote_project, transfer_restore_project,
 };
@@ -90,6 +84,49 @@ pub(super) fn download_remote_to_staging(
     let mut result = SyncResult::success();
     result.downloaded_files = downloaded;
     result
+}
+
+/// 统一对象传输（Issue #1066）：只把远端变化对象下载进 staging。
+///
+/// 不做业务合并、不做 LWW 裁决、不复制本地目录。远端索引记录与下载结果都写进
+/// staging，由提交阶段用同一套对象比较做唯一一次裁决。
+pub(super) fn transfer_object_scope(
+    provider: &dyn SyncProvider,
+    target: &SyncTarget,
+    live_root: &Path,
+    staging_root: Option<&Path>,
+    cancellation_token: Option<&SyncCancellationToken>,
+) -> SyncResult {
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] transfer_object_scope: cancellation requested — skipping {}",
+                target.remote_prefix
+            );
+            return SyncResult::success();
+        }
+    }
+    let Some(staging_root) = staging_root else {
+        return SyncResult::error(
+            crate::sync::SyncStatus::FatalError("missing staging root".to_string()),
+            "transfer_object_scope called without a staging root".to_string(),
+            None,
+        );
+    };
+    match crate::sync::staging::download::stage_remote_changes(
+        provider,
+        target,
+        live_root,
+        staging_root,
+    ) {
+        Ok(outcome) => {
+            let mut result = SyncResult::success();
+            result.downloaded_files = outcome.downloaded;
+            result.remote_deletes = outcome.remote_deletes;
+            result
+        }
+        Err(error) => sync_result_from_error(error),
+    }
 }
 
 pub(super) fn delete_all_remote_objects(
@@ -166,88 +203,4 @@ pub(super) fn delete_all_remote_objects(
     result
 }
 
-pub(super) fn run_single_target(
-    provider: &dyn SyncProvider,
-    local_root: &Path,
-    sync_policy: &SyncPolicy,
-    target: &SyncTarget,
-    force_sync: bool,
-    cancellation_token: Option<&SyncCancellationToken>,
-) -> SyncResult {
-    // Issue #729：关键写入操作前检查取消令牌。
-    // 如果已取消，提前返回，不继续写入远端。
-    if let Some(token) = cancellation_token {
-        if token.is_cancelled() {
-            log::info!("[sync] run_single_target: cancellation requested — skipping target");
-            return SyncResult::success();
-        }
-    }
-    // Issue #729 评论 5765306162 问题4：把 cancellation_token 传进 perform_lww_sync，
-    // 不再只在入口检查一次。perform_lww_sync 内部会在 debounce 后、重试循环每次
-    // 迭代前、execute_lww_sync_attempt 内部 merge/upload/delete 后各检查一次。
-    match crate::sync::SyncService::perform_lww_sync(
-        local_root,
-        provider,
-        sync_policy,
-        target,
-        force_sync,
-        cancellation_token,
-    ) {
-        Ok(result) => result,
-        Err(err) => sync_result_from_error(err),
-    }
-}
-
 // ── Per-kind transfer functions ──
-
-/// 合并累计的 local merge effects 到最终结果。
-///
-/// Issue #716 评论 5742849844 问题 2：CAS 重试时，前几轮的本地变化
-/// （downloaded_files/local_trashed/overwritten/ignored）不能被后续
-/// NoOp 轮次丢弃。任何 attempt 发生过真实本地变化，最终成功类结果
-/// 不能再降回 `NoChanges`。
-///
-/// 只合并本地效果（downloaded/remote_deletes=本地trashed/overwritten/ignored），
-/// 不碰 `local_deletes`（远端侧动作），避免覆盖 publish 路径已正确设置的远端删除。
-/// `auto_adjudicated` 只接收双方相对基线都变化、由 LWW 明确裁决的路径。
-fn merge_accumulated_local_effects(
-    result: &mut SyncResult,
-    downloaded: &[String],
-    trashed: &[String],
-    overwritten: &[String],
-    ignored: &[String],
-    auto_adjudicated: &[String],
-) {
-    use crate::sync::SyncStatus;
-    for f in downloaded {
-        if !result.downloaded_files.contains(f) {
-            result.downloaded_files.push(f.clone());
-        }
-    }
-    for f in trashed {
-        if !result.remote_deletes.contains(f) {
-            result.remote_deletes.push(f.clone());
-        }
-    }
-    for f in overwritten {
-        if !result.overwritten_files.contains(f) {
-            result.overwritten_files.push(f.clone());
-        }
-    }
-    for f in ignored {
-        if !result.ignored_files.contains(f) {
-            result.ignored_files.push(f.clone());
-        }
-    }
-    // 普通单侧变化不能把状态降回 NoChanges；只有明确的 LWW 自动裁决
-    // 才升级为 LatestWinsApplied，不能从下载/上传数量反推冲突。
-    let has_accumulated_changes = !downloaded.is_empty() || !trashed.is_empty();
-    if has_accumulated_changes && matches!(result.status, SyncStatus::NoChanges) {
-        result.status = SyncStatus::Success;
-    }
-    if !auto_adjudicated.is_empty()
-        && matches!(result.status, SyncStatus::NoChanges | SyncStatus::Success)
-    {
-        result.status = SyncStatus::LatestWinsApplied;
-    }
-}

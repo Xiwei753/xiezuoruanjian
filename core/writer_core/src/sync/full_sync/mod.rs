@@ -4,17 +4,16 @@
 //!
 //! 1. **Prepare**（短写锁）：写 `Syncing` 状态、加载 secrets 快照、枚举 targets、
 //!    算出每个 target 的 `local_root`，产出 [`FullSyncPlan`]（owned，不依赖 core）。
-//! 2. **Transfer**（不持锁）：用 plan 里的 secrets/config 创建 backend，对每个 target
-//!    调 `backend.sync()`（网络 + 本地文件读写）。本模块的 [`run_transfer`] 是纯函数，
-//!    不接触 [`crate::facade::WriterCore`]，调用方在 API 层释放锁后调用。
-//!    `cancellation_token` 在每次 target 迭代开头检查，已取消则 break。
-//! 3. **Commit**（短写锁）：聚合 [`FullSyncTransferResult`] → [`FullSyncResult`]，
-//!    原子写终态 `FullSyncState`，成功类重建搜索索引。
+//! 2. **Transfer**（不持锁）：用 plan 创建 provider，对每个 target 只把远端索引里
+//!    变化的 blob 下载进 staging（`transfer_object_scope`），不碰 live。
+//!    `cancellation_token` 在每次 target 迭代开头检查，已取消则跳过发布。
+//! 3. **Commit**（短写锁）：统一对象比较 → 一次 `SaveTransaction` 写回内容与对象
+//!    索引 → 聚合 [`SyncResult`] → 原子写终态 `FullSyncState`。
 //!
 //! 本模块只放纯编排逻辑（无 `&self`、无锁、无终态状态机），持锁、搜索索引等副作用留在
 //! `facade/sync_ops.rs` 的薄转发方法里。新编排（Issue #762 评论 5828791004）中，
 //! 每个 target Transfer 完成后立即 Commit，然后才发 progress——冲突状态由 Commit 阶段
-//! 写入 live，不需要提前落盘。`run_transfer`（兼容入口）保留给旧测试用。
+//! 写入 live，不需要提前落盘。
 //!
 //! ## 聚合优先级
 //!
@@ -28,8 +27,6 @@ use crate::sync::types::{SyncTarget, TargetSyncResult};
 pub(crate) mod aggregate;
 pub(crate) mod generation;
 pub(crate) mod plan;
-#[cfg(test)]
-pub(crate) mod tests;
 pub(crate) mod transfer;
 pub(crate) mod transfer_cleanup;
 pub(crate) mod transfer_helpers;
@@ -39,7 +36,7 @@ pub use aggregate::{
 };
 pub use plan::build_full_sync_target_plan;
 pub(crate) use transfer::prepare_failed_target_result;
-pub use transfer::{run_single_target_transfer, run_transfer};
+pub use transfer::run_single_target_transfer;
 
 /// 单个 target 完成后的进度回调载荷。
 ///
@@ -128,11 +125,4 @@ impl PlannedTarget {
 pub(crate) enum LifecycleCandidate {
     Live { lww: LiveTargetLww },
     Retry,
-}
-
-/// Transfer 阶段产出 — 各 target 的 `SyncResult`，待 Commit 聚合。
-#[derive(Debug, Clone)]
-pub struct FullSyncTransferResult {
-    pub targets: Vec<TargetSyncResult>,
-    pub generation_gc_result: Option<Result<(), String>>,
 }
