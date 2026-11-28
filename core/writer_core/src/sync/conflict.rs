@@ -198,10 +198,10 @@ pub(crate) fn persist_sync_merge_result_at_paths(
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
     // known_files 是基线索，不是存储差；用完整目标清单与当前权威 root
-    // 求"存储差"，只重写变化的 objects/index/root。
+    // 求"存储差"，只重写变化的 objects/index/root。清单语义未变化时计划为空，
+    // 只提交 state/conflicts。generation 由内容派生，调用方不再生成版本串。
     let store = crate::sync::lww::ManifestStore::new(sync_root, manifest_path);
-    let generation = uuid::Uuid::new_v4().to_string();
-    let plan = store.plan_sync_manifest(manifest, &generation)?;
+    let plan = store.plan_sync_manifest(manifest, "")?;
     let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
     // 对象 → 索引 → root（plan.writes 最后一项是 root）；deletes 排在
     // root 之后，只回收已不被新根引用的旧对象/索引。
@@ -238,8 +238,8 @@ pub(crate) fn persist_sync_merge_delta(
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
     let store = crate::sync::lww::ManifestStore::new(sync_root, manifest_path);
-    let generation = uuid::Uuid::new_v4().to_string();
-    let plan = store.apply_delta(delta, &generation)?;
+    // 根身份由最终 namespace 映射内容派生；空 delta / 语义相同 delta 不写根。
+    let plan = store.apply_delta(delta, "")?;
 
     let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
     // 对象 → 索引 → root；deletes 排在 root 之后，只回收已不被新根引用的
@@ -271,9 +271,8 @@ pub(crate) fn persist_sync_merge_delta_at_paths(
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
     let conflicts_json = serde_json::to_string_pretty(conflicts)
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-    let generation = uuid::Uuid::new_v4().to_string();
-    let plan = crate::sync::lww::ManifestStore::new(sync_root, manifest_path)
-        .apply_delta(delta, &generation)?;
+    let plan =
+        crate::sync::lww::ManifestStore::new(sync_root, manifest_path).apply_delta(delta, "")?;
     let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
     for (rel, bytes) in &plan.writes {
         tx.add_bytes(rel, bytes)?;
@@ -2840,12 +2839,61 @@ mod persist_manifest_tests {
             "app-meta/sync/manifest/index/volumes/{index_sha}.json"
         ));
         let index_before = std::fs::read(&index_path).unwrap();
+        let root_path = dir.path().join("app-meta/sync/manifest/root.json");
+        let root_before = std::fs::read(&root_path).unwrap();
 
         persist_sync_merge_result(dir.path(), MANIFEST, &manifest, &state, &[]).unwrap();
         for (path, bytes) in objects_before {
             assert_eq!(std::fs::read(&path).unwrap(), bytes);
         }
         assert_eq!(std::fs::read(&index_path).unwrap(), index_before);
+        assert_eq!(
+            std::fs::read(&root_path).unwrap(),
+            root_before,
+            "清单语义未变化时不得重写 root（不推进本地版本）"
+        );
+    }
+
+    #[test]
+    fn empty_delta_persists_state_without_touching_manifest_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = SyncManifest {
+            files: vec![record("volumes/a.json", "h1")],
+        };
+        persist_sync_merge_result(
+            dir.path(),
+            MANIFEST,
+            &manifest,
+            &crate::sync::types::SyncState::default(),
+            &[],
+        )
+        .unwrap();
+        let root_path = dir.path().join("app-meta/sync/manifest/root.json");
+        let root_before = std::fs::read(&root_path).unwrap();
+
+        // 空 delta 但 state 真实变化：只提交 state/conflicts，不写清单根。
+        let mut state = crate::sync::types::SyncState::default();
+        state.device_id = "device-after-empty-delta".to_string();
+        persist_sync_merge_delta(
+            dir.path(),
+            MANIFEST,
+            &crate::sync::manifest_delta::ManifestDelta::default(),
+            &state,
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(&root_path).unwrap(),
+            root_before,
+            "空增量只更新 state/conflicts 时不得写 root"
+        );
+        let state_text =
+            std::fs::read_to_string(dir.path().join("app-meta/sync/state.local.json")).unwrap();
+        assert!(
+            state_text.contains("device-after-empty-delta"),
+            "state 必须照常提交，实际 {state_text}"
+        );
     }
 
     #[test]

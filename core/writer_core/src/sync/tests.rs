@@ -4871,6 +4871,14 @@ mod tests {
                 tx.add_delete(rel).unwrap();
             }
             tx.commit().unwrap();
+            let root_written = plan.writes.iter().any(|(rel, _)| rel == &plan.root_rel);
+            if root_written {
+                assert_eq!(
+                    plan.writes.last().map(|(rel, _)| rel.as_str()),
+                    Some(plan.root_rel.as_str()),
+                    "写根时 root 必须是 writes 的最后一项"
+                );
+            }
         }
 
         fn upsert_delta(path: &str, hash: &str) -> crate::sync::manifest_delta::ManifestDelta {
@@ -5120,6 +5128,10 @@ mod tests {
                 root.get("previousRoot").is_none(),
                 "首次发布根没有 previousRoot"
             );
+            assert!(
+                root.get("localPreviousRoot").is_none(),
+                "发布根不得携带本地血缘 localPreviousRoot"
+            );
             let namespaces = root["namespaces"].as_object().unwrap();
             assert_eq!(namespaces.len(), 2);
             for namespace in namespaces.keys() {
@@ -5206,7 +5218,10 @@ mod tests {
             let fetched = fetch(&provider).unwrap().expect("v2 根仍是权威");
             assert!(fetched.semantically_equals(&manifest));
 
-            // 本地下一份写入计划同样迁移到内容寻址路径。
+            // 本地下一份写入计划同样把同一 sha 补写到内容寻址路径；这是幂等
+            // 修复事实，不推进本地根版本，也不回收旧固定路径（deletes 为空）。
+            let local_root_path = dir.path().join("app-meta/sync/manifest/root.json");
+            let local_root_before = std::fs::read(&local_root_path).unwrap();
             let store = ManifestStore::new(dir.path(), SYNC_MANIFEST_PATH);
             let plan = store
                 .apply_delta(
@@ -5214,14 +5229,55 @@ mod tests {
                     "g-migrate",
                 )
                 .unwrap();
+            assert!(
+                !plan.writes.iter().any(|(rel, _)| rel == &plan.root_rel),
+                "旧固定路径迁移不得推进本地根版本"
+            );
+            assert!(plan.deletes.is_empty());
             commit_plan(dir.path(), &plan);
             assert!(local_hashed.is_file(), "本地迁移后新路径必须存在");
-            assert!(!local_legacy.exists(), "本地旧固定路径应被回收");
+            assert!(
+                local_legacy.exists(),
+                "无版本推进的幂等迁移不回收本地旧固定路径"
+            );
+            assert_eq!(
+                std::fs::read(&local_root_path).unwrap(),
+                local_root_before,
+                "迁移不得改变本地 root 字节与 generation"
+            );
             assert!(store
                 .load_all()
                 .unwrap()
                 .unwrap()
                 .semantically_equals(&manifest));
+        }
+
+        /// 清单语义未变化时重复发布：远端根字节与 generation 不变，
+        /// 不制造新的版本边界。
+        #[test]
+        fn republish_without_semantic_change_keeps_remote_root() {
+            let dir = tempdir().unwrap();
+            let manifest = sample_manifest(&[("volumes/v1/chapters/c1/chapter.md", "hash-c1")]);
+            seed_local_store(dir.path(), &manifest);
+            let provider = MemoryProvider::new();
+            publish(&provider, dir.path());
+
+            let root_path = format!("{PREFIX}/{ROOT_REL}");
+            let root_before = provider.read(&root_path).unwrap().unwrap().content;
+            let tree_before = remote_tree(&provider);
+
+            publish(&provider, dir.path());
+
+            let root_after = provider.read(&root_path).unwrap().unwrap().content;
+            assert_eq!(
+                root_after, root_before,
+                "语义未变化的重复发布不得推进远端根版本"
+            );
+            assert_eq!(
+                remote_tree(&provider),
+                tree_before,
+                "语义未变化的重复发布不得改变远端文件集合"
+            );
         }
 
         /// 旧固定路径索引在索引换 sha 时仍是上一代根的唯一副本：保留一代，
@@ -5372,7 +5428,11 @@ mod tests {
             assert_eq!(
                 root2["previousRoot"].as_str(),
                 Some(sha256_hex(&r1_root).as_str()),
-                "R2.previousRoot 必须是 R1 根 canonical bytes 的 sha256"
+                "R2.previousRoot 必须是本轮读取的远端 R1 根 canonical bytes 的 sha256"
+            );
+            assert!(
+                root2.get("localPreviousRoot").is_none(),
+                "发布根不得携带本地血缘 localPreviousRoot"
             );
 
             // R3：上一代边界推进到 R2，R1 独有文件才可回收。
@@ -5848,6 +5908,14 @@ mod tests {
                 tx.add_delete(rel).unwrap();
             }
             tx.commit().unwrap();
+            let root_written = plan.writes.iter().any(|(rel, _)| rel == &plan.root_rel);
+            if root_written {
+                assert_eq!(
+                    plan.writes.last().map(|(rel, _)| rel.as_str()),
+                    Some(plan.root_rel.as_str()),
+                    "写根时 root 必须是 writes 的最后一项"
+                );
+            }
         }
 
         /// 旧单文件 → v2 迁移，建立带 root 的本地权威存储。

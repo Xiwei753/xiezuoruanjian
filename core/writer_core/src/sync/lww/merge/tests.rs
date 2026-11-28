@@ -620,8 +620,10 @@ fn sparse_merge_persists_only_affected_objects() {
         );
     }
 
-    // 再发布一代（空增量）后，第一代不再处于“新根 ∪ 上一代”保留边界内，
-    // 旧 affected object 才可以被回收。
+    // 空增量：清单语义未变化 → 不推进本地根版本，generation/root 字节不变，
+    // 也没有代次边界可结算，上一代 affected object 保持保留。
+    let root_path = sync_root.join("app-meta/sync/manifest/root.json");
+    let root_before_empty_delta = std::fs::read(&root_path).unwrap();
     crate::sync::conflict::persist_sync_merge_delta(
         sync_root,
         SYNC_MANIFEST_PATH,
@@ -630,6 +632,36 @@ fn sparse_merge_persists_only_affected_objects() {
         &[],
     )
     .unwrap();
+    assert_eq!(
+        std::fs::read(&root_path).unwrap(),
+        root_before_empty_delta,
+        "empty delta must not advance the manifest root or its generation"
+    );
+    assert!(
+        old_affected_object.exists(),
+        "object stays retained while the root version does not advance"
+    );
+
+    // 一次真实内容变化推进根版本后，R1 不再处于“新根 ∪ 上一代”保留边界内，
+    // 旧 affected object 才可以被回收。
+    let mut next_delta = crate::sync::manifest_delta::ManifestDelta::default();
+    next_delta.upserts.insert(
+        project.to_string(),
+        upsert_record(project, &md5_hex(b"project v2"), 2000, "local-dev"),
+    );
+    crate::sync::conflict::persist_sync_merge_delta(
+        sync_root,
+        SYNC_MANIFEST_PATH,
+        &next_delta,
+        &state,
+        &[],
+    )
+    .unwrap();
+    assert_ne!(
+        std::fs::read(&root_path).unwrap(),
+        root_before_empty_delta,
+        "a real content change must advance the manifest root"
+    );
     assert!(
         !old_affected_object.exists(),
         "object unreachable from both current and previous root must be reclaimed"

@@ -24,10 +24,16 @@
 //! 仍是权威；根成功且新根可读后才回收「新根与上一代根都不可达」的对象/索引，
 //! 以及旧单文件 / 旧分片目录（回收失败只 warn，不改变已发布事实）。
 //!
-//! 上一代根 = 本次发布前读到的远端根；它的 canonical sha256 写进新根的
-//! `previousRoot`。因此根切换后旧根读者仍能解析自己的索引/对象（保留一代）。
+//! 上一代根 = 本次发布前读到的固定远端 base 根；它的 canonical sha256 由
+//! **远端发布决议**写进新根的 `previousRoot`（本地 staging/merge 不得自称
+//! 已发布代）。因此根切换后旧根读者仍能解析自己的索引/对象（保留一代）。
 //! 旧固定路径索引只有在同 sha 的内容寻址副本已由新根提供时才立即回收；索引
 //! 换 sha 或 namespace 被移除时，它仍是上一代根读者的唯一副本，保留一代。
+//!
+//! 发布根不携带本地血缘：`localPreviousRoot` 在发布视图中恒为 `None`；
+//! `previousRoot` 只作为"上一代已发布根"的身份记录，GC 保留边界仍按发布时
+//! 实际读到的旧根可达集合结算。远端根与本地最终 namespace 映射相同（语义
+//! 未变化）时不重写根，避免无意义版本推进。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -440,23 +446,37 @@ fn read_legacy_shards(
 
 /// 本地 v2 存储的待发布视图（objects → indexes → root 顺序）。
 ///
-/// `manifest` 为 `Some` 时用 `plan_write_all` 从这份快照推导完整可达集合与
-/// 字节（generation 由内容 sha256 派生，保证同一份清单得到逐字节一致的根，
-/// 不因随机 generation 每轮制造伪提交）；为 `None` 时严格按现有本地根读取，
-/// 根不存在返回 `Err`（不能发布空权威）。
+/// `manifest` 为 `Some` 时用 [`ManifestStore::plan_write_all`] 从这份快照推导
+/// 完整可达集合与字节；为 `None` 时严格按现有本地根读取，根不存在返回 `Err`
+/// （不能发布空权威）。
+///
+/// 发布根按发布视图重新构造：generation 由 namespace 映射内容派生（同一份
+/// 清单得到逐字节一致的根），`localPreviousRoot` 被剥离。本入口的调用方
+/// （LWW 全量发布 batch）没有携带固定远端 base 根身份，因此 `previousRoot`
+/// 留空而不是冒充本地根；REST 发布入口
+/// [`publish_remote_manifest`] 通过 [`local_manifest_storage_with_base`] 传入
+/// 本轮读取的远端 base 根。
 pub(crate) fn local_manifest_storage(
     store: &ManifestStore,
     manifest: Option<&SyncManifest>,
 ) -> crate::Result<Vec<ManifestStorageFile>> {
+    local_manifest_storage_with_base(store, manifest, None)
+}
+
+fn local_manifest_storage_with_base(
+    store: &ManifestStore,
+    manifest: Option<&SyncManifest>,
+    previous_published_root: Option<&str>,
+) -> crate::Result<Vec<ManifestStorageFile>> {
     let mut files = match manifest {
         Some(manifest) => {
-            let plan = store.plan_write_all(manifest, &stable_generation(manifest)?)?;
-            storage_files_from_plan(store, &plan)
+            let plan = store.plan_write_all(manifest, "")?;
+            storage_files_from_plan(store, &plan, previous_published_root)?
         }
         None => {
             // 严格按现有本地根读取；旧固定路径索引若尚未迁移，`load_publish_files`
             // 会把它的字节带回内容寻址路径，发布时一并完成迁移。
-            let Some(view) = store.load_publish_files()? else {
+            let Some(view) = store.load_publish_files(previous_published_root)? else {
                 return Err(crate::Error::Other(format!(
                     "manifest root {} missing — refusing to publish an empty authority",
                     store.sync_root().join(store.root_rel()).display()
@@ -486,12 +506,15 @@ pub(crate) fn local_manifest_storage(
 /// + 一次事务，本地根已指向新索引/对象）。因此发布端不能再调
 /// `plan_write_all` 展开完整可达集合，也不重新 `apply_delta`（那会重算全量
 /// 可达集合、且只报告根变化）：这里只按 delta 涉及的 namespace/object_key
-/// 从当前根取出变化文件的 identity 与字节，根用 delta 稳定 generation 重新
-/// 序列化。
+/// 从当前根取出变化文件的 identity 与字节。
 ///
 /// - root 不存在 → `Err`（调用方回退完整入口，不发布空权威）；
 /// - 只读 delta 涉及的索引与对象，未变化 object/index 不加载；
-/// - 顺序 objects → indexes → root，根永远最后。
+/// - 顺序 objects → indexes → root，根永远最后；
+/// - 根是**发布视图**：`previousRoot` 只由远端发布决议填写，LWW batch 调用方
+///   没有携带固定远端 base 根身份，因此这里不冒充任何已发布上一代（留空），
+///   且不携带本地血缘（`localPreviousRoot` = None）；generation 由最终
+///   namespace 映射内容派生，同一份清单内容稳定。
 pub(crate) fn local_manifest_storage_for_delta(
     store: &ManifestStore,
     delta: &ManifestDelta,
@@ -615,11 +638,11 @@ pub(crate) fn local_manifest_storage_for_delta(
         }
     }
 
-    // 根是提交点，最后一项。generation 只由 delta 内容决定（同输入稳定，
-    // 不因 uuid 每轮制造伪提交）；previousRoot 指向当前本地根。
-    let mut new_root = ManifestRoot::new(&delta_generation(delta)?);
-    new_root.namespaces = root.namespaces.clone();
-    new_root.previous_root = Some(root.canonical_sha256()?);
+    // 根是提交点，最后一项。发布视图不冒充"已发布上一代"：previousRoot 只由
+    // 远端发布决议（publish_remote_manifest）按本轮读取的远端 base 根填写，
+    // 这里留空；localPreviousRoot 不得进入发布视图。generation 由最终
+    // namespace 映射内容派生（同内容稳定，不因随机串每轮制造伪提交）。
+    let new_root = ManifestRoot::published(root.namespaces.clone(), None);
     let root_rel = store.root_rel();
     files.insert(
         root_rel.clone(),
@@ -640,45 +663,52 @@ pub(crate) fn local_manifest_storage_for_delta(
     Ok(files)
 }
 
-/// 稀疏发布的稳定 generation：同一份 delta（同一 base 根）得到同一代根串。
-fn delta_generation(delta: &ManifestDelta) -> crate::Result<String> {
-    #[derive(serde::Serialize)]
-    struct CanonicalDelta<'a> {
-        upserts: &'a BTreeMap<String, ManifestFileRecord>,
-        deletes: &'a BTreeSet<String>,
-    }
-    let bytes = serde_json::to_vec(&CanonicalDelta {
-        upserts: &delta.upserts,
-        deletes: &delta.deletes,
-    })
-    .map_err(crate::Error::Json)?;
-    Ok(format!("delta-{}", sha256_hex(&bytes)))
-}
-
-fn stable_generation(manifest: &SyncManifest) -> crate::Result<String> {
-    Ok(format!(
-        "manifest-{}",
-        sha256_hex(manifest.canonical_json()?.as_bytes())
-    ))
-}
-
 fn storage_files_from_plan(
     store: &ManifestStore,
     plan: &ManifestWritePlan,
-) -> Vec<ManifestStorageFile> {
+    previous_published_root: Option<&str>,
+) -> crate::Result<Vec<ManifestStorageFile>> {
     let writes: BTreeMap<&str, &[u8]> = plan
         .writes
         .iter()
         .map(|(rel, bytes)| (rel.as_str(), bytes.as_slice()))
         .collect();
-    plan.reachable
+    // 最终 namespace 映射：本计划写根时取新根字节，否则取当前本地根。
+    let namespaces = match writes.get(plan.root_rel.as_str()) {
+        Some(bytes) => {
+            let root: ManifestRoot = serde_json::from_slice(bytes).map_err(|error| {
+                crate::Error::Other(format!("manifest plan root is unreadable: {error}"))
+            })?;
+            root.namespaces
+        }
+        None => store
+            .load_root()?
+            .map(|root| root.namespaces)
+            .unwrap_or_default(),
+    };
+    // 发布视图重新构造根：远端 base 身份只由发布决议填写，本地血缘剥离。
+    let publish_root_bytes =
+        ManifestRoot::published(namespaces, previous_published_root).canonical_bytes()?;
+    let mut files: Vec<ManifestStorageFile> = plan
+        .reachable
         .iter()
         .map(|rel| ManifestStorageFile {
             kind: storage_kind(store, rel),
             rel: rel.clone(),
-            bytes: writes.get(rel.as_str()).map(|bytes| (*bytes).to_vec()),
+            bytes: if rel == &plan.root_rel {
+                Some(publish_root_bytes.clone())
+            } else {
+                writes.get(rel.as_str()).map(|bytes| (*bytes).to_vec())
+            },
         })
-        .collect()
+        .collect();
+    files.sort_by(|a, b| {
+        a.kind
+            .rank()
+            .cmp(&b.kind.rank())
+            .then_with(|| a.rel.cmp(&b.rel))
+    });
+    Ok(files)
 }
 
 fn storage_kind(store: &ManifestStore, rel: &str) -> ManifestStorageKind {
@@ -695,12 +725,17 @@ fn storage_kind(store: &ManifestStore, rel: &str) -> ManifestStorageKind {
 
 // ── 发布 ──
 
-/// 远端当前根的可达集合（发布端回收旧对象/索引用）。
+/// 远端当前根的可达集合（发布端回收旧对象/索引用），并保存本轮读取的固定
+/// base 根身份。
 struct RemoteManifestState {
+    /// 本轮读取的远端根原始字节；语义未变化时用它确认远端根未被并发改写。
+    root_bytes: Vec<u8>,
+    /// 远端根 canonical bytes 的 sha256（发布根 `previousRoot` 的唯一来源）。
+    root_sha256: String,
+    /// 远端旧根解析结果（namespaces 等）。
+    root: ManifestRoot,
     /// 相对 `remote_prefix` 的 root/index/object 路径（索引用内容寻址路径）。
     reachable: BTreeSet<String>,
-    /// 上一代根的 namespace → index sha256（判断旧固定路径索引是否仍需保留）。
-    namespaces: BTreeMap<String, String>,
 }
 
 /// 读取远端当前根并解析其可达集合；根不存在 → `Ok(None)`。
@@ -713,8 +748,10 @@ fn read_remote_manifest_state(
     let Some(object) = provider.read(&root_path)? else {
         return Ok(None);
     };
-    let root = parse_root(&object.content, &root_path)?;
-    let namespaces = root.namespaces.clone();
+    let root_bytes = object.content;
+    let root = parse_root(&root_bytes, &root_path)?;
+    // 身份按 canonical bytes 结算：外部写入的非规范序列化不影响"上一代"身份。
+    let root_sha256 = root.canonical_sha256()?;
     let mut reachable = BTreeSet::new();
     reachable.insert(root_rel);
     for (namespace, index_sha) in &root.namespaces {
@@ -729,8 +766,10 @@ fn read_remote_manifest_state(
         reachable.insert(remote_index_rel(namespace, index_sha));
     }
     Ok(Some(RemoteManifestState {
+        root_bytes,
+        root_sha256,
+        root,
         reachable,
-        namespaces,
     }))
 }
 
@@ -781,6 +820,14 @@ fn verify_published_remote_root(
 /// 根写入失败直接返回 `Err`（远端旧根仍是权威）；根成功并确认新根可读后，才
 /// 回收「新根与上一代根都不可达」的对象/索引，以及旧单文件 / 旧分片目录，
 /// 回收失败只 warn。
+///
+/// 版本身份：
+/// - 发布根 `previousRoot` = 本轮读取的固定远端 base 根 canonical sha256，
+///   只在这里（远端发布决议）填写；本地根不自称已发布代；
+/// - 远端根与本地最终 namespace 映射一致（清单语义未变化）时不重写根，
+///   只补齐缺失的 objects/indexes；
+/// - 回收边界仍按发布时实际读到的旧根可达集合结算，`previousRoot` 只作身份
+///   记录，不参与删除判定。
 #[allow(clippy::too_many_lines)]
 pub(crate) fn publish_remote_manifest(
     provider: &dyn SyncProvider,
@@ -800,15 +847,39 @@ pub(crate) fn publish_remote_manifest(
         }
     }
     let store = ManifestStore::new(sync_root, manifest_rel);
-    let files = local_manifest_storage(&store, None)?;
+    // 先读本轮固定远端 base 根：发布根 previousRoot 只能来自它。
     let old_state = read_remote_manifest_state(provider, remote_prefix)?;
+    let previous_published_root = old_state.as_ref().map(|state| state.root_sha256.as_str());
+    let files = local_manifest_storage_with_base(&store, None, previous_published_root)?;
     let mut new_rels: BTreeSet<String> = BTreeSet::new();
     for file in &files {
         new_rels.insert(remote_rel_for(&store, &file.rel)?);
     }
 
+    let root_file = files
+        .iter()
+        .find(|file| file.kind == ManifestStorageKind::Root)
+        .ok_or_else(|| {
+            crate::Error::Other(format!(
+                "manifest publish plan for {remote_prefix} has no root file"
+            ))
+        })?;
+    let root_bytes = root_file.read_bytes(sync_root)?;
+    let publish_root: ManifestRoot = serde_json::from_slice(&root_bytes).map_err(|error| {
+        crate::Error::Other(format!(
+            "manifest publish root for {remote_prefix} is unreadable: {error}"
+        ))
+    })?;
+    // 远端根已经与本地最终 namespace 映射一致：清单语义未变化，不推进根版本。
+    let root_unchanged = old_state
+        .as_ref()
+        .is_some_and(|state| state.root.namespaces == publish_root.namespaces);
+
     let caps = provider.capabilities();
     for file in &files {
+        if file.kind == ManifestStorageKind::Root && root_unchanged {
+            continue;
+        }
         let remote_rel = remote_rel_for(&store, &file.rel)?;
         let path = remote_path(remote_prefix, &remote_rel);
         let version = remote_tree_files.get(&remote_rel);
@@ -837,24 +908,19 @@ pub(crate) fn publish_remote_manifest(
         )?;
     }
 
-    // 根（files 最后一项）已经写入成功。先确认新根可读（root + 每个内容寻址
-    // 索引），失败则不回收任何文件；确认后才回收「新根与上一代根都不可达」的
-    // 对象/索引，以及旧单文件 / 旧分片目录。
-    let root_file = files
-        .iter()
-        .find(|file| file.kind == ManifestStorageKind::Root)
-        .ok_or_else(|| {
-            crate::Error::Other(format!(
-                "manifest publish plan for {remote_prefix} has no root file"
-            ))
-        })?;
-    let root_bytes = root_file.read_bytes(sync_root)?;
-    verify_published_remote_root(provider, remote_prefix, &root_bytes)?;
+    // 提交点确认：写根时确认新根字节与索引可读；语义未变化时确认远端根仍是
+    // 本轮读到的固定 base（没有并发改写）。
+    let verified_root_bytes: &[u8] = match (&old_state, root_unchanged) {
+        (Some(state), true) => &state.root_bytes,
+        _ => &root_bytes,
+    };
+    verify_published_remote_root(provider, remote_prefix, verified_root_bytes)?;
 
     // 上一代已发布根的可达集合：根切换后保留一代，旧根读者仍能解析自己的
-    // 索引/对象；`previousRoot` 记录的就是这个根的身份。
+    // 索引/对象。保留边界按本轮实际读到的远端旧根可达集合结算；旧根上的
+    // `previousRoot` 字段只作身份记录，不参与这里的删除判定。
     let (previous_reachable, previous_namespaces) = match old_state {
-        Some(state) => (state.reachable, state.namespaces),
+        Some(state) => (state.reachable, state.root.namespaces),
         None => (BTreeSet::new(), BTreeMap::new()),
     };
     let index_prefix = format!("{}/{}/", remote_storage_dir_rel(), INDEX_DIR_NAME);

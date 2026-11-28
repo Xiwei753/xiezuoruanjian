@@ -329,11 +329,19 @@ mod manifest_store {
             tx.add_delete(rel).unwrap();
         }
         tx.commit().unwrap();
-        assert_eq!(
-            plan.writes.last().map(|(rel, _)| rel.as_str()),
-            Some(plan.root_rel.as_str()),
-            "root 必须是 writes 的最后一项"
-        );
+        let root_written = plan.writes.iter().any(|(rel, _)| rel == &plan.root_rel);
+        if root_written {
+            assert_eq!(
+                plan.writes.last().map(|(rel, _)| rel.as_str()),
+                Some(plan.root_rel.as_str()),
+                "写根时 root 必须是 writes 的最后一项"
+            );
+        } else {
+            assert!(
+                !plan.writes.iter().any(|(rel, _)| rel == &plan.root_rel),
+                "清单语义未变化时不得写 root"
+            );
+        }
     }
 
     fn storage_dir(dir: &Path) -> PathBuf {
@@ -686,11 +694,19 @@ mod manifest_store {
             );
         }
 
-        // 相同清单再计划：同 sha 索引/对象复用，只重写根（previousRoot 变化）。
-        let plan = store.plan_write_all(&manifest, "g1").unwrap();
-        assert_eq!(plan.writes.len(), 1, "索引/对象同 sha 必须复用");
-        assert_eq!(plan.writes[0].0, plan.root_rel);
-        assert!(plan.deletes.is_empty(), "上一代仍可达的文件不能回收");
+        // 相同清单再计划：根映射未变化 → 不写根，索引/对象同 sha 复用。
+        let root_before = root_bytes(root, STORAGE);
+        let plan = store
+            .plan_write_all(&manifest, "ignored-generation")
+            .unwrap();
+        assert!(plan.writes.is_empty(), "语义未变化时不得重写任何清单文件");
+        assert!(plan.deletes.is_empty(), "未推进版本时不得回收文件");
+        commit_plan(root, &plan);
+        assert_eq!(
+            root_bytes(root, STORAGE),
+            root_before,
+            "空计划不得改变 root 字节与 generation"
+        );
         assert!(store
             .load_all()
             .unwrap()
@@ -723,7 +739,9 @@ mod manifest_store {
             "迁移前必须能回退读取旧固定路径索引"
         );
 
-        // 下一次写入计划把同一 sha 写到内容寻址路径（根中 sha 不变）。
+        // 下一次写入计划把同一 sha 补写到内容寻址路径：这是幂等修复事实，
+        // 不推进根版本，也不回收旧固定路径（deletes 为空）。
+        let root_before = root_bytes(root, STORAGE);
         let mut delta = ManifestDelta::default();
         delta.upserts.insert(
             "volumes/v1/chapters/c1/chapter.md".to_string(),
@@ -735,16 +753,44 @@ mod manifest_store {
             "迁移计划必须写内容寻址路径: {:?}",
             plan.writes.iter().map(|(rel, _)| rel).collect::<Vec<_>>()
         );
+        assert!(
+            !plan.writes.iter().any(|(rel, _)| rel == &plan.root_rel),
+            "迁移旧固定路径索引不推进根版本"
+        );
+        assert!(plan.deletes.is_empty(), "不推进版本时不得回收任何文件");
         commit_plan(root, &plan);
 
         assert!(hashed_path.is_file(), "迁移后新路径必须存在");
-        assert!(!legacy_path.exists(), "根切换后旧固定路径应被回收");
+        assert!(legacy_path.exists(), "无版本推进的幂等迁移不回收旧固定路径");
+        assert_eq!(
+            root_bytes(root, STORAGE),
+            root_before,
+            "迁移不得改变 root 字节与 generation"
+        );
         assert_eq!(index_rel(root, STORAGE, "volumes"), hashed_rel);
         assert!(store
             .load_all()
             .unwrap()
             .unwrap()
             .semantically_equals(&manifest));
+
+        // 真实变化推进根版本后，旧固定路径才进入上一代保留边界结算。
+        let mut delta = ManifestDelta::default();
+        delta.upserts.insert(
+            "volumes/v1/chapters/c1/chapter.md".to_string(),
+            record("volumes/v1/chapters/c1/chapter.md", "h2"),
+        );
+        let plan = store.apply_delta(&delta, "ignored").unwrap();
+        assert!(
+            plan.writes.iter().any(|(rel, _)| rel == &plan.root_rel),
+            "真实变化必须推进根版本"
+        );
+        commit_plan(root, &plan);
+        assert_ne!(
+            root_bytes(root, STORAGE),
+            root_before,
+            "真实变化必须改写 root"
+        );
     }
 
     #[test]
@@ -791,8 +837,17 @@ mod manifest_store {
             .iter()
             .any(|r| r.path == "volumes/v1/chapters/c1/chapter.md" && r.content_hash == "h2"));
 
-        // R3：上一代根换成 S2，固定路径的 S1 不再被需要，可以回收。
-        let plan = store.apply_delta(&ManifestDelta::default(), "g3").unwrap();
+        // R3：真实变化把上一代根换成 S2，固定路径的 S1 不再被需要，可以回收。
+        let mut delta = ManifestDelta::default();
+        delta.upserts.insert(
+            "volumes/v1/chapters/c1/chapter.md".to_string(),
+            record("volumes/v1/chapters/c1/chapter.md", "h3"),
+        );
+        let plan = store.apply_delta(&delta, "g3").unwrap();
+        assert!(
+            plan.writes.iter().any(|(rel, _)| rel == &plan.root_rel),
+            "R3 必须推进根版本"
+        );
         assert!(
             plan.deletes.contains(&fixed_rel),
             "R3 后旧固定路径可回收: {:?}",
@@ -808,10 +863,9 @@ mod manifest_store {
         let root = dir.path();
         let corrupt = b"{not json";
         let corrupt_sha = sha256_hex(corrupt);
-        let mut root_value = ManifestRoot::new("g1");
-        root_value
-            .namespaces
-            .insert("volumes".to_string(), corrupt_sha.clone());
+        let mut namespaces = BTreeMap::new();
+        namespaces.insert("volumes".to_string(), corrupt_sha.clone());
+        let root_value = ManifestRoot::local(namespaces, None);
         std::fs::create_dir_all(storage_dir(root).join("index/volumes")).unwrap();
         std::fs::write(
             storage_dir(root)
@@ -914,8 +968,13 @@ mod manifest_store {
         assert_eq!(c2.content_hash, "h2-new");
         assert!(plan.reachable.contains(&plan.root_rel));
 
-        // R3：上一代边界推进到 R2，R1 独有对象/索引才可回收。
-        let plan_r3 = store.apply_delta(&ManifestDelta::default(), "g3").unwrap();
+        // R3：真实变化推进根版本，上一代边界推进到 R2，R1 独有对象/索引才可回收。
+        let mut delta = ManifestDelta::default();
+        delta.upserts.insert(
+            "volumes/v1/chapters/c1/chapter.md".to_string(),
+            record("volumes/v1/chapters/c1/chapter.md", "h1-new"),
+        );
+        let plan_r3 = store.apply_delta(&delta, "g3").unwrap();
         assert!(
             plan_r3.deletes.contains(&c2_rel),
             "R3 后 R1 独有对象可回收: {:?}",
@@ -974,8 +1033,20 @@ mod manifest_store {
         assert!(volumes_index.is_file(), "R1 独有索引在 R2 后必须保留");
         assert!(store.load_all().unwrap().unwrap().files.is_empty());
 
-        // R3：R1 独有且 R2 不引用的文件才可回收。
-        let plan_r3 = store.apply_delta(&ManifestDelta::default(), "g3").unwrap();
+        // R3：真实变化推进根版本；R1 独有且 R2 不引用的文件才可回收。
+        let mut delta = ManifestDelta::default();
+        delta.upserts.insert(
+            "project.json".to_string(),
+            record("project.json", "h-project"),
+        );
+        let plan_r3 = store.apply_delta(&delta, "g3").unwrap();
+        assert!(
+            plan_r3
+                .writes
+                .iter()
+                .any(|(rel, _)| rel == &plan_r3.root_rel),
+            "R3 必须推进根版本"
+        );
         assert!(plan_r3.deletes.contains(&object_rel), "R3 回收旧对象");
         let volumes_index_rel = volumes_index
             .strip_prefix(root)
@@ -991,11 +1062,74 @@ mod manifest_store {
         assert!(!object_path.exists());
         assert!(!volumes_index.exists());
         let loaded = store.load_all().unwrap().unwrap();
-        assert!(loaded.files.is_empty());
+        assert_eq!(
+            loaded
+                .files
+                .iter()
+                .map(|record| record.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["project.json"],
+            "R3 只保留本轮真实变化的记录"
+        );
     }
 
     #[test]
-    fn previous_root_records_one_generation_boundary() {
+    fn empty_delta_keeps_root_bytes_and_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let manifest = SyncManifest {
+            files: vec![
+                record("volumes/v1/chapters/c1/chapter.md", "h1"),
+                record("project.json", "h2"),
+            ],
+        };
+        let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+        commit_plan(root, &store.plan_write_all(&manifest, "g1").unwrap());
+        let root_before = root_bytes(root, STORAGE);
+        let generation_before: ManifestRoot = serde_json::from_slice(&root_before).unwrap();
+
+        let plan = store
+            .apply_delta(&ManifestDelta::default(), "ignored")
+            .unwrap();
+        assert!(plan.writes.is_empty(), "空增量不得产生任何清单写入");
+        assert!(plan.deletes.is_empty(), "空增量不得回收任何文件");
+        commit_plan(root, &plan);
+
+        let root_after = root_bytes(root, STORAGE);
+        let generation_after: ManifestRoot = serde_json::from_slice(&root_after).unwrap();
+        assert_eq!(root_after, root_before, "空增量不得改变 root 字节");
+        assert_eq!(
+            generation_after.generation, generation_before.generation,
+            "空增量不得改变 generation"
+        );
+    }
+
+    #[test]
+    fn semantically_identical_delta_does_not_rewrite_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let manifest = SyncManifest {
+            files: vec![record("volumes/v1/chapters/c1/chapter.md", "h1")],
+        };
+        let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
+        commit_plan(root, &store.plan_write_all(&manifest, "g1").unwrap());
+        let root_before = root_bytes(root, STORAGE);
+
+        // 相同 records 重新提交：索引 sha 不变，不写根。
+        let mut delta = ManifestDelta::default();
+        delta.upserts.insert(
+            "volumes/v1/chapters/c1/chapter.md".to_string(),
+            record("volumes/v1/chapters/c1/chapter.md", "h1"),
+        );
+        let plan = store.apply_delta(&delta, "ignored").unwrap();
+        assert!(plan.writes.is_empty(), "语义相同 delta 不得重写清单");
+        assert!(plan.deletes.is_empty());
+        commit_plan(root, &plan);
+        assert_eq!(root_bytes(root, STORAGE), root_before);
+    }
+
+    #[test]
+    fn local_root_lineage_uses_local_previous_root_not_previous_root() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let store = ManifestStore::new(root, SYNC_MANIFEST_PATH);
@@ -1005,7 +1139,8 @@ mod manifest_store {
         commit_plan(root, &store.plan_write_all(&manifest, "g1").unwrap());
         let r1_bytes = root_bytes(root, STORAGE);
         let r1: ManifestRoot = serde_json::from_slice(&r1_bytes).unwrap();
-        assert!(r1.previous_root.is_none(), "首次根没有上一代");
+        assert!(r1.previous_root.is_none(), "本地根不得自称已发布上一代");
+        assert!(r1.local_previous_root.is_none(), "首次本地根没有本地前代");
         let r1_sha = sha256_hex(&r1_bytes);
 
         let mut delta = ManifestDelta::default();
@@ -1013,29 +1148,113 @@ mod manifest_store {
             "volumes/v1/chapters/c1/chapter.md".to_string(),
             record("volumes/v1/chapters/c1/chapter.md", "h2"),
         );
-        commit_plan(root, &store.apply_delta(&delta, "g2").unwrap());
+        let plan = store.apply_delta(&delta, "g2").unwrap();
+        let root_write = plan
+            .writes
+            .iter()
+            .find(|(rel, _)| rel == &plan.root_rel)
+            .map(|(_, bytes)| bytes.clone())
+            .expect("真实变化必须写根");
+        let planned: ManifestRoot = serde_json::from_slice(&root_write).unwrap();
+        assert!(planned.previous_root.is_none());
+        assert_eq!(
+            planned.local_previous_root.as_deref(),
+            Some(r1_sha.as_str()),
+            "localPreviousRoot 必须是写盘前当前本地根的 canonical sha256"
+        );
+        assert_eq!(
+            planned.generation,
+            ManifestRoot::content_generation(&planned.namespaces, Some(&r1_sha)),
+            "generation 必须由 (namespaces, localPreviousRoot) 内容派生"
+        );
+        let planned_json: serde_json::Value = serde_json::from_slice(&root_write).unwrap();
+        assert!(
+            planned_json.get("previousRoot").is_none(),
+            "本地根序列化不得包含 previousRoot"
+        );
+        assert_eq!(
+            planned_json["localPreviousRoot"].as_str(),
+            Some(r1_sha.as_str()),
+            "本地前代字段名必须是 camelCase 的 localPreviousRoot"
+        );
+
+        // 同一 base + 同一变化重复计算：逐字节一致（连续两次得到同一 generation）。
+        let plan_again = store.apply_delta(&delta, "g3").unwrap();
+        let root_write_again = plan_again
+            .writes
+            .iter()
+            .find(|(rel, _)| rel == &plan_again.root_rel)
+            .map(|(_, bytes)| bytes.clone())
+            .expect("真实变化必须写根");
+        assert_eq!(
+            root_write_again, root_write,
+            "相同内容变化必须得到逐字节一致的 root/generation"
+        );
+
+        commit_plan(root, &plan);
         let r2_bytes = root_bytes(root, STORAGE);
-        let r2: ManifestRoot = serde_json::from_slice(&r2_bytes).unwrap();
+        assert_ne!(r2_bytes, r1_bytes);
+    }
+
+    #[test]
+    fn content_generation_depends_on_namespaces_and_local_previous_root() {
+        let namespaces = BTreeMap::from([
+            ("_root".to_string(), sha256_hex(b"root-index")),
+            ("volumes".to_string(), sha256_hex(b"volumes-index")),
+        ]);
+        let generation = ManifestRoot::content_generation(&namespaces, None);
+        assert!(generation.starts_with("manifest-"));
         assert_eq!(
-            r2.previous_root.as_deref(),
-            Some(r1_sha.as_str()),
-            "previousRoot 必须是上一代根 canonical bytes 的 sha256"
+            generation,
+            ManifestRoot::content_generation(&namespaces, None),
+            "同内容必须得到同一 generation"
         );
 
-        let v2: serde_json::Value = serde_json::from_slice(&r2_bytes).unwrap();
-        assert_eq!(
-            v2["previousRoot"].as_str(),
-            Some(r1_sha.as_str()),
-            "字段名必须是 camelCase 的 previousRoot"
+        let local_previous = sha256_hex(b"previous-local-root");
+        assert_ne!(
+            generation,
+            ManifestRoot::content_generation(&namespaces, Some(&local_previous)),
+            "本地前代不同则 generation 不同"
         );
 
-        commit_plan(
-            root,
-            &store.apply_delta(&ManifestDelta::default(), "g3").unwrap(),
+        let mut other = namespaces.clone();
+        other.insert("settings".to_string(), sha256_hex(b"settings-index"));
+        assert_ne!(
+            generation,
+            ManifestRoot::content_generation(&other, None),
+            "不同 namespaces 必须得到不同 generation"
         );
-        let r2_sha = sha256_hex(&r2_bytes);
-        let r3: ManifestRoot = serde_json::from_slice(&root_bytes(root, STORAGE)).unwrap();
-        assert_eq!(r3.previous_root.as_deref(), Some(r2_sha.as_str()));
+    }
+
+    #[test]
+    fn published_root_records_remote_base_and_strips_local_lineage() {
+        let namespaces = BTreeMap::from([("volumes".to_string(), sha256_hex(b"volumes-index"))]);
+        let base_sha = sha256_hex(b"remote-base-root");
+        let published = ManifestRoot::published(namespaces.clone(), Some(&base_sha));
+        assert_eq!(
+            published.previous_root.as_deref(),
+            Some(base_sha.as_str()),
+            "previousRoot 必须记录本轮远端 base 根 canonical sha256"
+        );
+        assert!(
+            published.local_previous_root.is_none(),
+            "发布视图不得携带本地血缘"
+        );
+        assert_eq!(
+            published.generation,
+            ManifestRoot::content_generation(&namespaces, None)
+        );
+        let json: serde_json::Value = serde_json::to_value(&published).unwrap();
+        assert_eq!(json["previousRoot"].as_str(), Some(base_sha.as_str()));
+        assert!(json.get("localPreviousRoot").is_none());
+
+        let mut invalid = published.clone();
+        invalid.local_previous_root = Some("not-a-sha256".to_string());
+        let err = invalid.validate("test-root").unwrap_err();
+        assert!(
+            format!("{err}").contains("localPreviousRoot"),
+            "validate 必须校验 localPreviousRoot，实际 {err}"
+        );
     }
 
     #[test]

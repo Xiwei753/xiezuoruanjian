@@ -19,12 +19,20 @@
 //!   `<ns>/<sha256>.json` 缺失时作为一次性迁移读取；下一次写入计划会把它写到
 //!   内容寻址路径。只有新根已用同一 sha 提供内容寻址副本时才回收旧固定路径；
 //!   索引换 sha 或 namespace 被移除时，它仍是上一代根读者的唯一副本，保留一代。
-//! - `ManifestWritePlan::writes` 的对象/索引/根顺序固定，根永远最后一项；
-//!   调用方用 [`crate::storage::transaction::SaveTransaction`] 一次提交，
+//! - `ManifestWritePlan::writes` 的对象/索引/根顺序固定，根（若写）永远最后
+//!   一项；调用方用 [`crate::storage::transaction::SaveTransaction`] 一次提交，
 //!   根写失败时旧根仍指向旧对象，不会出现"根指向不存在对象"。
+//! - 根版本只在清单语义（namespace → index sha256 映射）真实变化或首次建立
+//!   权威时才推进：`apply_delta`/`plan_write_all`/`plan_sync_manifest` 先算
+//!   最终映射并与当前根比较；映射不变时不写根、不回收任何文件，只保留
+//!   "补写缺失的内容寻址文件"（例如旧固定路径索引迁移）这类幂等修复写入。
+//! - `generation` 由 `(schemaVersion, namespaces, localPreviousRoot)` 内容派生，
+//!   调用方传入的 generation 不参与身份；同一内容得到逐字节一致的根。
+//! - 本地根的 `previousRoot` 恒为 `None`：本地 staging/merge 不是已发布代，
+//!   `localPreviousRoot` 记录写盘前本地根 canonical sha256。
 //! - GC 保留一代：根切换后只回收「既不在新根可达集合、也不在上一代根可达
-//!   集合」的文件（上一代 = 本次发布读到的旧根，其 canonical sha256 写进新根
-//!   的 `previousRoot`）。因此旧根读者在切换后仍能解析自己的索引/对象。
+//!   集合」的文件（上一代 = 本次切换读到的旧根）。因此旧根读者在切换后仍能
+//!   解析自己的索引/对象。
 //! - 任一索引/对象缺失、sha256 不符、JSON 损坏、路径不属于该 object_key
 //!   都返回 `Err`；禁止把损坏或缺失静默当成空清单。
 
@@ -52,12 +60,15 @@ const JSON_SUFFIX: &str = ".json";
 /// 一次清单持久化计划。
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ManifestWritePlan {
-    /// (相对 sync_root 的路径, canonical 字节)；最后一项固定是 root。
+    /// (相对 sync_root 的路径, canonical 字节)；写根时最后一项固定是 root。
+    ///
+    /// 清单语义未变化时根不进入 writes；没有需要补写的内容寻址文件时为空。
     pub writes: Vec<(String, Vec<u8>)>,
     /// 本计划后不再可达、需要回收的旧对象/索引（相对路径）。
     ///
-    /// 只包含「新根与上一代已发布根都不可达」的文件，因此根切换后立即执行
-    /// 也不会破坏旧根读者的依赖；执行顺序固定排在根写入之后。
+    /// 只包含「新根与上一代本地根都不可达」的文件，因此根切换后立即执行
+    /// 也不会破坏旧根读者的依赖；执行顺序固定排在根写入之后。清单语义
+    /// 未变化（不写根、不推进代次）时恒为空。
     pub deletes: Vec<String>,
     /// root.json 相对 sync_root 的路径。
     // 发布端要按这个路径单独上传/替换根，当前主链路只消费 writes/deletes。
@@ -261,8 +272,9 @@ impl ManifestStore {
             // 没有任何清单来源：这是合法空清单，不写根（写根是业务提交的职责）。
             return Ok(SyncManifest::default());
         };
-        let generation = uuid::Uuid::new_v4().to_string();
-        let plan = self.plan_write_all(&manifest, &generation)?;
+        // 首次迁移建立权威根：generation 由最终 namespace 映射内容派生，
+        // 不再用随机 UUID 充当版本身份。
+        let plan = self.plan_write_all(&manifest, "")?;
         self.commit_plan(&plan)?;
         Ok(manifest)
     }
@@ -271,6 +283,9 @@ impl ManifestStore {
     ///
     /// 未涉及的 namespace/index/object 不重写；删除后为空的 objects 文件
     /// 不写入并在 `deletes` 里回收。
+    ///
+    /// `generation` 仅为兼容旧调用方保留，**不参与根身份**：需要写根时
+    /// generation 由最终 namespace 映射 + 本地前一个持久根内容派生。
     #[allow(
         clippy::too_many_lines,
         clippy::cognitive_complexity,
@@ -280,7 +295,7 @@ impl ManifestStore {
     pub(crate) fn apply_delta(
         &self,
         delta: &ManifestDelta,
-        generation: &str,
+        _generation: &str,
     ) -> crate::Result<ManifestWritePlan> {
         let current_root = self.load_root()?;
         let mut namespaces: BTreeMap<String, String> = match &current_root {
@@ -407,20 +422,28 @@ impl ManifestStore {
         writes.extend(migration_writes);
 
         let root_rel = self.root_rel();
-        let prev_root_sha = current_root
-            .as_ref()
-            .map(ManifestRoot::canonical_sha256)
-            .transpose()?;
-        let mut root = ManifestRoot::new(generation);
-        root.namespaces = namespaces.clone();
-        root.previous_root = prev_root_sha;
-        writes.push((root_rel.clone(), root.canonical_bytes()?));
+        // 根版本只在清单语义真实变化或首次建立权威时推进。最终 namespace 映射
+        // 与当前根一致（空 delta / 相同记录重放 / 旧固定路径迁移）时：不写根、
+        // 不改 generation、不回收任何文件；writes 只保留上面确实缺失的
+        // 内容寻址索引/对象补写。
+        let root_changes = Self::root_version_changes(current_root.as_ref(), &namespaces);
+        if root_changes {
+            writes.push((
+                root_rel.clone(),
+                Self::local_root_bytes(current_root.as_ref(), &namespaces)?,
+            ));
+        }
 
         let pending_writes: BTreeSet<String> = writes.iter().map(|(rel, _)| rel.clone()).collect();
         let new_reachable =
             self.reachable_with_overrides(&namespaces, &final_indexes, &pending_writes, false)?;
-        // GC 保留一代：上一代已发布根（本次读到的旧根）仍可达的文件不能删。
-        let deletes = self.plan_deletes(&new_reachable, current_root.as_ref())?;
+        // GC 保留一代：上一代本地根（本次切换读到的旧根）仍可达的文件不能删。
+        // 语义未变化时没有代次推进，也就没有可结算的回收边界。
+        let deletes = if root_changes {
+            self.plan_deletes(&new_reachable, current_root.as_ref())?
+        } else {
+            Vec::new()
+        };
 
         Ok(ManifestWritePlan {
             writes,
@@ -431,11 +454,13 @@ impl ManifestStore {
     }
 
     /// 完整重建：首次写入 / 旧格式迁移用。
+    ///
+    /// `generation` 仅为兼容旧调用方保留，不参与根身份（见 [`Self::apply_delta`]）。
     #[allow(clippy::type_complexity)]
     pub(crate) fn plan_write_all(
         &self,
         manifest: &SyncManifest,
-        generation: &str,
+        _generation: &str,
     ) -> crate::Result<ManifestWritePlan> {
         let mut grouped: BTreeMap<String, BTreeMap<String, BTreeMap<String, ManifestFileRecord>>> =
             BTreeMap::new();
@@ -481,20 +506,25 @@ impl ManifestStore {
 
         let root_rel = self.root_rel();
         let current_root = self.load_root()?;
-        let prev_root_sha = current_root
-            .as_ref()
-            .map(ManifestRoot::canonical_sha256)
-            .transpose()?;
-        let mut root = ManifestRoot::new(generation);
-        root.namespaces = namespaces.clone();
-        root.previous_root = prev_root_sha;
-        writes.push((root_rel.clone(), root.canonical_bytes()?));
+        // 与 apply_delta 同一判定：映射相同（含空清单首次/重复重建）时只有
+        // 缺失的内容寻址文件需要补写，根与代次不变。
+        let root_changes = Self::root_version_changes(current_root.as_ref(), &namespaces);
+        if root_changes {
+            writes.push((
+                root_rel.clone(),
+                Self::local_root_bytes(current_root.as_ref(), &namespaces)?,
+            ));
+        }
 
         let pending_writes: BTreeSet<String> = writes.iter().map(|(rel, _)| rel.clone()).collect();
         let new_reachable =
             self.reachable_with_overrides(&namespaces, &indexes, &pending_writes, false)?;
-        // GC 保留一代：上一代已发布根（本次读到的旧根）仍可达的文件不能删。
-        let deletes = self.plan_deletes(&new_reachable, current_root.as_ref())?;
+        // GC 保留一代：上一代本地根（本次切换读到的旧根）仍可达的文件不能删。
+        let deletes = if root_changes {
+            self.plan_deletes(&new_reachable, current_root.as_ref())?
+        } else {
+            Vec::new()
+        };
 
         Ok(ManifestWritePlan {
             writes,
@@ -507,7 +537,10 @@ impl ManifestStore {
     /// 以传入的完整清单为目标求"存储差"，只为变化的 object/index/root 生成计划。
     ///
     /// 用于 LWW merge 后的持久化：不能把 known_files 基线当存储增量，也不能
-    /// 退化成整份单文件重写。
+    /// 退化成整份单文件重写。清单语义未变化时返回空 writes/deletes，调用方仍
+    /// 可提交真正变化的 state/conflicts。
+    ///
+    /// `generation` 仅为兼容旧调用方保留，不参与根身份。
     pub(crate) fn plan_sync_manifest(
         &self,
         manifest: &SyncManifest,
@@ -541,10 +574,40 @@ impl ManifestStore {
         self.apply_delta(&delta, generation)
     }
 
+    /// 本次计划是否推进根版本：首次建立权威根，或 namespace → index sha256
+    /// 映射真实变化（增/删 namespace、索引换 sha）才推进。
+    fn root_version_changes(
+        current_root: Option<&ManifestRoot>,
+        namespaces: &BTreeMap<String, String>,
+    ) -> bool {
+        match current_root {
+            Some(root) => root.namespaces != *namespaces,
+            None => true,
+        }
+    }
+
+    /// 本地存储根的 canonical 字节。
+    ///
+    /// - generation 由 `(schemaVersion, namespaces, localPreviousRoot)` 派生，
+    ///   同一内容稳定，不使用调用方传入的随机串；
+    /// - `previousRoot` 恒为 `None`：本地 staging/merge 不是已发布代；
+    /// - `localPreviousRoot` = 写盘前当前本地根 canonical sha256。
+    fn local_root_bytes(
+        current_root: Option<&ManifestRoot>,
+        namespaces: &BTreeMap<String, String>,
+    ) -> crate::Result<Vec<u8>> {
+        let local_previous_root = current_root
+            .map(ManifestRoot::canonical_sha256)
+            .transpose()?;
+        ManifestRoot::local(namespaces.clone(), local_previous_root).canonical_bytes()
+    }
+
     /// 读取当前根与其全部可达文件。
     ///
     /// root 不存在 → `Ok(None)`；根/索引/对象缺失或损坏 → `Err`。
-    /// 返回原始根字节（发布端要上传的字节）与可达路径集合（相对 sync_root）。
+    /// 返回本地根原始字节（本地视图，含 `localPreviousRoot`）与可达路径集合
+    /// （相对 sync_root）。发布字节由 [`Self::load_publish_files`] 按发布视图
+    /// 重新构造。
     // 发布/GC 接线的只读入口；当前主链路尚未消费。
     #[allow(dead_code)]
     pub(crate) fn load_reachable(&self) -> crate::Result<Option<(Vec<u8>, BTreeSet<String>)>> {
@@ -576,7 +639,9 @@ impl ManifestStore {
 
     /// 当前根的发布视图：canonical 相对路径 + 可选内联字节。
     ///
-    /// - root 带回原始字节（提交点按原样上传）；
+    /// - 根按**发布视图**重新构造：`previousRoot` = 调用方传入的本轮固定远端
+    ///   base 根 canonical sha256，`localPreviousRoot` 恒为 `None`（发布视图不
+    ///   携带本地血缘），generation 由 namespace 映射内容派生；
     /// - 索引总是以内容寻址路径 `<ns>/<sha256>.json` 输出；若该文件尚未落盘而
     ///   旧固定路径索引可用（87b15f2 布局），则带回字节，让发布端把它写到新
     ///   路径（迁移），根中的 sha 保持不变；
@@ -585,12 +650,15 @@ impl ManifestStore {
     /// root 不存在 → `Ok(None)`。
     pub(crate) fn load_publish_files(
         &self,
+        previous_published_root: Option<&str>,
     ) -> crate::Result<Option<Vec<(String, Option<Vec<u8>>)>>> {
         let Some(root) = self.load_root()? else {
             return Ok(None);
         };
         let root_rel = self.root_rel();
-        let root_bytes = self.read_required_bytes(&root_rel, "root")?;
+        let publish_root =
+            ManifestRoot::published(root.namespaces.clone(), previous_published_root);
+        let root_bytes = publish_root.canonical_bytes()?;
         let mut files: Vec<(String, Option<Vec<u8>>)> = vec![(root_rel, Some(root_bytes))];
         let mut seen_objects: BTreeSet<String> = BTreeSet::new();
         for (namespace, index_sha) in &root.namespaces {
