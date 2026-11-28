@@ -25,8 +25,6 @@ use crate::error::{Error, Result};
 
 /// 章节 journal 所在目录（相对 project root）。
 const JOURNAL_DIR: &str = "app-meta/chapter-commits";
-/// 存在未完成 journal 的快速探针；读取路径见到它才做恢复扫描。
-const PENDING_MARKER: &str = "pending.marker";
 /// 冲突材料目录。
 const CONFLICT_DIR: &str = "conflicts";
 /// 每章未完成正文决议的定位目录，不是 journal 事务目录。
@@ -376,16 +374,14 @@ pub(crate) use journal::commit_chapter_with_guard;
 pub(crate) use journal::read_chapter_state;
 pub(crate) use journal::write_editor_conflict_material;
 pub(crate) use journal::{
-    pending_chapter_proof_transactions_for_key,
-    pending_chapter_proof_transactions_for_transaction,
+    pending_chapter_proof_payload, pending_chapter_proof_transactions_for_key,
 };
 pub use journal::{
     mark_chapter_commit_draft_ack, mark_chapter_commit_projection, mark_chapter_commit_projections,
     pending_chapter_draft_acks,
-    pending_chapter_proof_events, pending_chapter_proof_transactions,
-    pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
+    pending_chapter_proof_transactions, pending_chapter_sync_proof_fact_ids,
     read_chapter_state_recovering, read_chapter_version, read_chapter_version_recovering,
-    recover_pending_chapter_commits, replay_pending_sync_mutation, replay_pending_sync_mutations,
+    recover_pending_chapter_commits, replay_pending_sync_mutations,
 };
 #[cfg(test)]
 mod tests;

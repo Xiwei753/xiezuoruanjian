@@ -12,10 +12,11 @@ use super::*;
 /// 可调用本函数推进 journal。
 pub fn mark_chapter_commit_projection(
     project_root: &Path,
+    key: &ChapterKey,
     transaction_id: &str,
     projection_id: &str,
 ) -> Result<bool> {
-    confirm_pending_projections(project_root, transaction_id, &[projection_id])
+    confirm_pending_projections(project_root, key, transaction_id, &[projection_id])
 }
 
 /// 一次确认同一事务的多个 Core 统计投影，只写一次 manifest。
@@ -24,19 +25,21 @@ pub fn mark_chapter_commit_projection(
 /// 回执，避免每个事件都重新读写 manifest。
 pub fn mark_chapter_commit_projections(
     project_root: &Path,
+    key: &ChapterKey,
     transaction_id: &str,
     projection_ids: &[String],
 ) -> Result<bool> {
     let ids: Vec<&str> = projection_ids.iter().map(String::as_str).collect();
-    confirm_pending_projections(project_root, transaction_id, &ids)
+    confirm_pending_projections(project_root, key, transaction_id, &ids)
 }
 
 fn confirm_pending_projections(
     project_root: &Path,
+    key: &ChapterKey,
     transaction_id: &str,
     projection_ids: &[&str],
 ) -> Result<bool> {
-    let tx_dir = find_transaction_dir(project_root, transaction_id)?;
+    let tx_dir = chapter_transaction_dir(project_root, key, transaction_id);
     let manifest_path = tx_dir.join("manifest.json");
     if !manifest_path.exists() {
         return Ok(false);
@@ -63,7 +66,7 @@ fn confirm_pending_projections(
     }
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
-        let _ = remove_transaction_dir(&tx_dir);
+        let _ = remove_transaction_dir(project_root, &manifest.key, &manifest.transaction_id);
         return Ok(true);
     }
     Ok(false)
@@ -76,10 +79,11 @@ fn confirm_pending_projections(
 /// 统计投影都清空后 journal 才 Finished。
 pub fn mark_chapter_commit_draft_ack(
     project_root: &Path,
+    key: &ChapterKey,
     transaction_id: &str,
     projection_id: &str,
 ) -> Result<bool> {
-    let tx_dir = find_transaction_dir(project_root, transaction_id)?;
+    let tx_dir = chapter_transaction_dir(project_root, key, transaction_id);
     let manifest_path = tx_dir.join("manifest.json");
     if !manifest_path.exists() {
         return Ok(false);
@@ -106,7 +110,7 @@ pub fn mark_chapter_commit_draft_ack(
     }
     write_manifest(&tx_dir, &manifest)?;
     if manifest.phase == ChapterCommitPhase::Finished {
-        let _ = remove_transaction_dir(&tx_dir);
+        let _ = remove_transaction_dir(project_root, &manifest.key, &manifest.transaction_id);
         return Ok(true);
     }
     Ok(false)

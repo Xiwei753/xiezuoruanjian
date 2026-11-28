@@ -477,7 +477,10 @@ impl super::WriterCore {
                 );
             }
             if let Err(error) =
-                self.apply_pending_chapter_proof(&project_root, &result.0.transaction_id)
+                self.apply_pending_chapter_proof(
+                    &project_root,
+                    &crate::chapter::ChapterKey::new(project_id, volume_id, chapter_id),
+                )
             {
                 // 正文已经 durable；证明投影失败只保留 journal，不能反过来
                 // 把已提交正文判为失败。
@@ -556,7 +559,10 @@ impl super::WriterCore {
                 );
             }
             if let Err(error) =
-                self.apply_pending_chapter_proof(&project_root, &result.0.transaction_id)
+                self.apply_pending_chapter_proof(
+                    &project_root,
+                    &crate::chapter::ChapterKey::new(project_id, volume_id, chapter_id),
+                )
             {
                 // 正文已经 durable；证明投影失败只保留 journal，不能反过来
                 // 把已提交正文判为失败。
@@ -661,7 +667,10 @@ impl super::WriterCore {
                 );
             }
             if let Err(error) =
-                self.apply_pending_chapter_proof(&project_root, &receipt.transaction_id)
+                self.apply_pending_chapter_proof(
+                    &project_root,
+                    &crate::chapter::ChapterKey::new(project_id, volume_id, chapter_id),
+                )
             {
                 log::warn!(
                     "pending chapter proof projection deferred after save: tx={} error={error}",

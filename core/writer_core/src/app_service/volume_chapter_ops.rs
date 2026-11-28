@@ -341,11 +341,18 @@ impl super::WriterAppService {
     pub fn acknowledge_chapter_commit_draft(
         &self,
         project_id: String,
+        volume_id: String,
+        chapter_id: String,
         transaction_id: String,
         event_ids: Vec<String>,
     ) -> Result<u32, WriterError> {
-        self.api
-            .acknowledge_chapter_commit_draft(project_id, transaction_id, event_ids)
+        self.api.acknowledge_chapter_commit_draft(
+            project_id,
+            volume_id,
+            chapter_id,
+            transaction_id,
+            event_ids,
+        )
     }
 
     pub fn clear_chapter_content(

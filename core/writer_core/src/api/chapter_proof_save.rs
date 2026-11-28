@@ -203,10 +203,13 @@ impl WriterCoreApi {
     pub fn acknowledge_chapter_commit_draft(
         &self,
         project_id: String,
+        volume_id: String,
+        chapter_id: String,
         transaction_id: String,
         event_ids: Vec<String>,
     ) -> ApiResult<u32> {
         let project_root = self.projects_root.join(&project_id);
+        let key = crate::chapter::ChapterKey::new(project_id.clone(), volume_id.clone(), chapter_id.clone());
         let mut acknowledged = 0u32;
         for event_id in event_ids {
             if event_id.is_empty() {
@@ -214,6 +217,7 @@ impl WriterCoreApi {
             }
             if crate::chapter::commit::mark_chapter_commit_draft_ack(
                 &project_root,
+                &key,
                 &transaction_id,
                 &event_id,
             )

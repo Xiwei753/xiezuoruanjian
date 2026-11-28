@@ -6,7 +6,7 @@ use chrono::Utc;
 use super::super::Chapter;
 use super::super::ChapterProofProjection;
 use super::journal::{
-    chapter_transaction_dir, journal_root, mark_chapter_commit_draft_ack, mark_pending, md5_hex, pending_chapter_draft_acks,
+    chapter_transaction_dir, journal_root, mark_chapter_commit_draft_ack, md5_hex, pending_chapter_draft_acks,
     read_current, recover_pending_chapter_commits, sha256_hex, write_manifest,
     ChapterCommitManifest, ChapterCommitPhase,
 };
@@ -135,7 +135,6 @@ fn recovery_applies_decided_body_but_never_overwrites_newer_content() {
     let tx_id = "tx-recover";
     let tx_dir = journal_root(root).join(tx_id);
     fs::create_dir_all(&tx_dir).unwrap();
-    mark_pending(root).unwrap();
     let after_content = "B";
     crate::storage::atomic_write_bytes(&tx_dir.join(BODY_FILE), after_content.as_bytes()).unwrap();
     let mut manifest = ChapterCommitManifest {
@@ -232,9 +231,9 @@ fn draft_proof_events_stay_pending_until_platform_ack() {
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].draft_ack_projections.len(), 2);
 
-    assert!(!mark_chapter_commit_draft_ack(root, &receipt.transaction_id, "evt-1").unwrap());
+    assert!(!mark_chapter_commit_draft_ack(root, &key, &receipt.transaction_id, "evt-1").unwrap());
     assert!(chapter_transaction_dir(root, &key, &receipt.transaction_id).exists());
-    assert!(mark_chapter_commit_draft_ack(root, &receipt.transaction_id, "evt-2").unwrap());
+    assert!(mark_chapter_commit_draft_ack(root, &key, &receipt.transaction_id, "evt-2").unwrap());
     assert!(!chapter_transaction_dir(root, &key, &receipt.transaction_id).exists());
     assert!(pending_chapter_draft_acks(root).unwrap().is_empty());
 }

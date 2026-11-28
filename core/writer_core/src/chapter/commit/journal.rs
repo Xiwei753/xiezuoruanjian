@@ -26,15 +26,12 @@ use recovery::{
     recover_pending_chapter_commits_for_key,
 };
 pub(crate) use recovery::preserve_superseded_conflict;
-pub(crate) use recovery::{
-    pending_chapter_proof_transactions_for_key,
-    pending_chapter_proof_transactions_for_transaction,
-};
+pub(crate) use recovery::pending_chapter_proof_transactions_for_key;
+pub(crate) use recovery::pending_chapter_proof_payload;
 pub use recovery::{
-    pending_chapter_draft_acks, pending_chapter_proof_events, pending_chapter_proof_transactions,
-    pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
-    recover_pending_chapter_commits, replay_pending_sync_mutation, replay_pending_sync_mutations,
-    PendingChapterProofScan,
+    pending_chapter_draft_acks, pending_chapter_proof_transactions,
+    pending_chapter_sync_proof_fact_ids, recover_pending_chapter_commits,
+    replay_pending_sync_mutations, PendingChapterProofScan,
 };
 
 /// journal 阶段。
@@ -81,40 +78,12 @@ pub(super) fn chapter_transaction_dir(
     chapter_transactions_dir(project_root, key).join(transaction_id)
 }
 
-/// 按事务 ID 找到真实事务目录：新布局先查每章目录，旧扁平布局保持兼容。
-pub(super) fn find_transaction_dir(project_root: &Path, transaction_id: &str) -> Result<PathBuf> {
-    let chapters = journal_root(project_root).join(CHAPTERS_DIR);
-    if let Ok(volumes) = fs::read_dir(&chapters) {
-        for volume in volumes.flatten() {
-            if !volume.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-                continue;
-            }
-            if let Ok(chapters) = fs::read_dir(volume.path()) {
-                for chapter in chapters.flatten() {
-                    if !chapter.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-                        continue;
-                    }
-                    let candidate = chapter.path().join(transaction_id);
-                    if candidate.is_dir() {
-                        return Ok(candidate);
-                    }
-                }
-            }
-        }
-    }
-    Ok(journal_root(project_root).join(transaction_id))
-}
-
 /// 冲突回执文件名：只有 manifest 确定的材料全部 durable 后，归档路径才写入。
 const CONFLICT_RECEIPT_FILE: &str = "conflict.json";
 
 /// 一笔事务的冲突归档目录（normal 归档与恢复归档共用同一路径）。
 pub(super) fn conflict_dir_path(project_root: &Path, transaction_id: &str) -> PathBuf {
     journal_root(project_root).join(CONFLICT_DIR).join(transaction_id)
-}
-
-fn pending_marker(project_root: &Path) -> PathBuf {
-    journal_root(project_root).join(PENDING_MARKER)
 }
 
 fn project_id(project_root: &Path) -> String {
@@ -197,99 +166,6 @@ fn max_journal_commit_sequence(project_root: &Path) -> Result<u64> {
 fn ensure_journal_dir(project_root: &Path) -> Result<()> {
     let root = journal_root(project_root);
     fs::create_dir_all(&root)?;
-    Ok(())
-}
-
-/// 写入 pending 探针。只在第一次写 journal 时调用，内容为空。
-pub(super) fn mark_pending(project_root: &Path) -> Result<()> {
-    ensure_journal_dir(project_root)?;
-    let marker = pending_marker(project_root);
-    if !marker.exists() {
-        crate::storage::atomic_write_bytes(&marker, b"1")?;
-    }
-    Ok(())
-}
-
-/// 没有未完成 journal 时移除探针。
-///
-/// 任何目录项/清单读取失败都保留 marker 并返回真实错误：探针用于恢复入口
-/// 判断是否有未完成事务，猜测的“已完成”会让 journal 永远不被重放。
-fn clear_pending_if_idle(project_root: &Path) -> Result<()> {
-    let root = journal_root(project_root);
-    let marker = pending_marker(project_root);
-    match fs::metadata(&marker) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(Error::Other(format!(
-                "failed to inspect chapter commit pending marker {}: {error}",
-                marker.display()
-            )))
-        }
-    }
-    let mut unfinished = false;
-    for entry in fs::read_dir(&root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        // 冲突归档目录是 Superseded 事务的材料副本，不是未决事务；它没有
-        // manifest 探针，不能让它把 pending marker 永久钉住。
-        if entry.file_name().to_string_lossy() == CONFLICT_DIR
-            || entry.file_name().to_string_lossy() == CHAPTERS_DIR
-        {
-            continue;
-        }
-        let manifest_path = entry.path().join("manifest.json");
-        let content = match fs::read_to_string(&manifest_path) {
-            Ok(content) => content,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // 事务目录尚未写出清单：仍未完成，保留 marker。
-                unfinished = true;
-                break;
-            }
-            Err(error) => {
-                return Err(Error::Other(format!(
-                    "failed to read chapter commit manifest {}: {error}",
-                    manifest_path.display()
-                )))
-            }
-        };
-        match serde_json::from_str::<ChapterCommitManifest>(&content) {
-            Ok(manifest)
-                if matches!(
-                    manifest.phase,
-                    ChapterCommitPhase::Finished
-                        | ChapterCommitPhase::Superseded
-                        | ChapterCommitPhase::Prepared
-                ) => {}
-            Ok(_) => {
-                unfinished = true;
-                break;
-            }
-            Err(error) => {
-                // 损坏清单无法证明已结束，保留 marker 等恢复入口处理。
-                log::warn!(
-                    "chapter commit manifest {} is corrupt, keeping pending marker: {error}",
-                    manifest_path.display()
-                );
-                unfinished = true;
-                break;
-            }
-        }
-    }
-    if !unfinished {
-        match fs::remove_file(&marker) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(Error::Other(format!(
-                    "failed to remove chapter commit pending marker {}: {error}",
-                    marker.display()
-                )))
-            }
-        }
-    }
     Ok(())
 }
 
@@ -656,22 +532,20 @@ pub(super) fn write_manifest(tx_dir: &Path, manifest: &ChapterCommitManifest) ->
     Ok(())
 }
 
-fn remove_transaction_dir(tx_dir: &Path) -> Result<()> {
-    // 只允许删除 journal root 下一级的目录，避免路径计算错误误删。
-    let parent = tx_dir.parent().ok_or_else(|| {
-        Error::Other(format!(
-            "chapter commit journal has no parent: {}",
+fn remove_transaction_dir(
+    project_root: &Path,
+    key: &ChapterKey,
+    transaction_id: &str,
+) -> Result<()> {
+    let tx_dir = chapter_transaction_dir(project_root, key, transaction_id);
+    match fs::remove_dir_all(&tx_dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(Error::Other(format!(
+            "failed to remove chapter commit transaction {}: {error}",
             tx_dir.display()
-        ))
-    })?;
-    if parent.file_name().and_then(|name| name.to_str()) != Some("chapter-commits") {
-        return Err(Error::Other(format!(
-            "refuse to remove non-journal directory: {}",
-            tx_dir.display()
-        )));
+        ))),
     }
-    fs::remove_dir_all(tx_dir)?;
-    Ok(())
 }
 
 /// 把 journal 中的 after 内容/附加文件发布到 live。
@@ -835,7 +709,6 @@ pub(crate) fn commit_chapter_with_guard(
     }
 
     ensure_journal_dir(project_root)?;
-    mark_pending(project_root)?;
     let commit_sequence = next_commit_sequence(project_root)?;
     let tx_dir = chapter_transaction_dir(project_root, &key, &transaction_id);
     fs::create_dir_all(&tx_dir)?;
@@ -993,7 +866,7 @@ pub(crate) fn commit_chapter_with_guard(
         )?;
         crate::storage::sync_dir(&conflict_dir)?;
         // 回执即将返回调用方；归档目录已 durable，源事务不再保留。
-        if let Err(error) = remove_transaction_dir(&tx_dir) {
+        if let Err(error) = remove_transaction_dir(project_root, &key, &transaction_id) {
             log::warn!(
                 "failed to clean delivered superseded chapter commit {}: {error}",
                 tx_dir.display()
@@ -1021,7 +894,7 @@ pub(crate) fn commit_chapter_with_guard(
     if sync_projected && pending.is_empty() && manifest.draft_ack_projections.is_empty() {
         manifest.phase = ChapterCommitPhase::Finished;
         write_manifest(&tx_dir, &manifest)?;
-        let _ = remove_transaction_dir(&tx_dir);
+        let _ = remove_transaction_dir(project_root, &key, &transaction_id);
     } else {
         // 去重，事件 ID 重发不会制造第二份 pending。
         pending.sort();

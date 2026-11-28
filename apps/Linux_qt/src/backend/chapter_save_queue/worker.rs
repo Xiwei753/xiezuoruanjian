@@ -465,6 +465,7 @@ fn handle_chapter_save(state: &mut ChapterSaveWorkerState, request_id: u32) {
                             api,
                             request.context.projects_root(),
                             &request.identity.project_id,
+                            &request.identity.volume_id,
                             &request.identity.chapter_id,
                             &receipt.transaction_id,
                             &acknowledged,

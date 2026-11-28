@@ -131,6 +131,7 @@ impl WriterCoreApi {
             if !event_id.is_empty() && !core_receipt.transaction_id.is_empty() {
                 crate::chapter::commit::mark_chapter_commit_projection(
                     &project_root,
+                    &crate::chapter::ChapterKey::new(project_id, volume_id, chapter_id),
                     &core_receipt.transaction_id,
                     &event_id,
                 )?;

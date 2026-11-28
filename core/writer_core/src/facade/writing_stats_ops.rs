@@ -679,11 +679,11 @@ impl super::WriterCore {
     pub(crate) fn apply_pending_chapter_proof(
         &self,
         project_root: &std::path::Path,
-        transaction_id: &str,
+        key: &crate::chapter::ChapterKey,
     ) -> Result<()> {
-        let chain = crate::chapter::commit::pending_chapter_proof_transactions_for_transaction(
+        let chain = crate::chapter::commit::pending_chapter_proof_transactions_for_key(
             project_root,
-            transaction_id,
+            key,
         )?;
         if chain.is_empty() {
             // 事务已确认/已清理：没有待投影事实。
@@ -702,14 +702,14 @@ impl super::WriterCore {
         project_root: &std::path::Path,
         current: &crate::chapter::commit::PendingChapterProofTransaction,
     ) -> Result<()> {
-        let events = crate::chapter::commit::pending_chapter_proof_events(
+        let Some((events, facts)) = crate::chapter::commit::pending_chapter_proof_payload(
             project_root,
+            &current.key,
             &current.transaction_id,
-        )?;
-        let facts = crate::chapter::commit::pending_chapter_sync_proof_facts(
-            project_root,
-            &current.transaction_id,
-        )?;
+        )?
+        else {
+            return Ok(());
+        };
         if events.is_empty() && facts.is_empty() {
             return Ok(());
         }
@@ -754,6 +754,7 @@ impl super::WriterCore {
         // 原 journal，下一次重放会按 event_id 去重后重试。
         crate::chapter::commit::mark_chapter_commit_projections(
             project_root,
+            &current.key,
             &current.transaction_id,
             &projection_ids,
         )?;

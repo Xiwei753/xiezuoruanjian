@@ -184,7 +184,14 @@ pub(super) fn reconcile_core_acks(
                         continue;
                     }
                 }
-                match acknowledge_one(api, project_id, &ack.transaction_id, &ack.event_ids) {
+                match acknowledge_one(
+                        api,
+                        project_id,
+                        &ack.volume_id,
+                        &ack.chapter_id,
+                        &ack.transaction_id,
+                        &ack.event_ids,
+                    ) {
                     Ok(()) => {
                         // 本地没有草稿可应用：Core 已确认，顺手回收可能残留
                         // 的本地 ack 文件，避免永久孤儿。
@@ -359,7 +366,14 @@ pub(super) fn flush_reconciled_acks(
     };
     let mut failures = Vec::new();
     for (ack, _path) in acks {
-        match acknowledge_one(api, project_id, &ack.transaction_id, &ack.event_ids) {
+        match acknowledge_one(
+                        api,
+                        project_id,
+                        &ack.volume_id,
+                        &ack.chapter_id,
+                        &ack.transaction_id,
+                        &ack.event_ids,
+                    ) {
             Ok(()) => {
                 chapter_draft::complete_pending_ack(
                     root,
@@ -390,6 +404,7 @@ pub(super) fn acknowledge_core_transaction(
     api: &WriterCoreApi,
     projects_root: &str,
     project_id: &str,
+    volume_id: &str,
     chapter_id: &str,
     transaction_id: &str,
     event_ids: &[String],
@@ -410,7 +425,7 @@ pub(super) fn acknowledge_core_transaction(
         );
         return false;
     }
-    if acknowledge_one(api, project_id, transaction_id, event_ids).is_ok() {
+    if acknowledge_one(api, project_id, volume_id, chapter_id, transaction_id, event_ids).is_ok() {
         chapter_draft::complete_pending_ack(
             Path::new(projects_root),
             project_id,
@@ -426,11 +441,15 @@ pub(super) fn acknowledge_core_transaction(
 fn acknowledge_one(
     api: &WriterCoreApi,
     project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
     transaction_id: &str,
     event_ids: &[String],
 ) -> Result<(), String> {
     api.acknowledge_chapter_commit_draft(
         project_id.to_string(),
+        volume_id.to_string(),
+        chapter_id.to_string(),
         transaction_id.to_string(),
         event_ids.to_vec(),
     )
