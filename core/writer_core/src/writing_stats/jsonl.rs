@@ -147,6 +147,66 @@ where
     scan_ids_impl(path, id_of, Some(expected_lines), true, false)
 }
 
+/// 扫描稳定 ID 与调用方给出的业务事实指纹，容忍文件末尾未写完的尾行。
+///
+/// 同一 ID 重复出现时只接受相同业务指纹；不同业务事实直接报错，不让最后
+/// 一条静默覆盖前面的真实记录。用于证明事件按 journal 原始事实判重。
+pub(crate) fn read_jsonl_identities_tolerant_tail<T, F, I>(
+    path: &Path,
+    id_of: F,
+    identity_of: I,
+) -> Result<HashMap<String, u64>>
+where
+    T: DeserializeOwned,
+    F: for<'a> Fn(&'a T) -> &'a str,
+    I: Fn(&T) -> Result<u64>,
+{
+    let Some(mut file) = open_for_read(path)? else {
+        return Ok(HashMap::new());
+    };
+    let mut identities = HashMap::new();
+    let mut buffer = Vec::new();
+    let mut line_number = 0usize;
+    loop {
+        buffer.clear();
+        let read = file.read_until(b'\n', &mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        line_number += 1;
+        if buffer.last() != Some(&b'\n') {
+            // 未完成尾行不可能是完整事件；追加路径会按确定事实修复。
+            break;
+        }
+        buffer.pop();
+        if buffer.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        let value: T = serde_json::from_slice(&buffer)
+            .map_err(|error| invalid_json_bytes(path, line_number, error))?;
+        let id = id_of(&value);
+        if id.is_empty() {
+            continue;
+        }
+        let identity = identity_of(&value)?;
+        match identities.get(id) {
+            Some(stored) if *stored == identity => {}
+            Some(_) => {
+                return Err(Error::Other(format!(
+                    "stats jsonl {} line {} stores event {} with conflicting business facts; refusing to pick one",
+                    path.display(),
+                    line_number,
+                    id
+                )))
+            }
+            None => {
+                identities.insert(id.to_string(), identity);
+            }
+        }
+    }
+    Ok(identities)
+}
+
 /// 只修复未以换行结束的尾部残片，不扫描完整文件。
 ///
 /// 用于“同一批多个分区必须先全部完成尾部修复，再开始任何追加”的恢复路径。
@@ -257,8 +317,19 @@ where
                         )));
                     }
                 }
-                scan.fingerprints
-                    .insert(id.to_string(), line_fingerprint(trim_ascii(raw)));
+                let fingerprint = line_fingerprint(trim_ascii(raw));
+                if let Some(stored) = scan.fingerprints.get(id) {
+                    if *stored != fingerprint {
+                        return Err(Error::Other(format!(
+                            "stats jsonl {} line {} stores event {} with a different payload than an earlier line; refusing to pick one",
+                            path.display(),
+                            line_number,
+                            id
+                        )));
+                    }
+                    continue;
+                }
+                scan.fingerprints.insert(id.to_string(), fingerprint);
                 scan.ids.insert(id.to_string());
             }
             Err(error) => {
@@ -376,6 +447,9 @@ pub(crate) fn confirm_durable(path: &Path) -> Result<()> {
         file.write_all(b"\n")?;
     }
     file.sync_all()?;
+    // 文件内容 durable 之后还要确认目录项：首次创建时父目录同步可能失败，
+    // 重放已有文件不能只凭“文件已存在”跳过。
+    crate::storage::sync_parent(path)?;
     Ok(())
 }
 
@@ -386,18 +460,18 @@ pub(crate) fn confirm_durable(path: &Path) -> Result<()> {
 /// - `lines` 为空时仍对已有文件执行一次分隔符修复与 `sync_all`，让上一次
 ///   “写成功但同步失败”的事实得到确认；文件本来不存在则什么都不做。
 pub(crate) fn append_jsonl_lines(path: &Path, lines: &[String]) -> Result<()> {
-    append_jsonl_lines_with(path, lines, true).map(|_| ())
+    append_jsonl_lines_with(path, lines, true)
 }
 
-/// 追加但不立即 `sync_all`，返回本次是否创建了文件（需要稍后同步父目录）。
-pub(crate) fn append_jsonl_lines_deferred(path: &Path, lines: &[String]) -> Result<bool> {
+/// 追加但不立即 `sync_all`，由调用方在整批末尾统一确认。
+pub(crate) fn append_jsonl_lines_deferred(path: &Path, lines: &[String]) -> Result<()> {
     append_jsonl_lines_with(path, lines, false)
 }
 
-fn append_jsonl_lines_with(path: &Path, lines: &[String], sync: bool) -> Result<bool> {
+fn append_jsonl_lines_with(path: &Path, lines: &[String], sync: bool) -> Result<()> {
     let existed = path.exists();
     if lines.is_empty() && !existed {
-        return Ok(false);
+        return Ok(());
     }
     if !existed {
         if let Some(parent) = path.parent() {
@@ -432,10 +506,12 @@ fn append_jsonl_lines_with(path: &Path, lines: &[String], sync: bool) -> Result<
         file.sync_all()?;
     }
     drop(file);
-    if !existed && sync {
+    // 每次同步写入都确认父目录项：首次创建时父目录同步可能失败，
+    // 之后重放已有文件也必须补上，不能只凭文件已存在就跳过。
+    if sync {
         crate::storage::sync_parent(path)?;
     }
-    Ok(!existed)
+    Ok(())
 }
 
 #[cfg(test)]

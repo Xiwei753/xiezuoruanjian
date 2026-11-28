@@ -299,7 +299,7 @@ pub(super) fn reconcile_core_acks(
             outcome.failures.push(ReconcileFailure {
                 transaction_id: String::new(),
                 volume_id: String::new(),
-                chapter_id: chapter_id.to_string(),
+                chapter_id: chapter_id.unwrap_or_default().to_string(),
                 reason: format!("enumerate reconciled acks (kept): {error}"),
             });
         }

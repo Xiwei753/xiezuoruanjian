@@ -1,44 +1,130 @@
-use super::super::publish::{publish_decided, publish_deleted};
+use super::super::publish::{publish_decided, publish_deleted, sha256_bytes};
 use super::*;
 
-/// 把一份冲突材料原子写入归档目录（含目标文件与父目录 fsync）。
+/// 已归档材料是否与 manifest 的确定清单逐项一致（按字节校验，不看存在性）。
 ///
-/// 先读后写走既有 `atomic_write_bytes`，不直接 `fs::copy`：复制成功但目标
-/// 内容未落盘时，恢复入口不能把 Superseded 当成已完成归档。
-fn copy_conflict_material(source: &Path, target: &Path) -> Result<()> {
-    let bytes = fs::read(source).map_err(|error| {
-        Error::Other(format!(
-            "failed to read chapter commit material {} for conflict archive: {error}",
-            source.display()
-        ))
-    })?;
-    crate::storage::atomic_write_bytes(target, &bytes).map_err(|error| {
-        Error::Other(format!(
-            "failed to preserve chapter commit material {} -> {}: {error}",
-            source.display(),
-            target.display()
-        ))
-    })
+/// `conflict.json` 或目标文件“存在”都不能证明归档完成：历史失败会留下只有
+/// 回执、没有材料的旧目录。这里以 durable manifest（before/after 身份、正文与
+/// 附加文件摘要）加真实字节摘要判定；身份不符、半套材料或旧回执一律按
+/// “未完成”处理，由 [`preserve_superseded_conflict`] 覆盖重建。
+fn archived_conflict_complete(
+    conflict_dir: &Path,
+    manifest: &ChapterCommitManifest,
+) -> Result<bool> {
+    let archived_manifest = match fs::read_to_string(conflict_dir.join("manifest.json")) {
+        Ok(raw) => match serde_json::from_str::<ChapterCommitManifest>(&raw) {
+            Ok(archived) => archived,
+            // 归档清单损坏：不能作为完成证明，下面整份覆盖重建。
+            Err(_) => return Ok(false),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if archived_manifest.transaction_id != manifest.transaction_id
+        || archived_manifest.key != manifest.key
+        || archived_manifest.before != manifest.before
+        || archived_manifest.after != manifest.after
+        || archived_manifest.phase != ChapterCommitPhase::Superseded
+    {
+        return Ok(false);
+    }
+    // 删除冲突没有待发布正文；正文提交冲突的正文材料必须与决议摘要一致。
+    if !manifest.deleted
+        && !file_digest_matches(&conflict_dir.join(BODY_FILE), &manifest.after.content_sha256)?
+    {
+        return Ok(false);
+    }
+    for plan in &manifest.additional_files {
+        if !file_digest_matches(&conflict_dir.join(&plan.staging_filename), &plan.sha256)? {
+            return Ok(false);
+        }
+    }
+    let receipt = ChapterConflictReceipt::read(conflict_dir)?;
+    Ok(receipt.is_some_and(|receipt| receipt.matches_manifest(manifest)))
+}
+
+/// 文件存在且摘要与决议一致；缺失返回 false，读取失败向上返回真实错误。
+fn file_digest_matches(path: &Path, expected_sha256: &str) -> Result<bool> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(sha256_bytes(&bytes) == expected_sha256),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// 保留 Superseded 事务的真实材料、pending 事件和冲突记录。
 ///
-/// 幂等：归档目录里已经存在的文件直接复用；恢复入口对 Superseded 事务每次
-/// 都会调用本函数补齐缺失材料，复制失败时保留 tx_dir 供下次重试。
+/// 幂等且自校验：归档目录里已有的旧 `conflict.json` / 半套材料不能当完成
+/// 证明，必须按 manifest 的确定清单逐项核对字节摘要。缺材料时先把全部源材料
+/// 读进内存并校验（源缺失/摘要不符时只复用已通过校验的归档副本；两者都不可信
+/// 就整体失败，不写半套），再用 `atomic_write` 一次覆盖补齐；材料 durable 后
+/// 才写回执（真实完成标记），最后再次整份校验，仍不完整就保留事务交下一次
+/// 恢复重试。
 pub(crate) fn preserve_superseded_conflict(
     project_root: &Path,
     tx_dir: &Path,
     manifest: &ChapterCommitManifest,
 ) -> Result<String> {
-    let conflict_dir = journal_root(project_root)
-        .join(CONFLICT_DIR)
-        .join(&manifest.transaction_id);
+    let conflict_dir = conflict_dir_path(project_root, &manifest.transaction_id);
     fs::create_dir_all(&conflict_dir)?;
-    // conflict.json 是最后一步原子写入的完成标记：它存在说明材料已完整
-    // 归档，恢复轮直接复用，不重复复制/写盘。
-    if conflict_dir.join("conflict.json").is_file() {
+    if archived_conflict_complete(&conflict_dir, manifest)? {
         return Ok(conflict_dir.to_string_lossy().to_string());
     }
+
+    let mut materials: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    let archived_body = conflict_dir.join(BODY_FILE);
+    let mut body_ready = false;
+    match fs::read(tx_dir.join(BODY_FILE)) {
+        Ok(bytes) if sha256_bytes(&bytes) == manifest.after.content_sha256 => {
+            materials.push((archived_body.clone(), bytes));
+            body_ready = true;
+        }
+        Ok(_) => {
+            // 事务源与决议摘要不符：不能用它覆盖归档，退回已校验的归档副本。
+            log::warn!(
+                "chapter conflict archive source body digest mismatch, keeping verified copy: tx={}",
+                manifest.transaction_id
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    // 删除冲突没有待发布正文；正文提交冲突必须有可校验的正文材料。
+    if !body_ready
+        && !manifest.deleted
+        && !file_digest_matches(&archived_body, &manifest.after.content_sha256)?
+    {
+        return Err(Error::Other(format!(
+            "chapter conflict archive is missing body material: tx={}",
+            manifest.transaction_id
+        )));
+    }
+    for plan in &manifest.additional_files {
+        let target = conflict_dir.join(&plan.staging_filename);
+        let mut additional_ready = false;
+        match fs::read(tx_dir.join(&plan.staging_filename)) {
+            Ok(bytes) if sha256_bytes(&bytes) == plan.sha256 => {
+                materials.push((target.clone(), bytes));
+                additional_ready = true;
+            }
+            Ok(_) => {
+                log::warn!(
+                    "chapter conflict archive source digest mismatch, keeping verified copy: tx={}, file={}",
+                    manifest.transaction_id,
+                    plan.staging_filename
+                );
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        if !additional_ready && !file_digest_matches(&target, &plan.sha256)? {
+            return Err(Error::Other(format!(
+                "chapter conflict archive is missing additional material: tx={}, file={}",
+                manifest.transaction_id, plan.staging_filename
+            )));
+        }
+    }
+
     // 归档清单用当前内存中的真实事务状态写入（调用方可能刚标记
     // Superseded，尚未回写 tx_dir 清单），不能复制旧阶段文件。
     write_manifest(&conflict_dir, manifest).map_err(|error| {
@@ -48,60 +134,46 @@ pub(crate) fn preserve_superseded_conflict(
             conflict_dir.display()
         ))
     })?;
-    let staged_body = tx_dir.join(BODY_FILE);
-    let archived_body = conflict_dir.join(BODY_FILE);
-    if manifest.deleted {
-        // 删除冲突没有待发布正文；事务里若保留了正文材料则一并归档。
-        if staged_body.exists() && !archived_body.exists() {
-            copy_conflict_material(&staged_body, &archived_body)?;
-        }
-    } else if !archived_body.exists() {
-        // 正文提交冲突：正文材料必须 durable，缺它说明事务材料被外部破坏。
-        copy_conflict_material(&staged_body, &archived_body)?;
+    // 一次覆盖补齐清单里的全部确定材料。
+    for (target, bytes) in &materials {
+        crate::storage::atomic_write_bytes(target, bytes).map_err(|error| {
+            Error::Other(format!(
+                "failed to preserve chapter commit material {}: {error}",
+                target.display()
+            ))
+        })?;
     }
-    for plan in &manifest.additional_files {
-        let target = conflict_dir.join(&plan.staging_filename);
-        if target.exists() {
-            continue;
-        }
-        copy_conflict_material(&tx_dir.join(&plan.staging_filename), &target)?;
-    }
-    let actual = match read_current(project_root, &manifest.key) {
-        Ok((_, _, version)) => Some(version),
-        Err(Error::ChapterNotFound) => None,
-        Err(error) => {
-            return Err(Error::Other(format!(
-                "failed to read current chapter while preserving conflict {}: {error}",
-                manifest.transaction_id
-            )))
-        }
-    };
-    let record = serde_json::json!({
-        "transactionId": manifest.transaction_id,
-        "key": manifest.key,
-        "before": manifest.before,
-        "after": manifest.after,
-        "actual": actual,
-        "reason": manifest.superseded_reason,
-        "pendingProjections": manifest.pending_projections,
-    });
-    let conflict_json = conflict_dir.join("conflict.json");
-    crate::storage::atomic_write_bytes(
-        &conflict_json,
-        serde_json::to_string_pretty(&record)?.as_bytes(),
-    )?;
     crate::storage::sync_dir(&conflict_dir)?;
+    // 材料齐备之后才写回执；回执本身也按同一 durable manifest 生成。
+    ChapterConflictReceipt::from_manifest(manifest).write(&conflict_dir)?;
+    crate::storage::sync_dir(&conflict_dir)?;
+    if !archived_conflict_complete(&conflict_dir, manifest)? {
+        return Err(Error::Other(format!(
+            "chapter conflict archive still incomplete after rewrite: tx={}",
+            manifest.transaction_id
+        )));
+    }
     Ok(conflict_dir.to_string_lossy().to_string())
 }
 
 /// 列出当前项目内已发布正文、但仍有证明投影未确认的 journal。
+pub struct PendingChapterProofScan {
+    pub transactions: Vec<super::PendingChapterProofTransaction>,
+    pub failures: Vec<String>,
+}
+
 pub fn pending_chapter_proof_transactions(
     project_root: &Path,
-) -> Result<Vec<super::PendingChapterProofTransaction>> {
+) -> Result<PendingChapterProofScan> {
     let root = journal_root(project_root);
     match fs::metadata(&root) {
         Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PendingChapterProofScan {
+                transactions: Vec::new(),
+                failures: Vec::new(),
+            })
+        }
         Err(error) => {
             return Err(Error::Other(format!(
                 "failed to inspect chapter commit journal root {}: {error}",
@@ -110,9 +182,14 @@ pub fn pending_chapter_proof_transactions(
         }
     }
     let mut transactions = Vec::new();
+    let mut failures = Vec::new();
     for entry in fs::read_dir(&root)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        // 冲突归档目录不是未决事务，永不进入 pending/sequence 扫描。
+        if entry.file_name().to_string_lossy() == CONFLICT_DIR {
             continue;
         }
         let manifest_path = entry.path().join("manifest.json");
@@ -129,12 +206,16 @@ pub fn pending_chapter_proof_transactions(
         let manifest = match serde_json::from_str::<ChapterCommitManifest>(&raw) {
             Ok(manifest) => manifest,
             Err(error) => {
-                // 损坏清单保留在磁盘上供诊断；恢复轮必须显式报告该事务，
-                // 但不把它当成可投影事实，也不阻断其它事务。
+                // 损坏清单保留在磁盘上供诊断；把真实失败带回恢复结果，
+                // 但不把它当成可投影事实，也不阻断其它可读事务。
                 log::error!(
                     "chapter commit manifest {} is corrupt, transaction kept and skipped: {error}",
                     manifest_path.display()
                 );
+                failures.push(format!(
+                    "corrupt chapter commit manifest {}: {error}",
+                    manifest_path.display()
+                ));
                 continue;
             }
         };
@@ -167,7 +248,10 @@ pub fn pending_chapter_proof_transactions(
                 &right.2.transaction_id,
             ))
     });
-    Ok(transactions.into_iter().map(|(_, _, item)| item).collect())
+    Ok(PendingChapterProofScan {
+        transactions: transactions.into_iter().map(|(_, _, item)| item).collect(),
+        failures,
+    })
 }
 
 /// 读取 journal 中尚未确认的证明事件（供投影 worker 使用）。
@@ -262,6 +346,10 @@ pub fn pending_chapter_sync_proof_fact_ids(
     for entry in fs::read_dir(&root)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        // 冲突归档目录不是未决事务，永不进入 pending/sequence 扫描。
+        if entry.file_name().to_string_lossy() == CONFLICT_DIR {
             continue;
         }
         let manifest_path = entry.path().join("manifest.json");
@@ -484,6 +572,24 @@ pub fn replay_pending_sync_mutation(project_root: &Path, transaction_id: &str) -
 }
 
 pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<ChapterCommitRecovery>> {
+    recover_pending_chapter_commits_filtered(project_root, None)
+}
+
+/// 读取/提交当前章时的恢复入口：只处理该章尚未完成的正文决议。
+///
+/// 已发布正文、只剩统计投影或 draft ack 的事务不参与逐章读写闸门；启动或
+/// 显式恢复仍调用 [`recover_pending_chapter_commits`] 处理全部待办。
+pub(crate) fn recover_pending_chapter_commits_for_key(
+    project_root: &Path,
+    key: &ChapterKey,
+) -> Result<Vec<ChapterCommitRecovery>> {
+    recover_pending_chapter_commits_filtered(project_root, Some(key))
+}
+
+fn recover_pending_chapter_commits_filtered(
+    project_root: &Path,
+    only_key: Option<&ChapterKey>,
+) -> Result<Vec<ChapterCommitRecovery>> {
     let root = journal_root(project_root);
     match fs::metadata(&root) {
         Ok(_) => {}
@@ -527,7 +633,18 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
             }
         };
         match serde_json::from_str::<ChapterCommitManifest>(&raw) {
-            Ok(manifest) => entries.push((dir, manifest)),
+            Ok(manifest) => {
+                if let Some(key) = only_key {
+                    // 逐章热路径只处理当前章真实未完成的正文决议；已发布的
+                    // 统计/确认事务留给启动或显式恢复。
+                    if &manifest.key != key
+                        || !matches!(manifest.phase, ChapterCommitPhase::Decided)
+                    {
+                        continue;
+                    }
+                }
+                entries.push((dir, manifest));
+            }
             Err(error) => {
                 // 损坏事务保留原目录并显式报告；不能静默当成已完成，也不
                 // 阻断其它章节的恢复。
@@ -585,20 +702,32 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
                 }
             }
             ChapterCommitPhase::Applied => {}
-            ChapterCommitPhase::Finished | ChapterCommitPhase::Superseded => {
-                if manifest.phase == ChapterCommitPhase::Finished {
-                    if let Err(error) = remove_transaction_dir(&tx_dir) {
-                        log::warn!(
-                            "failed to clean finished chapter commit {}: {error}",
-                            tx_dir.display()
-                        );
-                    }
-                } else {
-                    // Superseded 在发布失败时先落盘、归档随后才做；恢复时继续
-                    // 补齐冲突材料（已存在的文件复用），失败则保留事务下次再试。
-                    if let Err(error) =
-                        preserve_superseded_conflict(project_root, &tx_dir, &manifest)
-                    {
+            ChapterCommitPhase::Finished => {
+                if let Err(error) = remove_transaction_dir(&tx_dir) {
+                    log::warn!(
+                        "failed to clean finished chapter commit {}: {error}",
+                        tx_dir.display()
+                    );
+                }
+                continue;
+            }
+            ChapterCommitPhase::Superseded => {
+                // Superseded 可能只落盘了阶段、归档还没做完（崩溃在材料复制
+                // 与 Superseded 写入之间，或旧版本只留下半套材料）。先按
+                // manifest 补齐并自校验，再交付恢复回执——不能直接 continue，
+                // 否则 Qt 拿不到这笔已放弃事务的真实 transaction_id/conflict_dir。
+                match preserve_superseded_conflict(project_root, &tx_dir, &manifest) {
+                    Ok(conflict_dir) => recovered.push(ChapterCommitRecovery {
+                        transaction_id: manifest.transaction_id.clone(),
+                        key: manifest.key.clone(),
+                        after: manifest.after.clone(),
+                        pending_projections: manifest.pending_projections.clone(),
+                        draft_ack_projections: manifest.draft_ack_projections.clone(),
+                        superseded: true,
+                        conflict_dir: Some(conflict_dir),
+                    }),
+                    Err(error) => {
+                        // 归档不完整：保留事务等下一次恢复，不交付指向残件的回执。
                         log::error!(
                             "superseded chapter conflict archive incomplete, journal retained: {}: {error}",
                             tx_dir.display()

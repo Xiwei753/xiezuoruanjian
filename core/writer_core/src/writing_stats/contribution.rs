@@ -341,6 +341,55 @@ pub struct ContributionEvent {
 }
 
 impl ContributionEvent {
+    /// 事件业务事实指纹：只用于“同一 event_id 是否同一条事实”的判断。
+    ///
+    /// 排除存储分配的派生字段（重放位置、链哈希、状态承诺根、本地日期/平台
+    /// 补全等），避免序列化字段顺序或旧格式默认值把同一事实误判为冲突。
+    pub(crate) fn business_identity_fingerprint(&self) -> crate::error::Result<u64> {
+        let mut value = serde_json::to_value(self).map_err(|error| {
+            crate::error::Error::Other(format!(
+                "failed to serialize contribution event {} for identity: {error}",
+                self.event_id
+            ))
+        })?;
+        if let Some(object) = value.as_object_mut() {
+            for key in [
+                "event_id",
+                "origin_device_id",
+                "local_date",
+                "local_hour",
+                "platform",
+                "device_class",
+                "replay_position",
+            ] {
+                object.remove(key);
+            }
+            if let Some(delta) = object
+                .get_mut("replay_delta")
+                .and_then(|delta| delta.as_object_mut())
+            {
+                for key in [
+                    "format_version",
+                    "state_root_after",
+                    "branch_position",
+                    "prev_event_hash",
+                    "event_hash",
+                    "before_state_hash",
+                    "after_state_hash",
+                ] {
+                    delta.remove(key);
+                }
+            }
+        }
+        let bytes = serde_json::to_vec(&value).map_err(|error| {
+            crate::error::Error::Other(format!(
+                "failed to serialize contribution event {} identity bytes: {error}",
+                self.event_id
+            ))
+        })?;
+        Ok(crate::writing_stats::jsonl::line_fingerprint(&bytes))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         context: &MutationContext,

@@ -43,7 +43,7 @@ pub struct ContributionStore {
 
 struct OriginEventIdCache {
     fingerprint: u64,
-    ids: HashSet<String>,
+    identities: HashMap<String, u64>,
 }
 
 /// 跨 `ContributionStore` 实例共享的写锁：同一个 app data 根下只能有一个
@@ -64,7 +64,7 @@ struct ReplayMetadata {
 #[derive(Default)]
 struct PartitionAppend {
     written: usize,
-    written_ids: HashMap<String, Vec<String>>,
+    written_identities: HashMap<String, Vec<(String, u64)>>,
 }
 
 /// 计算事件归属的业务日；两种日历都无法解析时返回带时间戳的错误。
@@ -158,6 +158,28 @@ impl ContributionStore {
         self.events_root()
             .join(origin)
             .join(format!("{date}{OBJECTS_SUFFIX}"))
+    }
+
+    /// 确认贡献事件分区已经 durable（文件内容 + 父目录项）。
+    fn confirm_event_partition_durable(&self, origin: &str, date: &str) -> Result<()> {
+        let path = self.event_file_path(origin, date);
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => jsonl::confirm_durable(&path),
+            Ok(_) => Err(Error::Other(format!(
+                "contribution event partition {} is not a regular file while confirming durability",
+                path.display()
+            ))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err(Error::Other(format!(
+                    "contribution event partition {} is missing while confirming durability",
+                    path.display()
+                )))
+            }
+            Err(error) => Err(Error::Other(format!(
+                "failed to stat contribution event partition {} while confirming durability: {error}",
+                path.display()
+            ))),
+        }
     }
 
     fn replay_sequence_path(&self, origin: &str) -> PathBuf {
@@ -445,10 +467,12 @@ impl ContributionStore {
         Ok((count, head))
     }
 
-    /// 读取某来源分区已落盘的全部对象事件 ID，用于幂等去重。
+    /// 读取某来源分区已落盘事件 ID -> 业务事实指纹，用于幂等去重。
     ///
-    /// 缓存只在 origin 指纹变化（同步替换目录、generation 更新）时重扫。
-    fn load_origin_event_ids(&self, origin: &str) -> Result<HashSet<String>> {
+    /// 缓存只在 origin 指纹变化（同步替换目录、generation 更新）时重扫；
+    /// 普通追加不再逐日重扫分区文件。同一 ID 在磁盘上出现两种不同业务事实
+    /// 时直接报错，不把最后一条当作真实值。
+    fn load_origin_event_identities(&self, origin: &str) -> Result<HashMap<String, u64>> {
         let fingerprint = self.origin_fingerprint(origin);
         {
             let cache = self
@@ -457,16 +481,16 @@ impl ContributionStore {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(entry) = cache.get(origin) {
                 if entry.fingerprint == fingerprint {
-                    return Ok(entry.ids.clone());
+                    return Ok(entry.identities.clone());
                 }
             }
         }
         let dir = self.events_root().join(origin);
-        let mut ids = HashSet::new();
+        let mut identities = HashMap::new();
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(HashSet::new())
+                return Ok(HashMap::new())
             }
             Err(error) => {
                 return Err(Error::Other(format!(
@@ -475,16 +499,32 @@ impl ContributionStore {
                 )))
             }
         };
-        {
-            for entry in entries {
-                let path = entry?.path();
-                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                    continue;
-                };
-                if !name.ends_with(OBJECTS_SUFFIX) {
-                    continue;
+        for entry in entries {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(OBJECTS_SUFFIX) {
+                continue;
+            }
+            let scan = jsonl::read_jsonl_identities_tolerant_tail::<ContributionEvent, _, _>(
+                &path,
+                |event| event.event_id.as_str(),
+                |event| event.business_identity_fingerprint(),
+            )?;
+            for (id, identity) in scan {
+                match identities.get(&id).copied() {
+                    Some(stored) if stored == identity => {}
+                    Some(_) => {
+                        return Err(Error::Other(format!(
+                            "contribution event {id} is stored with conflicting business payloads in {}",
+                            path.display()
+                        )))
+                    }
+                    None => {
+                        identities.insert(id, identity);
+                    }
                 }
-                ids.extend(read_ids(&path)?);
             }
         }
         let mut cache = self
@@ -495,15 +535,15 @@ impl ContributionStore {
             origin.to_string(),
             OriginEventIdCache {
                 fingerprint,
-                ids: ids.clone(),
+                identities: identities.clone(),
             },
         );
-        Ok(ids)
+        Ok(identities)
     }
 
-    /// 写成功后增量更新事件 ID 缓存，避免下一次记录再次全量扫描。
-    fn cache_written_event_ids(&self, origin: &str, event_ids: &[String]) {
-        if event_ids.is_empty() {
+    /// 写成功后增量更新事件身份缓存，避免下一次记录再次全量扫描。
+    fn cache_written_event_identities(&self, origin: &str, identities: &[(String, u64)]) {
+        if identities.is_empty() {
             return;
         }
         let fingerprint = self.origin_fingerprint(origin);
@@ -512,7 +552,9 @@ impl ContributionStore {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(entry) = cache.get_mut(origin) {
-            entry.ids.extend(event_ids.iter().cloned());
+            for (id, identity) in identities {
+                entry.identities.insert(id.clone(), *identity);
+            }
             entry.fingerprint = fingerprint;
         }
     }
@@ -1326,22 +1368,42 @@ impl ContributionStore {
             prepared.push(event);
         }
 
-        // 先按真实落盘事实去重，再给新增事件分配序号/计数/哈希。重发相同
-        // event_id 时不能推进任何派生索引，否则会留下不存在的“幽灵链头”。
-        let existing_by_origin = self.load_existing_ids(&prepared)?;
-        let mut seen_in_batch: HashSet<(String, String)> = HashSet::new();
-        prepared.retain(|event| {
+        // 先按真实落盘事实（ID -> 业务事实指纹）去重，再给新增事件分配
+        // 序号/计数/哈希。重发相同 event_id 时不能推进任何派生索引，否则会
+        // 留下不存在的“幽灵链头”；同一 ID 不同业务事实必须报错而不是覆盖。
+        let existing = self.load_existing_identities(&prepared)?;
+        let mut unique = Vec::with_capacity(prepared.len());
+        let mut batch_seen: HashMap<(String, String), u64> = HashMap::new();
+        for event in prepared {
             if event.event_id.is_empty() {
-                return true;
+                return Err(Error::Other(
+                    "refuse to append a contribution event without a stable event_id".to_string(),
+                ));
             }
-            if existing_by_origin
-                .get(&event.origin_device_id)
-                .is_some_and(|ids| ids.contains(&event.event_id))
-            {
-                return false;
+            let identity = event.business_identity_fingerprint()?;
+            let key = (event.origin_device_id.clone(), event.event_id.clone());
+            if let Some(stored) = existing.get(&key.0).and_then(|ids| ids.get(&key.1)) {
+                if *stored == identity {
+                    continue;
+                }
+                return Err(Error::Other(format!(
+                    "contribution event {} is already persisted with a different business payload",
+                    event.event_id
+                )));
             }
-            seen_in_batch.insert((event.origin_device_id.clone(), event.event_id.clone()))
-        });
+            if let Some(stored) = batch_seen.get(&key) {
+                if *stored == identity {
+                    continue;
+                }
+                return Err(Error::Other(format!(
+                    "contribution batch contains event {} twice with different business payloads",
+                    event.event_id
+                )));
+            }
+            batch_seen.insert(key, identity);
+            unique.push(event);
+        }
+        let mut prepared = unique;
         if prepared.is_empty() {
             return Ok(0);
         }
@@ -1388,8 +1450,8 @@ impl ContributionStore {
         self.bump_replay_generation();
         self.publish_branch_commitments(&checkpoint_targets, &metadata.chains);
         commitment_guard.committed = true;
-        for (origin, ids) in appended.written_ids {
-            self.cache_written_event_ids(&origin, &ids);
+        for (origin, identities) in appended.written_identities {
+            self.cache_written_event_identities(&origin, &identities);
         }
         // 检查点回放会通过 load_all_events 重入 pending recovery；先释放写锁，
         // 否则同一线程会在不可重入的全局锁上死锁。
@@ -1398,19 +1460,19 @@ impl ContributionStore {
         Ok(appended.written)
     }
 
-    /// 读取本批事件涉及来源分区的已落盘 ID（同一来源只读一次）。
-    fn load_existing_ids(
+    /// 读取本批事件涉及来源分区的已落盘 ID -> 业务事实指纹（同一来源只读一次）。
+    fn load_existing_identities(
         &self,
         events: &[ContributionEvent],
-    ) -> Result<HashMap<String, HashSet<String>>> {
-        let mut existing_by_origin: HashMap<String, HashSet<String>> = HashMap::new();
+    ) -> Result<HashMap<String, HashMap<String, u64>>> {
+        let mut existing_by_origin: HashMap<String, HashMap<String, u64>> = HashMap::new();
         for event in events {
             if existing_by_origin.contains_key(&event.origin_device_id) {
                 continue;
             }
             existing_by_origin.insert(
                 event.origin_device_id.clone(),
-                self.load_origin_event_ids(&event.origin_device_id)?,
+                self.load_origin_event_identities(&event.origin_device_id)?,
             );
         }
         Ok(existing_by_origin)
@@ -1461,13 +1523,23 @@ impl ContributionStore {
                     path.display()
                 ))
             })?;
-            let events: Vec<ContributionEvent> =
+            let mut events: Vec<ContributionEvent> =
                 serde_json::from_str(&content).map_err(|error| {
                     Error::Other(format!(
                         "corrupt contribution pending journal {}: {error}",
                         path.display()
                     ))
                 })?;
+            // 旧 pending 可能没有稳定 ID：按原内容的业务事实生成确定 ID，
+            // 下次重放得到同一身份，不会每次继续追加新行。
+            for event in &mut events {
+                if event.event_id.is_empty() {
+                    event.event_id = format!(
+                        "legacy-{:016x}",
+                        event.business_identity_fingerprint()?
+                    );
+                }
+            }
             if !events.is_empty() {
                 self.append_events_locked(&events)?;
             }
@@ -1516,23 +1588,9 @@ impl ContributionStore {
         self.rebuild_replay_indexes(events)?;
         self.bump_replay_generation();
         self.invalidate_all_branch_commitments();
-        for (origin, ids) in appended.written_ids {
-            self.cache_written_event_ids(&origin, &ids);
-        }
-        Ok(())
-    }
-
-    /// 按 `origin_device_id + local_date` 分区追加事件，返回真正写入的事件数。
-    ///
-    /// 正式写入与 pending 重放共用这一处。`recovering` 时先对同一批所有涉及
-    /// 分区做尾部修复，再开始任何追加，避免“后一个分区有残行时前一个分区
-    /// 已写入”的半轮失败；普通写入不扫描整文件，只按已落盘 ID 去重。
-    fn append_partition_files(
-        &self,
-        events: &[ContributionEvent],
-        recovering: bool,
-    ) -> Result<PartitionAppend> {
-        let mut by_partition: BTreeMap<(String, String), Vec<&ContributionEvent>> = BTreeMap::new();
+        // 去重命中的 pending 事件没有新行可写，也必须确认其真实分区 durable
+        // 后才能让调用方删除 journal。
+        let mut partitions: HashSet<(String, String)> = HashSet::new();
         for event in events {
             let origin = if event.origin_device_id.is_empty() {
                 self.resolve_origin_device_id()?
@@ -1544,20 +1602,65 @@ impl ContributionStore {
             } else {
                 event.local_date.clone()
             };
-            by_partition.entry((origin, date)).or_default().push(event);
+            partitions.insert((origin, date));
+        }
+        for (origin, date) in partitions {
+            self.confirm_event_partition_durable(&origin, &date)?;
+        }
+        for (origin, identities) in appended.written_identities {
+            self.cache_written_event_identities(&origin, &identities);
+        }
+        Ok(())
+    }
+
+    /// 按 `origin_device_id + local_date` 分区追加事件，返回真正写入的事件数。
+    ///
+    /// 正式写入与 pending 重放共用这一处。`recovering` 时先对同一批所有涉及
+    /// 分区做尾部修复，再开始任何追加，避免“后一个分区有残行时前一个分区
+    /// 已写入”的半轮失败。ID 判重统一走来源级身份索引：普通追加不再逐日
+    /// 重扫分区文件，只有首次建立索引或同步替换后失效时才流式重读。
+    fn append_partition_files(
+        &self,
+        events: &[ContributionEvent],
+        recovering: bool,
+    ) -> Result<PartitionAppend> {
+        let fresh_events = if recovering {
+            self.filter_persisted_events(events)?
+        } else {
+            events.to_vec()
+        };
+        let mut by_partition: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+        for (index, event) in fresh_events.iter().enumerate() {
+            let origin = if event.origin_device_id.is_empty() {
+                self.resolve_origin_device_id()?
+            } else {
+                event.origin_device_id.clone()
+            };
+            let date = if event.local_date.is_empty() {
+                local_date_for_event(event.occurred_at_ms)?
+            } else {
+                event.local_date.clone()
+            };
+            by_partition.entry((origin, date)).or_default().push(index);
         }
         // 先把每个分区的确定行准备好；重放路径先统一修复尾部，再进入追加。
-        let mut partitions: Vec<(String, String, Vec<&ContributionEvent>, Vec<String>)> =
+        let mut partitions: Vec<(String, String, Vec<usize>, Vec<String>, Vec<(String, u64)>)> =
             Vec::with_capacity(by_partition.len());
-        for ((origin, date), events) in by_partition {
-            let mut expected_lines = Vec::with_capacity(events.len());
-            for event in &events {
-                expected_lines.push(serde_json::to_string(*event)?);
+        for ((origin, date), indexes) in by_partition {
+            let mut expected_lines = Vec::with_capacity(indexes.len());
+            let mut identities = Vec::with_capacity(indexes.len());
+            for index in &indexes {
+                let event = &fresh_events[*index];
+                expected_lines.push(serde_json::to_string(event)?);
+                identities.push((
+                    event.event_id.clone(),
+                    event.business_identity_fingerprint()?,
+                ));
             }
-            partitions.push((origin, date, events, expected_lines));
+            partitions.push((origin, date, indexes, expected_lines, identities));
         }
         if recovering {
-            for (origin, date, _, expected_lines) in &partitions {
+            for (origin, date, _, expected_lines, _) in &partitions {
                 jsonl::repair_tail_fragment::<ContributionEvent>(
                     &self.event_file_path(origin, date),
                     expected_lines,
@@ -1565,57 +1668,69 @@ impl ContributionStore {
             }
         }
         let mut appended = PartitionAppend::default();
-        let mut existing_by_origin: HashMap<String, HashSet<String>> = HashMap::new();
-        for (origin, date, events, expected_lines) in partitions {
+        for (origin, date, indexes, expected_lines, identities) in partitions {
             let path = self.event_file_path(&origin, &date);
-            let scan = jsonl::read_jsonl_ids::<ContributionEvent, _>(&path, |event| {
-                event.event_id.as_str()
-            })?;
-            let existing = match existing_by_origin.entry(origin.clone()) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(self.load_origin_event_ids(&origin)?)
-                }
-            };
-            let mut fresh_lines = Vec::new();
-            let mut fresh_ids = Vec::new();
-            for (event, line) in events.into_iter().zip(expected_lines) {
-                if !recovering && event.event_id.is_empty() {
-                    return Err(Error::Other(
-                        "refuse to append a contribution event without a stable event_id"
-                            .to_string(),
-                    ));
-                }
-                if !event.event_id.is_empty() {
-                    if let Some(stored) = scan.fingerprints.get(&event.event_id).copied() {
-                        if stored != 0 && stored != jsonl::line_fingerprint(line.as_bytes()) {
-                            return Err(Error::Other(format!(
-                                "contribution event {} is already persisted with a different payload",
-                                event.event_id
-                            )));
-                        }
-                    }
-                    if existing.contains(&event.event_id) {
-                        continue;
-                    }
-                    existing.insert(event.event_id.clone());
-                    fresh_ids.push(event.event_id.clone());
-                }
-                fresh_lines.push(line);
-            }
-            appended.written += fresh_lines.len();
+            appended.written += expected_lines.len();
             // 没有新行时也确认一次已有文件持久化；只有确认成功才允许删除
             // pending journal。
-            jsonl::append_jsonl_lines(&path, &fresh_lines)?;
-            if !fresh_ids.is_empty() {
+            jsonl::append_jsonl_lines(&path, &expected_lines)?;
+            if !indexes.is_empty() {
                 appended
-                    .written_ids
+                    .written_identities
                     .entry(origin.clone())
                     .or_default()
-                    .extend(fresh_ids);
+                    .extend(identities);
             }
         }
         Ok(appended)
+    }
+
+    /// pending 重放时按来源级身份索引过滤已落盘事件；同 ID 不同业务事实报错。
+    fn filter_persisted_events(
+        &self,
+        events: &[ContributionEvent],
+    ) -> Result<Vec<ContributionEvent>> {
+        let mut identities_by_origin: HashMap<String, HashMap<String, u64>> = HashMap::new();
+        let mut fresh = Vec::with_capacity(events.len());
+        for event in events {
+            if event.event_id.is_empty() {
+                return Err(Error::Other(
+                    "refuse to replay a contribution event without a stable event_id".to_string(),
+                ));
+            }
+            let origin = if event.origin_device_id.is_empty() {
+                self.resolve_origin_device_id()?
+            } else {
+                event.origin_device_id.clone()
+            };
+            if !identities_by_origin.contains_key(&origin) {
+                identities_by_origin.insert(
+                    origin.clone(),
+                    self.load_origin_event_identities(&origin)?,
+                );
+            }
+            let identity = event.business_identity_fingerprint()?;
+            let existing = identities_by_origin
+                .get(&origin)
+                .and_then(|ids| ids.get(&event.event_id))
+                .copied();
+            match existing {
+                Some(stored) if stored == identity => continue,
+                Some(_) => {
+                    return Err(Error::Other(format!(
+                        "contribution event {} is already persisted with a different business payload",
+                        event.event_id
+                    )))
+                }
+                None => {
+                    if let Some(ids) = identities_by_origin.get_mut(&origin) {
+                        ids.insert(event.event_id.clone(), identity);
+                    }
+                    fresh.push(event.clone());
+                }
+            }
+        }
+        Ok(fresh)
     }
 
     /// 第一次在旧星图上记录回放事件时落一条真实基线检查点。
@@ -1826,13 +1941,6 @@ pub(crate) fn resolve_device_partition_id(app_data_root: &Path) -> Result<String
         )));
     }
     Ok(info.device_id)
-}
-
-fn read_ids(path: &Path) -> Result<HashSet<String>> {
-    Ok(jsonl::read_jsonl_ids::<ContributionEvent, _>(path, |event| {
-        event.event_id.as_str()
-    })?
-    .ids)
 }
 
 pub(crate) fn valid_segment(value: &str) -> bool {

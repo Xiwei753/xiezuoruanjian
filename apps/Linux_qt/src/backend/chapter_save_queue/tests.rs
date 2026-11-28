@@ -1298,4 +1298,298 @@ mod restore_isolation_tests {
             1
         );
     }
+
+    /// Issue #1067 复审第 7 项：同卷不同章节的两份旧稿会话坐标完全相同
+    /// （`write_verified_draft` 固定 session=1、generation=gen-1），也必须按
+    /// 各自的归档事务身份各消费一次；按 (volume, session, generation) 去重
+    /// 会把后一份当成重复，把它的活动槽位留在可写目录里。
+    #[test]
+    fn same_volume_same_session_sibling_chapters_are_both_consumed() {
+        let (temp, api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        let second = api
+            .create_chapter(&project_id, &volume_id, "第二章")
+            .unwrap();
+        api.save_chapter_content_versioned(
+            &project_id,
+            &volume_id,
+            &second.id,
+            "第二章已提交正文",
+            None,
+            None,
+        )
+        .unwrap();
+        for (chapter, text) in [
+            (chapter_id.as_str(), "第一章旧稿"),
+            (second.id.as_str(), "第二章旧稿"),
+        ] {
+            write_verified_draft(&projects_root, &project_id, &volume_id, chapter, text);
+            let archived = chapter_draft::quarantine(&projects_root, &project_id, chapter)
+                .expect("quarantine")
+                .expect("archived path");
+            chapter_draft::record_retry(
+                &projects_root,
+                &project_id,
+                chapter,
+                &volume_id,
+                std::path::Path::new(&archived),
+                "unit",
+                0,
+            )
+            .expect("record retry");
+        }
+        assert_eq!(
+            chapter_draft::list_retries(&projects_root, &project_id).len(),
+            2,
+            "同卷不同章节是两份独立归档事务"
+        );
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project_id.clone(),
+            },
+        );
+
+        assert!(
+            !draft_dir(&projects_root, &project_id, &chapter_id).exists(),
+            "第一章的归档事务必须被消费"
+        );
+        assert!(
+            !draft_dir(&projects_root, &project_id, &second.id).exists(),
+            "同卷另一章的归档事务不能被会话坐标去重吞掉并留在活动槽位"
+        );
+        assert!(
+            chapter_draft::list_retries(&projects_root, &project_id).is_empty(),
+            "两份归档事务都应搬回结算"
+        );
+        let status = draft_restore_status(&project_id);
+        assert_eq!(status.kept, 2);
+        assert!(status.retry_chapters.is_empty());
+    }
+
+    /// Issue #1067 复审第 7 项：同章同会话的两份不同归档事务以
+    /// `archived_path` 区分，各自搬回并结算一次，不能把第二份当成第一份的
+    /// 重复而留在活动槽位。
+    #[test]
+    fn same_chapter_same_session_archived_transactions_are_each_consumed() {
+        let (temp, api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        for text in ["第一份旧稿", "第二份旧稿"] {
+            write_verified_draft(&projects_root, &project_id, &volume_id, &chapter_id, text);
+            let archived = chapter_draft::quarantine(&projects_root, &project_id, &chapter_id)
+                .expect("quarantine")
+                .expect("archived path");
+            chapter_draft::record_retry(
+                &projects_root,
+                &project_id,
+                &chapter_id,
+                &volume_id,
+                std::path::Path::new(&archived),
+                "unit",
+                0,
+            )
+            .expect("record retry");
+        }
+        // 两份旧稿来自同一会话（固定 session=1、generation=gen-1），只有
+        // 归档路径能区分事务。
+        let candidates = chapter_draft::list_retries(&projects_root, &project_id);
+        assert_eq!(candidates.len(), 2);
+        assert_ne!(
+            candidates[0].marker.archived_path, candidates[1].marker.archived_path,
+            "同章同会话的两个归档事务必须靠归档路径区分"
+        );
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project_id.clone(),
+            },
+        );
+
+        assert!(
+            !draft_dir(&projects_root, &project_id, &chapter_id).exists(),
+            "两份归档事务都必须离开活动槽位"
+        );
+        assert!(
+            chapter_draft::list_retries(&projects_root, &project_id).is_empty(),
+            "两份事务都必须各消费一次"
+        );
+        let status = draft_restore_status(&project_id);
+        assert_eq!(status.kept, 2, "两份事务各结算一次");
+        assert!(status.retry_chapters.is_empty());
+    }
+
+    /// Issue #1067 复审第 7 项：同章已有活动稿占位时，先按真实结算规则
+    /// 处理活动稿，再消费该章冻结的归档队列；归档事务不能因为槽位被占而
+    /// 永久延期。
+    #[test]
+    fn active_slot_is_settled_before_frozen_archived_transaction() {
+        let (temp, api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        write_verified_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            "归档旧稿",
+        );
+        let archived = chapter_draft::quarantine(&projects_root, &project_id, &chapter_id)
+            .expect("quarantine")
+            .expect("archived path");
+        chapter_draft::record_retry(
+            &projects_root,
+            &project_id,
+            &chapter_id,
+            &volume_id,
+            std::path::Path::new(&archived),
+            "unit",
+            0,
+        )
+        .expect("record retry");
+        // 同章活动稿占住槽位：恢复入口必须先把这份活动稿按现有规则结算，
+        // 再搬回上面冻结的归档事务。
+        write_verified_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            "活动稿正文",
+        );
+        assert!(draft_dir(&projects_root, &project_id, &chapter_id).exists());
+        let candidates = chapter_draft::list_retries(&projects_root, &project_id);
+        assert_eq!(candidates.len(), 1);
+        // 协调器必须报告“活动槽位占用”，而不是把这条候选当成已消费；
+        // 调用方先结算活动稿，随后还要回来搬回这条归档事务。
+        assert_eq!(
+            super::super::restore_coordinator::materialize_candidate(
+                &projects_root,
+                &project_id,
+                &candidates[0],
+                &mut super::super::kept_draft::RestoreCounters::default(),
+            ),
+            super::super::restore_coordinator::MaterializeOutcome::ActiveDraftOccupies
+        );
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project_id.clone(),
+            },
+        );
+
+        assert!(
+            !draft_dir(&projects_root, &project_id, &chapter_id).exists(),
+            "活动稿与冻结的归档事务都必须搬出可写槽位"
+        );
+        assert!(
+            chapter_draft::list_retries(&projects_root, &project_id).is_empty(),
+            "活动槽位结算后必须继续消费该章冻结的归档事务"
+        );
+        let status = draft_restore_status(&project_id);
+        assert_eq!(status.kept, 2, "活动稿与归档事务各结算一次");
+        assert!(status.kept_chapters.contains(&chapter_id));
+        assert!(status.retry_chapters.is_empty());
+    }
+
+    /// Issue #1067 复审第 7 项：单个候选失败只保留它自己。本章活动槽位的
+    /// ack 材料损坏使该章被阻断时，该章归档事务原样保留，另一章的归档事务
+    /// 仍在本轮正常消费，不能被一个失败拖住。
+    #[test]
+    fn blocked_active_slot_only_defers_its_own_transaction() {
+        let (temp, api, project_id, volume_id, chapter_id) = workspace();
+        let projects_root = temp.path().join("projects");
+        let second = api
+            .create_chapter(&project_id, &volume_id, "第二章")
+            .unwrap();
+        api.save_chapter_content_versioned(
+            &project_id,
+            &volume_id,
+            &second.id,
+            "第二章已提交正文",
+            None,
+            None,
+        )
+        .unwrap();
+        // 第一章：冻结归档事务 A，再让一份活动稿占位，并写坏它的 ack 材料。
+        write_verified_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            "第一章归档旧稿",
+        );
+        let archived_a = chapter_draft::quarantine(&projects_root, &project_id, &chapter_id)
+            .expect("quarantine")
+            .expect("archived path");
+        chapter_draft::record_retry(
+            &projects_root,
+            &project_id,
+            &chapter_id,
+            &volume_id,
+            std::path::Path::new(&archived_a),
+            "unit",
+            0,
+        )
+        .expect("record retry");
+        write_verified_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            "第一章活动稿",
+        );
+        let ack_dir = draft_dir(&projects_root, &project_id, &chapter_id).join("pending-acks");
+        std::fs::create_dir_all(&ack_dir).unwrap();
+        std::fs::write(ack_dir.join("tx-bad.json"), b"{ not-json").unwrap();
+        // 第二章：普通归档事务 B。
+        write_verified_draft(
+            &projects_root,
+            &project_id,
+            &volume_id,
+            &second.id,
+            "第二章旧稿",
+        );
+        let archived_b = chapter_draft::quarantine(&projects_root, &project_id, &second.id)
+            .expect("quarantine")
+            .expect("archived path");
+        chapter_draft::record_retry(
+            &projects_root,
+            &project_id,
+            &second.id,
+            &volume_id,
+            std::path::Path::new(&archived_b),
+            "unit",
+            0,
+        )
+        .expect("record retry");
+
+        let mut state = ChapterSaveWorkerState::for_tests(api);
+        handle_restore_project(
+            &mut state,
+            ChapterRestoreCommand {
+                context: context(temp.path(), &projects_root),
+                project_id: project_id.clone(),
+            },
+        );
+
+        // 第一章被阻断：活动槽位与归档事务都原样保留，等下一次入口。
+        assert!(draft_dir(&projects_root, &project_id, &chapter_id).exists());
+        let retries = chapter_draft::list_retries(&projects_root, &project_id);
+        assert_eq!(retries.len(), 1, "只有被阻断章节的归档事务保留");
+        assert_eq!(retries[0].marker.chapter_id, chapter_id);
+        assert_eq!(retries[0].marker.archived_path, archived_a);
+        // 第二章不受影响：归档事务被消费，活动槽位清空。
+        assert!(!draft_dir(&projects_root, &project_id, &second.id).exists());
+        let status = draft_restore_status(&project_id);
+        assert!(status.blocked_chapters.contains(&chapter_id));
+        assert!(!status.blocked_chapters.contains(&second.id));
+        assert!(status.kept_chapters.contains(&second.id));
+    }
 }

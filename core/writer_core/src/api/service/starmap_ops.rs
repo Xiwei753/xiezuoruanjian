@@ -1641,6 +1641,7 @@ impl WriterCoreApi {
             self,
             self.begin_starmap_contribution_transaction()?,
         );
+        let mut contribution_batch = self.begin_contribution_batch();
         let history_token = crate::storage::journal::workspace_change::new_token();
         // rename 直接写 meta：必须在修改前登记具体文件，来源事务才能回滚。
         contribution_txn.prepare_paths(&[self
@@ -1695,6 +1696,7 @@ impl WriterCoreApi {
             Some(&after_meta),
             Some(roots_after),
         )?;
+        self.commit_contribution_batch(&mut contribution_batch)?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         if let Err(e) = history_journal.mark_local_applied(&self.app_data_root) {
             log::warn!(
@@ -1912,6 +1914,7 @@ impl WriterCoreApi {
             self,
             self.begin_starmap_contribution_transaction()?,
         );
+        let mut contribution_batch = self.begin_contribution_batch();
         let history_token = crate::storage::journal::workspace_change::new_token();
         // bind 直接写 meta，并可能先写 index；两者都要进入来源事务备份清单。
         contribution_txn.prepare_paths(&[
@@ -2041,6 +2044,7 @@ impl WriterCoreApi {
             Some(&meta),
             Some(roots_after),
         )?;
+        self.commit_contribution_batch(&mut contribution_batch)?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         if let Err(e) = history_journal.mark_local_applied(&self.app_data_root) {
             log::warn!(
@@ -2076,6 +2080,7 @@ impl WriterCoreApi {
             self,
             self.begin_starmap_contribution_transaction()?,
         );
+        let mut contribution_batch = self.begin_contribution_batch();
         let history_token = crate::storage::journal::workspace_change::new_token();
         // unbind 直接写 meta，并可能先写 index；两者都要进入来源事务备份清单。
         contribution_txn.prepare_paths(&[
@@ -2200,6 +2205,7 @@ impl WriterCoreApi {
             Some(&meta),
             Some(roots_after),
         )?;
+        self.commit_contribution_batch(&mut contribution_batch)?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         if let Err(e) = history_journal.mark_local_applied(&self.app_data_root) {
             log::warn!(
@@ -3713,7 +3719,6 @@ impl WriterCoreApi {
             return Err(error);
         }
         transaction.commit()?;
-        self.clear_starmap_batch_snapshots();
         Ok(())
     }
 }

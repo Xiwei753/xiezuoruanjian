@@ -25,8 +25,9 @@ fn mark_superseded(
 ) -> Result<bool> {
     manifest.phase = ChapterCommitPhase::Superseded;
     manifest.superseded_reason = Some(reason);
-    // 先把冲突材料归档 durable，再确认 Superseded；归档失败时保持 Decided
-    // 原样，下一次恢复按同一事务材料重试，不会出现“Superseded 但永不归档”。
+    // 先把冲突材料按 manifest 清单归档并自校验（字节摘要逐项核对），只有归档
+    // 完整才把 Superseded 写成真实完成标记；归档失败时保持 Decided 原样，下一次
+    // 恢复按同一事务材料重试，不会出现“Superseded 但材料残缺”的完成态。
     preserve_superseded_conflict(project_root, tx_dir, manifest)?;
     write_manifest(tx_dir, manifest)?;
     Ok(false)

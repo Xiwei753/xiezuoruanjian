@@ -578,14 +578,16 @@ impl super::WriterCore {
             }
             // 同一恢复轮只枚举一次真实未决事务，按章节顺序逐个投影；单个
             // 事务失败保留自己的 journal，不阻断其它章节。
-            let transactions =
+            let scan =
                 match crate::chapter::commit::pending_chapter_proof_transactions(&project_root) {
-                    Ok(transactions) => transactions,
+                    Ok(scan) => scan,
                     Err(error) => {
                         failures.push(format!("{}: {error}", project_root.display()));
                         continue;
                     }
                 };
+            failures.extend(scan.failures);
+            let transactions = scan.transactions;
             // 本轮已成功确认的事务要从“更早未决”集合里移除，否则同章后续
             // 事务会把它误判成仍未投影而整章阻塞。
             let mut remaining = transactions.clone();
@@ -634,12 +636,12 @@ impl super::WriterCore {
         &self,
         project_root: &std::path::Path,
     ) -> Result<()> {
-        let transactions =
-            crate::chapter::commit::pending_chapter_proof_transactions(project_root)?;
+        let scan = crate::chapter::commit::pending_chapter_proof_transactions(project_root)?;
         // 同一章前序 journal 投影失败时，后续 journal 不能越过它；其他章
         // 仍继续结算。进程内失败集只用于本轮，durable journal 仍是事实来源。
         let mut blocked_chapters = std::collections::HashSet::new();
-        let mut failures: Vec<String> = Vec::new();
+        let mut failures: Vec<String> = scan.failures;
+        let transactions = scan.transactions;
         // 成功确认的事务从 remaining 移除，供同章后续事务判断“前序仍未决”。
         let mut remaining = transactions.clone();
         for transaction in &transactions {
@@ -688,8 +690,11 @@ impl super::WriterCore {
         project_root: &std::path::Path,
         transaction_id: &str,
     ) -> Result<()> {
-        let transactions =
-            crate::chapter::commit::pending_chapter_proof_transactions(project_root)?;
+        let scan = crate::chapter::commit::pending_chapter_proof_transactions(project_root)?;
+        for failure in &scan.failures {
+            log::warn!("pending chapter proof scan reported failure: {failure}");
+        }
+        let transactions = scan.transactions;
         let Some(current) = transactions
             .iter()
             .find(|transaction| transaction.transaction_id == transaction_id)

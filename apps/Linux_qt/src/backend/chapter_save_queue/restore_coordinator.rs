@@ -5,9 +5,10 @@
 // Issue #1067 复审第 7 项：恢复入口的队列以真实归档事务（chapter_id +
 // marker.archived_path）为单位，`list_retries` 只取一次、按列表顺序逐条
 // materialize；每条候选无论成功失败都只消费一次，失败时计数并保留归档原件，
-// 不再靠 chapter_id、重新枚举或路径集合增长推断本轮进度。
+// 不再靠 chapter_id、会话坐标、重新枚举或路径集合增长推断本轮进度。
 //
-// 这里只放“消费一条候选”的步骤，不按 chapter_id/timestamp 代表当前事务。
+// 活动槽位被同章另一份草稿占着时，由调用方先按真实结算规则处理活动稿，再
+// 回来消费这条归档事务；这里只报告槽位占用的种类，不按会话身份去重。
 
 use std::path::Path;
 
@@ -18,8 +19,14 @@ use super::kept_draft::RestoreCounters;
 pub(super) enum MaterializeOutcome {
     /// 已搬回活动槽位：调用方必须立刻处理这一份草稿。
     Moved,
-    /// 本轮已消费但没有可处理的活动草稿（更新草稿占位、ack 待对账、归档
-    /// 丢失、标记缺失或搬运失败）：原件保持原样，不回到本轮队列。
+    /// 活动槽位被同章另一份活动草稿占着：调用方先结算活动稿，再回来搬回
+    /// 这条归档事务。
+    ActiveDraftOccupies,
+    /// 活动槽位只剩待对账 ack 文件：调用方先让 Core journal 对账消费 ack，
+    /// 再回来搬回这条归档事务。
+    PendingAckOccupies,
+    /// 本轮已消费但没有可处理的活动草稿（归档丢失、标记缺失或搬运失败）：
+    /// 原件保持原样，不回到本轮队列。
     Consumed,
 }
 
@@ -27,6 +34,7 @@ pub(super) enum MaterializeOutcome {
 ///
 /// 每份归档副本有独立的标记文件，同章多份事务各自调用一次即可；失败时
 /// 不删除归档目录，只记 counters.failed/note，由下一次进入项目时再试。
+/// 槽位占用只报告种类，处理顺序（先结算活动槽位再搬回）由调用方决定。
 pub(super) fn materialize_candidate(
     projects_root: &Path,
     project_id: &str,
@@ -45,18 +53,10 @@ pub(super) fn materialize_candidate(
             MaterializeOutcome::Moved
         }
         Ok(super::super::chapter_draft::RetryMaterialize::ActiveDraftExists) => {
-            counters.note(
-                &chapter_id,
-                "retry deferred by newer active draft (old copy kept)",
-            );
-            MaterializeOutcome::Consumed
+            MaterializeOutcome::ActiveDraftOccupies
         }
         Ok(super::super::chapter_draft::RetryMaterialize::AckOnlyPending) => {
-            counters.note(
-                &chapter_id,
-                "retry deferred by pending draft ack (old copy kept)",
-            );
-            MaterializeOutcome::Consumed
+            MaterializeOutcome::PendingAckOccupies
         }
         Ok(super::super::chapter_draft::RetryMaterialize::ArchivedMissing) => {
             counters.note(&chapter_id, "retry archived copy missing (marker cleared)");

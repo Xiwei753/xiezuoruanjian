@@ -14,6 +14,7 @@ use writer_core::api::WriterCoreApi;
 
 use super::draft_jobs::{draft_restore_state, retry_pending_inputs, ChapterDraftRestoreStatus};
 use super::kept_draft::{KeptDisposition, RestoreCounters};
+use super::restore_coordinator::{materialize_candidate, MaterializeOutcome};
 use super::{ChapterRestoreCommand, ChapterSaveWorkerState};
 
 pub(crate) fn version_display(version: &ChapterVersionDto) -> String {
@@ -116,9 +117,11 @@ pub(crate) fn unchanged_baseline(
 ///
 /// Issue #1067 复审第 7 项：本轮队列以真实归档事务（chapter_id +
 /// `marker.archived_path`）为单位，`list_retries` 只取一次并按列表顺序消费；
-/// 每条候选 materialize 后立刻处理该章活动稿，成功/失败都只消费一次，失败
-/// 只记 counters 并保留归档原件。候选消费完后再做一次活动草稿发现，用于
-/// 处理活动槽位与本轮的 unreadable/scan_errors；发现结果不回填队列。
+/// 每条候选搬回活动槽位后立刻处理该事务，成功/失败都只消费一次，失败只记
+/// counters 并保留归档原件。同章已有活动稿占位时，先按既有真实结算规则处理
+/// 活动稿，再消费该章冻结的归档队列；单个候选失败不会顺延其余候选。候选
+/// 消费完后再做一次活动草稿发现，用于处理活动槽位与本轮的 unreadable/
+/// scan_errors；发现结果不回填队列。
 pub(super) fn handle_restore_project(
     state: &mut ChapterSaveWorkerState,
     command: ChapterRestoreCommand,
@@ -192,75 +195,36 @@ pub(super) fn handle_restore_project(
     }
     let api = state.api_for(&command.context);
     // Issue #1067 复审第 7 项：归档事务队列只枚举一次，按 `list_retries` 的
-    // 顺序逐条消费。同一章的多个归档候选各自处理一次；不因为本章已经处理过
-    // 就跳过其余候选，也不因为本轮新增 kept/retry 目录而重新枚举。
+    // 顺序逐条消费。消费单位是候选自带的归档事务（`marker.archived_path`），
+    // 同章多个不同事务各自处理一次；不因为本章/本会话已经处理过就跳过其余
+    // 候选，也不因为本轮新增 kept/retry 目录而重新枚举。
     let candidates =
         super::super::chapter_draft::list_retries(&projects_root, &command.project_id);
-    // 以真实草稿会话身份记录本轮已消费的候选，后续活动稿发现不再重复处理
-    // 同一份事务；不按 chapter_id 推断进度。
-    let mut consumed_sessions: std::collections::BTreeSet<(String, u64, String)> =
+    // 每条归档事务只消费一次：身份取自候选自身的归档路径（marker 内容），
+    // 不是 (volume, session, generation) 会话坐标，因此同章同会话的多个不同
+    // 归档事务不会被当成重复。
+    let mut consumed_transactions: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
     for candidate in candidates {
-        let chapter_id = candidate.marker.chapter_id.clone();
-        // 项目级对账已判定本章失败：这张归档事务不搬回，原件留到下一次入口。
-        if blocked_chapters.contains(&chapter_id)
-            || counters.blocked_chapters.iter().any(|id| id == &chapter_id)
-        {
+        if !consumed_transactions.insert(candidate.marker.archived_path.clone()) {
             counters.note(
-                &chapter_id,
-                "retry candidate deferred by blocked chapter (archived copy kept)",
+                &candidate.marker.chapter_id,
+                format!(
+                    "retry transaction already consumed this round (skipped): {}",
+                    candidate.marker.archived_path
+                ),
             );
             continue;
         }
-        // 搬回失败/活动槽位被新草稿占用/归档丢失都只消费这一条候选：原件
-        // 原样保留，本轮不再重试，也不进入下一轮扫描。
-        let outcome = super::restore_coordinator::materialize_candidate(
+        consume_retry_candidate(
+            api,
             &projects_root,
-            &command.project_id,
+            &command,
             &candidate,
+            &mut blocked_chapters,
+            &mut reconcile_failed_all,
             &mut counters,
         );
-        if outcome != super::restore_coordinator::MaterializeOutcome::Moved {
-            continue;
-        }
-        // Issue #1062 评论 #7214283385 第 1 项：Core durable ack 对账必须在
-        // materialize 之后按事务推进。进入作品前的那次全局对账只能覆盖
-        // “已无本地草稿”的 ack；被归档区的 retry 事务会在那一轮被 skipped，
-        // 搬回活动槽位后必须立刻用同一章节的 Core 记录重新对账，再走
-        // restore_plan_strict/replay，否则已提交事实会被当成未提交重放。
-        // 对账失败时保留草稿与 Core journal，并把本章标为 Deferred，不 replay。
-        if !reconcile_failed_all {
-            match reconcile_chapter_acks(
-                api,
-                command.context.projects_root(),
-                &command.project_id,
-                &chapter_id,
-                &mut blocked_chapters,
-                &mut counters,
-            ) {
-                ChapterReconcile::Ok => {}
-                ChapterReconcile::Blocked => continue,
-                ChapterReconcile::GlobalFailed => reconcile_failed_all = true,
-            }
-        }
-        let draft = ActiveDraft::from_materialized(
-            &projects_root,
-            &command.project_id,
-            &chapter_id,
-            &candidate.marker.volume_id,
-        );
-        if !consumed_sessions.insert((
-            draft.volume_id.clone(),
-            draft.session_id,
-            draft.generation.clone(),
-        )) {
-            continue;
-        }
-        if reconcile_failed_all {
-            keep_unreconciled_draft(&projects_root, &command.project_id, &draft, &mut counters);
-            continue;
-        }
-        restore_draft_decision(api, &projects_root, &command, &draft, &mut counters);
     }
     // Issue #1067 复审第 7 项：候选消费完后只做一次活动草稿发现，处理活动
     // 槽位与 unreadable/scan_errors；这是本轮唯一的剩余枚举，不是循环推进。
@@ -322,14 +286,6 @@ pub(super) fn handle_restore_project(
                     continue;
                 }
                 let draft = ActiveDraft::from_summary(draft);
-                if !consumed_sessions.insert((
-                    draft.volume_id.clone(),
-                    draft.session_id,
-                    draft.generation.clone(),
-                )) {
-                    // 本轮归档候选已经处理过同一份草稿；不再重复 replay/save。
-                    continue;
-                }
                 if reconcile_failed_all {
                     keep_unreconciled_draft(
                         &projects_root,
@@ -456,6 +412,182 @@ fn reconcile_chapter_acks(
     }
 }
 
+/// 消费一条归档事务候选：搬回活动槽位后立刻处理这一份事务。
+///
+/// Issue #1067 复审第 7 项：
+/// - 活动槽位被同章另一份活动稿（或待对账 ack）占着时，先按发现链相同的
+///   真实结算规则处理活动槽位，再回头搬回这条冻结的归档副本；
+/// - 单个候选失败只保留它自己（归档原件不动），循环继续处理后续候选；
+/// - 这里不再枚举归档队列，每条候选只消费一次。
+fn consume_retry_candidate(
+    api: &WriterCoreApi,
+    projects_root: &Path,
+    command: &ChapterRestoreCommand,
+    candidate: &super::super::chapter_draft::RetryCandidate,
+    blocked_chapters: &mut std::collections::BTreeSet<String>,
+    reconcile_failed_all: &mut bool,
+    counters: &mut RestoreCounters,
+) {
+    let chapter_id = candidate.marker.chapter_id.clone();
+    // 项目级对账已判定本章失败：这张归档事务不搬回，原件留到下一次入口。
+    if blocked_chapters.contains(&chapter_id)
+        || counters.blocked_chapters.iter().any(|id| id == &chapter_id)
+    {
+        counters.note(
+            &chapter_id,
+            format!(
+                "retry candidate deferred by blocked chapter (archived copy kept): {}",
+                candidate.marker.archived_path
+            ),
+        );
+        return;
+    }
+    let mut outcome = materialize_candidate(
+        projects_root,
+        &command.project_id,
+        candidate,
+        counters,
+    );
+    if matches!(
+        outcome,
+        MaterializeOutcome::ActiveDraftOccupies | MaterializeOutcome::PendingAckOccupies
+    ) {
+        // 活动槽位不是本轮可以直接搬走的状态：先按现有真实结算规则处理
+        // 完它，再消费该章冻结的归档队列。处理失败只保留当前这条候选。
+        let active_draft = outcome == MaterializeOutcome::ActiveDraftOccupies;
+        if !settle_occupied_slot(
+            api,
+            projects_root,
+            command,
+            &chapter_id,
+            &candidate.marker.volume_id,
+            active_draft,
+            blocked_chapters,
+            reconcile_failed_all,
+            counters,
+        ) {
+            counters.note(
+                &chapter_id,
+                format!(
+                    "retry transaction kept behind active slot (archived copy kept): {}",
+                    candidate.marker.archived_path
+                ),
+            );
+            return;
+        }
+        outcome = materialize_candidate(
+            projects_root,
+            &command.project_id,
+            candidate,
+            counters,
+        );
+    }
+    if outcome != MaterializeOutcome::Moved {
+        if matches!(
+            outcome,
+            MaterializeOutcome::ActiveDraftOccupies | MaterializeOutcome::PendingAckOccupies
+        ) {
+            // 活动槽位结算后仍有内容占着：这条归档事务原样保留，等下一次
+            // 入口再试；后续不同候选不受影响。
+            counters.note(
+                &chapter_id,
+                format!(
+                    "retry transaction kept behind active slot (archived copy kept): {}",
+                    candidate.marker.archived_path
+                ),
+            );
+        }
+        return;
+    }
+    // Issue #1062 评论 #7214283385 第 1 项：Core durable ack 对账必须在
+    // materialize 之后按事务推进。进入作品前的那次全局对账只能覆盖
+    // “已无本地草稿”的 ack；被归档区的 retry 事务会在那一轮被 skipped，
+    // 搬回活动槽位后必须立刻用同一章节的 Core 记录重新对账，再走
+    // restore_plan_strict/replay，否则已提交事实会被当成未提交重放。
+    // 对账失败时保留草稿与 Core journal，并把本章标为 Deferred，不 replay。
+    if !*reconcile_failed_all {
+        match reconcile_chapter_acks(
+            api,
+            command.context.projects_root(),
+            &command.project_id,
+            &chapter_id,
+            blocked_chapters,
+            counters,
+        ) {
+            ChapterReconcile::Ok => {}
+            ChapterReconcile::Blocked => return,
+            ChapterReconcile::GlobalFailed => *reconcile_failed_all = true,
+        }
+    }
+    let draft = ActiveDraft::from_slot(
+        projects_root,
+        &command.project_id,
+        &chapter_id,
+        &candidate.marker.volume_id,
+    );
+    if *reconcile_failed_all {
+        keep_unreconciled_draft(projects_root, &command.project_id, &draft, counters);
+        return;
+    }
+    restore_draft_decision(api, projects_root, command, &draft, counters);
+}
+
+/// 处理占住活动槽位的同章内容，为搬回冻结的归档事务腾出槽位。
+///
+/// `active_draft` 为 true 表示槽位是真实活动草稿，按发现链相同的结算规则
+/// 处理；false 表示槽位只剩待对账 ack，只让 Core journal 对账消费 ack，
+/// 不把 ack 材料当草稿归档。
+///
+/// 返回 true 表示活动槽位已腾出，可以继续搬回这条归档事务；false 表示本章
+/// 被阻断或项目级对账失败，调用方只保留当前候选，后续候选照常处理。
+fn settle_occupied_slot(
+    api: &WriterCoreApi,
+    projects_root: &Path,
+    command: &ChapterRestoreCommand,
+    chapter_id: &str,
+    fallback_volume_id: &str,
+    active_draft: bool,
+    blocked_chapters: &mut std::collections::BTreeSet<String>,
+    reconcile_failed_all: &mut bool,
+    counters: &mut RestoreCounters,
+) -> bool {
+    // 活动槽位同样必须在 replay/搬回之前按章对账；对账失败时本章进入
+    // blocked，活动槽位与归档副本都留到下一次入口。
+    if !*reconcile_failed_all {
+        match reconcile_chapter_acks(
+            api,
+            command.context.projects_root(),
+            &command.project_id,
+            chapter_id,
+            blocked_chapters,
+            counters,
+        ) {
+            ChapterReconcile::Ok => {}
+            ChapterReconcile::Blocked => return false,
+            ChapterReconcile::GlobalFailed => *reconcile_failed_all = true,
+        }
+    }
+    if !active_draft {
+        // 只剩 ack 的槽位不是草稿事务：对账后若仍被 ack 占着，后面的
+        // materialize 会再次报告占位，候选自己留到下一次入口。
+        return !*reconcile_failed_all;
+    }
+    let draft = ActiveDraft::from_slot(
+        projects_root,
+        &command.project_id,
+        chapter_id,
+        fallback_volume_id,
+    );
+    if *reconcile_failed_all {
+        keep_unreconciled_draft(projects_root, &command.project_id, &draft, counters);
+        return false;
+    }
+    restore_draft_decision(api, projects_root, command, &draft, counters);
+    // 结算成功会删除（settle）或归档（keep）活动目录；失败分支若把原目录
+    // 留在槽位，调用方再次 materialize 会重新判定占位，只保留该候选。
+    true
+}
+
 /// 一份待恢复活动草稿的身份：恢复决议只依赖这些字段。
 ///
 /// 归档事务队列与活动槽位发现两条入口都收敛成这个结构，避免把整份发现
@@ -480,18 +612,19 @@ impl ActiveDraft {
         }
     }
 
-    /// materialize 回来的活动稿：只读这一章，不再为一条候选枚举整个项目。
-    fn from_materialized(
+    /// 从活动槽位读取这一章草稿的身份：归档候选搬回后与恢复入口发现的
+    /// 活动稿都走这里，只读这一章，不再为一条候选枚举整个项目。
+    fn from_slot(
         projects_root: &Path,
         project_id: &str,
         chapter_id: &str,
-        marker_volume_id: &str,
+        fallback_volume_id: &str,
     ) -> Self {
         match super::super::chapter_draft::snapshot(projects_root, project_id, chapter_id) {
             Some(snapshot) => Self {
                 chapter_id: chapter_id.to_string(),
                 volume_id: if snapshot.volume_id.is_empty() {
-                    marker_volume_id.to_string()
+                    fallback_volume_id.to_string()
                 } else {
                     snapshot.volume_id
                 },
@@ -503,7 +636,7 @@ impl ActiveDraft {
             // 失败分支会按原语义保留原件并把错误原文写进 counters。
             None => Self {
                 chapter_id: chapter_id.to_string(),
-                volume_id: marker_volume_id.to_string(),
+                volume_id: fallback_volume_id.to_string(),
                 session_id: 0,
                 generation: String::new(),
                 draft_error: None,

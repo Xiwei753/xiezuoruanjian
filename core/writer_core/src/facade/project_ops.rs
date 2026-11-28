@@ -467,7 +467,15 @@ impl super::WriterCore {
                 .iter()
                 .map(|event| event.event_id().to_string())
                 .collect();
-            self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed)?;
+            if let Err(error) =
+                self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed)
+            {
+                // 正文和回执已经 durable；清理派生缓存失败只记录真实错误，
+                // 不能把已提交正文判成保存失败。
+                log::warn!(
+                    "failed to clear pending editor proof after save: project={project_id} volume={volume_id} chapter={chapter_id}: {error}"
+                );
+            }
             if let Err(error) =
                 self.apply_pending_chapter_proof(&project_root, &result.0.transaction_id)
             {
@@ -538,7 +546,15 @@ impl super::WriterCore {
                 .map(|event| event.event_id().to_string())
                 .filter(|event_id| !event_id.is_empty())
                 .collect();
-            self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed)?;
+            if let Err(error) =
+                self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed)
+            {
+                // 正文和回执已经 durable；清理派生缓存失败只记录真实错误，
+                // 不能把已提交正文判成保存失败。
+                log::warn!(
+                    "failed to clear pending editor proof after save: project={project_id} volume={volume_id} chapter={chapter_id}: {error}"
+                );
+            }
             if let Err(error) =
                 self.apply_pending_chapter_proof(&project_root, &result.0.transaction_id)
             {
@@ -635,7 +651,15 @@ impl super::WriterCore {
                 .iter()
                 .map(|event| event.event_id().to_string())
                 .collect();
-            self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed)?;
+            if let Err(error) =
+                self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed)
+            {
+                // 正文和回执已经 durable；清理派生缓存失败只记录真实错误，
+                // 不能把已提交正文判成保存失败。
+                log::warn!(
+                    "failed to clear pending editor proof after save: project={project_id} volume={volume_id} chapter={chapter_id}: {error}"
+                );
+            }
             if let Err(error) =
                 self.apply_pending_chapter_proof(&project_root, &receipt.transaction_id)
             {

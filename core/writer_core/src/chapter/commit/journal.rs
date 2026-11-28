@@ -21,12 +21,13 @@ mod recovery;
 pub(crate) use manifest::{
     AdditionalFilePlan, ChapterCommitManifest, ChapterCommitRecovery, ChapterSyncMutationPlan,
 };
-use recovery::project_manifest_sync_mutations;
+use recovery::{project_manifest_sync_mutations, recover_pending_chapter_commits_for_key};
 pub(crate) use recovery::preserve_superseded_conflict;
 pub use recovery::{
     pending_chapter_draft_acks, pending_chapter_proof_events, pending_chapter_proof_transactions,
     pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
     recover_pending_chapter_commits, replay_pending_sync_mutation, replay_pending_sync_mutations,
+    PendingChapterProofScan,
 };
 
 /// journal 阶段。
@@ -55,6 +56,14 @@ pub(super) fn md5_hex(text: &str) -> String {
 
 pub(super) fn journal_root(project_root: &Path) -> PathBuf {
     project_root.join(JOURNAL_DIR)
+}
+
+/// 冲突回执文件名：只有 manifest 确定的材料全部 durable 后，归档路径才写入。
+const CONFLICT_RECEIPT_FILE: &str = "conflict.json";
+
+/// 一笔事务的冲突归档目录（normal 归档与恢复归档共用同一路径）。
+pub(super) fn conflict_dir_path(project_root: &Path, transaction_id: &str) -> PathBuf {
+    journal_root(project_root).join(CONFLICT_DIR).join(transaction_id)
 }
 
 fn pending_marker(project_root: &Path) -> PathBuf {
@@ -301,8 +310,8 @@ pub fn read_chapter_state_recovering(
     volume_id: &str,
     chapter_id: &str,
 ) -> Result<(Chapter, String, ChapterVersion)> {
-    recover_pending_for_read(guard, project_root)?;
     let key = ChapterKey::new(project_id(project_root), volume_id, chapter_id);
+    recover_pending_for_read(guard, project_root, &key)?;
     read_current_migrated(project_root, &key)
 }
 
@@ -319,11 +328,13 @@ pub fn read_chapter_version_recovering(
 
 /// 读取路径的恢复入口：调用方必须持有覆盖该项目的 workspace guard。
 fn recover_pending_for_read(
-    guard: &crate::storage::WorkspaceWriteLock,
+    _guard: &crate::storage::WorkspaceWriteLock,
     project_root: &Path,
+    key: &ChapterKey,
 ) -> Result<()> {
     if pending_marker(project_root).exists() {
-        recover_pending_chapter_commits(project_root)?;
+        // 只处理当前章真实未完成的正文决议；全项目恢复只在启动/显式入口。
+        recover_pending_chapter_commits_for_key(project_root, key)?;
     }
     Ok(())
 }
@@ -388,6 +399,69 @@ fn read_current_migrated(
     Ok((meta, content, version))
 }
 
+/// Superseded 冲突的 durable 回执（normal 归档与恢复归档共用这一份构造）。
+///
+/// `before`/`actual` 都取提交决议里的真实版本：`actual` 就是决议时 live 的
+/// `before`，恢复入口不再重读 live 生成第二份“猜测”的 actual。`after` 是本次
+/// 想发布、但被更新版本放弃的决议。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChapterConflictReceipt {
+    transaction_id: String,
+    key: ChapterKey,
+    before: ChapterVersion,
+    after: ChapterVersion,
+    actual: ChapterVersion,
+    #[serde(default)]
+    expected: Option<ChapterVersion>,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    pending_projections: Vec<String>,
+}
+
+impl ChapterConflictReceipt {
+    fn from_manifest(manifest: &ChapterCommitManifest) -> Self {
+        Self {
+            transaction_id: manifest.transaction_id.clone(),
+            key: manifest.key.clone(),
+            before: manifest.before.clone(),
+            after: manifest.after.clone(),
+            actual: manifest.before.clone(),
+            expected: manifest.expected.clone(),
+            reason: manifest.superseded_reason.clone(),
+            pending_projections: manifest.pending_projections.clone(),
+        }
+    }
+
+    /// 回执是否确实是同一笔 durable 决议的产物（旧失败留下的回执不算）。
+    fn matches_manifest(&self, manifest: &ChapterCommitManifest) -> bool {
+        self.transaction_id == manifest.transaction_id
+            && self.key == manifest.key
+            && self.before == manifest.before
+            && self.after == manifest.after
+            && self.actual == manifest.before
+            && self.reason == manifest.superseded_reason
+    }
+
+    fn write(&self, conflict_dir: &Path) -> Result<()> {
+        crate::storage::atomic_write_bytes(
+            &conflict_dir.join(CONFLICT_RECEIPT_FILE),
+            serde_json::to_string_pretty(self)?.as_bytes(),
+        )?;
+        Ok(())
+    }
+
+    /// 读取归档回执；缺失或损坏都按“尚未完成归档”处理（由归档路径覆盖重建）。
+    fn read(conflict_dir: &Path) -> Result<Option<Self>> {
+        match fs::read_to_string(conflict_dir.join(CONFLICT_RECEIPT_FILE)) {
+            Ok(raw) => Ok(serde_json::from_str(&raw).ok()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
 fn write_conflict_material(
     project_root: &Path,
     request: &ChapterCommitRequest,
@@ -395,15 +469,15 @@ fn write_conflict_material(
     actual: &ChapterVersion,
     transaction_id: &str,
 ) -> Result<String> {
-    let root = journal_root(project_root)
-        .join(CONFLICT_DIR)
-        .join(transaction_id);
+    let root = conflict_dir_path(project_root, transaction_id);
     write_conflict_material_files(
         &root,
         request.base_content.as_deref(),
         current,
         &request.content,
     )?;
+    // 没有 journal 决议的 CAS 冲突没有 manifest，只能在材料目录里留版本快照；
+    // Superseded 冲突的 before/actual 只由 ChapterConflictReceipt 生成一份。
     if let Some(expected) = request.expected.as_ref() {
         crate::storage::atomic_write_bytes(
             &root.join("expected.json"),
@@ -560,11 +634,11 @@ pub(crate) fn commit_chapter_with_guard(
     guard: Option<&crate::storage::WorkspaceWriteLock>,
     request: ChapterCommitRequest,
 ) -> Result<ChapterCommitOutcome> {
+    let key = request.key.clone();
     if let Some(guard) = guard {
-        recover_pending_for_read(guard, project_root)?;
+        recover_pending_for_read(guard, project_root, &key)?;
     }
 
-    let key = request.key.clone();
     let (mut meta, current, before) = match read_current_migrated(project_root, &key) {
         Ok(state) => state,
         Err(Error::ChapterNotFound) if request.mutation == ChapterMutationKind::Create => {
@@ -855,15 +929,23 @@ pub(crate) fn commit_chapter_with_guard(
         publish_decided(project_root, &tx_dir, &mut manifest)?
     };
     if !published {
-        let conflict_dir =
-            write_conflict_material(project_root, &request, &current, &before, &transaction_id)?;
+        // Superseded 回执（conflict.json）已由 mark_superseded 按同一份 durable
+        // manifest 归档，这里只补三方合并材料，不再另写一份 before/actual。
+        let conflict_dir = conflict_dir_path(project_root, &transaction_id);
+        write_conflict_material_files(
+            &conflict_dir,
+            request.base_content.as_deref(),
+            &current,
+            &request.content,
+        )?;
+        crate::storage::sync_dir(&conflict_dir)?;
         clear_pending_if_idle(project_root)?;
         return Ok(ChapterCommitOutcome::Conflict(ChapterConflict {
             key,
             expected: request.expected,
             actual: before,
             transaction_id,
-            conflict_dir,
+            conflict_dir: conflict_dir.to_string_lossy().to_string(),
         }));
     }
 

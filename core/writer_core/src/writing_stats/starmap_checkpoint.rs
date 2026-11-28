@@ -718,17 +718,12 @@ pub fn has_starmap_checkpoints(
         return Ok(false);
     }
     for header in &headers {
-        let path = snapshot_path(root, &header.device_id, &header.starmap_id, header);
-        match fs::metadata(&path) {
-            Ok(metadata) if metadata.is_file() => return Ok(true),
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(Error::Other(format!(
-                    "failed to inspect starmap checkpoint snapshot {}: {error}",
-                    path.display()
-                )))
-            }
+        // 文件存在不等于检查点可用：按现有读取路径真正解析快照内容，
+        // 损坏/半写入的快照不能当作可用历史。
+        match read_snapshot_checkpoint(root, device_id, starmap_id, header) {
+            Ok(Some(_)) => return Ok(true),
+            Ok(None) => {}
+            Err(error) => return Err(error),
         }
     }
     // 索引存在但快照全缺失/未迁移时不能算作可用历史，否则旧星图永远无法
