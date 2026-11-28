@@ -158,27 +158,6 @@ fn validate_group_conflict_path(
     Ok(())
 }
 
-/// 清单根提交成功后结算 GC journal：失败只记录日志，不影响已提交结果。
-///
-/// `apply_delta` 不再全目录扫描求删除集合，被替换/移除的旧对象/索引以 retire
-/// 记录随新根落盘；这里只在提交成功后按当前根结算上一代及更早的退休文件。
-fn collect_manifest_garbage_after_commit(
-    store: &crate::sync::lww::ManifestStore,
-    sync_root: &Path,
-) {
-    match store.collect_manifest_garbage() {
-        Ok(0) => {}
-        Ok(reclaimed) => log::info!(
-            "[sync] manifest gc reclaimed {reclaimed} retired file(s) under {}",
-            sync_root.display()
-        ),
-        Err(error) => log::warn!(
-            "[sync] manifest gc after commit failed under {}: {error}",
-            sync_root.display()
-        ),
-    }
-}
-
 /// 按 `local_path` 去重/替换加入冲突。
 ///
 /// 同一路径重复写入时替换已有记录，不无限 append。`state_conflicts` 和
