@@ -22,7 +22,7 @@
 //! `error_category` / `message_key` 从与总体同优先级的第一个 dominant target 取得，
 //! 避免"总体是认证失败、文案却拿到前一个网络错误"的错位。
 
-use crate::sync::types::{SyncTarget, TargetSyncResult};
+use crate::sync::types::SyncTarget;
 
 pub(crate) mod aggregate;
 pub(crate) mod discovery;
@@ -81,25 +81,6 @@ pub struct PlannedTarget {
     pub target_live_root: std::path::PathBuf,
     /// 作品删除前的回收区快照根（提供最后的已确认对象基线）。
     pub baseline_root: Option<std::path::PathBuf>,
-    #[allow(clippy::struct_field_names)]
-    pub deleted_journal_token: Option<String>,
-    pub deleted_lww: Option<DeletedTargetLww>,
-    pub live_lww: Option<LiveTargetLww>,
-    pub expected_delete_lww: Option<DeletedTargetLww>,
-}
-
-///   deleted target 的 LWW 决策元数据。
-#[derive(Debug, Clone)]
-pub struct DeletedTargetLww {
-    pub deleted_at_ms: i64,
-    pub device_id: String,
-}
-
-///   live project 的 LWW 决策元数据。
-#[derive(Debug, Clone)]
-pub struct LiveTargetLww {
-    pub lww_time_ms: i64,
-    pub device_id: String,
 }
 
 /// target 在 checkpoint/dirty 索引里的稳定键（App 组按组 id，作品按作品 id）。
@@ -118,11 +99,4 @@ impl PlannedTarget {
     pub fn is_deleted_target(&self) -> bool {
         self.target_kind.is_pending_deleted()
     }
-}
-
-///   无副作用共享 target planner 产生的生命周期候选。
-#[derive(Debug, Clone)]
-pub(crate) enum LifecycleCandidate {
-    Live { lww: LiveTargetLww },
-    Retry,
 }

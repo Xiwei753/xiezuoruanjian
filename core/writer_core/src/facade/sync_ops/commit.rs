@@ -15,29 +15,19 @@ impl crate::facade::WriterCore {
     ///
     /// 每个 target 的 Transfer + Commit 已在 `perform_full_sync` 中逐 target 完成，
     /// 此函数只负责整轮结束后的聚合收口：
-    /// - `apply_local_lifecycle_deletes`：处理 DeleteProject action
     /// - `aggregate_full_sync_result`：聚合总体状态
     /// - generation GC 失败传播
     /// - `cleanup_completed_deleted_targets`：清理 pending deleted
     /// - `FullSyncState` 持久化
     /// - `rebuild_search_index`
     ///
-    /// 返回 `(FullSyncResult, committed_paths, lifecycle_receipts)`。
-    /// `committed_paths` 只包含 lifecycle 删除产生的 paths（staging commit 的 paths
-    /// 已在 `perform_full_sync` 中逐 target 收集）。
+    /// 返回本轮的聚合结果；本地对象提交已在逐 target 阶段完成。
     pub fn finalize_full_sync(
         &self,
-        mut targets: Vec<crate::sync::types::TargetSyncResult>,
+        targets: Vec<crate::sync::types::TargetSyncResult>,
         round_phase_failure: Option<RoundPhaseFailure>,
-    ) -> (
-        crate::sync::types::FullSyncResult,
-        Vec<std::path::PathBuf>,
-        Vec<crate::sync::types::LocalLifecycleCommitReceipt>,
-    ) {
-        // 处理 local_lifecycle_action（DeleteProject）。
-        let (lifecycle_committed_paths, lifecycle_receipts) =
-            self.apply_local_lifecycle_deletes(&mut targets);
-
+        deletions_confirmed: bool,
+    ) -> crate::sync::types::FullSyncResult {
         let mut result = crate::sync::full_sync::aggregate_full_sync_result(targets);
 
         // 本轮级别的阶段失败（远端发布失败 / 取消）必须在**持久化终态之前**
@@ -60,8 +50,11 @@ impl crate::facade::WriterCore {
             }
         }
 
-        // deleted target 远端清理成功后，从 pending_deleted_targets.json 移除该条目。
-        self.cleanup_completed_deleted_targets(&result);
+        // 只有远端提交成功且删除回执都已结算时，才消费 pending 删除记录；
+        // 发布失败/回执未结算的删除必须保留到下一轮重试。
+        if deletions_confirmed {
+            self.cleanup_completed_deleted_targets(&result);
+        }
 
         let report_time = now_epoch_seconds();
         let previous_state = self.load_full_sync_state().unwrap_or(None);
@@ -91,115 +84,7 @@ impl crate::facade::WriterCore {
             }
         }
 
-        (result, lifecycle_committed_paths, lifecycle_receipts)
-    }
-
-    fn apply_local_lifecycle_deletes(
-        &self,
-        targets: &mut [crate::sync::types::TargetSyncResult],
-    ) -> (
-        Vec<std::path::PathBuf>,
-        Vec<crate::sync::types::LocalLifecycleCommitReceipt>,
-    ) {
-        let lifecycle_committed_paths: Vec<std::path::PathBuf> = Vec::new();
-        let mut lifecycle_receipts: Vec<crate::sync::types::LocalLifecycleCommitReceipt> =
-            Vec::new();
-        for target in targets {
-            if let crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
-                project_id,
-                expected_local_lww,
-            } = &target.local_lifecycle_action
-            {
-                // DeleteProject guard —
-                // 用 snapshot_local_records_read_only 重新计算当前 local target LWW，
-                // 与 expected_local_lww 严格比较。current_local == expected 才放行，
-                // 其他任何情况都拒绝。
-                // expected_local_lww 非 Option —
-                // 破坏性 action 必须携带 guard。
-                let expected_lww = crate::sync::full_sync::LiveTargetLww {
-                    lww_time_ms: expected_local_lww.lww_time_ms,
-                    device_id: expected_local_lww.device_id.clone(),
-                };
-                let project_root = self.projects_root.join(project_id);
-                match crate::sync::staging::replace::check_replace_project_guard(
-                    &project_root,
-                    &expected_lww,
-                ) {
-                    crate::sync::staging::replace::ReplaceProjectGuardResult::Ok => {
-                        // guard 通过，继续执行删除。
-                    }
-                    crate::sync::staging::replace::ReplaceProjectGuardResult::Err(e) => {
-                        let msg = match e {
-                            crate::sync::staging::replace::ReplaceProjectGuardError::LocalAdvanced {
-                                expected,
-                                current,
-                            } => format!(
-                                "DeleteProject guard failed: local diverged \
-                                 (expected lww_time={} device_id={}, current lww_time={} device_id={}) \
-                                 — not touching live",
-                                expected.lww_time_ms,
-                                expected.device_id,
-                                current.lww_time_ms,
-                                current.device_id
-                            ),
-                            crate::sync::staging::replace::ReplaceProjectGuardError::SnapshotFailed(err) => {
-                                format!("DeleteProject guard snapshot failed: {err}")
-                            }
-                        };
-                        log::warn!(
-                            "[sync] commit_full_sync: DeleteProject {} guard failed: {}",
-                            project_id,
-                            msg
-                        );
-                        target.result.status =
-                            crate::sync::SyncStatus::RecoverableError(msg.clone());
-                        target.result.error = Some(msg);
-                        continue;
-                    }
-                }
-
-                //   RemoteLifecycle origin — 不生成
-                // PendingDeletedTarget（远端已删，不反向要求删远端）。
-                log::info!(
-                    "[sync] commit_full_sync: DeleteProject (remote lifecycle) project_id={}",
-                    project_id
-                );
-                let device_id = crate::settings::load_device_info(&self.app_data_root)
-                    .map(|info| info.device_id)
-                    .unwrap_or_default();
-                match crate::project::delete_project_with_changes(
-                    &self.projects_root,
-                    project_id,
-                    &self.app_data_root,
-                    &device_id,
-                    crate::project::ProjectDeleteOrigin::RemoteLifecycle,
-                ) {
-                    Ok(outcome) => {
-                        // RemoteLifecycle delete 走单一
-                        // durable 路线 — 不把 outcome.changes.to_flat_paths() 塞进
-                        // lifecycle_committed_paths（避免与 receipt.change_set 双重记 history）。
-                        // API 层用 receipt.change_set 调 record_workspace_change_set_history，
-                        // 成功后调 ack_project_delete_history。
-                        lifecycle_receipts.push(crate::sync::types::LocalLifecycleCommitReceipt {
-                            journal_token: outcome.journal_token.clone(),
-                            change_set: outcome.changes.clone(),
-                            unbound_starmap_ids: outcome.unbound_starmap_ids.clone(),
-                            origin: crate::project::ProjectDeleteOrigin::RemoteLifecycle,
-                        });
-                        // 真实删除是实际变更，
-                        // 用 Success 触发 rebuild_search_index（NoChanges 不触发）。
-                        target.result = crate::sync::types::SyncResult::success();
-                    }
-                    Err(e) => {
-                        let msg = format!("remote lifecycle delete failed: {e}");
-                        target.result.status =
-                            crate::sync::SyncStatus::RecoverableError(msg.clone());
-                        target.result.error = Some(msg);
-                    }
-                }
-            }
-        }
-        (lifecycle_committed_paths, lifecycle_receipts)
+        result
     }
 
     /// 删除作品的远端对象全部发布成功后，移除本地 pending 记录。

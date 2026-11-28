@@ -37,7 +37,7 @@ pub(super) fn sync_result_from_provider_error(
 pub(super) fn transfer_object_scope(
     provider: &dyn SyncProvider,
     target: &SyncTarget,
-    live_root: &Path,
+    _live_root: &Path,
     known_root: &Path,
     staging_root: Option<&Path>,
     cancellation_token: Option<&SyncCancellationToken>,
@@ -61,7 +61,6 @@ pub(super) fn transfer_object_scope(
     match crate::sync::staging::download::stage_remote_changes(
         provider,
         target,
-        live_root,
         known_root,
         staging_root,
     ) {

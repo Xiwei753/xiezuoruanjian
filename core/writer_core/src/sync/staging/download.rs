@@ -3,7 +3,8 @@
 //! 传输层只做三件事：
 //!
 //! 1. 读远端固定 HEAD 上的对象索引（manifest）；
-//! 2. 只下载"远端内容与已确认基线/本机内容都不同"的 blob 到 staging；
+//! 2. 只下载裁决需要的 blob：远端版本与已确认基线不同，或旧冲突记录要求
+//!    采用远端；版本比较先于内容读取，缺失 blob 是真实读失败；
 //! 3. 把远端索引记录原样写进 staging manifest，供提交阶段做唯一一次裁决。
 //!
 //! 这里不做业务合并、不做 LWW 裁决、不复制本地整棵目录：裁决只在
@@ -80,13 +81,12 @@ fn load_known_files(
 /// 增量下载远端变化对象到 staging，并把远端索引记录写进 staging manifest。
 ///
 /// - 远端内容与已确认基线相同 → 不下载（未参与本轮）；
-/// - 远端内容与本机当前内容相同 → 不下载（下次提交会把基线推进到该内容）；
 /// - 远端内容不同 → 只下载这一个 blob；
+/// - 旧冲突记录要求采用远端 → 即使停在基线也下载，供提交阶段直接落地；
 /// - 远端索引记录了 delete → 只写记录，不读 blob。
 pub(crate) fn stage_remote_changes(
     provider: &dyn SyncProvider,
     target: &SyncTarget,
-    sync_root: &Path,
     known_root: &Path,
     staging_root: &Path,
 ) -> Result<RemoteStageOutcome> {
@@ -126,9 +126,13 @@ pub(crate) fn stage_remote_changes(
                         continue;
                     }
                 }
+                let validated = crate::sync::path::ValidatedSyncPath::new(&rel)?;
+                let rel = validated.as_str().to_string();
                 let remote_path = format!("{prefix}/{rel}");
                 let Some(object) = provider.read(&remote_path)? else {
-                    continue;
+                    return Err(crate::Error::Other(format!(
+                        "remote object blob missing at {remote_path}: no index and object unreadable"
+                    )));
                 };
                 let hash = crate::sync::hash::content_md5(&object.content);
                 let record = ManifestFileRecord {
@@ -164,27 +168,18 @@ pub(crate) fn stage_remote_changes(
                 // 远端停在已确认基线：本轮未参与。
                 continue;
             }
-            let local_path = sync_root.join(&record.path);
-            if !force_fetch && local_path.is_file() {
-                let local_hash = crate::sync::hash::content_md5_file(&local_path).unwrap_or_default();
-                if local_hash == record.content_hash {
-                    // 本机已有同一内容，不需要网络下载。
-                    continue;
-                }
-            }
+            let validated = crate::sync::path::ValidatedSyncPath::new(&record.path)?;
             let remote_path = format!(
                 "{}/{}",
                 target.remote_prefix.trim_end_matches('/'),
-                record.path
+                validated.as_str()
             );
             let Some(object) = provider.read(&remote_path)? else {
-                // 索引声明存在但 blob 缺失：保留记录，提交阶段把它当作未参与。
-                log::warn!(
-                    "[sync] remote index lists {} but blob is missing at {}",
-                    record.path,
-                    remote_path
-                );
-                continue;
+                // 索引声明存在但 blob 读不到：本轮该对象读失败，同步不能成功。
+                return Err(crate::Error::Other(format!(
+                    "remote object blob missing at {remote_path}: fixed HEAD index declares {}",
+                    record.path
+                )));
             };
             let actual = crate::sync::hash::content_md5(&object.content);
             if actual != record.content_hash {

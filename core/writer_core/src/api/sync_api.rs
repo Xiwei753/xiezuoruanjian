@@ -1267,7 +1267,7 @@ impl WriterCoreApi {
         &self,
         no_change_targets: Vec<crate::sync::types::TargetSyncResult>,
     ) -> FullSyncResultDto {
-        let (mut result, _, _) = self.core_write().finalize_full_sync(no_change_targets, None);
+        let mut result = self.core_write().finalize_full_sync(no_change_targets, None, false);
         result.targets.clear();
         result.into()
     }
@@ -1891,8 +1891,6 @@ impl WriterCoreApi {
         let mut chapter_changes: Vec<crate::chapter::ChapterChangeReceipt> = Vec::new();
         let mut pending_commits: Vec<PendingTargetCommit> = Vec::new();
         let mut completed_transfer_results: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
-        let mut target_manifests: Vec<Option<crate::sync::types::SyncManifest>> =
-            plan.targets.iter().map(|_| None).collect();
         let total_targets = u32::try_from(plan.targets.len()).unwrap_or(u32::MAX);
 
         for target_index in 0..plan.targets.len() {
@@ -1990,7 +1988,6 @@ impl WriterCoreApi {
                     cancellation_token.as_ref(),
                     Some(diagnostic_operation_id),
                 )
-                .map(|(result, _action)| result)
             };
             let Some(target_sync_result) = transfer_result else {
                 transfer_phase.finish_with_provider("cancelled", provider);
@@ -2084,8 +2081,19 @@ impl WriterCoreApi {
         // 下一轮继续推进（见 commit_helpers 的 deferred upload 处理）。
         // 本轮已经 durable 落进 live 的对象事实：发布前用它把待发布内容
         // 冻结成刚提交的字节，杜绝推送旧 staging（复审 #2）。
+        // 每个 target 的完整发布增量：只在提交成功后生成，包含实际成功的
+        // 对象决议与对应远端索引；三者一起进入同一次 Git 提交。
+        struct TargetPublishDelta {
+            prefix: String,
+            project_id: Option<String>,
+            manifest_rel: String,
+            index_root: std::path::PathBuf,
+            decisions: Vec<crate::sync::decision::DurableObjectDecision>,
+        }
+        let mut target_deltas: Vec<TargetPublishDelta> = Vec::new();
         let mut publish_decisions: Vec<(String, crate::sync::decision::DurableObjectDecision)> =
             Vec::new();
+        let mut manifest_publish_error: Option<String> = None;
         // 被远端消费的本地事实（target key → target 相对路径），用于确认。
         let mut consumed_by_target: std::collections::BTreeMap<
             String,
@@ -2119,7 +2127,7 @@ impl WriterCoreApi {
                 provider,
             );
             let (
-                target_with_conflicts,
+                mut target_with_conflicts,
                 target_committed_paths,
                 target_chapter_changes,
                 target_decisions,
@@ -2131,24 +2139,54 @@ impl WriterCoreApi {
                 &target_sync_result,
                 diagnostic_operation_id,
             );
-            if let Some(slot) = target_manifests.get_mut(target_index) {
-                *slot = target_manifest;
+            let commit_failed = matches!(
+                target_with_conflicts.result.status,
+                crate::sync::SyncStatus::RecoverableError(_)
+                    | crate::sync::SyncStatus::FatalError(_)
+                    | crate::sync::SyncStatus::Error(_)
+            );
+            // 只有提交成功的 target 才生成完整发布增量；失败 target 无 delta，
+            // 内容与索引都不会进入本轮远端提交。
+            if !commit_failed {
+                if let (Some(manifest), Some(run)) =
+                    (target_manifest, staging_runs.get(target_index))
+                {
+                    let manifest_rel = planned
+                        .target
+                        .app_group
+                        .as_ref()
+                        .map(crate::sync::types::AppDataGroup::local_manifest_path)
+                        .unwrap_or_else(|| crate::sync::lww::SYNC_MANIFEST_PATH.to_string());
+                    let index_root = self
+                        .app_data_root
+                        .join("app-meta/sync/publish-manifests")
+                        .join(run.run_id());
+                    match write_remote_manifest_store(&index_root, &manifest_rel, &manifest) {
+                        Ok(()) => target_deltas.push(TargetPublishDelta {
+                            prefix: planned.target.remote_prefix.trim_end_matches('/').to_string(),
+                            project_id: planned.project_id.clone(),
+                            manifest_rel,
+                            index_root,
+                            decisions: target_decisions.clone(),
+                        }),
+                        Err(error) => {
+                            // 该 target 的索引无法冻结：本轮不发布它的对象，
+                            // 其它 target 照常提交。
+                            target_with_conflicts.result.status =
+                                crate::sync::SyncStatus::RecoverableError(format!(
+                                    "manifest_stage_failed: {error}"
+                                ));
+                            target_with_conflicts.result.error = Some(format!(
+                                "stage object index for {} failed: {error}",
+                                planned.target.remote_prefix
+                            ));
+                        }
+                    }
+                }
             }
             let commit_outcome =
                 crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
             commit_phase.finish_with_provider(&commit_outcome, provider);
-            // 本地提交产出的不可变对象决议：内容已在提交阶段冻结，这里只做
-            // identity → 远端路径映射并收集，发布时不再回读 live。
-            let remote_prefix = planned.target.remote_prefix.trim_end_matches('/');
-            for decision in &target_decisions {
-                let remote_path = match planned.project_id.as_deref() {
-                    Some(project_id) => {
-                        format!("projects/{project_id}/{}", decision.identity)
-                    }
-                    None => format!("{remote_prefix}/{}", decision.identity),
-                };
-                publish_decisions.push((remote_path, decision.clone()));
-            }
             let decision_key = crate::sync::full_sync::sync_target_checkpoint_key(planned);
             if let Some(key) = decision_key.as_ref() {
                 // 被远端消费的本地事实只认提交阶段冻结的决议（origin =
@@ -2303,13 +2341,24 @@ impl WriterCoreApi {
             );
         }
 
-        // 先按不可变决议重建发布批次（内容取自提交阶段冻结的字节），
-        // 再基于该批次的远端视图发布对象索引：索引必须能看到本轮新增对象。
-        let decision_outcome = if publish_blocked {
-            crate::sync::decision::DecisionApplyOutcome::default()
-        } else {
-            round.apply_durable_decisions(&publish_decisions)
-        };
+        // 每个 target 的发布增量在提交成功时已经冻结（对象决议 + 最终索引）。
+        // 这里把它们合并进同一个 round：对象先进入缓冲，索引随后写入，
+        // 最终由一次 flush 提交。
+        let mut decision_outcome = crate::sync::decision::DecisionApplyOutcome::default();
+        if !publish_blocked {
+            for delta in &target_deltas {
+                for decision in &delta.decisions {
+                    let remote_path = match delta.project_id.as_deref() {
+                        Some(project_id) => {
+                            format!("projects/{project_id}/{}", decision.identity)
+                        }
+                        None => format!("{}/{}", delta.prefix, decision.identity),
+                    };
+                    publish_decisions.push((remote_path, decision.clone()));
+                }
+            }
+            decision_outcome = round.apply_durable_decisions(&publish_decisions);
+        }
         if decision_outcome.rewritten > 0
             || decision_outcome.withheld > 0
             || decision_outcome.missing > 0
@@ -2328,83 +2377,43 @@ impl WriterCoreApi {
             );
         }
 
-        // 每个 target 的最终对象索引与业务对象在同一次 flush 里提交。
-        // 失败的 target 保持固定远端索引，不为它写 manifest；其它 target 照常发布。
-        let failed_prefixes: std::collections::HashSet<&str> = all_targets
-            .iter()
-            .filter(|target| {
-                matches!(
-                    target.result.status,
-                    crate::sync::SyncStatus::RecoverableError(_)
-                        | crate::sync::SyncStatus::FatalError(_)
-                        | crate::sync::SyncStatus::Error(_)
-                )
-            })
-            .map(|target| target.remote_prefix.as_str())
-            .collect();
-        let mut manifest_publish_error: Option<String> = None;
+        // 每个 target 的索引与业务对象在同一次 flush 里提交。索引文件已在
+        // 提交成功时冻结到临时目录；这里只把它们写进同一个 round。
         if !publish_blocked {
-            for (target_index, planned) in plan.targets.iter().enumerate() {
-                if failed_prefixes.contains(planned.target.remote_prefix.as_str()) {
-                    continue;
-                }
-                let Some(run) = staging_runs.get(target_index) else {
-                    continue;
-                };
-                // 远端清单 = 提交阶段冻结的"固定远端索引 + 本次真实决议"，
-                // 不再从 live 存储反推，也不把未决对象的本地记录发出去。
-                let Some(manifest) = target_manifests
-                    .get(target_index)
-                    .and_then(std::clone::Clone::clone)
-                else {
-                    continue;
-                };
-                let manifest_rel = planned
-                    .target
-                    .app_group
-                    .as_ref()
-                    .map(crate::sync::types::AppDataGroup::local_manifest_path)
-                    .unwrap_or_else(|| crate::sync::lww::SYNC_MANIFEST_PATH.to_string());
-                let prefix = planned.target.remote_prefix.trim_end_matches('/').to_string();
+            for delta in &target_deltas {
                 let remote_tree_files: std::collections::HashMap<String, String> =
-                    match crate::sync::provider::SyncProvider::list(round, &prefix) {
+                    match crate::sync::provider::SyncProvider::list(round, &delta.prefix) {
                         Ok(entries) => entries
                             .into_iter()
                             .map(|entry| (entry.path, entry.version.0))
                             .collect(),
                         Err(error) => {
-                            // 该 target 索引本轮不发布；其它 target 照常进入同一次提交。
                             manifest_publish_error = Some(format!(
                                 "list remote tree before manifest publish failed: {error}"
                             ));
-                            continue;
+                            publish_blocked = true;
+                            break;
                         }
                     };
-                let index_root = run.staging_root().join("remote-manifest");
-                if let Err(error) = write_remote_manifest_store(
-                    &index_root,
-                    &manifest_rel,
-                    &manifest,
-                ) {
-                    manifest_publish_error = Some(format!(
-                        "stage object index for {} failed: {error}",
-                        planned.target.remote_prefix
-                    ));
-                    continue;
-                }
                 if let Err(error) = crate::sync::lww::publish_remote_manifest(
                     round,
-                    &prefix,
-                    &index_root,
-                    &manifest_rel,
+                    &delta.prefix,
+                    &delta.index_root,
+                    &delta.manifest_rel,
                     &remote_tree_files,
                     cancellation_token.as_ref(),
                 ) {
+                    // 索引写不进 round 就是本轮传输失败：不能只发布对象。
                     manifest_publish_error = Some(format!(
                         "publish object index for {} failed: {error}",
-                        planned.target.remote_prefix
+                        delta.prefix
                     ));
+                    publish_blocked = true;
+                    break;
                 }
+            }
+            if publish_blocked {
+                round.discard();
             }
         }
 
@@ -2499,6 +2508,10 @@ impl WriterCoreApi {
             }
         }
 
+        for delta in &target_deltas {
+            let _ = std::fs::remove_dir_all(&delta.index_root);
+        }
+
         // 每个 target 的 commit 已在同一写锁内完成 Store 协调与索引失效（问题2）。
         // 此处再失效一次是冗余但安全的兜底，覆盖部分 target 成功、后续取消的场景。
         self.core_write().invalidate_path_dependency_index();
@@ -2552,14 +2565,13 @@ impl WriterCoreApi {
         } else {
             None
         };
-        let (result, committed_paths, lifecycle_receipts) = {
+        let deletions_confirmed = publish_succeeded && publish_ack_unsettled == 0;
+        let result = {
             let core = self.core_write();
-            core.finalize_full_sync(all_targets, round_phase_failure)
+            core.finalize_full_sync(all_targets, round_phase_failure, deletions_confirmed)
         };
 
-        // 合并 per-target committed_paths 与 finalize 阶段返回的 committed_paths。
-        let mut all_paths = all_committed_paths;
-        all_paths.extend(committed_paths);
+        let all_paths = all_committed_paths;
 
         // 用 commit 阶段返回的 committed_paths
         // 精确 stage，替代全量 &[] 扫描。committed_paths 是 workspace-relative paths。
@@ -2567,15 +2579,6 @@ impl WriterCoreApi {
         // 空 paths 直接返回空结果）。
         let local_content_changed = !all_paths.is_empty();
         self.record_workspace_paths_history(&all_paths, "full_sync_commit");
-
-        // 处理 RemoteLifecycle 删除事务的 receipts。
-        // 恢复单一 durable 路线 —
-        // 对每个 receipt：用 change_set 调 record_workspace_change_set_history 记本地 history，
-        // 成功后才调 ack_project_delete_history 推进 journal。
-        // history 失败 → 不 ack → journal 保留 StarMapsUnbound → bootstrap/recover 下次补记。
-        for receipt in &lifecycle_receipts {
-            self.process_lifecycle_receipt(receipt);
-        }
 
         // 远端发布失败：把失败注入终态，平台与 checkpoint 都按失败处理，
         // 但已提交的本地结果、history 与索引失效照常收口（复审 #2、#3）。
@@ -2797,13 +2800,30 @@ impl WriterCoreApi {
                 &committed_paths,
                 operation_id,
             );
-            // 决议完全来自提交阶段冻结的版本事实：基线、最终哈希、mutation
-            // 序号和事务身份都随提交计划返回；这里只读一次已提交字节。
-            let decisions = crate::sync::decision::publish_decisions(
-                run.target_live_root(),
+            // 决议完全来自提交阶段冻结的版本事实：内容、基线、最终哈希、
+            // mutation 序号和事务身份都随提交计划返回；这里不再回读 live。
+            // 只有提交成功时 publish_batch 才非空；失败 target 没有发布事实。
+            let decisions = match crate::sync::decision::publish_decisions(
                 &publish_batch.objects,
                 &publish_batch.deletes,
-            );
+            ) {
+                Ok(decisions) => decisions,
+                Err(error) => {
+                    target_with_conflicts.result.status =
+                        crate::sync::SyncStatus::RecoverableError(format!(
+                            "publish_decisions_failed: {error}"
+                        ));
+                    target_with_conflicts.result.error =
+                        Some(format!("publish decisions could not be frozen: {error}"));
+                    return (
+                        target_with_conflicts,
+                        committed_paths,
+                        chapter_receipts,
+                        Vec::new(),
+                        None,
+                    );
+                }
+            };
             target_with_conflicts.result.uploaded_files.extend(
                 decisions
                     .iter()
@@ -2867,37 +2887,6 @@ impl WriterCoreApi {
             message_key: None,
         }
         .into()
-    }
-
-    ///   处理单个 lifecycle receipt — history ack。
-    ///
-    /// history 成功 → ack 推进 journal；history 失败 → 不 ack → journal 保留 → 下次补记。
-    fn process_lifecycle_receipt(&self, receipt: &crate::sync::types::LocalLifecycleCommitReceipt) {
-        match self
-            .record_workspace_change_set_history(&receipt.change_set, "remote_lifecycle_delete")
-        {
-            Ok(()) => {
-                if let Err(e) = crate::storage::journal::project_delete::ack_project_delete_history(
-                    &self.app_data_root,
-                    &receipt.journal_token,
-                ) {
-                    log::warn!(
-                        "[sync] perform_full_sync: ack_project_delete_history failed \
-                         for {}: {} — journal retained",
-                        receipt.journal_token,
-                        e
-                    );
-                }
-            }
-            Err(e) => {
-                log::warn!(
-                    "[sync] perform_full_sync: record_workspace_change_set_history failed \
-                     for {}: {} — journal retained, will retry on recover",
-                    receipt.journal_token,
-                    e
-                );
-            }
-        }
     }
 
     /// 冲突解决：保留本地版本。

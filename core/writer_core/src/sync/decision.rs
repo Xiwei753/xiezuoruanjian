@@ -71,33 +71,26 @@ impl DurableObjectDecision {
 
 /// 从提交阶段冻结的上传/删除清单构造不可变对象决议。
 ///
-/// 版本号、基线、mutation 序号都来自统一裁决；这里只读取一次已提交字节，
-/// 不再重新加载状态或重建上传清单。内容哈希与裁决不一致时放弃该对象，
-/// 留给下一轮重新比较。
+/// 内容、版本、基线、mutation 序号都来自统一裁决的冻结结果；这里不再回读
+/// live，也不再因读失败静默跳过对象——冻结内容与 final hash 不一致就是提交
+/// 之后有人改写了对象，本轮发布失败。
 pub(crate) fn publish_decisions(
-    live_root: &std::path::Path,
     uploads: &[crate::sync::staging::PublishObject],
     deletes: &[std::path::PathBuf],
-) -> Vec<DurableObjectDecision> {
+) -> crate::error::Result<Vec<DurableObjectDecision>> {
     let mut decisions = Vec::new();
     for object in uploads {
         let identity = object.rel_path.to_string_lossy().replace('\\', "/");
         if identity.is_empty() {
             continue;
         }
-        let Ok(content) = std::fs::read(live_root.join(&identity)) else {
-            log::warn!(
-                "[sync] publish decision skipped: committed object unreadable {identity}"
-            );
-            continue;
-        };
-        let final_hash = crate::sync::hash::content_md5(&content);
+        let final_hash = crate::sync::hash::content_md5(&object.content);
         if !object.final_hash.is_empty() && final_hash != object.final_hash {
-            log::warn!(
-                "[sync] publish decision skipped: content changed after commit                  path={identity} expected={} actual={final_hash}",
+            return Err(crate::Error::Other(format!(
+                "publish decision content changed after commit: path={identity} \
+                 expected={} actual={final_hash}",
                 object.final_hash
-            );
-            continue;
+            )));
         }
         decisions.push(DurableObjectDecision {
             transaction_id: object.transaction_id.clone(),
@@ -108,7 +101,7 @@ pub(crate) fn publish_decisions(
             final_version: None,
             mutation_seq: object.mutation_seq,
             origin: DecisionOrigin::Local,
-            content: Some(content),
+            content: Some(object.content.clone()),
             dependencies: Vec::new(),
         });
     }
@@ -130,5 +123,5 @@ pub(crate) fn publish_decisions(
             dependencies: Vec::new(),
         });
     }
-    decisions
+    Ok(decisions)
 }

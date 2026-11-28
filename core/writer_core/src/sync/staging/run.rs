@@ -186,6 +186,12 @@ pub fn prepare_staging_runs(
             crate::sync::types::PlannedTargetKind::DeleteRemoteProject
         ));
         run.set_baseline_root(planned.baseline_root.clone());
+        // 作品删除：只在第一次处理时把删除前回收区里已确认的对象版本写成
+        // live 的初始对象索引；之后冲突选择、恢复都读写 live 权威状态，
+        // 不再每轮回到回收区读旧基线。
+        if let Err(error) = seed_delete_baseline_state(planned) {
+            run.record_prepare_error(error);
+        }
         // #955：本机统计设备组必须在传输之前完成旧事件库迁移（写 live）。
         // 迁移失败只记录到该 run：本组本次跳过 Transfer/Commit，其它组继续同步。
         if let Some(error) = migrate_local_stats_group_before_seed(planned) {
@@ -196,6 +202,43 @@ pub fn prepare_staging_runs(
     }
 
     Ok(staging_runs)
+}
+
+/// 第一次处理作品删除时，用删除前回收区的已确认版本初始化 live 对象索引。
+///
+/// 只写一次：live 已有 `state.local.json` 就说明本轮之后的所有选择都有权威
+/// 状态，不能再拿回收区旧基线覆盖。
+fn seed_delete_baseline_state(
+    planned: &crate::sync::full_sync::PlannedTarget,
+) -> std::result::Result<(), String> {
+    if !matches!(
+        planned.target_kind,
+        crate::sync::types::PlannedTargetKind::DeleteRemoteProject
+    ) {
+        return Ok(());
+    }
+    let Some(baseline_root) = planned.baseline_root.as_deref() else {
+        return Ok(());
+    };
+    let live_state = planned
+        .target_live_root
+        .join("app-meta/sync/state.local.json");
+    if live_state.exists() {
+        return Ok(());
+    }
+    let baseline_state = baseline_root.join("app-meta/sync/state.local.json");
+    let bytes = match std::fs::read(&baseline_state) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("seed_delete_baseline_state: {error}")),
+    };
+    if let Some(parent) = live_state.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("seed_delete_baseline_state: {error}"))?;
+    }
+    crate::storage::transaction::atomic_write_bytes(&live_state, &bytes)
+        .map_err(|error| format!("seed_delete_baseline_state: {error}"))?;
+    Ok(())
 }
 
 /// 本机统计设备组的旧事件库迁移（#955）。
@@ -224,30 +267,4 @@ fn migrate_local_stats_group_before_seed(
         Ok(()) => None,
         Err(error) => Some(format!("migration: {error}")),
     }
-}
-
-/// 递归遍历 `dir`，跳过同步引擎内部目录，把文件相对 `root` 的路径推入 `out`。
-///
-/// 规则统一到 [`crate::storage::workspace_paths`]，本函数不持有规则副本。
-pub(crate) fn walk_commit_candidates(
-    root: &Path,
-    dir: &Path,
-    out: &mut Vec<PathBuf>,
-) -> Result<()> {
-    use crate::storage::workspace_paths::is_workspace_internal_path;
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if let Ok(rel) = path.strip_prefix(root) {
-            if is_workspace_internal_path(rel) {
-                continue;
-            }
-        }
-        if path.is_dir() {
-            walk_commit_candidates(root, &path, out)?;
-        } else if let Ok(rel) = path.strip_prefix(root) {
-            out.push(rel.to_path_buf());
-        }
-    }
-    Ok(())
 }

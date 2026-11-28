@@ -16,7 +16,6 @@
 pub(crate) mod commit_plan;
 pub(crate) mod download;
 pub(crate) mod plan;
-pub(crate) mod replace;
 pub(crate) mod resolve;
 pub(crate) mod run;
 

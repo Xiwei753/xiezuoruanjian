@@ -114,7 +114,7 @@ pub(crate) fn compare_object(
             ObjectSide::Present(_) => ObjectVerdict::PublishUpsert,
             ObjectSide::Deleted => ObjectVerdict::PublishDelete,
             // 本地没有事实而远端停在基线：没有可传播的内容。
-            ObjectSide::Absent => ObjectVerdict::Unparticipated,
+            ObjectSide::Absent => ObjectVerdict::NoOp,
         },
         // 4. 只有远端相对基线改变：应用远端版本。
         (false, true) => match remote {
@@ -134,6 +134,9 @@ pub(crate) fn compare_object(
             (ObjectSide::Deleted, ObjectSide::Present(_)) => {
                 ObjectVerdict::Conflict(ObjectConflictSide::LocalDeleted)
             }
+            // 远端没有索引（Absent）时本地修改仍要上传：远端没有可比较的
+            // 版本事实，不能把"索引缺失"当成删除或冲突。
+            (ObjectSide::Present(_), ObjectSide::Absent) => ObjectVerdict::PublishUpsert,
             // 一侧没有事实，另一侧改变：缺少该侧版本，不能替用户裁决。
             _ => ObjectVerdict::Unparticipated,
         },

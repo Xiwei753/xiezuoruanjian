@@ -22,11 +22,8 @@ pub fn run_single_target_transfer(
     plan: &FullSyncPlan,
     target_index: usize,
     cancellation_token: Option<&SyncCancellationToken>,
-    diagnostic_operation_id: Option<&str>,
-) -> Option<(
-    TargetSyncResult,
-    Option<crate::sync::types::LocalLifecycleCommitAction>,
-)> {
+    _diagnostic_operation_id: Option<&str>,
+) -> Option<TargetSyncResult> {
     if !plan.sync_policy.enabled {
         log::debug!("[sync] run_single_target_transfer: sync disabled — returning no-op");
         return None;
@@ -52,12 +49,13 @@ pub fn run_single_target_transfer(
 
     // 删除作品与其它 target 走同一条对象传输：真正需要的远端冲突内容
     // 也会下载到 staging，供用户预览与选择。
-    let known_root = planned.baseline_root.as_deref().unwrap_or(&planned.local_root);
+    // 删除作品的回收区基线已在 Prepare 阶段写成 live 的初始索引，之后所有
+    // 下载判断统一读 live 权威状态，不再双根切换。
     let result = transfer_object_scope(
         provider,
         &planned.target,
         &planned.local_root,
-        known_root,
+        &planned.local_root,
         Some(staging_root),
         cancellation_token,
     );
@@ -70,10 +68,9 @@ pub fn run_single_target_transfer(
         failure_path: app_group_failure_path(&planned.target, &result),
         failure_phase: app_group_failure_phase(&planned.target, &result),
         result,
-        local_lifecycle_action: Default::default(),
     };
 
-    Some((target_sync_result, None))
+    Some(target_sync_result)
 }
 
 /// Prepare 阶段已失败的 target 结果（#955：本机统计事件库迁移失败）。
@@ -104,7 +101,6 @@ pub(crate) fn prepare_failed_target_result(
             error.to_string(),
             None,
         ),
-        local_lifecycle_action: Default::default(),
     }
 }
 

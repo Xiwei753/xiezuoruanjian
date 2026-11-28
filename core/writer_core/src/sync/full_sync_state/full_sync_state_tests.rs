@@ -16,7 +16,6 @@ mod tests {
                 failure_path: None,
                 failure_phase: None,
                 result: crate::sync::types::SyncResult::success(),
-                local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
             }],
             total_uploaded: 0,
             total_downloaded: 0,
@@ -43,7 +42,6 @@ mod tests {
                     failure_path: None,
                     failure_phase: None,
                     result: crate::sync::types::SyncResult::success(),
-                        local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
                 },
                 crate::sync::types::TargetSyncResult {
                     target_kind: "project".to_string(),
@@ -57,7 +55,6 @@ mod tests {
                         "boom".to_string(),
                         None,
                     ),
-                        local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
                 },
             ],
             total_uploaded: 0,

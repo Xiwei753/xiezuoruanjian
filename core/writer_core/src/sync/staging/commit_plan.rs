@@ -11,11 +11,6 @@ use std::path::PathBuf;
 /// 两类最后用同一个 `SaveTransaction` 一次写回 live，不另起第二套保存路径。
 #[derive(Default, Debug)]
 pub struct CommitPlan {
-    /// 本 plan 由统一对象比较产出（Issue #1066）。
-    ///
-    /// 提交阶段据此走对象提交：只推进远端已确认对象的基线，冲突/上传等待
-    /// 回执确认；不再走旧的 state 三方合并。旧生命周期路径仍产出 false 的 plan。
-    pub object_engine: bool,
     /// 用户内容写回动作：本地未改时应用远端内容/删除（含远端独有新增）。
     pub content_actions: Vec<CommitAction>,
     /// 引擎状态写回动作：最终对象索引（manifest，canonical JSON）。
@@ -45,6 +40,9 @@ pub struct CommitPlan {
 #[derive(Debug, Clone)]
 pub struct PublishObject {
     pub rel_path: PathBuf,
+    /// 比较阶段冻结的本地内容；提交成功后同一字节进入发布决议，
+    /// 不再按路径回读 live 猜内容。
+    pub content: Vec<u8>,
     /// 上次双方确认的内容摘要（上传决议的 precondition 基线）。
     pub base_hash: Option<String>,
     /// 本次要发布的本地内容摘要。
