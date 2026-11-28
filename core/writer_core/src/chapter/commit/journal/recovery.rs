@@ -590,6 +590,9 @@ fn recover_pending_chapter_commits_filtered(
     project_root: &Path,
     only_key: Option<&ChapterKey>,
 ) -> Result<Vec<ChapterCommitRecovery>> {
+    if let Some(key) = only_key {
+        return recover_chapter_locator(project_root, key);
+    }
     let root = journal_root(project_root);
     match fs::metadata(&root) {
         Ok(_) => {}
@@ -608,14 +611,15 @@ fn recover_pending_chapter_commits_filtered(
             continue;
         }
         let dir = entry.path();
-        if dir.file_name().and_then(|name| name.to_str()) == Some(CONFLICT_DIR) {
+        if dir.file_name().and_then(|name| name.to_str()) == Some(CONFLICT_DIR)
+            || dir.file_name().and_then(|name| name.to_str()) == Some(CHAPTER_PENDING_DIR)
+        {
             continue;
         }
         let manifest_path = dir.join("manifest.json");
         let raw = match fs::read_to_string(&manifest_path) {
             Ok(raw) => raw,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // 清单从未落盘：live 从未被触碰，删除自己的未发布材料。
                 if let Err(error) = fs::remove_dir_all(&dir) {
                     log::warn!(
                         "failed to clean chapter commit directory without manifest {}: {error}",
@@ -625,7 +629,6 @@ fn recover_pending_chapter_commits_filtered(
                 continue;
             }
             Err(error) => {
-                // 清单存在但不可读：保留事务目录并把真实错误交回调用方。
                 return Err(Error::Other(format!(
                     "failed to read chapter commit manifest {}: {error}",
                     manifest_path.display()
@@ -633,21 +636,8 @@ fn recover_pending_chapter_commits_filtered(
             }
         };
         match serde_json::from_str::<ChapterCommitManifest>(&raw) {
-            Ok(manifest) => {
-                if let Some(key) = only_key {
-                    // 逐章热路径只处理当前章真实未完成的正文决议；已发布的
-                    // 统计/确认事务留给启动或显式恢复。
-                    if &manifest.key != key
-                        || !matches!(manifest.phase, ChapterCommitPhase::Decided)
-                    {
-                        continue;
-                    }
-                }
-                entries.push((dir, manifest));
-            }
+            Ok(manifest) => entries.push((dir, manifest)),
             Err(error) => {
-                // 损坏事务保留原目录并显式报告；不能静默当成已完成，也不
-                // 阻断其它章节的恢复。
                 log::error!(
                     "chapter commit journal manifest parse failed, transaction preserved: {}: {}",
                     manifest_path.display(),
@@ -656,17 +646,69 @@ fn recover_pending_chapter_commits_filtered(
             }
         }
     }
+    recover_chapter_commit_entries(project_root, entries)
+}
+
+/// 读取/提交当前章时只按该章定位文件找到真实未完成正文事务。
+fn recover_chapter_locator(
+    project_root: &Path,
+    key: &ChapterKey,
+) -> Result<Vec<ChapterCommitRecovery>> {
+    let Some(transaction_id) = read_chapter_locator(project_root, key)? else {
+        return Ok(Vec::new());
+    };
+    let tx_dir = journal_root(project_root).join(&transaction_id);
+    let manifest_path = tx_dir.join("manifest.json");
+    let raw = match fs::read_to_string(&manifest_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // 定位指向已清理事务：清掉陈旧定位，不再全项目扫描。
+            clear_chapter_locator(project_root, key)?;
+            return Ok(Vec::new());
+        }
+        Err(error) => {
+            return Err(Error::Other(format!(
+                "failed to read located chapter commit manifest {}: {error}",
+                manifest_path.display()
+            )))
+        }
+    };
+    let manifest: ChapterCommitManifest = serde_json::from_str(&raw).map_err(|error| {
+        Error::Other(format!(
+            "located chapter commit manifest {} is corrupt: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    if &manifest.key != key || manifest.phase != ChapterCommitPhase::Decided {
+        // 正文已发布/已切换决议：定位过期，不再让辅助投影进入热路径。
+        clear_chapter_locator(project_root, key)?;
+        return Ok(Vec::new());
+    }
+    recover_chapter_commit_entries(project_root, vec![(tx_dir, manifest)])
+}
+
+fn recover_chapter_commit_entries(
+    project_root: &Path,
+    mut entries: Vec<(PathBuf, ChapterCommitManifest)>,
+) -> Result<Vec<ChapterCommitRecovery>> {
     entries.sort_by_key(|(_, manifest)| (manifest.commit_sequence, manifest.created_at_ms));
 
     let mut recovered = Vec::new();
     for (tx_dir, mut manifest) in entries {
+        let key = manifest.key.clone();
+        let transaction_id = manifest.transaction_id.clone();
         match manifest.phase {
             ChapterCommitPhase::Prepared => {
                 // 未决议：live 从未被触碰。保留目录供人工诊断，不能删除后
-                // 继续写 Finished manifest；pending 探针会由空闲清理移除。
+                // 继续写 Finished manifest；陈旧定位一并清理。
+                if let Err(error) = clear_chapter_locator(project_root, &key) {
+                    log::warn!("failed to clear stale chapter commit locator: {error}");
+                }
                 continue;
             }
             ChapterCommitPhase::Decided => {
+                // 决议已 durable：登记本章定位，崩溃后读写仍能直达该事务。
+                write_chapter_locator(project_root, &key, &transaction_id)?;
                 let published = if manifest.deleted {
                     publish_deleted(project_root, &tx_dir, &mut manifest)?
                 } else {
@@ -698,11 +740,24 @@ fn recover_pending_chapter_commits_filtered(
                         superseded: true,
                         conflict_dir: Some(conflict_dir),
                     });
+                    if let Err(error) = clear_chapter_locator(project_root, &key) {
+                        log::warn!("failed to clear chapter commit locator: {error}");
+                    }
                     continue;
                 }
+                if let Err(error) = clear_chapter_locator(project_root, &key) {
+                    log::warn!("failed to clear chapter commit locator after publish: {error}");
+                }
             }
-            ChapterCommitPhase::Applied => {}
+            ChapterCommitPhase::Applied => {
+                if let Err(error) = clear_chapter_locator(project_root, &key) {
+                    log::warn!("failed to clear stale chapter commit locator: {error}");
+                }
+            }
             ChapterCommitPhase::Finished => {
+                if let Err(error) = clear_chapter_locator(project_root, &key) {
+                    log::warn!("failed to clear stale chapter commit locator: {error}");
+                }
                 if let Err(error) = remove_transaction_dir(&tx_dir) {
                     log::warn!(
                         "failed to clean finished chapter commit {}: {error}",
@@ -733,6 +788,9 @@ fn recover_pending_chapter_commits_filtered(
                             tx_dir.display()
                         );
                     }
+                }
+                if let Err(error) = clear_chapter_locator(project_root, &key) {
+                    log::warn!("failed to clear chapter commit locator: {error}");
                 }
                 continue;
             }

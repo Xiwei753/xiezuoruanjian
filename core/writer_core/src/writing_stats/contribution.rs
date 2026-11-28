@@ -346,44 +346,31 @@ impl ContributionEvent {
     /// 排除存储分配的派生字段（重放位置、链哈希、状态承诺根、本地日期/平台
     /// 补全等），避免序列化字段顺序或旧格式默认值把同一事实误判为冲突。
     pub(crate) fn business_identity_fingerprint(&self) -> crate::error::Result<u64> {
-        let mut value = serde_json::to_value(self).map_err(|error| {
-            crate::error::Error::Other(format!(
-                "failed to serialize contribution event {} for identity: {error}",
-                self.event_id
-            ))
-        })?;
-        if let Some(object) = value.as_object_mut() {
-            for key in [
-                "event_id",
-                "origin_device_id",
-                "local_date",
-                "local_hour",
-                "platform",
-                "device_class",
-                "replay_position",
-            ] {
-                object.remove(key);
-            }
-            if let Some(delta) = object
-                .get_mut("replay_delta")
-                .and_then(|delta| delta.as_object_mut())
-            {
-                for key in [
-                    "format_version",
-                    "state_root_after",
-                    "branch_position",
-                    "prev_event_hash",
-                    "event_hash",
-                    "before_state_hash",
-                    "after_state_hash",
-                ] {
-                    delta.remove(key);
-                }
-            }
+        // 用真实事件类型做身份投影：只清空 store 分配/派生字段，再由
+        // serde 统一序列化。不要手写 JSON 字段名，避免 camelCase 重命名
+        // 或旧字段默认值让同一事实产生不同指纹。
+        let mut identity = self.clone();
+        identity.event_id.clear();
+        identity.origin_device_id.clear();
+        identity.local_date.clear();
+        identity.local_hour = None;
+        identity.platform.clear();
+        identity.device_class.clear();
+        identity.replay_format_version = None;
+        identity.replay_order = None;
+        identity.replay_position = None;
+        if let Some(delta) = identity.replay_delta.as_mut() {
+            delta.format_version = 0;
+            delta.state_root_after = None;
+            delta.branch_position = None;
+            delta.prev_event_hash = None;
+            delta.event_hash = None;
+            delta.before_state_hash = None;
+            delta.after_state_hash = None;
         }
-        let bytes = serde_json::to_vec(&value).map_err(|error| {
+        let bytes = serde_json::to_vec(&identity).map_err(|error| {
             crate::error::Error::Other(format!(
-                "failed to serialize contribution event {} identity bytes: {error}",
+                "failed to serialize contribution event identity for {}: {error}",
                 self.event_id
             ))
         })?;

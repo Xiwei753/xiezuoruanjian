@@ -43,7 +43,14 @@ pub struct ContributionStore {
 
 struct OriginEventIdCache {
     fingerprint: u64,
-    identities: HashMap<String, u64>,
+    identities: HashMap<String, PersistedEventIdentity>,
+}
+
+#[derive(Debug, Clone)]
+struct PersistedEventIdentity {
+    /// 事件真实所在的 `YYYY-MM-DD` 分区。
+    date: String,
+    identity: u64,
 }
 
 /// 跨 `ContributionStore` 实例共享的写锁：同一个 app data 根下只能有一个
@@ -64,7 +71,7 @@ struct ReplayMetadata {
 #[derive(Default)]
 struct PartitionAppend {
     written: usize,
-    written_identities: HashMap<String, Vec<(String, u64)>>,
+    written_identities: HashMap<String, Vec<(String, String, u64)>>,
 }
 
 /// 计算事件归属的业务日；两种日历都无法解析时返回带时间戳的错误。
@@ -472,7 +479,10 @@ impl ContributionStore {
     /// 缓存只在 origin 指纹变化（同步替换目录、generation 更新）时重扫；
     /// 普通追加不再逐日重扫分区文件。同一 ID 在磁盘上出现两种不同业务事实
     /// 时直接报错，不把最后一条当作真实值。
-    fn load_origin_event_identities(&self, origin: &str) -> Result<HashMap<String, u64>> {
+    fn load_origin_event_identities(
+        &self,
+        origin: &str,
+    ) -> Result<HashMap<String, PersistedEventIdentity>> {
         let fingerprint = self.origin_fingerprint(origin);
         {
             let cache = self
@@ -499,22 +509,33 @@ impl ContributionStore {
                 )))
             }
         };
+        let mut paths = Vec::new();
         for entry in entries {
             let path = entry?.path();
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if !name.ends_with(OBJECTS_SUFFIX) {
-                continue;
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(OBJECTS_SUFFIX))
+            {
+                paths.push(path);
             }
+        }
+        paths.sort();
+        for path in paths {
+            let date = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_suffix(OBJECTS_SUFFIX))
+                .unwrap_or_default()
+                .to_string();
             let scan = jsonl::read_jsonl_identities_tolerant_tail::<ContributionEvent, _, _>(
                 &path,
                 |event| event.event_id.as_str(),
                 |event| event.business_identity_fingerprint(),
             )?;
             for (id, identity) in scan {
-                match identities.get(&id).copied() {
-                    Some(stored) if stored == identity => {}
+                match identities.get(&id) {
+                    Some(stored) if stored.identity == identity => {}
                     Some(_) => {
                         return Err(Error::Other(format!(
                             "contribution event {id} is stored with conflicting business payloads in {}",
@@ -522,7 +543,13 @@ impl ContributionStore {
                         )))
                     }
                     None => {
-                        identities.insert(id, identity);
+                        identities.insert(
+                            id,
+                            PersistedEventIdentity {
+                                date: date.clone(),
+                                identity,
+                            },
+                        );
                     }
                 }
             }
@@ -542,7 +569,11 @@ impl ContributionStore {
     }
 
     /// 写成功后增量更新事件身份缓存，避免下一次记录再次全量扫描。
-    fn cache_written_event_identities(&self, origin: &str, identities: &[(String, u64)]) {
+    fn cache_written_event_identities(
+        &self,
+        origin: &str,
+        identities: &[(String, String, u64)],
+    ) {
         if identities.is_empty() {
             return;
         }
@@ -552,8 +583,14 @@ impl ContributionStore {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(entry) = cache.get_mut(origin) {
-            for (id, identity) in identities {
-                entry.identities.insert(id.clone(), *identity);
+            for (id, date, identity) in identities {
+                entry.identities.insert(
+                    id.clone(),
+                    PersistedEventIdentity {
+                        date: date.clone(),
+                        identity: *identity,
+                    },
+                );
             }
             entry.fingerprint = fingerprint;
         }
@@ -1383,7 +1420,7 @@ impl ContributionStore {
             let identity = event.business_identity_fingerprint()?;
             let key = (event.origin_device_id.clone(), event.event_id.clone());
             if let Some(stored) = existing.get(&key.0).and_then(|ids| ids.get(&key.1)) {
-                if *stored == identity {
+                if stored.identity == identity {
                     continue;
                 }
                 return Err(Error::Other(format!(
@@ -1464,8 +1501,9 @@ impl ContributionStore {
     fn load_existing_identities(
         &self,
         events: &[ContributionEvent],
-    ) -> Result<HashMap<String, HashMap<String, u64>>> {
-        let mut existing_by_origin: HashMap<String, HashMap<String, u64>> = HashMap::new();
+    ) -> Result<HashMap<String, HashMap<String, PersistedEventIdentity>>> {
+        let mut existing_by_origin: HashMap<String, HashMap<String, PersistedEventIdentity>> =
+            HashMap::new();
         for event in events {
             if existing_by_origin.contains_key(&event.origin_device_id) {
                 continue;
@@ -1530,8 +1568,9 @@ impl ContributionStore {
                         path.display()
                     ))
                 })?;
-            // 旧 pending 可能没有稳定 ID：按原内容的业务事实生成确定 ID，
-            // 下次重放得到同一身份，不会每次继续追加新行。
+            // 旧 pending 可能没有稳定 ID：先用原 pending 字节修复尾部残片，
+            // 再按原内容生成确定 ID；不能用改写后的序列化行去匹配旧残片。
+            self.repair_pending_event_tails(&events)?;
             for event in &mut events {
                 if event.event_id.is_empty() {
                     event.event_id = format!(
@@ -1591,6 +1630,47 @@ impl ContributionStore {
         // 去重命中的 pending 事件没有新行可写，也必须确认其真实分区 durable
         // 后才能让调用方删除 journal。
         let mut partitions: HashSet<(String, String)> = HashSet::new();
+        let mut identities_by_origin: HashMap<String, HashMap<String, PersistedEventIdentity>> =
+            HashMap::new();
+        for event in events {
+            let origin = if event.origin_device_id.is_empty() {
+                self.resolve_origin_device_id()?
+            } else {
+                event.origin_device_id.clone()
+            };
+            // 事件可能已在别的日期分区（或归档）真实落盘；确认必须使用
+            // 实际位置，不能用 pending 自带的日期猜分区。
+            if !identities_by_origin.contains_key(&origin) {
+                identities_by_origin.insert(
+                    origin.clone(),
+                    self.load_origin_event_identities(&origin)?,
+                );
+            }
+            let date = identities_by_origin
+                .get(&origin)
+                .and_then(|identities| identities.get(&event.event_id))
+                .map(|stored| stored.date.clone())
+                .unwrap_or_else(|| {
+                    if event.local_date.is_empty() {
+                        local_date_for_event(event.occurred_at_ms)
+                    } else {
+                        Ok(event.local_date.clone())
+                    }
+                })?;
+            partitions.insert((origin, date));
+        }
+        for (origin, date) in partitions {
+            self.confirm_event_partition_durable(&origin, &date)?;
+        }
+        for (origin, identities) in appended.written_identities {
+            self.cache_written_event_identities(&origin, &identities);
+        }
+        Ok(())
+    }
+
+    /// 按 pending 原始序列化行修复各分区未完成尾片（分配 legacy ID 之前）。
+    fn repair_pending_event_tails(&self, events: &[ContributionEvent]) -> Result<()> {
+        let mut by_partition: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
         for event in events {
             let origin = if event.origin_device_id.is_empty() {
                 self.resolve_origin_device_id()?
@@ -1602,15 +1682,36 @@ impl ContributionStore {
             } else {
                 event.local_date.clone()
             };
-            partitions.insert((origin, date));
+            by_partition
+                .entry((origin, date))
+                .or_default()
+                .push(serde_json::to_string(event)?);
         }
-        for (origin, date) in partitions {
-            self.confirm_event_partition_durable(&origin, &date)?;
-        }
-        for (origin, identities) in appended.written_identities {
-            self.cache_written_event_identities(&origin, &identities);
+        for ((origin, date), lines) in by_partition {
+            jsonl::repair_tail_fragment::<ContributionEvent>(
+                &self.event_file_path(&origin, &date),
+                &lines,
+            )?;
         }
         Ok(())
+    }
+
+    /// 追加失败后目录 mtime 可能不变；恢复前必须丢掉来源级身份缓存重读。
+    fn invalidate_origin_event_caches(&self, events: &[ContributionEvent]) {
+        let mut origins: HashSet<String> = HashSet::new();
+        for event in events {
+            if event.origin_device_id.is_empty() {
+                continue;
+            }
+            origins.insert(event.origin_device_id.clone());
+        }
+        let mut cache = self
+            .event_id_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for origin in origins {
+            cache.remove(&origin);
+        }
     }
 
     /// 按 `origin_device_id + local_date` 分区追加事件，返回真正写入的事件数。
@@ -1625,6 +1726,10 @@ impl ContributionStore {
         recovering: bool,
     ) -> Result<PartitionAppend> {
         let fresh_events = if recovering {
+            // 先按 pending 原始字节修复确定残片，再从修复后的真实分区重建
+            // 身份索引并过滤；不能拿追加失败前的目录 mtime 缓存直接判重。
+            self.repair_pending_event_tails(events)?;
+            self.invalidate_origin_event_caches(events);
             self.filter_persisted_events(events)?
         } else {
             events.to_vec()
@@ -1644,8 +1749,13 @@ impl ContributionStore {
             by_partition.entry((origin, date)).or_default().push(index);
         }
         // 先把每个分区的确定行准备好；重放路径先统一修复尾部，再进入追加。
-        let mut partitions: Vec<(String, String, Vec<usize>, Vec<String>, Vec<(String, u64)>)> =
-            Vec::with_capacity(by_partition.len());
+        let mut partitions: Vec<(
+            String,
+            String,
+            Vec<usize>,
+            Vec<String>,
+            Vec<(String, String, u64)>,
+        )> = Vec::with_capacity(by_partition.len());
         for ((origin, date), indexes) in by_partition {
             let mut expected_lines = Vec::with_capacity(indexes.len());
             let mut identities = Vec::with_capacity(indexes.len());
@@ -1654,6 +1764,7 @@ impl ContributionStore {
                 expected_lines.push(serde_json::to_string(event)?);
                 identities.push((
                     event.event_id.clone(),
+                    date.clone(),
                     event.business_identity_fingerprint()?,
                 ));
             }
@@ -1690,7 +1801,8 @@ impl ContributionStore {
         &self,
         events: &[ContributionEvent],
     ) -> Result<Vec<ContributionEvent>> {
-        let mut identities_by_origin: HashMap<String, HashMap<String, u64>> = HashMap::new();
+        let mut identities_by_origin: HashMap<String, HashMap<String, PersistedEventIdentity>> =
+            HashMap::new();
         let mut fresh = Vec::with_capacity(events.len());
         for event in events {
             if event.event_id.is_empty() {
@@ -1703,6 +1815,11 @@ impl ContributionStore {
             } else {
                 event.origin_device_id.clone()
             };
+            let date = if event.local_date.is_empty() {
+                local_date_for_event(event.occurred_at_ms)?
+            } else {
+                event.local_date.clone()
+            };
             if !identities_by_origin.contains_key(&origin) {
                 identities_by_origin.insert(
                     origin.clone(),
@@ -1712,10 +1829,9 @@ impl ContributionStore {
             let identity = event.business_identity_fingerprint()?;
             let existing = identities_by_origin
                 .get(&origin)
-                .and_then(|ids| ids.get(&event.event_id))
-                .copied();
+                .and_then(|ids| ids.get(&event.event_id));
             match existing {
-                Some(stored) if stored == identity => continue,
+                Some(stored) if stored.identity == identity => continue,
                 Some(_) => {
                     return Err(Error::Other(format!(
                         "contribution event {} is already persisted with a different business payload",
@@ -1724,7 +1840,13 @@ impl ContributionStore {
                 }
                 None => {
                     if let Some(ids) = identities_by_origin.get_mut(&origin) {
-                        ids.insert(event.event_id.clone(), identity);
+                        ids.insert(
+                            event.event_id.clone(),
+                            PersistedEventIdentity {
+                                date: date.clone(),
+                                identity,
+                            },
+                        );
                     }
                     fresh.push(event.clone());
                 }

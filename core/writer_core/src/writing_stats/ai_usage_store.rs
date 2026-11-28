@@ -241,21 +241,27 @@ impl AiUsageStore {
             for event in &events {
                 expected_lines.push(serde_json::to_string(*event)?);
             }
-            // 崩溃留下的尾部残行只有本批 pending 事件能证明时才截断；完整
-            // 记录缺换行由共用追加函数补分隔符。
-            jsonl::repair_tail_fragment::<AiUsageEvent>(&path, &expected_lines)?;
+            // 一次扫描同时修复可由本批确定行证明的尾部残片并取得已落盘
+            // 身份；不要再先 repair 一遍再 read_jsonl_ids_repairing_tail。
             let mut existing = jsonl::read_jsonl_ids_repairing_tail::<AiUsageEvent, _>(
                 &path,
                 |event| event.event_id.as_str(),
                 &expected_lines,
             )?
-            .ids;
+            .fingerprints;
             let mut fresh_lines = Vec::new();
             for (event, line) in events.into_iter().zip(expected_lines) {
-                if existing.contains(&event.event_id) {
+                let fingerprint = jsonl::line_fingerprint(line.as_bytes());
+                if let Some(stored) = existing.get(&event.event_id) {
+                    if *stored != fingerprint {
+                        return Err(Error::Other(format!(
+                            "AI usage event {} is already persisted with a different payload",
+                            event.event_id
+                        )));
+                    }
                     continue;
                 }
-                existing.insert(event.event_id.clone());
+                existing.insert(event.event_id.clone(), fingerprint);
                 fresh_lines.push(line);
                 written += 1;
             }

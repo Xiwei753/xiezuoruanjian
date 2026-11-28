@@ -136,6 +136,11 @@ impl WriterCoreApi {
         starmap_id: &str,
         before_graph: Option<&crate::starmap::types::StarMapGraph>,
     ) -> ApiResult<()> {
+        // 已有可用历史的普通增删/拖动不需要完整 before 快照；只在首次
+        // 需要建立基线时才读取图/meta/根列表。
+        if !self.starmap_baseline_needed(starmap_id)? {
+            return Ok(());
+        }
         let meta = self.core_write().get_starmap(starmap_id)?;
         let roots_before = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
         match before_graph {

@@ -29,6 +29,8 @@ const JOURNAL_DIR: &str = "app-meta/chapter-commits";
 const PENDING_MARKER: &str = "pending.marker";
 /// 冲突材料目录。
 const CONFLICT_DIR: &str = "conflicts";
+/// 每章未完成正文决议的定位目录，不是 journal 事务目录。
+const CHAPTER_PENDING_DIR: &str = "chapter-pending";
 /// 正文投影文件名。
 const BODY_FILE: &str = "chapter.md";
 /// 元数据投影文件名。

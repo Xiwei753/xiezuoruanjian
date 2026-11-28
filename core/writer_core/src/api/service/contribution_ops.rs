@@ -8,7 +8,6 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 
 use crate::api::service::WriterCoreApi;
 use crate::starmap::semantic::StarMapNodeContent;
@@ -23,10 +22,14 @@ use crate::writing_stats::starmap_proof::{
 };
 
 thread_local! {
-    static ACTIVE_BATCH: RefCell<Option<Vec<ContributionEvent>>> = const { RefCell::new(None) };
-    /// 当前批次持有的星图快照状态；生命周期与 [`ContributionBatch`] 相同。
-    static ACTIVE_STARMAP_STATE: RefCell<Option<Rc<RefCell<StarmapBatchState>>>> =
-        const { RefCell::new(None) };
+    static ACTIVE_BATCH: RefCell<Option<ActiveBatch>> = const { RefCell::new(None) };
+}
+
+/// 一批业务事务内共享的事件与星图基线状态。
+#[derive(Default)]
+struct ActiveBatch {
+    events: Vec<ContributionEvent>,
+    starmap: StarmapBatchState,
 }
 
 /// 一批业务事务内共享的星图基线状态。
@@ -51,8 +54,6 @@ pub(crate) struct StarMapBatchSnapshot {
 /// 业务返回错误时 [`Drop`] 丢弃，绝不留下假事件。
 pub(crate) struct ContributionBatch {
     owns_batch: bool,
-    /// 本批的星图快照状态；嵌套批次共享同一份，不另造生命周期。
-    starmap: Rc<RefCell<StarmapBatchState>>,
 }
 
 impl Drop for ContributionBatch {
@@ -61,11 +62,6 @@ impl Drop for ContributionBatch {
             ACTIVE_BATCH.with(|slot| {
                 slot.borrow_mut().take();
             });
-            ACTIVE_STARMAP_STATE.with(|slot| {
-                slot.borrow_mut().take();
-            });
-            self.starmap.borrow_mut().snapshots.clear();
-            self.starmap.borrow_mut().baselined.clear();
         }
     }
 }
@@ -82,24 +78,23 @@ impl WriterCoreApi {
         graph: &StarMapGraph,
         root_starmap_ids: &[String],
     ) {
-        let state = ACTIVE_STARMAP_STATE.with(|slot| slot.borrow().clone());
-        let Some(state) = state else {
-            // 没有活动批次就没有可结算的生命周期；调用方应先 begin。
-            log::error!(
-                "starmap batch snapshot for {starmap_id} registered without an active contribution batch"
-            );
-            return;
-        };
-        // 第一次登记的 before 才是本批事实；同批后续登记不能覆盖它。
-        state
-            .borrow_mut()
-            .snapshots
-            .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapBatchSnapshot {
-                meta: meta.cloned(),
-                graph: graph.clone(),
-                root_starmap_ids: root_starmap_ids.to_vec(),
+        ACTIVE_BATCH.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let Some(batch) = slot.as_mut() else {
+                log::error!(
+                    "starmap batch snapshot for {starmap_id} registered without an active contribution batch"
+                );
+                return;
+            };
+            // 第一次登记的 before 才是本批事实；同批后续登记不能覆盖它。
+            batch.starmap.snapshots.entry(starmap_id.to_string()).or_insert_with(|| {
+                StarMapBatchSnapshot {
+                    meta: meta.cloned(),
+                    graph: graph.clone(),
+                    root_starmap_ids: root_starmap_ids.to_vec(),
+                }
             });
+        });
     }
 
     pub(crate) fn begin_contribution_batch(&self) -> ContributionBatch {
@@ -108,25 +103,11 @@ impl WriterCoreApi {
             if slot.is_some() {
                 false
             } else {
-                *slot = Some(Vec::new());
+                *slot = Some(ActiveBatch::default());
                 true
             }
         });
-        let starmap = if owns_batch {
-            let state = Rc::new(RefCell::new(StarmapBatchState::default()));
-            ACTIVE_STARMAP_STATE.with(|slot| {
-                *slot.borrow_mut() = Some(state.clone());
-            });
-            state
-        } else {
-            ACTIVE_STARMAP_STATE
-                .with(|slot| slot.borrow().clone())
-                .unwrap_or_else(|| Rc::new(RefCell::new(StarmapBatchState::default())))
-        };
-        ContributionBatch {
-            owns_batch,
-            starmap,
-        }
+        ContributionBatch { owns_batch }
     }
 
     pub(crate) fn commit_contribution_batch(
@@ -137,19 +118,14 @@ impl WriterCoreApi {
             return Ok(());
         }
         batch.owns_batch = false;
-        ACTIVE_STARMAP_STATE.with(|slot| {
-            slot.borrow_mut().take();
-        });
-        batch.starmap.borrow_mut().snapshots.clear();
-        batch.starmap.borrow_mut().baselined.clear();
-        let events = ACTIVE_BATCH
+        let active = ACTIVE_BATCH
             .with(|slot| slot.borrow_mut().take())
             .ok_or_else(|| {
                 super::WriterError::Other(
                     "contribution batch missing while committing; no events written".into(),
                 )
             })?;
-        self.record_contribution_events(events)
+        self.record_contribution_events(active.events)
     }
 
     pub(crate) fn record_contribution_event(
@@ -230,8 +206,9 @@ impl WriterCoreApi {
             let order = ACTIVE_BATCH.with(|slot| {
                 slot.borrow()
                     .as_ref()
-                    .map(|events| {
-                        events
+                    .map(|batch| {
+                        batch
+                            .events
                             .iter()
                             .filter(|event| event.replay_delta.is_some())
                             .count() as u32
@@ -242,8 +219,8 @@ impl WriterCoreApi {
                 event.attach_replay(delta, Some(order));
             }
             ACTIVE_BATCH.with(|slot| {
-                if let Some(events) = slot.borrow_mut().as_mut() {
-                    events.push(event);
+                if let Some(batch) = slot.borrow_mut().as_mut() {
+                    batch.events.push(event);
                 }
             });
             return Ok(());
@@ -586,15 +563,19 @@ impl WriterCoreApi {
     }
 
     /// 本批第一个证明事件是否需要基线；已存在可用检查点时不伪造基线。
-    fn starmap_baseline_needed(&self, starmap_id: &str) -> super::ApiResult<bool> {
+    pub(super) fn starmap_baseline_needed(
+        &self,
+        starmap_id: &str,
+    ) -> super::ApiResult<bool> {
         if starmap_created_in_active_batch(starmap_id) {
             return Ok(false);
         }
-        let state = self.starmap_batch_state();
-        if state
-            .as_ref()
-            .is_some_and(|state| state.borrow().baselined.contains(starmap_id))
-        {
+        let already_baselined = ACTIVE_BATCH.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .is_some_and(|batch| batch.starmap.baselined.contains(starmap_id))
+        });
+        if already_baselined {
             return Ok(false);
         }
         let device_id = self
@@ -609,28 +590,31 @@ impl WriterCoreApi {
             &device_id,
             starmap_id,
         )? {
-            if let Some(state) = state.as_ref() {
-                state.borrow_mut().baselined.insert(starmap_id.to_string());
-            }
+            ACTIVE_BATCH.with(|slot| {
+                if let Some(batch) = slot.borrow_mut().as_mut() {
+                    batch.starmap.baselined.insert(starmap_id.to_string());
+                }
+            });
             return Ok(false);
         }
         Ok(true)
     }
 
-    fn starmap_batch_state(&self) -> Option<Rc<RefCell<StarmapBatchState>>> {
-        ACTIVE_STARMAP_STATE.with(|slot| slot.borrow().clone())
-    }
-
     fn mark_starmap_baselined(&self, starmap_id: &str) {
-        if let Some(state) = self.starmap_batch_state() {
-            state.borrow_mut().baselined.insert(starmap_id.to_string());
-        }
+        ACTIVE_BATCH.with(|slot| {
+            if let Some(batch) = slot.borrow_mut().as_mut() {
+                batch.starmap.baselined.insert(starmap_id.to_string());
+            }
+        });
     }
 
     /// 生成基线时把快照移出批次状态；每份快照只使用一次。
     fn take_starmap_batch_snapshot(&self, starmap_id: &str) -> Option<StarMapBatchSnapshot> {
-        self.starmap_batch_state()
-            .and_then(|state| state.borrow_mut().snapshots.remove(starmap_id))
+        ACTIVE_BATCH.with(|slot| {
+            slot.borrow_mut()
+                .as_mut()
+                .and_then(|batch| batch.starmap.snapshots.remove(starmap_id))
+        })
     }
 
     /// 旧星图第一次进入回放账本时，把操作开始前登记的 before 快照移动为基线。
@@ -798,8 +782,8 @@ impl WriterCoreApi {
 /// 当前批次的星图创建事件会从空白开始回放，不能再生成“旧图基线”。
 fn starmap_created_in_active_batch(starmap_id: &str) -> bool {
     ACTIVE_BATCH.with(|slot| {
-        slot.borrow().as_ref().is_some_and(|events| {
-            events.iter().any(|event| {
+        slot.borrow().as_ref().is_some_and(|batch| {
+            batch.events.iter().any(|event| {
                 event.object_type == ContributionObjectType::StarMap
                     && event.object_id == starmap_id
                     && event.operation == ContributionOperation::Create

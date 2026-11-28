@@ -169,36 +169,26 @@ impl WritingInputEvent {
     /// 事件业务事实指纹：忽略 proof 中由 Core 计算的链字段和本地日期补全，
     /// 用于“同一 event_id 是否同一条 journal 事实”的判重。
     pub(crate) fn business_identity_fingerprint(&self) -> crate::error::Result<u64> {
-        let mut value = serde_json::to_value(self).map_err(|error| {
-            crate::error::Error::Other(format!(
-                "failed to serialize stats event {} for identity: {error}",
-                self.event_id
-            ))
-        })?;
-        if let Some(object) = value.as_object_mut() {
-            for key in ["event_id", "local_date"] {
-                object.remove(key);
-            }
-            if let Some(proof) = object.get_mut("proof").and_then(|proof| proof.as_object_mut()) {
-                for key in [
-                    "format_version",
-                    "seq",
-                    "baseline_id",
-                    "starts_new_chain",
-                    "before_content_hash",
-                    "after_content_hash",
-                    "before_text_sha256",
-                    "after_text_sha256",
-                    "prev_event_hash",
-                    "event_hash",
-                ] {
-                    proof.remove(key);
-                }
-            }
+        // 类型化投影：清空 proof 中由 Core 计算的链字段与本地日期补全，
+        // 其余字段（含真实 before/after 变更、选区、时间）保持原值。
+        let mut identity = self.clone();
+        identity.event_id.clear();
+        identity.local_date.clear();
+        if let Some(proof) = identity.proof.as_mut() {
+            proof.format_version = 0;
+            proof.seq = 0;
+            proof.baseline_id.clear();
+            proof.starts_new_chain = false;
+            proof.before_content_hash.clear();
+            proof.after_content_hash.clear();
+            proof.before_text_sha256.clear();
+            proof.after_text_sha256.clear();
+            proof.prev_event_hash.clear();
+            proof.event_hash.clear();
         }
-        let bytes = serde_json::to_vec(&value).map_err(|error| {
+        let bytes = serde_json::to_vec(&identity).map_err(|error| {
             crate::error::Error::Other(format!(
-                "failed to serialize stats event {} identity bytes: {error}",
+                "failed to serialize stats event identity for {}: {error}",
                 self.event_id
             ))
         })?;

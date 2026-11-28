@@ -426,7 +426,36 @@ impl StatsStore {
         if !state.initialized {
             self.initialize_proof_state(&mut state)?;
         }
-        let mut working = state.clone();
+        // 只把本批涉及的章节链头/摘要与设备级 next_seq 带进工作状态，
+        // 不克隆其它章节的摘要和完整缺口正文。
+        let involved: HashSet<String> = items
+            .iter()
+            .filter(|(event, _)| {
+                event
+                    .proof
+                    .as_ref()
+                    .is_some_and(|proof| proof.has_content_change())
+            })
+            .map(|(event, _)| format!("{}/{}", event.device_id, event.chapter_id))
+            .collect();
+        let mut working = ProofStoreState {
+            initialized: true,
+            next_seq: state.next_seq,
+            chains: HashMap::new(),
+            digests: HashMap::new(),
+            gap_baselines: HashMap::new(),
+        };
+        for key in &involved {
+            if let Some(head) = state.chains.get(key) {
+                working.chains.insert(key.clone(), head.clone());
+            }
+            if let Some(digest) = state.digests.get(key) {
+                working.digests.insert(key.clone(), digest.clone());
+            }
+            if let Some(gap) = state.gap_baselines.get(key) {
+                working.gap_baselines.insert(key.clone(), gap.clone());
+            }
+        }
         let mut prepared: Vec<WritingInputEvent> = Vec::new();
         for (event, baseline_text) in items {
             if event
@@ -444,7 +473,17 @@ impl StatsStore {
             if self.event_is_persisted_identity(&origin, &date, &event)? {
                 // 去重命中同样要确认 durable，才能让调用方删除 journal。
                 self.confirm_event_partition_durable(&origin, &date)?;
-                self.advance_proof_state_from_persisted(&mut working, &event);
+                let actual = self.load_persisted_event(&origin, &date, &event.event_id)?;
+                let Some(actual) = actual else {
+                    // 索引说存在但读不到完整事件：当前内存链头无法证明，
+                    // 让下一次调用从完整持久事实重新初始化。
+                    self.reset_proof_state_for(&mut *state, &involved);
+                    return Err(crate::Error::Other(format!(
+                        "stats event {} is indexed as persisted but cannot be read back",
+                        event.event_id
+                    )));
+                };
+                self.advance_proof_state_from_persisted(&mut working, &actual);
                 continue;
             }
             if let Some(prepared_event) =
@@ -474,7 +513,13 @@ impl StatsStore {
                     partitions.push((origin, date));
                 }
                 Err(error) => {
+                    // 本批可能有分区已写入但未确认；丢掉本批涉及的 ID
+                    // 缓存，并让下一次调用从完整持久事件重建链状态。
+                    for (origin, date) in &partitions {
+                        self.invalidate_written_ids(&format!("{origin}/{date}"));
+                    }
                     self.invalidate_written_ids(&format!("{origin}/{date}"));
+                    self.reset_proof_state_for(&mut *state, &involved);
                     return Err(error);
                 }
             }
@@ -482,9 +527,24 @@ impl StatsStore {
         // 只有实际分区确认 durable 后才允许发布链头；去重命中的分区也要
         // 补一次文件与目录项确认。
         for (origin, date) in &partitions {
-            self.confirm_event_partition_durable(origin, date)?;
+            if let Err(error) = self.confirm_event_partition_durable(origin, date) {
+                for (origin, date) in &partitions {
+                    self.invalidate_written_ids(&format!("{origin}/{date}"));
+                }
+                self.reset_proof_state_for(&mut *state, &involved);
+                return Err(error);
+            }
         }
-        *state = working;
+        state.next_seq = working.next_seq;
+        for (key, head) in working.chains {
+            state.chains.insert(key, head);
+        }
+        for (key, digest) in working.digests {
+            state.digests.insert(key, digest);
+        }
+        for (key, gap) in working.gap_baselines {
+            state.gap_baselines.insert(key, gap);
+        }
         drop(state);
         if written > 0 {
             self.proof_generation.fetch_add(1, Ordering::SeqCst);
@@ -830,8 +890,18 @@ impl StatsStore {
         Ok(Some(event))
     }
 
-    /// 崩溃重试时事件已落盘但内存状态未发布：按已保存 proof 字段把工作
-    /// 状态推进到该事件，后续事件仍按同一链头继续计算。
+    /// 批次失败后清掉本批章节的链头/摘要缓存，下一次从完整持久事件重建。
+    fn reset_proof_state_for(&self, state: &mut ProofStoreState, involved: &HashSet<String>) {
+        for key in involved {
+            state.chains.remove(key);
+            state.digests.remove(key);
+            state.gap_baselines.remove(key);
+        }
+        state.initialized = false;
+    }
+
+    /// 崩溃重试时事件已落盘但内存状态未发布：必须用从磁盘读回的完整事件
+    /// （含真实 seq/event_hash）推进工作状态，不能拿 journal 原始事件猜。
     fn advance_proof_state_from_persisted(
         &self,
         state: &mut ProofStoreState,
@@ -1478,6 +1548,43 @@ impl StatsStore {
         self.proof_state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 从具体日分区读回一条完整持久事件（原始段优先，其次归档段）。
+    fn load_persisted_event(
+        &self,
+        origin: &str,
+        date: &str,
+        event_id: &str,
+    ) -> Result<Option<WritingInputEvent>> {
+        if event_id.is_empty() {
+            return Ok(None);
+        }
+        let raw = self.event_file_path(origin, date);
+        let records = jsonl::read_jsonl::<WritingInputEvent>(&raw)?;
+        if let Some(found) = records
+            .into_iter()
+            .find(|record| record.value.event_id == event_id)
+        {
+            return Ok(Some(found.value));
+        }
+        let archive_path = self
+            .app_data_root
+            .join(checkpoint::archive_relative_path(origin, date));
+        if archive_path.is_file() {
+            let file = EventFile {
+                origin: origin.to_string(),
+                date: date.to_string(),
+                path: archive_path,
+                compressed: true,
+            };
+            for event in self.parse_events_file(&file)? {
+                if event.event_id == event_id {
+                    return Ok(Some(event));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// 扫描某设备某个 UTC 日期的原始 JSONL 与已封口归档，按 event_id
