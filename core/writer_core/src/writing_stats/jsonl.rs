@@ -112,7 +112,23 @@ where
     T: DeserializeOwned,
     F: for<'a> Fn(&'a T) -> &'a str,
 {
-    scan_ids_impl(path, id_of, None, false)
+    scan_ids_impl(path, id_of, None, false, false)
+}
+
+/// 扫描稳定 ID，但容忍文件末尾未写完的最后一行（不截断、不报错）。
+///
+/// 只用于“根据已有 ID 判重”的读路径：尾部残片没有换行，不可能是完整事件；
+/// 真正的追加/恢复路径会用本批确定事件的序列化行匹配后再截断。这样合法
+/// 中断的写入不会因为一次严格判重而永久堵住后续写入。
+pub(crate) fn read_jsonl_ids_tolerant_tail<T, F>(
+    path: &Path,
+    id_of: F,
+) -> Result<JsonlIdScan>
+where
+    T: DeserializeOwned,
+    F: for<'a> Fn(&'a T) -> &'a str,
+{
+    scan_ids_impl(path, id_of, None, false, true)
 }
 
 /// 扫描稳定 ID，并允许用本批确定事件修复“未以换行结束”的尾部残片。
@@ -128,7 +144,7 @@ where
     T: DeserializeOwned,
     F: for<'a> Fn(&'a T) -> &'a str,
 {
-    scan_ids_impl(path, id_of, Some(expected_lines), true)
+    scan_ids_impl(path, id_of, Some(expected_lines), true, false)
 }
 
 /// 只修复未以换行结束的尾部残片，不扫描完整文件。
@@ -172,6 +188,7 @@ fn scan_ids_impl<T, F>(
     id_of: F,
     expected_lines: Option<&[String]>,
     repair_tail: bool,
+    ignore_incomplete_tail: bool,
 ) -> Result<JsonlIdScan>
 where
     T: DeserializeOwned,
@@ -245,6 +262,11 @@ where
                 scan.ids.insert(id.to_string());
             }
             Err(error) => {
+                if !complete && ignore_incomplete_tail {
+                    // 尾片没有换行，不可能是完整事件；判重先忽略它，真正的
+                    // 追加路径会按确定事件序列化行证明后截断。
+                    break;
+                }
                 if !complete && repair_tail {
                     let Some(expected) = expected_lines else {
                         return Err(invalid_json_bytes(path, line_number, error));

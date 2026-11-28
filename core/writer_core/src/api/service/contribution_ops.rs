@@ -27,7 +27,7 @@ thread_local! {
     static BATCH_STARMAP_SNAPSHOTS: RefCell<HashMap<String, StarMapBatchSnapshot>> =
         RefCell::new(HashMap::new());
     /// 本批已经产生过基线的星图；后续对象事件复用，不再克隆整图。
-    static BATCH_BASELINED_STARMAPS: RefCell<HashSet<String>> = const { RefCell::new(HashSet::new()) };
+    static BATCH_BASELINED_STARMAPS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 /// 一次星图写操作开始时的真实状态，供本批第一个证明事件生成基线，避免

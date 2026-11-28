@@ -1430,7 +1430,8 @@ impl StatsStore {
 
     /// 扫描某设备某个 UTC 日期的原始 JSONL 与已封口归档，按 event_id 去重。
     fn scan_persisted_ids(&self, origin: &str, date: &str) -> Result<HashMap<String, u64>> {
-        let scan = jsonl::read_jsonl_ids::<WritingInputEvent, _>(
+        // 判重容忍未写完的尾行：追加路径会用本批确定事件行证明后修复。
+        let scan = jsonl::read_jsonl_ids_tolerant_tail::<WritingInputEvent, _>(
             &self.event_file_path(origin, date),
             |event| event.event_id.as_str(),
         )?;
@@ -1646,7 +1647,7 @@ impl StatsStore {
         let mut cache = self.lock_written_ids();
         let cache_key = format!("sessions:{origin}/{date}");
         if !cache.contains_key(&cache_key) {
-            let scan = jsonl::read_jsonl_ids::<WritingActivitySegment, _>(
+            let scan = jsonl::read_jsonl_ids_tolerant_tail::<WritingActivitySegment, _>(
                 &self.session_file_path(origin, date),
                 |segment| segment.event_id.as_str(),
             )?;
