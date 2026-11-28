@@ -7,10 +7,10 @@
 
 ## 当前平台
 
-- Android：主力移动端。
+- Android：移动端，原生 Kotlin/Compose 客户端。
+- HarmonyOS：主力移动端，原生 ArkTS 客户端经 Bridge 接入 Rust Core。
 - Linux Qt：主力桌面端。
-- Windows Qt：Qt6/QML 客户端，复用 Linux Qt 的通用实现，仅平台差异独立装配。
-- HarmonyOS：保留原生客户端骨架和 Rust Core 接入。
+- Windows Qt：桌面端，是 Linux Qt 的 Qt6/QML 套壳，直接复用其同一份 QML、编辑器、星图与后端实现，只独立装配 Windows 窗口、输入法、渲染和部署。
 
 ## 仓库结构
 
@@ -18,7 +18,7 @@
 core/writer_core/   Rust 业务核心
 apps/android/       Android 原生客户端
 apps/Linux_qt/      Linux Qt 原生客户端
-apps/windows/       Windows 原生客户端
+apps/windows/       Windows Qt 客户端
 apps/harmony/       HarmonyOS 原生客户端
 bindings/           跨语言绑定
 ```
@@ -29,7 +29,7 @@ bindings/           跨语言绑定
 - 平台端负责 UI、输入法、排版、渲染、动画和系统能力接入。
 - 跨语言接口使用强类型 DTO；JSON 只允许存在于必须使用文本协议的边界。
 - 正文始终保存为纯文本，任何视觉效果都不能污染正文数据。
-- 平台客户端之间共享业务契约，不共享 UI 和系统实现。
+- 平台客户端之间共享业务契约；Linux Qt 与 Windows Qt 共用同一份 Qt 界面实现，移动端各自维护原生界面与系统实现。
 
 ## 开发
 

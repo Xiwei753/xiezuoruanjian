@@ -21,7 +21,7 @@ core/
 platform/rust/
   android/                # Android 平台实现 + 最终 cdylib 组装
   linux/                  # Linux 平台实现 + 最终 cdylib 组装
-  harmony/                # HarmonyOS Rust 适配（预留）
+  harmony/                # HarmonyOS 平台实现 + 最终 cdylib 组装
   windows/                # Windows 平台实现 + 最终 cdylib 组装
   apple/                  # Apple Rust 适配（预留）
 ```
@@ -53,7 +53,7 @@ writer_core 通用业务核心
 - Android 使用原生 Kotlin 客户端。
 - Linux 使用独立的 Qt 原生客户端。
 - Windows 使用 `apps/windows/qt` 的 Qt6/QML 客户端：独立装配 Windows 窗口、TSF/IME 输入、RHI/D3D11 渲染与部署，复用 Linux Qt 中平台无关的 QML、编辑器、星图和后端实现；不再使用 WinUI / Windows App SDK 原生重做路线。
-- HarmonyOS 保留原生客户端与 Rust Core 接入。
+- HarmonyOS 使用原生 ArkTS 客户端，经 Bridge 接入 Rust Core，是移动端主力平台。
 - 新平台复用 Core 契约，不复制现有平台 UI。
 
 不同平台可以有不同的排版、输入法和渲染实现，但功能语义、设置键、数据格式和同步规则必须一致。
