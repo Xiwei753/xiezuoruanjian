@@ -68,38 +68,22 @@ impl StarMapStore {
             let mut succeeded = true;
             for node_id in &ids {
                 if let Some(node) = self.nodes.get(node_id) {
-                    // Issue #1062：画布节点文件只保存实例，共享内容必须落在
-                    // 素材库本体里。flush 只补写缺失的本体，绝不覆盖已有本体
-                    // （本体编辑走 library 的独立事务），保证低层写入不会留下
-                    // "只有实例没有本体"的数据。
-                    let asset_id = self.asset_id_for_node(&node.id);
-                    let mut shared = node.clone();
-                    shared.asset_id = asset_id.clone();
-                    let definition_missing = match crate::starmap::library::load_node_definition(
-                        &self.app_data_root,
-                        &asset_id,
-                    ) {
-                        Ok(definition) => definition.is_none(),
-                        Err(_) => {
-                            succeeded = false;
-                            break;
-                        }
+                    // Issue #1062 评论 #7236446138 第 2 项：画布节点文件只保存
+                    // 实例，flush 不补写共享本体。
+                    //
+                    // 读模型可能是「本体尚未到达」的内存占位视图
+                    // （`NodeDefinitionState::ProvisionalMissingDefinition`），
+                    // 从它反推 definition 会把 title=asset_id、内容为空的占位
+                    // 内容持久化成真实的全局共享素材。共享本体只允许由显式
+                    // 创建入口（`upsert_node` 的创建路径 / `create_node_asset`）
+                    // 或旧完整节点的已确认原始字段（迁移 persist）建立。
+                    // 实例的共享身份以读模型上的 `asset_id` 为准；本地新建
+                    // 节点没有缓存记录时不能退化成实例 ID。
+                    let asset_id = if node.asset_id.trim().is_empty() {
+                        self.asset_id_for_node(&node.id)
+                    } else {
+                        node.asset_id.clone()
                     };
-                    if definition_missing {
-                        let definition = crate::starmap::types::StarMapNodeDefinition::from_node(
-                            asset_id.clone(),
-                            &shared,
-                        );
-                        if crate::starmap::library::save_node_definition(
-                            &self.app_data_root,
-                            &definition,
-                        )
-                        .is_err()
-                        {
-                            succeeded = false;
-                            break;
-                        }
-                    }
                     let instance = crate::starmap::types::StarMapNodeInstance {
                         instance_id: node.id.clone(),
                         asset_id,

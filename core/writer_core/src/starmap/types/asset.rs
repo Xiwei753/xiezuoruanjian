@@ -320,6 +320,65 @@ impl StarMapNodeDefinition {
 /// 两者独立递增，不再合成单一写入版本。
 pub type NodeView = super::StarMapNode;
 
+/// 节点读模型的共享本体到达状态（只读事实，不参与任何持久化）。
+///
+/// Issue #1062 评论 #7236446138 第 2 项：画布实例可以先于共享本体存在。
+/// 缺本体时读模型只能是内存占位——标题退回稳定 `asset_id`、内容为空。
+/// 它既不是可发布的共享内容，也不能在"只改实例"的事务里被反推成真实素材。
+/// 状态必须显式记录，不能靠 `title`/`kind`/`content` 猜测：真实本体恰好也是
+/// 空内容笔记时，内容猜测会把占位当成权威素材。
+///
+/// 本类型刻意不实现 `Serialize`/`Deserialize`，也不出现在任何持久化结构里，
+/// 因此占位标记不可能写进节点 JSON、星图快照或同步 manifest。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NodeDefinitionState {
+    /// 共享本体已从素材库解析成功，当前读模型反映真实共享内容。
+    #[default]
+    Resolved,
+    /// 画布实例已存在，但共享本体尚未到达：当前读模型是内存占位视图。
+    ///
+    /// 占位视图只用于解析/渲染；实例只是引用，本体文件缺失不是"需要补写
+    /// 本体"的脏状态，任何只改实例的事务都不得据此创建共享定义。
+    ProvisionalMissingDefinition,
+    /// 本地显式新建的节点：共享内容来自调用方提供的完整节点，允许由
+    /// 显式创建入口建立共享本体。
+    LocalNew,
+}
+
+impl NodeDefinitionState {
+    /// 当前视图是否是"本体尚未到达"的内存占位。
+    pub fn is_provisional(self) -> bool {
+        matches!(self, Self::ProvisionalMissingDefinition)
+    }
+}
+
+/// 带共享本体到达状态的节点读模型（只读包装）。
+///
+/// [`NodeDefinitionState`] 不是 `StarMapNode` 的持久化字段：它在读取时按
+/// "素材库有没有该 `asset_id` 的本体 + 画布实例文件是否已落盘"显式给出，
+/// 因此不需要也不允许写进磁盘。
+#[derive(Debug, Clone)]
+pub struct StarMapNodeRead {
+    /// 投影后的节点读模型。
+    pub node: super::StarMapNode,
+    /// 该读模型共享本体的到达状态。
+    pub definition_state: NodeDefinitionState,
+}
+
+impl StarMapNodeRead {
+    pub fn new(node: super::StarMapNode, definition_state: NodeDefinitionState) -> Self {
+        Self {
+            node,
+            definition_state,
+        }
+    }
+
+    /// 当前视图是否是尚未到达真实本体的内存占位。
+    pub fn is_provisional(&self) -> bool {
+        self.definition_state.is_provisional()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

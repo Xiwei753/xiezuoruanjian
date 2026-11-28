@@ -266,13 +266,22 @@ impl StarMapStore {
             .insert(node_id.to_string(), asset_id.clone());
         let definition = match plan.definition {
             Some(definition) => definition,
-            None => crate::starmap::library::load_node_definition(&self.app_data_root, &asset_id)?
-                .unwrap_or_else(|| {
-                    // Issue #1062：实例可以先于/独立于共享本体存在（旧数据、
-                    // 旧端只写实例的包）。缺本体不阻断加载，用只存在于内存的
-                    // 占位本体完成投影；不写回素材库，不伪造共享内容。
-                    crate::starmap::migration::nodes::placeholder_definition(&instance)
-                }),
+            None => {
+                match crate::starmap::library::load_node_definition(&self.app_data_root, &asset_id)?
+                {
+                    Some(definition) => definition,
+                    None => {
+                        // Issue #1062 评论 #7236446138 第 2 项：实例存在、共享本体
+                        // 缺失时读模型是显式的"本体尚未到达"视图
+                        // （[`crate::starmap::types::NodeDefinitionState::ProvisionalMissingDefinition`]，
+                        // 由 `StarMapStore::node_definition_state` 按同一判定给出）。
+                        // 占位本体只存在于内存：标题退回稳定 asset_id、内容为空，
+                        // 不写回素材库，不进入节点 JSON / 同步 manifest；真正本体
+                        // 到达后重新加载即变回 Resolved，不产生任何上推。
+                        crate::starmap::migration::nodes::placeholder_definition(&instance)
+                    }
+                }
+            }
         };
         if definition.asset_id != asset_id {
             return Err(Error::Other(format!(

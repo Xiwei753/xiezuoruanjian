@@ -672,9 +672,11 @@ fn lookup_definition(
 
 /// 缺失共享本体时用于运行时投影的占位本体。
 ///
-/// Issue #1062：旧数据里画布实例可以先于/独立于共享本体存在，加载不能因此
-/// 失败。占位本体只存在于内存，不写回素材库，也不会覆盖以后真正发布的本体；
-/// 它的标题退回稳定 asset id，避免伪造任何共享内容。
+/// Issue #1062 评论 #7236446138 第 2 项：旧数据里画布实例可以先于/独立于
+/// 共享本体存在，加载不能因此失败。占位本体只存在于内存，对应读模型状态
+/// [`crate::starmap::types::NodeDefinitionState::ProvisionalMissingDefinition`]；
+/// 它不写回素材库，不会被任何"只改实例"的事务反推成真实素材，也不会覆盖
+/// 以后真正发布的本体。标题退回稳定 `asset_id`、内容为空，避免伪造共享内容。
 pub(crate) fn placeholder_definition(instance: &StarMapNodeInstance) -> StarMapNodeDefinition {
     StarMapNodeDefinition {
         asset_id: instance.asset_id.clone(),
