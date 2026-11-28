@@ -1291,7 +1291,9 @@ impl StatsStore {
     fn initialize_proof_state(&self, state: &mut ProofStoreState) -> Result<()> {
         let origin = self.resolve_origin_device_id()?;
         let mut local_event_seqs: HashMap<u64, String> = HashMap::new();
-        for event in self.load_all_events()? {
+        // 初始化只消费完整事件：合法中断留下的未完成尾行由追加路径按本批
+        // 确定序列化行证明后修复，不能让严格读取把后续编辑永久堵死。
+        for event in self.load_events_for_proof_state()? {
             let Some(proof) = event.proof.as_ref() else {
                 continue;
             };
@@ -1701,6 +1703,24 @@ impl StatsStore {
         self.load_merged_files(files)
     }
 
+    /// 读取全部事件，用于证明状态初始化：只忽略末尾未写完的原始分区尾行。
+    ///
+    /// 完整行仍严格解析；归档段不可变，任何损坏都报错。
+    fn load_events_for_proof_state(&self) -> Result<Vec<WritingInputEvent>> {
+        let mut files = self.list_event_files()?;
+        files.sort_by(|a, b| a.origin.cmp(&b.origin).then_with(|| a.date.cmp(&b.date)));
+        let mut merged = MergeAccumulator::default();
+        for file in &files {
+            for event in self.parse_events_file_tolerant_tail(file)? {
+                merged.ingest(file, event);
+            }
+        }
+        if let Err(error) = self.append_conflicts(&merged.conflicts) {
+            log::warn!("[writing_stats] failed to append event id conflicts: {error}");
+        }
+        Ok(merged.events)
+    }
+
     /// 读取全部来源分区的已测量写作计时切片（按 `event_id` 去重）。
     pub fn load_all_segments(&self) -> Result<Vec<WritingActivitySegment>> {
         let files = self.list_session_files()?;
@@ -1864,6 +1884,61 @@ impl StatsStore {
     }
 
     /// 严格读取单个事件文件（任何一行解析失败都报错）。
+    /// 初始化专用：原始分区末尾未写完的行忽略；其余严格解析。
+    fn parse_events_file_tolerant_tail(
+        &self,
+        file: &EventFile,
+    ) -> Result<Vec<WritingInputEvent>> {
+        let handle = File::open(&file.path)?;
+        let mut reader: Box<dyn BufRead> = if file.compressed {
+            Box::new(BufReader::new(
+                zstd::stream::read::Decoder::new(handle).map_err(|error| {
+                    crate::Error::Other(format!(
+                        "Open proof archive stats/events/{}/proof/archive/{}.events.jsonl.zst: {}",
+                        file.origin, file.date, error
+                    ))
+                })?,
+            ))
+        } else {
+            Box::new(BufReader::new(handle))
+        };
+        let mut events = Vec::new();
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut line_number = 0usize;
+        loop {
+            buffer.clear();
+            let read = reader.read_until(b'\n', &mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            line_number += 1;
+            let complete = buffer.last() == Some(&b'\n');
+            let raw: &[u8] = if complete {
+                &buffer[..buffer.len() - 1]
+            } else {
+                &buffer[..]
+            };
+            if raw.iter().all(|byte| byte.is_ascii_whitespace()) {
+                continue;
+            }
+            match serde_json::from_slice::<WritingInputEvent>(raw) {
+                Ok(event) => events.push(event),
+                Err(_) if !complete && !file.compressed => {
+                    // 未写完的尾行不是完整事件；保留原始字节，等追加路径
+                    // 用确定事件序列化行证明后再截断。
+                }
+                Err(error) => {
+                    return Err(crate::Error::Other(format!(
+                        "Corrupt event at {}:{}: {error}",
+                        file.path.display(),
+                        line_number
+                    )))
+                }
+            }
+        }
+        Ok(events)
+    }
+
     fn parse_events_file(&self, file: &EventFile) -> Result<Vec<WritingInputEvent>> {
         let handle = File::open(&file.path)?;
         let reader: Box<dyn BufRead> = if file.compressed {
