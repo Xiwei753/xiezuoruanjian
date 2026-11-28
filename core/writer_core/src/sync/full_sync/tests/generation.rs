@@ -661,6 +661,7 @@ fn merge_outcome(
         manifest_unchanged: false,
         manifest_delta: delta,
         affected_paths: None,
+        remote_base_root: None,
     }
 }
 

@@ -271,6 +271,11 @@ pub(crate) struct LwwMergeOutcome {
     pub manifest_delta: Option<crate::sync::manifest_delta::ManifestDelta>,
     /// 稀疏轮真实受影响的路径集合；发布端据此只加载受影响的对象/索引。
     pub affected_paths: Option<std::collections::BTreeSet<String>>,
+    /// 本轮读取的固定远端 base 清单根的 canonical sha256。
+    ///
+    /// 只有远端存在 v2 根时才有值；发布根用它在 `previousRoot` 记录真实
+    /// 已发布上一代，而不是本地刚写出的根。
+    pub remote_base_root: Option<String>,
 }
 
 /// 唯一的只读 merge 核心。
@@ -409,6 +414,10 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     );
     // 稀疏轮按 affected 路径点查远端：不 list 全树、不读未受影响远端清单对象；
     // 非稀疏路径保持整树 + 完整清单读取。
+
+    // 发布根绑定本轮固定 base 的已发布身份：固定远端根在发布/GC 之前读取。
+    let remote_base_root =
+        crate::sync::lww::fetch_remote_root_identity(provider, source_remote_prefix)?;
     let (remote_manifest, remote_tree_files) = match sparse {
         Some(plan) => {
             let versions = fetch_remote_versions_for_paths(
@@ -1429,6 +1438,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         manifest_unchanged,
         manifest_delta: sparse.map(|_| manifest_delta),
         affected_paths: sparse.map(|plan| plan.affected_paths().clone()),
+        remote_base_root,
     })
 }
 
@@ -1643,6 +1653,7 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
         manifest_unchanged: false,
         manifest_delta: None,
         affected_paths: None,
+        remote_base_root: None,
     })
 }
 

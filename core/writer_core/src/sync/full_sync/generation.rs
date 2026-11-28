@@ -272,7 +272,11 @@ fn publish_snapshot_batch(
     let delta_manifest_files =
         match merge_outcome.and_then(|outcome| outcome.manifest_delta.as_ref()) {
             Some(delta) => {
-                match crate::sync::lww::local_manifest_storage_for_delta(&manifest_store, delta) {
+                match crate::sync::lww::local_manifest_storage_for_delta_with_base(
+                    &manifest_store,
+                    delta,
+                    merge_outcome.and_then(|outcome| outcome.remote_base_root.as_deref()),
+                ) {
                     Ok(files) => Some(files),
                     Err(error) => {
                         log::warn!(
@@ -290,7 +294,11 @@ fn publish_snapshot_batch(
     let delta_mode = delta_manifest_files.is_some();
     let manifest_files = match delta_manifest_files {
         Some(files) => files,
-        None => match crate::sync::lww::local_manifest_storage(&manifest_store, Some(&manifest)) {
+        None => match crate::sync::lww::local_manifest_storage_with_published_base(
+            &manifest_store,
+            Some(&manifest),
+            merge_outcome.and_then(|outcome| outcome.remote_base_root.as_deref()),
+        ) {
             Ok(files) => files,
             Err(error) => return super::transfer_helpers::sync_result_from_error(error),
         },
@@ -500,7 +508,11 @@ fn try_publish_sparse_batch(
         return None;
     }
     let store = crate::sync::lww::ManifestStore::new(sync_root, &manifest_rel_path(app_group));
-    let manifest_files = match crate::sync::lww::local_manifest_storage_for_delta(&store, delta) {
+    let manifest_files = match crate::sync::lww::local_manifest_storage_for_delta_with_base(
+        &store,
+        delta,
+        outcome.remote_base_root.as_deref(),
+    ) {
         Ok(files) => files,
         Err(error) => {
             log::warn!(

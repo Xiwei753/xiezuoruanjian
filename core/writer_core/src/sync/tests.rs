@@ -5970,6 +5970,7 @@ mod tests {
                 manifest_unchanged: false,
                 manifest_delta: Some(delta),
                 affected_paths: Some(BTreeSet::new()),
+                remote_base_root: None,
             }
         }
 
@@ -6092,6 +6093,73 @@ mod tests {
             assert!(
                 paths.contains(&format!("{PREFIX}/{chapter_rel}").as_str()),
                 "业务 Put 仍应与清单同批，实际 {paths:?}"
+            );
+        }
+
+        /// 稀疏发布根把 `previousRoot` 绑定到本轮固定远端 base 根的 sha256，
+        /// 而不是本地刚写出的根。
+        #[test]
+        fn sparse_publish_binds_previous_root_to_remote_base() {
+            use crate::sync::provider::SyncProvider;
+            let dir = tempdir().unwrap();
+            let baseline = SyncManifest {
+                files: vec![
+                    record("project.json", "hash-root", 10),
+                    record("volumes/v1/chapters/c1/chapter.md", "hash-c1", 10),
+                ],
+            };
+            let store = seed_store(dir.path(), &baseline);
+            let base_namespaces = store.load_root().unwrap().unwrap().namespaces;
+            let base_bytes = crate::sync::lww::ManifestRoot::published(base_namespaces, None)
+                .canonical_bytes()
+                .unwrap();
+            let base_sha = sha256_hex(&base_bytes);
+
+            let changed = record("volumes/v1/chapters/c1/chapter.md", "hash-c1-new", 20);
+            let mut delta = ManifestDelta::default();
+            delta.upserts.insert(changed.path.clone(), changed);
+            let plan = store.apply_delta(&delta, "g-local").unwrap();
+            commit_plan(dir.path(), &plan);
+            let merged = store.load_all().unwrap().unwrap();
+
+            let provider = MemoryProvider::new();
+            provider
+                .write(
+                    &format!("{PREFIX}/app-meta/sync/manifest/root.json"),
+                    &base_bytes,
+                    crate::sync::provider::model::WritePrecondition::Unconditional,
+                )
+                .unwrap();
+
+            let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+            let chapter_abs = dir.path().join(chapter_rel);
+            std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+            std::fs::write(&chapter_abs, b"chapter v2").unwrap();
+            let mut outcome = outcome_with_delta(merged, delta, vec![chapter_rel.to_string()]);
+            outcome.remote_base_root = Some(base_sha.clone());
+            let mutations =
+                plan_lww_publish(dir.path(), &provider, PREFIX, SYNC_MANIFEST_PATH, &outcome)
+                    .unwrap();
+            let root_path = format!("{PREFIX}/app-meta/sync/manifest/root.json");
+            let root_bytes = mutations
+                .iter()
+                .find_map(|mutation| match mutation {
+                    BatchMutation::Put { path, content } if path == &root_path => {
+                        Some(content.clone())
+                    }
+                    _ => None,
+                })
+                .expect("稀疏发布必须写根");
+            let published: crate::sync::lww::ManifestRoot =
+                serde_json::from_slice(&root_bytes).unwrap();
+            assert_eq!(
+                published.previous_root.as_deref(),
+                Some(base_sha.as_str()),
+                "previousRoot 必须等于远端 base 根"
+            );
+            assert!(
+                published.local_previous_root.is_none(),
+                "发布根不得携带本地血缘"
             );
         }
 

@@ -241,6 +241,19 @@ pub(crate) fn fetch_remote_manifest(
     read_legacy_shards(provider, remote_prefix, &shard_paths)
 }
 
+/// 读取远端 v2 清单根的 canonical sha256（不存在返回 None）。
+///
+/// 发布根用它在 `previousRoot` 记录本轮固定 base 的已发布上一代。
+pub(crate) fn fetch_remote_root_identity(
+    provider: &dyn SyncProvider,
+    remote_prefix: &str,
+) -> crate::Result<Option<String>> {
+    let rel = remote_root_rel();
+    Ok(provider
+        .read(&remote_path(remote_prefix, &rel))?
+        .map(|object| sha256_hex(&object.content)))
+}
+
 /// 不需要远端 tree 的版本：直接探测根 → 旧单文件 → 旧分片目录。
 ///
 /// 三种来源都不存在 → `Ok(None)`（调用方决定是否允许"没有清单"）；
@@ -538,6 +551,15 @@ pub(crate) fn local_manifest_storage(
     local_manifest_storage_with_base(store, manifest, None)
 }
 
+/// 完整发布视图，但根按本轮固定远端 base 根填写 `previousRoot`。
+pub(crate) fn local_manifest_storage_with_published_base(
+    store: &ManifestStore,
+    manifest: Option<&SyncManifest>,
+    previous_published_root: Option<&str>,
+) -> crate::Result<Vec<ManifestStorageFile>> {
+    local_manifest_storage_with_base(store, manifest, previous_published_root)
+}
+
 fn local_manifest_storage_with_base(
     store: &ManifestStore,
     manifest: Option<&SyncManifest>,
@@ -593,6 +615,15 @@ fn local_manifest_storage_with_base(
 pub(crate) fn local_manifest_storage_for_delta(
     store: &ManifestStore,
     delta: &ManifestDelta,
+) -> crate::Result<Vec<ManifestStorageFile>> {
+    local_manifest_storage_for_delta_with_base(store, delta, None)
+}
+
+/// 稀疏发布视图；`previous_published_root` 为本轮固定远端 base 根的 sha256。
+pub(crate) fn local_manifest_storage_for_delta_with_base(
+    store: &ManifestStore,
+    delta: &ManifestDelta,
+    previous_published_root: Option<&str>,
 ) -> crate::Result<Vec<ManifestStorageFile>> {
     let Some(root) = store.load_root()? else {
         return Err(crate::Error::Other(format!(
@@ -717,7 +748,7 @@ pub(crate) fn local_manifest_storage_for_delta(
     // 远端发布决议（publish_remote_manifest）按本轮读取的远端 base 根填写，
     // 这里留空；localPreviousRoot 不得进入发布视图。generation 由最终
     // namespace 映射内容派生（同内容稳定，不因随机串每轮制造伪提交）。
-    let new_root = ManifestRoot::published(root.namespaces.clone(), None);
+    let new_root = ManifestRoot::published(root.namespaces.clone(), previous_published_root);
     let root_rel = store.root_rel();
     files.insert(
         root_rel.clone(),

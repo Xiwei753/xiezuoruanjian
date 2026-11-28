@@ -392,7 +392,11 @@ fn plan_manifest_mutations(
     // objects/indexes 与根，不展开完整清单。root 缺失或 delta 视图不可用时
     // 回退完整入口，保持首次同步/迁移/损坏修复的行为不变。
     let delta_files = match outcome.manifest_delta.as_ref() {
-        Some(delta) => match super::local_manifest_storage_for_delta(&store, delta) {
+        Some(delta) => match super::local_manifest_storage_for_delta_with_base(
+            &store,
+            delta,
+            outcome.remote_base_root.as_deref(),
+        ) {
             Ok(files) => Some(files),
             Err(error) => {
                 log::warn!(
@@ -407,7 +411,11 @@ fn plan_manifest_mutations(
     };
     let files = match delta_files {
         Some(files) => files,
-        None => super::local_manifest_storage(&store, Some(&outcome.merged_manifest))?,
+        None => super::local_manifest_storage_with_published_base(
+            &store,
+            Some(&outcome.merged_manifest),
+            outcome.remote_base_root.as_deref(),
+        )?,
     };
     let mut mutations: Vec<BatchMutation> = Vec::with_capacity(files.len() + 1);
     let mut root_mutation: Option<BatchMutation> = None;

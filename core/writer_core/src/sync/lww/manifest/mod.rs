@@ -31,8 +31,10 @@ pub(crate) use index::{namespace_for_path, validate_namespace, ManifestIndex};
 pub(crate) use objects::{is_sha256_hex, object_key, sha256_hex, ManifestObject};
 pub(crate) use remote::{
     fetch_remote_manifest as fetch_remote_manifest_v2, fetch_remote_manifest_at,
-    fetch_remote_manifest_for_paths, local_manifest_storage, local_manifest_storage_for_delta,
-    publish_remote_manifest, remote_rel_for, ManifestStorageKind,
+    fetch_remote_manifest_for_paths, fetch_remote_root_identity, local_manifest_storage,
+    local_manifest_storage_for_delta, local_manifest_storage_for_delta_with_base,
+    local_manifest_storage_with_published_base, publish_remote_manifest, remote_rel_for,
+    ManifestStorageKind,
 };
 pub(crate) use root::{ManifestRoot, MANIFEST_SCHEMA_VERSION};
 pub(crate) use store::{
