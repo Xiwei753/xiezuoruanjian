@@ -23,18 +23,6 @@ impl crate::facade::WriterCore {
         provider.diagnose().map_err(crate::Error::from)
     }
 
-    fn remove_pending_remote_cleanup_by_prefix(&self, remote_prefix: &str) {
-        if let Err(error) = crate::sync::pending_remote_cleanup::remove_pending_remote_cleanup(
-            &self.app_data_root,
-            remote_prefix,
-        ) {
-            log::warn!(
-                "finalize_full_sync: remove_pending_remote_cleanup failed for {remote_prefix}: \
-                 {error} — pending will be retried next sync"
-            );
-        }
-    }
-
     fn remove_pending_deleted_by_prefix(&self, remote_prefix: &str) {
         let pending = match crate::sync::pending_deleted::load_pending_deleted_targets(
             &self.app_data_root,

@@ -57,7 +57,6 @@ pub(crate) mod object_compare;
 pub mod path;
 pub mod pending_deleted;
 /// 待清理远端残留的持久化（provider-neutral）。
-pub mod pending_remote_cleanup;
 pub mod provider;
 pub mod scanner;
 pub mod service;

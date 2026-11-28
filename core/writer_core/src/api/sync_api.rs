@@ -835,8 +835,8 @@ impl WriterCoreApi {
             }
 
             // 远端 HEAD 在规划后变化：旧 batch 即使重试也不能提交。重新执行
-            // 整轮 Prepare → 读取 catalog → LWW → 新 batch，每轮使用新 provider
-            // 和新远端快照；不能靠 generation 层重放旧 mutations。
+            // 整轮 Prepare → 固定新 HEAD → 对象比较 → 新 batch，每轮使用新
+            // provider 和新远端快照；不能重放旧决议。
             let cancelled = cancellation_token
                 .as_ref()
                 .is_some_and(SyncCancellationToken::is_cancelled);
@@ -1852,41 +1852,6 @@ impl WriterCoreApi {
     /// 集成测试用 `MemoryProvider` + 手工 `FullSyncPlan` + `prepare_staging_runs`
     /// 驱动同一条编排。
     #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
-    pub fn perform_full_sync_with_provider(
-        &self,
-        provider: &dyn crate::sync::provider::SyncProvider,
-        plan: &crate::sync::full_sync::FullSyncPlan,
-        staging_runs: Vec<crate::sync::staging::StagingRun>,
-        cancellation_token: Option<SyncCancellationToken>,
-        progress_sink: Option<SyncProgressSink>,
-        target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
-    ) -> ApiResult<FullSyncResultDto> {
-        let operation_id = progress_sink
-            .as_ref()
-            .and_then(SyncProgressSink::operation_id)
-            .map(str::to_string)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let base_revision = provider
-            .remote_revision()
-            .ok()
-            .flatten()
-            .map(crate::sync::provider::model::RemoteVersion::new);
-        let round = crate::sync::provider::round::RoundProvider::new(provider, base_revision);
-        self.perform_full_sync_with_provider_for_run(
-            provider,
-            &round,
-            plan,
-            staging_runs,
-            cancellation_token,
-            progress_sink,
-            target_progress,
-            &operation_id,
-            None,
-            &PendingMutationMap::new(),
-        )
-        .map(|outcome| outcome.result)
-    }
-
     #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
     fn perform_full_sync_with_provider_for_run(
         &self,

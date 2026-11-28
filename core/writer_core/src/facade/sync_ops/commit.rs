@@ -215,7 +215,6 @@ impl crate::facade::WriterCore {
                 crate::sync::SyncStatus::Success | crate::sync::SyncStatus::LatestWinsApplied
             ) {
                 self.remove_pending_deleted_by_prefix(&target.remote_prefix);
-                self.remove_pending_remote_cleanup_by_prefix(&target.remote_prefix);
             }
         }
     }
