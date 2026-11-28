@@ -22,6 +22,7 @@ pub(crate) use manifest::{
     AdditionalFilePlan, ChapterCommitManifest, ChapterCommitRecovery, ChapterSyncMutationPlan,
 };
 use recovery::project_manifest_sync_mutations;
+pub(crate) use recovery::preserve_superseded_conflict;
 pub use recovery::{
     pending_chapter_draft_acks, pending_chapter_proof_events, pending_chapter_proof_transactions,
     pending_chapter_sync_proof_fact_ids, pending_chapter_sync_proof_facts,
@@ -115,6 +116,9 @@ fn max_journal_commit_sequence(project_root: &Path) -> Result<u64> {
         if !entry.file_type()?.is_dir() {
             continue;
         }
+        if entry.file_name().to_string_lossy() == CONFLICT_DIR {
+            continue;
+        }
         let manifest_path = entry.path().join("manifest.json");
         if !manifest_path.exists() {
             continue;
@@ -166,6 +170,11 @@ fn clear_pending_if_idle(project_root: &Path) -> Result<()> {
     for entry in fs::read_dir(&root)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        // 冲突归档目录是 Superseded 事务的材料副本，不是未决事务；它没有
+        // manifest 探针，不能让它把 pending marker 永久钉住。
+        if entry.file_name().to_string_lossy() == CONFLICT_DIR {
             continue;
         }
         let manifest_path = entry.path().join("manifest.json");
@@ -922,7 +931,10 @@ pub(crate) fn commit_chapter_with_guard(
 }
 
 mod ack;
-pub use ack::{mark_chapter_commit_draft_ack, mark_chapter_commit_projection};
+pub use ack::{
+    mark_chapter_commit_draft_ack, mark_chapter_commit_projection,
+    mark_chapter_commit_projections,
+};
 
 /// 把一次提交决议要投影的同步对象整理成 durable 材料（复审 #1）。
 ///

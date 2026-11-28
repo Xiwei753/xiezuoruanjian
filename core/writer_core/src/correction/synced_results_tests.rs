@@ -57,19 +57,22 @@ fn write_is_idempotent_and_empty_suggestions_round_trip() {
         "equivalent record must not rewrite"
     );
     assert_eq!(first, std::fs::read_to_string(&path).unwrap());
-    let loaded = load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a").unwrap();
+    let loaded = load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a")
+        .unwrap()
+        .records;
     assert_eq!(loaded.len(), 1);
     assert!(loaded[0].suggestions.is_empty() && loaded[0].checked);
     assert!(loaded[0].text_sha256 == "t" && loaded[0].context_sha256 == "ctx");
 }
 
 #[test]
-fn load_skips_bad_files_and_identity_mismatches() {
+fn load_keeps_valid_records_and_reports_bad_files() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path();
     let dir = root.join("correction/results/chapter-1");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("broken.json"), "{not json").unwrap();
+    let broken_path = dir.join("broken.json");
+    std::fs::write(&broken_path, "{not json").unwrap();
     let mut wrong_mode = record("t", "ctx");
     wrong_mode.mode = MODE_RULES.to_string();
     std::fs::write(
@@ -84,20 +87,30 @@ fn load_skips_bad_files_and_identity_mismatches() {
         serde_json::to_string(&wrong_version).unwrap(),
     )
     .unwrap();
-    assert!(load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a")
-        .unwrap()
-        .is_empty());
+    let only_bad = load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a").unwrap();
+    assert!(only_bad.records.is_empty());
+    assert_eq!(only_bad.failures.len(), 1);
+    assert_eq!(only_bad.failures[0].path, broken_path);
     assert!(write_record(root, &record("t3", "ctx")).unwrap());
+    // 一个坏文件只报告它自己：同章有效记录仍要读出，不能丢掉整章。
     let loaded = load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-a").unwrap();
-    assert_eq!(loaded.len(), 1);
-    assert_eq!(loaded[0].text_sha256, "t3");
+    assert_eq!(loaded.failures.len(), 1);
+    assert_eq!(loaded.failures[0].path, broken_path);
+    assert_eq!(loaded.records.len(), 1);
+    assert_eq!(loaded.records[0].text_sha256, "t3");
+    // 身份不匹配仍是正常缓存失效，静默跳过，不算损坏。
     assert!(load_records(root, "project-a", "chapter-1", MODE_RULES, "stable-a")
         .unwrap()
+        .records
         .is_empty());
     assert!(load_records(root, "project-a", "chapter-1", MODE_MODEL, "stable-b")
         .unwrap()
+        .records
         .is_empty());
-    assert!(load_records(root, "project-a", "missing-chapter", MODE_MODEL, "stable-a")
-        .unwrap()
-        .is_empty());
+    // 非法章节 id 不产生目录，按“没有可用记录”返回空；目录整体不可读仍是 Err。
+    let invalid = load_records(root, "project-a", "", MODE_MODEL, "stable-a").unwrap();
+    assert!(invalid.records.is_empty() && invalid.failures.is_empty());
+    let missing = load_records(root, "project-a", "missing-chapter", MODE_MODEL, "stable-a")
+        .expect("missing chapter dir is an empty result");
+    assert!(missing.records.is_empty());
 }

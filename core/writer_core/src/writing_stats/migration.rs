@@ -13,6 +13,7 @@ use crate::writing_stats::store::StatsStore;
 use crate::writing_stats::WritingInputEvent;
 use chrono::NaiveDate;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -67,6 +68,13 @@ fn migrate_stats_event_store_inner(app_data_root: &Path) -> Result<()> {
         for event in &mut events {
             if event.local_date.is_empty() {
                 event.local_date = event.business_date();
+            }
+            if event.event_id.is_empty() {
+                // 旧格式允许空 ID，但新分区写入必须有稳定非空 ID；按事件
+                // 内容确定性生成，崩溃后重跑迁移不会产生重复事件。
+                let seed = serde_json::to_vec(event)?;
+                let digest = Sha256::digest(&seed);
+                event.event_id = format!("legacy-{digest:x}");
             }
         }
         migrated += store.record_events(events)?;

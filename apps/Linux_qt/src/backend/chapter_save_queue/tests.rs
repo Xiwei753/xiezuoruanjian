@@ -1151,32 +1151,39 @@ mod restore_isolation_tests {
         );
 
         let mut counters = super::super::kept_draft::RestoreCounters::default();
-        let mut noted = std::collections::BTreeSet::new();
-        super::super::restore_coordinator::materialize_pending_retries(
-            &projects_root,
-            &project_id,
-            &std::collections::BTreeSet::new(),
-            &mut noted,
-            &mut counters,
+        // 恢复入口按真实候选快照逐条消费：同一章的多个归档事务各自只搬一次。
+        let candidates = chapter_draft::list_retries(&projects_root, &project_id);
+        assert_eq!(candidates.len(), 2, "两个归档事务都是真实候选");
+
+        assert_eq!(
+            super::super::restore_coordinator::materialize_candidate(
+                &projects_root,
+                &project_id,
+                &candidates[0],
+                &mut counters,
+            ),
+            super::super::restore_coordinator::MaterializeOutcome::Moved
         );
         let dir = draft_dir(&projects_root, &project_id, &chapter_id);
         assert!(dir.exists(), "第一份事务搬回活动槽位");
         assert_eq!(
             chapter_draft::list_retries(&projects_root, &project_id).len(),
             1,
-            "第二份仍在归档区等待本轮后续"
+            "第二份仍在归档区，等待队列中的下一条候选"
         );
         chapter_draft::remove(&projects_root, &project_id, &chapter_id).expect("settle first");
         assert!(!dir.exists());
 
-        super::super::restore_coordinator::materialize_pending_retries(
-            &projects_root,
-            &project_id,
-            &std::collections::BTreeSet::new(),
-            &mut noted,
-            &mut counters,
+        assert_eq!(
+            super::super::restore_coordinator::materialize_candidate(
+                &projects_root,
+                &project_id,
+                &candidates[1],
+                &mut counters,
+            ),
+            super::super::restore_coordinator::MaterializeOutcome::Moved
         );
-        assert!(dir.exists(), "结算后同一轮继续搬回第二份");
+        assert!(dir.exists(), "结算后继续搬回第二份");
         assert!(chapter_draft::retry_chapters(&projects_root, &project_id).is_empty());
         assert_eq!(archived.len(), 2);
     }

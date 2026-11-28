@@ -7,6 +7,7 @@
 //! 留下任何事件。
 
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 use crate::api::service::WriterCoreApi;
 use crate::starmap::semantic::StarMapNodeContent;
@@ -16,13 +17,26 @@ use crate::writing_stats::contribution::{
     current_mutation_context, ContributionEvent, ContributionObjectSnapshot,
     ContributionObjectType, ContributionOperation, CurrentTextSnapshot, MutationContext,
 };
-use crate::writing_stats::starmap_checkpoint::has_starmap_checkpoints;
 use crate::writing_stats::starmap_proof::{
     StarMapProofBaseline, StarMapProofDelta, StarMapProofTrajectorySample,
 };
 
 thread_local! {
     static ACTIVE_BATCH: RefCell<Option<Vec<ContributionEvent>>> = const { RefCell::new(None) };
+    /// 本批开始时（尚未改动磁盘）的完整星图快照，按 starmap_id 缓存。
+    static BATCH_STARMAP_SNAPSHOTS: RefCell<HashMap<String, StarMapBatchSnapshot>> =
+        RefCell::new(HashMap::new());
+    /// 本批已经产生过基线的星图；后续对象事件复用，不再克隆整图。
+    static BATCH_BASELINED_STARMAPS: RefCell<HashSet<String>> = const { RefCell::new(HashSet::new()) };
+}
+
+/// 一次星图写操作开始时的真实状态，供本批第一个证明事件生成基线，避免
+/// 删除/解绑之后再去磁盘读一个已经不存在的对象。
+#[derive(Clone)]
+pub(crate) struct StarMapBatchSnapshot {
+    pub meta: Option<StarMapMeta>,
+    pub graph: StarMapGraph,
+    pub root_starmap_ids: Vec<String>,
 }
 
 /// 一次业务事务内的来源事件批次。成功提交时整批写入 pending journal；
@@ -37,11 +51,49 @@ impl Drop for ContributionBatch {
             ACTIVE_BATCH.with(|slot| {
                 slot.borrow_mut().take();
             });
+            BATCH_STARMAP_SNAPSHOTS.with(|snapshots| snapshots.borrow_mut().clear());
+            BATCH_BASELINED_STARMAPS.with(|baselined| baselined.borrow_mut().clear());
         }
     }
 }
 
 impl WriterCoreApi {
+    /// 记录操作开始前的真实星图快照（meta + 完整图 + 根列表）。
+    ///
+    /// 删除、解绑、改主图这些操作完成后对象可能已不存在；证明基线必须来自
+    /// 这里，不能在记录事件时重新读盘。
+    pub(crate) fn register_starmap_batch_snapshot(
+        &self,
+        starmap_id: &str,
+        meta: Option<&StarMapMeta>,
+        graph: &StarMapGraph,
+        root_starmap_ids: &[String],
+    ) {
+        // 没有活动批次的操作（rename/bind 等直接记录）在本次调用结束后没有
+        // Drop 清理点：下一次登记前清掉上一笔的临时快照，避免跨操作复用。
+        let batch_active = ACTIVE_BATCH.with(|slot| slot.borrow().is_some());
+        if !batch_active {
+            BATCH_STARMAP_SNAPSHOTS.with(|snapshots| snapshots.borrow_mut().clear());
+            BATCH_BASELINED_STARMAPS.with(|baselined| baselined.borrow_mut().clear());
+        }
+        BATCH_STARMAP_SNAPSHOTS.with(|snapshots| {
+            snapshots.borrow_mut().insert(
+                starmap_id.to_string(),
+                StarMapBatchSnapshot {
+                    meta: meta.cloned(),
+                    graph: graph.clone(),
+                    root_starmap_ids: root_starmap_ids.to_vec(),
+                },
+            );
+        });
+    }
+
+    /// 当前线程临时星图快照的清理点（无活动批次的写操作在收尾时调用）。
+    pub(crate) fn clear_starmap_batch_snapshots(&self) {
+        BATCH_STARMAP_SNAPSHOTS.with(|snapshots| snapshots.borrow_mut().clear());
+        BATCH_BASELINED_STARMAPS.with(|baselined| baselined.borrow_mut().clear());
+    }
+
     pub(crate) fn begin_contribution_batch(&self) -> ContributionBatch {
         let owns_batch = ACTIVE_BATCH.with(|slot| {
             let mut slot = slot.borrow_mut();
@@ -52,6 +104,11 @@ impl WriterCoreApi {
                 true
             }
         });
+        if owns_batch {
+            // 新批次从干净快照开始，不复用上一笔未清理的临时状态。
+            BATCH_STARMAP_SNAPSHOTS.with(|snapshots| snapshots.borrow_mut().clear());
+            BATCH_BASELINED_STARMAPS.with(|baselined| baselined.borrow_mut().clear());
+        }
         ContributionBatch { owns_batch }
     }
 
@@ -63,6 +120,8 @@ impl WriterCoreApi {
             return Ok(());
         }
         batch.owns_batch = false;
+        BATCH_STARMAP_SNAPSHOTS.with(|snapshots| snapshots.borrow_mut().clear());
+        BATCH_BASELINED_STARMAPS.with(|baselined| baselined.borrow_mut().clear());
         let events = ACTIVE_BATCH
             .with(|slot| slot.borrow_mut().take())
             .ok_or_else(|| {
@@ -512,7 +571,45 @@ impl WriterCoreApi {
         )
     }
 
-    /// 旧星图第一次进入回放账本时，从真实图快照生成基线。
+    /// 本批第一个证明事件是否需要基线；已存在可用检查点时不伪造基线。
+    fn starmap_baseline_needed(&self, starmap_id: &str) -> super::ApiResult<bool> {
+        if starmap_created_in_active_batch(starmap_id) {
+            return Ok(false);
+        }
+        if BATCH_BASELINED_STARMAPS.with(|baselined| baselined.borrow().contains(starmap_id)) {
+            return Ok(false);
+        }
+        let device_id = self
+            .core_write()
+            .get_stats_api()
+            .contribution_store()
+            .resolve_origin_device_id()?;
+        // 不把“文件存在”当成可用历史：按索引/快照/旧 JSONL 的实际读取
+        // 结果判断，读不出来就报错而不是伪造基线。
+        if crate::writing_stats::starmap_checkpoint::has_starmap_checkpoints(
+            &self.app_data_root,
+            &device_id,
+            starmap_id,
+        )? {
+            BATCH_BASELINED_STARMAPS.with(|baselined| {
+                baselined.borrow_mut().insert(starmap_id.to_string());
+            });
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn mark_starmap_baselined(&self, starmap_id: &str) {
+        BATCH_BASELINED_STARMAPS.with(|baselined| {
+            baselined.borrow_mut().insert(starmap_id.to_string());
+        });
+    }
+
+    fn batch_starmap_snapshot(&self, starmap_id: &str) -> Option<StarMapBatchSnapshot> {
+        BATCH_STARMAP_SNAPSHOTS.with(|snapshots| snapshots.borrow().get(starmap_id).cloned())
+    }
+
+    /// 旧星图第一次进入回放账本时，从操作开始时的真实图快照生成基线。
     fn starmap_replay_baseline(
         &self,
         starmap_id: &str,
@@ -521,24 +618,25 @@ impl WriterCoreApi {
         object_type: ContributionObjectType,
         object_id: &str,
     ) -> super::ApiResult<Option<StarMapProofBaseline>> {
-        if starmap_created_in_active_batch(starmap_id) {
+        if !self.starmap_baseline_needed(starmap_id)? {
             return Ok(None);
         }
-        let device_id = self
-            .core_write()
-            .get_stats_api()
-            .contribution_store()
-            .resolve_origin_device_id()?;
-        if has_starmap_checkpoints(&self.app_data_root, &device_id, starmap_id)? {
-            return Ok(None);
+        if let Some(snapshot) = self.batch_starmap_snapshot(starmap_id) {
+            self.mark_starmap_baselined(starmap_id);
+            return Ok(Some(StarMapProofBaseline {
+                meta: snapshot.meta,
+                graph: snapshot.graph,
+                root_starmap_ids: snapshot.root_starmap_ids,
+                history_complete: false,
+            }));
         }
+        // 未登记快照的调用方（旧入口/测试）：仍从本次操作的 before 图推导。
         let graph = match before_graph {
             Some(graph) => graph.clone(),
             None => {
                 // 第一条操作就是新增对象：用写入后的真实图减去该对象，得到
                 // 操作前的图状态，而不是把新对象提前放进基线。
                 let Some(after_graph) = after_graph else {
-                    // 非图对象（文本/注释）没有图基线可补。
                     return Ok(None);
                 };
                 let mut graph = after_graph.clone();
@@ -562,6 +660,7 @@ impl WriterCoreApi {
         };
         let meta = Some(self.core_write().get_starmap(starmap_id)?);
         let root_starmap_ids = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
+        self.mark_starmap_baselined(starmap_id);
         Ok(Some(StarMapProofBaseline {
             meta,
             graph,
@@ -575,19 +674,23 @@ impl WriterCoreApi {
         starmap_id: &str,
         before: Option<&StarMapMeta>,
     ) -> super::ApiResult<Option<StarMapProofBaseline>> {
-        if starmap_created_in_active_batch(starmap_id) {
+        if !self.starmap_baseline_needed(starmap_id)? {
             return Ok(None);
         }
-        let device_id = self
-            .core_write()
-            .get_stats_api()
-            .contribution_store()
-            .resolve_origin_device_id()?;
-        if has_starmap_checkpoints(&self.app_data_root, &device_id, starmap_id)? {
-            return Ok(None);
+        if let Some(snapshot) = self.batch_starmap_snapshot(starmap_id) {
+            self.mark_starmap_baselined(starmap_id);
+            return Ok(Some(StarMapProofBaseline {
+                // 操作开始时的 meta 才是真实基线；`before` 参数通常是同一份，
+                // 但删除路径必须优先使用登记快照，避免事后读盘。
+                meta: snapshot.meta.or_else(|| before.cloned()),
+                graph: snapshot.graph,
+                root_starmap_ids: snapshot.root_starmap_ids,
+                history_complete: false,
+            }));
         }
         let graph = self.get_starmap_graph_snapshot(starmap_id)?;
         let root_starmap_ids = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
+        self.mark_starmap_baselined(starmap_id);
         Ok(Some(StarMapProofBaseline {
             meta: before.cloned(),
             graph,

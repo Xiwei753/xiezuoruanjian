@@ -77,7 +77,9 @@ pub struct StatsStore {
     /// 本机来源分区标识（懒解析后缓存）。
     origin_device_id: Mutex<Option<String>>,
     /// 按「分区/UTC 日期」缓存已持久化的 event_id，避免每次全量重扫。
-    written_ids: Mutex<HashMap<String, HashSet<String>>>,
+    /// 缓存键（origin/date 或 sessions:origin/date）→ 已落盘 event_id → 原始行
+    /// 指纹。指纹用于拒绝“同一 ID、不同 payload”的伪成功。
+    written_ids: Mutex<HashMap<String, HashMap<String, u64>>>,
     /// 证明序号与每章节链头。首次写入时扫描已有事件重建。
     proof_state: Mutex<ProofStoreState>,
     /// 证明事件变化代数；回放缓存据此失效。
@@ -210,6 +212,16 @@ impl StatsStore {
     /// 追加一批事件，只写入本机来源分区。按 `event_id` 幂等：已存在的事件跳过，
     /// 返回真正新写入的事件数。
     pub fn record_events(&self, events: Vec<WritingInputEvent>) -> Result<usize> {
+        self.record_events_with_sync(events, true)
+    }
+
+    /// 追加事件；`sync` 为 false 时只写页缓存，由调用方在整批末尾统一
+    /// `sync_all`，避免一条按键事件一次 fsync。
+    fn record_events_with_sync(
+        &self,
+        events: Vec<WritingInputEvent>,
+        sync: bool,
+    ) -> Result<usize> {
         if events.is_empty() {
             return Ok(0);
         }
@@ -227,7 +239,7 @@ impl StatsStore {
 
         let mut written = 0usize;
         for (date, events) in by_date {
-            match self.append_confirmed_events(&origin, &date, events) {
+            match self.append_confirmed_events(&origin, &date, events, sync) {
                 Ok(count) => written += count,
                 Err(error) => {
                     // 写入失败后丢弃该日期的 ID 缓存：重试时以磁盘真值重新判重，
@@ -260,25 +272,45 @@ impl StatsStore {
         origin: &str,
         date: &str,
         events: Vec<WritingInputEvent>,
+        sync: bool,
     ) -> Result<usize> {
-        let fresh = self.select_fresh_events(origin, date, events)?;
-        if fresh.is_empty() {
+        if events.is_empty() {
             return Ok(0);
         }
-        let mut lines = Vec::with_capacity(fresh.len());
-        for event in &fresh {
-            lines.push(serde_json::to_string(event)?);
+        let path = self.event_file_path(origin, date);
+        // 本批事件本身就是确定事实：尾部若是其中某条序列化行的前缀，可证明
+        // 是上次中断的追加，截断后重写；其它残片保持原文件并报错。
+        let all_lines: Vec<String> = events
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<_, _>>()?;
+        jsonl::repair_tail_fragment::<WritingInputEvent>(&path, &all_lines)?;
+        let fresh = self.select_fresh_events(origin, date, events, &all_lines)?;
+        if fresh.is_empty() {
+            if sync {
+                // 去重命中只说明读得到；必须对文件完成持久化确认后才能让
+                // 调用方删除 pending/journal 责任。已封口归档段本身 durable。
+                self.confirm_event_partition_durable(origin, date)?;
+            }
+            return Ok(0);
         }
-        jsonl::append_jsonl_lines(&self.event_file_path(origin, date), &lines)?;
+        let lines: Vec<String> = fresh.iter().map(|(line, _)| line.clone()).collect();
+        let ids: Vec<String> = fresh
+            .iter()
+            .map(|(_, event)| event.event_id.clone())
+            .collect();
+        if sync {
+            jsonl::append_jsonl_lines(&path, &lines)?;
+        } else {
+            jsonl::append_jsonl_lines_deferred(&path, &lines)?;
+        }
 
         let mut cache = self.lock_written_ids();
-        let ids = cache.entry(format!("{origin}/{date}")).or_default();
-        for event in &fresh {
-            if !event.event_id.is_empty() {
-                ids.insert(event.event_id.clone());
-            }
+        let known = cache.entry(format!("{origin}/{date}")).or_default();
+        for (id, line) in ids.iter().zip(lines.iter()) {
+            known.insert(id.clone(), jsonl::line_fingerprint(line.as_bytes()));
         }
-        Ok(fresh.len())
+        Ok(ids.len())
     }
 
     /// 只读筛选本机分区里尚未写入过的 `event_id`（含本批次内部重复）。
@@ -287,7 +319,8 @@ impl StatsStore {
         origin: &str,
         date: &str,
         events: Vec<WritingInputEvent>,
-    ) -> Result<Vec<WritingInputEvent>> {
+        lines: &[String],
+    ) -> Result<Vec<(String, WritingInputEvent)>> {
         let mut cache = self.lock_written_ids();
         let cache_key = format!("{origin}/{date}");
         if !cache.contains_key(&cache_key) {
@@ -300,16 +333,36 @@ impl StatsStore {
 
         let mut batch_ids: HashSet<String> = HashSet::new();
         let mut fresh = Vec::new();
-        for event in events {
+        for (index, event) in events.into_iter().enumerate() {
+            // 新写入必须带稳定非空 ID；旧格式空 ID 只供读取。
             if event.event_id.is_empty() {
-                fresh.push(event);
+                return Err(crate::Error::Other(
+                    "refuse to append a new stats event without a stable event_id".to_string(),
+                ));
+            }
+            if let Some(stored) = ids.get(&event.event_id) {
+                let line = lines.get(index).map(String::as_str).unwrap_or_default();
+                if *stored != 0 && *stored != jsonl::line_fingerprint(line.as_bytes()) {
+                    return Err(crate::Error::Other(format!(
+                        "stats event {} is already persisted with a different payload",
+                        event.event_id
+                    )));
+                }
                 continue;
             }
-            if ids.contains(&event.event_id) || batch_ids.contains(&event.event_id) {
+            if !batch_ids.insert(event.event_id.clone()) {
                 continue;
             }
-            batch_ids.insert(event.event_id.clone());
-            fresh.push(event);
+            let line = lines
+                .get(index)
+                .cloned()
+                .ok_or_else(|| {
+                    crate::Error::Other(format!(
+                        "stats event {} is missing its serialized line",
+                        event.event_id
+                    ))
+                })?;
+            fresh.push((line, event));
         }
         Ok(fresh)
     }
@@ -321,8 +374,9 @@ impl StatsStore {
     }
 
     /// 事件 ID 缓存只是幂等去重的加速器，磁盘始终是事实源：
-    /// 锁中毒时接管内部数据，不让缓存状态阻塞写入。
-    fn lock_written_ids(&self) -> std::sync::MutexGuard<'_, HashMap<String, HashSet<String>>> {
+    /// 锁中毒时接管内部数据，不让缓存状态阻塞写入。值为该 ID 原始行的
+    /// 稳定指纹，用来识别“同一 ID、不同 payload”不能被当作已写入。
+    fn lock_written_ids(&self) -> std::sync::MutexGuard<'_, HashMap<String, HashMap<String, u64>>> {
         self.written_ids
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -341,8 +395,79 @@ impl StatsStore {
     /// - 首次记录时若提供 `baseline_text`，先写 seq=0 的基线 checkpoint。
     pub(crate) fn record_proof_event(
         &self,
+        event: WritingInputEvent,
+        baseline_text: Option<&str>,
+    ) -> Result<bool> {
+        self.record_proof_event_with_sync(event, baseline_text, true)
+    }
+
+    /// 批量写入同一章 journal 的本批证明事件。
+    ///
+    /// 事件按因果顺序计算序号/哈希并依次追加，但只在整批末尾对涉及的每个
+    /// 日分区调用一次 `sync_all`；真实回执由调用方批量确认 journal。
+    pub(crate) fn record_proof_events(
+        &self,
+        items: Vec<(WritingInputEvent, Option<String>)>,
+    ) -> Result<usize> {
+        let mut paths: std::collections::BTreeSet<std::path::PathBuf> =
+            std::collections::BTreeSet::new();
+        let mut written = 0usize;
+        let mut failure: Option<crate::Error> = None;
+        for (event, baseline_text) in items {
+            let origin = event.device_id.clone();
+            match self.timestamp_to_date(event.timestamp_ms) {
+                Ok(date) if !origin.is_empty() => {
+                    paths.insert(self.event_file_path(&origin, &date));
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+            match self.record_proof_event_with_sync(
+                event,
+                baseline_text.as_deref(),
+                false,
+            ) {
+                Ok(true) => written += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+        for path in &paths {
+            // 没有实际写入（例如事件无正文变更）时文件可能不存在。
+            if !path.exists() {
+                continue;
+            }
+            // 批末确认：完整但缺换行的尾记录在这里补分隔符后再持久化。
+            if let Err(error) = jsonl::confirm_durable(path) {
+                if failure.is_none() {
+                    failure = Some(error);
+                }
+                break;
+            }
+            if let Err(error) = crate::storage::sync_parent(path) {
+                if failure.is_none() {
+                    failure = Some(error);
+                }
+                break;
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(written),
+        }
+    }
+
+    fn record_proof_event_with_sync(
+        &self,
         mut event: WritingInputEvent,
         baseline_text: Option<&str>,
+        sync: bool,
     ) -> Result<bool> {
         if event
             .proof
@@ -357,6 +482,11 @@ impl StatsStore {
         }
         let date = self.timestamp_to_date(event.timestamp_ms)?;
         if self.event_is_persisted(&origin, &date, &event.event_id)? {
+            // 读得到不代表上次 write_all 后的 sync_all 成功；单条路径在这里
+            // 立即确认，批路径由整批末尾统一 sync 后再确认 journal。
+            if sync {
+                self.confirm_event_partition_durable(&origin, &date)?;
+            }
             return Ok(false);
         }
 
@@ -645,7 +775,7 @@ impl StatsStore {
         let chapter_for_checkpoint = event.chapter_id.clone();
         let timestamp_for_checkpoint = event.timestamp_ms;
 
-        let written = self.record_events(vec![event])?;
+        let written = self.record_events_with_sync(vec![event], sync)?;
         if written == 0 {
             return Ok(false);
         }
@@ -1299,12 +1429,12 @@ impl StatsStore {
     }
 
     /// 扫描某设备某个 UTC 日期的原始 JSONL 与已封口归档，按 event_id 去重。
-    fn scan_persisted_ids(&self, origin: &str, date: &str) -> Result<HashSet<String>> {
-        let mut ids = jsonl::read_jsonl_ids::<WritingInputEvent, _>(
+    fn scan_persisted_ids(&self, origin: &str, date: &str) -> Result<HashMap<String, u64>> {
+        let scan = jsonl::read_jsonl_ids::<WritingInputEvent, _>(
             &self.event_file_path(origin, date),
             |event| event.event_id.as_str(),
-        )?
-        .ids;
+        )?;
+        let mut ids = scan.fingerprints;
         let archive_path = self
             .app_data_root
             .join(checkpoint::archive_relative_path(origin, date));
@@ -1317,7 +1447,8 @@ impl StatsStore {
             };
             for event in self.parse_events_file(&file)? {
                 if !event.event_id.is_empty() {
-                    ids.insert(event.event_id);
+                    // 已封口归档不可改写：只记录存在，不再比较 payload。
+                    ids.entry(event.event_id).or_insert(0);
                 }
             }
         }
@@ -1357,7 +1488,25 @@ impl StatsStore {
         }
         Ok(cache
             .get(&cache_key)
-            .is_some_and(|ids| ids.contains(event_id)))
+            .is_some_and(|ids| ids.contains_key(event_id)))
+    }
+
+    /// 确认某个事件分区已经 durable：当天原始段要求文件级同步；已封口
+    /// 归档段是归档时完成持久化的不可变事实，不需要再次同步。
+    fn confirm_event_partition_durable(&self, origin: &str, date: &str) -> Result<()> {
+        let raw = self.event_file_path(origin, date);
+        if raw.exists() {
+            return jsonl::confirm_durable(&raw);
+        }
+        let archive = self
+            .app_data_root
+            .join(checkpoint::archive_relative_path(origin, date));
+        if archive.is_file() {
+            return Ok(());
+        }
+        Err(crate::Error::Other(format!(
+            "stats event partition {origin}/{date} is missing while confirming a previously written event"
+        )))
     }
 
     /// 判断一条同步证明事件是否已经按原始事件时间落盘。
@@ -1452,26 +1601,39 @@ impl StatsStore {
         date: &str,
         segments: Vec<WritingActivitySegment>,
     ) -> Result<usize> {
-        let fresh = self.select_fresh_segments(origin, date, segments)?;
-        if fresh.is_empty() {
+        if segments.is_empty() {
             return Ok(0);
         }
-        let mut lines = Vec::with_capacity(fresh.len());
-        for segment in &fresh {
-            lines.push(serde_json::to_string(segment)?);
+        let path = self.session_file_path(origin, date);
+        let all_lines: Vec<String> = segments
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<_, _>>()?;
+        jsonl::repair_tail_fragment::<WritingActivitySegment>(&path, &all_lines)?;
+        let fresh = self.select_fresh_segments(origin, date, segments, &all_lines)?;
+        if fresh.is_empty() {
+            jsonl::confirm_durable(&path)?;
+            return Ok(0);
         }
-        jsonl::append_jsonl_lines(&self.session_file_path(origin, date), &lines)?;
+        let lines: Vec<String> = fresh.iter().map(|(line, _)| line.clone()).collect();
+        let ids: Vec<String> = fresh
+            .iter()
+            .map(|(_, segment)| segment.event_id.clone())
+            .collect();
+        if sync {
+            jsonl::append_jsonl_lines(&path, &lines)?;
+        } else {
+            jsonl::append_jsonl_lines_deferred(&path, &lines)?;
+        }
 
         let mut cache = self.lock_written_ids();
-        let ids = cache
+        let known = cache
             .entry(format!("sessions:{origin}/{date}"))
             .or_default();
-        for segment in &fresh {
-            if !segment.event_id.is_empty() {
-                ids.insert(segment.event_id.clone());
-            }
+        for (id, line) in ids.iter().zip(lines.iter()) {
+            known.insert(id.clone(), jsonl::line_fingerprint(line.as_bytes()));
         }
-        Ok(fresh.len())
+        Ok(ids.len())
     }
 
     fn select_fresh_segments(
@@ -1479,16 +1641,16 @@ impl StatsStore {
         origin: &str,
         date: &str,
         segments: Vec<WritingActivitySegment>,
-    ) -> Result<Vec<WritingActivitySegment>> {
+        lines: &[String],
+    ) -> Result<Vec<(String, WritingActivitySegment)>> {
         let mut cache = self.lock_written_ids();
         let cache_key = format!("sessions:{origin}/{date}");
         if !cache.contains_key(&cache_key) {
-            let ids = jsonl::read_jsonl_ids::<WritingActivitySegment, _>(
+            let scan = jsonl::read_jsonl_ids::<WritingActivitySegment, _>(
                 &self.session_file_path(origin, date),
                 |segment| segment.event_id.as_str(),
-            )?
-            .ids;
-            cache.insert(cache_key.clone(), ids);
+            )?;
+            cache.insert(cache_key.clone(), scan.fingerprints);
         }
         let Some(ids) = cache.get(&cache_key) else {
             return Ok(Vec::new());
@@ -1496,16 +1658,32 @@ impl StatsStore {
 
         let mut batch_ids: HashSet<String> = HashSet::new();
         let mut fresh = Vec::new();
-        for segment in segments {
+        for (index, segment) in segments.into_iter().enumerate() {
             if segment.event_id.is_empty() {
-                fresh.push(segment);
+                return Err(crate::Error::Other(
+                    "refuse to append a new timing segment without a stable event_id".to_string(),
+                ));
+            }
+            if let Some(stored) = ids.get(&segment.event_id) {
+                let line = lines.get(index).map(String::as_str).unwrap_or_default();
+                if *stored != 0 && *stored != jsonl::line_fingerprint(line.as_bytes()) {
+                    return Err(crate::Error::Other(format!(
+                        "timing segment {} is already persisted with a different payload",
+                        segment.event_id
+                    )));
+                }
                 continue;
             }
-            if ids.contains(&segment.event_id) || batch_ids.contains(&segment.event_id) {
+            if !batch_ids.insert(segment.event_id.clone()) {
                 continue;
             }
-            batch_ids.insert(segment.event_id.clone());
-            fresh.push(segment);
+            let line = lines.get(index).cloned().ok_or_else(|| {
+                crate::Error::Other(format!(
+                    "timing segment {} is missing its serialized line",
+                    segment.event_id
+                ))
+            })?;
+            fresh.push((line, segment));
         }
         Ok(fresh)
     }

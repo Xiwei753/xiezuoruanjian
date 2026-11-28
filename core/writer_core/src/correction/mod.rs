@@ -526,16 +526,12 @@ fn take_unconfigured_engines(
     inner: &CorrectionStoreInner,
     key: &Path,
 ) -> Vec<Arc<CorrectionEngine>> {
-    let mut engines = match inner.engines.lock() {
-        Ok(engines) => engines,
-        Err(error) => {
-            log::warn!(
-                target: "correction",
-                "correction_unconfigured_engine_lock_failed: {error}"
-            );
-            return Vec::new();
-        }
-    };
+    // poison 只说明上一个持锁线程 panic，队列内容仍然完整；继续取出未配置
+    // 引擎，避免 Ready Arc 永久留在缓存里。
+    let mut engines = inner
+        .engines
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut removed = Vec::new();
     engines.retain(|_, cached| {
         let matches_path =
@@ -552,16 +548,11 @@ fn take_unconfigured_engines(
 
 /// Move one idle model slot out and wake waiters so they reload from config.
 fn take_model_slot(slot: &ModelLoadSlot) -> Option<Arc<ProofreadingModel>> {
-    let mut state = match slot.state.lock() {
-        Ok(state) => state,
-        Err(error) => {
-            log::warn!(
-                target: "correction",
-                "correction_model_slot_lock_failed: {error}"
-            );
-            return None;
-        }
-    };
+    // 同上：poison 不破坏槽位状态本身，继续把空闲会话移出交给回收路径。
+    let mut state = slot
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let previous = std::mem::replace(&mut *state, ModelLoadState::Empty);
     slot.wake.notify_all();
     match previous {
@@ -586,9 +577,12 @@ fn wait_model_slot<'a>(
 /// True when a live engine for this store still references the model bundle.
 /// Used only to decide whether an unconfigured model may be released.
 fn engine_references_model(inner: &CorrectionStoreInner, key: &Path) -> bool {
-    let Ok(engines) = inner.engines.lock() else {
-        return false;
-    };
+    // poison 不能猜成“没有引用”，否则可能把仍被扫描持有的会话当作可删除；
+    // 继续读取缓存内容判断。
+    let engines = inner
+        .engines
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     engines.values().any(|cached| {
         cached.model_key.as_ref().map(|model| &model.path) == Some(&key.to_path_buf())
             && Arc::strong_count(&cached.engine) > 1
@@ -597,14 +591,15 @@ fn engine_references_model(inner: &CorrectionStoreInner, key: &Path) -> bool {
 
 /// Number of live ONNX sessions held by this process. Diagnostics only.
 pub(super) fn model_instance_count() -> usize {
-    let Ok(slots) = model_cache().lock() else {
-        return 0;
-    };
+    let slots = model_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut count = 0;
     for slot in slots.values() {
-        let Ok(state) = slot.state.lock() else {
-            continue;
-        };
+        let state = slot
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if matches!(*state, ModelLoadState::Ready { .. }) {
             count += 1;
         }
@@ -620,14 +615,15 @@ pub(super) fn engine_model_reference_count() -> usize {
     let Some(stores) = STORE_REGISTRY.get() else {
         return 0;
     };
-    let Ok(stores) = stores.lock() else {
-        return 0;
-    };
+    let stores = stores
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut count = 0;
     for inner in stores.values() {
-        let Ok(engines) = inner.engines.lock() else {
-            continue;
-        };
+        let engines = inner
+            .engines
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         count += engines
             .values()
             .filter(|cached| cached.model_key.is_some())
@@ -648,19 +644,19 @@ pub(super) struct ModelLifetimeMetrics {
 }
 
 pub(super) fn model_lifetime_metrics() -> ModelLifetimeMetrics {
-    let (retired_models, retired_engines) = retired_model_resources()
-        .lock()
-        .map(|queue| {
-            queue
-                .iter()
-                .fold((0usize, 0usize), |(models, engines), batch| {
-                    (
-                        models.saturating_add(batch.models.len()),
-                        engines.saturating_add(batch.engines.len()),
-                    )
-                })
-        })
-        .unwrap_or((0, 0));
+    let (retired_models, retired_engines) = {
+        let retired = retired_model_resources()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        retired
+            .iter()
+            .fold((0usize, 0usize), |(models, engines), batch| {
+                (
+                    models.saturating_add(batch.models.len()),
+                    engines.saturating_add(batch.engines.len()),
+                )
+            })
+    };
     ModelLifetimeMetrics {
         cached: model_instance_count(),
         engine_refs: engine_model_reference_count(),
@@ -1091,16 +1087,11 @@ fn model_lifecycle_loop(wake: &'static ModelManagerWake) {
 
 fn release_retired_model_resources(thread_label: &'static str) {
     let batches = {
-        let mut queue = match retired_model_resources().lock() {
-            Ok(queue) => queue,
-            Err(error) => {
-                log::warn!(
-                    target: "correction",
-                    "correction_retired_resource_lock_failed: {error}"
-                );
-                return;
-            }
-        };
+        // poison 时仍要取走队列：否则生命周期线程每 15 秒重复报错，队列里的
+        // Ready Arc 永远不释放；正在被使用的 Arc 由实际持有者释放。
+        let mut queue = retired_model_resources()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         std::mem::take(&mut *queue)
     };
     for resources in batches {
@@ -1178,21 +1169,15 @@ fn retire_model_resources(resources: RetiredModelResources) {
         return;
     }
     if !ensure_model_lifecycle_manager() {
+        // 线程启动失败时同步释放，不能让 Arc owner 泄漏。
         release_model_resources(resources, "caller-fallback");
         return;
     }
-    match retired_model_resources().lock() {
-        Ok(mut queue) => queue.push(resources),
-        Err(error) => {
-            // 无法入队时同步释放，不能让 Arc owner 泄漏。
-            log::warn!(
-                target: "correction",
-                "correction_retired_resource_queue_failed: {error}"
-            );
-            release_model_resources(resources, "caller-fallback");
-            return;
-        }
-    }
+    // poison 不影响入队本身，继续交给生命周期线程统一释放。
+    retired_model_resources()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(resources);
     model_manager_wake().condvar.notify_all();
 }
 
@@ -1200,30 +1185,18 @@ fn retire_model_resources(resources: RetiredModelResources) {
 /// scanner/engine leases are left in place; the model slot keeps its `Arc`
 /// until the scanner naturally finishes and the next manager pass runs.
 fn collect_idle_model_resources(immediate: bool) -> Option<RetiredModelResources> {
-    let slots = match model_cache().lock() {
-        Ok(slots) => slots,
-        Err(error) => {
-            log::warn!(
-                target: "correction",
-                "correction_idle_model_cache_lock_failed: {error}"
-            );
-            return None;
-        }
-    };
+    // poison 只影响互斥本身，缓存内容仍完整；继续扫描并回收，否则空闲会话
+    // 会永远留在槽位里，生命周期线程每 15 秒重复报错。
+    let slots = model_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let now = Instant::now();
     let mut expired_paths: HashSet<PathBuf> = HashSet::new();
     for (path, slot) in slots.iter() {
-        let state = match slot.state.lock() {
-            Ok(state) => state,
-            Err(error) => {
-                log::warn!(
-                    target: "correction",
-                    "correction_idle_model_slot_lock_failed {}: {error}",
-                    path.display()
-                );
-                continue;
-            }
-        };
+        let state = slot
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if matches!(
             &*state,
             ModelLoadState::Ready { last_used, .. }
@@ -1240,50 +1213,39 @@ fn collect_idle_model_resources(immediate: bool) -> Option<RetiredModelResources
     let mut engines = Vec::new();
     let mut active_paths: HashSet<PathBuf> = HashSet::new();
     if let Some(stores) = STORE_REGISTRY.get() {
-        match stores.lock() {
-            Ok(stores) => {
-            for inner in stores.values() {
-                let mut cache = match inner.engines.lock() {
-                    Ok(cache) => cache,
-                    Err(error) => {
-                        log::warn!(
-                            target: "correction",
-                            "correction_idle_engine_lock_failed: {error}"
-                        );
-                        continue;
-                    }
+        let stores = stores
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for inner in stores.values() {
+            let mut cache = inner
+                .engines
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let keys: Vec<_> = cache
+                .iter()
+                .filter(|(_, cached)| {
+                    cached
+                        .model_key
+                        .as_ref()
+                        .is_some_and(|key| expired_paths.contains(&key.path))
+                })
+                .map(|(key, _)| key.clone())
+                .collect();
+            for key in keys {
+                let Some(cached) = cache.get(&key) else {
+                    continue;
                 };
-                let keys: Vec<_> = cache
-                    .iter()
-                    .filter(|(_, cached)| {
-                        cached
-                            .model_key
-                            .as_ref()
-                            .is_some_and(|key| expired_paths.contains(&key.path))
-                    })
-                    .map(|(key, _)| key.clone())
-                    .collect();
-                for key in keys {
-                    let Some(cached) = cache.get(&key) else {
-                        continue;
-                    };
-                    let Some(model_key) = cached.model_key.as_ref() else {
-                        continue;
-                    };
-                    if Arc::strong_count(&cached.engine) > 1 {
-                        active_paths.insert(model_key.path.clone());
-                        continue;
-                    }
-                    if let Some(cached) = cache.remove(&key) {
-                        engines.push(cached.engine);
-                    }
+                let Some(model_key) = cached.model_key.as_ref() else {
+                    continue;
+                };
+                if Arc::strong_count(&cached.engine) > 1 {
+                    active_paths.insert(model_key.path.clone());
+                    continue;
+                }
+                if let Some(cached) = cache.remove(&key) {
+                    engines.push(cached.engine);
                 }
             }
-            }
-            Err(error) => log::warn!(
-                target: "correction",
-                "correction_store_registry_lock_failed: {error}"
-            ),
         }
     }
 
@@ -1293,9 +1255,10 @@ fn collect_idle_model_resources(immediate: bool) -> Option<RetiredModelResources
         let Some(slot) = slots.get(path) else {
             continue;
         };
-        let Ok(mut state) = slot.state.lock() else {
-            continue;
-        };
+        let mut state = slot
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let ModelLoadState::Ready {
             last_used, model, ..
         } = &*state
@@ -1443,16 +1406,17 @@ impl CorrectionStore {
             }
         }
         // 读目录/反序列化不持有全局索引锁，restore 的章节 slot 锁也不在此处。
-        // 记录是派生数据：读取/JSON 损坏时记录真实错误并让该章缓存失效，
-        // 返回空索引但不缓存损坏结果，不阻塞正文保存。
-        let mut records = match synced_results::load_records(
+        // 记录是派生数据：单个文件读取/JSON 损坏只报告一次并跳过该文件，其余
+        // 有效记录照常建索引并缓存；只有目录整体不可读才清该章缓存返回空索引，
+        // 不阻塞正文保存，缓存命中时也不会重复扫描坏文件。
+        let mut loaded = match synced_results::load_records(
             &project_root,
             project_id,
             chapter_id,
             mode,
             scanner_stable,
         ) {
-            Ok(records) => records,
+            Ok(loaded) => loaded,
             Err(error) => {
                 log::warn!(
                     target: "correction",
@@ -1476,14 +1440,14 @@ impl CorrectionStore {
             .and_then(|meta| meta.modified())
             .ok();
         if after != signature {
-            records = match synced_results::load_records(
+            loaded = match synced_results::load_records(
                 &project_root,
                 project_id,
                 chapter_id,
                 mode,
                 scanner_stable,
             ) {
-                Ok(records) => records,
+                Ok(loaded) => loaded,
                 Err(error) => {
                     log::warn!(
                         target: "correction",
@@ -1504,7 +1468,9 @@ impl CorrectionStore {
                 }
             };
         }
-        let index = Arc::new(synced_results::SyncedResultIndex::build(&records));
+        // 目录在读取期间变化时以重读结果为准，只报告最终的失败集合。
+        Self::log_synced_record_failures(project_id, chapter_id, &loaded);
+        let index = Arc::new(synced_results::SyncedResultIndex::build(&loaded.records));
         let mut cache = self.inner.synced_records.lock().map_err(|_| {
             WriterError::Other("correction synced record cache lock poisoned".into())
         })?;
@@ -1531,6 +1497,25 @@ impl CorrectionStore {
             },
         );
         Ok(index)
+    }
+
+    /// 报告本次加载跳过的记录文件。每份失败只在真正读取时记一次，不进入任何
+    /// 缓存；后续 restore 命中仍存活的索引时不会重新读取，也就不会重复报告。
+    fn log_synced_record_failures(
+        project_id: &str,
+        chapter_id: &str,
+        loaded: &synced_results::LoadedSyncedRecords,
+    ) {
+        for failure in &loaded.failures {
+            log::warn!(
+                target: "correction",
+                "correction synced record skipped for project={} chapter={} path={}: {}",
+                project_id,
+                chapter_id,
+                failure.path.display(),
+                failure.error
+            );
+        }
     }
 
     /// 扫描完成先把完整结果写进独立待发布文件；只有 durable 成功才返回 true。
@@ -1751,9 +1736,11 @@ impl CorrectionStore {
         let generation = MODEL_CONFIG_GENERATION.load(Ordering::SeqCst);
         let mut retired_models = Vec::new();
         for slot in slots.values() {
-            let Ok(mut state) = slot.state.lock() else {
-                continue;
-            };
+            // 配置替换必须把旧会话移出；poison 时继续读状态，不能跳过释放。
+            let mut state = slot
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if matches!(*state, ModelLoadState::Loading) {
                 slot.wake.notify_all();
                 continue;
@@ -1939,9 +1926,13 @@ impl CorrectionStore {
             .values()
             .any(|inner| engine_references_model(inner, &key));
         let loading = models.get(&key).is_some_and(|slot| {
-            slot.state
+            // poison 不能猜成“没有加载”：继续读槽位状态，避免把加载中的会话
+            // 标记为可删除。
+            let state = slot
+                .state
                 .lock()
-                .is_ok_and(|state| matches!(*state, ModelLoadState::Loading))
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            matches!(*state, ModelLoadState::Loading)
         });
         let in_use = engine_in_use || loading;
         let mut retired_model = None;

@@ -1650,6 +1650,14 @@ impl WriterCoreApi {
         self.register_starmap_history_journal(&mut contribution_txn, &history_token)?;
         //   用 _with_changes 版本记录本地历史。
         let before_meta = self.core_write().get_starmap(starmap_id)?;
+        let before_graph = self.get_starmap_graph_snapshot(starmap_id)?;
+        let roots_before = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
+        self.register_starmap_batch_snapshot(
+            starmap_id,
+            Some(&before_meta),
+            &before_graph,
+            &roots_before,
+        );
         let (result, change_set) = self
             .core_write()
             .rename_starmap_with_changes(starmap_id, new_title)
@@ -1677,6 +1685,7 @@ impl WriterCoreApi {
         // 的 guard 活到整条调用语句结束，而贡献记录内部还会再取一次 core 写锁
         // （starmap_meta_replay_baseline），同一线程自锁。
         let after_meta = self.core_write().get_starmap(starmap_id)?;
+        let roots_after = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
         self.record_starmap_meta_with_context(
             &crate::writing_stats::current_mutation_context(),
             project_id.as_deref(),
@@ -1684,7 +1693,7 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Update,
             Some(&before_meta),
             Some(&after_meta),
-            None,
+            Some(roots_after),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         if let Err(e) = history_journal.mark_local_applied(&self.app_data_root) {
@@ -1725,6 +1734,15 @@ impl WriterCoreApi {
         let before_meta = self.core_write().get_starmap(starmap_id)?;
         let contribution_project = before_meta.project_id.clone().unwrap_or_default();
         let before_graph = self.get_starmap_graph_snapshot(starmap_id)?;
+        // 删除后对象已不存在：证明基线必须来自删除前的真实快照，不能等
+        // record_* 时再读盘。
+        let roots_before = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
+        self.register_starmap_batch_snapshot(
+            starmap_id,
+            Some(&before_meta),
+            &before_graph,
+            &roots_before,
+        );
         let device_id = crate::settings::load_device_info(&self.app_data_root)?.device_id;
         // 先 flush 全部 dirty starmap stores，确保引用扫描读到最新磁盘数据。
         self.core_write().flush_all_starmap_stores()?;
@@ -1904,6 +1922,14 @@ impl WriterCoreApi {
         ])?;
         self.register_starmap_history_journal(&mut contribution_txn, &history_token)?;
         let before_meta = self.core_write().get_starmap(starmap_id)?;
+        let before_graph = self.get_starmap_graph_snapshot(starmap_id)?;
+        let roots_before = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
+        self.register_starmap_batch_snapshot(
+            starmap_id,
+            Some(&before_meta),
+            &before_graph,
+            &roots_before,
+        );
         //   用 _with_changes 版本记录本地历史。
         let change_set = self
             .core_write()
@@ -1930,7 +1956,8 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        let graph = self.core_write().get_starmap_graph(starmap_id)?;
+        // 绑定不改图内容：复用操作开始时的快照，避免事后二次读图。
+        let graph = before_graph;
         for node in &graph.nodes {
             let node_content = extract_node_search_body(&node.content);
             let entry = crate::search::extractor::extract_starmap_node_entry(
@@ -2004,6 +2031,7 @@ impl WriterCoreApi {
                 target: Some(entry.target.clone()),
             });
         }
+        let roots_after = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
         self.record_starmap_meta_with_context(
             &crate::writing_stats::current_mutation_context(),
             Some(project_id),
@@ -2011,7 +2039,7 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Link,
             Some(&before_meta),
             Some(&meta),
-            None,
+            Some(roots_after),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         if let Err(e) = history_journal.mark_local_applied(&self.app_data_root) {
@@ -2058,6 +2086,14 @@ impl WriterCoreApi {
         ])?;
         self.register_starmap_history_journal(&mut contribution_txn, &history_token)?;
         let before_meta = self.core_write().get_starmap(starmap_id)?;
+        let before_graph = self.get_starmap_graph_snapshot(starmap_id)?;
+        let roots_before = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
+        self.register_starmap_batch_snapshot(
+            starmap_id,
+            Some(&before_meta),
+            &before_graph,
+            &roots_before,
+        );
         //   用 _with_changes 版本记录本地历史。
         let change_set = self
             .core_write()
@@ -2081,7 +2117,8 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        let graph = self.core_write().get_starmap_graph(starmap_id)?;
+        // 解绑不改图内容：复用操作开始时的快照。
+        let graph = before_graph;
         for node in &graph.nodes {
             let node_content = extract_node_search_body(&node.content);
             let entry = crate::search::extractor::extract_starmap_node_entry(
@@ -2153,6 +2190,7 @@ impl WriterCoreApi {
             });
         }
         let contribution_project = before_meta.project_id.clone().unwrap_or_default();
+        let roots_after = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
         self.record_starmap_meta_with_context(
             &crate::writing_stats::current_mutation_context(),
             Some(&contribution_project),
@@ -2160,7 +2198,7 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Unlink,
             Some(&before_meta),
             Some(&meta),
-            None,
+            Some(roots_after),
         )?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         if let Err(e) = history_journal.mark_local_applied(&self.app_data_root) {
@@ -2315,6 +2353,30 @@ impl WriterCoreApi {
         // 失败必须直接报错；新主图必须真实存在，不能伪造一个 meta 充当 before。
         let previous_before = self.core_write().get_main_starmap_for_project(project_id)?;
         let new_before = self.core_write().get_starmap(starmap_id)?;
+        // 主图关系的变化也进入证明：变更前抓取两张图的真实快照与根列表，
+        // 事后不再读盘（旧主图/新主图都可能在本事务中改变映射）。
+        let new_before_graph = self.get_starmap_graph_snapshot(starmap_id)?;
+        let previous_before_graph = match previous_before.as_ref() {
+            Some(previous) => Some(self.get_starmap_graph_snapshot(&previous.starmap_id)?),
+            None => None,
+        };
+        let roots_before = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
+        self.register_starmap_batch_snapshot(
+            starmap_id,
+            Some(&new_before),
+            &new_before_graph,
+            &roots_before,
+        );
+        if let (Some(previous), Some(graph)) =
+            (previous_before.as_ref(), previous_before_graph.as_ref())
+        {
+            self.register_starmap_batch_snapshot(
+                &previous.starmap_id,
+                Some(previous),
+                graph,
+                &roots_before,
+            );
+        }
         //   用 _with_changes 版本记录本地历史。
         let change_set = self
             .core_write()
@@ -2331,6 +2393,7 @@ impl WriterCoreApi {
             crate::storage::journal::workspace_change::WorkspaceChangeOpType::SetMainStarMap,
         )?;
         let context = crate::writing_stats::current_mutation_context();
+        let roots_after = crate::starmap::load_index(&self.app_data_root)?.root_starmap_ids;
         if let Some(previous_before) = previous_before {
             // 旧主图只失去 main 映射，项目绑定仍然存在：after 取变更后的真实 meta，
             // 不能用 None 冒充“已解绑”。
@@ -2342,7 +2405,7 @@ impl WriterCoreApi {
                 crate::writing_stats::ContributionOperation::Unlink,
                 Some(&previous_before),
                 Some(&previous_after),
-                None,
+                Some(roots_after.clone()),
             )?;
         }
         let new_after = self.core_write().get_starmap(starmap_id)?;
@@ -2353,7 +2416,7 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Link,
             Some(&new_before),
             Some(&new_after),
-            None,
+            Some(roots_after),
         )?;
         self.commit_contribution_batch(&mut contribution_batch)?;
         self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
@@ -3650,6 +3713,7 @@ impl WriterCoreApi {
             return Err(error);
         }
         transaction.commit()?;
+        self.clear_starmap_batch_snapshots();
         Ok(())
     }
 }

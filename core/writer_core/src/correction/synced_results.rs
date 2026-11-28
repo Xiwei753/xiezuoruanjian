@@ -458,28 +458,54 @@ impl SyncedResultIndex {
     }
 }
 
-/// 加载一个章节在当前 mode + scanner 稳定身份下的全部记录。
+/// 单个同步记录文件的加载失败（路径 + 真实错误）。
 ///
-/// 目录不存在、版本不符、身份不匹配都按“没有可用记录”略过；真实的目录/
-/// 文件读取或 JSON 损坏返回带路径错误，由调用方按现有缓存失效入口重建，
-/// 不能静默当成“未检查”重扫整个章节。
+/// 记录是派生数据：一个不可读/损坏的文件只影响它自己的 key，不能因此丢掉
+/// 同章其它有效记录，也不能让调用方反复重扫整章。
+#[derive(Debug)]
+pub(crate) struct SyncedRecordFailure {
+    pub(crate) path: PathBuf,
+    pub(crate) error: String,
+}
+
+/// 一次章节记录加载的完整结果：成功记录 + 需要调用方报告一次的失败项。
+#[derive(Debug, Default)]
+pub(crate) struct LoadedSyncedRecords {
+    pub(crate) records: Vec<SyncedCorrectionRecord>,
+    pub(crate) failures: Vec<SyncedRecordFailure>,
+}
+
+/// 加载一个章节在当前 mode + scanner 稳定身份下的记录。
+///
+/// 目录不存在、章节 id 非法、版本不符、身份不匹配都按“没有可用记录”略过；
+/// 目录整体不可读（权限/IO）仍是错误（调用方清该章缓存并返回空索引）。单个文件读取或 JSON
+/// 反序列化失败只计入 [`LoadedSyncedRecords::failures`] 并继续读其它文件，
+/// 由调用方报告一次后照常按成功记录建索引并缓存，不把整章当成“未检查”。
 pub(crate) fn load_records(
     project_root: &Path,
     project_id: &str,
     chapter_id: &str,
     mode: &str,
     scanner_stable: &str,
-) -> crate::Result<Vec<SyncedCorrectionRecord>> {
+) -> crate::Result<LoadedSyncedRecords> {
     let Some(dir) = chapter_records_dir(project_root, chapter_id) else {
-        return Ok(Vec::new());
+        return Ok(LoadedSyncedRecords::default());
+    };
+    let entries = match std::fs::read_dir(&dir) {
+        // 章节还没有任何同步记录：目录不存在是正常空结果，不是读取失败。
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LoadedSyncedRecords::default())
+        }
+        Err(error) => {
+            return Err(crate::Error::Other(format!(
+                "failed to read synced correction records dir {}: {error}",
+                dir.display()
+            )))
+        }
     };
     let mut paths = Vec::new();
-    for entry in std::fs::read_dir(&dir).map_err(|error| {
-        crate::Error::Other(format!(
-            "failed to read synced correction records dir {}: {error}",
-            dir.display()
-        ))
-    })? {
+    for entry in entries {
         let entry = entry.map_err(|error| {
             crate::Error::Other(format!(
                 "failed to read synced correction record entry in {}: {error}",
@@ -495,20 +521,28 @@ pub(crate) fn load_records(
         }
     }
     paths.sort();
-    let mut records = Vec::new();
+    let mut loaded = LoadedSyncedRecords::default();
     for path in paths {
-        let content = std::fs::read_to_string(&path).map_err(|error| {
-            crate::Error::Other(format!(
-                "failed to read synced correction record {}: {error}",
-                path.display()
-            ))
-        })?;
-        let record: SyncedCorrectionRecord = serde_json::from_str(&content).map_err(|error| {
-            crate::Error::Other(format!(
-                "corrupt synced correction record {}: {error}",
-                path.display()
-            ))
-        })?;
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) => {
+                loaded.failures.push(SyncedRecordFailure {
+                    path,
+                    error: format!("failed to read synced correction record: {error}"),
+                });
+                continue;
+            }
+        };
+        let record: SyncedCorrectionRecord = match serde_json::from_str(&content) {
+            Ok(record) => record,
+            Err(error) => {
+                loaded.failures.push(SyncedRecordFailure {
+                    path,
+                    error: format!("corrupt synced correction record: {error}"),
+                });
+                continue;
+            }
+        };
         let Some(file_key) = path.file_stem().and_then(|stem| stem.to_str()) else {
             continue;
         };
@@ -523,9 +557,9 @@ pub(crate) fn load_records(
         {
             continue;
         }
-        records.push(record);
+        loaded.records.push(record);
     }
-    Ok(records)
+    Ok(loaded)
 }
 
 /// 显式作品级回收：删除一个章节的全部同步记录文件。

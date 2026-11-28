@@ -573,16 +573,46 @@ impl super::WriterCore {
                         continue;
                     }
                 };
+            if recovered.is_empty() {
+                continue;
+            }
+            // 同一恢复轮只枚举一次真实未决事务，按章节顺序逐个投影；单个
+            // 事务失败保留自己的 journal，不阻断其它章节。
+            let transactions =
+                match crate::chapter::commit::pending_chapter_proof_transactions(&project_root) {
+                    Ok(transactions) => transactions,
+                    Err(error) => {
+                        failures.push(format!("{}: {error}", project_root.display()));
+                        continue;
+                    }
+                };
+            // 本轮已成功确认的事务要从“更早未决”集合里移除，否则同章后续
+            // 事务会把它误判成仍未投影而整章阻塞。
+            let mut remaining = transactions.clone();
             for item in recovered {
                 if item.superseded || item.pending_projections.is_empty() {
                     continue;
                 }
-                if !self.apply_pending_chapter_proof(&project_root, &item.transaction_id) {
+                let Some(current) = remaining
+                    .iter()
+                    .find(|transaction| transaction.transaction_id == item.transaction_id)
+                else {
+                    continue;
+                };
+                if let Err(error) = self.apply_pending_chapter_proof_transaction(
+                    &project_root,
+                    current,
+                    &remaining,
+                ) {
                     failures.push(format!(
-                        "{}: pending proof projection not durable for transaction {}",
+                        "{}: transaction {}: {error}",
                         project_root.display(),
                         item.transaction_id
                     ));
+                } else {
+                    remaining.retain(|transaction| {
+                        transaction.transaction_id != item.transaction_id
+                    });
                 }
             }
         }
@@ -596,8 +626,10 @@ impl super::WriterCore {
         }
     }
 
-    /// 重试当前项目内所有已发布但未确认的证明投影。保存/清空前调用，
-    /// 避免一次投影失败要等下次启动才恢复。
+    /// 重试当前项目内所有已发布但未确认的证明投影。
+    ///
+    /// 保存路径不再调用本函数：正文 durable 之后只投影本次事务，历史投影
+    /// 失败不会阻断无关章节的正文保存。
     pub(crate) fn retry_pending_chapter_proof_projections(
         &self,
         project_root: &std::path::Path,
@@ -608,17 +640,25 @@ impl super::WriterCore {
         // 仍继续结算。进程内失败集只用于本轮，durable journal 仍是事实来源。
         let mut blocked_chapters = std::collections::HashSet::new();
         let mut failures: Vec<String> = Vec::new();
-        for transaction in transactions {
+        // 成功确认的事务从 remaining 移除，供同章后续事务判断“前序仍未决”。
+        let mut remaining = transactions.clone();
+        for transaction in &transactions {
             if blocked_chapters.contains(&transaction.key) {
                 continue;
             }
-            if !self.apply_pending_chapter_proof(project_root, &transaction.transaction_id) {
+            if let Err(error) = self.apply_pending_chapter_proof_transaction(
+                project_root,
+                transaction,
+                &remaining,
+            ) {
                 blocked_chapters.insert(transaction.key.clone());
                 failures.push(format!(
-                    "{}: proof projection not durable for transaction {}",
+                    "{}: proof projection not durable for transaction {}: {error}",
                     project_root.display(),
                     transaction.transaction_id
                 ));
+            } else {
+                remaining.retain(|item| item.transaction_id != transaction.transaction_id);
             }
         }
         if failures.is_empty() {
@@ -639,118 +679,99 @@ impl super::WriterCore {
         crate::chapter::commit::pending_chapter_sync_proof_fact_ids(project_root)
     }
 
-    /// 把 journal 中 durable 的证明事件幂等写入统计，并逐条确认投影。
-    /// 失败时保留 journal/pending，不把正文判为保存失败。
+    /// 把单笔 journal 中 durable 的证明事件批量投影到统计，并批量确认 journal。
+    ///
+    /// 错误只表示“证明投影待补”，调用方必须区分正文已经 durable 与证明
+    /// 尚未落盘：不能因此把正文保存判为失败，也不能把未确认当成功。
     pub(crate) fn apply_pending_chapter_proof(
         &self,
         project_root: &std::path::Path,
         transaction_id: &str,
-    ) -> bool {
-        let Ok(events) =
-            crate::chapter::commit::pending_chapter_proof_events(project_root, transaction_id)
-        else {
-            return false;
-        };
-        let Ok(transactions) =
-            crate::chapter::commit::pending_chapter_proof_transactions(project_root)
-        else {
-            return false;
-        };
+    ) -> Result<()> {
+        let transactions =
+            crate::chapter::commit::pending_chapter_proof_transactions(project_root)?;
         let Some(current) = transactions
             .iter()
-            .find(|item| item.transaction_id == transaction_id)
+            .find(|transaction| transaction.transaction_id == transaction_id)
         else {
-            return false;
+            // 事务已确认/已清理：没有待投影事实。
+            return Ok(());
         };
+        self.apply_pending_chapter_proof_transaction(project_root, current, &transactions)
+    }
+
+    fn apply_pending_chapter_proof_transaction(
+        &self,
+        project_root: &std::path::Path,
+        current: &crate::chapter::commit::PendingChapterProofTransaction,
+        transactions: &[crate::chapter::commit::PendingChapterProofTransaction],
+    ) -> Result<()> {
         // 同章仍有更早的未确认 journal 时，当前批次的 proof event 不能先写，
         // 否则证明链会按错误的因果顺序接续。
-        if transactions
-            .iter()
-            .any(|item| item.key == current.key && item.commit_sequence < current.commit_sequence)
-        {
-            return false;
+        if transactions.iter().any(|item| {
+            item.key == current.key && item.commit_sequence < current.commit_sequence
+        }) {
+            return Err(Error::Other(format!(
+                "chapter proof transaction {} has an earlier pending transaction for the same chapter",
+                current.transaction_id
+            )));
         }
-        let Ok(facts) =
-            crate::chapter::commit::pending_chapter_sync_proof_facts(project_root, transaction_id)
-        else {
-            return false;
-        };
+        let events = crate::chapter::commit::pending_chapter_proof_events(
+            project_root,
+            &current.transaction_id,
+        )?;
+        let facts = crate::chapter::commit::pending_chapter_sync_proof_facts(
+            project_root,
+            &current.transaction_id,
+        )?;
         if events.is_empty() && facts.is_empty() {
-            return false;
+            return Ok(());
         }
         let stats = self.get_stats_api();
-        let mut completed = true;
+        let mut projection_ids = Vec::with_capacity(events.len() + facts.len());
+        let mut items = Vec::with_capacity(events.len());
         for projection in events {
-            let event_id = projection.event_id().to_string();
-            match stats.record_proof_event(projection.event, projection.baseline_text.as_deref()) {
-                Ok(_) => {
-                    if let Err(error) = crate::chapter::commit::mark_chapter_commit_projection(
-                        project_root,
-                        transaction_id,
-                        &event_id,
-                    ) {
-                        log::warn!(
-                            "chapter proof projection ack failed, journal retained: tx={} event={} error={}",
-                            transaction_id,
-                            event_id,
-                            error
-                        );
-                        completed = false;
-                        break;
-                    }
-                }
-                Err(error) => {
-                    log::warn!(
-                        "chapter proof projection failed, journal retained: tx={} event={} error={}",
-                        transaction_id,
-                        event_id,
-                        error
-                    );
-                    completed = false;
-                    break;
-                }
-            }
+            projection_ids.push(projection.event_id().to_string());
+            items.push((projection.event, projection.baseline_text));
         }
-        if completed {
-            for fact in facts {
-                let event_id = fact.event_id.clone();
-                if let Err(error) = self.record_sync_content_change_at(
-                    &fact.key.project_id,
-                    &fact.key.volume_id,
-                    &fact.key.chapter_id,
-                    fact.before_text.as_deref(),
-                    fact.after_text.as_deref(),
-                    &event_id,
-                    &fact.source_device_id,
-                    "",
-                    fact.occurred_at_ms,
-                ) {
-                    log::warn!(
-                        "chapter sync proof projection failed, journal retained: tx={} event={} error={}",
-                        transaction_id,
-                        event_id,
-                        error
-                    );
-                    completed = false;
-                    break;
-                }
-                if let Err(error) = crate::chapter::commit::mark_chapter_commit_projection(
-                    project_root,
-                    transaction_id,
-                    &event_id,
-                ) {
-                    log::warn!(
-                        "chapter sync proof ack failed, journal retained: tx={} event={} error={}",
-                        transaction_id,
-                        event_id,
-                        error
-                    );
-                    completed = false;
-                    break;
-                }
-            }
+        // 本批证明事件按因果顺序计算链头，一次批量落盘并只 sync 涉及的日分区。
+        if !items.is_empty() {
+            stats.record_proof_events(items).map_err(|error| {
+                Error::Other(format!(
+                    "chapter proof events not durable for transaction {}: {error}",
+                    current.transaction_id
+                ))
+            })?;
         }
-        completed
+        for fact in facts {
+            let event_id = fact.event_id.clone();
+            self.record_sync_content_change_at(
+                &fact.key.project_id,
+                &fact.key.volume_id,
+                &fact.key.chapter_id,
+                fact.before_text.as_deref(),
+                fact.after_text.as_deref(),
+                &event_id,
+                &fact.source_device_id,
+                "",
+                fact.occurred_at_ms,
+            )
+            .map_err(|error| {
+                Error::Other(format!(
+                    "chapter sync proof event not durable for transaction {}: {error}",
+                    current.transaction_id
+                ))
+            })?;
+            projection_ids.push(event_id);
+        }
+        // 只有全部事件/事实已确认持久化后才批量回执 journal；中途失败保留
+        // 原 journal，下一次重放会按 event_id 去重后重试。
+        crate::chapter::commit::mark_chapter_commit_projections(
+            project_root,
+            &current.transaction_id,
+            &projection_ids,
+        )?;
+        Ok(())
     }
 
     /// 记录一次“同步把正文改成 after_text”的明确事实。

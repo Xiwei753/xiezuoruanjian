@@ -107,11 +107,19 @@ impl AiUsageStore {
 
     fn recover_pending_events_locked(&self) -> Result<()> {
         let pending_dir = self.app_data_root.join(PENDING_ROOT);
-        if !pending_dir.is_dir() {
-            return Ok(());
-        }
+        // 只有真实不存在才是“没有待恢复 journal”；权限/IO 失败必须返回。
+        let entries = match fs::read_dir(&pending_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to read AI usage pending directory {}: {error}",
+                    pending_dir.display()
+                )))
+            }
+        };
         let mut paths: Vec<PathBuf> = Vec::new();
-        for entry in fs::read_dir(&pending_dir)? {
+        for entry in entries {
             let entry = entry.map_err(|error| {
                 Error::Other(format!(
                     "failed to read AI usage pending directory {}: {error}",
@@ -233,22 +241,27 @@ impl AiUsageStore {
             for event in &events {
                 expected_lines.push(serde_json::to_string(*event)?);
             }
-            // 崩溃留下的尾部残行只有 pending 能证明时才截断；完整记录缺换行
-            // 由共用追加函数补分隔符。
-            jsonl::repair_tail_with_pending::<AiUsageEvent>(&path, &expected_lines)?;
-            let mut existing = read_ids(&path)?;
+            // 崩溃留下的尾部残行只有本批 pending 事件能证明时才截断；完整
+            // 记录缺换行由共用追加函数补分隔符。
+            jsonl::repair_tail_fragment::<AiUsageEvent>(&path, &expected_lines)?;
+            let mut existing = jsonl::read_jsonl_ids_repairing_tail::<AiUsageEvent, _>(
+                &path,
+                |event| event.event_id.as_str(),
+                &expected_lines,
+            )?
+            .ids;
             let mut fresh_lines = Vec::new();
-            for event in events {
+            for (event, line) in events.into_iter().zip(expected_lines) {
                 if existing.contains(&event.event_id) {
                     continue;
                 }
-                fresh_lines.push(serde_json::to_string(event)?);
                 existing.insert(event.event_id.clone());
+                fresh_lines.push(line);
                 written += 1;
             }
-            if !fresh_lines.is_empty() {
-                jsonl::append_jsonl_lines(&path, &fresh_lines)?;
-            }
+            // 即使没有新行也要确认已有文件持久化；只有追加/确认成功后才允许
+            // 调用方删除 pending journal。
+            jsonl::append_jsonl_lines(&path, &fresh_lines)?;
         }
         Ok(written)
     }
@@ -311,11 +324,18 @@ impl AiUsageStore {
 
     fn list_origins(&self) -> Result<Vec<String>> {
         let root = self.events_root();
-        if !root.is_dir() {
-            return Ok(Vec::new());
-        }
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to read AI usage events root {}: {error}",
+                    root.display()
+                )))
+            }
+        };
         let mut origins = Vec::new();
-        for entry in fs::read_dir(root)? {
+        for entry in entries {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
                 continue;
@@ -346,13 +366,6 @@ fn validate_local_date(date: &str) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn read_ids(path: &Path) -> Result<HashSet<String>> {
-    Ok(jsonl::read_jsonl_ids::<AiUsageEvent, _>(path, |event| {
-        event.event_id.as_str()
-    })?
-    .ids)
 }
 
 fn remove_pending_file(path: &Path) -> Result<()> {

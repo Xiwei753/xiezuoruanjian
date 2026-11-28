@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::journal::{
-    sha256_hex, write_manifest, AdditionalFilePlan, ChapterCommitManifest, ChapterCommitPhase,
+    preserve_superseded_conflict, sha256_hex, write_manifest, AdditionalFilePlan,
+    ChapterCommitManifest, ChapterCommitPhase,
 };
 use super::BODY_FILE;
 use crate::chapter::Chapter;
@@ -17,12 +18,16 @@ pub(super) fn sha256_bytes(bytes: &[u8]) -> String {
 }
 
 fn mark_superseded(
+    project_root: &Path,
     tx_dir: &Path,
     manifest: &mut ChapterCommitManifest,
     reason: String,
 ) -> Result<bool> {
     manifest.phase = ChapterCommitPhase::Superseded;
     manifest.superseded_reason = Some(reason);
+    // 先把冲突材料归档 durable，再确认 Superseded；归档失败时保持 Decided
+    // 原样，下一次恢复按同一事务材料重试，不会出现“Superseded 但永不归档”。
+    preserve_superseded_conflict(project_root, tx_dir, manifest)?;
     write_manifest(tx_dir, manifest)?;
     Ok(false)
 }
@@ -50,6 +55,7 @@ pub(super) fn publish_deleted(
         .to_path_buf();
     let Some(trash_path) = manifest.trash_path.as_ref().map(PathBuf::from) else {
         return mark_superseded(
+            project_root,
             tx_dir,
             manifest,
             "chapter delete journal missing trash path".to_string(),
@@ -65,6 +71,7 @@ pub(super) fn publish_deleted(
             && body_sha == manifest.before.content_sha256;
         if !matches_before {
             return mark_superseded(
+                project_root,
                 tx_dir,
                 manifest,
                 "chapter changed after delete decision".to_string(),
@@ -169,6 +176,7 @@ pub(super) fn publish_decided(
             let existing = fs::read(&body_path)?;
             if sha256_bytes(&existing) != manifest.after.content_sha256 {
                 return mark_superseded(
+                project_root,
                     tx_dir,
                     manifest,
                     "chapter body appeared with different content during create".to_string(),
@@ -182,6 +190,7 @@ pub(super) fn publish_decided(
                 || existing.content_sha256 != manifest.after.content_sha256
             {
                 return mark_superseded(
+                project_root,
                     tx_dir,
                     manifest,
                     "chapter meta appeared with different version during create".to_string(),
@@ -204,6 +213,7 @@ pub(super) fn publish_decided(
                 }
                 Ok(_) => {
                     return mark_superseded(
+                        project_root,
                         tx_dir,
                         manifest,
                         format!(
@@ -241,6 +251,7 @@ pub(super) fn publish_decided(
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return mark_superseded(
+                project_root,
                 tx_dir,
                 manifest,
                 "chapter body missing before publish (deleted tombstone)".to_string(),
@@ -253,6 +264,7 @@ pub(super) fn publish_decided(
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return mark_superseded(
+                project_root,
                 tx_dir,
                 manifest,
                 "chapter meta missing before publish (deleted tombstone)".to_string(),
@@ -266,6 +278,7 @@ pub(super) fn publish_decided(
         && meta.object_generation != manifest.after.object_generation
     {
         return mark_superseded(
+            project_root,
             tx_dir,
             manifest,
             format!(
@@ -280,6 +293,7 @@ pub(super) fn publish_decided(
         || (meta.revision != manifest.before.revision && meta.revision != manifest.after.revision)
     {
         return mark_superseded(
+            project_root,
             tx_dir,
             manifest,
             format!(
@@ -292,6 +306,7 @@ pub(super) fn publish_decided(
         && meta.content_sha256 != manifest.before.content_sha256
     {
         return mark_superseded(
+            project_root,
             tx_dir,
             manifest,
             format!(
@@ -304,6 +319,7 @@ pub(super) fn publish_decided(
     let already_after = current_sha == manifest.after.content_sha256;
     if !already_after && current_sha != manifest.before.content_sha256 {
         return mark_superseded(
+            project_root,
             tx_dir,
             manifest,
             format!(
@@ -343,6 +359,7 @@ pub(super) fn publish_decided(
                 }
                 if plan.before_sha256.as_deref() != Some(existing_sha.as_str()) {
                     return mark_superseded(
+                        project_root,
                         tx_dir,
                         manifest,
                         format!(
@@ -355,6 +372,7 @@ pub(super) fn publish_decided(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if plan.before_sha256.is_some() {
                     return mark_superseded(
+                        project_root,
                         tx_dir,
                         manifest,
                         format!(

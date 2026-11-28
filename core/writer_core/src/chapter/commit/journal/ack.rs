@@ -15,6 +15,27 @@ pub fn mark_chapter_commit_projection(
     transaction_id: &str,
     projection_id: &str,
 ) -> Result<bool> {
+    confirm_pending_projections(project_root, transaction_id, &[projection_id])
+}
+
+/// 一次确认同一事务的多个 Core 统计投影，只写一次 manifest。
+///
+/// 编辑保存/恢复轮里同一批证明事件按因果顺序批量落盘后，用这个入口批量
+/// 回执，避免每个事件都重新读写 manifest。
+pub fn mark_chapter_commit_projections(
+    project_root: &Path,
+    transaction_id: &str,
+    projection_ids: &[String],
+) -> Result<bool> {
+    let ids: Vec<&str> = projection_ids.iter().map(String::as_str).collect();
+    confirm_pending_projections(project_root, transaction_id, &ids)
+}
+
+fn confirm_pending_projections(
+    project_root: &Path,
+    transaction_id: &str,
+    projection_ids: &[&str],
+) -> Result<bool> {
     let tx_dir = journal_root(project_root).join(transaction_id);
     let manifest_path = tx_dir.join("manifest.json");
     if !manifest_path.exists() {
@@ -24,7 +45,7 @@ pub fn mark_chapter_commit_projection(
         serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
     manifest
         .pending_projections
-        .retain(|id| id != projection_id);
+        .retain(|id| !projection_ids.contains(&id.as_str()));
     if manifest.pending_projections.is_empty()
         && manifest.draft_ack_projections.is_empty()
         && matches!(

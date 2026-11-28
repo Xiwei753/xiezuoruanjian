@@ -17,7 +17,7 @@ use crate::writing_stats::contribution::{
 };
 use crate::writing_stats::jsonl;
 use crate::writing_stats::starmap_checkpoint::{
-    append_starmap_checkpoint, ensure_checkpoint_storage, has_starmap_checkpoints,
+    append_starmap_checkpoint, ensure_checkpoint_storage,
     list_checkpoint_headers, load_checkpoint_at, StarMapProofCheckpoint,
     CHECKPOINT_REASON_BASELINE_INCOMPLETE, CHECKPOINT_REASON_CREATED, STARMAP_CHECKPOINT_INTERVAL,
 };
@@ -319,19 +319,27 @@ impl ContributionStore {
     fn scan_replay_sequence(&self, origin: &str) -> Result<u64> {
         let dir = self.events_root().join(origin);
         let mut max_position = 0u64;
-        if dir.is_dir() {
-            for entry in fs::read_dir(&dir)? {
-                let path = entry?.path();
-                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                    continue;
-                };
-                if !name.ends_with(OBJECTS_SUFFIX) {
-                    continue;
-                }
-                for record in jsonl::read_jsonl::<ContributionEvent>(&path)? {
-                    if let Some(position) = record.value.replay_position {
-                        max_position = max_position.max(position.saturating_add(1));
-                    }
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to read contribution events dir {}: {error}",
+                    dir.display()
+                )))
+            }
+        };
+        for entry in entries {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(OBJECTS_SUFFIX) {
+                continue;
+            }
+            for record in jsonl::read_jsonl::<ContributionEvent>(&path)? {
+                if let Some(position) = record.value.replay_position {
+                    max_position = max_position.max(position.saturating_add(1));
                 }
             }
         }
@@ -384,12 +392,21 @@ impl ContributionStore {
     fn scan_branch_replay_state(&self, origin: &str, starmap_id: &str) -> Result<(u64, String)> {
         let dir = self.events_root().join(origin);
         let chain_head = self.read_replay_chain_head(origin, starmap_id)?;
-        if !dir.is_dir() {
-            return Ok((0, chain_head));
-        }
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((0, chain_head))
+            }
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to read contribution events dir {}: {error}",
+                    dir.display()
+                )))
+            }
+        };
         let mut count = 0u64;
         let mut latest: Option<(u64, String, String)> = None;
-        for entry in fs::read_dir(&dir)? {
+        for entry in entries {
             let path = entry?.path();
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
@@ -446,8 +463,20 @@ impl ContributionStore {
         }
         let dir = self.events_root().join(origin);
         let mut ids = HashSet::new();
-        if dir.is_dir() {
-            for entry in fs::read_dir(&dir)? {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(HashSet::new())
+            }
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to read contribution events dir {}: {error}",
+                    dir.display()
+                )))
+            }
+        };
+        {
+            for entry in entries {
                 let path = entry?.path();
                 let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                     continue;
@@ -1343,7 +1372,8 @@ impl ContributionStore {
 
         // 事件、基线检查点、回放索引全部落稳后才删 journal；任一步失败都
         // 保留 pending，下次重放会以磁盘事实重新判重并补齐。
-        let appended = self.append_partition_files(&prepared)?;
+        // 普通写入不扫描整文件：pending 已先落盘，异常尾部由下一次重放修复。
+        let appended = self.append_partition_files(&prepared, false)?;
         self.persist_baseline_checkpoints(&prepared)?;
         self.persist_replay_metadata(&metadata.sequences, &metadata.chains)?;
         for (origin, starmap_id, count) in &checkpoint_targets {
@@ -1396,11 +1426,19 @@ impl ContributionStore {
 
     fn recover_pending_events_locked(&self) -> Result<()> {
         let pending_dir = self.app_data_root.join(PENDING_ROOT);
-        if !pending_dir.is_dir() {
-            return Ok(());
-        }
+        // 只有真实不存在才是“没有待恢复 journal”；权限/IO 失败必须返回。
+        let entries = match fs::read_dir(&pending_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to read contribution pending directory {}: {error}",
+                    pending_dir.display()
+                )))
+            }
+        };
         let mut paths: Vec<PathBuf> = Vec::new();
-        for entry in fs::read_dir(&pending_dir)? {
+        for entry in entries {
             let entry = entry.map_err(|error| {
                 Error::Other(format!(
                     "failed to read contribution pending directory {}: {error}",
@@ -1472,7 +1510,8 @@ impl ContributionStore {
     }
 
     fn append_events_locked(&self, events: &[ContributionEvent]) -> Result<()> {
-        let appended = self.append_partition_files(events)?;
+        // 重放路径：pending journal 中的确定事件行可以证明并修复异常尾部。
+        let appended = self.append_partition_files(events, true)?;
         self.persist_baseline_checkpoints(events)?;
         self.rebuild_replay_indexes(events)?;
         self.bump_replay_generation();
@@ -1485,9 +1524,14 @@ impl ContributionStore {
 
     /// 按 `origin_device_id + local_date` 分区追加事件，返回真正写入的事件数。
     ///
-    /// 正式写入与 pending 重放共用这一处：追加前先用尚存 pending 中确定事件的
-    /// 序列化行修复崩溃残行，再按已落盘 ID 去重，最后逐分区 `sync_all`。
-    fn append_partition_files(&self, events: &[ContributionEvent]) -> Result<PartitionAppend> {
+    /// 正式写入与 pending 重放共用这一处。`recovering` 时先对同一批所有涉及
+    /// 分区做尾部修复，再开始任何追加，避免“后一个分区有残行时前一个分区
+    /// 已写入”的半轮失败；普通写入不扫描整文件，只按已落盘 ID 去重。
+    fn append_partition_files(
+        &self,
+        events: &[ContributionEvent],
+        recovering: bool,
+    ) -> Result<PartitionAppend> {
         let mut by_partition: BTreeMap<(String, String), Vec<&ContributionEvent>> = BTreeMap::new();
         for event in events {
             let origin = if event.origin_device_id.is_empty() {
@@ -1502,15 +1546,31 @@ impl ContributionStore {
             };
             by_partition.entry((origin, date)).or_default().push(event);
         }
-        let mut appended = PartitionAppend::default();
-        let mut existing_by_origin: HashMap<String, HashSet<String>> = HashMap::new();
+        // 先把每个分区的确定行准备好；重放路径先统一修复尾部，再进入追加。
+        let mut partitions: Vec<(String, String, Vec<&ContributionEvent>, Vec<String>)> =
+            Vec::with_capacity(by_partition.len());
         for ((origin, date), events) in by_partition {
-            let path = self.event_file_path(&origin, &date);
             let mut expected_lines = Vec::with_capacity(events.len());
             for event in &events {
                 expected_lines.push(serde_json::to_string(*event)?);
             }
-            jsonl::repair_tail_with_pending::<ContributionEvent>(&path, &expected_lines)?;
+            partitions.push((origin, date, events, expected_lines));
+        }
+        if recovering {
+            for (origin, date, _, expected_lines) in &partitions {
+                jsonl::repair_tail_fragment::<ContributionEvent>(
+                    &self.event_file_path(origin, date),
+                    expected_lines,
+                )?;
+            }
+        }
+        let mut appended = PartitionAppend::default();
+        let mut existing_by_origin: HashMap<String, HashSet<String>> = HashMap::new();
+        for (origin, date, events, expected_lines) in partitions {
+            let path = self.event_file_path(&origin, &date);
+            let scan = jsonl::read_jsonl_ids::<ContributionEvent, _>(&path, |event| {
+                event.event_id.as_str()
+            })?;
             let existing = match existing_by_origin.entry(origin.clone()) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
@@ -1519,20 +1579,33 @@ impl ContributionStore {
             };
             let mut fresh_lines = Vec::new();
             let mut fresh_ids = Vec::new();
-            for event in events {
-                if !event.event_id.is_empty() && existing.contains(&event.event_id) {
-                    continue;
+            for (event, line) in events.into_iter().zip(expected_lines) {
+                if !recovering && event.event_id.is_empty() {
+                    return Err(Error::Other(
+                        "refuse to append a contribution event without a stable event_id"
+                            .to_string(),
+                    ));
                 }
-                fresh_lines.push(serde_json::to_string(event)?);
                 if !event.event_id.is_empty() {
+                    if let Some(stored) = scan.fingerprints.get(&event.event_id).copied() {
+                        if stored != 0 && stored != jsonl::line_fingerprint(line.as_bytes()) {
+                            return Err(Error::Other(format!(
+                                "contribution event {} is already persisted with a different payload",
+                                event.event_id
+                            )));
+                        }
+                    }
+                    if existing.contains(&event.event_id) {
+                        continue;
+                    }
                     existing.insert(event.event_id.clone());
                     fresh_ids.push(event.event_id.clone());
                 }
-            }
-            if fresh_lines.is_empty() {
-                continue;
+                fresh_lines.push(line);
             }
             appended.written += fresh_lines.len();
+            // 没有新行时也确认一次已有文件持久化；只有确认成功才允许删除
+            // pending journal。
             jsonl::append_jsonl_lines(&path, &fresh_lines)?;
             if !fresh_ids.is_empty() {
                 appended
@@ -1565,7 +1638,14 @@ impl ContributionStore {
             } else {
                 event.origin_device_id.clone()
             };
-            if has_starmap_checkpoints(&self.app_data_root, &device_id, &delta.starmap_id)? {
+            // 检查点文件存在不等于可用：以实际读取到的历史头为准，读不出来
+            // 时先补真实基线，而不是伪造“已有历史”。
+            let headers = list_checkpoint_headers(
+                &self.app_data_root,
+                &device_id,
+                &delta.starmap_id,
+            )?;
+            if !headers.is_empty() {
                 continue;
             }
             let checkpoint = StarMapProofCheckpoint::new(
@@ -1596,11 +1676,18 @@ impl ContributionStore {
         let mut seen = HashSet::new();
         for origin in self.list_origins()? {
             let dir = self.events_root().join(&origin);
-            if !dir.is_dir() {
-                continue;
-            }
+            let origin_entries = match fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(Error::Other(format!(
+                        "failed to read contribution events dir {}: {error}",
+                        dir.display()
+                    )))
+                }
+            };
             let mut paths: Vec<PathBuf> = Vec::new();
-            for entry in fs::read_dir(&dir)? {
+            for entry in origin_entries {
                 let entry = entry?;
                 let path = entry.path();
                 if path
@@ -1663,11 +1750,18 @@ impl ContributionStore {
 
     fn list_origins(&self) -> Result<Vec<String>> {
         let root = self.events_root();
-        if !root.is_dir() {
-            return Ok(Vec::new());
-        }
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "failed to read contribution events root {}: {error}",
+                    root.display()
+                )))
+            }
+        };
         let mut origins = Vec::new();
-        for entry in fs::read_dir(root)? {
+        for entry in entries {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
                 continue;

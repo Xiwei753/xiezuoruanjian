@@ -1,21 +1,31 @@
 use super::super::publish::{publish_decided, publish_deleted};
 use super::*;
 
-/// 复制一份冲突材料；manifest 声明的材料缺失或复制失败必须报错，
-/// 不能用 `exists()` 把必需文件缺失伪装成正常。
+/// 把一份冲突材料原子写入归档目录（含目标文件与父目录 fsync）。
+///
+/// 先读后写走既有 `atomic_write_bytes`，不直接 `fs::copy`：复制成功但目标
+/// 内容未落盘时，恢复入口不能把 Superseded 当成已完成归档。
 fn copy_conflict_material(source: &Path, target: &Path) -> Result<()> {
-    fs::copy(source, target).map_err(|error| {
+    let bytes = fs::read(source).map_err(|error| {
+        Error::Other(format!(
+            "failed to read chapter commit material {} for conflict archive: {error}",
+            source.display()
+        ))
+    })?;
+    crate::storage::atomic_write_bytes(target, &bytes).map_err(|error| {
         Error::Other(format!(
             "failed to preserve chapter commit material {} -> {}: {error}",
             source.display(),
             target.display()
         ))
-    })?;
-    Ok(())
+    })
 }
 
 /// 保留 Superseded 事务的真实材料、pending 事件和冲突记录。
-fn preserve_superseded_conflict(
+///
+/// 幂等：归档目录里已经存在的文件直接复用；恢复入口对 Superseded 事务每次
+/// 都会调用本函数补齐缺失材料，复制失败时保留 tx_dir 供下次重试。
+pub(crate) fn preserve_superseded_conflict(
     project_root: &Path,
     tx_dir: &Path,
     manifest: &ChapterCommitManifest,
@@ -24,21 +34,37 @@ fn preserve_superseded_conflict(
         .join(CONFLICT_DIR)
         .join(&manifest.transaction_id);
     fs::create_dir_all(&conflict_dir)?;
-    copy_conflict_material(
-        &tx_dir.join("manifest.json"),
-        &conflict_dir.join("manifest.json"),
-    )?;
-    // Decided 阶段正文材料一定已 durable；缺它说明事务材料被外部破坏，
-    // 保留 tx_dir 并返回真实错误。
-    copy_conflict_material(
-        &tx_dir.join(BODY_FILE),
-        &conflict_dir.join(BODY_FILE),
-    )?;
+    // conflict.json 是最后一步原子写入的完成标记：它存在说明材料已完整
+    // 归档，恢复轮直接复用，不重复复制/写盘。
+    if conflict_dir.join("conflict.json").is_file() {
+        return Ok(conflict_dir.to_string_lossy().to_string());
+    }
+    // 归档清单用当前内存中的真实事务状态写入（调用方可能刚标记
+    // Superseded，尚未回写 tx_dir 清单），不能复制旧阶段文件。
+    write_manifest(&conflict_dir, manifest).map_err(|error| {
+        Error::Other(format!(
+            "failed to archive chapter commit manifest {} -> {}: {error}",
+            tx_dir.display(),
+            conflict_dir.display()
+        ))
+    })?;
+    let staged_body = tx_dir.join(BODY_FILE);
+    let archived_body = conflict_dir.join(BODY_FILE);
+    if manifest.deleted {
+        // 删除冲突没有待发布正文；事务里若保留了正文材料则一并归档。
+        if staged_body.exists() && !archived_body.exists() {
+            copy_conflict_material(&staged_body, &archived_body)?;
+        }
+    } else if !archived_body.exists() {
+        // 正文提交冲突：正文材料必须 durable，缺它说明事务材料被外部破坏。
+        copy_conflict_material(&staged_body, &archived_body)?;
+    }
     for plan in &manifest.additional_files {
-        copy_conflict_material(
-            &tx_dir.join(&plan.staging_filename),
-            &conflict_dir.join(&plan.staging_filename),
-        )?;
+        let target = conflict_dir.join(&plan.staging_filename);
+        if target.exists() {
+            continue;
+        }
+        copy_conflict_material(&tx_dir.join(&plan.staging_filename), &target)?;
     }
     let actual = match read_current(project_root, &manifest.key) {
         Ok((_, _, version)) => Some(version),
@@ -103,9 +129,10 @@ pub fn pending_chapter_proof_transactions(
         let manifest = match serde_json::from_str::<ChapterCommitManifest>(&raw) {
             Ok(manifest) => manifest,
             Err(error) => {
-                // 损坏清单保留在磁盘上供诊断，不能静默当成已完成。
-                log::warn!(
-                    "chapter commit manifest {} is corrupt, skipping proof projection: {error}",
+                // 损坏清单保留在磁盘上供诊断；恢复轮必须显式报告该事务，
+                // 但不把它当成可投影事实，也不阻断其它事务。
+                log::error!(
+                    "chapter commit manifest {} is corrupt, transaction kept and skipped: {error}",
                     manifest_path.display()
                 );
                 continue;
@@ -251,8 +278,8 @@ pub fn pending_chapter_sync_proof_fact_ids(
         let manifest = match serde_json::from_str::<ChapterCommitManifest>(&raw) {
             Ok(manifest) => manifest,
             Err(error) => {
-                log::warn!(
-                    "chapter commit manifest {} is corrupt, skipping proof fact scan: {error}",
+                log::error!(
+                    "chapter commit manifest {} is corrupt, transaction kept and skipped for proof facts: {error}",
                     manifest_path.display()
                 );
                 continue;
@@ -502,8 +529,10 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
         match serde_json::from_str::<ChapterCommitManifest>(&raw) {
             Ok(manifest) => entries.push((dir, manifest)),
             Err(error) => {
-                log::warn!(
-                    "chapter commit journal manifest parse failed, preserving: {}: {}",
+                // 损坏事务保留原目录并显式报告；不能静默当成已完成，也不
+                // 阻断其它章节的恢复。
+                log::error!(
+                    "chapter commit journal manifest parse failed, transaction preserved: {}: {}",
                     manifest_path.display(),
                     error
                 );
@@ -527,8 +556,22 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
                     publish_decided(project_root, &tx_dir, &mut manifest)?
                 };
                 if !published {
-                    let conflict_dir =
-                        preserve_superseded_conflict(project_root, &tx_dir, &manifest)?;
+                    let conflict_dir = match preserve_superseded_conflict(
+                        project_root,
+                        &tx_dir,
+                        &manifest,
+                    ) {
+                        Ok(conflict_dir) => conflict_dir,
+                        Err(error) => {
+                            // 归档未 durable：保留 Decided/Superseded 事务，
+                            // 下一次恢复继续补齐；不能用复制失败阻断无关章节。
+                            log::error!(
+                                "chapter conflict archive incomplete, journal retained: {}: {error}",
+                                tx_dir.display()
+                            );
+                            continue;
+                        }
+                    };
                     recovered.push(ChapterCommitRecovery {
                         transaction_id: manifest.transaction_id.clone(),
                         key: manifest.key.clone(),
@@ -547,6 +590,17 @@ pub fn recover_pending_chapter_commits(project_root: &Path) -> Result<Vec<Chapte
                     if let Err(error) = remove_transaction_dir(&tx_dir) {
                         log::warn!(
                             "failed to clean finished chapter commit {}: {error}",
+                            tx_dir.display()
+                        );
+                    }
+                } else {
+                    // Superseded 在发布失败时先落盘、归档随后才做；恢复时继续
+                    // 补齐冲突材料（已存在的文件复用），失败则保留事务下次再试。
+                    if let Err(error) =
+                        preserve_superseded_conflict(project_root, &tx_dir, &manifest)
+                    {
+                        log::error!(
+                            "superseded chapter conflict archive incomplete, journal retained: {}: {error}",
                             tx_dir.display()
                         );
                     }

@@ -411,9 +411,8 @@ impl super::WriterCore {
         proof_event_ids: &[String],
     ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
         let project_root = self.project_root(project_id);
-        // 先结算此前 journal 里滞留的投影；目录/清单读取失败必须让本次保存
-        // 看到真实错误，不能把未决证明当成不存在继续写。
-        self.retry_pending_chapter_proof_projections(&project_root)?;
+        // 正文保存不以历史证明为前提：旧投影由各自 chapter journal 保留，
+        // 本次正文 durable 之后只投影本次事务，A 章旧证明失败不能阻断 B 章。
         let pending_proof = self.pending_editor_proof_for(project_id, volume_id, chapter_id)?;
         if proof_snapshot_revision.is_some() && proof_event_ids.is_empty() {
             // 带快照的保存必须显式给出本批 event IDs。不能再按正文摘要从
@@ -469,7 +468,16 @@ impl super::WriterCore {
                 .map(|event| event.event_id().to_string())
                 .collect();
             self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed)?;
-            self.apply_pending_chapter_proof(&project_root, &result.0.transaction_id);
+            if let Err(error) =
+                self.apply_pending_chapter_proof(&project_root, &result.0.transaction_id)
+            {
+                // 正文已经 durable；证明投影失败只保留 journal，不能反过来
+                // 把已提交正文判为失败。
+                log::warn!(
+                    "pending chapter proof projection deferred after save: tx={} error={error}",
+                    result.0.transaction_id
+                );
+            }
         }
         Ok(result)
     }
@@ -496,9 +504,7 @@ impl super::WriterCore {
         workspace_lock: Option<&crate::storage::WorkspaceWriteLock>,
     ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
         let project_root = self.project_root(project_id);
-        // 先结算此前 journal 里滞留的投影；读取/清单失败必须返回真实错误，
-        // 真实待恢复事项保留在 journal 中。
-        self.retry_pending_chapter_proof_projections(&project_root)?;
+        // 正文保存不以历史证明为前提；真实待恢复事项保留在各自 journal 中。
         super::chapter_proof_batch::validate_explicit_editor_proof_batch(
             chapter_id,
             proof_events,
@@ -533,7 +539,16 @@ impl super::WriterCore {
                 .filter(|event_id| !event_id.is_empty())
                 .collect();
             self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed)?;
-            self.apply_pending_chapter_proof(&project_root, &result.0.transaction_id);
+            if let Err(error) =
+                self.apply_pending_chapter_proof(&project_root, &result.0.transaction_id)
+            {
+                // 正文已经 durable；证明投影失败只保留 journal，不能反过来
+                // 把已提交正文判为失败。
+                log::warn!(
+                    "pending chapter proof projection deferred after save: tx={} error={error}",
+                    result.0.transaction_id
+                );
+            }
         }
         Ok(result)
     }
@@ -573,9 +588,8 @@ impl super::WriterCore {
         proof_event_ids: &[String],
     ) -> Result<ChapterSaveReceipt> {
         let project_root = self.project_root(project_id);
-        // 先结算此前 journal 里滞留的投影；目录/清单读取失败必须让本次保存
-        // 看到真实错误，不能把未决证明当成不存在继续写。
-        self.retry_pending_chapter_proof_projections(&project_root)?;
+        // 正文保存不以历史证明为前提：旧投影由各自 chapter journal 保留，
+        // 本次正文 durable 之后只投影本次事务，A 章旧证明失败不能阻断 B 章。
         let pending_proof = self.pending_editor_proof_for(project_id, volume_id, chapter_id)?;
         if proof_snapshot_revision.is_some() && proof_event_ids.is_empty() {
             if !pending_proof.is_empty() {
@@ -622,7 +636,14 @@ impl super::WriterCore {
                 .map(|event| event.event_id().to_string())
                 .collect();
             self.clear_pending_editor_proof(project_id, volume_id, chapter_id, &completed)?;
-            self.apply_pending_chapter_proof(&project_root, &receipt.transaction_id);
+            if let Err(error) =
+                self.apply_pending_chapter_proof(&project_root, &receipt.transaction_id)
+            {
+                log::warn!(
+                    "pending chapter proof projection deferred after save: tx={} error={error}",
+                    receipt.transaction_id
+                );
+            }
         }
         Ok(receipt)
     }

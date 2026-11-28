@@ -1,83 +1,74 @@
 // =============================================================================
-// chapter_save_queue/restore_coordinator.rs — 恢复队列的按事务调度
+// chapter_save_queue/restore_coordinator.rs — 恢复队列的按事务消费
 // =============================================================================
 //
-// Issue #1062 评论 #7213634487 第 B 项：同一章可以同时挂起多份未决草稿。
-// 恢复入口按“每轮搬回一份、处理完再搬下一份”推进，直到本轮候选都拿到
-// durable 状态；这里集中放队列调度所需的归档事务快照与 materialize 步骤，
-// 不按 chapter_id/timestamp 代表当前事务。
+// Issue #1067 复审第 7 项：恢复入口的队列以真实归档事务（chapter_id +
+// marker.archived_path）为单位，`list_retries` 只取一次、按列表顺序逐条
+// materialize；每条候选无论成功失败都只消费一次，失败时计数并保留归档原件，
+// 不再靠 chapter_id、重新枚举或路径集合增长推断本轮进度。
+//
+// 这里只放“消费一条候选”的步骤，不按 chapter_id/timestamp 代表当前事务。
 
 use std::path::Path;
 
 use super::kept_draft::RestoreCounters;
 
-/// 本轮把可自动复制的归档事务搬回活动槽位；每章一次一份，其余等后续轮次。
-pub(super) fn materialize_pending_retries(
-    projects_root: &Path,
-    project_id: &str,
-    skip: &std::collections::BTreeSet<String>,
-    noted: &mut std::collections::BTreeSet<String>,
-    counters: &mut RestoreCounters,
-) {
-    for candidate in super::super::chapter_draft::list_retries(projects_root, project_id) {
-        let chapter_id = candidate.marker.chapter_id.clone();
-        if skip.contains(&chapter_id) {
-            continue;
-        }
-        match super::super::chapter_draft::materialize_retry_candidate(
-            projects_root,
-            project_id,
-            &chapter_id,
-            &candidate,
-        ) {
-            Ok(super::super::chapter_draft::RetryMaterialize::Moved) => {
-                counters.note(&chapter_id, "retry slot materialized");
-            }
-            Ok(super::super::chapter_draft::RetryMaterialize::ActiveDraftExists) => {
-                let key = format!("active:{}", candidate.marker.archived_path);
-                if noted.insert(key) {
-                    counters.note(
-                        &chapter_id,
-                        "retry deferred by newer active draft (old copy kept)",
-                    );
-                }
-            }
-            Ok(super::super::chapter_draft::RetryMaterialize::AckOnlyPending) => {
-                let key = format!("ack:{}", candidate.marker.archived_path);
-                if noted.insert(key) {
-                    counters.note(
-                        &chapter_id,
-                        "retry deferred by pending draft ack (old copy kept)",
-                    );
-                }
-            }
-            Ok(super::super::chapter_draft::RetryMaterialize::ArchivedMissing) => {
-                counters.note(&chapter_id, "retry archived copy missing (marker cleared)");
-            }
-            Ok(super::super::chapter_draft::RetryMaterialize::NoMarker) => {}
-            Err(error) => {
-                counters.failed = counters.failed.saturating_add(1);
-                counters.note(
-                    &chapter_id,
-                    format!("retry materialize failed kept: {error}"),
-                );
-            }
-        }
-    }
+/// 一条归档事务候选在本轮的消费结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MaterializeOutcome {
+    /// 已搬回活动槽位：调用方必须立刻处理这一份草稿。
+    Moved,
+    /// 本轮已消费但没有可处理的活动草稿（更新草稿占位、ack 待对账、归档
+    /// 丢失、标记缺失或搬运失败）：原件保持原样，不回到本轮队列。
+    Consumed,
 }
 
-/// 章节 -> 本轮可见的归档事务副本（archived_path），用于识别本轮新失败。
-pub(super) fn retry_snapshot(
+/// 消费一条归档事务候选：能搬回就搬回，不能搬回也只影响这一条。
+///
+/// 每份归档副本有独立的标记文件，同章多份事务各自调用一次即可；失败时
+/// 不删除归档目录，只记 counters.failed/note，由下一次进入项目时再试。
+pub(super) fn materialize_candidate(
     projects_root: &Path,
     project_id: &str,
-) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
-    let mut snapshot: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
-        std::collections::BTreeMap::new();
-    for candidate in super::super::chapter_draft::list_retries(projects_root, project_id) {
-        snapshot
-            .entry(candidate.marker.chapter_id.clone())
-            .or_default()
-            .insert(candidate.marker.archived_path);
+    candidate: &super::super::chapter_draft::RetryCandidate,
+    counters: &mut RestoreCounters,
+) -> MaterializeOutcome {
+    let chapter_id = candidate.marker.chapter_id.clone();
+    match super::super::chapter_draft::materialize_retry_candidate(
+        projects_root,
+        project_id,
+        &chapter_id,
+        candidate,
+    ) {
+        Ok(super::super::chapter_draft::RetryMaterialize::Moved) => {
+            counters.note(&chapter_id, "retry slot materialized");
+            MaterializeOutcome::Moved
+        }
+        Ok(super::super::chapter_draft::RetryMaterialize::ActiveDraftExists) => {
+            counters.note(
+                &chapter_id,
+                "retry deferred by newer active draft (old copy kept)",
+            );
+            MaterializeOutcome::Consumed
+        }
+        Ok(super::super::chapter_draft::RetryMaterialize::AckOnlyPending) => {
+            counters.note(
+                &chapter_id,
+                "retry deferred by pending draft ack (old copy kept)",
+            );
+            MaterializeOutcome::Consumed
+        }
+        Ok(super::super::chapter_draft::RetryMaterialize::ArchivedMissing) => {
+            counters.note(&chapter_id, "retry archived copy missing (marker cleared)");
+            MaterializeOutcome::Consumed
+        }
+        Ok(super::super::chapter_draft::RetryMaterialize::NoMarker) => {
+            MaterializeOutcome::Consumed
+        }
+        Err(error) => {
+            counters.failed = counters.failed.saturating_add(1);
+            counters.note(&chapter_id, format!("retry materialize failed kept: {error}"));
+            MaterializeOutcome::Consumed
+        }
     }
-    snapshot
 }

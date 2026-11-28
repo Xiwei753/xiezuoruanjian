@@ -1201,6 +1201,17 @@ impl StatsApi {
         self.store.record_proof_event(event, baseline_text)
     }
 
+    /// 按因果顺序批量写入同一章 journal 的本批证明事件。
+    ///
+    /// 序号/哈希仍由 store 串行补齐，但只在整批末尾对涉及的日分区各做一次
+    /// `sync_all`，避免每个按键事件一次 fsync。
+    pub(crate) fn record_proof_events(
+        &self,
+        items: Vec<(WritingInputEvent, Option<String>)>,
+    ) -> Result<usize> {
+        self.store.record_proof_events(items)
+    }
+
     /// 本机某章节是否已有逐字证明事件。
     pub fn has_chapter_proof(&self, device_id: &str, chapter_id: &str) -> Result<bool> {
         self.store.has_chapter_proof(device_id, chapter_id)
